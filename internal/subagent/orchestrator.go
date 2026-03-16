@@ -20,6 +20,7 @@ type Orchestrator struct {
 	cfg      *config.Config
 	agents   map[string]*agentState
 	mu       sync.Mutex
+	closed   bool // set by Shutdown to reject new Spawn calls
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -53,6 +54,13 @@ func NewOrchestrator(cfg *config.Config, repoRoot string) *Orchestrator {
 // Spawn starts a new subagent and returns an event channel.
 // It acquires a pool slot, optionally creates a worktree, and spawns the pi process.
 func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Event, string, error) {
+	o.mu.Lock()
+	if o.closed {
+		o.mu.Unlock()
+		return nil, "", fmt.Errorf("orchestrator is shut down")
+	}
+	o.mu.Unlock()
+
 	// Validate agent type.
 	if err := ValidateType(input.Type); err != nil {
 		return nil, "", err
@@ -198,6 +206,7 @@ func (o *Orchestrator) Cancel(agentID string) error {
 // Shutdown cancels all running agents and cleans up worktrees.
 func (o *Orchestrator) Shutdown() {
 	o.mu.Lock()
+	o.closed = true
 	for _, state := range o.agents {
 		if state.Status == "running" {
 			state.Process.Cancel()

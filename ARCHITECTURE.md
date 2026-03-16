@@ -200,7 +200,7 @@ config.json:
 
 `ResolveRole(role)` resolves a role name to a model and provider. Falls back to "default" role if the requested role is not configured. The provider is auto-detected from the model name prefix (claude→anthropic, gpt/o1-4→openai, gemini→gemini).
 
-CLI flags `--smol-model`, `--plan-model`, `--slow-model` override roles for a single invocation.
+CLI flags `--smol`, `--plan`, `--slow` override the active role for a single invocation.
 
 ## Subagent System
 
@@ -421,4 +421,4 @@ graph TD
 
 **Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/branch`, `/compact`, `/commit`, `/agents`, `/exit`
 
-**Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), y/n (commit confirmation)
+**Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), Enter/Esc (commit confirm/cancel)

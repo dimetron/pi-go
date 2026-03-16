@@ -14,6 +14,8 @@ type WorktreeManager struct {
 	repoRoot string
 	active   map[string]worktreeInfo // agentID → info
 	mu       sync.Mutex
+	inflight sync.WaitGroup // tracks in-flight Cleanup calls
+	closed   bool           // set by CleanupAll to reject late Cleanup calls
 }
 
 type worktreeInfo struct {
@@ -45,6 +47,10 @@ func (m *WorktreeManager) Create(agentID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.closed {
+		return "", fmt.Errorf("worktree manager is shut down")
+	}
+
 	if _, exists := m.active[agentID]; exists {
 		return "", fmt.Errorf("worktree already exists for agent %s", agentID)
 	}
@@ -69,32 +75,65 @@ func (m *WorktreeManager) Create(agentID string) (string, error) {
 }
 
 // Cleanup removes the worktree and branch for the given agent ID.
-// Errors are logged but do not cause failure (best-effort cleanup).
+// After CleanupAll has started (closed=true), late Cleanup calls are
+// no-ops — CleanupAll owns all remaining entries at that point.
 func (m *WorktreeManager) Cleanup(agentID string) error {
 	m.mu.Lock()
+	if m.closed {
+		// CleanupAll is running or has run; it will handle this entry.
+		m.mu.Unlock()
+		return nil
+	}
+	m.inflight.Add(1)
 	info, exists := m.active[agentID]
 	if !exists {
 		m.mu.Unlock()
+		m.inflight.Done()
 		return fmt.Errorf("no worktree found for agent %s", agentID)
 	}
+	// Remove from active map under lock to prevent concurrent cleanup of the
+	// same worktree (e.g. from completion goroutine and Shutdown racing).
 	delete(m.active, agentID)
 	m.mu.Unlock()
 
+	err := m.cleanupWorktree(agentID, info)
+	m.inflight.Done()
+	return err
+}
+
+// cleanupWorktree performs the git operations to remove a worktree and its branch.
+// If cleanup fails, the entry is re-added to the active map so callers can retry.
+func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) error {
 	var errs []string
 
-	// Remove the worktree.
-	if out, err := m.git("worktree", "remove", "--force", info.Path); err != nil {
-		errs = append(errs, fmt.Sprintf("worktree remove: %v: %s", err, out))
-		// Fallback: remove directory manually.
-		_ = os.RemoveAll(info.Path)
+	// Remove the worktree only if the path still exists on disk.
+	if _, statErr := os.Stat(info.Path); statErr == nil {
+		if out, err := m.git("worktree", "remove", "--force", info.Path); err != nil {
+			errs = append(errs, fmt.Sprintf("worktree remove: %v: %s", err, out))
+			// Fallback: remove directory manually, then prune stale worktree
+			// metadata so git no longer considers the branch "checked out".
+			_ = os.RemoveAll(info.Path)
+			_, _ = m.git("worktree", "prune")
+		}
+	} else {
+		// Path already gone (e.g. prior partial cleanup) — prune stale
+		// worktree metadata so git branch -D can succeed.
+		_, _ = m.git("worktree", "prune")
 	}
 
-	// Delete the branch.
+	// Delete the branch only if it still exists.
 	if out, err := m.git("branch", "-D", info.Branch); err != nil {
-		errs = append(errs, fmt.Sprintf("branch delete: %v: %s", err, out))
+		// Ignore "not found" — branch was already deleted on a prior attempt.
+		if !strings.Contains(out, "not found") {
+			errs = append(errs, fmt.Sprintf("branch delete: %v: %s", err, out))
+		}
 	}
 
 	if len(errs) > 0 {
+		// Re-add entry so a retry pass can attempt again.
+		m.mu.Lock()
+		m.active[agentID] = info
+		m.mu.Unlock()
 		return fmt.Errorf("cleanup errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
@@ -119,23 +158,52 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 }
 
 // CleanupAll removes all active worktrees. Used during shutdown.
+// It sets the closed flag to reject late Cleanup calls from completion
+// goroutines, waits for in-flight cleanups, then retries remaining
+// entries up to maxPasses.
 func (m *WorktreeManager) CleanupAll() error {
+	// Prevent new Cleanup calls from starting — after this point,
+	// completion goroutines that call Cleanup will no-op.
 	m.mu.Lock()
-	ids := make([]string, 0, len(m.active))
-	for id := range m.active {
-		ids = append(ids, id)
-	}
+	m.closed = true
 	m.mu.Unlock()
 
-	var errs []string
-	for _, id := range ids {
-		if err := m.Cleanup(id); err != nil {
-			errs = append(errs, fmt.Sprintf("agent %s: %v", id, err))
+	// Wait for any in-flight Cleanup calls that started before we set closed.
+	m.inflight.Wait()
+
+	const maxPasses = 3
+	var lastErrs []string
+
+	for pass := range maxPasses {
+		m.mu.Lock()
+		snapshot := make(map[string]worktreeInfo, len(m.active))
+		for id, info := range m.active {
+			snapshot[id] = info
+			delete(m.active, id)
+		}
+		m.mu.Unlock()
+
+		if len(snapshot) == 0 {
+			return nil
+		}
+
+		lastErrs = nil
+		for id, info := range snapshot {
+			if err := m.cleanupWorktree(id, info); err != nil {
+				lastErrs = append(lastErrs, fmt.Sprintf("agent %s: %v (pass %d)", id, err, pass+1))
+			}
+		}
+
+		m.mu.Lock()
+		remaining := len(m.active)
+		m.mu.Unlock()
+		if remaining == 0 {
+			return nil
 		}
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("cleanup errors: %s", strings.Join(errs, "; "))
+	if len(lastErrs) > 0 {
+		return fmt.Errorf("cleanup errors after %d passes: %s", maxPasses, strings.Join(lastErrs, "; "))
 	}
 	return nil
 }

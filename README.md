@@ -77,9 +77,9 @@ make clean      # remove binary
 ./pi --plan          # planning-oriented model
 
 # Non-interactive modes
-./pi --print "explain this codebase"
-./pi --json "list all TODO comments"
-./pi --rpc                              # start RPC server
+./pi --mode print "explain this codebase"
+./pi --mode json "list all TODO comments"
+./pi --mode rpc                         # start RPC server
 ```
 
 ### Slash commands
@@ -97,12 +97,12 @@ make clean      # remove binary
 
 ## Configuration
 
-Pi looks for configuration in `~/.config/pi/` (global) and `.pi/` (project-local):
+Pi looks for configuration in `~/.pi-go/config.json` (global) and `.pi-go/config.json` (project-local):
 
 - **Model roles** — Map role names to specific model strings
 - **Hooks** — Shell commands triggered on tool events (e.g., post-write formatting)
 - **MCP servers** — External tool servers via Model Context Protocol
-- **Themes** — Terminal color schemes (`theme.json`)
+- **Themes** — Terminal color schemes via `theme` config field
 
 ## License
 

@@ -93,7 +93,7 @@ func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 		fname := parts[len(parts)-1]
 		diff, _ := gitCmd(cwd, "diff", "--cached", "--", fname)
 		if diff != "" {
-			diffs.WriteString(fmt.Sprintf("=== %s ===\n%s\n", fname, diff))
+			fmt.Fprintf(&diffs, "=== %s ===\n%s\n", fname, diff)
 		}
 	}
 

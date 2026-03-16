@@ -248,6 +248,21 @@ func waitForAgent(ch chan agentMsg) tea.Cmd {
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 
+	// Handle commit confirmation mode first so Esc cancels the commit
+	// instead of quitting the TUI.
+	if !m.running && m.commit != nil && m.commit.phase == "confirming" {
+		switch {
+		case key.Code == tea.KeyEnter:
+			return m.handleCommitConfirm()
+		case key.Code == tea.KeyEsc:
+			return m.handleCommitCancel()
+		case key.Code == 'c' && key.Mod == tea.ModCtrl:
+			return m.handleCommitCancel()
+		default:
+			return m, nil
+		}
+	}
+
 	switch {
 	case key.Code == tea.KeyEsc || (key.Code == 'c' && key.Mod == tea.ModCtrl):
 		if m.running {
@@ -265,18 +280,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.running {
 		return m, nil
-	}
-
-	// Handle commit confirmation mode.
-	if m.commit != nil && m.commit.phase == "confirming" {
-		switch {
-		case key.Code == tea.KeyEnter:
-			return m.handleCommitConfirm()
-		case key.Code == tea.KeyEsc:
-			return m.handleCommitCancel()
-		default:
-			return m, nil
-		}
 	}
 
 	switch {
@@ -497,7 +500,7 @@ func (m *model) handleBranchCommand(args []string) {
 			if br.Name == active {
 				marker = "*"
 			}
-			b.WriteString(fmt.Sprintf("- %s `%s` (head: %d)\n", marker, br.Name, br.Head))
+			fmt.Fprintf(&b, "- %s `%s` (head: %d)\n", marker, br.Name, br.Head)
 		}
 		m.messages = append(m.messages, message{role: "assistant", content: b.String()})
 
@@ -617,7 +620,7 @@ func (m *model) handleAgentsCommand() {
 		if dur == "" {
 			dur = time.Since(a.StartedAt).Truncate(time.Millisecond).String()
 		}
-		b.WriteString(fmt.Sprintf("- `%s` [%s] %s — %s (%s)\n", a.AgentID, a.Type, status, prompt, dur))
+		fmt.Fprintf(&b, "- `%s` [%s] %s — %s (%s)\n", a.AgentID, a.Type, status, prompt, dur)
 	}
 
 	m.messages = append(m.messages, message{
@@ -629,9 +632,9 @@ func (m *model) handleAgentsCommand() {
 // formatModelInfo returns a formatted string showing the current model and all configured roles.
 func (m *model) formatModelInfo() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Current model: **%s**", m.cfg.ModelName))
+	fmt.Fprintf(&b, "Current model: **%s**", m.cfg.ModelName)
 	if m.cfg.ActiveRole != "" && m.cfg.ActiveRole != "default" {
-		b.WriteString(fmt.Sprintf(" (role: %s)", m.cfg.ActiveRole))
+		fmt.Fprintf(&b, " (role: %s)", m.cfg.ActiveRole)
 	}
 
 	if len(m.cfg.Roles) > 0 {
@@ -652,7 +655,7 @@ func (m *model) formatModelInfo() string {
 			if rc.Provider != "" {
 				provInfo = fmt.Sprintf(" [%s]", rc.Provider)
 			}
-			b.WriteString(fmt.Sprintf("- %s **%s**: `%s`%s\n", marker, name, rc.Model, provInfo))
+			fmt.Fprintf(&b, "- %s **%s**: `%s`%s\n", marker, name, rc.Model, provInfo)
 		}
 	}
 	return b.String()
