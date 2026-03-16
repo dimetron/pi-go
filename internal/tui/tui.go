@@ -108,6 +108,7 @@ type model struct {
 	cursorPos  int
 	history    []string
 	historyIdx int
+	completion string // ghost autocomplete suggestion
 
 	// Messages.
 	messages []message
@@ -129,6 +130,9 @@ type model struct {
 
 	// Commit flow state.
 	commit *commitState
+
+	// Run flow state (/run command).
+	run *runState
 
 	// Git branch (detected at startup).
 	gitBranch string
@@ -188,6 +192,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateRenderer()
+
+	case tea.PasteMsg:
+		if !m.running {
+			text := msg.Content
+			m.input = m.input[:m.cursorPos] + text + m.input[m.cursorPos:]
+			m.cursorPos += len(text)
+		}
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -288,6 +299,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentCh = nil
 		return m, nil
 
+	case runAgentEventMsg:
+		return m.handleRunAgentEvent(msg)
+
+	case runAgentDoneMsg:
+		return m.handleRunAgentDone()
+
 	case commitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
 
@@ -367,6 +384,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Code == tea.KeyEnter:
 		return m.submit()
 
+	case key.Code == tea.KeyTab:
+		if m.completion != "" {
+			m.input = m.completion
+			m.cursorPos = len(m.input)
+			m.completion = ""
+		}
+
 	case key.Code == tea.KeyBackspace:
 		if m.cursorPos > 0 {
 			m.input = m.input[:m.cursorPos-1] + m.input[m.cursorPos:]
@@ -435,6 +459,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input = m.input[:m.cursorPos] + key.Text + m.input[m.cursorPos:]
 			m.cursorPos += len(key.Text)
 		}
+	}
+
+	// Update autocomplete suggestion.
+	if m.cursorPos == len(m.input) {
+		m.completion = completeSlashCommand(m.input)
+	} else {
+		m.completion = ""
 	}
 
 	return m, nil
@@ -1025,6 +1056,36 @@ func isUserInput(s string) bool {
 	return true
 }
 
+// slashCommands is the list of available slash commands for autocomplete.
+var slashCommands = []string{
+	"/help",
+	"/clear",
+	"/model",
+	"/session",
+	"/branch",
+	"/compact",
+	"/agents",
+	"/history",
+	"/commit",
+	"/exit",
+	"/quit",
+}
+
+// completeSlashCommand returns the best matching slash command for the current input,
+// or "" if no match. Only completes when cursor is at end of input.
+func completeSlashCommand(input string) string {
+	if !strings.HasPrefix(input, "/") || len(input) < 2 {
+		return ""
+	}
+	prefix := strings.ToLower(input)
+	for _, cmd := range slashCommands {
+		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
+			return cmd
+		}
+	}
+	return ""
+}
+
 func (m *model) updateRenderer() {
 	contentWidth := m.width - 4
 	if contentWidth < 40 {
@@ -1229,7 +1290,14 @@ func (m *model) renderInput() string {
 		after = m.input[m.cursorPos+1:]
 	}
 
-	return prefix + before + cursor + after
+	// Show ghost autocomplete suggestion after cursor.
+	ghost := ""
+	if m.completion != "" && m.cursorPos == len(m.input) {
+		suffix := m.completion[len(m.input):]
+		ghost = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(suffix + " [tab]")
+	}
+
+	return prefix + before + cursor + after + ghost
 }
 
 func (m *model) maxScroll() int {
