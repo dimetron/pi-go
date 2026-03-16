@@ -30,9 +30,12 @@ func NewWorktreeManager(repoRoot string) *WorktreeManager {
 }
 
 // shortID returns the first 8 characters of an agent ID (or the full ID if shorter).
+// shortID returns a short suffix from an agent ID for use in paths and branch names.
+// Agent IDs have the form "type-nanotimestamp", so we take the last 12 characters
+// to get the unique timestamp portion.
 func shortID(agentID string) string {
-	if len(agentID) > 8 {
-		return agentID[:8]
+	if len(agentID) > 12 {
+		return agentID[len(agentID)-12:]
 	}
 	return agentID
 }
@@ -75,6 +78,7 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("no worktree found for agent %s", agentID)
 	}
+	delete(m.active, agentID)
 	m.mu.Unlock()
 
 	var errs []string
@@ -90,11 +94,6 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 	if out, err := m.git("branch", "-D", info.Branch); err != nil {
 		errs = append(errs, fmt.Sprintf("branch delete: %v: %s", err, out))
 	}
-
-	// Remove from map only after cleanup operations complete.
-	m.mu.Lock()
-	delete(m.active, agentID)
-	m.mu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("cleanup errors: %s", strings.Join(errs, "; "))

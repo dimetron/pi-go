@@ -133,12 +133,14 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 		_, waitErr := proc.Wait()
 
 		o.mu.Lock()
-		if waitErr != nil {
-			state.Status = "failed"
-		} else {
-			state.Status = "completed"
+		if state.Status == "running" {
+			if waitErr != nil {
+				state.Status = "failed"
+			} else {
+				state.Status = "completed"
+			}
+			state.FinishedAt = time.Now()
 		}
-		state.FinishedAt = time.Now()
 		o.mu.Unlock()
 
 		// Cleanup worktree if needed.
@@ -200,6 +202,7 @@ func (o *Orchestrator) Shutdown() {
 		if state.Status == "running" {
 			state.Process.Cancel()
 			state.Status = "cancelled"
+			state.FinishedAt = time.Now()
 		}
 	}
 	o.mu.Unlock()

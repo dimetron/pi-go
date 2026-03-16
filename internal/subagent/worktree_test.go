@@ -85,18 +85,18 @@ func TestWorktree_BranchNaming(t *testing.T) {
 	}
 	defer mgr.Cleanup("myagent-1234abcd-extra")
 
-	// Verify branch exists with correct name.
-	cmd := exec.Command("git", "branch", "--list", "pi-agent-myagent-")
+	// Verify branch exists with correct name (shortID uses last 12 chars).
+	expectedBranch := "pi-agent-34abcd-extra"
+	cmd := exec.Command("git", "branch", "--list", expectedBranch)
 	cmd.Dir = repo
 	out, _ := cmd.CombinedOutput()
 	branches := strings.TrimSpace(string(out))
 	if branches == "" {
-		// Check with the actual shortID prefix.
 		cmd2 := exec.Command("git", "branch")
 		cmd2.Dir = repo
 		out2, _ := cmd2.CombinedOutput()
-		if !strings.Contains(string(out2), "pi-agent-myagent-") {
-			t.Errorf("expected branch pi-agent-myagent- in:\n%s", out2)
+		if !strings.Contains(string(out2), expectedBranch) {
+			t.Errorf("expected branch %s in:\n%s", expectedBranch, out2)
 		}
 	}
 }
