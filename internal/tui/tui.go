@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/logger"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 
@@ -53,6 +55,8 @@ type Config struct {
 	// GenerateCommitMsg is called by /commit to generate a conventional commit message from diffs.
 	// If nil, /commit is disabled.
 	GenerateCommitMsg func(ctx context.Context, diffs string) (string, error)
+	// Logger is the session logger. If nil, logging is disabled.
+	Logger *logger.Logger
 }
 
 // message represents a chat message in the conversation.
@@ -99,6 +103,9 @@ type model struct {
 	// Commit flow state.
 	commit *commitState
 
+	// Git branch (detected at startup).
+	gitBranch string
+
 	// Quit.
 	quitting bool
 }
@@ -122,14 +129,21 @@ func Run(ctx context.Context, cfg Config) error {
 		glamour.WithEmoji(),
 	)
 
+	// Load persistent command history from ~/.pi-go/history.
+	history := loadHistory()
+	if history == nil {
+		history = make([]string, 0)
+	}
+
 	m := model{
 		cfg:        cfg,
 		ctx:        ctx,
 		cancel:     cancel,
-		history:    make([]string, 0),
+		history:    history,
 		historyIdx: -1,
 		messages:   make([]message, 0),
 		renderer:   renderer,
+		gitBranch:  detectBranch(cfg.WorkDir),
 	}
 
 	p := tea.NewProgram(&m, tea.WithContext(ctx))
@@ -370,9 +384,17 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 		return m.handleSlashCommand(input)
 	}
 
-	// Add to history.
-	m.history = append(m.history, input)
+	// Add to history (skip duplicates of the last entry).
+	if len(m.history) == 0 || m.history[len(m.history)-1] != input {
+		m.history = append(m.history, input)
+		appendHistory(input)
+	}
 	m.historyIdx = -1
+
+	// Log user message.
+	if m.cfg.Logger != nil {
+		m.cfg.Logger.UserMessage(input)
+	}
 
 	// Add user message.
 	m.messages = append(m.messages, message{role: "user", content: input})
@@ -415,6 +437,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"- `/agents` — Show running and recent subagents\n" +
 				"- `/commit` — Generate and create a conventional commit from staged changes\n" +
 				"- `/compact` — Compact session context\n" +
+				"- `/history [query]` — Show command history (optionally filter by query)\n" +
 				"- `/exit`, `/quit` — Exit\n\n" +
 				"**Keyboard shortcuts:**\n" +
 				"- `Enter` — Submit prompt\n" +
@@ -442,6 +465,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.handleCompactCommand()
 	case "/agents":
 		m.handleAgentsCommand()
+	case "/history":
+		m.handleHistoryCommand(parts[1:])
 	case "/commit":
 		return m.handleCommitCommand()
 	case "/exit", "/quit":
@@ -654,9 +679,13 @@ func (m *model) formatModelInfo() string {
 // runAgentLoop runs the agent and sends events to the channel.
 func (m *model) runAgentLoop(prompt string) {
 	defer close(m.agentCh)
+	log := m.cfg.Logger
 
 	for ev, err := range m.cfg.Agent.Run(m.ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
+			if log != nil {
+				log.Error(err.Error())
+			}
 			m.agentCh <- agentDoneMsg{err: err}
 			return
 		}
@@ -665,9 +694,15 @@ func (m *model) runAgentLoop(prompt string) {
 		}
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" {
+				if log != nil {
+					log.LLMText(ev.Author, part.Text)
+				}
 				m.agentCh <- agentTextMsg{text: part.Text}
 			}
 			if part.FunctionCall != nil {
+				if log != nil {
+					log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
+				}
 				m.agentCh <- agentToolCallMsg{
 					name: part.FunctionCall.Name,
 					args: part.FunctionCall.Args,
@@ -675,6 +710,9 @@ func (m *model) runAgentLoop(prompt string) {
 			}
 			if part.FunctionResponse != nil {
 				respJSON, _ := json.Marshal(part.FunctionResponse.Response)
+				if log != nil {
+					log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
+				}
 				m.agentCh <- agentToolResultMsg{
 					name:    part.FunctionResponse.Name,
 					content: string(respJSON),
@@ -1002,26 +1040,66 @@ func (m *model) renderMarkdown(text string) string {
 }
 
 func (m *model) renderStatusBar() string {
-	style := lipgloss.NewStyle().
-		Background(lipgloss.Color("236")).
-		Foreground(lipgloss.Color("252")).
-		Width(m.width)
+	bg := lipgloss.Color("236")
+	fg := lipgloss.Color("252")
+	dimFg := lipgloss.Color("243")
+
+	bright := lipgloss.NewStyle().Background(bg).Foreground(fg)
+	dim := lipgloss.NewStyle().Background(bg).Foreground(dimFg)
+	bar := lipgloss.NewStyle().Background(bg).Width(m.width)
+
+	sep := dim.Render("  |  ")
 
 	var parts []string
-	parts = append(parts, fmt.Sprintf(" model: %s", m.cfg.ModelName))
 
+	// Model name.
+	parts = append(parts, bright.Render(fmt.Sprintf(" %s", m.cfg.ModelName)))
+
+	// Context size estimate (rough: ~4 chars per token).
+	ctxChars := 0
+	for _, msg := range m.messages {
+		ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
+	}
+	ctxTokens := ctxChars / 4
+	switch {
+	case ctxTokens >= 1000:
+		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
+	default:
+		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
+	}
+
+	// Git branch.
+	if m.gitBranch != "" {
+		parts = append(parts, bright.Render(fmt.Sprintf("\u2387 %s", m.gitBranch)))
+	}
+
+	// Active tool or thinking status.
 	if m.activeTool != "" {
 		elapsed := time.Since(m.toolStart).Truncate(time.Millisecond)
-		parts = append(parts, fmt.Sprintf("tool: %s (%s)", m.activeTool, elapsed))
+		parts = append(parts, bright.Render(fmt.Sprintf("tool: %s (%s)", m.activeTool, elapsed)))
 	} else if m.running {
-		parts = append(parts, "thinking...")
+		parts = append(parts, dim.Render("thinking..."))
 	}
 
+	// Trace count.
 	if len(m.traceLog) > 0 {
-		parts = append(parts, fmt.Sprintf("trace: %d", len(m.traceLog)))
+		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", len(m.traceLog))))
 	}
 
-	return style.Render(strings.Join(parts, "  |  "))
+	return bar.Render(strings.Join(parts, sep))
+}
+
+// detectBranch returns the current git branch name, or empty string.
+func detectBranch(workDir string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (m *model) renderInput() string {

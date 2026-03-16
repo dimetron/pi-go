@@ -7,8 +7,9 @@ require (
 	charm.land/lipgloss/v2 v2.0.2
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/charmbracelet/glamour v1.0.0
+	github.com/google/jsonschema-go v0.4.2
 	github.com/google/uuid v1.6.0
-	github.com/modelcontextprotocol/go-sdk v1.4.0
+	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/openai/openai-go/v3 v3.28.0
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/adk v0.6.0
@@ -39,7 +40,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -56,7 +56,7 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
-	github.com/segmentio/encoding v0.5.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

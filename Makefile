@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage lint e2e clean
+.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama lint e2e clean
 
 build:
 	go build ./cmd/pi
@@ -21,6 +21,9 @@ test-all: test-unit test-integration test-e2e
 
 test-coverage:
 	go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+
+test-ollama: build
+	@bash scripts/test-ollama-e2e.sh
 
 lint:
 	go vet ./...

@@ -42,7 +42,7 @@ type TreeOutput struct {
 }
 
 func newTreeTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("tree", "Show directory tree structure. Returns an indented tree view of files and directories, useful for quickly understanding project layout. Skips hidden and common non-code directories.", func(_ tool.Context, input TreeInput) (TreeOutput, error) {
+	return newTool("tree", "Show directory tree structure. Parameters: 'path' (directory to list, default '.') and 'depth' (max recursion depth, default 3, max 10). Returns an indented tree view of files and directories. Skips hidden and common non-code directories.", func(_ tool.Context, input TreeInput) (TreeOutput, error) {
 		return treeHandler(sb, input)
 	})
 }

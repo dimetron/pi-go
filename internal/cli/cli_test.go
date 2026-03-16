@@ -340,7 +340,7 @@ func TestRunPrintTextOutput(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runPrint(context.Background(), ag, sessionID, "Say hello")
+		err := runPrint(context.Background(), ag, sessionID, "Say hello", nil)
 		if err != nil {
 			t.Fatalf("runPrint error: %v", err)
 		}
@@ -388,7 +388,7 @@ func TestRunPrintToolStatusToStderr(t *testing.T) {
 	sessionID, _ := ag.CreateSession(ctx)
 
 	stderr := captureStderr(t, func() {
-		_ = runPrint(ctx, ag, sessionID, "Read the file")
+		_ = runPrint(ctx, ag, sessionID, "Read the file", nil)
 	})
 
 	if !strings.Contains(stderr, "⚙ tool: read") {
@@ -404,7 +404,7 @@ func TestRunJSONTextDelta(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(context.Background(), ag, sessionID, "Say hello")
+		err := runJSON(context.Background(), ag, sessionID, "Say hello", nil)
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -493,7 +493,7 @@ func TestRunJSONToolCallEvents(t *testing.T) {
 	sessionID, _ := ag.CreateSession(ctx)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(ctx, ag, sessionID, "Read the file")
+		err := runJSON(ctx, ag, sessionID, "Read the file", nil)
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -546,7 +546,7 @@ func TestRunJSONValidJSONL(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		_ = runJSON(context.Background(), ag, sessionID, "Test")
+		_ = runJSON(context.Background(), ag, sessionID, "Test", nil)
 	})
 
 	// Every line should be valid JSON.

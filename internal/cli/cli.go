@@ -13,6 +13,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/provider"
 	"github.com/dimetron/pi-go/internal/rpc"
@@ -250,6 +251,16 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Create session logger (always enabled).
+	sessionLog, err := logger.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "pi-go: session log: %s\n", sessionLog.Path())
+	}
+	defer sessionLog.Close()
+	sessionLog.SessionStart(sessionID, llm.Name(), mode)
+
 	// Run the agent based on output mode.
 	switch mode {
 	case "interactive":
@@ -264,6 +275,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			WorkDir:           cwd,
 			Orchestrator:      orch,
 			GenerateCommitMsg: commitMsgFn,
+			Logger:            sessionLog,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{
@@ -276,13 +288,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "pi-go: no prompt provided (model: %s, mode: %s)\n", llm.Name(), mode)
 			return nil
 		}
-		return runJSON(ctx, ag, sessionID, prompt)
+		return runJSON(ctx, ag, sessionID, prompt, sessionLog)
 	default:
 		if prompt == "" {
 			fmt.Fprintf(os.Stderr, "pi-go: no prompt provided (model: %s, mode: %s)\n", llm.Name(), mode)
 			return nil
 		}
-		return runPrint(ctx, ag, sessionID, prompt)
+		return runPrint(ctx, ag, sessionID, prompt, sessionLog)
 	}
 }
 
@@ -312,12 +324,14 @@ func detectMode() string {
 
 // runPrint runs the agent and prints text responses to stdout.
 // Tool calls are shown as status lines on stderr.
-func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string) error {
+func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
+	log.UserMessage(prompt)
 	retryCfg := agent.DefaultRetryConfig()
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.Run(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
+			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
 		if ev == nil || ev.Content == nil {
@@ -326,12 +340,15 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string) er
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" {
 				fmt.Print(part.Text)
+				log.LLMText(ev.Author, part.Text)
 			}
 			if part.FunctionCall != nil {
 				fmt.Fprintf(os.Stderr, "⚙ tool: %s\n", part.FunctionCall.Name)
+				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if part.FunctionResponse != nil {
 				fmt.Fprintf(os.Stderr, "✓ tool: %s done\n", part.FunctionResponse.Name)
+				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
 			}
 		}
 	}
@@ -353,7 +370,8 @@ type jsonEvent struct {
 
 // runJSON runs the agent and emits JSONL events to stdout.
 // Events: message_start (once), text_delta (per text chunk), tool_call, tool_result, message_end (once).
-func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string) error {
+func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
+	log.UserMessage(prompt)
 	enc := json.NewEncoder(os.Stdout)
 	started := false
 
@@ -362,6 +380,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string) err
 		return ag.Run(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
+			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
 		if ev == nil || ev.Content == nil {
@@ -385,6 +404,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string) err
 					Agent: ev.Author,
 					Delta: part.Text,
 				})
+				log.LLMText(ev.Author, part.Text)
 			}
 			if part.FunctionCall != nil {
 				_ = enc.Encode(jsonEvent{
@@ -393,6 +413,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string) err
 					ToolName:  part.FunctionCall.Name,
 					ToolInput: part.FunctionCall.Args,
 				})
+				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if part.FunctionResponse != nil {
 				_ = enc.Encode(jsonEvent{
@@ -401,6 +422,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string) err
 					ToolName: part.FunctionResponse.Name,
 					Content:  fmt.Sprintf("%v", part.FunctionResponse.Response),
 				})
+				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
 			}
 		}
 	}
