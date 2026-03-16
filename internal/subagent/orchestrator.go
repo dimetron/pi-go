@@ -124,6 +124,16 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 	}
 
 	o.mu.Lock()
+	if o.closed {
+		o.mu.Unlock()
+		// Orchestrator shut down while we were setting up — clean up and bail.
+		proc.Cancel()
+		if useWorktree && o.worktree != nil {
+			_ = o.worktree.Cleanup(agentID)
+		}
+		o.pool.Release()
+		return nil, "", fmt.Errorf("orchestrator is shut down")
+	}
 	o.agents[agentID] = state
 	o.mu.Unlock()
 
