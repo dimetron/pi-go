@@ -541,6 +541,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 				"- `/branch list` — List all branches\n" +
 				"- `/agents` — Show running and recent subagents\n" +
 				"- `/commit` — Generate and create a conventional commit from staged changes\n" +
+				"- `/plan <idea>` — Start a PDD planning session to design and spec a feature\n" +
+				"- `/run <spec-name>` — Execute a spec's PROMPT.md using an isolated task agent\n" +
 				"- `/compact` — Compact session context\n" +
 				"- `/history [query]` — Show command history (optionally filter by query)\n" +
 				"- `/exit`, `/quit` — Exit\n\n" +
@@ -574,6 +576,10 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.handleHistoryCommand(parts[1:])
 	case "/commit":
 		return m.handleCommitCommand()
+	case "/plan":
+		return m.handlePlanCommand(parts[1:])
+	case "/run":
+		return m.handleRunCommand(parts[1:])
 	case "/exit", "/quit":
 		m.quitting = true
 		m.input = ""
@@ -1073,6 +1079,8 @@ var slashCommands = []string{
 	"/agents",
 	"/history",
 	"/commit",
+	"/plan",
+	"/run",
 	"/exit",
 	"/quit",
 }

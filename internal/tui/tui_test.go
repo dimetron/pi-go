@@ -511,6 +511,70 @@ func TestHandleSlashCommandHelpContainsBranch(t *testing.T) {
 	}
 }
 
+func TestSlashCommands_PlanRegistered(t *testing.T) {
+	found := false
+	for _, cmd := range slashCommands {
+		if cmd == "/plan" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected /plan in slashCommands list")
+	}
+}
+
+func TestSlashCommands_RunRegistered(t *testing.T) {
+	found := false
+	for _, cmd := range slashCommands {
+		if cmd == "/run" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected /run in slashCommands list")
+	}
+}
+
+func TestHelpText_IncludesPlanAndRun(t *testing.T) {
+	m := &model{
+		input:    "/help",
+		messages: make([]message, 0),
+	}
+
+	newM, _ := m.handleSlashCommand("/help")
+	mm := newM.(*model)
+
+	content := mm.messages[0].content
+	if !strings.Contains(content, "/plan") {
+		t.Errorf("expected /help to mention /plan, got %q", content)
+	}
+	if !strings.Contains(content, "/run") {
+		t.Errorf("expected /help to mention /run, got %q", content)
+	}
+	if !strings.Contains(content, "PDD planning session") {
+		t.Errorf("expected /help to describe /plan, got %q", content)
+	}
+	if !strings.Contains(content, "PROMPT.md") {
+		t.Errorf("expected /help to mention PROMPT.md for /run, got %q", content)
+	}
+}
+
+func TestCompleteSlashCommand_Plan(t *testing.T) {
+	result := completeSlashCommand("/pl")
+	if result != "/plan" {
+		t.Errorf("expected /plan completion, got %q", result)
+	}
+}
+
+func TestCompleteSlashCommand_Run(t *testing.T) {
+	result := completeSlashCommand("/ru")
+	if result != "/run" {
+		t.Errorf("expected /run completion, got %q", result)
+	}
+}
+
 // Test helpers
 
 func setupTestSessionService(t *testing.T) *pisession.FileService {
