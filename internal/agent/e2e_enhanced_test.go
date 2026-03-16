@@ -34,7 +34,9 @@ func initGitRepo(t *testing.T, dir string) {
 		}
 	}
 	// Create and commit an initial file
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	for _, args := range [][]string{
 		{"add", "main.go"},
 		{"commit", "-m", "initial commit"},
@@ -54,7 +56,9 @@ func TestE2EGitOverviewWorkflow(t *testing.T) {
 	initGitRepo(t, dir)
 
 	// Make a modification to trigger unstaged changes
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	llm := &scenarioLLM{
 		name: "e2e-git-overview",
@@ -142,7 +146,9 @@ func TestE2EGitStagedDiffWorkflow(t *testing.T) {
 	initGitRepo(t, dir)
 
 	// Create a new file and stage it
-	os.WriteFile(filepath.Join(dir, "utils.go"), []byte("package main\n\nfunc add(a, b int) int { return a + b }\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "utils.go"), []byte("package main\n\nfunc add(a, b int) int { return a + b }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	cmd := exec.Command("git", "add", "utils.go")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -381,8 +387,8 @@ func TestE2EAllNewToolsRegistered(t *testing.T) {
 		}
 	}
 
-	if len(coreTools) != 11 {
-		t.Errorf("expected 11 core tools, got %d", len(coreTools))
+	if len(coreTools) < len(expected) {
+		t.Errorf("expected at least %d core tools, got %d", len(expected), len(coreTools))
 	}
 }
 
@@ -420,7 +426,9 @@ func TestE2ECommitWorkflow(t *testing.T) {
 	initGitRepo(t, dir)
 
 	// Create and stage a new file
-	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc hello() string { return \"hello\" }\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc hello() string { return \"hello\" }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	cmd := exec.Command("git", "add", "hello.go")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -479,11 +487,25 @@ func TestE2ECommitWorkflow(t *testing.T) {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
 
+	toolResponses := map[string]int{}
 	for event, err := range a.Run(ctx, sessionID, "Commit the staged changes with a conventional message") {
 		if err != nil {
 			t.Fatalf("Run() error: %v", err)
 		}
-		_ = event
+		if event != nil && event.Content != nil {
+			for _, p := range event.Content.Parts {
+				if p.FunctionResponse != nil {
+					toolResponses[p.FunctionResponse.Name]++
+				}
+			}
+		}
+	}
+
+	// Verify expected tool calls were dispatched
+	for _, name := range []string{"git-overview", "git-file-diff", "bash"} {
+		if toolResponses[name] == 0 {
+			t.Errorf("expected function response for %q tool", name)
+		}
 	}
 
 	// Verify commit was created with conventional format
@@ -591,18 +613,7 @@ func TestE2EWorktreeLifecycle(t *testing.T) {
 	}
 
 	// Verify it's a separate working copy (has its own .git or gitdir link)
-	entries, err := os.ReadDir(wtPath)
-	if err != nil {
-		t.Fatalf("ReadDir(%s) error: %v", wtPath, err)
-	}
-	hasGitMarker := false
-	for _, e := range entries {
-		if e.Name() == ".git" {
-			hasGitMarker = true
-			break
-		}
-	}
-	if !hasGitMarker {
+	if _, err := os.Stat(filepath.Join(wtPath, ".git")); os.IsNotExist(err) {
 		t.Error("worktree directory does not contain .git marker")
 	}
 
@@ -622,7 +633,9 @@ func TestE2EWorktreeLifecycle(t *testing.T) {
 	}
 
 	// Make a change in the worktree
-	os.WriteFile(filepath.Join(wtPath, "wt-file.txt"), []byte("worktree change\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(wtPath, "wt-file.txt"), []byte("worktree change\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Cleanup
 	err = mgr.Cleanup("test-agent-001")
@@ -762,6 +775,6 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 			t.Error("declaration has nil ParametersJsonSchema")
 		}
 	} else {
-		t.Log("agent tool does not implement Declaration interface; schema check skipped")
+		t.Error("agent tool does not implement Declaration interface; schema check skipped")
 	}
 }

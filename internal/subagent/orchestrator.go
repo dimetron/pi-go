@@ -24,13 +24,14 @@ type Orchestrator struct {
 
 // agentState tracks the runtime state of a subagent.
 type agentState struct {
-	ID        string
-	Type      string
-	Prompt    string
-	StartedAt time.Time
-	Process   *Process
-	Worktree  bool   // whether a worktree was created
-	Status    string // "running", "completed", "failed", "cancelled"
+	ID         string
+	Type       string
+	Prompt     string
+	StartedAt  time.Time
+	FinishedAt time.Time // set when status changes from "running"
+	Process    *Process
+	Worktree   bool   // whether a worktree was created
+	Status     string // "running", "completed", "failed", "cancelled"
 }
 
 // NewOrchestrator creates an Orchestrator from config.
@@ -137,6 +138,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 		} else {
 			state.Status = "completed"
 		}
+		state.FinishedAt = time.Now()
 		o.mu.Unlock()
 
 		// Cleanup worktree if needed.
@@ -156,8 +158,8 @@ func (o *Orchestrator) List() []AgentStatus {
 	statuses := make([]AgentStatus, 0, len(o.agents))
 	for _, s := range o.agents {
 		dur := ""
-		if s.Status != "running" {
-			dur = time.Since(s.StartedAt).Truncate(time.Millisecond).String()
+		if s.Status != "running" && !s.FinishedAt.IsZero() {
+			dur = s.FinishedAt.Sub(s.StartedAt).Truncate(time.Millisecond).String()
 		}
 		statuses = append(statuses, AgentStatus{
 			AgentID:   s.ID,
@@ -174,9 +176,9 @@ func (o *Orchestrator) List() []AgentStatus {
 // Cancel cancels a running agent by ID.
 func (o *Orchestrator) Cancel(agentID string) error {
 	o.mu.Lock()
-	state, ok := o.agents[agentID]
-	o.mu.Unlock()
+	defer o.mu.Unlock()
 
+	state, ok := o.agents[agentID]
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
@@ -185,10 +187,8 @@ func (o *Orchestrator) Cancel(agentID string) error {
 	}
 
 	state.Process.Cancel()
-
-	o.mu.Lock()
 	state.Status = "cancelled"
-	o.mu.Unlock()
+	state.FinishedAt = time.Now()
 
 	return nil
 }

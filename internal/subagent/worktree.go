@@ -75,7 +75,6 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("no worktree found for agent %s", agentID)
 	}
-	delete(m.active, agentID)
 	m.mu.Unlock()
 
 	var errs []string
@@ -91,6 +90,11 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 	if out, err := m.git("branch", "-D", info.Branch); err != nil {
 		errs = append(errs, fmt.Sprintf("branch delete: %v: %s", err, out))
 	}
+
+	// Remove from map only after cleanup operations complete.
+	m.mu.Lock()
+	delete(m.active, agentID)
+	m.mu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("cleanup errors: %s", strings.Join(errs, "; "))

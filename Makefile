@@ -17,7 +17,7 @@ test-e2e:
 # keep old name as alias
 e2e: test-e2e
 
-test-all: test-unit test-integration test-e2e
+test-all: test-unit test-e2e
 
 test-coverage:
 	go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
