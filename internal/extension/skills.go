@@ -10,7 +10,7 @@ import (
 
 // Skill represents a loaded skill from a SKILL.md file.
 type Skill struct {
-	// Name is the skill's identifier (derived from filename: my-skill.SKILL.md → my-skill).
+	// Name is the skill's identifier (derived from directory name).
 	Name string
 	// Description is a one-line description from frontmatter.
 	Description string
@@ -20,22 +20,36 @@ type Skill struct {
 	Tools []string
 }
 
-// LoadSkills discovers and loads SKILL.md files from the given directories.
-// It searches for files matching *.SKILL.md pattern.
+// LoadSkills discovers and loads skills from the given directories.
+// It searches for <dir>/<skill-name>/SKILL.md subdirectories.
 // Later directories override earlier ones (project overrides global).
 func LoadSkills(dirs ...string) ([]Skill, error) {
 	seen := make(map[string]int) // name → index in result
 	var skills []Skill
 
 	for _, dir := range dirs {
-		matches, err := filepath.Glob(filepath.Join(dir, "*.SKILL.md"))
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return nil, fmt.Errorf("globbing skills in %s: %w", dir, err)
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("reading skills dir %s: %w", dir, err)
 		}
-		for _, path := range matches {
-			skill, err := parseSkillFile(path)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillFile := filepath.Join(dir, entry.Name(), "SKILL.md")
+			if _, err := os.Stat(skillFile); err != nil {
+				continue
+			}
+			skill, err := parseSkillFile(skillFile)
 			if err != nil {
-				return nil, fmt.Errorf("parsing %s: %w", path, err)
+				return nil, fmt.Errorf("parsing %s: %w", skillFile, err)
+			}
+			// Default name from directory if not set in frontmatter
+			if skill.Name == "" {
+				skill.Name = entry.Name()
 			}
 			if idx, ok := seen[skill.Name]; ok {
 				// Override with project-level skill.
@@ -64,27 +78,28 @@ func parseSkillFile(path string) (Skill, error) {
 		return Skill{}, err
 	}
 
-	// Derive name from filename: my-skill.SKILL.md → my-skill
-	base := filepath.Base(path)
-	name := strings.TrimSuffix(base, ".SKILL.md")
+	// Derive default name from parent directory: skills/my-skill/SKILL.md → my-skill
+	name := filepath.Base(filepath.Dir(path))
 
 	skill := Skill{Name: name}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	inFrontmatter := false
+	frontmatterDone := false
 	var body strings.Builder
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
 
-		if trimmed == "---" {
+		if trimmed == "---" && !frontmatterDone {
 			if !inFrontmatter {
 				inFrontmatter = true
 				continue
 			}
 			// End of frontmatter.
 			inFrontmatter = false
+			frontmatterDone = true
 			continue
 		}
 

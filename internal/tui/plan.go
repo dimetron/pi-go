@@ -84,6 +84,14 @@ func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 	return specDir, nil
 }
 
+// planState tracks the /plan interactive flow (override confirmation).
+type planState struct {
+	phase     string // "confirming_override"
+	taskName  string
+	roughIdea string
+	specDir   string // existing spec directory path
+}
+
 // handlePlanCommand processes "/plan <rough idea>" input.
 // Creates the spec skeleton, loads the PDD SOP, injects it as the system
 // instruction, clears the conversation, and sends the rough idea as the
@@ -104,6 +112,24 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 
 	specDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
 	if err != nil {
+		// Check if it's an "already exists" error — prompt for override.
+		existingDir := filepath.Join(m.cfg.WorkDir, "specs", taskName)
+		if strings.Contains(err.Error(), "already exists") {
+			m.plan = &planState{
+				phase:     "confirming_override",
+				taskName:  taskName,
+				roughIdea: roughIdea,
+				specDir:   existingDir,
+			}
+			m.messages = append(m.messages, message{
+				role: "assistant",
+				content: fmt.Sprintf("Spec directory already exists: `%s`\n\nPress **Enter** to override, **Esc** to cancel.",
+					existingDir),
+			})
+			m.input = ""
+			m.cursorPos = 0
+			return m, nil
+		}
 		m.messages = append(m.messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error: %v", err),
@@ -113,6 +139,54 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	return m.startPlanSession(taskName, roughIdea, specDir)
+}
+
+// handlePlanOverride removes the existing spec directory and restarts the plan flow.
+func (m *model) handlePlanOverride() (tea.Model, tea.Cmd) {
+	if m.plan == nil || m.plan.phase != "confirming_override" {
+		return m, nil
+	}
+
+	taskName := m.plan.taskName
+	roughIdea := m.plan.roughIdea
+	specDir := m.plan.specDir
+	m.plan = nil
+
+	// Remove the existing spec directory.
+	if err := os.RemoveAll(specDir); err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error removing spec directory: %v", err),
+		})
+		return m, nil
+	}
+
+	// Recreate the skeleton.
+	newSpecDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
+	if err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error: %v", err),
+		})
+		return m, nil
+	}
+
+	return m.startPlanSession(taskName, roughIdea, newSpecDir)
+}
+
+// handlePlanCancel cancels the plan override prompt.
+func (m *model) handlePlanCancel() (tea.Model, tea.Cmd) {
+	m.plan = nil
+	m.messages = append(m.messages, message{
+		role:    "assistant",
+		content: "Plan cancelled.",
+	})
+	return m, nil
+}
+
+// startPlanSession loads the SOP, rebuilds the agent, and starts streaming.
+func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model, tea.Cmd) {
 	// Load PDD SOP (project override → global override → embedded default).
 	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
 	if err != nil {
@@ -136,6 +210,15 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 		"Artifacts should be written to `specs/" + taskName + "/` using the write and edit tools.\n"
 
 	// Rebuild the agent with the PDD SOP as system instruction.
+	if m.cfg.Agent == nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: "Error: no agent configured for /plan",
+		})
+		m.input = ""
+		m.cursorPos = 0
+		return m, nil
+	}
 	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
 		m.messages = append(m.messages, message{
 			role:    "assistant",

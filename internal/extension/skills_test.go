@@ -8,7 +8,9 @@ import (
 
 func TestParseSkillFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "code-review.SKILL.md")
+	skillDir := filepath.Join(dir, "code-review")
+	os.MkdirAll(skillDir, 0o755)
+	path := filepath.Join(skillDir, "SKILL.md")
 	content := `---
 name: code-review
 description: Review code for quality and security issues
@@ -45,10 +47,12 @@ You are a code reviewer. Analyze the code for:
 	}
 }
 
-func TestParseSkillFileNameFromFilename(t *testing.T) {
+func TestParseSkillFileNameFromDirectory(t *testing.T) {
 	dir := t.TempDir()
-	// Skill without explicit name in frontmatter — should derive from filename.
-	path := filepath.Join(dir, "my-skill.SKILL.md")
+	skillDir := filepath.Join(dir, "my-skill")
+	os.MkdirAll(skillDir, 0o755)
+	// Skill without explicit name in frontmatter — should derive from directory.
+	path := filepath.Join(skillDir, "SKILL.md")
 	content := `---
 description: A test skill
 ---
@@ -71,8 +75,10 @@ func TestLoadSkills(t *testing.T) {
 	globalDir := t.TempDir()
 	projectDir := t.TempDir()
 
-	// Global skill.
-	if err := os.WriteFile(filepath.Join(globalDir, "lint.SKILL.md"), []byte(`---
+	// Global skill: globalDir/lint/SKILL.md
+	lintGlobal := filepath.Join(globalDir, "lint")
+	os.MkdirAll(lintGlobal, 0o755)
+	if err := os.WriteFile(filepath.Join(lintGlobal, "SKILL.md"), []byte(`---
 name: lint
 description: Run linter
 ---
@@ -82,7 +88,9 @@ Run the linter.
 	}
 
 	// Project skill overrides global with same name.
-	if err := os.WriteFile(filepath.Join(projectDir, "lint.SKILL.md"), []byte(`---
+	lintProject := filepath.Join(projectDir, "lint")
+	os.MkdirAll(lintProject, 0o755)
+	if err := os.WriteFile(filepath.Join(lintProject, "SKILL.md"), []byte(`---
 name: lint
 description: Project linter
 ---
@@ -92,7 +100,9 @@ Run the project linter.
 	}
 
 	// Project-only skill.
-	if err := os.WriteFile(filepath.Join(projectDir, "deploy.SKILL.md"), []byte(`---
+	deployDir := filepath.Join(projectDir, "deploy")
+	os.MkdirAll(deployDir, 0o755)
+	if err := os.WriteFile(filepath.Join(deployDir, "SKILL.md"), []byte(`---
 name: deploy
 description: Deploy the app
 ---

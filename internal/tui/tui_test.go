@@ -256,6 +256,7 @@ func TestHistoryNavigation(t *testing.T) {
 		input:      "",
 		history:    []string{"first", "second", "third"},
 		historyIdx: -1,
+		cyclingIdx: -1,
 		messages:   make([]message, 0),
 	}
 
@@ -572,6 +573,106 @@ func TestCompleteSlashCommand_Run(t *testing.T) {
 	result := completeSlashCommand("/ru")
 	if result != "/run" {
 		t.Errorf("expected /run completion, got %q", result)
+	}
+}
+
+func TestCompleteSlashCommand_SlashOnly_NoGhost(t *testing.T) {
+	// Just "/" should NOT produce a ghost completion (Tab shows the list instead).
+	result := completeSlashCommand("/")
+	if result != "" {
+		t.Errorf("expected no ghost completion for '/', got %q", result)
+	}
+}
+
+func TestCompleteSlashCommand_ExactMatch_NoGhost(t *testing.T) {
+	result := completeSlashCommand("/help")
+	if result != "" {
+		t.Errorf("exact match should not produce ghost, got %q", result)
+	}
+}
+
+func TestMatchingSlashCommands_All(t *testing.T) {
+	matches := matchingSlashCommands("/")
+	if len(matches) != len(slashCommands) {
+		t.Errorf("expected %d matches for '/', got %d", len(slashCommands), len(matches))
+	}
+}
+
+func TestMatchingSlashCommands_Partial(t *testing.T) {
+	matches := matchingSlashCommands("/c")
+	// Should match: /clear, /compact, /commit
+	if len(matches) != 3 {
+		t.Errorf("expected 3 matches for '/c', got %d: %v", len(matches), matches)
+	}
+	for _, m := range matches {
+		if !strings.HasPrefix(m, "/c") {
+			t.Errorf("unexpected match %q for '/c'", m)
+		}
+	}
+}
+
+func TestMatchingSlashCommands_NoMatch(t *testing.T) {
+	matches := matchingSlashCommands("/z")
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for '/z', got %d: %v", len(matches), matches)
+	}
+}
+
+func TestShowCommandList(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+	}
+	m.showCommandList()
+
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	}
+	content := m.messages[0].content
+	if !strings.Contains(content, "Available commands") {
+		t.Error("expected 'Available commands' header")
+	}
+	// Verify all commands are listed.
+	for _, cmd := range slashCommands {
+		if !strings.Contains(content, cmd) {
+			t.Errorf("command list should contain %q", cmd)
+		}
+	}
+	// Verify descriptions are included.
+	if !strings.Contains(content, "Show help") {
+		t.Error("expected description for /help")
+	}
+	if !strings.Contains(content, "PDD planning session") {
+		t.Error("expected description for /plan")
+	}
+}
+
+func TestSlashCommandDesc_AllCommandsHaveDescs(t *testing.T) {
+	for _, cmd := range slashCommands {
+		desc := slashCommandDesc(cmd)
+		if desc == "" {
+			t.Errorf("command %q has no description", cmd)
+		}
+	}
+}
+
+func TestTabOnSlash_ShowsCommandList(t *testing.T) {
+	m := &model{
+		input:    "/",
+		messages: make([]message, 0),
+	}
+
+	// Simulate Tab press.
+	m.showCommandList()
+
+	if len(m.messages) == 0 {
+		t.Fatal("expected command list message")
+	}
+	content := m.messages[0].content
+	if !strings.Contains(content, "/plan") {
+		t.Error("command list should include /plan")
+	}
+	if !strings.Contains(content, "/run") {
+		t.Error("command list should include /run")
 	}
 }
 

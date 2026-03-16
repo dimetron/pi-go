@@ -19,15 +19,17 @@ import (
 
 // runState tracks the state of a /run command execution.
 type runState struct {
-	specName   string
-	promptMD   string
-	gates      []Gate
-	agentID    string
-	phase      string // "running", "gating", "merging", "done", "failed"
-	retries    int
-	maxRetries int
-	events     <-chan subagent.Event // subagent event channel
-	gateOutput string                // formatted gate failure output (for retry prompts)
+	specName    string
+	promptMD    string
+	gates       []Gate
+	agentID     string
+	phase       string // "running", "gating", "merging", "done", "failed"
+	retries     int
+	maxRetries  int
+	events      <-chan subagent.Event // subagent event channel
+	gateOutput  string                // formatted gate failure output (for retry prompts)
+	gateResults []GateResult          // latest gate results (for summary report)
+	startTime   time.Time             // when the run started
 }
 
 // --- Message types for /run streaming ---
@@ -139,6 +141,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		phase:      "running",
 		maxRetries: 3,
 		events:     events,
+		startTime:  time.Now(),
 	}
 
 	// Show run start message.
@@ -359,6 +362,9 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Store gate results for the summary report.
+	m.run.gateResults = msg.results
+
 	// Build gate results summary.
 	var summary strings.Builder
 	summary.WriteString("**Gate Results:**\n")
@@ -460,6 +466,14 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 			m.run.specName, m.run.maxRetries, wtPath),
 	})
 
+	// Write summary report for gate failure.
+	if report, err := m.writeRunSummary("gate_failed"); err == nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Summary report: `%s`", report),
+		})
+	}
+
 	return m, nil
 }
 
@@ -508,6 +522,14 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 			content: fmt.Sprintf("**Merge failed** for spec `%s`: %v\nWorktree preserved at: `%s`",
 				m.run.specName, msg.err, wtPath),
 		})
+
+		// Write summary report for merge failure.
+		if report, err := m.writeRunSummary("merge_failed"); err == nil {
+			m.messages = append(m.messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Summary report: `%s`", report),
+			})
+		}
 		return m, nil
 	}
 
@@ -517,7 +539,105 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 		content: fmt.Sprintf("**Spec `%s` completed** — changes merged successfully.", m.run.specName),
 	})
 
+	// Write summary report.
+	if report, err := m.writeRunSummary("completed"); err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Warning: failed to write summary report: %v", err),
+		})
+	} else {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Summary report: `%s`", report),
+		})
+	}
+
 	return m, nil
+}
+
+// writeRunSummary writes a SUMMARY.md report to the spec directory.
+// Returns the path to the written report, or an error.
+func (m *model) writeRunSummary(outcome string) (string, error) {
+	if m.run == nil {
+		return "", fmt.Errorf("no run state")
+	}
+	report := buildRunSummaryReport(m.run, outcome)
+	reportPath := filepath.Join(m.cfg.WorkDir, "specs", m.run.specName, "SUMMARY.md")
+	if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+		return "", fmt.Errorf("writing summary: %w", err)
+	}
+	return reportPath, nil
+}
+
+// buildRunSummaryReport generates a markdown summary of a /run execution.
+func buildRunSummaryReport(rs *runState, outcome string) string {
+	var b strings.Builder
+
+	b.WriteString("# Run Summary\n\n")
+
+	// Metadata.
+	b.WriteString("## Metadata\n\n")
+	b.WriteString("| Field | Value |\n")
+	b.WriteString("|-------|-------|\n")
+	fmt.Fprintf(&b, "| Spec | `%s` |\n", rs.specName)
+	fmt.Fprintf(&b, "| Agent | `%s` |\n", rs.agentID)
+	fmt.Fprintf(&b, "| Outcome | **%s** |\n", outcome)
+	fmt.Fprintf(&b, "| Retries | %d / %d |\n", rs.retries, rs.maxRetries)
+	if !rs.startTime.IsZero() {
+		fmt.Fprintf(&b, "| Started | %s |\n", rs.startTime.Format(time.RFC3339))
+		fmt.Fprintf(&b, "| Duration | %s |\n", time.Since(rs.startTime).Truncate(time.Second))
+	}
+	b.WriteString("\n")
+
+	// Gate results.
+	b.WriteString("## Gates\n\n")
+	if len(rs.gateResults) == 0 && len(rs.gates) == 0 {
+		b.WriteString("No gates defined.\n\n")
+	} else if len(rs.gateResults) == 0 {
+		b.WriteString("Gates were defined but not executed.\n\n")
+		for _, g := range rs.gates {
+			fmt.Fprintf(&b, "- **%s**: `%s`\n", g.Name, g.Command)
+		}
+		b.WriteString("\n")
+	} else {
+		allPassed := true
+		for _, r := range rs.gateResults {
+			status := "PASS"
+			if !r.Passed {
+				status = "FAIL"
+				allPassed = false
+			}
+			fmt.Fprintf(&b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
+			if !r.Passed && r.Output != "" {
+				out := strings.TrimSpace(r.Output)
+				if len(out) > 1000 {
+					out = out[:1000] + "\n...(truncated)"
+				}
+				fmt.Fprintf(&b, "  ```\n  %s\n  ```\n", out)
+			}
+		}
+		b.WriteString("\n")
+		if allPassed {
+			b.WriteString("All gates **passed**.\n\n")
+		} else {
+			b.WriteString("Some gates **failed**.\n\n")
+		}
+	}
+
+	// Outcome details.
+	b.WriteString("## Result\n\n")
+	switch outcome {
+	case "completed":
+		b.WriteString("All gates passed and changes were merged successfully.\n")
+	case "gate_failed":
+		fmt.Fprintf(&b, "Gate validation failed after %d retries. Worktree preserved for manual inspection.\n", rs.retries)
+	case "merge_failed":
+		b.WriteString("Gates passed but merge into the main branch failed. Worktree preserved for manual resolution.\n")
+	default:
+		fmt.Fprintf(&b, "Run ended with status: %s\n", outcome)
+	}
+
+	return b.String()
 }
 
 // buildRetryPrompt constructs the prompt for a retry agent after gate failure.

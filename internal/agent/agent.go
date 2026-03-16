@@ -73,6 +73,10 @@ Coding principles:
 - Prefer edit over write — use the edit tool for targeted changes, write tool only for new files.
 - Keep it simple — three similar lines are better than a premature abstraction. No feature flags, no backwards-compat shims, no speculative helpers.
 - Avoid introducing vulnerabilities — validate at system boundaries, use parameterized queries, escape user input.
+
+# Internal tools
+
+- restart — Restarts the pi process (re-exec with same binary and args). Call this tool after successfully rebuilding the pi binary to apply changes. The process will restart with the updated binary.
 `
 
 // Config holds configuration for creating a new Agent.

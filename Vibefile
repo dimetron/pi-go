@@ -25,6 +25,8 @@ vet:
 check: fmt vet lint test:
     "print a summary of what passed — all quality gates complete"
 
+cve-scan:
+    "run govulncheck on the entire module"
 
 # ── housekeeping ──────────────────────────────
 

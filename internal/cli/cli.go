@@ -159,8 +159,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 	coreTools = append(coreTools, agentTools...)
 
-	// Build screen tool for interactive mode (gives LLM access to terminal content).
+	// Build screen and restart tools for interactive mode.
 	var screen *tui.Screen
+	var restartCh chan struct{}
 	if mode == "interactive" {
 		screen = &tui.Screen{}
 		screenTool, err := tools.NewScreenTool(screen)
@@ -168,6 +169,18 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating screen tool: %w", err)
 		}
 		coreTools = append(coreTools, screenTool)
+
+		restartCh = make(chan struct{}, 1)
+		restartTool, err := tools.NewRestartTool(func() {
+			select {
+			case restartCh <- struct{}{}:
+			default:
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("creating restart tool: %w", err)
+		}
+		coreTools = append(coreTools, restartTool)
 	}
 
 	// Load system instruction: --system flag overrides default.
@@ -213,11 +226,17 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load skills from global and project directories.
+	// Global: ~/.pi-go/skills/
+	// Project: .pi-go/skills/, .claude/skills/, .cursor/skills/
 	skillDirs := []string{}
 	if homeDir, hErr := os.UserHomeDir(); hErr == nil {
 		skillDirs = append(skillDirs, filepath.Join(homeDir, ".pi-go", "skills"))
 	}
-	skillDirs = append(skillDirs, filepath.Join(".pi-go", "skills"))
+	skillDirs = append(skillDirs,
+		filepath.Join(".pi-go", "skills"),
+		filepath.Join(".claude", "skills"),
+		filepath.Join(".cursor", "skills"),
+	)
 	skills, _ := extension.LoadSkills(skillDirs...)
 	if len(skills) > 0 {
 		instruction += "\n\n# Available Skills\n\n"
@@ -297,6 +316,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			GenerateCommitMsg: commitMsgFn,
 			Logger:            sessionLog,
 			Screen:            screen,
+			Skills:            skills,
+			SkillDirs:         skillDirs,
+			RestartCh:         restartCh,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{
