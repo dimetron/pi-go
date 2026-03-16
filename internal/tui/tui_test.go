@@ -7,6 +7,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
 	"google.golang.org/adk/session"
@@ -701,4 +702,35 @@ func setupTestSessionWithID(t *testing.T) (*pisession.FileService, string) {
 		t.Fatalf("creating session: %v", err)
 	}
 	return svc, resp.Session.ID()
+}
+
+func TestHandleAgentsCommand_NoOrchestrator(t *testing.T) {
+	m := &model{
+		cfg:      Config{},
+		messages: make([]message, 0),
+	}
+	m.handleAgentsCommand()
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	}
+	if m.messages[0].content != "Subagent system not available." {
+		t.Errorf("unexpected message: %q", m.messages[0].content)
+	}
+}
+
+func TestHandleAgentsCommand_EmptyList(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	m := &model{
+		cfg: Config{
+			Orchestrator: orch,
+		},
+		messages: make([]message, 0),
+	}
+	m.handleAgentsCommand()
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	}
+	if m.messages[0].content != "No subagents have been spawned yet." {
+		t.Errorf("unexpected message: %q", m.messages[0].content)
+	}
 }

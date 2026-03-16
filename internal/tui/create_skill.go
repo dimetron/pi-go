@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/dimetron/pi-go/internal/extension"
@@ -68,7 +69,7 @@ func (m *model) handleSkillCreateCommand(args []string) (tea.Model, tea.Cmd) {
 
 	// Validate skill name
 	for _, c := range skillName {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '-' && c != '_' {
 			m.messages = append(m.messages, message{
 				role:    "assistant",
 				content: "Invalid skill name. Use only alphanumeric characters, dashes, and underscores.",

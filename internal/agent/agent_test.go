@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -758,5 +759,54 @@ func TestNewWithTools(t *testing.T) {
 	}
 	if a == nil {
 		t.Fatal("New() returned nil agent")
+	}
+}
+
+func TestRebuildWithInstruction(t *testing.T) {
+	llm := &mockLLM{name: "test-model", response: "Hello!"}
+
+	a, err := New(Config{Model: llm, Instruction: "Original instruction."})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with new instruction
+	err = a.RebuildWithInstruction("New custom instruction.")
+	if err != nil {
+		t.Fatalf("RebuildWithInstruction() error: %v", err)
+	}
+
+	// Verify the new instruction was applied
+	if a.config.Instruction != "New custom instruction." {
+		t.Errorf("config.Instruction = %q, want %q", a.config.Instruction, "New custom instruction.")
+	}
+}
+
+func TestRebuildWithInstructionEmptyError(t *testing.T) {
+	llm := &mockLLM{name: "test-model", response: "Hello!"}
+
+	a, err := New(Config{Model: llm})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with empty instruction should fail
+	err = a.RebuildWithInstruction("")
+	if err == nil {
+		t.Error("RebuildWithInstruction() should return error for empty instruction")
+	}
+}
+
+func TestDefaultRetryConfig(t *testing.T) {
+	cfg := DefaultRetryConfig()
+
+	if cfg.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
+	}
+	if cfg.InitialDelay != 1*time.Second {
+		t.Errorf("InitialDelay = %v, want 1s", cfg.InitialDelay)
+	}
+	if cfg.MaxDelay != 30*time.Second {
+		t.Errorf("MaxDelay = %v, want 30s", cfg.MaxDelay)
 	}
 }

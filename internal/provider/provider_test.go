@@ -38,3 +38,59 @@ func TestResolve(t *testing.T) {
 		})
 	}
 }
+
+func TestNewLLMWithProvider(t *testing.T) {
+	t.Run("creates gemini provider", func(t *testing.T) {
+		llm, err := NewLLM(nil, Info{Provider: "gemini", Model: "gemini-2.0-flash"}, "key", "", "")
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+	t.Run("creates openai provider", func(t *testing.T) {
+		llm, err := NewLLM(nil, Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "")
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+	t.Run("creates anthropic provider", func(t *testing.T) {
+		llm, err := NewLLM(nil, Info{Provider: "anthropic", Model: "claude-sonnet-4-20250514"}, "sk-test", "", "")
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+}
+
+func TestResolveWithOllamaPrefix(t *testing.T) {
+	info, err := Resolve("ollama/llama3:8b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "openai" {
+		t.Errorf("provider = %q, want openai (as fallback for ollama)", info.Provider)
+	}
+	if info.Ollama != true {
+		t.Error("expected Ollama = true")
+	}
+}
+
+func TestNewGemini(t *testing.T) {
+	llm, err := NewGemini(nil, "gemini-2.0-flash", "")
+	if err != nil {
+		t.Fatalf("NewGemini() error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+	if llm.Name() != "gemini-2.0-flash" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "gemini-2.0-flash")
+	}
+}

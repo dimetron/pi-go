@@ -28,7 +28,7 @@ type anthropicModel struct {
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
 func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
 	if apiKey == "" && baseURL == "" {
-		return nil, fmt.Errorf("Anthropic API key is required")
+		return nil, fmt.Errorf("anthropic API key is required")
 	}
 	var opts []anthropicopt.RequestOption
 	if apiKey != "" {
@@ -270,6 +270,7 @@ func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
 
 func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthropic.MessageNewParams, yield func(*model.LLMResponse, error) bool) {
 	stream := client.Messages.NewStreaming(ctx, params)
+	//nolint:errcheck // Close() may return error but we can't recover from it in defer
 	defer stream.Close()
 
 	var aggregatedText string

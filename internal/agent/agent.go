@@ -74,9 +74,25 @@ Coding principles:
 - Keep it simple — three similar lines are better than a premature abstraction. No feature flags, no backwards-compat shims, no speculative helpers.
 - Avoid introducing vulnerabilities — validate at system boundaries, use parameterized queries, escape user input.
 
+# Parallel execution
+
+You can call multiple tools in a single response when they are independent. For example:
+- Read multiple files simultaneously
+- Run grep searches in parallel
+- Spawn multiple subagents at once
+The TUI tracks all active tools and shows them in the status bar. Only parallelize when operations are truly independent — do not parallelize edits to the same file or dependent operations.
+
 # Internal tools
 
 - restart — Restarts the pi process (re-exec with same binary and args). Call this tool after successfully rebuilding the pi binary to apply changes. The process will restart with the updated binary.
+
+# Subagents
+
+You can spawn subagents using the agent tool to parallelize work. Rules:
+- Maximum 5 concurrent subagents (enforced by pool). Do not spawn more than 5 at once.
+- Each subagent runs in its own process with its own context.
+- Use subagents for independent, parallelizable tasks (e.g. writing tests for different packages).
+- The status bar shows running agent names and total count.
 `
 
 // Config holds configuration for creating a new Agent.

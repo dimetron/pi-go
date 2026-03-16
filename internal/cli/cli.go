@@ -41,13 +41,17 @@ var (
 	flagSystem   string
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "pi [prompt]",
-		Short: "pi-go coding agent",
-		Long:  "A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  runRoot,
+		Use:     "pi [prompt]",
+		Short:   "pi-go coding agent",
+		Long:    "A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.",
+		Version: Version,
+		Args:    cobra.ArbitraryArgs,
+		RunE:    runRoot,
 	}
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-20250514, gpt-4o, gemini-2.5-pro)")

@@ -130,12 +130,13 @@ type model struct {
 	scroll   int // scroll offset from bottom
 
 	// Agent state.
-	running    bool
-	streaming  string // current streaming text accumulator
-	thinking   string // current thinking text accumulator
-	activeTool string
-	toolStart  time.Time
-	agentCh    chan agentMsg // channel for receiving agent events
+	running     bool
+	streaming   string // current streaming text accumulator
+	thinking    string // current thinking text accumulator
+	activeTool  string
+	activeTools map[string]time.Time // parallel tool tracking: name → start time
+	toolStart   time.Time
+	agentCh     chan agentMsg // channel for receiving agent events
 
 	// Markdown renderer.
 	renderer *glamour.TermRenderer
@@ -176,7 +177,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel()
 
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(100),
 		glamour.WithEmoji(),
 	)
@@ -284,6 +285,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgent(m.agentCh)
 
 	case agentToolCallMsg:
+		if m.activeTools == nil {
+			m.activeTools = make(map[string]time.Time)
+		}
+		m.activeTools[msg.name] = time.Now()
 		m.activeTool = msg.name
 		m.toolStart = time.Now()
 		argsJSON, _ := json.MarshalIndent(msg.args, "", "  ")
@@ -302,7 +307,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgent(m.agentCh)
 
 	case agentToolResultMsg:
+		delete(m.activeTools, msg.name)
+		// Update activeTool to show remaining running tool, or clear.
 		m.activeTool = ""
+		for name := range m.activeTools {
+			m.activeTool = name
+			m.toolStart = m.activeTools[name]
+			break
+		}
 		m.traceLog = append(m.traceLog, traceEntry{
 			time:    time.Now(),
 			kind:    "tool_result",
@@ -322,6 +334,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentDoneMsg:
 		m.running = false
 		m.activeTool = ""
+		m.activeTools = nil
 		if msg.err != nil {
 			m.messages = append(m.messages, message{
 				role:    "assistant",
@@ -438,6 +451,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			m.running = false
 			m.activeTool = ""
+			m.activeTools = nil
 			m.streaming = ""
 			m.thinking = ""
 			if m.agentCh != nil {
@@ -466,6 +480,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			m.running = false
 			m.activeTool = ""
+			m.activeTools = nil
 			m.streaming = ""
 			m.thinking = ""
 			if m.agentCh != nil {
@@ -980,19 +995,49 @@ func (m *model) handleAgentsCommand() {
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString("**Subagents:**\n\n")
+	running, done, failed := 0, 0, 0
 	for _, a := range agents {
-		status := a.Status
-		prompt := a.Prompt
-		if len(prompt) > 60 {
-			prompt = prompt[:57] + "..."
+		switch a.Status {
+		case "running":
+			running++
+		case "completed":
+			done++
+		case "failed":
+			failed++
 		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Subagents** — %d total, %d running, %d done", len(agents), running, done)
+	if failed > 0 {
+		fmt.Fprintf(&b, ", %d failed", failed)
+	}
+	b.WriteString("\n\n")
+
+	for _, a := range agents {
+		icon := "  "
+		switch a.Status {
+		case "running":
+			icon = "▶ "
+		case "completed":
+			icon = "✓ "
+		case "failed":
+			icon = "✗ "
+		case "cancelled":
+			icon = "◼ "
+		}
+
+		prompt := a.Prompt
+		if len(prompt) > 70 {
+			prompt = prompt[:67] + "..."
+		}
+
 		dur := a.Duration
 		if dur == "" {
-			dur = time.Since(a.StartedAt).Truncate(time.Millisecond).String()
+			dur = time.Since(a.StartedAt).Truncate(time.Second).String()
 		}
-		fmt.Fprintf(&b, "- `%s` [%s] %s — %s (%s)\n", a.AgentID, a.Type, status, prompt, dur)
+
+		fmt.Fprintf(&b, "%s `%s` **%s** [%s] %s (%s)\n", icon, a.AgentID[:8], a.Type, a.Status, prompt, dur)
 	}
 
 	m.messages = append(m.messages, message{
@@ -1465,7 +1510,7 @@ func (m *model) updateRenderer() {
 		contentWidth = 40
 	}
 	m.renderer, _ = glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(contentWidth),
 		glamour.WithEmoji(),
 	)
@@ -1504,18 +1549,33 @@ func (m *model) renderMessages() string {
 
 		case "tool":
 			toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
+			argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 			b.WriteString("\n")
 			b.WriteString(toolBullet)
 			b.WriteString(toolStyle.Render(msg.tool))
-			b.WriteString(dim.Render("("))
-			b.WriteString(dim.Render(msg.toolIn))
-			b.WriteString(dim.Render(")"))
+			if msg.toolIn != "" {
+				args := msg.toolIn
+				if len(args) > 80 {
+					args = args[:77] + "..."
+				}
+				b.WriteString(dim.Render("("))
+				b.WriteString(argStyle.Render(args))
+				b.WriteString(dim.Render(")"))
+			}
 			b.WriteString("\n")
 			if msg.content != "" {
-				b.WriteString("  ")
-				b.WriteString(dim.Render("└ "))
-				b.WriteString(dim.Render(msg.content))
-				b.WriteString("\n")
+				content := msg.content
+				lines := strings.Split(content, "\n")
+				maxLines := 15
+				if len(lines) > maxLines {
+					lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
+				}
+				for _, line := range lines {
+					b.WriteString("  ")
+					b.WriteString(dim.Render("│ "))
+					b.WriteString(dim.Render(line))
+					b.WriteString("\n")
+				}
 			}
 
 		case "thinking":
@@ -1608,12 +1668,60 @@ func (m *model) renderStatusBar() string {
 		parts = append(parts, bright.Render(fmt.Sprintf("\u2387 %s", m.gitBranch)))
 	}
 
-	// Active tool or thinking status.
-	if m.activeTool != "" {
+	// Active tools or thinking status.
+	if len(m.activeTools) > 1 {
+		// Multiple tools running in parallel.
+		var toolNames []string
+		for name := range m.activeTools {
+			toolNames = append(toolNames, name)
+		}
+		sort.Strings(toolNames)
+		parts = append(parts, bright.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", "))))
+	} else if m.activeTool != "" {
 		elapsed := time.Since(m.toolStart).Truncate(time.Millisecond)
 		parts = append(parts, bright.Render(fmt.Sprintf("tool: %s (%s)", m.activeTool, elapsed)))
 	} else if m.running {
 		parts = append(parts, dim.Render("thinking..."))
+	}
+
+	// Subagent status.
+	if m.cfg.Orchestrator != nil {
+		agents := m.cfg.Orchestrator.List()
+		if len(agents) > 0 {
+			var runningNames []string
+			total := len(agents)
+			failed := 0
+			for _, a := range agents {
+				switch a.Status {
+				case "running":
+					name := a.Type
+					if len(name) > 12 {
+						name = name[:12]
+					}
+					runningNames = append(runningNames, name)
+				case "failed":
+					failed++
+				}
+			}
+			agentFg := lipgloss.Color("35") // green
+			if len(runningNames) > 0 {
+				agentFg = lipgloss.Color("214") // orange when active
+			}
+			if failed > 0 {
+				agentFg = lipgloss.Color("196") // red if any failed
+			}
+			agentStyle := lipgloss.NewStyle().Background(bg).Foreground(agentFg)
+			var label string
+			if len(runningNames) > 0 {
+				label = fmt.Sprintf("agents[%d]: %s", total, strings.Join(runningNames, ", "))
+			} else {
+				label = fmt.Sprintf("agents: %d done", total)
+			}
+			if failed > 0 {
+				label += fmt.Sprintf(" (%d failed)", failed)
+			}
+			parts = append(parts, agentStyle.Render(label))
+		}
 	}
 
 	// Trace count.

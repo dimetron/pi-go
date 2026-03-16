@@ -241,6 +241,7 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 		IncludeUsage: param.NewOpt(true),
 	}
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	//nolint:errcheck // Close() may return error but we can't recover from it in defer
 	defer stream.Close()
 
 	var aggregatedText string
