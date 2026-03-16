@@ -2,7 +2,7 @@
 
 ## Overview
 
-pi-go is a coding agent built on [Google ADK Go](https://google.golang.org/adk) with multi-provider LLM support, sandboxed tool execution, session persistence, and an interactive terminal UI.
+pi-go is a coding agent built on [Google ADK Go](https://google.golang.org/adk) with multi-provider LLM support, sandboxed tool execution, session persistence, an interactive terminal UI, LSP integration, and a subagent orchestration system.
 
 ## Package Structure
 
@@ -12,12 +12,14 @@ pi-go/
 └── internal/
     ├── agent/                       # ADK agent setup, retry logic
     ├── cli/                         # CLI flags, output modes, wiring
-    ├── config/                      # Config loading (global + project)
+    ├── config/                      # Config loading (global + project), model roles
     ├── extension/                   # Hooks, skills, MCP integration
+    ├── lsp/                         # LSP integration (protocol, client, manager, languages, hooks)
     ├── provider/                    # LLM providers (Anthropic, OpenAI, Gemini)
     ├── rpc/                         # Unix socket JSON-RPC server
     ├── session/                     # JSONL persistence, branching, compaction
-    ├── tools/                       # Sandboxed tools (read, write, edit, bash, grep, find, ls, tree)
+    ├── subagent/                    # Subagent orchestration (pool, spawner, worktree, orchestrator)
+    ├── tools/                       # Sandboxed tools (read, write, edit, bash, grep, find, ls, tree, git, lsp, agent)
     └── tui/                         # Bubble Tea v2 interactive UI
 ```
 
@@ -34,6 +36,8 @@ graph TD
     cli --> session["session"]
     cli --> tui["tui"]
     cli --> rpc["rpc"]
+    cli --> subagent["subagent"]
+    cli --> lsp["lsp"]
 
     agent --> adk_runner["ADK runner"]
     agent --> adk_llmagent["ADK llmagent"]
@@ -45,6 +49,11 @@ graph TD
 
     tools --> sandbox["os.Root sandbox"]
     tools --> adk_tool["ADK tool/functiontool"]
+
+    subagent --> config
+    subagent --> provider
+
+    lsp --> config
 
     tui --> bubbletea["Bubble Tea v2"]
     tui --> glamour["Glamour (markdown)"]
@@ -63,6 +72,8 @@ graph TD
     style tools fill:#3a5c1a,color:#fff
     style tui fill:#5c3a1a,color:#fff
     style session fill:#1a5c5c,color:#fff
+    style subagent fill:#3a1a5c,color:#fff
+    style lsp fill:#5c5c1a,color:#fff
 ```
 
 ## Request Flow
@@ -110,7 +121,22 @@ graph LR
         grep["grep<br/>Regex content search"]
     end
 
+    subgraph GitTools["Git Tools"]
+        git_overview["git-overview<br/>Repo status & info"]
+        git_file_diff["git-file-diff<br/>Unified file diff"]
+        git_hunk["git-hunk<br/>Parsed diff hunks"]
+    end
+
+    subgraph LSPTools["LSP Tools"]
+        lsp_diag["lsp-diagnostics<br/>Errors & warnings"]
+        lsp_def["lsp-definition<br/>Go to definition"]
+        lsp_ref["lsp-references<br/>Find references"]
+        lsp_hover["lsp-hover<br/>Type info & docs"]
+        lsp_sym["lsp-symbols<br/>Document symbols"]
+    end
+
     bash["bash<br/>Shell command<br/>(runs in sandbox dir)"]
+    agent_tool["agent<br/>Spawn subagent"]
 
     registry["CoreTools(sandbox)"] --> read
     registry --> write
@@ -120,9 +146,24 @@ graph LR
     registry --> find
     registry --> ls
     registry --> tree
+    registry --> git_overview
+    registry --> git_file_diff
+    registry --> git_hunk
+
+    lsp_registry["LSPTools(manager)"] --> lsp_diag
+    lsp_registry --> lsp_def
+    lsp_registry --> lsp_ref
+    lsp_registry --> lsp_hover
+    lsp_registry --> lsp_sym
+
+    agent_registry["AgentTool(orchestrator)"] --> agent_tool
 
     style Sandbox fill:#1a2a1a,stroke:#4a4,color:#fff
+    style GitTools fill:#1a1a2a,stroke:#44a,color:#fff
+    style LSPTools fill:#2a1a1a,stroke:#a44,color:#fff
     style registry fill:#333,color:#fff
+    style lsp_registry fill:#333,color:#fff
+    style agent_registry fill:#333,color:#fff
 ```
 
 All file tools operate through the `Sandbox` which uses Go's `os.Root` to restrict access to the working directory tree. Paths cannot escape via `..` or symlinks.
@@ -137,6 +178,81 @@ All file tools operate through the `Sandbox` which uses Go's `os.Root` to restri
 | find | pattern, path | files, total_files | 500 results max |
 | ls | path | entries (name, is_dir, size) | — |
 | tree | path, depth | tree, dirs, files | Depth 10 max, 500 entries |
+| git-overview | — | branch, commits, staged, unstaged, untracked | 10s timeout |
+| git-file-diff | file, staged | diff | 10s timeout |
+| git-hunk | file, staged | hunks (header, content, lines) | 10s timeout |
+
+## Model Roles
+
+The model roles system maps abstract role names to specific LLM models, enabling different components to use appropriate models for their task complexity.
+
+```
+config.json:
+{
+  "roles": {
+    "default": { "model": "claude-sonnet-4-20250514" },
+    "smol":    { "model": "claude-haiku-3-20240307" },
+    "plan":    { "model": "claude-sonnet-4-20250514" },
+    "slow":    { "model": "claude-opus-4-20250514" }
+  }
+}
+```
+
+`ResolveRole(role)` resolves a role name to a model and provider. Falls back to "default" role if the requested role is not configured. The provider is auto-detected from the model name prefix (claude→anthropic, gpt/o1-4→openai, gemini→gemini).
+
+CLI flags `--smol-model`, `--plan-model`, `--slow-model` override roles for a single invocation.
+
+## Subagent System
+
+The subagent system enables the main agent to spawn autonomous child agents for parallel task execution.
+
+```mermaid
+graph TD
+    agent_tool["agent tool<br/>(LLM-initiated)"] --> orchestrator["Orchestrator"]
+
+    orchestrator --> pool["Pool<br/>Concurrency limiter<br/>(max 5)"]
+    orchestrator --> spawner["Spawner<br/>Process manager"]
+    orchestrator --> worktree["WorktreeManager<br/>Git worktree isolation"]
+
+    spawner --> subprocess["pi subprocess<br/>(JSON output mode)"]
+    worktree --> git["git worktree<br/>.pi-go/worktrees/"]
+
+    subgraph AgentTypes["Agent Types"]
+        explore["explore<br/>Fast read-only<br/>(smol model)"]
+        plan["plan<br/>Analysis & planning<br/>(plan model)"]
+        designer["designer<br/>Code creation<br/>(slow model, worktree)"]
+        reviewer["reviewer<br/>Code review<br/>(slow model)"]
+        task["task<br/>Full coding tasks<br/>(default model, worktree)"]
+        quick_task["quick_task<br/>Small tasks<br/>(smol model)"]
+    end
+
+    orchestrator --> AgentTypes
+
+    style orchestrator fill:#3a1a5c,color:#fff
+    style pool fill:#1a3a5c,color:#fff
+    style spawner fill:#1a3a5c,color:#fff
+    style worktree fill:#1a3a5c,color:#fff
+    style AgentTypes fill:#1a1a2a,color:#fff
+```
+
+Each agent type defines: model role, worktree isolation, system instruction, and allowed tools. The orchestrator validates agent type, resolves the model via roles, acquires a pool slot, optionally creates a git worktree for isolation, and spawns a `pi` subprocess in JSON output mode. Events stream back via JSONL.
+
+## LSP Integration
+
+The LSP system provides language intelligence through two mechanisms:
+
+**Hooks** (automatic, via `AfterToolCallback`):
+- **Format-on-write**: After `write` or `edit` tool calls, requests formatting from the language server and applies edits (5s timeout)
+- **Diagnostics-on-edit**: After file modifications, collects compiler errors/warnings with a 2s delay for server processing
+
+**Explicit tools** (LLM-invoked):
+- `lsp-diagnostics` — Get errors and warnings for a file
+- `lsp-definition` — Go to definition of symbol at position
+- `lsp-references` — Find all references to a symbol
+- `lsp-hover` — Get type information and documentation
+- `lsp-symbols` — List all symbols in a file
+
+The `Manager` starts language servers on demand based on file extension, caches connections, and shuts them down on exit. Supported languages: Go (gopls), TypeScript (typescript-language-server), Python (pylsp), Rust (rust-analyzer).
 
 ## Provider System
 
@@ -303,6 +419,6 @@ graph TD
     style BubbleTea fill:#1a2a1a,color:#fff
 ```
 
-**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/branch`, `/compact`, `/exit`
+**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/branch`, `/compact`, `/commit`, `/agents`, `/exit`
 
-**Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll)
+**Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), y/n (commit confirmation)

@@ -24,17 +24,17 @@ Finish the remaining items from Step 14 of the enhance-from-oh-my-pi plan. All c
 **Files:**
 - Modify: `ARCHITECTURE.md`
 
-- [ ] Add `subagent/` package to the Package Structure tree with description (pool, spawner, worktree, orchestrator)
-- [ ] Add `lsp/` package to the Package Structure tree with description (protocol, client, manager, languages, hooks)
-- [ ] Update the Dependency Graph mermaid diagram to include cli->subagent, cli->lsp edges
-- [ ] Update Tool System diagram to include git-overview, git-file-diff, git-hunk, and the 5 LSP tools (diagnostics, definition, references, hover, symbols), and agent tool
-- [ ] Update the tool table with git-overview, git-file-diff, git-hunk rows
-- [ ] Add a new "Model Roles" section describing the role-based model routing system
-- [ ] Add a new "Subagent System" section with mermaid diagram showing orchestrator->pool, spawner, worktree, and the 6 agent types
-- [ ] Add a new "LSP Integration" section describing hooks (format-on-write, diagnostics-on-edit) and explicit tools
-- [ ] Update Slash commands list to include /commit and /agents
-- [ ] Update Keyboard section if commit confirmation keys were added
-- [ ] No tests needed for documentation-only task; verify build still passes
+- [x] Add `subagent/` package to the Package Structure tree with description (pool, spawner, worktree, orchestrator)
+- [x] Add `lsp/` package to the Package Structure tree with description (protocol, client, manager, languages, hooks)
+- [x] Update the Dependency Graph mermaid diagram to include cli->subagent, cli->lsp edges
+- [x] Update Tool System diagram to include git-overview, git-file-diff, git-hunk, and the 5 LSP tools (diagnostics, definition, references, hover, symbols), and agent tool
+- [x] Update the tool table with git-overview, git-file-diff, git-hunk rows
+- [x] Add a new "Model Roles" section describing the role-based model routing system
+- [x] Add a new "Subagent System" section with mermaid diagram showing orchestrator->pool, spawner, worktree, and the 6 agent types
+- [x] Add a new "LSP Integration" section describing hooks (format-on-write, diagnostics-on-edit) and explicit tools
+- [x] Update Slash commands list to include /commit and /agents
+- [x] Update Keyboard section if commit confirmation keys were added
+- [x] No tests needed for documentation-only task; verify build still passes
 
 ### Task 2: Add missing E2E test scenarios
 
