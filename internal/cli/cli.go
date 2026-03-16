@@ -38,6 +38,7 @@ var (
 	flagSmol     bool
 	flagSlow     bool
 	flagPlan     bool
+	flagSystem   string
 )
 
 func newRootCmd() *cobra.Command {
@@ -58,6 +59,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagSmol, "smol", false, "Use the smol role (fast/cheap model)")
 	cmd.Flags().BoolVar(&flagSlow, "slow", false, "Use the slow role (powerful model)")
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role (planning model)")
+	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
 
 	return cmd
 }
@@ -168,8 +170,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		coreTools = append(coreTools, screenTool)
 	}
 
-	// Load system instruction with optional AGENTS.md.
-	instruction := agent.LoadInstruction(agent.SystemInstruction)
+	// Load system instruction: --system flag overrides default.
+	var instruction string
+	if flagSystem != "" {
+		instruction = flagSystem
+	} else {
+		instruction = agent.LoadInstruction(agent.SystemInstruction)
+	}
 
 	// Load extensions: hooks, skills, MCP toolsets.
 	hooks := convertHooks(cfg.Hooks)

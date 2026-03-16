@@ -33,6 +33,12 @@ func Resolve(modelName string) (Info, error) {
 		return Info{}, fmt.Errorf("no model specified")
 	}
 
+	// Detect ollama/ prefix → Ollama OpenAI-compatible API.
+	// The prefix is stripped; the remainder is the Ollama model name.
+	if strings.HasPrefix(strings.ToLower(modelName), "ollama/") {
+		return Info{Provider: "openai", Model: modelName[len("ollama/"):], Ollama: true}, nil
+	}
+
 	// Detect :cloud suffix → Ollama Anthropic-compatible API.
 	// The full model name (including :cloud) is passed to Ollama as-is.
 	if strings.HasSuffix(modelName, ":cloud") {
@@ -46,7 +52,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, o1, o3, o4, gemini, or use :cloud suffix for Ollama)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, o1, o3, o4, gemini, or use ollama/ prefix or :cloud suffix for Ollama)", modelName)
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, and thinking level.

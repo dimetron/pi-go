@@ -305,6 +305,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runAgentDoneMsg:
 		return m.handleRunAgentDone()
 
+	case runGateResultMsg:
+		return m.handleRunGateResult(msg)
+
+	case runMergeResultMsg:
+		return m.handleRunMergeResult(msg)
+
 	case commitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
 

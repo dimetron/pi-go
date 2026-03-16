@@ -1,0 +1,12 @@
+recipe: compile the Go binary named pi-go from the module root
+model: claude-sonnet-4-6
+variables:
+    model: claude-sonnet-4-6
+    module: github.com/dimetron/pi-go
+    name: pi-go
+context_files:
+    Makefile: sha256:d9efe528ab101755d3bfa5efb4a5a3c0ec58ab874aaac6cb3e7e94ecb792c25c
+    Vibefile: sha256:152d70eeb29dabd482ec55a0f3d51abb217c3881aad4a433e0ce95af35fdace1
+    go.mod: sha256:9fa39f709e3c8f87afe60bd676839101d69f4ec5c306270fd47d97455706dd7d
+script_hash: sha256:e4122d7fe4f606a400e6d58f6e910f596d10235328f1c578bbd61339e5d761fe
+generated_at: 2026-03-16T16:52:16.971641Z

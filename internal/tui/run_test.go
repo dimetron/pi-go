@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -365,13 +367,15 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 		t.Errorf("activeTool should be cleared after result, got %q", m.activeTool)
 	}
 
-	// Process done.
+	// Process done — with no gates defined, it transitions to merging.
 	m.handleRunAgentDone()
 	if m.running {
 		t.Error("model should not be running after done")
 	}
-	if m.run.phase != "done" {
-		t.Errorf("run phase = %q, want %q", m.run.phase, "done")
+	// With no gates and no orchestrator/worktree manager, phase goes to "merging"
+	// because handleRunAgentDone skips gates and attempts merge.
+	if m.run.phase != "merging" {
+		t.Errorf("run phase = %q, want %q", m.run.phase, "merging")
 	}
 }
 
@@ -395,5 +399,323 @@ func TestHandleRunCommand_NoArgsShowsAvailableSpecs(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	if !strings.Contains(last.content, "my-feature") {
 		t.Errorf("expected spec name in output, got: %s", last.content)
+	}
+}
+
+// --- Step 6 tests: Gate Validation & Auto-merge ---
+
+func TestRunGates_AllPass(t *testing.T) {
+	gates := []Gate{
+		{Name: "echo", Command: "echo hello"},
+		{Name: "true", Command: "true"},
+	}
+
+	result := runGates(context.Background(), t.TempDir(), gates)
+
+	if !result.passed {
+		t.Error("expected all gates to pass")
+	}
+	if len(result.results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(result.results))
+	}
+	for i, r := range result.results {
+		if !r.Passed {
+			t.Errorf("gate[%d] %q should have passed", i, r.Name)
+		}
+	}
+	// First gate should have "hello" in output.
+	if !strings.Contains(result.results[0].Output, "hello") {
+		t.Errorf("gate[0] output should contain 'hello', got: %q", result.results[0].Output)
+	}
+}
+
+func TestRunGates_BuildFails(t *testing.T) {
+	gates := []Gate{
+		{Name: "build", Command: "false"},
+		{Name: "test", Command: "true"},
+	}
+
+	result := runGates(context.Background(), t.TempDir(), gates)
+
+	if result.passed {
+		t.Error("expected gates to fail")
+	}
+	// Should stop at first failure.
+	if len(result.results) != 1 {
+		t.Fatalf("expected 1 result (stops at first failure), got %d", len(result.results))
+	}
+	if result.results[0].Passed {
+		t.Error("build gate should have failed")
+	}
+}
+
+func TestRunGates_TestFails(t *testing.T) {
+	gates := []Gate{
+		{Name: "build", Command: "true"},
+		{Name: "test", Command: "false"},
+	}
+
+	result := runGates(context.Background(), t.TempDir(), gates)
+
+	if result.passed {
+		t.Error("expected gates to fail")
+	}
+	if len(result.results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(result.results))
+	}
+	if !result.results[0].Passed {
+		t.Error("build gate should have passed")
+	}
+	if result.results[1].Passed {
+		t.Error("test gate should have failed")
+	}
+}
+
+func TestRunGates_NoGates(t *testing.T) {
+	result := runGates(context.Background(), t.TempDir(), nil)
+
+	if !result.passed {
+		t.Error("expected pass with no gates")
+	}
+	if len(result.results) != 0 {
+		t.Errorf("expected 0 results, got %d", len(result.results))
+	}
+}
+
+func TestRunGates_CapturesOutput(t *testing.T) {
+	gates := []Gate{
+		{Name: "output", Command: "echo stdout-text && echo stderr-text >&2"},
+	}
+
+	result := runGates(context.Background(), t.TempDir(), gates)
+
+	if !result.passed {
+		t.Error("expected gate to pass")
+	}
+	if !strings.Contains(result.results[0].Output, "stdout-text") {
+		t.Errorf("expected stdout captured, got: %q", result.results[0].Output)
+	}
+	if !strings.Contains(result.results[0].Output, "stderr-text") {
+		t.Errorf("expected stderr captured, got: %q", result.results[0].Output)
+	}
+}
+
+func TestHandleRunGateResult_AllPass(t *testing.T) {
+	m := &model{
+		cfg: Config{
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "gating",
+		},
+	}
+
+	msg := runGateResultMsg{
+		results: []GateResult{
+			{Name: "build", Command: "go build ./...", Passed: true},
+			{Name: "test", Command: "go test ./...", Passed: true},
+		},
+		passed: true,
+	}
+
+	m.handleRunGateResult(msg)
+
+	if m.run.phase != "merging" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "merging")
+	}
+
+	// Should have gate results and merge message.
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "All gates passed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'All gates passed' message")
+	}
+}
+
+func TestHandleRunGateResult_Failure(t *testing.T) {
+	m := &model{
+		cfg: Config{
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "gating",
+		},
+	}
+
+	msg := runGateResultMsg{
+		results: []GateResult{
+			{Name: "build", Command: "go build ./...", Passed: true},
+			{Name: "test", Command: "go test ./...", Passed: false, Output: "FAIL pkg/foo"},
+		},
+		passed: false,
+	}
+
+	m.handleRunGateResult(msg)
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "failed")
+	}
+
+	if m.run.gateOutput == "" {
+		t.Error("expected gateOutput to be set")
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "Gate validation failed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'Gate validation failed' message")
+	}
+}
+
+func TestHandleRunMergeResult_Success(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "merging",
+		},
+	}
+
+	msg := runMergeResultMsg{output: "Merge made by 'ort' strategy."}
+	m.handleRunMergeResult(msg)
+
+	if m.run.phase != "done" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "done")
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "merged successfully") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'merged successfully' message")
+	}
+}
+
+func TestHandleRunMergeResult_Conflict(t *testing.T) {
+	m := &model{
+		cfg: Config{
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "merging",
+		},
+	}
+
+	msg := runMergeResultMsg{
+		output: "CONFLICT (content): Merge conflict in foo.go",
+		err:    fmt.Errorf("merge failed: exit status 1"),
+	}
+	m.handleRunMergeResult(msg)
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "failed")
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "Merge failed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'Merge failed' message")
+	}
+}
+
+func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		running:  true,
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "running",
+			gates:    nil, // no gates
+		},
+	}
+
+	m.handleRunAgentDone()
+
+	if m.run.phase != "merging" {
+		t.Errorf("phase = %q, want %q (should skip to merge with no gates)", m.run.phase, "merging")
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "No gates defined") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'No gates defined' message")
+	}
+}
+
+func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
+	m := &model{
+		cfg: Config{
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+		},
+		messages: make([]message, 0),
+		running:  true,
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "running",
+			gates: []Gate{
+				{Name: "build", Command: "go build ./..."},
+			},
+		},
+	}
+
+	m.handleRunAgentDone()
+
+	if m.run.phase != "gating" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "gating")
+	}
+}
+
+func TestFormatGateFailures(t *testing.T) {
+	results := []GateResult{
+		{Name: "build", Command: "go build ./...", Passed: true, Output: "ok"},
+		{Name: "test", Command: "go test ./...", Passed: false, Output: "FAIL pkg/foo\nTest failed"},
+	}
+
+	output := formatGateFailures(results)
+
+	if strings.Contains(output, "build") && strings.Contains(output, "ok") {
+		t.Error("passed gates should not be included in failure output")
+	}
+	if !strings.Contains(output, "test") {
+		t.Error("failed gate name should be in output")
+	}
+	if !strings.Contains(output, "FAIL pkg/foo") {
+		t.Error("failed gate output should be included")
 	}
 }

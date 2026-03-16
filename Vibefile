@@ -1,0 +1,71 @@
+model  = claude-sonnet-4-6
+name   = pi-go
+module = github.com/dimetron/pi-go
+
+# ── build & test ──────────────────────────────
+
+build:
+    "compile the Go binary named $(name) from the module root"
+
+test:
+    "run all Go tests in every package with verbose output and race detection enabled"
+
+lint:
+    "run golangci-lint on the entire module. if golangci-lint is not installed, install it first using go install"
+
+fmt:
+    "format all .go files using gofmt -s -w and then run go mod tidy"
+
+vet:
+    "run go vet on all packages in the module"
+
+
+# ── quality gates ─────────────────────────────
+
+check: fmt vet lint test:
+    "print a summary of what passed — all quality gates complete"
+
+
+# ── housekeeping ──────────────────────────────
+
+clean:
+    "remove the $(name) binary and the dist/ directory if they exist"
+
+install: build:
+    "move the compiled $(name) binary to $GOPATH/bin or ~/go/bin"
+
+
+# ── makefile ──────────────────────────────────
+
+make-build:
+    "run the existing Makefile target 'build' by executing make build"
+
+make-test:
+    "run the existing Makefile target 'test' by executing make test"
+
+make-test-unit:
+    "run the existing Makefile target 'test-unit' by executing make test-unit"
+
+make-test-integration:
+    "run the existing Makefile target 'test-integration' by executing make test-integration"
+
+make-test-e2e:
+    "run the existing Makefile target 'test-e2e' by executing make test-e2e"
+
+make-e2e:
+    "run the existing Makefile target 'e2e' by executing make e2e"
+
+make-test-all:
+    "run the existing Makefile target 'test-all' by executing make test-all"
+
+make-test-coverage:
+    "run the existing Makefile target 'test-coverage' by executing make test-coverage"
+
+make-test-ollama:
+    "run the existing Makefile target 'test-ollama' by executing make test-ollama"
+
+make-lint:
+    "run the existing Makefile target 'lint' by executing make lint"
+
+make-clean:
+    "run the existing Makefile target 'clean' by executing make clean"

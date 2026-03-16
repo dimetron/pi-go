@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -24,6 +27,7 @@ type runState struct {
 	retries    int
 	maxRetries int
 	events     <-chan subagent.Event // subagent event channel
+	gateOutput string                // formatted gate failure output (for retry prompts)
 }
 
 // --- Message types for /run streaming ---
@@ -35,6 +39,26 @@ type runAgentEventMsg struct {
 
 // runAgentDoneMsg signals that the subagent has finished (events channel closed).
 type runAgentDoneMsg struct{}
+
+// GateResult holds the result of running a single gate command.
+type GateResult struct {
+	Name    string
+	Command string
+	Passed  bool
+	Output  string
+}
+
+// runGateResultMsg carries the result of running all gate commands.
+type runGateResultMsg struct {
+	results []GateResult
+	passed  bool // true if all gates passed
+}
+
+// runMergeResultMsg carries the result of merging the worktree branch.
+type runMergeResultMsg struct {
+	output string
+	err    error
+}
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
 func buildRunPrompt(specName, promptMD string) string {
@@ -90,12 +114,13 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	// Build augmented prompt.
 	prompt := buildRunPrompt(specName, promptMD)
 
-	// Spawn task subagent.
+	// Spawn task subagent with SkipCleanup so we can run gates before merge.
 	useWorktree := true
 	events, agentID, err := m.cfg.Orchestrator.Spawn(m.ctx, subagent.AgentInput{
-		Type:     "task",
-		Prompt:   prompt,
-		Worktree: &useWorktree,
+		Type:        "task",
+		Prompt:      prompt,
+		Worktree:    &useWorktree,
+		SkipCleanup: true,
 	})
 	if err != nil {
 		m.messages = append(m.messages, message{
@@ -228,22 +253,231 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleRunAgentDone is called when the subagent events channel closes.
+// It transitions to gate validation if gates are defined, or directly to merge.
 func (m *model) handleRunAgentDone() (tea.Model, tea.Cmd) {
 	m.running = false
 	m.activeTool = ""
 	m.streaming = ""
 	m.thinking = ""
 
-	if m.run != nil {
-		m.run.phase = "done"
-		m.messages = append(m.messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("**Spec `%s` completed** — agent `%s` finished.", m.run.specName, m.run.agentID),
-		})
-		// TODO: Step 6 will add gate validation here instead of marking done.
+	if m.run == nil {
+		return m, nil
 	}
 
+	m.messages = append(m.messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("**Agent `%s` finished** — validating gates...", m.run.agentID),
+	})
+
+	// If no gates, skip directly to merge.
+	if len(m.run.gates) == 0 {
+		m.run.phase = "merging"
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: "No gates defined — proceeding to merge.",
+		})
+		return m, m.mergeWorktreeCmd()
+	}
+
+	// Run gate validation.
+	m.run.phase = "gating"
+	return m, m.runGatesCmd()
+}
+
+// runGatesCmd returns a tea.Cmd that runs each gate command sequentially in the worktree.
+func (m *model) runGatesCmd() tea.Cmd {
+	if m.run == nil || m.cfg.Orchestrator == nil {
+		return nil
+	}
+
+	wm := m.cfg.Orchestrator.Worktree()
+	if wm == nil {
+		return func() tea.Msg {
+			return runGateResultMsg{passed: true}
+		}
+	}
+
+	worktreePath := wm.PathFor(m.run.agentID)
+	if worktreePath == "" {
+		// No worktree path found — treat as pass (agent may not have used worktree).
+		return func() tea.Msg {
+			return runGateResultMsg{passed: true}
+		}
+	}
+
+	gates := m.run.gates
+	ctx := m.ctx
+
+	return func() tea.Msg {
+		return runGates(ctx, worktreePath, gates)
+	}
+}
+
+// runGates executes gate commands sequentially in the given directory.
+func runGates(ctx context.Context, workDir string, gates []Gate) runGateResultMsg {
+	var results []GateResult
+	allPassed := true
+
+	for _, gate := range gates {
+		cmd := exec.CommandContext(ctx, "sh", "-c", gate.Command)
+		cmd.Dir = workDir
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
+		passed := err == nil
+
+		output := stdout.String()
+		if stderr.Len() > 0 {
+			if output != "" {
+				output += "\n"
+			}
+			output += stderr.String()
+		}
+
+		results = append(results, GateResult{
+			Name:    gate.Name,
+			Command: gate.Command,
+			Passed:  passed,
+			Output:  output,
+		})
+
+		if !passed {
+			allPassed = false
+			break // Stop at first failure.
+		}
+	}
+
+	return runGateResultMsg{results: results, passed: allPassed}
+}
+
+// handleRunGateResult processes gate validation results.
+func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
+	if m.run == nil {
+		return m, nil
+	}
+
+	// Build gate results summary.
+	var summary strings.Builder
+	summary.WriteString("**Gate Results:**\n")
+	for _, r := range msg.results {
+		status := "PASS"
+		if !r.Passed {
+			status = "FAIL"
+		}
+		summary.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", r.Name, r.Command, status))
+		if !r.Passed && r.Output != "" {
+			// Include truncated output for failed gates.
+			out := r.Output
+			if len(out) > 500 {
+				out = out[:500] + "...(truncated)"
+			}
+			summary.WriteString(fmt.Sprintf("  ```\n  %s\n  ```\n", strings.TrimSpace(out)))
+		}
+	}
+
+	m.messages = append(m.messages, message{
+		role:    "assistant",
+		content: summary.String(),
+	})
+
+	if msg.passed {
+		// All gates passed — proceed to merge.
+		m.run.phase = "merging"
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: "All gates passed — merging worktree branch...",
+		})
+		return m, m.mergeWorktreeCmd()
+	}
+
+	// Gates failed — store results for potential retry (Step 7).
+	m.run.gateOutput = formatGateFailures(msg.results)
+	m.run.phase = "failed"
+
+	wm := m.cfg.Orchestrator.Worktree()
+	wtPath := ""
+	if wm != nil {
+		wtPath = wm.PathFor(m.run.agentID)
+	}
+
+	m.messages = append(m.messages, message{
+		role: "assistant",
+		content: fmt.Sprintf("**Gate validation failed** for spec `%s`.\nWorktree preserved at: `%s`\nUse retry logic or inspect manually.",
+			m.run.specName, wtPath),
+	})
+
 	return m, nil
+}
+
+// mergeWorktreeCmd returns a tea.Cmd that merges the worktree branch and cleans up.
+func (m *model) mergeWorktreeCmd() tea.Cmd {
+	if m.run == nil || m.cfg.Orchestrator == nil {
+		return nil
+	}
+
+	wm := m.cfg.Orchestrator.Worktree()
+	if wm == nil {
+		return func() tea.Msg {
+			return runMergeResultMsg{output: "no worktree manager"}
+		}
+	}
+
+	agentID := m.run.agentID
+	return func() tea.Msg {
+		out, err := wm.MergeBack(agentID)
+		if err != nil {
+			return runMergeResultMsg{output: out, err: err}
+		}
+		// Cleanup worktree after successful merge.
+		_ = wm.Cleanup(agentID)
+		return runMergeResultMsg{output: out}
+	}
+}
+
+// handleRunMergeResult processes the merge result.
+func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd) {
+	if m.run == nil {
+		return m, nil
+	}
+
+	if msg.err != nil {
+		m.run.phase = "failed"
+
+		wm := m.cfg.Orchestrator.Worktree()
+		wtPath := ""
+		if wm != nil {
+			wtPath = wm.PathFor(m.run.agentID)
+		}
+
+		m.messages = append(m.messages, message{
+			role: "assistant",
+			content: fmt.Sprintf("**Merge failed** for spec `%s`: %v\nWorktree preserved at: `%s`",
+				m.run.specName, msg.err, wtPath),
+		})
+		return m, nil
+	}
+
+	m.run.phase = "done"
+	m.messages = append(m.messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("**Spec `%s` completed** — changes merged successfully.", m.run.specName),
+	})
+
+	return m, nil
+}
+
+// formatGateFailures formats gate results into a string for retry prompts.
+func formatGateFailures(results []GateResult) string {
+	var b strings.Builder
+	for _, r := range results {
+		if !r.Passed {
+			b.WriteString(fmt.Sprintf("Gate `%s` (`%s`) FAILED:\n%s\n\n", r.Name, r.Command, r.Output))
+		}
+	}
+	return b.String()
 }
 
 // waitForRunEvents returns a tea.Cmd to consume the next event from the running subagent.

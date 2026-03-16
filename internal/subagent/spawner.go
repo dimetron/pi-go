@@ -14,10 +14,11 @@ import (
 
 // SpawnOpts holds options for spawning a subagent process.
 type SpawnOpts struct {
-	AgentID string // Unique ID for this agent
-	Model   string // Model name to use
-	WorkDir string // Working directory for the process
-	Prompt  string // Task prompt to send
+	AgentID     string // Unique ID for this agent
+	Model       string // Model name to use
+	WorkDir     string // Working directory for the process
+	Prompt      string // Task prompt to send
+	Instruction string // System instruction for the subagent
 }
 
 // Spawner creates and manages subagent pi processes.
@@ -76,6 +77,9 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 	args := []string{"--mode", "json"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	if opts.Instruction != "" {
+		args = append(args, "--system", opts.Instruction)
 	}
 	args = append(args, opts.Prompt)
 

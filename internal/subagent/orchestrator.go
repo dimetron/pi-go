@@ -25,14 +25,15 @@ type Orchestrator struct {
 
 // agentState tracks the runtime state of a subagent.
 type agentState struct {
-	ID         string
-	Type       string
-	Prompt     string
-	StartedAt  time.Time
-	FinishedAt time.Time // set when status changes from "running"
-	Process    *Process
-	Worktree   bool   // whether a worktree was created
-	Status     string // "running", "completed", "failed", "cancelled"
+	ID          string
+	Type        string
+	Prompt      string
+	StartedAt   time.Time
+	FinishedAt  time.Time // set when status changes from "running"
+	Process     *Process
+	Worktree    bool   // whether a worktree was created
+	SkipCleanup bool   // don't auto-cleanup worktree on completion (for gate validation)
+	Status      string // "running", "completed", "failed", "cancelled"
 }
 
 // NewOrchestrator creates an Orchestrator from config.
@@ -100,10 +101,11 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 
 	// Spawn the process.
 	proc, err := o.spawner.Spawn(ctx, SpawnOpts{
-		AgentID: agentID,
-		Model:   model,
-		WorkDir: workDir,
-		Prompt:  input.Prompt,
+		AgentID:     agentID,
+		Model:       model,
+		WorkDir:     workDir,
+		Prompt:      input.Prompt,
+		Instruction: typeDef.Instruction,
 	})
 	if err != nil {
 		if useWorktree && o.worktree != nil {
@@ -114,13 +116,14 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 	}
 
 	state := &agentState{
-		ID:        agentID,
-		Type:      input.Type,
-		Prompt:    input.Prompt,
-		StartedAt: time.Now(),
-		Process:   proc,
-		Worktree:  useWorktree && o.worktree != nil,
-		Status:    "running",
+		ID:          agentID,
+		Type:        input.Type,
+		Prompt:      input.Prompt,
+		StartedAt:   time.Now(),
+		Process:     proc,
+		Worktree:    useWorktree && o.worktree != nil,
+		SkipCleanup: input.SkipCleanup,
+		Status:      "running",
 	}
 
 	o.mu.Lock()
@@ -161,8 +164,8 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 		}
 		o.mu.Unlock()
 
-		// Cleanup worktree if needed.
-		if state.Worktree && o.worktree != nil {
+		// Cleanup worktree if needed (skip if caller will handle it, e.g. for gate validation).
+		if state.Worktree && o.worktree != nil && !state.SkipCleanup {
 			_ = o.worktree.Cleanup(agentID)
 		}
 	}()
@@ -211,6 +214,11 @@ func (o *Orchestrator) Cancel(agentID string) error {
 	state.FinishedAt = time.Now()
 
 	return nil
+}
+
+// Worktree returns the WorktreeManager (may be nil if worktrees are disabled).
+func (o *Orchestrator) Worktree() *WorktreeManager {
+	return o.worktree
 }
 
 // Shutdown cancels all running agents and cleans up worktrees.
