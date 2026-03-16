@@ -105,6 +105,7 @@ type Config struct {
 type Agent struct {
 	runner         *runner.Runner
 	sessionService session.Service
+	config         Config // stored for RebuildWithInstruction
 }
 
 // New creates a new Agent with the given configuration.
@@ -154,7 +155,47 @@ func New(cfg Config) (*Agent, error) {
 	return &Agent{
 		runner:         r,
 		sessionService: sessionSvc,
+		config:         cfg,
 	}, nil
+}
+
+// RebuildWithInstruction recreates the agent's internal runner with a new
+// system instruction while preserving all other configuration (tools, callbacks, etc.).
+// The session service is reused so existing sessions remain accessible.
+func (a *Agent) RebuildWithInstruction(instruction string) error {
+	cfg := a.config
+	cfg.Instruction = instruction
+	// Force the provided instruction (skip default fallback).
+	if instruction == "" {
+		return fmt.Errorf("instruction must not be empty")
+	}
+
+	llmAgent, err := llmagent.New(llmagent.Config{
+		Name:                "pi",
+		Description:         "A coding agent that helps with software engineering tasks.",
+		Model:               cfg.Model,
+		Instruction:         instruction,
+		Tools:               cfg.Tools,
+		Toolsets:            cfg.Toolsets,
+		BeforeToolCallbacks: cfg.BeforeToolCallbacks,
+		AfterToolCallbacks:  cfg.AfterToolCallbacks,
+	})
+	if err != nil {
+		return fmt.Errorf("rebuilding LLM agent: %w", err)
+	}
+
+	r, err := runner.New(runner.Config{
+		AppName:        AppName,
+		Agent:          llmAgent,
+		SessionService: a.sessionService,
+	})
+	if err != nil {
+		return fmt.Errorf("rebuilding runner: %w", err)
+	}
+
+	a.runner = r
+	a.config = cfg
+	return nil
 }
 
 // CreateSession creates a new session and returns its ID.

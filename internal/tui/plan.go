@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/dimetron/pi-go/internal/sop"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -83,8 +85,9 @@ func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 }
 
 // handlePlanCommand processes "/plan <rough idea>" input.
-// Creates the spec skeleton and shows confirmation.
-// Agent kickoff with SOP injection is deferred to Step 3.
+// Creates the spec skeleton, loads the PDD SOP, injects it as the system
+// instruction, clears the conversation, and sends the rough idea as the
+// first user message so the LLM drives the PDD flow.
 func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	if len(parts) == 0 {
 		m.messages = append(m.messages, message{
@@ -110,17 +113,74 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Load PDD SOP (project override → global override → embedded default).
+	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
+	if err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error loading PDD SOP: %v", err),
+		})
+		m.input = ""
+		m.cursorPos = 0
+		return m, nil
+	}
+
+	// Construct augmented system instruction with SOP + task context.
+	instruction := sopText + "\n\n## Current Task\n" +
+		"- Task name: " + taskName + "\n" +
+		"- Spec directory: specs/" + taskName + "/\n" +
+		"- Rough idea: " + roughIdea + "\n\n" +
+		"## Instructions\n" +
+		"The spec skeleton has been created at `" + specDir + "`. " +
+		"Begin the PDD process starting with Step 2 (Initial Process Planning).\n" +
+		"Artifacts should be written to `specs/" + taskName + "/` using the write and edit tools.\n"
+
+	// Rebuild the agent with the PDD SOP as system instruction.
+	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error configuring agent: %v", err),
+		})
+		m.input = ""
+		m.cursorPos = 0
+		return m, nil
+	}
+
+	// Create a fresh session so the LLM starts with a clean conversation.
+	newSessionID, err := m.cfg.Agent.CreateSession(m.ctx)
+	if err != nil {
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error creating session: %v", err),
+		})
+		m.input = ""
+		m.cursorPos = 0
+		return m, nil
+	}
+	m.cfg.SessionID = newSessionID
+
+	// Clear the TUI conversation (like /clear).
+	m.messages = m.messages[:0]
+	m.scroll = 0
+
+	// Show a brief confirmation, then start the agent loop with the rough idea.
 	m.messages = append(m.messages, message{
 		role: "assistant",
-		content: fmt.Sprintf("Created spec skeleton: `%s`\n\n"+
-			"- `rough-idea.md` — your idea\n"+
-			"- `requirements.md` — Q&A template\n"+
-			"- `research/` — research artifacts\n\n"+
-			"_PDD SOP injection will be added in the next step._",
-			specDir),
+		content: fmt.Sprintf("Starting PDD session for **%s**\n\nSpec directory: `%s`",
+			taskName, specDir),
 	})
+	m.messages = append(m.messages, message{role: "user", content: roughIdea})
+	m.messages = append(m.messages, message{role: "assistant", content: ""})
+	m.streaming = ""
+	m.thinking = ""
 
+	// Clear input and start the agent.
 	m.input = ""
 	m.cursorPos = 0
-	return m, nil
+	m.running = true
+
+	m.agentCh = make(chan agentMsg, 64)
+	go m.runAgentLoop(roughIdea)
+
+	return m, waitForAgent(m.agentCh)
 }

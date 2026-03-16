@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/sop"
 )
 
 func TestToKebabCase_Simple(t *testing.T) {
@@ -160,5 +162,95 @@ func TestCreateSpecSkeleton_RequirementsContent(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "## Questions & Answers") {
 		t.Error("requirements.md should contain '## Questions & Answers' header")
+	}
+}
+
+// --- Step 3 tests: PDD SOP instruction construction ---
+
+func TestBuildPlanInstruction_ContainsSOP(t *testing.T) {
+	// Verify the instruction construction includes the SOP text, task context, and instructions.
+	tmpDir := t.TempDir()
+	sopText, err := sop.LoadPDD(tmpDir) // no overrides → embedded default
+	if err != nil {
+		t.Fatalf("LoadPDD failed: %v", err)
+	}
+
+	taskName := "add-rate-limiting"
+	roughIdea := "add rate limiting to API"
+	specDir := filepath.Join(tmpDir, "specs", taskName)
+
+	instruction := sopText + "\n\n## Current Task\n" +
+		"- Task name: " + taskName + "\n" +
+		"- Spec directory: specs/" + taskName + "/\n" +
+		"- Rough idea: " + roughIdea + "\n\n" +
+		"## Instructions\n" +
+		"The spec skeleton has been created at `" + specDir + "`. " +
+		"Begin the PDD process starting with Step 2 (Initial Process Planning).\n" +
+		"Artifacts should be written to `specs/" + taskName + "/` using the write and edit tools.\n"
+
+	// Must contain the SOP text.
+	if !strings.Contains(instruction, "PDD") {
+		t.Error("instruction should contain PDD SOP content")
+	}
+
+	// Must contain task context.
+	if !strings.Contains(instruction, "## Current Task") {
+		t.Error("instruction should contain '## Current Task' section")
+	}
+	if !strings.Contains(instruction, taskName) {
+		t.Errorf("instruction should contain task name %q", taskName)
+	}
+	if !strings.Contains(instruction, roughIdea) {
+		t.Errorf("instruction should contain rough idea %q", roughIdea)
+	}
+
+	// Must contain instructions for the agent.
+	if !strings.Contains(instruction, "Begin the PDD process") {
+		t.Error("instruction should contain 'Begin the PDD process'")
+	}
+	if !strings.Contains(instruction, "specs/"+taskName+"/") {
+		t.Error("instruction should reference the spec directory path")
+	}
+}
+
+func TestBuildPlanInstruction_SOPOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create project-level SOP override.
+	sopDir := filepath.Join(tmpDir, ".pi-go", "sops")
+	if err := os.MkdirAll(sopDir, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	customSOP := "# Custom PDD SOP\n\nThis is a custom PDD workflow."
+	if err := os.WriteFile(filepath.Join(sopDir, "pdd.md"), []byte(customSOP), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	sopText, err := sop.LoadPDD(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadPDD failed: %v", err)
+	}
+
+	if sopText != customSOP {
+		t.Errorf("LoadPDD should return custom SOP, got %q", sopText[:50])
+	}
+}
+
+func TestPlanInstruction_ExistingSpecReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create existing spec directory.
+	specDir := filepath.Join(tmpDir, "specs", "existing-feature")
+	if err := os.MkdirAll(specDir, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	// createSpecSkeleton should fail with "already exists".
+	_, err := createSpecSkeleton(tmpDir, "existing-feature", "Some idea")
+	if err == nil {
+		t.Error("expected error when spec directory already exists")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error should mention 'already exists', got: %v", err)
 	}
 }
