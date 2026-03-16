@@ -23,12 +23,12 @@ type Logger struct {
 type Entry struct {
 	Time    string `json:"time"`
 	Type    string `json:"type"`              // "user", "llm_text", "tool_call", "tool_result", "error", "info"
-	Agent   string `json:"agent,omitempty"`    // agent name (for subagents)
-	Tool    string `json:"tool,omitempty"`     // tool name
-	Content string `json:"content,omitempty"`  // text content or error message
-	Args    any    `json:"args,omitempty"`     // tool call arguments
-	Session string `json:"session,omitempty"`  // session ID (logged once at start)
-	Model   string `json:"model,omitempty"`    // model name (logged once at start)
+	Agent   string `json:"agent,omitempty"`   // agent name (for subagents)
+	Tool    string `json:"tool,omitempty"`    // tool name
+	Content string `json:"content,omitempty"` // text content or error message
+	Args    any    `json:"args,omitempty"`    // tool call arguments
+	Session string `json:"session,omitempty"` // session ID (logged once at start)
+	Model   string `json:"model,omitempty"`   // model name (logged once at start)
 }
 
 // New creates a new session logger.

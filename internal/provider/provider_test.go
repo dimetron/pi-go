@@ -1,6 +1,9 @@
 package provider
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestResolve(t *testing.T) {
 	tests := []struct {
@@ -41,6 +44,9 @@ func TestResolve(t *testing.T) {
 
 func TestNewLLMWithProvider(t *testing.T) {
 	t.Run("creates gemini provider", func(t *testing.T) {
+		if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
+			t.Skip("skipping: no Google/Gemini API key set")
+		}
 		llm, err := NewLLM(nil, Info{Provider: "gemini", Model: "gemini-2.0-flash"}, "key", "", "")
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
@@ -83,6 +89,9 @@ func TestResolveWithOllamaPrefix(t *testing.T) {
 }
 
 func TestNewGemini(t *testing.T) {
+	if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
+		t.Skip("skipping: no Google/Gemini API key set")
+	}
 	llm, err := NewGemini(nil, "gemini-2.0-flash", "")
 	if err != nil {
 		t.Fatalf("NewGemini() error: %v", err)
