@@ -41,12 +41,12 @@ Finish the remaining items from Step 14 of the enhance-from-oh-my-pi plan. All c
 **Files:**
 - Modify: `internal/agent/e2e_enhanced_test.go`
 
-- [ ] Add TestE2ECommitWorkflow: create temp repo, stage changes, simulate /commit flow with scenarioLLM generating a conventional commit message, verify commit created with expected format
-- [ ] Add TestE2ESubagentTypes: verify all 6 agent types (explore, plan, designer, reviewer, task, quick_task) are defined with valid role mappings, worktree settings, instructions, and tool lists
-- [ ] Add TestE2EWorktreeLifecycle: create temp git repo, use WorktreeManager to create worktree, verify path exists and is a separate working copy, make a change, cleanup, verify worktree removed
-- [ ] Add TestE2ELSPToolRegistration: verify LSPTools() returns 5 tools with correct names (lsp-diagnostics, lsp-definition, lsp-references, lsp-hover, lsp-symbols)
-- [ ] Add TestE2EAgentToolRegistration: verify agent tool is created with correct schema including type and prompt fields
-- [ ] Run e2e tests: go test -tags e2e ./internal/agent/ - all must pass
+- [x] Add TestE2ECommitWorkflow: create temp repo, stage changes, simulate /commit flow with scenarioLLM generating a conventional commit message, verify commit created with expected format
+- [x] Add TestE2ESubagentTypes: verify all 6 agent types (explore, plan, designer, reviewer, task, quick_task) are defined with valid role mappings, worktree settings, instructions, and tool lists
+- [x] Add TestE2EWorktreeLifecycle: create temp git repo, use WorktreeManager to create worktree, verify path exists and is a separate working copy, make a change, cleanup, verify worktree removed
+- [x] Add TestE2ELSPToolRegistration: verify LSPTools() returns 5 tools with correct names (lsp-diagnostics, lsp-definition, lsp-references, lsp-hover, lsp-symbols)
+- [x] Add TestE2EAgentToolRegistration: verify agent tool is created with correct schema including type and prompt fields
+- [x] Run e2e tests: go test -tags e2e ./internal/agent/ - all must pass
 
 ### Task 3: Refine Makefile test targets
 
