@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -59,6 +60,29 @@ type Config struct {
 	GenerateCommitMsg func(ctx context.Context, diffs string) (string, error)
 	// Logger is the session logger. If nil, logging is disabled.
 	Logger *logger.Logger
+	// Screen receives screen content updates for the screen tool.
+	// If nil, the screen tool won't have access to TUI content.
+	Screen *Screen
+}
+
+// Screen provides thread-safe access to the current TUI screen content.
+// It implements tools.ScreenProvider so the LLM can read what the user sees.
+type Screen struct {
+	mu      sync.Mutex
+	content string
+}
+
+// ScreenContent returns the current screen content.
+func (s *Screen) ScreenContent() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.content
+}
+
+func (s *Screen) update(content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.content = content
 }
 
 // message represents a chat message in the conversation.
@@ -127,7 +151,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancel()
 
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(100),
 		glamour.WithEmoji(),
 	)
@@ -164,7 +188,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateRenderer()
-		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -183,13 +206,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgent(m.agentCh)
 
 	case agentTextMsg:
-		// When text starts arriving, clear the thinking accumulator.
+		// When text starts arriving after thinking, replace the thinking message
+		// with the assistant message.
 		if m.thinking != "" {
 			m.thinking = ""
+			// Remove the thinking message and add an assistant message.
+			if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "thinking" {
+				m.messages[len(m.messages)-1] = message{role: "assistant", content: ""}
+			}
 		}
 		m.streaming += msg.text
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
-			m.messages[len(m.messages)-1].content = m.streaming
+		// Find the assistant message to update (may not be last if tool messages intervene).
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].role == "assistant" {
+				m.messages[i].content = m.streaming
+				break
+			}
 		}
 		m.scroll = 0
 		// Trace: accumulate LLM text (don't log every delta, update last llm entry).
@@ -263,6 +295,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCommitDone(msg)
 	}
 
+	// Keep the agent listener alive for any unhandled message types.
+	if m.running {
+		return m, waitForAgent(m.agentCh)
+	}
 	return m, nil
 }
 
@@ -813,6 +849,11 @@ func (m *model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(inputArea)
 
+	// Update screen provider so the screen tool can read current content.
+	if m.cfg.Screen != nil {
+		m.cfg.Screen.update(visibleMessages)
+	}
+
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
@@ -990,7 +1031,7 @@ func (m *model) updateRenderer() {
 		contentWidth = 40
 	}
 	m.renderer, _ = glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(contentWidth),
 		glamour.WithEmoji(),
 	)

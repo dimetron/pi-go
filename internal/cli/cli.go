@@ -157,6 +157,17 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 	coreTools = append(coreTools, agentTools...)
 
+	// Build screen tool for interactive mode (gives LLM access to terminal content).
+	var screen *tui.Screen
+	if mode == "interactive" {
+		screen = &tui.Screen{}
+		screenTool, err := tools.NewScreenTool(screen)
+		if err != nil {
+			return fmt.Errorf("creating screen tool: %w", err)
+		}
+		coreTools = append(coreTools, screenTool)
+	}
+
 	// Load system instruction with optional AGENTS.md.
 	instruction := agent.LoadInstruction(agent.SystemInstruction)
 
@@ -278,6 +289,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			Orchestrator:      orch,
 			GenerateCommitMsg: commitMsgFn,
 			Logger:            sessionLog,
+			Screen:            screen,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{
