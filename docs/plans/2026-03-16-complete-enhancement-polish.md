@@ -53,12 +53,12 @@ Finish the remaining items from Step 14 of the enhance-from-oh-my-pi plan. All c
 **Files:**
 - Modify: `Makefile`
 
-- [ ] Add test-unit target: go test ./... (excludes e2e tag by default)
-- [ ] Add test-integration target: go test -tags integration ./... (for tests needing git, real filesystem)
-- [ ] Rename existing e2e target to test-e2e for consistency
-- [ ] Add test-all target that runs unit + integration + e2e
-- [ ] Add test-coverage target: go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
-- [ ] Verify all Makefile targets work by running make test
+- [x] Add test-unit target: go test ./... (excludes e2e tag by default)
+- [x] Add test-integration target: go test -tags integration ./... (for tests needing git, real filesystem)
+- [x] Rename existing e2e target to test-e2e for consistency
+- [x] Add test-all target that runs unit + integration + e2e
+- [x] Add test-coverage target: go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+- [x] Verify all Makefile targets work by running make test
 
 ### Task 4: Verify acceptance criteria
 
