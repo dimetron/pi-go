@@ -17,14 +17,16 @@ const defaultMaxTokens = 8192
 
 // anthropicModel implements model.LLM for the Anthropic API.
 type anthropicModel struct {
-	modelName string
-	client    anthropic.Client
+	modelName     string
+	client        anthropic.Client
+	thinkingLevel string // "none", "low", "medium", "high"
 }
 
 // NewAnthropic creates an Anthropic model.LLM.
 // If baseURL is non-empty, it overrides the default API endpoint.
 // When baseURL is set, the API key is optional (for Ollama compatibility).
-func NewAnthropic(_ context.Context, modelName, apiKey, baseURL string) (model.LLM, error) {
+// thinkingLevel controls extended thinking: "none", "low", "medium", "high".
+func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
 	if apiKey == "" && baseURL == "" {
 		return nil, fmt.Errorf("Anthropic API key is required")
 	}
@@ -36,7 +38,7 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL string) (model.L
 		opts = append(opts, anthropicopt.WithBaseURL(baseURL))
 	}
 	client := anthropic.NewClient(opts...)
-	return &anthropicModel{modelName: modelName, client: client}, nil
+	return &anthropicModel{modelName: modelName, client: client, thinkingLevel: thinkingLevel}, nil
 }
 
 func (m *anthropicModel) Name() string { return m.modelName }
@@ -53,10 +55,21 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			modelName = "claude-sonnet-4-20250514"
 		}
 
+		maxTokens := int64(defaultMaxTokens)
+		thinkingCfg := antThinkingConfig(m.thinkingLevel)
+		if thinkingCfg != nil {
+			// Thinking requires higher max_tokens to accommodate the thinking budget.
+			maxTokens = 16384
+		}
+
 		params := anthropic.MessageNewParams{
 			Model:     anthropic.Model(modelName),
 			Messages:  messages,
-			MaxTokens: int64(defaultMaxTokens),
+			MaxTokens: maxTokens,
+		}
+
+		if thinkingCfg != nil {
+			params.Thinking = *thinkingCfg
 		}
 
 		if systemPrompt != "" {
@@ -238,6 +251,23 @@ func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
 	return out
 }
 
+// antThinkingConfig maps a thinking level string to Anthropic thinking config.
+func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
+	var budget int64
+	switch level {
+	case "low":
+		budget = 2048
+	case "medium":
+		budget = 4096
+	case "high":
+		budget = 8192
+	default:
+		return nil
+	}
+	cfg := anthropic.ThinkingConfigParamOfEnabled(budget)
+	return &cfg
+}
+
 func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthropic.MessageNewParams, yield func(*model.LLMResponse, error) bool) {
 	stream := client.Messages.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -279,6 +309,17 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 						Partial:      true,
 						TurnComplete: false,
 						Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
+					}, nil) {
+						return
+					}
+				}
+			case "thinking_delta":
+				if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
+					// Yield thinking content as partial response with a "thinking" role marker.
+					if !yield(&model.LLMResponse{
+						Partial:      true,
+						TurnComplete: false,
+						Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
 					}, nil) {
 						return
 					}

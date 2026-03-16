@@ -7,6 +7,7 @@ import (
 	"iter"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -120,7 +121,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create the LLM provider.
-	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL)
+	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel)
 	if err != nil {
 		return fmt.Errorf("creating LLM provider: %w", err)
 	}
@@ -232,7 +233,8 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating agent: %w", err)
 	}
 
-	ctx := cmd.Context()
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	defer stop()
 
 	// Resolve session: --continue resumes last, --session resumes specific, else create new.
 	sessionID := flagSession
@@ -328,9 +330,13 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 	log.UserMessage(prompt)
 	retryCfg := agent.DefaultRetryConfig()
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
-		return ag.Run(ctx, sessionID, prompt)
+		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintln(os.Stderr, "\ninterrupted")
+				return nil
+			}
 			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
@@ -338,6 +344,10 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 			continue
 		}
 		for _, part := range ev.Content.Parts {
+			if part.Text != "" && ev.Content.Role == "thinking" {
+				fmt.Fprintf(os.Stderr, "\033[2m%s\033[0m", part.Text)
+				continue
+			}
 			if part.Text != "" {
 				fmt.Print(part.Text)
 				log.LLMText(ev.Author, part.Text)
@@ -377,9 +387,13 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 
 	retryCfg := agent.DefaultRetryConfig()
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
-		return ag.Run(ctx, sessionID, prompt)
+		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
+			if ctx.Err() != nil {
+				_ = enc.Encode(jsonEvent{Type: "message_end"})
+				return nil
+			}
 			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
@@ -398,6 +412,14 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		}
 
 		for _, part := range ev.Content.Parts {
+			if part.Text != "" && ev.Content.Role == "thinking" {
+				_ = enc.Encode(jsonEvent{
+					Type:  "thinking_delta",
+					Agent: ev.Author,
+					Delta: part.Text,
+				})
+				continue
+			}
 			if part.Text != "" {
 				_ = enc.Encode(jsonEvent{
 					Type:  "text_delta",
@@ -459,7 +481,7 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		baseURL = "http://localhost:11434"
 	}
 
-	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL)
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none")
 	if err != nil {
 		return nil
 	}

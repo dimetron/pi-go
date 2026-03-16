@@ -49,15 +49,15 @@ func Resolve(modelName string) (Info, error) {
 	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, o1, o3, o4, gemini, or use :cloud suffix for Ollama)", modelName)
 }
 
-// NewLLM creates a model.LLM for the given provider info, API key, and optional base URL.
-func NewLLM(ctx context.Context, info Info, apiKey, baseURL string) (model.LLM, error) {
+// NewLLM creates a model.LLM for the given provider info, API key, optional base URL, and thinking level.
+func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
 	switch info.Provider {
 	case "gemini":
 		return NewGemini(ctx, info.Model, baseURL)
 	case "openai":
 		return NewOpenAI(ctx, info.Model, apiKey, baseURL)
 	case "anthropic":
-		return NewAnthropic(ctx, info.Model, apiKey, baseURL)
+		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

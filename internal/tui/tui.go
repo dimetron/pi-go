@@ -27,6 +27,7 @@ import (
 type agentMsg interface{ agentMsg() }
 
 type agentTextMsg struct{ text string }
+type agentThinkingMsg struct{ text string }
 type agentToolCallMsg struct {
 	name string
 	args map[string]any
@@ -38,6 +39,7 @@ type agentToolResultMsg struct {
 type agentDoneMsg struct{ err error }
 
 func (agentTextMsg) agentMsg()       {}
+func (agentThinkingMsg) agentMsg()   {}
 func (agentToolCallMsg) agentMsg()   {}
 func (agentToolResultMsg) agentMsg() {}
 func (agentDoneMsg) agentMsg()       {}
@@ -90,6 +92,7 @@ type model struct {
 	// Agent state.
 	running    bool
 	streaming  string // current streaming text accumulator
+	thinking   string // current thinking text accumulator
 	activeTool string
 	toolStart  time.Time
 	agentCh    chan agentMsg // channel for receiving agent events
@@ -166,7 +169,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case agentThinkingMsg:
+		m.thinking += msg.text
+		// Update the thinking message in the chat.
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "thinking" {
+			m.messages[len(m.messages)-1].content = m.thinking
+		} else {
+			m.messages = append(m.messages, message{
+				role: "thinking", content: m.thinking,
+			})
+		}
+		m.scroll = 0
+		return m, waitForAgent(m.agentCh)
+
 	case agentTextMsg:
+		// When text starts arriving, clear the thinking accumulator.
+		if m.thinking != "" {
+			m.thinking = ""
+		}
 		m.streaming += msg.text
 		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "assistant" {
 			m.messages[len(m.messages)-1].content = m.streaming
@@ -232,6 +252,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		m.streaming = ""
+		m.thinking = ""
 		m.agentCh = nil
 		return m, nil
 
@@ -283,6 +304,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			m.running = false
 			m.activeTool = ""
+			m.streaming = ""
+			m.thinking = ""
+			// Drain the agent channel so the goroutine can exit.
+			if m.agentCh != nil {
+				go func(ch chan agentMsg) {
+					for range ch {
+					}
+				}(m.agentCh)
+				m.agentCh = nil
+			}
 			return m, nil
 		}
 		m.quitting = true
@@ -402,6 +433,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	// Add empty assistant message for streaming.
 	m.messages = append(m.messages, message{role: "assistant", content: ""})
 	m.streaming = ""
+	m.thinking = ""
 
 	// Clear input.
 	prompt := input
@@ -681,7 +713,7 @@ func (m *model) runAgentLoop(prompt string) {
 	defer close(m.agentCh)
 	log := m.cfg.Logger
 
-	for ev, err := range m.cfg.Agent.Run(m.ctx, m.cfg.SessionID, prompt) {
+	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
 			if log != nil {
 				log.Error(err.Error())
@@ -693,6 +725,10 @@ func (m *model) runAgentLoop(prompt string) {
 			continue
 		}
 		for _, part := range ev.Content.Parts {
+			if part.Text != "" && ev.Content.Role == "thinking" {
+				m.agentCh <- agentThinkingMsg{text: part.Text}
+				continue
+			}
 			if part.Text != "" {
 				if log != nil {
 					log.LLMText(ev.Author, part.Text)
@@ -1004,6 +1040,30 @@ func (m *model) renderMessages() string {
 				b.WriteString("  ")
 				b.WriteString(dim.Render("└ "))
 				b.WriteString(dim.Render(msg.content))
+				b.WriteString("\n")
+			}
+
+		case "thinking":
+			if msg.content != "" {
+				thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
+				thinkBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("💭 ")
+				b.WriteString("\n")
+				b.WriteString(thinkBullet)
+				// Show last few lines of thinking to keep it compact.
+				lines := strings.Split(msg.content, "\n")
+				maxLines := 6
+				if len(lines) > maxLines {
+					lines = lines[len(lines)-maxLines:]
+				}
+				for j, line := range lines {
+					if j > 0 {
+						b.WriteString("   ")
+					}
+					b.WriteString(thinkStyle.Render(line))
+					if j < len(lines)-1 {
+						b.WriteString("\n")
+					}
+				}
 				b.WriteString("\n")
 			}
 

@@ -147,7 +147,7 @@ func TestAntGenaiToolsToAnthropic(t *testing.T) {
 
 func TestNewLLMFactory(t *testing.T) {
 	t.Run("unsupported provider", func(t *testing.T) {
-		_, err := NewLLM(nil, Info{Provider: "unknown", Model: "test"}, "key", "")
+		_, err := NewLLM(nil, Info{Provider: "unknown", Model: "test"}, "key", "", "")
 		if err == nil {
 			t.Fatal("expected error for unsupported provider")
 		}
@@ -161,14 +161,14 @@ func TestNewLLMFactory(t *testing.T) {
 	})
 
 	t.Run("anthropic requires key without baseURL", func(t *testing.T) {
-		_, err := NewAnthropic(nil, "claude-sonnet-4-20250514", "", "")
+		_, err := NewAnthropic(nil, "claude-sonnet-4-20250514", "", "", "")
 		if err == nil {
 			t.Fatal("expected error for empty API key")
 		}
 	})
 
 	t.Run("anthropic allows empty key with baseURL", func(t *testing.T) {
-		llm, err := NewAnthropic(nil, "qwen2.5", "", "http://localhost:11434")
+		llm, err := NewAnthropic(nil, "qwen2.5", "", "http://localhost:11434", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
