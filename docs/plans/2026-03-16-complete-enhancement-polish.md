@@ -62,11 +62,11 @@ Finish the remaining items from Step 14 of the enhance-from-oh-my-pi plan. All c
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] manual test: go build ./cmd/pi succeeds
-- [ ] run full test suite: make test
-- [ ] run linter: go vet ./...
-- [ ] run e2e tests: make test-e2e (or make e2e)
-- [ ] verify ARCHITECTURE.md accurately reflects current codebase
+- [x] manual test: go build ./cmd/pi succeeds
+- [x] run full test suite: make test
+- [x] run linter: go vet ./...
+- [x] run e2e tests: make test-e2e (or make e2e)
+- [x] verify ARCHITECTURE.md accurately reflects current codebase
 
 ### Task 5: Update documentation
 
