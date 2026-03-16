@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
-	"sort"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -602,16 +602,6 @@ func (m *model) handleAgentsCommand() {
 	b.WriteString("**Subagents:**\n\n")
 	for _, a := range agents {
 		status := a.Status
-		switch status {
-		case "running":
-			status = "running"
-		case "completed":
-			status = "completed"
-		case "failed":
-			status = "failed"
-		case "cancelled":
-			status = "cancelled"
-		}
 		prompt := a.Prompt
 		if len(prompt) > 60 {
 			prompt = prompt[:57] + "..."
