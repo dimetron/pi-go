@@ -540,16 +540,18 @@ func TestHandleRunGateResult_AllPass(t *testing.T) {
 	}
 }
 
-func TestHandleRunGateResult_Failure(t *testing.T) {
+func TestHandleRunGateResult_Failure_MaxRetries(t *testing.T) {
 	m := &model{
 		cfg: Config{
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
 		},
 		messages: make([]message, 0),
 		run: &runState{
-			specName: "test-spec",
-			agentID:  "task-123",
-			phase:    "gating",
+			specName:   "test-spec",
+			agentID:    "task-123",
+			phase:      "gating",
+			retries:    3,
+			maxRetries: 3,
 		},
 	}
 
@@ -573,13 +575,13 @@ func TestHandleRunGateResult_Failure(t *testing.T) {
 
 	found := false
 	for _, msg := range m.messages {
-		if strings.Contains(msg.content, "Gate validation failed") {
+		if strings.Contains(msg.content, "Gate validation failed") && strings.Contains(msg.content, "after 3 retries") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected 'Gate validation failed' message")
+		t.Error("expected 'Gate validation failed after 3 retries' message")
 	}
 }
 
@@ -717,5 +719,180 @@ func TestFormatGateFailures(t *testing.T) {
 	}
 	if !strings.Contains(output, "FAIL pkg/foo") {
 		t.Error("failed gate output should be included")
+	}
+}
+
+// --- Step 7 tests: Retry Logic on Gate Failure ---
+
+func TestBuildRetryPrompt_IncludesGateOutput(t *testing.T) {
+	promptMD := "# My Feature\n\n## Objective\n\nBuild something.\n"
+	gateOutput := "Gate `test` (`go test ./...`) FAILED:\nFAIL pkg/foo\n\n"
+
+	result := buildRetryPrompt("my-feature", promptMD, gateOutput)
+
+	if !strings.Contains(result, "failed gate validation") {
+		t.Error("retry prompt should mention gate validation failure")
+	}
+	if !strings.Contains(result, "## Gate Failures") {
+		t.Error("retry prompt should contain gate failures section")
+	}
+	if !strings.Contains(result, "FAIL pkg/foo") {
+		t.Error("retry prompt should include gate failure output")
+	}
+	if !strings.Contains(result, promptMD) {
+		t.Error("retry prompt should include original PROMPT.md")
+	}
+	if !strings.Contains(result, "specs/my-feature/plan.md") {
+		t.Error("retry prompt should reference the spec's plan.md")
+	}
+	if !strings.Contains(result, "Fix the issues") {
+		t.Error("retry prompt should include fix instructions")
+	}
+}
+
+func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
+	// When spawn fails during retry, phase should be "failed" and retry counter should increment.
+	// We use a real orchestrator with empty config — Spawn will fail on role resolution.
+	orch := subagent.NewOrchestrator(&config.Config{}, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx: ctx,
+		cfg: Config{
+			Orchestrator: orch,
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName:   "test-spec",
+			promptMD:   "# Test\n\n## Objective\nDo stuff.\n",
+			agentID:    "task-123",
+			phase:      "gating",
+			retries:    0,
+			maxRetries: 3,
+		},
+	}
+
+	msg := runGateResultMsg{
+		results: []GateResult{
+			{Name: "test", Command: "go test ./...", Passed: false, Output: "FAIL pkg/foo"},
+		},
+		passed: false,
+	}
+
+	m.handleRunGateResult(msg)
+
+	// Retry counter should increment even if spawn fails.
+	if m.run.retries != 1 {
+		t.Errorf("retries = %d, want 1", m.run.retries)
+	}
+
+	// Phase should be "failed" because spawn failed.
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "failed")
+	}
+
+	// Should have a "Failed to spawn retry agent" message.
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "Failed to spawn retry agent") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'Failed to spawn retry agent' message")
+	}
+}
+
+func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
+	// Verify retry count increments and gateOutput updates on each failure.
+	orch := subagent.NewOrchestrator(&config.Config{}, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx: ctx,
+		cfg: Config{
+			Orchestrator: orch,
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName:   "test-spec",
+			promptMD:   "# Test\n",
+			agentID:    "task-retry-1",
+			phase:      "gating",
+			retries:    1,
+			maxRetries: 3,
+			gateOutput: "previous failure",
+		},
+	}
+
+	msg := runGateResultMsg{
+		results: []GateResult{
+			{Name: "test", Command: "go test ./...", Passed: false, Output: "FAIL pkg/bar (second attempt)"},
+		},
+		passed: false,
+	}
+
+	m.handleRunGateResult(msg)
+
+	if m.run.retries != 2 {
+		t.Errorf("retries = %d, want 2", m.run.retries)
+	}
+
+	// The gate output should contain the LATEST failure.
+	if !strings.Contains(m.run.gateOutput, "FAIL pkg/bar") {
+		t.Error("gateOutput should contain latest failure output")
+	}
+}
+
+func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "")
+
+	m := &model{
+		cfg: Config{
+			Orchestrator: orch,
+		},
+		messages: make([]message, 0),
+		run: &runState{
+			specName:   "test-spec",
+			promptMD:   "# Test\n",
+			agentID:    "task-retry-3",
+			phase:      "gating",
+			retries:    3, // already at max
+			maxRetries: 3,
+		},
+	}
+
+	msg := runGateResultMsg{
+		results: []GateResult{
+			{Name: "test", Command: "go test ./...", Passed: false, Output: "FAIL"},
+		},
+		passed: false,
+	}
+
+	m.handleRunGateResult(msg)
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want %q", m.run.phase, "failed")
+	}
+
+	// Retry counter should NOT increment beyond max.
+	if m.run.retries != 3 {
+		t.Errorf("retries = %d, want 3 (should not increment beyond max)", m.run.retries)
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if strings.Contains(msg.content, "after 3 retries") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected message mentioning max retries exhausted")
 	}
 }

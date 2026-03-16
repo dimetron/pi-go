@@ -131,6 +131,7 @@ type AgentInput struct {
 	Type        string `json:"type"`                   // Agent type name
 	Prompt      string `json:"prompt"`                 // Task prompt for the agent
 	Worktree    *bool  `json:"worktree,omitempty"`     // Override worktree setting
+	WorkDir     string `json:"work_dir,omitempty"`     // Override working directory (e.g. existing worktree path)
 	Background  bool   `json:"background,omitempty"`   // Run in background
 	SkipCleanup bool   `json:"skip_cleanup,omitempty"` // Don't auto-cleanup worktree on completion
 }

@@ -393,8 +393,59 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		return m, m.mergeWorktreeCmd()
 	}
 
-	// Gates failed — store results for potential retry (Step 7).
+	// Gates failed — attempt retry or give up.
 	m.run.gateOutput = formatGateFailures(msg.results)
+
+	if m.run.retries < m.run.maxRetries {
+		// Retry: re-spawn agent in the same worktree with failure context.
+		m.run.retries++
+		m.run.phase = "retrying"
+
+		wm := m.cfg.Orchestrator.Worktree()
+		wtPath := ""
+		if wm != nil {
+			wtPath = wm.PathFor(m.run.agentID)
+		}
+
+		m.messages = append(m.messages, message{
+			role: "assistant",
+			content: fmt.Sprintf("**Gate failed** — retry %d/%d in worktree `%s`...",
+				m.run.retries, m.run.maxRetries, wtPath),
+		})
+
+		retryPrompt := buildRetryPrompt(m.run.specName, m.run.promptMD, m.run.gateOutput)
+
+		// Spawn a new agent in the same worktree directory.
+		events, agentID, err := m.cfg.Orchestrator.Spawn(m.ctx, subagent.AgentInput{
+			Type:        "task",
+			Prompt:      retryPrompt,
+			WorkDir:     wtPath,
+			SkipCleanup: true,
+		})
+		if err != nil {
+			m.run.phase = "failed"
+			m.messages = append(m.messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
+			})
+			return m, nil
+		}
+
+		m.run.agentID = agentID
+		m.run.phase = "running"
+		m.run.events = events
+
+		// Add empty assistant message for streaming.
+		m.messages = append(m.messages, message{role: "assistant", content: ""})
+		m.streaming = ""
+		m.thinking = ""
+		m.running = true
+		m.scroll = 0
+
+		return m, waitForRunAgent(events)
+	}
+
+	// Retries exhausted.
 	m.run.phase = "failed"
 
 	wm := m.cfg.Orchestrator.Worktree()
@@ -405,8 +456,8 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 
 	m.messages = append(m.messages, message{
 		role: "assistant",
-		content: fmt.Sprintf("**Gate validation failed** for spec `%s`.\nWorktree preserved at: `%s`\nUse retry logic or inspect manually.",
-			m.run.specName, wtPath),
+		content: fmt.Sprintf("**Gate validation failed** for spec `%s` after %d retries.\nWorktree preserved at: `%s`\nInspect manually and fix the issues.",
+			m.run.specName, m.run.maxRetries, wtPath),
 	})
 
 	return m, nil
@@ -467,6 +518,23 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 	})
 
 	return m, nil
+}
+
+// buildRetryPrompt constructs the prompt for a retry agent after gate failure.
+func buildRetryPrompt(specName, promptMD, gateOutput string) string {
+	var b strings.Builder
+	b.WriteString("The previous implementation attempt failed gate validation.\n\n")
+	b.WriteString("## Gate Failures\n")
+	b.WriteString(gateOutput)
+	b.WriteString("\n## Original Task\n")
+	b.WriteString(promptMD)
+	b.WriteString("\n\n## Instructions\n")
+	b.WriteString("Fix the issues identified by the gate failures. The failing commands were run in the worktree.\n")
+	b.WriteString("Continue working in the current directory. Run the failing commands yourself to verify fixes.\n")
+	b.WriteString("Update specs/")
+	b.WriteString(specName)
+	b.WriteString("/plan.md checklist as you complete steps.\n")
+	return b.String()
 }
 
 // formatGateFailures formats gate results into a string for retry prompts.

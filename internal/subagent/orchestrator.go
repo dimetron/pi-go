@@ -90,7 +90,11 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 	}
 
 	workDir := ""
-	if useWorktree && o.worktree != nil {
+	if input.WorkDir != "" {
+		// Use provided working directory (e.g. existing worktree for retry).
+		workDir = input.WorkDir
+		useWorktree = false // Don't create a new worktree or mark for cleanup.
+	} else if useWorktree && o.worktree != nil {
 		wtPath, err := o.worktree.Create(agentID)
 		if err != nil {
 			o.pool.Release()
