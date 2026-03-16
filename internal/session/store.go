@@ -111,7 +111,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 	s.sessions[sessionID] = sess
 
 	return &session.CreateResponse{
-		Session: sess.snapshot(),
+		Session: sess.live(),
 	}, nil
 }
 
@@ -128,10 +128,21 @@ func (s *FileService) Get(_ context.Context, req *session.GetRequest) (*session.
 		return nil, err
 	}
 
-	snap := sess.snapshot()
+	live := sess.live()
 
-	// Apply event filters.
-	filtered := snap.events
+	// If no filters requested, return the live session directly.
+	// The live session reflects events appended after Get() returns,
+	// which is required by the ADK runner's ContentsRequestProcessor.
+	if req.NumRecentEvents == 0 && req.After.IsZero() {
+		return &session.GetResponse{Session: live}, nil
+	}
+
+	// Apply event filters — return a filtered snapshot (not live).
+	sess.mu.RLock()
+	filtered := make([]*session.Event, len(sess.events))
+	copy(filtered, sess.events)
+	sess.mu.RUnlock()
+
 	if req.NumRecentEvents > 0 {
 		start := max(len(filtered)-req.NumRecentEvents, 0)
 		filtered = filtered[start:]
@@ -142,10 +153,12 @@ func (s *FileService) Get(_ context.Context, req *session.GetRequest) (*session.
 		})
 		filtered = filtered[firstIdx:]
 	}
-	snap.events = filtered
 
 	return &session.GetResponse{
-		Session: snap,
+		Session: &filteredSession{
+			fs:     sess,
+			events: filtered,
+		},
 	}, nil
 }
 
@@ -179,15 +192,13 @@ func (s *FileService) List(_ context.Context, req *session.ListRequest) (*sessio
 			continue
 		}
 		// Return lightweight session without events.
-		snap := &sessionSnapshot{
-			id:        meta.ID,
-			appName:   meta.AppName,
-			userID:    meta.UserID,
-			state:     make(map[string]any),
+		lightFS := &fileSession{
+			meta:      *meta,
 			events:    nil,
+			state:     make(map[string]any),
 			updatedAt: meta.UpdatedAt,
 		}
-		sessions = append(sessions, snap)
+		sessions = append(sessions, lightFS.live())
 	}
 
 	return &session.ListResponse{
@@ -347,76 +358,86 @@ func (s *FileService) LastSessionID(appName, userID string) string {
 
 // fileSession holds session data in memory, backed by disk.
 type fileSession struct {
+	mu        sync.RWMutex
 	meta      Meta
 	events    []*session.Event
 	state     map[string]any
 	updatedAt time.Time
 }
 
-func (s *fileSession) snapshot() *sessionSnapshot {
-	eventsCopy := make([]*session.Event, len(s.events))
-	copy(eventsCopy, s.events)
-	return &sessionSnapshot{
-		id:        s.meta.ID,
-		appName:   s.meta.AppName,
-		userID:    s.meta.UserID,
-		state:     maps.Clone(s.state),
-		events:    eventsCopy,
-		updatedAt: s.updatedAt,
-	}
+func (s *fileSession) live() *liveSession {
+	return &liveSession{fs: s}
 }
 
-// sessionSnapshot implements session.Session for returning to callers.
-type sessionSnapshot struct {
-	id        string
-	appName   string
-	userID    string
-	state     map[string]any
-	events    []*session.Event
-	updatedAt time.Time
-	mu        sync.RWMutex
+// liveSession implements session.Session as a live view of the underlying
+// fileSession. Events and state are read through the shared reference so
+// that mutations (e.g. AppendEvent) are immediately visible to the ADK
+// runner's ContentsRequestProcessor.
+type liveSession struct {
+	fs *fileSession
 }
 
-func (s *sessionSnapshot) ID() string                { return s.id }
-func (s *sessionSnapshot) AppName() string           { return s.appName }
-func (s *sessionSnapshot) UserID() string            { return s.userID }
-func (s *sessionSnapshot) LastUpdateTime() time.Time { return s.updatedAt }
-
-func (s *sessionSnapshot) State() session.State {
-	return &snapshotState{mu: &s.mu, state: s.state}
+func (s *liveSession) ID() string      { return s.fs.meta.ID }
+func (s *liveSession) AppName() string { return s.fs.meta.AppName }
+func (s *liveSession) UserID() string  { return s.fs.meta.UserID }
+func (s *liveSession) LastUpdateTime() time.Time {
+	s.fs.mu.RLock()
+	defer s.fs.mu.RUnlock()
+	return s.fs.updatedAt
 }
 
-func (s *sessionSnapshot) Events() session.Events {
-	return eventList(s.events)
+func (s *liveSession) State() session.State {
+	return &liveState{fs: s.fs}
 }
 
-// snapshotState implements session.State.
-type snapshotState struct {
-	mu    *sync.RWMutex
-	state map[string]any
+func (s *liveSession) Events() session.Events {
+	s.fs.mu.RLock()
+	eventsCopy := make([]*session.Event, len(s.fs.events))
+	copy(eventsCopy, s.fs.events)
+	s.fs.mu.RUnlock()
+	return eventList(eventsCopy)
 }
 
-func (s *snapshotState) Get(key string) (any, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	val, ok := s.state[key]
+// filteredSession wraps a fileSession but returns a pre-filtered events list.
+// Used when Get() is called with NumRecentEvents or After filters.
+type filteredSession struct {
+	fs     *fileSession
+	events []*session.Event
+}
+
+func (s *filteredSession) ID() string                { return s.fs.meta.ID }
+func (s *filteredSession) AppName() string           { return s.fs.meta.AppName }
+func (s *filteredSession) UserID() string            { return s.fs.meta.UserID }
+func (s *filteredSession) LastUpdateTime() time.Time { return s.fs.updatedAt }
+func (s *filteredSession) State() session.State      { return &liveState{fs: s.fs} }
+func (s *filteredSession) Events() session.Events    { return eventList(s.events) }
+
+// liveState implements session.State backed by the fileSession's state map.
+type liveState struct {
+	fs *fileSession
+}
+
+func (s *liveState) Get(key string) (any, error) {
+	s.fs.mu.RLock()
+	defer s.fs.mu.RUnlock()
+	val, ok := s.fs.state[key]
 	if !ok {
 		return nil, session.ErrStateKeyNotExist
 	}
 	return val, nil
 }
 
-func (s *snapshotState) Set(key string, value any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state[key] = value
+func (s *liveState) Set(key string, value any) error {
+	s.fs.mu.Lock()
+	defer s.fs.mu.Unlock()
+	s.fs.state[key] = value
 	return nil
 }
 
-func (s *snapshotState) All() iter.Seq2[string, any] {
-	s.mu.RLock()
-	stateCopy := maps.Clone(s.state)
-	s.mu.RUnlock()
+func (s *liveState) All() iter.Seq2[string, any] {
+	s.fs.mu.RLock()
+	stateCopy := maps.Clone(s.fs.state)
+	s.fs.mu.RUnlock()
 	return func(yield func(string, any) bool) {
 		for k, v := range stateCopy {
 			if !yield(k, v) {
