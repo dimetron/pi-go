@@ -169,14 +169,18 @@ func TestWorktree_MergeConflict(t *testing.T) {
 
 	// Create a file in main and commit.
 	conflictFile := filepath.Join(repo, "conflict.txt")
-	os.WriteFile(conflictFile, []byte("original\n"), 0o644)
+	if err := os.WriteFile(conflictFile, []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("write conflict file: %v", err)
+	}
 	for _, args := range [][]string{
 		{"git", "add", "conflict.txt"},
 		{"git", "commit", "-m", "add conflict file"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = repo
-		cmd.CombinedOutput()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v: %s", args, err, out)
+		}
 	}
 
 	// Create worktree.
@@ -188,25 +192,33 @@ func TestWorktree_MergeConflict(t *testing.T) {
 
 	// Modify file in worktree.
 	wtFile := filepath.Join(wtPath, "conflict.txt")
-	os.WriteFile(wtFile, []byte("worktree version\n"), 0o644)
+	if err := os.WriteFile(wtFile, []byte("worktree version\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
 	for _, args := range [][]string{
 		{"git", "add", "conflict.txt"},
 		{"git", "commit", "-m", "worktree change"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = wtPath
-		cmd.CombinedOutput()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s in worktree failed: %v: %s", args, err, out)
+		}
 	}
 
 	// Modify same file in main.
-	os.WriteFile(conflictFile, []byte("main version\n"), 0o644)
+	if err := os.WriteFile(conflictFile, []byte("main version\n"), 0o644); err != nil {
+		t.Fatalf("write main file: %v", err)
+	}
 	for _, args := range [][]string{
 		{"git", "add", "conflict.txt"},
 		{"git", "commit", "-m", "main change"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = repo
-		cmd.CombinedOutput()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v: %s", args, err, out)
+		}
 	}
 
 	// MergeBack should fail with conflict.
