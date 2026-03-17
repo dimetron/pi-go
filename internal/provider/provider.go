@@ -3,7 +3,11 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/model"
 )
@@ -53,6 +57,45 @@ func Resolve(modelName string) (Info, error) {
 	}
 
 	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, o1, o3, o4, gemini, or use ollama/ prefix or :cloud suffix for Ollama)", modelName)
+}
+
+// CheckOllama verifies that the Ollama server at baseURL is reachable.
+// It first checks TCP connectivity on the port, then issues a GET to the root
+// endpoint (Ollama returns "Ollama is running").
+func CheckOllama(baseURL string) error {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)
+	}
+
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		if u.Scheme == "https" {
+			host += ":443"
+		} else {
+			host += ":80"
+		}
+	}
+
+	// TCP port check.
+	conn, err := net.DialTimeout("tcp", host, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("ollama not reachable at %s: %w", host, err)
+	}
+	conn.Close()
+
+	// HTTP health check.
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL)
+	if err != nil {
+		return fmt.Errorf("ollama HTTP check failed at %s: %w", baseURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ollama returned status %d at %s", resp.StatusCode, baseURL)
+	}
+	return nil
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, and thinking level.

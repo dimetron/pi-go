@@ -14,6 +14,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/provider"
@@ -69,6 +70,9 @@ func newRootCmd() *cobra.Command {
 }
 
 func runRoot(cmd *cobra.Command, args []string) error {
+	// Load API keys from ~/.pi-go/.env (set by /login command).
+	loadDotEnv()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -126,11 +130,22 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		baseURL = "http://localhost:11434"
 	}
 
+	// Check Ollama is online before proceeding.
+	if info.Ollama {
+		if err := provider.CheckOllama(baseURL); err != nil {
+			return fmt.Errorf("ollama health check: %w", err)
+		}
+	}
+
 	// Create the LLM provider.
 	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel)
 	if err != nil {
 		return fmt.Errorf("creating LLM provider: %w", err)
 	}
+
+	// Create token usage tracker and wrap LLM with guardrail.
+	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
+	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	prompt := strings.Join(args, " ")
 
@@ -332,6 +347,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			SkillDirs:         skillDirs,
 			RestartCh:         restartCh,
 			AgentEventCh:      agentEventCh,
+			TokenTracker:      tokenTracker,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{
@@ -535,6 +551,12 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		baseURL = "http://localhost:11434"
 	}
 
+	if info.Ollama {
+		if err := provider.CheckOllama(baseURL); err != nil {
+			return nil
+		}
+	}
+
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none")
 	if err != nil {
 		return nil
@@ -567,6 +589,35 @@ func detectGitRoot(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// loadDotEnv loads environment variables from ~/.pi-go/.env.
+// This file is written by the /login command.
+func loadDotEnv() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".pi-go", ".env"))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		// Don't override existing env vars.
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
 }
 
 // Execute runs the root command.

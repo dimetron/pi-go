@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 )
@@ -85,6 +87,47 @@ func TestResolveWithOllamaPrefix(t *testing.T) {
 	}
 	if info.Ollama != true {
 		t.Error("expected Ollama = true")
+	}
+}
+
+func TestCheckOllamaUnreachable(t *testing.T) {
+	// Port 19 (chargen) is almost certainly not running Ollama.
+	err := CheckOllama("http://localhost:19")
+	if err == nil {
+		t.Fatal("expected error for unreachable Ollama")
+	}
+}
+
+func TestCheckOllamaInvalidURL(t *testing.T) {
+	err := CheckOllama("://bad")
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+}
+
+func TestCheckOllamaWrongStatus(t *testing.T) {
+	// Start a local server that returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	err := CheckOllama(srv.URL)
+	if err == nil {
+		t.Fatal("expected error for non-200 status")
+	}
+}
+
+func TestCheckOllamaOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ollama is running"))
+	}))
+	defer srv.Close()
+
+	err := CheckOllama(srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

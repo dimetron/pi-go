@@ -36,6 +36,7 @@ type Config struct {
 	Tools           map[string]any        `json:"tools,omitempty"`
 	MCP             *MCPConfig            `json:"mcp,omitempty"`
 	Hooks           []HookConfig          `json:"hooks,omitempty"`
+	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
 }
 
 type MCPConfig struct {

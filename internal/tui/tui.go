@@ -85,6 +85,16 @@ type Config struct {
 	RestartCh chan struct{}
 	// AgentEventCh receives subagent events from the agent tool for live display.
 	AgentEventCh <-chan AgentSubEvent
+	// TokenTracker tracks daily token usage and enforces limits. May be nil.
+	TokenTracker TokenTracker
+}
+
+// TokenTracker provides read access to daily token usage for the status bar.
+type TokenTracker interface {
+	Limit() int64
+	Remaining() int64       // -1 if unlimited
+	PercentUsed() float64   // 0-100+
+	TotalUsed() int64       // total tokens consumed today
 }
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.
@@ -179,6 +189,9 @@ type model struct {
 
 	// Commit flow state.
 	commit *commitState
+
+	// Login flow state.
+	login *loginState
 
 	// Plan flow state (/plan override confirmation).
 	plan *planState
@@ -440,6 +453,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runMergeResultMsg:
 		return m.handleRunMergeResult(msg)
 
+	case loginSSOResultMsg:
+		return m.handleLoginSSOResult(msg)
+
 	case commitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
 
@@ -499,6 +515,29 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Code == 'c' && key.Mod == tea.ModCtrl:
 			return m.handleCommitCancel()
 		default:
+			return m, nil
+		}
+	}
+
+	// Handle login flow (manual key entry or SSO/device waiting).
+	if !m.running && m.login != nil {
+		switch {
+		case key.Code == tea.KeyEsc:
+			return m.handleLoginCancel()
+		case key.Code == 'c' && key.Mod == tea.ModCtrl:
+			return m.handleLoginCancel()
+		case key.Code == tea.KeyEnter && m.login.phase == "waiting":
+			apiKey := strings.TrimSpace(m.input)
+			if apiKey == "" {
+				return m, nil
+			}
+			m.input = ""
+			m.cursorPos = 0
+			return m.handleLoginSave(apiKey)
+		}
+		// For "waiting" phase, fall through to normal input handling for typing.
+		// For "sso"/"device" phases, block other keys while waiting.
+		if m.login.phase != "waiting" {
 			return m, nil
 		}
 	}
@@ -870,32 +909,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/help":
 		m.messages = append(m.messages, message{
-			role: "assistant",
-			content: "**Available commands:**\n" +
-				"- `/help` — Show this help\n" +
-				"- `/clear` — Clear conversation\n" +
-				"- `/model` — Show current model and configured roles\n" +
-				"- `/session` — Show current session info\n" +
-				"- `/branch <name>` — Create a new branch\n" +
-				"- `/branch switch <name>` — Switch to a branch\n" +
-				"- `/branch list` — List all branches\n" +
-				"- `/agents` — Show running and recent subagents\n" +
-				"- `/commit` — Generate and create a conventional commit from staged changes\n" +
-				"- `/plan <idea>` — Start a PDD planning session to design and spec a feature\n" +
-				"- `/run <spec-name>` — Execute a spec's PROMPT.md using an isolated task agent\n" +
-				"- `/skill-create <name> [desc]` — Create a new skill\n" +
-				"- `/skill-list` — List loaded skills\n" +
-				"- `/skill-load` — Reload skills from disk\n" +
-				"- `/restart` — Restart pi process\n" +
-				"- `/compact` — Compact session context\n" +
-				"- `/history [query]` — Show command history (optionally filter by query)\n" +
-				"- `/exit`, `/quit` — Exit\n\n" +
-				"**Keyboard shortcuts:**\n" +
-				"- `Enter` — Submit prompt\n" +
-				"- `Ctrl+C` / `Esc` — Cancel/quit\n" +
-				"- `Up/Down` — Command history\n" +
-				"- `PgUp/PgDown` — Scroll messages\n" +
-				"",
+			role:    "assistant",
+			content: m.formatHelp(),
 		})
 	case "/clear":
 		m.messages = m.messages[:0]
@@ -924,6 +939,10 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handlePlanCommand(parts[1:])
 	case "/run":
 		return m.handleRunCommand(parts[1:])
+	case "/login":
+		return m.handleLoginCommand(parts[1:])
+	case "/skills":
+		return m.handleSkillsCommand(parts[1:])
 	case "/skill-create":
 		return m.handleSkillCreateCommand(parts[1:])
 	case "/skill-load":
@@ -1522,12 +1541,11 @@ var slashCommands = []string{
 	"/compact",
 	"/agents",
 	"/history",
+	"/login",
 	"/commit",
 	"/plan",
 	"/run",
-	"/skill-create",
-	"/skill-list",
-	"/skill-load",
+	"/skills",
 	"/restart",
 	"/exit",
 	"/quit",
@@ -1593,28 +1611,99 @@ func (m *model) allCommandNames() []string {
 // showCommandList displays available slash commands as an assistant message.
 func (m *model) showCommandList() {
 	var b strings.Builder
-	b.WriteString("**Available commands:**\n")
-	for _, cmd := range m.allCommandNames() {
-		b.WriteString("  `" + cmd + "`")
+	b.WriteString("**Commands:**\n")
+	for _, cmd := range slashCommands {
 		desc := slashCommandDesc(cmd)
-		if desc == "" {
-			// Check skills for description
-			for _, skill := range m.cfg.Skills {
-				if "/"+skill.Name == cmd {
-					desc = skill.Description
-					break
-				}
-			}
-		}
+		b.WriteString("  `" + cmd + "`")
 		if desc != "" {
 			b.WriteString(" — " + desc)
 		}
 		b.WriteString("\n")
 	}
+	if len(m.cfg.Skills) > 0 {
+		b.WriteString("\n**Skills:**\n")
+		for _, skill := range m.cfg.Skills {
+			fmt.Fprintf(&b, "  `/%s`", skill.Name)
+			if skill.Description != "" {
+				b.WriteString(" — " + skill.Description)
+			}
+			b.WriteString("\n")
+		}
+	}
 	m.messages = append(m.messages, message{
 		role:    "assistant",
 		content: b.String(),
 	})
+}
+
+// formatHelp builds the grouped help text for /help.
+func (m *model) formatHelp() string {
+	var b strings.Builder
+
+	b.WriteString("**Commands:**\n")
+	b.WriteString("  `/help`                — Show this help\n")
+	b.WriteString("  `/clear`               — Clear conversation\n")
+	b.WriteString("  `/model`               — Show current model and roles\n")
+	b.WriteString("  `/session`             — Show session info\n")
+	b.WriteString("  `/compact`             — Compact session context\n")
+	b.WriteString("  `/history [query]`     — Command history\n")
+	b.WriteString("  `/exit`, `/quit`       — Exit\n")
+
+	b.WriteString("\n**Git & Planning:**\n")
+	b.WriteString("  `/commit`              — Generate commit from staged changes\n")
+	b.WriteString("  `/branch <name>`       — Create/switch/list branches\n")
+	b.WriteString("  `/plan <idea>`         — Start PDD planning session\n")
+	b.WriteString("  `/run <spec>`          — Execute a spec with task agent\n")
+
+	b.WriteString("\n**System:**\n")
+	b.WriteString("  `/agents`              — Show running subagents\n")
+	b.WriteString("  `/login <provider>`    — Configure API keys\n")
+	b.WriteString("  `/restart`             — Restart pi process\n")
+
+	b.WriteString("\n**Skills:**\n")
+	b.WriteString("  `/skills`              — List available skills\n")
+	b.WriteString("  `/skills create <n>`   — Create a new skill\n")
+	b.WriteString("  `/skills load`         — Reload skills from disk\n")
+
+	if len(m.cfg.Skills) > 0 {
+		b.WriteString("\n**Available skills:**\n")
+		for _, s := range m.cfg.Skills {
+			fmt.Fprintf(&b, "  `/%s`", s.Name)
+			if s.Description != "" {
+				b.WriteString(" — " + s.Description)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n**Keyboard shortcuts:**\n")
+	b.WriteString("  `Enter` — Submit  `Ctrl+C`/`Esc` — Cancel  `Up/Down` — History  `PgUp/PgDn` — Scroll\n")
+
+	return b.String()
+}
+
+// handleSkillsCommand handles /skills and its subcommands: create, load, list (default).
+func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m.handleSkillListCommand()
+	}
+	sub := strings.ToLower(args[0])
+	switch sub {
+	case "create":
+		return m.handleSkillCreateCommand(args[1:])
+	case "load", "reload":
+		return m.handleSkillLoadCommand()
+	case "list":
+		return m.handleSkillListCommand()
+	default:
+		m.input = ""
+		m.cursorPos = 0
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: "Usage: `/skills` — list  |  `/skills create <name>` — create  |  `/skills load` — reload",
+		})
+		return m, nil
+	}
 }
 
 // slashCommandDesc returns a short description for a slash command.
@@ -1636,18 +1725,16 @@ func slashCommandDesc(cmd string) string {
 		return "Show subagents"
 	case "/history":
 		return "Command history"
+	case "/login":
+		return "Configure API keys (codex, openai, anthropic, gemini)"
 	case "/commit":
 		return "Create commit from staged changes"
 	case "/plan":
 		return "Start PDD planning session"
 	case "/run":
 		return "Execute a spec with task agent"
-	case "/skill-create":
-		return "Create a new skill"
-	case "/skill-list":
-		return "List loaded skills"
-	case "/skill-load":
-		return "Reload skills from disk"
+	case "/skills":
+		return "List skills (create, load)"
 	case "/restart":
 		return "Restart pi process"
 	case "/exit", "/quit":
@@ -2034,6 +2121,28 @@ func (m *model) renderStatusBar() string {
 		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
 	}
 
+	// Token usage guardrail.
+	if tt := m.cfg.TokenTracker; tt != nil {
+		total := tt.TotalUsed()
+		limit := tt.Limit()
+		if limit > 0 {
+			pct := tt.PercentUsed()
+			var tokenStyle lipgloss.Style
+			switch {
+			case pct >= 100:
+				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("196")) // red
+			case pct >= 80:
+				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange
+			default:
+				tokenStyle = dim
+			}
+			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tokens: %s/%s (%.0f%%)",
+				formatTokenCount(total), formatTokenCount(limit), pct)))
+		} else if total > 0 {
+			parts = append(parts, dim.Render(fmt.Sprintf("tokens: %s", formatTokenCount(total))))
+		}
+	}
+
 	// Git branch.
 	if m.gitBranch != "" {
 		parts = append(parts, bright.Render(fmt.Sprintf("\u2387 %s", m.gitBranch)))
@@ -2101,6 +2210,17 @@ func (m *model) renderStatusBar() string {
 	}
 
 	return bar.Render(strings.Join(parts, sep))
+}
+
+func formatTokenCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // detectBranch returns the current git branch name, or empty string.

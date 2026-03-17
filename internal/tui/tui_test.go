@@ -558,8 +558,8 @@ func TestHelpText_IncludesPlanAndRun(t *testing.T) {
 	if !strings.Contains(content, "PDD planning session") {
 		t.Errorf("expected /help to describe /plan, got %q", content)
 	}
-	if !strings.Contains(content, "PROMPT.md") {
-		t.Errorf("expected /help to mention PROMPT.md for /run, got %q", content)
+	if !strings.Contains(content, "spec") {
+		t.Errorf("expected /help to mention spec for /run, got %q", content)
 	}
 }
 
@@ -629,8 +629,8 @@ func TestShowCommandList(t *testing.T) {
 		t.Fatalf("expected 1 message, got %d", len(m.messages))
 	}
 	content := m.messages[0].content
-	if !strings.Contains(content, "Available commands") {
-		t.Error("expected 'Available commands' header")
+	if !strings.Contains(content, "Commands:") {
+		t.Error("expected 'Commands:' header")
 	}
 	// Verify all commands are listed.
 	for _, cmd := range slashCommands {

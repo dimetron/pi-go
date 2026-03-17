@@ -21,7 +21,7 @@ func TestComplete_CommandCompletion(t *testing.T) {
 		{"all commands", "/", 0, ""},            // "/" alone doesn't return completions (handled by showCommandList)
 		{"no match", "/xyz", 0, ""},
 		{"exact match", "/plan", 1, "/plan"}, // exact match with single candidate stays
-		{"skill-like", "/skills", 0, ""},     // no skill matches if skills empty
+		{"skill-like", "/skills", 1, "/skills"}, // /skills is a built-in command
 	}
 
 	for _, tt := range tests {
