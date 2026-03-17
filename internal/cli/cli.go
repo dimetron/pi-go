@@ -218,6 +218,25 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		instruction = agent.LoadInstruction(agent.SystemInstruction)
 	}
 
+	// Build output compactor callback.
+	compactorCfg := tools.DefaultCompactorConfig()
+	if cfg.Compactor != nil {
+		if cfg.Compactor.Enabled != nil {
+			compactorCfg.Enabled = *cfg.Compactor.Enabled
+		}
+		if cfg.Compactor.SourceCodeFiltering != "" {
+			compactorCfg.SourceCodeFiltering = cfg.Compactor.SourceCodeFiltering
+		}
+		if cfg.Compactor.MaxChars > 0 {
+			compactorCfg.MaxChars = cfg.Compactor.MaxChars
+		}
+		if cfg.Compactor.MaxLines > 0 {
+			compactorCfg.MaxLines = cfg.Compactor.MaxLines
+		}
+	}
+	compactMetrics := tools.NewCompactMetrics()
+	compactorCB := tools.BuildCompactorCallback(compactorCfg, compactMetrics)
+
 	// Load extensions: hooks, skills, MCP toolsets.
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
@@ -227,6 +246,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
 	afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
+	afterCBs = append(afterCBs, compactorCB)
 
 	// Build LSP explicit tools (lsp-diagnostics, lsp-definition, etc.).
 	lspTools, err := tools.LSPTools(lspMgr)
@@ -348,6 +368,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			RestartCh:         restartCh,
 			AgentEventCh:      agentEventCh,
 			TokenTracker:      tokenTracker,
+			CompactMetrics:    compactMetrics,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{

@@ -87,6 +87,13 @@ type Config struct {
 	AgentEventCh <-chan AgentSubEvent
 	// TokenTracker tracks daily token usage and enforces limits. May be nil.
 	TokenTracker TokenTracker
+	// CompactMetrics tracks output compaction statistics. May be nil.
+	CompactMetrics CompactStatsProvider
+}
+
+// CompactStatsProvider provides compaction statistics for TUI display.
+type CompactStatsProvider interface {
+	FormatStats() string
 }
 
 // TokenTracker provides read access to daily token usage for the status bar.
@@ -949,6 +956,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleSkillLoadCommand()
 	case "/skill-list":
 		return m.handleSkillListCommand()
+	case "/rtk":
+		m.handleRTKCommand(parts[1:])
 	case "/restart":
 		return m.handleRestartCommand()
 	case "/exit", "/quit":
@@ -1546,6 +1555,7 @@ var slashCommands = []string{
 	"/plan",
 	"/run",
 	"/skills",
+	"/rtk",
 	"/restart",
 	"/exit",
 	"/quit",
@@ -1657,6 +1667,7 @@ func (m *model) formatHelp() string {
 
 	b.WriteString("\n**System:**\n")
 	b.WriteString("  `/agents`              — Show running subagents\n")
+	b.WriteString("  `/rtk`                 — Output compaction stats\n")
 	b.WriteString("  `/login <provider>`    — Configure API keys\n")
 	b.WriteString("  `/restart`             — Restart pi process\n")
 
@@ -1706,6 +1717,33 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 }
 
+// handleRTKCommand handles the /rtk command and subcommands.
+func (m *model) handleRTKCommand(args []string) {
+	sub := "stats"
+	if len(args) > 0 {
+		sub = strings.ToLower(args[0])
+	}
+	switch sub {
+	case "stats":
+		if m.cfg.CompactMetrics == nil {
+			m.messages = append(m.messages, message{
+				role:    "assistant",
+				content: "Output compactor is not active.",
+			})
+			return
+		}
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: m.cfg.CompactMetrics.FormatStats(),
+		})
+	default:
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: "Usage: `/rtk` or `/rtk stats` — Show output compaction statistics",
+		})
+	}
+}
+
 // slashCommandDesc returns a short description for a slash command.
 func slashCommandDesc(cmd string) string {
 	switch cmd {
@@ -1723,6 +1761,8 @@ func slashCommandDesc(cmd string) string {
 		return "Compact context"
 	case "/agents":
 		return "Show subagents"
+	case "/rtk":
+		return "Output compaction stats"
 	case "/history":
 		return "Command history"
 	case "/login":

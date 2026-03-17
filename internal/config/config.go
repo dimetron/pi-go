@@ -37,6 +37,16 @@ type Config struct {
 	MCP             *MCPConfig            `json:"mcp,omitempty"`
 	Hooks           []HookConfig          `json:"hooks,omitempty"`
 	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
+	Compactor       *CompactorConfig      `json:"compactor,omitempty"`
+}
+
+// CompactorConfig holds user-overridable compaction settings.
+// When nil in config, defaults are applied by the tools package.
+type CompactorConfig struct {
+	Enabled             *bool  `json:"enabled,omitempty"`
+	SourceCodeFiltering string `json:"source_code_filtering,omitempty"` // "none", "minimal", "aggressive"
+	MaxChars            int    `json:"max_chars,omitempty"`
+	MaxLines            int    `json:"max_lines,omitempty"`
 }
 
 type MCPConfig struct {

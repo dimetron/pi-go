@@ -1,7 +1,7 @@
 package tools
 
 const (
-	maxOutputBytes = 100 * 1024 // 100KB output limit
+	maxOutputBytes = 256 * 1024 // 256KB safety limit (smart compaction happens in AfterToolCallback)
 	maxLineLength  = 500        // max chars per match/content line
 )
 
