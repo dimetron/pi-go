@@ -165,6 +165,11 @@ func (c *Client) Close() error {
 	if c.closed.Swap(true) {
 		return nil // already closed
 	}
+	// Handle case where cmd was never started (e.g., test mocks)
+	if c.cmd == nil {
+		close(c.done)
+		return nil
+	}
 
 	// Try graceful shutdown (best-effort, short timeout).
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

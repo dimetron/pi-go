@@ -462,10 +462,11 @@ func TestManager_ServerFor_NoRootMarker(t *testing.T) {
 	// Create a temp dir without go.mod
 	tmpDir := t.TempDir()
 
+	// Use a command that definitely doesn't exist
 	cfg := &ManagerConfig{
 		Languages: map[string]*LanguageConfig{
 			"go": {
-				Command:        "/bin/echo", // Won't work but that's ok
+				Command:        "nonexistent-lsp-server-that-does-not-exist",
 				FileExtensions: []string{".go"},
 				RootMarkers:    []string{"go.mod"},
 				LanguageID:     "go",

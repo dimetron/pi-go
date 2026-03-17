@@ -205,7 +205,7 @@ func TestFormatFile_HappyPath(t *testing.T) {
 	mockSrv := &mockServer{
 		formatResult: []TextEdit{
 			{
-				Range:   Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 7}},
+				Range:   Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 12}},
 				NewText: "package main",
 			},
 		},
@@ -236,13 +236,6 @@ func TestFormatFile_FormatError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr := &Manager{
-		languages:   make(map[string]*LanguageConfig),
-		servers:     make(map[string]*Server),
-		diagnostics: make(map[string][]Diagnostic),
-		available:   make(map[string]bool),
-	}
-
 	// Mock server that returns error
 	mockSrv := &mockServer{
 		formatErr: fmt.Errorf("format failed"),
@@ -263,13 +256,6 @@ func TestFormatFile_EmptyEdits(t *testing.T) {
 	content := "package main\n"
 	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
-	}
-
-	mgr := &Manager{
-		languages:   make(map[string]*LanguageConfig),
-		servers:     make(map[string]*Server),
-		diagnostics: make(map[string][]Diagnostic),
-		available:   make(map[string]bool),
 	}
 
 	// Mock server that returns no edits
