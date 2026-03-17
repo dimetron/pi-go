@@ -78,24 +78,38 @@ make clean      # remove binary
 ./pi --slow          # most capable model
 ./pi --plan          # planning-oriented model
 
+# Additional options
+./pi --continue      # continue last session
+./pi --session <id>  # resume specific session
+./pi --system "..." # custom system instructions
+./pi --url "..."    # custom API endpoint URL
+
 # Non-interactive modes
 ./pi --mode print "explain this codebase"
 ./pi --mode json "list all TODO comments"
-./pi --mode rpc                         # start RPC server
+./pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
 ```
 
 ### Slash commands
 
-| Command    | Description                          |
-|------------|--------------------------------------|
-| `/help`    | Show available commands              |
-| `/model`   | Switch model mid-conversation        |
-| `/session` | List and switch sessions             |
-| `/branch`  | Create a conversation branch         |
-| `/commit`  | Generate and apply a git commit      |
-| `/compact` | Compact session history              |
-| `/clear`   | Clear conversation                   |
-| `/exit`    | Exit the agent                       |
+| Command          | Description                                |
+|------------------|--------------------------------------------|
+| `/help`          | Show available commands                   |
+| `/model`         | Switch model mid-conversation             |
+| `/session`       | List and switch sessions                  |
+| `/branch`        | Create a conversation branch              |
+| `/commit`        | Generate and apply a git commit           |
+| `/compact`       | Compact session history                   |
+| `/agents`        | Show running subagents                    |
+| `/history`       | Show command history                      |
+| `/plan`          | Start PDD planning session                |
+| `/run`           | Execute a spec with task agent            |
+| `/skill-create`  | Create a new skill                        |
+| `/skill-list`    | List available skills                     |
+| `/skill-load`    | Reload skills from disk                   |
+| `/restart`       | Restart pi-go                             |
+| `/clear`         | Clear conversation                        |
+| `/exit`          | Exit the agent                            |
 
 ## Configuration
 
