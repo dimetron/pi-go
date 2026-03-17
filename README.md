@@ -71,7 +71,8 @@ make clean      # remove binary
 ./pi --model claude:sonnet
 ./pi --model openai:gpt-4o
 ./pi --model gemini:gemini-2.5-pro
-./pi --model ollama:llama3
+./pi --model ollama:qwen3.5:latest
+./pi --model minimax-m2.5:cloud #automatically detect ollama if :cloud
 
 # Use model roles
 ./pi --smol          # fast, cheap model
