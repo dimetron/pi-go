@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -24,6 +25,7 @@ type AgentConfig struct {
 	Description string   // One-line description from frontmatter
 	Role        string   // Config role name for model resolution (e.g., "smol", "plan", "slow")
 	Worktree    bool     // Whether this agent runs in an isolated git worktree
+	Timeout     int      // Absolute timeout in milliseconds (0 = use default)
 	Instruction string   // System prompt (markdown body)
 	Tools       []string // Allowed tool names (empty = all tools)
 	Source      string   // "bundled", "user", or "project"
@@ -105,6 +107,10 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 				cfg.Role = value
 			case "worktree":
 				cfg.Worktree = strings.ToLower(value) == "true"
+			case "timeout":
+				if ms, err := strconv.Atoi(value); err == nil && ms > 0 {
+					cfg.Timeout = ms
+				}
 			case "tools":
 				for _, t := range strings.Split(value, ",") {
 					t = strings.TrimSpace(t)
