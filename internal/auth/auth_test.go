@@ -1075,4 +1075,3 @@ func TestRunTLSPreflight_TLSCertKind(t *testing.T) {
 		t.Error("expected TLS error detection for Go's x509 error message")
 	}
 }
-

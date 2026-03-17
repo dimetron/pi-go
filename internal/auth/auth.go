@@ -22,15 +22,15 @@ import (
 
 // Provider holds OAuth configuration for an LLM provider.
 type Provider struct {
-	Name         string
-	EnvVar       string
-	AuthURL      string // OAuth authorization endpoint
-	TokenURL     string // OAuth token endpoint
-	ClientID     string // OAuth client ID (public client)
-	Scopes       []string
-	ExtraParams  map[string]string // additional auth URL params
-	TokenToKey   func(tok *TokenResponse) string
-	KeyPageURL   string // fallback manual key page
+	Name          string
+	EnvVar        string
+	AuthURL       string // OAuth authorization endpoint
+	TokenURL      string // OAuth token endpoint
+	ClientID      string // OAuth client ID (public client)
+	Scopes        []string
+	ExtraParams   map[string]string // additional auth URL params
+	TokenToKey    func(tok *TokenResponse) string
+	KeyPageURL    string // fallback manual key page
 	DeviceURL     string // device authorization endpoint (optional)
 	UseDeviceFlow bool   // prefer device code flow over PKCE
 	TLSPreflight  bool   // run TLS preflight before OAuth (OpenAI Codex)

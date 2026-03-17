@@ -431,4 +431,3 @@ func TestCodexProviderConfig(t *testing.T) {
 		t.Errorf("expected audience extra param, got %v", p.ExtraParams)
 	}
 }
-

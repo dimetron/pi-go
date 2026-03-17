@@ -13,8 +13,8 @@ import (
 type AgentScope string
 
 const (
-	ScopeBoth    AgentScope = "both"     // Bundled + user/project
-	ScopeBundled AgentScope = "bundled"  // Only embedded agents
+	ScopeBoth    AgentScope = "both"    // Bundled + user/project
+	ScopeBundled AgentScope = "bundled" // Only embedded agents
 	ScopeProject AgentScope = "project" // Only user/project agents
 )
 
@@ -24,7 +24,7 @@ type AgentConfig struct {
 	Description string   // One-line description from frontmatter
 	Role        string   // Config role name for model resolution (e.g., "smol", "plan", "slow")
 	Worktree    bool     // Whether this agent runs in an isolated git worktree
-	Instruction string  // System prompt (markdown body)
+	Instruction string   // System prompt (markdown body)
 	Tools       []string // Allowed tool names (empty = all tools)
 	Source      string   // "bundled", "user", or "project"
 }

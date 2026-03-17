@@ -20,7 +20,7 @@ func TestComplete_CommandCompletion(t *testing.T) {
 		{"commit matches", "/co", 2, "/commit"}, // /commit, /compact
 		{"all commands", "/", 0, ""},            // "/" alone doesn't return completions (handled by showCommandList)
 		{"no match", "/xyz", 0, ""},
-		{"exact match", "/plan", 1, "/plan"}, // exact match with single candidate stays
+		{"exact match", "/plan", 1, "/plan"},    // exact match with single candidate stays
 		{"skill-like", "/skills", 1, "/skills"}, // /skills is a built-in command
 	}
 

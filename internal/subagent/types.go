@@ -7,12 +7,12 @@ import (
 
 // SpawnInput is the input to spawn a subagent with an AgentConfig.
 type SpawnInput struct {
-	Agent       AgentConfig `json:"agent"`                     // Agent configuration
-	Prompt      string      `json:"prompt"`                    // Task prompt for the agent
-	Worktree    *bool       `json:"worktree,omitempty"`       // Override worktree setting
-	WorkDir     string      `json:"work_dir,omitempty"`        // Override working directory (e.g. existing worktree path)
-	Background  bool        `json:"background,omitempty"`     // Run in background
-	SkipCleanup bool        `json:"skip_cleanup,omitempty"`    // Don't auto-cleanup worktree on completion
+	Agent       AgentConfig `json:"agent"`                  // Agent configuration
+	Prompt      string      `json:"prompt"`                 // Task prompt for the agent
+	Worktree    *bool       `json:"worktree,omitempty"`     // Override worktree setting
+	WorkDir     string      `json:"work_dir,omitempty"`     // Override working directory (e.g. existing worktree path)
+	Background  bool        `json:"background,omitempty"`   // Run in background
+	SkipCleanup bool        `json:"skip_cleanup,omitempty"` // Don't auto-cleanup worktree on completion
 }
 
 // AgentInput is the legacy input to spawn a subagent (deprecated, use SpawnInput).

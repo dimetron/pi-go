@@ -679,7 +679,6 @@ func newMockDeviceServer(t *testing.T, attempt *int) *httptest.Server {
 	}))
 }
 
-
 func TestLoginStartDeviceFlow_CmdError(t *testing.T) {
 	// Device code request succeeds, but token polling fails with timeout.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

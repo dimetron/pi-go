@@ -18,10 +18,10 @@ type CompactMetrics struct {
 
 // CompactRecord is a single compaction event.
 type CompactRecord struct {
-	Tool       string   `json:"tool"`
-	Techniques []string `json:"techniques"`
-	OrigSize   int      `json:"orig_size"`
-	CompSize   int      `json:"comp_size"`
+	Tool       string    `json:"tool"`
+	Techniques []string  `json:"techniques"`
+	OrigSize   int       `json:"orig_size"`
+	CompSize   int       `json:"comp_size"`
 	Timestamp  time.Time `json:"timestamp"`
 }
 

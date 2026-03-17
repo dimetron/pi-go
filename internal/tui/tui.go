@@ -99,9 +99,9 @@ type CompactStatsProvider interface {
 // TokenTracker provides read access to daily token usage for the status bar.
 type TokenTracker interface {
 	Limit() int64
-	Remaining() int64       // -1 if unlimited
-	PercentUsed() float64   // 0-100+
-	TotalUsed() int64       // total tokens consumed today
+	Remaining() int64     // -1 if unlimited
+	PercentUsed() float64 // 0-100+
+	TotalUsed() int64     // total tokens consumed today
 }
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.

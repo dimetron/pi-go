@@ -810,9 +810,9 @@ func TestApplyCompaction_FallbackFields(t *testing.T) {
 }
 
 func TestApplyCompaction_NilResult(t *testing.T) {
-	applyCompaction(nil, nil)                 // should not panic
-	applyCompaction(map[string]any{}, nil)    // should not panic
-	applyCompaction(nil, &CompactResult{})    // should not panic
+	applyCompaction(nil, nil)              // should not panic
+	applyCompaction(map[string]any{}, nil) // should not panic
+	applyCompaction(nil, &CompactResult{}) // should not panic
 }
 
 // ---------------------------------------------------------------------------

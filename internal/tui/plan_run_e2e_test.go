@@ -286,7 +286,7 @@ func TestE2E_GateFailTriggersRetry(t *testing.T) {
 	// Verify retry message was shown.
 	var hasRetryMsg bool
 	for _, msg := range m.messages {
-		if strings.Contains(msg.content, "retry 1/3") {
+		if strings.Contains(msg.content, "Gate failed") && strings.Contains(msg.content, "retry 1") {
 			hasRetryMsg = true
 			break
 		}

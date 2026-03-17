@@ -18,7 +18,7 @@ type Usage struct {
 	Date         string `json:"date"`          // YYYY-MM-DD
 	InputTokens  int64  `json:"input_tokens"`  // total prompt tokens
 	OutputTokens int64  `json:"output_tokens"` // total completion tokens
-	Requests     int64  `json:"requests"`       // number of LLM calls
+	Requests     int64  `json:"requests"`      // number of LLM calls
 }
 
 // TotalTokens returns the combined input + output token count.
