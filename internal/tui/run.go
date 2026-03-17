@@ -139,7 +139,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		gates:      gates,
 		agentID:    agentID,
 		phase:      "running",
-		maxRetries: 3,
+		maxRetries: 10,
 		events:     events,
 		startTime:  time.Now(),
 	}
@@ -155,8 +155,8 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 	m.messages = append(m.messages, message{
 		role: "assistant",
-		content: fmt.Sprintf("**Running spec `%s`** — agent `%s` spawned in worktree\nGates: %s",
-			specName, agentID, gateInfo),
+		content: fmt.Sprintf("**Running spec `%s`** [cycle 1/%d] — agent `%s` spawned in worktree\nGates: %s",
+			specName, m.run.maxRetries, agentID, gateInfo),
 	})
 
 	// Add empty assistant message for streaming.
@@ -415,8 +415,8 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 
 		m.messages = append(m.messages, message{
 			role: "assistant",
-			content: fmt.Sprintf("**Gate failed** — retry %d/%d in worktree `%s`...",
-				m.run.retries, m.run.maxRetries, wtPath),
+			content: fmt.Sprintf("**Gate failed** — cycle %d/%d (retry %d) in worktree `%s`...",
+				m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
 		})
 
 		retryPrompt := buildRetryPrompt(m.run.specName, m.run.promptMD, m.run.gateOutput)

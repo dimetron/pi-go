@@ -2244,6 +2244,14 @@ func (m *model) renderStatusBar() string {
 		}
 	}
 
+	// /run cycle indicator.
+	if m.run != nil && m.run.phase != "done" && m.run.phase != "failed" {
+		cycle := m.run.retries + 1
+		runStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214"))
+		parts = append(parts, runStyle.Render(fmt.Sprintf("run[%s]: cycle %d/%d",
+			m.run.specName, cycle, m.run.maxRetries)))
+	}
+
 	// Trace count.
 	if len(m.traceLog) > 0 {
 		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", len(m.traceLog))))
