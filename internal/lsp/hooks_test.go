@@ -201,13 +201,6 @@ func TestFormatFile_HappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr := &Manager{
-		languages:   make(map[string]*LanguageConfig),
-		servers:     make(map[string]*Server),
-		diagnostics: make(map[string][]Diagnostic),
-		available:   make(map[string]bool),
-	}
-
 	// Mock server that returns a formatting edit
 	mockSrv := &mockServer{
 		formatResult: []TextEdit{
@@ -256,7 +249,7 @@ func TestFormatFile_FormatError(t *testing.T) {
 	}
 
 	result := map[string]any{"path": tmpFile}
-	result = formatFile(context.Background(), mgr, mockSrv, tmpFile, result)
+	result = formatFileWithFormatter(mockSrv, tmpFile, result)
 
 	// Should return unchanged result
 	if _, ok := result["lsp_formatted"]; ok {
@@ -285,7 +278,7 @@ func TestFormatFile_EmptyEdits(t *testing.T) {
 	}
 
 	result := map[string]any{"path": tmpFile}
-	result = formatFile(context.Background(), mgr, mockSrv, tmpFile, result)
+	result = formatFileWithFormatter(mockSrv, tmpFile, result)
 
 	// Should return unchanged result
 	if _, ok := result["lsp_formatted"]; ok {
