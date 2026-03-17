@@ -2,6 +2,8 @@
 
 A terminal-based coding agent built on [Google ADK Go](https://google.github.io/adk-go/) with multi-provider LLM support, sandboxed tool execution, LSP integration, and a subagent system.
 
+![pi-go TUI](docs/screen/pi-go.png)
+
 ## Features
 
 - **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), and Ollama for local models

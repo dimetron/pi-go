@@ -39,6 +39,16 @@ pi-go is a Go coding agent built on Google ADK Go (`google.golang.org/adk`) with
 - **rpc**: Unix socket JSON-RPC with JSONL event streaming.
 - **interactive**: Bubble Tea v2 TUI with markdown rendering. Default when stdin is a terminal.
 
+## Repository
+
+- **GitHub**: https://github.com/dimetron/pi-go
+
+When the user asks to "open GitHub", "open in browser", "show github", "go to github", or similar, use the `open` command to open the repository URL in the default browser:
+
+```bash
+open https://github.com/dimetron/pi-go
+```
+
 ## Do NOT
 
 - Add multi-module structure. Keep everything in one `go.mod`.
