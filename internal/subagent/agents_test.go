@@ -249,3 +249,87 @@ func TestFindAgent(t *testing.T) {
 		t.Error("expected not to find nonexistent agent")
 	}
 }
+
+func TestLoadBundledAgents(t *testing.T) {
+	agents, err := LoadBundledAgents()
+	if err != nil {
+		t.Fatalf("LoadBundledAgents failed: %v", err)
+	}
+
+	// Expected 8 agents: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer
+	if len(agents) != 8 {
+		t.Errorf("expected 8 bundled agents, got %d: %v", len(agents), agentNames(agents))
+	}
+
+	// Verify all agents have required fields
+	expectedNames := map[string]bool{
+		"explore":       false,
+		"plan":          false,
+		"designer":      false,
+		"task":          false,
+		"quick-task":    false,
+		"worker":        false,
+		"code-reviewer": false,
+		"spec-reviewer": false,
+	}
+
+	for _, agent := range agents {
+		if agent.Name == "" {
+			t.Error("agent has empty name")
+		}
+		if agent.Source != "bundled" {
+			t.Errorf("expected source 'bundled', got %q for agent %s", agent.Source, agent.Name)
+		}
+		expectedNames[agent.Name] = true
+	}
+
+	for name, found := range expectedNames {
+		if !found {
+			t.Errorf("missing bundled agent: %s", name)
+		}
+	}
+}
+
+func TestDiscoverAgents_Bundled(t *testing.T) {
+	result, err := DiscoverAgents(".", ScopeBundled)
+	if err != nil {
+		t.Fatalf("DiscoverAgents failed: %v", err)
+	}
+
+	// Should have 8 bundled agents
+	if len(result.Bundled) != 8 {
+		t.Errorf("expected 8 bundled agents, got %d", len(result.Bundled))
+	}
+
+	// All should have bundled source
+	for _, agent := range result.Bundled {
+		if agent.Source != "bundled" {
+			t.Errorf("expected source 'bundled', got %q", agent.Source)
+		}
+	}
+}
+
+func TestDiscoverAgents_Both(t *testing.T) {
+	result, err := DiscoverAgents(".", ScopeBoth)
+	if err != nil {
+		t.Fatalf("DiscoverAgents failed: %v", err)
+	}
+
+	// Should have bundled agents
+	if len(result.Bundled) != 8 {
+		t.Errorf("expected 8 bundled agents, got %d", len(result.Bundled))
+	}
+
+	// All should be in merged All slice
+	if len(result.All) < 8 {
+		t.Errorf("expected at least 8 agents in All, got %d", len(result.All))
+	}
+}
+
+func agentNames(agents []AgentConfig) []string {
+	names := make([]string, len(agents))
+	for i, a := range agents {
+		names[i] = a.Name
+	}
+	return names
+}

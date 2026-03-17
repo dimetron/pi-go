@@ -54,7 +54,7 @@ func NewOrchestrator(cfg *config.Config, repoRoot string) *Orchestrator {
 
 // Spawn starts a new subagent and returns an event channel.
 // It acquires a pool slot, optionally creates a worktree, and spawns the pi process.
-func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Event, string, error) {
+func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
 	o.mu.Lock()
 	if o.closed {
 		o.mu.Unlock()
@@ -62,17 +62,16 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 	}
 	o.mu.Unlock()
 
-	// Validate agent type.
-	if err := ValidateType(input.Type); err != nil {
-		return nil, "", err
+	// Validate agent config.
+	agent := input.Agent
+	if agent.Name == "" {
+		return nil, "", fmt.Errorf("agent config must have a name")
 	}
 
-	typeDef := AgentTypes[input.Type]
-
-	// Resolve model for this agent type's role.
-	model, _, err := o.cfg.ResolveRole(typeDef.Role)
+	// Resolve model for this agent's role.
+	model, _, err := o.cfg.ResolveRole(agent.Role)
 	if err != nil {
-		return nil, "", fmt.Errorf("resolving role %q for agent type %q: %w", typeDef.Role, input.Type, err)
+		return nil, "", fmt.Errorf("resolving role %q for agent %q: %w", agent.Role, agent.Name, err)
 	}
 
 	// Acquire a pool slot.
@@ -81,10 +80,10 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 	}
 
 	// Generate agent ID.
-	agentID := fmt.Sprintf("%s-%d", input.Type, time.Now().UnixNano())
+	agentID := fmt.Sprintf("%s-%d", agent.Name, time.Now().UnixNano())
 
 	// Determine if worktree is needed.
-	useWorktree := typeDef.Worktree
+	useWorktree := agent.Worktree
 	if input.Worktree != nil {
 		useWorktree = *input.Worktree
 	}
@@ -109,7 +108,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 		Model:       model,
 		WorkDir:     workDir,
 		Prompt:      input.Prompt,
-		Instruction: typeDef.Instruction,
+		Instruction: agent.Instruction,
 	})
 	if err != nil {
 		if useWorktree && o.worktree != nil {
@@ -121,7 +120,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input AgentInput) (<-chan Even
 
 	state := &agentState{
 		ID:          agentID,
-		Type:        input.Type,
+		Type:        agent.Name,
 		Prompt:      input.Prompt,
 		StartedAt:   time.Now(),
 		Process:     proc,
@@ -241,4 +240,15 @@ func (o *Orchestrator) Shutdown() {
 	if o.worktree != nil {
 		_ = o.worktree.CleanupAll()
 	}
+}
+
+// SpawnWithInput is the legacy method that accepts AgentInput for backward compatibility.
+// It converts the input to SpawnInput and calls Spawn.
+// Deprecated: Use Spawn with SpawnInput directly.
+func (o *Orchestrator) SpawnWithInput(ctx context.Context, input AgentInput) (<-chan Event, string, error) {
+	spawnInput, err := input.ToSpawnInput()
+	if err != nil {
+		return nil, "", err
+	}
+	return o.Spawn(ctx, spawnInput)
 }

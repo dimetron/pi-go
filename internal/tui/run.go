@@ -118,7 +118,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 
 	// Spawn task subagent with SkipCleanup so we can run gates before merge.
 	useWorktree := true
-	events, agentID, err := m.cfg.Orchestrator.Spawn(m.ctx, subagent.AgentInput{
+	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 		Type:        "task",
 		Prompt:      prompt,
 		Worktree:    &useWorktree,
@@ -422,7 +422,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		retryPrompt := buildRetryPrompt(m.run.specName, m.run.promptMD, m.run.gateOutput)
 
 		// Spawn a new agent in the same worktree directory.
-		events, agentID, err := m.cfg.Orchestrator.Spawn(m.ctx, subagent.AgentInput{
+		events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 			Type:        "task",
 			Prompt:      retryPrompt,
 			WorkDir:     wtPath,

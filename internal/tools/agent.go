@@ -53,7 +53,7 @@ Maximum 5 concurrent subagents. The agent runs as a separate process and returns
 func agentHandler(ctx tool.Context, orch *subagent.Orchestrator, input AgentToolInput, onEvent AgentEventCallback) (AgentToolOutput, error) {
 	start := time.Now()
 
-	events, agentID, err := orch.Spawn(ctx, subagent.AgentInput{
+	events, agentID, err := orch.SpawnWithInput(ctx, subagent.AgentInput{
 		Type:   input.Type,
 		Prompt: input.Prompt,
 	})

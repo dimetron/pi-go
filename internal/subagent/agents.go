@@ -3,6 +3,7 @@ package subagent
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,13 +52,26 @@ func ParseAgentFile(path string) (AgentConfig, error) {
 	if err != nil {
 		return AgentConfig{}, err
 	}
+	return parseAgentContent(string(data), path)
+}
 
+// ParseAgentFileFromFS parses an agent file from an embedded filesystem.
+func ParseAgentFileFromFS(fsys fs.FS, path string) (AgentConfig, error) {
+	data, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	return parseAgentContent(string(data), path)
+}
+
+// parseAgentContent is the shared parsing logic for agent markdown content.
+func parseAgentContent(content, path string) (AgentConfig, error) {
 	// Derive default name from filename: explore.md → explore
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
 	cfg := AgentConfig{Name: name}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(strings.NewReader(content))
 	inFrontmatter := false
 	frontmatterDone := false
 	var body strings.Builder
@@ -170,8 +184,12 @@ func findNearestProjectAgentsDir(cwd string) (string, error) {
 func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error) {
 	result := &AgentDiscoveryResult{}
 
-	// Load bundled agents (Step 2 will add LoadBundledAgents)
-	// For now, we skip this in Step 1 - will be added in Step 2
+	// Load bundled agents
+	bundledAgents, err := LoadBundledAgents()
+	if err != nil {
+		return nil, fmt.Errorf("loading bundled agents: %w", err)
+	}
+	result.Bundled = bundledAgents
 
 	// Load user agents (~/.pi-go/agents/)
 	homeDir, err := os.UserHomeDir()

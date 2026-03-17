@@ -47,7 +47,7 @@ func TestOrchestrator_SpawnInvalidType(t *testing.T) {
 	cfg := testConfig()
 	orch := NewOrchestrator(cfg, "")
 
-	_, _, err := orch.Spawn(context.Background(), AgentInput{
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "nonexistent",
 		Prompt: "test",
 	})
@@ -61,7 +61,7 @@ func TestOrchestrator_SpawnRoleResolution(t *testing.T) {
 	cfg := config.Config{} // empty, no roles
 	orch := NewOrchestrator(&cfg, "")
 
-	_, _, err := orch.Spawn(context.Background(), AgentInput{
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "explore",
 		Prompt: "test",
 	})
@@ -142,7 +142,7 @@ func TestOrchestrator_SpawnExploreNoWorktree(t *testing.T) {
 	// Use a binary that won't be found — we just want to verify no worktree is created.
 	orch.spawner.PiBinary = "/nonexistent/pi"
 
-	_, _, err := orch.Spawn(context.Background(), AgentInput{
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "explore",
 		Prompt: "test explore",
 	})
@@ -172,7 +172,7 @@ func TestOrchestrator_SpawnTaskWithWorktree(t *testing.T) {
 	// Use a binary that won't be found.
 	orch.spawner.PiBinary = "/nonexistent/pi"
 
-	_, _, err := orch.Spawn(context.Background(), AgentInput{
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "task",
 		Prompt: "test task",
 	})
@@ -198,7 +198,7 @@ func TestOrchestrator_WorktreeOverride(t *testing.T) {
 
 	// Override worktree=false for a task type (which normally uses worktree).
 	noWorktree := false
-	_, _, err := orch.Spawn(context.Background(), AgentInput{
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:     "task",
 		Prompt:   "test no worktree override",
 		Worktree: &noWorktree,
