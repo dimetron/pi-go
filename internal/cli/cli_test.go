@@ -171,7 +171,7 @@ func TestCLI_SmolFlag(t *testing.T) {
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
 		"roles": {
-			"default": {"model": "claude-sonnet-4-20250514"},
+			"default": {"model": "claude-sonnet-4-6"},
 			"smol": {"model": "gpt-4o-mini", "provider": "openai"}
 		}
 	}`), 0o644)

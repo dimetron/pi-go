@@ -52,7 +52,7 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			modelName = req.Model
 		}
 		if modelName == "" || modelName == "anthropic" {
-			modelName = "claude-sonnet-4-20250514"
+			modelName = "claude-sonnet-4-6"
 		}
 
 		maxTokens := int64(defaultMaxTokens)

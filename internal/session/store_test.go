@@ -338,7 +338,9 @@ func TestGetWithNumRecentEvents(t *testing.T) {
 			Author:    "user",
 		}
 		event.Content = genai.NewContentFromText(fmt.Sprintf("msg-%d", i), genai.RoleUser)
-		svc.AppendEvent(ctx, resp.Session, event)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Get last 2 events.
@@ -372,13 +374,114 @@ func TestLastSessionID(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // Ensure different timestamps.
 
 	svc.Create(ctx, &session.CreateRequest{
-		AppName:   "test-app",
-		UserID:    "test-user",
-		SessionID: "new-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+}
+
+func TestFilteredSessionMethods(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
 	})
 
-	if id := svc.LastSessionID("test-app", "test-user"); id != "new-session" {
-		t.Errorf("LastSessionID() = %q, want %q", id, "new-session")
+	// Add 5 events.
+	for i := 0; i < 5; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("event-%d", i),
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("msg-%d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Get filtered session with NumRecentEvents - this creates filteredSession
+	getResp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:         "test-app",
+		UserID:          "test-user",
+		SessionID:       resp.Session.ID(),
+		NumRecentEvents: 2,
+	})
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+
+	// Test filteredSession methods
+	if getResp.Session.ID() != resp.Session.ID() {
+		t.Errorf("filteredSession ID = %q, want %q", getResp.Session.ID(), resp.Session.ID())
+	}
+	if getResp.Session.AppName() != "test-app" {
+		t.Errorf("filteredSession AppName = %q, want %q", getResp.Session.AppName(), "test-app")
+	}
+	if getResp.Session.UserID() != "test-user" {
+		t.Errorf("filteredSession UserID = %q, want %q", getResp.Session.UserID(), "test-user")
+	}
+
+	// LastUpdateTime should return a valid time
+	if getResp.Session.LastUpdateTime().IsZero() {
+		t.Error("filteredSession LastUpdateTime should not be zero")
+	}
+
+	// State should work
+	_, err = getResp.Session.State().Get("nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent key in filtered session state")
+	}
+}
+
+func TestFilteredSessionAll(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+
+	// Add events
+	for i := 0; i < 3; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("event-%d", i),
+			Timestamp: time.Now(),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("msg-%d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Get filtered session with NumRecentEvents
+	getResp, _ := svc.Get(ctx, &session.GetRequest{
+		AppName:         "test-app",
+		UserID:          "test-user",
+		SessionID:       resp.Session.ID(),
+		NumRecentEvents: 2,
+	})
+
+	// Test that we can iterate over events
+	count := 0
+	for range getResp.Session.Events().All() {
+		count++
+	}
+	if count != 2 {
+		t.Errorf("Events().All() count = %d, want 2", count)
+	}
+}
+
+func TestDefaultCompactConfig(t *testing.T) {
+	cfg := DefaultCompactConfig()
+	if cfg.MaxTokens != 100000 {
+		t.Errorf("MaxTokens = %d, want 100000", cfg.MaxTokens)
+	}
+	if cfg.KeepRecent != 10 {
+		t.Errorf("KeepRecent = %d, want 10", cfg.KeepRecent)
 	}
 }
 

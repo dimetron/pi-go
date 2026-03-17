@@ -383,6 +383,104 @@ func TestClient_ErrorResponse(t *testing.T) {
 	}
 }
 
+func TestNewClient(t *testing.T) {
+	// Create a minimal LSP server using net.Pipe for testing
+	clientConn, serverConn := net.Pipe()
+
+	// Start a minimal server that handles initialize and shutdown
+	go func() {
+		defer serverConn.Close()
+		// Read and parse the initialize request
+		buf := make([]byte, 4096)
+		n, _ := serverConn.Read(buf)
+		_ = n
+
+		// Send initialize response
+		initResp := `Content-Length: 43\r\n\r\n{"capabilities":{}}`
+		serverConn.Write([]byte(initResp))
+
+		// Read and handle shutdown request
+		n, _ = serverConn.Read(buf)
+		_ = n
+
+		// Send shutdown response
+		shutdownResp := `Content-Length: 10\r\n\r\nnull`
+		serverConn.Write([]byte(shutdownResp))
+
+		// Read exit notification
+		n, _ = serverConn.Read(buf)
+		_ = n
+
+		// Close client side
+		clientConn.Close()
+	}()
+
+	c, err := NewClient("/bin/cat")
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	// Verify client was created successfully
+	if c == nil {
+		t.Fatal("expected non-nil client")
+	}
+}
+
+func TestClient_Close(t *testing.T) {
+	// Test Close on an already closed client (should be no-op)
+	c, _ := newClientWithMock(nil)
+
+	// Close the client first time
+	err1 := c.Close()
+	if err1 != nil {
+		t.Errorf("first Close() failed: %v", err1)
+	}
+
+	// Close again - should be no-op
+	err2 := c.Close()
+	if err2 != nil {
+		t.Errorf("second Close() should succeed but got: %v", err2)
+	}
+}
+
+func TestClient_Request_ClosedClient(t *testing.T) {
+	c, _ := newClientWithMock(nil)
+	defer func() {
+		c.closed.Store(true)
+		_ = c.stdin.Close()
+	}()
+
+	// Mark as closed
+	c.closed.Store(true)
+
+	_, err := c.Request(context.Background(), "test", nil)
+	if err == nil {
+		t.Fatal("expected error for closed client")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("expected 'closed' in error, got: %v", err)
+	}
+}
+
+func TestClient_Notify_ClosedClient(t *testing.T) {
+	c, _ := newClientWithMock(nil)
+	defer func() {
+		c.closed.Store(true)
+		_ = c.stdin.Close()
+	}()
+
+	// Mark as closed
+	c.closed.Store(true)
+
+	err := c.Notify("test", nil)
+	if err == nil {
+		t.Fatal("expected error for closed client")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("expected 'closed' in error, got: %v", err)
+	}
+}
+
 func TestProtocol_DiagnosticSeverity(t *testing.T) {
 	tests := []struct {
 		severity int

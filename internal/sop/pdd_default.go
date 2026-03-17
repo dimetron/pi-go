@@ -86,10 +86,11 @@ You can reference rough-idea.md for the original idea.
 
 ## Guidelines
 
-- Be thorough but efficient — ask only necessary questions
+- **NEVER modify source code** — /plan only reads code for research, all writes go to specs/*
 - Write artifacts incrementally (don't wait until the end)
 - Each artifact should be standalone and self-contained
 - Use the project's existing patterns and conventions
 - The PROMPT.md must contain enough context for an autonomous agent to execute
 - Gates should use the project's actual build/test commands
+- Be thorough but efficient — ask only necessary questions
 `

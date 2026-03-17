@@ -32,7 +32,10 @@ type GitFileDiffOutput struct {
 }
 
 func newGitFileDiffTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("git-file-diff", "Get the unified diff for a specific file. Shows unstaged changes by default; set staged=true for staged (cached) changes.", func(ctx tool.Context, input GitFileDiffInput) (GitFileDiffOutput, error) {
+	return newTool("git-file-diff", `Get the unified diff for a specific file.
+
+Required: file (path relative to repo root).
+Optional: staged (bool, default false — set true for cached/staged changes).`, func(ctx tool.Context, input GitFileDiffInput) (GitFileDiffOutput, error) {
 		return gitFileDiffHandler(sb, ctx, input)
 	})
 }

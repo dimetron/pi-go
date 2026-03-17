@@ -28,7 +28,10 @@ type EditOutput struct {
 }
 
 func newEditTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("edit", "Edit a file by replacing an exact string match. The old_string must be unique in the file unless replace_all is true. Use this for precise, surgical edits.", func(_ tool.Context, input EditInput) (EditOutput, error) {
+	return newTool("edit", `Edit a file by replacing an exact string match.
+
+Required: file_path (absolute path), old_string (text to find), new_string (replacement).
+Optional: replace_all (bool, default false). old_string must be unique unless replace_all is true.`, func(_ tool.Context, input EditInput) (EditOutput, error) {
 		return editHandler(sb, input)
 	})
 }

@@ -223,11 +223,11 @@ func TestE2EGitStagedDiffWorkflow(t *testing.T) {
 func TestE2ERoleResolution(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Roles = map[string]config.RoleConfig{
-		"default": {Model: "claude-sonnet-4-20250514"},
-		"smol":    {Model: "claude-haiku-3-20240307"},
-		"slow":    {Model: "claude-opus-4-20250514"},
-		"plan":    {Model: "claude-opus-4-20250514"},
-		"commit":  {Model: "claude-haiku-3-20240307"},
+		"default": {Model: "claude-sonnet-4-6"},
+		"smol":    {Model: "claude-haiku-4-5-20251001"},
+		"slow":    {Model: "claude-opus-4-6"},
+		"plan":    {Model: "claude-opus-4-6"},
+		"commit":  {Model: "claude-haiku-4-5-20251001"},
 	}
 
 	tests := []struct {
@@ -235,12 +235,12 @@ func TestE2ERoleResolution(t *testing.T) {
 		wantModel string
 		wantProv  string
 	}{
-		{"default", "claude-sonnet-4-20250514", "anthropic"},
-		{"smol", "claude-haiku-3-20240307", "anthropic"},
-		{"slow", "claude-opus-4-20250514", "anthropic"},
-		{"plan", "claude-opus-4-20250514", "anthropic"},
-		{"commit", "claude-haiku-3-20240307", "anthropic"},
-		{"unknown", "claude-sonnet-4-20250514", "anthropic"}, // falls back to default
+		{"default", "claude-sonnet-4-6", "anthropic"},
+		{"smol", "claude-haiku-4-5-20251001", "anthropic"},
+		{"slow", "claude-opus-4-6", "anthropic"},
+		{"plan", "claude-opus-4-6", "anthropic"},
+		{"commit", "claude-haiku-4-5-20251001", "anthropic"},
+		{"unknown", "claude-sonnet-4-6", "anthropic"}, // falls back to default
 	}
 
 	for _, tt := range tests {
@@ -712,7 +712,7 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 
 	orch := subagent.NewOrchestrator(&cfg, "")
 
-	agentTools, err := tools.AgentTools(orch)
+	agentTools, err := tools.AgentTools(orch, nil)
 	if err != nil {
 		t.Fatalf("AgentTools() error: %v", err)
 	}

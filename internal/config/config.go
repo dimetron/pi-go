@@ -52,7 +52,7 @@ type MCPServer struct {
 func Defaults() Config {
 	return Config{
 		Roles: map[string]RoleConfig{
-			"default": {Model: "claude-sonnet-4-20250514"},
+			"default": {Model: "claude-sonnet-4-6"},
 		},
 		DefaultProvider: "anthropic",
 		ThinkingLevel:   "medium",

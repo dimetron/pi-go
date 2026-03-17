@@ -11,8 +11,8 @@ func TestResolve(t *testing.T) {
 		wantProv string
 		wantErr  bool
 	}{
-		{"claude-sonnet-4-20250514", "anthropic", false},
-		{"claude-opus-4-20250514", "anthropic", false},
+		{"claude-sonnet-4-6", "anthropic", false},
+		{"claude-opus-4-6", "anthropic", false},
 		{"gpt-4o", "openai", false},
 		{"o3-mini", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
@@ -47,7 +47,7 @@ func TestNewLLMWithProvider(t *testing.T) {
 		if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
 			t.Skip("skipping: no Google/Gemini API key set")
 		}
-		llm, err := NewLLM(nil, Info{Provider: "gemini", Model: "gemini-2.0-flash"}, "key", "", "")
+		llm, err := NewLLM(nil, Info{Provider: "gemini", Model: "gemini-2.5-flash"}, "key", "", "")
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestNewLLMWithProvider(t *testing.T) {
 		}
 	})
 	t.Run("creates anthropic provider", func(t *testing.T) {
-		llm, err := NewLLM(nil, Info{Provider: "anthropic", Model: "claude-sonnet-4-20250514"}, "sk-test", "", "")
+		llm, err := NewLLM(nil, Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "")
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -92,14 +92,14 @@ func TestNewGemini(t *testing.T) {
 	if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
 		t.Skip("skipping: no Google/Gemini API key set")
 	}
-	llm, err := NewGemini(nil, "gemini-2.0-flash", "")
+	llm, err := NewGemini(nil, "gemini-2.5-flash", "")
 	if err != nil {
 		t.Fatalf("NewGemini() error: %v", err)
 	}
 	if llm == nil {
 		t.Fatal("NewGemini() returned nil")
 	}
-	if llm.Name() != "gemini-2.0-flash" {
-		t.Errorf("Name() = %q, want %q", llm.Name(), "gemini-2.0-flash")
+	if llm.Name() != "gemini-2.5-flash" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "gemini-2.5-flash")
 	}
 }

@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/glamour"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -40,11 +45,19 @@ type agentToolResultMsg struct {
 }
 type agentDoneMsg struct{ err error }
 
+// agentSubEventMsg carries a streamed event from a running subagent to the TUI.
+type agentSubEventMsg struct {
+	agentID string // which subagent
+	kind    string // "tool_call", "tool_result", "text"
+	content string
+}
+
 func (agentTextMsg) agentMsg()       {}
 func (agentThinkingMsg) agentMsg()   {}
 func (agentToolCallMsg) agentMsg()   {}
 func (agentToolResultMsg) agentMsg() {}
 func (agentDoneMsg) agentMsg()       {}
+func (agentSubEventMsg) agentMsg()   {}
 
 // Config holds configuration for the TUI.
 type Config struct {
@@ -70,6 +83,15 @@ type Config struct {
 	SkillDirs []string
 	// RestartCh receives a signal when the agent calls the restart tool.
 	RestartCh chan struct{}
+	// AgentEventCh receives subagent events from the agent tool for live display.
+	AgentEventCh <-chan AgentSubEvent
+}
+
+// AgentSubEvent carries a subagent event from the agent tool to the TUI.
+type AgentSubEvent struct {
+	AgentID string
+	Kind    string // "tool_call", "tool_result", "text_delta", etc.
+	Content string
 }
 
 // Screen provides thread-safe access to the current TUI screen content.
@@ -98,6 +120,17 @@ type message struct {
 	content string
 	tool    string // tool name (for role=="tool")
 	toolIn  string // tool input args (for role=="tool")
+	// Subagent event stream (for tool=="agent").
+	agentID     string    // subagent ID for matching events
+	agentType   string    // subagent type (e.g. "task", "explore")
+	agentTitle  string    // short description from prompt
+	agentEvents []agentEv // streamed events from the subagent
+}
+
+// agentEv is a single event from a subagent's event stream.
+type agentEv struct {
+	kind    string // "tool_call", "tool_result", "text"
+	content string
 }
 
 // model is the Bubble Tea model for the interactive TUI.
@@ -206,10 +239,14 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func (m *model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if m.cfg.RestartCh != nil {
-		return waitForRestart(m.cfg.RestartCh)
+		cmds = append(cmds, waitForRestart(m.cfg.RestartCh))
 	}
-	return nil
+	if m.cfg.AgentEventCh != nil {
+		cmds = append(cmds, waitForSubEvent(m.cfg.AgentEventCh))
+	}
+	return tea.Batch(cmds...)
 }
 
 // waitForRestart returns a Cmd that listens for a restart signal from the agent.
@@ -300,9 +337,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		// Show tool call inline in chat.
 		toolIn := toolCallSummary(msg.name, msg.args)
-		m.messages = append(m.messages, message{
+		newMsg := message{
 			role: "tool", tool: msg.name, toolIn: toolIn,
-		})
+		}
+		// For agent tool, store type and title for display.
+		if msg.name == "agent" {
+			newMsg.agentType, _ = msg.args["type"].(string)
+			prompt, _ := msg.args["prompt"].(string)
+			if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+				prompt = prompt[:idx]
+			}
+			if len(prompt) > 60 {
+				prompt = prompt[:57] + "..."
+			}
+			newMsg.agentTitle = prompt
+		}
+		m.messages = append(m.messages, newMsg)
 
 		return m, waitForAgent(m.agentCh)
 
@@ -330,6 +380,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, waitForAgent(m.agentCh)
+
+	case agentSubEventMsg:
+		// Handle subagent event: associate with the correct agent message.
+		if msg.kind == "spawn" {
+			// Assign agentID to the most recent agent message without one.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].tool == "agent" && m.messages[i].agentID == "" {
+					m.messages[i].agentID = msg.agentID
+					break
+				}
+			}
+		} else {
+			// Append event to the matching agent message.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].tool == "agent" && m.messages[i].agentID == msg.agentID {
+					evKind := msg.kind
+					if evKind == "text_delta" {
+						evKind = "text"
+					}
+					m.messages[i].agentEvents = append(m.messages[i].agentEvents, agentEv{
+						kind:    evKind,
+						content: msg.content,
+					})
+					break
+				}
+			}
+		}
+		m.scroll = 0
+		return m, waitForSubEvent(m.cfg.AgentEventCh)
 
 	case agentDoneMsg:
 		m.running = false
@@ -386,6 +465,23 @@ func waitForAgent(ch chan agentMsg) tea.Cmd {
 			return agentDoneMsg{}
 		}
 		return msg
+	}
+}
+
+func waitForSubEvent(ch <-chan AgentSubEvent) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return agentSubEventMsg{
+			agentID: ev.AgentID,
+			kind:    ev.Kind,
+			content: ev.Content,
+		}
 	}
 }
 
@@ -1237,6 +1333,23 @@ func toolCallSummary(name string, args map[string]any) string {
 			return fmt.Sprintf("%s (depth %d)", p, int(d))
 		}
 		return p
+	case "agent":
+		typ, _ := args["type"].(string)
+		prompt, _ := args["prompt"].(string)
+		// Truncate prompt to first line, max 60 chars.
+		if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+			prompt = prompt[:idx]
+		}
+		if len(prompt) > 60 {
+			prompt = prompt[:57] + "..."
+		}
+		if typ != "" && prompt != "" {
+			return fmt.Sprintf("%s: %s", typ, prompt)
+		}
+		if typ != "" {
+			return typ
+		}
+		return prompt
 	}
 	return ""
 }
@@ -1282,15 +1395,55 @@ func formatToolResult(data map[string]any) string {
 		f, _ := data["files"].(float64)
 		return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
 	}
-	// grep tool: show match count
+	// grep tool: show matches with file:line: content
+	if matchList, ok := data["matches"].([]any); ok {
+		total, _ := data["total_matches"].(float64)
+		trunc, _ := data["truncated"].(bool)
+		var sb strings.Builder
+		for _, m := range matchList {
+			if entry, ok := m.(map[string]any); ok {
+				file, _ := entry["file"].(string)
+				line, _ := entry["line"].(float64)
+				content, _ := entry["content"].(string)
+				fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
+			}
+		}
+		if trunc {
+			fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
+		}
+		return strings.TrimRight(sb.String(), "\n")
+	}
 	if matches, ok := data["total_matches"].(float64); ok {
 		return fmt.Sprintf("%d matches", int(matches))
 	}
-	// find tool: show file count
+	// find tool: show file list
+	if fileList, ok := data["files"].([]any); ok {
+		total, _ := data["total_files"].(float64)
+		trunc, _ := data["truncated"].(bool)
+		var sb strings.Builder
+		for _, f := range fileList {
+			if name, ok := f.(string); ok {
+				sb.WriteString(name)
+				sb.WriteByte('\n')
+			}
+		}
+		if trunc {
+			fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
+		}
+		return strings.TrimRight(sb.String(), "\n")
+	}
 	if total, ok := data["total_files"].(float64); ok {
 		return fmt.Sprintf("%d files", int(total))
 	}
-	// read tool: show line count
+	// read tool: show actual content with line numbers
+	if content, ok := data["content"].(string); ok {
+		total, _ := data["total_lines"].(float64)
+		trunc, _ := data["truncated"].(bool)
+		if trunc {
+			content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
+		}
+		return content
+	}
 	if total, ok := data["total_lines"].(float64); ok {
 		trunc := ""
 		if t, ok := data["truncated"].(bool); ok && t {
@@ -1551,30 +1704,113 @@ func (m *model) renderMessages() string {
 			toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
 			argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 			b.WriteString("\n")
-			b.WriteString(toolBullet)
-			b.WriteString(toolStyle.Render(msg.tool))
-			if msg.toolIn != "" {
-				args := msg.toolIn
-				if len(args) > 80 {
-					args = args[:77] + "..."
+
+			// Special rendering for agent tool: show type, title, and event stream.
+			if msg.tool == "agent" {
+				agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("● ")
+				typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
+				titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+				b.WriteString(agentBullet)
+				b.WriteString(typeStyle.Render("agent"))
+				if msg.agentType != "" {
+					b.WriteString(dim.Render("["))
+					b.WriteString(typeStyle.Render(msg.agentType))
+					b.WriteString(dim.Render("]"))
 				}
-				b.WriteString(dim.Render("("))
-				b.WriteString(argStyle.Render(args))
-				b.WriteString(dim.Render(")"))
-			}
-			b.WriteString("\n")
-			if msg.content != "" {
-				content := msg.content
-				lines := strings.Split(content, "\n")
-				maxLines := 15
-				if len(lines) > maxLines {
-					lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
+				if msg.agentTitle != "" {
+					b.WriteString(" ")
+					b.WriteString(titleStyle.Render(msg.agentTitle))
 				}
-				for _, line := range lines {
+				b.WriteString("\n")
+
+				// Show event stream (last N events).
+				if len(msg.agentEvents) > 0 {
+					evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+					evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+					maxEvents := 8
+					events := msg.agentEvents
+					if len(events) > maxEvents {
+						skipped := len(events) - maxEvents
+						events = events[len(events)-maxEvents:]
+						b.WriteString("  ")
+						b.WriteString(dim.Render(fmt.Sprintf("│ ... %d earlier events\n", skipped)))
+					}
+					for _, ev := range events {
+						b.WriteString("  ")
+						b.WriteString(dim.Render("│ "))
+						switch ev.kind {
+						case "tool_call":
+							b.WriteString(evToolStyle.Render("⚙ " + ev.content))
+						case "tool_result":
+							summary := ev.content
+							if len(summary) > 80 {
+								summary = summary[:77] + "..."
+							}
+							b.WriteString(evStyle.Render("  ✓ " + summary))
+						case "text":
+							// Skip text deltas in event stream to avoid clutter.
+						default:
+							b.WriteString(evStyle.Render(ev.kind + ": " + ev.content))
+						}
+						b.WriteString("\n")
+					}
+				}
+
+				// Show result summary when done.
+				if msg.content != "" {
 					b.WriteString("  ")
 					b.WriteString(dim.Render("│ "))
-					b.WriteString(dim.Render(line))
+					summary := msg.content
+					if len(summary) > 100 {
+						summary = summary[:97] + "..."
+					}
+					b.WriteString(dim.Render("→ " + summary))
 					b.WriteString("\n")
+				}
+			} else {
+				b.WriteString(toolBullet)
+				b.WriteString(toolStyle.Render(msg.tool))
+				if msg.toolIn != "" {
+					args := msg.toolIn
+					if len(args) > 80 {
+						args = args[:77] + "..."
+					}
+					b.WriteString(dim.Render("("))
+					b.WriteString(argStyle.Render(args))
+					b.WriteString(dim.Render(")"))
+				}
+				b.WriteString("\n")
+				if msg.content != "" {
+					content := msg.content
+					lines := strings.Split(content, "\n")
+					maxLines := 15
+					if len(lines) > maxLines {
+						lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
+					}
+					var styled []string
+					switch {
+					case msg.tool == "read" && msg.toolIn != "":
+						styled = highlightReadOutput(lines, msg.toolIn)
+					case msg.tool == "grep":
+						styled = highlightGrepOutput(lines)
+					case msg.tool == "find":
+						styled = highlightFindOutput(lines)
+					}
+					if styled != nil {
+						for _, line := range styled {
+							b.WriteString("  ")
+							b.WriteString(dim.Render("│ "))
+							b.WriteString(line)
+							b.WriteString("\n")
+						}
+					} else {
+						for _, line := range lines {
+							b.WriteString("  ")
+							b.WriteString(dim.Render("│ "))
+							b.WriteString(dim.Render(line))
+							b.WriteString("\n")
+						}
+					}
 				}
 			}
 
@@ -1632,6 +1868,141 @@ func (m *model) renderMarkdown(text string) string {
 		return text
 	}
 	return strings.TrimRight(rendered, "\n")
+}
+
+// highlightReadOutput applies syntax highlighting to read tool output lines.
+// Each line has format "     1\tcontent" — line numbers are styled separately.
+func highlightReadOutput(lines []string, filename string) []string {
+	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	// Separate line numbers from code
+	var codeLines []string
+	var lineNums []string
+	for _, line := range lines {
+		if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
+			lineNums = append(lineNums, parts[0])
+			codeLines = append(codeLines, parts[1])
+		} else {
+			lineNums = append(lineNums, "")
+			codeLines = append(codeLines, line)
+		}
+	}
+
+	// Highlight all code at once for proper multi-line token handling
+	code := strings.Join(codeLines, "\n")
+	highlighted := highlightCode(code, filename)
+	highlightedLines := strings.Split(highlighted, "\n")
+
+	// Recombine with styled line numbers
+	result := make([]string, 0, len(lines))
+	for i := range lines {
+		if i < len(highlightedLines) {
+			if i < len(lineNums) && lineNums[i] != "" {
+				result = append(result, numStyle.Render(lineNums[i])+" "+highlightedLines[i])
+			} else {
+				result = append(result, highlightedLines[i])
+			}
+		}
+	}
+	return result
+}
+
+// highlightCode applies chroma syntax highlighting based on filename extension.
+func highlightCode(code, filename string) string {
+	lexer := lexers.Match(filename)
+	if lexer == nil {
+		lexer = lexers.Analyse(code)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	lexer = chroma.Coalesce(lexer)
+
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		formatter = formatters.Fallback
+	}
+
+	iterator, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		return code
+	}
+
+	var buf bytes.Buffer
+	if err := formatter.Format(&buf, style, iterator); err != nil {
+		return code
+	}
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+// highlightGrepOutput styles grep result lines of the form "file:line: content".
+// File path and line number get distinct colors; content is syntax-highlighted
+// based on the file extension.
+func highlightGrepOutput(lines []string) []string {
+	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))     // blue
+	lineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // gray
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// Try to parse "file:line: content"
+		first := strings.IndexByte(line, ':')
+		if first < 0 {
+			// Not a match line (e.g. truncation note) — dim it.
+			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
+			continue
+		}
+		second := strings.IndexByte(line[first+1:], ':')
+		if second < 0 {
+			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
+			continue
+		}
+		second += first + 1 // absolute index of second colon
+
+		filePart := line[:first]
+		linePart := line[first+1 : second]
+		contentPart := ""
+		if second+1 < len(line) {
+			contentPart = strings.TrimPrefix(line[second+1:], " ")
+		}
+
+		// Highlight the content portion using the file extension.
+		highlighted := highlightCode(contentPart, filePart)
+
+		var sb strings.Builder
+		sb.WriteString(fileStyle.Render(filePart))
+		sb.WriteString(sepStyle.Render(":"))
+		sb.WriteString(lineNumStyle.Render(linePart))
+		sb.WriteString(sepStyle.Render(": "))
+		sb.WriteString(highlighted)
+		result = append(result, sb.String())
+	}
+	return result
+}
+
+// highlightFindOutput styles find/glob result lines as file paths.
+// Directories get a trailing "/" and different color.
+func highlightFindOutput(lines []string) []string {
+	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // blue
+	dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "...") {
+			// Truncation note.
+			result = append(result, dimStyle.Render(line))
+		} else if strings.HasSuffix(line, "/") {
+			result = append(result, dirStyle.Render(line))
+		} else {
+			result = append(result, fileStyle.Render(line))
+		}
+	}
+	return result
 }
 
 func (m *model) renderStatusBar() string {

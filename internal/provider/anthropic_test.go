@@ -161,7 +161,7 @@ func TestNewLLMFactory(t *testing.T) {
 	})
 
 	t.Run("anthropic requires key without baseURL", func(t *testing.T) {
-		_, err := NewAnthropic(nil, "claude-sonnet-4-20250514", "", "", "")
+		_, err := NewAnthropic(nil, "claude-sonnet-4-6", "", "", "")
 		if err == nil {
 			t.Fatal("expected error for empty API key")
 		}
@@ -196,7 +196,7 @@ func TestResolveCloudSuffix(t *testing.T) {
 	})
 
 	t.Run("regular model unaffected", func(t *testing.T) {
-		info, err := Resolve("claude-sonnet-4-20250514")
+		info, err := Resolve("claude-sonnet-4-6")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

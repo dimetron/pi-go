@@ -76,12 +76,12 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 		input:    "/model",
 		messages: make([]message, 0),
 		cfg: Config{
-			ModelName:  "claude-sonnet-4-20250514",
+			ModelName:  "claude-sonnet-4-6",
 			ActiveRole: "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "claude-sonnet-4-20250514"},
-				"smol":    {Model: "gemini-2.0-flash"},
-				"slow":    {Model: "claude-opus-4-20250514", Provider: "anthropic"},
+				"default": {Model: "claude-sonnet-4-6"},
+				"smol":    {Model: "gemini-2.5-flash"},
+				"slow":    {Model: "claude-opus-4-6", Provider: "anthropic"},
 			},
 		},
 	}
@@ -112,11 +112,11 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 		input:    "/model",
 		messages: make([]message, 0),
 		cfg: Config{
-			ModelName:  "gemini-2.0-flash",
+			ModelName:  "gemini-2.5-flash",
 			ActiveRole: "smol",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "claude-sonnet-4-20250514"},
-				"smol":    {Model: "gemini-2.0-flash"},
+				"default": {Model: "claude-sonnet-4-6"},
+				"smol":    {Model: "gemini-2.5-flash"},
 			},
 		},
 	}

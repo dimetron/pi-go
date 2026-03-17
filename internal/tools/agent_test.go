@@ -15,7 +15,7 @@ func TestAgentTool_Registration(t *testing.T) {
 
 	orch := subagent.NewOrchestrator(&cfg, "")
 
-	tools, err := AgentTools(orch)
+	tools, err := AgentTools(orch, nil)
 	if err != nil {
 		t.Fatalf("AgentTools: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestNewAgentTool(t *testing.T) {
 	cfg := config.Defaults()
 	orch := subagent.NewOrchestrator(&cfg, "")
 
-	tool, err := NewAgentTool(orch)
+	tool, err := NewAgentTool(orch, nil)
 	if err != nil {
 		t.Fatalf("NewAgentTool: %v", err)
 	}

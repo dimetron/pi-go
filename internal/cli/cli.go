@@ -54,7 +54,7 @@ func newRootCmd() *cobra.Command {
 		RunE:    runRoot,
 	}
 
-	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-20250514, gpt-4o, gemini-2.5-pro)")
+	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
 	cmd.Flags().StringVar(&flagMode, "mode", "", "Output mode: interactive, print, json, rpc")
 	cmd.Flags().StringVar(&flagSocket, "socket", "/tmp/pi-go.sock", "Unix socket path for RPC mode")
 	cmd.Flags().StringVar(&flagSession, "session", "", "Session ID to resume")
@@ -157,7 +157,15 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	orch := subagent.NewOrchestrator(&cfg, repoRoot)
 	defer orch.Shutdown()
 
-	agentTools, err := tools.AgentTools(orch)
+	// Create subagent event channel for TUI live streaming.
+	agentEventCh := make(chan tui.AgentSubEvent, 128)
+	agentEventCB := func(agentID, eventType, content string) {
+		select {
+		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
+		default: // drop if channel full
+		}
+	}
+	agentTools, err := tools.AgentTools(orch, agentEventCB)
 	if err != nil {
 		return fmt.Errorf("creating agent tools: %w", err)
 	}
@@ -323,6 +331,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			Skills:            skills,
 			SkillDirs:         skillDirs,
 			RestartCh:         restartCh,
+			AgentEventCh:      agentEventCh,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{

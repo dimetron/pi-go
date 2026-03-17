@@ -81,12 +81,23 @@ func BuildLSPAfterToolCallback(mgr *Manager) llmagent.AfterToolCallback {
 	}
 }
 
+// formatter is an interface for LSP servers that can format files.
+type formatter interface {
+	Format(ctx context.Context, file string) ([]TextEdit, error)
+	NotifyChange(file, content string) error
+}
+
 // formatFile requests formatting from the LSP server and applies edits to disk.
-func formatFile(_ tool.Context, _ *Manager, srv *Server, filePath string, result map[string]any) map[string]any {
+func formatFile(_ context.Context, _ *Manager, srv *Server, filePath string, result map[string]any) map[string]any {
+	return formatFileWithFormatter(srv, filePath, result)
+}
+
+// formatFileWithFormatter allows injecting a formatter for testing.
+func formatFileWithFormatter(fmtr formatter, filePath string, result map[string]any) map[string]any {
 	fmtCtx, cancel := context.WithTimeout(context.Background(), FormatTimeout)
 	defer cancel()
 
-	edits, err := srv.Format(fmtCtx, filePath)
+	edits, err := fmtr.Format(fmtCtx, filePath)
 	if err != nil {
 		log.Printf("lsp hook: format %s: %v", filePath, err)
 		return result
@@ -109,7 +120,7 @@ func formatFile(_ tool.Context, _ *Manager, srv *Server, filePath string, result
 	}
 
 	// Notify server of the formatted content.
-	if err := srv.NotifyChange(filePath, formatted); err != nil {
+	if err := fmtr.NotifyChange(filePath, formatted); err != nil {
 		log.Printf("lsp hook: notify formatted %s: %v", filePath, err)
 	}
 

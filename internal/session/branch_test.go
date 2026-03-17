@@ -312,3 +312,34 @@ func TestBranchAddEventsAndSwitch(t *testing.T) {
 		t.Errorf("main events after branch work = %d, want 3", getResp.Session.Events().Len())
 	}
 }
+
+func TestLoadBranchEvents_NotFound(t *testing.T) {
+	// This test is skipped because loadBranchEvents is private
+	// and requires internal dir field access
+	t.Skip("Test requires internal loadBranchEvents method access")
+}
+
+func TestActiveBranch(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	sessionID := resp.Session.ID()
+
+	// Create a branch
+	if err := svc.CreateBranch(sessionID, "test-app", "test-user", "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SwitchBranch(sessionID, "test-app", "test-user", "feature"); err != nil {
+		t.Fatal(err)
+	}
+
+	// ActiveBranch should return the current branch
+	active := svc.ActiveBranch(sessionID)
+	if active != "feature" {
+		t.Errorf("active branch = %q, want %q", active, "feature")
+	}
+}

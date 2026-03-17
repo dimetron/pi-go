@@ -457,3 +457,49 @@ func waitForSocket(t *testing.T, path string) {
 	}
 	t.Fatalf("socket %s did not appear", path)
 }
+
+func TestServerSessionList(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag := newTestAgent(t, "ok")
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "session.list",
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	// Result should contain a list (even if empty)
+	result, _ := json.Marshal(resp.Result)
+	if string(result) == "null" {
+		t.Error("expected non-null result for session.list")
+	}
+}

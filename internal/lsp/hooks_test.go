@@ -1,6 +1,9 @@
 package lsp
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -172,5 +175,148 @@ func TestCollectDiagnostics_NoDiagnostics(t *testing.T) {
 
 	if _, ok := result["lsp_diagnostics"]; ok {
 		t.Error("expected no lsp_diagnostics for clean file")
+	}
+}
+
+// mockServer is a minimal Server implementation for testing hooks.
+type mockServer struct {
+	formatResult []TextEdit
+	formatErr    error
+}
+
+func (m *mockServer) Format(_ context.Context, _ string) ([]TextEdit, error) {
+	return m.formatResult, m.formatErr
+}
+
+func (m *mockServer) NotifyChange(_, _ string) error {
+	return nil
+}
+
+func TestFormatFile_HappyPath(t *testing.T) {
+	// Create a temp file
+	tmpDir := t.TempDir()
+	tmpFile := tmpDir + "/test.go"
+	content := "package main\nfunc main() {}\n"
+	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{
+		languages:   make(map[string]*LanguageConfig),
+		servers:     make(map[string]*Server),
+		diagnostics: make(map[string][]Diagnostic),
+		available:   make(map[string]bool),
+	}
+
+	// Mock server that returns a formatting edit
+	mockSrv := &mockServer{
+		formatResult: []TextEdit{
+			{
+				Range:   Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 7}},
+				NewText: "package main",
+			},
+		},
+	}
+
+	result := map[string]any{"path": tmpFile}
+	result = formatFileWithFormatter(mockSrv, tmpFile, result)
+
+	if !result["lsp_formatted"].(bool) {
+		t.Error("expected lsp_formatted to be true")
+	}
+
+	// Verify file was formatted
+	formatted, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("failed to read formatted file: %v", err)
+	}
+	if string(formatted) != "package main\nfunc main() {}\n" {
+		t.Errorf("unexpected formatted content: %q", string(formatted))
+	}
+}
+
+func TestFormatFile_FormatError(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := tmpDir + "/test.go"
+	content := "package main\n"
+	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{
+		languages:   make(map[string]*LanguageConfig),
+		servers:     make(map[string]*Server),
+		diagnostics: make(map[string][]Diagnostic),
+		available:   make(map[string]bool),
+	}
+
+	// Mock server that returns error
+	mockSrv := &mockServer{
+		formatErr: fmt.Errorf("format failed"),
+	}
+
+	result := map[string]any{"path": tmpFile}
+	result = formatFile(context.Background(), mgr, mockSrv, tmpFile, result)
+
+	// Should return unchanged result
+	if _, ok := result["lsp_formatted"]; ok {
+		t.Error("expected no lsp_formatted when format fails")
+	}
+}
+
+func TestFormatFile_EmptyEdits(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := tmpDir + "/test.go"
+	content := "package main\n"
+	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{
+		languages:   make(map[string]*LanguageConfig),
+		servers:     make(map[string]*Server),
+		diagnostics: make(map[string][]Diagnostic),
+		available:   make(map[string]bool),
+	}
+
+	// Mock server that returns no edits
+	mockSrv := &mockServer{
+		formatResult: []TextEdit{},
+	}
+
+	result := map[string]any{"path": tmpFile}
+	result = formatFile(context.Background(), mgr, mockSrv, tmpFile, result)
+
+	// Should return unchanged result
+	if _, ok := result["lsp_formatted"]; ok {
+		t.Error("expected no lsp_formatted when no edits returned")
+	}
+}
+
+func TestCollectDiagnostics_WaitForDiagnostics(t *testing.T) {
+	mgr := &Manager{
+		languages:   make(map[string]*LanguageConfig),
+		servers:     make(map[string]*Server),
+		diagnostics: make(map[string][]Diagnostic),
+		available:   make(map[string]bool),
+	}
+
+	// Pre-populate diagnostics cache
+	testURI := pathToURI("/tmp/test.go")
+	mgr.diagnostics[testURI] = []Diagnostic{
+		{Range: Range{Start: Position{Line: 5, Character: 0}}, Severity: SeverityError, Message: "error message"},
+	}
+
+	result := map[string]any{"path": "/tmp/test.go"}
+	// Note: collectDiagnostics waits for DiagnosticsDelay (2s)
+	// We can't easily test the delay without actual time passing
+	result = collectDiagnosticsImmediate(mgr, nil, "/tmp/test.go", result)
+
+	diagStr, ok := result["lsp_diagnostics"].(string)
+	if !ok {
+		t.Fatal("expected lsp_diagnostics in result")
+	}
+	if !strings.Contains(diagStr, "error message") {
+		t.Errorf("expected error message in diagnostics, got: %s", diagStr)
 	}
 }

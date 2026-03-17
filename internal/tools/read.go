@@ -30,7 +30,10 @@ type ReadOutput struct {
 }
 
 func newReadTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("read", "Read a file's contents. Returns the content with line numbers. Supports optional line offset and limit for reading portions of large files.", func(_ tool.Context, input ReadInput) (ReadOutput, error) {
+	return newTool("read", `Read a file's contents. Returns the content with line numbers.
+
+Required: file_path (absolute path to the file).
+Optional: offset (start line, 1-based), limit (max lines to read).`, func(_ tool.Context, input ReadInput) (ReadOutput, error) {
 		return readHandler(sb, input)
 	})
 }

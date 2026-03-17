@@ -301,3 +301,187 @@ func TestParseLocations(t *testing.T) {
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+func TestServer_Diagnostics(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp/test",
+		opened:   make(map[string]int),
+	}
+
+	// Test Diagnostics - should return empty as diagnostics are pushed async
+	ctx := context.Background()
+	diags, err := srv.Diagnostics(ctx, tmpFile)
+	if err != nil {
+		t.Fatalf("Diagnostics failed: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Errorf("expected empty diagnostics, got %d", len(diags))
+	}
+
+	// Cleanup
+	srv.client.closed.Store(true)
+	_ = srv.client.stdin.Close()
+}
+
+func TestServer_Close(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "shutdown" {
+			return json.RawMessage(`null`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp/test",
+		opened:   map[string]int{fileURI(tmpFile): 1},
+	}
+
+	// Close should send didClose for all opened files and close the client
+	err := srv.Close()
+	if err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Verify client was closed
+	if !srv.client.closed.Load() {
+		t.Error("expected client to be closed")
+	}
+}
+
+func TestManager_Shutdown(t *testing.T) {
+	// Create a manager with a mock server
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "initialize" {
+			return json.RawMessage(`{"capabilities":{}}`), nil
+		}
+		if req.Method == "shutdown" {
+			return json.RawMessage(`null`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually create a server and add it to manager
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   make(map[string]int),
+	}
+
+	mgr := &Manager{
+		languages:   make(map[string]*LanguageConfig),
+		servers:     map[string]*Server{"go:tmp": srv},
+		diagnostics: make(map[string][]Diagnostic),
+		available:   make(map[string]bool),
+	}
+
+	// Shutdown should close all servers
+	mgr.Shutdown()
+
+	// Verify server was closed
+	if !srv.client.closed.Load() {
+		t.Error("expected client to be closed after Shutdown")
+	}
+
+	// Verify servers map was cleared
+	if len(mgr.servers) != 0 {
+		t.Errorf("expected servers map to be empty, got %d entries", len(mgr.servers))
+	}
+}
+
+func TestManager_ServerFor_AvailableServer(t *testing.T) {
+	// This tests ServerFor when the server is available and starts successfully
+	cfg := &ManagerConfig{
+		Languages: map[string]*LanguageConfig{
+			"testlang": {
+				Command:        "/bin/echo", // Binary exists but won't work as LSP
+				FileExtensions: []string{".test"},
+				RootMarkers:    []string{"test.toml"},
+				LanguageID:     "testlang",
+			},
+		},
+	}
+
+	mgr := NewManager(cfg)
+	defer mgr.Shutdown()
+
+	// The echo command exists but won't respond to LSP protocol
+	// ServerFor should return (nil, error) because it can't start a real LSP server
+	srv, err := mgr.ServerFor("/tmp/test.test")
+	// We expect an error because echo isn't a real LSP server
+	if err == nil && srv != nil {
+		t.Error("expected error or nil server for non-LSP command")
+	}
+}
+
+func TestManager_ServerFor_DisabledLanguage(t *testing.T) {
+	cfg := &ManagerConfig{
+		Disabled: []string{"go"},
+	}
+
+	mgr := NewManager(cfg)
+	defer mgr.Shutdown()
+
+	// go is disabled, so ServerFor should return (nil, nil)
+	srv, err := mgr.ServerFor("/tmp/test.go")
+	if err != nil {
+		t.Errorf("expected no error for disabled language, got: %v", err)
+	}
+	if srv != nil {
+		t.Error("expected nil server for disabled language")
+	}
+}
+
+func TestManager_ServerFor_NoRootMarker(t *testing.T) {
+	// Create a temp dir without go.mod
+	tmpDir := t.TempDir()
+
+	cfg := &ManagerConfig{
+		Languages: map[string]*LanguageConfig{
+			"go": {
+				Command:        "/bin/echo", // Won't work but that's ok
+				FileExtensions: []string{".go"},
+				RootMarkers:    []string{"go.mod"},
+				LanguageID:     "go",
+			},
+		},
+	}
+
+	mgr := NewManager(cfg)
+	defer mgr.Shutdown()
+
+	// Since the binary doesn't exist, ServerFor should return (nil, nil)
+	srv, err := mgr.ServerFor(tmpDir + "/test.go")
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	if srv != nil {
+		t.Error("expected nil server (binary not found)")
+	}
+}
