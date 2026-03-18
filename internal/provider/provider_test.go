@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestResolve(t *testing.T) {
 		{"gpt-5.4", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
 		{"", "", true},
-		{"llama-3", "", true},
+		{"llama-3", "ollama", false},
 	}
 
 	for _, tt := range tests {
@@ -37,8 +38,13 @@ func TestResolve(t *testing.T) {
 			if info.Provider != tt.wantProv {
 				t.Errorf("got provider %q, want %q", info.Provider, tt.wantProv)
 			}
-			if info.Model != tt.model {
-				t.Errorf("got model %q, want %q", info.Model, tt.model)
+			wantModel := tt.model
+			// Ollama models without a tag get :latest appended.
+			if info.Ollama && !strings.Contains(tt.model, ":") {
+				wantModel = tt.model + ":latest"
+			}
+			if info.Model != wantModel {
+				t.Errorf("got model %q, want %q", info.Model, wantModel)
 			}
 		})
 	}
@@ -82,8 +88,8 @@ func TestResolveWithOllamaPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Provider != "openai" {
-		t.Errorf("provider = %q, want openai (as fallback for ollama)", info.Provider)
+	if info.Provider != "ollama" {
+		t.Errorf("provider = %q, want ollama", info.Provider)
 	}
 	if info.Ollama != true {
 		t.Error("expected Ollama = true")

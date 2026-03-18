@@ -16,7 +16,7 @@ import (
 type Info struct {
 	Provider string
 	Model    string
-	Ollama   bool // true when model was suffixed with :cloud (Ollama Anthropic-compatible API)
+	Ollama   bool // true when model is served by Ollama
 }
 
 // Known model prefixes mapped to providers.
@@ -27,24 +27,26 @@ var modelPrefixes = map[string]string{
 	"gemini": "gemini",
 }
 
+// OllamaModelPrefixes are common Ollama model name prefixes.
+var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "mistral", "phi", "codellama", "gemma"}
+
 // Resolve determines the provider from a model name.
-// Models ending with ":cloud" are routed through the Anthropic provider
-// using Ollama's Anthropic-compatible API.
+// Ollama models are routed to the native "ollama" provider.
 func Resolve(modelName string) (Info, error) {
 	if modelName == "" {
 		return Info{}, fmt.Errorf("no model specified")
 	}
 
-	// Detect ollama/ prefix → Ollama OpenAI-compatible API.
+	// Detect ollama/ prefix → native Ollama provider.
 	// The prefix is stripped; the remainder is the Ollama model name.
 	if strings.HasPrefix(strings.ToLower(modelName), "ollama/") {
-		return Info{Provider: "openai", Model: modelName[len("ollama/"):], Ollama: true}, nil
+		return Info{Provider: "ollama", Model: modelName[len("ollama/"):], Ollama: true}, nil
 	}
 
-	// Detect :cloud suffix → Ollama Anthropic-compatible API.
-	// The full model name (including :cloud) is passed to Ollama as-is.
-	if strings.HasSuffix(modelName, ":cloud") {
-		return Info{Provider: "anthropic", Model: modelName, Ollama: true}, nil
+	// Detect :cloud or :local suffix → native Ollama provider.
+	// Keep the full model name — :cloud/:local are valid Ollama model tags.
+	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, ":local") {
+		return Info{Provider: "ollama", Model: modelName, Ollama: true}, nil
 	}
 
 	lower := strings.ToLower(modelName)
@@ -54,7 +56,18 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, o1, o3, o4, gemini, or use ollama/ prefix or :cloud suffix for Ollama)", modelName)
+	// Detect common Ollama model prefixes → native Ollama provider.
+	for _, prefix := range OllamaModelPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			model := modelName
+			if !strings.Contains(model, ":") {
+				model = modelName + ":latest"
+			}
+			return Info{Provider: "ollama", Model: model, Ollama: true}, nil
+		}
+	}
+
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, qwen, minimax, deepseek, llama, mistral, phi, codellama, gemma, or use ollama/ prefix for Ollama)", modelName)
 }
 
 // CheckOllama verifies that the Ollama server at baseURL is reachable.
@@ -99,6 +112,8 @@ func CheckOllama(baseURL string) error {
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, and thinking level.
 func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
 	switch info.Provider {
+	case "ollama":
+		return NewOllama(ctx, info.Model, baseURL, thinkingLevel)
 	case "gemini":
 		return NewGemini(ctx, info.Model, baseURL)
 	case "openai":

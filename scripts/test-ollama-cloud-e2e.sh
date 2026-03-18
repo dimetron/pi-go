@@ -37,6 +37,7 @@ pass "Ollama is running"
 
 # Check model is available
 MODEL_NAME="${MODEL%:cloud}"  # strip :cloud suffix for ollama check
+MODEL_NAME="${MODEL_NAME%:local}"  # strip :local suffix for ollama check
 if ! curl -sf http://localhost:11434/api/tags | grep -q "${MODEL_NAME}"; then
     fail "Model '${MODEL_NAME}' not found in Ollama"
     echo "  Pull it with: ollama pull ${MODEL_NAME}"

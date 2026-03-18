@@ -111,14 +111,26 @@ func (c *Config) ResolveRole(role string) (model string, prov string, err error)
 
 // autoDetectProvider detects the provider from model name prefix.
 func autoDetectProvider(modelName string) string {
-	if strings.HasSuffix(modelName, ":cloud") {
-		return "anthropic"
+	// Ollama suffixes → native Ollama provider.
+	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, ":local") {
+		return "ollama"
 	}
 	lower := strings.ToLower(modelName)
 	for prefix, provider := range modelPrefixes {
 		if strings.HasPrefix(lower, prefix) {
 			return provider
 		}
+	}
+	// Common Ollama model prefixes → native Ollama provider.
+	ollamaPrefixes := []string{"qwen", "minimax", "deepseek", "llama", "mistral", "phi", "codellama", "gemma"}
+	for _, prefix := range ollamaPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return "ollama"
+		}
+	}
+	// ollama/ prefix → native Ollama provider.
+	if strings.HasPrefix(lower, "ollama/") {
+		return "ollama"
 	}
 	return ""
 }

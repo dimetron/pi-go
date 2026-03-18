@@ -66,6 +66,8 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role (planning model)")
 	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
 
+	cmd.AddCommand(newPingCmd())
+
 	return cmd
 }
 
@@ -115,7 +117,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	if apiKey == "" && info.Provider != "gemini" && !info.Ollama {
+	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}

@@ -394,6 +394,12 @@ func antRunNonStreaming(ctx context.Context, client *anthropic.Client, params an
 			if textBlock, ok := block.AsAny().(anthropic.TextBlock); ok {
 				parts = append(parts, &genai.Part{Text: textBlock.Text})
 			}
+		case "thinking":
+			// Handle thinking blocks from models like qwen3.5 that only return thinking
+			// Extract thinking content as the response text
+			if thinkingBlock, ok := block.AsAny().(anthropic.ThinkingBlock); ok {
+				parts = append(parts, &genai.Part{Text: thinkingBlock.Thinking})
+			}
 		case "tool_use":
 			if toolUse, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
 				var args map[string]any

@@ -260,13 +260,13 @@ func TestNewLLMFactory(t *testing.T) {
 }
 
 func TestResolveCloudSuffix(t *testing.T) {
-	t.Run("cloud suffix routes to anthropic", func(t *testing.T) {
+	t.Run("cloud suffix routes to ollama", func(t *testing.T) {
 		info, err := Resolve("qwen2.5:cloud")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if info.Provider != "anthropic" {
-			t.Errorf("provider = %q, want %q", info.Provider, "anthropic")
+		if info.Provider != "ollama" {
+			t.Errorf("provider = %q, want %q", info.Provider, "ollama")
 		}
 		if info.Model != "qwen2.5:cloud" {
 			t.Errorf("model = %q, want %q", info.Model, "qwen2.5:cloud")
