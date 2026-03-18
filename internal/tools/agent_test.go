@@ -13,7 +13,7 @@ func TestAgentTool_Registration(t *testing.T) {
 	cfg.Roles["slow"] = config.RoleConfig{Model: "claude-opus"}
 	cfg.Roles["plan"] = config.RoleConfig{Model: "claude-sonnet"}
 
-	orch := subagent.NewOrchestrator(&cfg, "")
+	orch := subagent.NewOrchestrator(&cfg, "", nil)
 
 	tools, err := AgentTools(orch, nil)
 	if err != nil {
@@ -29,7 +29,7 @@ func TestAgentTool_Registration(t *testing.T) {
 
 func TestNewAgentTool(t *testing.T) {
 	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "")
+	orch := subagent.NewOrchestrator(&cfg, "", nil)
 
 	tool, err := NewAgentTool(orch, nil)
 	if err != nil {

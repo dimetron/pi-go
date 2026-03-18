@@ -369,7 +369,7 @@ func TestE2E_PlanOverrideRecreatesSkeleton(t *testing.T) {
 
 func TestPlanCommand_ExistingSpec_WithOrchestrator_NotStuck(t *testing.T) {
 	tmpDir := t.TempDir()
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	// Pre-create spec.
 	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "rate-limiting"), 0o755); err != nil {

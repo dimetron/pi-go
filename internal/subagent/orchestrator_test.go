@@ -22,7 +22,7 @@ func TestOrchestrator_NewOrchestrator(t *testing.T) {
 	cfg := testConfig()
 
 	// With repo root.
-	orch := NewOrchestrator(cfg, "/tmp/fake-repo")
+	orch := NewOrchestrator(cfg, "/tmp/fake-repo", nil)
 	if orch.pool == nil {
 		t.Fatal("pool should not be nil")
 	}
@@ -37,7 +37,7 @@ func TestOrchestrator_NewOrchestrator(t *testing.T) {
 	}
 
 	// Without repo root.
-	orch2 := NewOrchestrator(cfg, "")
+	orch2 := NewOrchestrator(cfg, "", nil)
 	if orch2.worktree != nil {
 		t.Fatal("worktree should be nil without repoRoot")
 	}
@@ -45,7 +45,7 @@ func TestOrchestrator_NewOrchestrator(t *testing.T) {
 
 func TestOrchestrator_SpawnInvalidType(t *testing.T) {
 	cfg := testConfig()
-	orch := NewOrchestrator(cfg, "")
+	orch := NewOrchestrator(cfg, "", nil)
 
 	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "nonexistent",
@@ -59,7 +59,7 @@ func TestOrchestrator_SpawnInvalidType(t *testing.T) {
 func TestOrchestrator_SpawnRoleResolution(t *testing.T) {
 	// Config with no roles at all — should fail on role resolution.
 	cfg := config.Config{} // empty, no roles
-	orch := NewOrchestrator(&cfg, "")
+	orch := NewOrchestrator(&cfg, "", nil)
 
 	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:   "explore",
@@ -76,7 +76,7 @@ func TestOrchestrator_SpawnRoleResolution(t *testing.T) {
 
 func TestOrchestrator_ListEmpty(t *testing.T) {
 	cfg := testConfig()
-	orch := NewOrchestrator(cfg, "")
+	orch := NewOrchestrator(cfg, "", nil)
 
 	agents := orch.List()
 	if len(agents) != 0 {
@@ -86,7 +86,7 @@ func TestOrchestrator_ListEmpty(t *testing.T) {
 
 func TestOrchestrator_CancelNotFound(t *testing.T) {
 	cfg := testConfig()
-	orch := NewOrchestrator(cfg, "")
+	orch := NewOrchestrator(cfg, "", nil)
 
 	err := orch.Cancel("nonexistent")
 	if err == nil {
@@ -96,7 +96,7 @@ func TestOrchestrator_CancelNotFound(t *testing.T) {
 
 func TestOrchestrator_Shutdown(t *testing.T) {
 	cfg := testConfig()
-	orch := NewOrchestrator(cfg, "")
+	orch := NewOrchestrator(cfg, "", nil)
 
 	// Shutdown on empty orchestrator should not panic.
 	orch.Shutdown()
@@ -104,7 +104,7 @@ func TestOrchestrator_Shutdown(t *testing.T) {
 
 func TestOrchestrator_ConcurrencyLimit(t *testing.T) {
 	cfg := testConfig()
-	orch := NewOrchestrator(cfg, "")
+	orch := NewOrchestrator(cfg, "", nil)
 
 	// Verify pool is properly initialized.
 	if orch.pool.Available() != DefaultPoolSize {
@@ -136,7 +136,7 @@ func TestOrchestrator_ConcurrencyLimit(t *testing.T) {
 func TestOrchestrator_SpawnExploreNoWorktree(t *testing.T) {
 	cfg := testConfig()
 	repo := initTestRepo(t)
-	orch := NewOrchestrator(cfg, repo)
+	orch := NewOrchestrator(cfg, repo, nil)
 	defer orch.Shutdown()
 
 	// Use a binary that won't be found — we just want to verify no worktree is created.
@@ -166,7 +166,7 @@ func TestOrchestrator_SpawnExploreNoWorktree(t *testing.T) {
 func TestOrchestrator_SpawnTaskWithWorktree(t *testing.T) {
 	cfg := testConfig()
 	repo := initTestRepo(t)
-	orch := NewOrchestrator(cfg, repo)
+	orch := NewOrchestrator(cfg, repo, nil)
 	defer orch.Shutdown()
 
 	// Use a binary that won't be found.
@@ -191,7 +191,7 @@ func TestOrchestrator_SpawnTaskWithWorktree(t *testing.T) {
 func TestOrchestrator_WorktreeOverride(t *testing.T) {
 	cfg := testConfig()
 	repo := initTestRepo(t)
-	orch := NewOrchestrator(cfg, repo)
+	orch := NewOrchestrator(cfg, repo, nil)
 	defer orch.Shutdown()
 
 	orch.spawner.PiBinary = "/nonexistent/pi"

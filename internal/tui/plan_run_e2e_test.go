@@ -183,7 +183,7 @@ Implement a sliding window rate limiter.
 // --- E2E: Gate pass → merge ---
 
 func TestE2E_GatePassTriggersMerge(t *testing.T) {
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		cfg: Config{
@@ -238,7 +238,7 @@ func TestE2E_GatePassTriggersMerge(t *testing.T) {
 // --- E2E: Gate fail → retry ---
 
 func TestE2E_GateFailTriggersRetry(t *testing.T) {
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		ctx: t.Context(),
@@ -344,7 +344,7 @@ func TestE2E_RunWhileAgentRunning(t *testing.T) {
 	m := &model{
 		cfg: Config{
 			WorkDir:      tmpDir,
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		messages: make([]message, 0),
 		running:  true, // already running
@@ -570,7 +570,7 @@ func TestE2E_MergeSuccessFlow(t *testing.T) {
 // --- E2E: Agent done with gates triggers gating, then pass triggers merge ---
 
 func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		cfg: Config{

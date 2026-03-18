@@ -719,7 +719,7 @@ func TestHandleAgentsCommand_NoOrchestrator(t *testing.T) {
 }
 
 func TestHandleAgentsCommand_EmptyList(t *testing.T) {
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 	m := &model{
 		cfg: Config{
 			Orchestrator: orch,

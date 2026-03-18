@@ -169,7 +169,15 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	// Build subagent orchestrator and agent tool.
 	// Detect git repo root for worktree support.
 	repoRoot := detectGitRoot(cwd)
-	orch := subagent.NewOrchestrator(&cfg, repoRoot)
+	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
+	}
+	var agentConfigs []subagent.AgentConfig
+	if discovery != nil {
+		agentConfigs = discovery.All
+	}
+	orch := subagent.NewOrchestrator(&cfg, repoRoot, agentConfigs)
 	defer orch.Shutdown()
 
 	// Create subagent event channel for TUI live streaming.

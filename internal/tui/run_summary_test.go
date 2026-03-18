@@ -406,7 +406,7 @@ func TestE2E_GateFailure_WritesSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		cfg: Config{
@@ -471,7 +471,7 @@ func TestE2E_MergeFailure_WritesSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		cfg: Config{

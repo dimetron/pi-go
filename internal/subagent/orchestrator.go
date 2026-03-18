@@ -18,6 +18,7 @@ type Orchestrator struct {
 	spawner  *Spawner
 	worktree *WorktreeManager
 	cfg      *config.Config
+	registry map[string]AgentConfig // agent name → config (from discovery)
 	agents   map[string]*agentState
 	mu       sync.Mutex
 	closed   bool // set by Shutdown to reject new Spawn calls
@@ -38,18 +39,62 @@ type agentState struct {
 
 // NewOrchestrator creates an Orchestrator from config.
 // repoRoot is the git repository root (empty string disables worktree support).
-func NewOrchestrator(cfg *config.Config, repoRoot string) *Orchestrator {
+// agentConfigs are the discovered agent definitions (from DiscoverAgents + bundled).
+func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentConfig) *Orchestrator {
 	var wm *WorktreeManager
 	if repoRoot != "" {
 		wm = NewWorktreeManager(repoRoot)
 	}
+
+	registry := make(map[string]AgentConfig, len(agentConfigs))
+	for _, ac := range agentConfigs {
+		registry[ac.Name] = ac
+	}
+
 	return &Orchestrator{
 		pool:     NewPool(DefaultPoolSize),
 		spawner:  NewSpawner(""),
 		worktree: wm,
 		cfg:      cfg,
+		registry: registry,
 		agents:   make(map[string]*agentState),
 	}
+}
+
+// RegisterAgents replaces the agent registry with the given configs.
+func (o *Orchestrator) RegisterAgents(configs []AgentConfig) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.registry = make(map[string]AgentConfig, len(configs))
+	for _, ac := range configs {
+		o.registry[ac.Name] = ac
+	}
+}
+
+// AgentNames returns the names of all registered agents.
+func (o *Orchestrator) AgentNames() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	names := make([]string, 0, len(o.registry))
+	for name := range o.registry {
+		names = append(names, name)
+	}
+	return names
+}
+
+// LookupAgent returns the AgentConfig for the given name, or an error if not found.
+func (o *Orchestrator) LookupAgent(name string) (AgentConfig, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ac, ok := o.registry[name]
+	if !ok {
+		names := make([]string, 0, len(o.registry))
+		for n := range o.registry {
+			names = append(names, n)
+		}
+		return AgentConfig{}, fmt.Errorf("unknown agent %q; available: %v", name, names)
+	}
+	return ac, nil
 }
 
 // Spawn starts a new subagent and returns an event channel.

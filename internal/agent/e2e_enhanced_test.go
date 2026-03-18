@@ -546,13 +546,14 @@ func TestE2ESubagentTypes(t *testing.T) {
 		{"quick_task", "smol", false, 3, []string{"read", "write", "edit", "bash"}},
 	}
 
-	if len(subagent.AgentTypes) != 6 {
-		t.Fatalf("expected 6 agent types, got %d", len(subagent.AgentTypes))
+	agentTypes := subagent.AgentTypes()
+	if len(agentTypes) < 6 {
+		t.Fatalf("expected at least 6 agent types, got %d", len(agentTypes))
 	}
 
 	for _, tt := range expectedTypes {
 		t.Run(tt.name, func(t *testing.T) {
-			def, ok := subagent.AgentTypes[tt.name]
+			def, ok := agentTypes[tt.name]
 			if !ok {
 				t.Fatalf("agent type %q not found", tt.name)
 			}
@@ -710,7 +711,7 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 	cfg.Roles["slow"] = config.RoleConfig{Model: "claude-opus"}
 	cfg.Roles["plan"] = config.RoleConfig{Model: "claude-sonnet"}
 
-	orch := subagent.NewOrchestrator(&cfg, "")
+	orch := subagent.NewOrchestrator(&cfg, "", nil)
 
 	agentTools, err := tools.AgentTools(orch, nil)
 	if err != nil {

@@ -503,7 +503,7 @@ func TestRunGates_CapturesOutput(t *testing.T) {
 func TestHandleRunGateResult_AllPass(t *testing.T) {
 	m := &model{
 		cfg: Config{
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		messages: make([]message, 0),
 		run: &runState{
@@ -543,7 +543,7 @@ func TestHandleRunGateResult_AllPass(t *testing.T) {
 func TestHandleRunGateResult_Failure_MaxRetries(t *testing.T) {
 	m := &model{
 		cfg: Config{
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		messages: make([]message, 0),
 		run: &runState{
@@ -617,7 +617,7 @@ func TestHandleRunMergeResult_Success(t *testing.T) {
 func TestHandleRunMergeResult_Conflict(t *testing.T) {
 	m := &model{
 		cfg: Config{
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		messages: make([]message, 0),
 		run: &runState{
@@ -682,7 +682,7 @@ func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
 	m := &model{
 		cfg: Config{
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, ""),
+			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		messages: make([]message, 0),
 		running:  true,
@@ -753,7 +753,7 @@ func TestBuildRetryPrompt_IncludesGateOutput(t *testing.T) {
 func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
 	// When spawn fails during retry, phase should be "failed" and retry counter should increment.
 	// We use a real orchestrator with empty config — Spawn will fail on role resolution.
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -808,7 +808,7 @@ func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
 
 func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
 	// Verify retry count increments and gateOutput updates on each failure.
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -850,7 +850,7 @@ func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
 }
 
 func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
-	orch := subagent.NewOrchestrator(&config.Config{}, "")
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
 	m := &model{
 		cfg: Config{
