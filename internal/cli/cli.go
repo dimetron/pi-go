@@ -363,8 +363,10 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		commitMsgFn := buildCommitMsgFunc(cmd.Context(), cfg)
 		return tui.Run(ctx, tui.Config{
 			Agent:             ag,
+			LLM:               llm,
 			SessionID:         sessionID,
 			ModelName:         llm.Name(),
+			ProviderName:      info.Provider,
 			ActiveRole:        activeRole,
 			Roles:             cfg.Roles,
 			SessionService:    sessionSvc,

@@ -21,10 +21,20 @@ import (
 
 func newPingCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "ping",
+		Use:   "ping [prompt...]",
 		Short: "Check connectivity to the LLM provider (verbose trace)",
-		Long:  "Performs a verbose connectivity check to the configured LLM provider, similar to curl -vvv. Shows DNS resolution, TCP connection, TLS handshake, HTTP request/response, and a minimal API call to verify the model is alive.",
-		RunE:  runPing,
+		Long: `Performs a verbose connectivity check to the configured LLM provider, similar to curl -vvv.
+Shows DNS resolution, TCP connection, TLS handshake, HTTP request/response, and a model API call.
+
+The default test sends "Prompt" and expects "Prompt". If a prompt is provided as positional args,
+it is sent instead and the full response is displayed with all trace-level data.
+
+Examples:
+  pi ping                     # Prompt:Prompt connectivity test
+  pi ping 2+2                 # custom prompt with full trace
+  pi ping --smol Explain Go   # test smol role with custom prompt`,
+		Args: cobra.ArbitraryArgs,
+		RunE: runPing,
 	}
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use")
 	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the LLM API endpoint")
@@ -331,19 +341,44 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	w("* ─── Model Ping ───\n")
-	w("* Sending test message to %s ...\n", info.Model)
+	// Resolve prompt: positional args or default Ping:Pong test.
+	prompt := strings.Join(args, " ")
+	isPingPong := prompt == ""
+	if isPingPong {
+		prompt = "Prompt"
+	}
 
-	// If Ollama, first do a raw API test to bypass SDK.
+	w("* ─── Model Ping ───\n")
+	w("* Prompt:    %q\n", prompt)
+	if isPingPong {
+		w("* Mode:      Prompt:Prompt connectivity test\n")
+	} else {
+		w("* Mode:      custom prompt (full trace)\n")
+	}
+	w("* Sending to %s ...\n", info.Model)
+
+	// For Ollama, use native provider directly with no artificial timeout.
+	// Ollama processes requests sequentially — running both a raw test and an
+	// SDK test double-queues and causes the second request to timeout.
 	if info.Ollama {
-		w("* ─── Raw Ollama API Test ───\n")
-		rawReply, rawErr := ollamaRawPing(cmd.Context(), baseURL, info.Model)
-		if rawErr != nil {
-			w("* ✗ Raw Ollama API test FAILED: %v\n", rawErr)
-		} else {
-			w("* ✓ Raw Ollama API: %s\n", rawReply)
+		w("* ─── Ollama Ping ───\n")
+		ollamaReply, ollamaErr := ollamaPingFull(cmd.Context(), baseURL, info.Model, prompt, isPingPong, w)
+		if ollamaErr != nil {
+			w("* ✗ Ollama ping FAILED: %v\n", ollamaErr)
+			return fmt.Errorf("model ping failed: %w", ollamaErr)
 		}
-		w("*\n")
+		w("* Model replied: %q\n", ollamaReply)
+		if isPingPong {
+			if strings.Contains(strings.ToLower(ollamaReply), "prompt") {
+				w("* ✓ Prompt:Prompt OK — model %s is ALIVE\n", info.Model)
+			} else {
+				w("* ⚠ Model responded but did not say \"Prompt\" (got %q)\n", ollamaReply)
+				w("* ✓ Model %s is ALIVE (response unexpected)\n", info.Model)
+			}
+		} else {
+			w("* ✓ Model %s is ALIVE\n", info.Model)
+		}
+		return nil
 	}
 
 	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none")
@@ -352,35 +387,48 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating LLM for ping: %w", llmErr)
 	}
 
+	// Cloud providers get 60s timeout.
 	pingCtx, pingCancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 	defer pingCancel()
 
-	reply, pingErr := modelPing(pingCtx, llm)
+	reply, pingErr := modelPing(pingCtx, llm, prompt, isPingPong)
 	if pingErr != nil {
 		w("* ✗ Model ping FAILED: %v\n", pingErr)
 		return fmt.Errorf("model ping failed: %w", pingErr)
 	}
 
 	w("* Model replied: %q\n", reply)
-	w("* ✓ Model %s is ALIVE\n", info.Model)
+	if isPingPong {
+		if strings.Contains(strings.ToLower(reply), "prompt") {
+			w("* ✓ Prompt:Prompt OK — model %s is ALIVE\n", info.Model)
+		} else {
+			w("* ⚠ Model responded but did not say \"Prompt\" (got %q)\n", reply)
+			w("* ✓ Model %s is ALIVE (response unexpected)\n", info.Model)
+		}
+	} else {
+		w("* ✓ Model %s is ALIVE\n", info.Model)
+	}
 
 	return nil
 }
 
-// modelPing sends "ping" to the model with instructions to reply "pong".
-// It tests both non-streaming and streaming modes, printing detailed event info.
-func modelPing(ctx context.Context, llm llmmodel.LLM) (string, error) {
+// modelPing sends a prompt to the model and traces the full response.
+// Used for cloud providers (Anthropic, OpenAI, Gemini).
+// Tests both non-streaming and streaming modes with detailed event tracing.
+func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool) (string, error) {
 	w := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
+
+	systemMsg := "You are a connectivity test. Reply briefly and concisely."
+	if isPingPong {
+		systemMsg = `You are a connectivity test. When the user says "Prompt", reply with exactly "Prompt:Prompt" and nothing else.`
+	}
 
 	req := &llmmodel.LLMRequest{
 		Contents: []*genai.Content{
-			genai.NewContentFromText("Say hello", genai.RoleUser),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		Config: &genai.GenerateContentConfig{
-			SystemInstruction: genai.NewContentFromText(
-				"You are a connectivity test. When the user says \"ping\", reply with exactly \"pong\" and nothing else. For any other message, reply briefly.",
-				genai.RoleUser,
-			),
+			SystemInstruction: genai.NewContentFromText(systemMsg, genai.RoleUser),
 		},
 	}
 
@@ -489,21 +537,22 @@ func modelPing(ctx context.Context, llm llmmodel.LLM) (string, error) {
 	return reply, nil
 }
 
-// ollamaRawPing tests the native Ollama API directly using the Ollama Go client.
-func ollamaRawPing(ctx context.Context, baseURL, modelName string) (string, error) {
-	w := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
-
-	// List available models first.
+// ollamaPingFull performs a complete Ollama ping: lists models, checks availability,
+// then runs non-streaming and streaming tests using the native Ollama provider.
+// No artificial timeout — local models can be slow (thinking, model loading).
+func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPingPong bool, w func(string, ...any)) (string, error) {
+	// Step 1: List available models.
 	models, err := provider.OllamaListModels(ctx, baseURL)
 	if err != nil {
 		return "", fmt.Errorf("list models: %w", err)
 	}
-	w("*   [raw] Available models: %s\n", strings.Join(models, ", "))
+	w("*   Available models: %s\n", strings.Join(models, ", "))
 
 	// Check if our model is available.
+	modelBase := strings.Split(modelName, ":")[0]
 	found := false
 	for _, m := range models {
-		if m == modelName || strings.HasPrefix(m, strings.Split(modelName, ":")[0]) {
+		if m == modelName || strings.HasPrefix(m, modelBase) {
 			found = true
 			break
 		}
@@ -511,43 +560,93 @@ func ollamaRawPing(ctx context.Context, baseURL, modelName string) (string, erro
 	if !found {
 		return "", fmt.Errorf("model %q not found in available models", modelName)
 	}
+	w("*   Model %s: found ✓\n", modelName)
 
-	// Do a quick non-streaming chat.
+	// Step 2: Create native Ollama LLM.
 	llm, err := provider.NewOllama(ctx, modelName, baseURL, "none")
 	if err != nil {
 		return "", fmt.Errorf("create client: %w", err)
 	}
 
+	systemMsg := "You are a connectivity test. Reply briefly and concisely."
+	if isPingPong {
+		systemMsg = `You are a connectivity test. When the user says "Prompt", reply with exactly "Prompt:Prompt" and nothing else.`
+	}
+
 	req := &llmmodel.LLMRequest{
 		Contents: []*genai.Content{
-			genai.NewContentFromText("Say hello in one word", genai.RoleUser),
+			genai.NewContentFromText(prompt, genai.RoleUser),
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: genai.NewContentFromText(systemMsg, genai.RoleUser),
 		},
 	}
 
-	var textContent string
-	var thinkingChars int
+	// Step 3: Non-streaming test.
+	w("*   [non-stream] Calling Ollama chat (stream=false)...\n")
+	nsStart := time.Now()
+	var nsResult strings.Builder
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
-			return "", fmt.Errorf("generate: %w", err)
+			w("*   [non-stream] ERROR: %v\n", err)
+			return "", fmt.Errorf("non-streaming: %w", err)
 		}
 		if resp.Content != nil {
 			for _, part := range resp.Content.Parts {
 				if part.Text != "" {
-					textContent += part.Text
+					nsResult.WriteString(part.Text)
 				}
 			}
 		}
 		if resp.UsageMetadata != nil {
-			w("*   [raw] tokens(in=%d out=%d)\n",
+			w("*   [non-stream] tokens(in=%d out=%d)\n",
 				resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
 		}
 	}
+	nsDur := time.Since(nsStart)
+	nsText := strings.TrimSpace(nsResult.String())
+	w("*   [non-stream] Done (%s): %s\n", nsDur.Round(time.Millisecond), truncate(nsText, 120))
 
-	_ = thinkingChars
-	if textContent == "" {
-		return "", fmt.Errorf("model returned empty response")
+	// Step 4: Streaming test.
+	w("*   [stream] Calling Ollama chat (stream=true)...\n")
+	sStart := time.Now()
+	var sResult strings.Builder
+	sChunks := 0
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
+		if err != nil {
+			w("*   [stream] ERROR: %v\n", err)
+			if nsText != "" {
+				w("*   [stream] Falling back to non-streaming result\n")
+				return nsText, nil
+			}
+			return "", fmt.Errorf("streaming: %w", err)
+		}
+		if resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.Text != "" && resp.Content.Role != "thinking" {
+					sResult.WriteString(part.Text)
+					sChunks++
+				}
+			}
+		}
+		if resp.UsageMetadata != nil {
+			w("*   [stream] tokens(in=%d out=%d)\n",
+				resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
+		}
 	}
-	return truncate(textContent, 200), nil
+	sDur := time.Since(sStart)
+	sText := strings.TrimSpace(sResult.String())
+	w("*   [stream] Done (%s, %d chunks): %s\n", sDur.Round(time.Millisecond), sChunks, truncate(sText, 120))
+
+	// Return non-streaming result (preferred) or streaming fallback.
+	reply := nsText
+	if reply == "" {
+		reply = sText
+	}
+	if reply == "" {
+		return "", fmt.Errorf("model returned empty response in both modes")
+	}
+	return reply, nil
 }
 
 func truncate(s string, n int) string {

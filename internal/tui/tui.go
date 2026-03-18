@@ -28,6 +28,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	llmmodel "google.golang.org/adk/model"
 )
 
 // agentMsg wraps messages coming from the agent goroutine via a channel.
@@ -62,8 +63,10 @@ func (agentSubEventMsg) agentMsg()   {}
 // Config holds configuration for the TUI.
 type Config struct {
 	Agent          *agent.Agent
+	LLM            llmmodel.LLM // The active LLM, used by /ping.
 	SessionID      string
 	ModelName      string
+	ProviderName   string
 	ActiveRole     string
 	Roles          map[string]config.RoleConfig
 	SessionService *pisession.FileService
@@ -468,6 +471,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commitDoneMsg:
 		return m.handleCommitDone(msg)
+
+	case pingDoneMsg:
+		content := msg.output
+		if msg.err != nil {
+			content += fmt.Sprintf("\n\n✗ Ping failed: %v", msg.err)
+		}
+		// Replace the "Pinging model..." placeholder.
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].content == "Pinging model..." {
+			m.messages[len(m.messages)-1].content = content
+		} else {
+			m.messages = append(m.messages, message{role: "assistant", content: content})
+		}
+		return m, nil
 	}
 
 	// Keep the agent listener alive for any unhandled message types.
@@ -958,6 +974,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleSkillListCommand()
 	case "/rtk":
 		m.handleRTKCommand(parts[1:])
+	case "/ping":
+		return m.handlePingCommand(parts[1:])
 	case "/restart":
 		return m.handleRestartCommand()
 	case "/exit", "/quit":
@@ -1555,6 +1573,7 @@ var slashCommands = []string{
 	"/plan",
 	"/run",
 	"/skills",
+	"/ping",
 	"/rtk",
 	"/restart",
 	"/exit",
@@ -1775,6 +1794,8 @@ func slashCommandDesc(cmd string) string {
 		return "Execute a spec with task agent"
 	case "/skills":
 		return "List skills (create, load)"
+	case "/ping":
+		return "Test LLM connectivity"
 	case "/restart":
 		return "Restart pi process"
 	case "/exit", "/quit":
@@ -2145,8 +2166,12 @@ func (m *model) renderStatusBar() string {
 
 	var parts []string
 
-	// Model name.
-	parts = append(parts, bright.Render(fmt.Sprintf(" %s", m.cfg.ModelName)))
+	// Provider | Model.
+	if m.cfg.ProviderName != "" {
+		parts = append(parts, bright.Render(fmt.Sprintf(" %s | %s", m.cfg.ProviderName, m.cfg.ModelName)))
+	} else {
+		parts = append(parts, bright.Render(fmt.Sprintf(" %s", m.cfg.ModelName)))
+	}
 
 	// Context size estimate (rough: ~4 chars per token).
 	ctxChars := 0
