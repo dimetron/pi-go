@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"testing"
 )
 
@@ -81,5 +82,70 @@ func TestBuildAfterToolCallbacksEmpty(t *testing.T) {
 	after := BuildAfterToolCallbacks(nil)
 	if len(after) != 0 {
 		t.Errorf("expected 0 after callbacks, got %d", len(after))
+	}
+}
+
+func TestRunHookCommand(t *testing.T) {
+	hook := HookConfig{
+		Event:   "before_tool",
+		Command: "cat",
+		Timeout: 5,
+	}
+	ctx := context.Background()
+
+	// Test successful execution
+	err := runHookCommand(ctx, hook, "read", map[string]any{"path": "/test"})
+	if err != nil {
+		t.Errorf("runHookCommand() error = %v", err)
+	}
+
+	// Test with invalid command (non-existent)
+	badHook := HookConfig{
+		Event:   "before_tool",
+		Command: "nonexistent-command-12345",
+		Timeout: 1,
+	}
+	err = runHookCommand(ctx, badHook, "read", nil)
+	if err == nil {
+		t.Error("expected error for non-existent command")
+	}
+}
+
+func TestRunHookCommandTimeout(t *testing.T) {
+	hook := HookConfig{
+		Event:   "before_tool",
+		Command: "sleep 10",
+		Timeout: 1, // 1 second timeout
+	}
+	ctx := context.Background()
+
+	err := runHookCommand(ctx, hook, "read", nil)
+	// Should timeout
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+}
+
+func TestBuildBeforeToolCallbacksWithTools(t *testing.T) {
+	// Test that filtering by tools works
+	hooks := []HookConfig{
+		{Event: "before_tool", Tools: []string{"read"}, Command: "echo before"},
+		{Event: "before_tool", Tools: []string{"write"}, Command: "echo before_write"},
+	}
+
+	before := BuildBeforeToolCallbacks(hooks)
+	if len(before) != 2 {
+		t.Errorf("expected 2 before callbacks, got %d", len(before))
+	}
+}
+
+func TestBuildAfterToolCallbacksWithTools(t *testing.T) {
+	hooks := []HookConfig{
+		{Event: "after_tool", Tools: []string{"read", "write"}, Command: "echo after"},
+	}
+
+	after := BuildAfterToolCallbacks(hooks)
+	if len(after) != 1 {
+		t.Errorf("expected 1 after callback, got %d", len(after))
 	}
 }

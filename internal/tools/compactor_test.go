@@ -1342,3 +1342,50 @@ func BenchmarkCompactGitFileDiff_FullPipeline(b *testing.B) {
 		compactGitFileDiff(result, cfg)
 	}
 }
+
+// -------------------------------------------------------------------
+// BuildCompactorCallback tests
+// -------------------------------------------------------------------
+
+func TestBuildCompactorCallback_Disabled(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	cfg.Enabled = false
+	metrics := NewCompactMetrics()
+
+	cb := BuildCompactorCallback(cfg, metrics)
+	// When disabled, should return result unchanged
+	result := map[string]any{"content": "test"}
+	got, err := cb(nil, nil, nil, result, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["content"] != "test" {
+		t.Errorf("expected result unchanged, got %v", got)
+	}
+}
+
+func TestBuildCompactorCallback_WithError(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	cfg.Enabled = true
+	metrics := NewCompactMetrics()
+
+	cb := BuildCompactorCallback(cfg, metrics)
+	// When there's an error, should return result unchanged
+	result := map[string]any{"content": "test"}
+	got, err := cb(nil, nil, nil, result, fmt.Errorf("some error"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["content"] != "test" {
+		t.Errorf("expected result unchanged on error, got %v", got)
+	}
+}
+
+func TestCompactToolResult_UnknownTool(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	result := compactToolResult("unknown_tool", nil, map[string]any{"content": "test"}, cfg)
+	// Should return nil for unknown tools (no compaction)
+	if result != nil {
+		t.Errorf("expected nil for unknown tool, got %v", result)
+	}
+}

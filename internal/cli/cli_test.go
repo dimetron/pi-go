@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"iter"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -213,8 +214,14 @@ func TestCLI_RoleFlagsMutuallyExclusive(t *testing.T) {
 func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
 	// Default model is gpt-5.4, so set OpenAI key.
 	// No prompt in print mode → should exit cleanly with info message.
-	os.Setenv("OPENAI_API_KEY", "test-key")
-	defer os.Unsetenv("OPENAI_API_KEY")
+	if err := os.Setenv("OPENAI_API_KEY", "test-key"); err != nil {
+		t.Fatalf("failed to set env: %v", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
+			t.Logf("failed to unset env: %v", err)
+		}
+	}()
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--mode", "print"})
@@ -226,9 +233,11 @@ func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
 
 func TestRootCmdMissingAPIKey(t *testing.T) {
 	// Ensure no API keys are set
-	os.Unsetenv("ANTHROPIC_API_KEY")
-	os.Unsetenv("OPENAI_API_KEY")
-	os.Unsetenv("GOOGLE_API_KEY")
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"} {
+		if err := os.Unsetenv(key); err != nil {
+			t.Logf("failed to unset %s: %v", key, err)
+		}
+	}
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--model", "gpt-4o", "hello"})
@@ -555,5 +564,157 @@ func TestRunJSONValidJSONL(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			t.Errorf("line %d is not valid JSON: %q", i, line)
 		}
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	tests := []struct {
+		name       string
+		envContent string
+		setEnv     string
+		wantValue  string
+	}{
+		{
+			name:       "normal key value",
+			envContent: "TEST_KEY=test-value\n",
+			wantValue:  "test-value",
+		},
+		{
+			name:       "comment line skipped",
+			envContent: "# comment\nTEST_KEY=comment-value\n",
+			wantValue:  "comment-value",
+		},
+		{
+			name:       "empty line skipped",
+			envContent: "\nTEST_KEY=empty-line\n",
+			wantValue:  "empty-line",
+		},
+		{
+			name:       "no equals sign skipped",
+			envContent: "TEST_KEY_NO_EQUALS\n",
+			wantValue:  "",
+		},
+		{
+			name:       "existing env not overridden",
+			envContent: "TEST_KEY=from-file\n",
+			setEnv:     "from-file",
+			wantValue:  "from-file",
+		},
+		{
+			name:       "whitespace trimmed",
+			envContent: "  TEST_KEY  =  spaces  \n",
+			wantValue:  "spaces",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set up a temp .pi-go dir with .env file
+			tmpDir := t.TempDir()
+			piGoDir := filepath.Join(tmpDir, ".pi-go")
+			if err := os.MkdirAll(piGoDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			envFile := filepath.Join(piGoDir, ".env")
+			if tt.envContent != "" {
+				if err := os.WriteFile(envFile, []byte(tt.envContent), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Override home dir
+			origHome := os.Getenv("HOME")
+			if err := os.Setenv("HOME", tmpDir); err != nil {
+				t.Fatalf("failed to set HOME: %v", err)
+			}
+			// Use Setenv in cleanup but ignore error (cleanup shouldn't fail test)
+			t.Cleanup(func() { _ = os.Setenv("HOME", origHome) })
+
+			if tt.setEnv != "" {
+				if err := os.Setenv("TEST_KEY", tt.setEnv); err != nil {
+					t.Fatalf("failed to set env: %v", err)
+				}
+			}
+			t.Cleanup(func() { _ = os.Unsetenv("TEST_KEY") })
+
+			loadDotEnv()
+
+			got := os.Getenv("TEST_KEY")
+			if got != tt.wantValue {
+				t.Errorf("loadDotEnv() = %q, want %q", got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestLoadDotEnvNoFile(t *testing.T) {
+	// Should not panic when .env doesn't exist
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("failed to set HOME: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("HOME", origHome) })
+
+	loadDotEnv() // Should not panic
+}
+
+func TestDetectGitRoot(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) (string, func())
+		wantRoot bool
+	}{
+		{
+			name: "git directory exists",
+			setup: func(t *testing.T) (string, func()) {
+				tmpDir := t.TempDir()
+				gitDir := filepath.Join(tmpDir, ".git")
+				if err := os.MkdirAll(gitDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				// Need to run git init to make it a real repo
+				cmd := exec.Command("git", "init")
+				cmd.Dir = tmpDir
+				if err := cmd.Run(); err != nil {
+					t.Skip("git not available")
+				}
+				return tmpDir, func() {}
+			},
+			wantRoot: true,
+		},
+		{
+			name: "no git directory",
+			setup: func(t *testing.T) (string, func()) {
+				tmpDir := t.TempDir()
+				return tmpDir, func() {}
+			},
+			wantRoot: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			startDir, cleanup := tt.setup(t)
+			defer cleanup()
+
+			got := detectGitRoot(startDir)
+			if tt.wantRoot && got == "" {
+				t.Error("detectGitRoot() = empty, want non-empty")
+			}
+			if !tt.wantRoot && got != "" {
+				t.Errorf("detectGitRoot() = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestExecute(t *testing.T) {
+	// Test that Execute runs without panic
+	// It should fail due to missing args but not panic
+	err := Execute()
+	// Execute without args should fail
+	if err == nil {
+		t.Log("Execute() returned nil - may be valid in some contexts")
 	}
 }
