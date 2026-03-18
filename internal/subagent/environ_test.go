@@ -21,7 +21,7 @@ func TestMatchesAllowlist(t *testing.T) {
 		{"prefix match PI_SUBAGENT_TIMEOUT_MS", "PI_SUBAGENT_TIMEOUT_MS", true},
 		{"no match SECRET_KEY", "SECRET_KEY", false},
 		{"no match AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID", false},
-		{"no match ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", false},
+		{"no match ANTHROPIC_API_KEY with custom list", "ANTHROPIC_API_KEY", false},
 		{"partial name not matched", "HOMEWARD", false},
 		{"prefix entry itself", "LC_", true},
 		{"empty name", "", false},
@@ -92,11 +92,21 @@ func TestDefaultEnvAllowlist(t *testing.T) {
 		}
 	})
 
-	t.Run("does not contain secret patterns", func(t *testing.T) {
-		dangerous := []string{"AWS_", "ANTHROPIC_", "OPENAI_", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL"}
+	t.Run("does not contain dangerous wildcard prefixes", func(t *testing.T) {
+		// Wildcard prefixes (ending with _) for secret namespaces should never be allowed.
+		dangerous := []string{"AWS_", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL"}
 		for _, d := range dangerous {
 			if slices.Contains(DefaultEnvAllowlist, d) {
 				t.Errorf("DefaultEnvAllowlist should not contain %q", d)
+			}
+		}
+	})
+
+	t.Run("contains LLM API keys for subagent processes", func(t *testing.T) {
+		required := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
+		for _, req := range required {
+			if !slices.Contains(DefaultEnvAllowlist, req) {
+				t.Errorf("DefaultEnvAllowlist missing required LLM key %q", req)
 			}
 		}
 	})

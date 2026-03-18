@@ -42,6 +42,17 @@ var DefaultEnvAllowlist = []string{
 	// pi-go specific.
 	"PI_", // prefix: PI_SUBAGENT_TIMEOUT_MS, PI_SUBAGENT_CONCURRENCY, etc.
 
+	// LLM provider API keys and base URLs — required for subagent pi processes.
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_BASE_URL",
+	"OPENAI_API_KEY",
+	"OPENAI_BASE_URL",
+	"GOOGLE_API_KEY",
+	"GEMINI_API_KEY",
+	"GEMINI_BASE_URL",
+	"OLLAMA_HOST", // Ollama server address override.
+
 	// Common dev tools.
 	"DOCKER_HOST",
 	"KUBECONFIG",
