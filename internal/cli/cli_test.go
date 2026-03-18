@@ -200,7 +200,7 @@ func TestCLI_ModelFlagOverridesDefault(t *testing.T) {
 func TestCLI_RoleFlagsMutuallyExclusive(t *testing.T) {
 	// When multiple role flags are set, the switch statement picks one (smol wins due to order).
 	// This just verifies no crash occurs.
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--smol", "--mode", "print"})
@@ -211,10 +211,10 @@ func TestCLI_RoleFlagsMutuallyExclusive(t *testing.T) {
 }
 
 func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
-	// Default model is claude-sonnet, so set Anthropic key.
+	// Default model is gpt-5.4, so set OpenAI key.
 	// No prompt in print mode → should exit cleanly with info message.
-	os.Setenv("ANTHROPIC_API_KEY", "test-key")
-	defer os.Unsetenv("ANTHROPIC_API_KEY")
+	os.Setenv("OPENAI_API_KEY", "test-key")
+	defer os.Unsetenv("OPENAI_API_KEY")
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--mode", "print"})

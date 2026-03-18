@@ -16,7 +16,7 @@ func TestResolve(t *testing.T) {
 		{"claude-sonnet-4-6", "anthropic", false},
 		{"claude-opus-4-6", "anthropic", false},
 		{"gpt-4o", "openai", false},
-		{"o3-mini", "openai", false},
+		{"gpt-5.4", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
 		{"", "", true},
 		{"llama-3", "", true},

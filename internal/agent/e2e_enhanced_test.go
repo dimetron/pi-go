@@ -528,7 +528,7 @@ func TestE2ECommitWorkflow(t *testing.T) {
 	}
 }
 
-// TestE2ESubagentTypes verifies all 6 agent types are defined with valid
+// TestE2ESubagentTypes verifies bundled agent types are defined with valid
 // role mappings, worktree settings, instructions, and tool lists.
 func TestE2ESubagentTypes(t *testing.T) {
 	expectedTypes := []struct {
@@ -541,9 +541,9 @@ func TestE2ESubagentTypes(t *testing.T) {
 		{"explore", "smol", false, 3, []string{"read", "grep", "find"}},
 		{"plan", "plan", false, 3, []string{"read", "grep", "git-overview"}},
 		{"designer", "slow", true, 5, []string{"read", "write", "edit", "bash"}},
-		{"reviewer", "slow", false, 3, []string{"read", "git-overview", "git-file-diff", "git-hunk"}},
+		{"code-reviewer", "slow", false, 3, []string{"read", "git-overview", "git-file-diff", "git-hunk"}},
 		{"task", "default", true, 5, []string{"read", "write", "edit", "bash", "git-overview"}},
-		{"quick_task", "smol", false, 3, []string{"read", "write", "edit", "bash"}},
+		{"quick-task", "smol", false, 3, []string{"read", "write", "edit", "bash"}},
 	}
 
 	agentTypes := subagent.AgentTypes()

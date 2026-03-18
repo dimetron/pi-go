@@ -15,10 +15,10 @@ func TestDefaults(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 'default' role")
 	}
-	if rc.Model != "claude-sonnet-4-6" {
+	if rc.Model != "gpt-5.4" {
 		t.Errorf("unexpected default model: %s", rc.Model)
 	}
-	if cfg.DefaultProvider != "anthropic" {
+	if cfg.DefaultProvider != "openai" {
 		t.Errorf("unexpected default provider: %s", cfg.DefaultProvider)
 	}
 }
@@ -92,8 +92,8 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 	}{
 		{"claude-sonnet-4-6", "anthropic"},
 		{"gpt-4o", "openai"},
+		{"gpt-5.4", "openai"},
 		{"gemini-2.5-pro", "gemini"},
-		{"o3-mini", "openai"},
 		{"minimax-m2.5:cloud", "anthropic"},
 	}
 
