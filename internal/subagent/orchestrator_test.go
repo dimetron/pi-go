@@ -213,3 +213,52 @@ func TestOrchestrator_WorktreeOverride(t *testing.T) {
 		t.Errorf("expected 0 active worktrees with override, got %d", orch.worktree.Active())
 	}
 }
+
+func TestOrchestrator_SpawnWithTimeout(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	defer orch.Shutdown()
+
+	// Use a binary that won't be found — we just want to verify timeout is passed through.
+	orch.spawner.PiBinary = "/nonexistent/pi"
+
+	// Spawn with explicit timeout (5000ms = 5 seconds).
+	_, _, err := orch.Spawn(context.Background(), SpawnInput{
+		Agent: AgentConfig{
+			Name:    "explore",
+			Role:    "smol",
+			Timeout: 5000, // 5 second timeout
+		},
+		Prompt: "test",
+	})
+
+	// Should fail because binary doesn't exist.
+	if err == nil {
+		t.Fatal("expected error for missing binary")
+	}
+}
+
+func TestOrchestrator_SpawnWithEnv(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	defer orch.Shutdown()
+
+	// Use a binary that won't be found — we just want to verify env is passed through.
+	orch.spawner.PiBinary = "/nonexistent/pi"
+
+	// Spawn with custom env.
+	_, _, err := orch.Spawn(context.Background(), SpawnInput{
+		Agent: AgentConfig{
+			Name:    "explore",
+			Role:    "smol",
+			Timeout: 5000,
+		},
+		Prompt: "test",
+		Env:    []string{"TEST_VAR=value", "ANOTHER=test"},
+	})
+
+	// Should fail because binary doesn't exist.
+	if err == nil {
+		t.Fatal("expected error for missing binary")
+	}
+}

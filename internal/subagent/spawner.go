@@ -14,11 +14,13 @@ import (
 
 // SpawnOpts holds options for spawning a subagent process.
 type SpawnOpts struct {
-	AgentID     string // Unique ID for this agent
-	Model       string // Model name to use
-	WorkDir     string // Working directory for the process
-	Prompt      string // Task prompt to send
-	Instruction string // System instruction for the subagent
+	AgentID     string   // Unique ID for this agent
+	Model       string   // Model name to use
+	WorkDir     string   // Working directory for the process
+	Prompt      string   // Task prompt to send
+	Instruction string   // System instruction for the subagent
+	Timeout     int      // Timeout in milliseconds (0 = use default)
+	Env         []string // Additional environment variables (merged with filtered process env)
 }
 
 // Spawner creates and manages subagent pi processes.
@@ -71,7 +73,9 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 		return nil, fmt.Errorf("prompt is required")
 	}
 
-	procCtx, cancel := context.WithCancel(ctx)
+	// Resolve timeout configuration (applies defaults if not set).
+	timeoutCfg := ResolveTimeout(opts.Timeout)
+	procCtx, cancel := context.WithTimeout(ctx, timeoutCfg.Absolute)
 
 	// Build command arguments.
 	args := []string{"--mode", "json"}
@@ -84,6 +88,15 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 	args = append(args, opts.Prompt)
 
 	cmd := exec.CommandContext(procCtx, s.PiBinary, args...)
+
+	// Set up environment: filtered process env + additional env vars.
+	baseEnv := FilterEnv(nil)
+	if len(opts.Env) > 0 {
+		cmd.Env = append(baseEnv, opts.Env...)
+	} else {
+		cmd.Env = baseEnv
+	}
+
 	// Ensure the process and its children are killed on cancel.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

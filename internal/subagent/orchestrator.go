@@ -154,6 +154,8 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		WorkDir:     workDir,
 		Prompt:      input.Prompt,
 		Instruction: agent.Instruction,
+		Timeout:     agent.Timeout,
+		Env:         input.Env,
 	})
 	if err != nil {
 		if useWorktree && o.worktree != nil {

@@ -13,6 +13,7 @@ type SpawnInput struct {
 	WorkDir     string      `json:"work_dir,omitempty"`     // Override working directory (e.g. existing worktree path)
 	Background  bool        `json:"background,omitempty"`   // Run in background
 	SkipCleanup bool        `json:"skip_cleanup,omitempty"` // Don't auto-cleanup worktree on completion
+	Env         []string    `json:"env,omitempty"`          // Additional environment variables
 }
 
 // AgentInput is the legacy input to spawn a subagent (deprecated, use SpawnInput).
