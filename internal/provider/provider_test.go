@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,5 +151,125 @@ func TestNewGemini(t *testing.T) {
 	}
 	if llm.Name() != "gemini-2.5-flash" {
 		t.Errorf("Name() = %q, want %q", llm.Name(), "gemini-2.5-flash")
+	}
+}
+
+func TestResolveLocalSuffix(t *testing.T) {
+	info, err := Resolve("qwen2.5:local")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "ollama" {
+		t.Errorf("provider = %q, want %q", info.Provider, "ollama")
+	}
+	if !info.Ollama {
+		t.Error("expected Ollama = true")
+	}
+	if info.Model != "qwen2.5:local" {
+		t.Errorf("model = %q, want %q", info.Model, "qwen2.5:local")
+	}
+}
+
+func TestResolveOllamaModelPrefixes(t *testing.T) {
+	tests := []struct {
+		model     string
+		wantModel string
+	}{
+		{"qwen2.5", "qwen2.5:latest"},
+		{"deepseek-coder", "deepseek-coder:latest"},
+		{"mistral-7b", "mistral-7b:latest"},
+		{"phi-3", "phi-3:latest"},
+		{"codellama", "codellama:latest"},
+		{"gemma-2", "gemma-2:latest"},
+		{"llama3:8b", "llama3:8b"},
+		{"minimax-01", "minimax-01:latest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			info, err := Resolve(tt.model)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Provider != "ollama" {
+				t.Errorf("provider = %q, want ollama", info.Provider)
+			}
+			if !info.Ollama {
+				t.Error("expected Ollama = true")
+			}
+			if info.Model != tt.wantModel {
+				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+			}
+		})
+	}
+}
+
+func TestResolveUnknownModel(t *testing.T) {
+	_, err := Resolve("totally-unknown-model")
+	if err == nil {
+		t.Fatal("expected error for unknown model")
+	}
+}
+
+func TestResolveOllamaPrefixStripsPrefix(t *testing.T) {
+	info, err := Resolve("ollama/my-custom-model:v2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "ollama" {
+		t.Errorf("provider = %q, want ollama", info.Provider)
+	}
+	if info.Model != "my-custom-model:v2" {
+		t.Errorf("model = %q, want my-custom-model:v2", info.Model)
+	}
+	if !info.Ollama {
+		t.Error("expected Ollama = true")
+	}
+}
+
+func TestResolveOllamaPrefixCaseInsensitive(t *testing.T) {
+	info, err := Resolve("Ollama/MyModel")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "ollama" {
+		t.Errorf("provider = %q, want ollama", info.Provider)
+	}
+	if info.Model != "MyModel" {
+		t.Errorf("model = %q, want MyModel", info.Model)
+	}
+}
+
+func TestResolveKnownProviders(t *testing.T) {
+	tests := []struct {
+		model    string
+		provider string
+	}{
+		{"claude-3-opus", "anthropic"},
+		{"gpt-4o-mini", "openai"},
+		{"gemini-2.0-flash", "gemini"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			info, err := Resolve(tt.model)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Provider != tt.provider {
+				t.Errorf("provider = %q, want %q", info.Provider, tt.provider)
+			}
+			if info.Model != tt.model {
+				t.Errorf("model = %q, want %q", info.Model, tt.model)
+			}
+			if info.Ollama {
+				t.Error("expected Ollama = false for cloud provider")
+			}
+		})
+	}
+}
+
+func TestNewLLMUnsupportedProvider(t *testing.T) {
+	_, err := NewLLM(context.Background(), Info{Provider: "unsupported", Model: "test"}, "key", "", "")
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
 	}
 }

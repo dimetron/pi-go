@@ -262,3 +262,106 @@ func TestOrchestrator_SpawnWithEnv(t *testing.T) {
 		t.Fatal("expected error for missing binary")
 	}
 }
+
+func TestOrchestrator_RegisterAgents(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	configs := []AgentConfig{
+		{Name: "alpha", Role: "smol"},
+		{Name: "beta", Role: "slow"},
+	}
+	orch.RegisterAgents(configs)
+
+	names := orch.AgentNames()
+	if len(names) != 2 {
+		t.Fatalf("expected 2 agent names, got %d", len(names))
+	}
+	nameSet := map[string]bool{}
+	for _, n := range names {
+		nameSet[n] = true
+	}
+	if !nameSet["alpha"] || !nameSet["beta"] {
+		t.Errorf("unexpected agent names: %v", names)
+	}
+}
+
+func TestOrchestrator_LookupAgent(t *testing.T) {
+	cfg := testConfig()
+	configs := []AgentConfig{
+		{Name: "explorer", Role: "smol", Description: "Explore the codebase"},
+	}
+	orch := NewOrchestrator(cfg, "", configs)
+
+	t.Run("found", func(t *testing.T) {
+		ac, err := orch.LookupAgent("explorer")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ac.Name != "explorer" {
+			t.Errorf("name = %q, want explorer", ac.Name)
+		}
+		if ac.Description != "Explore the codebase" {
+			t.Errorf("description = %q", ac.Description)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		_, err := orch.LookupAgent("nonexistent")
+		if err == nil {
+			t.Fatal("expected error for unknown agent")
+		}
+		if !strings.Contains(err.Error(), "unknown agent") {
+			t.Errorf("expected 'unknown agent' in error, got: %v", err)
+		}
+	})
+}
+
+func TestOrchestrator_WorktreeAccessor(t *testing.T) {
+	cfg := testConfig()
+
+	t.Run("with repo root", func(t *testing.T) {
+		orch := NewOrchestrator(cfg, "/tmp/fake-repo", nil)
+		if orch.Worktree() == nil {
+			t.Error("expected non-nil Worktree() with repo root")
+		}
+	})
+
+	t.Run("without repo root", func(t *testing.T) {
+		orch := NewOrchestrator(cfg, "", nil)
+		if orch.Worktree() != nil {
+			t.Error("expected nil Worktree() without repo root")
+		}
+	})
+}
+
+func TestOrchestrator_SpawnAfterShutdown(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	orch.Shutdown()
+
+	_, _, err := orch.Spawn(context.Background(), SpawnInput{
+		Agent:  AgentConfig{Name: "test", Role: "smol"},
+		Prompt: "test",
+	})
+	if err == nil {
+		t.Fatal("expected error after shutdown")
+	}
+	if !strings.Contains(err.Error(), "shut down") {
+		t.Errorf("expected shutdown error, got: %v", err)
+	}
+}
+
+func TestOrchestrator_SpawnEmptyAgentName(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	defer orch.Shutdown()
+
+	_, _, err := orch.Spawn(context.Background(), SpawnInput{
+		Agent:  AgentConfig{Name: "", Role: "smol"},
+		Prompt: "test",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty agent name")
+	}
+}

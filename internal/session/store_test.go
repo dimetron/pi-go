@@ -837,3 +837,91 @@ func TestSessionStateTempKeysStripped(t *testing.T) {
 		t.Error("temp key should be stripped from state delta")
 	}
 }
+
+func TestSessionStateSetAndAll(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+
+	// Set state via State().Set()
+	state := resp.Session.State()
+	if err := state.Set("key1", "val1"); err != nil {
+		t.Fatalf("State.Set() error: %v", err)
+	}
+	if err := state.Set("key2", 42); err != nil {
+		t.Fatalf("State.Set() error: %v", err)
+	}
+
+	// Verify Get.
+	val, err := state.Get("key1")
+	if err != nil || val != "val1" {
+		t.Errorf("State.Get(key1) = %v, %v; want val1", val, err)
+	}
+
+	// Verify All() iterates over all keys.
+	found := make(map[string]bool)
+	for k, _ := range state.All() {
+		found[k] = true
+	}
+	if !found["key1"] || !found["key2"] {
+		t.Errorf("State.All() missing keys, got %v", found)
+	}
+}
+
+func TestSessionStateGetMissing(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+
+	_, err := resp.Session.State().Get("nonexistent")
+	if err != session.ErrStateKeyNotExist {
+		t.Errorf("expected ErrStateKeyNotExist, got %v", err)
+	}
+}
+
+func TestSessionLastUpdateTime(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	before := time.Now()
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	after := time.Now()
+
+	lut := resp.Session.LastUpdateTime()
+	if lut.Before(before) || lut.After(after) {
+		t.Errorf("LastUpdateTime %v not between %v and %v", lut, before, after)
+	}
+
+	// Append event and verify update time advances.
+	time.Sleep(time.Millisecond)
+	event := &session.Event{
+		ID:        "ev1",
+		Timestamp: time.Now(),
+		Author:    "user",
+	}
+	event.Content = genai.NewContentFromText("hello", genai.RoleUser)
+	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+		t.Fatalf("AppendEvent failed: %v", err)
+	}
+
+	getResp, _ := svc.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: resp.Session.ID(),
+	})
+	lut2 := getResp.Session.LastUpdateTime()
+	if !lut2.After(lut) {
+		t.Errorf("LastUpdateTime should advance after event, got %v vs %v", lut2, lut)
+	}
+}

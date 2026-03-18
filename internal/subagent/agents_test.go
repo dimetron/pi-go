@@ -333,3 +333,94 @@ func agentNames(agents []AgentConfig) []string {
 	}
 	return names
 }
+
+func TestAgentTypes(t *testing.T) {
+	types := AgentTypes()
+	if types == nil {
+		t.Fatal("AgentTypes() returned nil")
+	}
+	if len(types) != 8 {
+		t.Errorf("expected 8 agent types, got %d", len(types))
+	}
+	if _, ok := types["explore"]; !ok {
+		t.Error("missing 'explore' in AgentTypes")
+	}
+	if _, ok := types["task"]; !ok {
+		t.Error("missing 'task' in AgentTypes")
+	}
+}
+
+func TestValidateType(t *testing.T) {
+	t.Run("valid type", func(t *testing.T) {
+		err := ValidateType("explore")
+		if err != nil {
+			t.Errorf("unexpected error for valid type: %v", err)
+		}
+	})
+
+	t.Run("invalid type", func(t *testing.T) {
+		err := ValidateType("nonexistent-agent")
+		if err == nil {
+			t.Error("expected error for invalid type")
+		}
+	})
+}
+
+func TestParseAgentFile_WithTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	agentFile := filepath.Join(tmpDir, "timed.md")
+	agentContent := `---
+name: timed-agent
+description: Agent with timeout
+role: smol
+timeout: 30000
+worktree: true
+---
+Agent with a 30s timeout.`
+
+	if err := os.WriteFile(agentFile, []byte(agentContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := ParseAgentFile(agentFile)
+	if err != nil {
+		t.Fatalf("ParseAgentFile failed: %v", err)
+	}
+
+	if agent.Timeout != 30000 {
+		t.Errorf("expected timeout 30000, got %d", agent.Timeout)
+	}
+	if !agent.Worktree {
+		t.Error("expected worktree true")
+	}
+}
+
+func TestParseAgentFile_NoFrontmatter(t *testing.T) {
+	tmpDir := t.TempDir()
+	agentFile := filepath.Join(tmpDir, "no-fm.md")
+	agentContent := "Just a plain markdown file without frontmatter."
+
+	if err := os.WriteFile(agentFile, []byte(agentContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Parser treats everything as body text when there's no frontmatter.
+	// Name is derived from filename.
+	agent, err := ParseAgentFile(agentFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agent.Name != "no-fm" {
+		t.Errorf("expected name derived from filename 'no-fm', got %q", agent.Name)
+	}
+	if agent.Instruction != agentContent {
+		t.Errorf("expected instruction = file content, got %q", agent.Instruction)
+	}
+}
+
+func TestParseAgentFile_FileNotFound(t *testing.T) {
+	_, err := ParseAgentFile("/nonexistent/path/agent.md")
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}

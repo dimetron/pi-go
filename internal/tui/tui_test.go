@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 
@@ -674,6 +676,349 @@ func TestTabOnSlash_ShowsCommandList(t *testing.T) {
 	}
 	if !strings.Contains(content, "/run") {
 		t.Error("command list should include /run")
+	}
+}
+
+func TestFormatTokenCount(t *testing.T) {
+	tests := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0"},
+		{500, "500"},
+		{999, "999"},
+		{1000, "1.0k"},
+		{1500, "1.5k"},
+		{52000, "52.0k"},
+		{999999, "1000.0k"},
+		{1000000, "1.0M"},
+		{5200000, "5.2M"},
+		{123456789, "123.5M"},
+	}
+	for _, tt := range tests {
+		got := formatTokenCount(tt.n)
+		if got != tt.want {
+			t.Errorf("formatTokenCount(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}
+
+func TestHandleHistoryCommand_Empty(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		history:  nil,
+	}
+	m.handleHistoryCommand(nil)
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	}
+	if !strings.Contains(m.messages[0].content, "No command history") {
+		t.Errorf("expected no history message, got %q", m.messages[0].content)
+	}
+}
+
+func TestHandleHistoryCommand_WithEntries(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		history:  []string{"/help", "/model", "/ping", "/clear"},
+	}
+	m.handleHistoryCommand(nil)
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	}
+	content := m.messages[0].content
+	if !strings.Contains(content, "/help") || !strings.Contains(content, "/ping") {
+		t.Errorf("expected history entries, got %q", content)
+	}
+}
+
+func TestHandleHistoryCommand_WithFilter(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		history:  []string{"/help", "/model", "/ping", "/plan"},
+	}
+	m.handleHistoryCommand([]string{"p"})
+	content := m.messages[0].content
+	if !strings.Contains(content, "/ping") || !strings.Contains(content, "/plan") {
+		t.Errorf("expected filtered entries with 'p', got %q", content)
+	}
+	if strings.Contains(content, "/model") {
+		t.Errorf("should not contain /model, got %q", content)
+	}
+}
+
+func TestHandleHistoryCommand_FilterNoMatch(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		history:  []string{"/help", "/model"},
+	}
+	m.handleHistoryCommand([]string{"xyz"})
+	if !strings.Contains(m.messages[0].content, "No history matching") {
+		t.Errorf("expected no match message, got %q", m.messages[0].content)
+	}
+}
+
+func TestHandleCommitDone_Success(t *testing.T) {
+	m := &model{
+		messages: []message{
+			{role: "assistant", content: "Committing..."},
+		},
+		commit: &commitState{phase: "committing"},
+	}
+	newM, _ := m.handleCommitDone(commitDoneMsg{output: "commit abc123"})
+	mm := newM.(*model)
+	found := false
+	for _, msg := range mm.messages {
+		if strings.Contains(msg.content, "Committed successfully") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected success message")
+	}
+}
+
+func TestHandleCommitDone_Error(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		commit:   &commitState{phase: "committing"},
+	}
+	newM, _ := m.handleCommitDone(commitDoneMsg{err: fmt.Errorf("git error")})
+	mm := newM.(*model)
+	found := false
+	for _, msg := range mm.messages {
+		if strings.Contains(msg.content, "git error") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error in messages")
+	}
+}
+
+func TestRenderStatusBar_WithProvider(t *testing.T) {
+	m := &model{
+		cfg:   Config{ProviderName: "ollama", ModelName: "qwen3.5:latest"},
+		width: 120,
+	}
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "ollama") {
+		t.Errorf("status bar should contain provider, got %q", bar)
+	}
+	if !strings.Contains(bar, "qwen3.5:latest") {
+		t.Errorf("status bar should contain model, got %q", bar)
+	}
+}
+
+func TestRenderStatusBar_WithoutProvider(t *testing.T) {
+	m := &model{
+		cfg:   Config{ModelName: "gpt-4o"},
+		width: 120,
+	}
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "gpt-4o") {
+		t.Errorf("status bar should contain model, got %q", bar)
+	}
+}
+
+func TestRenderStatusBar_ContextEstimate(t *testing.T) {
+	m := &model{
+		cfg:   Config{ModelName: "test"},
+		width: 120,
+		messages: []message{
+			{content: strings.Repeat("a", 4000)}, // ~1k tokens
+		},
+	}
+	bar := m.renderStatusBar()
+	if !strings.Contains(bar, "ctx:") {
+		t.Errorf("status bar should show context estimate, got %q", bar)
+	}
+}
+
+func TestMaxScroll_EmptyMessages(t *testing.T) {
+	m := &model{
+		messages: nil,
+		height:   40,
+	}
+	if m.maxScroll() != 0 {
+		t.Error("maxScroll should be 0 for empty messages")
+	}
+}
+
+func TestMaxScroll_SmallHeight(t *testing.T) {
+	m := &model{
+		messages: []message{{content: "test"}},
+		height:   0,
+	}
+	if m.maxScroll() != 0 {
+		t.Error("maxScroll should be 0 for zero height")
+	}
+}
+
+func TestHandleSlashCommand_Session(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		cfg:      Config{SessionID: "test-session-123"},
+	}
+	newM, _ := m.handleSlashCommand("/session")
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "test-session-123") {
+		t.Errorf("expected session ID, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSlashCommand_Unknown(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+	}
+	newM, _ := m.handleSlashCommand("/nonexistent")
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "Unknown command") {
+		t.Errorf("expected unknown command message, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSlashCommand_Exit(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+	}
+	newM, cmd := m.handleSlashCommand("/exit")
+	mm := newM.(*model)
+	if !mm.quitting {
+		t.Error("expected quitting to be true")
+	}
+	if cmd == nil {
+		t.Error("expected tea.Quit cmd")
+	}
+}
+
+func TestHandleSlashCommand_Ping(t *testing.T) {
+	mockLLM := &pingMockLLM{name: "test", response: "Pong"}
+	m := &model{
+		messages: make([]message, 0),
+		cfg:      Config{LLM: mockLLM},
+	}
+	newM, cmd := m.handleSlashCommand("/ping")
+	mm := newM.(*model)
+	if cmd == nil {
+		t.Error("expected non-nil cmd for /ping")
+	}
+	if len(mm.messages) < 1 {
+		t.Fatal("expected placeholder message")
+	}
+}
+
+func TestHandleSkillCreateCommand_NoArgs(t *testing.T) {
+	m := &model{messages: make([]message, 0)}
+	newM, cmd := m.handleSkillCreateCommand(nil)
+	mm := newM.(*model)
+	if cmd != nil {
+		t.Error("expected nil cmd")
+	}
+	if !strings.Contains(mm.messages[0].content, "Usage:") {
+		t.Errorf("expected usage message, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSkillCreateCommand_InvalidName(t *testing.T) {
+	m := &model{messages: make([]message, 0)}
+	newM, _ := m.handleSkillCreateCommand([]string{"bad name!"})
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "Invalid skill name") {
+		t.Errorf("expected invalid name error, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSkillCreateCancel(t *testing.T) {
+	m := &model{
+		messages:           make([]message, 0),
+		pendingSkillCreate: &pendingSkillCreate{name: "test"},
+	}
+	newM, _ := m.handleSkillCreateCancel()
+	mm := newM.(*model)
+	if mm.pendingSkillCreate != nil {
+		t.Error("pending should be cleared")
+	}
+	if !strings.Contains(mm.messages[0].content, "cancelled") {
+		t.Errorf("expected cancelled message, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSkillListCommand_Empty(t *testing.T) {
+	m := &model{messages: make([]message, 0), cfg: Config{}}
+	newM, _ := m.handleSkillListCommand()
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "No skills loaded") {
+		t.Errorf("expected no skills message, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSkillListCommand_WithSkills(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		cfg: Config{
+			Skills: []extension.Skill{
+				{Name: "test-skill", Description: "A test skill"},
+				{Name: "another", Description: "Another one"},
+			},
+			SkillDirs: []string{"/tmp/skills"},
+		},
+	}
+	newM, _ := m.handleSkillListCommand()
+	mm := newM.(*model)
+	content := mm.messages[0].content
+	if !strings.Contains(content, "/test-skill") {
+		t.Errorf("expected skill name, got %q", content)
+	}
+	if !strings.Contains(content, "A test skill") {
+		t.Errorf("expected skill description, got %q", content)
+	}
+	if !strings.Contains(content, "/tmp/skills") {
+		t.Errorf("expected skill dir, got %q", content)
+	}
+}
+
+func TestHandleSkillLoadCommand_Empty(t *testing.T) {
+	m := &model{messages: make([]message, 0), cfg: Config{}}
+	newM, _ := m.handleSkillLoadCommand()
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "no skills found") {
+		t.Errorf("expected no skills message, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSlashCommand_Model(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		cfg:      Config{ModelName: "gpt-4o", ActiveRole: "default", Roles: map[string]config.RoleConfig{"default": {Model: "gpt-4o"}}},
+	}
+	newM, _ := m.handleSlashCommand("/model")
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "gpt-4o") {
+		t.Errorf("expected model name in output, got %q", mm.messages[0].content)
+	}
+}
+
+func TestHandleSlashCommand_Clear(t *testing.T) {
+	m := &model{
+		messages: []message{{role: "user", content: "hello"}, {role: "assistant", content: "hi"}},
+	}
+	newM, _ := m.handleSlashCommand("/clear")
+	mm := newM.(*model)
+	if len(mm.messages) != 0 {
+		t.Errorf("expected 0 messages after /clear, got %d", len(mm.messages))
+	}
+}
+
+func TestHandleSlashCommand_History(t *testing.T) {
+	m := &model{
+		messages: make([]message, 0),
+		history:  []string{"/help", "/model"},
+	}
+	newM, _ := m.handleSlashCommand("/history")
+	mm := newM.(*model)
+	if !strings.Contains(mm.messages[0].content, "/help") {
+		t.Errorf("expected history output, got %q", mm.messages[0].content)
 	}
 }
 
