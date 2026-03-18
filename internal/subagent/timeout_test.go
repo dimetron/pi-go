@@ -26,7 +26,7 @@ func TestResolveTimeout(t *testing.T) {
 
 	t.Run("agent frontmatter overrides env var", func(t *testing.T) {
 		t.Setenv("PI_SUBAGENT_TIMEOUT_MS", "300000") // 5 minutes
-		tc := ResolveTimeout(60000)                   // 1 minute from frontmatter
+		tc := ResolveTimeout(60000)                  // 1 minute from frontmatter
 		if tc.Absolute != time.Minute {
 			t.Errorf("Absolute = %v, want 1m (frontmatter takes priority)", tc.Absolute)
 		}

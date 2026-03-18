@@ -63,9 +63,9 @@ type MCPServer struct {
 func Defaults() Config {
 	return Config{
 		Roles: map[string]RoleConfig{
-			"default": {Model: "claude-sonnet-4-6"},
+			"default": {Model: "gpt-5.4"},
 		},
-		DefaultProvider: "anthropic",
+		DefaultProvider: "openai",
 		ThinkingLevel:   "medium",
 		Theme:           "default",
 	}
@@ -75,9 +75,7 @@ func Defaults() Config {
 var modelPrefixes = map[string]string{
 	"claude": "anthropic",
 	"gpt":    "openai",
-	"o1":     "openai",
-	"o3":     "openai",
-	"o4":     "openai",
+	"gpt-5":  "openai",
 	"gemini": "gemini",
 }
 

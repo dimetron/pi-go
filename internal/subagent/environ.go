@@ -17,10 +17,10 @@ var DefaultEnvAllowlist = []string{
 	"SHELL",
 	"PATH",
 	"LANG",
-	"LC_",   // prefix: LC_ALL, LC_CTYPE, etc.
+	"LC_", // prefix: LC_ALL, LC_CTYPE, etc.
 	"TERM",
 	"TMPDIR",
-	"XDG_",  // prefix: XDG_CONFIG_HOME, etc.
+	"XDG_", // prefix: XDG_CONFIG_HOME, etc.
 	"EDITOR",
 	"VISUAL",
 
@@ -36,11 +36,11 @@ var DefaultEnvAllowlist = []string{
 	"CGO_ENABLED",
 
 	// Git.
-	"GIT_",   // prefix: GIT_DIR, GIT_WORK_TREE, GIT_AUTHOR_*, etc.
+	"GIT_", // prefix: GIT_DIR, GIT_WORK_TREE, GIT_AUTHOR_*, etc.
 	"SSH_AUTH_SOCK",
 
 	// pi-go specific.
-	"PI_",    // prefix: PI_SUBAGENT_TIMEOUT_MS, PI_SUBAGENT_CONCURRENCY, etc.
+	"PI_", // prefix: PI_SUBAGENT_TIMEOUT_MS, PI_SUBAGENT_CONCURRENCY, etc.
 
 	// Common dev tools.
 	"DOCKER_HOST",

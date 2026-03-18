@@ -23,9 +23,7 @@ type Info struct {
 var modelPrefixes = map[string]string{
 	"claude": "anthropic",
 	"gpt":    "openai",
-	"o1":     "openai",
-	"o3":     "openai",
-	"o4":     "openai",
+	"gpt-5":  "openai",
 	"gemini": "gemini",
 }
 
