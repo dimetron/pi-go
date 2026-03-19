@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,6 +12,52 @@ import (
 
 	"google.golang.org/adk/model"
 )
+
+// BuildTransport creates an http.Transport with optional TLS skip and extra headers.
+// Returns nil if no customization is needed.
+func BuildTransport(opts *LLMOptions) http.RoundTripper {
+	if opts == nil {
+		return nil
+	}
+	hasHeaders := len(opts.ExtraHeaders) > 0
+	if !opts.InsecureSkipTLS && !hasHeaders {
+		return nil
+	}
+
+	base := http.RoundTripper(http.DefaultTransport)
+	if opts.InsecureSkipTLS {
+		base = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // user-requested
+		}
+	}
+	if hasHeaders {
+		base = &headerTransport{base: base, headers: opts.ExtraHeaders}
+	}
+	return base
+}
+
+// BuildHTTPClient creates an *http.Client with optional TLS skip, extra headers, and timeout.
+// Returns a default client if no customization is needed.
+func BuildHTTPClient(opts *LLMOptions, timeout time.Duration) *http.Client {
+	transport := BuildTransport(opts)
+	if transport == nil {
+		return &http.Client{Timeout: timeout}
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+// headerTransport injects extra HTTP headers into every request.
+type headerTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(req)
+}
 
 // Info describes a provider and the model to use.
 type Info struct {
@@ -109,17 +156,26 @@ func CheckOllama(baseURL string) error {
 	return nil
 }
 
-// NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and extra headers.
-func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string, extraHeaders map[string]string) (model.LLM, error) {
+// LLMOptions holds optional configuration for LLM provider creation.
+type LLMOptions struct {
+	ExtraHeaders    map[string]string
+	InsecureSkipTLS bool
+}
+
+// NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.
+func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
+	if opts == nil {
+		opts = &LLMOptions{}
+	}
 	switch info.Provider {
 	case "ollama":
-		return NewOllama(ctx, info.Model, baseURL, thinkingLevel, extraHeaders)
+		return NewOllama(ctx, info.Model, baseURL, thinkingLevel, opts)
 	case "gemini":
-		return NewGemini(ctx, info.Model, baseURL, extraHeaders)
+		return NewGemini(ctx, info.Model, baseURL, opts)
 	case "openai":
-		return NewOpenAI(ctx, info.Model, apiKey, baseURL, extraHeaders)
+		return NewOpenAI(ctx, info.Model, apiKey, baseURL, opts)
 	case "anthropic":
-		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, extraHeaders)
+		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

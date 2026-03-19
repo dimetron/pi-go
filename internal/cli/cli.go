@@ -38,6 +38,7 @@ var (
 	flagHeaders []string
 
 	flagContinue bool
+	flagInsecure bool
 	flagSmol     bool
 	flagSlow     bool
 	flagPlan     bool
@@ -68,6 +69,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role (planning model)")
 	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
 	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
+	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 
 	cmd.AddCommand(newPingCmd())
 
@@ -142,11 +144,14 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Merge extra headers: config + CLI flags (CLI wins on conflict).
-	extraHeaders := mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders)
+	// Build LLM options: extra headers + insecure TLS.
+	llmOpts := &provider.LLMOptions{
+		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+	}
 
 	// Create the LLM provider.
-	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel, extraHeaders)
+	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return fmt.Errorf("creating LLM provider: %w", err)
 	}
@@ -596,7 +601,10 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		}
 	}
 
-	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none", cfg.ExtraHeaders)
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none", &provider.LLMOptions{
+		ExtraHeaders:    cfg.ExtraHeaders,
+		InsecureSkipTLS: cfg.InsecureSkipTLS,
+	})
 	if err != nil {
 		return nil
 	}

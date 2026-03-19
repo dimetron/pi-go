@@ -962,28 +962,21 @@ func TestDetectGitRootSubdirectory(t *testing.T) {
 }
 
 func TestLoadDotEnvQuotedValues(t *testing.T) {
-	// Test that quoted values are loaded as-is (quotes included since loadDotEnv does simple trimming).
 	tmpDir := t.TempDir()
 	piGoDir := filepath.Join(tmpDir, ".pi-go")
 	if err := os.MkdirAll(piGoDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	envContent := "TEST_QUOTED_KEY=\"quoted-value\"\n"
-	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte("TEST_QUOTED_KEY=\"quoted-value\"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() {
-		os.Setenv("HOME", origHome)
-		os.Unsetenv("TEST_QUOTED_KEY")
-	})
+	t.Setenv("HOME", tmpDir)
+	t.Cleanup(func() { _ = os.Unsetenv("TEST_QUOTED_KEY") })
 
 	loadDotEnv()
 
 	got := os.Getenv("TEST_QUOTED_KEY")
-	// loadDotEnv does TrimSpace but not quote stripping, so quotes remain.
 	if got != "\"quoted-value\"" {
 		t.Errorf("TEST_QUOTED_KEY = %q, want %q", got, "\"quoted-value\"")
 	}
@@ -995,17 +988,14 @@ func TestLoadDotEnvMultipleKeys(t *testing.T) {
 	if err := os.MkdirAll(piGoDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	envContent := "# API Keys\nTEST_MULTI_A=alpha\n\nTEST_MULTI_B=beta\n# end\n"
-	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte("# API Keys\nTEST_MULTI_A=alpha\n\nTEST_MULTI_B=beta\n# end\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
+	t.Setenv("HOME", tmpDir)
 	t.Cleanup(func() {
-		os.Setenv("HOME", origHome)
-		os.Unsetenv("TEST_MULTI_A")
-		os.Unsetenv("TEST_MULTI_B")
+		_ = os.Unsetenv("TEST_MULTI_A")
+		_ = os.Unsetenv("TEST_MULTI_B")
 	})
 
 	loadDotEnv()
@@ -1024,18 +1014,12 @@ func TestLoadDotEnvExistingVarNotOverridden(t *testing.T) {
 	if err := os.MkdirAll(piGoDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	envContent := "TEST_EXISTING=from-file\n"
-	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte("TEST_EXISTING=from-file\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	os.Setenv("TEST_EXISTING", "from-env")
-	t.Cleanup(func() {
-		os.Setenv("HOME", origHome)
-		os.Unsetenv("TEST_EXISTING")
-	})
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("TEST_EXISTING", "from-env")
 
 	loadDotEnv()
 

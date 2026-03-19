@@ -239,11 +239,12 @@ func TestNewOpenAIWithBaseURL(t *testing.T) {
 }
 
 func TestNewOpenAIWithExtraHeaders(t *testing.T) {
-	headers := map[string]string{
-		"X-Custom-Header": "custom-value",
-		"X-Org-ID":        "org-123",
-	}
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "", headers)
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "", &LLMOptions{
+		ExtraHeaders: map[string]string{
+			"X-Custom-Header": "custom-value",
+			"X-Org-ID":        "org-123",
+		},
+	})
 	if err != nil {
 		t.Fatalf("NewOpenAI() with headers error: %v", err)
 	}
@@ -256,8 +257,9 @@ func TestNewOpenAIWithExtraHeaders(t *testing.T) {
 }
 
 func TestNewOpenAIWithBaseURLAndHeaders(t *testing.T) {
-	headers := map[string]string{"X-Custom": "value"}
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "https://custom.example.com", headers)
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "https://custom.example.com", &LLMOptions{
+		ExtraHeaders: map[string]string{"X-Custom": "value"},
+	})
 	if err != nil {
 		t.Fatalf("NewOpenAI() with baseURL+headers error: %v", err)
 	}

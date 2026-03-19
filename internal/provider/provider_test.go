@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolve(t *testing.T) {
@@ -275,13 +276,13 @@ func TestNewLLMUnsupportedProvider(t *testing.T) {
 }
 
 func TestNewLLMWithExtraHeaders(t *testing.T) {
-	headers := map[string]string{
+	opts := &LLMOptions{ExtraHeaders: map[string]string{
 		"X-Custom":      "value1",
 		"X-Application": "test-app",
-	}
+	}}
 
 	t.Run("openai with extra headers", func(t *testing.T) {
-		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", headers)
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", opts)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -291,7 +292,7 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 	})
 
 	t.Run("anthropic with extra headers", func(t *testing.T) {
-		llm, err := NewLLM(context.Background(), Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "", headers)
+		llm, err := NewLLM(context.Background(), Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "", opts)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -301,7 +302,7 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 	})
 
 	t.Run("ollama with extra headers", func(t *testing.T) {
-		llm, err := NewLLM(context.Background(), Info{Provider: "ollama", Model: "test-model", Ollama: true}, "", "http://localhost:11434", "", headers)
+		llm, err := NewLLM(context.Background(), Info{Provider: "ollama", Model: "test-model", Ollama: true}, "", "http://localhost:11434", "", opts)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -310,7 +311,7 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 		}
 	})
 
-	t.Run("nil extra headers", func(t *testing.T) {
+	t.Run("nil opts", func(t *testing.T) {
 		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", nil)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
@@ -320,8 +321,31 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 		}
 	})
 
-	t.Run("empty extra headers", func(t *testing.T) {
-		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", map[string]string{})
+	t.Run("empty opts", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", &LLMOptions{})
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("insecure TLS", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", &LLMOptions{InsecureSkipTLS: true})
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("insecure TLS with headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", &LLMOptions{
+			ExtraHeaders:    map[string]string{"X-Test": "val"},
+			InsecureSkipTLS: true,
+		})
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -332,28 +356,14 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 }
 
 func TestNewGeminiWithExtraHeaders(t *testing.T) {
-	// Save and clear env vars to test the no-API-key path.
-	origGoogle := os.Getenv("GOOGLE_API_KEY")
-	origGemini := os.Getenv("GEMINI_API_KEY")
-	os.Setenv("GOOGLE_API_KEY", "test-google-key")
-	defer func() {
-		if origGoogle != "" {
-			os.Setenv("GOOGLE_API_KEY", origGoogle)
-		} else {
-			os.Unsetenv("GOOGLE_API_KEY")
-		}
-		if origGemini != "" {
-			os.Setenv("GEMINI_API_KEY", origGemini)
-		} else {
-			os.Unsetenv("GEMINI_API_KEY")
-		}
-	}()
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 
-	headers := map[string]string{
-		"X-Custom-Header": "value1",
-		"X-Another":       "value2",
-	}
-	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", headers)
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", &LLMOptions{
+		ExtraHeaders: map[string]string{
+			"X-Custom-Header": "value1",
+			"X-Another":       "value2",
+		},
+	})
 	if err != nil {
 		t.Fatalf("NewGemini() with headers error: %v", err)
 	}
@@ -363,21 +373,7 @@ func TestNewGeminiWithExtraHeaders(t *testing.T) {
 }
 
 func TestNewGeminiWithBaseURL(t *testing.T) {
-	origGoogle := os.Getenv("GOOGLE_API_KEY")
-	origGemini := os.Getenv("GEMINI_API_KEY")
-	os.Setenv("GOOGLE_API_KEY", "test-google-key")
-	defer func() {
-		if origGoogle != "" {
-			os.Setenv("GOOGLE_API_KEY", origGoogle)
-		} else {
-			os.Unsetenv("GOOGLE_API_KEY")
-		}
-		if origGemini != "" {
-			os.Setenv("GEMINI_API_KEY", origGemini)
-		} else {
-			os.Unsetenv("GEMINI_API_KEY")
-		}
-	}()
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom-gemini.example.com", nil)
 	if err != nil {
@@ -389,24 +385,11 @@ func TestNewGeminiWithBaseURL(t *testing.T) {
 }
 
 func TestNewGeminiWithBaseURLAndHeaders(t *testing.T) {
-	origGoogle := os.Getenv("GOOGLE_API_KEY")
-	origGemini := os.Getenv("GEMINI_API_KEY")
-	os.Setenv("GOOGLE_API_KEY", "test-google-key")
-	defer func() {
-		if origGoogle != "" {
-			os.Setenv("GOOGLE_API_KEY", origGoogle)
-		} else {
-			os.Unsetenv("GOOGLE_API_KEY")
-		}
-		if origGemini != "" {
-			os.Setenv("GEMINI_API_KEY", origGemini)
-		} else {
-			os.Unsetenv("GEMINI_API_KEY")
-		}
-	}()
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 
-	headers := map[string]string{"X-Custom": "val"}
-	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom.example.com", headers)
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom.example.com", &LLMOptions{
+		ExtraHeaders: map[string]string{"X-Custom": "val"},
+	})
 	if err != nil {
 		t.Fatalf("NewGemini() with baseURL+headers error: %v", err)
 	}
@@ -416,22 +399,8 @@ func TestNewGeminiWithBaseURLAndHeaders(t *testing.T) {
 }
 
 func TestNewGeminiWithGeminiAPIKeyEnv(t *testing.T) {
-	origGoogle := os.Getenv("GOOGLE_API_KEY")
-	origGemini := os.Getenv("GEMINI_API_KEY")
-	os.Unsetenv("GOOGLE_API_KEY")
-	os.Setenv("GEMINI_API_KEY", "test-gemini-key")
-	defer func() {
-		if origGoogle != "" {
-			os.Setenv("GOOGLE_API_KEY", origGoogle)
-		} else {
-			os.Unsetenv("GOOGLE_API_KEY")
-		}
-		if origGemini != "" {
-			os.Setenv("GEMINI_API_KEY", origGemini)
-		} else {
-			os.Unsetenv("GEMINI_API_KEY")
-		}
-	}()
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "test-gemini-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
 	if err != nil {
@@ -443,22 +412,8 @@ func TestNewGeminiWithGeminiAPIKeyEnv(t *testing.T) {
 }
 
 func TestNewGeminiNoAPIKeyEnvVars(t *testing.T) {
-	origGoogle := os.Getenv("GOOGLE_API_KEY")
-	origGemini := os.Getenv("GEMINI_API_KEY")
-	os.Unsetenv("GOOGLE_API_KEY")
-	os.Unsetenv("GEMINI_API_KEY")
-	defer func() {
-		if origGoogle != "" {
-			os.Setenv("GOOGLE_API_KEY", origGoogle)
-		} else {
-			os.Unsetenv("GOOGLE_API_KEY")
-		}
-		if origGemini != "" {
-			os.Setenv("GEMINI_API_KEY", origGemini)
-		} else {
-			os.Unsetenv("GEMINI_API_KEY")
-		}
-	}()
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
 
 	// Without API keys, NewGemini may still succeed (using ADC) or fail depending on environment.
 	// We just verify it doesn't panic.
@@ -500,4 +455,84 @@ func TestHeaderTransport(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
+}
+
+func TestBuildTransport(t *testing.T) {
+	t.Run("nil opts returns nil", func(t *testing.T) {
+		tr := BuildTransport(nil)
+		if tr != nil {
+			t.Fatal("expected nil transport")
+		}
+	})
+
+	t.Run("no customization returns nil", func(t *testing.T) {
+		tr := BuildTransport(&LLMOptions{})
+		if tr != nil {
+			t.Fatal("expected nil transport")
+		}
+	})
+
+	t.Run("insecure only", func(t *testing.T) {
+		tr := BuildTransport(&LLMOptions{InsecureSkipTLS: true})
+		if tr == nil {
+			t.Fatal("expected non-nil transport")
+		}
+		// Should be an *http.Transport with InsecureSkipVerify.
+		if _, ok := tr.(*http.Transport); !ok {
+			t.Fatalf("expected *http.Transport, got %T", tr)
+		}
+	})
+
+	t.Run("headers only", func(t *testing.T) {
+		tr := BuildTransport(&LLMOptions{ExtraHeaders: map[string]string{"X-Test": "val"}})
+		if tr == nil {
+			t.Fatal("expected non-nil transport")
+		}
+		if _, ok := tr.(*headerTransport); !ok {
+			t.Fatalf("expected *headerTransport, got %T", tr)
+		}
+	})
+
+	t.Run("insecure + headers chains transports", func(t *testing.T) {
+		tr := BuildTransport(&LLMOptions{
+			ExtraHeaders:    map[string]string{"X-Test": "val"},
+			InsecureSkipTLS: true,
+		})
+		if tr == nil {
+			t.Fatal("expected non-nil transport")
+		}
+		ht, ok := tr.(*headerTransport)
+		if !ok {
+			t.Fatalf("expected outer *headerTransport, got %T", tr)
+		}
+		// Inner transport should be *http.Transport with InsecureSkipVerify.
+		if _, ok := ht.base.(*http.Transport); !ok {
+			t.Fatalf("expected inner *http.Transport, got %T", ht.base)
+		}
+	})
+}
+
+func TestBuildHTTPClient(t *testing.T) {
+	t.Run("nil opts returns default client", func(t *testing.T) {
+		c := BuildHTTPClient(nil, 5*time.Second)
+		if c == nil {
+			t.Fatal("expected non-nil client")
+		}
+		if c.Timeout != 5*time.Second {
+			t.Errorf("timeout = %v, want 5s", c.Timeout)
+		}
+		if c.Transport != nil {
+			t.Error("expected nil transport for default client")
+		}
+	})
+
+	t.Run("insecure client has custom transport", func(t *testing.T) {
+		c := BuildHTTPClient(&LLMOptions{InsecureSkipTLS: true}, 10*time.Second)
+		if c.Transport == nil {
+			t.Fatal("expected non-nil transport")
+		}
+		if c.Timeout != 10*time.Second {
+			t.Errorf("timeout = %v, want 10s", c.Timeout)
+		}
+	})
 }

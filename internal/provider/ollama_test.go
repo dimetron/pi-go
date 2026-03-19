@@ -348,8 +348,9 @@ func TestNewOllamaValidation(t *testing.T) {
 	})
 
 	t.Run("with extra headers", func(t *testing.T) {
-		headers := map[string]string{"X-Custom": "value"}
-		llm, err := NewOllama(context.Background(), "test-model", "", "none", headers)
+		llm, err := NewOllama(context.Background(), "test-model", "", "none", &LLMOptions{
+			ExtraHeaders: map[string]string{"X-Custom": "value"},
+		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

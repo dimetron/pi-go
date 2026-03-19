@@ -345,3 +345,41 @@ func TestExtraHeadersAbsentByDefault(t *testing.T) {
 		t.Errorf("expected nil ExtraHeaders in defaults, got %v", cfg.ExtraHeaders)
 	}
 }
+
+func TestInsecureSkipTLSFromConfig(t *testing.T) {
+	tmp := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfgDir := filepath.Join(tmp, ".pi-go")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgJSON := `{
+		"roles": {"default": {"model": "gpt-4o"}},
+		"insecureSkipTLS": true
+	}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.InsecureSkipTLS {
+		t.Error("expected InsecureSkipTLS to be true")
+	}
+}
+
+func TestInsecureSkipTLSFalseByDefault(t *testing.T) {
+	cfg := Defaults()
+	if cfg.InsecureSkipTLS {
+		t.Error("expected InsecureSkipTLS to be false by default")
+	}
+}

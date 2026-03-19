@@ -24,7 +24,7 @@ type ollamaModel struct {
 // NewOllama creates an Ollama model.LLM using the native Ollama Go client.
 // baseURL defaults to http://localhost:11434 if empty.
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
-func NewOllama(_ context.Context, modelName, baseURL, thinkingLevel string, extraHeaders map[string]string) (model.LLM, error) {
+func NewOllama(_ context.Context, modelName, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
@@ -35,32 +35,13 @@ func NewOllama(_ context.Context, modelName, baseURL, thinkingLevel string, extr
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)
 	}
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
-	if len(extraHeaders) > 0 {
-		httpClient.Transport = &headerTransport{
-			base:    http.DefaultTransport,
-			headers: extraHeaders,
-		}
-	}
+	httpClient := BuildHTTPClient(opts, 10*time.Minute)
 	client := ollamaapi.NewClient(u, httpClient)
 	return &ollamaModel{
 		modelName:     modelName,
 		client:        client,
 		thinkingLevel: thinkingLevel,
 	}, nil
-}
-
-// headerTransport injects extra HTTP headers into every request.
-type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
-}
-
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	for k, v := range t.headers {
-		req.Header.Set(k, v)
-	}
-	return t.base.RoundTrip(req)
 }
 
 func (m *ollamaModel) Name() string { return m.modelName }

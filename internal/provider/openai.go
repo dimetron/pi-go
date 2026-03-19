@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -26,7 +27,7 @@ type openaiModel struct {
 
 // NewOpenAI creates an OpenAI model.LLM.
 // If baseURL is non-empty, it overrides the default API endpoint.
-func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, extraHeaders map[string]string) (model.LLM, error) {
+func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
@@ -34,8 +35,13 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, extraHeader
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	for k, v := range extraHeaders {
-		opts = append(opts, option.WithHeader(k, v))
+	if llmOpts != nil {
+		for k, v := range llmOpts.ExtraHeaders {
+			opts = append(opts, option.WithHeader(k, v))
+		}
+		if transport := BuildTransport(llmOpts); transport != nil {
+			opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
+		}
 	}
 	client := openai.NewClient(opts...)
 	return &openaiModel{modelName: modelName, client: client}, nil

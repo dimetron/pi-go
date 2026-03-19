@@ -15,7 +15,7 @@ import (
 // It reads the API key from GOOGLE_API_KEY or GEMINI_API_KEY env vars.
 // If neither is set, it falls back to Application Default Credentials.
 // If baseURL is non-empty, it overrides the default API endpoint.
-func NewGemini(ctx context.Context, modelName, baseURL string, extraHeaders map[string]string) (model.LLM, error) {
+func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions) (model.LLM, error) {
 	cfg := &genai.ClientConfig{
 		Backend: genai.BackendGeminiAPI,
 	}
@@ -33,14 +33,17 @@ func NewGemini(ctx context.Context, modelName, baseURL string, extraHeaders map[
 	if baseURL != "" {
 		httpOpts.BaseURL = baseURL
 	}
-	if len(extraHeaders) > 0 {
+	if opts != nil && len(opts.ExtraHeaders) > 0 {
 		httpOpts.Headers = make(http.Header)
-		for k, v := range extraHeaders {
+		for k, v := range opts.ExtraHeaders {
 			httpOpts.Headers.Set(k, v)
 		}
 	}
-	if baseURL != "" || len(extraHeaders) > 0 {
+	if baseURL != "" || (opts != nil && len(opts.ExtraHeaders) > 0) {
 		cfg.HTTPOptions = httpOpts
+	}
+	if opts != nil && opts.InsecureSkipTLS {
+		cfg.HTTPClient = BuildHTTPClient(opts, 0)
 	}
 
 	llm, err := gemini.NewModel(ctx, modelName, cfg)

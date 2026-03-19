@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"net/http"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -26,7 +27,7 @@ type anthropicModel struct {
 // If baseURL is non-empty, it overrides the default API endpoint.
 // When baseURL is set, the API key is optional (for Ollama compatibility).
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
-func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, extraHeaders map[string]string) (model.LLM, error) {
+func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" && baseURL == "" {
 		return nil, fmt.Errorf("anthropic API key is required")
 	}
@@ -37,8 +38,13 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 	if baseURL != "" {
 		opts = append(opts, anthropicopt.WithBaseURL(baseURL))
 	}
-	for k, v := range extraHeaders {
-		opts = append(opts, anthropicopt.WithHeader(k, v))
+	if llmOpts != nil {
+		for k, v := range llmOpts.ExtraHeaders {
+			opts = append(opts, anthropicopt.WithHeader(k, v))
+		}
+		if transport := BuildTransport(llmOpts); transport != nil {
+			opts = append(opts, anthropicopt.WithHTTPClient(&http.Client{Transport: transport}))
+		}
 	}
 	client := anthropic.NewClient(opts...)
 	return &anthropicModel{modelName: modelName, client: client, thinkingLevel: thinkingLevel}, nil
