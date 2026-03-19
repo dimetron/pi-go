@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/tools"
 	"google.golang.org/adk/model"
@@ -779,4 +781,289 @@ func TestMergeExtraHeaders(t *testing.T) {
 			t.Errorf("valid = %q, want %q", result["valid"], "ok")
 		}
 	})
+
+	t.Run("empty map config returns nil when no cli headers", func(t *testing.T) {
+		cfg := map[string]string{}
+		result := mergeExtraHeaders(cfg, nil)
+		if result != nil {
+			t.Fatalf("expected nil for empty map + nil cli, got %v", result)
+		}
+	})
+
+	t.Run("empty map config with empty cli slice returns nil", func(t *testing.T) {
+		cfg := map[string]string{}
+		cli := []string{}
+		result := mergeExtraHeaders(cfg, cli)
+		if result != nil {
+			t.Fatalf("expected nil for empty map + empty cli, got %v", result)
+		}
+	})
+
+	t.Run("empty string cli header is ignored", func(t *testing.T) {
+		cli := []string{""}
+		result := mergeExtraHeaders(nil, cli)
+		if result != nil {
+			t.Fatalf("expected nil for empty string header, got %v", result)
+		}
+	})
+
+	t.Run("all malformed cli headers returns nil", func(t *testing.T) {
+		cli := []string{"noequals1", "noequals2"}
+		result := mergeExtraHeaders(nil, cli)
+		if result != nil {
+			t.Fatalf("expected nil when all cli headers are malformed, got %v", result)
+		}
+	})
+}
+
+func TestConvertHooks(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []config.HookConfig
+		check func(t *testing.T, result []extension.HookConfig)
+	}{
+		{
+			name:  "nil input returns empty slice",
+			input: nil,
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if len(result) != 0 {
+					t.Errorf("expected empty slice, got %d items", len(result))
+				}
+			},
+		},
+		{
+			name:  "empty input returns empty slice",
+			input: []config.HookConfig{},
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if len(result) != 0 {
+					t.Errorf("expected empty slice, got %d items", len(result))
+				}
+			},
+		},
+		{
+			name: "single hook with all fields",
+			input: []config.HookConfig{
+				{
+					Event:   "before_tool",
+					Command: "echo hello",
+					Tools:   []string{"read", "write"},
+					Timeout: 30,
+				},
+			},
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if len(result) != 1 {
+					t.Fatalf("expected 1 hook, got %d", len(result))
+				}
+				h := result[0]
+				if h.Event != "before_tool" {
+					t.Errorf("Event = %q, want %q", h.Event, "before_tool")
+				}
+				if h.Command != "echo hello" {
+					t.Errorf("Command = %q, want %q", h.Command, "echo hello")
+				}
+				if len(h.Tools) != 2 || h.Tools[0] != "read" || h.Tools[1] != "write" {
+					t.Errorf("Tools = %v, want [read write]", h.Tools)
+				}
+				if h.Timeout != 30 {
+					t.Errorf("Timeout = %d, want 30", h.Timeout)
+				}
+			},
+		},
+		{
+			name: "multiple hooks preserve order",
+			input: []config.HookConfig{
+				{Event: "before_tool", Command: "cmd1"},
+				{Event: "after_tool", Command: "cmd2", Timeout: 5},
+			},
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if len(result) != 2 {
+					t.Fatalf("expected 2 hooks, got %d", len(result))
+				}
+				if result[0].Event != "before_tool" || result[0].Command != "cmd1" {
+					t.Errorf("first hook = {%q, %q}, want {before_tool, cmd1}", result[0].Event, result[0].Command)
+				}
+				if result[1].Event != "after_tool" || result[1].Command != "cmd2" || result[1].Timeout != 5 {
+					t.Errorf("second hook = {%q, %q, %d}, want {after_tool, cmd2, 5}", result[1].Event, result[1].Command, result[1].Timeout)
+				}
+			},
+		},
+		{
+			name: "hook with nil tools",
+			input: []config.HookConfig{
+				{Event: "before_tool", Command: "cmd1", Tools: nil},
+			},
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if len(result) != 1 {
+					t.Fatalf("expected 1 hook, got %d", len(result))
+				}
+				if result[0].Tools != nil {
+					t.Errorf("Tools = %v, want nil", result[0].Tools)
+				}
+			},
+		},
+		{
+			name: "hook with zero timeout",
+			input: []config.HookConfig{
+				{Event: "after_tool", Command: "cmd1", Timeout: 0},
+			},
+			check: func(t *testing.T, result []extension.HookConfig) {
+				if result[0].Timeout != 0 {
+					t.Errorf("Timeout = %d, want 0", result[0].Timeout)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertHooks(tt.input)
+			tt.check(t, result)
+		})
+	}
+}
+
+func TestDetectMode(t *testing.T) {
+	// When running under `go test`, stdin is typically a pipe (not a terminal),
+	// so detectMode should return "print".
+	mode := detectMode()
+	if mode != "print" && mode != "interactive" {
+		t.Errorf("detectMode() = %q, want 'print' or 'interactive'", mode)
+	}
+	// Under go test, stdin is typically a pipe.
+	if mode != "print" {
+		t.Logf("detectMode() returned %q (stdin appears to be a terminal)", mode)
+	}
+}
+
+func TestDetectGitRootSubdirectory(t *testing.T) {
+	// detectGitRoot from a subdirectory should still find the root.
+	tmpDir := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Skip("git not available")
+	}
+
+	subDir := filepath.Join(tmpDir, "a", "b", "c")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	root := detectGitRoot(subDir)
+	if root == "" {
+		t.Fatal("detectGitRoot() from subdirectory returned empty")
+	}
+	// The root should be the tmpDir (resolved via realpath for macOS /private/tmp).
+	resolvedTmp, _ := filepath.EvalSymlinks(tmpDir)
+	resolvedRoot, _ := filepath.EvalSymlinks(root)
+	if resolvedRoot != resolvedTmp {
+		t.Errorf("detectGitRoot() = %q, want %q", resolvedRoot, resolvedTmp)
+	}
+}
+
+func TestLoadDotEnvQuotedValues(t *testing.T) {
+	// Test that quoted values are loaded as-is (quotes included since loadDotEnv does simple trimming).
+	tmpDir := t.TempDir()
+	piGoDir := filepath.Join(tmpDir, ".pi-go")
+	if err := os.MkdirAll(piGoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "TEST_QUOTED_KEY=\"quoted-value\"\n"
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Unsetenv("TEST_QUOTED_KEY")
+	})
+
+	loadDotEnv()
+
+	got := os.Getenv("TEST_QUOTED_KEY")
+	// loadDotEnv does TrimSpace but not quote stripping, so quotes remain.
+	if got != "\"quoted-value\"" {
+		t.Errorf("TEST_QUOTED_KEY = %q, want %q", got, "\"quoted-value\"")
+	}
+}
+
+func TestLoadDotEnvMultipleKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	piGoDir := filepath.Join(tmpDir, ".pi-go")
+	if err := os.MkdirAll(piGoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "# API Keys\nTEST_MULTI_A=alpha\n\nTEST_MULTI_B=beta\n# end\n"
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Unsetenv("TEST_MULTI_A")
+		os.Unsetenv("TEST_MULTI_B")
+	})
+
+	loadDotEnv()
+
+	if got := os.Getenv("TEST_MULTI_A"); got != "alpha" {
+		t.Errorf("TEST_MULTI_A = %q, want %q", got, "alpha")
+	}
+	if got := os.Getenv("TEST_MULTI_B"); got != "beta" {
+		t.Errorf("TEST_MULTI_B = %q, want %q", got, "beta")
+	}
+}
+
+func TestLoadDotEnvExistingVarNotOverridden(t *testing.T) {
+	tmpDir := t.TempDir()
+	piGoDir := filepath.Join(tmpDir, ".pi-go")
+	if err := os.MkdirAll(piGoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	envContent := "TEST_EXISTING=from-file\n"
+	if err := os.WriteFile(filepath.Join(piGoDir, ".env"), []byte(envContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("TEST_EXISTING", "from-env")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Unsetenv("TEST_EXISTING")
+	})
+
+	loadDotEnv()
+
+	if got := os.Getenv("TEST_EXISTING"); got != "from-env" {
+		t.Errorf("TEST_EXISTING = %q, want %q (should not be overridden)", got, "from-env")
+	}
+}
+
+func TestProviderEnvVarAllCases(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     string
+	}{
+		{"anthropic", "ANTHROPIC_API_KEY"},
+		{"openai", "OPENAI_API_KEY"},
+		{"gemini", "GOOGLE_API_KEY"},
+		{"custom", "CUSTOM_API_KEY"},
+		{"ollama", "OLLAMA_API_KEY"},
+		{"azure", "AZURE_API_KEY"},
+		{"", "_API_KEY"},
+	}
+
+	for _, tt := range tests {
+		t.Run("provider_"+tt.provider, func(t *testing.T) {
+			got := providerEnvVar(tt.provider)
+			if got != tt.want {
+				t.Errorf("providerEnvVar(%q) = %q, want %q", tt.provider, got, tt.want)
+			}
+		})
+	}
 }

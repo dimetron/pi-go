@@ -331,6 +331,142 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 	})
 }
 
+func TestNewGeminiWithExtraHeaders(t *testing.T) {
+	// Save and clear env vars to test the no-API-key path.
+	origGoogle := os.Getenv("GOOGLE_API_KEY")
+	origGemini := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GOOGLE_API_KEY", "test-google-key")
+	defer func() {
+		if origGoogle != "" {
+			os.Setenv("GOOGLE_API_KEY", origGoogle)
+		} else {
+			os.Unsetenv("GOOGLE_API_KEY")
+		}
+		if origGemini != "" {
+			os.Setenv("GEMINI_API_KEY", origGemini)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	headers := map[string]string{
+		"X-Custom-Header": "value1",
+		"X-Another":       "value2",
+	}
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", headers)
+	if err != nil {
+		t.Fatalf("NewGemini() with headers error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+}
+
+func TestNewGeminiWithBaseURL(t *testing.T) {
+	origGoogle := os.Getenv("GOOGLE_API_KEY")
+	origGemini := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GOOGLE_API_KEY", "test-google-key")
+	defer func() {
+		if origGoogle != "" {
+			os.Setenv("GOOGLE_API_KEY", origGoogle)
+		} else {
+			os.Unsetenv("GOOGLE_API_KEY")
+		}
+		if origGemini != "" {
+			os.Setenv("GEMINI_API_KEY", origGemini)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom-gemini.example.com", nil)
+	if err != nil {
+		t.Fatalf("NewGemini() with baseURL error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+}
+
+func TestNewGeminiWithBaseURLAndHeaders(t *testing.T) {
+	origGoogle := os.Getenv("GOOGLE_API_KEY")
+	origGemini := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GOOGLE_API_KEY", "test-google-key")
+	defer func() {
+		if origGoogle != "" {
+			os.Setenv("GOOGLE_API_KEY", origGoogle)
+		} else {
+			os.Unsetenv("GOOGLE_API_KEY")
+		}
+		if origGemini != "" {
+			os.Setenv("GEMINI_API_KEY", origGemini)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	headers := map[string]string{"X-Custom": "val"}
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom.example.com", headers)
+	if err != nil {
+		t.Fatalf("NewGemini() with baseURL+headers error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+}
+
+func TestNewGeminiWithGeminiAPIKeyEnv(t *testing.T) {
+	origGoogle := os.Getenv("GOOGLE_API_KEY")
+	origGemini := os.Getenv("GEMINI_API_KEY")
+	os.Unsetenv("GOOGLE_API_KEY")
+	os.Setenv("GEMINI_API_KEY", "test-gemini-key")
+	defer func() {
+		if origGoogle != "" {
+			os.Setenv("GOOGLE_API_KEY", origGoogle)
+		} else {
+			os.Unsetenv("GOOGLE_API_KEY")
+		}
+		if origGemini != "" {
+			os.Setenv("GEMINI_API_KEY", origGemini)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
+	if err != nil {
+		t.Fatalf("NewGemini() with GEMINI_API_KEY error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+}
+
+func TestNewGeminiNoAPIKeyEnvVars(t *testing.T) {
+	origGoogle := os.Getenv("GOOGLE_API_KEY")
+	origGemini := os.Getenv("GEMINI_API_KEY")
+	os.Unsetenv("GOOGLE_API_KEY")
+	os.Unsetenv("GEMINI_API_KEY")
+	defer func() {
+		if origGoogle != "" {
+			os.Setenv("GOOGLE_API_KEY", origGoogle)
+		} else {
+			os.Unsetenv("GOOGLE_API_KEY")
+		}
+		if origGemini != "" {
+			os.Setenv("GEMINI_API_KEY", origGemini)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	// Without API keys, NewGemini may still succeed (using ADC) or fail depending on environment.
+	// We just verify it doesn't panic.
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
+	_ = llm
+	_ = err
+}
+
 func TestHeaderTransport(t *testing.T) {
 	headers := map[string]string{
 		"X-Username":    "dimetron",

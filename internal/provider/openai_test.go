@@ -190,6 +190,218 @@ func TestOaiFunctionResponseContent(t *testing.T) {
 	}
 }
 
+func TestOaiFunctionResponseContentEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		resp any
+		want string
+	}{
+		{"nil input", nil, ""},
+		{"string input", "hello world", "hello world"},
+		{"empty string input", "", ""},
+		{"map with result key", map[string]any{"result": "ok"}, "ok"},
+		{"map with content array", map[string]any{"content": []any{map[string]any{"text": "extracted"}}}, "extracted"},
+		{"map with content array missing text", map[string]any{"content": []any{map[string]any{"type": "image"}}}, `{"content":[{"type":"image"}]}`},
+		{"map with content array non-map item", map[string]any{"content": []any{"plain string"}}, `{"content":["plain string"]}`},
+		{"map with empty content array", map[string]any{"content": []any{}}, `{"content":[]}`},
+		{"map with content not array", map[string]any{"content": "not-array"}, `{"content":"not-array"}`},
+		{"map with neither result nor content", map[string]any{"status": "done"}, `{"status":"done"}`},
+		{"map with both content and result prefers content", map[string]any{
+			"content": []any{map[string]any{"text": "from-content"}},
+			"result":  "from-result",
+		}, "from-content"},
+		{"number input", 42, "42"},
+		{"bool input", true, "true"},
+		{"slice input", []string{"a", "b"}, `["a","b"]`},
+		{"map with result non-string", map[string]any{"result": 123}, `{"result":123}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := oaiFunctionResponseContent(tt.resp)
+			if got != tt.want {
+				t.Errorf("oaiFunctionResponseContent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewOpenAIWithBaseURL(t *testing.T) {
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "https://custom-api.example.com/v1", nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI() with baseURL error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewOpenAI() returned nil")
+	}
+	if llm.Name() != "gpt-4o" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "gpt-4o")
+	}
+}
+
+func TestNewOpenAIWithExtraHeaders(t *testing.T) {
+	headers := map[string]string{
+		"X-Custom-Header": "custom-value",
+		"X-Org-ID":        "org-123",
+	}
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "", headers)
+	if err != nil {
+		t.Fatalf("NewOpenAI() with headers error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewOpenAI() returned nil")
+	}
+	if llm.Name() != "gpt-4o" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "gpt-4o")
+	}
+}
+
+func TestNewOpenAIWithBaseURLAndHeaders(t *testing.T) {
+	headers := map[string]string{"X-Custom": "value"}
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "https://custom.example.com", headers)
+	if err != nil {
+		t.Fatalf("NewOpenAI() with baseURL+headers error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewOpenAI() returned nil")
+	}
+}
+
+func TestNewOpenAIEmptyAPIKey(t *testing.T) {
+	_, err := NewOpenAI(context.Background(), "gpt-4o", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for empty API key")
+	}
+}
+
+func TestOaiContentsToMessagesEdgeCases(t *testing.T) {
+	t.Run("nil content entries are skipped", func(t *testing.T) {
+		contents := []*genai.Content{
+			nil,
+			{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+			nil,
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+	})
+
+	t.Run("nil parts in content are skipped", func(t *testing.T) {
+		contents := []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{nil, {Text: "Hello"}, nil}},
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+	})
+
+	t.Run("system instruction with multiple parts", func(t *testing.T) {
+		config := &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "Part one."},
+					nil,
+					{Text: "Part two."},
+				},
+			},
+		}
+		contents := []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		}
+		_, sysInstr := oaiContentsToMessages(contents, config)
+		if sysInstr != "Part one.\nPart two." {
+			t.Errorf("system instruction = %q, want %q", sysInstr, "Part one.\nPart two.")
+		}
+	})
+
+	t.Run("system role content is skipped", func(t *testing.T) {
+		contents := []*genai.Content{
+			{Role: " system ", Parts: []*genai.Part{{Text: "ignored"}}},
+			{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+	})
+
+	t.Run("assistant message with text and function calls", func(t *testing.T) {
+		fc := genai.NewPartFromFunctionCall("my_tool", map[string]any{"arg": "val"})
+		fc.FunctionCall.ID = "call_abc"
+
+		fr := &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:       "call_abc",
+				Name:     "my_tool",
+				Response: map[string]any{"result": "tool output text"},
+			},
+		}
+
+		contents := []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Do something"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "I will call the tool"}, fc}},
+			{Role: "user", Parts: []*genai.Part{fr}},
+		}
+
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		// user + assistant(text+tool_calls) + tool_response
+		if len(msgs) != 3 {
+			t.Fatalf("expected 3 messages, got %d", len(msgs))
+		}
+	})
+
+	t.Run("function call without matching response", func(t *testing.T) {
+		fc := genai.NewPartFromFunctionCall("orphan_tool", map[string]any{})
+		fc.FunctionCall.ID = "call_orphan"
+
+		contents := []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Call it"}}},
+			{Role: "model", Parts: []*genai.Part{fc}},
+		}
+
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		// user + assistant(tool_calls) + tool_response (with default "No response available")
+		if len(msgs) != 3 {
+			t.Fatalf("expected 3 messages, got %d", len(msgs))
+		}
+	})
+
+	t.Run("content with nil Parts slice collected for function responses", func(t *testing.T) {
+		contents := []*genai.Content{
+			{Role: "user", Parts: nil},
+			{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+	})
+
+	t.Run("empty text parts produce no message", func(t *testing.T) {
+		contents := []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: ""}}},
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 0 {
+			t.Fatalf("expected 0 messages for empty text, got %d", len(msgs))
+		}
+	})
+
+	t.Run("assistant role text message", func(t *testing.T) {
+		contents := []*genai.Content{
+			{Role: "assistant", Parts: []*genai.Part{{Text: "I am an assistant"}}},
+		}
+		msgs, _ := oaiContentsToMessages(contents, nil)
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+		if msgs[0].OfAssistant == nil {
+			t.Error("expected assistant message type")
+		}
+	})
+}
+
 func TestOpenAIModelName(t *testing.T) {
 	// Create a mock OpenAI model to test Name() method
 	llm := &openaiModel{modelName: "gpt-4o"}
