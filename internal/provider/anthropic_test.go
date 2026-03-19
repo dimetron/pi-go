@@ -228,28 +228,28 @@ func TestAntGenaiToolsToAnthropic(t *testing.T) {
 
 func TestNewLLMFactory(t *testing.T) {
 	t.Run("unsupported provider", func(t *testing.T) {
-		_, err := NewLLM(nil, Info{Provider: "unknown", Model: "test"}, "key", "", "")
+		_, err := NewLLM(context.TODO(), Info{Provider: "unknown", Model: "test"}, "key", "", "", nil)
 		if err == nil {
 			t.Fatal("expected error for unsupported provider")
 		}
 	})
 
 	t.Run("openai requires key", func(t *testing.T) {
-		_, err := NewOpenAI(nil, "gpt-4o", "", "")
+		_, err := NewOpenAI(context.TODO(), "gpt-4o", "", "", nil)
 		if err == nil {
 			t.Fatal("expected error for empty API key")
 		}
 	})
 
 	t.Run("anthropic requires key without baseURL", func(t *testing.T) {
-		_, err := NewAnthropic(nil, "claude-sonnet-4-6", "", "", "")
+		_, err := NewAnthropic(context.TODO(), "claude-sonnet-4-6", "", "", "", nil)
 		if err == nil {
 			t.Fatal("expected error for empty API key")
 		}
 	})
 
 	t.Run("anthropic allows empty key with baseURL", func(t *testing.T) {
-		llm, err := NewAnthropic(nil, "qwen2.5", "", "http://localhost:11434", "")
+		llm, err := NewAnthropic(context.TODO(), "qwen2.5", "", "http://localhost:11434", "", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -304,7 +304,7 @@ func TestAntThinkingConfig(t *testing.T) {
 
 func TestAnthropicGenerateContentErrors(t *testing.T) {
 	// Test with invalid API key to trigger error path
-	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "")
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestAnthropicGenerateContentErrors(t *testing.T) {
 
 func TestAnthropicGenerateContentStreaming(t *testing.T) {
 	// Test streaming mode (will fail with invalid key, but exercises the code path)
-	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "")
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAnthropicGenerateContentStreaming(t *testing.T) {
 
 func TestAnthropicGenerateContentWithTools(t *testing.T) {
 	// Test with tools configured
-	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "")
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestAnthropicGenerateContentWithTools(t *testing.T) {
 
 func TestAnthropicGenerateContentWithModelOverride(t *testing.T) {
 	// Test with model override in request
-	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "")
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestAnthropicGenerateContentWithModelOverride(t *testing.T) {
 
 func TestAnthropicGenerateContentWithThinking(t *testing.T) {
 	// Test with thinking enabled
-	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "medium")
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key-invalid", "", "medium", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}

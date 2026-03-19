@@ -298,3 +298,50 @@ func TestLoad_MergesDefaultModelWithExistingRoles(t *testing.T) {
 	// Similar to above - Load() doesn't migrate defaultModel if roles exist
 	t.Skip("Load() migration only works when config has no roles - behavior verified manually")
 }
+
+func TestExtraHeadersFromConfig(t *testing.T) {
+	tmp := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfgDir := filepath.Join(tmp, ".pi-go")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgJSON := `{
+		"roles": {"default": {"model": "gpt-4o"}},
+		"extraHeaders": {
+			"username": "dimetron",
+			"application": "kagent"
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if len(cfg.ExtraHeaders) != 2 {
+		t.Fatalf("expected 2 extra headers, got %d", len(cfg.ExtraHeaders))
+	}
+	if cfg.ExtraHeaders["username"] != "dimetron" {
+		t.Errorf("username = %q, want %q", cfg.ExtraHeaders["username"], "dimetron")
+	}
+	if cfg.ExtraHeaders["application"] != "kagent" {
+		t.Errorf("application = %q, want %q", cfg.ExtraHeaders["application"], "kagent")
+	}
+}
+
+func TestExtraHeadersAbsentByDefault(t *testing.T) {
+	cfg := Defaults()
+	if cfg.ExtraHeaders != nil {
+		t.Errorf("expected nil ExtraHeaders in defaults, got %v", cfg.ExtraHeaders)
+	}
+}

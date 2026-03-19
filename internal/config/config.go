@@ -33,6 +33,7 @@ type Config struct {
 	DefaultProvider string                `json:"defaultProvider"`
 	ThinkingLevel   string                `json:"thinkingLevel"`
 	Theme           string                `json:"theme"`
+	ExtraHeaders    map[string]string     `json:"extraHeaders,omitempty"`
 	Tools           map[string]any        `json:"tools,omitempty"`
 	MCP             *MCPConfig            `json:"mcp,omitempty"`
 	Hooks           []HookConfig          `json:"hooks,omitempty"`

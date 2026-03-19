@@ -718,3 +718,65 @@ func TestExecute(t *testing.T) {
 		t.Log("Execute() returned nil - may be valid in some contexts")
 	}
 }
+
+func TestMergeExtraHeaders(t *testing.T) {
+	t.Run("both nil/empty", func(t *testing.T) {
+		result := mergeExtraHeaders(nil, nil)
+		if result != nil {
+			t.Fatalf("expected nil, got %v", result)
+		}
+	})
+
+	t.Run("config only", func(t *testing.T) {
+		cfg := map[string]string{"username": "dimetron", "application": "kagent"}
+		result := mergeExtraHeaders(cfg, nil)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 headers, got %d", len(result))
+		}
+		if result["username"] != "dimetron" {
+			t.Errorf("username = %q, want %q", result["username"], "dimetron")
+		}
+	})
+
+	t.Run("cli only", func(t *testing.T) {
+		cli := []string{"username=dimetron", "application=kagent"}
+		result := mergeExtraHeaders(nil, cli)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 headers, got %d", len(result))
+		}
+		if result["username"] != "dimetron" {
+			t.Errorf("username = %q, want %q", result["username"], "dimetron")
+		}
+	})
+
+	t.Run("cli overrides config", func(t *testing.T) {
+		cfg := map[string]string{"username": "old", "keep": "this"}
+		cli := []string{"username=new"}
+		result := mergeExtraHeaders(cfg, cli)
+		if result["username"] != "new" {
+			t.Errorf("username = %q, want %q (CLI should override config)", result["username"], "new")
+		}
+		if result["keep"] != "this" {
+			t.Errorf("keep = %q, want %q", result["keep"], "this")
+		}
+	})
+
+	t.Run("trims whitespace in cli headers", func(t *testing.T) {
+		cli := []string{" key = value "}
+		result := mergeExtraHeaders(nil, cli)
+		if result["key"] != "value" {
+			t.Errorf("key = %q, want %q", result["key"], "value")
+		}
+	})
+
+	t.Run("ignores malformed cli headers", func(t *testing.T) {
+		cli := []string{"noequals", "valid=ok"}
+		result := mergeExtraHeaders(nil, cli)
+		if len(result) != 1 {
+			t.Fatalf("expected 1 header, got %d: %v", len(result), result)
+		}
+		if result["valid"] != "ok" {
+			t.Errorf("valid = %q, want %q", result["valid"], "ok")
+		}
+	})
+}

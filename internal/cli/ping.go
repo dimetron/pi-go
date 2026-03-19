@@ -381,7 +381,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none")
+	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none", nil)
 	if llmErr != nil {
 		w("* ✗ Failed to create LLM client: %v\n", llmErr)
 		return fmt.Errorf("creating LLM for ping: %w", llmErr)
@@ -563,7 +563,7 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 	w("*   Model %s: found ✓\n", modelName)
 
 	// Step 2: Create native Ollama LLM.
-	llm, err := provider.NewOllama(ctx, modelName, baseURL, "none")
+	llm, err := provider.NewOllama(ctx, modelName, baseURL, "none", nil)
 	if err != nil {
 		return "", fmt.Errorf("create client: %w", err)
 	}

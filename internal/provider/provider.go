@@ -109,17 +109,17 @@ func CheckOllama(baseURL string) error {
 	return nil
 }
 
-// NewLLM creates a model.LLM for the given provider info, API key, optional base URL, and thinking level.
-func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
+// NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and extra headers.
+func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string, extraHeaders map[string]string) (model.LLM, error) {
 	switch info.Provider {
 	case "ollama":
-		return NewOllama(ctx, info.Model, baseURL, thinkingLevel)
+		return NewOllama(ctx, info.Model, baseURL, thinkingLevel, extraHeaders)
 	case "gemini":
-		return NewGemini(ctx, info.Model, baseURL)
+		return NewGemini(ctx, info.Model, baseURL, extraHeaders)
 	case "openai":
-		return NewOpenAI(ctx, info.Model, apiKey, baseURL)
+		return NewOpenAI(ctx, info.Model, apiKey, baseURL, extraHeaders)
 	case "anthropic":
-		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel)
+		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, extraHeaders)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

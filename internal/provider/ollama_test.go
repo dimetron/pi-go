@@ -314,21 +314,21 @@ func TestOllamaGenaiToolsToOllama(t *testing.T) {
 
 func TestNewOllamaValidation(t *testing.T) {
 	t.Run("empty model name", func(t *testing.T) {
-		_, err := NewOllama(context.Background(), "", "", "none")
+		_, err := NewOllama(context.Background(), "", "", "none", nil)
 		if err == nil {
 			t.Fatal("expected error for empty model name")
 		}
 	})
 
 	t.Run("invalid URL", func(t *testing.T) {
-		_, err := NewOllama(context.Background(), "test-model", "://bad", "none")
+		_, err := NewOllama(context.Background(), "test-model", "://bad", "none", nil)
 		if err == nil {
 			t.Fatal("expected error for invalid URL")
 		}
 	})
 
 	t.Run("default base URL", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "", "none")
+		llm, err := NewOllama(context.Background(), "test-model", "", "none", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -338,12 +338,37 @@ func TestNewOllamaValidation(t *testing.T) {
 	})
 
 	t.Run("custom base URL", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "http://custom:1234", "none")
+		llm, err := NewOllama(context.Background(), "test-model", "http://custom:1234", "none", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if llm.Name() != "test-model" {
 			t.Errorf("Name() = %q, want test-model", llm.Name())
+		}
+	})
+
+	t.Run("with extra headers", func(t *testing.T) {
+		headers := map[string]string{"X-Custom": "value"}
+		llm, err := NewOllama(context.Background(), "test-model", "", "none", headers)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("expected non-nil LLM")
+		}
+		// Verify the ollama model was created with correct name.
+		if llm.Name() != "test-model" {
+			t.Errorf("Name() = %q, want test-model", llm.Name())
+		}
+	})
+
+	t.Run("nil extra headers no transport wrapping", func(t *testing.T) {
+		llm, err := NewOllama(context.Background(), "test-model", "", "none", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("expected non-nil LLM")
 		}
 	})
 }

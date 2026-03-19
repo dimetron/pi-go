@@ -200,7 +200,7 @@ func TestOpenAIModelName(t *testing.T) {
 
 func TestOpenAIGenerateContentErrors(t *testing.T) {
 	// Test with invalid API key to trigger error path
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "")
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestOpenAIGenerateContentErrors(t *testing.T) {
 
 func TestOpenAIGenerateContentStreaming(t *testing.T) {
 	// Test streaming mode
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "")
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestOpenAIGenerateContentStreaming(t *testing.T) {
 
 func TestOpenAIGenerateContentWithTools(t *testing.T) {
 	// Test with tools configured
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "")
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestOpenAIGenerateContentWithTools(t *testing.T) {
 
 func TestOpenAIGenerateContentWithModelOverride(t *testing.T) {
 	// Test with model override in request
-	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "")
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "test-key-invalid", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)
 	}

@@ -131,7 +131,7 @@ func TestE2EMockLLMAnthropic(t *testing.T) {
 
 	// Create Anthropic provider pointing to mock server
 	// mockURL is like http://127.0.0.1:PORT - NewAnthropic will add /v1
-	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none")
+	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none", nil)
 	if err != nil {
 		t.Fatalf("Failed to create Anthropic provider: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestE2EMockLLMToolCalling(t *testing.T) {
 	}
 	defer server.Stop(context.Background())
 
-	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none")
+	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none", nil)
 	if err != nil {
 		t.Fatalf("Failed to create provider: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestE2EMockLLMStream(t *testing.T) {
 	}
 	defer server.Stop(context.Background())
 
-	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none")
+	llm, err := provider.NewAnthropic(context.Background(), "claude-sonnet-4-20250514", "test-key", mockURL, "none", nil)
 	if err != nil {
 		t.Fatalf("Failed to create provider: %v", err)
 	}

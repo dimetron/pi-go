@@ -26,7 +26,7 @@ type anthropicModel struct {
 // If baseURL is non-empty, it overrides the default API endpoint.
 // When baseURL is set, the API key is optional (for Ollama compatibility).
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
-func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string) (model.LLM, error) {
+func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, extraHeaders map[string]string) (model.LLM, error) {
 	if apiKey == "" && baseURL == "" {
 		return nil, fmt.Errorf("anthropic API key is required")
 	}
@@ -36,6 +36,9 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 	}
 	if baseURL != "" {
 		opts = append(opts, anthropicopt.WithBaseURL(baseURL))
+	}
+	for k, v := range extraHeaders {
+		opts = append(opts, anthropicopt.WithHeader(k, v))
 	}
 	client := anthropic.NewClient(opts...)
 	return &anthropicModel{modelName: modelName, client: client, thinkingLevel: thinkingLevel}, nil

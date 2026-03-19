@@ -26,13 +26,16 @@ type openaiModel struct {
 
 // NewOpenAI creates an OpenAI model.LLM.
 // If baseURL is non-empty, it overrides the default API endpoint.
-func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string) (model.LLM, error) {
+func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, extraHeaders map[string]string) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	for k, v := range extraHeaders {
+		opts = append(opts, option.WithHeader(k, v))
 	}
 	client := openai.NewClient(opts...)
 	return &openaiModel{modelName: modelName, client: client}, nil

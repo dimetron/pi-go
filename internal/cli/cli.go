@@ -30,11 +30,13 @@ import (
 )
 
 var (
-	flagModel    string
-	flagMode     string
-	flagSession  string
-	flagSocket   string
-	flagURL      string
+	flagModel   string
+	flagMode    string
+	flagSession string
+	flagSocket  string
+	flagURL     string
+	flagHeaders []string
+
 	flagContinue bool
 	flagSmol     bool
 	flagSlow     bool
@@ -65,6 +67,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagSlow, "slow", false, "Use the slow role (powerful model)")
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role (planning model)")
 	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
+	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
 
 	cmd.AddCommand(newPingCmd())
 
@@ -139,8 +142,11 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Merge extra headers: config + CLI flags (CLI wins on conflict).
+	extraHeaders := mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders)
+
 	// Create the LLM provider.
-	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel)
+	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel, extraHeaders)
 	if err != nil {
 		return fmt.Errorf("creating LLM provider: %w", err)
 	}
@@ -590,12 +596,34 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		}
 	}
 
-	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none")
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, "none", cfg.ExtraHeaders)
 	if err != nil {
 		return nil
 	}
 
 	return tui.GenerateCommitMsgFunc(llm)
+}
+
+// mergeExtraHeaders merges config extraHeaders with CLI --header flags.
+// CLI flags override config values on key conflict.
+func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[string]string {
+	if len(cfgHeaders) == 0 && len(cliHeaders) == 0 {
+		return nil
+	}
+	merged := make(map[string]string)
+	for k, v := range cfgHeaders {
+		merged[k] = v
+	}
+	for _, h := range cliHeaders {
+		key, val, ok := strings.Cut(h, "=")
+		if ok {
+			merged[strings.TrimSpace(key)] = strings.TrimSpace(val)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 // convertHooks converts config.HookConfig to extension.HookConfig.

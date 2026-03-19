@@ -56,7 +56,7 @@ func TestNewLLMWithProvider(t *testing.T) {
 		if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
 			t.Skip("skipping: no Google/Gemini API key set")
 		}
-		llm, err := NewLLM(nil, Info{Provider: "gemini", Model: "gemini-2.5-flash"}, "key", "", "")
+		llm, err := NewLLM(context.TODO(), Info{Provider: "gemini", Model: "gemini-2.5-flash"}, "key", "", "", nil)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestNewLLMWithProvider(t *testing.T) {
 		}
 	})
 	t.Run("creates openai provider", func(t *testing.T) {
-		llm, err := NewLLM(nil, Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "")
+		llm, err := NewLLM(context.TODO(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", nil)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -74,7 +74,7 @@ func TestNewLLMWithProvider(t *testing.T) {
 		}
 	})
 	t.Run("creates anthropic provider", func(t *testing.T) {
-		llm, err := NewLLM(nil, Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "")
+		llm, err := NewLLM(context.TODO(), Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "", nil)
 		if err != nil {
 			t.Fatalf("NewLLM() error: %v", err)
 		}
@@ -142,7 +142,7 @@ func TestNewGemini(t *testing.T) {
 	if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
 		t.Skip("skipping: no Google/Gemini API key set")
 	}
-	llm, err := NewGemini(nil, "gemini-2.5-flash", "")
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
 	if err != nil {
 		t.Fatalf("NewGemini() error: %v", err)
 	}
@@ -268,8 +268,100 @@ func TestResolveKnownProviders(t *testing.T) {
 }
 
 func TestNewLLMUnsupportedProvider(t *testing.T) {
-	_, err := NewLLM(context.Background(), Info{Provider: "unsupported", Model: "test"}, "key", "", "")
+	_, err := NewLLM(context.Background(), Info{Provider: "unsupported", Model: "test"}, "key", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported provider")
+	}
+}
+
+func TestNewLLMWithExtraHeaders(t *testing.T) {
+	headers := map[string]string{
+		"X-Custom":      "value1",
+		"X-Application": "test-app",
+	}
+
+	t.Run("openai with extra headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", headers)
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("anthropic with extra headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, "sk-test", "", "", headers)
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("ollama with extra headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "ollama", Model: "test-model", Ollama: true}, "", "http://localhost:11434", "", headers)
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("nil extra headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", nil)
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+
+	t.Run("empty extra headers", func(t *testing.T) {
+		llm, err := NewLLM(context.Background(), Info{Provider: "openai", Model: "gpt-4o"}, "sk-test", "", "", map[string]string{})
+		if err != nil {
+			t.Fatalf("NewLLM() error: %v", err)
+		}
+		if llm == nil {
+			t.Fatal("NewLLM() returned nil")
+		}
+	})
+}
+
+func TestHeaderTransport(t *testing.T) {
+	headers := map[string]string{
+		"X-Username":    "dimetron",
+		"X-Application": "kagent",
+	}
+
+	// Create a test server that echoes back the received headers.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range headers {
+			got := r.Header.Get(k)
+			if got != v {
+				http.Error(w, "missing header "+k, http.StatusBadRequest)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	transport := &headerTransport{
+		base:    http.DefaultTransport,
+		headers: headers,
+	}
+	client := &http.Client{Transport: transport}
+
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }

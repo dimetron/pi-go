@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 
 	"google.golang.org/adk/model"
@@ -14,7 +15,7 @@ import (
 // It reads the API key from GOOGLE_API_KEY or GEMINI_API_KEY env vars.
 // If neither is set, it falls back to Application Default Credentials.
 // If baseURL is non-empty, it overrides the default API endpoint.
-func NewGemini(ctx context.Context, modelName, baseURL string) (model.LLM, error) {
+func NewGemini(ctx context.Context, modelName, baseURL string, extraHeaders map[string]string) (model.LLM, error) {
 	cfg := &genai.ClientConfig{
 		Backend: genai.BackendGeminiAPI,
 	}
@@ -28,8 +29,18 @@ func NewGemini(ctx context.Context, modelName, baseURL string) (model.LLM, error
 		cfg.APIKey = apiKey
 	}
 
+	httpOpts := genai.HTTPOptions{}
 	if baseURL != "" {
-		cfg.HTTPOptions = genai.HTTPOptions{BaseURL: baseURL}
+		httpOpts.BaseURL = baseURL
+	}
+	if len(extraHeaders) > 0 {
+		httpOpts.Headers = make(http.Header)
+		for k, v := range extraHeaders {
+			httpOpts.Headers.Set(k, v)
+		}
+	}
+	if baseURL != "" || len(extraHeaders) > 0 {
+		cfg.HTTPOptions = httpOpts
 	}
 
 	llm, err := gemini.NewModel(ctx, modelName, cfg)
