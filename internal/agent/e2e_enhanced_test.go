@@ -546,9 +546,28 @@ func TestE2ESubagentTypes(t *testing.T) {
 		{"quick-task", "smol", false, 3, []string{"read", "write", "edit", "bash"}},
 	}
 
-	agentTypes := subagent.AgentTypes()
+	// Use DiscoverAgents with ScopeBundled to get bundled agents.
+	discovery, err := subagent.DiscoverAgents(".", subagent.ScopeBundled)
+	if err != nil {
+		t.Fatalf("DiscoverAgents: %v", err)
+	}
+
+	// Also verify LoadBundledAgents directly.
+	bundled, err := subagent.LoadBundledAgents()
+	if err != nil {
+		t.Fatalf("LoadBundledAgents: %v", err)
+	}
+	if len(bundled) < 6 {
+		t.Fatalf("expected at least 6 bundled agents, got %d", len(bundled))
+	}
+
+	// Build map from discovery result for lookups.
+	agentTypes := make(map[string]subagent.AgentConfig, len(discovery.Bundled))
+	for _, a := range discovery.Bundled {
+		agentTypes[a.Name] = a
+	}
 	if len(agentTypes) < 6 {
-		t.Fatalf("expected at least 6 agent types, got %d", len(agentTypes))
+		t.Fatalf("expected at least 6 agent types from discovery, got %d", len(agentTypes))
 	}
 
 	for _, tt := range expectedTypes {
@@ -580,17 +599,7 @@ func TestE2ESubagentTypes(t *testing.T) {
 					t.Errorf("missing expected tool %q in tools %v", want, def.Tools)
 				}
 			}
-
-			// Verify role is valid (maps to a known config role)
-			if err := subagent.ValidateType(tt.name); err != nil {
-				t.Errorf("ValidateType(%q) error: %v", tt.name, err)
-			}
 		})
-	}
-
-	// Verify unknown type is rejected
-	if err := subagent.ValidateType("nonexistent"); err == nil {
-		t.Error("expected error for unknown agent type, got nil")
 	}
 }
 
@@ -723,23 +732,23 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 	}
 
 	agentTool := agentTools[0]
-	if agentTool.Name() != "agent" {
-		t.Errorf("expected tool name 'agent', got %q", agentTool.Name())
+	if agentTool.Name() != "subagent" {
+		t.Errorf("expected tool name 'subagent', got %q", agentTool.Name())
 	}
 
 	if agentTool.Description() == "" {
 		t.Error("agent tool has empty description")
 	}
 
-	// Verify description mentions available agent types
+	// Verify description mentions key modes
 	desc := agentTool.Description()
-	for _, typeName := range []string{"explore", "plan", "designer", "reviewer", "task", "quick_task"} {
-		if !strings.Contains(desc, typeName) {
-			t.Errorf("agent tool description does not mention type %q", typeName)
+	for _, keyword := range []string{"Single", "Parallel", "Chain"} {
+		if !strings.Contains(desc, keyword) {
+			t.Errorf("subagent tool description does not mention %q", keyword)
 		}
 	}
 
-	// Verify the tool implements Declaration to check schema has type and prompt fields
+	// Verify the tool implements Declaration to check schema has agent and task fields
 	type declarator interface {
 		Declaration() *genai.FunctionDeclaration
 	}
@@ -748,8 +757,8 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 		if decl == nil {
 			t.Fatal("Declaration() returned nil")
 		}
-		if decl.Name != "agent" {
-			t.Errorf("declaration name = %q, want 'agent'", decl.Name)
+		if decl.Name != "subagent" {
+			t.Errorf("declaration name = %q, want 'subagent'", decl.Name)
 		}
 		// Marshal ParametersJsonSchema to JSON and check for required fields
 		if decl.ParametersJsonSchema != nil {
@@ -765,11 +774,11 @@ func TestE2EAgentToolRegistration(t *testing.T) {
 			if props == nil {
 				t.Error("schema missing 'properties'")
 			} else {
-				if _, ok := props["type"]; !ok {
-					t.Error("schema missing 'type' property")
+				if _, ok := props["agent"]; !ok {
+					t.Error("schema missing 'agent' property")
 				}
-				if _, ok := props["prompt"]; !ok {
-					t.Error("schema missing 'prompt' property")
+				if _, ok := props["task"]; !ok {
+					t.Error("schema missing 'task' property")
 				}
 			}
 		} else {

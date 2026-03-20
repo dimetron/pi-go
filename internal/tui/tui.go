@@ -50,9 +50,13 @@ type agentDoneMsg struct{ err error }
 
 // agentSubEventMsg carries a streamed event from a running subagent to the TUI.
 type agentSubEventMsg struct {
-	agentID string // which subagent
-	kind    string // "tool_call", "tool_result", "text"
-	content string
+	agentID      string // which subagent
+	kind         string // "tool_call", "tool_result", "text"
+	content      string
+	pipelineID   string // groups agents in same call
+	pipelineMode string // "single", "parallel", "chain"
+	pipelineStep int    // 1-based position
+	pipelineTotal int   // total agents in pipeline
 }
 
 func (agentTextMsg) agentMsg()       {}
@@ -111,9 +115,13 @@ type TokenTracker interface {
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.
 type AgentSubEvent struct {
-	AgentID string
-	Kind    string // "tool_call", "tool_result", "text_delta", etc.
-	Content string
+	AgentID      string
+	Kind         string // "tool_call", "tool_result", "text_delta", etc.
+	Content      string
+	PipelineID   string // groups agents in same call
+	Mode         string // "single", "parallel", "chain"
+	Step         int    // 1-based position in pipeline
+	Total        int    // total agents in pipeline
 }
 
 // Screen provides thread-safe access to the current TUI screen content.
@@ -142,11 +150,15 @@ type message struct {
 	content string
 	tool    string // tool name (for role=="tool")
 	toolIn  string // tool input args (for role=="tool")
-	// Subagent event stream (for tool=="agent").
-	agentID     string    // subagent ID for matching events
-	agentType   string    // subagent type (e.g. "task", "explore")
-	agentTitle  string    // short description from prompt
-	agentEvents []agentEv // streamed events from the subagent
+	// Subagent event stream (for tool=="agent" or tool=="subagent").
+	agentID       string    // subagent ID for matching events
+	agentType     string    // subagent type (e.g. "task", "explore")
+	agentTitle    string    // short description from prompt
+	agentEvents   []agentEv // streamed events from the subagent
+	pipelineID    string    // pipeline ID for grouping
+	pipelineMode  string    // "single", "parallel", "chain"
+	pipelineStep  int       // 1-based step in pipeline
+	pipelineTotal int       // total steps in pipeline
 }
 
 // agentEv is a single event from a subagent's event stream.
@@ -365,10 +377,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newMsg := message{
 			role: "tool", tool: msg.name, toolIn: toolIn,
 		}
-		// For agent tool, store type and title for display.
-		if msg.name == "agent" {
-			newMsg.agentType, _ = msg.args["type"].(string)
+		// For agent/subagent tool, store type and title for display.
+		if msg.name == "agent" || msg.name == "subagent" {
+			// Support both legacy "type" and new "agent" key for agent name.
+			agentType, _ := msg.args["type"].(string)
+			if agentType == "" {
+				agentType, _ = msg.args["agent"].(string)
+			}
+			newMsg.agentType = agentType
+			// Support both legacy "prompt" and new "task" key.
 			prompt, _ := msg.args["prompt"].(string)
+			if prompt == "" {
+				prompt, _ = msg.args["task"].(string)
+			}
 			if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
 				prompt = prompt[:idx]
 			}
@@ -409,17 +430,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentSubEventMsg:
 		// Handle subagent event: associate with the correct agent message.
 		if msg.kind == "spawn" {
-			// Assign agentID to the most recent agent message without one.
+			// Assign agentID to the most recent agent/subagent message without one.
 			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].tool == "agent" && m.messages[i].agentID == "" {
+				if (m.messages[i].tool == "agent" || m.messages[i].tool == "subagent") && m.messages[i].agentID == "" {
 					m.messages[i].agentID = msg.agentID
+					m.messages[i].pipelineID = msg.pipelineID
+					m.messages[i].pipelineMode = msg.pipelineMode
+					m.messages[i].pipelineStep = msg.pipelineStep
+					m.messages[i].pipelineTotal = msg.pipelineTotal
 					break
 				}
 			}
 		} else {
 			// Append event to the matching agent message.
 			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].tool == "agent" && m.messages[i].agentID == msg.agentID {
+				if (m.messages[i].tool == "agent" || m.messages[i].tool == "subagent") && m.messages[i].agentID == msg.agentID {
 					evKind := msg.kind
 					if evKind == "text_delta" {
 						evKind = "text"
@@ -519,9 +544,13 @@ func waitForSubEvent(ch <-chan AgentSubEvent) tea.Cmd {
 			return nil
 		}
 		return agentSubEventMsg{
-			agentID: ev.AgentID,
-			kind:    ev.Kind,
-			content: ev.Content,
+			agentID:       ev.AgentID,
+			kind:          ev.Kind,
+			content:       ev.Content,
+			pipelineID:    ev.PipelineID,
+			pipelineMode:  ev.Mode,
+			pipelineStep:  ev.Step,
+			pipelineTotal: ev.Total,
 		}
 	}
 }
@@ -2008,7 +2037,7 @@ func (m *model) renderMessages() string {
 			b.WriteString("\n")
 
 			// Special rendering for agent tool: show type, title, and event stream.
-			if msg.tool == "agent" {
+			if msg.tool == "agent" || msg.tool == "subagent" {
 				agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("● ")
 				typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
 				titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))

@@ -271,31 +271,3 @@ func FindAgent(result *AgentDiscoveryResult, name string) (AgentConfig, bool) {
 	return AgentConfig{}, false
 }
 
-// AgentTypes returns a map of all bundled agent configurations.
-// This is a convenience wrapper around LoadBundledAgents for test access.
-func AgentTypes() map[string]AgentConfig {
-	agents, err := LoadBundledAgents()
-	if err != nil {
-		return nil
-	}
-	m := make(map[string]AgentConfig, len(agents))
-	for _, a := range agents {
-		m[a.Name] = a
-	}
-	return m
-}
-
-// ValidateType validates that an agent type name exists in the bundled agents.
-// Returns an error if the agent type is not found.
-func ValidateType(name string) error {
-	agents, err := LoadBundledAgents()
-	if err != nil {
-		return err
-	}
-	for _, a := range agents {
-		if a.Name == name {
-			return nil
-		}
-	}
-	return fmt.Errorf("unknown agent type: %s", name)
-}

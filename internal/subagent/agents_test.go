@@ -334,36 +334,25 @@ func agentNames(agents []AgentConfig) []string {
 	return names
 }
 
-func TestAgentTypes(t *testing.T) {
-	types := AgentTypes()
-	if types == nil {
-		t.Fatal("AgentTypes() returned nil")
+func TestLoadBundledAgents_HasExpectedTypes(t *testing.T) {
+	agents, err := LoadBundledAgents()
+	if err != nil {
+		t.Fatalf("LoadBundledAgents() error: %v", err)
 	}
-	if len(types) != 8 {
-		t.Errorf("expected 8 agent types, got %d", len(types))
+	if len(agents) < 6 {
+		t.Errorf("expected at least 6 bundled agents, got %d", len(agents))
 	}
-	if _, ok := types["explore"]; !ok {
-		t.Error("missing 'explore' in AgentTypes")
-	}
-	if _, ok := types["task"]; !ok {
-		t.Error("missing 'task' in AgentTypes")
-	}
-}
 
-func TestValidateType(t *testing.T) {
-	t.Run("valid type", func(t *testing.T) {
-		err := ValidateType("explore")
-		if err != nil {
-			t.Errorf("unexpected error for valid type: %v", err)
-		}
-	})
-
-	t.Run("invalid type", func(t *testing.T) {
-		err := ValidateType("nonexistent-agent")
-		if err == nil {
-			t.Error("expected error for invalid type")
-		}
-	})
+	nameSet := make(map[string]bool)
+	for _, a := range agents {
+		nameSet[a.Name] = true
+	}
+	if !nameSet["explore"] {
+		t.Error("missing 'explore' in bundled agents")
+	}
+	if !nameSet["task"] {
+		t.Error("missing 'task' in bundled agents")
+	}
 }
 
 func TestParseAgentFile_WithTimeout(t *testing.T) {

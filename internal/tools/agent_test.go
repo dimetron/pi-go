@@ -20,22 +20,35 @@ func TestAgentTool_Registration(t *testing.T) {
 		t.Fatalf("AgentTools: %v", err)
 	}
 	if len(tools) != 1 {
-		t.Fatalf("expected 1 agent tool, got %d", len(tools))
+		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
-	if tools[0].Name() != "agent" {
-		t.Errorf("expected tool name 'agent', got %q", tools[0].Name())
+	if tools[0].Name() != "subagent" {
+		t.Errorf("expected tool name 'subagent', got %q", tools[0].Name())
 	}
 }
 
-func TestNewAgentTool(t *testing.T) {
+func TestAgentTools_LegacyCallbackWrapping(t *testing.T) {
 	cfg := config.Defaults()
 	orch := subagent.NewOrchestrator(&cfg, "", nil)
 
-	tool, err := NewAgentTool(orch, nil)
+	var receivedID, receivedKind, receivedContent string
+	cb := func(agentID, eventType, content string) {
+		receivedID = agentID
+		receivedKind = eventType
+		receivedContent = content
+	}
+
+	tools, err := AgentTools(orch, cb)
 	if err != nil {
-		t.Fatalf("NewAgentTool: %v", err)
+		t.Fatalf("AgentTools: %v", err)
 	}
-	if tool.Name() != "agent" {
-		t.Errorf("expected 'agent', got %q", tool.Name())
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
+
+	// Verify the tool was created (we can't easily invoke it without a real orchestrator,
+	// but we've confirmed the wrapping compiles and the tool is registered).
+	_ = receivedID
+	_ = receivedKind
+	_ = receivedContent
 }
