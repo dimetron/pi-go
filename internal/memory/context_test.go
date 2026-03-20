@@ -54,17 +54,17 @@ func TestContextGenerator_BasicOutput(t *testing.T) {
 		{
 			SessionID: "sess-1", Project: "/my/project",
 			Title: "Added retry logic", Type: TypeFeature,
-			Text: "Implemented exponential backoff in API client",
+			Text:        "Implemented exponential backoff in API client",
 			SourceFiles: []string{"internal/api/client.go"},
-			ToolName: "Edit", DiscoveryTokens: 850,
+			ToolName:    "Edit", DiscoveryTokens: 850,
 			CreatedAt: now.Add(-30 * time.Minute),
 		},
 		{
 			SessionID: "sess-1", Project: "/my/project",
 			Title: "Fixed nil pointer", Type: TypeBugfix,
-			Text: "Session store was returning nil on missing key",
+			Text:        "Session store was returning nil on missing key",
 			SourceFiles: []string{"internal/store/session.go"},
-			ToolName: "Edit", DiscoveryTokens: 1200,
+			ToolName:    "Edit", DiscoveryTokens: 1200,
 			CreatedAt: now.Add(-25 * time.Minute),
 		},
 	}
@@ -129,11 +129,11 @@ func TestContextGenerator_TokenBudget(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		obs := &Observation{
 			SessionID: "sess-budget", Project: "/budget/project",
-			Title: strings.Repeat("Long title text ", 10),
-			Type:  TypeChange,
-			Text:  strings.Repeat("This is a long observation text that should consume tokens. ", 20),
+			Title:       strings.Repeat("Long title text ", 10),
+			Type:        TypeChange,
+			Text:        strings.Repeat("This is a long observation text that should consume tokens. ", 20),
 			SourceFiles: []string{"file.go"},
-			ToolName: "Edit", DiscoveryTokens: 100,
+			ToolName:    "Edit", DiscoveryTokens: 100,
 			CreatedAt: now.Add(-time.Duration(50-i) * time.Minute),
 		}
 		if err := store.InsertObservation(ctx, obs); err != nil {

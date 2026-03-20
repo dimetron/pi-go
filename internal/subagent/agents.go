@@ -270,4 +270,3 @@ func FindAgent(result *AgentDiscoveryResult, name string) (AgentConfig, bool) {
 	}
 	return AgentConfig{}, false
 }
-

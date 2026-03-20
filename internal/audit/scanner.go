@@ -290,4 +290,3 @@ func ExitCode(findings []ScanFinding) int {
 		return 0
 	}
 }
-
