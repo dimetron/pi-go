@@ -51,9 +51,9 @@ func (s *memMockStore) GetObservations(_ context.Context, ids []int64) ([]*memor
 	return result, nil
 }
 
-func (s *memMockStore) CreateSession(context.Context, *memory.Session) error                { return nil }
-func (s *memMockStore) CompleteSession(context.Context, string) error                       { return nil }
-func (s *memMockStore) InsertObservation(context.Context, *memory.Observation) error        { return nil }
+func (s *memMockStore) CreateSession(context.Context, *memory.Session) error         { return nil }
+func (s *memMockStore) CompleteSession(context.Context, string) error                { return nil }
+func (s *memMockStore) InsertObservation(context.Context, *memory.Observation) error { return nil }
 func (s *memMockStore) RecentObservations(context.Context, string, int) ([]*memory.Observation, error) {
 	return nil, nil
 }

@@ -71,7 +71,7 @@ type AgentResult struct {
 // SubagentEvent extends agent events with pipeline metadata for the TUI.
 type SubagentEvent struct {
 	AgentID    string `json:"agent_id"`
-	Kind       string `json:"kind"`        // "spawn", "text_delta", "tool_call", "tool_result", "error", "done"
+	Kind       string `json:"kind"` // "spawn", "text_delta", "tool_call", "tool_result", "error", "done"
 	Content    string `json:"content"`
 	PipelineID string `json:"pipeline_id"` // groups agents in same call
 	Mode       string `json:"mode"`        // "single", "parallel", "chain"

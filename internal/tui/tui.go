@@ -51,13 +51,13 @@ type agentDoneMsg struct{ err error }
 
 // agentSubEventMsg carries a streamed event from a running subagent to the TUI.
 type agentSubEventMsg struct {
-	agentID      string // which subagent
-	kind         string // "tool_call", "tool_result", "text"
-	content      string
-	pipelineID   string // groups agents in same call
-	pipelineMode string // "single", "parallel", "chain"
-	pipelineStep int    // 1-based position
-	pipelineTotal int   // total agents in pipeline
+	agentID       string // which subagent
+	kind          string // "tool_call", "tool_result", "text"
+	content       string
+	pipelineID    string // groups agents in same call
+	pipelineMode  string // "single", "parallel", "chain"
+	pipelineStep  int    // 1-based position
+	pipelineTotal int    // total agents in pipeline
 }
 
 func (agentTextMsg) agentMsg()       {}
@@ -116,13 +116,13 @@ type TokenTracker interface {
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.
 type AgentSubEvent struct {
-	AgentID      string
-	Kind         string // "tool_call", "tool_result", "text_delta", etc.
-	Content      string
-	PipelineID   string // groups agents in same call
-	Mode         string // "single", "parallel", "chain"
-	Step         int    // 1-based position in pipeline
-	Total        int    // total agents in pipeline
+	AgentID    string
+	Kind       string // "tool_call", "tool_result", "text_delta", etc.
+	Content    string
+	PipelineID string // groups agents in same call
+	Mode       string // "single", "parallel", "chain"
+	Step       int    // 1-based position in pipeline
+	Total      int    // total agents in pipeline
 }
 
 // Screen provides thread-safe access to the current TUI screen content.
