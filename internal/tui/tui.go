@@ -948,6 +948,11 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: fmt.Sprintf("Session: `%s`", m.cfg.SessionID),
 		})
+	case "/context":
+		m.messages = append(m.messages, message{
+			role:    "assistant",
+			content: m.formatContextUsage(),
+		})
 	case "/branch":
 		m.handleBranchCommand(parts[1:])
 	case "/compact":
@@ -1218,6 +1223,142 @@ func (m *model) formatModelInfo() string {
 		}
 	}
 	return b.String()
+}
+
+// formatContextUsage builds a context usage display similar to Claude Code's /context.
+func (m *model) formatContextUsage() string {
+	var b strings.Builder
+
+	// Count chars per role (rough token estimate: ~4 chars per token).
+	userChars, assistantChars, toolChars := 0, 0, 0
+	for _, msg := range m.messages {
+		size := len(msg.content) + len(msg.tool) + len(msg.toolIn)
+		switch msg.role {
+		case "user":
+			userChars += size
+		case "assistant":
+			assistantChars += size
+		default: // tool
+			toolChars += size
+		}
+	}
+	totalChars := userChars + assistantChars + toolChars
+	totalTokens := int64(totalChars / 4)
+	userTokens := int64(userChars / 4)
+	assistantTokens := int64(assistantChars / 4)
+	toolTokens := int64(toolChars / 4)
+
+	// Header.
+	b.WriteString("**Context Usage**\n\n")
+
+	// Progress bar (20 blocks).
+	const barLen = 20
+	var usedBlocks int
+	var limitTokens int64
+	if tt := m.cfg.TokenTracker; tt != nil && tt.Limit() > 0 {
+		limitTokens = tt.Limit()
+		pct := float64(tt.TotalUsed()) / float64(limitTokens)
+		usedBlocks = int(pct * barLen)
+		if usedBlocks > barLen {
+			usedBlocks = barLen
+		}
+	} else {
+		// No limit — show context proportion only.
+		if totalTokens > 0 {
+			usedBlocks = 1
+			if totalTokens > 10000 {
+				usedBlocks = int(float64(totalTokens) / 100000 * barLen)
+				if usedBlocks < 1 {
+					usedBlocks = 1
+				}
+				if usedBlocks > barLen {
+					usedBlocks = barLen
+				}
+			}
+		}
+	}
+	bar := strings.Repeat("█", usedBlocks) + strings.Repeat("░", barLen-usedBlocks)
+
+	// Model line with bar.
+	modelLabel := m.cfg.ModelName
+	if m.cfg.ProviderName != "" {
+		modelLabel = m.cfg.ProviderName + " | " + modelLabel
+	}
+	if limitTokens > 0 {
+		tt := m.cfg.TokenTracker
+		b.WriteString(fmt.Sprintf("`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
+			bar, modelLabel,
+			formatTokenCount(tt.TotalUsed()), formatTokenCount(limitTokens), tt.PercentUsed()))
+	} else {
+		b.WriteString(fmt.Sprintf("`%s`  %s · ctx ~%s tokens\n\n",
+			bar, modelLabel, formatTokenCount(totalTokens)))
+	}
+
+	// Category breakdown.
+	b.WriteString("*Estimated usage by category*\n")
+	b.WriteString(fmt.Sprintf("- **User messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(userTokens), countByRole(m.messages, "user")))
+	b.WriteString(fmt.Sprintf("- **Assistant messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(assistantTokens), countByRole(m.messages, "assistant")))
+	b.WriteString(fmt.Sprintf("- **Tool calls**: ~%s tokens (%d calls)\n",
+		formatTokenCount(toolTokens), countByRole(m.messages, "tool")))
+	b.WriteString(fmt.Sprintf("- **Total context**: ~%s tokens (%d messages)\n",
+		formatTokenCount(totalTokens), len(m.messages)))
+
+	// Daily token usage (actual, not estimated).
+	if tt := m.cfg.TokenTracker; tt != nil {
+		total := tt.TotalUsed()
+		if total > 0 {
+			b.WriteString(fmt.Sprintf("\n*Daily token usage*\n"))
+			b.WriteString(fmt.Sprintf("- **Consumed today**: %s tokens\n", formatTokenCount(total)))
+			if tt.Limit() > 0 {
+				b.WriteString(fmt.Sprintf("- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining())))
+			}
+		}
+	}
+
+	// Subagents.
+	if m.cfg.Orchestrator != nil {
+		agents := m.cfg.Orchestrator.List()
+		if len(agents) > 0 {
+			running, done, failed := 0, 0, 0
+			for _, a := range agents {
+				switch a.Status {
+				case "running":
+					running++
+				case "failed":
+					failed++
+				default:
+					done++
+				}
+			}
+			b.WriteString(fmt.Sprintf("\n*Subagents*\n"))
+			b.WriteString(fmt.Sprintf("- **Total**: %d (running: %d, done: %d, failed: %d)\n",
+				len(agents), running, done, failed))
+		}
+	}
+
+	// Compaction stats.
+	if cm := m.cfg.CompactMetrics; cm != nil {
+		stats := cm.FormatStats()
+		if stats != "" {
+			b.WriteString(fmt.Sprintf("\n*Output compaction*\n"))
+			b.WriteString(stats)
+		}
+	}
+
+	return b.String()
+}
+
+// countByRole counts messages with the given role.
+func countByRole(msgs []message, role string) int {
+	n := 0
+	for _, msg := range msgs {
+		if msg.role == role {
+			n++
+		}
+	}
+	return n
 }
 
 // runAgentLoop runs the agent and sends events to the channel.
@@ -1564,6 +1705,7 @@ var slashCommands = []string{
 	"/clear",
 	"/model",
 	"/session",
+	"/context",
 	"/branch",
 	"/compact",
 	"/agents",
@@ -1674,6 +1816,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("  `/clear`               — Clear conversation\n")
 	b.WriteString("  `/model`               — Show current model and roles\n")
 	b.WriteString("  `/session`             — Show session info\n")
+	b.WriteString("  `/context`             — Show context usage\n")
 	b.WriteString("  `/compact`             — Compact session context\n")
 	b.WriteString("  `/history [query]`     — Command history\n")
 	b.WriteString("  `/exit`, `/quit`       — Exit\n")
@@ -1774,6 +1917,8 @@ func slashCommandDesc(cmd string) string {
 		return "Show current model"
 	case "/session":
 		return "Show session info"
+	case "/context":
+		return "Show context usage"
 	case "/branch":
 		return "Manage branches"
 	case "/compact":

@@ -17,7 +17,7 @@ func TestComplete_CommandCompletion(t *testing.T) {
 		{"plan matches", "/pl", 1, "/plan"},
 		{"run matches", "/ru", 1, "/run"},
 		{"help matches", "/he", 1, "/help"},
-		{"commit matches", "/co", 2, "/commit"}, // /commit, /compact
+		{"commit matches", "/co", 3, "/commit"}, // /commit, /compact, /context
 		{"all commands", "/", 0, ""},            // "/" alone doesn't return completions (handled by showCommandList)
 		{"no match", "/xyz", 0, ""},
 		{"exact match", "/plan", 1, "/plan"},    // exact match with single candidate stays
@@ -91,6 +91,12 @@ func TestComplete_CycleSelection(t *testing.T) {
 	result.CycleSelection(1)
 	if result.Selected != 2 {
 		t.Errorf("expected selected 2, got %d", result.Selected)
+	}
+
+	// Cycle forward again (should be at 3)
+	result.CycleSelection(1)
+	if result.Selected != 3 {
+		t.Errorf("expected selected 3, got %d", result.Selected)
 	}
 
 	// Cycle forward again (wrap around to 0)
