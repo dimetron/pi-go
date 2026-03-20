@@ -254,7 +254,7 @@ type mockTokenTracker struct {
 	totalUsed   int64
 }
 
-func (m *mockTokenTracker) Limit() int64        { return m.limit }
+func (m *mockTokenTracker) Limit() int64         { return m.limit }
 func (m *mockTokenTracker) Remaining() int64     { return m.remaining }
 func (m *mockTokenTracker) PercentUsed() float64 { return m.percentUsed }
 func (m *mockTokenTracker) TotalUsed() int64     { return m.totalUsed }
@@ -1618,7 +1618,10 @@ func TestSubmit_RegularText(t *testing.T) {
 	}
 	// Clean up the goroutine
 	if m.agentCh != nil {
-		go func() { for range m.agentCh {} }()
+		go func() {
+			for range m.agentCh {
+			}
+		}()
 	}
 }
 
@@ -1637,7 +1640,10 @@ func TestSubmit_SkipsDuplicateHistory(t *testing.T) {
 		t.Errorf("expected no duplicate history, got %d entries", count)
 	}
 	if m.agentCh != nil {
-		go func() { for range m.agentCh {} }()
+		go func() {
+			for range m.agentCh {
+			}
+		}()
 	}
 }
 

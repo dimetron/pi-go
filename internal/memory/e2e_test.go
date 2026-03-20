@@ -149,14 +149,14 @@ func TestE2EFullCycle(t *testing.T) {
 
 	// Upsert session summary
 	err = store.UpsertSummary(ctx, &SessionSummary{
-		SessionID:   sessionID,
-		Project:     project,
-		Request:     "E2E integration test",
+		SessionID:    sessionID,
+		Project:      project,
+		Request:      "E2E integration test",
 		Investigated: "Full memory pipeline",
-		Learned:     "All components work together",
-		Completed:   "Pipeline validation",
-		NextSteps:   "Ship it",
-		CreatedAt:   time.Now(),
+		Learned:      "All components work together",
+		Completed:    "Pipeline validation",
+		NextSteps:    "Ship it",
+		CreatedAt:    time.Now(),
 	})
 	if err != nil {
 		t.Fatalf("UpsertSummary: %v", err)
@@ -347,4 +347,3 @@ func TestE2EPrivacyFiltering(t *testing.T) {
 		t.Fatalf("expected 1 observation, got %d", len(obs))
 	}
 }
-

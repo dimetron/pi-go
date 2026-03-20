@@ -263,15 +263,15 @@ func TestLoadBundledAgents(t *testing.T) {
 
 	// Verify all agents have required fields
 	expectedNames := map[string]bool{
-		"explore":            false,
-		"plan":               false,
-		"designer":           false,
-		"task":               false,
-		"quick-task":         false,
-		"worker":             false,
-		"code-reviewer":      false,
-		"spec-reviewer":      false,
-		"memory-compressor":  false,
+		"explore":           false,
+		"plan":              false,
+		"designer":          false,
+		"task":              false,
+		"quick-task":        false,
+		"worker":            false,
+		"code-reviewer":     false,
+		"spec-reviewer":     false,
+		"memory-compressor": false,
 	}
 
 	for _, agent := range agents {
