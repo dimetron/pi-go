@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/dimetron/pi-go/internal/audit"
 )
 
 // Skill represents a loaded skill from a SKILL.md file.
@@ -20,12 +22,36 @@ type Skill struct {
 	Tools []string
 }
 
+// AuditMode controls how skill loading handles audit findings.
+type AuditMode string
+
+const (
+	// AuditBlock blocks skills with critical findings (default).
+	AuditBlock AuditMode = "block"
+	// AuditWarn loads all skills but logs warnings for critical findings.
+	AuditWarn AuditMode = "warn"
+	// AuditSkip skips scanning entirely (backward compat for tests).
+	AuditSkip AuditMode = "skip"
+)
+
+// LoadOptions controls skill loading behavior.
+type LoadOptions struct {
+	AuditMode AuditMode
+}
+
 // LoadSkills discovers and loads skills from the given directories.
 // It searches for <dir>/<skill-name>/SKILL.md subdirectories.
 // Later directories override earlier ones (project overrides global).
+// Skills with critical audit findings are blocked when AuditMode is "block" (default).
 func LoadSkills(dirs ...string) ([]Skill, error) {
+	return LoadSkillsWithOptions(LoadOptions{AuditMode: AuditBlock}, dirs...)
+}
+
+// LoadSkillsWithOptions discovers and loads skills with configurable audit behavior.
+func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	seen := make(map[string]int) // name → index in result
 	var skills []Skill
+	var blocked []string
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -43,6 +69,23 @@ func LoadSkills(dirs ...string) ([]Skill, error) {
 			if _, err := os.Stat(skillFile); err != nil {
 				continue
 			}
+
+			// Audit the skill file before loading.
+			if opts.AuditMode != AuditSkip {
+				scanResult, scanErr := audit.ScanFile(skillFile)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", skillFile, scanErr)
+				} else if scanResult.HasCritical() {
+					if opts.AuditMode == AuditBlock {
+						blocked = append(blocked, skillFile)
+						fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", entry.Name())
+						continue
+					}
+					// AuditWarn: log but continue loading.
+					fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", entry.Name())
+				}
+			}
+
 			skill, err := parseSkillFile(skillFile)
 			if err != nil {
 				return nil, fmt.Errorf("parsing %s: %w", skillFile, err)
@@ -60,6 +103,11 @@ func LoadSkills(dirs ...string) ([]Skill, error) {
 			}
 		}
 	}
+
+	if len(blocked) > 0 {
+		fmt.Fprintf(os.Stderr, "pi-go: %d skill(s) blocked due to security audit. Run 'pi audit' for details.\n", len(blocked))
+	}
+
 	return skills, nil
 }
 
