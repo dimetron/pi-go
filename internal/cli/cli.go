@@ -511,6 +511,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			AgentEventCh:      agentEventCh,
 			TokenTracker:      tokenTracker,
 			CompactMetrics:    compactMetrics,
+			ThemeName:         cfg.Theme,
 		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{

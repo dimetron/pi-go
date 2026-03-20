@@ -404,6 +404,7 @@ var slashCommands = []string{
 	"/plan",
 	"/run",
 	"/skills",
+	"/theme",
 	"/ping",
 	"/rtk",
 	"/restart",
@@ -442,6 +443,8 @@ func slashCommandDesc(cmd string) string {
 		return "Start PDD planning session"
 	case "/run":
 		return "Execute a spec with task agent"
+	case "/theme":
+		return "Switch theme or list themes"
 	case "/skills":
 		return "List skills (create, load)"
 	case "/ping":

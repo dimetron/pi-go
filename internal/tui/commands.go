@@ -70,6 +70,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleSkillLoadCommand()
 	case "/skill-list":
 		return m.handleSkillListCommand()
+	case "/theme":
+		return m.handleThemeCommand(parts[1:])
 	case "/rtk":
 		m.handleRTKCommand(parts[1:])
 	case "/ping":
@@ -487,6 +489,9 @@ func (m *model) formatHelp() string {
 	b.WriteString("  `/plan <idea>`         — Start PDD planning session\n")
 	b.WriteString("  `/run <spec>`          — Execute a spec with task agent\n")
 
+	b.WriteString("\n**Display:**\n")
+	b.WriteString("  `/theme [name]`        — List or switch themes\n")
+
 	b.WriteString("\n**System:**\n")
 	b.WriteString("  `/agents`              — Show running subagents\n")
 	b.WriteString("  `/rtk`                 — Output compaction stats\n")
@@ -535,6 +540,65 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 		})
 		return m, nil
 	}
+}
+
+// handleThemeCommand handles /theme: list themes, switch theme, or show current.
+func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
+	if m.themeManager == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Theme system not available.",
+		})
+		return m, nil
+	}
+
+	if len(args) == 0 {
+		// Show current theme + list all.
+		var b strings.Builder
+		fmt.Fprintf(&b, "**Current theme:** `%s`\n\n", m.themeManager.CurrentName())
+		b.WriteString("**Available themes:**\n")
+		for _, t := range m.themeManager.List() {
+			marker := " "
+			if t.Name == m.themeManager.CurrentName() {
+				marker = "*"
+			}
+			icon := "🌙"
+			if t.ThemeType == "light" {
+				icon = "☀️"
+			}
+			fmt.Fprintf(&b, "%s %s `%s` — %s\n", marker, icon, t.Name, t.DisplayName)
+		}
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: b.String(),
+		})
+		return m, nil
+	}
+
+	name := strings.ToLower(args[0])
+	if err := m.themeManager.SetTheme(name); err != nil {
+		// Try to suggest close matches.
+		matches := m.themeManager.ClosestMatches(name, 5)
+		msg := fmt.Sprintf("Unknown theme `%s`.", name)
+		if len(matches) > 0 {
+			msg += " Did you mean: " + strings.Join(matches, ", ") + "?"
+		}
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: msg,
+		})
+		return m, nil
+	}
+
+	// Persist to config.
+	saveThemeToConfig(name)
+
+	cur := m.themeManager.Current()
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Theme switched to `%s` (%s). Colors will apply to new output.", cur.Name, cur.DisplayName),
+	})
+	return m, nil
 }
 
 // handleRTKCommand handles the /rtk command and subcommands.

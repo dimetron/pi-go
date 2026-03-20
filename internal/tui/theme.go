@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -213,4 +215,34 @@ func (tm *ThemeManager) ClosestMatches(query string, max int) []string {
 		matches = matches[:max]
 	}
 	return matches
+}
+
+// saveThemeToConfig persists the theme name to ~/.pi-go/config.json.
+func saveThemeToConfig(name string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	configDir := filepath.Join(home, ".pi-go")
+	configPath := filepath.Join(configDir, "config.json")
+
+	// Read existing config.
+	var raw map[string]any
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		raw = make(map[string]any)
+	} else {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			raw = make(map[string]any)
+		}
+	}
+
+	raw["theme"] = name
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(configDir, 0o755)
+	_ = os.WriteFile(configPath, out, 0o644)
 }

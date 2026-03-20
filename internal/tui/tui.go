@@ -33,6 +33,9 @@ type model struct {
 	// Status bar sub-model.
 	statusModel StatusModel
 
+	// Theme manager.
+	themeManager *ThemeManager
+
 	// Agent state.
 	running bool
 	agentCh chan agentMsg // channel for receiving agent events
@@ -73,13 +76,20 @@ func Run(ctx context.Context, cfg Config) error {
 		history = make([]string, 0)
 	}
 
+	// Initialize theme manager.
+	tm := NewThemeManager()
+	if cfg.ThemeName != "" && cfg.ThemeName != "default" {
+		_ = tm.SetTheme(cfg.ThemeName) // ignore error, falls back to tokyo-night
+	}
+
 	m := model{
-		cfg:         cfg,
-		ctx:         ctx,
-		cancel:      cancel,
-		inputModel:  NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
-		chatModel:   NewChatModel(renderer),
-		statusModel: StatusModel{GitBranch: detectBranch(cfg.WorkDir)},
+		cfg:          cfg,
+		ctx:          ctx,
+		cancel:       cancel,
+		inputModel:   NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
+		chatModel:    NewChatModel(renderer),
+		statusModel:  StatusModel{GitBranch: detectBranch(cfg.WorkDir)},
+		themeManager: tm,
 	}
 
 	p := tea.NewProgram(&m, tea.WithContext(ctx))

@@ -46,6 +46,8 @@ type Config struct {
 	TokenTracker TokenTracker
 	// CompactMetrics tracks output compaction statistics. May be nil.
 	CompactMetrics CompactStatsProvider
+	// ThemeName is the configured theme name from config. Empty or "default" uses tokyo-night.
+	ThemeName string
 }
 
 // CompactStatsProvider provides compaction statistics for TUI display.
