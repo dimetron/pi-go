@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	stdlog "log"
 	"os/exec"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1364,6 +1366,13 @@ func countByRole(msgs []message, role string) int {
 // runAgentLoop runs the agent and sends events to the channel.
 func (m *model) runAgentLoop(prompt string) {
 	defer close(m.agentCh)
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			stdlog.Printf("agent loop panicked: %v\n%s", r, stack)
+			m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
+		}
+	}()
 	log := m.cfg.Logger
 
 	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {

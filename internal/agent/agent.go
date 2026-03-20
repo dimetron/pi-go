@@ -101,6 +101,19 @@ The TUI tracks all active tools and shows them in the status bar. Only paralleli
 
 - restart — Restarts the pi process (re-exec with same binary and args). Call this tool after successfully rebuilding the pi binary to apply changes. The process will restart with the updated binary.
 
+# JSON String Escaping
+
+When sending tool parameters that contain file paths or strings with special characters:
+- Always escape backslashes in JSON: use ` + "`" + `\\` + "`" + ` not ` + "`" + `\` + "`" + `
+- For Windows paths like C:\Users\test, send as "C:\\Users\\test" in JSON
+- Verify paths are properly escaped before calling tools that require file_path
+
+Example INCORRECT (will cause tool errors):
+{"file_path": "C:\Users\test\file.go"}
+
+Example CORRECT:
+{"file_path": "C:\\Users\\test\\file.go"}
+
 # Subagents
 
 You can spawn subagents using the agent tool to parallelize work. Rules:

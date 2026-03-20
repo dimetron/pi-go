@@ -39,13 +39,40 @@ Optional: offset (start line, 1-based), limit (max lines to read).`, func(_ tool
 }
 
 func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
+	return readHandlerWithCache(sb, input, nil)
+}
+
+func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *fileContentCache) (ReadOutput, error) {
 	if input.FilePath == "" {
 		return ReadOutput{}, fmt.Errorf("file_path is required")
 	}
 
-	data, err := sb.ReadFile(input.FilePath)
-	if err != nil {
-		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+	var data []byte
+
+	// Try cache first (if available)
+	if cache != nil {
+		info, err := sb.Stat(input.FilePath)
+		if err != nil {
+			return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+		}
+		mtime := info.ModTime().UnixNano()
+
+		if cached := cache.Get(input.FilePath, mtime); cached != nil {
+			data = cached
+		} else {
+			raw, err := sb.ReadFile(input.FilePath)
+			if err != nil {
+				return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+			}
+			data = raw
+			cache.Put(input.FilePath, data, mtime)
+		}
+	} else {
+		raw, err := sb.ReadFile(input.FilePath)
+		if err != nil {
+			return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+		}
+		data = raw
 	}
 
 	lines := strings.Split(string(data), "\n")

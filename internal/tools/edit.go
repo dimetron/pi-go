@@ -37,6 +37,10 @@ Optional: replace_all (bool, default false). old_string must be unique unless re
 }
 
 func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
+	return editHandlerWithCache(sb, input, nil)
+}
+
+func editHandlerWithCache(sb *Sandbox, input EditInput, cache *fileContentCache) (EditOutput, error) {
 	if input.FilePath == "" {
 		return EditOutput{}, fmt.Errorf("file_path is required")
 	}
@@ -55,8 +59,17 @@ func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
 	content := string(data)
 	count := strings.Count(content, input.OldString)
 
+	// If not found, retry once (file may have been modified concurrently)
 	if count == 0 {
-		return EditOutput{}, fmt.Errorf("old_string not found in file")
+		data2, err2 := reReadFile(sb, input.FilePath)
+		if err2 == nil {
+			content = string(data2)
+			count = strings.Count(content, input.OldString)
+		}
+	}
+
+	if count == 0 {
+		return EditOutput{}, buildEditNotFoundError(input, content)
 	}
 	if count > 1 && !input.ReplaceAll {
 		return EditOutput{}, fmt.Errorf("old_string found %d times in file; set replace_all=true to replace all occurrences, or provide more context to make the match unique", count)
@@ -74,8 +87,39 @@ func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
 		return EditOutput{}, fmt.Errorf("writing file: %w", err)
 	}
 
+	// Invalidate cache after successful edit
+	if cache != nil {
+		cache.Invalidate(input.FilePath)
+	}
+
 	return EditOutput{
 		Path:         input.FilePath,
 		Replacements: count,
 	}, nil
+}
+
+// reReadFile re-reads a file from the sandbox (used for retry on edit miss).
+func reReadFile(sb *Sandbox, path string) ([]byte, error) {
+	return sb.ReadFile(path)
+}
+
+// buildEditNotFoundError returns an enhanced error with preview and suggestions.
+func buildEditNotFoundError(input EditInput, content string) error {
+	preview := content
+	if len(preview) > 500 {
+		preview = preview[:500] + "\n..."
+	}
+	return fmt.Errorf(`old_string not found in file
+
+Expected:
+%s
+
+File preview (first 500 chars):
+%s
+
+Suggestions:
+- Verify the exact text matches including whitespace
+- Use the Read tool to see current file content
+- Try a smaller, unique portion of the old_string`,
+		input.OldString, preview)
 }

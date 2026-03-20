@@ -1,13 +1,60 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 )
 
-// Sandbox restricts file system access to a directory tree using os.Root.
+const (
+	maxReadRetries = 3
+	readRetryDelay = 50 * time.Millisecond
+)
+
+// isTransientReadError returns true for errors that might succeed on retry.
+func isTransientReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	transient := []string{
+		"text file busy",
+		"resource temporarily unavailable",
+		"input/output error",
+	}
+	for _, t := range transient {
+		if strings.Contains(msg, t) {
+			return true
+		}
+	}
+	if errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+	return false
+}
+
+// Sandbox provides a secure file system abstraction that restricts
+// all file operations to a specific directory tree.
+//
+// SECURITY MODEL:
+//   - All file paths are resolved relative to the sandbox root
+//   - Access outside the sandbox is blocked via os.Root (Go 1.24+)
+//   - This prevents the agent from accessing sensitive files outside
+//     the working directory
+//
+// LIMITATIONS:
+//   - Files outside the sandbox cannot be accessed
+//   - Symlinks pointing outside are blocked
+//   - Absolute paths are converted to relative
+//
+// WORKAROUNDS:
+//   - Change the working directory to access different files
+//   - Use tools that explicitly access external resources (e.g., fetch URLs)
 type Sandbox struct {
 	root *os.Root
 	dir  string // absolute path of the root directory
@@ -41,9 +88,16 @@ func (s *Sandbox) Dir() string {
 	return s.dir
 }
 
-// Resolve converts an absolute or relative path to a relative path under the
-// sandbox root. os.Root enforces that the resolved path cannot escape the
-// directory tree (via ".." or symlinks).
+// Resolve converts an absolute or relative path to a relative path
+// under the sandbox root. os.Root enforces that the resolved path
+// cannot escape the directory tree (via ".." or symlinks).
+//
+// SECURITY: This is intentional. The sandbox restricts file system
+// access to prevent the agent from reading/writing files outside
+// the working directory.
+//
+// ERROR: Returns error if absolute path is outside sandbox.
+// Include sandbox path in error message for debugging.
 func (s *Sandbox) Resolve(name string) (string, error) {
 	if filepath.IsAbs(name) {
 		rel, err := filepath.Rel(s.dir, name)
@@ -56,12 +110,31 @@ func (s *Sandbox) Resolve(name string) (string, error) {
 }
 
 // ReadFile reads the named file within the sandbox.
+// Transient errors (e.g. "text file busy") are retried up to 3 times
+// with increasing delay. Non-transient errors are returned immediately.
 func (s *Sandbox) ReadFile(name string) ([]byte, error) {
 	rel, err := s.Resolve(name)
 	if err != nil {
 		return nil, err
 	}
-	return s.root.ReadFile(rel)
+
+	var lastErr error
+	for attempt := 0; attempt < maxReadRetries; attempt++ {
+		data, err := s.root.ReadFile(rel)
+		if err == nil {
+			return data, nil
+		}
+
+		if !isTransientReadError(err) {
+			return nil, err
+		}
+		lastErr = err
+
+		if attempt < maxReadRetries-1 {
+			time.Sleep(readRetryDelay * time.Duration(attempt+1))
+		}
+	}
+	return nil, lastErr
 }
 
 // WriteFile writes data to the named file within the sandbox, creating it if
