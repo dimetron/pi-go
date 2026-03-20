@@ -17,6 +17,8 @@ type Store interface {
 	RecentObservations(ctx context.Context, project string, limit int) ([]*Observation, error)
 	UpsertSummary(ctx context.Context, sum *SessionSummary) error
 	RecentSummaries(ctx context.Context, project string, limit int) ([]*SessionSummary, error)
+	Search(ctx context.Context, q SearchQuery) (*SearchResult, error)
+	Timeline(ctx context.Context, anchorID int64, before, after int) ([]*Observation, error)
 	Close() error
 }
 

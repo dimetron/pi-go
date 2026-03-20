@@ -92,6 +92,12 @@ func (s *mockStore) UpsertSummary(context.Context, *SessionSummary) error { retu
 func (s *mockStore) RecentSummaries(context.Context, string, int) ([]*SessionSummary, error) {
 	return nil, nil
 }
+func (s *mockStore) Search(context.Context, SearchQuery) (*SearchResult, error) {
+	return &SearchResult{}, nil
+}
+func (s *mockStore) Timeline(context.Context, int64, int, int) ([]*Observation, error) {
+	return nil, nil
+}
 func (s *mockStore) Close() error { return nil }
 
 func makeRaw(toolName string) RawObservation {
