@@ -17,7 +17,7 @@ import (
 
 func TestHandleSlashCommandHelp(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, cmd := m.handleSlashCommand("/help")
@@ -26,53 +26,55 @@ func TestHandleSlashCommandHelp(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd for /help")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if mm.messages[0].role != "assistant" {
-		t.Errorf("expected assistant role, got %q", mm.messages[0].role)
+	if mm.chatModel.Messages[0].role != "assistant" {
+		t.Errorf("expected assistant role, got %q", mm.chatModel.Messages[0].role)
 	}
 }
 
 func TestHandleSlashCommandClear(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/clear"},
-		messages: []message{
-			{role: "user", content: "hello"},
-			{role: "assistant", content: "hi"},
+		chatModel: ChatModel{
+			Messages: []message{
+				{role: "user", content: "hello"},
+				{role: "assistant", content: "hi"},
+			},
 		},
 	}
 
 	newM, _ := m.handleSlashCommand("/clear")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 0 {
-		t.Errorf("expected 0 messages after /clear, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 0 {
+		t.Errorf("expected 0 messages after /clear, got %d", len(mm.chatModel.Messages))
 	}
 }
 
 func TestHandleSlashCommandModel(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{ModelName: "test-model"},
 	}
 
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "Current model: **test-model**") {
-		t.Errorf("unexpected content: %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Current model: **test-model**") {
+		t.Errorf("unexpected content: %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			ModelName:  "claude-sonnet-4-6",
 			ActiveRole: "default",
@@ -87,10 +89,10 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	content := mm.messages[0].content
+	content := mm.chatModel.Messages[0].content
 	if !strings.Contains(content, "Configured roles:") {
 		t.Errorf("expected roles section, got %q", content)
 	}
@@ -108,7 +110,7 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			ModelName:  "gemini-2.5-flash",
 			ActiveRole: "smol",
@@ -122,7 +124,7 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	content := mm.messages[0].content
+	content := mm.chatModel.Messages[0].content
 	if !strings.Contains(content, "(role: smol)") {
 		t.Errorf("expected active role indicator, got %q", content)
 	}
@@ -131,7 +133,7 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 func TestHandleSlashCommandExit(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/exit"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, cmd := m.handleSlashCommand("/exit")
@@ -148,23 +150,23 @@ func TestHandleSlashCommandExit(t *testing.T) {
 func TestHandleSlashCommandUnknown(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/unknown"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/unknown")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if mm.messages[0].content != "Unknown command: `/unknown`. Type `/help` for available commands." {
-		t.Errorf("unexpected content: %q", mm.messages[0].content)
+	if mm.chatModel.Messages[0].content != "Unknown command: `/unknown`. Type `/help` for available commands." {
+		t.Errorf("unexpected content: %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestUpdateWindowSize(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -181,10 +183,12 @@ func TestUpdateWindowSize(t *testing.T) {
 func TestAgentTextMsg(t *testing.T) {
 	m := &model{
 		running:   true,
-		streaming: "",
-		messages: []message{
-			{role: "user", content: "hello"},
-			{role: "assistant", content: ""},
+		chatModel: ChatModel{
+			Streaming: "",
+			Messages: []message{
+				{role: "user", content: "hello"},
+				{role: "assistant", content: ""},
+			},
 		},
 		agentCh: make(chan agentMsg, 1),
 	}
@@ -192,20 +196,22 @@ func TestAgentTextMsg(t *testing.T) {
 	newM, _ := m.Update(agentTextMsg{text: "Hello "})
 	mm := newM.(*model)
 
-	if mm.streaming != "Hello " {
-		t.Errorf("expected streaming %q, got %q", "Hello ", mm.streaming)
+	if mm.chatModel.Streaming != "Hello " {
+		t.Errorf("expected streaming %q, got %q", "Hello ", mm.chatModel.Streaming)
 	}
-	if mm.messages[1].content != "Hello " {
-		t.Errorf("expected message content %q, got %q", "Hello ", mm.messages[1].content)
+	if mm.chatModel.Messages[1].content != "Hello " {
+		t.Errorf("expected message content %q, got %q", "Hello ", mm.chatModel.Messages[1].content)
 	}
 }
 
 func TestAgentDoneMsg(t *testing.T) {
 	m := &model{
 		running:   true,
-		streaming: "accumulated text",
+		chatModel: ChatModel{
+			Streaming: "accumulated text",
+			Messages: make([]message, 0),
+		},
 		agentCh:   make(chan agentMsg, 1),
-		messages:  make([]message, 0),
 	}
 
 	newM, _ := m.Update(agentDoneMsg{})
@@ -214,15 +220,15 @@ func TestAgentDoneMsg(t *testing.T) {
 	if mm.running {
 		t.Error("expected running to be false after agentDoneMsg")
 	}
-	if mm.streaming != "" {
-		t.Errorf("expected streaming to be cleared, got %q", mm.streaming)
+	if mm.chatModel.Streaming != "" {
+		t.Errorf("expected streaming to be cleared, got %q", mm.chatModel.Streaming)
 	}
 }
 
 func TestAgentToolCallMsg(t *testing.T) {
 	m := &model{
 		running:  true,
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		agentCh:  make(chan agentMsg, 1),
 	}
 
@@ -238,7 +244,7 @@ func TestAgentToolResultMsg(t *testing.T) {
 	m := &model{
 		running:    true,
 		activeTool: "read",
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		agentCh:    make(chan agentMsg, 1),
 	}
 
@@ -257,7 +263,7 @@ func TestHistoryNavigation(t *testing.T) {
 			HistoryIdx: -1,
 			CyclingIdx: -1,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Press Up → should get "third" (last entry)
@@ -292,7 +298,7 @@ func TestHistoryNavigation(t *testing.T) {
 func TestTextInput(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{CyclingIdx: -1},
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Type "hi"
@@ -320,9 +326,9 @@ func TestRenderMessagesEmpty(t *testing.T) {
 	m := &model{
 		width:    80,
 		height:   24,
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if output == "" {
 		t.Error("expected welcome message for empty conversation")
 	}
@@ -353,10 +359,10 @@ func TestViewLoading(t *testing.T) {
 
 func TestMaxScrollEmpty(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		height:   24,
 	}
-	if max := m.maxScroll(); max != 0 {
+	if max := m.chatModel.MaxScroll(m.height); max != 0 {
 		t.Errorf("expected 0, got %d", max)
 	}
 }
@@ -364,36 +370,36 @@ func TestMaxScrollEmpty(t *testing.T) {
 func TestHandleSlashCommandSession(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/session"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionID: "test-session-123"},
 	}
 
 	newM, _ := m.handleSlashCommand("/session")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if mm.messages[0].content != "Session: `test-session-123`" {
-		t.Errorf("unexpected content: %q", mm.messages[0].content)
+	if mm.chatModel.Messages[0].content != "Session: `test-session-123`" {
+		t.Errorf("unexpected content: %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommandBranchNoService(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/branch experiment"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: nil},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch experiment")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "not available") {
-		t.Errorf("expected 'not available' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "not available") {
+		t.Errorf("expected 'not available' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -401,18 +407,18 @@ func TestHandleSlashCommandBranchUsage(t *testing.T) {
 	svc := setupTestSessionService(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: svc, SessionID: "s1"},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "Usage") {
-		t.Errorf("expected usage message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Usage") {
+		t.Errorf("expected usage message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -420,18 +426,18 @@ func TestHandleSlashCommandBranchCreate(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch experiment"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch experiment")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "Created and switched to branch") {
-		t.Errorf("expected success message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Created and switched to branch") {
+		t.Errorf("expected success message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -439,18 +445,18 @@ func TestHandleSlashCommandBranchList(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch list"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch list")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "main") {
-		t.Errorf("expected branch list containing 'main', got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "main") {
+		t.Errorf("expected branch list containing 'main', got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -458,56 +464,56 @@ func TestHandleSlashCommandBranchSwitchNoName(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch switch"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch switch")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "Usage") {
-		t.Errorf("expected usage message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Usage") {
+		t.Errorf("expected usage message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommandCompactNoService(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/compact"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionService: nil},
 	}
 
 	newM, _ := m.handleSlashCommand("/compact")
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "not available") {
-		t.Errorf("expected 'not available' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "not available") {
+		t.Errorf("expected 'not available' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommandHelpContainsBranch(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/help"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/help")
 	mm := newM.(*model)
 
-	if !strings.Contains(mm.messages[0].content, "/branch") {
-		t.Errorf("expected /help to mention /branch, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "/branch") {
+		t.Errorf("expected /help to mention /branch, got %q", mm.chatModel.Messages[0].content)
 	}
-	if !strings.Contains(mm.messages[0].content, "/compact") {
-		t.Errorf("expected /help to mention /compact, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "/compact") {
+		t.Errorf("expected /help to mention /compact, got %q", mm.chatModel.Messages[0].content)
 	}
-	if !strings.Contains(mm.messages[0].content, "/session") {
-		t.Errorf("expected /help to mention /session, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "/session") {
+		t.Errorf("expected /help to mention /session, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -540,13 +546,13 @@ func TestSlashCommands_RunRegistered(t *testing.T) {
 func TestHelpText_IncludesPlanAndRun(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/help"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/help")
 	mm := newM.(*model)
 
-	content := mm.messages[0].content
+	content := mm.chatModel.Messages[0].content
 	if !strings.Contains(content, "/plan") {
 		t.Errorf("expected /help to mention /plan, got %q", content)
 	}
@@ -619,14 +625,14 @@ func TestMatchingSlashCommands_NoMatch(t *testing.T) {
 
 func TestShowCommandList(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.showCommandList()
 
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	content := m.messages[0].content
+	content := m.chatModel.Messages[0].content
 	if !strings.Contains(content, "Commands:") {
 		t.Error("expected 'Commands:' header")
 	}
@@ -657,16 +663,16 @@ func TestSlashCommandDesc_AllCommandsHaveDescs(t *testing.T) {
 func TestTabOnSlash_ShowsCommandList(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/"},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Simulate Tab press.
 	m.showCommandList()
 
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected command list message")
 	}
-	content := m.messages[0].content
+	content := m.chatModel.Messages[0].content
 	if !strings.Contains(content, "/plan") {
 		t.Error("command list should include /plan")
 	}
@@ -701,27 +707,27 @@ func TestFormatTokenCount(t *testing.T) {
 
 func TestHandleHistoryCommand_Empty(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleHistoryCommand(nil)
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "No command history") {
-		t.Errorf("expected no history message, got %q", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "No command history") {
+		t.Errorf("expected no history message, got %q", m.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 	m := &model{
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/clear"}},
 	}
 	m.handleHistoryCommand(nil)
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	content := m.messages[0].content
+	content := m.chatModel.Messages[0].content
 	if !strings.Contains(content, "/help") || !strings.Contains(content, "/ping") {
 		t.Errorf("expected history entries, got %q", content)
 	}
@@ -729,11 +735,11 @@ func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 
 func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 	m := &model{
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/plan"}},
 	}
 	m.handleHistoryCommand([]string{"p"})
-	content := m.messages[0].content
+	content := m.chatModel.Messages[0].content
 	if !strings.Contains(content, "/ping") || !strings.Contains(content, "/plan") {
 		t.Errorf("expected filtered entries with 'p', got %q", content)
 	}
@@ -744,26 +750,28 @@ func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 
 func TestHandleHistoryCommand_FilterNoMatch(t *testing.T) {
 	m := &model{
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []string{"/help", "/model"}},
 	}
 	m.handleHistoryCommand([]string{"xyz"})
-	if !strings.Contains(m.messages[0].content, "No history matching") {
-		t.Errorf("expected no match message, got %q", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "No history matching") {
+		t.Errorf("expected no match message, got %q", m.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleCommitDone_Success(t *testing.T) {
 	m := &model{
-		messages: []message{
-			{role: "assistant", content: "Committing..."},
+		chatModel: ChatModel{
+			Messages: []message{
+				{role: "assistant", content: "Committing..."},
+			},
 		},
 		commit: &commitState{phase: "committing"},
 	}
 	newM, _ := m.handleCommitDone(commitDoneMsg{output: "commit abc123"})
 	mm := newM.(*model)
 	found := false
-	for _, msg := range mm.messages {
+	for _, msg := range mm.chatModel.Messages {
 		if strings.Contains(msg.content, "Committed successfully") {
 			found = true
 		}
@@ -775,13 +783,13 @@ func TestHandleCommitDone_Success(t *testing.T) {
 
 func TestHandleCommitDone_Error(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		commit:   &commitState{phase: "committing"},
 	}
 	newM, _ := m.handleCommitDone(commitDoneMsg{err: fmt.Errorf("git error")})
 	mm := newM.(*model)
 	found := false
-	for _, msg := range mm.messages {
+	for _, msg := range mm.chatModel.Messages {
 		if strings.Contains(msg.content, "git error") {
 			found = true
 		}
@@ -820,8 +828,10 @@ func TestRenderStatusBar_ContextEstimate(t *testing.T) {
 	m := &model{
 		cfg:   Config{ModelName: "test"},
 		width: 120,
-		messages: []message{
-			{content: strings.Repeat("a", 4000)}, // ~1k tokens
+		chatModel: ChatModel{
+			Messages: []message{
+				{content: strings.Repeat("a", 4000)}, // ~1k tokens
+			},
 		},
 	}
 	bar := m.renderStatusBar()
@@ -832,50 +842,50 @@ func TestRenderStatusBar_ContextEstimate(t *testing.T) {
 
 func TestMaxScroll_EmptyMessages(t *testing.T) {
 	m := &model{
-		messages: nil,
+		chatModel: ChatModel{Messages: nil},
 		height:   40,
 	}
-	if m.maxScroll() != 0 {
+	if m.chatModel.MaxScroll(m.height) != 0 {
 		t.Error("maxScroll should be 0 for empty messages")
 	}
 }
 
 func TestMaxScroll_SmallHeight(t *testing.T) {
 	m := &model{
-		messages: []message{{content: "test"}},
+		chatModel: ChatModel{Messages: []message{{content: "test"}}},
 		height:   0,
 	}
-	if m.maxScroll() != 0 {
+	if m.chatModel.MaxScroll(m.height) != 0 {
 		t.Error("maxScroll should be 0 for zero height")
 	}
 }
 
 func TestHandleSlashCommand_Session(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{SessionID: "test-session-123"},
 	}
 	newM, _ := m.handleSlashCommand("/session")
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "test-session-123") {
-		t.Errorf("expected session ID, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "test-session-123") {
+		t.Errorf("expected session ID, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommand_Unknown(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	newM, _ := m.handleSlashCommand("/nonexistent")
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "Unknown command") {
-		t.Errorf("expected unknown command message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Unknown command") {
+		t.Errorf("expected unknown command message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommand_Exit(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	newM, cmd := m.handleSlashCommand("/exit")
 	mm := newM.(*model)
@@ -890,7 +900,7 @@ func TestHandleSlashCommand_Exit(t *testing.T) {
 func TestHandleSlashCommand_Ping(t *testing.T) {
 	mockLLM := &pingMockLLM{name: "test", response: "Pong"}
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{LLM: mockLLM},
 	}
 	newM, cmd := m.handleSlashCommand("/ping")
@@ -898,35 +908,35 @@ func TestHandleSlashCommand_Ping(t *testing.T) {
 	if cmd == nil {
 		t.Error("expected non-nil cmd for /ping")
 	}
-	if len(mm.messages) < 1 {
+	if len(mm.chatModel.Messages) < 1 {
 		t.Fatal("expected placeholder message")
 	}
 }
 
 func TestHandleSkillCreateCommand_NoArgs(t *testing.T) {
-	m := &model{messages: make([]message, 0)}
+	m := &model{chatModel: ChatModel{Messages: make([]message, 0)}}
 	newM, cmd := m.handleSkillCreateCommand(nil)
 	mm := newM.(*model)
 	if cmd != nil {
 		t.Error("expected nil cmd")
 	}
-	if !strings.Contains(mm.messages[0].content, "Usage:") {
-		t.Errorf("expected usage message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Usage:") {
+		t.Errorf("expected usage message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSkillCreateCommand_InvalidName(t *testing.T) {
-	m := &model{messages: make([]message, 0)}
+	m := &model{chatModel: ChatModel{Messages: make([]message, 0)}}
 	newM, _ := m.handleSkillCreateCommand([]string{"bad name!"})
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "Invalid skill name") {
-		t.Errorf("expected invalid name error, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Invalid skill name") {
+		t.Errorf("expected invalid name error, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSkillCreateCancel(t *testing.T) {
 	m := &model{
-		messages:           make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		pendingSkillCreate: &pendingSkillCreate{name: "test"},
 	}
 	newM, _ := m.handleSkillCreateCancel()
@@ -934,23 +944,23 @@ func TestHandleSkillCreateCancel(t *testing.T) {
 	if mm.pendingSkillCreate != nil {
 		t.Error("pending should be cleared")
 	}
-	if !strings.Contains(mm.messages[0].content, "cancelled") {
-		t.Errorf("expected cancelled message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "cancelled") {
+		t.Errorf("expected cancelled message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSkillListCommand_Empty(t *testing.T) {
-	m := &model{messages: make([]message, 0), cfg: Config{}}
+	m := &model{chatModel: ChatModel{Messages: make([]message, 0)}, cfg: Config{}}
 	newM, _ := m.handleSkillListCommand()
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "No skills loaded") {
-		t.Errorf("expected no skills message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "No skills loaded") {
+		t.Errorf("expected no skills message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSkillListCommand_WithSkills(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			Skills: []extension.Skill{
 				{Name: "test-skill", Description: "A test skill"},
@@ -961,7 +971,7 @@ func TestHandleSkillListCommand_WithSkills(t *testing.T) {
 	}
 	newM, _ := m.handleSkillListCommand()
 	mm := newM.(*model)
-	content := mm.messages[0].content
+	content := mm.chatModel.Messages[0].content
 	if !strings.Contains(content, "/test-skill") {
 		t.Errorf("expected skill name, got %q", content)
 	}
@@ -974,46 +984,46 @@ func TestHandleSkillListCommand_WithSkills(t *testing.T) {
 }
 
 func TestHandleSkillLoadCommand_Empty(t *testing.T) {
-	m := &model{messages: make([]message, 0), cfg: Config{}}
+	m := &model{chatModel: ChatModel{Messages: make([]message, 0)}, cfg: Config{}}
 	newM, _ := m.handleSkillLoadCommand()
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "no skills found") {
-		t.Errorf("expected no skills message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "no skills found") {
+		t.Errorf("expected no skills message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommand_Model(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg:      Config{ModelName: "gpt-4o", ActiveRole: "default", Roles: map[string]config.RoleConfig{"default": {Model: "gpt-4o"}}},
 	}
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "gpt-4o") {
-		t.Errorf("expected model name in output, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "gpt-4o") {
+		t.Errorf("expected model name in output, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestHandleSlashCommand_Clear(t *testing.T) {
 	m := &model{
-		messages: []message{{role: "user", content: "hello"}, {role: "assistant", content: "hi"}},
+		chatModel: ChatModel{Messages: []message{{role: "user", content: "hello"}, {role: "assistant", content: "hi"}}},
 	}
 	newM, _ := m.handleSlashCommand("/clear")
 	mm := newM.(*model)
-	if len(mm.messages) != 0 {
-		t.Errorf("expected 0 messages after /clear, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 0 {
+		t.Errorf("expected 0 messages after /clear, got %d", len(mm.chatModel.Messages))
 	}
 }
 
 func TestHandleSlashCommand_History(t *testing.T) {
 	m := &model{
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []string{"/help", "/model"}},
 	}
 	newM, _ := m.handleSlashCommand("/history")
 	mm := newM.(*model)
-	if !strings.Contains(mm.messages[0].content, "/help") {
-		t.Errorf("expected history output, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "/help") {
+		t.Errorf("expected history output, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -1047,14 +1057,14 @@ func setupTestSessionWithID(t *testing.T) (*pisession.FileService, string) {
 func TestHandleAgentsCommand_NoOrchestrator(t *testing.T) {
 	m := &model{
 		cfg:      Config{},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleAgentsCommand()
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if m.messages[0].content != "Subagent system not available." {
-		t.Errorf("unexpected message: %q", m.messages[0].content)
+	if m.chatModel.Messages[0].content != "Subagent system not available." {
+		t.Errorf("unexpected message: %q", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -1064,13 +1074,13 @@ func TestHandleAgentsCommand_EmptyList(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleAgentsCommand()
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if m.messages[0].content != "No subagents have been spawned yet." {
-		t.Errorf("unexpected message: %q", m.messages[0].content)
+	if m.chatModel.Messages[0].content != "No subagents have been spawned yet." {
+		t.Errorf("unexpected message: %q", m.chatModel.Messages[0].content)
 	}
 }

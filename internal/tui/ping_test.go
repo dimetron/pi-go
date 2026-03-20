@@ -180,7 +180,7 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 	m := &model{
 		ctx:        ctx,
 		inputModel: InputModel{Text: "/ping"},
-		messages:   make([]message, 0),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg:        Config{ActiveRole: "default", LLM: mockLLM},
 	}
 
@@ -190,11 +190,11 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 	if cmd == nil {
 		t.Error("expected non-nil cmd for async ping")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 placeholder message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 placeholder message, got %d", len(mm.chatModel.Messages))
 	}
-	if mm.messages[0].content != "Pinging model..." {
-		t.Errorf("expected placeholder 'Pinging model...', got %q", mm.messages[0].content)
+	if mm.chatModel.Messages[0].content != "Pinging model..." {
+		t.Errorf("expected placeholder 'Pinging model...', got %q", mm.chatModel.Messages[0].content)
 	}
 	if mm.inputModel.Text != "" {
 		t.Errorf("input should be cleared, got %q", mm.inputModel.Text)
@@ -204,7 +204,7 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 func TestHandlePingCommand_NoLLM(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/ping"},
-		messages:   make([]message, 0),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg:        Config{},
 	}
 
@@ -214,45 +214,45 @@ func TestHandlePingCommand_NoLLM(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd when no LLM")
 	}
-	if !strings.Contains(mm.messages[0].content, "No LLM configured") {
-		t.Errorf("expected no LLM message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "No LLM configured") {
+		t.Errorf("expected no LLM message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestPingDoneMsg_ReplacesPlaceholder(t *testing.T) {
 	m := &model{
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "assistant", content: "Pinging model..."},
-		},
+		}},
 	}
 
 	msg := pingDoneMsg{output: "**Provider:** test\n✓ Model **test** is ALIVE"}
 	newM, _ := m.Update(msg)
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message (replaced), got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message (replaced), got %d", len(mm.chatModel.Messages))
 	}
-	if strings.Contains(mm.messages[0].content, "Pinging model...") {
+	if strings.Contains(mm.chatModel.Messages[0].content, "Pinging model...") {
 		t.Error("placeholder should have been replaced")
 	}
-	if !strings.Contains(mm.messages[0].content, "is ALIVE") {
-		t.Errorf("expected ALIVE in output, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "is ALIVE") {
+		t.Errorf("expected ALIVE in output, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestPingDoneMsg_ErrorIncluded(t *testing.T) {
 	m := &model{
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "assistant", content: "Pinging model..."},
-		},
+		}},
 	}
 
 	msg := pingDoneMsg{output: "**Provider:** test\n", err: fmt.Errorf("timeout")}
 	newM, _ := m.Update(msg)
 	mm := newM.(*model)
 
-	if !strings.Contains(mm.messages[0].content, "Ping failed: timeout") {
-		t.Errorf("expected error in output, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Ping failed: timeout") {
+		t.Errorf("expected error in output, got %q", mm.chatModel.Messages[0].content)
 	}
 }

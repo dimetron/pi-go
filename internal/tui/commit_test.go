@@ -12,8 +12,8 @@ import (
 
 func TestCommitCommand_NoLLM(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		cfg:      Config{GenerateCommitMsg: nil},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg:       Config{GenerateCommitMsg: nil},
 	}
 
 	newM, cmd := m.handleCommitCommand()
@@ -22,11 +22,11 @@ func TestCommitCommand_NoLLM(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd when no LLM configured")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "not available") {
-		t.Errorf("expected 'not available' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "not available") {
+		t.Errorf("expected 'not available' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -34,7 +34,7 @@ func TestCommitCommand_NotARepo(t *testing.T) {
 	dir := t.TempDir() // not a git repo
 
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			WorkDir:           dir,
 			GenerateCommitMsg: func(ctx context.Context, diffs string) (string, error) { return "", nil },
@@ -47,11 +47,11 @@ func TestCommitCommand_NotARepo(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd for non-repo")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "Not a git repository") {
-		t.Errorf("expected 'Not a git repository' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Not a git repository") {
+		t.Errorf("expected 'Not a git repository' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -59,7 +59,7 @@ func TestCommitCommand_NoStagedChanges(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			WorkDir:           dir,
 			GenerateCommitMsg: func(ctx context.Context, diffs string) (string, error) { return "", nil },
@@ -72,11 +72,11 @@ func TestCommitCommand_NoStagedChanges(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd when no staged changes")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "No staged changes") {
-		t.Errorf("expected 'No staged changes' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "No staged changes") {
+		t.Errorf("expected 'No staged changes' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestCommitCommand_GeneratesConventionalFormat(t *testing.T) {
 	defer cancel()
 
 	m := &model{
-		ctx:      ctx,
-		messages: make([]message, 0),
+		ctx:       ctx,
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			WorkDir: dir,
 			GenerateCommitMsg: func(ctx context.Context, diffs string) (string, error) {
@@ -154,10 +154,10 @@ func TestCommitCommand_ConfirmCommits(t *testing.T) {
 
 	commitMsg := "feat: add hello"
 	m := &model{
-		ctx:      ctx,
-		messages: make([]message, 0),
-		commit:   &commitState{phase: "confirming", message: commitMsg},
-		cfg:      Config{WorkDir: dir},
+		ctx:       ctx,
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		commit:    &commitState{phase: "confirming", message: commitMsg},
+		cfg:       Config{WorkDir: dir},
 	}
 
 	// Confirm the commit.
@@ -193,8 +193,8 @@ func TestCommitCommand_ConfirmCommits(t *testing.T) {
 
 func TestCommitCommand_CancelCommit(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		commit:   &commitState{phase: "confirming", message: "some message"},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		commit:    &commitState{phase: "confirming", message: "some message"},
 	}
 
 	newM, _ := m.handleCommitCancel()
@@ -203,18 +203,18 @@ func TestCommitCommand_CancelCommit(t *testing.T) {
 	if mm.commit != nil {
 		t.Error("expected commit state to be nil after cancel")
 	}
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.messages[0].content, "cancelled") {
-		t.Errorf("expected 'cancelled' message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "cancelled") {
+		t.Errorf("expected 'cancelled' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
 func TestCommitCommand_LLMError(t *testing.T) {
 	m := &model{
-		messages: []message{{role: "assistant", content: "Generating..."}},
-		commit:   &commitState{phase: "generating"},
+		chatModel: ChatModel{Messages: []message{{role: "assistant", content: "Generating..."}}},
+		commit:    &commitState{phase: "generating"},
 	}
 
 	newM, _ := m.handleCommitGenerated(commitGeneratedMsg{
@@ -225,8 +225,8 @@ func TestCommitCommand_LLMError(t *testing.T) {
 	if mm.commit != nil {
 		t.Error("expected commit state to be nil after error")
 	}
-	if !strings.Contains(mm.messages[0].content, "Error generating") {
-		t.Errorf("expected error message, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Error generating") {
+		t.Errorf("expected error message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -298,14 +298,14 @@ func TestCommitParsePorcelain(t *testing.T) {
 func TestHandleSlashCommandHelpContainsCommit(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/help"},
-		messages:   make([]message, 0),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/help")
 	mm := newM.(*model)
 
-	if !strings.Contains(mm.messages[0].content, "/commit") {
-		t.Errorf("expected /help to mention /commit, got %q", mm.messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "/commit") {
+		t.Errorf("expected /help to mention /commit, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 

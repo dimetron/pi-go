@@ -19,14 +19,14 @@ type pingDoneMsg struct {
 // handlePingCommand runs the ping test asynchronously and displays the result.
 // Uses the TUI's current LLM (from the agent) — not a fresh config reload.
 func (m *model) handlePingCommand(args []string) (tea.Model, tea.Cmd) {
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Pinging model...",
 	})
 	m.inputModel.Clear()
 
 	if m.cfg.LLM == nil {
-		m.messages[len(m.messages)-1].content = "✗ No LLM configured"
+		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = "✗ No LLM configured"
 		return m, nil
 	}
 

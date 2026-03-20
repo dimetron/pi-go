@@ -2,7 +2,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,10 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/formatters"
-	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/alecthomas/chroma/v2/styles"
+
 	"github.com/charmbracelet/glamour"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -143,28 +139,6 @@ func (s *Screen) update(content string) {
 	s.content = content
 }
 
-// message represents a chat message in the conversation.
-type message struct {
-	role    string // "user", "assistant", or "tool"
-	content string
-	tool    string // tool name (for role=="tool")
-	toolIn  string // tool input args (for role=="tool")
-	// Subagent event stream (for tool=="agent" or tool=="subagent").
-	agentID       string    // subagent ID for matching events
-	agentType     string    // subagent type (e.g. "task", "explore")
-	agentTitle    string    // short description from prompt
-	agentEvents   []agentEv // streamed events from the subagent
-	pipelineID    string    // pipeline ID for grouping
-	pipelineMode  string    // "single", "parallel", "chain"
-	pipelineStep  int       // 1-based step in pipeline
-	pipelineTotal int       // total steps in pipeline
-}
-
-// agentEv is a single event from a subagent's event stream.
-type agentEv struct {
-	kind    string // "tool_call", "tool_result", "text"
-	content string
-}
 
 // model is the Bubble Tea model for the interactive TUI.
 type model struct {
@@ -179,24 +153,15 @@ type model struct {
 	// Input sub-model.
 	inputModel InputModel
 
-	// Messages.
-	messages []message
-	scroll   int // scroll offset from bottom
+	// Chat sub-model (messages, scroll, rendering).
+	chatModel ChatModel
 
 	// Agent state.
 	running     bool
-	streaming   string // current streaming text accumulator
-	thinking    string // current thinking text accumulator
 	activeTool  string
 	activeTools map[string]time.Time // parallel tool tracking: name → start time
 	toolStart   time.Time
 	agentCh     chan agentMsg // channel for receiving agent events
-
-	// Markdown renderer.
-	renderer *glamour.TermRenderer
-
-	// Trace log (for status bar counter).
-	traceLog []traceEntry
 
 	// Commit flow state.
 	commit *commitState
@@ -218,14 +183,6 @@ type model struct {
 
 	// Quit.
 	quitting bool
-}
-
-// traceEntry represents a single entry in the debug trace log.
-type traceEntry struct {
-	time    time.Time
-	kind    string // "llm", "tool_call", "tool_result", "error"
-	summary string // short one-line summary
-	detail  string // full content (args, response, etc.)
 }
 
 // Run starts the interactive TUI.
@@ -250,8 +207,7 @@ func Run(ctx context.Context, cfg Config) error {
 		ctx:        ctx,
 		cancel:     cancel,
 		inputModel: NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
-		messages:   make([]message, 0),
-		renderer:   renderer,
+		chatModel:  NewChatModel(renderer),
 		gitBranch:  detectBranch(cfg.WorkDir),
 	}
 
@@ -285,7 +241,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.updateRenderer()
+		m.chatModel.UpdateRenderer(m.width)
 
 	case tea.PasteMsg:
 		if !m.running {
@@ -306,42 +262,42 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case agentThinkingMsg:
-		m.thinking += msg.text
+		m.chatModel.Thinking += msg.text
 		// Update the thinking message in the chat.
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "thinking" {
-			m.messages[len(m.messages)-1].content = m.thinking
+		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+			m.chatModel.Messages[len(m.chatModel.Messages)-1].content = m.chatModel.Thinking
 		} else {
-			m.messages = append(m.messages, message{
-				role: "thinking", content: m.thinking,
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role: "thinking", content: m.chatModel.Thinking,
 			})
 		}
-		m.scroll = 0
+		m.chatModel.Scroll = 0
 		return m, waitForAgent(m.agentCh)
 
 	case agentTextMsg:
 		// When text starts arriving after thinking, replace the thinking message
 		// with the assistant message.
-		if m.thinking != "" {
-			m.thinking = ""
+		if m.chatModel.Thinking != "" {
+			m.chatModel.Thinking = ""
 			// Remove the thinking message and add an assistant message.
-			if len(m.messages) > 0 && m.messages[len(m.messages)-1].role == "thinking" {
-				m.messages[len(m.messages)-1] = message{role: "assistant", content: ""}
+			if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+				m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: ""}
 			}
 		}
-		m.streaming += msg.text
+		m.chatModel.Streaming += msg.text
 		// Find the assistant message to update (may not be last if tool messages intervene).
-		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].role == "assistant" {
-				m.messages[i].content = m.streaming
+		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+			if m.chatModel.Messages[i].role == "assistant" {
+				m.chatModel.Messages[i].content = m.chatModel.Streaming
 				break
 			}
 		}
-		m.scroll = 0
+		m.chatModel.Scroll = 0
 		// Trace: accumulate LLM text (don't log every delta, update last llm entry).
-		if len(m.traceLog) > 0 && m.traceLog[len(m.traceLog)-1].kind == "llm" {
-			m.traceLog[len(m.traceLog)-1].detail = m.streaming
+		if len(m.chatModel.TraceLog) > 0 && m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].kind == "llm" {
+			m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].detail = m.chatModel.Streaming
 		} else {
-			m.traceLog = append(m.traceLog, traceEntry{
+			m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 				time: time.Now(), kind: "llm", summary: "LLM response", detail: msg.text,
 			})
 		}
@@ -356,7 +312,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeTool = msg.name
 		m.toolStart = time.Now()
 		argsJSON, _ := json.MarshalIndent(msg.args, "", "  ")
-		m.traceLog = append(m.traceLog, traceEntry{
+		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time:    time.Now(),
 			kind:    "tool_call",
 			summary: fmt.Sprintf(">>> %s", msg.name),
@@ -388,7 +344,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			newMsg.agentTitle = prompt
 		}
-		m.messages = append(m.messages, newMsg)
+		m.chatModel.Messages = append(m.chatModel.Messages, newMsg)
 
 		return m, waitForAgent(m.agentCh)
 
@@ -401,16 +357,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolStart = m.activeTools[name]
 			break
 		}
-		m.traceLog = append(m.traceLog, traceEntry{
+		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time:    time.Now(),
 			kind:    "tool_result",
 			summary: fmt.Sprintf("<<< %s", msg.name),
 			detail:  msg.content,
 		})
 		// Update the tool message with the result.
-		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].role == "tool" && m.messages[i].tool == msg.name && m.messages[i].content == "" {
-				m.messages[i].content = toolResultSummary(msg.content)
+		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+			if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].tool == msg.name && m.chatModel.Messages[i].content == "" {
+				m.chatModel.Messages[i].content = toolResultSummary(msg.content)
 				break
 			}
 		}
@@ -421,25 +377,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle subagent event: associate with the correct agent message.
 		if msg.kind == "spawn" {
 			// Assign agentID to the most recent agent/subagent message without one.
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				if (m.messages[i].tool == "agent" || m.messages[i].tool == "subagent") && m.messages[i].agentID == "" {
-					m.messages[i].agentID = msg.agentID
-					m.messages[i].pipelineID = msg.pipelineID
-					m.messages[i].pipelineMode = msg.pipelineMode
-					m.messages[i].pipelineStep = msg.pipelineStep
-					m.messages[i].pipelineTotal = msg.pipelineTotal
+			for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+				if (m.chatModel.Messages[i].tool == "agent" || m.chatModel.Messages[i].tool == "subagent") && m.chatModel.Messages[i].agentID == "" {
+					m.chatModel.Messages[i].agentID = msg.agentID
+					m.chatModel.Messages[i].pipelineID = msg.pipelineID
+					m.chatModel.Messages[i].pipelineMode = msg.pipelineMode
+					m.chatModel.Messages[i].pipelineStep = msg.pipelineStep
+					m.chatModel.Messages[i].pipelineTotal = msg.pipelineTotal
 					break
 				}
 			}
 		} else {
 			// Append event to the matching agent message.
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				if (m.messages[i].tool == "agent" || m.messages[i].tool == "subagent") && m.messages[i].agentID == msg.agentID {
+			for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+				if (m.chatModel.Messages[i].tool == "agent" || m.chatModel.Messages[i].tool == "subagent") && m.chatModel.Messages[i].agentID == msg.agentID {
 					evKind := msg.kind
 					if evKind == "text_delta" {
 						evKind = "text"
 					}
-					m.messages[i].agentEvents = append(m.messages[i].agentEvents, agentEv{
+					m.chatModel.Messages[i].agentEvents = append(m.chatModel.Messages[i].agentEvents, agentEv{
 						kind:    evKind,
 						content: msg.content,
 					})
@@ -447,7 +403,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.scroll = 0
+		m.chatModel.Scroll = 0
 		return m, waitForSubEvent(m.cfg.AgentEventCh)
 
 	case agentDoneMsg:
@@ -455,16 +411,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeTool = ""
 		m.activeTools = nil
 		if msg.err != nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Error: %v", msg.err),
 			})
-			m.traceLog = append(m.traceLog, traceEntry{
+			m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 				time: time.Now(), kind: "error", summary: "Error", detail: msg.err.Error(),
 			})
 		}
-		m.streaming = ""
-		m.thinking = ""
+		m.chatModel.Streaming = ""
+		m.chatModel.Thinking = ""
 		m.agentCh = nil
 		return m, nil
 
@@ -495,10 +451,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content += fmt.Sprintf("\n\n✗ Ping failed: %v", msg.err)
 		}
 		// Replace the "Pinging model..." placeholder.
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].content == "Pinging model..." {
-			m.messages[len(m.messages)-1].content = content
+		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].content == "Pinging model..." {
+			m.chatModel.Messages[len(m.chatModel.Messages)-1].content = content
 		} else {
-			m.messages = append(m.messages, message{role: "assistant", content: content})
+			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: content})
 		}
 		return m, nil
 	}
@@ -646,18 +602,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Scroll keys stay in root model.
 	switch {
 	case key.Code == tea.KeyPgUp:
-		m.scroll += 5
-		maxScroll := m.maxScroll()
-		if m.scroll > maxScroll {
-			m.scroll = maxScroll
-		}
+		m.chatModel.ScrollUp(5, m.height)
 		return m, nil
 
 	case key.Code == tea.KeyPgDown:
-		m.scroll -= 5
-		if m.scroll < 0 {
-			m.scroll = 0
-		}
+		m.chatModel.ScrollDown(5)
 		return m, nil
 	}
 
@@ -672,8 +621,8 @@ func (m *model) cancelAgent() {
 	m.running = false
 	m.activeTool = ""
 	m.activeTools = nil
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 	if m.agentCh != nil {
 		go func(ch chan agentMsg) {
 			for range ch {
@@ -689,12 +638,12 @@ func (m *model) submitPrompt(text string) (tea.Model, tea.Cmd) {
 		m.cfg.Logger.UserMessage(text)
 	}
 
-	m.messages = append(m.messages, message{role: "user", content: text})
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: text})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 	m.running = true
-	m.scroll = 0
+	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
 	go m.runAgentLoop(text)
@@ -713,25 +662,25 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 
 	switch cmd {
 	case "/help":
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.formatHelp(),
 		})
 	case "/clear":
-		m.messages = m.messages[:0]
-		m.scroll = 0
+		m.chatModel.Messages = m.chatModel.Messages[:0]
+		m.chatModel.Scroll = 0
 	case "/model":
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.formatModelInfo(),
 		})
 	case "/session":
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Session: `%s`", m.cfg.SessionID),
 		})
 	case "/context":
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.formatContextUsage(),
 		})
@@ -774,7 +723,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		if skill, ok := extension.FindSkill(m.cfg.Skills, skillName); ok {
 			return m.handleSkillCommand(skill, parts[1:])
 		}
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Unknown command: `%s`. Type `/help` for available commands.", cmd),
 		})
@@ -786,7 +735,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 // handleBranchCommand handles /branch subcommands: create, switch, list.
 func (m *model) handleBranchCommand(args []string) {
 	if m.cfg.SessionService == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Branching not available (no session service configured).",
 		})
@@ -794,7 +743,7 @@ func (m *model) handleBranchCommand(args []string) {
 	}
 
 	if len(args) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Usage: `/branch <name>` to create, `/branch switch <name>` to switch, `/branch list` to list.",
 		})
@@ -809,7 +758,7 @@ func (m *model) handleBranchCommand(args []string) {
 			m.cfg.SessionID, agent.AppName, agent.DefaultUserID,
 		)
 		if err != nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Error listing branches: %v", err),
 			})
@@ -824,11 +773,11 @@ func (m *model) handleBranchCommand(args []string) {
 			}
 			fmt.Fprintf(&b, "- %s `%s` (head: %d)\n", marker, br.Name, br.Head)
 		}
-		m.messages = append(m.messages, message{role: "assistant", content: b.String()})
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: b.String()})
 
 	case "switch":
 		if len(args) < 2 {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: "Usage: `/branch switch <name>`",
 			})
@@ -839,13 +788,13 @@ func (m *model) handleBranchCommand(args []string) {
 			m.cfg.SessionID, agent.AppName, agent.DefaultUserID, branchName,
 		)
 		if err != nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Error switching branch: %v", err),
 			})
 			return
 		}
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Switched to branch `%s`.", branchName),
 		})
@@ -857,7 +806,7 @@ func (m *model) handleBranchCommand(args []string) {
 			m.cfg.SessionID, agent.AppName, agent.DefaultUserID, branchName,
 		)
 		if err != nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Error creating branch: %v", err),
 			})
@@ -867,7 +816,7 @@ func (m *model) handleBranchCommand(args []string) {
 		_ = m.cfg.SessionService.SwitchBranch(
 			m.cfg.SessionID, agent.AppName, agent.DefaultUserID, branchName,
 		)
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Created and switched to branch `%s`.", branchName),
 		})
@@ -877,7 +826,7 @@ func (m *model) handleBranchCommand(args []string) {
 // handleCompactCommand triggers session compaction.
 func (m *model) handleCompactCommand() {
 	if m.cfg.SessionService == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Compaction not available (no session service configured).",
 		})
@@ -889,13 +838,13 @@ func (m *model) handleCompactCommand() {
 		pisession.SimpleSummarizer, pisession.CompactConfig{},
 	)
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Compaction error: %v", err),
 		})
 		return
 	}
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Session context compacted.",
 	})
@@ -904,7 +853,7 @@ func (m *model) handleCompactCommand() {
 // handleAgentsCommand shows the status of running and recent subagents.
 func (m *model) handleAgentsCommand() {
 	if m.cfg.Orchestrator == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Subagent system not available.",
 		})
@@ -913,7 +862,7 @@ func (m *model) handleAgentsCommand() {
 
 	agents := m.cfg.Orchestrator.List()
 	if len(agents) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "No subagents have been spawned yet.",
 		})
@@ -965,7 +914,7 @@ func (m *model) handleAgentsCommand() {
 		fmt.Fprintf(&b, "%s `%s` **%s** [%s] %s (%s)\n", icon, a.AgentID[:8], a.Type, a.Status, prompt, dur)
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: b.String(),
 	})
@@ -1009,7 +958,7 @@ func (m *model) formatContextUsage() string {
 
 	// Count chars per role (rough token estimate: ~4 chars per token).
 	userChars, assistantChars, toolChars := 0, 0, 0
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		size := len(msg.content) + len(msg.tool) + len(msg.toolIn)
 		switch msg.role {
 		case "user":
@@ -1075,13 +1024,13 @@ func (m *model) formatContextUsage() string {
 	// Category breakdown.
 	b.WriteString("*Estimated usage by category*\n")
 	b.WriteString(fmt.Sprintf("- **User messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(userTokens), countByRole(m.messages, "user")))
+		formatTokenCount(userTokens), countByRole(m.chatModel.Messages, "user")))
 	b.WriteString(fmt.Sprintf("- **Assistant messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(assistantTokens), countByRole(m.messages, "assistant")))
+		formatTokenCount(assistantTokens), countByRole(m.chatModel.Messages, "assistant")))
 	b.WriteString(fmt.Sprintf("- **Tool calls**: ~%s tokens (%d calls)\n",
-		formatTokenCount(toolTokens), countByRole(m.messages, "tool")))
+		formatTokenCount(toolTokens), countByRole(m.chatModel.Messages, "tool")))
 	b.WriteString(fmt.Sprintf("- **Total context**: ~%s tokens (%d messages)\n",
-		formatTokenCount(totalTokens), len(m.messages)))
+		formatTokenCount(totalTokens), len(m.chatModel.Messages)))
 
 	// Daily token usage (actual, not estimated).
 	if tt := m.cfg.TokenTracker; tt != nil {
@@ -1126,17 +1075,6 @@ func (m *model) formatContextUsage() string {
 	}
 
 	return b.String()
-}
-
-// countByRole counts messages with the given role.
-func countByRole(msgs []message, role string) int {
-	n := 0
-	for _, msg := range msgs {
-		if msg.role == role {
-			n++
-		}
-	}
-	return n
 }
 
 // runAgentLoop runs the agent and sends events to the channel.
@@ -1208,7 +1146,7 @@ func (m *model) View() tea.View {
 	// Layout.
 
 	// Render components.
-	messagesView := m.renderMessages()
+	messagesView := m.chatModel.RenderMessages(m.running)
 	statusBar := m.renderStatusBar()
 	inputArea := m.inputModel.View(m.running)
 
@@ -1225,7 +1163,7 @@ func (m *model) View() tea.View {
 	msgLines := strings.Split(messagesView, "\n")
 	totalLines := len(msgLines)
 
-	startLine := totalLines - availableHeight - m.scroll
+	startLine := totalLines - availableHeight - m.chatModel.Scroll
 	if startLine < 0 {
 		startLine = 0
 	}
@@ -1259,202 +1197,6 @@ func (m *model) View() tea.View {
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
-}
-
-// toolCallSummary returns a short one-line summary of tool arguments.
-func toolCallSummary(name string, args map[string]any) string {
-	switch name {
-	case "read":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "write":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "edit":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "bash":
-		if cmd, ok := args["command"].(string); ok {
-			if len(cmd) > 80 {
-				cmd = cmd[:77] + "..."
-			}
-			return cmd
-		}
-	case "grep":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "find":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "ls":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-		return "."
-	case "tree":
-		p, _ := args["path"].(string)
-		if p == "" {
-			p = "."
-		}
-		if d, ok := args["depth"].(float64); ok && d > 0 {
-			return fmt.Sprintf("%s (depth %d)", p, int(d))
-		}
-		return p
-	case "agent":
-		typ, _ := args["type"].(string)
-		prompt, _ := args["prompt"].(string)
-		// Truncate prompt to first line, max 60 chars.
-		if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
-			prompt = prompt[:idx]
-		}
-		if len(prompt) > 60 {
-			prompt = prompt[:57] + "..."
-		}
-		if typ != "" && prompt != "" {
-			return fmt.Sprintf("%s: %s", typ, prompt)
-		}
-		if typ != "" {
-			return typ
-		}
-		return prompt
-	}
-	return ""
-}
-
-// toolResultSummary returns a short one-line summary of a tool result.
-func toolResultSummary(content string) string {
-	// Try to parse as JSON and extract a friendly summary.
-	var data map[string]any
-	if json.Unmarshal([]byte(content), &data) == nil {
-		return formatToolResult(data)
-	}
-	// Collapse to single line.
-	content = strings.ReplaceAll(content, "\n", " ")
-	if len(content) > 120 {
-		return content[:117] + "..."
-	}
-	return content
-}
-
-// formatToolResult extracts a readable summary from a parsed tool result.
-func formatToolResult(data map[string]any) string {
-	// ls tool: show file/dir names
-	if entries, ok := data["entries"].([]any); ok {
-		var names []string
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				name, _ := m["name"].(string)
-				if isDir, ok := m["is_dir"].(bool); ok && isDir {
-					name += "/"
-				}
-				names = append(names, name)
-			}
-		}
-		result := strings.Join(names, "  ")
-		if len(result) > 120 {
-			return result[:117] + "..."
-		}
-		return result
-	}
-	// tree tool: show dirs/files count
-	if _, ok := data["tree"].(string); ok {
-		d, _ := data["dirs"].(float64)
-		f, _ := data["files"].(float64)
-		return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
-	}
-	// grep tool: show matches with file:line: content
-	if matchList, ok := data["matches"].([]any); ok {
-		total, _ := data["total_matches"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, m := range matchList {
-			if entry, ok := m.(map[string]any); ok {
-				file, _ := entry["file"].(string)
-				line, _ := entry["line"].(float64)
-				content, _ := entry["content"].(string)
-				fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if matches, ok := data["total_matches"].(float64); ok {
-		return fmt.Sprintf("%d matches", int(matches))
-	}
-	// find tool: show file list
-	if fileList, ok := data["files"].([]any); ok {
-		total, _ := data["total_files"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, f := range fileList {
-			if name, ok := f.(string); ok {
-				sb.WriteString(name)
-				sb.WriteByte('\n')
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if total, ok := data["total_files"].(float64); ok {
-		return fmt.Sprintf("%d files", int(total))
-	}
-	// read tool: show actual content with line numbers
-	if content, ok := data["content"].(string); ok {
-		total, _ := data["total_lines"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		if trunc {
-			content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
-		}
-		return content
-	}
-	if total, ok := data["total_lines"].(float64); ok {
-		trunc := ""
-		if t, ok := data["truncated"].(bool); ok && t {
-			trunc = " (truncated)"
-		}
-		return fmt.Sprintf("%d lines%s", int(total), trunc)
-	}
-	// write tool: show bytes written
-	if bw, ok := data["bytes_written"].(float64); ok {
-		if p, ok := data["path"].(string); ok {
-			return fmt.Sprintf("%s (%d bytes)", p, int(bw))
-		}
-	}
-	// edit tool: show replacements
-	if r, ok := data["replacements"].(float64); ok {
-		return fmt.Sprintf("%d replacements", int(r))
-	}
-	// bash tool: show exit code + truncated stdout
-	if code, ok := data["exit_code"].(float64); ok {
-		stdout, _ := data["stdout"].(string)
-		stdout = strings.ReplaceAll(stdout, "\n", " ")
-		if len(stdout) > 80 {
-			stdout = stdout[:77] + "..."
-		}
-		if int(code) != 0 {
-			return fmt.Sprintf("exit %d: %s", int(code), stdout)
-		}
-		if stdout == "" {
-			return "(No output)"
-		}
-		return stdout
-	}
-	// Fallback: compact JSON
-	b, _ := json.Marshal(data)
-	s := string(b)
-	if len(s) > 120 {
-		return s[:117] + "..."
-	}
-	return s
 }
 
 // drainTerminalResponses discards any pending terminal response sequences
@@ -1501,7 +1243,7 @@ func (m *model) showCommandList() {
 			b.WriteString("\n")
 		}
 	}
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: b.String(),
 	})
@@ -1569,7 +1311,7 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 	case "list":
 		return m.handleSkillListCommand()
 	default:
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Usage: `/skills` — list  |  `/skills create <name>` — create  |  `/skills load` — reload",
 		})
@@ -1586,370 +1328,22 @@ func (m *model) handleRTKCommand(args []string) {
 	switch sub {
 	case "stats":
 		if m.cfg.CompactMetrics == nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: "Output compactor is not active.",
 			})
 			return
 		}
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.cfg.CompactMetrics.FormatStats(),
 		})
 	default:
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Usage: `/rtk` or `/rtk stats` — Show output compaction statistics",
 		})
 	}
-}
-
-func (m *model) updateRenderer() {
-	contentWidth := m.width - 4
-	if contentWidth < 40 {
-		contentWidth = 40
-	}
-	m.renderer, _ = glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(contentWidth),
-		glamour.WithEmoji(),
-	)
-}
-
-func (m *model) renderMessages() string {
-	if len(m.messages) == 0 {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		return dim.Render("  Welcome to pi-go! Type a prompt, /command, or press Tab to cycle commands.")
-	}
-
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("● ")
-	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("● ")
-	sepWidth := m.width - 4
-	if sepWidth < 20 {
-		sepWidth = 20
-	}
-	separator := dim.Render(strings.Repeat("─", sepWidth))
-
-	var b strings.Builder
-	for i, msg := range m.messages {
-		switch msg.role {
-		case "user":
-			if i > 0 {
-				b.WriteString(separator)
-				b.WriteString("\n")
-			}
-			label := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Bold(true).
-				Render("> ")
-			b.WriteString(label)
-			b.WriteString(msg.content)
-			b.WriteString("\n")
-
-		case "tool":
-			toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
-			argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-			b.WriteString("\n")
-
-			// Special rendering for agent tool: show type, title, and event stream.
-			if msg.tool == "agent" || msg.tool == "subagent" {
-				agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("● ")
-				typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
-				titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-				b.WriteString(agentBullet)
-				b.WriteString(typeStyle.Render("agent"))
-				if msg.agentType != "" {
-					b.WriteString(dim.Render("["))
-					b.WriteString(typeStyle.Render(msg.agentType))
-					b.WriteString(dim.Render("]"))
-				}
-				if msg.agentTitle != "" {
-					b.WriteString(" ")
-					b.WriteString(titleStyle.Render(msg.agentTitle))
-				}
-				b.WriteString("\n")
-
-				// Show event stream (last N events).
-				if len(msg.agentEvents) > 0 {
-					evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-					evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-					maxEvents := 8
-					events := msg.agentEvents
-					if len(events) > maxEvents {
-						skipped := len(events) - maxEvents
-						events = events[len(events)-maxEvents:]
-						b.WriteString("  ")
-						b.WriteString(dim.Render(fmt.Sprintf("│ ... %d earlier events\n", skipped)))
-					}
-					for _, ev := range events {
-						b.WriteString("  ")
-						b.WriteString(dim.Render("│ "))
-						switch ev.kind {
-						case "tool_call":
-							b.WriteString(evToolStyle.Render("⚙ " + ev.content))
-						case "tool_result":
-							summary := ev.content
-							if len(summary) > 80 {
-								summary = summary[:77] + "..."
-							}
-							b.WriteString(evStyle.Render("  ✓ " + summary))
-						case "text":
-							// Skip text deltas in event stream to avoid clutter.
-						default:
-							b.WriteString(evStyle.Render(ev.kind + ": " + ev.content))
-						}
-						b.WriteString("\n")
-					}
-				}
-
-				// Show result summary when done.
-				if msg.content != "" {
-					b.WriteString("  ")
-					b.WriteString(dim.Render("│ "))
-					summary := msg.content
-					if len(summary) > 100 {
-						summary = summary[:97] + "..."
-					}
-					b.WriteString(dim.Render("→ " + summary))
-					b.WriteString("\n")
-				}
-			} else {
-				b.WriteString(toolBullet)
-				b.WriteString(toolStyle.Render(msg.tool))
-				if msg.toolIn != "" {
-					args := msg.toolIn
-					if len(args) > 80 {
-						args = args[:77] + "..."
-					}
-					b.WriteString(dim.Render("("))
-					b.WriteString(argStyle.Render(args))
-					b.WriteString(dim.Render(")"))
-				}
-				b.WriteString("\n")
-				if msg.content != "" {
-					content := msg.content
-					lines := strings.Split(content, "\n")
-					maxLines := 15
-					if len(lines) > maxLines {
-						lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
-					}
-					var styled []string
-					switch {
-					case msg.tool == "read" && msg.toolIn != "":
-						styled = highlightReadOutput(lines, msg.toolIn)
-					case msg.tool == "grep":
-						styled = highlightGrepOutput(lines)
-					case msg.tool == "find":
-						styled = highlightFindOutput(lines)
-					}
-					if styled != nil {
-						for _, line := range styled {
-							b.WriteString("  ")
-							b.WriteString(dim.Render("│ "))
-							b.WriteString(line)
-							b.WriteString("\n")
-						}
-					} else {
-						for _, line := range lines {
-							b.WriteString("  ")
-							b.WriteString(dim.Render("│ "))
-							b.WriteString(dim.Render(line))
-							b.WriteString("\n")
-						}
-					}
-				}
-			}
-
-		case "thinking":
-			if msg.content != "" {
-				thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
-				thinkBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("💭 ")
-				b.WriteString("\n")
-				b.WriteString(thinkBullet)
-				// Show last few lines of thinking to keep it compact.
-				lines := strings.Split(msg.content, "\n")
-				maxLines := 6
-				if len(lines) > maxLines {
-					lines = lines[len(lines)-maxLines:]
-				}
-				for j, line := range lines {
-					if j > 0 {
-						b.WriteString("   ")
-					}
-					b.WriteString(thinkStyle.Render(line))
-					if j < len(lines)-1 {
-						b.WriteString("\n")
-					}
-				}
-				b.WriteString("\n")
-			}
-
-		case "assistant":
-			content := msg.content
-			if content == "" && m.running && i == len(m.messages)-1 {
-				content = "..."
-			}
-			if content != "" {
-				b.WriteString("\n")
-				b.WriteString(bullet)
-				rendered := m.renderMarkdown(content)
-				b.WriteString(rendered)
-				b.WriteString("\n")
-			}
-		}
-	}
-
-	return b.String()
-}
-
-func (m *model) renderMarkdown(text string) string {
-	if text == "" {
-		return ""
-	}
-	if m.renderer == nil {
-		return text
-	}
-	rendered, err := m.renderer.Render(text)
-	if err != nil {
-		return text
-	}
-	return strings.TrimRight(rendered, "\n")
-}
-
-// highlightReadOutput applies syntax highlighting to read tool output lines.
-// Each line has format "     1\tcontent" — line numbers are styled separately.
-func highlightReadOutput(lines []string, filename string) []string {
-	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-
-	// Separate line numbers from code
-	var codeLines []string
-	var lineNums []string
-	for _, line := range lines {
-		if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
-			lineNums = append(lineNums, parts[0])
-			codeLines = append(codeLines, parts[1])
-		} else {
-			lineNums = append(lineNums, "")
-			codeLines = append(codeLines, line)
-		}
-	}
-
-	// Highlight all code at once for proper multi-line token handling
-	code := strings.Join(codeLines, "\n")
-	highlighted := highlightCode(code, filename)
-	highlightedLines := strings.Split(highlighted, "\n")
-
-	// Recombine with styled line numbers
-	result := make([]string, 0, len(lines))
-	for i := range lines {
-		if i < len(highlightedLines) {
-			if i < len(lineNums) && lineNums[i] != "" {
-				result = append(result, numStyle.Render(lineNums[i])+" "+highlightedLines[i])
-			} else {
-				result = append(result, highlightedLines[i])
-			}
-		}
-	}
-	return result
-}
-
-// highlightCode applies chroma syntax highlighting based on filename extension.
-func highlightCode(code, filename string) string {
-	lexer := lexers.Match(filename)
-	if lexer == nil {
-		lexer = lexers.Analyse(code)
-	}
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-	lexer = chroma.Coalesce(lexer)
-
-	style := styles.Get("monokai")
-	if style == nil {
-		style = styles.Fallback
-	}
-	formatter := formatters.Get("terminal256")
-	if formatter == nil {
-		formatter = formatters.Fallback
-	}
-
-	iterator, err := lexer.Tokenise(nil, code)
-	if err != nil {
-		return code
-	}
-
-	var buf bytes.Buffer
-	if err := formatter.Format(&buf, style, iterator); err != nil {
-		return code
-	}
-	return strings.TrimRight(buf.String(), "\n")
-}
-
-// highlightGrepOutput styles grep result lines of the form "file:line: content".
-// File path and line number get distinct colors; content is syntax-highlighted
-// based on the file extension.
-func highlightGrepOutput(lines []string) []string {
-	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))     // blue
-	lineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // gray
-	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-
-	result := make([]string, 0, len(lines))
-	for _, line := range lines {
-		// Try to parse "file:line: content"
-		first := strings.IndexByte(line, ':')
-		if first < 0 {
-			// Not a match line (e.g. truncation note) — dim it.
-			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
-			continue
-		}
-		second := strings.IndexByte(line[first+1:], ':')
-		if second < 0 {
-			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
-			continue
-		}
-		second += first + 1 // absolute index of second colon
-
-		filePart := line[:first]
-		linePart := line[first+1 : second]
-		contentPart := ""
-		if second+1 < len(line) {
-			contentPart = strings.TrimPrefix(line[second+1:], " ")
-		}
-
-		// Highlight the content portion using the file extension.
-		highlighted := highlightCode(contentPart, filePart)
-
-		var sb strings.Builder
-		sb.WriteString(fileStyle.Render(filePart))
-		sb.WriteString(sepStyle.Render(":"))
-		sb.WriteString(lineNumStyle.Render(linePart))
-		sb.WriteString(sepStyle.Render(": "))
-		sb.WriteString(highlighted)
-		result = append(result, sb.String())
-	}
-	return result
-}
-
-// highlightFindOutput styles find/glob result lines as file paths.
-// Directories get a trailing "/" and different color.
-func highlightFindOutput(lines []string) []string {
-	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // blue
-	dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-
-	result := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(line, "...") {
-			// Truncation note.
-			result = append(result, dimStyle.Render(line))
-		} else if strings.HasSuffix(line, "/") {
-			result = append(result, dirStyle.Render(line))
-		} else {
-			result = append(result, fileStyle.Render(line))
-		}
-	}
-	return result
 }
 
 func (m *model) renderStatusBar() string {
@@ -1974,7 +1368,7 @@ func (m *model) renderStatusBar() string {
 
 	// Context size estimate (rough: ~4 chars per token).
 	ctxChars := 0
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
 	}
 	ctxTokens := ctxChars / 4
@@ -2077,22 +1471,11 @@ func (m *model) renderStatusBar() string {
 	}
 
 	// Trace count.
-	if len(m.traceLog) > 0 {
-		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", len(m.traceLog))))
+	if len(m.chatModel.TraceLog) > 0 {
+		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", len(m.chatModel.TraceLog))))
 	}
 
 	return bar.Render(strings.Join(parts, sep))
-}
-
-func formatTokenCount(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
 }
 
 // detectBranch returns the current git branch name, or empty string.
@@ -2108,20 +1491,3 @@ func detectBranch(workDir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func (m *model) maxScroll() int {
-	if len(m.messages) == 0 {
-		return 0
-	}
-	messagesView := m.renderMessages()
-	totalLines := strings.Count(messagesView, "\n") + 1
-
-	availableHeight := m.height - 3
-	if availableHeight < 1 {
-		return 0
-	}
-	max := totalLines - availableHeight
-	if max < 0 {
-		return 0
-	}
-	return max
-}

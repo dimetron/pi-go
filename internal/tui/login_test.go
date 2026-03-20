@@ -83,10 +83,10 @@ func TestMaskKey_NineChars(t *testing.T) {
 func TestHandleLoginCommand_NoArgs(t *testing.T) {
 	m := &model{}
 	m.handleLoginCommand(nil)
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	msg := m.messages[0]
+	msg := m.chatModel.Messages[0]
 	if msg.role != "assistant" {
 		t.Errorf("expected assistant role, got %q", msg.role)
 	}
@@ -105,14 +105,14 @@ func TestHandleLoginCommand_NoArgs(t *testing.T) {
 func TestHandleLoginCommand_UnknownProvider(t *testing.T) {
 	m := &model{}
 	m.handleLoginCommand([]string{"ollama"})
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "Unknown provider") {
-		t.Errorf("expected unknown provider message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Unknown provider") {
+		t.Errorf("expected unknown provider message, got: %s", m.chatModel.Messages[0].content)
 	}
-	if !strings.Contains(m.messages[0].content, "codex") {
-		t.Errorf("expected codex in available providers list, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "codex") {
+		t.Errorf("expected codex in available providers list, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -150,8 +150,8 @@ func TestHandleLoginCommand_CodexPKCEFlow(t *testing.T) {
 		return
 	}
 	// TLS preflight may have failed (network issue in CI).
-	if len(m.messages) > 0 {
-		lastMsg := m.messages[len(m.messages)-1]
+	if len(m.chatModel.Messages) > 0 {
+		lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 		if strings.Contains(lastMsg.content, "TLS certificate") ||
 			strings.Contains(lastMsg.content, "preflight") ||
 			strings.Contains(lastMsg.content, "login") {
@@ -168,8 +168,8 @@ func TestHandleLoginCommand_OpenAIDeviceFlow(t *testing.T) {
 	if m.login != nil && m.login.phase == "device" {
 		return
 	}
-	if len(m.messages) > 0 {
-		lastMsg := m.messages[len(m.messages)-1]
+	if len(m.chatModel.Messages) > 0 {
+		lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 		if strings.Contains(lastMsg.content, "Login error") {
 			return
 		}
@@ -220,7 +220,7 @@ func TestHandleLoginCancel(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login state to be nil after cancel")
 	}
-	if len(m.messages) != 1 || !strings.Contains(m.messages[0].content, "cancelled") {
+	if len(m.chatModel.Messages) != 1 || !strings.Contains(m.chatModel.Messages[0].content, "cancelled") {
 		t.Error("expected cancellation message")
 	}
 }
@@ -269,11 +269,11 @@ func TestHandleLoginSSOResult_Success(t *testing.T) {
 		t.Error("expected login state to be cleared")
 	}
 
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "Login successful") {
-		t.Errorf("expected success message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Login successful") {
+		t.Errorf("expected success message, got: %s", m.chatModel.Messages[0].content)
 	}
 
 	if os.Getenv("ANTHROPIC_API_KEY") != "sk-ant-sso-token-12345" {
@@ -299,11 +299,11 @@ func TestHandleLoginSSOResult_Error(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login state to be cleared")
 	}
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "failed") {
-		t.Errorf("expected failure message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "failed") {
+		t.Errorf("expected failure message, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -321,7 +321,7 @@ func TestHandleLoginSSOResult_Cancelled(t *testing.T) {
 
 	m.handleLoginSSOResult(msg)
 
-	if len(m.messages) != 0 {
+	if len(m.chatModel.Messages) != 0 {
 		t.Error("expected no messages when login was cancelled")
 	}
 }
@@ -344,11 +344,11 @@ func TestHandleLoginSSOResult_EmptyKey(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login state to be cleared")
 	}
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "empty key") {
-		t.Errorf("expected empty key message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "empty key") {
+		t.Errorf("expected empty key message, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -372,11 +372,11 @@ func TestHandleLoginSSOResult_SaveError(t *testing.T) {
 
 	m.handleLoginSSOResult(msg)
 
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "Error saving key") {
-		t.Errorf("expected save error message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Error saving key") {
+		t.Errorf("expected save error message, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -390,11 +390,11 @@ func TestHandleLoginSave_UnknownProvider(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login to be cleared")
 	}
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "Internal error") {
-		t.Errorf("expected internal error, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Internal error") {
+		t.Errorf("expected internal error, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -409,11 +409,11 @@ func TestHandleLoginSave_SaveError(t *testing.T) {
 
 	m.handleLoginSave("sk-test-key")
 
-	if len(m.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.messages[0].content, "Error saving key") {
-		t.Errorf("expected save error, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Error saving key") {
+		t.Errorf("expected save error, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -461,11 +461,11 @@ func TestLoginStart_DeviceFlow(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login to be nil after device flow network error")
 	}
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Error("expected error message")
 	}
-	if !strings.Contains(m.messages[len(m.messages)-1].content, "Login error") {
-		t.Errorf("expected login error, got: %s", m.messages[len(m.messages)-1].content)
+	if !strings.Contains(m.chatModel.Messages[len(m.chatModel.Messages)-1].content, "Login error") {
+		t.Errorf("expected login error, got: %s", m.chatModel.Messages[len(m.chatModel.Messages)-1].content)
 	}
 }
 
@@ -491,7 +491,7 @@ func TestLoginStart_TLSPreflightBlock(t *testing.T) {
 	if m.login != nil && m.login.phase == "sso" {
 		return // PKCE started
 	}
-	if len(m.messages) > 0 {
+	if len(m.chatModel.Messages) > 0 {
 		return // TLS preflight or PKCE error message
 	}
 }
@@ -552,13 +552,13 @@ func TestLoginStartPKCEFlow_StateAndMessage(t *testing.T) {
 		t.Fatal("expected non-nil cmd (async PKCE flow)")
 	}
 	// Verify message was shown.
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected login message")
 	}
-	if !strings.Contains(m.messages[len(m.messages)-1].content, "test") {
+	if !strings.Contains(m.chatModel.Messages[len(m.chatModel.Messages)-1].content, "test") {
 		t.Error("expected provider name in message")
 	}
-	if !strings.Contains(m.messages[len(m.messages)-1].content, "browser") {
+	if !strings.Contains(m.chatModel.Messages[len(m.chatModel.Messages)-1].content, "browser") {
 		t.Error("expected browser mention in message")
 	}
 	// Don't execute the cmd — it would block waiting for browser callback.
@@ -605,7 +605,7 @@ func TestLoginStartDeviceFlow_CmdExecution(t *testing.T) {
 
 	// Verify the user code message was shown.
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "MOCK-CODE") {
 			found = true
 			break

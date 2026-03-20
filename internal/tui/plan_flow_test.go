@@ -28,7 +28,7 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handlePlanCommand([]string{"add", "logging"})
@@ -48,10 +48,10 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 	}
 
 	// Verify the prompt message is shown.
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected a message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "already exists") {
 		t.Errorf("message should mention 'already exists', got: %s", last.content)
 	}
@@ -82,7 +82,7 @@ func TestPlanCommand_OverrideCancel(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Trigger override prompt.
@@ -101,7 +101,7 @@ func TestPlanCommand_OverrideCancel(t *testing.T) {
 
 	// Should have cancel message.
 	var found bool
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "cancelled") {
 			found = true
 			break
@@ -131,7 +131,7 @@ func TestPlanCommand_OverrideConfirm_RemovesOldDir(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Trigger override prompt.
@@ -189,7 +189,7 @@ func TestPlanCommand_OverrideConfirm_RemovesOldDir(t *testing.T) {
 
 func TestPlanCommand_NoArgs_NotStuck(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handlePlanCommand(nil)
@@ -201,11 +201,11 @@ func TestPlanCommand_NoArgs_NotStuck(t *testing.T) {
 	if m.plan != nil {
 		t.Error("plan state should be nil")
 	}
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected usage message")
 	}
-	if !strings.Contains(m.messages[0].content, "Usage") {
-		t.Errorf("expected usage message, got: %s", m.messages[0].content)
+	if !strings.Contains(m.chatModel.Messages[0].content, "Usage") {
+		t.Errorf("expected usage message, got: %s", m.chatModel.Messages[0].content)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestPlanCommand_NewSpec_NotStuck(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	// This will succeed creating the skeleton but fail at startPlanSession
@@ -254,7 +254,7 @@ func TestPlanCommand_ExistingSpec_NotStuck(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	done := make(chan struct{})
@@ -283,7 +283,7 @@ func TestPlanCommand_ExistingSpec_NotStuck(t *testing.T) {
 
 func TestPlanConfirmation_KeyHandling(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		plan: &planState{
 			phase:     "confirming_override",
 			taskName:  "test-feature",
@@ -382,7 +382,7 @@ func TestPlanCommand_ExistingSpec_WithOrchestrator_NotStuck(t *testing.T) {
 			WorkDir:      tmpDir,
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	done := make(chan struct{})
@@ -423,7 +423,7 @@ func TestPlanCommand_RapidCalls_NoDeadlock(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	done := make(chan struct{})

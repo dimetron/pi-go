@@ -340,7 +340,7 @@ func TestE2E_MergeSuccess_WritesSummary(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "rate-limiter",
 			agentID:    "task-merge-ok",
@@ -385,7 +385,7 @@ func TestE2E_MergeSuccess_WritesSummary(t *testing.T) {
 
 	// TUI should show summary path message.
 	var hasSummaryMsg bool
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Summary report") && strings.Contains(msg.content, "SUMMARY.md") {
 			hasSummaryMsg = true
 			break
@@ -413,7 +413,7 @@ func TestE2E_GateFailure_WritesSummary(t *testing.T) {
 			WorkDir:      tmpDir,
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "auth-fix",
 			promptMD:   "# Fix Auth\n",
@@ -478,7 +478,7 @@ func TestE2E_MergeFailure_WritesSummary(t *testing.T) {
 			WorkDir:      tmpDir,
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "api-refactor",
 			agentID:    "task-merge-fail",

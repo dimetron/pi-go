@@ -98,7 +98,7 @@ type planState struct {
 // first user message so the LLM drives the PDD flow.
 func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	if len(parts) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Usage: `/plan <rough idea text>`\n\nExample: `/plan add rate limiting to API`",
 		})
@@ -120,14 +120,14 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 				roughIdea: roughIdea,
 				specDir:   existingDir,
 			}
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role: "assistant",
 				content: fmt.Sprintf("Spec directory already exists: `%s`\n\nPress **Enter** to override, **Esc** to cancel.",
 					existingDir),
 			})
 			return m, nil
 		}
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error: %v", err),
 		})
@@ -151,7 +151,7 @@ func (m *model) handlePlanOverride() (tea.Model, tea.Cmd) {
 
 	// Remove the existing spec directory.
 	if err := os.RemoveAll(specDir); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error removing spec directory: %v", err),
 		})
@@ -161,7 +161,7 @@ func (m *model) handlePlanOverride() (tea.Model, tea.Cmd) {
 	// Recreate the skeleton.
 	newSpecDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error: %v", err),
 		})
@@ -174,7 +174,7 @@ func (m *model) handlePlanOverride() (tea.Model, tea.Cmd) {
 // handlePlanCancel cancels the plan override prompt.
 func (m *model) handlePlanCancel() (tea.Model, tea.Cmd) {
 	m.plan = nil
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Plan cancelled.",
 	})
@@ -186,7 +186,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	// Load PDD SOP (project override → global override → embedded default).
 	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error loading PDD SOP: %v", err),
 		})
@@ -206,7 +206,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 
 	// Rebuild the agent with the PDD SOP as system instruction.
 	if m.cfg.Agent == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Error: no agent configured for /plan",
 		})
@@ -214,7 +214,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 		return m, nil
 	}
 	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error configuring agent: %v", err),
 		})
@@ -225,7 +225,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	// Create a fresh session so the LLM starts with a clean conversation.
 	newSessionID, err := m.cfg.Agent.CreateSession(m.ctx)
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error creating session: %v", err),
 		})
@@ -235,19 +235,19 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	m.cfg.SessionID = newSessionID
 
 	// Clear the TUI conversation (like /clear).
-	m.messages = m.messages[:0]
-	m.scroll = 0
+	m.chatModel.Messages = m.chatModel.Messages[:0]
+	m.chatModel.Scroll = 0
 
 	// Show a brief confirmation, then start the agent loop with the rough idea.
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf("Starting PDD session for **%s**\n\nSpec directory: `%s`",
 			taskName, specDir),
 	})
-	m.messages = append(m.messages, message{role: "user", content: roughIdea})
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: roughIdea})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 
 	m.running = true
 

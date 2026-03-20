@@ -189,7 +189,7 @@ func TestE2E_GatePassTriggersMerge(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			agentID:    "task-e2e-1",
@@ -219,7 +219,7 @@ func TestE2E_GatePassTriggersMerge(t *testing.T) {
 
 	// Verify messages contain gate results and merge trigger.
 	var hasGateResults, hasMergeMsg bool
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Gate Results") {
 			hasGateResults = true
 		}
@@ -245,7 +245,7 @@ func TestE2E_GateFailTriggersRetry(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			promptMD:   "# Test\n\n## Objective\nDo stuff.\n",
@@ -285,7 +285,7 @@ func TestE2E_GateFailTriggersRetry(t *testing.T) {
 
 	// Verify retry message was shown.
 	var hasRetryMsg bool
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Gate failed") && strings.Contains(msg.content, "retry 1") {
 			hasRetryMsg = true
 			break
@@ -346,7 +346,7 @@ func TestE2E_RunWhileAgentRunning(t *testing.T) {
 			WorkDir:      tmpDir,
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:  true, // already running
 	}
 
@@ -356,7 +356,7 @@ func TestE2E_RunWhileAgentRunning(t *testing.T) {
 	m.handleRunCommand([]string{"my-feature"})
 
 	// Should have attempted to spawn (will fail due to empty config, but no panic).
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Error("expected at least one message")
 	}
 }
@@ -464,11 +464,11 @@ func TestE2E_MultipleSpecsListed(t *testing.T) {
 	// /run no-args should list them.
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleRunCommand(nil)
 
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	for _, name := range expected {
 		if !strings.Contains(last.content, name) {
 			t.Errorf("expected %q in available specs, got: %s", name, last.content)
@@ -539,7 +539,7 @@ Build something.
 
 func TestE2E_MergeSuccessFlow(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName: "rate-limiter",
 			agentID:  "task-merge-1",
@@ -556,7 +556,7 @@ func TestE2E_MergeSuccessFlow(t *testing.T) {
 	}
 
 	var found bool
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "rate-limiter") && strings.Contains(msg.content, "merged successfully") {
 			found = true
 			break
@@ -576,7 +576,7 @@ func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:  true,
 		run: &runState{
 			specName: "my-feature",

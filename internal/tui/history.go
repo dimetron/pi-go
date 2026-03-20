@@ -90,7 +90,7 @@ func (m *model) handleHistoryCommand(args []string) {
 		if query != "" {
 			msg = fmt.Sprintf("No history matching `%s`.", query)
 		}
-		m.messages = append(m.messages, message{role: "assistant", content: msg})
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
 		return
 	}
 
@@ -108,5 +108,5 @@ func (m *model) handleHistoryCommand(args []string) {
 	for i := start; i < len(filtered); i++ {
 		sb.WriteString(fmt.Sprintf("- `%s`\n", filtered[i]))
 	}
-	m.messages = append(m.messages, message{role: "assistant", content: sb.String()})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: sb.String()})
 }

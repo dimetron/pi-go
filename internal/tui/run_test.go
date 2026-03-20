@@ -247,15 +247,15 @@ func TestHandleRunCommand_NoArgs(t *testing.T) {
 		cfg: Config{
 			WorkDir: tmpDir,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handleRunCommand(nil)
 
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected a usage message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "Usage:") {
 		t.Errorf("expected usage message, got: %s", last.content)
 	}
@@ -267,15 +267,15 @@ func TestHandleRunCommand_NoOrchestrator(t *testing.T) {
 		cfg: Config{
 			WorkDir: tmpDir,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handleRunCommand([]string{"some-spec"})
 
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected error message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "not available") {
 		t.Errorf("expected 'not available' message, got: %s", last.content)
 	}
@@ -298,15 +298,15 @@ func TestHandleRunCommand_MissingSpec(t *testing.T) {
 			WorkDir:      tmpDir,
 			Orchestrator: &subagent.Orchestrator{},
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handleRunCommand([]string{"nonexistent"})
 
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected error message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "PROMPT.md not found") {
 		t.Errorf("expected 'not found' error, got: %s", last.content)
 	}
@@ -330,7 +330,7 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	m := &model{
 		ctx:      ctx,
 		cancel:   cancel,
-		messages: []message{{role: "assistant", content: ""}},
+		chatModel: ChatModel{Messages: []message{{role: "assistant", content: ""}}},
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",
@@ -343,14 +343,14 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	// Process text_delta events.
 	ev1 := runAgentEventMsg{event: subagent.Event{Type: "text_delta", Content: "Hello "}}
 	m.handleRunAgentEvent(ev1)
-	if m.streaming != "Hello " {
-		t.Errorf("streaming = %q, want %q", m.streaming, "Hello ")
+	if m.chatModel.Streaming != "Hello " {
+		t.Errorf("streaming = %q, want %q", m.chatModel.Streaming, "Hello ")
 	}
 
 	ev2 := runAgentEventMsg{event: subagent.Event{Type: "text_delta", Content: "world"}}
 	m.handleRunAgentEvent(ev2)
-	if m.streaming != "Hello world" {
-		t.Errorf("streaming = %q, want %q", m.streaming, "Hello world")
+	if m.chatModel.Streaming != "Hello world" {
+		t.Errorf("streaming = %q, want %q", m.chatModel.Streaming, "Hello world")
 	}
 
 	// Process tool_call event.
@@ -391,12 +391,12 @@ func TestHandleRunCommand_NoArgsShowsAvailableSpecs(t *testing.T) {
 
 	m := &model{
 		cfg:      Config{WorkDir: tmpDir},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
 	m.handleRunCommand(nil)
 
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "my-feature") {
 		t.Errorf("expected spec name in output, got: %s", last.content)
 	}
@@ -505,7 +505,7 @@ func TestHandleRunGateResult_AllPass(t *testing.T) {
 		cfg: Config{
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",
@@ -529,7 +529,7 @@ func TestHandleRunGateResult_AllPass(t *testing.T) {
 
 	// Should have gate results and merge message.
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "All gates passed") {
 			found = true
 			break
@@ -545,7 +545,7 @@ func TestHandleRunGateResult_Failure_MaxRetries(t *testing.T) {
 		cfg: Config{
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			agentID:    "task-123",
@@ -574,7 +574,7 @@ func TestHandleRunGateResult_Failure_MaxRetries(t *testing.T) {
 	}
 
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Gate validation failed") && strings.Contains(msg.content, "after 3 retries") {
 			found = true
 			break
@@ -587,7 +587,7 @@ func TestHandleRunGateResult_Failure_MaxRetries(t *testing.T) {
 
 func TestHandleRunMergeResult_Success(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",
@@ -603,7 +603,7 @@ func TestHandleRunMergeResult_Success(t *testing.T) {
 	}
 
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "merged successfully") {
 			found = true
 			break
@@ -619,7 +619,7 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 		cfg: Config{
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",
@@ -638,7 +638,7 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 	}
 
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Merge failed") {
 			found = true
 			break
@@ -651,7 +651,7 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 
 func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:  true,
 		run: &runState{
 			specName: "test-spec",
@@ -668,7 +668,7 @@ func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 	}
 
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "No gates defined") {
 			found = true
 			break
@@ -684,7 +684,7 @@ func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
 		cfg: Config{
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:  true,
 		run: &runState{
 			specName: "test-spec",
@@ -763,7 +763,7 @@ func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			promptMD:   "# Test\n\n## Objective\nDo stuff.\n",
@@ -795,7 +795,7 @@ func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
 
 	// Should have a "Failed to spawn retry agent" message.
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "Failed to spawn retry agent") {
 			found = true
 			break
@@ -818,7 +818,7 @@ func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			promptMD:   "# Test\n",
@@ -856,7 +856,7 @@ func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
 		cfg: Config{
 			Orchestrator: orch,
 		},
-		messages: make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "test-spec",
 			promptMD:   "# Test\n",
@@ -886,7 +886,7 @@ func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
 	}
 
 	found := false
-	for _, msg := range m.messages {
+	for _, msg := range m.chatModel.Messages {
 		if strings.Contains(msg.content, "after 3 retries") {
 			found = true
 			break

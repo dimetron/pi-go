@@ -44,7 +44,7 @@ func (m *model) handleLoginCommand(args []string) (tea.Model, tea.Cmd) {
 	// Find provider.
 	authProv, ok := auth.FindProvider(provName)
 	if !ok {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Unknown provider: `%s`. Available: codex, openai, anthropic, gemini", provName),
 		})
@@ -71,7 +71,7 @@ func (m *model) loginShowStatus() (tea.Model, tea.Cmd) {
 	sb.WriteString("\n**Usage:** `/login <provider>`\n")
 	sb.WriteString("Example: `/login codex`")
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: sb.String(),
 	})
@@ -84,7 +84,7 @@ func (m *model) loginStart(prov auth.Provider) (tea.Model, tea.Cmd) {
 	if prov.TLSPreflight {
 		result := auth.RunTLSPreflight(4000)
 		if !result.OK && result.Kind == "tls-cert" {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: auth.FormatTLSPreflightFix(result),
 			})
@@ -111,7 +111,7 @@ func (m *model) loginStartManual(prov auth.Provider) (tea.Model, tea.Cmd) {
 		provider: prov.Name,
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
 			"Opening **%s** API key page in your browser...\n\n"+
@@ -130,7 +130,7 @@ func (m *model) loginStartPKCEFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 		provider: prov.Name,
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
 			"Starting **%s** login...\n\n"+
@@ -163,7 +163,7 @@ func (m *model) loginStartDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 	dcr, err := auth.DeviceFlow(context.Background(), prov)
 	if err != nil {
 		m.login = nil
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Login error for %s: %v", prov.Name, err),
 		})
@@ -173,7 +173,7 @@ func (m *model) loginStartDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 	// Open browser to verification URI.
 	_ = openBrowser(dcr.VerificationURI)
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
 			"**%s Device Login**\n\n"+
@@ -209,7 +209,7 @@ func (m *model) handleLoginSSOResult(msg loginSSOResultMsg) (tea.Model, tea.Cmd)
 
 	r := msg.result
 	if r.Err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Login failed: %v", r.Err),
 		})
@@ -217,7 +217,7 @@ func (m *model) handleLoginSSOResult(msg loginSSOResultMsg) (tea.Model, tea.Cmd)
 	}
 
 	if r.APIKey == "" {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Login returned empty key for %s.", r.Provider),
 		})
@@ -226,7 +226,7 @@ func (m *model) handleLoginSSOResult(msg loginSSOResultMsg) (tea.Model, tea.Cmd)
 
 	// Save the key.
 	if err := auth.SaveKey(r.EnvVar, r.APIKey); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error saving key: %v", err),
 		})
@@ -234,7 +234,7 @@ func (m *model) handleLoginSSOResult(msg loginSSOResultMsg) (tea.Model, tea.Cmd)
 	}
 
 	masked := maskKey(r.APIKey)
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
 			"Login successful! Saved **%s** key `%s` to `~/.pi-go/.env`.\n\n"+
@@ -251,7 +251,7 @@ func (m *model) handleLoginSave(apiKey string) (tea.Model, tea.Cmd) {
 
 	prov, ok := auth.FindProvider(provName)
 	if !ok {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Internal error: unknown provider.",
 		})
@@ -259,7 +259,7 @@ func (m *model) handleLoginSave(apiKey string) (tea.Model, tea.Cmd) {
 	}
 
 	if err := auth.SaveKey(prov.EnvVar, apiKey); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error saving key: %v", err),
 		})
@@ -267,7 +267,7 @@ func (m *model) handleLoginSave(apiKey string) (tea.Model, tea.Cmd) {
 	}
 
 	masked := maskKey(apiKey)
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
 			"Saved **%s** key `%s` to `~/.pi-go/.env`.\n\nThe key is active for this session.",
@@ -279,7 +279,7 @@ func (m *model) handleLoginSave(apiKey string) (tea.Model, tea.Cmd) {
 // handleLoginCancel cancels the login flow.
 func (m *model) handleLoginCancel() (tea.Model, tea.Cmd) {
 	m.login = nil
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Login cancelled.",
 	})

@@ -23,7 +23,7 @@ func newTestModel(t *testing.T) *model {
 		ctx:        ctx,
 		cancel:     cancel,
 		inputModel: NewInputModel(make([]string, 0), nil, nil, ""),
-		messages:   make([]message, 0),
+		chatModel: ChatModel{Messages: make([]message, 0)},
 		width:      80,
 		height:     24,
 	}
@@ -70,32 +70,32 @@ func TestUpdate_PasteMsg_IgnoredWhenRunning(t *testing.T) {
 func TestUpdate_AgentThinkingMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.Update(agentThinkingMsg{text: "Hmm, "})
-	if len(m.messages) != 1 || m.messages[0].role != "thinking" {
+	if len(m.chatModel.Messages) != 1 || m.chatModel.Messages[0].role != "thinking" {
 		t.Fatal("expected thinking message")
 	}
 	m.Update(agentThinkingMsg{text: "let me think..."})
-	if len(m.messages) != 1 {
+	if len(m.chatModel.Messages) != 1 {
 		t.Error("expected thinking to accumulate in same message")
 	}
-	if m.thinking != "Hmm, let me think..." {
-		t.Errorf("unexpected thinking: %q", m.thinking)
+	if m.chatModel.Thinking != "Hmm, let me think..." {
+		t.Errorf("unexpected thinking: %q", m.chatModel.Thinking)
 	}
 }
 
 func TestUpdate_AgentTextMsg(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.Update(agentTextMsg{text: "Hello!"})
-	if m.streaming != "Hello!" {
-		t.Errorf("expected streaming 'Hello!', got %q", m.streaming)
+	if m.chatModel.Streaming != "Hello!" {
+		t.Errorf("expected streaming 'Hello!', got %q", m.chatModel.Streaming)
 	}
 }
 
 func TestUpdate_AgentDoneMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	m.streaming = "some text"
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = "some text"
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.Update(agentDoneMsg{})
 	if m.running {
 		t.Error("expected running=false after done")
@@ -116,12 +116,12 @@ func TestUpdate_AgentToolResultMsg(t *testing.T) {
 	m.activeTool = "read"
 	m.activeTools = map[string]time.Time{"read": time.Now()}
 	// Tool call creates the message; tool result fills it in.
-	m.messages = append(m.messages, message{role: "tool", tool: "read", content: ""})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "tool", tool: "read", content: ""})
 	m.Update(agentToolResultMsg{name: "read", content: `{"text":"hello"}`})
 	if m.activeTool != "" {
 		t.Errorf("expected activeTool cleared, got %q", m.activeTool)
 	}
-	if m.messages[0].content == "" {
+	if m.chatModel.Messages[0].content == "" {
 		t.Error("expected tool message content to be filled")
 	}
 }
@@ -133,39 +133,39 @@ func TestSlashCommand_Help(t *testing.T) {
 	m.inputModel.Text = "/help"
 	m.inputModel.CursorPos = 5
 	m.handleSlashCommand("/help")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected help message")
 	}
-	if m.messages[len(m.messages)-1].role != "assistant" {
+	if m.chatModel.Messages[len(m.chatModel.Messages)-1].role != "assistant" {
 		t.Error("expected assistant message for /help")
 	}
 }
 
 func TestSlashCommand_Clear(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = append(m.messages, message{role: "user", content: "hi"})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: "hi"})
 	m.handleSlashCommand("/clear")
-	if len(m.messages) != 0 {
-		t.Errorf("expected messages cleared, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 0 {
+		t.Errorf("expected messages cleared, got %d", len(m.chatModel.Messages))
 	}
 }
 
 func TestSlashCommand_Model(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/model")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected model info message")
 	}
 }
 
 func TestSlashCommand_Context(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = append(m.messages,
+	m.chatModel.Messages = append(m.chatModel.Messages,
 		message{role: "user", content: "hello there"},
 		message{role: "assistant", content: "hi back"},
 	)
 	m.handleSlashCommand("/context")
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if last.role != "assistant" {
 		t.Error("expected assistant message for /context")
 	}
@@ -190,7 +190,7 @@ func TestSlashCommand_Quit(t *testing.T) {
 func TestSlashCommand_Skills(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/skills")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected skills list message")
 	}
 }
@@ -198,7 +198,7 @@ func TestSlashCommand_Skills(t *testing.T) {
 func TestSlashCommand_RTK_NoMetrics(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/rtk")
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if last.content != "Output compactor is not active." {
 		t.Errorf("unexpected rtk message: %q", last.content)
 	}
@@ -228,7 +228,7 @@ func TestCountByRole(t *testing.T) {
 
 func TestFormatContextUsage_NoTracker(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = append(m.messages,
+	m.chatModel.Messages = append(m.chatModel.Messages,
 		message{role: "user", content: "hello world"},
 		message{role: "assistant", content: "hi there"},
 	)
@@ -264,7 +264,7 @@ func TestFormatContextUsage_WithTracker(t *testing.T) {
 		percentUsed: 50.0,
 		totalUsed:   50000,
 	}
-	m.messages = append(m.messages,
+	m.chatModel.Messages = append(m.chatModel.Messages,
 		message{role: "user", content: "hello"},
 		message{role: "assistant", content: "world"},
 	)
@@ -398,7 +398,7 @@ func TestHandleRTKCommand_WithMetrics(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.CompactMetrics = &mockCompactMetrics{}
 	m.handleRTKCommand([]string{})
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !contains(last.content, "Compacted") {
 		t.Errorf("expected compact stats, got %q", last.content)
 	}
@@ -407,7 +407,7 @@ func TestHandleRTKCommand_WithMetrics(t *testing.T) {
 func TestHandleRTKCommand_UnknownSubcommand(t *testing.T) {
 	m := newTestModel(t)
 	m.handleRTKCommand([]string{"unknown"})
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !contains(last.content, "Usage") {
 		t.Errorf("expected usage message, got %q", last.content)
 	}
@@ -418,7 +418,7 @@ func TestHandleRTKCommand_UnknownSubcommand(t *testing.T) {
 func TestHandleSkillsCommand_List(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSkillsCommand([]string{})
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message from /skills")
 	}
 }
@@ -426,7 +426,7 @@ func TestHandleSkillsCommand_List(t *testing.T) {
 func TestHandleSkillsCommand_Unknown(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSkillsCommand([]string{"bogus"})
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !contains(last.content, "Usage") {
 		t.Errorf("expected usage message, got %q", last.content)
 	}
@@ -438,10 +438,10 @@ func TestShowCommandList_WithSkills(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.Skills = []extension.Skill{{Name: "foo", Description: "bar"}}
 	m.showCommandList()
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected command list message")
 	}
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !contains(last.content, "Commands") {
 		t.Error("expected 'Commands' in output")
 	}
@@ -454,7 +454,7 @@ func TestShowCommandList_WithSkills(t *testing.T) {
 
 func TestView_BasicRender(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = append(m.messages,
+	m.chatModel.Messages = append(m.chatModel.Messages,
 		message{role: "user", content: "hi"},
 		message{role: "assistant", content: "hello"},
 	)
@@ -660,17 +660,17 @@ func TestHandleKey_UpDown_History(t *testing.T) {
 
 func TestHandleKey_PgUpPgDown(t *testing.T) {
 	m := newTestModel(t)
-	m.messages = make([]message, 100)
-	for i := range m.messages {
-		m.messages[i] = message{role: "user", content: "line"}
+	m.chatModel.Messages = make([]message, 100)
+	for i := range m.chatModel.Messages {
+		m.chatModel.Messages[i] = message{role: "user", content: "line"}
 	}
 	m.handleKey(makeKey(tea.KeyPgUp))
-	if m.scroll < 5 {
-		t.Errorf("expected scroll >= 5, got %d", m.scroll)
+	if m.chatModel.Scroll < 5 {
+		t.Errorf("expected scroll >= 5, got %d", m.chatModel.Scroll)
 	}
 	m.handleKey(makeKey(tea.KeyPgDown))
-	if m.scroll != 0 {
-		t.Errorf("expected scroll 0, got %d", m.scroll)
+	if m.chatModel.Scroll != 0 {
+		t.Errorf("expected scroll 0, got %d", m.chatModel.Scroll)
 	}
 }
 
@@ -696,7 +696,7 @@ func TestHandleKey_Enter_SubmitSlashCommand(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/clear"
 	m.inputModel.CursorPos = 6
-	m.messages = append(m.messages, message{role: "user", content: "hi"})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: "hi"})
 	_, cmd := m.handleKey(makeKey(tea.KeyEnter))
 	if cmd != nil {
 		msg := cmd()
@@ -704,8 +704,8 @@ func TestHandleKey_Enter_SubmitSlashCommand(t *testing.T) {
 			m.Update(msg)
 		}
 	}
-	if len(m.messages) != 0 {
-		t.Errorf("expected messages cleared by /clear, got %d", len(m.messages))
+	if len(m.chatModel.Messages) != 0 {
+		t.Errorf("expected messages cleared by /clear, got %d", len(m.chatModel.Messages))
 	}
 }
 
@@ -815,7 +815,7 @@ func TestRenderStatusBar_Running(t *testing.T) {
 
 func TestRenderStatusBar_WithTraceLog(t *testing.T) {
 	m := newTestModel(t)
-	m.traceLog = []traceEntry{{kind: "llm", summary: "test"}}
+	m.chatModel.TraceLog = []traceEntry{{kind: "llm", summary: "test"}}
 	out := m.renderStatusBar()
 	if out == "" {
 		t.Error("expected non-empty status bar")
@@ -825,7 +825,7 @@ func TestRenderStatusBar_WithTraceLog(t *testing.T) {
 func TestRenderStatusBar_LargeContext(t *testing.T) {
 	m := newTestModel(t)
 	// Create enough content to push ctx over 1k tokens
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: strings.Repeat("x", 8000), // ~2k tokens
 	})
@@ -887,7 +887,7 @@ func TestSubmit_SlashCommand(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/help"
 	m.testSubmit()
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Error("expected help message from submit")
 	}
 }
@@ -1041,7 +1041,7 @@ func TestMaxScroll(t *testing.T) {
 	m := newTestModel(t)
 	m.height = 20
 	// With few messages, max scroll should be 0.
-	ms := m.maxScroll()
+	ms := m.chatModel.MaxScroll(m.height)
 	if ms < 0 {
 		t.Errorf("expected maxScroll >= 0, got %d", ms)
 	}
@@ -1099,7 +1099,7 @@ func TestSlashCommand_Session(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.SessionID = "test-session-123"
 	m.handleSlashCommand("/session")
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "test-session-123") {
 		t.Error("expected session ID in output")
 	}
@@ -1108,7 +1108,7 @@ func TestSlashCommand_Session(t *testing.T) {
 func TestSlashCommand_Agents_NoOrchestrator(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/agents")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message from /agents")
 	}
 }
@@ -1116,7 +1116,7 @@ func TestSlashCommand_Agents_NoOrchestrator(t *testing.T) {
 func TestSlashCommand_Branch_NoService(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/branch")
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "not available") && !strings.Contains(last.content, "Session") {
 		// Some error message about missing session service
 		t.Logf("branch message: %s", last.content)
@@ -1127,7 +1127,7 @@ func TestSlashCommand_Compact(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/compact")
 	// Should produce some output
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message from /compact")
 	}
 }
@@ -1135,7 +1135,7 @@ func TestSlashCommand_Compact(t *testing.T) {
 func TestSlashCommand_Unknown(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/nonexistent")
-	last := m.messages[len(m.messages)-1]
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "Unknown command") {
 		t.Errorf("expected unknown command message, got %q", last.content)
 	}
@@ -1156,10 +1156,10 @@ func TestSlashCommand_DynamicSkill(t *testing.T) {
 func TestSubmit_SlashClear(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/clear"
-	m.messages = append(m.messages, message{role: "user", content: "hi"})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: "hi"})
 	m.testSubmit()
-	if len(m.messages) != 0 {
-		t.Errorf("expected clear, got %d messages", len(m.messages))
+	if len(m.chatModel.Messages) != 0 {
+		t.Errorf("expected clear, got %d messages", len(m.chatModel.Messages))
 	}
 }
 
@@ -1319,7 +1319,7 @@ func TestSlashCommand_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []string{"/help", "/clear", "hello world"}
 	m.handleSlashCommand("/history")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected history output")
 	}
 }
@@ -1328,7 +1328,7 @@ func TestSlashCommand_HistoryWithQuery(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []string{"/help", "/clear", "hello world"}
 	m.handleSlashCommand("/history help")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected filtered history output")
 	}
 }
@@ -1416,7 +1416,7 @@ func TestHandleSkillCreateCommand_WithNameTmpDir(t *testing.T) {
 	m.cfg.WorkDir = t.TempDir()
 	m.handleSkillCreateCommand([]string{"test-new-skill"})
 	// Should either create the skill or show a message
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message from skill create")
 	}
 }
@@ -1427,7 +1427,7 @@ func TestHandleSkillLoadCommand(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.SkillDirs = []string{t.TempDir()}
 	m.handleSkillLoadCommand()
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message from skill load")
 	}
 }
@@ -1442,10 +1442,10 @@ func TestSubmit_RegularText(t *testing.T) {
 	// add messages and start goroutine. We test the state changes.
 	m.testSubmit()
 	// Should have added user + assistant messages
-	if len(m.messages) < 2 {
-		t.Errorf("expected at least 2 messages, got %d", len(m.messages))
+	if len(m.chatModel.Messages) < 2 {
+		t.Errorf("expected at least 2 messages, got %d", len(m.chatModel.Messages))
 	}
-	if m.messages[0].role != "user" || m.messages[0].content != "hello world" {
+	if m.chatModel.Messages[0].role != "user" || m.chatModel.Messages[0].content != "hello world" {
 		t.Error("expected user message")
 	}
 	if !m.running {
@@ -1484,7 +1484,7 @@ func TestSubmit_SkipsDuplicateHistory(t *testing.T) {
 func TestSlashCommand_SkillCreate(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/skill-create")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message")
 	}
 }
@@ -1493,7 +1493,7 @@ func TestSlashCommand_SkillLoad(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.SkillDirs = []string{t.TempDir()}
 	m.handleSlashCommand("/skill-load")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message")
 	}
 }
@@ -1501,7 +1501,7 @@ func TestSlashCommand_SkillLoad(t *testing.T) {
 func TestSlashCommand_SkillList(t *testing.T) {
 	m := newTestModel(t)
 	m.handleSlashCommand("/skill-list")
-	if len(m.messages) == 0 {
+	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected message")
 	}
 }

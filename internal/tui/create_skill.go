@@ -28,15 +28,15 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	if m.cfg.Logger != nil {
 		m.cfg.Logger.Info(fmt.Sprintf("skill:%s instruction=%d bytes", skill.Name, len(prompt)))
 	}
-	m.messages = append(m.messages, message{role: "user", content: display})
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: display})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 
 	// Clear input and start agent
 	m.inputModel.Clear()
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 	m.running = true
-	m.scroll = 0
+	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
 	go m.runAgentLoop(prompt)
@@ -56,7 +56,7 @@ func (m *model) handleSkillCreateCommand(args []string) (tea.Model, tea.Cmd) {
 	m.inputModel.Clear()
 
 	if len(args) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Usage: `/skill-create <name> [description]`\nCreates `.pi-go/skills/<name>/SKILL.md`",
 		})
@@ -68,7 +68,7 @@ func (m *model) handleSkillCreateCommand(args []string) (tea.Model, tea.Cmd) {
 	// Validate skill name
 	for _, c := range skillName {
 		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '-' && c != '_' {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: "Invalid skill name. Use only alphanumeric characters, dashes, and underscores.",
 			})
@@ -91,7 +91,7 @@ func (m *model) handleSkillCreateCommand(args []string) (tea.Model, tea.Cmd) {
 			desc: desc,
 			path: skillPath,
 		}
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Skill already exists: `%s`\n\nPress **Enter** to overwrite, **Esc** to cancel.", skillPath),
 		})
@@ -111,7 +111,7 @@ func (m *model) handleSkillCreateConfirm() (tea.Model, tea.Cmd) {
 // handleSkillCreateCancel cancels skill-create overwrite.
 func (m *model) handleSkillCreateCancel() (tea.Model, tea.Cmd) {
 	m.pendingSkillCreate = nil
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Skill creation cancelled.",
 	})
@@ -122,7 +122,7 @@ func (m *model) handleSkillCreateCancel() (tea.Model, tea.Cmd) {
 func (m *model) writeSkillFile(name, desc, path string) (tea.Model, tea.Cmd) {
 	skillDir := filepath.Dir(path)
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error creating directory: %v", err),
 		})
@@ -150,7 +150,7 @@ description: %s
 `, name, desc, name)
 
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error creating skill: %v", err),
 		})
@@ -182,16 +182,16 @@ After the user answers, update %s with:
 - ## Examples with concrete usage
 - ## Guidelines from answer C + research`, path, name, path)
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: fmt.Sprintf("Created skill `/%s` at `%s`\n\nLet me help you configure it.", name, path),
 	})
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 	m.running = true
-	m.scroll = 0
+	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
 	go m.runAgentLoop(prompt)
@@ -204,7 +204,7 @@ func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
 	m.inputModel.Clear()
 
 	if len(m.cfg.Skills) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "No skills loaded. Place `*.SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.",
 		})
@@ -226,7 +226,7 @@ func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
 			fmt.Fprintf(&b, "  `%s`\n", d)
 		}
 	}
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: b.String(),
 	})
@@ -241,7 +241,7 @@ func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
 	m.cfg.Skills = m.inputModel.Skills
 
 	if len(m.cfg.Skills) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Reloaded: no skills found. Place `*.SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.",
 		})
@@ -252,7 +252,7 @@ func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
 	for _, s := range m.cfg.Skills {
 		names = append(names, "/"+s.Name)
 	}
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: fmt.Sprintf("Reloaded %d skill(s): %s", len(m.cfg.Skills), strings.Join(names, ", ")),
 	})

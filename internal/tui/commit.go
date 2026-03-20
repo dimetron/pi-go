@@ -48,7 +48,7 @@ Rules:
 // handleCommitCommand initiates the /commit flow.
 func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 	if m.cfg.GenerateCommitMsg == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Commit generation not available (no LLM configured for commit role).",
 		})
@@ -59,7 +59,7 @@ func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 
 	// Check if we're in a git repo.
 	if _, err := gitCmd(cwd, "rev-parse", "--git-dir"); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Not a git repository.",
 		})
@@ -69,7 +69,7 @@ func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 	// Get porcelain status.
 	status, err := gitCmd(cwd, "status", "--porcelain")
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error getting git status: %v", err),
 		})
@@ -78,7 +78,7 @@ func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 
 	staged, _, _ := commitParsePorcelain(status)
 	if len(staged) == 0 {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "No staged changes. Use `git add <files>` to stage changes first.",
 		})
@@ -106,7 +106,7 @@ func (m *model) handleCommitCommand() (tea.Model, tea.Cmd) {
 	}
 
 	// Show progress.
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Generating commit message...",
 	})
@@ -125,8 +125,8 @@ func (m *model) handleCommitGenerated(msg commitGeneratedMsg) (tea.Model, tea.Cm
 	if msg.err != nil {
 		m.commit = nil
 		// Update the "generating" message to show error.
-		if len(m.messages) > 0 {
-			m.messages[len(m.messages)-1].content = fmt.Sprintf("Error generating commit message: %v", msg.err)
+		if len(m.chatModel.Messages) > 0 {
+			m.chatModel.Messages[len(m.chatModel.Messages)-1].content = fmt.Sprintf("Error generating commit message: %v", msg.err)
 		}
 		return m, nil
 	}
@@ -139,8 +139,8 @@ func (m *model) handleCommitGenerated(msg commitGeneratedMsg) (tea.Model, tea.Cm
 	m.commit = &commitState{phase: "confirming", message: commitMsg}
 
 	// Update the "generating" message to show the proposed commit.
-	if len(m.messages) > 0 {
-		m.messages[len(m.messages)-1].content = fmt.Sprintf(
+	if len(m.chatModel.Messages) > 0 {
+		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = fmt.Sprintf(
 			"**Proposed commit message:**\n```\n%s\n```\n\nPress **Enter** to commit, **Esc** to cancel.",
 			commitMsg,
 		)
@@ -168,12 +168,12 @@ func (m *model) handleCommitConfirm() (tea.Model, tea.Cmd) {
 // handleCommitDone processes the git commit result.
 func (m *model) handleCommitDone(msg commitDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Commit failed: %v\n%s", msg.err, msg.output),
 		})
 	} else {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Committed successfully.",
 		})
@@ -184,7 +184,7 @@ func (m *model) handleCommitDone(msg commitDoneMsg) (tea.Model, tea.Cmd) {
 // handleCommitCancel cancels the commit flow.
 func (m *model) handleCommitCancel() (tea.Model, tea.Cmd) {
 	m.commit = nil
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Commit cancelled.",
 	})

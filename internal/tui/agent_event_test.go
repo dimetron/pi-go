@@ -378,9 +378,9 @@ func TestAgentSubEvent_SpawnAssignsID(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentType: "task", agentTitle: "fix bug"},
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -389,8 +389,8 @@ func TestAgentSubEvent_SpawnAssignsID(t *testing.T) {
 		content: "task",
 	})
 	mm := newM.(*model)
-	if mm.messages[0].agentID != "sub-123" {
-		t.Errorf("expected agentID 'sub-123', got %q", mm.messages[0].agentID)
+	if mm.chatModel.Messages[0].agentID != "sub-123" {
+		t.Errorf("expected agentID 'sub-123', got %q", mm.chatModel.Messages[0].agentID)
 	}
 }
 
@@ -398,10 +398,10 @@ func TestAgentSubEvent_SpawnAssignsToLatestUnmatched(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-old"},   // already assigned
 			{role: "tool", tool: "agent", agentType: "explore"}, // unassigned
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -410,11 +410,11 @@ func TestAgentSubEvent_SpawnAssignsToLatestUnmatched(t *testing.T) {
 		content: "explore",
 	})
 	mm := newM.(*model)
-	if mm.messages[0].agentID != "sub-old" {
+	if mm.chatModel.Messages[0].agentID != "sub-old" {
 		t.Error("first agent should keep its original ID")
 	}
-	if mm.messages[1].agentID != "sub-new" {
-		t.Errorf("second agent should get new ID, got %q", mm.messages[1].agentID)
+	if mm.chatModel.Messages[1].agentID != "sub-new" {
+		t.Errorf("second agent should get new ID, got %q", mm.chatModel.Messages[1].agentID)
 	}
 }
 
@@ -422,9 +422,9 @@ func TestAgentSubEvent_ToolCallAppended(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -433,10 +433,10 @@ func TestAgentSubEvent_ToolCallAppended(t *testing.T) {
 		content: "read",
 	})
 	mm := newM.(*model)
-	if len(mm.messages[0].agentEvents) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(mm.messages[0].agentEvents))
+	if len(mm.chatModel.Messages[0].agentEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(mm.chatModel.Messages[0].agentEvents))
 	}
-	ev := mm.messages[0].agentEvents[0]
+	ev := mm.chatModel.Messages[0].agentEvents[0]
 	if ev.kind != "tool_call" {
 		t.Errorf("expected kind 'tool_call', got %q", ev.kind)
 	}
@@ -449,9 +449,9 @@ func TestAgentSubEvent_ToolResultAppended(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -460,10 +460,10 @@ func TestAgentSubEvent_ToolResultAppended(t *testing.T) {
 		content: "file contents here",
 	})
 	mm := newM.(*model)
-	if len(mm.messages[0].agentEvents) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(mm.messages[0].agentEvents))
+	if len(mm.chatModel.Messages[0].agentEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(mm.chatModel.Messages[0].agentEvents))
 	}
-	if mm.messages[0].agentEvents[0].kind != "tool_result" {
+	if mm.chatModel.Messages[0].agentEvents[0].kind != "tool_result" {
 		t.Error("expected tool_result kind")
 	}
 }
@@ -472,9 +472,9 @@ func TestAgentSubEvent_TextDeltaConvertedToText(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -483,11 +483,11 @@ func TestAgentSubEvent_TextDeltaConvertedToText(t *testing.T) {
 		content: "some text",
 	})
 	mm := newM.(*model)
-	if len(mm.messages[0].agentEvents) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(mm.messages[0].agentEvents))
+	if len(mm.chatModel.Messages[0].agentEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(mm.chatModel.Messages[0].agentEvents))
 	}
-	if mm.messages[0].agentEvents[0].kind != "text" {
-		t.Errorf("expected text_delta converted to 'text', got %q", mm.messages[0].agentEvents[0].kind)
+	if mm.chatModel.Messages[0].agentEvents[0].kind != "text" {
+		t.Errorf("expected text_delta converted to 'text', got %q", mm.chatModel.Messages[0].agentEvents[0].kind)
 	}
 }
 
@@ -495,9 +495,9 @@ func TestAgentSubEvent_MultipleEventsAccumulate(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
-		},
+		}},
 	}
 
 	events := []agentSubEventMsg{
@@ -513,8 +513,8 @@ func TestAgentSubEvent_MultipleEventsAccumulate(t *testing.T) {
 		mm = newM.(*model)
 	}
 
-	if len(mm.messages[0].agentEvents) != 4 {
-		t.Fatalf("expected 4 events, got %d", len(mm.messages[0].agentEvents))
+	if len(mm.chatModel.Messages[0].agentEvents) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(mm.chatModel.Messages[0].agentEvents))
 	}
 }
 
@@ -522,10 +522,10 @@ func TestAgentSubEvent_RoutedByAgentID(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
 			{role: "tool", tool: "agent", agentID: "sub-2"},
-		},
+		}},
 	}
 
 	// Event for sub-2.
@@ -536,14 +536,14 @@ func TestAgentSubEvent_RoutedByAgentID(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if len(mm.messages[0].agentEvents) != 0 {
+	if len(mm.chatModel.Messages[0].agentEvents) != 0 {
 		t.Error("sub-1 should have no events")
 	}
-	if len(mm.messages[1].agentEvents) != 1 {
+	if len(mm.chatModel.Messages[1].agentEvents) != 1 {
 		t.Fatal("sub-2 should have 1 event")
 	}
-	if mm.messages[1].agentEvents[0].content != "bash" {
-		t.Errorf("expected 'bash', got %q", mm.messages[1].agentEvents[0].content)
+	if mm.chatModel.Messages[1].agentEvents[0].content != "bash" {
+		t.Errorf("expected 'bash', got %q", mm.chatModel.Messages[1].agentEvents[0].content)
 	}
 }
 
@@ -551,9 +551,9 @@ func TestAgentSubEvent_UnknownAgentIDIgnored(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
 		cfg: Config{AgentEventCh: ch},
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "tool", tool: "agent", agentID: "sub-1"},
-		},
+		}},
 	}
 
 	newM, _ := m.Update(agentSubEventMsg{
@@ -562,7 +562,7 @@ func TestAgentSubEvent_UnknownAgentIDIgnored(t *testing.T) {
 		content: "read",
 	})
 	mm := newM.(*model)
-	if len(mm.messages[0].agentEvents) != 0 {
+	if len(mm.chatModel.Messages[0].agentEvents) != 0 {
 		t.Error("event for unknown agentID should not be appended")
 	}
 }
@@ -570,10 +570,12 @@ func TestAgentSubEvent_UnknownAgentIDIgnored(t *testing.T) {
 func TestAgentSubEvent_ResetsScroll(t *testing.T) {
 	ch := make(chan AgentSubEvent, 1)
 	m := &model{
-		cfg:    Config{AgentEventCh: ch},
-		scroll: 5,
-		messages: []message{
-			{role: "tool", tool: "agent", agentID: "sub-1"},
+		cfg: Config{AgentEventCh: ch},
+		chatModel: ChatModel{
+			Scroll: 5,
+			Messages: []message{
+				{role: "tool", tool: "agent", agentID: "sub-1"},
+			},
 		},
 	}
 
@@ -583,8 +585,8 @@ func TestAgentSubEvent_ResetsScroll(t *testing.T) {
 		content: "read",
 	})
 	mm := newM.(*model)
-	if mm.scroll != 0 {
-		t.Errorf("expected scroll reset to 0, got %d", mm.scroll)
+	if mm.chatModel.Scroll != 0 {
+		t.Errorf("expected scroll reset to 0, got %d", mm.chatModel.Scroll)
 	}
 }
 
@@ -592,9 +594,9 @@ func TestAgentSubEvent_ResetsScroll(t *testing.T) {
 
 func TestAgentToolCallMsg_SetsAgentFields(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentToolCallMsg{
@@ -606,10 +608,10 @@ func TestAgentToolCallMsg_SetsAgentFields(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if len(mm.messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.messages))
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	msg := mm.messages[0]
+	msg := mm.chatModel.Messages[0]
 	if msg.tool != "agent" {
 		t.Errorf("expected tool 'agent', got %q", msg.tool)
 	}
@@ -623,9 +625,9 @@ func TestAgentToolCallMsg_SetsAgentFields(t *testing.T) {
 
 func TestAgentToolCallMsg_TruncatesLongTitle(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	longPrompt := strings.Repeat("a", 100)
@@ -638,19 +640,19 @@ func TestAgentToolCallMsg_TruncatesLongTitle(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if len(mm.messages[0].agentTitle) > 60 {
-		t.Errorf("expected title <= 60 chars, got %d", len(mm.messages[0].agentTitle))
+	if len(mm.chatModel.Messages[0].agentTitle) > 60 {
+		t.Errorf("expected title <= 60 chars, got %d", len(mm.chatModel.Messages[0].agentTitle))
 	}
-	if !strings.HasSuffix(mm.messages[0].agentTitle, "...") {
+	if !strings.HasSuffix(mm.chatModel.Messages[0].agentTitle, "...") {
 		t.Error("expected '...' suffix for truncated title")
 	}
 }
 
 func TestAgentToolCallMsg_MultiLinePromptTrimmed(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentToolCallMsg{
@@ -662,19 +664,19 @@ func TestAgentToolCallMsg_MultiLinePromptTrimmed(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if strings.Contains(mm.messages[0].agentTitle, "\n") {
+	if strings.Contains(mm.chatModel.Messages[0].agentTitle, "\n") {
 		t.Error("expected single-line title")
 	}
-	if mm.messages[0].agentTitle != "First line" {
-		t.Errorf("expected 'First line', got %q", mm.messages[0].agentTitle)
+	if mm.chatModel.Messages[0].agentTitle != "First line" {
+		t.Errorf("expected 'First line', got %q", mm.chatModel.Messages[0].agentTitle)
 	}
 }
 
 func TestAgentToolCallMsg_NonAgentToolNoAgentFields(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentToolCallMsg{
@@ -683,10 +685,10 @@ func TestAgentToolCallMsg_NonAgentToolNoAgentFields(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if mm.messages[0].agentType != "" {
+	if mm.chatModel.Messages[0].agentType != "" {
 		t.Error("non-agent tool should not set agentType")
 	}
-	if mm.messages[0].agentTitle != "" {
+	if mm.chatModel.Messages[0].agentTitle != "" {
 		t.Error("non-agent tool should not set agentTitle")
 	}
 }
@@ -730,7 +732,7 @@ func TestWaitForSubEvent_ReceivesEvent(t *testing.T) {
 func TestRenderMessages_AgentWithTitle(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:       "tool",
 				tool:       "agent",
@@ -738,11 +740,11 @@ func TestRenderMessages_AgentWithTitle(t *testing.T) {
 				agentTitle: "Fix linter issues",
 				agentID:    "sub-1",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "agent") {
 		t.Error("expected 'agent' in rendered output")
 	}
@@ -757,7 +759,7 @@ func TestRenderMessages_AgentWithTitle(t *testing.T) {
 func TestRenderMessages_AgentWithEvents(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:      "tool",
 				tool:      "agent",
@@ -770,11 +772,11 @@ func TestRenderMessages_AgentWithEvents(t *testing.T) {
 					{kind: "tool_result", content: "1 replacement"},
 				},
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "read") {
 		t.Error("expected 'read' tool call in event stream")
 	}
@@ -792,7 +794,7 @@ func TestRenderMessages_AgentEventStreamTruncated(t *testing.T) {
 
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:        "tool",
 				tool:        "agent",
@@ -800,11 +802,11 @@ func TestRenderMessages_AgentEventStreamTruncated(t *testing.T) {
 				agentID:     "sub-1",
 				agentEvents: events,
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "earlier events") {
 		t.Error("expected 'earlier events' note for truncated stream")
 	}
@@ -813,7 +815,7 @@ func TestRenderMessages_AgentEventStreamTruncated(t *testing.T) {
 func TestRenderMessages_AgentWithResult(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:      "tool",
 				tool:      "agent",
@@ -821,11 +823,11 @@ func TestRenderMessages_AgentWithResult(t *testing.T) {
 				agentID:   "sub-1",
 				content:   "Changes applied successfully",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "Changes applied") {
 		t.Error("expected result summary in rendered output")
 	}
@@ -834,18 +836,18 @@ func TestRenderMessages_AgentWithResult(t *testing.T) {
 func TestRenderMessages_RegularToolUnchanged(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:    "tool",
 				tool:    "read",
 				toolIn:  "/path/to/file.go",
 				content: "42 lines",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "read") {
 		t.Error("expected 'read' tool name")
 	}
@@ -857,18 +859,18 @@ func TestRenderMessages_RegularToolUnchanged(t *testing.T) {
 func TestRenderMessages_GrepHighlighted(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:    "tool",
 				tool:    "grep",
 				toolIn:  "func main",
 				content: "main.go:5: func main() {}\nutil.go:10: func helper() {}",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "\033[") {
 		t.Error("expected ANSI codes for highlighted grep output")
 	}
@@ -880,18 +882,18 @@ func TestRenderMessages_GrepHighlighted(t *testing.T) {
 func TestRenderMessages_FindHighlighted(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:    "tool",
 				tool:    "find",
 				toolIn:  "*.go",
 				content: "internal/tools/read.go\ninternal/tools/write.go",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "\033[") {
 		t.Error("expected ANSI codes for highlighted find output")
 	}
@@ -942,18 +944,18 @@ func TestInit_NoChannels(t *testing.T) {
 func TestRenderMessages_ReadToolHighlighted(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{
 				role:    "tool",
 				tool:    "read",
 				toolIn:  "main.go",
 				content: "     1\tpackage main\n     2\t\n     3\tfunc main() {}",
 			},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	// Should contain ANSI codes from syntax highlighting.
 	if !strings.Contains(output, "\033[") {
 		t.Error("expected ANSI escape codes for highlighted Go code")
@@ -968,13 +970,13 @@ func TestRenderMessages_ReadToolHighlighted(t *testing.T) {
 func TestRenderMessages_UserMessage(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "user", content: "hello world"},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "hello world") {
 		t.Error("expected user message content")
 	}
@@ -983,13 +985,13 @@ func TestRenderMessages_UserMessage(t *testing.T) {
 func TestRenderMessages_AssistantMessage(t *testing.T) {
 	m := &model{
 		width: 120,
-		messages: []message{
+		chatModel: ChatModel{Messages: []message{
 			{role: "assistant", content: "I can help with that"},
-		},
+		}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "help") {
 		t.Error("expected assistant message content")
 	}
@@ -997,12 +999,12 @@ func TestRenderMessages_AssistantMessage(t *testing.T) {
 
 func TestRenderMessages_Empty(t *testing.T) {
 	m := &model{
-		width:    120,
-		messages: []message{},
+		width:     120,
+		chatModel: ChatModel{Messages: []message{}},
 	}
-	m.updateRenderer()
+	m.chatModel.UpdateRenderer(m.width)
 
-	output := m.renderMessages()
+	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "Welcome") {
 		t.Error("expected welcome message for empty conversation")
 	}
@@ -1049,33 +1051,35 @@ func TestScreen_Empty(t *testing.T) {
 
 func TestAgentTextMsg_AccumulatesStreaming(t *testing.T) {
 	m := &model{
-		messages: []message{{role: "assistant", content: ""}},
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: []message{{role: "assistant", content: ""}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentTextMsg{text: "Hello "})
 	mm := newM.(*model)
-	if mm.streaming != "Hello " {
-		t.Errorf("expected streaming 'Hello ', got %q", mm.streaming)
+	if mm.chatModel.Streaming != "Hello " {
+		t.Errorf("expected streaming 'Hello ', got %q", mm.chatModel.Streaming)
 	}
 
 	newM2, _ := mm.Update(agentTextMsg{text: "world"})
 	mm2 := newM2.(*model)
-	if mm2.streaming != "Hello world" {
-		t.Errorf("expected 'Hello world', got %q", mm2.streaming)
+	if mm2.chatModel.Streaming != "Hello world" {
+		t.Errorf("expected 'Hello world', got %q", mm2.chatModel.Streaming)
 	}
 }
 
 func TestAgentDoneMsg_ClearsRunning(t *testing.T) {
 	m := &model{
-		messages:    []message{{role: "assistant", content: "done"}},
+		chatModel: ChatModel{
+			Messages:  []message{{role: "assistant", content: "done"}},
+			Streaming: "text",
+			Thinking:  "thought",
+		},
 		running:     true,
 		activeTool:  "read",
 		activeTools: map[string]time.Time{"read": {}},
 		agentCh:     make(chan agentMsg, 64),
-		streaming:   "text",
-		thinking:    "thought",
 	}
 
 	newM, _ := m.Update(agentDoneMsg{})
@@ -1089,22 +1093,22 @@ func TestAgentDoneMsg_ClearsRunning(t *testing.T) {
 	if mm.activeTools != nil {
 		t.Error("expected nil activeTools")
 	}
-	if mm.streaming != "" {
+	if mm.chatModel.Streaming != "" {
 		t.Error("expected empty streaming")
 	}
 }
 
 func TestAgentDoneMsg_WithError(t *testing.T) {
 	m := &model{
-		messages: []message{{role: "assistant"}},
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentDoneMsg{err: fmt.Errorf("connection lost")})
 	mm := newM.(*model)
 	found := false
-	for _, msg := range mm.messages {
+	for _, msg := range mm.chatModel.Messages {
 		if strings.Contains(msg.content, "connection lost") {
 			found = true
 			break
@@ -1117,9 +1121,9 @@ func TestAgentDoneMsg_WithError(t *testing.T) {
 
 func TestAgentToolCallMsg_SetsActiveTool(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		running:  true,
-		agentCh:  make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentToolCallMsg{
@@ -1134,7 +1138,7 @@ func TestAgentToolCallMsg_SetsActiveTool(t *testing.T) {
 
 func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 	m := &model{
-		messages:    []message{{role: "tool", tool: "read", content: ""}},
+		chatModel:   ChatModel{Messages: []message{{role: "tool", tool: "read", content: ""}}},
 		running:     true,
 		activeTool:  "read",
 		activeTools: map[string]time.Time{"read": {}},
@@ -1149,7 +1153,7 @@ func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 	if mm.activeTool != "" {
 		t.Errorf("expected empty activeTool, got %q", mm.activeTool)
 	}
-	if mm.messages[0].content == "" {
+	if mm.chatModel.Messages[0].content == "" {
 		t.Error("expected message content to be updated")
 	}
 }

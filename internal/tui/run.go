@@ -84,12 +84,12 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		if len(specs) > 0 {
 			msg += "\n\n**Available specs:** " + strings.Join(specs, ", ")
 		}
-		m.messages = append(m.messages, message{role: "assistant", content: msg})
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
 		return m, nil
 	}
 
 	if m.cfg.Orchestrator == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "Subagent system not available. Cannot run specs.",
 		})
@@ -106,7 +106,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		if len(specs) > 0 {
 			errMsg += "\n\n**Available specs:** " + strings.Join(specs, ", ")
 		}
-		m.messages = append(m.messages, message{role: "assistant", content: errMsg})
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: errMsg})
 		return m, nil
 	}
 
@@ -125,7 +125,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		SkipCleanup: true,
 	})
 	if err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Failed to spawn task agent: %v", err),
 		})
@@ -153,18 +153,18 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		}
 		gateInfo = strings.Join(names, ", ")
 	}
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf("**Running spec `%s`** [cycle 1/%d] — agent `%s` spawned in worktree\nGates: %s",
 			specName, m.run.maxRetries, agentID, gateInfo),
 	})
 
 	// Add empty assistant message for streaming.
-	m.messages = append(m.messages, message{role: "assistant", content: ""})
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 	m.running = true
-	m.scroll = 0
+	m.chatModel.Scroll = 0
 
 	// Start consuming events from the subagent.
 	return m, waitForRunAgent(events)
@@ -190,20 +190,20 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 
 	switch ev.Type {
 	case "text_delta":
-		m.streaming += ev.Content
+		m.chatModel.Streaming += ev.Content
 		// Update the last assistant message with accumulated text.
-		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].role == "assistant" {
-				m.messages[i].content = m.streaming
+		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+			if m.chatModel.Messages[i].role == "assistant" {
+				m.chatModel.Messages[i].content = m.chatModel.Streaming
 				break
 			}
 		}
-		m.scroll = 0
+		m.chatModel.Scroll = 0
 		// Trace.
-		if len(m.traceLog) > 0 && m.traceLog[len(m.traceLog)-1].kind == "llm" {
-			m.traceLog[len(m.traceLog)-1].detail = m.streaming
+		if len(m.chatModel.TraceLog) > 0 && m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].kind == "llm" {
+			m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].detail = m.chatModel.Streaming
 		} else {
-			m.traceLog = append(m.traceLog, traceEntry{
+			m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 				time: time.Now(), kind: "llm", summary: "agent response", detail: ev.Content,
 			})
 		}
@@ -211,42 +211,42 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 	case "tool_call":
 		m.activeTool = ev.Content
 		m.toolStart = time.Now()
-		m.traceLog = append(m.traceLog, traceEntry{
+		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_call", summary: fmt.Sprintf(">>> %s", ev.Content),
 		})
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "tool", tool: ev.Content,
 		})
 
 	case "tool_result":
 		m.activeTool = ""
-		m.traceLog = append(m.traceLog, traceEntry{
+		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_result", summary: "<<< result",
 			detail: ev.Content,
 		})
 		// Update the last tool message with the result.
-		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].role == "tool" && m.messages[i].content == "" {
-				m.messages[i].content = toolResultSummary(ev.Content)
+		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+			if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].content == "" {
+				m.chatModel.Messages[i].content = toolResultSummary(ev.Content)
 				break
 			}
 		}
 
 	case "message_start":
 		// New message from the agent — add an empty assistant placeholder.
-		m.streaming = ""
-		m.messages = append(m.messages, message{role: "assistant", content: ""})
+		m.chatModel.Streaming = ""
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 
 	case "message_end":
 		// Message completed — reset streaming accumulator for the next message.
-		m.streaming = ""
+		m.chatModel.Streaming = ""
 
 	case "error":
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Agent error: %s", ev.Error),
 		})
-		m.traceLog = append(m.traceLog, traceEntry{
+		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "error", summary: "agent error", detail: ev.Error,
 		})
 	}
@@ -260,14 +260,14 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleRunAgentDone() (tea.Model, tea.Cmd) {
 	m.running = false
 	m.activeTool = ""
-	m.streaming = ""
-	m.thinking = ""
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
 
 	if m.run == nil {
 		return m, nil
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: fmt.Sprintf("**Agent `%s` finished** — validating gates...", m.run.agentID),
 	})
@@ -275,7 +275,7 @@ func (m *model) handleRunAgentDone() (tea.Model, tea.Cmd) {
 	// If no gates, skip directly to merge.
 	if len(m.run.gates) == 0 {
 		m.run.phase = "merging"
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "No gates defined — proceeding to merge.",
 		})
@@ -384,7 +384,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: summary.String(),
 	})
@@ -392,7 +392,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	if msg.passed {
 		// All gates passed — proceed to merge.
 		m.run.phase = "merging"
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: "All gates passed — merging worktree branch...",
 		})
@@ -413,7 +413,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 			wtPath = wm.PathFor(m.run.agentID)
 		}
 
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "assistant",
 			content: fmt.Sprintf("**Gate failed** — cycle %d/%d (retry %d) in worktree `%s`...",
 				m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
@@ -430,7 +430,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		})
 		if err != nil {
 			m.run.phase = "failed"
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
 			})
@@ -442,11 +442,11 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		m.run.events = events
 
 		// Add empty assistant message for streaming.
-		m.messages = append(m.messages, message{role: "assistant", content: ""})
-		m.streaming = ""
-		m.thinking = ""
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+		m.chatModel.Streaming = ""
+		m.chatModel.Thinking = ""
 		m.running = true
-		m.scroll = 0
+		m.chatModel.Scroll = 0
 
 		return m, waitForRunAgent(events)
 	}
@@ -460,7 +460,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		wtPath = wm.PathFor(m.run.agentID)
 	}
 
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf("**Gate validation failed** for spec `%s` after %d retries.\nWorktree preserved at: `%s`\nInspect manually and fix the issues.",
 			m.run.specName, m.run.maxRetries, wtPath),
@@ -468,7 +468,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 
 	// Write summary report for gate failure.
 	if report, err := m.writeRunSummary("gate_failed"); err == nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Summary report: `%s`", report),
 		})
@@ -517,7 +517,7 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 			wtPath = wm.PathFor(m.run.agentID)
 		}
 
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "assistant",
 			content: fmt.Sprintf("**Merge failed** for spec `%s`: %v\nWorktree preserved at: `%s`",
 				m.run.specName, msg.err, wtPath),
@@ -525,7 +525,7 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 
 		// Write summary report for merge failure.
 		if report, err := m.writeRunSummary("merge_failed"); err == nil {
-			m.messages = append(m.messages, message{
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
 				content: fmt.Sprintf("Summary report: `%s`", report),
 			})
@@ -534,19 +534,19 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 	}
 
 	m.run.phase = "done"
-	m.messages = append(m.messages, message{
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: fmt.Sprintf("**Spec `%s` completed** — changes merged successfully.", m.run.specName),
 	})
 
 	// Write summary report.
 	if report, err := m.writeRunSummary("completed"); err != nil {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Warning: failed to write summary report: %v", err),
 		})
 	} else {
-		m.messages = append(m.messages, message{
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Summary report: `%s`", report),
 		})
