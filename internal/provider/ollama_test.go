@@ -1119,10 +1119,10 @@ func TestOllamaRunStreaming_YieldCancelled(t *testing.T) {
 	}
 
 	var count int
-	for range llm.GenerateContent(context.Background(), req, true) {
+	llm.GenerateContent(context.Background(), req, true)(func(*model.LLMResponse, error) bool {
 		count++
-		break
-	}
+		return false // stop after first yield
+	})
 	if count == 0 {
 		t.Error("expected at least one yield before stopping")
 	}

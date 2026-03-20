@@ -225,7 +225,7 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		defer func() { _ = resp.Body.Close() }()()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Follow redirect to callback.
 		if resp.StatusCode == http.StatusFound {
@@ -299,7 +299,7 @@ func TestPollDeviceToken_Success(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if attempt < 3 {
 			w.WriteHeader(http.StatusBadRequest)
-			_ = _ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(TokenResponse{
@@ -384,7 +384,7 @@ func TestSaveKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	_ = os.Setenv("HOME", tmpDir)
-	defer _ = os.Setenv("HOME", origHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	if err := SaveKey("TEST_KEY", "test-value-123"); err != nil {
 		t.Fatalf("SaveKey error: %v", err)
@@ -844,7 +844,7 @@ func TestSaveKey_ExistingFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	_ = os.Setenv("HOME", tmpDir)
-	defer _ = os.Setenv("HOME", origHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	piDir := filepath.Join(tmpDir, ".pi-go")
 	_ = os.MkdirAll(piDir, 0700)
@@ -1028,7 +1028,7 @@ func TestSaveKey_MkdirAllError(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "fakefile")
 	_ = os.WriteFile(tmpFile, []byte("x"), 0600)
 	os.Setenv("HOME", tmpFile) // .pi-go will be tmpFile/.pi-go which can't be created
-	defer _ = os.Setenv("HOME", origHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	err := SaveKey("TEST_KEY", "test")
 	if err == nil {
@@ -1043,7 +1043,7 @@ func TestSaveKey_WriteFileError(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	_ = os.Setenv("HOME", tmpDir)
-	defer _ = os.Setenv("HOME", origHome)
+	defer func() { _ = os.Setenv("HOME", origHome) }()
 
 	// Create .pi-go/.env as a directory to make WriteFile fail.
 	envDir := filepath.Join(tmpDir, ".pi-go", ".env")
