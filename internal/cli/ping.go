@@ -44,6 +44,11 @@ Examples:
 	return cmd
 }
 
+// HTTPDoer abstracts http.Client for testability.
+type HTTPDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 // defaultAPIBaseURL returns the default API base URL for a provider.
 func defaultAPIBaseURL(providerName string) string {
 	switch providerName {
