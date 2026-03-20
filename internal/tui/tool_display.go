@@ -20,18 +20,62 @@ import (
 type ToolDisplayModel struct {
 	// Width is the terminal width for rendering.
 	Width int
+	// CompactTools when true shows one-line summaries instead of full output.
+	CompactTools bool
 }
 
 // RenderToolMessage renders a tool message (role=="tool") into a styled string.
 // It handles both agent/subagent tools (with event streams) and regular tools
-// (with syntax-highlighted output).
+// (with syntax-highlighted output). When CompactTools is true, renders a
+// one-line summary instead of full output.
 func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
+	if t.CompactTools {
+		return t.renderCompactTool(msg, dim)
+	}
 	if msg.tool == "agent" || msg.tool == "subagent" {
 		return t.renderAgentTool(msg, dim)
 	}
 	return t.renderRegularTool(msg, dim)
+}
+
+// renderCompactTool renders a one-line tally for a tool message.
+func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) string {
+	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
+	checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("● ")
+
+	var b strings.Builder
+	b.WriteString(toolBullet)
+	b.WriteString(toolStyle.Render(msg.tool))
+
+	if msg.toolIn != "" {
+		args := msg.toolIn
+		if len(args) > 60 {
+			args = args[:57] + "..."
+		}
+		b.WriteString(dim.Render("("))
+		b.WriteString(dim.Render(args))
+		b.WriteString(dim.Render(")"))
+	}
+
+	if msg.content != "" {
+		summary := toolResultSummary(msg.content)
+		if len(summary) > 60 {
+			summary = summary[:57] + "..."
+		}
+		// Show only the first line of the summary.
+		if idx := strings.IndexByte(summary, '\n'); idx >= 0 {
+			summary = summary[:idx]
+		}
+		b.WriteString(" ")
+		b.WriteString(checkStyle.Render("✓ "))
+		b.WriteString(dim.Render(summary))
+	}
+
+	b.WriteString("\n")
+	return b.String()
 }
 
 // renderAgentTool renders an agent/subagent tool message with type, title,

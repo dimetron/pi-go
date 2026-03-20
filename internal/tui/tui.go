@@ -303,6 +303,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Ctrl+O: toggle compact/expanded tool output.
+	if key.Code == 'o' && key.Mod == tea.ModCtrl {
+		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
+		return m, nil
+	}
+
 	// Scroll keys stay in root model.
 	switch {
 	case key.Code == tea.KeyPgUp:
