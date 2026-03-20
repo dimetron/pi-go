@@ -129,8 +129,8 @@ func performEdit(sb *Sandbox, cache *fileContentCache, input EditInput, content 
 
 // reReadFile re-reads a file from the sandbox (used for retry on edit miss).
 const (
-	maxEditRetries    = 3
-	editRetryDelay    = 100 // milliseconds between retries
+	maxEditRetries = 3
+	editRetryDelay = 100 // milliseconds between retries
 )
 
 // buildEditNotFoundError returns an enhanced error with preview and suggestions.

@@ -26,7 +26,7 @@ func newTestModel(t *testing.T) *model {
 		ctx:        ctx,
 		cancel:     cancel,
 		inputModel: NewInputModel(make([]HistoryEntry, 0), nil, nil, ""),
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		width:      80,
 		height:     24,
 	}

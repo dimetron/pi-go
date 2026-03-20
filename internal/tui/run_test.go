@@ -328,8 +328,8 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	defer cancel()
 
 	m := &model{
-		ctx:      ctx,
-		cancel:   cancel,
+		ctx:       ctx,
+		cancel:    cancel,
 		chatModel: ChatModel{Messages: []message{{role: "assistant", content: ""}}},
 		run: &runState{
 			specName: "test-spec",
@@ -390,7 +390,7 @@ func TestHandleRunCommand_NoArgsShowsAvailableSpecs(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -652,7 +652,7 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		running:  true,
+		running:   true,
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",
@@ -685,7 +685,7 @@ func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		running:  true,
+		running:   true,
 		run: &runState{
 			specName: "test-spec",
 			agentID:  "task-123",

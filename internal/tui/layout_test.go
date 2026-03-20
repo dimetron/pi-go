@@ -96,8 +96,8 @@ func TestLayout_StatusWidth(t *testing.T) {
 		width int
 		want  int
 	}{
-		{10, 20},  // too small, clamp to 20
-		{80, 76},  // normal
+		{10, 20},   // too small, clamp to 20
+		{80, 76},   // normal
 		{120, 116}, // wide
 	}
 	for _, tt := range tests {
@@ -113,8 +113,8 @@ func TestLayout_ChatWidth(t *testing.T) {
 		width int
 		want  int
 	}{
-		{10, 40},  // too small, clamp to 40
-		{80, 76},  // normal
+		{10, 40},   // too small, clamp to 40
+		{80, 76},   // normal
 		{120, 116}, // wide
 	}
 	for _, tt := range tests {

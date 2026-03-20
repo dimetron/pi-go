@@ -38,7 +38,7 @@ type model struct {
 
 	// Agent state.
 	running bool
-	mode    string // "chat" or "plan" — shown in status bar
+	mode    string        // "chat" or "plan" — shown in status bar
 	agentCh chan agentMsg // channel for receiving agent events
 
 	// Commit flow state.
@@ -204,7 +204,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 
@@ -325,10 +324,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-
-
-
-
 func (m *model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("Goodbye!\n")
@@ -416,7 +411,6 @@ func drainTerminalResponses() {
 	}
 }
 
-
 // statusRenderInput builds the StatusRenderInput from the current model state.
 func (m *model) statusRenderInput() StatusRenderInput {
 	var rc *runCycleInfo
@@ -456,4 +450,3 @@ func detectBranch(workDir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-

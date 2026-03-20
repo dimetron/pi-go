@@ -43,14 +43,14 @@ type traceEntry struct {
 
 // ChatModel manages the conversation message display, scrolling, and markdown rendering.
 type ChatModel struct {
-	Messages     []message
-	Scroll       int // scroll offset from bottom
-	Streaming    string
-	Thinking     string
-	Renderer     *glamour.TermRenderer
-	TraceLog     []traceEntry
-	Width        int
-	ToolDisplay  ToolDisplayModel
+	Messages    []message
+	Scroll      int // scroll offset from bottom
+	Streaming   string
+	Thinking    string
+	Renderer    *glamour.TermRenderer
+	TraceLog    []traceEntry
+	Width       int
+	ToolDisplay ToolDisplayModel
 }
 
 // NewChatModel creates a ChatModel with the given markdown renderer.
@@ -236,4 +236,3 @@ func formatTokenCount(n int64) string {
 		return fmt.Sprintf("%d", n)
 	}
 }
-

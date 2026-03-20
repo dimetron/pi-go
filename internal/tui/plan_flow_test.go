@@ -27,7 +27,7 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -81,7 +81,7 @@ func TestPlanCommand_OverrideCancel(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -130,7 +130,7 @@ func TestPlanCommand_OverrideConfirm_RemovesOldDir(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -213,7 +213,7 @@ func TestPlanCommand_NewSpec_NotStuck(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -253,7 +253,7 @@ func TestPlanCommand_ExistingSpec_NotStuck(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -422,7 +422,7 @@ func TestPlanCommand_RapidCalls_NoDeadlock(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 

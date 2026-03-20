@@ -1,10 +1,10 @@
 package tui
 
 import (
-	"image/color"
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"sort"

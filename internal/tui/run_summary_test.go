@@ -339,7 +339,7 @@ func TestE2E_MergeSuccess_WritesSummary(t *testing.T) {
 	}
 
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 		run: &runState{
 			specName:   "rate-limiter",

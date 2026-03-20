@@ -347,7 +347,7 @@ func TestE2E_RunWhileAgentRunning(t *testing.T) {
 			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
 		},
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		running:  true, // already running
+		running:   true, // already running
 	}
 
 	// /run should still process (the handleRunCommand doesn't check m.running;
@@ -463,7 +463,7 @@ func TestE2E_MultipleSpecsListed(t *testing.T) {
 
 	// /run no-args should list them.
 	m := &model{
-		cfg:      Config{WorkDir: tmpDir},
+		cfg:       Config{WorkDir: tmpDir},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleRunCommand(nil)
@@ -577,7 +577,7 @@ func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
 			Orchestrator: orch,
 		},
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		running:  true,
+		running:   true,
 		run: &runState{
 			specName: "my-feature",
 			agentID:  "task-flow-1",

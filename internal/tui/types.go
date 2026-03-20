@@ -65,13 +65,13 @@ type TokenTracker interface {
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.
 type AgentSubEvent struct {
-	AgentID      string
-	Kind         string // "tool_call", "tool_result", "text_delta", etc.
-	Content      string
-	PipelineID   string // groups agents in same call
-	Mode         string // "single", "parallel", "chain"
-	Step         int    // 1-based position in pipeline
-	Total        int    // total agents in pipeline
+	AgentID    string
+	Kind       string // "tool_call", "tool_result", "text_delta", etc.
+	Content    string
+	PipelineID string // groups agents in same call
+	Mode       string // "single", "parallel", "chain"
+	Step       int    // 1-based position in pipeline
+	Total      int    // total agents in pipeline
 }
 
 // Screen provides thread-safe access to the current TUI screen content.

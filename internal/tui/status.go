@@ -31,9 +31,9 @@ type StatusRenderInput struct {
 	ProviderName string
 	ModelName    string
 	Running      bool
-	Mode         string        // "chat" or "plan"
-	Messages     []message     // for context estimate
-	TokenTracker TokenTracker  // may be nil
+	Mode         string                 // "chat" or "plan"
+	Messages     []message              // for context estimate
+	TokenTracker TokenTracker           // may be nil
 	Orchestrator *subagent.Orchestrator // may be nil
 	TraceCount   int
 	RunCycle     *runCycleInfo // may be nil

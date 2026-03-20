@@ -56,8 +56,8 @@ func TestHandleSlashCommandClear(t *testing.T) {
 func TestHandleSlashCommandModel(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{ModelName: "test-model"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{ModelName: "test-model"},
 	}
 
 	newM, _ := m.handleSlashCommand("/model")
@@ -74,7 +74,7 @@ func TestHandleSlashCommandModel(t *testing.T) {
 func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			ModelName:  "claude-sonnet-4-6",
 			ActiveRole: "default",
@@ -110,7 +110,7 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
 			ModelName:  "gemini-2.5-flash",
 			ActiveRole: "smol",
@@ -133,7 +133,7 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 func TestHandleSlashCommandExit(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/exit"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, cmd := m.handleSlashCommand("/exit")
@@ -150,7 +150,7 @@ func TestHandleSlashCommandExit(t *testing.T) {
 func TestHandleSlashCommandUnknown(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/unknown"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/unknown")
@@ -182,7 +182,7 @@ func TestUpdateWindowSize(t *testing.T) {
 
 func TestAgentTextMsg(t *testing.T) {
 	m := &model{
-		running:   true,
+		running: true,
 		chatModel: ChatModel{
 			Streaming: "",
 			Messages: []message{
@@ -206,12 +206,12 @@ func TestAgentTextMsg(t *testing.T) {
 
 func TestAgentDoneMsg(t *testing.T) {
 	m := &model{
-		running:   true,
+		running: true,
 		chatModel: ChatModel{
 			Streaming: "accumulated text",
-			Messages: make([]message, 0),
+			Messages:  make([]message, 0),
 		},
-		agentCh:   make(chan agentMsg, 1),
+		agentCh: make(chan agentMsg, 1),
 	}
 
 	newM, _ := m.Update(agentDoneMsg{})
@@ -227,9 +227,9 @@ func TestAgentDoneMsg(t *testing.T) {
 
 func TestAgentToolCallMsg(t *testing.T) {
 	m := &model{
-		running:  true,
+		running:   true,
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		agentCh:  make(chan agentMsg, 1),
+		agentCh:   make(chan agentMsg, 1),
 	}
 
 	newM, _ := m.Update(agentToolCallMsg{name: "read"})
@@ -298,7 +298,7 @@ func TestHistoryNavigation(t *testing.T) {
 func TestTextInput(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{CyclingIdx: -1},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Type "hi"
@@ -324,8 +324,8 @@ func TestTextInput(t *testing.T) {
 
 func TestRenderMessagesEmpty(t *testing.T) {
 	m := &model{
-		width:    80,
-		height:   24,
+		width:     80,
+		height:    24,
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	output := m.chatModel.RenderMessages(m.running)
@@ -360,7 +360,7 @@ func TestViewLoading(t *testing.T) {
 func TestMaxScrollEmpty(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		height:   24,
+		height:    24,
 	}
 	if max := m.chatModel.MaxScroll(m.height); max != 0 {
 		t.Errorf("expected 0, got %d", max)
@@ -370,8 +370,8 @@ func TestMaxScrollEmpty(t *testing.T) {
 func TestHandleSlashCommandSession(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/session"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionID: "test-session-123"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionID: "test-session-123"},
 	}
 
 	newM, _ := m.handleSlashCommand("/session")
@@ -388,8 +388,8 @@ func TestHandleSlashCommandSession(t *testing.T) {
 func TestHandleSlashCommandBranchNoService(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/branch experiment"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: nil},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: nil},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch experiment")
@@ -407,8 +407,8 @@ func TestHandleSlashCommandBranchUsage(t *testing.T) {
 	svc := setupTestSessionService(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: svc, SessionID: "s1"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: svc, SessionID: "s1"},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch")
@@ -426,8 +426,8 @@ func TestHandleSlashCommandBranchCreate(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch experiment"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: svc, SessionID: sessionID},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch experiment")
@@ -445,8 +445,8 @@ func TestHandleSlashCommandBranchList(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch list"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: svc, SessionID: sessionID},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch list")
@@ -464,8 +464,8 @@ func TestHandleSlashCommandBranchSwitchNoName(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
 		inputModel: InputModel{Text: "/branch switch"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: svc, SessionID: sessionID},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: svc, SessionID: sessionID},
 	}
 
 	newM, _ := m.handleSlashCommand("/branch switch")
@@ -482,8 +482,8 @@ func TestHandleSlashCommandBranchSwitchNoName(t *testing.T) {
 func TestHandleSlashCommandCompactNoService(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/compact"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionService: nil},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg:        Config{SessionService: nil},
 	}
 
 	newM, _ := m.handleSlashCommand("/compact")
@@ -500,7 +500,7 @@ func TestHandleSlashCommandCompactNoService(t *testing.T) {
 func TestHandleSlashCommandHelpContainsBranch(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/help"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/help")
@@ -546,7 +546,7 @@ func TestSlashCommands_RunRegistered(t *testing.T) {
 func TestHelpText_IncludesPlanAndRun(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/help"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	newM, _ := m.handleSlashCommand("/help")
@@ -663,7 +663,7 @@ func TestSlashCommandDesc_AllCommandsHaveDescs(t *testing.T) {
 func TestTabOnSlash_ShowsCommandList(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
 	// Simulate Tab press.
@@ -720,7 +720,7 @@ func TestHandleHistoryCommand_Empty(t *testing.T) {
 
 func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}, {Text: "/ping"}, {Text: "/clear"}}},
 	}
 	m.handleHistoryCommand(nil)
@@ -735,7 +735,7 @@ func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 
 func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}, {Text: "/ping"}, {Text: "/plan"}}},
 	}
 	m.handleHistoryCommand([]string{"p"})
@@ -750,7 +750,7 @@ func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 
 func TestHandleHistoryCommand_FilterNoMatch(t *testing.T) {
 	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}}},
 	}
 	m.handleHistoryCommand([]string{"xyz"})
@@ -784,7 +784,7 @@ func TestHandleCommitDone_Success(t *testing.T) {
 func TestHandleCommitDone_Error(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		commit:   &commitState{phase: "committing"},
+		commit:    &commitState{phase: "committing"},
 	}
 	newM, _ := m.handleCommitDone(commitDoneMsg{err: fmt.Errorf("git error")})
 	mm := newM.(*model)
@@ -846,7 +846,7 @@ func TestRenderStatusBar_ContextEstimate(t *testing.T) {
 func TestMaxScroll_EmptyMessages(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: nil},
-		height:   40,
+		height:    40,
 	}
 	if m.chatModel.MaxScroll(m.height) != 0 {
 		t.Error("maxScroll should be 0 for empty messages")
@@ -856,7 +856,7 @@ func TestMaxScroll_EmptyMessages(t *testing.T) {
 func TestMaxScroll_SmallHeight(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: []message{{content: "test"}}},
-		height:   0,
+		height:    0,
 	}
 	if m.chatModel.MaxScroll(m.height) != 0 {
 		t.Error("maxScroll should be 0 for zero height")
@@ -866,7 +866,7 @@ func TestMaxScroll_SmallHeight(t *testing.T) {
 func TestHandleSlashCommand_Session(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{SessionID: "test-session-123"},
+		cfg:       Config{SessionID: "test-session-123"},
 	}
 	newM, _ := m.handleSlashCommand("/session")
 	mm := newM.(*model)
@@ -904,7 +904,7 @@ func TestHandleSlashCommand_Ping(t *testing.T) {
 	mockLLM := &pingMockLLM{name: "test", response: "Pong"}
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{LLM: mockLLM},
+		cfg:       Config{LLM: mockLLM},
 	}
 	newM, cmd := m.handleSlashCommand("/ping")
 	mm := newM.(*model)
@@ -939,7 +939,7 @@ func TestHandleSkillCreateCommand_InvalidName(t *testing.T) {
 
 func TestHandleSkillCreateCancel(t *testing.T) {
 	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:          ChatModel{Messages: make([]message, 0)},
 		pendingSkillCreate: &pendingSkillCreate{name: "test"},
 	}
 	newM, _ := m.handleSkillCreateCancel()
@@ -998,7 +998,7 @@ func TestHandleSkillLoadCommand_Empty(t *testing.T) {
 func TestHandleSlashCommand_Model(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg:      Config{ModelName: "gpt-4o", ActiveRole: "default", Roles: map[string]config.RoleConfig{"default": {Model: "gpt-4o"}}},
+		cfg:       Config{ModelName: "gpt-4o", ActiveRole: "default", Roles: map[string]config.RoleConfig{"default": {Model: "gpt-4o"}}},
 	}
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
@@ -1020,7 +1020,7 @@ func TestHandleSlashCommand_Clear(t *testing.T) {
 
 func TestHandleSlashCommand_History(t *testing.T) {
 	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
 		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}}},
 	}
 	newM, _ := m.handleSlashCommand("/history")
@@ -1059,7 +1059,7 @@ func setupTestSessionWithID(t *testing.T) (*pisession.FileService, string) {
 
 func TestHandleAgentsCommand_NoOrchestrator(t *testing.T) {
 	m := &model{
-		cfg:      Config{},
+		cfg:       Config{},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 	m.handleAgentsCommand()
