@@ -1,9 +1,245 @@
 package cli
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
+	"iter"
+	"strings"
 	"testing"
+
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
+
+// ---------------------------------------------------------------------------
+// Mocks for modelPing tests
+// ---------------------------------------------------------------------------
+
+// pingMockLLM yields a fixed set of responses (or a single error) for every
+// GenerateContent call.  modelPing calls GenerateContent twice (non-streaming
+// then streaming), so the same slice is replayed each time.
+type pingMockLLM struct {
+	name      string
+	responses []*model.LLMResponse
+	err       error
+}
+
+func (m *pingMockLLM) Name() string { return m.name }
+
+func (m *pingMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.err != nil {
+			yield(nil, m.err)
+			return
+		}
+		for _, r := range m.responses {
+			if !yield(r, nil) {
+				return
+			}
+		}
+	}
+}
+
+// cliThinkingLLM yields a "thinking"-role event then a normal model-text event.
+type cliThinkingLLM struct {
+	name         string
+	thoughtText  string
+	responseText string
+}
+
+func (m *cliThinkingLLM) Name() string { return m.name }
+
+func (m *cliThinkingLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		thinking := &model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "thinking",
+				Parts: []*genai.Part{{Text: m.thoughtText}},
+			},
+		}
+		if !yield(thinking, nil) {
+			return
+		}
+		text := &model.LLMResponse{
+			Content: genai.NewContentFromText(m.responseText, genai.RoleModel),
+		}
+		yield(text, nil)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// modelPing unit tests
+// ---------------------------------------------------------------------------
+
+// TestModelPingPingPong verifies that modelPing succeeds and returns the model
+// reply when isPingPong=true and the mock LLM echoes "Prompt:Prompt".
+func TestModelPingPingPong(t *testing.T) {
+	llm := &pingMockLLM{
+		name:      "mock-ping-pong",
+		responses: []*model.LLMResponse{{Content: genai.NewContentFromText("Prompt:Prompt", genai.RoleModel)}},
+	}
+
+	reply, err := modelPing(context.Background(), llm, "Prompt", true)
+	if err != nil {
+		t.Fatalf("modelPing returned unexpected error: %v", err)
+	}
+	if reply != "Prompt:Prompt" {
+		t.Errorf("modelPing reply = %q, want %q", reply, "Prompt:Prompt")
+	}
+}
+
+// TestModelPingCustomPrompt verifies that modelPing works with isPingPong=false
+// and a custom prompt / arbitrary response text.
+func TestModelPingCustomPrompt(t *testing.T) {
+	want := "42"
+	llm := &pingMockLLM{
+		name:      "mock-custom",
+		responses: []*model.LLMResponse{{Content: genai.NewContentFromText(want, genai.RoleModel)}},
+	}
+
+	reply, err := modelPing(context.Background(), llm, "2+2", false)
+	if err != nil {
+		t.Fatalf("modelPing returned unexpected error: %v", err)
+	}
+	if reply != want {
+		t.Errorf("modelPing reply = %q, want %q", reply, want)
+	}
+}
+
+// TestModelPingEmptyResponse verifies that an LLM returning no text causes
+// modelPing to return a descriptive non-nil error.
+func TestModelPingEmptyResponse(t *testing.T) {
+	llm := &pingMockLLM{
+		name: "mock-empty",
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{}}},
+		},
+	}
+
+	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	if err == nil {
+		t.Fatal("expected error for empty LLM response, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("error %q should mention empty response", err.Error())
+	}
+}
+
+// TestModelPingLLMError verifies that an error from the LLM is wrapped and
+// propagated by modelPing.  The non-streaming call executes first, so its
+// error surfaces.
+func TestModelPingLLMError(t *testing.T) {
+	sentinel := errors.New("llm backend unavailable")
+	llm := &pingMockLLM{
+		name: "mock-error",
+		err:  sentinel,
+	}
+
+	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	if err == nil {
+		t.Fatal("expected error from modelPing, got nil")
+	}
+	if !errors.Is(err, sentinel) && !strings.Contains(err.Error(), sentinel.Error()) {
+		t.Errorf("expected sentinel error to be wrapped, got: %v", err)
+	}
+}
+
+// TestModelPingThinkingRole verifies that content with role "thinking" is
+// excluded from the streaming text accumulator but does not prevent modelPing
+// from returning the non-streaming text result.
+func TestModelPingThinkingRole(t *testing.T) {
+	// The mock returns: [thinking event, text event].
+	// Non-stream pass: collects text from the text event.
+	// Stream pass: ignores the thinking chunk; collects text from the text event.
+	llm := &pingMockLLM{
+		name: "mock-thinking",
+		responses: []*model.LLMResponse{
+			{
+				Content: &genai.Content{
+					Role:  "thinking",
+					Parts: []*genai.Part{{Text: "internal thought"}},
+				},
+			},
+			{Content: genai.NewContentFromText("Final answer", genai.RoleModel)},
+		},
+	}
+
+	reply, err := modelPing(context.Background(), llm, "Explain Go", false)
+	if err != nil {
+		t.Fatalf("modelPing returned unexpected error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected non-empty reply from modelPing with thinking+text response")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runPrint / runJSON context-cancellation and thinking-output tests
+// ---------------------------------------------------------------------------
+
+// TestRunPrintContextCancelled verifies that runPrint returns nil (not an
+// error) when the context is already cancelled before execution.
+func TestRunPrintContextCancelled(t *testing.T) {
+	llm := &cliMockLLM{name: "test-cancel-print", response: "should not appear"}
+	ag, sessionID := newTestAgent(t, llm)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := runPrint(ctx, ag, sessionID, "hello", nil)
+	if err != nil {
+		t.Fatalf("runPrint with cancelled context returned error: %v", err)
+	}
+}
+
+// TestRunJSONContextCancelled verifies that runJSON emits a message_end event
+// and returns nil when the context is already cancelled.
+func TestRunJSONContextCancelled(t *testing.T) {
+	llm := &cliMockLLM{name: "test-cancel-json", response: "should not appear"}
+	ag, sessionID := newTestAgent(t, llm)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stdout := captureStdout(t, func() {
+		err := runJSON(ctx, ag, sessionID, "hello", nil)
+		if err != nil {
+			t.Errorf("runJSON with cancelled context returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "message_end") {
+		t.Errorf("runJSON should emit message_end on context cancellation, got: %q", stdout)
+	}
+}
+
+// TestRunPrintThinkingOutput verifies that thinking-role content is written to
+// stderr (dim ANSI) and that normal text goes to stdout.
+func TestRunPrintThinkingOutput(t *testing.T) {
+	llm := &cliThinkingLLM{
+		name:         "test-thinking-print",
+		thoughtText:  "internal reasoning",
+		responseText: "visible answer",
+	}
+	ag, sessionID := newTestAgent(t, llm)
+
+	var stdout, stderr string
+	stderr = captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			if err := runPrint(context.Background(), ag, sessionID, "think about it", nil); err != nil {
+				t.Errorf("runPrint error: %v", err)
+			}
+		})
+	})
+
+	if !strings.Contains(stdout, "visible answer") {
+		t.Errorf("stdout should contain the visible answer, got: %q", stdout)
+	}
+	if !strings.Contains(stderr, "internal reasoning") {
+		t.Errorf("stderr should contain thinking content, got: %q", stderr)
+	}
+}
 
 func TestDefaultAPIBaseURL(t *testing.T) {
 	tests := []struct {

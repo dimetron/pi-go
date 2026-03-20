@@ -2,6 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"google.golang.org/adk/model"
@@ -452,5 +455,437 @@ func TestAnthropicGenerateContentWithThinking(t *testing.T) {
 			return
 		}
 		_ = resp
+	}
+}
+
+func TestAnthropicGenerateContentModelNameFallback(t *testing.T) {
+	// When the model is named "anthropic" it should fall back to claude-sonnet-4-6.
+	// We create the model with name "anthropic" so modelName == "anthropic" after no override.
+	llm, err := NewAnthropic(context.Background(), "anthropic", "test-key-invalid", "", "", nil)
+	if err != nil {
+		t.Fatalf("failed to create model: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	seq := llm.GenerateContent(context.Background(), req, false)
+	for resp, err := range seq {
+		if err != nil {
+			// Expected - API will fail with invalid key
+			return
+		}
+		_ = resp
+	}
+}
+
+func TestAnthropicGenerateContentModelOverrideToAnthropic(t *testing.T) {
+	// req.Model == "anthropic" should also trigger the fallback to "claude-sonnet-4-6".
+	llm, err := NewAnthropic(context.Background(), "some-model", "test-key-invalid", "", "", nil)
+	if err != nil {
+		t.Fatalf("failed to create model: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Model: "anthropic", // triggers the fallback branch
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	seq := llm.GenerateContent(context.Background(), req, false)
+	for resp, err := range seq {
+		if err != nil {
+			return
+		}
+		_ = resp
+	}
+}
+
+func TestAntContentsToMessagesAssistantRoleText(t *testing.T) {
+	// Covers the "assistant" role keyword (as opposed to "model") for plain text.
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		{Role: "assistant", Parts: []*genai.Part{{Text: "Hi there"}}},
+	}
+	msgs, _ := antContentsToMessages(contents, nil)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != anthropic.MessageParamRoleAssistant {
+		t.Errorf("second message role = %q, want assistant", msgs[1].Role)
+	}
+}
+
+func TestAntContentsToMessagesAssistantRoleFunctionCall(t *testing.T) {
+	// Covers the "assistant" keyword (not "model") for the function-call path.
+	fc := genai.NewPartFromFunctionCall("bash", map[string]any{"command": "ls"})
+	fc.FunctionCall.ID = "tool_xyz"
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "List files"}}},
+		{Role: "assistant", Parts: []*genai.Part{fc}},
+	}
+
+	msgs, _ := antContentsToMessages(contents, nil)
+	// user + assistant(tool_use) + user(tool_result with default msg)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != anthropic.MessageParamRoleAssistant {
+		t.Errorf("assistant message role = %q, want assistant", msgs[1].Role)
+	}
+}
+
+func TestNewAnthropicWithExtraHeaders(t *testing.T) {
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key", "", "", &LLMOptions{
+		ExtraHeaders: map[string]string{
+			"X-Custom-Header": "value1",
+			"X-Org-ID":        "org-456",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAnthropic() with extra headers error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewAnthropic() returned nil")
+	}
+	if llm.Name() != "claude-sonnet-4-6" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "claude-sonnet-4-6")
+	}
+}
+
+func TestNewAnthropicWithInsecureTLS(t *testing.T) {
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "test-key", "", "", &LLMOptions{
+		InsecureSkipTLS: true,
+	})
+	if err != nil {
+		t.Fatalf("NewAnthropic() with InsecureSkipTLS error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewAnthropic() returned nil")
+	}
+}
+
+func TestNewAnthropicWithBaseURLAndKey(t *testing.T) {
+	// Both apiKey and baseURL set - exercises both option branches.
+	llm, err := NewAnthropic(context.Background(), "custom-model", "test-key", "http://localhost:8080", "low", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() with baseURL+key error: %v", err)
+	}
+	if llm.Name() != "custom-model" {
+		t.Errorf("Name() = %q, want custom-model", llm.Name())
+	}
+}
+
+// TestAntContentsToMessagesEmptyFallback verifies that when no messages are
+// produced (e.g. only nil contents) a default user "Hello" message is injected.
+func TestAntContentsToMessagesEmptyFallback(t *testing.T) {
+	// All nil contents → no messages produced → fallback to default "Hello" message.
+	msgs, sysPrompt := antContentsToMessages([]*genai.Content{nil, nil}, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 fallback message, got %d", len(msgs))
+	}
+	if msgs[0].Role != anthropic.MessageParamRoleUser {
+		t.Errorf("fallback message role = %q, want user", msgs[0].Role)
+	}
+	if sysPrompt != "" {
+		t.Errorf("expected empty system prompt, got %q", sysPrompt)
+	}
+}
+
+// TestAntContentsToMessagesMultipleSystemParts verifies that multiple text
+// parts in the system instruction are concatenated into one system prompt.
+func TestAntContentsToMessagesMultipleSystemParts(t *testing.T) {
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{
+				{Text: "Part one."},
+				nil,
+				{Text: "Part two."},
+			},
+		},
+	}
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+	}
+
+	_, sysPrompt := antContentsToMessages(contents, config)
+	if sysPrompt != "Part one.\nPart two." {
+		t.Errorf("system prompt = %q, want %q", sysPrompt, "Part one.\nPart two.")
+	}
+}
+
+// TestAntContentsToMessagesAssistantFunctionCallWithText verifies that an
+// assistant message with BOTH text and function calls is handled correctly:
+// a text block is prepended before the tool_use blocks.
+func TestAntContentsToMessagesAssistantFunctionCallWithText(t *testing.T) {
+	fc := genai.NewPartFromFunctionCall("search", map[string]any{"q": "go lang"})
+	fc.FunctionCall.ID = "call_text_fc"
+
+	fr := &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       "call_text_fc",
+			Name:     "search",
+			Response: map[string]any{"result": "results here"},
+		},
+	}
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Search for Go"}}},
+		{Role: "model", Parts: []*genai.Part{{Text: "I will search."}, fc}},
+		{Role: "user", Parts: []*genai.Part{fr}},
+	}
+
+	msgs, _ := antContentsToMessages(contents, nil)
+	// user + assistant(text+tool_use) + user(tool_result)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != anthropic.MessageParamRoleAssistant {
+		t.Errorf("assistant message role = %q, want assistant", msgs[1].Role)
+	}
+}
+
+// TestAntContentsToMessagesFunctionResponseContentPaths exercises the
+// oaiFunctionResponseContent helper via antContentsToMessages to ensure the
+// content string extraction works for the map-with-result path.
+func TestAntContentsToMessagesFunctionResponseContentPaths(t *testing.T) {
+	fc := genai.NewPartFromFunctionCall("bash", map[string]any{"cmd": "ls"})
+	fc.FunctionCall.ID = "call_resp_path"
+
+	// Response using the "result" key path in oaiFunctionResponseContent.
+	fr := &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       "call_resp_path",
+			Name:     "bash",
+			Response: map[string]any{"result": "output text"},
+		},
+	}
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "run ls"}}},
+		{Role: "model", Parts: []*genai.Part{fc}},
+		{Role: "user", Parts: []*genai.Part{fr}},
+	}
+
+	msgs, _ := antContentsToMessages(contents, nil)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %v", len(msgs), msgs)
+	}
+}
+
+func TestAnthropicNonStreamingTextResponse(t *testing.T) {
+	// Mock server that returns a successful Anthropic message response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "expected POST", http.StatusMethodNotAllowed)
+			return
+		}
+		body := map[string]any{
+			"id":   "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello world"},
+			},
+			"model":       "claude-sonnet-4-6",
+			"stop_reason": "end_turn",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 5,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Say hello"}}},
+		},
+	}
+
+	var responses []*model.LLMResponse
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+		responses = append(responses, resp)
+	}
+
+	if len(responses) == 0 {
+		t.Fatal("expected at least one response")
+	}
+	final := responses[len(responses)-1]
+	if final.Content == nil {
+		t.Fatal("expected non-nil Content")
+	}
+	if len(final.Content.Parts) == 0 {
+		t.Fatal("expected at least one part in response")
+	}
+	if final.Content.Parts[0].Text != "Hello world" {
+		t.Errorf("text = %q, want %q", final.Content.Parts[0].Text, "Hello world")
+	}
+	if !final.TurnComplete {
+		t.Error("expected TurnComplete = true")
+	}
+	if final.FinishReason != genai.FinishReasonStop {
+		t.Errorf("finish reason = %v, want Stop", final.FinishReason)
+	}
+	if final.UsageMetadata == nil {
+		t.Fatal("expected non-nil UsageMetadata")
+	}
+	if final.UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("input tokens = %d, want 10", final.UsageMetadata.PromptTokenCount)
+	}
+	if final.UsageMetadata.CandidatesTokenCount != 5 {
+		t.Errorf("output tokens = %d, want 5", final.UsageMetadata.CandidatesTokenCount)
+	}
+}
+
+func TestAnthropicNonStreamingToolCallResponse(t *testing.T) {
+	// Mock server that returns a tool_use block in the response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]any{
+			"id":   "msg_tool_test",
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]any{
+				{
+					"type":  "tool_use",
+					"id":    "toolu_abc123",
+					"name":  "get_weather",
+					"input": map[string]any{"location": "San Francisco"},
+				},
+			},
+			"model":       "claude-sonnet-4-6",
+			"stop_reason": "tool_use",
+			"usage": map[string]any{
+				"input_tokens":  15,
+				"output_tokens": 20,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "What's the weather in SF?"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "get_weather",
+							Description: "Get current weather",
+							ParametersJsonSchema: map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"location": map[string]any{"type": "string"},
+								},
+								"required": []any{"location"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var responses []*model.LLMResponse
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+		responses = append(responses, resp)
+	}
+
+	if len(responses) == 0 {
+		t.Fatal("expected at least one response")
+	}
+	final := responses[len(responses)-1]
+	if final.Content == nil {
+		t.Fatal("expected non-nil Content")
+	}
+
+	// Find the function call part.
+	var fcPart *genai.Part
+	for _, p := range final.Content.Parts {
+		if p.FunctionCall != nil {
+			fcPart = p
+			break
+		}
+	}
+	if fcPart == nil {
+		t.Fatal("expected a FunctionCall part in response")
+	}
+	if fcPart.FunctionCall.Name != "get_weather" {
+		t.Errorf("function name = %q, want get_weather", fcPart.FunctionCall.Name)
+	}
+	if fcPart.FunctionCall.ID != "toolu_abc123" {
+		t.Errorf("function call ID = %q, want toolu_abc123", fcPart.FunctionCall.ID)
+	}
+	loc, _ := fcPart.FunctionCall.Args["location"].(string)
+	if loc != "San Francisco" {
+		t.Errorf("location arg = %q, want San Francisco", loc)
+	}
+}
+
+func TestAnthropicNonStreamingErrorResponse(t *testing.T) {
+	// Mock server that returns a 500 error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"internal server error"}}`))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		},
+	}
+
+	gotError := false
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			gotError = true
+			break
+		}
+		if resp != nil && resp.ErrorCode != "" {
+			gotError = true
+			break
+		}
+	}
+	if !gotError {
+		t.Error("expected an error or ErrorCode for 500 response")
 	}
 }

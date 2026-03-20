@@ -121,3 +121,106 @@ func TestFindRoot_MultipleMarkers(t *testing.T) {
 		t.Errorf("FindRoot() = %q, want %q", got, sub)
 	}
 }
+
+func TestFindRoot_MarkerAtFileDirectory(t *testing.T) {
+	// Marker is in the same directory as the file — should return that directory.
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test"), 0o644)
+	filePath := filepath.Join(root, "main.go")
+	os.WriteFile(filePath, []byte("package main"), 0o644)
+
+	got := FindRoot(filePath, []string{"go.mod"})
+	if got != root {
+		t.Errorf("FindRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestFindRoot_FirstMarkerWins(t *testing.T) {
+	// When multiple markers are provided and the first one is found, it returns that directory.
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "tsconfig.json"), []byte("{}"), 0o644)
+	// No package.json — only tsconfig.json exists.
+	filePath := filepath.Join(root, "index.ts")
+	os.WriteFile(filePath, []byte(""), 0o644)
+
+	got := FindRoot(filePath, []string{"tsconfig.json", "package.json"})
+	if got != root {
+		t.Errorf("FindRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestFindRoot_EmptyMarkers(t *testing.T) {
+	// With no markers, should return the file's directory.
+	root := t.TempDir()
+	filePath := filepath.Join(root, "file.go")
+	os.WriteFile(filePath, []byte(""), 0o644)
+
+	got := FindRoot(filePath, []string{})
+	// Should return the file's directory when no markers specified.
+	if got != root {
+		t.Errorf("FindRoot() with empty markers = %q, want %q", got, root)
+	}
+}
+
+func TestFindRoot_DeepNesting(t *testing.T) {
+	// go.mod at root, file deeply nested — should walk all the way up.
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module deep"), 0o644)
+
+	deep := filepath.Join(root, "a", "b", "c", "d", "e")
+	os.MkdirAll(deep, 0o755)
+	filePath := filepath.Join(deep, "file.go")
+	os.WriteFile(filePath, []byte("package e"), 0o644)
+
+	got := FindRoot(filePath, []string{"go.mod"})
+	if got != root {
+		t.Errorf("FindRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestFindRoot_DirectoryMarker(t *testing.T) {
+	// Markers can also be directories (e.g., .git).
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	os.MkdirAll(gitDir, 0o755)
+
+	sub := filepath.Join(root, "src")
+	os.MkdirAll(sub, 0o755)
+	filePath := filepath.Join(sub, "main.go")
+	os.WriteFile(filePath, []byte(""), 0o644)
+
+	got := FindRoot(filePath, []string{".git"})
+	if got != root {
+		t.Errorf("FindRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestDetectLanguage_CaseInsensitiveExtension(t *testing.T) {
+	langs := DefaultLanguages()
+
+	// Uppercase extensions should still match via ToLower.
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/path/FILE.GO", "go"},
+		{"/path/APP.TS", "typescript"},
+		{"/path/SCRIPT.PY", "python"},
+		{"/path/LIB.RS", "rust"},
+	}
+	for _, tt := range tests {
+		got := DetectLanguage(tt.path, langs)
+		if got != tt.want {
+			t.Errorf("DetectLanguage(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestDetectLanguage_NoExtension(t *testing.T) {
+	langs := DefaultLanguages()
+	// Files with no extension should return empty string.
+	got := DetectLanguage("Makefile", langs)
+	if got != "" {
+		t.Errorf("expected empty for no extension, got %q", got)
+	}
+}

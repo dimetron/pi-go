@@ -26,12 +26,12 @@ func FormatText(result *ScanResult, verbose bool) string {
 
 	var b strings.Builder
 	critical, warning, info := result.CountBySeverity()
-	b.WriteString(fmt.Sprintf("Scanned %d file(s): %d finding(s)\n", len(result.Files), len(result.Findings)))
-	b.WriteString(fmt.Sprintf("  critical: %d, warning: %d, info: %d\n\n", critical, warning, info))
+	fmt.Fprintf(&b, "Scanned %d file(s): %d finding(s)\n", len(result.Files), len(result.Findings))
+	fmt.Fprintf(&b, "  critical: %d, warning: %d, info: %d\n\n", critical, warning, info)
 
 	// Table header.
-	b.WriteString(fmt.Sprintf("%-10s %-40s %8s  %-10s  %s\n",
-		"SEVERITY", "FILE", "LINE:COL", "CODEPOINT", "DESCRIPTION"))
+	fmt.Fprintf(&b, "%-10s %-40s %8s  %-10s  %s\n",
+		"SEVERITY", "FILE", "LINE:COL", "CODEPOINT", "DESCRIPTION")
 	b.WriteString(strings.Repeat("-", 100) + "\n")
 
 	for _, f := range findings {
@@ -39,8 +39,8 @@ func FormatText(result *ScanResult, verbose bool) string {
 		if len(file) > 40 {
 			file = "..." + file[len(file)-37:]
 		}
-		b.WriteString(fmt.Sprintf("%-10s %-40s %4d:%-3d  %-10s  %s\n",
-			f.Severity, file, f.Line, f.Col, f.Codepoint, f.Description))
+		fmt.Fprintf(&b, "%-10s %-40s %4d:%-3d  %-10s  %s\n",
+			f.Severity, file, f.Line, f.Col, f.Codepoint, f.Description)
 	}
 
 	return b.String()
@@ -98,17 +98,17 @@ func FormatMarkdown(result *ScanResult) string {
 
 	var b strings.Builder
 	b.WriteString("## Audit Results\n\n")
-	b.WriteString(fmt.Sprintf("Scanned **%d** file(s): **%d** finding(s)\n\n",
-		len(result.Files), len(result.Findings)))
-	b.WriteString(fmt.Sprintf("| Metric | Count |\n|--------|-------|\n"))
-	b.WriteString(fmt.Sprintf("| Critical | %d |\n| Warning | %d |\n| Info | %d |\n\n", critical, warning, info))
+	fmt.Fprintf(&b, "Scanned **%d** file(s): **%d** finding(s)\n\n",
+		len(result.Files), len(result.Findings))
+	b.WriteString("| Metric | Count |\n|--------|-------|\n")
+	fmt.Fprintf(&b, "| Critical | %d |\n| Warning | %d |\n| Info | %d |\n\n", critical, warning, info)
 
 	b.WriteString("| Severity | File | Line:Col | Codepoint | Description |\n")
 	b.WriteString("|----------|------|----------|-----------|-------------|\n")
 
 	for _, f := range findings {
-		b.WriteString(fmt.Sprintf("| %s | %s | %d:%d | `%s` | %s |\n",
-			f.Severity, f.File, f.Line, f.Col, f.Codepoint, f.Description))
+		fmt.Fprintf(&b, "| %s | %s | %d:%d | `%s` | %s |\n",
+			f.Severity, f.File, f.Line, f.Col, f.Codepoint, f.Description)
 	}
 
 	return b.String()

@@ -1,23 +1,19 @@
-# Nanocoder TUI
+# Nanocoder TUI — Design Patterns for pi-go
 
-Build a terminal-based coding agent TUI inspired by [Nanocoder](https://github.com/Nano-Collective/nanocoder) — a community-built, local-first CLI coding agent.
+## Source
+https://github.com/Nano-Collective/nanocoder
 
-## Source of Inspiration
+## Idea
+Analyze nanocoder's TUI design patterns and identify features that can be adapted for pi-go's Bubble Tea v2 terminal interface. Nanocoder is a TypeScript/Ink-based coding agent with a polished TUI — we want to cherry-pick the best UX patterns and translate them to Go/Bubble Tea.
 
-Nanocoder is a TypeScript-based CLI coding agent by the Nano Collective that:
-- Supports multiple AI providers (OpenRouter, Ollama, local models)
-- Offers interactive and non-interactive modes
-- Provides tool capabilities (file operations, command execution)
-- Integrates MCP (Model Context Protocol) servers
-- Features checkpointing, task management, custom commands, keyboard shortcuts
-- Distributed via npm, Homebrew, Nix Flakes
-- MIT licensed, 1.5k+ stars
-
-## Initial Concept
-
-"nanocoder-tui" — a Go-based TUI implementation leveraging the existing pi-go codebase (Bubble Tea v2, agent infrastructure, MCP integration, tool registry) to provide a nanocoder-like experience with:
-- Local-first AI coding agent in the terminal
-- Multi-provider support (OpenRouter, Ollama, local models)
-- Rich TUI with Bubble Tea
-- Agentic tool use (file ops, shell, code search)
-- MCP server integration
+## Key Areas of Interest
+- Theme system (39 themes, JSON-loaded, runtime switching)
+- Responsive terminal layout (narrow/normal/wide breakpoints)
+- Tool confirmation with formatter previews
+- File autocomplete via @mentions
+- Context window usage percentage display
+- Compact/expanded tool output toggle
+- Bash streaming progress with live output
+- Markdown rendering in terminal
+- Prompt history with full InputState preservation
+- Development mode indicator

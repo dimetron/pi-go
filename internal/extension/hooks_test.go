@@ -149,3 +149,71 @@ func TestBuildAfterToolCallbacksWithTools(t *testing.T) {
 		t.Errorf("expected 1 after callback, got %d", len(after))
 	}
 }
+
+// TestBuildBeforeToolCallbacksMultipleHooks verifies multiple before_tool hooks
+// each produce a separate callback.
+func TestBuildBeforeToolCallbacksMultipleHooks(t *testing.T) {
+	hooks := []HookConfig{
+		{Event: "before_tool", Command: "echo a", Tools: []string{"read"}, Timeout: 5},
+		{Event: "before_tool", Command: "echo b", Timeout: 5},
+		{Event: "after_tool", Command: "echo c", Timeout: 5}, // should be skipped
+	}
+
+	cbs := BuildBeforeToolCallbacks(hooks)
+	if len(cbs) != 2 {
+		t.Errorf("expected 2 before callbacks, got %d", len(cbs))
+	}
+}
+
+// TestBuildAfterToolCallbacksMultipleHooks verifies multiple after_tool hooks
+// each produce a separate callback.
+func TestBuildAfterToolCallbacksMultipleHooks(t *testing.T) {
+	hooks := []HookConfig{
+		{Event: "after_tool", Command: "echo a", Tools: []string{"write"}, Timeout: 5},
+		{Event: "after_tool", Command: "echo b", Timeout: 5},
+		{Event: "before_tool", Command: "echo c", Timeout: 5}, // should be skipped
+	}
+
+	cbs := BuildAfterToolCallbacks(hooks)
+	if len(cbs) != 2 {
+		t.Errorf("expected 2 after callbacks, got %d", len(cbs))
+	}
+}
+
+// TestParseFrontmatterLine covers the happy path and the "no colon" edge case.
+func TestParseFrontmatterLine(t *testing.T) {
+	tests := []struct {
+		line      string
+		wantKey   string
+		wantValue string
+		wantOK    bool
+	}{
+		{"name: my-skill", "name", "my-skill", true},
+		{"description: Does something", "description", "Does something", true},
+		{"tools: read, write, bash", "tools", "read, write, bash", true},
+		// Value with a colon in it — SplitN(n=2) keeps the rest intact.
+		{"key: val:ue", "key", "val:ue", true},
+		// No colon → not a valid frontmatter line.
+		{"no colon here", "", "", false},
+		// Empty line.
+		{"", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			key, value, ok := parseFrontmatterLine(tt.line)
+			if ok != tt.wantOK {
+				t.Errorf("parseFrontmatterLine(%q) ok = %v, want %v", tt.line, ok, tt.wantOK)
+				return
+			}
+			if ok {
+				if key != tt.wantKey {
+					t.Errorf("key = %q, want %q", key, tt.wantKey)
+				}
+				if value != tt.wantValue {
+					t.Errorf("value = %q, want %q", value, tt.wantValue)
+				}
+			}
+		})
+	}
+}

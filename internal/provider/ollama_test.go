@@ -1,7 +1,13 @@
 package provider
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/model"
@@ -497,6 +503,124 @@ func TestOllamaGenerateContent(t *testing.T) {
 	})
 }
 
+func TestOllamaContentsToMessages_AssistantRoleText(t *testing.T) {
+	// Covers the "assistant" keyword (not just "model") for plain-text messages.
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		{Role: "assistant", Parts: []*genai.Part{{Text: "Hi there"}}},
+	}
+	msgs, _ := ollamaContentsToMessages(contents, nil)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != "assistant" {
+		t.Errorf("second message role = %q, want assistant", msgs[1].Role)
+	}
+	if msgs[1].Content != "Hi there" {
+		t.Errorf("second message content = %q, want Hi there", msgs[1].Content)
+	}
+}
+
+func TestOllamaContentsToMessages_AssistantRoleFunctionCall(t *testing.T) {
+	// Covers the "assistant" keyword (not "model") for the function-call path.
+	fc := genai.NewPartFromFunctionCall("my_tool", map[string]any{"x": "y"})
+	fc.FunctionCall.ID = "call_asst"
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Do it"}}},
+		{Role: "assistant", Parts: []*genai.Part{fc}},
+	}
+	msgs, _ := ollamaContentsToMessages(contents, nil)
+	// user + assistant(tool_calls) + tool_result
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != "assistant" {
+		t.Errorf("assistant message role = %q, want assistant", msgs[1].Role)
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Errorf("expected 1 tool call, got %d", len(msgs[1].ToolCalls))
+	}
+}
+
+func TestOllamaContentsToMessages_MultipleTextParts(t *testing.T) {
+	// Covers joining multiple text parts with "\n".
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Part A"}, {Text: "Part B"}}},
+	}
+	msgs, _ := ollamaContentsToMessages(contents, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Content != "Part A\nPart B" {
+		t.Errorf("content = %q, want %q", msgs[0].Content, "Part A\nPart B")
+	}
+}
+
+func TestOllamaContentsToMessages_AssistantFunctionCallWithText(t *testing.T) {
+	// Covers the path where an assistant message has BOTH text and function calls.
+	fc := genai.NewPartFromFunctionCall("search", map[string]any{"q": "test"})
+	fc.FunctionCall.ID = "call_mixed"
+
+	fr := &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       "call_mixed",
+			Name:     "search",
+			Response: map[string]any{"result": "results here"},
+		},
+	}
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Search for test"}}},
+		{Role: "model", Parts: []*genai.Part{{Text: "I will search."}, fc}},
+		{Role: "user", Parts: []*genai.Part{fr}},
+	}
+	msgs, _ := ollamaContentsToMessages(contents, nil)
+	// user + assistant(text+tool_calls) + tool_result
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	if msgs[1].Content != "I will search." {
+		t.Errorf("assistant text = %q, want 'I will search.'", msgs[1].Content)
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Errorf("expected 1 tool call, got %d", len(msgs[1].ToolCalls))
+	}
+}
+
+func TestOllamaListModelsWithMockServer(t *testing.T) {
+	// Mock HTTP server returning a valid Ollama /api/tags response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Minimal Ollama list response format.
+		_, _ = w.Write([]byte(`{"models":[{"name":"llama3:latest"},{"name":"qwen2.5:7b"}]}`))
+	}))
+	defer srv.Close()
+
+	names, err := OllamaListModels(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("OllamaListModels() error: %v", err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected 2 models, got %d: %v", len(names), names)
+	}
+	found := map[string]bool{}
+	for _, n := range names {
+		found[n] = true
+	}
+	if !found["llama3:latest"] {
+		t.Error("expected llama3:latest in results")
+	}
+	if !found["qwen2.5:7b"] {
+		t.Error("expected qwen2.5:7b in results")
+	}
+}
+
 func TestNewOllamaValidation(t *testing.T) {
 	t.Run("empty model name", func(t *testing.T) {
 		_, err := NewOllama(context.Background(), "", "", "none", nil)
@@ -557,4 +681,754 @@ func TestNewOllamaValidation(t *testing.T) {
 			t.Fatal("expected non-nil LLM")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Mock server helpers
+// ---------------------------------------------------------------------------
+
+// newMockOllamaServer creates an httptest.Server and registers srv.Close as a
+// test cleanup function.
+func newMockOllamaServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// writeNDJSON writes each value as a JSON line (with optional flush) to w.
+func writeNDJSON(w http.ResponseWriter, lines []any) {
+	flusher, canFlush := w.(http.Flusher)
+	for _, l := range lines {
+		b, _ := json.Marshal(l)
+		_, _ = fmt.Fprintf(w, "%s\n", b)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+}
+
+// ollamaChatLine builds a map whose JSON representation matches ChatResponse fields.
+func ollamaChatLine(modelName, role, content, thinking, doneReason string, done bool, promptEval, eval int, toolCalls []map[string]any) map[string]any {
+	msg := map[string]any{"role": role, "content": content}
+	if thinking != "" {
+		msg["thinking"] = thinking
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+	line := map[string]any{
+		"model":   modelName,
+		"message": msg,
+		"done":    done,
+	}
+	if done {
+		line["done_reason"] = doneReason
+		line["prompt_eval_count"] = promptEval
+		line["eval_count"] = eval
+	}
+	return line
+}
+
+// newOllamaModelFromServer creates an ollamaModel whose HTTP client points at srv.
+func newOllamaModelFromServer(t *testing.T, srv *httptest.Server, modelName, thinkingLevel string) model.LLM {
+	t.Helper()
+	llm, err := NewOllama(context.Background(), modelName, srv.URL, thinkingLevel, nil)
+	if err != nil {
+		t.Fatalf("NewOllama: %v", err)
+	}
+	return llm
+}
+
+// collectResponses drains a GenerateContent iterator and returns all responses and errors.
+func collectResponses(t *testing.T, llm model.LLM, req *model.LLMRequest, stream bool) ([]*model.LLMResponse, []error) {
+	t.Helper()
+	var resps []*model.LLMResponse
+	var errs []error
+	for resp, err := range llm.GenerateContent(context.Background(), req, stream) {
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			resps = append(resps, resp)
+		}
+	}
+	return resps, errs
+}
+
+// ---------------------------------------------------------------------------
+// Streaming tests
+// ---------------------------------------------------------------------------
+
+func TestOllamaRunStreaming_BasicText(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "Hello", "", "", false, 0, 0, nil),
+			ollamaChatLine("test", "assistant", " world", "", "stop", true, 10, 5, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	// Expect at least one partial chunk plus the final response.
+	if len(resps) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(resps))
+	}
+
+	// Last response must be the final, non-partial one.
+	last := resps[len(resps)-1]
+	if last.Partial {
+		t.Error("last response should not be partial")
+	}
+	if !last.TurnComplete {
+		t.Error("last response should have TurnComplete=true")
+	}
+	if last.FinishReason != genai.FinishReasonStop {
+		t.Errorf("finish reason = %v, want Stop", last.FinishReason)
+	}
+	if last.UsageMetadata == nil {
+		t.Fatal("expected non-nil UsageMetadata")
+	}
+	if last.UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("PromptTokenCount = %d, want 10", last.UsageMetadata.PromptTokenCount)
+	}
+	if last.UsageMetadata.CandidatesTokenCount != 5 {
+		t.Errorf("CandidatesTokenCount = %d, want 5", last.UsageMetadata.CandidatesTokenCount)
+	}
+
+	// Aggregated text should contain both chunks.
+	if last.Content == nil || len(last.Content.Parts) == 0 {
+		t.Fatal("expected content parts in final response")
+	}
+	combined := ""
+	for _, p := range last.Content.Parts {
+		combined += p.Text
+	}
+	if !strings.Contains(combined, "Hello") || !strings.Contains(combined, "world") {
+		t.Errorf("aggregated text %q does not contain expected chunks", combined)
+	}
+}
+
+func TestOllamaRunStreaming_ThinkingContent(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// Thinking chunk followed by the actual answer.
+		thinkLine := map[string]any{
+			"model":   "test",
+			"message": map[string]any{"role": "assistant", "content": "", "thinking": "let me think"},
+			"done":    false,
+		}
+		answerLine := ollamaChatLine("test", "assistant", "42", "", "stop", true, 5, 3, nil)
+		writeNDJSON(w, []any{thinkLine, answerLine})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "What is 6*7?"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(resps))
+	}
+
+	// First partial should carry the "thinking" role.
+	first := resps[0]
+	if !first.Partial {
+		t.Error("first response should be partial")
+	}
+	if first.Content == nil || first.Content.Role != "thinking" {
+		t.Errorf("first response content role = %q, want thinking", first.Content.Role)
+	}
+	if first.Content.Parts[0].Text != "let me think" {
+		t.Errorf("thinking text = %q, want 'let me think'", first.Content.Parts[0].Text)
+	}
+}
+
+func TestOllamaRunStreaming_ToolCalls(t *testing.T) {
+	toolCallLine := map[string]any{
+		"model": "test",
+		"message": map[string]any{
+			"role":    "assistant",
+			"content": "",
+			"tool_calls": []any{
+				map[string]any{
+					"id": "call_abc",
+					"function": map[string]any{
+						"name":      "get_weather",
+						"arguments": map[string]any{"city": "Paris"},
+					},
+				},
+			},
+		},
+		"done":              true,
+		"done_reason":       "stop",
+		"prompt_eval_count": 8,
+		"eval_count":        4,
+	}
+
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{toolCallLine})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Weather in Paris?"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) == 0 {
+		t.Fatal("expected at least one response")
+	}
+
+	last := resps[len(resps)-1]
+	if last.Content == nil {
+		t.Fatal("expected non-nil content")
+	}
+	var foundFC bool
+	for _, p := range last.Content.Parts {
+		if p.FunctionCall != nil && p.FunctionCall.Name == "get_weather" {
+			foundFC = true
+			break
+		}
+	}
+	if !foundFC {
+		t.Error("expected a FunctionCall part with name=get_weather")
+	}
+}
+
+func TestOllamaRunStreaming_FinishReasonLength(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "truncated", "", "length", true, 100, 50, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "tell me a story"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	last := resps[len(resps)-1]
+	if last.FinishReason != genai.FinishReasonMaxTokens {
+		t.Errorf("finish reason = %v, want MaxTokens", last.FinishReason)
+	}
+}
+
+func TestOllamaRunStreaming_ServerError(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusInternalServerError)
+		// The Ollama client checks for {"error":...} in each NDJSON line.
+		_, _ = fmt.Fprintln(w, `{"error":"internal server error"}`)
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, _ := collectResponses(t, llm, req, true)
+	var foundError bool
+	for _, r := range resps {
+		if r.ErrorCode != "" {
+			foundError = true
+			break
+		}
+	}
+	if !foundError {
+		t.Error("expected an error response with ErrorCode set")
+	}
+}
+
+func TestOllamaRunStreaming_CancelledContext(t *testing.T) {
+	// Server that blocks until the client context is cancelled.
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		<-r.Context().Done()
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	var resps []*model.LLMResponse
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
+		if err == nil {
+			resps = append(resps, resp)
+		}
+	}
+	// With a cancelled context the streaming path returns without yielding an
+	// ErrorCode response (it silently returns).
+	for _, r := range resps {
+		if r.ErrorCode != "" {
+			t.Error("did not expect ErrorCode for cancelled context")
+		}
+	}
+}
+
+func TestOllamaRunStreaming_WithTools(t *testing.T) {
+	// Verify that tools are forwarded in the request body.
+	var capturedBody []byte
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		scanner := bufio.NewScanner(r.Body)
+		if scanner.Scan() {
+			capturedBody = append([]byte(nil), scanner.Bytes()...)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "ok", "", "stop", true, 1, 1, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Use the tool"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "search",
+							Description: "Search the web",
+							ParametersJsonSchema: map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"query": map[string]any{"type": "string", "description": "Search query"},
+								},
+								"required": []any{"query"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) == 0 {
+		t.Fatal("expected at least one response")
+	}
+
+	// The request body should contain tool definitions.
+	var body map[string]any
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatalf("failed to parse captured request body: %v", err)
+	}
+	if _, ok := body["tools"]; !ok {
+		t.Error("expected 'tools' key in request body")
+	}
+}
+
+func TestOllamaRunStreaming_WithThinkingLevel(t *testing.T) {
+	var capturedBody []byte
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		scanner := bufio.NewScanner(r.Body)
+		if scanner.Scan() {
+			capturedBody = append([]byte(nil), scanner.Bytes()...)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "answer", "", "stop", true, 2, 2, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "medium")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Think hard"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) == 0 {
+		t.Fatal("expected at least one response")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatalf("failed to parse captured body: %v", err)
+	}
+	if body["think"] == nil {
+		t.Error("expected 'think' field in request body for thinking level=medium")
+	}
+}
+
+func TestOllamaRunStreaming_YieldCancelled(t *testing.T) {
+	// Server returns two text chunks; we break after the first yield.
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "chunk1", "", "", false, 0, 0, nil),
+			ollamaChatLine("test", "assistant", "chunk2", "", "stop", true, 5, 3, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	var count int
+	for range llm.GenerateContent(context.Background(), req, true) {
+		count++
+		break
+	}
+	if count == 0 {
+		t.Error("expected at least one yield before stopping")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming tests
+// ---------------------------------------------------------------------------
+
+func TestOllamaRunNonStreaming_BasicText(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		// Verify stream=false in the request body.
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if s, _ := body["stream"].(bool); s {
+			t.Error("expected stream=false in non-streaming request")
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "Hello world", "", "stop", true, 10, 5, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(resps))
+	}
+
+	r := resps[0]
+	if r.Partial {
+		t.Error("non-streaming response should not be partial")
+	}
+	if !r.TurnComplete {
+		t.Error("non-streaming response should be TurnComplete")
+	}
+	if r.FinishReason != genai.FinishReasonStop {
+		t.Errorf("finish reason = %v, want Stop", r.FinishReason)
+	}
+	if r.UsageMetadata == nil {
+		t.Fatal("expected UsageMetadata")
+	}
+	if r.UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("PromptTokenCount = %d, want 10", r.UsageMetadata.PromptTokenCount)
+	}
+	if r.UsageMetadata.CandidatesTokenCount != 5 {
+		t.Errorf("CandidatesTokenCount = %d, want 5", r.UsageMetadata.CandidatesTokenCount)
+	}
+	if r.Content == nil || len(r.Content.Parts) == 0 {
+		t.Fatal("expected content parts")
+	}
+	if r.Content.Parts[0].Text != "Hello world" {
+		t.Errorf("content text = %q, want 'Hello world'", r.Content.Parts[0].Text)
+	}
+}
+
+func TestOllamaRunNonStreaming_ThinkingContent(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		line := map[string]any{
+			"model": "test",
+			"message": map[string]any{
+				"role":     "assistant",
+				"content":  "42",
+				"thinking": "I computed this carefully",
+			},
+			"done":              true,
+			"done_reason":       "stop",
+			"prompt_eval_count": 5,
+			"eval_count":        3,
+		}
+		writeNDJSON(w, []any{line})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "6*7?"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(resps))
+	}
+
+	r := resps[0]
+	if r.Content == nil || len(r.Content.Parts) < 2 {
+		t.Fatalf("expected at least 2 parts (thinking + answer), got %d", len(r.Content.Parts))
+	}
+	if r.Content.Parts[0].Text != "I computed this carefully" {
+		t.Errorf("thinking part = %q, want 'I computed this carefully'", r.Content.Parts[0].Text)
+	}
+	if r.Content.Parts[1].Text != "42" {
+		t.Errorf("answer part = %q, want '42'", r.Content.Parts[1].Text)
+	}
+}
+
+func TestOllamaRunNonStreaming_ToolCalls(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		line := map[string]any{
+			"model": "test",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []any{
+					map[string]any{
+						"id": "call_xyz",
+						"function": map[string]any{
+							"name":      "calculator",
+							"arguments": map[string]any{"expression": "2+2"},
+						},
+					},
+				},
+			},
+			"done":              true,
+			"done_reason":       "stop",
+			"prompt_eval_count": 6,
+			"eval_count":        2,
+		}
+		writeNDJSON(w, []any{line})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Calculate 2+2"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(resps))
+	}
+
+	r := resps[0]
+	if r.Content == nil {
+		t.Fatal("expected non-nil content")
+	}
+	var foundFC bool
+	for _, p := range r.Content.Parts {
+		if p.FunctionCall != nil && p.FunctionCall.Name == "calculator" {
+			foundFC = true
+			if p.FunctionCall.ID != "call_xyz" {
+				t.Errorf("function call ID = %q, want call_xyz", p.FunctionCall.ID)
+			}
+			if v, ok := p.FunctionCall.Args["expression"]; !ok || v != "2+2" {
+				t.Errorf("function call arg expression = %v, want 2+2", v)
+			}
+		}
+	}
+	if !foundFC {
+		t.Error("expected a FunctionCall part with name=calculator")
+	}
+}
+
+func TestOllamaRunNonStreaming_FinishReasonLength(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "cut short", "", "length", true, 200, 100, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Write a novel"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	last := resps[len(resps)-1]
+	if last.FinishReason != genai.FinishReasonMaxTokens {
+		t.Errorf("finish reason = %v, want MaxTokens", last.FinishReason)
+	}
+}
+
+func TestOllamaRunNonStreaming_ServerError(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintln(w, `{"error":"something went wrong"}`)
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	_, errs := collectResponses(t, llm, req, false)
+	if len(errs) == 0 {
+		t.Error("expected at least one error from non-streaming server error")
+	}
+}
+
+func TestOllamaRunNonStreaming_ModelOverride(t *testing.T) {
+	var capturedModel string
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		capturedModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("override-model", "assistant", "ok", "", "stop", true, 1, 1, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "original-model", "none")
+	req := &model.LLMRequest{
+		Model: "override-model",
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) == 0 {
+		t.Fatal("expected a response")
+	}
+	if capturedModel != "override-model" {
+		t.Errorf("model sent = %q, want override-model", capturedModel)
+	}
+}
+
+func TestOllamaRunNonStreaming_SystemPrompt(t *testing.T) {
+	var capturedMessages []any
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if msgs, ok := body["messages"].([]any); ok {
+			capturedMessages = msgs
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("test", "assistant", "sure", "", "stop", true, 3, 2, nil),
+		})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "none")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Parts: []*genai.Part{{Text: "You are concise."}},
+			},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(resps) == 0 {
+		t.Fatal("expected a response")
+	}
+
+	// First message should be the system message.
+	if len(capturedMessages) < 2 {
+		t.Fatalf("expected at least 2 messages (system + user), got %d", len(capturedMessages))
+	}
+	firstMsg, _ := capturedMessages[0].(map[string]any)
+	if firstMsg["role"] != "system" {
+		t.Errorf("first message role = %v, want system", firstMsg["role"])
+	}
+	if firstMsg["content"] != "You are concise." {
+		t.Errorf("system content = %v, want 'You are concise.'", firstMsg["content"])
+	}
+}
+
+func TestOllamaName(t *testing.T) {
+	llm, err := NewOllama(context.Background(), "my-model", "", "none", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if llm.Name() != "my-model" {
+		t.Errorf("Name() = %q, want my-model", llm.Name())
+	}
 }

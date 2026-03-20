@@ -220,3 +220,44 @@ func TestWithRetryPartialResponseNotRetried(t *testing.T) {
 		t.Errorf("expected 1 partial event, got %d", len(collected))
 	}
 }
+
+// timeoutError implements the Timeout() bool interface.
+type timeoutError struct{ msg string }
+
+func (e *timeoutError) Error() string { return e.msg }
+func (e *timeoutError) Timeout() bool { return true }
+
+// temporaryError implements the Temporary() bool interface.
+type temporaryError struct{ msg string }
+
+func (e *temporaryError) Error() string   { return e.msg }
+func (e *temporaryError) Temporary() bool { return true }
+
+// TestIsTransientTimeoutInterface verifies that errors implementing the
+// Timeout() bool interface are classified as transient.
+func TestIsTransientTimeoutInterface(t *testing.T) {
+	err := &timeoutError{msg: "connection timed out"}
+	if !isTransient(err) {
+		t.Errorf("isTransient(timeoutError) = false, want true")
+	}
+}
+
+// TestIsTransientTemporaryInterface verifies that errors implementing the
+// Temporary() bool interface are classified as transient.
+func TestIsTransientTemporaryInterface(t *testing.T) {
+	err := &temporaryError{msg: "temporary failure occurred"}
+	if !isTransient(err) {
+		t.Errorf("isTransient(temporaryError) = false, want true")
+	}
+}
+
+// TestIsTransientTimeoutInterfaceFalse verifies that a Timeout()==false error
+// is not automatically transient (unless the message matches a pattern).
+func TestIsTransientTimeoutInterfaceFalse(t *testing.T) {
+	type nonTimeoutErr struct{ msg string }
+	// This struct has no Timeout() method — it's a plain error.
+	err := fmt.Errorf("unique non-matching error xyz123")
+	if isTransient(err) {
+		t.Errorf("isTransient(non-matching error) = true, want false")
+	}
+}

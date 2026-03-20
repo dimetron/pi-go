@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/model"
@@ -53,9 +55,10 @@ func lenientSchema[T any]() *jsonschema.Schema {
 
 // collectCoerceProps inspects a schema and returns sets of property names
 // that should be coerced from string to their expected types.
-func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps map[string]bool) {
+func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps, jsonProps map[string]bool) {
 	intProps = make(map[string]bool)
 	boolProps = make(map[string]bool)
+	jsonProps = make(map[string]bool)
 	if schema == nil {
 		return
 	}
@@ -65,6 +68,8 @@ func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps map[stri
 			intProps[name] = true
 		case "boolean":
 			boolProps[name] = true
+		case "array", "object":
+			jsonProps[name] = true
 		}
 	}
 	return
@@ -72,8 +77,9 @@ func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps map[stri
 
 // helper to create a function tool with less boilerplate.
 // Uses lenient input schema that tolerates extra properties from LLMs.
-// Wraps with type coercion for integer/boolean fields that LLMs may send as strings.
-func newTool[TArgs, TResults any](name, description string, handler functiontool.Func[TArgs, TResults]) (tool.Tool, error) {
+// Wraps with type coercion for integer/boolean fields that LLMs may send as strings,
+// and parameter alias resolution for common LLM naming mistakes.
+func newTool[TArgs, TResults any](name, description string, handler functiontool.Func[TArgs, TResults], aliases ...map[string]string) (tool.Tool, error) {
 	schema := lenientSchema[TArgs]()
 	inner, err := functiontool.New(functiontool.Config{
 		Name:        name,
@@ -84,9 +90,19 @@ func newTool[TArgs, TResults any](name, description string, handler functiontool
 		return nil, err
 	}
 
-	intProps, boolProps := collectCoerceProps(schema)
-	if len(intProps) > 0 || len(boolProps) > 0 {
-		return &coercingTool{Tool: inner, intProps: intProps, boolProps: boolProps}, nil
+	intProps, boolProps, jsonProps := collectCoerceProps(schema)
+	var mergedAliases map[string]string
+	for _, a := range aliases {
+		if mergedAliases == nil {
+			mergedAliases = make(map[string]string, len(a))
+		}
+		for from, to := range a {
+			mergedAliases[from] = to
+		}
+	}
+
+	if len(intProps) > 0 || len(boolProps) > 0 || len(jsonProps) > 0 || len(mergedAliases) > 0 {
+		return &coercingTool{Tool: inner, intProps: intProps, boolProps: boolProps, jsonProps: jsonProps, aliases: mergedAliases}, nil
 	}
 	return inner, nil
 }
@@ -98,6 +114,8 @@ type coercingTool struct {
 	tool.Tool
 	intProps  map[string]bool
 	boolProps map[string]bool
+	jsonProps map[string]bool   // array/object props that may arrive as JSON strings
+	aliases   map[string]string // from → to parameter name remapping
 }
 
 // Declaration delegates to the inner tool.
@@ -149,9 +167,11 @@ func (c *coercingTool) ProcessRequest(_ tool.Context, req *model.LLMRequest) err
 	return nil
 }
 
-// Run coerces string values to expected types, then delegates to the inner tool.
+// Run resolves parameter aliases and coerces string values to expected types,
+// then delegates to the inner tool.
 func (c *coercingTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	if m, ok := args.(map[string]any); ok {
+		c.aliasArgs(m)
 		c.coerceArgs(m)
 	}
 	type runner interface {
@@ -161,6 +181,20 @@ func (c *coercingTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		return r.Run(ctx, args)
 	}
 	return nil, fmt.Errorf("inner tool %s does not implement Run", c.Name())
+}
+
+// aliasArgs remaps common LLM parameter name mistakes to their canonical names.
+// Only applies if the canonical name is not already present.
+func (c *coercingTool) aliasArgs(m map[string]any) {
+	for from, to := range c.aliases {
+		if _, hasCanonical := m[to]; hasCanonical {
+			continue
+		}
+		if v, hasAlias := m[from]; hasAlias {
+			m[to] = v
+			delete(m, from)
+		}
+	}
 }
 
 // coerceArgs converts string values to their expected types based on schema info.
@@ -179,6 +213,16 @@ func (c *coercingTool) coerceArgs(m map[string]any) {
 		} else if c.boolProps[k] {
 			if b, err := strconv.ParseBool(s); err == nil {
 				m[k] = b
+			}
+		} else if c.jsonProps[k] {
+			// LLMs sometimes stringify JSON arrays/objects. Parse them back.
+			s = strings.TrimSpace(s)
+			if (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
+				(strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
+				var parsed any
+				if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+					m[k] = parsed
+				}
 			}
 		}
 	}

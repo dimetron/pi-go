@@ -173,6 +173,48 @@ func TestMigrations_Triggers(t *testing.T) {
 	}
 }
 
+func TestOpenDB_ReadOnlyDirFails(t *testing.T) {
+	// Try to open a DB inside a path that cannot be created (file used as dir).
+	f, err := os.CreateTemp(t.TempDir(), "blocker-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	f.Close()
+	// Use the file (not a dir) as the parent directory — MkdirAll should fail.
+	badPath := filepath.Join(f.Name(), "subdir", "test.db")
+	_, err = OpenDB(badPath)
+	if err == nil {
+		t.Error("OpenDB with bad path: expected error, got nil")
+	}
+}
+
+func TestMigrate_Partial(t *testing.T) {
+	// Open without migrations (raw sql.Open), manually apply first migration only,
+	// then call migrate() — it should apply only the remaining one.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+
+	// Bootstrap schema_versions table and apply first migration manually.
+	db.Exec(`CREATE TABLE IF NOT EXISTS schema_versions (
+		id INTEGER PRIMARY KEY, version INTEGER UNIQUE NOT NULL, applied_at TEXT NOT NULL)`)
+	db.Exec(migrations[0])
+	db.Exec(`INSERT INTO schema_versions (version, applied_at) VALUES (1, '2026-01-01T00:00:00Z')`)
+
+	// Now call migrate — should apply only migration 2.
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate on partial DB: %v", err)
+	}
+
+	var version int
+	db.QueryRow("SELECT MAX(version) FROM schema_versions").Scan(&version)
+	if version != len(migrations) {
+		t.Errorf("version = %d, want %d", version, len(migrations))
+	}
+}
+
 func TestOpenDB_FileBased(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")

@@ -82,9 +82,11 @@ func (s *mockStore) getObservations() []*Observation {
 }
 
 // Unused Store methods — satisfy interface.
-func (s *mockStore) CreateSession(context.Context, *Session) error                        { return nil }
-func (s *mockStore) CompleteSession(context.Context, string) error                        { return nil }
-func (s *mockStore) GetObservations(context.Context, []int64) ([]*Observation, error)     { return nil, nil }
+func (s *mockStore) CreateSession(context.Context, *Session) error { return nil }
+func (s *mockStore) CompleteSession(context.Context, string) error { return nil }
+func (s *mockStore) GetObservations(context.Context, []int64) ([]*Observation, error) {
+	return nil, nil
+}
 func (s *mockStore) RecentObservations(context.Context, string, int) ([]*Observation, error) {
 	return nil, nil
 }
@@ -99,6 +101,16 @@ func (s *mockStore) Timeline(context.Context, int64, int, int) ([]*Observation, 
 	return nil, nil
 }
 func (s *mockStore) Close() error { return nil }
+
+// fakeToolForCallback is a minimal implementation of toolpkg.Tool for testing.
+type fakeToolForCallback struct{ name string }
+
+func (f *fakeToolForCallback) Name() string        { return f.name }
+func (f *fakeToolForCallback) Description() string { return "" }
+func (f *fakeToolForCallback) IsLongRunning() bool { return false }
+func (f *fakeToolForCallback) Declaration() (interface{}, error) {
+	return nil, nil
+}
 
 func makeRaw(toolName string) RawObservation {
 	return RawObservation{
@@ -348,6 +360,91 @@ func TestBuildMemoryCallback(t *testing.T) {
 	}
 	if obs[0].Project != "/my/project" {
 		t.Errorf("Project = %q, want %q", obs[0].Project, "/my/project")
+	}
+}
+
+func TestNewWorkerDefaultBufSize(t *testing.T) {
+	// bufSize <= 0 should default to 100.
+	store := newMockStore()
+	comp := newMockCompressor()
+	w := NewWorker(store, comp, 0)
+
+	ctx := context.Background()
+	w.Start(ctx)
+
+	// Enqueue 10 items — well under the default 100 buffer.
+	for i := 0; i < 10; i++ {
+		w.Enqueue(makeRaw(fmt.Sprintf("t%d", i)))
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	if n := len(store.getObservations()); n != 10 {
+		t.Errorf("observations = %d, want 10", n)
+	}
+}
+
+func TestWorkerShutdownTimeout(t *testing.T) {
+	store := newMockStore()
+	// Use a compressor with a long latency so it doesn't finish before the timeout.
+	comp := &mockCompressor{failAt: -1, latency: 200 * time.Millisecond}
+	w := NewWorker(store, comp, 10)
+
+	ctx := context.Background()
+	w.Start(ctx)
+
+	// Fill the queue.
+	for i := 0; i < 5; i++ {
+		w.Enqueue(makeRaw(fmt.Sprintf("slow-%d", i)))
+	}
+
+	// Shutdown with a very short timeout — should time out.
+	shortCtx, cancel := context.WithTimeout(ctx, 1*time.Millisecond)
+	defer cancel()
+	err := w.Shutdown(shortCtx)
+	if err == nil {
+		t.Error("expected timeout error from Shutdown, got nil")
+	}
+}
+
+func TestBuildAfterToolCallback(t *testing.T) {
+	store := newMockStore()
+	comp := newMockCompressor()
+	w := NewWorker(store, comp, 10)
+
+	ctx := context.Background()
+	w.Start(ctx)
+
+	excluded := map[string]bool{"skip-me": true}
+	cb := BuildAfterToolCallback(w, "sess-cb", "/project", excluded)
+
+	// A nil tool error means it should be enqueued.
+	mockTool := &fakeToolForCallback{name: "real-tool"}
+	cb(nil, mockTool, map[string]any{"key": "val"}, map[string]any{"out": "ok"}, nil)
+
+	// An excluded tool should not be enqueued.
+	skippedTool := &fakeToolForCallback{name: "skip-me"}
+	cb(nil, skippedTool, map[string]any{}, map[string]any{}, nil)
+
+	// A tool error should not be enqueued.
+	cb(nil, mockTool, map[string]any{}, map[string]any{}, fmt.Errorf("tool failed"))
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	obs := store.getObservations()
+	if len(obs) != 1 {
+		t.Errorf("stored observations = %d, want 1 (excluded + errored should be skipped)", len(obs))
+	}
+	if obs[0].ToolName != "real-tool" {
+		t.Errorf("ToolName = %q, want real-tool", obs[0].ToolName)
 	}
 }
 

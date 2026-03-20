@@ -32,10 +32,7 @@ func isTransientReadError(err error) bool {
 			return true
 		}
 	}
-	if errors.Is(err, syscall.ETIMEDOUT) {
-		return true
-	}
-	return false
+	return errors.Is(err, syscall.ETIMEDOUT)
 }
 
 // Sandbox provides a secure file system abstraction that restricts
@@ -89,24 +86,31 @@ func (s *Sandbox) Dir() string {
 }
 
 // Resolve converts an absolute or relative path to a relative path
-// under the sandbox root. os.Root enforces that the resolved path
-// cannot escape the directory tree (via ".." or symlinks).
+// under the sandbox root. Returns an error with the sandbox root path
+// if the resolved path would escape the directory tree.
 //
 // SECURITY: This is intentional. The sandbox restricts file system
 // access to prevent the agent from reading/writing files outside
 // the working directory.
-//
-// ERROR: Returns error if absolute path is outside sandbox.
-// Include sandbox path in error message for debugging.
 func (s *Sandbox) Resolve(name string) (string, error) {
+	var rel string
 	if filepath.IsAbs(name) {
-		rel, err := filepath.Rel(s.dir, name)
+		var err error
+		rel, err = filepath.Rel(s.dir, name)
 		if err != nil {
-			return "", fmt.Errorf("path %s is outside sandbox %s", name, s.dir)
+			return "", fmt.Errorf("path %s is outside sandbox root %s — use absolute paths under this directory", name, s.dir)
 		}
-		return rel, nil
+	} else {
+		rel = name
 	}
-	return name, nil
+
+	// Check if the cleaned relative path escapes the sandbox root.
+	cleaned := filepath.Clean(rel)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes sandbox root %s — use absolute paths starting with %s/", name, s.dir, s.dir)
+	}
+
+	return rel, nil
 }
 
 // ReadFile reads the named file within the sandbox.

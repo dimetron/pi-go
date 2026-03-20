@@ -32,7 +32,7 @@ type FindOutput struct {
 func newFindTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("find", "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*.ts', 'src/**/*.test.js'.", func(_ tool.Context, input FindInput) (FindOutput, error) {
 		return findHandler(sb, input)
-	})
+	}, map[string]string{"glob": "pattern"})
 }
 
 func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {

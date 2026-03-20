@@ -292,14 +292,14 @@ func TestUpsertSummary(t *testing.T) {
 	insertTestSession(t, store, "sess-sum", "/project")
 
 	sum := &SessionSummary{
-		SessionID:   "sess-sum",
-		Project:     "/project",
-		Request:     "implement feature X",
+		SessionID:    "sess-sum",
+		Project:      "/project",
+		Request:      "implement feature X",
 		Investigated: "read source files",
-		Learned:     "uses MVC pattern",
-		Completed:   "added controller",
-		NextSteps:   "write tests",
-		CreatedAt:   time.Now(),
+		Learned:      "uses MVC pattern",
+		Completed:    "added controller",
+		NextSteps:    "write tests",
+		CreatedAt:    time.Now(),
 	}
 
 	if err := store.UpsertSummary(ctx, sum); err != nil {
@@ -441,6 +441,62 @@ func TestFullCRUDCycle(t *testing.T) {
 	}
 	if sums[0].Request != "full test" {
 		t.Errorf("summary request = %q, want 'full test'", sums[0].Request)
+	}
+}
+
+func TestRecentObservations_DefaultLimit(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-deflimit", "/project")
+	now := time.Now()
+
+	// Insert 60 observations.
+	for i := 0; i < 60; i++ {
+		obs := &Observation{
+			SessionID:   "sess-deflimit",
+			Project:     "/project",
+			Title:       fmt.Sprintf("obs-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "Read",
+			CreatedAt:   now.Add(time.Duration(i) * time.Second),
+		}
+		if err := store.InsertObservation(ctx, obs); err != nil {
+			t.Fatalf("InsertObservation %d: %v", i, err)
+		}
+	}
+
+	// limit=0 should default to 50.
+	results, err := store.RecentObservations(ctx, "/project", 0)
+	if err != nil {
+		t.Fatalf("RecentObservations: %v", err)
+	}
+	if len(results) != 50 {
+		t.Errorf("got %d, want 50 (default limit)", len(results))
+	}
+}
+
+func TestRecentObservations_NoResults(t *testing.T) {
+	store := newTestStore(t)
+	results, err := store.RecentObservations(context.Background(), "/unknown-project", 10)
+	if err != nil {
+		t.Fatalf("RecentObservations: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("got %d results, want 0 for unknown project", len(results))
+	}
+}
+
+func TestClose(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	store := NewSQLiteStore(db)
+	if err := store.Close(); err != nil {
+		t.Errorf("Close() error: %v", err)
 	}
 }
 

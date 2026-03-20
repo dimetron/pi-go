@@ -35,7 +35,7 @@ func newReadTool(sb *Sandbox) (tool.Tool, error) {
 Required: file_path (absolute path to the file).
 Optional: offset (start line, 1-based), limit (max lines to read).`, func(_ tool.Context, input ReadInput) (ReadOutput, error) {
 		return readHandler(sb, input)
-	})
+	}, map[string]string{"path": "file_path"})
 }
 
 func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {

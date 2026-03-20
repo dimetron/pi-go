@@ -887,6 +887,406 @@ func TestSessionStateGetMissing(t *testing.T) {
 	}
 }
 
+func TestLastSessionIDPicksMostRecent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "older-session",
+	})
+
+	// Ensure timestamps differ.
+	time.Sleep(10 * time.Millisecond)
+
+	svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "newer-session",
+	})
+
+	id := svc.LastSessionID("test-app", "test-user")
+	if id != "newer-session" {
+		t.Errorf("LastSessionID() = %q, want %q", id, "newer-session")
+	}
+}
+
+func TestLastSessionIDFiltersAppAndUser(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	svc.Create(ctx, &session.CreateRequest{
+		AppName:   "app-a",
+		UserID:    "user-1",
+		SessionID: "sess-a",
+	})
+	svc.Create(ctx, &session.CreateRequest{
+		AppName:   "app-b",
+		UserID:    "user-1",
+		SessionID: "sess-b",
+	})
+	svc.Create(ctx, &session.CreateRequest{
+		AppName:   "app-a",
+		UserID:    "user-2",
+		SessionID: "sess-c",
+	})
+
+	// Only sess-a matches app-a + user-1.
+	id := svc.LastSessionID("app-a", "user-1")
+	if id != "sess-a" {
+		t.Errorf("LastSessionID() = %q, want %q", id, "sess-a")
+	}
+
+	// No match returns "".
+	id = svc.LastSessionID("app-x", "user-1")
+	if id != "" {
+		t.Errorf("LastSessionID() = %q, want empty for unknown app", id)
+	}
+}
+
+func TestLastSessionIDEmptyDir(t *testing.T) {
+	svc := newTestService(t)
+	id := svc.LastSessionID("any-app", "any-user")
+	if id != "" {
+		t.Errorf("LastSessionID() = %q, want empty when no sessions", id)
+	}
+}
+
+func TestEstimateEventTokensAllPartTypes(t *testing.T) {
+	ev := &session.Event{}
+	ev.Content = genai.NewContentFromText(strings.Repeat("x", 400), genai.RoleUser)
+	// Add a function call part manually.
+	ev.Content.Parts = append(ev.Content.Parts,
+		genai.NewPartFromFunctionCall("myFunc", map[string]any{"arg": strings.Repeat("y", 100)}),
+	)
+	// Add a function response part.
+	ev.Content.Parts = append(ev.Content.Parts,
+		genai.NewPartFromFunctionResponse("myFunc", map[string]any{"result": strings.Repeat("z", 100)}),
+	)
+
+	nilContentEv := &session.Event{} // nil content — should be skipped
+	events := []*session.Event{ev, nilContentEv}
+
+	tokens := estimateEventTokens(events)
+	if tokens <= 100 {
+		t.Errorf("estimateEventTokens() = %d, expected > 100 (text + function parts)", tokens)
+	}
+}
+
+func TestEstimateEventTokensEmpty(t *testing.T) {
+	if got := estimateEventTokens(nil); got != 0 {
+		t.Errorf("estimateEventTokens(nil) = %d, want 0", got)
+	}
+	if got := estimateEventTokens([]*session.Event{}); got != 0 {
+		t.Errorf("estimateEventTokens([]) = %d, want 0", got)
+	}
+}
+
+func TestRewriteEvents(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create the events.jsonl so the file exists first.
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(eventsPath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	events := []*session.Event{
+		{ID: "e1", Timestamp: time.Now(), Author: "user"},
+		{ID: "e2", Timestamp: time.Now(), Author: "model"},
+	}
+
+	if err := rewriteEvents(dir, events); err != nil {
+		t.Fatalf("rewriteEvents() error: %v", err)
+	}
+
+	// Reload and verify.
+	loaded, err := readEvents(dir)
+	if err != nil {
+		t.Fatalf("readEvents() error: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded %d events, want 2", len(loaded))
+	}
+	if loaded[0].ID != "e1" {
+		t.Errorf("event[0].ID = %q, want e1", loaded[0].ID)
+	}
+	if loaded[1].ID != "e2" {
+		t.Errorf("event[1].ID = %q, want e2", loaded[1].ID)
+	}
+}
+
+func TestRewriteEventsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(eventsPath, []byte("old content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := rewriteEvents(dir, nil); err != nil {
+		t.Fatalf("rewriteEvents(nil) error: %v", err)
+	}
+
+	loaded, err := readEvents(dir)
+	if err != nil {
+		t.Fatalf("readEvents() error: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Errorf("loaded %d events after rewrite with nil, want 0", len(loaded))
+	}
+}
+
+func TestReadEventsNonExistentFile(t *testing.T) {
+	dir := t.TempDir()
+	// No events.jsonl created — should return nil, nil.
+	events, err := readEvents(dir)
+	if err != nil {
+		t.Fatalf("readEvents() error: %v", err)
+	}
+	if events != nil {
+		t.Errorf("readEvents() = %v, want nil for missing file", events)
+	}
+}
+
+func TestReadEventsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	events, err := readEvents(dir)
+	if err != nil {
+		t.Fatalf("readEvents() error: %v", err)
+	}
+	if events != nil {
+		t.Errorf("readEvents() = %v, want nil for empty file", events)
+	}
+}
+
+func TestWriteMetaAndReadMeta(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().Truncate(time.Second)
+	meta := &Meta{
+		ID:        "test-id",
+		AppName:   "app",
+		UserID:    "user",
+		WorkDir:   "/work",
+		Model:     "gemini",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := writeMeta(dir, meta); err != nil {
+		t.Fatalf("writeMeta() error: %v", err)
+	}
+
+	loaded, err := readMeta(dir)
+	if err != nil {
+		t.Fatalf("readMeta() error: %v", err)
+	}
+	if loaded.ID != meta.ID {
+		t.Errorf("ID = %q, want %q", loaded.ID, meta.ID)
+	}
+	if loaded.AppName != meta.AppName {
+		t.Errorf("AppName = %q, want %q", loaded.AppName, meta.AppName)
+	}
+	if loaded.WorkDir != meta.WorkDir {
+		t.Errorf("WorkDir = %q, want %q", loaded.WorkDir, meta.WorkDir)
+	}
+}
+
+func TestWriteMetaBadDir(t *testing.T) {
+	// Write to a nonexistent directory — should error.
+	meta := &Meta{ID: "x", AppName: "a", UserID: "u"}
+	err := writeMeta("/nonexistent/path/that/does/not/exist", meta)
+	if err == nil {
+		t.Error("writeMeta() to bad dir: expected error, got nil")
+	}
+}
+
+func TestEventListAtBounds(t *testing.T) {
+	e0 := &session.Event{ID: "e0"}
+	e1 := &session.Event{ID: "e1"}
+	list := eventList([]*session.Event{e0, e1})
+
+	if got := list.At(0); got != e0 {
+		t.Errorf("At(0) = %v, want e0", got)
+	}
+	if got := list.At(1); got != e1 {
+		t.Errorf("At(1) = %v, want e1", got)
+	}
+	if got := list.At(2); got != nil {
+		t.Errorf("At(2) = %v, want nil (out of bounds)", got)
+	}
+	if got := list.At(-1); got != nil {
+		t.Errorf("At(-1) = %v, want nil (negative index)", got)
+	}
+}
+
+func TestEventListAllEarlyReturn(t *testing.T) {
+	events := make([]*session.Event, 5)
+	for i := range events {
+		events[i] = &session.Event{ID: fmt.Sprintf("e%d", i)}
+	}
+	list := eventList(events)
+
+	count := 0
+	for range list.All() {
+		count++
+		break // stop after first
+	}
+	if count != 1 {
+		t.Errorf("early return from All(): got %d iterations, want 1", count)
+	}
+}
+
+func TestStateAllEarlyReturn(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	state := resp.Session.State()
+	state.Set("k1", "v1")
+	state.Set("k2", "v2")
+	state.Set("k3", "v3")
+
+	count := 0
+	for range state.All() {
+		count++
+		break
+	}
+	if count != 1 {
+		t.Errorf("early return from State.All(): got %d iterations, want 1", count)
+	}
+}
+
+func TestGetSessionWithAfterFilter(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("e%d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("msg-%d", i), genai.RoleUser)
+		svc.AppendEvent(ctx, resp.Session, event)
+	}
+
+	// Filter to events after the 3rd event's timestamp (i=2).
+	after := base.Add(2 * time.Second)
+	getResp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: resp.Session.ID(),
+		After:     after,
+	})
+	if err != nil {
+		t.Fatalf("Get(After) error: %v", err)
+	}
+	// Events at t=2,3,4 qualify (>= after).
+	if getResp.Session.Events().Len() != 3 {
+		t.Errorf("Get(After) events = %d, want 3", getResp.Session.Events().Len())
+	}
+}
+
+func TestGetRequiredFieldsValidation(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.Get(ctx, &session.GetRequest{AppName: "app", UserID: ""})
+	if err == nil {
+		t.Error("expected error for missing UserID")
+	}
+	_, err = svc.Get(ctx, &session.GetRequest{AppName: "", UserID: "user"})
+	if err == nil {
+		t.Error("expected error for missing AppName")
+	}
+}
+
+func TestCreateRequiredFieldsValidation(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, &session.CreateRequest{AppName: "", UserID: "user"})
+	if err == nil {
+		t.Error("expected error for missing AppName")
+	}
+	_, err = svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: ""})
+	if err == nil {
+		t.Error("expected error for missing UserID")
+	}
+}
+
+func TestAppendEventNilSessionError(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	err := svc.AppendEvent(ctx, nil, &session.Event{ID: "e1", Timestamp: time.Now()})
+	if err == nil {
+		t.Error("expected error for nil session")
+	}
+}
+
+func TestAppendEventNilEventError(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	err := svc.AppendEvent(ctx, resp.Session, nil)
+	if err == nil {
+		t.Error("expected error for nil event")
+	}
+}
+
+func TestNewFileServiceBadDir(t *testing.T) {
+	// Attempt to create a service in a path that is a file, not a dir.
+	f, err := os.CreateTemp(t.TempDir(), "not-a-dir-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	f.Close()
+	// Try to use the file path as a directory — MkdirAll will fail on some systems,
+	// or if it succeeds the service should still be created. We just verify no panic.
+	_, _ = NewFileService(f.Name() + "/subdir")
+}
+
+func TestCreateWithInitialState(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "explicit-id",
+		State:     map[string]any{"init-key": "init-val"},
+	})
+	if resp.Session.ID() != "explicit-id" {
+		t.Errorf("ID() = %q, want explicit-id", resp.Session.ID())
+	}
+	// Verify initial state is accessible.
+	val, err := resp.Session.State().Get("init-key")
+	if err != nil {
+		t.Fatalf("State.Get(init-key): %v", err)
+	}
+	if val != "init-val" {
+		t.Errorf("init-key = %v, want init-val", val)
+	}
+}
+
 func TestSessionLastUpdateTime(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

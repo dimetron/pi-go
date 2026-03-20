@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -313,11 +315,192 @@ func TestBranchAddEventsAndSwitch(t *testing.T) {
 	}
 }
 
-func TestLoadBranchEvents_NotFound(t *testing.T) {
-	// This test is skipped because loadBranchEvents is private
-	// and requires internal dir field access
-	t.Skip("Test requires internal loadBranchEvents method access")
+func TestLoadBranchEvents_BranchDirExists(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	sessionID := resp.Session.ID()
+	addTestEvents(t, svc, resp.Session, 3)
+
+	// CreateBranch writes branch events to branches/<name>/events.jsonl.
+	if err := svc.CreateBranch(sessionID, "test-app", "test-user", "mybranch"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	sessionDir := filepath.Join(svc.baseDir, sessionID)
+	events, err := svc.loadBranchEvents(sessionDir, "mybranch")
+	if err != nil {
+		t.Fatalf("loadBranchEvents(mybranch): %v", err)
+	}
+	if len(events) != 3 {
+		t.Errorf("loaded %d events, want 3", len(events))
+	}
 }
+
+func TestLoadBranchEvents_MainFallsBackToRoot(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	sessionID := resp.Session.ID()
+	addTestEvents(t, svc, resp.Session, 2)
+
+	sessionDir := filepath.Join(svc.baseDir, sessionID)
+	// "main" has no branch dir yet — falls back to root events.jsonl.
+	events, err := svc.loadBranchEvents(sessionDir, "main")
+	if err != nil {
+		t.Fatalf("loadBranchEvents(main): %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("loaded %d events from main, want 2", len(events))
+	}
+}
+
+func TestLoadBranchEvents_UnknownBranchErrors(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	sessionDir := filepath.Join(svc.baseDir, resp.Session.ID())
+	_, err := svc.loadBranchEvents(sessionDir, "ghost")
+	if err == nil {
+		t.Error("expected error for nonexistent non-main branch, got nil")
+	}
+}
+
+func TestSaveBranchEventsCreatesDir(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	sessionID := resp.Session.ID()
+	addTestEvents(t, svc, resp.Session, 2)
+
+	// loadSession to get the internal fileSession.
+	svc.mu.Lock()
+	sess, err := svc.loadSession(sessionID, "test-app", "test-user")
+	svc.mu.Unlock()
+	if err != nil {
+		t.Fatalf("loadSession: %v", err)
+	}
+
+	sessionDir := filepath.Join(svc.baseDir, sessionID)
+	// Branch dir doesn't exist yet; saveBranchEvents should create it.
+	if err := svc.saveBranchEvents(sessionDir, "newbranch", sess); err != nil {
+		t.Fatalf("saveBranchEvents: %v", err)
+	}
+
+	branchDir := filepath.Join(sessionDir, "branches", "newbranch")
+	if _, statErr := os.Stat(filepath.Join(branchDir, "events.jsonl")); statErr != nil {
+		t.Errorf("branch events.jsonl not created: %v", statErr)
+	}
+}
+
+func TestSaveBranchesAndLoadBranches(t *testing.T) {
+	dir := t.TempDir()
+
+	bs := &branchState{
+		Active: "feature",
+		Branches: map[string]BranchInfo{
+			"main":    {Name: "main", Head: 5, Parent: nil, ForkPoint: 0},
+			"feature": {Name: "feature", Head: 3, Parent: strPtr("main"), ForkPoint: 3},
+		},
+	}
+	if err := saveBranches(dir, bs); err != nil {
+		t.Fatalf("saveBranches: %v", err)
+	}
+
+	loaded, err := loadBranches(dir)
+	if err != nil {
+		t.Fatalf("loadBranches: %v", err)
+	}
+	if loaded.Active != "feature" {
+		t.Errorf("active = %q, want feature", loaded.Active)
+	}
+	if len(loaded.Branches) != 2 {
+		t.Errorf("branches count = %d, want 2", len(loaded.Branches))
+	}
+	feat := loaded.Branches["feature"]
+	if feat.Head != 3 {
+		t.Errorf("feature head = %d, want 3", feat.Head)
+	}
+	if feat.Parent == nil || *feat.Parent != "main" {
+		t.Errorf("feature parent = %v, want main", feat.Parent)
+	}
+}
+
+func TestLoadBranchesDefault(t *testing.T) {
+	dir := t.TempDir()
+	// No branches.json — should return default single main branch.
+	bs, err := loadBranches(dir)
+	if err != nil {
+		t.Fatalf("loadBranches on missing file: %v", err)
+	}
+	if bs.Active != "main" {
+		t.Errorf("default active = %q, want main", bs.Active)
+	}
+	if len(bs.Branches) != 1 {
+		t.Errorf("default branches count = %d, want 1", len(bs.Branches))
+	}
+	main := bs.Branches["main"]
+	if main.Name != "main" {
+		t.Errorf("default branch name = %q, want main", main.Name)
+	}
+	if main.Parent != nil {
+		t.Errorf("main parent should be nil, got %v", main.Parent)
+	}
+}
+
+func TestLoadBranchesInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "branches.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := loadBranches(dir)
+	if err == nil {
+		t.Error("expected error parsing invalid branches.json, got nil")
+	}
+}
+
+func TestActiveBranchDefaultsToMain(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, _ := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+
+	// No branches.json yet — should default to "main".
+	active := svc.ActiveBranch(resp.Session.ID())
+	if active != "main" {
+		t.Errorf("ActiveBranch() = %q, want main", active)
+	}
+}
+
+func TestListBranchesInvalidSession(t *testing.T) {
+	svc := newTestService(t)
+	_, _, err := svc.ListBranches("nonexistent-id", "test-app", "test-user")
+	if err == nil {
+		t.Error("expected error listing branches of nonexistent session")
+	}
+}
+
+// strPtr is a helper to get a pointer to a string value.
+func strPtr(s string) *string { return &s }
 
 func TestActiveBranch(t *testing.T) {
 	svc := newTestService(t)

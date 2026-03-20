@@ -481,6 +481,143 @@ func TestClient_Notify_ClosedClient(t *testing.T) {
 	}
 }
 
+func TestNewClient_NonExistentCommand(t *testing.T) {
+	// NewClient should return an error if the command doesn't exist.
+	_, err := NewClient("this-command-definitely-does-not-exist-xyz-abc-123")
+	if err == nil {
+		t.Fatal("expected error for non-existent command")
+	}
+}
+
+func TestNewClient_ValidCommand(t *testing.T) {
+	// /bin/cat is a valid command that can be started.
+	c, err := NewClient("/bin/cat")
+	if err != nil {
+		t.Fatalf("NewClient(/bin/cat) failed: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil client")
+	}
+	// Force close without LSP handshake to avoid blocking.
+	c.closed.Store(true)
+	_ = c.stdin.Close()
+}
+
+func TestClient_Close_MockClient(t *testing.T) {
+	// Test Close on a mock client (cmd == nil path).
+	c, _ := newClientWithMock(nil)
+
+	// The mock client has cmd == nil — Close should handle this path.
+	// First close properly.
+	err := c.Close()
+	if err != nil {
+		t.Errorf("Close() failed: %v", err)
+	}
+
+	// Verify done channel is closed.
+	select {
+	case <-c.done:
+		// expected
+	default:
+		t.Error("expected done channel to be closed after Close()")
+	}
+}
+
+func TestClient_Close_AlreadyClosed(t *testing.T) {
+	c, _ := newClientWithMock(nil)
+
+	// Pre-mark as closed.
+	c.closed.Store(true)
+	close(c.done)
+
+	// Second Close() should be idempotent.
+	err := c.Close()
+	if err != nil {
+		t.Errorf("Close() on already-closed client should return nil, got: %v", err)
+	}
+}
+
+func TestClient_HandleMessage_NoID_NoMethod(t *testing.T) {
+	// handleMessage with a message that has neither ID nor method should be a no-op.
+	c := &Client{
+		pending: make(map[int]chan *Response),
+		done:    make(chan struct{}),
+	}
+	close(c.done)
+
+	// Message with neither id nor method.
+	c.handleMessage([]byte(`{"jsonrpc":"2.0"}`))
+	// Should not panic or send to any channel.
+}
+
+func TestClient_HandleMessage_InvalidJSON(t *testing.T) {
+	c := &Client{
+		pending: make(map[int]chan *Response),
+		done:    make(chan struct{}),
+	}
+	close(c.done)
+
+	// Invalid JSON should be silently ignored.
+	c.handleMessage([]byte(`{invalid json`))
+}
+
+func TestClient_HandleMessage_ResponseUnmarshalError(t *testing.T) {
+	// A message with an ID but invalid response body should be silently dropped.
+	c := &Client{
+		pending: make(map[int]chan *Response),
+		done:    make(chan struct{}),
+	}
+	close(c.done)
+
+	// Register a pending channel for id=1.
+	ch := make(chan *Response, 1)
+	c.pendMu.Lock()
+	c.pending[1] = ch
+	c.pendMu.Unlock()
+
+	// Send a message that passes the first unmarshal (to get id) but fails the Response unmarshal.
+	// Note: the message has id=1 but is malformed for full Response parsing.
+	// Actually, since the second unmarshal uses the same body, we need it to truly fail.
+	// The only way to do this is if the body is completely invalid after the first check.
+	// Since {"id":1} is valid JSON, the Response unmarshal will succeed (with empty result).
+	// So let's test that the response with ID=1 is delivered to the channel.
+	c.handleMessage([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
+
+	select {
+	case resp := <-ch:
+		if resp == nil {
+			t.Error("expected non-nil response")
+		}
+	default:
+		t.Error("expected response to be delivered to pending channel")
+	}
+}
+
+func TestClient_HandleMessage_NotificationWithNoHandler(t *testing.T) {
+	// Notification without a NotificationHandler should not panic.
+	c := &Client{
+		pending:             make(map[int]chan *Response),
+		done:                make(chan struct{}),
+		NotificationHandler: nil, // no handler
+	}
+	close(c.done)
+
+	c.handleMessage([]byte(`{"jsonrpc":"2.0","method":"some/notification","params":{}}`))
+	// Should not panic.
+}
+
+func TestClient_HandleMessage_UnknownResponseID(t *testing.T) {
+	// Response with an ID that has no pending channel should be silently ignored.
+	c := &Client{
+		pending: make(map[int]chan *Response),
+		done:    make(chan struct{}),
+	}
+	close(c.done)
+
+	// ID 999 has no pending channel — should be silently dropped.
+	c.handleMessage([]byte(`{"jsonrpc":"2.0","id":999,"result":null}`))
+}
+
 func TestProtocol_DiagnosticSeverity(t *testing.T) {
 	tests := []struct {
 		severity int

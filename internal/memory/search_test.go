@@ -413,6 +413,220 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
+func TestSearch_DefaultLimitAndOffset(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-defaults", "/project")
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		store.InsertObservation(ctx, &Observation{
+			SessionID: "sess-defaults", Project: "/project",
+			Title: fmt.Sprintf("item %d", i), Type: TypeChange,
+			Text: "default limit test content", SourceFiles: []string{}, ToolName: "Read",
+			CreatedAt: now.Add(time.Duration(i) * time.Second),
+		})
+	}
+
+	// Limit=0 should default to 20, Offset=-1 should default to 0.
+	result, err := store.Search(ctx, SearchQuery{Query: "default", Limit: 0, Offset: -1})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if result.Total != 5 {
+		t.Errorf("total = %d, want 5", result.Total)
+	}
+	if len(result.Rows) != 5 {
+		t.Errorf("rows = %d, want 5", len(result.Rows))
+	}
+}
+
+func TestTimeline_DefaultBeforeAfter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-defba", "/project")
+	base := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	var anchorID int64
+	for i := 0; i < 11; i++ {
+		obs := &Observation{
+			SessionID: "sess-defba", Project: "/project",
+			Title: fmt.Sprintf("t-%d", i), Type: TypeChange,
+			Text: "text", SourceFiles: []string{}, ToolName: "Read",
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		}
+		store.InsertObservation(ctx, obs)
+		if i == 5 {
+			anchorID = obs.ID
+		}
+	}
+
+	// before=0 and after=0 both default to 5 each.
+	timeline, err := store.Timeline(ctx, anchorID, 0, 0)
+	if err != nil {
+		t.Fatalf("Timeline(0,0): %v", err)
+	}
+	// anchor (1) + up to 5 before + up to 5 after = 11 total.
+	if len(timeline) != 11 {
+		t.Errorf("timeline len = %d, want 11", len(timeline))
+	}
+}
+
+func TestSearchSummaries_NoProject(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		sid := fmt.Sprintf("sess-np-%d", i)
+		proj := fmt.Sprintf("/proj-%d", i)
+		insertTestSession(t, store, sid, proj)
+		store.UpsertSummary(ctx, &SessionSummary{
+			SessionID: sid, Project: proj,
+			Request: fmt.Sprintf("searched keyword item %d", i),
+			Learned: "details", CreatedAt: time.Now(),
+		})
+	}
+
+	// Search without project filter — should find all 3.
+	results, err := store.SearchSummaries(ctx, "keyword", "")
+	if err != nil {
+		t.Fatalf("SearchSummaries: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("got %d results, want 3", len(results))
+	}
+}
+
+func TestSearchLike_DirectCall(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-like", "/project")
+	now := time.Now()
+
+	store.InsertObservation(ctx, &Observation{
+		SessionID: "sess-like", Project: "/project",
+		Title: "awesome implementation", Type: TypeFeature,
+		Text: "used the awesome framework", SourceFiles: []string{}, ToolName: "Write",
+		CreatedAt: now,
+	})
+	store.InsertObservation(ctx, &Observation{
+		SessionID: "sess-like", Project: "/project",
+		Title: "boring bugfix", Type: TypeBugfix,
+		Text: "nothing special here", SourceFiles: []string{}, ToolName: "Edit",
+		CreatedAt: now.Add(time.Second),
+	})
+
+	// Call searchLike directly (bypasses HasFTS5 check). Limit must be > 0.
+	result, err := store.searchLike(ctx, SearchQuery{Query: "awesome", Limit: 20})
+	if err != nil {
+		t.Fatalf("searchLike: %v", err)
+	}
+	if result.Total != 1 {
+		t.Errorf("total = %d, want 1", result.Total)
+	}
+	if len(result.Rows) != 1 {
+		t.Errorf("rows = %d, want 1", len(result.Rows))
+	}
+}
+
+func TestSearchLike_WithProjectAndTypeFilters(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-likefilter-a", "/proj-a")
+	insertTestSession(t, store, "sess-likefilter-b", "/proj-b")
+	now := time.Now()
+
+	store.InsertObservation(ctx, &Observation{
+		SessionID: "sess-likefilter-a", Project: "/proj-a",
+		Title: "zeta feature", Type: TypeFeature,
+		Text: "zeta work done", SourceFiles: []string{}, ToolName: "Write",
+		CreatedAt: now,
+	})
+	store.InsertObservation(ctx, &Observation{
+		SessionID: "sess-likefilter-b", Project: "/proj-b",
+		Title: "zeta bugfix", Type: TypeBugfix,
+		Text: "zeta bug fixed", SourceFiles: []string{}, ToolName: "Edit",
+		CreatedAt: now.Add(time.Second),
+	})
+
+	// Scoped to /proj-a only.
+	result, err := store.searchLike(ctx, SearchQuery{Query: "zeta", Project: "/proj-a"})
+	if err != nil {
+		t.Fatalf("searchLike with project: %v", err)
+	}
+	if result.Total != 1 {
+		t.Errorf("total = %d, want 1", result.Total)
+	}
+
+	// Scoped by type bugfix.
+	result, err = store.searchLike(ctx, SearchQuery{Query: "zeta", Type: TypeBugfix})
+	if err != nil {
+		t.Fatalf("searchLike with type: %v", err)
+	}
+	if result.Total != 1 {
+		t.Errorf("total bugfix = %d, want 1", result.Total)
+	}
+
+	// Pagination.
+	result, err = store.searchLike(ctx, SearchQuery{Query: "zeta", Limit: 1, Offset: 0})
+	if err != nil {
+		t.Fatalf("searchLike with limit: %v", err)
+	}
+	if result.Total != 2 {
+		t.Errorf("total all = %d, want 2", result.Total)
+	}
+	if len(result.Rows) != 1 {
+		t.Errorf("rows = %d, want 1 (limited)", len(result.Rows))
+	}
+}
+
+func TestSearchSummariesLike_DirectCall(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		sid := fmt.Sprintf("sess-sumlike-%d", i)
+		proj := "/proj"
+		insertTestSession(t, store, sid, proj)
+		store.UpsertSummary(ctx, &SessionSummary{
+			SessionID: sid, Project: proj,
+			Request:   fmt.Sprintf("unique-term task %d", i),
+			Learned:   "some learning",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Second),
+		})
+	}
+
+	// Without project filter.
+	results, err := store.searchSummariesLike(ctx, "unique-term", "")
+	if err != nil {
+		t.Fatalf("searchSummariesLike: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("got %d results, want 3", len(results))
+	}
+
+	// With project filter.
+	results, err = store.searchSummariesLike(ctx, "unique-term", "/proj")
+	if err != nil {
+		t.Fatalf("searchSummariesLike with project: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("got %d results with project, want 3", len(results))
+	}
+
+	// No match.
+	results, err = store.searchSummariesLike(ctx, "xyz-not-found", "")
+	if err != nil {
+		t.Fatalf("searchSummariesLike no match: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("got %d results, want 0", len(results))
+	}
+}
+
 func TestSanitizeFTS5Query(t *testing.T) {
 	tests := []struct {
 		input string

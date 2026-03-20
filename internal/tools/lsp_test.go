@@ -244,3 +244,27 @@ func TestURIToPath(t *testing.T) {
 		}
 	}
 }
+
+func TestFileURI(t *testing.T) {
+	tests := []struct {
+		path    string
+		wantPfx string
+	}{
+		{"/tmp/foo.go", "file:///tmp/foo.go"},
+		{"/home/user/project/main.go", "file:///home/user/project/main.go"},
+	}
+	for _, tt := range tests {
+		got := fileURI(tt.path)
+		if got != tt.wantPfx {
+			t.Errorf("fileURI(%q) = %q, want %q", tt.path, got, tt.wantPfx)
+		}
+	}
+}
+
+func TestFileURI_RelativePath(t *testing.T) {
+	// Relative paths are converted to absolute
+	got := fileURI("relative/path.go")
+	if len(got) < 8 || got[:7] != "file://" {
+		t.Errorf("fileURI(relative) = %q, want file:// prefix", got)
+	}
+}

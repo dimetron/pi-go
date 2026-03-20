@@ -324,3 +324,55 @@ func TestExitCodeEmpty(t *testing.T) {
 		t.Errorf("ExitCode(nil) = %d, want 0", got)
 	}
 }
+
+// TestSeverityStringAll covers all severity levels including the default unknown case.
+func TestSeverityStringAll(t *testing.T) {
+	tests := []struct {
+		sev  Severity
+		want string
+	}{
+		{SeverityInfo, "info"},
+		{SeverityWarning, "warning"},
+		{SeverityCritical, "critical"},
+		{Severity(999), "unknown"}, // default branch
+	}
+	for _, tt := range tests {
+		got := tt.sev.String()
+		if got != tt.want {
+			t.Errorf("Severity(%d).String() = %q, want %q", tt.sev, got, tt.want)
+		}
+	}
+}
+
+// TestScanSkillDirsNonExistentDirSkipped verifies that a non-existent dir
+// is silently skipped by ScanSkillDirs.
+func TestScanSkillDirsNonExistentDirSkipped(t *testing.T) {
+	result, err := ScanSkillDirs("/tmp/nonexistent-dir-xyz-99999")
+	if err != nil {
+		t.Fatalf("expected no error for non-existent dir, got: %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Errorf("expected 0 findings for empty scan, got %d", len(result.Findings))
+	}
+}
+
+// TestScanSkillDirsFindsSkillMD verifies that ScanSkillDirs scans SKILL.md files.
+func TestScanSkillDirsFindsSkillMD(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "my-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a clean SKILL.md (no dangerous chars).
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# My Skill\nClean content."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ScanSkillDirs(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Files) != 1 {
+		t.Errorf("expected 1 scanned file, got %d", len(result.Files))
+	}
+}

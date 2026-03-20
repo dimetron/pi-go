@@ -536,3 +536,42 @@ func TestBuildHTTPClient(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckOllamaHTTPSPortInference(t *testing.T) {
+	// Start a TLS test server to exercise the https host+":443" port-inference branch.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ollama is running")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	// srv.URL is already "https://127.0.0.1:<port>", so use just the host without port
+	// to hit the "no colon → append :443" branch in CheckOllama.
+	// We can't actually test the real :443 without network, but we can test that
+	// a URL like "https://127.0.0.1" (no port) triggers the port-inference path
+	// by passing an HTTPS URL without a port that will fail at TCP dial - which
+	// is fine because we just need to exercise that code branch.
+	err := CheckOllama("https://192.0.2.1") // TEST-NET-1, guaranteed unreachable
+	// We expect an error (TCP dial failure), but the https port-inference path was exercised.
+	if err == nil {
+		t.Fatal("expected error for unreachable HTTPS host")
+	}
+	if !strings.Contains(err.Error(), ":443") {
+		t.Errorf("expected error to mention :443 port, got: %v", err)
+	}
+}
+
+func TestNewGeminiInsecureTLSOnly(t *testing.T) {
+	// Exercise the InsecureSkipTLS path in NewGemini without extra headers.
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+
+	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", &LLMOptions{
+		InsecureSkipTLS: true,
+	})
+	if err != nil {
+		t.Fatalf("NewGemini() with InsecureSkipTLS error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewGemini() returned nil")
+	}
+}
