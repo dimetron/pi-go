@@ -256,21 +256,22 @@ func TestLoadBundledAgents(t *testing.T) {
 		t.Fatalf("LoadBundledAgents failed: %v", err)
 	}
 
-	// Expected 8 agents: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer
-	if len(agents) != 8 {
-		t.Errorf("expected 8 bundled agents, got %d: %v", len(agents), agentNames(agents))
+	// Expected 9 agents: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer, memory-compressor
+	if len(agents) != 9 {
+		t.Errorf("expected 9 bundled agents, got %d: %v", len(agents), agentNames(agents))
 	}
 
 	// Verify all agents have required fields
 	expectedNames := map[string]bool{
-		"explore":       false,
-		"plan":          false,
-		"designer":      false,
-		"task":          false,
-		"quick-task":    false,
-		"worker":        false,
-		"code-reviewer": false,
-		"spec-reviewer": false,
+		"explore":            false,
+		"plan":               false,
+		"designer":           false,
+		"task":               false,
+		"quick-task":         false,
+		"worker":             false,
+		"code-reviewer":      false,
+		"spec-reviewer":      false,
+		"memory-compressor":  false,
 	}
 
 	for _, agent := range agents {
@@ -296,9 +297,9 @@ func TestDiscoverAgents_Bundled(t *testing.T) {
 		t.Fatalf("DiscoverAgents failed: %v", err)
 	}
 
-	// Should have 8 bundled agents
-	if len(result.Bundled) != 8 {
-		t.Errorf("expected 8 bundled agents, got %d", len(result.Bundled))
+	// Should have 9 bundled agents
+	if len(result.Bundled) != 9 {
+		t.Errorf("expected 9 bundled agents, got %d", len(result.Bundled))
 	}
 
 	// All should have bundled source
@@ -316,13 +317,13 @@ func TestDiscoverAgents_Both(t *testing.T) {
 	}
 
 	// Should have bundled agents
-	if len(result.Bundled) != 8 {
-		t.Errorf("expected 8 bundled agents, got %d", len(result.Bundled))
+	if len(result.Bundled) != 9 {
+		t.Errorf("expected 9 bundled agents, got %d", len(result.Bundled))
 	}
 
 	// All should be in merged All slice
-	if len(result.All) < 8 {
-		t.Errorf("expected at least 8 agents in All, got %d", len(result.All))
+	if len(result.All) < 9 {
+		t.Errorf("expected at least 9 agents in All, got %d", len(result.All))
 	}
 }
 

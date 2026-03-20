@@ -47,7 +47,7 @@ func (a AgentInput) ToSpawnInput() (SpawnInput, error) {
 		}
 	}
 	if !found {
-		return SpawnInput{}, fmt.Errorf("unknown agent type %q; valid types: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer", a.Type)
+		return SpawnInput{}, fmt.Errorf("unknown agent type %q; valid types: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer, memory-compressor", a.Type)
 	}
 
 	return SpawnInput{
