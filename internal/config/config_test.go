@@ -383,3 +383,78 @@ func TestInsecureSkipTLSFalseByDefault(t *testing.T) {
 		t.Error("expected InsecureSkipTLS to be false by default")
 	}
 }
+
+func TestMemoryDefaults(t *testing.T) {
+	m := MemoryDefaults()
+	if m.TokenBudget != 8000 {
+		t.Errorf("expected token budget 8000, got %d", m.TokenBudget)
+	}
+	if m.CompressionRole != "smol" {
+		t.Errorf("expected compression role smol, got %s", m.CompressionRole)
+	}
+	if m.MaxPending != 100 {
+		t.Errorf("expected max pending 100, got %d", m.MaxPending)
+	}
+	if m.LookbackHours != 72 {
+		t.Errorf("expected lookback hours 72, got %d", m.LookbackHours)
+	}
+}
+
+func TestMemoryConfigFromJSON(t *testing.T) {
+	tmp := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfgDir := filepath.Join(tmp, ".pi-go")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgJSON := `{
+		"roles": {"default": {"model": "gpt-4o"}},
+		"memory": {
+			"enabled": false,
+			"db_path": "/tmp/test.db",
+			"token_budget": 4000,
+			"max_pending_observations": 50,
+			"excluded_tools": ["bash", "read"]
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Memory == nil {
+		t.Fatal("expected memory config to be set")
+	}
+	if cfg.Memory.Enabled == nil || *cfg.Memory.Enabled != false {
+		t.Error("expected memory enabled to be false")
+	}
+	if cfg.Memory.DBPath != "/tmp/test.db" {
+		t.Errorf("expected db_path /tmp/test.db, got %s", cfg.Memory.DBPath)
+	}
+	if cfg.Memory.TokenBudget != 4000 {
+		t.Errorf("expected token_budget 4000, got %d", cfg.Memory.TokenBudget)
+	}
+	if cfg.Memory.MaxPending != 50 {
+		t.Errorf("expected max_pending 50, got %d", cfg.Memory.MaxPending)
+	}
+	if len(cfg.Memory.ExcludedTools) != 2 {
+		t.Errorf("expected 2 excluded tools, got %d", len(cfg.Memory.ExcludedTools))
+	}
+}
+
+func TestMemoryConfigNilWhenNotSet(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Memory != nil {
+		t.Error("expected memory config to be nil in defaults")
+	}
+}

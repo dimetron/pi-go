@@ -26,6 +26,28 @@ type RoleConfig struct {
 // ErrNoDefaultRole is returned when no default role is configured.
 var ErrNoDefaultRole = errors.New("no default model role configured")
 
+// MemoryConfig holds settings for the persistent memory system.
+type MemoryConfig struct {
+	Enabled          *bool    `json:"enabled,omitempty"`
+	DBPath           string   `json:"db_path,omitempty"`
+	TokenBudget      int      `json:"token_budget,omitempty"`
+	CompressionRole  string   `json:"compression_model_role,omitempty"`
+	MaxPending       int      `json:"max_pending_observations,omitempty"`
+	LookbackHours    int      `json:"context_lookback_hours,omitempty"`
+	ExcludedTools    []string `json:"excluded_tools,omitempty"`
+	ExcludedProjects []string `json:"excluded_projects,omitempty"`
+}
+
+// MemoryDefaults returns a MemoryConfig with default values.
+func MemoryDefaults() MemoryConfig {
+	return MemoryConfig{
+		TokenBudget:     8000,
+		CompressionRole: "smol",
+		MaxPending:      100,
+		LookbackHours:   72,
+	}
+}
+
 // Config holds all pi-go configuration.
 type Config struct {
 	Roles           map[string]RoleConfig `json:"roles,omitempty"`
@@ -40,6 +62,7 @@ type Config struct {
 	Hooks           []HookConfig          `json:"hooks,omitempty"`
 	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
 	Compactor       *CompactorConfig      `json:"compactor,omitempty"`
+	Memory          *MemoryConfig         `json:"memory,omitempty"`
 }
 
 // CompactorConfig holds user-overridable compaction settings.

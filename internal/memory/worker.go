@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	toolpkg "google.golang.org/adk/tool"
 )
 
 // Compressor transforms raw tool observations into structured observations.
@@ -149,7 +151,7 @@ func extractSourceFiles(input map[string]any) []string {
 	return files
 }
 
-// BuildMemoryCallback creates an AfterToolCallback function that enqueues observations.
+// BuildMemoryCallback creates an ADK AfterToolCallback that enqueues observations to the worker.
 func BuildMemoryCallback(w *Worker, sessionID, project string) func(toolName string, toolInput, toolOutput map[string]any) {
 	return func(toolName string, toolInput, toolOutput map[string]any) {
 		w.Enqueue(RawObservation{
@@ -160,5 +162,28 @@ func BuildMemoryCallback(w *Worker, sessionID, project string) func(toolName str
 			ToolOutput: toolOutput,
 			Timestamp:  time.Now(),
 		})
+	}
+}
+
+// BuildAfterToolCallback creates an ADK AfterToolCallback that enqueues observations.
+// It wraps the worker's Enqueue in the ADK callback signature for direct use with agent callbacks.
+func BuildAfterToolCallback(w *Worker, sessionID, project string, excludedTools map[string]bool) func(ctx toolpkg.Context, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+	return func(_ toolpkg.Context, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+		if toolErr != nil {
+			return result, nil // don't record failed tool calls
+		}
+		name := t.Name()
+		if excludedTools[name] {
+			return result, nil
+		}
+		w.Enqueue(RawObservation{
+			SessionID:  sessionID,
+			Project:    project,
+			ToolName:   name,
+			ToolInput:  args,
+			ToolOutput: result,
+			Timestamp:  time.Now(),
+		})
+		return result, nil
 	}
 }
