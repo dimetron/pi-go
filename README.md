@@ -16,6 +16,7 @@ A terminal-based coding agent built on [Google ADK Go](https://google.github.io/
 - **AI Git tools** — Repository overview, file diffs, hunk parsing, and LLM-generated conventional commits (`/commit`)
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
 - **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and MCP server support
+- **Skills audit** — Security scanning for hidden Unicode characters, BiDi attacks, and supply-chain threats in skill files (`pi audit`)
 
 ## Architecture
 
@@ -25,6 +26,7 @@ internal/
 ├── agent/          ADK agent setup, retry logic, runner
 ├── cli/            Cobra CLI flags, output modes (interactive, print, json, rpc)
 ├── config/         Global and project config (roles, hooks, MCP, themes)
+├── audit/          Security scanner for skills (hidden Unicode, supply-chain threats)
 ├── extension/      Hooks, skills, MCP server integration
 ├── lsp/            LSP JSON-RPC client, language registry, manager, hooks
 ├── provider/       LLM providers implementing genai model interface
@@ -108,9 +110,34 @@ make clean      # remove binary
 | `/skill-create`  | Create a new skill                        |
 | `/skill-list`    | List available skills                     |
 | `/skill-load`    | Reload skills from disk                   |
+| `/audit`         | Scan skills for hidden Unicode threats    |
 | `/restart`       | Restart pi-go                             |
 | `/clear`         | Clear conversation                        |
 | `/exit`          | Exit the agent                            |
+
+### Security audit
+
+```bash
+# Scan all skill files for hidden Unicode characters
+./pi audit
+
+# Scan with verbose output (include info-level findings)
+./pi audit -v
+
+# Output as JSON for CI pipelines
+./pi audit --format json --output report.json
+
+# Auto-remove dangerous characters (creates .bak backups)
+./pi audit --strip
+
+# Preview what would be removed
+./pi audit --strip --dry-run
+
+# Scan a specific file
+./pi audit --file path/to/SKILL.md
+```
+
+Skills are automatically scanned on load — skills with critical findings (Unicode tags, BiDi overrides, variation selector attacks) are blocked from loading.
 
 ## Configuration
 
