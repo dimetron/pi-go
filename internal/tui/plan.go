@@ -249,6 +249,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 
+	m.mode = "plan"
 	m.running = true
 
 	m.agentCh = make(chan agentMsg, 64)

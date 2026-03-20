@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type StatusRenderInput struct {
 	ProviderName string
 	ModelName    string
 	Running      bool
+	Mode         string        // "chat" or "plan"
 	Messages     []message     // for context estimate
 	TokenTracker TokenTracker  // may be nil
 	Orchestrator *subagent.Orchestrator // may be nil
@@ -42,6 +44,44 @@ type runCycleInfo struct {
 	SpecName   string
 	Cycle      int
 	MaxRetries int
+}
+
+// contextBarWidth is the number of characters used for the visual context bar.
+const contextBarWidth = 10
+
+// renderContextBar returns a color-coded visual bar like "████░░░░░░ 42%".
+// Colors: green < 60%, orange 60-80%, red > 80%.
+func renderContextBar(pct float64, bg color.Color) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	filled := int(pct / 100 * contextBarWidth)
+	if filled > contextBarWidth {
+		filled = contextBarWidth
+	}
+	empty := contextBarWidth - filled
+
+	var fg color.Color
+	switch {
+	case pct >= 80:
+		fg = lipgloss.Color("196") // red
+	case pct >= 60:
+		fg = lipgloss.Color("214") // orange
+	default:
+		fg = lipgloss.Color("35") // green
+	}
+
+	filledStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
+	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("240"))
+	pctStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
+
+	return filledStyle.Render(strings.Repeat("█", filled)) +
+		emptyStyle.Render(strings.Repeat("░", empty)) +
+		pctStyle.Render(fmt.Sprintf(" %.0f%%", pct))
 }
 
 // Render renders the status bar string.
@@ -58,27 +98,45 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 
 	var parts []string
 
+	// Mode indicator: [chat] or [plan].
+	mode := in.Mode
+	if mode == "" {
+		mode = "chat"
+	}
+	if mode == "plan" {
+		modeStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange/warning
+		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", mode)))
+	} else {
+		parts = append(parts, dim.Render(fmt.Sprintf(" [%s]", mode)))
+	}
+
 	// Provider | Model.
 	if in.ProviderName != "" {
-		parts = append(parts, bright.Render(fmt.Sprintf(" %s | %s", in.ProviderName, in.ModelName)))
+		parts = append(parts, bright.Render(fmt.Sprintf("%s | %s", in.ProviderName, in.ModelName)))
 	} else {
-		parts = append(parts, bright.Render(fmt.Sprintf(" %s", in.ModelName)))
+		parts = append(parts, bright.Render(in.ModelName))
 	}
 
-	// Context size estimate (rough: ~4 chars per token).
-	ctxChars := 0
-	for _, msg := range in.Messages {
-		ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-	}
-	ctxTokens := ctxChars / 4
-	switch {
-	case ctxTokens >= 1000:
-		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
-	default:
-		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
+	// Context % bar (visual bar with color coding).
+	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
+		pct := tt.PercentUsed()
+		parts = append(parts, renderContextBar(pct, bg))
+	} else {
+		// Fallback: rough context size estimate (~4 chars per token).
+		ctxChars := 0
+		for _, msg := range in.Messages {
+			ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
+		}
+		ctxTokens := ctxChars / 4
+		switch {
+		case ctxTokens >= 1000:
+			parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
+		default:
+			parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
+		}
 	}
 
-	// Token usage guardrail.
+	// Token usage (numeric).
 	if tt := in.TokenTracker; tt != nil {
 		total := tt.TotalUsed()
 		limit := tt.Limit()
@@ -93,8 +151,8 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			default:
 				tokenStyle = dim
 			}
-			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tokens: %s/%s (%.0f%%)",
-				formatTokenCount(total), formatTokenCount(limit), pct)))
+			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tokens: %s/%s",
+				formatTokenCount(total), formatTokenCount(limit))))
 		} else if total > 0 {
 			parts = append(parts, dim.Render(fmt.Sprintf("tokens: %s", formatTokenCount(total))))
 		}

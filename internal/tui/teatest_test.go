@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -810,6 +811,78 @@ func TestRenderStatusBar_Running(t *testing.T) {
 	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
+	}
+}
+
+func TestRenderStatusBar_ModeIndicatorChat(t *testing.T) {
+	m := newTestModel(t)
+	out := m.statusModel.Render(m.statusRenderInput())
+	// Default mode is "chat".
+	if !strings.Contains(out, "[chat]") {
+		t.Error("expected [chat] mode indicator in status bar")
+	}
+}
+
+func TestRenderStatusBar_ModeIndicatorPlan(t *testing.T) {
+	m := newTestModel(t)
+	m.mode = "plan"
+	out := m.statusModel.Render(m.statusRenderInput())
+	if !strings.Contains(out, "[plan]") {
+		t.Error("expected [plan] mode indicator in status bar")
+	}
+}
+
+func TestRenderStatusBar_ContextBar(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.TokenTracker = &mockTokenTracker{
+		limit:       100000,
+		remaining:   60000,
+		percentUsed: 40.0,
+		totalUsed:   40000,
+	}
+	out := m.statusModel.Render(m.statusRenderInput())
+	// Should show the visual bar with percentage.
+	if !strings.Contains(out, "40%") {
+		t.Error("expected context bar with 40% in status bar")
+	}
+}
+
+func TestRenderStatusBar_ContextBarHighUsage(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.TokenTracker = &mockTokenTracker{
+		limit:       100000,
+		remaining:   10000,
+		percentUsed: 90.0,
+		totalUsed:   90000,
+	}
+	out := m.statusModel.Render(m.statusRenderInput())
+	// Should show 90% in bar.
+	if !strings.Contains(out, "90%") {
+		t.Error("expected context bar with 90% in status bar")
+	}
+}
+
+func TestRenderContextBar(t *testing.T) {
+	tests := []struct {
+		name string
+		pct  float64
+		want string // expected percentage text
+	}{
+		{"zero", 0, "0%"},
+		{"low", 30, "30%"},
+		{"medium", 65, "65%"},
+		{"high", 85, "85%"},
+		{"full", 100, "100%"},
+		{"overflow", 120, "100%"}, // clamped
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bg := lipgloss.Color("236")
+			result := renderContextBar(tc.pct, bg)
+			if !strings.Contains(result, tc.want) {
+				t.Errorf("renderContextBar(%.0f) = %q, want substring %q", tc.pct, result, tc.want)
+			}
+		})
 	}
 }
 

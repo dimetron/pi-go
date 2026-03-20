@@ -38,6 +38,7 @@ type model struct {
 
 	// Agent state.
 	running bool
+	mode    string // "chat" or "plan" — shown in status bar
 	agentCh chan agentMsg // channel for receiving agent events
 
 	// Commit flow state.
@@ -420,10 +421,15 @@ func (m *model) statusRenderInput() StatusRenderInput {
 			MaxRetries: m.run.maxRetries,
 		}
 	}
+	mode := m.mode
+	if mode == "" {
+		mode = "chat"
+	}
 	return StatusRenderInput{
 		ProviderName: m.cfg.ProviderName,
 		ModelName:    m.cfg.ModelName,
 		Running:      m.running,
+		Mode:         mode,
 		Messages:     m.chatModel.Messages,
 		TokenTracker: m.cfg.TokenTracker,
 		Orchestrator: m.cfg.Orchestrator,
