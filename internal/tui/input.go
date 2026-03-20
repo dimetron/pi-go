@@ -13,7 +13,8 @@ import (
 
 // InputSubmitMsg is emitted when the user presses Enter with non-empty input.
 type InputSubmitMsg struct {
-	Text string
+	Text     string
+	Mentions []string // file paths referenced via @path
 }
 
 // InputModel manages the text input area: cursor, history, and completion.
@@ -33,6 +34,12 @@ type InputModel struct {
 
 	// Command cycling state.
 	CyclingIdx int
+
+	// File @mention completion state.
+	MentionMode          bool
+	MentionStart         int // cursor position of the '@' character
+	MentionResult        *CompleteResult
+	MentionSelectedIndex int
 
 	// Dependencies (set by root model).
 	Skills    []extension.Skill
@@ -59,6 +66,17 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	switch {
 	case key.Code == tea.KeyEnter:
+		// Mention mode: apply file selection, don't submit.
+		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
+			selected := im.MentionResult.Candidates[im.MentionSelectedIndex].Text
+			// Replace @prefix with @selected-path
+			before := im.Text[:im.MentionStart]
+			after := im.Text[im.CursorPos:]
+			im.Text = before + "@" + selected + after
+			im.CursorPos = im.MentionStart + 1 + len(selected)
+			im.dismissMention()
+			return nil
+		}
 		// Cycling: place command, dismiss menu.
 		if im.CyclingIdx >= 0 {
 			im.CyclingIdx = -1
@@ -79,6 +97,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if text == "" {
 			return nil
 		}
+		mentions := extractMentions(text)
 		if len(im.History) == 0 || im.History[len(im.History)-1] != text {
 			im.History = append(im.History, text)
 			appendHistory(text)
@@ -86,9 +105,14 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		im.HistoryIdx = -1
 		im.Text = ""
 		im.CursorPos = 0
-		return func() tea.Msg { return InputSubmitMsg{Text: text} }
+		return func() tea.Msg { return InputSubmitMsg{Text: text, Mentions: mentions} }
 
 	case key.Code == tea.KeyTab && key.Mod == tea.ModShift:
+		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
+			im.MentionResult.CycleSelection(-1)
+			im.MentionSelectedIndex = im.MentionResult.Selected
+			return nil
+		}
 		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
 			im.CompletionResult.CycleSelection(-1)
 			im.SelectedIndex = im.CompletionResult.Selected
@@ -106,6 +130,11 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 
 	case key.Code == tea.KeyTab:
+		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
+			im.MentionResult.CycleSelection(1)
+			im.MentionSelectedIndex = im.MentionResult.Selected
+			return nil
+		}
 		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
 			im.CompletionResult.CycleSelection(1)
 			im.SelectedIndex = im.CompletionResult.Selected
@@ -135,6 +164,17 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.CursorPos--
 			if im.Text == "" {
 				im.CyclingIdx = -1
+			}
+			// Update mention mode after backspace.
+			if im.MentionMode {
+				start, prefix := findMentionAtCursor(im.Text, im.CursorPos)
+				if start >= 0 {
+					im.MentionStart = start
+					im.MentionResult = CompleteMention(prefix, im.WorkDir)
+					im.MentionSelectedIndex = 0
+				} else {
+					im.dismissMention()
+				}
 			}
 		}
 
@@ -200,6 +240,12 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.CursorPos = len(im.Text)
 		}
 
+	case key.Code == tea.KeyEscape:
+		if im.MentionMode {
+			im.dismissMention()
+			return nil
+		}
+
 	default:
 		if key.Text != "" && isUserInput(key.Text) {
 			if key.Text == "/" && im.Text == "" {
@@ -217,6 +263,27 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.Text = im.Text[:im.CursorPos] + key.Text + im.Text[im.CursorPos:]
 			im.CursorPos += len(key.Text)
 			im.CyclingIdx = -1
+
+			// Enter mention mode when @ is typed.
+			if key.Text == "@" {
+				im.MentionMode = true
+				im.MentionStart = im.CursorPos - 1
+				im.MentionResult = CompleteMention("", im.WorkDir)
+				im.MentionSelectedIndex = 0
+				return nil
+			}
+
+			// Update mention completions while typing after @.
+			if im.MentionMode {
+				start, prefix := findMentionAtCursor(im.Text, im.CursorPos)
+				if start >= 0 {
+					im.MentionStart = start
+					im.MentionResult = CompleteMention(prefix, im.WorkDir)
+					im.MentionSelectedIndex = 0
+				} else {
+					im.dismissMention()
+				}
+			}
 		}
 	}
 
@@ -321,6 +388,28 @@ func (im *InputModel) View(running bool) string {
 		return inputLine + "\n" + menu.String()
 	}
 
+	// File @mention completion menu.
+	if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
+		inputLine := prefix + before + cursor + after
+		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+		var menu strings.Builder
+		for i, c := range im.MentionResult.Candidates {
+			if i == im.MentionSelectedIndex {
+				menu.WriteString(sel.Render("  > @" + c.Text))
+			} else {
+				menu.WriteString(dim.Render("    @" + c.Text))
+			}
+			if c.Description != "" {
+				menu.WriteString(fileStyle.Render(" — " + c.Description))
+			}
+			menu.WriteString("\n")
+		}
+		return inputLine + "\n" + menu.String()
+	}
+
 	// Ghost autocomplete.
 	ghost := ""
 	if im.Completion != "" && im.CursorPos == len(im.Text) {
@@ -343,19 +432,28 @@ func (im *InputModel) Clear() {
 	im.CursorPos = 0
 }
 
-// InCompletionMode returns true if the input is showing a completion or cycling menu.
+// InCompletionMode returns true if the input is showing a completion, cycling, or mention menu.
 func (im *InputModel) InCompletionMode() bool {
-	return im.CompletionMode || im.CyclingIdx >= 0
+	return im.CompletionMode || im.CyclingIdx >= 0 || im.MentionMode
 }
 
-// DismissCompletion clears completion/cycling state and input.
+// DismissCompletion clears completion/cycling/mention state and input.
 func (im *InputModel) DismissCompletion() {
 	im.CompletionMode = false
 	im.CompletionResult = nil
 	im.SelectedIndex = 0
 	im.CyclingIdx = -1
+	im.dismissMention()
 	im.Text = ""
 	im.CursorPos = 0
+}
+
+// dismissMention exits mention completion mode.
+func (im *InputModel) dismissMention() {
+	im.MentionMode = false
+	im.MentionResult = nil
+	im.MentionSelectedIndex = 0
+	im.MentionStart = 0
 }
 
 // ReloadSkills re-scans skill directories from disk and updates the cached list.

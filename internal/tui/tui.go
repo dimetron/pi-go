@@ -138,7 +138,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(msg.Text, "/") {
 			return m.handleSlashCommand(msg.Text)
 		}
-		return m.submitPrompt(msg.Text)
+		return m.submitPrompt(msg.Text, msg.Mentions)
 
 	case restartMsg:
 		execRestart()

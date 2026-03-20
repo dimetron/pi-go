@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/extension"
@@ -322,6 +324,174 @@ func TestComplete_PlanSpecCompletion(t *testing.T) {
 	}
 	if result.Candidates[0].Text != "/plan another-plan" {
 		t.Errorf("first = %q, want '/plan another-plan'", result.Candidates[0].Text)
+	}
+}
+
+// --- File @mention completion ---
+
+func TestCompleteMention_MatchingFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupTestFiles(t, tmpDir, "src/main.go", "src/model.go", "internal/tui/input.go", "README.md")
+
+	result := CompleteMention("src/", tmpDir)
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates for 'src/', got %d: %v", len(result.Candidates), result.Candidates)
+	}
+	if result.Candidates[0].Text != "src/main.go" {
+		t.Errorf("first = %q, want 'src/main.go'", result.Candidates[0].Text)
+	}
+}
+
+func TestCompleteMention_EmptyPrefix(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupTestFiles(t, tmpDir, "a.go", "b.go", "c.go")
+
+	result := CompleteMention("", tmpDir)
+	if len(result.Candidates) != 3 {
+		t.Fatalf("expected 3 candidates for empty prefix, got %d", len(result.Candidates))
+	}
+}
+
+func TestCompleteMention_NoMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupTestFiles(t, tmpDir, "src/main.go")
+
+	result := CompleteMention("zzz", tmpDir)
+	if len(result.Candidates) != 0 {
+		t.Errorf("expected 0 candidates, got %d", len(result.Candidates))
+	}
+}
+
+func TestCompleteMention_FuzzyMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupTestFiles(t, tmpDir, "src/main.go", "src/model.go", "internal/tui/input.go")
+
+	result := CompleteMention("smo", tmpDir) // fuzzy: s->src/, m->m, o->odel
+	found := false
+	for _, c := range result.Candidates {
+		if c.Text == "src/model.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected fuzzy match for 'src/model.go' in %v", result.Candidates)
+	}
+}
+
+func TestCompleteMention_SkipsHiddenDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupTestFiles(t, tmpDir, ".git/config", "src/main.go")
+
+	result := CompleteMention("", tmpDir)
+	for _, c := range result.Candidates {
+		if c.Text == ".git/config" {
+			t.Error("should not include files in hidden directories")
+		}
+	}
+}
+
+func TestCompleteMention_MaxResults(t *testing.T) {
+	tmpDir := t.TempDir()
+	files := make([]string, 30)
+	for i := range files {
+		files[i] = fmt.Sprintf("file%02d.go", i)
+	}
+	setupTestFiles(t, tmpDir, files...)
+
+	result := CompleteMention("", tmpDir)
+	if len(result.Candidates) > 20 {
+		t.Errorf("expected at most 20 candidates, got %d", len(result.Candidates))
+	}
+}
+
+func TestFindMentionAtCursor(t *testing.T) {
+	tests := []struct {
+		name      string
+		text      string
+		cursor    int
+		wantStart int
+		wantPfx   string
+	}{
+		{"at end", "fix @src/ma", 11, 4, "src/ma"},
+		{"mid text", "fix @src/main.go and more", 16, 4, "src/main.go"},
+		{"no mention", "fix this bug", 12, -1, ""},
+		{"just @", "hello @", 7, 6, ""},
+		{"@ at start", "@main", 5, 0, "main"},
+		{"space before cursor", "fix @src/ file", 9, 4, "src/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, pfx := findMentionAtCursor(tt.text, tt.cursor)
+			if start != tt.wantStart {
+				t.Errorf("start = %d, want %d", start, tt.wantStart)
+			}
+			if pfx != tt.wantPfx {
+				t.Errorf("prefix = %q, want %q", pfx, tt.wantPfx)
+			}
+		})
+	}
+}
+
+func TestExtractMentions(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"single mention", "fix @src/main.go please", []string{"src/main.go"}},
+		{"multiple mentions", "look at @src/a.go and @src/b.go", []string{"src/a.go", "src/b.go"}},
+		{"no mentions", "fix this bug", nil},
+		{"mention at end", "check @README.md", []string{"README.md"}},
+		{"mention at start", "@main.go is broken", []string{"main.go"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMentions(tt.text)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d: %v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFuzzyMatchPath(t *testing.T) {
+	tests := []struct {
+		path, query string
+		want        bool
+	}{
+		{"src/main.go", "sma", true},
+		{"src/model.go", "smo", true},
+		{"internal/tui/input.go", "iti", true},
+		{"src/main.go", "zzz", false},
+		{"a.go", "a", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path+"_"+tt.query, func(t *testing.T) {
+			if got := fuzzyMatchPath(tt.path, tt.query); got != tt.want {
+				t.Errorf("fuzzyMatchPath(%q, %q) = %v, want %v", tt.path, tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Helpers ---
+
+func setupTestFiles(t *testing.T, workDir string, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		full := workDir + "/" + p
+		dir := full[:strings.LastIndex(full, "/")]
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("// "+p), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

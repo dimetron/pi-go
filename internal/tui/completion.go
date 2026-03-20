@@ -17,6 +17,7 @@ const (
 	CompletionTypeCommand
 	CompletionTypeSkill
 	CompletionTypeSpec
+	CompletionTypeFile
 )
 
 // CompletionCandidate represents a single completion option.
@@ -211,6 +212,117 @@ func listSpecs(workDir string) ([]string, error) {
 
 	sort.Strings(specs)
 	return specs, nil
+}
+
+// CompleteMention returns file completion candidates for the given prefix.
+func CompleteMention(prefix string, workDir string) *CompleteResult {
+	candidates := matchingFiles(prefix, workDir)
+	return &CompleteResult{
+		Candidates: candidates,
+		Selected:   0,
+		Type:       CompletionTypeFile,
+	}
+}
+
+// matchingFiles returns files in workDir whose relative path starts with the prefix.
+// Skips hidden directories, node_modules, vendor, and binary artifacts.
+// Returns at most 20 candidates.
+func matchingFiles(prefix string, workDir string) []CompletionCandidate {
+	if workDir == "" {
+		return nil
+	}
+
+	lowerPrefix := strings.ToLower(prefix)
+	var candidates []CompletionCandidate
+
+	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(workDir, path)
+		if rel == "." {
+			return nil
+		}
+
+		base := d.Name()
+		if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		lowerRel := strings.ToLower(rel)
+		if strings.HasPrefix(lowerRel, lowerPrefix) || (lowerPrefix != "" && fuzzyMatchPath(lowerRel, lowerPrefix)) {
+			candidates = append(candidates, CompletionCandidate{
+				Text:        rel,
+				Description: "file",
+				Type:        CompletionTypeFile,
+			})
+		}
+
+		if len(candidates) >= 20 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return strings.ToLower(candidates[i].Text) < strings.ToLower(candidates[j].Text)
+	})
+
+	return candidates
+}
+
+// fuzzyMatchPath checks if all parts of the query appear in order in the path.
+func fuzzyMatchPath(path, query string) bool {
+	pi := 0
+	for qi := 0; qi < len(query) && pi < len(path); qi++ {
+		idx := strings.IndexByte(path[pi:], query[qi])
+		if idx < 0 {
+			return false
+		}
+		pi += idx + 1
+	}
+	return pi <= len(path)
+}
+
+// findMentionAtCursor finds the @mention prefix at the cursor position.
+// Returns the start index of '@' and the text after it, or -1 if no mention found.
+func findMentionAtCursor(text string, cursorPos int) (start int, prefix string) {
+	for i := cursorPos - 1; i >= 0; i-- {
+		if text[i] == '@' {
+			return i, text[i+1 : cursorPos]
+		}
+		if text[i] == ' ' || text[i] == '\t' || text[i] == '\n' {
+			break
+		}
+	}
+	return -1, ""
+}
+
+// extractMentions finds all @path mentions in text and returns their paths.
+func extractMentions(text string) []string {
+	var mentions []string
+	for i := 0; i < len(text); i++ {
+		if text[i] != '@' {
+			continue
+		}
+		// Extract the path after @
+		j := i + 1
+		for j < len(text) && text[j] != ' ' && text[j] != '\t' && text[j] != '\n' && text[j] != '@' {
+			j++
+		}
+		if j > i+1 {
+			mentions = append(mentions, text[i+1:j])
+		}
+		i = j - 1
+	}
+	return mentions
 }
 
 // CycleSelection moves the selection index in the given direction.

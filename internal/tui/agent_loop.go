@@ -97,9 +97,23 @@ func (m *model) cancelAgent() {
 }
 
 // submitPrompt sends a user prompt to the agent.
-func (m *model) submitPrompt(text string) (tea.Model, tea.Cmd) {
+func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd) {
+	// Append referenced file annotations for @mentions.
+	promptText := text
+	if len(mentions) > 0 {
+		var refs strings.Builder
+		refs.WriteString(text)
+		refs.WriteString("\n")
+		for _, path := range mentions {
+			refs.WriteString("\n[Referenced file: ")
+			refs.WriteString(path)
+			refs.WriteString("]")
+		}
+		promptText = refs.String()
+	}
+
 	if m.cfg.Logger != nil {
-		m.cfg.Logger.UserMessage(text)
+		m.cfg.Logger.UserMessage(promptText)
 	}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: text})
@@ -110,7 +124,7 @@ func (m *model) submitPrompt(text string) (tea.Model, tea.Cmd) {
 	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(text)
+	go m.runAgentLoop(promptText)
 
 	return m, waitForAgent(m.agentCh)
 }
