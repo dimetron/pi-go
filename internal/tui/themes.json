@@ -1,0 +1,802 @@
+{
+  "tokyo-night": {
+    "name": "tokyo-night",
+    "displayName": "Tokyo Night",
+    "themeType": "dark",
+    "colors": {
+      "text": "#a9b1d6",
+      "base": "#1a1b26",
+      "primary": "#7aa2f7",
+      "tool": "#7dcfff",
+      "success": "#9ece6a",
+      "error": "#f7768e",
+      "secondary": "#565f89",
+      "info": "#bb9af7",
+      "warning": "#e0af68",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#9ece6a",
+      "diffRemovedText": "#f7768e"
+    }
+  },
+  "synthwave-84": {
+    "name": "synthwave-84",
+    "displayName": "Synthwave '84",
+    "themeType": "dark",
+    "colors": {
+      "text": "#f0e4fc",
+      "base": "#262335",
+      "primary": "#ff7edb",
+      "tool": "#36f9f6",
+      "success": "#72f1b8",
+      "error": "#fe4450",
+      "secondary": "#848bbd",
+      "info": "#fede5d",
+      "warning": "#f97e72",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#72f1b8",
+      "diffRemovedText": "#fe4450"
+    }
+  },
+  "forest-night": {
+    "name": "forest-night",
+    "displayName": "Forest Night",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d8caac",
+      "base": "#323d43",
+      "primary": "#a7c080",
+      "tool": "#83c092",
+      "success": "#a7c080",
+      "error": "#e67e80",
+      "secondary": "#859289",
+      "info": "#d699b6",
+      "warning": "#dbbc7f",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#a7c080",
+      "diffRemovedText": "#e67e80"
+    }
+  },
+  "material-ocean": {
+    "name": "material-ocean",
+    "displayName": "Material Ocean",
+    "themeType": "dark",
+    "colors": {
+      "text": "#b0bec5",
+      "base": "#0f111a",
+      "primary": "#82aaff",
+      "tool": "#89ddff",
+      "success": "#c3e88d",
+      "error": "#ff5370",
+      "secondary": "#546e7a",
+      "info": "#c792ea",
+      "warning": "#ffcb6b",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#c3e88d",
+      "diffRemovedText": "#ff5370"
+    }
+  },
+  "sunset-glow": {
+    "name": "sunset-glow",
+    "displayName": "Sunset Glow",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e8d5c4",
+      "base": "#2b1d0e",
+      "primary": "#ff9e64",
+      "tool": "#73daca",
+      "success": "#a9dc76",
+      "error": "#ff6188",
+      "secondary": "#9e8370",
+      "info": "#ffc777",
+      "warning": "#ff9e64",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#a9dc76",
+      "diffRemovedText": "#ff6188"
+    }
+  },
+  "nord-frost": {
+    "name": "nord-frost",
+    "displayName": "Nord Frost",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d8dee9",
+      "base": "#2e3440",
+      "primary": "#88c0d0",
+      "tool": "#81a1c1",
+      "success": "#a3be8c",
+      "error": "#bf616a",
+      "secondary": "#4c566a",
+      "info": "#b48ead",
+      "warning": "#ebcb8b",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#a3be8c",
+      "diffRemovedText": "#bf616a"
+    }
+  },
+  "neon-jungle": {
+    "name": "neon-jungle",
+    "displayName": "Neon Jungle",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e0ffe0",
+      "base": "#0a1a0a",
+      "primary": "#00ff87",
+      "tool": "#00e5ff",
+      "success": "#39ff14",
+      "error": "#ff1744",
+      "secondary": "#4a7a4a",
+      "info": "#ea80fc",
+      "warning": "#ffea00",
+      "diffAdded": "#0a2e0a",
+      "diffRemoved": "#2e0a0a",
+      "diffAddedText": "#39ff14",
+      "diffRemovedText": "#ff1744"
+    }
+  },
+  "midnight-amethyst": {
+    "name": "midnight-amethyst",
+    "displayName": "Midnight Amethyst",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e0d0f0",
+      "base": "#1a0e2e",
+      "primary": "#b48ead",
+      "tool": "#81a1c1",
+      "success": "#a3be8c",
+      "error": "#bf616a",
+      "secondary": "#5e4a7a",
+      "info": "#d08770",
+      "warning": "#ebcb8b",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#a3be8c",
+      "diffRemovedText": "#bf616a"
+    }
+  },
+  "desert-mirage": {
+    "name": "desert-mirage",
+    "displayName": "Desert Mirage",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e8d8c8",
+      "base": "#2e2218",
+      "primary": "#d4976c",
+      "tool": "#7eb8da",
+      "success": "#98c379",
+      "error": "#e06c75",
+      "secondary": "#7a6a5a",
+      "info": "#c678dd",
+      "warning": "#d19a66",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#98c379",
+      "diffRemovedText": "#e06c75"
+    }
+  },
+  "electric-storm": {
+    "name": "electric-storm",
+    "displayName": "Electric Storm",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d0e0ff",
+      "base": "#0a0e1a",
+      "primary": "#00b4d8",
+      "tool": "#48cae4",
+      "success": "#06d6a0",
+      "error": "#ef476f",
+      "secondary": "#3a4a6a",
+      "info": "#ffd166",
+      "warning": "#f77f00",
+      "diffAdded": "#0a2e1a",
+      "diffRemoved": "#2e0a1a",
+      "diffAddedText": "#06d6a0",
+      "diffRemovedText": "#ef476f"
+    }
+  },
+  "deep-sea": {
+    "name": "deep-sea",
+    "displayName": "Deep Sea",
+    "themeType": "dark",
+    "colors": {
+      "text": "#c0d8e8",
+      "base": "#0a1628",
+      "primary": "#2196f3",
+      "tool": "#00bcd4",
+      "success": "#4caf50",
+      "error": "#f44336",
+      "secondary": "#3a5068",
+      "info": "#9c27b0",
+      "warning": "#ff9800",
+      "diffAdded": "#1a3a1a",
+      "diffRemoved": "#3a1a1a",
+      "diffAddedText": "#4caf50",
+      "diffRemovedText": "#f44336"
+    }
+  },
+  "volcanic-ash": {
+    "name": "volcanic-ash",
+    "displayName": "Volcanic Ash",
+    "themeType": "dark",
+    "colors": {
+      "text": "#c8c0b8",
+      "base": "#1a1816",
+      "primary": "#ff6b35",
+      "tool": "#4ecdc4",
+      "success": "#95c623",
+      "error": "#d62839",
+      "secondary": "#5a5450",
+      "info": "#7b68ee",
+      "warning": "#f7b32b",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d1e",
+      "diffAddedText": "#95c623",
+      "diffRemovedText": "#d62839"
+    }
+  },
+  "cyberpunk-mint": {
+    "name": "cyberpunk-mint",
+    "displayName": "Cyberpunk Mint",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d0f0e0",
+      "base": "#0a1a14",
+      "primary": "#00ffcc",
+      "tool": "#00d4aa",
+      "success": "#00e676",
+      "error": "#ff1744",
+      "secondary": "#3a5a4a",
+      "info": "#e040fb",
+      "warning": "#ffc400",
+      "diffAdded": "#0a2e1a",
+      "diffRemoved": "#2e0a1a",
+      "diffAddedText": "#00e676",
+      "diffRemovedText": "#ff1744"
+    }
+  },
+  "dracula": {
+    "name": "dracula",
+    "displayName": "Dracula",
+    "themeType": "dark",
+    "colors": {
+      "text": "#f8f8f2",
+      "base": "#282a36",
+      "primary": "#bd93f9",
+      "tool": "#8be9fd",
+      "success": "#50fa7b",
+      "error": "#ff5555",
+      "secondary": "#6272a4",
+      "info": "#ff79c6",
+      "warning": "#f1fa8c",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#50fa7b",
+      "diffRemovedText": "#ff5555"
+    }
+  },
+  "catppuccin-frappe": {
+    "name": "catppuccin-frappe",
+    "displayName": "Catppuccin Frappe",
+    "themeType": "dark",
+    "colors": {
+      "text": "#c6d0f5",
+      "base": "#303446",
+      "primary": "#8caaee",
+      "tool": "#99d1db",
+      "success": "#a6d189",
+      "error": "#e78284",
+      "secondary": "#626880",
+      "info": "#ca9ee6",
+      "warning": "#e5c890",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#a6d189",
+      "diffRemovedText": "#e78284"
+    }
+  },
+  "catppuccin-macchiato": {
+    "name": "catppuccin-macchiato",
+    "displayName": "Catppuccin Macchiato",
+    "themeType": "dark",
+    "colors": {
+      "text": "#cad3f5",
+      "base": "#24273a",
+      "primary": "#8aadf4",
+      "tool": "#91d7e3",
+      "success": "#a6da95",
+      "error": "#ed8796",
+      "secondary": "#5b6078",
+      "info": "#c6a0f6",
+      "warning": "#eed49f",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#a6da95",
+      "diffRemovedText": "#ed8796"
+    }
+  },
+  "catppuccin-mocha": {
+    "name": "catppuccin-mocha",
+    "displayName": "Catppuccin Mocha",
+    "themeType": "dark",
+    "colors": {
+      "text": "#cdd6f4",
+      "base": "#1e1e2e",
+      "primary": "#89b4fa",
+      "tool": "#89dceb",
+      "success": "#a6e3a1",
+      "error": "#f38ba8",
+      "secondary": "#585b70",
+      "info": "#cba6f7",
+      "warning": "#f9e2af",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#a6e3a1",
+      "diffRemovedText": "#f38ba8"
+    }
+  },
+  "gruvbox-dark": {
+    "name": "gruvbox-dark",
+    "displayName": "Gruvbox Dark",
+    "themeType": "dark",
+    "colors": {
+      "text": "#ebdbb2",
+      "base": "#282828",
+      "primary": "#458588",
+      "tool": "#83a598",
+      "success": "#b8bb26",
+      "error": "#fb4934",
+      "secondary": "#928374",
+      "info": "#d3869b",
+      "warning": "#fabd2f",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#b8bb26",
+      "diffRemovedText": "#fb4934"
+    }
+  },
+  "solarized-dark": {
+    "name": "solarized-dark",
+    "displayName": "Solarized Dark",
+    "themeType": "dark",
+    "colors": {
+      "text": "#839496",
+      "base": "#002b36",
+      "primary": "#268bd2",
+      "tool": "#2aa198",
+      "success": "#859900",
+      "error": "#dc322f",
+      "secondary": "#586e75",
+      "info": "#6c71c4",
+      "warning": "#b58900",
+      "diffAdded": "#003a1a",
+      "diffRemoved": "#3a0a1a",
+      "diffAddedText": "#859900",
+      "diffRemovedText": "#dc322f"
+    }
+  },
+  "one-dark": {
+    "name": "one-dark",
+    "displayName": "One Dark",
+    "themeType": "dark",
+    "colors": {
+      "text": "#abb2bf",
+      "base": "#282c34",
+      "primary": "#61afef",
+      "tool": "#56b6c2",
+      "success": "#98c379",
+      "error": "#e06c75",
+      "secondary": "#5c6370",
+      "info": "#c678dd",
+      "warning": "#d19a66",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#98c379",
+      "diffRemovedText": "#e06c75"
+    }
+  },
+  "monokai": {
+    "name": "monokai",
+    "displayName": "Monokai",
+    "themeType": "dark",
+    "colors": {
+      "text": "#f8f8f2",
+      "base": "#272822",
+      "primary": "#66d9ef",
+      "tool": "#a6e22e",
+      "success": "#a6e22e",
+      "error": "#f92672",
+      "secondary": "#75715e",
+      "info": "#ae81ff",
+      "warning": "#fd971f",
+      "diffAdded": "#2d4a2e",
+      "diffRemoved": "#4a2d2e",
+      "diffAddedText": "#a6e22e",
+      "diffRemovedText": "#f92672"
+    }
+  },
+  "github-dark": {
+    "name": "github-dark",
+    "displayName": "GitHub Dark",
+    "themeType": "dark",
+    "colors": {
+      "text": "#c9d1d9",
+      "base": "#0d1117",
+      "primary": "#58a6ff",
+      "tool": "#79c0ff",
+      "success": "#3fb950",
+      "error": "#f85149",
+      "secondary": "#484f58",
+      "info": "#d2a8ff",
+      "warning": "#d29922",
+      "diffAdded": "#12261e",
+      "diffRemoved": "#3d1117",
+      "diffAddedText": "#3fb950",
+      "diffRemovedText": "#f85149"
+    }
+  },
+  "rose-pine": {
+    "name": "rose-pine",
+    "displayName": "Rose Pine",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e0def4",
+      "base": "#191724",
+      "primary": "#c4a7e7",
+      "tool": "#9ccfd8",
+      "success": "#31748f",
+      "error": "#eb6f92",
+      "secondary": "#6e6a86",
+      "info": "#f6c177",
+      "warning": "#f6c177",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#31748f",
+      "diffRemovedText": "#eb6f92"
+    }
+  },
+  "rose-pine-moon": {
+    "name": "rose-pine-moon",
+    "displayName": "Rose Pine Moon",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e0def4",
+      "base": "#232136",
+      "primary": "#c4a7e7",
+      "tool": "#9ccfd8",
+      "success": "#3e8fb0",
+      "error": "#eb6f92",
+      "secondary": "#6e6a86",
+      "info": "#f6c177",
+      "warning": "#f6c177",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#3e8fb0",
+      "diffRemovedText": "#eb6f92"
+    }
+  },
+  "ayu-dark": {
+    "name": "ayu-dark",
+    "displayName": "Ayu Dark",
+    "themeType": "dark",
+    "colors": {
+      "text": "#bfbdb6",
+      "base": "#0b0e14",
+      "primary": "#e6b450",
+      "tool": "#39bae6",
+      "success": "#7fd962",
+      "error": "#d95757",
+      "secondary": "#565b66",
+      "info": "#d2a6ff",
+      "warning": "#ffb454",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#7fd962",
+      "diffRemovedText": "#d95757"
+    }
+  },
+  "ayu-mirage": {
+    "name": "ayu-mirage",
+    "displayName": "Ayu Mirage",
+    "themeType": "dark",
+    "colors": {
+      "text": "#cccac2",
+      "base": "#1f2430",
+      "primary": "#ffcc66",
+      "tool": "#73d0ff",
+      "success": "#87d96c",
+      "error": "#f28779",
+      "secondary": "#5c6773",
+      "info": "#d4bfff",
+      "warning": "#ffa759",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#87d96c",
+      "diffRemovedText": "#f28779"
+    }
+  },
+  "night-owl": {
+    "name": "night-owl",
+    "displayName": "Night Owl",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d6deeb",
+      "base": "#011627",
+      "primary": "#82aaff",
+      "tool": "#7fdbca",
+      "success": "#addb67",
+      "error": "#ef5350",
+      "secondary": "#637777",
+      "info": "#c792ea",
+      "warning": "#f78c6c",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#addb67",
+      "diffRemovedText": "#ef5350"
+    }
+  },
+  "palenight": {
+    "name": "palenight",
+    "displayName": "Palenight",
+    "themeType": "dark",
+    "colors": {
+      "text": "#a6accd",
+      "base": "#292d3e",
+      "primary": "#82aaff",
+      "tool": "#89ddff",
+      "success": "#c3e88d",
+      "error": "#ff5370",
+      "secondary": "#676e95",
+      "info": "#c792ea",
+      "warning": "#ffcb6b",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#c3e88d",
+      "diffRemovedText": "#ff5370"
+    }
+  },
+  "horizon": {
+    "name": "horizon",
+    "displayName": "Horizon",
+    "themeType": "dark",
+    "colors": {
+      "text": "#e0e0e0",
+      "base": "#1c1e26",
+      "primary": "#e95678",
+      "tool": "#25b0bc",
+      "success": "#09f7a0",
+      "error": "#e95678",
+      "secondary": "#6c6f93",
+      "info": "#fab795",
+      "warning": "#fac29a",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#09f7a0",
+      "diffRemovedText": "#e95678"
+    }
+  },
+  "kanagawa": {
+    "name": "kanagawa",
+    "displayName": "Kanagawa",
+    "themeType": "dark",
+    "colors": {
+      "text": "#dcd7ba",
+      "base": "#1f1f28",
+      "primary": "#7e9cd8",
+      "tool": "#7fb4ca",
+      "success": "#98bb6c",
+      "error": "#e82424",
+      "secondary": "#727169",
+      "info": "#957fb8",
+      "warning": "#e6c384",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#98bb6c",
+      "diffRemovedText": "#e82424"
+    }
+  },
+  "aurora-borealis": {
+    "name": "aurora-borealis",
+    "displayName": "Aurora Borealis",
+    "themeType": "dark",
+    "colors": {
+      "text": "#d0e8f0",
+      "base": "#0a1628",
+      "primary": "#88c0d0",
+      "tool": "#5e81ac",
+      "success": "#a3be8c",
+      "error": "#bf616a",
+      "secondary": "#4c566a",
+      "info": "#b48ead",
+      "warning": "#ebcb8b",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#a3be8c",
+      "diffRemovedText": "#bf616a"
+    }
+  },
+  "cherry-blossom": {
+    "name": "cherry-blossom",
+    "displayName": "Cherry Blossom",
+    "themeType": "dark",
+    "colors": {
+      "text": "#f0d0e8",
+      "base": "#1a0e1e",
+      "primary": "#ff7eb3",
+      "tool": "#7ec8e3",
+      "success": "#98d8a8",
+      "error": "#ff5370",
+      "secondary": "#5a3a5e",
+      "info": "#c3a0e0",
+      "warning": "#ffd580",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#98d8a8",
+      "diffRemovedText": "#ff5370"
+    }
+  },
+  "rose-pine-dawn": {
+    "name": "rose-pine-dawn",
+    "displayName": "Rose Pine Dawn",
+    "themeType": "light",
+    "colors": {
+      "text": "#575279",
+      "base": "#faf4ed",
+      "primary": "#907aa9",
+      "tool": "#56949f",
+      "success": "#286983",
+      "error": "#b4637a",
+      "secondary": "#9893a5",
+      "info": "#ea9d34",
+      "warning": "#ea9d34",
+      "diffAdded": "#e0f0e0",
+      "diffRemoved": "#f0e0e0",
+      "diffAddedText": "#286983",
+      "diffRemovedText": "#b4637a"
+    }
+  },
+  "catppuccin-latte": {
+    "name": "catppuccin-latte",
+    "displayName": "Catppuccin Latte",
+    "themeType": "light",
+    "colors": {
+      "text": "#4c4f69",
+      "base": "#eff1f5",
+      "primary": "#1e66f5",
+      "tool": "#179299",
+      "success": "#40a02b",
+      "error": "#d20f39",
+      "secondary": "#9ca0b0",
+      "info": "#8839ef",
+      "warning": "#df8e1d",
+      "diffAdded": "#e0f0e0",
+      "diffRemoved": "#f0e0e0",
+      "diffAddedText": "#40a02b",
+      "diffRemovedText": "#d20f39"
+    }
+  },
+  "gruvbox-light": {
+    "name": "gruvbox-light",
+    "displayName": "Gruvbox Light",
+    "themeType": "light",
+    "colors": {
+      "text": "#3c3836",
+      "base": "#fbf1c7",
+      "primary": "#076678",
+      "tool": "#427b58",
+      "success": "#79740e",
+      "error": "#9d0006",
+      "secondary": "#928374",
+      "info": "#8f3f71",
+      "warning": "#b57614",
+      "diffAdded": "#e0f0d0",
+      "diffRemoved": "#f0d0d0",
+      "diffAddedText": "#79740e",
+      "diffRemovedText": "#9d0006"
+    }
+  },
+  "solarized-light": {
+    "name": "solarized-light",
+    "displayName": "Solarized Light",
+    "themeType": "light",
+    "colors": {
+      "text": "#657b83",
+      "base": "#fdf6e3",
+      "primary": "#268bd2",
+      "tool": "#2aa198",
+      "success": "#859900",
+      "error": "#dc322f",
+      "secondary": "#93a1a1",
+      "info": "#6c71c4",
+      "warning": "#b58900",
+      "diffAdded": "#e0f0e0",
+      "diffRemoved": "#f0e0e0",
+      "diffAddedText": "#859900",
+      "diffRemovedText": "#dc322f"
+    }
+  },
+  "one-light": {
+    "name": "one-light",
+    "displayName": "One Light",
+    "themeType": "light",
+    "colors": {
+      "text": "#383a42",
+      "base": "#fafafa",
+      "primary": "#4078f2",
+      "tool": "#0184bc",
+      "success": "#50a14f",
+      "error": "#e45649",
+      "secondary": "#a0a1a7",
+      "info": "#a626a4",
+      "warning": "#c18401",
+      "diffAdded": "#e0f0e0",
+      "diffRemoved": "#f0e0e0",
+      "diffAddedText": "#50a14f",
+      "diffRemovedText": "#e45649"
+    }
+  },
+  "github-light": {
+    "name": "github-light",
+    "displayName": "GitHub Light",
+    "themeType": "light",
+    "colors": {
+      "text": "#24292e",
+      "base": "#ffffff",
+      "primary": "#0366d6",
+      "tool": "#22863a",
+      "success": "#28a745",
+      "error": "#d73a49",
+      "secondary": "#6a737d",
+      "info": "#6f42c1",
+      "warning": "#e36209",
+      "diffAdded": "#e6ffed",
+      "diffRemoved": "#ffeef0",
+      "diffAddedText": "#28a745",
+      "diffRemovedText": "#d73a49"
+    }
+  },
+  "ayu-light": {
+    "name": "ayu-light",
+    "displayName": "Ayu Light",
+    "themeType": "light",
+    "colors": {
+      "text": "#5c6166",
+      "base": "#fafafa",
+      "primary": "#ff9940",
+      "tool": "#399ee6",
+      "success": "#6cbf43",
+      "error": "#e65050",
+      "secondary": "#abb0b6",
+      "info": "#a37acc",
+      "warning": "#f2ae49",
+      "diffAdded": "#e0f0e0",
+      "diffRemoved": "#f0e0e0",
+      "diffAddedText": "#6cbf43",
+      "diffRemovedText": "#e65050"
+    }
+  },
+  "pi-classic": {
+    "name": "pi-classic",
+    "displayName": "Pi Classic",
+    "themeType": "dark",
+    "colors": {
+      "text": "#bcbcbc",
+      "base": "#303030",
+      "primary": "#5f87ff",
+      "tool": "#5faf5f",
+      "success": "#5faf5f",
+      "error": "#ff5f5f",
+      "secondary": "#585858",
+      "info": "#af87ff",
+      "warning": "#ffaf5f",
+      "diffAdded": "#1e3a29",
+      "diffRemoved": "#3a1e2a",
+      "diffAddedText": "#5faf5f",
+      "diffRemovedText": "#ff5f5f"
+    }
+  }
+}
