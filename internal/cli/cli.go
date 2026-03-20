@@ -39,12 +39,13 @@ var (
 	flagURL     string
 	flagHeaders []string
 
-	flagContinue bool
-	flagInsecure bool
-	flagSmol     bool
-	flagSlow     bool
-	flagPlan     bool
-	flagSystem   string
+	flagContinue  bool
+	flagInsecure  bool
+	flagSmol      bool
+	flagSlow      bool
+	flagPlan      bool
+	flagMemoryOff bool
+	flagSystem    string
 )
 
 // Version is set at build time via -ldflags.
@@ -72,6 +73,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
 	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
+	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
 
 	cmd.AddCommand(newPingCmd())
 	cmd.AddCommand(newAuditCmd())
@@ -237,7 +239,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	// Initialize memory system.
 	var memStore memory.Store
 	var memWorker *memory.Worker
-	memEnabled := cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled
+	memEnabled := !flagMemoryOff && (cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled)
 	if memEnabled {
 		memCfg := config.MemoryDefaults()
 		if cfg.Memory != nil {
