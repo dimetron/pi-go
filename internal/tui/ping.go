@@ -23,8 +23,7 @@ func (m *model) handlePingCommand(args []string) (tea.Model, tea.Cmd) {
 		role:    "assistant",
 		content: "Pinging model...",
 	})
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Clear()
 
 	if m.cfg.LLM == nil {
 		m.messages[len(m.messages)-1].content = "✗ No LLM configured"

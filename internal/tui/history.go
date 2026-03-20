@@ -79,7 +79,7 @@ func (m *model) handleHistoryCommand(args []string) {
 	query := strings.ToLower(strings.Join(args, " "))
 
 	var filtered []string
-	for _, h := range m.history {
+	for _, h := range m.inputModel.History {
 		if query == "" || strings.Contains(strings.ToLower(h), query) {
 			filtered = append(filtered, h)
 		}

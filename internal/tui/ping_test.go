@@ -178,10 +178,10 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 
 	mockLLM := &pingMockLLM{name: "test-model", response: "Pong"}
 	m := &model{
-		ctx:      ctx,
-		input:    "/ping",
-		messages: make([]message, 0),
-		cfg:      Config{ActiveRole: "default", LLM: mockLLM},
+		ctx:        ctx,
+		inputModel: InputModel{Text: "/ping"},
+		messages:   make([]message, 0),
+		cfg:        Config{ActiveRole: "default", LLM: mockLLM},
 	}
 
 	newM, cmd := m.handlePingCommand(nil)
@@ -196,16 +196,16 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 	if mm.messages[0].content != "Pinging model..." {
 		t.Errorf("expected placeholder 'Pinging model...', got %q", mm.messages[0].content)
 	}
-	if mm.input != "" {
-		t.Errorf("input should be cleared, got %q", mm.input)
+	if mm.inputModel.Text != "" {
+		t.Errorf("input should be cleared, got %q", mm.inputModel.Text)
 	}
 }
 
 func TestHandlePingCommand_NoLLM(t *testing.T) {
 	m := &model{
-		input:    "/ping",
-		messages: make([]message, 0),
-		cfg:      Config{},
+		inputModel: InputModel{Text: "/ping"},
+		messages:   make([]message, 0),
+		cfg:        Config{},
 	}
 
 	newM, cmd := m.handlePingCommand(nil)

@@ -12,8 +12,6 @@ type restartMsg struct{}
 
 // handleRestartCommand triggers a clean restart of the current process.
 func (m *model) handleRestartCommand() (tea.Model, tea.Cmd) {
-	m.input = ""
-	m.cursorPos = 0
 	m.quitting = true
 	return m, func() tea.Msg { return restartMsg{} }
 }

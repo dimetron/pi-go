@@ -297,8 +297,8 @@ func TestCommitParsePorcelain(t *testing.T) {
 
 func TestHandleSlashCommandHelpContainsCommit(t *testing.T) {
 	m := &model{
-		input:    "/help",
-		messages: make([]message, 0),
+		inputModel: InputModel{Text: "/help"},
+		messages:   make([]message, 0),
 	}
 
 	newM, _ := m.handleSlashCommand("/help")

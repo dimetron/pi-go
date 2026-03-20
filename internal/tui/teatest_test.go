@@ -22,9 +22,7 @@ func newTestModel(t *testing.T) *model {
 		},
 		ctx:        ctx,
 		cancel:     cancel,
-		history:    make([]string, 0),
-		historyIdx: -1,
-		cyclingIdx: -1,
+		inputModel: NewInputModel(make([]string, 0), nil, nil, ""),
 		messages:   make([]message, 0),
 		width:      80,
 		height:     24,
@@ -45,25 +43,25 @@ func TestUpdate_WindowSize(t *testing.T) {
 
 func TestUpdate_PasteMsg(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "hello "
-	m.cursorPos = 6
+	m.inputModel.Text = "hello "
+	m.inputModel.CursorPos = 6
 	m.Update(tea.PasteMsg{Content: "world"})
-	if m.input != "hello world" {
-		t.Errorf("expected 'hello world', got %q", m.input)
+	if m.inputModel.Text != "hello world" {
+		t.Errorf("expected 'hello world', got %q", m.inputModel.Text)
 	}
-	if m.cursorPos != 11 {
-		t.Errorf("expected cursorPos 11, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 11 {
+		t.Errorf("expected cursorPos 11, got %d", m.inputModel.CursorPos)
 	}
 }
 
 func TestUpdate_PasteMsg_IgnoredWhenRunning(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	m.input = "before"
-	m.cursorPos = 6
+	m.inputModel.Text = "before"
+	m.inputModel.CursorPos = 6
 	m.Update(tea.PasteMsg{Content: "paste"})
-	if m.input != "before" {
-		t.Errorf("expected input unchanged when running, got %q", m.input)
+	if m.inputModel.Text != "before" {
+		t.Errorf("expected input unchanged when running, got %q", m.inputModel.Text)
 	}
 }
 
@@ -132,8 +130,8 @@ func TestUpdate_AgentToolResultMsg(t *testing.T) {
 
 func TestSlashCommand_Help(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/help"
-	m.cursorPos = 5
+	m.inputModel.Text = "/help"
+	m.inputModel.CursorPos = 5
 	m.handleSlashCommand("/help")
 	if len(m.messages) == 0 {
 		t.Fatal("expected help message")
@@ -298,7 +296,7 @@ func TestFormatContextUsage_WithCompactMetrics(t *testing.T) {
 
 func TestAllCommandNames(t *testing.T) {
 	m := newTestModel(t)
-	names := m.allCommandNames()
+	names := m.inputModel.AllCommandNames()
 	if len(names) == 0 {
 		t.Fatal("expected command names")
 	}
@@ -316,11 +314,11 @@ func TestAllCommandNames(t *testing.T) {
 
 func TestAllCommandNames_WithSkills(t *testing.T) {
 	m := newTestModel(t)
-	m.cfg.Skills = []extension.Skill{
+	m.inputModel.Skills = []extension.Skill{
 		{Name: "test-skill"},
 		{Name: "another-skill"},
 	}
-	names := m.allCommandNames()
+	names := m.inputModel.AllCommandNames()
 	foundSkill := false
 	for _, n := range names {
 		if n == "/test-skill" {
@@ -357,9 +355,9 @@ func TestDetectBranch_InvalidDir(t *testing.T) {
 
 func TestRenderInput_NotRunning(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "hello"
-	m.cursorPos = 3
-	out := m.renderInput()
+	m.inputModel.Text = "hello"
+	m.inputModel.CursorPos = 3
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
 	}
@@ -368,7 +366,7 @@ func TestRenderInput_NotRunning(t *testing.T) {
 func TestRenderInput_Running(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	out := m.renderInput()
+	out := m.inputModel.View(m.running)
 	if !contains(out, "waiting") {
 		t.Error("expected 'waiting' in running state")
 	}
@@ -376,9 +374,9 @@ func TestRenderInput_Running(t *testing.T) {
 
 func TestRenderInput_CursorAtEnd(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "abc"
-	m.cursorPos = 3
-	out := m.renderInput()
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
 	}
@@ -386,9 +384,9 @@ func TestRenderInput_CursorAtEnd(t *testing.T) {
 
 func TestRenderInput_CursorInMiddle(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "abcdef"
-	m.cursorPos = 3
-	out := m.renderInput()
+	m.inputModel.Text = "abcdef"
+	m.inputModel.CursorPos = 3
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
 	}
@@ -474,6 +472,19 @@ func TestView_EmptyMessages(t *testing.T) {
 	}
 }
 
+// testSubmit simulates pressing Enter: InputModel handles the key, then
+// if it returns an InputSubmitMsg, the root model processes it.
+func (m *model) testSubmit() (tea.Model, tea.Cmd) {
+	cmd := m.inputModel.HandleKey(makeKey(tea.KeyEnter))
+	if cmd != nil {
+		msg := cmd()
+		if msg != nil {
+			return m.Update(msg)
+		}
+	}
+	return m, nil
+}
+
 // --- handleKey tests ---
 
 func makeKey(code rune) tea.KeyPressMsg {
@@ -521,23 +532,23 @@ func TestHandleKey_Esc_CancelRunning(t *testing.T) {
 
 func TestHandleKey_Esc_DismissCompletion(t *testing.T) {
 	m := newTestModel(t)
-	m.completionMode = true
-	m.completionResult = &CompleteResult{}
+	m.inputModel.CompletionMode = true
+	m.inputModel.CompletionResult = &CompleteResult{}
 	m.handleKey(makeKey(tea.KeyEsc))
-	if m.completionMode {
+	if m.inputModel.CompletionMode {
 		t.Error("expected completion mode dismissed")
 	}
 }
 
 func TestHandleKey_Esc_DismissCycling(t *testing.T) {
 	m := newTestModel(t)
-	m.cyclingIdx = 3
-	m.input = "/help"
+	m.inputModel.CyclingIdx = 3
+	m.inputModel.Text = "/help"
 	m.handleKey(makeKey(tea.KeyEsc))
-	if m.cyclingIdx != -1 {
+	if m.inputModel.CyclingIdx != -1 {
 		t.Error("expected cycling dismissed")
 	}
-	if m.input != "" {
+	if m.inputModel.Text != "" {
 		t.Error("expected input cleared")
 	}
 }
@@ -545,9 +556,9 @@ func TestHandleKey_Esc_DismissCycling(t *testing.T) {
 func TestHandleKey_IgnoresWhenRunning(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	m.input = "before"
+	m.inputModel.Text = "before"
 	m.handleKey(makeTextKey("x"))
-	if m.input != "before" {
+	if m.inputModel.Text != "before" {
 		t.Error("expected input unchanged when running")
 	}
 }
@@ -556,94 +567,94 @@ func TestHandleKey_TypeCharacter(t *testing.T) {
 	m := newTestModel(t)
 	m.handleKey(makeTextKey("h"))
 	m.handleKey(makeTextKey("i"))
-	if m.input != "hi" {
-		t.Errorf("expected 'hi', got %q", m.input)
+	if m.inputModel.Text != "hi" {
+		t.Errorf("expected 'hi', got %q", m.inputModel.Text)
 	}
-	if m.cursorPos != 2 {
-		t.Errorf("expected cursorPos 2, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 2 {
+		t.Errorf("expected cursorPos 2, got %d", m.inputModel.CursorPos)
 	}
 }
 
 func TestHandleKey_Backspace(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "abc"
-	m.cursorPos = 3
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
 	m.handleKey(makeKey(tea.KeyBackspace))
-	if m.input != "ab" {
-		t.Errorf("expected 'ab', got %q", m.input)
+	if m.inputModel.Text != "ab" {
+		t.Errorf("expected 'ab', got %q", m.inputModel.Text)
 	}
 }
 
 func TestHandleKey_Delete(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "abc"
-	m.cursorPos = 1
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 1
 	m.handleKey(makeKey(tea.KeyDelete))
-	if m.input != "ac" {
-		t.Errorf("expected 'ac', got %q", m.input)
+	if m.inputModel.Text != "ac" {
+		t.Errorf("expected 'ac', got %q", m.inputModel.Text)
 	}
 }
 
 func TestHandleKey_LeftRight(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "abc"
-	m.cursorPos = 3
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
 	m.handleKey(makeKey(tea.KeyLeft))
-	if m.cursorPos != 2 {
-		t.Errorf("expected cursorPos 2, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 2 {
+		t.Errorf("expected cursorPos 2, got %d", m.inputModel.CursorPos)
 	}
 	m.handleKey(makeKey(tea.KeyRight))
-	if m.cursorPos != 3 {
-		t.Errorf("expected cursorPos 3, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 3 {
+		t.Errorf("expected cursorPos 3, got %d", m.inputModel.CursorPos)
 	}
 }
 
 func TestHandleKey_HomeEnd(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "hello"
-	m.cursorPos = 3
+	m.inputModel.Text = "hello"
+	m.inputModel.CursorPos = 3
 	m.handleKey(makeKey(tea.KeyHome))
-	if m.cursorPos != 0 {
-		t.Errorf("expected cursorPos 0 after Home, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 0 {
+		t.Errorf("expected cursorPos 0 after Home, got %d", m.inputModel.CursorPos)
 	}
 	m.handleKey(makeKey(tea.KeyEnd))
-	if m.cursorPos != 5 {
-		t.Errorf("expected cursorPos 5 after End, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 5 {
+		t.Errorf("expected cursorPos 5 after End, got %d", m.inputModel.CursorPos)
 	}
 }
 
 func TestHandleKey_CtrlA_CtrlE(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "hello"
-	m.cursorPos = 3
+	m.inputModel.Text = "hello"
+	m.inputModel.CursorPos = 3
 	m.handleKey(makeKeyMod('a', tea.ModCtrl))
-	if m.cursorPos != 0 {
-		t.Errorf("expected cursorPos 0 after Ctrl+A, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 0 {
+		t.Errorf("expected cursorPos 0 after Ctrl+A, got %d", m.inputModel.CursorPos)
 	}
 	m.handleKey(makeKeyMod('e', tea.ModCtrl))
-	if m.cursorPos != 5 {
-		t.Errorf("expected cursorPos 5 after Ctrl+E, got %d", m.cursorPos)
+	if m.inputModel.CursorPos != 5 {
+		t.Errorf("expected cursorPos 5 after Ctrl+E, got %d", m.inputModel.CursorPos)
 	}
 }
 
 func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
-	m.history = []string{"first", "second", "third"}
+	m.inputModel.History = []string{"first", "second", "third"}
 	m.handleKey(makeKey(tea.KeyUp))
-	if m.input != "third" {
-		t.Errorf("expected 'third', got %q", m.input)
+	if m.inputModel.Text != "third" {
+		t.Errorf("expected 'third', got %q", m.inputModel.Text)
 	}
 	m.handleKey(makeKey(tea.KeyUp))
-	if m.input != "second" {
-		t.Errorf("expected 'second', got %q", m.input)
+	if m.inputModel.Text != "second" {
+		t.Errorf("expected 'second', got %q", m.inputModel.Text)
 	}
 	m.handleKey(makeKey(tea.KeyDown))
-	if m.input != "third" {
-		t.Errorf("expected 'third', got %q", m.input)
+	if m.inputModel.Text != "third" {
+		t.Errorf("expected 'third', got %q", m.inputModel.Text)
 	}
 	m.handleKey(makeKey(tea.KeyDown))
-	if m.input != "" {
-		t.Errorf("expected empty after scrolling past end, got %q", m.input)
+	if m.inputModel.Text != "" {
+		t.Errorf("expected empty after scrolling past end, got %q", m.inputModel.Text)
 	}
 }
 
@@ -665,28 +676,34 @@ func TestHandleKey_PgUpPgDown(t *testing.T) {
 
 func TestHandleKey_Tab_CycleCommands(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/"
-	m.cursorPos = 1
-	m.cyclingIdx = -1
+	m.inputModel.Text = "/"
+	m.inputModel.CursorPos = 1
+	m.inputModel.CyclingIdx = -1
 	// First Tab starts cycling
 	m.handleKey(makeKey(tea.KeyTab))
-	if m.cyclingIdx < 0 {
+	if m.inputModel.CyclingIdx < 0 {
 		t.Error("expected cycling to start")
 	}
-	first := m.input
+	first := m.inputModel.Text
 	// Second Tab cycles to next
 	m.handleKey(makeKey(tea.KeyTab))
-	if m.input == first && len(m.allCommandNames()) > 1 {
+	if m.inputModel.Text == first && len(m.inputModel.AllCommandNames()) > 1 {
 		t.Error("expected cycling to advance")
 	}
 }
 
 func TestHandleKey_Enter_SubmitSlashCommand(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/clear"
-	m.cursorPos = 6
+	m.inputModel.Text = "/clear"
+	m.inputModel.CursorPos = 6
 	m.messages = append(m.messages, message{role: "user", content: "hi"})
-	m.handleKey(makeKey(tea.KeyEnter))
+	_, cmd := m.handleKey(makeKey(tea.KeyEnter))
+	if cmd != nil {
+		msg := cmd()
+		if msg != nil {
+			m.Update(msg)
+		}
+	}
 	if len(m.messages) != 0 {
 		t.Errorf("expected messages cleared by /clear, got %d", len(m.messages))
 	}
@@ -694,22 +711,22 @@ func TestHandleKey_Enter_SubmitSlashCommand(t *testing.T) {
 
 func TestHandleKey_Enter_CyclingDismiss(t *testing.T) {
 	m := newTestModel(t)
-	m.cyclingIdx = 2
-	m.input = "/model"
+	m.inputModel.CyclingIdx = 2
+	m.inputModel.Text = "/model"
 	m.handleKey(makeKey(tea.KeyEnter))
-	if m.cyclingIdx != -1 {
+	if m.inputModel.CyclingIdx != -1 {
 		t.Error("expected cycling dismissed on Enter")
 	}
-	if m.input != "/model" {
+	if m.inputModel.Text != "/model" {
 		t.Error("expected input preserved")
 	}
 }
 
 func TestHandleKey_F12_Noop(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "test"
+	m.inputModel.Text = "test"
 	m.handleKey(makeKey(tea.KeyF12))
-	if m.input != "test" {
+	if m.inputModel.Text != "test" {
 		t.Error("expected F12 to be a no-op")
 	}
 }
@@ -836,9 +853,9 @@ func TestRenderStatusBar_WithRunState(t *testing.T) {
 
 func TestRenderInput_EmptyInput(t *testing.T) {
 	m := newTestModel(t)
-	m.input = ""
-	m.cursorPos = 0
-	out := m.renderInput()
+	m.inputModel.Text = ""
+	m.inputModel.CursorPos = 0
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
 	}
@@ -846,10 +863,10 @@ func TestRenderInput_EmptyInput(t *testing.T) {
 
 func TestRenderInput_WithCompletion(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/hel"
-	m.cursorPos = 4
-	m.completion = "/help"
-	out := m.renderInput()
+	m.inputModel.Text = "/hel"
+	m.inputModel.CursorPos = 4
+	m.inputModel.Completion = "/help"
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
 	}
@@ -859,8 +876,8 @@ func TestRenderInput_WithCompletion(t *testing.T) {
 
 func TestSubmit_Empty(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "   "
-	_, cmd := m.submit()
+	m.inputModel.Text = "   "
+	_, cmd := m.testSubmit()
 	if cmd != nil {
 		t.Error("expected nil cmd for empty input")
 	}
@@ -868,8 +885,8 @@ func TestSubmit_Empty(t *testing.T) {
 
 func TestSubmit_SlashCommand(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/help"
-	m.submit()
+	m.inputModel.Text = "/help"
+	m.testSubmit()
 	if len(m.messages) == 0 {
 		t.Error("expected help message from submit")
 	}
@@ -957,9 +974,9 @@ func TestHandleKey_LoginCancel_CtrlC(t *testing.T) {
 func TestHandleKey_Login_BlocksInSSOPhase(t *testing.T) {
 	m := newTestModel(t)
 	m.login = &loginState{phase: "sso"}
-	m.input = "before"
+	m.inputModel.Text = "before"
 	m.handleKey(makeTextKey("x"))
-	if m.input != "before" {
+	if m.inputModel.Text != "before" {
 		t.Error("expected input unchanged in sso phase")
 	}
 }
@@ -1034,18 +1051,18 @@ func TestMaxScroll(t *testing.T) {
 
 func TestRenderInput_CompletionMenu(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/he"
-	m.cursorPos = 3
-	m.completionMode = true
-	m.selectedIndex = 0
-	m.completionResult = &CompleteResult{
+	m.inputModel.Text = "/he"
+	m.inputModel.CursorPos = 3
+	m.inputModel.CompletionMode = true
+	m.inputModel.SelectedIndex = 0
+	m.inputModel.CompletionResult = &CompleteResult{
 		Candidates: []CompletionCandidate{
 			{Text: "/help", Description: "Show help"},
 			{Text: "/history", Description: "Command history"},
 		},
 		Selected: 0,
 	}
-	out := m.renderInput()
+	out := m.inputModel.View(m.running)
 	if !strings.Contains(out, "/help") {
 		t.Error("expected /help in completion menu")
 	}
@@ -1056,10 +1073,10 @@ func TestRenderInput_CompletionMenu(t *testing.T) {
 
 func TestRenderInput_CyclingMenu(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/help"
-	m.cursorPos = 5
-	m.cyclingIdx = 0
-	out := m.renderInput()
+	m.inputModel.Text = "/help"
+	m.inputModel.CursorPos = 5
+	m.inputModel.CyclingIdx = 0
+	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty cycling menu")
 	}
@@ -1067,10 +1084,10 @@ func TestRenderInput_CyclingMenu(t *testing.T) {
 
 func TestRenderInput_GhostCompletion(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/hel"
-	m.cursorPos = 4
-	m.completion = "/help"
-	out := m.renderInput()
+	m.inputModel.Text = "/hel"
+	m.inputModel.CursorPos = 4
+	m.inputModel.Completion = "/help"
+	out := m.inputModel.View(m.running)
 	if !strings.Contains(out, "tab") {
 		t.Error("expected [tab] hint in ghost completion")
 	}
@@ -1138,9 +1155,9 @@ func TestSlashCommand_DynamicSkill(t *testing.T) {
 
 func TestSubmit_SlashClear(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/clear"
+	m.inputModel.Text = "/clear"
 	m.messages = append(m.messages, message{role: "user", content: "hi"})
-	m.submit()
+	m.testSubmit()
 	if len(m.messages) != 0 {
 		t.Errorf("expected clear, got %d messages", len(m.messages))
 	}
@@ -1164,27 +1181,27 @@ func TestLoadHistory(t *testing.T) {
 
 func TestHandleKey_ShiftTab_CycleBackwards(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/"
-	m.cursorPos = 1
-	m.cyclingIdx = 1
+	m.inputModel.Text = "/"
+	m.inputModel.CursorPos = 1
+	m.inputModel.CyclingIdx = 1
 	m.handleKey(makeKey(tea.KeyTab))
-	second := m.input
+	second := m.inputModel.Text
 	m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	if m.input == second && len(m.allCommandNames()) > 1 {
+	if m.inputModel.Text == second && len(m.inputModel.AllCommandNames()) > 1 {
 		t.Error("expected shift-tab to cycle backwards")
 	}
 }
 
 func TestHandleKey_ShiftTab_CompletionCycle(t *testing.T) {
 	m := newTestModel(t)
-	m.completionMode = true
-	m.selectedIndex = 1
-	m.completionResult = &CompleteResult{
+	m.inputModel.CompletionMode = true
+	m.inputModel.SelectedIndex = 1
+	m.inputModel.CompletionResult = &CompleteResult{
 		Candidates: []CompletionCandidate{{Text: "/a"}, {Text: "/b"}, {Text: "/c"}},
 		Selected:   1,
 	}
 	m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	if m.selectedIndex == 1 {
+	if m.inputModel.SelectedIndex == 1 {
 		t.Error("expected shift-tab to change selection")
 	}
 }
@@ -1220,11 +1237,11 @@ func (o *mockOrchestrator) List() []struct {
 func TestHandleKey_Login_WaitingPhase_Enter(t *testing.T) {
 	m := newTestModel(t)
 	m.login = &loginState{phase: "waiting", provider: "test"}
-	m.input = "sk-test-key"
-	m.cursorPos = 11
+	m.inputModel.Text = "sk-test-key"
+	m.inputModel.CursorPos = 11
 	m.handleKey(makeKey(tea.KeyEnter))
 	// Should attempt to save the key
-	if m.login != nil && m.login.phase == "waiting" && m.input == "sk-test-key" {
+	if m.login != nil && m.login.phase == "waiting" && m.inputModel.Text == "sk-test-key" {
 		t.Error("expected login phase to change after enter with key")
 	}
 }
@@ -1232,8 +1249,8 @@ func TestHandleKey_Login_WaitingPhase_Enter(t *testing.T) {
 func TestHandleKey_Login_WaitingPhase_EmptyEnter(t *testing.T) {
 	m := newTestModel(t)
 	m.login = &loginState{phase: "waiting", provider: "test"}
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Text = ""
+	m.inputModel.CursorPos = 0
 	m.handleKey(makeKey(tea.KeyEnter))
 	// Should stay in waiting phase
 	if m.login == nil || m.login.phase != "waiting" {
@@ -1244,11 +1261,11 @@ func TestHandleKey_Login_WaitingPhase_EmptyEnter(t *testing.T) {
 func TestHandleKey_Login_WaitingPhase_TypesCharacter(t *testing.T) {
 	m := newTestModel(t)
 	m.login = &loginState{phase: "waiting", provider: "test"}
-	m.input = "sk-"
-	m.cursorPos = 3
+	m.inputModel.Text = "sk-"
+	m.inputModel.CursorPos = 3
 	m.handleKey(makeTextKey("x"))
-	if m.input != "sk-x" {
-		t.Errorf("expected 'sk-x', got %q", m.input)
+	if m.inputModel.Text != "sk-x" {
+		t.Errorf("expected 'sk-x', got %q", m.inputModel.Text)
 	}
 }
 
@@ -1300,7 +1317,7 @@ func TestWaitForAgent_ReceivesMsg(t *testing.T) {
 
 func TestSlashCommand_History(t *testing.T) {
 	m := newTestModel(t)
-	m.history = []string{"/help", "/clear", "hello world"}
+	m.inputModel.History = []string{"/help", "/clear", "hello world"}
 	m.handleSlashCommand("/history")
 	if len(m.messages) == 0 {
 		t.Fatal("expected history output")
@@ -1309,7 +1326,7 @@ func TestSlashCommand_History(t *testing.T) {
 
 func TestSlashCommand_HistoryWithQuery(t *testing.T) {
 	m := newTestModel(t)
-	m.history = []string{"/help", "/clear", "hello world"}
+	m.inputModel.History = []string{"/help", "/clear", "hello world"}
 	m.handleSlashCommand("/history help")
 	if len(m.messages) == 0 {
 		t.Fatal("expected filtered history output")
@@ -1332,11 +1349,11 @@ func TestRenderStatusBar_WithOrchestrator(t *testing.T) {
 
 func TestHandleKey_Tab_SingleMatch(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/hel"
-	m.cursorPos = 4
+	m.inputModel.Text = "/hel"
+	m.inputModel.CursorPos = 4
 	m.handleKey(makeKey(tea.KeyTab))
-	if m.input != "/help" {
-		t.Errorf("expected single match '/help', got %q", m.input)
+	if m.inputModel.Text != "/help" {
+		t.Errorf("expected single match '/help', got %q", m.inputModel.Text)
 	}
 }
 
@@ -1344,12 +1361,12 @@ func TestHandleKey_Tab_SingleMatch(t *testing.T) {
 
 func TestHandleKey_Tab_MultipleMatches(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/h"
-	m.cursorPos = 2
+	m.inputModel.Text = "/h"
+	m.inputModel.CursorPos = 2
 	m.handleKey(makeKey(tea.KeyTab))
-	if !m.completionMode {
+	if !m.inputModel.CompletionMode {
 		// May or may not enter completion mode depending on matches
-		t.Logf("completionMode=%v, input=%q", m.completionMode, m.input)
+		t.Logf("completionMode=%v, input=%q", m.inputModel.CompletionMode, m.inputModel.Text)
 	}
 }
 
@@ -1357,9 +1374,9 @@ func TestHandleKey_Tab_MultipleMatches(t *testing.T) {
 
 func TestHandleKey_Enter_ApplyCompletion(t *testing.T) {
 	m := newTestModel(t)
-	m.completionMode = true
-	m.selectedIndex = 1
-	m.completionResult = &CompleteResult{
+	m.inputModel.CompletionMode = true
+	m.inputModel.SelectedIndex = 1
+	m.inputModel.CompletionResult = &CompleteResult{
 		Candidates: []CompletionCandidate{
 			{Text: "/help"},
 			{Text: "/history"},
@@ -1367,10 +1384,10 @@ func TestHandleKey_Enter_ApplyCompletion(t *testing.T) {
 		Selected: 1,
 	}
 	m.handleKey(makeKey(tea.KeyEnter))
-	if m.input != "/history" {
-		t.Errorf("expected '/history' applied, got %q", m.input)
+	if m.inputModel.Text != "/history" {
+		t.Errorf("expected '/history' applied, got %q", m.inputModel.Text)
 	}
-	if m.completionMode {
+	if m.inputModel.CompletionMode {
 		t.Error("expected completion mode dismissed")
 	}
 }
@@ -1379,10 +1396,10 @@ func TestHandleKey_Enter_ApplyCompletion(t *testing.T) {
 
 func TestSubmit_AddsToHistory(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "/help"
-	m.submit()
+	m.inputModel.Text = "/help"
+	m.testSubmit()
 	found := false
-	for _, h := range m.history {
+	for _, h := range m.inputModel.History {
 		if h == "/help" {
 			found = true
 		}
@@ -1419,11 +1436,11 @@ func TestHandleSkillLoadCommand(t *testing.T) {
 
 func TestSubmit_RegularText(t *testing.T) {
 	m := newTestModel(t)
-	m.input = "hello world"
-	m.cursorPos = 11
+	m.inputModel.Text = "hello world"
+	m.inputModel.CursorPos = 11
 	// submit() will call runAgentLoop which needs m.cfg.Agent, so it will
 	// add messages and start goroutine. We test the state changes.
-	m.submit()
+	m.testSubmit()
 	// Should have added user + assistant messages
 	if len(m.messages) < 2 {
 		t.Errorf("expected at least 2 messages, got %d", len(m.messages))
@@ -1434,7 +1451,7 @@ func TestSubmit_RegularText(t *testing.T) {
 	if !m.running {
 		t.Error("expected running=true")
 	}
-	if m.input != "" {
+	if m.inputModel.Text != "" {
 		t.Error("expected input cleared")
 	}
 	// Clean up the goroutine
@@ -1445,11 +1462,11 @@ func TestSubmit_RegularText(t *testing.T) {
 
 func TestSubmit_SkipsDuplicateHistory(t *testing.T) {
 	m := newTestModel(t)
-	m.history = []string{"hello"}
-	m.input = "hello"
-	m.submit()
+	m.inputModel.History = []string{"hello"}
+	m.inputModel.Text = "hello"
+	m.testSubmit()
 	count := 0
-	for _, h := range m.history {
+	for _, h := range m.inputModel.History {
 		if h == "hello" {
 			count++
 		}

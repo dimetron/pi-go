@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -178,20 +176,8 @@ type model struct {
 	width  int
 	height int
 
-	// Input.
-	input      string
-	cursorPos  int
-	history    []string
-	historyIdx int
-	completion string // ghost autocomplete suggestion
-
-	// Enhanced completion state.
-	completionResult *CompleteResult // completion candidates
-	completionMode   bool            // whether we're in completion selection mode
-	selectedIndex    int             // currently selected candidate index
-
-	// Command cycling state.
-	cyclingIdx int // current index for cycling commands in prompt
+	// Input sub-model.
+	inputModel InputModel
 
 	// Messages.
 	messages []message
@@ -263,9 +249,7 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg:        cfg,
 		ctx:        ctx,
 		cancel:     cancel,
-		history:    history,
-		historyIdx: -1,
-		cyclingIdx: -1,
+		inputModel: NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
 		messages:   make([]message, 0),
 		renderer:   renderer,
 		gitBranch:  detectBranch(cfg.WorkDir),
@@ -305,13 +289,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if !m.running {
-			text := msg.Content
-			m.input = m.input[:m.cursorPos] + text + m.input[m.cursorPos:]
-			m.cursorPos += len(text)
+			m.inputModel.InsertText(msg.Content)
 		}
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case InputSubmitMsg:
+		if strings.HasPrefix(msg.Text, "/") {
+			return m.handleSlashCommand(msg.Text)
+		}
+		return m.submitPrompt(msg.Text)
 
 	case restartMsg:
 		execRestart()
@@ -560,8 +548,7 @@ func waitForSubEvent(ch <-chan AgentSubEvent) tea.Cmd {
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 
-	// Handle commit confirmation mode first so Esc cancels the commit
-	// instead of quitting the TUI.
+	// Handle commit confirmation mode first.
 	if !m.running && m.commit != nil && m.commit.phase == "confirming" {
 		switch {
 		case key.Code == tea.KeyEnter:
@@ -575,7 +562,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Handle login flow (manual key entry or SSO/device waiting).
+	// Handle login flow.
 	if !m.running && m.login != nil {
 		switch {
 		case key.Code == tea.KeyEsc:
@@ -583,16 +570,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Code == 'c' && key.Mod == tea.ModCtrl:
 			return m.handleLoginCancel()
 		case key.Code == tea.KeyEnter && m.login.phase == "waiting":
-			apiKey := strings.TrimSpace(m.input)
+			apiKey := strings.TrimSpace(m.inputModel.Text)
 			if apiKey == "" {
 				return m, nil
 			}
-			m.input = ""
-			m.cursorPos = 0
+			m.inputModel.Clear()
 			return m.handleLoginSave(apiKey)
 		}
-		// For "waiting" phase, fall through to normal input handling for typing.
-		// For "sso"/"device" phases, block other keys while waiting.
 		if m.login.phase != "waiting" {
 			return m, nil
 		}
@@ -626,61 +610,26 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Esc / Ctrl+C: dismiss completion, cancel agent, or quit.
 	switch {
 	case key.Code == tea.KeyEsc:
-		// Esc dismisses completion/cycling or cancels running agent, never quits
-		if m.completionMode || m.cyclingIdx >= 0 {
-			m.completionMode = false
-			m.completionResult = nil
-			m.selectedIndex = 0
-			m.cyclingIdx = -1
-			m.input = ""
-			m.cursorPos = 0
+		if m.inputModel.InCompletionMode() {
+			m.inputModel.DismissCompletion()
 			return m, nil
 		}
 		if m.running {
-			m.cancel()
-			m.running = false
-			m.activeTool = ""
-			m.activeTools = nil
-			m.streaming = ""
-			m.thinking = ""
-			if m.agentCh != nil {
-				go func(ch chan agentMsg) {
-					for range ch {
-					}
-				}(m.agentCh)
-				m.agentCh = nil
-			}
+			m.cancelAgent()
 			return m, nil
 		}
 		return m, nil
 
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
-		// Ctrl+C: dismiss completion/cycling, cancel agent, or quit
-		if m.completionMode || m.cyclingIdx >= 0 {
-			m.completionMode = false
-			m.completionResult = nil
-			m.selectedIndex = 0
-			m.cyclingIdx = -1
-			m.input = ""
-			m.cursorPos = 0
+		if m.inputModel.InCompletionMode() {
+			m.inputModel.DismissCompletion()
 			return m, nil
 		}
 		if m.running {
-			m.cancel()
-			m.running = false
-			m.activeTool = ""
-			m.activeTools = nil
-			m.streaming = ""
-			m.thinking = ""
-			if m.agentCh != nil {
-				go func(ch chan agentMsg) {
-					for range ch {
-					}
-				}(m.agentCh)
-				m.agentCh = nil
-			}
+			m.cancelAgent()
 			return m, nil
 		}
 		m.quitting = true
@@ -694,255 +643,62 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Scroll keys stay in root model.
 	switch {
-	case key.Code == tea.KeyEnter:
-		// If in cycling mode, place command in input and dismiss menu
-		if m.cyclingIdx >= 0 {
-			// Input already set by cycling, just dismiss the menu
-			m.cyclingIdx = -1
-			m.cursorPos = len(m.input)
-			return m, nil
-		}
-		// If in completion mode with a selection, apply it
-		if m.completionMode && m.completionResult != nil && len(m.completionResult.Candidates) > 0 {
-			m.input = m.completionResult.ApplySelection(m.selectedIndex)
-			m.cursorPos = len(m.input)
-			m.completionMode = false
-			m.completionResult = nil
-			m.selectedIndex = 0
-			return m, nil
-		}
-		return m.submit()
-
-	case key.Code == tea.KeyTab && key.Mod == tea.ModShift:
-		// Shift+Tab cycles backwards through completions or commands
-		if m.completionMode && m.completionResult != nil && len(m.completionResult.Candidates) > 0 {
-			m.completionResult.CycleSelection(-1)
-			m.selectedIndex = m.completionResult.Selected
-		} else if m.input == "/" || m.cyclingIdx >= 0 {
-			// Cycle backwards through all available commands
-			allCmds := m.allCommandNames()
-			if len(allCmds) > 0 {
-				if m.cyclingIdx <= 0 {
-					m.cyclingIdx = len(allCmds) - 1
-				} else {
-					m.cyclingIdx--
-				}
-				m.input = allCmds[m.cyclingIdx]
-				m.cursorPos = len(m.input)
-			}
-		}
-
-	case key.Code == tea.KeyTab:
-		// Handle Tab for completion cycling and application
-		if m.completionMode && m.completionResult != nil && len(m.completionResult.Candidates) > 0 {
-			// Cycle through matches
-			m.completionResult.CycleSelection(1)
-			m.selectedIndex = m.completionResult.Selected
-		} else if m.input == "/" || m.cyclingIdx >= 0 {
-			// Cycle through all available commands (built-in + skills)
-			allCmds := m.allCommandNames()
-			if len(allCmds) > 0 {
-				m.cyclingIdx = (m.cyclingIdx + 1) % len(allCmds)
-				m.input = allCmds[m.cyclingIdx]
-				m.cursorPos = len(m.input)
-			}
-		} else {
-			// Try completion
-			m.completionResult = Complete(m.input, m.cfg.Skills, m.cfg.WorkDir)
-
-			if len(m.completionResult.Candidates) == 1 {
-				// Single match - apply as ghost text
-				m.input = m.completionResult.Candidates[0].Text
-				m.cursorPos = len(m.input)
-				m.completionResult = nil
-			} else if len(m.completionResult.Candidates) > 1 {
-				// Multiple matches - enter completion mode
-				m.completionMode = true
-				m.selectedIndex = 0
-				m.completionResult.Selected = 0
-			}
-		}
-
-	case key.Code == tea.KeyBackspace:
-		if m.cursorPos > 0 {
-			m.input = m.input[:m.cursorPos-1] + m.input[m.cursorPos:]
-			m.cursorPos--
-			// Reset cycling when input becomes empty
-			if m.input == "" {
-				m.cyclingIdx = -1
-			}
-		}
-
-	case key.Code == tea.KeyDelete:
-		if m.cursorPos < len(m.input) {
-			m.input = m.input[:m.cursorPos] + m.input[m.cursorPos+1:]
-		}
-
-	case key.Code == tea.KeyLeft:
-		if m.cursorPos > 0 {
-			m.cursorPos--
-		}
-
-	case key.Code == tea.KeyRight:
-		if m.cursorPos < len(m.input) {
-			m.cursorPos++
-		}
-
-	case key.Code == tea.KeyHome || (key.Code == 'a' && key.Mod == tea.ModCtrl):
-		m.cursorPos = 0
-
-	case key.Code == tea.KeyEnd || (key.Code == 'e' && key.Mod == tea.ModCtrl):
-		m.cursorPos = len(m.input)
-
-	case key.Code == tea.KeyUp:
-		if m.cyclingIdx >= 0 {
-			// Navigate command menu up
-			allCmds := m.allCommandNames()
-			if len(allCmds) > 0 {
-				if m.cyclingIdx <= 0 {
-					m.cyclingIdx = len(allCmds) - 1
-				} else {
-					m.cyclingIdx--
-				}
-				m.input = allCmds[m.cyclingIdx]
-				m.cursorPos = len(m.input)
-			}
-		} else if len(m.history) > 0 {
-			if m.historyIdx < 0 {
-				m.historyIdx = len(m.history) - 1
-			} else if m.historyIdx > 0 {
-				m.historyIdx--
-			}
-			m.input = m.history[m.historyIdx]
-			m.cursorPos = len(m.input)
-		}
-
-	case key.Code == tea.KeyDown:
-		if m.cyclingIdx >= 0 {
-			// Navigate command menu down
-			allCmds := m.allCommandNames()
-			if len(allCmds) > 0 {
-				m.cyclingIdx = (m.cyclingIdx + 1) % len(allCmds)
-				m.input = allCmds[m.cyclingIdx]
-				m.cursorPos = len(m.input)
-			}
-		} else if m.historyIdx >= 0 {
-			m.historyIdx++
-			if m.historyIdx >= len(m.history) {
-				m.historyIdx = -1
-				m.input = ""
-			} else {
-				m.input = m.history[m.historyIdx]
-			}
-			m.cursorPos = len(m.input)
-		}
-
 	case key.Code == tea.KeyPgUp:
 		m.scroll += 5
 		maxScroll := m.maxScroll()
 		if m.scroll > maxScroll {
 			m.scroll = maxScroll
 		}
+		return m, nil
 
 	case key.Code == tea.KeyPgDown:
 		m.scroll -= 5
 		if m.scroll < 0 {
 			m.scroll = 0
 		}
-
-	default:
-		if key.Text != "" && isUserInput(key.Text) {
-			// Show command menu when "/" is typed into empty input
-			if key.Text == "/" && m.input == "" {
-				m.reloadSkills()
-				m.input = "/"
-				m.cursorPos = 1
-				m.cyclingIdx = 0
-				allCmds := m.allCommandNames()
-				if len(allCmds) > 0 {
-					m.input = allCmds[0]
-					m.cursorPos = len(m.input)
-				}
-				return m, nil
-			}
-			m.input = m.input[:m.cursorPos] + key.Text + m.input[m.cursorPos:]
-			m.cursorPos += len(key.Text)
-			// Reset cycling when user starts typing
-			m.cyclingIdx = -1
-		}
-	}
-
-	// Update autocomplete suggestion using new completion engine.
-	if m.cursorPos == len(m.input) {
-		result := Complete(m.input, m.cfg.Skills, m.cfg.WorkDir)
-		if result != nil && len(result.Candidates) > 0 {
-			// Only show ghost text for single matches
-			if len(result.Candidates) == 1 {
-				m.completion = result.Candidates[0].Text
-			} else {
-				m.completion = ""
-			}
-		} else {
-			m.completion = ""
-		}
-	} else {
-		m.completion = ""
-	}
-
-	// Clear completion mode when user types (but not when Tab/Shift-Tab cycles).
-	if key.Code != tea.KeyTab {
-		m.completionMode = false
-		m.completionResult = nil
-		m.selectedIndex = 0
-	}
-
-	return m, nil
-}
-
-func (m *model) submit() (tea.Model, tea.Cmd) {
-	input := strings.TrimSpace(m.input)
-	if input == "" {
 		return m, nil
 	}
 
-	// Handle slash commands.
-	if strings.HasPrefix(input, "/") {
-		return m.handleSlashCommand(input)
-	}
+	// Delegate all other keys to InputModel.
+	cmd := m.inputModel.HandleKey(msg)
+	return m, cmd
+}
 
-	// Add to history (skip duplicates of the last entry).
-	if len(m.history) == 0 || m.history[len(m.history)-1] != input {
-		m.history = append(m.history, input)
-		appendHistory(input)
+// cancelAgent stops a running agent and drains its channel.
+func (m *model) cancelAgent() {
+	m.cancel()
+	m.running = false
+	m.activeTool = ""
+	m.activeTools = nil
+	m.streaming = ""
+	m.thinking = ""
+	if m.agentCh != nil {
+		go func(ch chan agentMsg) {
+			for range ch {
+			}
+		}(m.agentCh)
+		m.agentCh = nil
 	}
-	m.historyIdx = -1
+}
 
-	// Log user message.
+// submitPrompt sends a user prompt to the agent.
+func (m *model) submitPrompt(text string) (tea.Model, tea.Cmd) {
 	if m.cfg.Logger != nil {
-		m.cfg.Logger.UserMessage(input)
+		m.cfg.Logger.UserMessage(text)
 	}
 
-	// Add user message.
-	m.messages = append(m.messages, message{role: "user", content: input})
-
-	// Add empty assistant message for streaming.
+	m.messages = append(m.messages, message{role: "user", content: text})
 	m.messages = append(m.messages, message{role: "assistant", content: ""})
 	m.streaming = ""
 	m.thinking = ""
-
-	// Clear input.
-	prompt := input
-	m.input = ""
-	m.cursorPos = 0
 	m.running = true
 	m.scroll = 0
 
-	// Create agent channel and start goroutine.
 	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(prompt)
+	go m.runAgentLoop(text)
 
-	// Start listening for agent events.
 	return m, waitForAgent(m.agentCh)
 }
 
@@ -954,13 +710,6 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	if m.cfg.Logger != nil {
 		m.cfg.Logger.UserMessage(input)
 	}
-
-	// Add to history (skip duplicates).
-	if len(m.history) == 0 || m.history[len(m.history)-1] != input {
-		m.history = append(m.history, input)
-		appendHistory(input)
-	}
-	m.historyIdx = -1
 
 	switch cmd {
 	case "/help":
@@ -1018,8 +767,6 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleRestartCommand()
 	case "/exit", "/quit":
 		m.quitting = true
-		m.input = ""
-		m.cursorPos = 0
 		return m, tea.Quit
 	default:
 		// Check if it's a dynamic skill command.
@@ -1033,8 +780,6 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		})
 	}
 
-	m.input = ""
-	m.cursorPos = 0
 	return m, nil
 }
 
@@ -1465,7 +1210,7 @@ func (m *model) View() tea.View {
 	// Render components.
 	messagesView := m.renderMessages()
 	statusBar := m.renderStatusBar()
-	inputArea := m.renderInput()
+	inputArea := m.inputModel.View(m.running)
 
 	// Calculate available height for messages.
 	statusLines := strings.Count(statusBar, "\n") + 1
@@ -1734,113 +1479,6 @@ func drainTerminalResponses() {
 	}
 }
 
-// isUserInput returns true if the string looks like actual user-typed text
-// rather than a terminal response sequence leaked through as KeyPressMsg.
-// Terminal responses (OSC replies, CSI cursor reports, Kitty protocol) arrive
-// with ESC stripped, leaving patterns like "]11;rgb:..." or "[21;1R".
-func isUserInput(s string) bool {
-	// Reject non-printable characters.
-	for _, r := range s {
-		if !unicode.IsPrint(r) {
-			return false
-		}
-	}
-	// Reject known terminal response patterns (ESC already stripped).
-	// OSC responses: ]<digit>; ...
-	if len(s) > 2 && s[0] == ']' && s[1] >= '0' && s[1] <= '9' {
-		return false
-	}
-	// CSI responses: [<params><letter> e.g. "[21;1R" (cursor position report)
-	if len(s) > 2 && s[0] == '[' && (s[len(s)-1] >= 'A' && s[len(s)-1] <= 'Z') {
-		return false
-	}
-	// Kitty keyboard protocol responses containing ";rgb:" or ending in "u"
-	if strings.Contains(s, ";rgb:") || strings.Contains(s, "rgb:") {
-		return false
-	}
-	return true
-}
-
-// slashCommands is the list of available slash commands for autocomplete.
-var slashCommands = []string{
-	"/help",
-	"/clear",
-	"/model",
-	"/session",
-	"/context",
-	"/branch",
-	"/compact",
-	"/agents",
-	"/history",
-	"/login",
-	"/commit",
-	"/plan",
-	"/run",
-	"/skills",
-	"/ping",
-	"/rtk",
-	"/restart",
-	"/exit",
-	"/quit",
-}
-
-// completeSlashCommand returns the best matching slash command for the current input,
-// or "" if no match. Only completes when cursor is at end of input.
-func completeSlashCommand(input string) string {
-	if !strings.HasPrefix(input, "/") || len(input) < 2 {
-		return ""
-	}
-	prefix := strings.ToLower(input)
-	for _, cmd := range slashCommands {
-		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
-			return cmd
-		}
-	}
-	return ""
-}
-
-// matchingSlashCommands returns all slash commands matching the given prefix.
-func matchingSlashCommands(input string) []string {
-	prefix := strings.ToLower(input)
-	var matches []string
-	for _, cmd := range slashCommands {
-		if strings.HasPrefix(cmd, prefix) {
-			matches = append(matches, cmd)
-		}
-	}
-	return matches
-}
-
-// reloadSkills re-scans skill directories from disk and updates the cached list.
-func (m *model) reloadSkills() {
-	if len(m.cfg.SkillDirs) > 0 {
-		if fresh, err := extension.LoadSkills(m.cfg.SkillDirs...); err == nil {
-			m.cfg.Skills = fresh
-		}
-	}
-}
-
-// allCommandNames returns a sorted list of all command names: built-in + skills.
-func (m *model) allCommandNames() []string {
-	seen := make(map[string]bool)
-	var cmds []string
-	for _, cmd := range slashCommands {
-		if !seen[cmd] {
-			seen[cmd] = true
-			cmds = append(cmds, cmd)
-		}
-	}
-	for _, skill := range m.cfg.Skills {
-		name := "/" + skill.Name
-		if !seen[name] {
-			seen[name] = true
-			cmds = append(cmds, name)
-		}
-	}
-	sort.Strings(cmds)
-	return cmds
-}
-
 // showCommandList displays available slash commands as an assistant message.
 func (m *model) showCommandList() {
 	var b strings.Builder
@@ -1931,8 +1569,6 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 	case "list":
 		return m.handleSkillListCommand()
 	default:
-		m.input = ""
-		m.cursorPos = 0
 		m.messages = append(m.messages, message{
 			role:    "assistant",
 			content: "Usage: `/skills` — list  |  `/skills create <name>` — create  |  `/skills load` — reload",
@@ -1965,50 +1601,6 @@ func (m *model) handleRTKCommand(args []string) {
 			role:    "assistant",
 			content: "Usage: `/rtk` or `/rtk stats` — Show output compaction statistics",
 		})
-	}
-}
-
-// slashCommandDesc returns a short description for a slash command.
-func slashCommandDesc(cmd string) string {
-	switch cmd {
-	case "/help":
-		return "Show help"
-	case "/clear":
-		return "Clear conversation"
-	case "/model":
-		return "Show current model"
-	case "/session":
-		return "Show session info"
-	case "/context":
-		return "Show context usage"
-	case "/branch":
-		return "Manage branches"
-	case "/compact":
-		return "Compact context"
-	case "/agents":
-		return "Show subagents"
-	case "/rtk":
-		return "Output compaction stats"
-	case "/history":
-		return "Command history"
-	case "/login":
-		return "Configure API keys (codex, openai, anthropic, gemini)"
-	case "/commit":
-		return "Create commit from staged changes"
-	case "/plan":
-		return "Start PDD planning session"
-	case "/run":
-		return "Execute a spec with task agent"
-	case "/skills":
-		return "List skills (create, load)"
-	case "/ping":
-		return "Test LLM connectivity"
-	case "/restart":
-		return "Restart pi process"
-	case "/exit", "/quit":
-		return "Exit"
-	default:
-		return ""
 	}
 }
 
@@ -2514,96 +2106,6 @@ func detectBranch(workDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func (m *model) renderInput() string {
-	prefix := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
-		Bold(true).
-		Render("> ")
-
-	if m.running {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		return prefix + dim.Render("(waiting for response...)")
-	}
-
-	// Show input with cursor.
-	before := m.input[:m.cursorPos]
-	after := m.input[m.cursorPos:]
-	cursor := lipgloss.NewStyle().
-		Background(lipgloss.Color("252")).
-		Foreground(lipgloss.Color("0")).
-		Render(" ")
-	if m.cursorPos < len(m.input) {
-		cursor = lipgloss.NewStyle().
-			Background(lipgloss.Color("252")).
-			Foreground(lipgloss.Color("0")).
-			Render(string(m.input[m.cursorPos]))
-		after = m.input[m.cursorPos+1:]
-	}
-
-	// Show completion menu or command cycling menu.
-	if m.completionMode && m.completionResult != nil && len(m.completionResult.Candidates) > 0 {
-		// Render completion menu below the input line.
-		inputLine := prefix + before + cursor + after
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-
-		var menu strings.Builder
-		for i, c := range m.completionResult.Candidates {
-			if i == m.selectedIndex {
-				menu.WriteString(sel.Render("  > " + c.Text))
-			} else {
-				menu.WriteString(dim.Render("    " + c.Text))
-			}
-			if c.Description != "" {
-				menu.WriteString(dim.Render(" — " + c.Description))
-			}
-			menu.WriteString("\n")
-		}
-		return inputLine + "\n" + menu.String()
-	}
-
-	if m.cyclingIdx >= 0 {
-		// Render command cycling menu below the input line.
-		inputLine := prefix + before + cursor + after
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-
-		allCmds := m.allCommandNames()
-		var menu strings.Builder
-		for i, cmd := range allCmds {
-			desc := slashCommandDesc(cmd)
-			if desc == "" {
-				for _, skill := range m.cfg.Skills {
-					if "/"+skill.Name == cmd {
-						desc = skill.Description
-						break
-					}
-				}
-			}
-			if i == m.cyclingIdx {
-				menu.WriteString(sel.Render("  > " + cmd))
-			} else {
-				menu.WriteString(dim.Render("    " + cmd))
-			}
-			if desc != "" {
-				menu.WriteString(descStyle.Render(" — " + desc))
-			}
-			menu.WriteString("\n")
-		}
-		return inputLine + "\n" + menu.String()
-	}
-
-	// Show ghost autocomplete suggestion after cursor.
-	ghost := ""
-	if m.completion != "" && m.cursorPos == len(m.input) {
-		suffix := m.completion[len(m.input):]
-		ghost = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(suffix + " [tab]")
-	}
-
-	return prefix + before + cursor + after + ghost
 }
 
 func (m *model) maxScroll() int {

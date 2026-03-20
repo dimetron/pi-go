@@ -66,8 +66,8 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 	if m.running {
 		t.Error("model should not be running during override confirmation")
 	}
-	if m.input != "" {
-		t.Errorf("input should be cleared, got %q", m.input)
+	if m.inputModel.Text != "" {
+		t.Errorf("input should be cleared, got %q", m.inputModel.Text)
 	}
 }
 

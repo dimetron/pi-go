@@ -17,7 +17,6 @@ import (
 
 func TestHandleSlashCommandHelp(t *testing.T) {
 	m := &model{
-		input:    "/help",
 		messages: make([]message, 0),
 	}
 
@@ -33,14 +32,11 @@ func TestHandleSlashCommandHelp(t *testing.T) {
 	if mm.messages[0].role != "assistant" {
 		t.Errorf("expected assistant role, got %q", mm.messages[0].role)
 	}
-	if mm.input != "" {
-		t.Errorf("input should be cleared, got %q", mm.input)
-	}
 }
 
 func TestHandleSlashCommandClear(t *testing.T) {
 	m := &model{
-		input: "/clear",
+		inputModel: InputModel{Text: "/clear"},
 		messages: []message{
 			{role: "user", content: "hello"},
 			{role: "assistant", content: "hi"},
@@ -57,7 +53,7 @@ func TestHandleSlashCommandClear(t *testing.T) {
 
 func TestHandleSlashCommandModel(t *testing.T) {
 	m := &model{
-		input:    "/model",
+		inputModel: InputModel{Text: "/model"},
 		messages: make([]message, 0),
 		cfg:      Config{ModelName: "test-model"},
 	}
@@ -75,7 +71,7 @@ func TestHandleSlashCommandModel(t *testing.T) {
 
 func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	m := &model{
-		input:    "/model",
+		inputModel: InputModel{Text: "/model"},
 		messages: make([]message, 0),
 		cfg: Config{
 			ModelName:  "claude-sonnet-4-6",
@@ -111,7 +107,7 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 
 func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	m := &model{
-		input:    "/model",
+		inputModel: InputModel{Text: "/model"},
 		messages: make([]message, 0),
 		cfg: Config{
 			ModelName:  "gemini-2.5-flash",
@@ -134,7 +130,7 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 
 func TestHandleSlashCommandExit(t *testing.T) {
 	m := &model{
-		input:    "/exit",
+		inputModel: InputModel{Text: "/exit"},
 		messages: make([]message, 0),
 	}
 
@@ -151,7 +147,7 @@ func TestHandleSlashCommandExit(t *testing.T) {
 
 func TestHandleSlashCommandUnknown(t *testing.T) {
 	m := &model{
-		input:    "/unknown",
+		inputModel: InputModel{Text: "/unknown"},
 		messages: make([]message, 0),
 	}
 
@@ -256,47 +252,47 @@ func TestAgentToolResultMsg(t *testing.T) {
 
 func TestHistoryNavigation(t *testing.T) {
 	m := &model{
-		input:      "",
-		history:    []string{"first", "second", "third"},
-		historyIdx: -1,
-		cyclingIdx: -1,
-		messages:   make([]message, 0),
+		inputModel: InputModel{
+			History:    []string{"first", "second", "third"},
+			HistoryIdx: -1,
+			CyclingIdx: -1,
+		},
+		messages: make([]message, 0),
 	}
 
 	// Press Up → should get "third" (last entry)
 	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm := newM.(*model)
-	if mm.input != "third" {
-		t.Errorf("expected %q, got %q", "third", mm.input)
+	if mm.inputModel.Text != "third" {
+		t.Errorf("expected %q, got %q", "third", mm.inputModel.Text)
 	}
 
 	// Press Up again → should get "second"
 	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm = newM.(*model)
-	if mm.input != "second" {
-		t.Errorf("expected %q, got %q", "second", mm.input)
+	if mm.inputModel.Text != "second" {
+		t.Errorf("expected %q, got %q", "second", mm.inputModel.Text)
 	}
 
 	// Press Down → should get "third"
 	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	mm = newM.(*model)
-	if mm.input != "third" {
-		t.Errorf("expected %q, got %q", "third", mm.input)
+	if mm.inputModel.Text != "third" {
+		t.Errorf("expected %q, got %q", "third", mm.inputModel.Text)
 	}
 
 	// Press Down again → should clear input
 	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	mm = newM.(*model)
-	if mm.input != "" {
-		t.Errorf("expected empty input, got %q", mm.input)
+	if mm.inputModel.Text != "" {
+		t.Errorf("expected empty input, got %q", mm.inputModel.Text)
 	}
 }
 
 func TestTextInput(t *testing.T) {
 	m := &model{
-		input:     "",
-		cursorPos: 0,
-		messages:  make([]message, 0),
+		inputModel: InputModel{CyclingIdx: -1},
+		messages:   make([]message, 0),
 	}
 
 	// Type "hi"
@@ -305,18 +301,18 @@ func TestTextInput(t *testing.T) {
 	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Text: "i", Code: 'i'}))
 	mm = newM.(*model)
 
-	if mm.input != "hi" {
-		t.Errorf("expected %q, got %q", "hi", mm.input)
+	if mm.inputModel.Text != "hi" {
+		t.Errorf("expected %q, got %q", "hi", mm.inputModel.Text)
 	}
-	if mm.cursorPos != 2 {
-		t.Errorf("expected cursorPos 2, got %d", mm.cursorPos)
+	if mm.inputModel.CursorPos != 2 {
+		t.Errorf("expected cursorPos 2, got %d", mm.inputModel.CursorPos)
 	}
 
 	// Backspace
 	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 	mm = newM.(*model)
-	if mm.input != "h" {
-		t.Errorf("expected %q after backspace, got %q", "h", mm.input)
+	if mm.inputModel.Text != "h" {
+		t.Errorf("expected %q after backspace, got %q", "h", mm.inputModel.Text)
 	}
 }
 
@@ -367,7 +363,7 @@ func TestMaxScrollEmpty(t *testing.T) {
 
 func TestHandleSlashCommandSession(t *testing.T) {
 	m := &model{
-		input:    "/session",
+		inputModel: InputModel{Text: "/session"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionID: "test-session-123"},
 	}
@@ -385,7 +381,7 @@ func TestHandleSlashCommandSession(t *testing.T) {
 
 func TestHandleSlashCommandBranchNoService(t *testing.T) {
 	m := &model{
-		input:    "/branch experiment",
+		inputModel: InputModel{Text: "/branch experiment"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: nil},
 	}
@@ -404,7 +400,7 @@ func TestHandleSlashCommandBranchNoService(t *testing.T) {
 func TestHandleSlashCommandBranchUsage(t *testing.T) {
 	svc := setupTestSessionService(t)
 	m := &model{
-		input:    "/branch",
+		inputModel: InputModel{Text: "/branch"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: svc, SessionID: "s1"},
 	}
@@ -423,7 +419,7 @@ func TestHandleSlashCommandBranchUsage(t *testing.T) {
 func TestHandleSlashCommandBranchCreate(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
-		input:    "/branch experiment",
+		inputModel: InputModel{Text: "/branch experiment"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
@@ -442,7 +438,7 @@ func TestHandleSlashCommandBranchCreate(t *testing.T) {
 func TestHandleSlashCommandBranchList(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
-		input:    "/branch list",
+		inputModel: InputModel{Text: "/branch list"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
@@ -461,7 +457,7 @@ func TestHandleSlashCommandBranchList(t *testing.T) {
 func TestHandleSlashCommandBranchSwitchNoName(t *testing.T) {
 	svc, sessionID := setupTestSessionWithID(t)
 	m := &model{
-		input:    "/branch switch",
+		inputModel: InputModel{Text: "/branch switch"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: svc, SessionID: sessionID},
 	}
@@ -479,7 +475,7 @@ func TestHandleSlashCommandBranchSwitchNoName(t *testing.T) {
 
 func TestHandleSlashCommandCompactNoService(t *testing.T) {
 	m := &model{
-		input:    "/compact",
+		inputModel: InputModel{Text: "/compact"},
 		messages: make([]message, 0),
 		cfg:      Config{SessionService: nil},
 	}
@@ -497,7 +493,7 @@ func TestHandleSlashCommandCompactNoService(t *testing.T) {
 
 func TestHandleSlashCommandHelpContainsBranch(t *testing.T) {
 	m := &model{
-		input:    "/help",
+		inputModel: InputModel{Text: "/help"},
 		messages: make([]message, 0),
 	}
 
@@ -543,7 +539,7 @@ func TestSlashCommands_RunRegistered(t *testing.T) {
 
 func TestHelpText_IncludesPlanAndRun(t *testing.T) {
 	m := &model{
-		input:    "/help",
+		inputModel: InputModel{Text: "/help"},
 		messages: make([]message, 0),
 	}
 
@@ -660,7 +656,7 @@ func TestSlashCommandDesc_AllCommandsHaveDescs(t *testing.T) {
 
 func TestTabOnSlash_ShowsCommandList(t *testing.T) {
 	m := &model{
-		input:    "/",
+		inputModel: InputModel{Text: "/"},
 		messages: make([]message, 0),
 	}
 
@@ -706,7 +702,6 @@ func TestFormatTokenCount(t *testing.T) {
 func TestHandleHistoryCommand_Empty(t *testing.T) {
 	m := &model{
 		messages: make([]message, 0),
-		history:  nil,
 	}
 	m.handleHistoryCommand(nil)
 	if len(m.messages) != 1 {
@@ -719,8 +714,8 @@ func TestHandleHistoryCommand_Empty(t *testing.T) {
 
 func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		history:  []string{"/help", "/model", "/ping", "/clear"},
+		messages:   make([]message, 0),
+		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/clear"}},
 	}
 	m.handleHistoryCommand(nil)
 	if len(m.messages) != 1 {
@@ -734,8 +729,8 @@ func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 
 func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		history:  []string{"/help", "/model", "/ping", "/plan"},
+		messages:   make([]message, 0),
+		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/plan"}},
 	}
 	m.handleHistoryCommand([]string{"p"})
 	content := m.messages[0].content
@@ -749,8 +744,8 @@ func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 
 func TestHandleHistoryCommand_FilterNoMatch(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		history:  []string{"/help", "/model"},
+		messages:   make([]message, 0),
+		inputModel: InputModel{History: []string{"/help", "/model"}},
 	}
 	m.handleHistoryCommand([]string{"xyz"})
 	if !strings.Contains(m.messages[0].content, "No history matching") {
@@ -1012,8 +1007,8 @@ func TestHandleSlashCommand_Clear(t *testing.T) {
 
 func TestHandleSlashCommand_History(t *testing.T) {
 	m := &model{
-		messages: make([]message, 0),
-		history:  []string{"/help", "/model"},
+		messages:   make([]message, 0),
+		inputModel: InputModel{History: []string{"/help", "/model"}},
 	}
 	newM, _ := m.handleSlashCommand("/history")
 	mm := newM.(*model)

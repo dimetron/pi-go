@@ -32,8 +32,7 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	m.messages = append(m.messages, message{role: "assistant", content: ""})
 
 	// Clear input and start agent
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Clear()
 	m.streaming = ""
 	m.thinking = ""
 	m.running = true
@@ -54,8 +53,7 @@ type pendingSkillCreate struct {
 
 // handleSkillCreateCommand creates a new skill file directly (internal command).
 func (m *model) handleSkillCreateCommand(args []string) (tea.Model, tea.Cmd) {
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Clear()
 
 	if len(args) == 0 {
 		m.messages = append(m.messages, message{
@@ -159,7 +157,8 @@ description: %s
 		return m, nil
 	}
 
-	m.reloadSkills()
+	m.inputModel.ReloadSkills()
+	m.cfg.Skills = m.inputModel.Skills
 
 	// Start agent to interview the user and refine the skill
 	prompt := fmt.Sprintf(`A new skill file was just created at %s with a basic template.
@@ -202,8 +201,7 @@ After the user answers, update %s with:
 
 // handleSkillListCommand lists all currently loaded skills.
 func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Clear()
 
 	if len(m.cfg.Skills) == 0 {
 		m.messages = append(m.messages, message{
@@ -237,10 +235,10 @@ func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
 
 // handleSkillLoadCommand reloads skills from disk and reports what was found.
 func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
-	m.input = ""
-	m.cursorPos = 0
+	m.inputModel.Clear()
 
-	m.reloadSkills()
+	m.inputModel.ReloadSkills()
+	m.cfg.Skills = m.inputModel.Skills
 
 	if len(m.cfg.Skills) == 0 {
 		m.messages = append(m.messages, message{

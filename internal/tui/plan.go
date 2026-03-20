@@ -102,8 +102,7 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: "Usage: `/plan <rough idea text>`\n\nExample: `/plan add rate limiting to API`",
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 
@@ -126,16 +125,13 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 				content: fmt.Sprintf("Spec directory already exists: `%s`\n\nPress **Enter** to override, **Esc** to cancel.",
 					existingDir),
 			})
-			m.input = ""
-			m.cursorPos = 0
 			return m, nil
 		}
 		m.messages = append(m.messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error: %v", err),
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 
@@ -194,8 +190,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 			role:    "assistant",
 			content: fmt.Sprintf("Error loading PDD SOP: %v", err),
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 
@@ -215,8 +210,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 			role:    "assistant",
 			content: "Error: no agent configured for /plan",
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
@@ -224,8 +218,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 			role:    "assistant",
 			content: fmt.Sprintf("Error configuring agent: %v", err),
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 
@@ -236,8 +229,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 			role:    "assistant",
 			content: fmt.Sprintf("Error creating session: %v", err),
 		})
-		m.input = ""
-		m.cursorPos = 0
+		m.inputModel.Clear()
 		return m, nil
 	}
 	m.cfg.SessionID = newSessionID
@@ -257,9 +249,6 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	m.streaming = ""
 	m.thinking = ""
 
-	// Clear input and start the agent.
-	m.input = ""
-	m.cursorPos = 0
 	m.running = true
 
 	m.agentCh = make(chan agentMsg, 64)
