@@ -259,7 +259,7 @@ func TestAgentToolResultMsg(t *testing.T) {
 func TestHistoryNavigation(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{
-			History:    []string{"first", "second", "third"},
+			History:    []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}},
 			HistoryIdx: -1,
 			CyclingIdx: -1,
 		},
@@ -721,7 +721,7 @@ func TestHandleHistoryCommand_Empty(t *testing.T) {
 func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/clear"}},
+		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}, {Text: "/ping"}, {Text: "/clear"}}},
 	}
 	m.handleHistoryCommand(nil)
 	if len(m.chatModel.Messages) != 1 {
@@ -736,7 +736,7 @@ func TestHandleHistoryCommand_WithEntries(t *testing.T) {
 func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{History: []string{"/help", "/model", "/ping", "/plan"}},
+		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}, {Text: "/ping"}, {Text: "/plan"}}},
 	}
 	m.handleHistoryCommand([]string{"p"})
 	content := m.chatModel.Messages[0].content
@@ -751,7 +751,7 @@ func TestHandleHistoryCommand_WithFilter(t *testing.T) {
 func TestHandleHistoryCommand_FilterNoMatch(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{History: []string{"/help", "/model"}},
+		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}}},
 	}
 	m.handleHistoryCommand([]string{"xyz"})
 	if !strings.Contains(m.chatModel.Messages[0].content, "No history matching") {
@@ -1021,7 +1021,7 @@ func TestHandleSlashCommand_Clear(t *testing.T) {
 func TestHandleSlashCommand_History(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{History: []string{"/help", "/model"}},
+		inputModel: InputModel{History: []HistoryEntry{{Text: "/help"}, {Text: "/model"}}},
 	}
 	newM, _ := m.handleSlashCommand("/history")
 	mm := newM.(*model)

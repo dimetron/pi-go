@@ -71,10 +71,10 @@ func Run(ctx context.Context, cfg Config) error {
 		glamour.WithEmoji(),
 	)
 
-	// Load persistent command history from ~/.pi-go/history.
+	// Load persistent command history from ~/.pi-go/history.jsonl.
 	history := loadHistory()
 	if history == nil {
-		history = make([]string, 0)
+		history = make([]HistoryEntry, 0)
 	}
 
 	// Initialize theme manager.

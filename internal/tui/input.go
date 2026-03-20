@@ -21,7 +21,7 @@ type InputSubmitMsg struct {
 type InputModel struct {
 	Text       string
 	CursorPos  int
-	History    []string
+	History    []HistoryEntry
 	HistoryIdx int
 
 	// Ghost autocomplete suggestion.
@@ -48,7 +48,7 @@ type InputModel struct {
 }
 
 // NewInputModel creates an InputModel with initial state.
-func NewInputModel(history []string, skills []extension.Skill, skillDirs []string, workDir string) InputModel {
+func NewInputModel(history []HistoryEntry, skills []extension.Skill, skillDirs []string, workDir string) InputModel {
 	return InputModel{
 		History:    history,
 		HistoryIdx: -1,
@@ -98,9 +98,10 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		mentions := extractMentions(text)
-		if len(im.History) == 0 || im.History[len(im.History)-1] != text {
-			im.History = append(im.History, text)
-			appendHistory(text)
+		entry := HistoryEntry{Text: text, Mentions: mentions}
+		if len(im.History) == 0 || im.History[len(im.History)-1].Text != text {
+			im.History = append(im.History, entry)
+			appendHistory(entry)
 		}
 		im.HistoryIdx = -1
 		im.Text = ""
@@ -217,8 +218,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			} else if im.HistoryIdx > 0 {
 				im.HistoryIdx--
 			}
-			im.Text = im.History[im.HistoryIdx]
-			im.CursorPos = len(im.Text)
+			im.restoreHistoryEntry(im.HistoryIdx)
 		}
 
 	case key.Code == tea.KeyDown:
@@ -234,10 +234,11 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			if im.HistoryIdx >= len(im.History) {
 				im.HistoryIdx = -1
 				im.Text = ""
+				im.CursorPos = 0
+				im.dismissMention()
 			} else {
-				im.Text = im.History[im.HistoryIdx]
+				im.restoreHistoryEntry(im.HistoryIdx)
 			}
-			im.CursorPos = len(im.Text)
 		}
 
 	case key.Code == tea.KeyEscape:
@@ -446,6 +447,13 @@ func (im *InputModel) DismissCompletion() {
 	im.dismissMention()
 	im.Text = ""
 	im.CursorPos = 0
+}
+
+// restoreHistoryEntry restores full input state from a history entry.
+func (im *InputModel) restoreHistoryEntry(idx int) {
+	entry := im.History[idx]
+	im.Text = entry.Text
+	im.CursorPos = len(im.Text)
 }
 
 // dismissMention exits mention completion mode.

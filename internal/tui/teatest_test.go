@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +25,7 @@ func newTestModel(t *testing.T) *model {
 		},
 		ctx:        ctx,
 		cancel:     cancel,
-		inputModel: NewInputModel(make([]string, 0), nil, nil, ""),
+		inputModel: NewInputModel(make([]HistoryEntry, 0), nil, nil, ""),
 		chatModel: ChatModel{Messages: make([]message, 0)},
 		width:      80,
 		height:     24,
@@ -640,7 +642,7 @@ func TestHandleKey_CtrlA_CtrlE(t *testing.T) {
 
 func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
-	m.inputModel.History = []string{"first", "second", "third"}
+	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
 	m.handleKey(makeKey(tea.KeyUp))
 	if m.inputModel.Text != "third" {
 		t.Errorf("expected 'third', got %q", m.inputModel.Text)
@@ -1243,10 +1245,97 @@ func TestLoadHistory(t *testing.T) {
 	// May return nil or empty on first run / CI
 	if h != nil {
 		for _, entry := range h {
-			if entry == "" {
+			if entry.Text == "" {
 				t.Error("empty history entry")
 			}
 		}
+	}
+}
+
+func TestHistoryEntry_WithMentions(t *testing.T) {
+	m := newTestModel(t)
+	m.inputModel.History = []HistoryEntry{
+		{Text: "fix @main.go and @utils.go", Mentions: []string{"main.go", "utils.go"}},
+		{Text: "plain prompt"},
+	}
+
+	// Navigate up to most recent entry.
+	m.handleKey(makeKey(tea.KeyUp))
+	if m.inputModel.Text != "plain prompt" {
+		t.Errorf("expected 'plain prompt', got %q", m.inputModel.Text)
+	}
+
+	// Navigate up to entry with mentions.
+	m.handleKey(makeKey(tea.KeyUp))
+	if m.inputModel.Text != "fix @main.go and @utils.go" {
+		t.Errorf("expected mention text, got %q", m.inputModel.Text)
+	}
+}
+
+func TestHistoryJSON_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/history.jsonl"
+
+	entries := []HistoryEntry{
+		{Text: "hello"},
+		{Text: "fix @main.go", Mentions: []string{"main.go"}},
+	}
+
+	// Write entries.
+	for _, e := range entries {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(f).Encode(e); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+
+	// Read back.
+	loaded := loadHistoryJSON(path)
+	if len(loaded) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(loaded))
+	}
+	if loaded[0].Text != "hello" {
+		t.Errorf("expected 'hello', got %q", loaded[0].Text)
+	}
+	if loaded[1].Text != "fix @main.go" || len(loaded[1].Mentions) != 1 || loaded[1].Mentions[0] != "main.go" {
+		t.Errorf("expected mention entry, got %+v", loaded[1])
+	}
+}
+
+func TestHistoryPlain_Migration(t *testing.T) {
+	dir := t.TempDir()
+	plainPath := dir + "/history"
+
+	// Write plain text history.
+	if err := os.WriteFile(plainPath, []byte("/help\n/model\nhello world\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := loadHistoryPlain(plainPath)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(lines))
+	}
+	if lines[0] != "/help" || lines[2] != "hello world" {
+		t.Errorf("unexpected lines: %v", lines)
+	}
+}
+
+func TestHistoryDisplay_WithMentions(t *testing.T) {
+	m := newTestModel(t)
+	m.inputModel.History = []HistoryEntry{
+		{Text: "fix @main.go", Mentions: []string{"main.go"}},
+	}
+	m.handleSlashCommand("/history")
+	if len(m.chatModel.Messages) == 0 {
+		t.Fatal("expected history output")
+	}
+	content := m.chatModel.Messages[0].content
+	if !strings.Contains(content, "main.go") {
+		t.Errorf("expected mention in history display, got %q", content)
 	}
 }
 
@@ -1390,7 +1479,7 @@ func TestWaitForAgent_ReceivesMsg(t *testing.T) {
 
 func TestSlashCommand_History(t *testing.T) {
 	m := newTestModel(t)
-	m.inputModel.History = []string{"/help", "/clear", "hello world"}
+	m.inputModel.History = []HistoryEntry{{Text: "/help"}, {Text: "/clear"}, {Text: "hello world"}}
 	m.handleSlashCommand("/history")
 	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected history output")
@@ -1399,7 +1488,7 @@ func TestSlashCommand_History(t *testing.T) {
 
 func TestSlashCommand_HistoryWithQuery(t *testing.T) {
 	m := newTestModel(t)
-	m.inputModel.History = []string{"/help", "/clear", "hello world"}
+	m.inputModel.History = []HistoryEntry{{Text: "/help"}, {Text: "/clear"}, {Text: "hello world"}}
 	m.handleSlashCommand("/history help")
 	if len(m.chatModel.Messages) == 0 {
 		t.Fatal("expected filtered history output")
@@ -1473,7 +1562,7 @@ func TestSubmit_AddsToHistory(t *testing.T) {
 	m.testSubmit()
 	found := false
 	for _, h := range m.inputModel.History {
-		if h == "/help" {
+		if h.Text == "/help" {
 			found = true
 		}
 	}
@@ -1535,12 +1624,12 @@ func TestSubmit_RegularText(t *testing.T) {
 
 func TestSubmit_SkipsDuplicateHistory(t *testing.T) {
 	m := newTestModel(t)
-	m.inputModel.History = []string{"hello"}
+	m.inputModel.History = []HistoryEntry{{Text: "hello"}}
 	m.inputModel.Text = "hello"
 	m.testSubmit()
 	count := 0
 	for _, h := range m.inputModel.History {
-		if h == "hello" {
+		if h.Text == "hello" {
 			count++
 		}
 	}
