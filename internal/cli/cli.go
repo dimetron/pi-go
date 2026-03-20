@@ -167,12 +167,16 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	prompt := strings.Join(args, " ")
 
-	// Build sandbox rooted at current working directory.
+	// Build sandbox rooted at current working directory (or repo root for subagents).
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
-	sandbox, err := tools.NewSandbox(cwd)
+	sandboxRoot := os.Getenv("PI_SANDBOX_ROOT")
+	if sandboxRoot == "" {
+		sandboxRoot = cwd
+	}
+	sandbox, err := tools.NewSandbox(sandboxRoot)
 	if err != nil {
 		return fmt.Errorf("creating sandbox: %w", err)
 	}

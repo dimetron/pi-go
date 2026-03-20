@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/tool"
 )
@@ -13,8 +14,8 @@ type EditInput struct {
 	FilePath string `json:"file_path"`
 	// The exact string to find and replace.
 	OldString string `json:"old_string"`
-	// The replacement string.
-	NewString string `json:"new_string"`
+	// The replacement string. Optional — empty means delete old_string.
+	NewString string `json:"new_string,omitempty"`
 	// If true, replace all occurrences. Default: replace first occurrence only.
 	ReplaceAll bool `json:"replace_all,omitempty"`
 }
@@ -30,8 +31,9 @@ type EditOutput struct {
 func newEditTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("edit", `Edit a file by replacing an exact string match.
 
-Required: file_path (absolute path), old_string (text to find), new_string (replacement).
-Optional: replace_all (bool, default false). old_string must be unique unless replace_all is true.`, func(_ tool.Context, input EditInput) (EditOutput, error) {
+Required: file_path (absolute path), old_string (text to find).
+Optional: new_string (replacement, default "" = delete old_string), replace_all (bool, default false).
+old_string must be unique unless replace_all is true.`, func(_ tool.Context, input EditInput) (EditOutput, error) {
 		return editHandler(sb, input)
 	})
 }
@@ -51,47 +53,63 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *fileContentCache)
 		return EditOutput{}, fmt.Errorf("old_string and new_string must be different")
 	}
 
-	data, err := sb.ReadFile(input.FilePath)
-	if err != nil {
-		return EditOutput{}, fmt.Errorf("reading file: %w", err)
-	}
+	var content string
+	var data []byte
 
-	content := string(data)
-	count := strings.Count(content, input.OldString)
+	// Retry loop for handling concurrent modifications
+	for attempt := 0; attempt < maxEditRetries; attempt++ {
+		// Invalidate cache before reading (fresh read each attempt)
+		if cache != nil {
+			cache.Invalidate(input.FilePath)
+		}
 
-	// If not found, retry once (file may have been modified concurrently)
-	if count == 0 {
-		data2, err2 := reReadFile(sb, input.FilePath)
-		if err2 == nil {
-			content = string(data2)
-			count = strings.Count(content, input.OldString)
+		var err error
+		data, err = sb.ReadFile(input.FilePath)
+		if err != nil {
+			return EditOutput{}, fmt.Errorf("reading file: %w", err)
+		}
+
+		content = string(data)
+		count := strings.Count(content, input.OldString)
+
+		if count > 0 {
+			// Found the target string, proceed with edit
+			return performEdit(sb, cache, input, content, count)
+		}
+
+		// Not found - this might be a race condition with concurrent modification
+		// Retry with a small delay
+		if attempt < maxEditRetries-1 {
+			time.Sleep(time.Duration(editRetryDelay*(attempt+1)) * time.Millisecond)
 		}
 	}
 
-	if count == 0 {
-		return EditOutput{}, buildEditNotFoundError(input, content)
-	}
+	// All retries exhausted - build helpful error message
+	return EditOutput{}, buildEditNotFoundError(input, content)
+}
+
+// performEdit does the actual string replacement and file write.
+func performEdit(sb *Sandbox, cache *fileContentCache, input EditInput, content string, count int) (EditOutput, error) {
 	if count > 1 && !input.ReplaceAll {
 		// Find line numbers for all occurrences to help the caller
 		lines := strings.Split(content, "\n")
 		var locations []string
-		offset := 0
 		for lineNum, line := range lines {
 			idx := strings.Index(line, input.OldString)
 			if idx >= 0 {
 				locations = append(locations, fmt.Sprintf("line %d (col %d)", lineNum+1, idx+1))
 			}
-			offset += len(line) + 1
 		}
 		return EditOutput{}, fmt.Errorf("old_string found %d times in file; set replace_all=true to replace all occurrences, or provide more context to make the match unique\nLocations: %s", count, strings.Join(locations, ", "))
 	}
 
 	var result string
+	replacements := count
 	if input.ReplaceAll {
 		result = strings.ReplaceAll(content, input.OldString, input.NewString)
 	} else {
 		result = strings.Replace(content, input.OldString, input.NewString, 1)
-		count = 1
+		replacements = 1
 	}
 
 	if err := sb.WriteFile(input.FilePath, []byte(result), 0o644); err != nil {
@@ -105,14 +123,15 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *fileContentCache)
 
 	return EditOutput{
 		Path:         input.FilePath,
-		Replacements: count,
+		Replacements: replacements,
 	}, nil
 }
 
 // reReadFile re-reads a file from the sandbox (used for retry on edit miss).
-func reReadFile(sb *Sandbox, path string) ([]byte, error) {
-	return sb.ReadFile(path)
-}
+const (
+	maxEditRetries    = 3
+	editRetryDelay    = 100 // milliseconds between retries
+)
 
 // buildEditNotFoundError returns an enhanced error with preview and suggestions.
 func buildEditNotFoundError(input EditInput, content string) error {

@@ -48,9 +48,35 @@ func lenientSchema[T any]() *jsonschema.Schema {
 	if err != nil {
 		return nil // fall back to auto-inference
 	}
-	// Replace the strict "additionalProperties: false" with an open schema.
-	schema.AdditionalProperties = &jsonschema.Schema{}
+	relaxSchema(schema)
 	return schema
+}
+
+// relaxSchema recursively sets AdditionalProperties to an open schema on all
+// nested object schemas, so LLMs sending extra fields won't trigger validation errors.
+func relaxSchema(s *jsonschema.Schema) {
+	if s == nil {
+		return
+	}
+	// Open up additional properties on any object schema.
+	if s.Type == "object" || len(s.Properties) > 0 {
+		s.AdditionalProperties = &jsonschema.Schema{}
+	}
+	// Recurse into properties.
+	for _, prop := range s.Properties {
+		relaxSchema(prop)
+	}
+	// Recurse into array items.
+	if s.Items != nil {
+		relaxSchema(s.Items)
+	}
+	// Recurse into definitions (used by $ref).
+	for _, def := range s.Definitions {
+		relaxSchema(def)
+	}
+	for _, def := range s.Defs {
+		relaxSchema(def)
+	}
 }
 
 // collectCoerceProps inspects a schema and returns sets of property names
@@ -200,28 +226,48 @@ func (c *coercingTool) aliasArgs(m map[string]any) {
 // coerceArgs converts string values to their expected types based on schema info.
 func (c *coercingTool) coerceArgs(m map[string]any) {
 	for k, v := range m {
-		s, ok := v.(string)
-		if !ok {
+		// Handle string → expected type conversion
+		if s, ok := v.(string); ok {
+			if c.intProps[k] {
+				if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+					m[k] = float64(i) // JSON numbers are float64 in Go maps
+				} else if f, err := strconv.ParseFloat(s, 64); err == nil {
+					m[k] = f
+				}
+			} else if c.boolProps[k] {
+				if b, err := strconv.ParseBool(s); err == nil {
+					m[k] = b
+				}
+			} else if c.jsonProps[k] {
+				// LLMs sometimes stringify JSON arrays/objects. Parse them back.
+				s = strings.TrimSpace(s)
+				if (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
+					(strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
+					var parsed any
+					if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+						m[k] = parsed
+					}
+				}
+			}
 			continue
 		}
+
+		// Handle number → integer conversion (LLMs sometimes send integers as floats)
 		if c.intProps[k] {
-			if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-				m[k] = float64(i) // JSON numbers are float64 in Go maps
-			} else if f, err := strconv.ParseFloat(s, 64); err == nil {
-				m[k] = f
-			}
-		} else if c.boolProps[k] {
-			if b, err := strconv.ParseBool(s); err == nil {
-				m[k] = b
-			}
-		} else if c.jsonProps[k] {
-			// LLMs sometimes stringify JSON arrays/objects. Parse them back.
-			s = strings.TrimSpace(s)
-			if (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
-				(strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
-				var parsed any
-				if err := json.Unmarshal([]byte(s), &parsed); err == nil {
-					m[k] = parsed
+			switch n := v.(type) {
+			case float64:
+				// Already float64 from JSON, keep as-is (this is correct)
+			case float32:
+				m[k] = float64(n)
+			case int:
+				m[k] = float64(n)
+			case int64:
+				m[k] = float64(n)
+			case int32:
+				m[k] = float64(n)
+			case json.Number:
+				if f, err := n.Float64(); err == nil {
+					m[k] = f
 				}
 			}
 		}

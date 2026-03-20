@@ -147,6 +147,13 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		workDir = wtPath
 	}
 
+	// Pass repo root to subagent so its sandbox covers the full repo,
+	// not just the worktree directory.
+	env := input.Env
+	if o.worktree != nil {
+		env = append(append([]string(nil), env...), "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
+	}
+
 	// Spawn the process.
 	proc, err := o.spawner.Spawn(ctx, SpawnOpts{
 		AgentID:     agentID,
@@ -155,7 +162,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		Prompt:      input.Prompt,
 		Instruction: agent.Instruction,
 		Timeout:     agent.Timeout,
-		Env:         input.Env,
+		Env:         env,
 	})
 	if err != nil {
 		if useWorktree && o.worktree != nil {

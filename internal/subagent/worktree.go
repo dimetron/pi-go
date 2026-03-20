@@ -31,6 +31,11 @@ func NewWorktreeManager(repoRoot string) *WorktreeManager {
 	}
 }
 
+// RepoRoot returns the git repository root path.
+func (m *WorktreeManager) RepoRoot() string {
+	return m.repoRoot
+}
+
 // shortID returns a short suffix from an agent ID for use in paths and branch names.
 // Agent IDs have the form "type-nanotimestamp", so we take the last 12 characters
 // to get the unique timestamp portion.

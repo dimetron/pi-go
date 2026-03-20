@@ -24,8 +24,8 @@ type LSPFileInput struct {
 // LSPPositionInput is shared input for tools that take a file + position.
 type LSPPositionInput struct {
 	File   string `json:"file"`
-	Line   int    `json:"line"`
-	Column int    `json:"column"`
+	Line   int    `json:"line,omitempty"`
+	Column int    `json:"column,omitempty"`
 }
 
 // LSPDiagnosticsOutput is the output of the lsp-diagnostics tool.
