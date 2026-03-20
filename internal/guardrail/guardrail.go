@@ -203,8 +203,8 @@ func (t *Tracker) save() {
 		return
 	}
 
-	os.MkdirAll(filepath.Dir(t.filePath), 0700)
-	os.WriteFile(t.filePath, data, 0600)
+	_ = os.MkdirAll(filepath.Dir(t.filePath), 0700)
+	_ = os.WriteFile(t.filePath, data, 0600)
 }
 
 // LimitExceededError is returned when the daily token limit is reached.

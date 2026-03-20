@@ -176,6 +176,68 @@ func TestEditHandler(t *testing.T) {
 			t.Error("expected error for missing string")
 		}
 	})
+
+	t.Run("non-unique error includes line numbers", func(t *testing.T) {
+		path := filepath.Join(dir, "multiline.txt")
+		os.WriteFile(path, []byte("line one\nfoo\nline three\nfoo\nline five\n"), 0o644)
+
+		_, err := editHandler(sb, EditInput{
+			FilePath:  path,
+			OldString: "foo",
+			NewString: "bar",
+		})
+		if err == nil {
+			t.Fatal("expected error for non-unique match")
+		}
+		errStr := err.Error()
+		// Error should mention count
+		if !strings.Contains(errStr, "2 times") && !strings.Contains(errStr, "found 2") {
+			t.Errorf("error should mention occurrence count: %s", errStr)
+		}
+		// Error should mention replace_all
+		if !strings.Contains(errStr, "replace_all=true") {
+			t.Errorf("error should suggest replace_all=true: %s", errStr)
+		}
+		// Error should include line number hints
+		if !strings.Contains(errStr, "line") && !strings.Contains(errStr, "2") {
+			t.Errorf("error should hint at line numbers: %s", errStr)
+		}
+	})
+
+	t.Run("missing file error is descriptive", func(t *testing.T) {
+		_, err := editHandler(sb, EditInput{
+			FilePath:  filepath.Join(dir, "nonexistent.txt"),
+			OldString: "foo",
+			NewString: "bar",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing file")
+		}
+		errStr := err.Error()
+		if !strings.Contains(errStr, "nonexistent.txt") {
+			t.Errorf("error should mention the file path: %s", errStr)
+		}
+	})
+}
+
+func TestStringsSimilarity(t *testing.T) {
+	tests := []struct {
+		a, b   string
+		minSim float64
+	}{
+		{"hello", "hello", 1.0},
+		{"hello", "hello!", 0.8},
+		{"foo", "bar", 0},
+		{"func main()", "func main() {", 0.8},
+		{"", "", 0},
+		{"abc", "", 0},
+	}
+	for _, tt := range tests {
+		sim := stringsSimilarity(tt.a, tt.b)
+		if sim < tt.minSim {
+			t.Errorf("stringsSimilarity(%q, %q) = %v, want >= %v", tt.a, tt.b, sim, tt.minSim)
+		}
+	}
 }
 
 func TestBashHandler(t *testing.T) {

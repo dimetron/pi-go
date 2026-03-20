@@ -86,7 +86,7 @@ func TestCreateBranchDuplicateFails(t *testing.T) {
 	sessionID := resp.Session.ID()
 	addTestEvents(t, svc, resp.Session, 3)
 
-	svc.CreateBranch(sessionID, "test-app", "test-user", "feat")
+	_ = svc.CreateBranch(sessionID, "test-app", "test-user", "feat")
 	err := svc.CreateBranch(sessionID, "test-app", "test-user", "feat")
 	if err == nil {
 		t.Error("expected error creating duplicate branch")
@@ -107,7 +107,7 @@ func TestSwitchBranch(t *testing.T) {
 	addTestEvents(t, svc, resp.Session, 5)
 
 	// Create branch at event 4 (head).
-	svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
+	_ = svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
 
 	// Add 2 more events on main (events 5, 6).
 	for i := 5; i < 7; i++ {
@@ -117,7 +117,7 @@ func TestSwitchBranch(t *testing.T) {
 			Author:    "user",
 		}
 		event.Content = genai.NewContentFromText(fmt.Sprintf("main message %d", i), genai.RoleUser)
-		svc.AppendEvent(ctx, resp.Session, event)
+		_ = svc.AppendEvent(ctx, resp.Session, event)
 	}
 
 	// Main should now have 7 events.
@@ -158,10 +158,10 @@ func TestSwitchBranchBackToMain(t *testing.T) {
 	sessionID := resp.Session.ID()
 
 	addTestEvents(t, svc, resp.Session, 5)
-	svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
+	_ = svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
 
 	// Switch to experiment.
-	svc.SwitchBranch(sessionID, "test-app", "test-user", "experiment")
+	_ = svc.SwitchBranch(sessionID, "test-app", "test-user", "experiment")
 	// Switch back to main.
 	err := svc.SwitchBranch(sessionID, "test-app", "test-user", "main")
 	if err != nil {
@@ -247,7 +247,7 @@ func TestBranchPersistence(t *testing.T) {
 		SessionID: "branch-persist",
 	})
 	addTestEvents(t, svc1, resp.Session, 5)
-	svc1.CreateBranch("branch-persist", "test-app", "test-user", "feature")
+	_ = svc1.CreateBranch("branch-persist", "test-app", "test-user", "feature")
 
 	// New service instance (simulates restart).
 	svc2, _ := NewFileService(dir)
@@ -277,10 +277,10 @@ func TestBranchAddEventsAndSwitch(t *testing.T) {
 	addTestEvents(t, svc, resp.Session, 3)
 
 	// Create experiment branch (forks at head=2).
-	svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
+	_ = svc.CreateBranch(sessionID, "test-app", "test-user", "experiment")
 
 	// Switch to experiment and add 2 more events.
-	svc.SwitchBranch(sessionID, "test-app", "test-user", "experiment")
+	_ = svc.SwitchBranch(sessionID, "test-app", "test-user", "experiment")
 
 	// Need to get fresh session ref after switch.
 	getResp, _ := svc.Get(ctx, &session.GetRequest{
@@ -294,7 +294,7 @@ func TestBranchAddEventsAndSwitch(t *testing.T) {
 			Author:    "user",
 		}
 		event.Content = genai.NewContentFromText(fmt.Sprintf("experiment msg %d", i), genai.RoleUser)
-		svc.AppendEvent(ctx, getResp.Session, event)
+		_ = svc.AppendEvent(ctx, getResp.Session, event)
 	}
 
 	// Experiment should have 3 (forked) + 2 (new) = 5 events.
@@ -306,7 +306,7 @@ func TestBranchAddEventsAndSwitch(t *testing.T) {
 	}
 
 	// Switch back to main — should still have 3 events.
-	svc.SwitchBranch(sessionID, "test-app", "test-user", "main")
+	_ = svc.SwitchBranch(sessionID, "test-app", "test-user", "main")
 	getResp, _ = svc.Get(ctx, &session.GetRequest{
 		AppName: "test-app", UserID: "test-user", SessionID: sessionID,
 	})

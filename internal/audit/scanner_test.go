@@ -229,13 +229,13 @@ func TestScanSkillDirs(t *testing.T) {
 
 	// Clean skill.
 	cleanDir := filepath.Join(dir, "clean-skill")
-	os.MkdirAll(cleanDir, 0o755)
-	os.WriteFile(filepath.Join(cleanDir, "SKILL.md"), []byte("Clean skill"), 0o644)
+	_ = os.MkdirAll(cleanDir, 0o755)
+	_ = os.WriteFile(filepath.Join(cleanDir, "SKILL.md"), []byte("Clean skill"), 0o644)
 
 	// Dirty skill with BiDi override.
 	dirtyDir := filepath.Join(dir, "dirty-skill")
-	os.MkdirAll(dirtyDir, 0o755)
-	os.WriteFile(filepath.Join(dirtyDir, "SKILL.md"), []byte("Dirty \u202E skill"), 0o644)
+	_ = os.MkdirAll(dirtyDir, 0o755)
+	_ = os.WriteFile(filepath.Join(dirtyDir, "SKILL.md"), []byte("Dirty \u202E skill"), 0o644)
 
 	result, err := ScanSkillDirs(dir)
 	if err != nil {

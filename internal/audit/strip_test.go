@@ -76,7 +76,7 @@ func TestStripFileBak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")
 	original := "Hello \u202E World"
-	os.WriteFile(path, []byte(original), 0o644)
+	_ = os.WriteFile(path, []byte(original), 0o644)
 
 	if err := StripFile(path); err != nil {
 		t.Fatal(err)

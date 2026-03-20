@@ -95,8 +95,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", s.socketPath, err)
 	}
-	defer s.listener.Close()
-	defer os.Remove(s.socketPath)
+	defer func() { _ = s.listener.Close() }()
+	defer func() { _ = os.Remove(s.socketPath) }()
 
 	fmt.Fprintf(os.Stderr, "pi-go: RPC server listening on %s\n", s.socketPath)
 
@@ -106,7 +106,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		s.listener.Close()
+		_ = s.listener.Close()
 	}()
 
 	for {
@@ -133,7 +133,7 @@ func (s *Server) Run(ctx context.Context) error {
 // handleConn reads JSON-RPC requests from a connection and dispatches them.
 // Each connection can send multiple requests (newline-delimited JSON).
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	dec := json.NewDecoder(conn)
 	enc := json.NewEncoder(conn)

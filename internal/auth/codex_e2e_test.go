@@ -188,7 +188,7 @@ func TestCodexLoginE2E_BrowserPKCE(t *testing.T) {
 	if os.Getenv("OPENAI_API_KEY") != "codex-browser-token-xyz789" {
 		t.Error("expected OPENAI_API_KEY set in environment")
 	}
-	os.Unsetenv("OPENAI_API_KEY")
+	_ = os.Unsetenv("OPENAI_API_KEY")
 }
 
 // TestCodexLoginE2E_BrowserPKCE_OAuthError verifies handling when OpenAI

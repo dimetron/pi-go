@@ -67,7 +67,7 @@ func TestServerPromptRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialing: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send prompt request.
 	enc := json.NewEncoder(conn)
@@ -140,7 +140,7 @@ func TestServerSessionCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialing: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(Request{
@@ -188,7 +188,7 @@ func TestServerMethodNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialing: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(Request{
@@ -231,7 +231,7 @@ func TestServerPromptMissingText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialing: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(Request{
@@ -280,7 +280,7 @@ func TestServerConcurrentSessions(t *testing.T) {
 				results <- fmt.Sprintf("client %d dial error: %v", id, err)
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 
 			enc := json.NewEncoder(conn)
 			_ = enc.Encode(Request{
@@ -387,7 +387,7 @@ func TestServerPromptWithSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialing: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)

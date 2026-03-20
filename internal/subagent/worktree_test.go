@@ -83,7 +83,7 @@ func TestWorktree_BranchNaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	defer mgr.Cleanup("myagent-1234abcd-extra")
+	defer func() { _ = mgr.Cleanup("myagent-1234abcd-extra") }()
 
 	// Verify branch exists with correct name (shortID uses last 12 chars).
 	expectedBranch := "pi-agent-34abcd-extra"
@@ -109,7 +109,7 @@ func TestWorktree_DuplicateCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	defer mgr.Cleanup("dup-agent")
+	defer func() { _ = mgr.Cleanup("dup-agent") }()
 
 	_, err = mgr.Create("dup-agent")
 	if err == nil {
@@ -128,7 +128,7 @@ func TestWorktree_MergeBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	defer mgr.Cleanup("merge-test")
+	defer func() { _ = mgr.Cleanup("merge-test") }()
 
 	// Make a change in the worktree.
 	testFile := filepath.Join(wtPath, "new-file.txt")
@@ -188,7 +188,7 @@ func TestWorktree_MergeConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	defer mgr.Cleanup("conflict-test")
+	defer func() { _ = mgr.Cleanup("conflict-test") }()
 
 	// Modify file in worktree.
 	wtFile := filepath.Join(wtPath, "conflict.txt")
@@ -233,7 +233,7 @@ func TestWorktree_MergeConflict(t *testing.T) {
 	// Abort the merge so cleanup works.
 	cmd := exec.Command("git", "merge", "--abort")
 	cmd.Dir = repo
-	cmd.CombinedOutput()
+	_ = cmd.Run()
 }
 
 func TestWorktree_CleanupAll(t *testing.T) {
@@ -284,7 +284,7 @@ func TestWorktree_PathFor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	defer mgr.Cleanup("pathfor-test")
+	defer func() { _ = mgr.Cleanup("pathfor-test") }()
 
 	if got := mgr.PathFor("pathfor-test"); got != path {
 		t.Errorf("PathFor = %q, want %q", got, path)

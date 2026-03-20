@@ -232,7 +232,7 @@ func DeviceFlow(ctx context.Context, prov Provider) (*DeviceCodeResponse, error)
 	if err != nil {
 		return nil, fmt.Errorf("device code request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -350,7 +350,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string
 	ch <- codeResult{code: code}
 
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<!DOCTYPE html><html><body>
+	_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body>
 <h2>✓ Authentication successful</h2>
 <p>You can close this tab and return to pi.</p>
 <script>window.close()</script>
@@ -376,7 +376,7 @@ func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifie
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -407,7 +407,7 @@ func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -456,7 +456,7 @@ func SaveKey(envVar, apiKey string) error {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
-	os.Setenv(envVar, apiKey)
+	_ = os.Setenv(envVar, apiKey)
 	return nil
 }
 

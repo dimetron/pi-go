@@ -67,7 +67,7 @@ func TestWrapModel_TracksUsage(t *testing.T) {
 
 func TestWrapModel_BlocksWhenLimitExceeded(t *testing.T) {
 	tracker := NewWithPath(100, "")
-	tracker.Add(50, 50) // exactly 100 — at limit
+	_ = tracker.Add(50, 50) // exactly 100 — at limit
 
 	llm := &mockLLM{name: "test", inputTokens: 10, outputTokens: 5}
 	wrapped := WrapModel(llm, tracker)

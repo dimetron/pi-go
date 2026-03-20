@@ -282,6 +282,7 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 			branch.Head = len(sess.events) - 1
 			bs.Branches[bs.Active] = branch
 			saveBranches(sessionDir, bs) // best-effort
+			_ = saveBranches(sessionDir, bs)
 		}
 	}
 

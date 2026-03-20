@@ -58,9 +58,9 @@ func TestAdd_TracksUsage(t *testing.T) {
 
 func TestAdd_MultipleRequests(t *testing.T) {
 	tr := NewWithPath(0, "")
-	tr.Add(100, 50)
-	tr.Add(200, 100)
-	tr.Add(300, 150)
+	_ = tr.Add(100, 50)
+	_ = tr.Add(200, 100)
+	_ = tr.Add(300, 150)
 
 	u := tr.Current()
 	if u.InputTokens != 600 {
@@ -185,8 +185,8 @@ func TestPersistence_SaveAndLoad(t *testing.T) {
 
 	// Create tracker and add usage.
 	tr1 := NewWithPath(100_000, path)
-	tr1.Add(500, 200)
-	tr1.Add(300, 100)
+	_ = tr1.Add(500, 200)
+	_ = tr1.Add(300, 100)
 
 	// Create new tracker from same file.
 	tr2 := NewWithPath(100_000, path)

@@ -182,7 +182,7 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(TokenResponse{
+		_ = json.NewEncoder(w).Encode(TokenResponse{
 			AccessToken: "sk-test-token-123",
 			TokenType:   "bearer",
 		})
@@ -225,7 +225,7 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()()
 
 		// Follow redirect to callback.
 		if resp.StatusCode == http.StatusFound {
@@ -263,7 +263,7 @@ func TestDeviceFlow_Request(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(DeviceCodeResponse{
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
 			DeviceCode:      "device-test-code",
 			UserCode:        "ABCD-1234",
 			VerificationURI: "https://example.com/device",
@@ -299,10 +299,10 @@ func TestPollDeviceToken_Success(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if attempt < 3 {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+			_ = _ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 			return
 		}
-		json.NewEncoder(w).Encode(TokenResponse{
+		_ = json.NewEncoder(w).Encode(TokenResponse{
 			AccessToken: "sk-device-token",
 			TokenType:   "bearer",
 		})
@@ -338,7 +338,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 	}))
 	defer server.Close()
 
@@ -383,8 +383,8 @@ func TestFindProvider(t *testing.T) {
 func TestSaveKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpDir)
+	defer _ = os.Setenv("HOME", origHome)
 
 	if err := SaveKey("TEST_KEY", "test-value-123"); err != nil {
 		t.Fatalf("SaveKey error: %v", err)
@@ -401,7 +401,7 @@ func TestSaveKey(t *testing.T) {
 	if os.Getenv("TEST_KEY") != "test-value-123" {
 		t.Error("expected env var to be set")
 	}
-	os.Unsetenv("TEST_KEY")
+	_ = os.Unsetenv("TEST_KEY")
 }
 
 func TestUpdateEnvVar(t *testing.T) {
@@ -605,7 +605,7 @@ func TestPKCEFlow_BrowserOpenError(t *testing.T) {
 func TestExchangeCode_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"server_error"}`))
+		_, _ = w.Write([]byte(`{"error":"server_error"}`))
 	}))
 	defer srv.Close()
 
@@ -622,7 +622,7 @@ func TestExchangeCode_ServerError(t *testing.T) {
 func TestExchangeCode_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`not json`))
+		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
 
@@ -650,7 +650,7 @@ func TestExchangeCode_CancelledContext(t *testing.T) {
 func TestRequestDeviceToken_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`not json`))
+		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
 
@@ -667,7 +667,7 @@ func TestRequestDeviceToken_InvalidJSON(t *testing.T) {
 func TestRequestDeviceToken_NonBadRequestError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`server error`))
+		_, _ = w.Write([]byte(`server error`))
 	}))
 	defer srv.Close()
 
@@ -684,7 +684,7 @@ func TestRequestDeviceToken_NonBadRequestError(t *testing.T) {
 func TestRequestDeviceToken_BadRequestNonJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`not json`))
+		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
 
@@ -712,7 +712,7 @@ func TestRequestDeviceToken_CancelledContext(t *testing.T) {
 func TestDeviceFlow_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`forbidden`))
+		_, _ = w.Write([]byte(`forbidden`))
 	}))
 	defer srv.Close()
 
@@ -735,7 +735,7 @@ func TestDeviceFlow_ServerError(t *testing.T) {
 func TestDeviceFlow_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`not json`))
+		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
 
@@ -759,7 +759,7 @@ func TestDeviceFlow_DefaultInterval(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// Return interval=0, should default to 5.
-		json.NewEncoder(w).Encode(DeviceCodeResponse{
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
 			DeviceCode:      "test-code",
 			UserCode:        "TEST",
 			VerificationURI: "https://example.com",
@@ -808,10 +808,10 @@ func TestPollDeviceToken_SlowDown(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if attempt == 1 {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "slow_down"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "slow_down"})
 			return
 		}
-		json.NewEncoder(w).Encode(TokenResponse{AccessToken: "token"})
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "token"})
 	}))
 	defer srv.Close()
 
@@ -843,13 +843,13 @@ func TestPollDeviceToken_SlowDown(t *testing.T) {
 func TestSaveKey_ExistingFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpDir)
+	defer _ = os.Setenv("HOME", origHome)
 
 	piDir := filepath.Join(tmpDir, ".pi-go")
-	os.MkdirAll(piDir, 0700)
+	_ = os.MkdirAll(piDir, 0700)
 	// Write existing content.
-	os.WriteFile(filepath.Join(piDir, ".env"), []byte("EXISTING=value\n"), 0600)
+	_ = os.WriteFile(filepath.Join(piDir, ".env"), []byte("EXISTING=value\n"), 0600)
 
 	if err := SaveKey("NEW_KEY", "new-value"); err != nil {
 		t.Fatalf("SaveKey error: %v", err)
@@ -993,7 +993,7 @@ func TestPollDeviceToken_FatalError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "access_denied"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "access_denied"})
 	}))
 	defer srv.Close()
 
@@ -1026,9 +1026,9 @@ func TestSaveKey_MkdirAllError(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	// Point HOME to a file (not directory) to make MkdirAll fail.
 	tmpFile := filepath.Join(t.TempDir(), "fakefile")
-	os.WriteFile(tmpFile, []byte("x"), 0600)
+	_ = os.WriteFile(tmpFile, []byte("x"), 0600)
 	os.Setenv("HOME", tmpFile) // .pi-go will be tmpFile/.pi-go which can't be created
-	defer os.Setenv("HOME", origHome)
+	defer _ = os.Setenv("HOME", origHome)
 
 	err := SaveKey("TEST_KEY", "test")
 	if err == nil {
@@ -1042,12 +1042,12 @@ func TestSaveKey_MkdirAllError(t *testing.T) {
 func TestSaveKey_WriteFileError(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	_ = os.Setenv("HOME", tmpDir)
+	defer _ = os.Setenv("HOME", origHome)
 
 	// Create .pi-go/.env as a directory to make WriteFile fail.
 	envDir := filepath.Join(tmpDir, ".pi-go", ".env")
-	os.MkdirAll(envDir, 0700)
+	_ = os.MkdirAll(envDir, 0700)
 
 	err := SaveKey("TEST_KEY", "test")
 	if err == nil {
