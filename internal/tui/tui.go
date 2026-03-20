@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	stdlog "log"
+	"os"
 	"os/exec"
 	"runtime/debug"
 	"sort"
@@ -272,6 +273,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	p := tea.NewProgram(&m, tea.WithContext(ctx))
 	_, err := p.Run()
+	drainTerminalResponses()
 	return err
 }
 
@@ -1708,6 +1710,28 @@ func formatToolResult(data map[string]any) string {
 		return s[:117] + "..."
 	}
 	return s
+}
+
+// drainTerminalResponses discards any pending terminal response sequences
+// (e.g. cursor position reports, DECRQM replies) that may arrive after the
+// TUI exits. Without this, late responses leak into the shell prompt as garbage
+// like "[14;1R[?2026;2$y".
+func drainTerminalResponses() {
+	f := os.Stdin
+	// Switch stdin to non-blocking so we can read without waiting.
+	if err := setNonBlock(f); err != nil {
+		return
+	}
+	defer setBlock(f) //nolint:errcheck
+
+	buf := make([]byte, 256)
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		n, _ := f.Read(buf)
+		if n == 0 {
+			break
+		}
+	}
 }
 
 // isUserInput returns true if the string looks like actual user-typed text

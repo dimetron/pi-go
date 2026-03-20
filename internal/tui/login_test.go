@@ -723,12 +723,17 @@ func TestLoginStartDeviceFlow_CmdError(t *testing.T) {
 
 func TestOpenBrowserDefault_ExecutesCommand(t *testing.T) {
 	// Verify openBrowserDefault constructs the right command for the current platform.
-	// We call the real function — it will try to open a URL.
-	// Use a harmless URL; the command starts async so it won't block.
-	err := openBrowserDefault("https://example.com")
-	// On darwin/linux/windows this should succeed (starts process).
+	// We swap the function with a mock that records the URL instead of opening a browser.
+	mb := withMockBrowser(t)
+	err := openBrowser("https://test.invalid/browser-check")
 	if err != nil {
-		t.Logf("openBrowserDefault returned error (may be expected in CI): %v", err)
+		t.Fatalf("mock should not error: %v", err)
+	}
+	if mb.called() != 1 {
+		t.Errorf("expected 1 call, got %d", mb.called())
+	}
+	if mb.lastURL() != "https://test.invalid/browser-check" {
+		t.Errorf("expected test URL, got %q", mb.lastURL())
 	}
 }
 

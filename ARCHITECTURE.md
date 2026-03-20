@@ -422,3 +422,61 @@ graph TD
 **Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/branch`, `/compact`, `/commit`, `/agents`, `/exit`
 
 **Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), Enter/Esc (commit confirm/cancel)
+
+## Memory System (Planned)
+
+Persistent memory compression system inspired by [claude-mem](https://github.com/thedotmack/claude-mem), implemented natively in Go.
+
+```mermaid
+graph TD
+    subgraph Capture["Observation Capture"]
+        after_cb["AfterToolCallback"] -->|"enqueue"| queue["Buffered Channel"]
+        queue --> bg["Background Goroutine"]
+    end
+
+    subgraph Compress["AI Compression"]
+        bg --> spawner["Subagent Spawner"]
+        spawner --> compressor["memory-compressor<br/>(smol model)"]
+        compressor -->|"structured observation"| db
+    end
+
+    subgraph Store["SQLite Storage (~/.pi-go/memory/)"]
+        db["claude-mem.db<br/>WAL mode"]
+        db --- sessions_t["sessions"]
+        db --- obs_t["observations<br/>+ FTS5"]
+        db --- sum_t["session_summaries<br/>+ FTS5"]
+    end
+
+    subgraph Retrieve["Context & Search"]
+        start["SessionStart"] -->|"inject context"| instruction["System Instruction"]
+        search_tool["mem-search tool"] --> db
+        timeline_tool["mem-timeline tool"] --> db
+        get_obs_tool["mem-get tool"] --> db
+    end
+
+    style Capture fill:#1a2a1a,color:#fff
+    style Compress fill:#2a1a2a,color:#fff
+    style Store fill:#1a1a2a,color:#fff
+    style Retrieve fill:#1a2a3a,color:#fff
+```
+
+**Core Components:**
+- **Observation Capture**: `AfterToolCallback` enqueues tool usage to a buffered channel (non-blocking)
+- **AI Compression**: Background goroutine spawns `memory-compressor` subagent (smol model) to extract structured observations
+- **SQLite Storage**: `modernc.org/sqlite` (pure Go, no CGO) with FTS5 full-text search
+- **Context Injection**: Recent observations injected into system instruction at session start
+- **Search Tools**: Native `mem-search`, `mem-timeline`, `mem-get` tools registered in `CoreTools()`
+
+**Data Model:**
+| Table | Key Fields |
+|-------|------------|
+| sessions | id, session_id, project, started_at, status |
+| observations | id, session_id, project, title, type, text, source_files, created_at |
+| session_summaries | id, session_id, project, request, investigated, learned, completed, next_steps |
+
+**3-Layer Search Workflow:**
+1. `mem-search(query)` — compact index with IDs (~50-100 tokens/result)
+2. `mem-timeline(anchor=ID)` — chronological context around results
+3. `mem-get(ids=[...])` — full details for filtered IDs (~500-1000 tokens/result)
+
+See `specs/claude-mem/` for the full design specification.

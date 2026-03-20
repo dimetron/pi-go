@@ -4,6 +4,8 @@
 
 pi-go is a Go coding agent built on Google ADK Go (`google.golang.org/adk`) with multi-provider LLM support (Anthropic, OpenAI, Gemini).
 
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for full architecture documentation including diagrams, dependency graph, and the planned memory system.
+
 - **Single module**: `github.com/dimetron/pi-go`, Go 1.26+
 - **Internal packages**: all non-CLI code lives under `internal/`
 - **Single binary**: `go build ./cmd/pi` produces one executable
