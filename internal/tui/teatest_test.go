@@ -105,21 +105,21 @@ func TestUpdate_AgentDoneMsg(t *testing.T) {
 func TestUpdate_AgentToolCallMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.Update(agentToolCallMsg{name: "read", args: map[string]any{"file": "foo.go"}})
-	if m.activeTool != "read" {
-		t.Errorf("expected activeTool 'read', got %q", m.activeTool)
+	if m.statusModel.ActiveTool != "read" {
+		t.Errorf("expected activeTool 'read', got %q", m.statusModel.ActiveTool)
 	}
 }
 
 func TestUpdate_AgentToolResultMsg(t *testing.T) {
 	m := newTestModel(t)
 	m.agentCh = make(chan agentMsg, 1)
-	m.activeTool = "read"
-	m.activeTools = map[string]time.Time{"read": time.Now()}
+	m.statusModel.ActiveTool = "read"
+	m.statusModel.ActiveTools = map[string]time.Time{"read": time.Now()}
 	// Tool call creates the message; tool result fills it in.
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "tool", tool: "read", content: ""})
 	m.Update(agentToolResultMsg{name: "read", content: `{"text":"hello"}`})
-	if m.activeTool != "" {
-		t.Errorf("expected activeTool cleared, got %q", m.activeTool)
+	if m.statusModel.ActiveTool != "" {
+		t.Errorf("expected activeTool cleared, got %q", m.statusModel.ActiveTool)
 	}
 	if m.chatModel.Messages[0].content == "" {
 		t.Error("expected tool message content to be filled")
@@ -741,7 +741,7 @@ func TestRenderStatusBar_WithTokenTracker(t *testing.T) {
 		percentUsed: 80.0,
 		totalUsed:   80000,
 	}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -755,7 +755,7 @@ func TestRenderStatusBar_WithTokenTrackerOverLimit(t *testing.T) {
 		percentUsed: 105.0,
 		totalUsed:   105000,
 	}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -767,7 +767,7 @@ func TestRenderStatusBar_WithTokenTrackerNoLimit(t *testing.T) {
 		limit:     0,
 		totalUsed: 5000,
 	}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -775,8 +775,8 @@ func TestRenderStatusBar_WithTokenTrackerNoLimit(t *testing.T) {
 
 func TestRenderStatusBar_WithGitBranch(t *testing.T) {
 	m := newTestModel(t)
-	m.gitBranch = "feature-x"
-	out := m.renderStatusBar()
+	m.statusModel.GitBranch = "feature-x"
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -784,9 +784,9 @@ func TestRenderStatusBar_WithGitBranch(t *testing.T) {
 
 func TestRenderStatusBar_WithActiveTool(t *testing.T) {
 	m := newTestModel(t)
-	m.activeTool = "read"
-	m.toolStart = time.Now()
-	out := m.renderStatusBar()
+	m.statusModel.ActiveTool = "read"
+	m.statusModel.ToolStart = time.Now()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -794,11 +794,11 @@ func TestRenderStatusBar_WithActiveTool(t *testing.T) {
 
 func TestRenderStatusBar_WithMultipleActiveTools(t *testing.T) {
 	m := newTestModel(t)
-	m.activeTools = map[string]time.Time{
+	m.statusModel.ActiveTools = map[string]time.Time{
 		"read": time.Now(),
 		"grep": time.Now(),
 	}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -807,7 +807,7 @@ func TestRenderStatusBar_WithMultipleActiveTools(t *testing.T) {
 func TestRenderStatusBar_Running(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -816,7 +816,7 @@ func TestRenderStatusBar_Running(t *testing.T) {
 func TestRenderStatusBar_WithTraceLog(t *testing.T) {
 	m := newTestModel(t)
 	m.chatModel.TraceLog = []traceEntry{{kind: "llm", summary: "test"}}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -829,7 +829,7 @@ func TestRenderStatusBar_LargeContext(t *testing.T) {
 		role:    "assistant",
 		content: strings.Repeat("x", 8000), // ~2k tokens
 	})
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -843,7 +843,7 @@ func TestRenderStatusBar_WithRunState(t *testing.T) {
 		retries:    1,
 		maxRetries: 3,
 	}
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}
@@ -1339,7 +1339,7 @@ func TestRenderStatusBar_WithOrchestrator(t *testing.T) {
 	m := newTestModel(t)
 	// Can't easily mock Orchestrator since it's an interface we don't control
 	// but we can test without it
-	out := m.renderStatusBar()
+	out := m.statusModel.Render(m.statusRenderInput())
 	if out == "" {
 		t.Error("expected non-empty status bar")
 	}

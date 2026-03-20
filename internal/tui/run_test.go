@@ -356,15 +356,15 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	// Process tool_call event.
 	ev3 := runAgentEventMsg{event: subagent.Event{Type: "tool_call", Content: "bash"}}
 	m.handleRunAgentEvent(ev3)
-	if m.activeTool != "bash" {
-		t.Errorf("activeTool = %q, want %q", m.activeTool, "bash")
+	if m.statusModel.ActiveTool != "bash" {
+		t.Errorf("activeTool = %q, want %q", m.statusModel.ActiveTool, "bash")
 	}
 
 	// Process tool_result event.
 	ev4 := runAgentEventMsg{event: subagent.Event{Type: "tool_result", Content: `{"exit_code": 0, "stdout": "ok"}`}}
 	m.handleRunAgentEvent(ev4)
-	if m.activeTool != "" {
-		t.Errorf("activeTool should be cleared after result, got %q", m.activeTool)
+	if m.statusModel.ActiveTool != "" {
+		t.Errorf("activeTool should be cleared after result, got %q", m.statusModel.ActiveTool)
 	}
 
 	// Process done — with no gates defined, it transitions to merging.

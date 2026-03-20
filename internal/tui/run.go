@@ -209,8 +209,8 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "tool_call":
-		m.activeTool = ev.Content
-		m.toolStart = time.Now()
+		m.statusModel.ActiveTool = ev.Content
+		m.statusModel.ToolStart = time.Now()
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_call", summary: fmt.Sprintf(">>> %s", ev.Content),
 		})
@@ -219,7 +219,7 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 		})
 
 	case "tool_result":
-		m.activeTool = ""
+		m.statusModel.ActiveTool = ""
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_result", summary: "<<< result",
 			detail: ev.Content,
@@ -259,7 +259,7 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 // It transitions to gate validation if gates are defined, or directly to merge.
 func (m *model) handleRunAgentDone() (tea.Model, tea.Cmd) {
 	m.running = false
-	m.activeTool = ""
+	m.statusModel.ActiveTool = ""
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 

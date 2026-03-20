@@ -235,24 +235,24 @@ func TestAgentToolCallMsg(t *testing.T) {
 	newM, _ := m.Update(agentToolCallMsg{name: "read"})
 	mm := newM.(*model)
 
-	if mm.activeTool != "read" {
-		t.Errorf("expected activeTool %q, got %q", "read", mm.activeTool)
+	if mm.statusModel.ActiveTool != "read" {
+		t.Errorf("expected activeTool %q, got %q", "read", mm.statusModel.ActiveTool)
 	}
 }
 
 func TestAgentToolResultMsg(t *testing.T) {
 	m := &model{
-		running:    true,
-		activeTool: "read",
-		chatModel: ChatModel{Messages: make([]message, 0)},
-		agentCh:    make(chan agentMsg, 1),
+		running:     true,
+		statusModel: StatusModel{ActiveTool: "read"},
+		chatModel:   ChatModel{Messages: make([]message, 0)},
+		agentCh:     make(chan agentMsg, 1),
 	}
 
 	newM, _ := m.Update(agentToolResultMsg{name: "read"})
 	mm := newM.(*model)
 
-	if mm.activeTool != "" {
-		t.Errorf("expected activeTool to be empty, got %q", mm.activeTool)
+	if mm.statusModel.ActiveTool != "" {
+		t.Errorf("expected activeTool to be empty, got %q", mm.statusModel.ActiveTool)
 	}
 }
 
@@ -801,10 +801,11 @@ func TestHandleCommitDone_Error(t *testing.T) {
 
 func TestRenderStatusBar_WithProvider(t *testing.T) {
 	m := &model{
-		cfg:   Config{ProviderName: "ollama", ModelName: "qwen3.5:latest"},
-		width: 120,
+		cfg:         Config{ProviderName: "ollama", ModelName: "qwen3.5:latest"},
+		width:       120,
+		statusModel: StatusModel{Width: 120},
 	}
-	bar := m.renderStatusBar()
+	bar := m.statusModel.Render(m.statusRenderInput())
 	if !strings.Contains(bar, "ollama") {
 		t.Errorf("status bar should contain provider, got %q", bar)
 	}
@@ -815,10 +816,11 @@ func TestRenderStatusBar_WithProvider(t *testing.T) {
 
 func TestRenderStatusBar_WithoutProvider(t *testing.T) {
 	m := &model{
-		cfg:   Config{ModelName: "gpt-4o"},
-		width: 120,
+		cfg:         Config{ModelName: "gpt-4o"},
+		width:       120,
+		statusModel: StatusModel{Width: 120},
 	}
-	bar := m.renderStatusBar()
+	bar := m.statusModel.Render(m.statusRenderInput())
 	if !strings.Contains(bar, "gpt-4o") {
 		t.Errorf("status bar should contain model, got %q", bar)
 	}
@@ -826,15 +828,16 @@ func TestRenderStatusBar_WithoutProvider(t *testing.T) {
 
 func TestRenderStatusBar_ContextEstimate(t *testing.T) {
 	m := &model{
-		cfg:   Config{ModelName: "test"},
-		width: 120,
+		cfg:         Config{ModelName: "test"},
+		width:       120,
+		statusModel: StatusModel{Width: 120},
 		chatModel: ChatModel{
 			Messages: []message{
 				{content: strings.Repeat("a", 4000)}, // ~1k tokens
 			},
 		},
 	}
-	bar := m.renderStatusBar()
+	bar := m.statusModel.Render(m.statusRenderInput())
 	if !strings.Contains(bar, "ctx:") {
 		t.Errorf("status bar should show context estimate, got %q", bar)
 	}

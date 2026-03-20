@@ -1076,10 +1076,12 @@ func TestAgentDoneMsg_ClearsRunning(t *testing.T) {
 			Streaming: "text",
 			Thinking:  "thought",
 		},
-		running:     true,
-		activeTool:  "read",
-		activeTools: map[string]time.Time{"read": {}},
-		agentCh:     make(chan agentMsg, 64),
+		running: true,
+		statusModel: StatusModel{
+			ActiveTool:  "read",
+			ActiveTools: map[string]time.Time{"read": {}},
+		},
+		agentCh: make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentDoneMsg{})
@@ -1087,10 +1089,10 @@ func TestAgentDoneMsg_ClearsRunning(t *testing.T) {
 	if mm.running {
 		t.Error("expected running=false after done")
 	}
-	if mm.activeTool != "" {
-		t.Errorf("expected empty activeTool, got %q", mm.activeTool)
+	if mm.statusModel.ActiveTool != "" {
+		t.Errorf("expected empty activeTool, got %q", mm.statusModel.ActiveTool)
 	}
-	if mm.activeTools != nil {
+	if mm.statusModel.ActiveTools != nil {
 		t.Error("expected nil activeTools")
 	}
 	if mm.chatModel.Streaming != "" {
@@ -1131,18 +1133,20 @@ func TestAgentToolCallMsg_SetsActiveTool(t *testing.T) {
 		args: map[string]any{"file_path": "/tmp/file.go"},
 	})
 	mm := newM.(*model)
-	if mm.activeTool != "read" {
-		t.Errorf("expected activeTool 'read', got %q", mm.activeTool)
+	if mm.statusModel.ActiveTool != "read" {
+		t.Errorf("expected activeTool 'read', got %q", mm.statusModel.ActiveTool)
 	}
 }
 
 func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 	m := &model{
-		chatModel:   ChatModel{Messages: []message{{role: "tool", tool: "read", content: ""}}},
-		running:     true,
-		activeTool:  "read",
-		activeTools: map[string]time.Time{"read": {}},
-		agentCh:     make(chan agentMsg, 64),
+		chatModel: ChatModel{Messages: []message{{role: "tool", tool: "read", content: ""}}},
+		running:   true,
+		statusModel: StatusModel{
+			ActiveTool:  "read",
+			ActiveTools: map[string]time.Time{"read": {}},
+		},
+		agentCh: make(chan agentMsg, 64),
 	}
 
 	newM, _ := m.Update(agentToolResultMsg{
@@ -1150,8 +1154,8 @@ func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 		content: `{"content":"hello","total_lines":1}`,
 	})
 	mm := newM.(*model)
-	if mm.activeTool != "" {
-		t.Errorf("expected empty activeTool, got %q", mm.activeTool)
+	if mm.statusModel.ActiveTool != "" {
+		t.Errorf("expected empty activeTool, got %q", mm.statusModel.ActiveTool)
 	}
 	if mm.chatModel.Messages[0].content == "" {
 		t.Error("expected message content to be updated")

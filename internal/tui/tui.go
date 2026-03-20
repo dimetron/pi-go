@@ -24,7 +24,6 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	llmmodel "google.golang.org/adk/model"
 )
 
@@ -156,12 +155,12 @@ type model struct {
 	// Chat sub-model (messages, scroll, rendering).
 	chatModel ChatModel
 
+	// Status bar sub-model.
+	statusModel StatusModel
+
 	// Agent state.
-	running     bool
-	activeTool  string
-	activeTools map[string]time.Time // parallel tool tracking: name → start time
-	toolStart   time.Time
-	agentCh     chan agentMsg // channel for receiving agent events
+	running bool
+	agentCh chan agentMsg // channel for receiving agent events
 
 	// Commit flow state.
 	commit *commitState
@@ -177,9 +176,6 @@ type model struct {
 
 	// Run flow state (/run command).
 	run *runState
-
-	// Git branch (detected at startup).
-	gitBranch string
 
 	// Quit.
 	quitting bool
@@ -203,12 +199,12 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	m := model{
-		cfg:        cfg,
-		ctx:        ctx,
-		cancel:     cancel,
-		inputModel: NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
-		chatModel:  NewChatModel(renderer),
-		gitBranch:  detectBranch(cfg.WorkDir),
+		cfg:         cfg,
+		ctx:         ctx,
+		cancel:      cancel,
+		inputModel:  NewInputModel(history, cfg.Skills, cfg.SkillDirs, cfg.WorkDir),
+		chatModel:   NewChatModel(renderer),
+		statusModel: StatusModel{GitBranch: detectBranch(cfg.WorkDir)},
 	}
 
 	p := tea.NewProgram(&m, tea.WithContext(ctx))
@@ -241,6 +237,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.statusModel.Width = m.width
 		m.chatModel.UpdateRenderer(m.width)
 
 	case tea.PasteMsg:
@@ -305,12 +302,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgent(m.agentCh)
 
 	case agentToolCallMsg:
-		if m.activeTools == nil {
-			m.activeTools = make(map[string]time.Time)
+		if m.statusModel.ActiveTools == nil {
+			m.statusModel.ActiveTools = make(map[string]time.Time)
 		}
-		m.activeTools[msg.name] = time.Now()
-		m.activeTool = msg.name
-		m.toolStart = time.Now()
+		m.statusModel.ActiveTools[msg.name] = time.Now()
+		m.statusModel.ActiveTool = msg.name
+		m.statusModel.ToolStart = time.Now()
 		argsJSON, _ := json.MarshalIndent(msg.args, "", "  ")
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time:    time.Now(),
@@ -349,12 +346,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForAgent(m.agentCh)
 
 	case agentToolResultMsg:
-		delete(m.activeTools, msg.name)
+		delete(m.statusModel.ActiveTools, msg.name)
 		// Update activeTool to show remaining running tool, or clear.
-		m.activeTool = ""
-		for name := range m.activeTools {
-			m.activeTool = name
-			m.toolStart = m.activeTools[name]
+		m.statusModel.ActiveTool = ""
+		for name := range m.statusModel.ActiveTools {
+			m.statusModel.ActiveTool = name
+			m.statusModel.ToolStart = m.statusModel.ActiveTools[name]
 			break
 		}
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
@@ -408,8 +405,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentDoneMsg:
 		m.running = false
-		m.activeTool = ""
-		m.activeTools = nil
+		m.statusModel.ActiveTool = ""
+		m.statusModel.ActiveTools = nil
 		if msg.err != nil {
 			m.chatModel.Messages = append(m.chatModel.Messages, message{
 				role:    "assistant",
@@ -619,8 +616,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *model) cancelAgent() {
 	m.cancel()
 	m.running = false
-	m.activeTool = ""
-	m.activeTools = nil
+	m.statusModel.ActiveTool = ""
+	m.statusModel.ActiveTools = nil
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 	if m.agentCh != nil {
@@ -1147,7 +1144,7 @@ func (m *model) View() tea.View {
 
 	// Render components.
 	messagesView := m.chatModel.RenderMessages(m.running)
-	statusBar := m.renderStatusBar()
+	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running)
 
 	// Calculate available height for messages.
@@ -1346,136 +1343,26 @@ func (m *model) handleRTKCommand(args []string) {
 	}
 }
 
-func (m *model) renderStatusBar() string {
-	bg := lipgloss.Color("236")
-	fg := lipgloss.Color("252")
-	dimFg := lipgloss.Color("243")
-
-	bright := lipgloss.NewStyle().Background(bg).Foreground(fg)
-	dim := lipgloss.NewStyle().Background(bg).Foreground(dimFg)
-	bar := lipgloss.NewStyle().Background(bg).Width(m.width)
-
-	sep := dim.Render("  |  ")
-
-	var parts []string
-
-	// Provider | Model.
-	if m.cfg.ProviderName != "" {
-		parts = append(parts, bright.Render(fmt.Sprintf(" %s | %s", m.cfg.ProviderName, m.cfg.ModelName)))
-	} else {
-		parts = append(parts, bright.Render(fmt.Sprintf(" %s", m.cfg.ModelName)))
-	}
-
-	// Context size estimate (rough: ~4 chars per token).
-	ctxChars := 0
-	for _, msg := range m.chatModel.Messages {
-		ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-	}
-	ctxTokens := ctxChars / 4
-	switch {
-	case ctxTokens >= 1000:
-		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
-	default:
-		parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
-	}
-
-	// Token usage guardrail.
-	if tt := m.cfg.TokenTracker; tt != nil {
-		total := tt.TotalUsed()
-		limit := tt.Limit()
-		if limit > 0 {
-			pct := tt.PercentUsed()
-			var tokenStyle lipgloss.Style
-			switch {
-			case pct >= 100:
-				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("196")) // red
-			case pct >= 80:
-				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange
-			default:
-				tokenStyle = dim
-			}
-			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tokens: %s/%s (%.0f%%)",
-				formatTokenCount(total), formatTokenCount(limit), pct)))
-		} else if total > 0 {
-			parts = append(parts, dim.Render(fmt.Sprintf("tokens: %s", formatTokenCount(total))))
-		}
-	}
-
-	// Git branch.
-	if m.gitBranch != "" {
-		parts = append(parts, bright.Render(fmt.Sprintf("\u2387 %s", m.gitBranch)))
-	}
-
-	// Active tools or thinking status.
-	if len(m.activeTools) > 1 {
-		// Multiple tools running in parallel.
-		var toolNames []string
-		for name := range m.activeTools {
-			toolNames = append(toolNames, name)
-		}
-		sort.Strings(toolNames)
-		parts = append(parts, bright.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", "))))
-	} else if m.activeTool != "" {
-		elapsed := time.Since(m.toolStart).Truncate(time.Millisecond)
-		parts = append(parts, bright.Render(fmt.Sprintf("tool: %s (%s)", m.activeTool, elapsed)))
-	} else if m.running {
-		parts = append(parts, dim.Render("thinking..."))
-	}
-
-	// Subagent status.
-	if m.cfg.Orchestrator != nil {
-		agents := m.cfg.Orchestrator.List()
-		if len(agents) > 0 {
-			var runningNames []string
-			total := len(agents)
-			failed := 0
-			for _, a := range agents {
-				switch a.Status {
-				case "running":
-					name := a.Type
-					if len(name) > 12 {
-						name = name[:12]
-					}
-					runningNames = append(runningNames, name)
-				case "failed":
-					failed++
-				}
-			}
-			agentFg := lipgloss.Color("35") // green
-			if len(runningNames) > 0 {
-				agentFg = lipgloss.Color("214") // orange when active
-			}
-			if failed > 0 {
-				agentFg = lipgloss.Color("196") // red if any failed
-			}
-			agentStyle := lipgloss.NewStyle().Background(bg).Foreground(agentFg)
-			var label string
-			if len(runningNames) > 0 {
-				label = fmt.Sprintf("agents[%d]: %s", total, strings.Join(runningNames, ", "))
-			} else {
-				label = fmt.Sprintf("agents: %d done", total)
-			}
-			if failed > 0 {
-				label += fmt.Sprintf(" (%d failed)", failed)
-			}
-			parts = append(parts, agentStyle.Render(label))
-		}
-	}
-
-	// /run cycle indicator.
+// statusRenderInput builds the StatusRenderInput from the current model state.
+func (m *model) statusRenderInput() StatusRenderInput {
+	var rc *runCycleInfo
 	if m.run != nil && m.run.phase != "done" && m.run.phase != "failed" {
-		cycle := m.run.retries + 1
-		runStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214"))
-		parts = append(parts, runStyle.Render(fmt.Sprintf("run[%s]: cycle %d/%d",
-			m.run.specName, cycle, m.run.maxRetries)))
+		rc = &runCycleInfo{
+			SpecName:   m.run.specName,
+			Cycle:      m.run.retries + 1,
+			MaxRetries: m.run.maxRetries,
+		}
 	}
-
-	// Trace count.
-	if len(m.chatModel.TraceLog) > 0 {
-		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", len(m.chatModel.TraceLog))))
+	return StatusRenderInput{
+		ProviderName: m.cfg.ProviderName,
+		ModelName:    m.cfg.ModelName,
+		Running:      m.running,
+		Messages:     m.chatModel.Messages,
+		TokenTracker: m.cfg.TokenTracker,
+		Orchestrator: m.cfg.Orchestrator,
+		TraceCount:   len(m.chatModel.TraceLog),
+		RunCycle:     rc,
 	}
-
-	return bar.Render(strings.Join(parts, sep))
 }
 
 // detectBranch returns the current git branch name, or empty string.
