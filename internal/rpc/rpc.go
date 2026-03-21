@@ -85,7 +85,7 @@ func NewServer(cfg Config) *Server {
 
 // Run starts the server and blocks until shutdown.
 // It listens on the Unix socket and handles client connections concurrently.
-// Graceful shutdown occurs on SIGTERM or SIGINT, or when ctx is cancelled.
+// Graceful shutdown occurs on SIGTERM or SIGINT, or when ctx is canceled.
 func (s *Server) Run(ctx context.Context) error {
 	// Remove stale socket file if it exists.
 	_ = os.Remove(s.socketPath)
@@ -225,7 +225,7 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 			_ = enc.Encode(Event{
 				Type:  "message_start",
 				Agent: ev.Author,
-				Role:  string(ev.Content.Role),
+				Role:  ev.Content.Role,
 			})
 			started = true
 		}

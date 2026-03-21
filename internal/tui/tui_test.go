@@ -323,7 +323,7 @@ func TestTextInput(t *testing.T) {
 }
 
 func TestRenderMessagesEmpty(t *testing.T) {
-	m := &model{
+	m := &model{ //nolint:govet // width/height needed for valid model
 		width:     80,
 		height:    24,
 		chatModel: ChatModel{Messages: make([]message, 0)},
@@ -947,8 +947,8 @@ func TestHandleSkillCreateCancel(t *testing.T) {
 	if mm.pendingSkillCreate != nil {
 		t.Error("pending should be cleared")
 	}
-	if !strings.Contains(mm.chatModel.Messages[0].content, "cancelled") {
-		t.Errorf("expected cancelled message, got %q", mm.chatModel.Messages[0].content)
+	if !strings.Contains(mm.chatModel.Messages[0].content, "canceled") {
+		t.Errorf("expected canceled message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 
@@ -1085,5 +1085,220 @@ func TestHandleAgentsCommand_EmptyList(t *testing.T) {
 	}
 	if m.chatModel.Messages[0].content != "No subagents have been spawned yet." {
 		t.Errorf("unexpected message: %q", m.chatModel.Messages[0].content)
+	}
+}
+
+func TestCountAgentsByStatus(t *testing.T) {
+	agents := []subagent.AgentStatus{
+		{Status: "running"},
+		{Status: "running"},
+		{Status: "completed"},
+		{Status: "failed"},
+		{Status: "canceled"},
+	}
+	running, done, failed := countAgentsByStatus(agents)
+	if running != 2 {
+		t.Errorf("running = %d, want 2", running)
+	}
+	if done != 1 {
+		t.Errorf("done = %d, want 1", done)
+	}
+	if failed != 1 {
+		t.Errorf("failed = %d, want 1", failed)
+	}
+}
+
+func TestAgentStatusIcon(t *testing.T) {
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{"running", "▶ "},
+		{"completed", "✓ "},
+		{"failed", "✗ "},
+		{"canceled", "◼ "},
+		{"unknown", "  "},
+	}
+	for _, tt := range tests {
+		if got := agentStatusIcon(tt.status); got != tt.want {
+			t.Errorf("agentStatusIcon(%q) = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}
+
+func TestFormatAgentsList_Empty(t *testing.T) {
+	got := formatAgentsList(nil)
+	if got != "No subagents have been spawned yet." {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestFormatAgentsList_WithAgents(t *testing.T) {
+	agents := []subagent.AgentStatus{
+		{AgentID: "agent-abc12345", Type: "task", Status: "running", Prompt: "do something", Duration: "5s"},
+		{AgentID: "agent-def67890", Type: "plan", Status: "completed", Prompt: "plan it", Duration: "10s"},
+		{AgentID: "agent-ghi11111", Type: "fix", Status: "failed", Prompt: "fix bug", Duration: "2s"},
+	}
+	got := formatAgentsList(agents)
+
+	if !strings.Contains(got, "3 total") {
+		t.Errorf("missing total count in %q", got)
+	}
+	if !strings.Contains(got, "1 running") {
+		t.Errorf("missing running count")
+	}
+	if !strings.Contains(got, "1 failed") {
+		t.Errorf("missing failed count")
+	}
+	if !strings.Contains(got, "agent-ab") {
+		t.Errorf("missing agent ID prefix")
+	}
+}
+
+func TestFormatAgentsList_LongPromptTruncation(t *testing.T) {
+	agents := []subagent.AgentStatus{
+		{AgentID: "agent-abc12345", Type: "task", Status: "running",
+			Prompt: strings.Repeat("x", 100), Duration: "1s"},
+	}
+	got := formatAgentsList(agents)
+	if !strings.Contains(got, "...") {
+		t.Errorf("expected truncated prompt with '...'")
+	}
+}
+
+func TestFormatThemeList(t *testing.T) {
+	themes := []Theme{
+		{Name: "dark", DisplayName: "Dark Theme", ThemeType: "dark"},
+		{Name: "light", DisplayName: "Light Theme", ThemeType: "light"},
+	}
+	got := formatThemeList(themes, "dark")
+
+	if !strings.Contains(got, "**Current theme:** `dark`") {
+		t.Errorf("missing current theme header")
+	}
+	if !strings.Contains(got, "☀️") {
+		t.Errorf("missing light theme icon")
+	}
+	if !strings.Contains(got, "🌙") {
+		t.Errorf("missing dark theme icon")
+	}
+	if !strings.Contains(got, "* 🌙 `dark`") {
+		t.Errorf("missing current theme marker")
+	}
+}
+
+func TestFormatThemeError(t *testing.T) {
+	got := formatThemeError("darq", []string{"dark", "dracula"})
+	if !strings.Contains(got, "darq") {
+		t.Errorf("missing theme name in error")
+	}
+	if !strings.Contains(got, "Did you mean") {
+		t.Errorf("missing suggestion")
+	}
+	if !strings.Contains(got, "dark") {
+		t.Errorf("missing match suggestion")
+	}
+
+	// No matches
+	got2 := formatThemeError("xyz", nil)
+	if strings.Contains(got2, "Did you mean") {
+		t.Errorf("should not suggest when no matches")
+	}
+}
+
+func TestMigrateHistoryFormat(t *testing.T) {
+	lines := []string{"cmd1", "cmd2", "cmd3"}
+	entries := migrateHistoryFormat(lines)
+
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+	if entries[0].Text != "cmd1" {
+		t.Errorf("first entry = %q, want cmd1", entries[0].Text)
+	}
+	if entries[2].Text != "cmd3" {
+		t.Errorf("third entry = %q, want cmd3", entries[2].Text)
+	}
+}
+
+func TestTruncateHistory(t *testing.T) {
+	entries := make([]HistoryEntry, 50)
+	for i := range entries {
+		entries[i] = HistoryEntry{Text: fmt.Sprintf("cmd%d", i)}
+	}
+
+	result := truncateHistory(entries, 10)
+	if len(result) != 10 {
+		t.Fatalf("expected 10, got %d", len(result))
+	}
+	if result[0].Text != "cmd40" {
+		t.Errorf("first entry = %q, want cmd40", result[0].Text)
+	}
+
+	// Under limit — no truncation
+	small := truncateHistory(entries[:5], 10)
+	if len(small) != 5 {
+		t.Errorf("expected 5, got %d", len(small))
+	}
+}
+
+func TestFormatHistoryOutput(t *testing.T) {
+	entries := []HistoryEntry{
+		{Text: "git status"},
+		{Text: "go test ./...", Mentions: []string{"@file.go"}},
+		{Text: "git diff"},
+	}
+
+	// No filter
+	got := formatHistoryOutput(entries, "")
+	if !strings.Contains(got, "**Command history**") {
+		t.Errorf("missing header")
+	}
+	if !strings.Contains(got, "git status") {
+		t.Errorf("missing entry")
+	}
+
+	// With filter
+	got2 := formatHistoryOutput(entries, "git")
+	if !strings.Contains(got2, "**History matching `git`**") {
+		t.Errorf("missing filter header")
+	}
+	if strings.Contains(got2, "go test") {
+		t.Errorf("should not include non-matching entry")
+	}
+
+	// With mentions
+	if !strings.Contains(got, "@file.go") {
+		t.Errorf("missing mention in output")
+	}
+
+	// No matches
+	got3 := formatHistoryOutput(entries, "xyz")
+	if !strings.Contains(got3, "No history matching") {
+		t.Errorf("expected no-match message, got %q", got3)
+	}
+
+	// Empty history
+	got4 := formatHistoryOutput(nil, "")
+	if !strings.Contains(got4, "No command history") {
+		t.Errorf("expected empty history message")
+	}
+}
+
+func TestRenderWelcome(t *testing.T) {
+	got := renderWelcome()
+	// Check for key content (some words may be split by ANSI style codes).
+	checks := []string{
+		"Welcome to pi-go",
+		"coding agent",
+		"help",
+		"commit",
+		"plan",
+		"Tab",
+	}
+	for _, want := range checks {
+		if !strings.Contains(got, want) {
+			t.Errorf("welcome screen missing %q", want)
+		}
 	}
 }

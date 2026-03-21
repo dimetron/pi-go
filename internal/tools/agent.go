@@ -1,8 +1,9 @@
 package tools
 
 import (
-	"github.com/dimetron/pi-go/internal/subagent"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // AgentEventCallback is the legacy callback type for subagent events.

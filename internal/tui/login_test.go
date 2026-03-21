@@ -220,7 +220,7 @@ func TestHandleLoginCancel(t *testing.T) {
 	if m.login != nil {
 		t.Error("expected login state to be nil after cancel")
 	}
-	if len(m.chatModel.Messages) != 1 || !strings.Contains(m.chatModel.Messages[0].content, "cancelled") {
+	if len(m.chatModel.Messages) != 1 || !strings.Contains(m.chatModel.Messages[0].content, "canceled") {
 		t.Error("expected cancellation message")
 	}
 }
@@ -307,8 +307,8 @@ func TestHandleLoginSSOResult_Error(t *testing.T) {
 	}
 }
 
-func TestHandleLoginSSOResult_Cancelled(t *testing.T) {
-	// If login was cancelled before SSO result arrives, ignore it.
+func TestHandleLoginSSOResult_Canceled(t *testing.T) {
+	// If login was canceled before SSO result arrives, ignore it.
 	m := &model{login: nil}
 
 	msg := loginSSOResultMsg{
@@ -322,7 +322,7 @@ func TestHandleLoginSSOResult_Cancelled(t *testing.T) {
 	m.handleLoginSSOResult(msg)
 
 	if len(m.chatModel.Messages) != 0 {
-		t.Error("expected no messages when login was cancelled")
+		t.Error("expected no messages when login was canceled")
 	}
 }
 

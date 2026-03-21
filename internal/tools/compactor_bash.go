@@ -391,7 +391,7 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 		score int
 	}
 
-	scored_lines := make([]scored, len(lines))
+	scoredLines := make([]scored, len(lines))
 	for i, line := range lines {
 		score := 1 // default priority
 		lower := strings.ToLower(line)
@@ -409,7 +409,7 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 			score = 0 // blank lines are lowest priority
 		}
 
-		scored_lines[i] = scored{line: line, score: score}
+		scoredLines[i] = scored{line: line, score: score}
 	}
 
 	// Keep first and last 10% unconditionally for context
@@ -420,12 +420,12 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 	var result []string
 
 	// Head
-	for i := 0; i < headSize && i < len(scored_lines); i++ {
-		result = append(result, scored_lines[i].line)
+	for i := 0; i < headSize && i < len(scoredLines); i++ {
+		result = append(result, scoredLines[i].line)
 	}
 
 	// Middle: select by priority
-	middle := scored_lines[headSize : len(scored_lines)-tailSize]
+	middle := scoredLines[headSize : len(scoredLines)-tailSize]
 	if len(middle) > middleSize {
 		// Collect high-priority lines first
 		var highPri, lowPri []string
@@ -461,9 +461,9 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 	}
 
 	// Tail
-	for i := len(scored_lines) - tailSize; i < len(scored_lines); i++ {
+	for i := len(scoredLines) - tailSize; i < len(scoredLines); i++ {
 		if i >= 0 {
-			result = append(result, scored_lines[i].line)
+			result = append(result, scoredLines[i].line)
 		}
 	}
 

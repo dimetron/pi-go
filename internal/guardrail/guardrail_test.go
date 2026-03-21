@@ -2,6 +2,7 @@ package guardrail
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,7 +89,8 @@ func TestAdd_EnforcesLimit(t *testing.T) {
 		t.Fatal("expected limit exceeded error")
 	}
 
-	le, ok := err.(*LimitExceededError)
+	le := &LimitExceededError{}
+	ok := errors.As(err, &le)
 	if !ok {
 		t.Fatalf("expected *LimitExceededError, got %T", err)
 	}

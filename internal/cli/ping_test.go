@@ -184,7 +184,7 @@ func TestModelPingThinkingRole(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRunPrintContextCancelled verifies that runPrint returns nil (not an
-// error) when the context is already cancelled before execution.
+// error) when the context is already canceled before execution.
 func TestRunPrintContextCancelled(t *testing.T) {
 	llm := &cliMockLLM{name: "test-cancel-print", response: "should not appear"}
 	ag, sessionID := newTestAgent(t, llm)
@@ -194,12 +194,12 @@ func TestRunPrintContextCancelled(t *testing.T) {
 
 	err := runPrint(ctx, ag, sessionID, "hello", nil)
 	if err != nil {
-		t.Fatalf("runPrint with cancelled context returned error: %v", err)
+		t.Fatalf("runPrint with canceled context returned error: %v", err)
 	}
 }
 
 // TestRunJSONContextCancelled verifies that runJSON emits a message_end event
-// and returns nil when the context is already cancelled.
+// and returns nil when the context is already canceled.
 func TestRunJSONContextCancelled(t *testing.T) {
 	llm := &cliMockLLM{name: "test-cancel-json", response: "should not appear"}
 	ag, sessionID := newTestAgent(t, llm)
@@ -210,7 +210,7 @@ func TestRunJSONContextCancelled(t *testing.T) {
 	stdout := captureStdout(t, func() {
 		err := runJSON(ctx, ag, sessionID, "hello", nil)
 		if err != nil {
-			t.Errorf("runJSON with cancelled context returned error: %v", err)
+			t.Errorf("runJSON with canceled context returned error: %v", err)
 		}
 	})
 
@@ -497,20 +497,6 @@ func TestOllamaPingFullModelPrefixMatch(t *testing.T) {
 	}
 	if reply != "response" {
 		t.Errorf("ollamaPingFull reply = %q, want %q", reply, "response")
-	}
-}
-
-// ollamaErrorLLM is a mock LLM for ollamaPingFull that returns errors.
-type ollamaErrorLLM struct {
-	name string
-	err  error
-}
-
-func (m *ollamaErrorLLM) Name() string { return m.name }
-
-func (m *ollamaErrorLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
-	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(nil, m.err)
 	}
 }
 

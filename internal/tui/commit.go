@@ -186,7 +186,7 @@ func (m *model) handleCommitCancel() (tea.Model, tea.Cmd) {
 	m.commit = nil
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: "Commit cancelled.",
+		content: "Commit canceled.",
 	})
 	return m, nil
 }
@@ -244,6 +244,14 @@ func commitParsePorcelain(output string) (staged, unstaged, untracked []string) 
 	return
 }
 
+// normalizeCommitMessage cleans up raw LLM output for use as a commit message.
+func normalizeCommitMessage(raw string) string {
+	msg := strings.TrimSpace(raw)
+	msg = strings.Trim(msg, "\"'`")
+	msg = strings.TrimSpace(msg)
+	return msg
+}
+
 // GenerateCommitMsgFunc creates a function that generates commit messages using the given LLM.
 func GenerateCommitMsgFunc(llm llmmodel.LLM) func(ctx context.Context, diffs string) (string, error) {
 	return func(ctx context.Context, diffs string) (string, error) {
@@ -270,7 +278,7 @@ func GenerateCommitMsgFunc(llm llmmodel.LLM) func(ctx context.Context, diffs str
 			}
 		}
 
-		msg := strings.TrimSpace(result.String())
+		msg := normalizeCommitMessage(result.String())
 		if msg == "" {
 			return "", fmt.Errorf("LLM returned empty commit message")
 		}

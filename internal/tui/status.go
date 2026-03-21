@@ -32,11 +32,14 @@ type StatusRenderInput struct {
 	ModelName    string
 	Running      bool
 	Mode         string                 // "chat" or "plan"
+	Eyes         string                 // mood eyes e.g. "◕ ◕"
 	Messages     []message              // for context estimate
 	TokenTracker TokenTracker           // may be nil
 	Orchestrator *subagent.Orchestrator // may be nil
-	TraceCount   int
-	RunCycle     *runCycleInfo // may be nil
+	DiffAdded    int
+	DiffRemoved  int
+	RunCycle     *runCycleInfo   // may be nil
+	LoadingItems map[string]bool // item -> done; nil means not loading
 }
 
 // runCycleInfo carries /run state for the status bar.
@@ -88,7 +91,7 @@ func renderContextBar(pct float64, bg color.Color) string {
 func (s *StatusModel) Render(in StatusRenderInput) string {
 	bg := lipgloss.Color("236")
 	fg := lipgloss.Color("252")
-	dimFg := lipgloss.Color("243")
+	dimFg := lipgloss.Color("246")
 
 	bright := lipgloss.NewStyle().Background(bg).Foreground(fg)
 	dim := lipgloss.NewStyle().Background(bg).Foreground(dimFg)
@@ -115,6 +118,22 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		parts = append(parts, bright.Render(fmt.Sprintf("%s | %s", in.ProviderName, in.ModelName)))
 	} else {
 		parts = append(parts, bright.Render(in.ModelName))
+	}
+
+	// Loading progress (replaces normal status content during init).
+	if in.LoadingItems != nil {
+		var items []string
+		for _, name := range sortedKeys(in.LoadingItems) {
+			if in.LoadingItems[name] {
+				okStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("35")) // green
+				items = append(items, okStyle.Render(name+" \u2713"))
+			} else {
+				loadStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange
+				items = append(items, loadStyle.Render(name+"..."))
+			}
+		}
+		parts = append(parts, dim.Render("loading: ")+strings.Join(items, dim.Render(" ")))
+		return bar.Render(strings.Join(parts, sep))
 	}
 
 	// Context % bar (visual bar with color coding).
@@ -226,10 +245,15 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			in.RunCycle.SpecName, in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
 	}
 
-	// Trace count.
-	if in.TraceCount > 0 {
-		parts = append(parts, dim.Render(fmt.Sprintf("trace: %d", in.TraceCount)))
-	}
-
 	return bar.Render(strings.Join(parts, sep))
+}
+
+// sortedKeys returns map keys in sorted order.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -173,14 +173,14 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("begin migration %d: %w", version, err)
 		}
 		if _, err := tx.Exec(migrations[i]); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}
 		if _, err := tx.Exec(
 			"INSERT INTO schema_versions (version, applied_at) VALUES (?, ?)",
 			version, time.Now().UTC().Format(time.RFC3339),
 		); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
 		if err := tx.Commit(); err != nil {

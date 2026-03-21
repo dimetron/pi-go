@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -113,7 +114,7 @@ func (m *model) handleSkillCreateCancel() (tea.Model, tea.Cmd) {
 	m.pendingSkillCreate = nil
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: "Skill creation cancelled.",
+		content: "Skill creation canceled.",
 	})
 	return m, nil
 }

@@ -438,7 +438,7 @@ func highlightReadOutput(lines []string, filename string) []string {
 func highlightCode(code, filename string) string {
 	lexer := lexers.Match(filename)
 	if lexer == nil {
-		lexer = lexers.Analyse(code)
+		lexer = lexers.Analyse(code) //nolint:misspell // chroma API uses British spelling
 	}
 	if lexer == nil {
 		lexer = lexers.Fallback

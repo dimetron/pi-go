@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,7 +72,7 @@ func TestResolveRole_NoDefault(t *testing.T) {
 	}
 
 	_, _, err := cfg.ResolveRole("default")
-	if err != ErrNoDefaultRole {
+	if !errors.Is(err, ErrNoDefaultRole) {
 		t.Errorf("expected ErrNoDefaultRole, got %v", err)
 	}
 }
@@ -80,7 +81,7 @@ func TestResolveRole_NilRoles(t *testing.T) {
 	cfg := Config{}
 
 	_, _, err := cfg.ResolveRole("default")
-	if err != ErrNoDefaultRole {
+	if !errors.Is(err, ErrNoDefaultRole) {
 		t.Errorf("expected ErrNoDefaultRole, got %v", err)
 	}
 }

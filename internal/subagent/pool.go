@@ -22,13 +22,13 @@ func NewPool(maxConcurrent int) *Pool {
 	}
 }
 
-// Acquire blocks until a slot is available or the context is cancelled.
+// Acquire blocks until a slot is available or the context is canceled.
 func (p *Pool) Acquire(ctx context.Context) error {
 	select {
 	case p.sem <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("pool acquire cancelled: %w", ctx.Err())
+		return fmt.Errorf("pool acquire canceled: %w", ctx.Err())
 	}
 }
 

@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dimetron/pi-go/internal/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/agent"
 )
 
 // mockLLM returns a fixed text response.

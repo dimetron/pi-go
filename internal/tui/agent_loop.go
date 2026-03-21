@@ -87,6 +87,9 @@ func (m *model) cancelAgent() {
 	m.statusModel.ActiveTools = nil
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
+	if m.face != nil {
+		m.face.SetMood(MoodIdle)
+	}
 	if m.agentCh != nil {
 		go func(ch chan agentMsg) {
 			for range ch {
@@ -122,6 +125,9 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	m.chatModel.Thinking = ""
 	m.running = true
 	m.chatModel.Scroll = 0
+	if m.face != nil {
+		m.face.SetMood(MoodThinking)
+	}
 
 	m.agentCh = make(chan agentMsg, 64)
 	go m.runAgentLoop(promptText)
@@ -139,6 +145,13 @@ func (m *model) runAgentLoop(prompt string) {
 			m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
 		}
 	}()
+
+	// Guard against missing agent config (unit tests)
+	if m.cfg.Agent == nil {
+		m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent not configured")}
+		return
+	}
+
 	log := m.cfg.Logger
 
 	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {
@@ -188,6 +201,9 @@ func (m *model) runAgentLoop(prompt string) {
 
 // handleAgentThinking processes an agentThinkingMsg.
 func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
+	if m.face != nil {
+		m.face.SetMood(MoodThinking)
+	}
 	m.chatModel.Thinking += msg.text
 	if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
 		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = m.chatModel.Thinking
@@ -202,6 +218,9 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 
 // handleAgentText processes an agentTextMsg.
 func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
+	if m.face != nil {
+		m.face.SetMood(MoodSpeaking)
+	}
 	if m.chatModel.Thinking != "" {
 		m.chatModel.Thinking = ""
 		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
@@ -228,6 +247,9 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 
 // handleAgentToolCall processes an agentToolCallMsg.
 func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
+	if m.face != nil {
+		m.face.SetMood(MoodToolCall)
+	}
 	if m.statusModel.ActiveTools == nil {
 		m.statusModel.ActiveTools = make(map[string]time.Time)
 	}
@@ -269,6 +291,9 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 
 // handleAgentToolResult processes an agentToolResultMsg.
 func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cmd) {
+	if m.face != nil {
+		m.face.SetMood(MoodProcessing)
+	}
 	delete(m.statusModel.ActiveTools, msg.name)
 	m.statusModel.ActiveTool = ""
 	for name := range m.statusModel.ActiveTools {
@@ -288,6 +313,7 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 			break
 		}
 	}
+	m.refreshDiffStats()
 	return m, waitForAgent(m.agentCh)
 }
 
@@ -329,6 +355,9 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
 	if msg.err != nil {
+		if m.face != nil {
+			m.face.SetMood(MoodSad)
+		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: fmt.Sprintf("Error: %v", msg.err),
@@ -336,9 +365,14 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "error", summary: "Error", detail: msg.err.Error(),
 		})
+	} else {
+		if m.face != nil {
+			m.face.SetMood(MoodHappy)
+		}
 	}
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 	m.agentCh = nil
+	m.refreshDiffStats()
 	return m, nil
 }

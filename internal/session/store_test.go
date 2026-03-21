@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -864,7 +865,7 @@ func TestSessionStateSetAndAll(t *testing.T) {
 
 	// Verify All() iterates over all keys.
 	found := make(map[string]bool)
-	for k, _ := range state.All() {
+	for k := range state.All() {
 		found[k] = true
 	}
 	if !found["key1"] || !found["key2"] {
@@ -882,7 +883,7 @@ func TestSessionStateGetMissing(t *testing.T) {
 	})
 
 	_, err := resp.Session.State().Get("nonexistent")
-	if err != session.ErrStateKeyNotExist {
+	if !errors.Is(err, session.ErrStateKeyNotExist) {
 		t.Errorf("expected ErrStateKeyNotExist, got %v", err)
 	}
 }

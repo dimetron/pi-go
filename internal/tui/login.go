@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/config"
 )
@@ -201,7 +202,7 @@ func (m *model) loginStartDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 
 // handleLoginSSOResult processes the async SSO result.
 func (m *model) handleLoginSSOResult(msg loginSSOResultMsg) (tea.Model, tea.Cmd) {
-	// If login was cancelled while SSO was running, ignore the result.
+	// If login was canceled while SSO was running, ignore the result.
 	if m.login == nil {
 		return m, nil
 	}
@@ -281,7 +282,7 @@ func (m *model) handleLoginCancel() (tea.Model, tea.Cmd) {
 	m.login = nil
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: "Login cancelled.",
+		content: "Login canceled.",
 	})
 	return m, nil
 }

@@ -373,14 +373,14 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		if !r.Passed {
 			status = "FAIL"
 		}
-		summary.WriteString(fmt.Sprintf("- **%s** (`%s`): %s\n", r.Name, r.Command, status))
+		fmt.Fprintf(&summary, "- **%s** (`%s`): %s\n", r.Name, r.Command, status)
 		if !r.Passed && r.Output != "" {
 			// Include truncated output for failed gates.
 			out := r.Output
 			if len(out) > 500 {
 				out = out[:500] + "...(truncated)"
 			}
-			summary.WriteString(fmt.Sprintf("  ```\n  %s\n  ```\n", strings.TrimSpace(out)))
+			fmt.Fprintf(&summary, "  ```\n  %s\n  ```\n", strings.TrimSpace(out))
 		}
 	}
 
@@ -662,7 +662,7 @@ func formatGateFailures(results []GateResult) string {
 	var b strings.Builder
 	for _, r := range results {
 		if !r.Passed {
-			b.WriteString(fmt.Sprintf("Gate `%s` (`%s`) FAILED:\n%s\n\n", r.Name, r.Command, r.Output))
+			fmt.Fprintf(&b, "Gate `%s` (`%s`) FAILED:\n%s\n\n", r.Name, r.Command, r.Output)
 		}
 	}
 	return b.String()

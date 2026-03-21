@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -27,6 +28,7 @@ func newTestModel(t *testing.T) *model {
 		cancel:     cancel,
 		inputModel: NewInputModel(make([]HistoryEntry, 0), nil, nil, ""),
 		chatModel:  ChatModel{Messages: make([]message, 0)},
+		face:       NewFaceRenderer(),
 		width:      80,
 		height:     24,
 	}
@@ -504,12 +506,34 @@ func makeTextKey(text string) tea.KeyPressMsg {
 
 func TestHandleKey_CtrlC_Quit(t *testing.T) {
 	m := newTestModel(t)
+	// First press: shows warning, doesn't quit yet
 	_, cmd := m.handleKey(makeKeyMod('c', tea.ModCtrl))
 	if cmd == nil {
-		t.Error("expected quit command from Ctrl+C")
+		t.Error("expected reset command from first Ctrl+C")
+	}
+	if m.quitting {
+		t.Error("expected quitting=false after first Ctrl+C")
+	}
+	if m.ctrlCCount != 1 {
+		t.Errorf("expected ctrlCCount=1, got %d", m.ctrlCCount)
+	}
+
+	// Second press: quits
+	_, cmd = m.handleKey(makeKeyMod('c', tea.ModCtrl))
+	if cmd == nil {
+		t.Error("expected quit command from second Ctrl+C")
 	}
 	if !m.quitting {
-		t.Error("expected quitting=true")
+		t.Error("expected quitting=true after second Ctrl+C")
+	}
+}
+
+func TestHandleResetCtrlCCount(t *testing.T) {
+	m := newTestModel(t)
+	m.ctrlCCount = 1
+	newM, _ := m.handleResetCtrlCCount()
+	if newM.(*model).ctrlCCount != 0 {
+		t.Error("expected ctrlCCount=0 after reset")
 	}
 }
 
@@ -888,15 +912,6 @@ func TestRenderContextBar(t *testing.T) {
 	}
 }
 
-func TestRenderStatusBar_WithTraceLog(t *testing.T) {
-	m := newTestModel(t)
-	m.chatModel.TraceLog = []traceEntry{{kind: "llm", summary: "test"}}
-	out := m.statusModel.Render(m.statusRenderInput())
-	if out == "" {
-		t.Error("expected non-empty status bar")
-	}
-}
-
 func TestRenderStatusBar_LargeContext(t *testing.T) {
 	m := newTestModel(t)
 	// Create enough content to push ctx over 1k tokens
@@ -1006,7 +1021,7 @@ func TestHandleKey_CommitConfirm_Esc(t *testing.T) {
 	m.commit = &commitState{phase: "confirming"}
 	m.handleKey(makeKey(tea.KeyEsc))
 	if m.commit != nil {
-		t.Error("expected commit cancelled on Esc")
+		t.Error("expected commit canceled on Esc")
 	}
 }
 
@@ -1015,7 +1030,7 @@ func TestHandleKey_CommitConfirm_CtrlC(t *testing.T) {
 	m.commit = &commitState{phase: "confirming"}
 	m.handleKey(makeKeyMod('c', tea.ModCtrl))
 	if m.commit != nil {
-		t.Error("expected commit cancelled on Ctrl+C")
+		t.Error("expected commit canceled on Ctrl+C")
 	}
 }
 
@@ -1033,7 +1048,7 @@ func TestHandleKey_LoginCancel_Esc(t *testing.T) {
 	m.login = &loginState{phase: "sso"}
 	m.handleKey(makeKey(tea.KeyEsc))
 	if m.login != nil {
-		t.Error("expected login cancelled on Esc")
+		t.Error("expected login canceled on Esc")
 	}
 }
 
@@ -1042,7 +1057,7 @@ func TestHandleKey_LoginCancel_CtrlC(t *testing.T) {
 	m.login = &loginState{phase: "device"}
 	m.handleKey(makeKeyMod('c', tea.ModCtrl))
 	if m.login != nil {
-		t.Error("expected login cancelled on Ctrl+C")
+		t.Error("expected login canceled on Ctrl+C")
 	}
 }
 
@@ -1061,7 +1076,7 @@ func TestHandleKey_SkillCreate_Esc(t *testing.T) {
 	m.pendingSkillCreate = &pendingSkillCreate{name: "x"}
 	m.handleKey(makeKey(tea.KeyEsc))
 	if m.pendingSkillCreate != nil {
-		t.Error("expected skill create cancelled on Esc")
+		t.Error("expected skill create canceled on Esc")
 	}
 }
 
@@ -1070,7 +1085,7 @@ func TestHandleKey_SkillCreate_CtrlC(t *testing.T) {
 	m.pendingSkillCreate = &pendingSkillCreate{name: "x"}
 	m.handleKey(makeKeyMod('c', tea.ModCtrl))
 	if m.pendingSkillCreate != nil {
-		t.Error("expected skill create cancelled on Ctrl+C")
+		t.Error("expected skill create canceled on Ctrl+C")
 	}
 }
 
@@ -1088,7 +1103,7 @@ func TestHandleKey_PlanOverride_Esc(t *testing.T) {
 	m.plan = &planState{phase: "confirming_override"}
 	m.handleKey(makeKey(tea.KeyEsc))
 	if m.plan != nil {
-		t.Error("expected plan cancelled on Esc")
+		t.Error("expected plan canceled on Esc")
 	}
 }
 
@@ -1097,7 +1112,7 @@ func TestHandleKey_PlanOverride_CtrlC(t *testing.T) {
 	m.plan = &planState{phase: "confirming_override"}
 	m.handleKey(makeKeyMod('c', tea.ModCtrl))
 	if m.plan != nil {
-		t.Error("expected plan cancelled on Ctrl+C")
+		t.Error("expected plan canceled on Ctrl+C")
 	}
 }
 
@@ -1243,11 +1258,9 @@ func TestSubmit_SlashClear(t *testing.T) {
 func TestLoadHistory(t *testing.T) {
 	h := loadHistory()
 	// May return nil or empty on first run / CI
-	if h != nil {
-		for _, entry := range h {
-			if entry.Text == "" {
-				t.Error("empty history entry")
-			}
+	for _, entry := range h {
+		if entry.Text == "" {
+			t.Error("empty history entry")
 		}
 	}
 }
@@ -1366,32 +1379,6 @@ func TestHandleKey_ShiftTab_CompletionCycle(t *testing.T) {
 	if m.inputModel.SelectedIndex == 1 {
 		t.Error("expected shift-tab to change selection")
 	}
-}
-
-// --- renderStatusBar: orchestrator ---
-
-type mockOrchestrator struct {
-	agents []mockAgentInfo
-}
-
-type mockAgentInfo struct {
-	Type   string
-	Status string
-}
-
-func (o *mockOrchestrator) List() []struct {
-	Type   string
-	Status string
-} {
-	result := make([]struct {
-		Type   string
-		Status string
-	}, len(o.agents))
-	for i, a := range o.agents {
-		result[i].Type = a.Type
-		result[i].Status = a.Status
-	}
-	return result
 }
 
 // --- handleKey: login waiting phase ---

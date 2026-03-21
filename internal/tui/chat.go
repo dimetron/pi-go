@@ -10,12 +10,50 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// renderWelcome builds the startup welcome screen.
+func renderWelcome() string {
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	cmd := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
+
+	face := accent.Render(
+		"  ┌─────┐\n" +
+			"  │ ◕ ◕ │\n" +
+			"  │  ▽  │\n" +
+			"  └─────┘")
+
+	lines := []string{
+		face,
+		"",
+		accent.Render("  Welcome to pi-go") + dim.Render(" — your AI coding agent"),
+		"",
+		dim.Render("  Ask me anything or describe a task:"),
+		dim.Render("    - ") + dim.Render(`"research this codebase and explain the architecture"`),
+		dim.Render("    - ") + dim.Render(`"fix the failing test in auth_test.go"`),
+		dim.Render("    - ") + dim.Render(`"add error handling to the upload endpoint"`),
+		dim.Render("    - ") + dim.Render(`"explain how the session middleware works"`),
+		dim.Render("    - ") + dim.Render(`"refactor this function to use channels"`),
+		"",
+		dim.Render("  Commands: ") +
+			cmd.Render("/help") + dim.Render(" ") +
+			cmd.Render("/commit") + dim.Render(" ") +
+			cmd.Render("/plan") + dim.Render(" ") +
+			cmd.Render("/run") + dim.Render(" ") +
+			cmd.Render("/agents") + dim.Render(" ") +
+			cmd.Render("/ping"),
+		dim.Render("  Press ") + cmd.Render("Tab") + dim.Render(" to cycle commands, ") +
+			cmd.Render("@") + dim.Render(" to mention files"),
+	}
+	return strings.Join(lines, "\n")
+}
+
 // message represents a chat message in the conversation.
 type message struct {
-	role    string // "user", "assistant", or "tool"
-	content string
-	tool    string // tool name (for role=="tool")
-	toolIn  string // tool input args (for role=="tool")
+	role      string // "user", "assistant", or "tool"
+	content   string
+	isWarning bool   // if true, render with warning style
+	tool      string // tool name (for role=="tool")
+	toolIn    string // tool input args (for role=="tool")
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
 	agentID       string    // subagent ID for matching events
 	agentType     string    // subagent type (e.g. "task", "explore")
@@ -64,6 +102,16 @@ func NewChatModel(renderer *glamour.TermRenderer) ChatModel {
 // Clear removes all messages and resets scroll.
 func (c *ChatModel) Clear() {
 	c.Messages = c.Messages[:0]
+	c.Scroll = 0
+}
+
+// AppendWarning adds a warning message styled with yellow text.
+func (c *ChatModel) AppendWarning(text string) {
+	c.Messages = append(c.Messages, message{
+		role:      "assistant",
+		content:   text,
+		isWarning: true,
+	})
 	c.Scroll = 0
 }
 
@@ -140,11 +188,10 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 // RenderMessages renders all messages into a string for display.
 func (c *ChatModel) RenderMessages(running bool) string {
 	if len(c.Messages) == 0 {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		return dim.Render("  Welcome to pi-go! Type a prompt, /command, or press Tab to cycle commands.")
+		return renderWelcome()
 	}
 
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("● ")
 	sepWidth := c.Width - 4
 	if sepWidth < 20 {
@@ -203,9 +250,16 @@ func (c *ChatModel) RenderMessages(running bool) string {
 			}
 			if content != "" {
 				b.WriteString("\n")
-				b.WriteString(bullet)
-				rendered := c.RenderMarkdown(content)
-				b.WriteString(rendered)
+				if msg.isWarning {
+					warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
+					warnBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true).Render("⚠ ")
+					b.WriteString(warnBullet)
+					b.WriteString(warnStyle.Render(content))
+				} else {
+					b.WriteString(bullet)
+					rendered := c.RenderMarkdown(content)
+					b.WriteString(rendered)
+				}
 				b.WriteString("\n")
 			}
 		}

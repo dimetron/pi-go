@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dimetron/pi-go/internal/memory"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/memory"
 )
 
 // MemSearchInput defines parameters for the mem-search tool.
@@ -69,10 +70,10 @@ func formatSearchResults(result *memory.SearchResult) string {
 	b.WriteString("| ID | Type | Title | Time | Read |\n")
 	b.WriteString("|----|------|-------|------|------|\n")
 	for _, row := range result.Rows {
-		b.WriteString(fmt.Sprintf("| #%d | %s | %s | %s | %dt |\n",
+		fmt.Fprintf(&b, "| #%d | %s | %s | %s | %dt |\n",
 			row.ID, row.Type, row.Title,
 			row.CreatedAt.Format("Jan 2 15:04"),
-			row.ReadCost))
+			row.ReadCost)
 	}
 	b.WriteString("\nUse `mem-get` with IDs to fetch full details.")
 	return b.String()
@@ -135,10 +136,10 @@ func formatTimeline(obs []*memory.Observation, anchorID int64) string {
 		if len(o.SourceFiles) > 0 {
 			files = strings.Join(o.SourceFiles, ", ")
 		}
-		b.WriteString(fmt.Sprintf("| #%d | %s | %s%s | %s | %s |\n",
+		fmt.Fprintf(&b, "| #%d | %s | %s%s | %s | %s |\n",
 			o.ID, o.Type, o.Title, marker,
 			o.CreatedAt.Format("15:04:05"),
-			files))
+			files)
 	}
 	return b.String()
 }

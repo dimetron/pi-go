@@ -59,7 +59,7 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		}
 
 		params := openai.ChatCompletionNewParams{
-			Model:    shared.ChatModel(modelName),
+			Model:    modelName,
 			Messages: messages,
 		}
 		if systemInstruction != "" {
@@ -245,81 +245,46 @@ func oaiGenaiToolsToOpenAI(tools []*genai.Tool) []openai.ChatCompletionToolUnion
 	return out
 }
 
-func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool) {
-	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
-		IncludeUsage: param.NewOpt(true),
+// oaiStreamState holds accumulated state from processing OpenAI stream chunks.
+type oaiStreamState struct {
+	text             string
+	toolCalls        map[int64]map[string]any
+	finishReason     string
+	promptTokens     int64
+	completionTokens int64
+}
+
+// accumulateOaiToolCall updates the tool call accumulator with a single delta chunk.
+func accumulateOaiToolCall(acc map[int64]map[string]any, idx int64, id, name, arguments string) {
+	if acc[idx] == nil {
+		acc[idx] = map[string]any{"id": "", "name": "", "arguments": ""}
 	}
-	stream := client.Chat.Completions.NewStreaming(ctx, params)
-	//nolint:errcheck // Close() may return error but we can't recover from it in defer
-	defer stream.Close()
-
-	var aggregatedText string
-	toolCallsAcc := make(map[int64]map[string]any)
-	var finishReason string
-	var promptTokens, completionTokens int64
-
-	for stream.Next() {
-		chunk := stream.Current()
-		if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
-			promptTokens = chunk.Usage.PromptTokens
-			completionTokens = chunk.Usage.CompletionTokens
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		choice := chunk.Choices[0]
-		delta := choice.Delta
-		if delta.Content != "" {
-			aggregatedText += delta.Content
-			if !yield(&model.LLMResponse{
-				Partial:      true,
-				TurnComplete: false,
-				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: delta.Content}}},
-			}, nil) {
-				return
-			}
-		}
-		for _, tc := range delta.ToolCalls {
-			idx := tc.Index
-			if toolCallsAcc[idx] == nil {
-				toolCallsAcc[idx] = map[string]any{"id": "", "name": "", "arguments": ""}
-			}
-			if tc.ID != "" {
-				toolCallsAcc[idx]["id"] = tc.ID
-			}
-			if tc.Function.Name != "" {
-				toolCallsAcc[idx]["name"] = tc.Function.Name
-			}
-			if tc.Function.Arguments != "" {
-				prev, _ := toolCallsAcc[idx]["arguments"].(string)
-				toolCallsAcc[idx]["arguments"] = prev + tc.Function.Arguments
-			}
-		}
-		if choice.FinishReason != "" {
-			finishReason = choice.FinishReason
-		}
+	if id != "" {
+		acc[idx]["id"] = id
 	}
-
-	if err := stream.Err(); err != nil {
-		if ctx.Err() == context.Canceled {
-			return
-		}
-		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-		return
+	if name != "" {
+		acc[idx]["name"] = name
 	}
+	if arguments != "" {
+		prev, _ := acc[idx]["arguments"].(string)
+		acc[idx]["arguments"] = prev + arguments
+	}
+}
 
-	// Build final response with parts in index order
-	indices := make([]int64, 0, len(toolCallsAcc))
-	for k := range toolCallsAcc {
+// buildOaiFinalResponse constructs the final LLMResponse from accumulated streaming state.
+func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
+	indices := make([]int64, 0, len(s.toolCalls))
+	for k := range s.toolCalls {
 		indices = append(indices, k)
 	}
 	slices.Sort(indices)
-	finalParts := make([]*genai.Part, 0, 1+len(toolCallsAcc))
-	if aggregatedText != "" {
-		finalParts = append(finalParts, &genai.Part{Text: aggregatedText})
+
+	finalParts := make([]*genai.Part, 0, 1+len(s.toolCalls))
+	if s.text != "" {
+		finalParts = append(finalParts, &genai.Part{Text: s.text})
 	}
 	for _, idx := range indices {
-		tc := toolCallsAcc[idx]
+		tc := s.toolCalls[idx]
 		argsStr, _ := tc["arguments"].(string)
 		var args map[string]any
 		if argsStr != "" {
@@ -335,19 +300,69 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 	}
 
 	var usage *genai.GenerateContentResponseUsageMetadata
-	if promptTokens > 0 || completionTokens > 0 {
+	if s.promptTokens > 0 || s.completionTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(promptTokens),
-			CandidatesTokenCount: int32(completionTokens),
+			PromptTokenCount:     int32(s.promptTokens),
+			CandidatesTokenCount: int32(s.completionTokens),
 		}
 	}
-	_ = yield(&model.LLMResponse{
+	return &model.LLMResponse{
 		Partial:       false,
 		TurnComplete:  true,
-		FinishReason:  oaiFinishReasonToGenai(finishReason),
+		FinishReason:  oaiFinishReasonToGenai(s.finishReason),
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
-	}, nil)
+	}
+}
+
+func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool) {
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: param.NewOpt(true),
+	}
+	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	//nolint:errcheck // Close() may return error but we can't recover from it in defer
+	defer stream.Close()
+
+	state := &oaiStreamState{toolCalls: make(map[int64]map[string]any)}
+
+	for stream.Next() {
+		chunk := stream.Current()
+		if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+			state.promptTokens = chunk.Usage.PromptTokens
+			state.completionTokens = chunk.Usage.CompletionTokens
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		choice := chunk.Choices[0]
+		delta := choice.Delta
+		if delta.Content != "" {
+			state.text += delta.Content
+			if !yield(&model.LLMResponse{
+				Partial:      true,
+				TurnComplete: false,
+				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: delta.Content}}},
+			}, nil) {
+				return
+			}
+		}
+		for _, tc := range delta.ToolCalls {
+			accumulateOaiToolCall(state.toolCalls, tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)
+		}
+		if choice.FinishReason != "" {
+			state.finishReason = choice.FinishReason
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		if ctx.Err() == context.Canceled {
+			return
+		}
+		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+		return
+	}
+
+	_ = yield(buildOaiFinalResponse(state), nil)
 }
 
 func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool) {

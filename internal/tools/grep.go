@@ -189,7 +189,7 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 		if resolveErr != nil {
 			return GrepOutput{}, resolveErr
 		}
-		fs.WalkDir(fsys, rel, walkFn)
+		_ = fs.WalkDir(fsys, rel, walkFn)
 	} else {
 		matches = grepFileSandbox(sb, re, searchPath)
 		total = len(matches)

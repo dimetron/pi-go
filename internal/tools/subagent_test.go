@@ -434,3 +434,107 @@ func TestResolveContext_Nil(t *testing.T) {
 		t.Error("expected non-nil context from nil input")
 	}
 }
+
+// --- consumeAgentEvents tests ---
+
+func TestConsumeAgentEvents_TextOnly(t *testing.T) {
+	ch := make(chan subagent.Event, 3)
+	ch <- subagent.Event{Type: "text_delta", Content: "Hello "}
+	ch <- subagent.Event{Type: "text_delta", Content: "world"}
+	close(ch)
+
+	text, status, errMsg := consumeAgentEvents(ch)
+	if status != "completed" {
+		t.Errorf("status = %q, want completed", status)
+	}
+	if errMsg != "" {
+		t.Errorf("errMsg = %q, want empty", errMsg)
+	}
+	if text != "Hello world" {
+		t.Errorf("text = %q, want %q", text, "Hello world")
+	}
+}
+
+func TestConsumeAgentEvents_WithError(t *testing.T) {
+	ch := make(chan subagent.Event, 3)
+	ch <- subagent.Event{Type: "text_delta", Content: "partial"}
+	ch <- subagent.Event{Type: "error", Error: "timeout"}
+	close(ch)
+
+	_, status, errMsg := consumeAgentEvents(ch)
+	if status != "failed" {
+		t.Errorf("status = %q, want failed", status)
+	}
+	if errMsg != "timeout" {
+		t.Errorf("errMsg = %q, want timeout", errMsg)
+	}
+}
+
+func TestConsumeAgentEvents_Empty(t *testing.T) {
+	ch := make(chan subagent.Event)
+	close(ch)
+
+	text, status, errMsg := consumeAgentEvents(ch)
+	if status != "completed" {
+		t.Errorf("status = %q, want completed", status)
+	}
+	if text != "" {
+		t.Errorf("text = %q, want empty", text)
+	}
+	if errMsg != "" {
+		t.Errorf("errMsg = %q, want empty", errMsg)
+	}
+}
+
+// --- buildParallelSummary tests ---
+
+func TestBuildParallelSummary_AllCompleted(t *testing.T) {
+	results := []AgentResult{
+		{Status: "completed"},
+		{Status: "completed"},
+		{Status: "completed"},
+	}
+	got := buildParallelSummary(results, 3, "5s")
+	if got != "parallel: 3/3 completed in 5s" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBuildParallelSummary_WithFailures(t *testing.T) {
+	results := []AgentResult{
+		{Status: "completed"},
+		{Status: "failed"},
+		{Status: "completed"},
+	}
+	got := buildParallelSummary(results, 3, "10s")
+	if !strings.Contains(got, "2/3 completed") {
+		t.Errorf("missing completed count in %q", got)
+	}
+	if !strings.Contains(got, "1 failed") {
+		t.Errorf("missing failed count in %q", got)
+	}
+}
+
+// --- buildChainSummary tests ---
+
+func TestBuildChainSummary_AllCompleted(t *testing.T) {
+	results := []AgentResult{
+		{Status: "completed"},
+		{Status: "completed"},
+	}
+	got := buildChainSummary(results, 2, "3s")
+	if got != "chain: 2/2 steps completed in 3s" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBuildChainSummary_StoppedEarly(t *testing.T) {
+	results := []AgentResult{
+		{Status: "completed"},
+		{Status: "failed"},
+	}
+	got := buildChainSummary(results, 4, "7s")
+	if !strings.Contains(got, "stopped at step 2/4") {
+		t.Errorf("got %q", got)
+	}
+}

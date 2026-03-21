@@ -502,7 +502,7 @@ func TestManager_ServerFor_ReturnsCachedServer(t *testing.T) {
 		opened:   make(map[string]int),
 	}
 
-	mgr := &Manager{
+	mgr := &Manager{ //nolint:govet // fields are needed for valid struct initialization
 		languages: map[string]*LanguageConfig{
 			"go": {
 				Command:        "gopls",

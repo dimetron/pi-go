@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dimetron/pi-go/internal/audit"
 	"github.com/spf13/cobra"
+
+	"github.com/dimetron/pi-go/internal/audit"
 )
 
 func newAuditCmd() *cobra.Command {
@@ -148,7 +149,7 @@ func handleStrip(result *audit.ScanResult, dryRun, force, verbose bool) error {
 	if !force {
 		fmt.Print("\nStrip dangerous characters from these files? [y/N] ")
 		var answer string
-		fmt.Scanln(&answer)
+		_, _ = fmt.Scanln(&answer)
 		if answer != "y" && answer != "Y" {
 			fmt.Println("Aborted.")
 			return nil

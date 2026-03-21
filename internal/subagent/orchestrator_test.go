@@ -365,3 +365,59 @@ func TestOrchestrator_SpawnEmptyAgentName(t *testing.T) {
 		t.Fatal("expected error for empty agent name")
 	}
 }
+
+func TestResolveWorktreeUsage(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name          string
+		agentDefault  bool
+		inputOverride *bool
+		workDir       string
+		want          bool
+	}{
+		{"default true, no override", true, nil, "", true},
+		{"default false, no override", false, nil, "", false},
+		{"override true", false, boolPtr(true), "", true},
+		{"override false", true, boolPtr(false), "", false},
+		{"workDir provided, ignores all", true, boolPtr(true), "/tmp/wt", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveWorktreeUsage(tt.agentDefault, tt.inputOverride, tt.workDir)
+			if got != tt.want {
+				t.Errorf("resolveWorktreeUsage = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAgentForCancel(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   *agentState
+		wantErr string
+	}{
+		{"nil state", nil, "not found"},
+		{"completed", &agentState{Status: "completed"}, "not running"},
+		{"canceled", &agentState{Status: "canceled"}, "not running"},
+		{"running", &agentState{Status: "running"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAgentForCancel(tt.state, "test-agent")
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q should contain %q", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}

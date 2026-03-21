@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -50,7 +51,7 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 	}
 
 	// Use background context if tool.Context is nil (e.g. in unit tests)
-	var parentCtx context.Context = context.Background()
+	var parentCtx = context.Background()
 	if ctx != nil {
 		parentCtx = ctx
 	}
@@ -68,7 +69,8 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else if cmdCtx.Err() == context.DeadlineExceeded {
 			return BashOutput{

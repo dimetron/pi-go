@@ -327,9 +327,7 @@ func TestIntegrationToolExecution(t *testing.T) {
 			if p.FunctionCall != nil && p.FunctionCall.Name == "read" {
 				hasFunctionCall = true
 			}
-			if p.FunctionResponse != nil && p.FunctionResponse.Name == "read" {
-				// Tool result was fed back.
-			}
+			// Tool result fed back — no assertion needed, just verifying it's present.
 			if p.Text != "" && strings.Contains(p.Text, "hello from test file") {
 				hasFinalText = true
 			}

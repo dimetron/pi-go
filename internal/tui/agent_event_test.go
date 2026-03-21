@@ -507,7 +507,7 @@ func TestAgentSubEvent_MultipleEventsAccumulate(t *testing.T) {
 		{agentID: "sub-1", kind: "tool_result", content: "1 replacement"},
 	}
 
-	var mm *model = m
+	var mm = m
 	for _, ev := range events {
 		newM, _ := mm.Update(ev)
 		mm = newM.(*model)

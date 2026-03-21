@@ -1,0 +1,129 @@
+version: "2"
+
+run:
+  go: "1.26"
+  tests: true
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/dimetron/pi-go
+
+linters:
+  default: none
+  enable:
+    # Default linters.
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Style and bugs.
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errname
+    - errorlint
+    - fatcontext
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - wastedassign
+
+  exclusions:
+    # Built-in exclusion presets (e.g. test helpers, generated code).
+    presets:
+      - std-error-handling
+    rules:
+      # Test files: relax errcheck, bodyclose, nilerr, unusedwrite.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+          - nilerr
+      - path: _test\.go
+        text: unusedwrite
+      # Research directory is experimental.
+      - path: ^research/
+        linters:
+          - errcheck
+          - bodyclose
+          - nilerr
+          - revive
+          - staticcheck
+          - govet
+          - misspell
+          - errorlint
+          - unconvert
+          - unused
+          - wastedassign
+      # ADK tool handlers return errors inside result structs, not as Go errors.
+      - path: internal/tools/
+        linters:
+          - nilerr
+      # LSP/hook/callback wrappers intentionally swallow errors into result fields.
+      - path: internal/(lsp|cli|memory|tui)/
+        linters:
+          - nilerr
+      # Package comments: internal packages don't need them.
+      - linters:
+          - staticcheck
+        text: "ST1000"
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (strings.Builder).WriteString
+        - (strings.Builder).Write
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # too noisy, micro-optimisation
+        - shadow          # common in Go, intentional re-declarations
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true  # too strict for internal packages
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+          disabled: true  # channel drain pattern (for range ch {}) is idiomatic
+        - name: superfluous-else
+        - name: unreachable-code
+
+    staticcheck:
+      checks: ["all"]
+
+    misspell:
+      locale: US
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5

@@ -176,7 +176,7 @@ func (m *model) handlePlanCancel() (tea.Model, tea.Cmd) {
 	m.plan = nil
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: "Plan cancelled.",
+		content: "Plan canceled.",
 	})
 	return m, nil
 }

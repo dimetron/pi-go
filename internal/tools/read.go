@@ -42,7 +42,7 @@ func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
 	return readHandlerWithCache(sb, input, nil)
 }
 
-func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *fileContentCache) (ReadOutput, error) {
+func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *FileContentCache) (ReadOutput, error) {
 	if input.FilePath == "" {
 		return ReadOutput{}, fmt.Errorf("file_path is required")
 	}

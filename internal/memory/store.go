@@ -230,7 +230,7 @@ func scanObservations(rows *sql.Rows) ([]*Observation, error) {
 		}
 		obs.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		if sourceFilesJSON != "" {
-			json.Unmarshal([]byte(sourceFilesJSON), &obs.SourceFiles)
+			_ = json.Unmarshal([]byte(sourceFilesJSON), &obs.SourceFiles)
 		}
 		if obs.SourceFiles == nil {
 			obs.SourceFiles = []string{}

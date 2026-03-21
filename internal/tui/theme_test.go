@@ -80,15 +80,30 @@ func TestThemeColorsConversion(t *testing.T) {
 	tm := NewThemeManager()
 	colors := tm.Colors()
 
-	// Verify color.Color helpers don't panic and return non-nil.
-	if c := colors.TextColor(); c == nil {
-		t.Error("TextColor() returned nil")
+	// Verify all color.Color helpers don't panic.
+	// lipgloss.Color is just a string alias.
+	colorMethods := []struct {
+		name string
+		fn   func() any
+	}{
+		{"TextColor", func() any { return colors.TextColor() }},
+		{"BaseColor", func() any { return colors.BaseColor() }},
+		{"PrimaryColor", func() any { return colors.PrimaryColor() }},
+		{"ToolColor", func() any { return colors.ToolColor() }},
+		{"SuccessColor", func() any { return colors.SuccessColor() }},
+		{"ErrorColor", func() any { return colors.ErrorColor() }},
+		{"SecondaryColor", func() any { return colors.SecondaryColor() }},
+		{"InfoColor", func() any { return colors.InfoColor() }},
+		{"WarningColor", func() any { return colors.WarningColor() }},
+		{"DiffAddedColor", func() any { return colors.DiffAddedColor() }},
+		{"DiffRemovedColor", func() any { return colors.DiffRemovedColor() }},
+		{"DiffAddedTextColor", func() any { return colors.DiffAddedTextColor() }},
+		{"DiffRemovedTextColor", func() any { return colors.DiffRemovedTextColor() }},
 	}
-	if c := colors.PrimaryColor(); c == nil {
-		t.Error("PrimaryColor() returned nil")
-	}
-	if c := colors.ErrorColor(); c == nil {
-		t.Error("ErrorColor() returned nil")
+	for _, tc := range colorMethods {
+		if c := tc.fn(); c == nil {
+			t.Errorf("%s() returned nil", tc.name)
+		}
 	}
 }
 

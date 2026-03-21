@@ -141,7 +141,7 @@ func parsePorcelain(output string) (staged, unstaged, untracked []string) {
 
 // runGit executes a git command in the given directory and returns stdout.
 func runGit(ctx tool.Context, dir string, args ...string) (string, error) {
-	var parentCtx context.Context = context.Background()
+	var parentCtx = context.Background()
 	if ctx != nil {
 		parentCtx = ctx
 	}

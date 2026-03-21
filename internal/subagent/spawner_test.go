@@ -164,7 +164,7 @@ sleep 60
 
 	_, err = proc.Wait()
 	if err == nil {
-		t.Fatal("expected error from cancelled process")
+		t.Fatal("expected error from canceled process")
 	}
 }
 

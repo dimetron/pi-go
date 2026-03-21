@@ -643,7 +643,7 @@ func TestExchangeCode_CancelledContext(t *testing.T) {
 	prov := Provider{TokenURL: "http://127.0.0.1:1/token", ClientID: "test"}
 	_, err := exchangeCode(ctx, prov, "code", "http://localhost/cb", "verifier")
 	if err == nil {
-		t.Fatal("expected error with cancelled context")
+		t.Fatal("expected error with canceled context")
 	}
 }
 
@@ -705,7 +705,7 @@ func TestRequestDeviceToken_CancelledContext(t *testing.T) {
 	prov := Provider{TokenURL: "http://127.0.0.1:1/token", ClientID: "test"}
 	_, err := requestDeviceToken(ctx, prov, "device-code")
 	if err == nil {
-		t.Fatal("expected error with cancelled context")
+		t.Fatal("expected error with canceled context")
 	}
 }
 
