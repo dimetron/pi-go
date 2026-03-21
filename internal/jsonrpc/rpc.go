@@ -1,7 +1,7 @@
-// Package rpc implements a Unix socket JSON-RPC server for pi-go.
+// Package jsonrpc implements a Unix socket JSON-RPC server for pi-go.
 // It accepts JSON-RPC requests and streams JSONL events back to clients,
 // enabling editor/IDE integration.
-package rpc
+package jsonrpc
 
 import (
 	"context"

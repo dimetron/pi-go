@@ -20,11 +20,11 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/jsonrpc"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/provider"
-	"github.com/dimetron/pi-go/internal/rpc"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -484,7 +484,7 @@ func runNonInteractive(
 
 	switch mode {
 	case "rpc":
-		srv := rpc.NewServer(rpc.Config{
+		srv := jsonrpc.NewServer(jsonrpc.Config{
 			Agent:      ag,
 			SocketPath: flagSocket,
 		})
