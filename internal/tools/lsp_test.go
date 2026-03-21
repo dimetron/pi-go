@@ -268,3 +268,65 @@ func TestFileURI_RelativePath(t *testing.T) {
 		t.Errorf("fileURI(relative) = %q, want file:// prefix", got)
 	}
 }
+
+func TestConvertDiagnostics(t *testing.T) {
+	diags := []lsp.Diagnostic{
+		{
+			Range: lsp.Range{
+				Start: lsp.Position{Line: 10, Character: 5},
+			},
+			Severity: 1,
+			Message:  "undefined: foo",
+			Source:   "gopls",
+		},
+		{
+			Range: lsp.Range{
+				Start: lsp.Position{Line: 20, Character: 0},
+			},
+			Severity: 2,
+			Message:  "unused variable",
+			Source:   "gopls",
+		},
+	}
+	entries := convertDiagnostics(diags)
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].Line != 10 {
+		t.Errorf("line = %d, want 10", entries[0].Line)
+	}
+	if entries[0].Column != 5 {
+		t.Errorf("column = %d, want 5", entries[0].Column)
+	}
+	if entries[0].Message != "undefined: foo" {
+		t.Errorf("message = %q", entries[0].Message)
+	}
+	if entries[0].Source != "gopls" {
+		t.Errorf("source = %q", entries[0].Source)
+	}
+}
+
+func TestConvertDiagnostics_Empty(t *testing.T) {
+	entries := convertDiagnostics(nil)
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
+func TestExtractHoverContent_Nil(t *testing.T) {
+	got := extractHoverContent(nil)
+	if got != "no hover information available" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractHoverContent_WithResult(t *testing.T) {
+	result := &lsp.HoverResult{
+		Contents: lsp.MarkupContent{Value: "func Foo() int"},
+	}
+	got := extractHoverContent(result)
+	if got != "func Foo() int" {
+		t.Errorf("got %q", got)
+	}
+}

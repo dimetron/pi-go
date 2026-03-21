@@ -12,6 +12,10 @@ import (
 	"strings"
 	"time"
 
+	adkmodel "google.golang.org/adk/model"
+	"google.golang.org/adk/session"
+	adktool "google.golang.org/adk/tool"
+
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
@@ -25,8 +29,6 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
 	"github.com/dimetron/pi-go/internal/tui"
-	"google.golang.org/adk/session"
-	adktool "google.golang.org/adk/tool"
 
 	"github.com/spf13/cobra"
 )
@@ -167,7 +169,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	prompt := strings.Join(args, " ")
 
-	// Build sandbox rooted at current working directory (or repo root for subagents).
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
@@ -176,20 +177,55 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	if sandboxRoot == "" {
 		sandboxRoot = cwd
 	}
+
+	// Resolve --continue early (before TUI) so errors surface immediately.
+	if flagContinue {
+		homeDir, hErr := os.UserHomeDir()
+		if hErr != nil {
+			return fmt.Errorf("getting home dir: %w", hErr)
+		}
+		sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
+		sessionSvc, sErr := pisession.NewFileService(sessionsDir)
+		if sErr != nil {
+			return fmt.Errorf("creating session service: %w", sErr)
+		}
+		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
+		if lastID == "" {
+			return fmt.Errorf("no previous session found to continue")
+		}
+		flagSession = lastID
+	}
+
+	// Interactive mode: show TUI immediately, initialize in background.
+	if mode == "interactive" {
+		return runInteractive(cmd.Context(), cfg, llm, info, tokenTracker, activeRole, cwd, sandboxRoot)
+	}
+
+	// Non-interactive modes: synchronous initialization.
+	return runNonInteractive(cmd.Context(), cmd, cfg, llm, info, tokenTracker, cwd, sandboxRoot, mode, prompt)
+}
+
+// runNonInteractive performs synchronous initialization and runs print/json/rpc modes.
+func runNonInteractive(
+	parentCtx context.Context,
+	cmd *cobra.Command,
+	cfg config.Config,
+	llm adkmodel.LLM,
+	info provider.Info,
+	tokenTracker *guardrail.Tracker,
+	cwd, sandboxRoot, mode, prompt string,
+) error {
 	sandbox, err := tools.NewSandbox(sandboxRoot)
 	if err != nil {
 		return fmt.Errorf("creating sandbox: %w", err)
 	}
-	defer sandbox.Close()
+	defer func() { _ = sandbox.Close() }()
 
-	// Build core tools.
 	coreTools, err := tools.CoreTools(sandbox)
 	if err != nil {
 		return fmt.Errorf("creating core tools: %w", err)
 	}
 
-	// Build subagent orchestrator and agent tool.
-	// Detect git repo root for worktree support.
 	repoRoot := detectGitRoot(cwd)
 	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
 	if err != nil {
@@ -202,12 +238,11 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	orch := subagent.NewOrchestrator(&cfg, repoRoot, agentConfigs)
 	defer orch.Shutdown()
 
-	// Create subagent event channel for TUI live streaming.
 	agentEventCh := make(chan tui.AgentSubEvent, 128)
 	agentEventCB := func(agentID, eventType, content string) {
 		select {
 		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
-		default: // drop if channel full
+		default:
 		}
 	}
 	agentTools, err := tools.AgentTools(orch, agentEventCB)
@@ -215,30 +250,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating agent tools: %w", err)
 	}
 	coreTools = append(coreTools, agentTools...)
-
-	// Build screen and restart tools for interactive mode.
-	var screen *tui.Screen
-	var restartCh chan struct{}
-	if mode == "interactive" {
-		screen = &tui.Screen{}
-		screenTool, err := tools.NewScreenTool(screen)
-		if err != nil {
-			return fmt.Errorf("creating screen tool: %w", err)
-		}
-		coreTools = append(coreTools, screenTool)
-
-		restartCh = make(chan struct{}, 1)
-		restartTool, err := tools.NewRestartTool(func() {
-			select {
-			case restartCh <- struct{}{}:
-			default:
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("creating restart tool: %w", err)
-		}
-		coreTools = append(coreTools, restartTool)
-	}
 
 	// Initialize memory system.
 	var memStore memory.Store
@@ -251,13 +262,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 				memCfg.DBPath = cfg.Memory.DBPath
 			}
 			if cfg.Memory.TokenBudget > 0 {
-				memCfg.TokenBudget = cfg.Memory.TokenBudget
+				memCfg.TokenBudget = cfg.Memory.TokenBudget //nolint:govet // used by context generator
 			}
 			if cfg.Memory.MaxPending > 0 {
 				memCfg.MaxPending = cfg.Memory.MaxPending
 			}
 			if cfg.Memory.LookbackHours > 0 {
-				memCfg.LookbackHours = cfg.Memory.LookbackHours
+				memCfg.LookbackHours = cfg.Memory.LookbackHours //nolint:govet // reserved for future use
 			}
 		}
 		dbPath := memCfg.DBPath
@@ -273,7 +284,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			memStore = memory.NewSQLiteStore(memDB)
 			compressor := memory.NewSubagentCompressor(orch)
 			memWorker = memory.NewWorker(memStore, compressor, memCfg.MaxPending)
-			memWorker.Start(cmd.Context())
+			memWorker.Start(parentCtx)
 		}
 	}
 	defer func() {
@@ -287,7 +298,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Register memory search tools.
 	if memStore != nil {
 		memTools, memErr := tools.MemoryTools(memStore)
 		if memErr != nil {
@@ -297,7 +307,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Load system instruction: --system flag overrides default.
 	var instruction string
 	if flagSystem != "" {
 		instruction = flagSystem
@@ -305,7 +314,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		instruction = agent.LoadInstruction(agent.SystemInstruction)
 	}
 
-	// Build output compactor callback.
 	compactorCfg := tools.DefaultCompactorConfig()
 	if cfg.Compactor != nil {
 		if cfg.Compactor.Enabled != nil {
@@ -321,22 +329,17 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			compactorCfg.MaxLines = cfg.Compactor.MaxLines
 		}
 	}
-	compactMetrics := tools.NewCompactMetrics()
-	compactorCB := tools.BuildCompactorCallback(compactorCfg, compactMetrics)
+	compactorCB := tools.BuildCompactorCallback(compactorCfg, tools.NewCompactMetrics())
 
-	// Load extensions: hooks, skills, MCP toolsets.
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
 	afterCBs := extension.BuildAfterToolCallbacks(hooks)
 
-	// Create LSP manager for format-on-write and diagnostics-on-edit.
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
 	afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 	afterCBs = append(afterCBs, compactorCB)
 
-	// Add memory after-tool callback.
-	// memSessionID is set after session resolution to activate memory capture.
 	var memSessionID string
 	if memWorker != nil {
 		var excludedTools map[string]bool
@@ -366,7 +369,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Build LSP explicit tools (lsp-diagnostics, lsp-definition, etc.).
 	lspTools, err := tools.LSPTools(lspMgr)
 	if err != nil {
 		return fmt.Errorf("creating LSP tools: %w", err)
@@ -390,9 +392,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Load skills from global and project directories.
-	// Global: ~/.pi-go/skills/
-	// Project: .pi-go/skills/, .claude/skills/, .cursor/skills/
 	skillDirs := []string{}
 	if homeDir, hErr := os.UserHomeDir(); hErr == nil {
 		skillDirs = append(skillDirs, filepath.Join(homeDir, ".pi-go", "skills"))
@@ -410,14 +409,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Inject memory context into system instruction.
 	if memStore != nil {
 		memCfg := config.MemoryDefaults()
 		if cfg.Memory != nil && cfg.Memory.TokenBudget > 0 {
 			memCfg.TokenBudget = cfg.Memory.TokenBudget
 		}
 		ctxGen := memory.NewContextGenerator(memStore, memCfg.TokenBudget)
-		memContext, ctxErr := ctxGen.Generate(cmd.Context(), cwd)
+		memContext, ctxErr := ctxGen.Generate(parentCtx, cwd)
 		if ctxErr != nil {
 			fmt.Fprintf(os.Stderr, "pi-go: warning: memory context generation failed: %v\n", ctxErr)
 		} else if memContext != "" {
@@ -425,7 +423,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Set up persistent session service.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("getting home dir: %w", err)
@@ -436,7 +433,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating session service: %w", err)
 	}
 
-	// Create the agent with persistent session service and extensions.
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
 		Tools:               coreTools,
@@ -450,10 +446,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating agent: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt)
 	defer stop()
 
-	// Resolve session: --continue resumes last, --session resumes specific, else create new.
 	sessionID := flagSession
 	if flagContinue {
 		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
@@ -470,7 +465,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Activate memory capture now that session ID is known.
 	if memStore != nil {
 		memSessionID = sessionID
 		_ = memStore.CreateSession(ctx, &memory.Session{
@@ -481,42 +475,14 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Create session logger (always enabled).
 	sessionLog, err := logger.New()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "pi-go: session log: %s\n", sessionLog.Path())
 	}
-	defer sessionLog.Close()
+	defer func() { _ = sessionLog.Close() }()
 	sessionLog.SessionStart(sessionID, llm.Name(), mode)
 
-	// Run the agent based on output mode.
 	switch mode {
-	case "interactive":
-		commitMsgFn := buildCommitMsgFunc(cmd.Context(), cfg)
-		return tui.Run(ctx, tui.Config{
-			Agent:             ag,
-			LLM:               llm,
-			SessionID:         sessionID,
-			ModelName:         llm.Name(),
-			ProviderName:      info.Provider,
-			ActiveRole:        activeRole,
-			Roles:             cfg.Roles,
-			SessionService:    sessionSvc,
-			WorkDir:           cwd,
-			Orchestrator:      orch,
-			GenerateCommitMsg: commitMsgFn,
-			Logger:            sessionLog,
-			Screen:            screen,
-			Skills:            skills,
-			SkillDirs:         skillDirs,
-			RestartCh:         restartCh,
-			AgentEventCh:      agentEventCh,
-			TokenTracker:      tokenTracker,
-			CompactMetrics:    compactMetrics,
-			ThemeName:         cfg.Theme,
-		})
 	case "rpc":
 		srv := rpc.NewServer(rpc.Config{
 			Agent:      ag,
@@ -644,7 +610,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 			_ = enc.Encode(jsonEvent{
 				Type:  "message_start",
 				Agent: ev.Author,
-				Role:  string(ev.Content.Role),
+				Role:  ev.Content.Role,
 			})
 			started = true
 		}
@@ -712,9 +678,8 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	baseURL := ""
 	baseURLs := config.BaseURLs()
-	baseURL = baseURLs[info.Provider]
+	baseURL := baseURLs[info.Provider]
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
@@ -808,7 +773,7 @@ func loadDotEnv() {
 		val = strings.TrimSpace(val)
 		// Don't override existing env vars.
 		if os.Getenv(key) == "" {
-			os.Setenv(key, val)
+			_ = os.Setenv(key, val)
 		}
 	}
 }

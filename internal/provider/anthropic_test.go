@@ -853,6 +853,149 @@ func TestAnthropicNonStreamingToolCallResponse(t *testing.T) {
 	}
 }
 
+func TestBuildAntFinalResponse_TextOnly(t *testing.T) {
+	s := &antStreamState{
+		text:         "Hello world",
+		toolUse:      map[int]antToolUseAcc{},
+		stopReason:   anthropic.StopReasonEndTurn,
+		inputTokens:  10,
+		outputTokens: 5,
+	}
+	resp := buildAntFinalResponse(s)
+
+	if resp.Partial {
+		t.Error("expected Partial = false")
+	}
+	if !resp.TurnComplete {
+		t.Error("expected TurnComplete = true")
+	}
+	if resp.FinishReason != genai.FinishReasonStop {
+		t.Errorf("FinishReason = %v, want Stop", resp.FinishReason)
+	}
+	if len(resp.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(resp.Content.Parts))
+	}
+	if resp.Content.Parts[0].Text != "Hello world" {
+		t.Errorf("text = %q, want %q", resp.Content.Parts[0].Text, "Hello world")
+	}
+	if resp.UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("PromptTokenCount = %d, want 10", resp.UsageMetadata.PromptTokenCount)
+	}
+	if resp.UsageMetadata.CandidatesTokenCount != 5 {
+		t.Errorf("CandidatesTokenCount = %d, want 5", resp.UsageMetadata.CandidatesTokenCount)
+	}
+}
+
+func TestBuildAntFinalResponse_WithToolUse(t *testing.T) {
+	s := &antStreamState{
+		toolUse: map[int]antToolUseAcc{
+			0: {id: "tool_123", name: "bash", inputJSON: `{"command":"ls"}`},
+		},
+		stopReason:   anthropic.StopReasonToolUse,
+		inputTokens:  20,
+		outputTokens: 15,
+	}
+	resp := buildAntFinalResponse(s)
+
+	if len(resp.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(resp.Content.Parts))
+	}
+	fc := resp.Content.Parts[0].FunctionCall
+	if fc == nil {
+		t.Fatal("expected FunctionCall part")
+	}
+	if fc.Name != "bash" {
+		t.Errorf("name = %q, want bash", fc.Name)
+	}
+	if fc.ID != "tool_123" {
+		t.Errorf("ID = %q, want tool_123", fc.ID)
+	}
+	cmd, _ := fc.Args["command"].(string)
+	if cmd != "ls" {
+		t.Errorf("command arg = %q, want ls", cmd)
+	}
+}
+
+func TestBuildAntFinalResponse_TextAndToolUse(t *testing.T) {
+	s := &antStreamState{
+		text: "I'll run a command.",
+		toolUse: map[int]antToolUseAcc{
+			1: {id: "tool_456", name: "read", inputJSON: `{"path":"/tmp/x"}`},
+		},
+		stopReason:   anthropic.StopReasonToolUse,
+		inputTokens:  0,
+		outputTokens: 0,
+	}
+	resp := buildAntFinalResponse(s)
+
+	if len(resp.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(resp.Content.Parts))
+	}
+	if resp.Content.Parts[0].Text != "I'll run a command." {
+		t.Errorf("text part = %q", resp.Content.Parts[0].Text)
+	}
+	if resp.Content.Parts[1].FunctionCall == nil {
+		t.Error("expected FunctionCall in second part")
+	}
+	if resp.UsageMetadata != nil {
+		t.Error("expected nil UsageMetadata when tokens are 0")
+	}
+}
+
+func TestBuildAntFinalResponse_EmptyState(t *testing.T) {
+	s := &antStreamState{toolUse: map[int]antToolUseAcc{}}
+	resp := buildAntFinalResponse(s)
+
+	if len(resp.Content.Parts) != 0 {
+		t.Errorf("expected 0 parts, got %d", len(resp.Content.Parts))
+	}
+	if resp.UsageMetadata != nil {
+		t.Error("expected nil UsageMetadata")
+	}
+}
+
+func TestBuildAntFinalResponse_MultipleToolUseSortedByIndex(t *testing.T) {
+	s := &antStreamState{
+		toolUse: map[int]antToolUseAcc{
+			2: {id: "tool_c", name: "write", inputJSON: `{"path":"/c"}`},
+			0: {id: "tool_a", name: "bash", inputJSON: `{"cmd":"ls"}`},
+			1: {id: "tool_b", name: "read", inputJSON: `{"path":"/b"}`},
+		},
+		stopReason: anthropic.StopReasonToolUse,
+	}
+
+	// Run multiple times to verify determinism (maps iterate randomly).
+	for range 10 {
+		resp := buildAntFinalResponse(s)
+		if len(resp.Content.Parts) != 3 {
+			t.Fatalf("expected 3 parts, got %d", len(resp.Content.Parts))
+		}
+		names := []string{
+			resp.Content.Parts[0].FunctionCall.Name,
+			resp.Content.Parts[1].FunctionCall.Name,
+			resp.Content.Parts[2].FunctionCall.Name,
+		}
+		if names[0] != "bash" || names[1] != "read" || names[2] != "write" {
+			t.Fatalf("expected [bash, read, write], got %v", names)
+		}
+	}
+}
+
+func TestBuildAntFinalResponse_MaxTokens(t *testing.T) {
+	s := &antStreamState{
+		text:         "truncated",
+		toolUse:      map[int]antToolUseAcc{},
+		stopReason:   anthropic.StopReasonMaxTokens,
+		inputTokens:  100,
+		outputTokens: 4096,
+	}
+	resp := buildAntFinalResponse(s)
+
+	if resp.FinishReason != genai.FinishReasonMaxTokens {
+		t.Errorf("FinishReason = %v, want MaxTokens", resp.FinishReason)
+	}
+}
+
 func TestAnthropicNonStreamingErrorResponse(t *testing.T) {
 	// Mock server that returns a 500 error.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

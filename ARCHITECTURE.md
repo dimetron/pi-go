@@ -11,13 +11,19 @@ pi-go/
 ├── cmd/pi/main.go                  # Entry point → cli.Execute()
 └── internal/
     ├── agent/                       # ADK agent setup, retry logic
+    ├── audit/                       # Hidden character scanner for skill audit
+    ├── auth/                        # OAuth PKCE/device-code login flows
     ├── cli/                         # CLI flags, output modes, wiring
     ├── config/                      # Config loading (global + project), model roles
-    ├── extension/                   # Hooks, skills, MCP integration
+    ├── extension/                    # Hooks, skills, MCP integration
+    ├── guardrail/                    # Daily token usage tracking and limits
     ├── lsp/                         # LSP integration (protocol, client, manager, languages, hooks)
+    ├── logger/                      # Session logging to ~/.pi-go/log/
+    ├── memory/                      # Persistent memory system (SQLite + AI compression)
     ├── provider/                    # LLM providers (Anthropic, OpenAI, Gemini)
     ├── rpc/                         # Unix socket JSON-RPC server
     ├── session/                     # JSONL persistence, branching, compaction
+    ├── sop/                         # Standard Operating Procedures (PDD planning)
     ├── subagent/                    # Subagent orchestration (pool, spawner, worktree, orchestrator)
     ├── tools/                       # Sandboxed tools (read, write, edit, bash, grep, find, ls, tree, git, lsp, agent)
     └── tui/                         # Bubble Tea v2 interactive UI
@@ -38,6 +44,10 @@ graph TD
     cli --> rpc["rpc"]
     cli --> subagent["subagent"]
     cli --> lsp["lsp"]
+    cli --> guardrail["guardrail"]
+    cli --> auth["auth"]
+    cli --> audit["audit"]
+    cli --> logger["logger"]
 
     agent --> adk_runner["ADK runner"]
     agent --> adk_llmagent["ADK llmagent"]
@@ -65,6 +75,19 @@ graph TD
 
     session --> adk_session
 
+    guardrail --> cli
+    guardrail --> provider
+
+    memory["memory"] --> sqlite["modernc.org/sqlite"]
+    memory --> subagent
+    memory --> config
+
+    sop["sop"] --> agent
+
+    audit --> tools
+
+    logger --> cli
+
     style main fill:#2d5016,color:#fff
     style cli fill:#1a3a5c,color:#fff
     style agent fill:#1a3a5c,color:#fff
@@ -74,6 +97,12 @@ graph TD
     style session fill:#1a5c5c,color:#fff
     style subagent fill:#3a1a5c,color:#fff
     style lsp fill:#5c5c1a,color:#fff
+    style guardrail fill:#5c5c1a,color:#fff
+    style auth fill:#5c3a5c,color:#fff
+    style audit fill:#3a5c5c,color:#fff
+    style logger fill:#5c5c5c,color:#fff
+    style memory fill:#1a5c3a,color:#fff
+    style sop fill:#3a3a5c,color:#fff
 ```
 
 ## Request Flow
@@ -368,10 +397,63 @@ graph TD
 ~/.pi-go/config.json          # Global config
 .pi-go/config.json             # Project config (overrides global)
 .pi-go/AGENTS.md               # Project-specific agent instructions
+.pi-go/sops/                   # Custom SOPs
 ~/.pi-go/skills/*.SKILL.md     # Global skills
 .pi-go/skills/*.SKILL.md       # Project skills (override global)
 ~/.pi-go/sessions/             # Session storage
+~/.pi-go/memory/               # Memory SQLite database
+~/.pi-go/log/                  # Session logs
+~/.pi-go/.env                  # API keys (written by /login)
+~/.pi-go/usage.json            # Daily token usage
 ```
+
+**Configuration schema** (`config.json`):
+```json
+{
+  "roles": { "default": {...}, "smol": {...} },
+  "memory": { "enabled": true, "token_budget": 5000 },
+  "hooks": [...],
+  "mcp": { "servers": [...] },
+  "guardrail": { "max_daily_tokens": 0 },
+  "compactor": { "enabled": true }
+}
+```
+
+## Initialization Flow
+
+The TUI uses a **deferred initialization** pattern to show the UI immediately while initializing subsystems in the background:
+
+```mermaid
+sequenceDiagram
+    participant TUI as TUI (Bubble Tea)
+    participant Init as Deferred Init Goroutine
+    participant Tools as Core Tools
+    participant Git as Git + Subagents
+    participant LSP as LSP Manager
+    participant Mem as Memory DB
+    participant MCP as MCP Servers
+    participant Skills as Skills Loader
+    participant Agent as Agent Builder
+
+    TUI->>Init: Start background init
+    Init->>Tools: Phase 1: Create sandbox + core tools
+    par Parallel Initialization
+        Init->>Git: Detect repo, discover agents
+        Init->>LSP: Create LSP manager + tools
+        Init->>Mem: Open SQLite, create context
+        Init->>MCP: Launch MCP servers
+        Init->>Skills: Load .SKILL.md files
+    end
+    Init->>Agent: Phase 3: Build orchestrator + agent
+    Init->>TUI: InitEvent{Result: InitResult}
+    TUI->>User: Ready to accept input
+```
+
+**Key patterns:**
+- TUI starts immediately with spinner showing initialization progress
+- Heavy I/O operations run in parallel (git, LSP, memory, MCP, skills)
+- Agent is created last after all dependencies are ready
+- Progress sent via `InitEvent` channel
 
 ## Retry & Error Handling
 
@@ -419,11 +501,178 @@ graph TD
     style BubbleTea fill:#1a2a1a,color:#fff
 ```
 
-**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/branch`, `/compact`, `/commit`, `/agents`, `/exit`
+**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/context`, `/branch`, `/compact`, `/commit`, `/agents`, `/history`, `/plan`, `/run`, `/login`, `/skills`, `/theme`, `/rtk`, `/ping`, `/restart`, `/exit`, `/quit`
 
 **Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), Enter/Esc (commit confirm/cancel)
 
-## Memory System (Planned)
+## Guardrail System
+
+```mermaid
+graph TD
+    subgraph Tracking["Token Tracking"]
+        req["LLM Request"] --> tracker["Tracker"]
+        tracker --> guardrail["guardrail.Tracker"]
+        guardrail --> usage["usage.json"]
+    end
+
+    subgraph Enforcement["Limit Enforcement"]
+        tracker -->|exceeds limit| error["LimitExceededError"]
+        tracker -->|within limit| proceed["Proceed"]
+    end
+
+    style guardrail fill:#1a3a5c,color:#fff
+    style usage fill:#1a1a2a,color:#fff
+    style error fill:#5c1a1a,color:#fff
+```
+
+**Features:**
+- **Daily token tracking**: Input/output tokens, request count
+- **Configurable limits**: Set via `max_daily_tokens` in config
+- **Persistent storage**: `~/.pi-go/usage.json` (resets at midnight)
+- **Usage formatting**: Human-readable summaries with percentages
+
+**API:**
+```go
+type Tracker struct {
+    limit int64 // max tokens/day (0 = unlimited)
+    usage Usage
+}
+func (t *Tracker) Add(inputTokens, outputTokens int32) error
+func (t *Tracker) Check() error
+func (t *Tracker) Remaining() int64
+func (t *Tracker) PercentUsed() float64
+```
+
+## Authentication System
+
+```mermaid
+graph TD
+    subgraph Providers["OAuth Providers"]
+        anthropic["Anthropic"]
+        openai["OpenAI"]
+        codex["OpenAI Codex"]
+        gemini["Google Gemini"]
+    end
+
+    subgraph Flows["Auth Flows"]
+        pkce["PKCE Flow"]
+        device["Device Code Flow"]
+        pkce --> token["Token → API Key"]
+        device --> token
+    end
+
+    subgraph Storage["Storage"]
+        token --> dotenv["~/.pi-go/.env"]
+    end
+
+    style anthropic fill:#1a3a5c,color:#fff
+    style openai fill:#3a5c1a,color:#fff
+    style codex fill:#5c3a1a,color:#fff
+    style gemini fill:#5c1a3a,color:#fff
+    style dotenv fill:#1a1a2a,color:#fff
+```
+
+**Features:**
+- **OAuth PKCE flow**: Browser-based authorization for Anthropic, Google
+- **Device code flow**: CLI-friendly flow for OpenAI
+- **TLS preflight**: Detects certificate chain issues for OpenAI OAuth
+- **Key storage**: Saves API keys to `~/.pi-go/.env`
+
+**CLI command**: `/login [provider]` in TUI
+
+## Audit System
+
+```mermaid
+graph TD
+    subgraph Scan["Hidden Character Scanner"]
+        files["Files"] --> scanner["Scanner"]
+        scanner --> findings["ScanFinding[]"]
+    end
+
+    subgraph Severity["Severity Levels"]
+        findings -->|U+200B-ZWSP| critical["SeverityCritical"]
+        findings -->|U+2028/29|LTR| warning["SeverityWarning"]
+        findings -->|ZWJ/emoji| info["SeverityInfo"]
+    end
+
+    subgraph Output["Output Formats"]
+        findings --> text["Text Table"]
+        findings --> json["JSON"]
+        findings --> markdown["Markdown Table"]
+    end
+
+    style scanner fill:#3a5c5c,color:#fff
+```
+
+**Features:**
+- **Hidden character detection**: ZWSP, LTR marks, BOM, soft hyphens, etc.
+- **Smart context**: ZWJ between emoji downgraded to info
+- **Auto-fix**: `StripDangerous()` removes critical/warning chars
+- **Skill auditing**: `ScanSkillDirs()` audits all skills
+
+**Severity levels:**
+| Level | Characters | Exit Code |
+|-------|------------|-----------|
+| Critical | U+200B-200F (ZWSP, LTR marks) | 1 |
+| Warning | U+2028/29, U+00AD, etc. | 2 |
+| Info | ZWJ in emoji, BOM at start | 0 |
+
+## Logger System
+
+```mermaid
+graph TD
+    subgraph Session["Session Logging"]
+        user["User Message"] --> logger
+        llm["LLM Text"] --> logger
+        tool["Tool Call"] --> logger
+        result["Tool Result"] --> logger
+    end
+
+    logger --> logfile["~/.pi-go/log/yyyy-mm-dd/session-HH-MM-SS.log"]
+
+    style logger fill:#1a3a5c,color:#fff
+    style logfile fill:#1a1a2a,color:#fff
+```
+
+**Features:**
+- **Structured JSON logs**: Machine-parseable event log
+- **Entry types**: `session_start`, `user`, `llm_text`, `tool_call`, `tool_result`, `error`, `info`
+- **File location**: `~/.pi-go/log/YYYY-MM-DD/session-HH-MM-SS.log`
+- **Session metadata**: Session ID, model name, mode recorded at start
+
+## Standard Operating Procedures (SOPs)
+
+```mermaid
+graph TD
+    subgraph PDD["Prompt-Driven Development"]
+        phase1["Phase 1: Skeleton"]
+        phase2["Phase 2: Requirements"] --> questions["Q&A with user"]
+        phase3["Phase 3: Research"] --> artifacts["research/*.md"]
+        phase4["Phase 4: Design"] --> design["design.md"]
+        phase5["Phase 5: Outline"] --> outline["outline.md"]
+        phase6["Phase 6: Plan"] --> plan["plan.md"]
+        phase7["Phase 7: PROMPT.md"] --> prompt["PROMPT.md"]
+    end
+
+    style PDD fill:#1a3a3a,color:#fff
+```
+
+**Features:**
+- **LoadPDD()**: Resolution order: project → global → embedded default
+- **File paths**: `.pi-go/sops/pdd.md` or `~/.pi-go/sops/pdd.md`
+- **Vertical slicing**: Plans use vertical slices, not horizontal layers
+
+**Artifacts produced:**
+- `requirements.md` — clarified scope and constraints
+- `research/` — codebase exploration findings
+- `design.md` — architecture and component design
+- `outline.md` — high-level structure
+- `plan.md` — executable implementation checklist
+- `PROMPT.md` — compressed briefing for autonomous execution
+
+## Memory System
+
+> **Status**: Implemented — not yet production-ready, see `internal/memory/` for implementation.
 
 Persistent memory compression system inspired by [claude-mem](https://github.com/thedotmack/claude-mem), implemented natively in Go.
 
@@ -467,6 +716,13 @@ graph TD
 - **Context Injection**: Recent observations injected into system instruction at session start
 - **Search Tools**: Native `mem-search`, `mem-timeline`, `mem-get` tools registered in `CoreTools()`
 
+**Database Schema (migrations):**
+
+| Version | Contents |
+|---------|----------|
+| 1 | `sessions`, `observations`, `session_summaries` tables with indexes |
+| 2 | FTS5 virtual tables + sync triggers |
+
 **Data Model:**
 | Table | Key Fields |
 |-------|------------|
@@ -474,9 +730,35 @@ graph TD
 | observations | id, session_id, project, title, type, text, source_files, created_at |
 | session_summaries | id, session_id, project, request, investigated, learned, completed, next_steps |
 
+**Observation Types:**
+- `decision` — architectural decisions
+- `bugfix` — bug fixes
+- `feature` — new features
+- `refactor` — refactoring
+- `discovery` — codebase insights
+- `change` — general changes
+
 **3-Layer Search Workflow:**
 1. `mem-search(query)` — compact index with IDs (~50-100 tokens/result)
 2. `mem-timeline(anchor=ID)` — chronological context around results
 3. `mem-get(ids=[...])` — full details for filtered IDs (~500-1000 tokens/result)
+
+**Privacy Filtering:**
+- `privacy.go` contains PII detection and redaction
+- Configurable via `memory.privacy` config section
+
+**Configuration:**
+```json
+{
+  "memory": {
+    "enabled": true,
+    "db_path": "~/.pi-go/memory/claude-mem.db",
+    "token_budget": 5000,
+    "max_pending": 100,
+    "lookback_hours": 168,
+    "excluded_tools": ["screen", "restart"]
+  }
+}
+```
 
 See `specs/claude-mem/` for the full design specification.

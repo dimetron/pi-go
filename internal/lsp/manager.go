@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"maps"
 	"net/url"
 	"os"
@@ -231,9 +230,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	for name, lcfg := range langs {
 		_, err := exec.LookPath(lcfg.Command)
 		available[name] = err == nil
-		if err != nil {
-			log.Printf("lsp: %s server (%s) not found in PATH, will skip", name, lcfg.Command)
-		}
+		// silently skip unavailable servers
 	}
 
 	return &Manager{

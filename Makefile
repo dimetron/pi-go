@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama lint e2e clean
+.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama lint vet e2e clean
 
 build:
 	go build ./cmd/pi
@@ -26,6 +26,9 @@ test-ollama: build
 	@bash scripts/test-ollama-e2e.sh
 
 lint:
+	golangci-lint run ./...
+
+vet:
 	go vet ./...
 
 clean:

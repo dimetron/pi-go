@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dimetron/pi-go/internal/config"
-	"github.com/dimetron/pi-go/internal/provider"
 	"github.com/spf13/cobra"
 	llmmodel "google.golang.org/adk/model"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 func newPingCmd() *cobra.Command {
@@ -128,7 +129,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 
 	out := os.Stderr
-	w := func(format string, a ...any) { fmt.Fprintf(out, format, a...) }
+	w := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
 
 	w("* pi-go ping\n")
 	w("* Provider:  %s\n", info.Provider)
@@ -188,7 +189,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 		w("*\n* RESULT: connection issue — TCP connect failed to %s\n", tcpAddr)
 		return fmt.Errorf("TCP connect failed: %w", tcpErr)
 	}
-	conn.Close()
+	_ = conn.Close()
 	w("*   Connected to %s  (%s)\n", tcpAddr, tcpDur.Round(time.Millisecond))
 
 	// Phase 3: TLS handshake (if https).
@@ -207,7 +208,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("TLS handshake failed: %w", tlsErr)
 		}
 		state := tlsConn.ConnectionState()
-		tlsConn.Close()
+		_ = tlsConn.Close()
 		w("*   TLS %s, cipher %s  (%s)\n",
 			tlsVersionString(state.Version),
 			tls.CipherSuiteName(state.CipherSuite),
@@ -296,7 +297,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 		w("*\n* RESULT: connection issue — HTTP request failed\n")
 		return fmt.Errorf("HTTP request failed: %w", httpErr)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	w("< HTTP/%d.%d %s\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
 	for k, vs := range resp.Header {

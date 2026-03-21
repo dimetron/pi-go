@@ -840,3 +840,139 @@ func TestOpenAINonStreamingErrorResponse(t *testing.T) {
 		t.Error("expected an error or ErrorCode for 500 response")
 	}
 }
+
+func TestAccumulateOaiToolCall(t *testing.T) {
+	acc := make(map[int64]map[string]any)
+
+	// First chunk: id and name
+	accumulateOaiToolCall(acc, 0, "call_abc", "bash", "")
+	if acc[0]["id"] != "call_abc" {
+		t.Errorf("id = %q, want call_abc", acc[0]["id"])
+	}
+	if acc[0]["name"] != "bash" {
+		t.Errorf("name = %q, want bash", acc[0]["name"])
+	}
+
+	// Second chunk: partial arguments
+	accumulateOaiToolCall(acc, 0, "", "", `{"comm`)
+	if acc[0]["arguments"] != `{"comm` {
+		t.Errorf("arguments = %q, want partial", acc[0]["arguments"])
+	}
+
+	// Third chunk: rest of arguments
+	accumulateOaiToolCall(acc, 0, "", "", `and":"ls"}`)
+	if acc[0]["arguments"] != `{"command":"ls"}` {
+		t.Errorf("arguments = %q, want full JSON", acc[0]["arguments"])
+	}
+
+	// Second tool call
+	accumulateOaiToolCall(acc, 1, "call_def", "read", `{"path":"/tmp"}`)
+	if len(acc) != 2 {
+		t.Errorf("expected 2 tool calls, got %d", len(acc))
+	}
+}
+
+func TestBuildOaiFinalResponse_TextOnly(t *testing.T) {
+	s := &oaiStreamState{
+		text:             "Hello world",
+		toolCalls:        map[int64]map[string]any{},
+		finishReason:     "stop",
+		promptTokens:     10,
+		completionTokens: 5,
+	}
+	resp := buildOaiFinalResponse(s)
+
+	if resp.Partial {
+		t.Error("expected Partial = false")
+	}
+	if !resp.TurnComplete {
+		t.Error("expected TurnComplete = true")
+	}
+	if resp.FinishReason != genai.FinishReasonStop {
+		t.Errorf("FinishReason = %v, want Stop", resp.FinishReason)
+	}
+	if len(resp.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(resp.Content.Parts))
+	}
+	if resp.Content.Parts[0].Text != "Hello world" {
+		t.Errorf("text = %q", resp.Content.Parts[0].Text)
+	}
+	if resp.UsageMetadata.PromptTokenCount != 10 {
+		t.Errorf("PromptTokenCount = %d, want 10", resp.UsageMetadata.PromptTokenCount)
+	}
+}
+
+func TestBuildOaiFinalResponse_WithToolCalls(t *testing.T) {
+	s := &oaiStreamState{
+		toolCalls: map[int64]map[string]any{
+			1: {"id": "call_2", "name": "read", "arguments": `{"path":"/tmp"}`},
+			0: {"id": "call_1", "name": "bash", "arguments": `{"command":"ls"}`},
+		},
+		finishReason:     "tool_calls",
+		promptTokens:     20,
+		completionTokens: 15,
+	}
+	resp := buildOaiFinalResponse(s)
+
+	if len(resp.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(resp.Content.Parts))
+	}
+	// Should be sorted by index: 0 first, 1 second
+	if resp.Content.Parts[0].FunctionCall.Name != "bash" {
+		t.Errorf("first tool = %q, want bash", resp.Content.Parts[0].FunctionCall.Name)
+	}
+	if resp.Content.Parts[1].FunctionCall.Name != "read" {
+		t.Errorf("second tool = %q, want read", resp.Content.Parts[1].FunctionCall.Name)
+	}
+	if resp.Content.Parts[0].FunctionCall.ID != "call_1" {
+		t.Errorf("first tool ID = %q, want call_1", resp.Content.Parts[0].FunctionCall.ID)
+	}
+}
+
+func TestBuildOaiFinalResponse_TextAndToolCalls(t *testing.T) {
+	s := &oaiStreamState{
+		text: "I'll help you.",
+		toolCalls: map[int64]map[string]any{
+			0: {"id": "call_x", "name": "bash", "arguments": `{"command":"pwd"}`},
+		},
+		finishReason: "tool_calls",
+	}
+	resp := buildOaiFinalResponse(s)
+
+	if len(resp.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts (text + tool), got %d", len(resp.Content.Parts))
+	}
+	if resp.Content.Parts[0].Text != "I'll help you." {
+		t.Errorf("text = %q", resp.Content.Parts[0].Text)
+	}
+	if resp.Content.Parts[1].FunctionCall == nil {
+		t.Error("expected FunctionCall in second part")
+	}
+}
+
+func TestBuildOaiFinalResponse_EmptyState(t *testing.T) {
+	s := &oaiStreamState{toolCalls: map[int64]map[string]any{}}
+	resp := buildOaiFinalResponse(s)
+
+	if len(resp.Content.Parts) != 0 {
+		t.Errorf("expected 0 parts, got %d", len(resp.Content.Parts))
+	}
+	if resp.UsageMetadata != nil {
+		t.Error("expected nil UsageMetadata when tokens are 0")
+	}
+}
+
+func TestBuildOaiFinalResponse_MaxTokens(t *testing.T) {
+	s := &oaiStreamState{
+		text:             "truncated",
+		toolCalls:        map[int64]map[string]any{},
+		finishReason:     "length",
+		promptTokens:     100,
+		completionTokens: 4096,
+	}
+	resp := buildOaiFinalResponse(s)
+
+	if resp.FinishReason != genai.FinishReasonMaxTokens {
+		t.Errorf("FinishReason = %v, want MaxTokens", resp.FinishReason)
+	}
+}

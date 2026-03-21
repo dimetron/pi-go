@@ -9,6 +9,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -214,26 +215,8 @@ func (m *model) handleCompactCommand() {
 	})
 }
 
-// handleAgentsCommand shows the status of running and recent subagents.
-func (m *model) handleAgentsCommand() {
-	if m.cfg.Orchestrator == nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "Subagent system not available.",
-		})
-		return
-	}
-
-	agents := m.cfg.Orchestrator.List()
-	if len(agents) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "No subagents have been spawned yet.",
-		})
-		return
-	}
-
-	running, done, failed := 0, 0, 0
+// countAgentsByStatus counts agents in each status category.
+func countAgentsByStatus(agents []subagent.AgentStatus) (running, done, failed int) {
 	for _, a := range agents {
 		switch a.Status {
 		case "running":
@@ -244,6 +227,32 @@ func (m *model) handleAgentsCommand() {
 			failed++
 		}
 	}
+	return
+}
+
+// agentStatusIcon returns a display icon for an agent status.
+func agentStatusIcon(status string) string {
+	switch status {
+	case "running":
+		return "▶ "
+	case "completed":
+		return "✓ "
+	case "failed":
+		return "✗ "
+	case "canceled":
+		return "◼ "
+	default:
+		return "  "
+	}
+}
+
+// formatAgentsList formats a list of agents for display.
+func formatAgentsList(agents []subagent.AgentStatus) string {
+	if len(agents) == 0 {
+		return "No subagents have been spawned yet."
+	}
+
+	running, done, failed := countAgentsByStatus(agents)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Subagents** — %d total, %d running, %d done", len(agents), running, done)
@@ -253,17 +262,7 @@ func (m *model) handleAgentsCommand() {
 	b.WriteString("\n\n")
 
 	for _, a := range agents {
-		icon := "  "
-		switch a.Status {
-		case "running":
-			icon = "▶ "
-		case "completed":
-			icon = "✓ "
-		case "failed":
-			icon = "✗ "
-		case "cancelled":
-			icon = "◼ "
-		}
+		icon := agentStatusIcon(a.Status)
 
 		prompt := a.Prompt
 		if len(prompt) > 70 {
@@ -277,10 +276,22 @@ func (m *model) handleAgentsCommand() {
 
 		fmt.Fprintf(&b, "%s `%s` **%s** [%s] %s (%s)\n", icon, a.AgentID[:8], a.Type, a.Status, prompt, dur)
 	}
+	return b.String()
+}
+
+// handleAgentsCommand shows the status of running and recent subagents.
+func (m *model) handleAgentsCommand() {
+	if m.cfg.Orchestrator == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Subagent system not available.",
+		})
+		return
+	}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: b.String(),
+		content: formatAgentsList(m.cfg.Orchestrator.List()),
 	})
 }
 
@@ -377,33 +388,33 @@ func (m *model) formatContextUsage() string {
 	}
 	if limitTokens > 0 {
 		tt := m.cfg.TokenTracker
-		b.WriteString(fmt.Sprintf("`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
+		fmt.Fprintf(&b, "`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
 			bar, modelLabel,
-			formatTokenCount(tt.TotalUsed()), formatTokenCount(limitTokens), tt.PercentUsed()))
+			formatTokenCount(tt.TotalUsed()), formatTokenCount(limitTokens), tt.PercentUsed())
 	} else {
-		b.WriteString(fmt.Sprintf("`%s`  %s · ctx ~%s tokens\n\n",
-			bar, modelLabel, formatTokenCount(totalTokens)))
+		fmt.Fprintf(&b, "`%s`  %s · ctx ~%s tokens\n\n",
+			bar, modelLabel, formatTokenCount(totalTokens))
 	}
 
 	// Category breakdown.
 	b.WriteString("*Estimated usage by category*\n")
-	b.WriteString(fmt.Sprintf("- **User messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(userTokens), countByRole(m.chatModel.Messages, "user")))
-	b.WriteString(fmt.Sprintf("- **Assistant messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(assistantTokens), countByRole(m.chatModel.Messages, "assistant")))
-	b.WriteString(fmt.Sprintf("- **Tool calls**: ~%s tokens (%d calls)\n",
-		formatTokenCount(toolTokens), countByRole(m.chatModel.Messages, "tool")))
-	b.WriteString(fmt.Sprintf("- **Total context**: ~%s tokens (%d messages)\n",
-		formatTokenCount(totalTokens), len(m.chatModel.Messages)))
+	fmt.Fprintf(&b, "- **User messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(userTokens), countByRole(m.chatModel.Messages, "user"))
+	fmt.Fprintf(&b, "- **Assistant messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(assistantTokens), countByRole(m.chatModel.Messages, "assistant"))
+	fmt.Fprintf(&b, "- **Tool calls**: ~%s tokens (%d calls)\n",
+		formatTokenCount(toolTokens), countByRole(m.chatModel.Messages, "tool"))
+	fmt.Fprintf(&b, "- **Total context**: ~%s tokens (%d messages)\n",
+		formatTokenCount(totalTokens), len(m.chatModel.Messages))
 
 	// Daily token usage (actual, not estimated).
 	if tt := m.cfg.TokenTracker; tt != nil {
 		total := tt.TotalUsed()
 		if total > 0 {
-			b.WriteString(fmt.Sprintf("\n*Daily token usage*\n"))
-			b.WriteString(fmt.Sprintf("- **Consumed today**: %s tokens\n", formatTokenCount(total)))
+			b.WriteString("\n*Daily token usage*\n")
+			fmt.Fprintf(&b, "- **Consumed today**: %s tokens\n", formatTokenCount(total))
 			if tt.Limit() > 0 {
-				b.WriteString(fmt.Sprintf("- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining())))
+				fmt.Fprintf(&b, "- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining()))
 			}
 		}
 	}
@@ -423,9 +434,9 @@ func (m *model) formatContextUsage() string {
 					done++
 				}
 			}
-			b.WriteString(fmt.Sprintf("\n*Subagents*\n"))
-			b.WriteString(fmt.Sprintf("- **Total**: %d (running: %d, done: %d, failed: %d)\n",
-				len(agents), running, done, failed))
+			b.WriteString("\n*Subagents*\n")
+			fmt.Fprintf(&b, "- **Total**: %d (running: %d, done: %d, failed: %d)\n",
+				len(agents), running, done, failed)
 		}
 	}
 
@@ -433,7 +444,7 @@ func (m *model) formatContextUsage() string {
 	if cm := m.cfg.CompactMetrics; cm != nil {
 		stats := cm.FormatStats()
 		if stats != "" {
-			b.WriteString(fmt.Sprintf("\n*Output compaction*\n"))
+			b.WriteString("\n*Output compaction*\n")
 			b.WriteString(stats)
 		}
 	}
@@ -542,6 +553,34 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 }
 
+// formatThemeList builds a display string listing all themes with the current one marked.
+func formatThemeList(themes []Theme, currentName string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Current theme:** `%s`\n\n", currentName)
+	b.WriteString("**Available themes:**\n")
+	for _, t := range themes {
+		marker := " "
+		if t.Name == currentName {
+			marker = "*"
+		}
+		icon := "🌙"
+		if t.ThemeType == "light" {
+			icon = "☀️"
+		}
+		fmt.Fprintf(&b, "%s %s `%s` — %s\n", marker, icon, t.Name, t.DisplayName)
+	}
+	return b.String()
+}
+
+// formatThemeError builds an error message with optional close-match suggestions.
+func formatThemeError(name string, matches []string) string {
+	msg := fmt.Sprintf("Unknown theme `%s`.", name)
+	if len(matches) > 0 {
+		msg += " Did you mean: " + strings.Join(matches, ", ") + "?"
+	}
+	return msg
+}
+
 // handleThemeCommand handles /theme: list themes, switch theme, or show current.
 func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 	if m.themeManager == nil {
@@ -553,44 +592,22 @@ func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	if len(args) == 0 {
-		// Show current theme + list all.
-		var b strings.Builder
-		fmt.Fprintf(&b, "**Current theme:** `%s`\n\n", m.themeManager.CurrentName())
-		b.WriteString("**Available themes:**\n")
-		for _, t := range m.themeManager.List() {
-			marker := " "
-			if t.Name == m.themeManager.CurrentName() {
-				marker = "*"
-			}
-			icon := "🌙"
-			if t.ThemeType == "light" {
-				icon = "☀️"
-			}
-			fmt.Fprintf(&b, "%s %s `%s` — %s\n", marker, icon, t.Name, t.DisplayName)
-		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: b.String(),
+			content: formatThemeList(m.themeManager.List(), m.themeManager.CurrentName()),
 		})
 		return m, nil
 	}
 
 	name := strings.ToLower(args[0])
 	if err := m.themeManager.SetTheme(name); err != nil {
-		// Try to suggest close matches.
-		matches := m.themeManager.ClosestMatches(name, 5)
-		msg := fmt.Sprintf("Unknown theme `%s`.", name)
-		if len(matches) > 0 {
-			msg += " Did you mean: " + strings.Join(matches, ", ") + "?"
-		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: msg,
+			content: formatThemeError(name, m.themeManager.ClosestMatches(name, 5)),
 		})
 		return m, nil
 	}
 
-	// Persist to config.
 	saveThemeToConfig(name)
 
 	cur := m.themeManager.Current()

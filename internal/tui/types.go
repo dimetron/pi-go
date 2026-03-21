@@ -48,6 +48,40 @@ type Config struct {
 	CompactMetrics CompactStatsProvider
 	// ThemeName is the configured theme name from config. Empty or "default" uses tokyo-night.
 	ThemeName string
+
+	// DeferredInit, if non-nil, is a channel of InitEvent messages.
+	// When set, the TUI starts immediately in loading state and receives
+	// initialization progress updates. The final event carries the fully
+	// initialized subsystems in its Result field.
+	DeferredInit <-chan InitEvent
+}
+
+// InitEvent reports progress from deferred initialization.
+type InitEvent struct {
+	Item   string      // subsystem name (e.g. "lsp", "memory", "mcp")
+	Done   bool        // true when this item finished loading
+	Result *InitResult // set on the final event when all init is complete
+	Err    error       // fatal initialization error
+}
+
+// InitResult holds the fully initialized subsystems delivered by deferred init.
+type InitResult struct {
+	Agent             *agent.Agent
+	SessionID         string
+	SessionService    *pisession.FileService
+	Orchestrator      *subagent.Orchestrator
+	Logger            *logger.Logger
+	Skills            []extension.Skill
+	SkillDirs         []string
+	GenerateCommitMsg func(context.Context, string) (string, error)
+	AgentEventCh      <-chan AgentSubEvent
+	TokenTracker      TokenTracker
+	CompactMetrics    CompactStatsProvider
+	RestartCh         chan struct{}
+	Screen            *Screen
+	GitBranch         string
+	DiffAdded         int
+	DiffRemoved       int
 }
 
 // CompactStatsProvider provides compaction statistics for TUI display.

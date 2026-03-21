@@ -24,7 +24,7 @@ func BuildTransport(opts *LLMOptions) http.RoundTripper {
 		return nil
 	}
 
-	base := http.RoundTripper(http.DefaultTransport)
+	base := http.DefaultTransport
 	if opts.InsecureSkipTLS {
 		base = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // user-requested

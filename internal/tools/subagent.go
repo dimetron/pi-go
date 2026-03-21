@@ -7,8 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dimetron/pi-go/internal/subagent"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // resolveContext extracts a context.Context from tool.Context, defaulting to context.Background().
@@ -204,48 +205,39 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 		Total:      1,
 	})
 
-	// Consume events, accumulate result, forward to callback.
-	var result strings.Builder
-	status := "completed"
-	var errMsg string
-
-	for ev := range events {
-		// Forward to TUI with pipeline metadata.
-		evContent := ev.Content
-		if ev.Type == "error" && evContent == "" {
-			evContent = ev.Error
+	// Consume events, forward to TUI, accumulate result.
+	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string) {
+		var result strings.Builder
+		st := "completed"
+		var em string
+		for ev := range events {
+			evContent := ev.Content
+			if ev.Type == "error" && evContent == "" {
+				evContent = ev.Error
+			}
+			emitEvent(onEvent, SubagentEvent{
+				AgentID: agentID, Kind: ev.Type, Content: evContent,
+				PipelineID: pipelineID, Mode: "single", Step: 1, Total: 1,
+			})
+			switch ev.Type {
+			case "text_delta":
+				result.WriteString(ev.Content)
+			case "error":
+				st = "failed"
+				em = ev.Error
+			}
 		}
-		emitEvent(onEvent, SubagentEvent{
-			AgentID:    agentID,
-			Kind:       ev.Type,
-			Content:    evContent,
-			PipelineID: pipelineID,
-			Mode:       "single",
-			Step:       1,
-			Total:      1,
-		})
-
-		switch ev.Type {
-		case "text_delta":
-			result.WriteString(ev.Content)
-		case "error":
-			status = "failed"
-			errMsg = ev.Error
-		}
+		return truncateOutput(result.String()), st, em
 	}
 
-	// Emit done event.
+	resultText, status, errMsg := forwardAndConsume(events)
+
 	emitEvent(onEvent, SubagentEvent{
-		AgentID:    agentID,
-		Kind:       "done",
-		PipelineID: pipelineID,
-		Mode:       "single",
-		Step:       1,
-		Total:      1,
+		AgentID: agentID, Kind: "done",
+		PipelineID: pipelineID, Mode: "single", Step: 1, Total: 1,
 	})
 
 	duration := time.Since(start).Truncate(time.Millisecond).String()
-	resultText := truncateOutput(result.String())
 
 	return SubagentOutput{
 		Mode: "single",
@@ -387,26 +379,11 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 
 	wg.Wait()
 
-	// Build summary.
 	duration := time.Since(start).Truncate(time.Millisecond).String()
-	completed, failed := 0, 0
-	for _, r := range results {
-		if r.Status == "completed" {
-			completed++
-		} else {
-			failed++
-		}
-	}
-
-	summary := fmt.Sprintf("parallel: %d/%d completed in %s", completed, total, duration)
-	if failed > 0 {
-		summary = fmt.Sprintf("parallel: %d/%d completed, %d failed in %s", completed, total, failed, duration)
-	}
-
 	return SubagentOutput{
 		Mode:    "parallel",
 		Results: results,
-		Summary: summary,
+		Summary: buildParallelSummary(results, total, duration),
 	}, nil
 }
 
@@ -544,24 +521,11 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 		previousResult = resultText
 	}
 
-	// Build summary.
 	duration := time.Since(start).Truncate(time.Millisecond).String()
-	completed := 0
-	for _, r := range results {
-		if r.Status == "completed" {
-			completed++
-		}
-	}
-
-	summary := fmt.Sprintf("chain: %d/%d steps completed in %s", completed, total, duration)
-	if completed < total {
-		summary = fmt.Sprintf("chain: stopped at step %d/%d in %s", len(results), total, duration)
-	}
-
 	return SubagentOutput{
 		Mode:    "chain",
 		Results: results,
-		Summary: summary,
+		Summary: buildChainSummary(results, total, duration),
 	}, nil
 }
 
@@ -586,4 +550,52 @@ func emitEvent(cb SubagentEventCallback, ev SubagentEvent) {
 	if cb != nil {
 		cb(ev)
 	}
+}
+
+// consumeAgentEvents reads events from a channel, accumulates text, and detects errors.
+// Returns the accumulated result text, final status, and error message.
+func consumeAgentEvents(events <-chan subagent.Event) (resultText, status, errMsg string) {
+	var result strings.Builder
+	status = "completed"
+	for ev := range events {
+		switch ev.Type {
+		case "text_delta":
+			result.WriteString(ev.Content)
+		case "error":
+			status = "failed"
+			errMsg = ev.Error
+		}
+	}
+	resultText = truncateOutput(result.String())
+	return
+}
+
+// buildParallelSummary formats the summary line for parallel mode.
+func buildParallelSummary(results []AgentResult, total int, duration string) string {
+	completed, failed := 0, 0
+	for _, r := range results {
+		if r.Status == "completed" {
+			completed++
+		} else {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Sprintf("parallel: %d/%d completed, %d failed in %s", completed, total, failed, duration)
+	}
+	return fmt.Sprintf("parallel: %d/%d completed in %s", completed, total, duration)
+}
+
+// buildChainSummary formats the summary line for chain mode.
+func buildChainSummary(results []AgentResult, total int, duration string) string {
+	completed := 0
+	for _, r := range results {
+		if r.Status == "completed" {
+			completed++
+		}
+	}
+	if completed < total {
+		return fmt.Sprintf("chain: stopped at step %d/%d in %s", len(results), total, duration)
+	}
+	return fmt.Sprintf("chain: %d/%d steps completed in %s", completed, total, duration)
 }

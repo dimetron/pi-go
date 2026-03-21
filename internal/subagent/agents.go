@@ -252,9 +252,10 @@ func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error)
 	}
 
 	// Filter based on scope
-	if scope == ScopeBundled {
+	switch scope {
+	case ScopeBundled:
 		result.All = result.Bundled
-	} else if scope == ScopeProject {
+	case ScopeProject:
 		result.All = append(result.Project, result.User...)
 	}
 

@@ -206,7 +206,7 @@ func TestCommitCommand_CancelCommit(t *testing.T) {
 	if len(mm.chatModel.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(mm.chatModel.Messages[0].content, "cancelled") {
+	if !strings.Contains(mm.chatModel.Messages[0].content, "canceled") {
 		t.Errorf("expected 'cancelled' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
@@ -342,5 +342,29 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing file %s: %v", path, err)
+	}
+}
+
+func TestNormalizeCommitMessage(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"feat(auth): add login"`, "feat(auth): add login"},
+		{"  fix(bug): null check  ", "fix(bug): null check"},
+		{"`refactor(core): cleanup`", "refactor(core): cleanup"},
+		{"'chore: update deps'", "chore: update deps"},
+		{"plain message", "plain message"},
+		{"  ", ""},
+		{"", ""},
+		{`"""triple quotes"""`, `triple quotes`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeCommitMessage(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeCommitMessage(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

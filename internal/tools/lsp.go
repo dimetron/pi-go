@@ -6,8 +6,9 @@ import (
 	"net/url"
 	"path/filepath"
 
-	"github.com/dimetron/pi-go/internal/lsp"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/lsp"
 )
 
 // lspFileAliases maps common LLM parameter name mistakes to canonical names.
@@ -184,20 +185,9 @@ func lspDiagnosticsHandler(_ tool.Context, mgr *lsp.Manager, input LSPFileInput)
 	uri := fileURI(input.File)
 	cached := mgr.CachedDiagnostics(uri)
 
-	entries := make([]DiagnosticEntry, 0, len(cached))
-	for _, d := range cached {
-		entries = append(entries, DiagnosticEntry{
-			Line:     d.Range.Start.Line,
-			Column:   d.Range.Start.Character,
-			Severity: d.SeverityString(),
-			Message:  d.Message,
-			Source:   d.Source,
-		})
-	}
-
 	return LSPDiagnosticsOutput{
 		File:        input.File,
-		Diagnostics: entries,
+		Diagnostics: convertDiagnostics(cached),
 	}, nil
 }
 
@@ -239,11 +229,8 @@ func lspHoverHandler(_ tool.Context, mgr *lsp.Manager, input LSPPositionInput) (
 	if err != nil {
 		return LSPHoverOutput{Error: err.Error()}, nil
 	}
-	if result == nil {
-		return LSPHoverOutput{Content: "no hover information available"}, nil
-	}
 
-	return LSPHoverOutput{Content: result.Contents.Value}, nil
+	return LSPHoverOutput{Content: extractHoverContent(result)}, nil
 }
 
 func lspSymbolsHandler(_ tool.Context, mgr *lsp.Manager, input LSPFileInput) (LSPSymbolsOutput, error) {
@@ -275,6 +262,29 @@ func fileURI(path string) string {
 	}
 	u := &url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
 	return u.String()
+}
+
+// convertDiagnostics converts LSP diagnostics to tool output format.
+func convertDiagnostics(diags []lsp.Diagnostic) []DiagnosticEntry {
+	entries := make([]DiagnosticEntry, 0, len(diags))
+	for _, d := range diags {
+		entries = append(entries, DiagnosticEntry{
+			Line:     d.Range.Start.Line,
+			Column:   d.Range.Start.Character,
+			Severity: d.SeverityString(),
+			Message:  d.Message,
+			Source:   d.Source,
+		})
+	}
+	return entries
+}
+
+// extractHoverContent returns hover text or a default message if result is nil.
+func extractHoverContent(result *lsp.HoverResult) string {
+	if result == nil {
+		return "no hover information available"
+	}
+	return result.Contents.Value
 }
 
 func convertLocations(locs []lsp.Location) []LocationEntry {

@@ -254,8 +254,6 @@ func TestIsTransientTemporaryInterface(t *testing.T) {
 // TestIsTransientTimeoutInterfaceFalse verifies that a Timeout()==false error
 // is not automatically transient (unless the message matches a pattern).
 func TestIsTransientTimeoutInterfaceFalse(t *testing.T) {
-	type nonTimeoutErr struct{ msg string }
-	// This struct has no Timeout() method — it's a plain error.
 	err := fmt.Errorf("unique non-matching error xyz123")
 	if isTransient(err) {
 		t.Errorf("isTransient(non-matching error) = true, want false")

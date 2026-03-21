@@ -198,7 +198,7 @@ func TestCodexLoginE2E_BrowserPKCE_OAuthError(t *testing.T) {
 		redirectURI := r.URL.Query().Get("redirect_uri")
 		// Simulate: OpenAI returns error in callback.
 		http.Redirect(w, r,
-			redirectURI+"?error=access_denied&error_description=User+cancelled+login",
+			redirectURI+"?error=access_denied&error_description=User+canceled+login",
 			http.StatusFound)
 	}))
 	defer authSrv.Close()
@@ -243,8 +243,8 @@ func TestCodexLoginE2E_BrowserPKCE_OAuthError(t *testing.T) {
 	if result.Err == nil {
 		t.Fatal("expected OAuth error in result")
 	}
-	if !strings.Contains(result.Err.Error(), "User cancelled login") {
-		t.Errorf("expected 'User cancelled login' in error, got: %v", result.Err)
+	if !strings.Contains(result.Err.Error(), "User canceled login") {
+		t.Errorf("expected 'User canceled login' in error, got: %v", result.Err)
 	}
 }
 

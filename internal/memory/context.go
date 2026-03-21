@@ -132,7 +132,7 @@ func renderSessionGroup(sg *contextSessionGroup) string {
 		sessionTime = sg.summary.CreatedAt
 	}
 
-	b.WriteString(fmt.Sprintf("## Session: %s (%s)\n", title, formatSessionTime(sessionTime)))
+	fmt.Fprintf(&b, "## Session: %s (%s)\n", title, formatSessionTime(sessionTime))
 
 	// Group observations by primary source file
 	type fileGroup struct {
@@ -158,19 +158,18 @@ func renderSessionGroup(sg *contextSessionGroup) string {
 
 	for _, file := range fileOrder {
 		fg := fileMap[file]
-		b.WriteString(fmt.Sprintf("\n**%s**\n", file))
+		fmt.Fprintf(&b, "\n**%s**\n", file)
 		b.WriteString("| ID | Time | T | Title | Read | Work |\n")
 		b.WriteString("|----|------|---|-------|------|------|\n")
 
 		for _, obs := range fg.obs {
-			b.WriteString(fmt.Sprintf("| #%d | %s | %s | %s | %d | %d |\n",
+			fmt.Fprintf(&b, "| #%d | %s | %s | %s | %d | %d |\n",
 				obs.ID,
 				obs.CreatedAt.Format("3:04 PM"),
 				typeEmoji(obs.Type),
 				obs.Title,
 				estimateTokens(obs.Text),
-				obs.DiscoveryTokens,
-			))
+				obs.DiscoveryTokens)
 		}
 	}
 

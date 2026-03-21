@@ -159,7 +159,7 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 	if err != nil {
 		return nil, fmt.Errorf("starting callback server: %w", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	port := listener.Addr().(*net.TCPAddr).Port //nolint:errcheck // type assertion is guaranteed for TCP listener
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
 	state := generateState()
@@ -515,7 +515,10 @@ func RunTLSPreflight(timeoutMs int) *TLSPreflightResult {
 		},
 	}
 
-	_, err := client.Get(openAIAuthProbeURL)
+	resp, err := client.Get(openAIAuthProbeURL) //nolint:bodyclose // response may be nil on TLS errors
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err == nil {
 		return &TLSPreflightResult{OK: true}
 	}

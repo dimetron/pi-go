@@ -301,7 +301,7 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 				TurnComplete: false,
 				Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: msg.Thinking}}},
 			}, nil) {
-				return fmt.Errorf("yield cancelled")
+				return fmt.Errorf("yield canceled")
 			}
 		}
 
@@ -313,7 +313,7 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 				TurnComplete: false,
 				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: msg.Content}}},
 			}, nil) {
-				return fmt.Errorf("yield cancelled")
+				return fmt.Errorf("yield canceled")
 			}
 		}
 

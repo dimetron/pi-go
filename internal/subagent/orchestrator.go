@@ -34,7 +34,7 @@ type agentState struct {
 	Process     *Process
 	Worktree    bool   // whether a worktree was created
 	SkipCleanup bool   // don't auto-cleanup worktree on completion (for gate validation)
-	Status      string // "running", "completed", "failed", "cancelled"
+	Status      string // "running", "completed", "failed", "canceled"
 }
 
 // NewOrchestrator creates an Orchestrator from config.
@@ -128,16 +128,11 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	agentID := fmt.Sprintf("%s-%d", agent.Name, time.Now().UnixNano())
 
 	// Determine if worktree is needed.
-	useWorktree := agent.Worktree
-	if input.Worktree != nil {
-		useWorktree = *input.Worktree
-	}
+	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir)
 
 	workDir := ""
 	if input.WorkDir != "" {
-		// Use provided working directory (e.g. existing worktree for retry).
 		workDir = input.WorkDir
-		useWorktree = false // Don't create a new worktree or mark for cleanup.
 	} else if useWorktree && o.worktree != nil {
 		wtPath, err := o.worktree.Create(agentID)
 		if err != nil {
@@ -253,21 +248,40 @@ func (o *Orchestrator) List() []AgentStatus {
 	return statuses
 }
 
-// Cancel cancels a running agent by ID.
-func (o *Orchestrator) Cancel(agentID string) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+// resolveWorktreeUsage determines whether a worktree should be created for a spawn.
+func resolveWorktreeUsage(agentDefault bool, inputOverride *bool, workDir string) bool {
+	if workDir != "" {
+		return false // explicit work dir — no worktree
+	}
+	if inputOverride != nil {
+		return *inputOverride
+	}
+	return agentDefault
+}
 
-	state, ok := o.agents[agentID]
-	if !ok {
+// validateAgentForCancel checks whether an agent can be canceled.
+func validateAgentForCancel(state *agentState, agentID string) error {
+	if state == nil {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
 	if state.Status != "running" {
 		return fmt.Errorf("agent %q is not running (status: %s)", agentID, state.Status)
 	}
+	return nil
+}
+
+// Cancel cancels a running agent by ID.
+func (o *Orchestrator) Cancel(agentID string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	state := o.agents[agentID]
+	if err := validateAgentForCancel(state, agentID); err != nil {
+		return err
+	}
 
 	state.Process.Cancel()
-	state.Status = "cancelled"
+	state.Status = "canceled"
 	state.FinishedAt = time.Now()
 
 	return nil
@@ -285,7 +299,7 @@ func (o *Orchestrator) Shutdown() {
 	for _, state := range o.agents {
 		if state.Status == "running" {
 			state.Process.Cancel()
-			state.Status = "cancelled"
+			state.Status = "canceled"
 			state.FinishedAt = time.Now()
 		}
 	}

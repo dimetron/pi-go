@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -277,91 +278,37 @@ func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
 	return &cfg
 }
 
-func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthropic.MessageNewParams, yield func(*model.LLMResponse, error) bool) {
-	stream := client.Messages.NewStreaming(ctx, params)
-	//nolint:errcheck // Close() may return error but we can't recover from it in defer
-	defer stream.Close()
+// antToolUseAcc accumulates a single Anthropic tool_use block during streaming.
+type antToolUseAcc struct {
+	id        string
+	name      string
+	inputJSON string
+}
 
-	var aggregatedText string
-	toolUseBlocks := make(map[int]struct {
-		id        string
-		name      string
-		inputJSON string
-	})
-	var stopReason anthropic.StopReason
-	var inputTokens, outputTokens int64
+// antStreamState holds accumulated state from processing Anthropic stream events.
+type antStreamState struct {
+	text         string
+	toolUse      map[int]antToolUseAcc
+	stopReason   anthropic.StopReason
+	inputTokens  int64
+	outputTokens int64
+}
 
-	for stream.Next() {
-		event := stream.Current()
-
-		switch e := event.AsAny().(type) {
-		case anthropic.MessageStartEvent:
-			inputTokens = e.Message.Usage.InputTokens
-		case anthropic.ContentBlockStartEvent:
-			idx := int(e.Index)
-			if e.ContentBlock.Type == "tool_use" {
-				if toolUse, ok := e.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
-					toolUseBlocks[idx] = struct {
-						id        string
-						name      string
-						inputJSON string
-					}{id: toolUse.ID, name: toolUse.Name, inputJSON: ""}
-				}
-			}
-		case anthropic.ContentBlockDeltaEvent:
-			idx := int(e.Index)
-			delta := e.Delta
-			switch delta.Type {
-			case "text_delta":
-				if textDelta, ok := delta.AsAny().(anthropic.TextDelta); ok {
-					aggregatedText += textDelta.Text
-					if !yield(&model.LLMResponse{
-						Partial:      true,
-						TurnComplete: false,
-						Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
-					}, nil) {
-						return
-					}
-				}
-			case "thinking_delta":
-				if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
-					// Yield thinking content as partial response with a "thinking" role marker.
-					if !yield(&model.LLMResponse{
-						Partial:      true,
-						TurnComplete: false,
-						Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
-					}, nil) {
-						return
-					}
-				}
-			case "input_json_delta":
-				if jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta); ok {
-					if block, exists := toolUseBlocks[idx]; exists {
-						block.inputJSON += jsonDelta.PartialJSON
-						toolUseBlocks[idx] = block
-					}
-				}
-			}
-		case anthropic.MessageDeltaEvent:
-			stopReason = e.Delta.StopReason
-			outputTokens = e.Usage.OutputTokens
-		}
+// buildAntFinalResponse constructs the final LLMResponse from accumulated streaming state.
+func buildAntFinalResponse(s *antStreamState) *model.LLMResponse {
+	// Sort tool_use indices for deterministic output order (matching OpenAI path).
+	indices := make([]int, 0, len(s.toolUse))
+	for k := range s.toolUse {
+		indices = append(indices, k)
 	}
+	slices.Sort(indices)
 
-	if err := stream.Err(); err != nil {
-		if ctx.Err() == context.Canceled {
-			return
-		}
-		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-		return
+	finalParts := make([]*genai.Part, 0, 1+len(s.toolUse))
+	if s.text != "" {
+		finalParts = append(finalParts, &genai.Part{Text: s.text})
 	}
-
-	// Build final response
-	finalParts := make([]*genai.Part, 0, 1+len(toolUseBlocks))
-	if aggregatedText != "" {
-		finalParts = append(finalParts, &genai.Part{Text: aggregatedText})
-	}
-	for _, block := range toolUseBlocks {
+	for _, idx := range indices {
+		block := s.toolUse[idx]
 		var args map[string]any
 		if block.inputJSON != "" {
 			_ = json.Unmarshal([]byte(block.inputJSON), &args)
@@ -374,19 +321,89 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 	}
 
 	var usage *genai.GenerateContentResponseUsageMetadata
-	if inputTokens > 0 || outputTokens > 0 {
+	if s.inputTokens > 0 || s.outputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(inputTokens),
-			CandidatesTokenCount: int32(outputTokens),
+			PromptTokenCount:     int32(s.inputTokens),
+			CandidatesTokenCount: int32(s.outputTokens),
 		}
 	}
-	_ = yield(&model.LLMResponse{
+	return &model.LLMResponse{
 		Partial:       false,
 		TurnComplete:  true,
-		FinishReason:  antStopReasonToGenai(stopReason),
+		FinishReason:  antStopReasonToGenai(s.stopReason),
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
-	}, nil)
+	}
+}
+
+func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthropic.MessageNewParams, yield func(*model.LLMResponse, error) bool) {
+	stream := client.Messages.NewStreaming(ctx, params)
+	//nolint:errcheck // Close() may return error but we can't recover from it in defer
+	defer stream.Close()
+
+	state := &antStreamState{toolUse: make(map[int]antToolUseAcc)}
+
+	for stream.Next() {
+		event := stream.Current()
+
+		switch e := event.AsAny().(type) {
+		case anthropic.MessageStartEvent:
+			state.inputTokens = e.Message.Usage.InputTokens
+		case anthropic.ContentBlockStartEvent:
+			idx := int(e.Index)
+			if e.ContentBlock.Type == "tool_use" {
+				if toolUse, ok := e.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
+					state.toolUse[idx] = antToolUseAcc{id: toolUse.ID, name: toolUse.Name}
+				}
+			}
+		case anthropic.ContentBlockDeltaEvent:
+			idx := int(e.Index)
+			delta := e.Delta
+			switch delta.Type {
+			case "text_delta":
+				if textDelta, ok := delta.AsAny().(anthropic.TextDelta); ok {
+					state.text += textDelta.Text
+					if !yield(&model.LLMResponse{
+						Partial:      true,
+						TurnComplete: false,
+						Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
+					}, nil) {
+						return
+					}
+				}
+			case "thinking_delta":
+				if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
+					if !yield(&model.LLMResponse{
+						Partial:      true,
+						TurnComplete: false,
+						Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
+					}, nil) {
+						return
+					}
+				}
+			case "input_json_delta":
+				if jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta); ok {
+					if block, exists := state.toolUse[idx]; exists {
+						block.inputJSON += jsonDelta.PartialJSON
+						state.toolUse[idx] = block
+					}
+				}
+			}
+		case anthropic.MessageDeltaEvent:
+			state.stopReason = e.Delta.StopReason
+			state.outputTokens = e.Usage.OutputTokens
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		if ctx.Err() == context.Canceled {
+			return
+		}
+		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+		return
+	}
+
+	_ = yield(buildAntFinalResponse(state), nil)
 }
 
 func antRunNonStreaming(ctx context.Context, client *anthropic.Client, params anthropic.MessageNewParams, yield func(*model.LLMResponse, error) bool) {

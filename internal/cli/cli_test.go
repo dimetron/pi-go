@@ -13,14 +13,15 @@ import (
 	"sync"
 	"testing"
 
+	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
+
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/tools"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
-	"google.golang.org/genai"
 )
 
 // cliMockLLM returns a fixed text response.
@@ -1118,7 +1119,7 @@ func TestBuildCommitMsgFuncCommitRoleFallback(t *testing.T) {
 }
 
 // TestRunPrintAgentError verifies that runPrint propagates an agent error
-// when the context is not cancelled.
+// when the context is not canceled.
 func TestRunPrintAgentError(t *testing.T) {
 	sentinel := errors.New("agent backend error")
 	llm := &cliErrorLLM{name: "test-print-error", err: sentinel}
@@ -1126,12 +1127,12 @@ func TestRunPrintAgentError(t *testing.T) {
 
 	err := runPrint(context.Background(), ag, sessionID, "hello", nil)
 	if err == nil {
-		t.Fatal("expected runPrint to return an error when LLM errors and ctx is not cancelled")
+		t.Fatal("expected runPrint to return an error when LLM errors and ctx is not canceled")
 	}
 }
 
 // TestRunJSONAgentError verifies that runJSON propagates an agent error
-// when the context is not cancelled.
+// when the context is not canceled.
 func TestRunJSONAgentError(t *testing.T) {
 	sentinel := errors.New("agent json backend error")
 	llm := &cliErrorLLM{name: "test-json-error", err: sentinel}
@@ -1140,7 +1141,7 @@ func TestRunJSONAgentError(t *testing.T) {
 	stdout := captureStdout(t, func() {
 		err := runJSON(context.Background(), ag, sessionID, "hello", nil)
 		if err == nil {
-			t.Error("expected runJSON to return an error when LLM errors and ctx is not cancelled")
+			t.Error("expected runJSON to return an error when LLM errors and ctx is not canceled")
 		}
 	})
 	// Even on error, no message_end is emitted (error returns early).

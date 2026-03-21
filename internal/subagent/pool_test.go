@@ -77,7 +77,7 @@ func TestPool_ContextCancellation(t *testing.T) {
 
 	err := <-done
 	if err == nil {
-		t.Fatal("expected error from cancelled context")
+		t.Fatal("expected error from canceled context")
 	}
 
 	p.Release()

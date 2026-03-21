@@ -71,10 +71,7 @@ func loadHistory() []HistoryEntry {
 		return nil
 	}
 
-	entries := make([]HistoryEntry, len(lines))
-	for i, line := range lines {
-		entries[i] = HistoryEntry{Text: line}
-	}
+	entries := migrateHistoryFormat(lines)
 
 	// Write migrated entries to JSONL.
 	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o700); err == nil {
@@ -88,6 +85,60 @@ func loadHistory() []HistoryEntry {
 	}
 
 	return entries
+}
+
+// migrateHistoryFormat converts plain-text lines to HistoryEntry structs.
+func migrateHistoryFormat(lines []string) []HistoryEntry {
+	entries := make([]HistoryEntry, len(lines))
+	for i, line := range lines {
+		entries[i] = HistoryEntry{Text: line}
+	}
+	return entries
+}
+
+// truncateHistory limits history to the most recent maxSize entries.
+func truncateHistory(entries []HistoryEntry, maxSize int) []HistoryEntry {
+	if len(entries) <= maxSize {
+		return entries
+	}
+	return entries[len(entries)-maxSize:]
+}
+
+// formatHistoryOutput formats history entries for display, with optional query filter.
+func formatHistoryOutput(entries []HistoryEntry, query string) string {
+	var filtered []HistoryEntry
+	for _, h := range entries {
+		if query == "" || strings.Contains(strings.ToLower(h.Text), query) {
+			filtered = append(filtered, h)
+		}
+	}
+
+	if len(filtered) == 0 {
+		if query != "" {
+			return fmt.Sprintf("No history matching `%s`.", query)
+		}
+		return "No command history."
+	}
+
+	start := 0
+	if len(filtered) > 20 {
+		start = len(filtered) - 20
+	}
+	var sb strings.Builder
+	if query != "" {
+		fmt.Fprintf(&sb, "**History matching `%s`** (%d total):\n", query, len(filtered))
+	} else {
+		fmt.Fprintf(&sb, "**Command history** (%d total, showing last %d):\n", len(filtered), len(filtered)-start)
+	}
+	for i := start; i < len(filtered); i++ {
+		entry := filtered[i]
+		if len(entry.Mentions) > 0 {
+			fmt.Fprintf(&sb, "- `%s` (refs: %s)\n", entry.Text, strings.Join(entry.Mentions, ", "))
+		} else {
+			fmt.Fprintf(&sb, "- `%s`\n", entry.Text)
+		}
+	}
+	return sb.String()
 }
 
 // loadHistoryJSON reads JSONL history entries.
@@ -164,41 +215,8 @@ func appendHistory(entry HistoryEntry) {
 // handleHistoryCommand shows command history, optionally filtered by a query.
 func (m *model) handleHistoryCommand(args []string) {
 	query := strings.ToLower(strings.Join(args, " "))
-
-	var filtered []HistoryEntry
-	for _, h := range m.inputModel.History {
-		if query == "" || strings.Contains(strings.ToLower(h.Text), query) {
-			filtered = append(filtered, h)
-		}
-	}
-
-	if len(filtered) == 0 {
-		msg := "No command history."
-		if query != "" {
-			msg = fmt.Sprintf("No history matching `%s`.", query)
-		}
-		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
-		return
-	}
-
-	// Show last 20 entries.
-	start := 0
-	if len(filtered) > 20 {
-		start = len(filtered) - 20
-	}
-	var sb strings.Builder
-	if query != "" {
-		sb.WriteString(fmt.Sprintf("**History matching `%s`** (%d total):\n", query, len(filtered)))
-	} else {
-		sb.WriteString(fmt.Sprintf("**Command history** (%d total, showing last %d):\n", len(filtered), len(filtered)-start))
-	}
-	for i := start; i < len(filtered); i++ {
-		entry := filtered[i]
-		if len(entry.Mentions) > 0 {
-			sb.WriteString(fmt.Sprintf("- `%s` (refs: %s)\n", entry.Text, strings.Join(entry.Mentions, ", ")))
-		} else {
-			sb.WriteString(fmt.Sprintf("- `%s`\n", entry.Text))
-		}
-	}
-	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: sb.String()})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: formatHistoryOutput(m.inputModel.History, query),
+	})
 }

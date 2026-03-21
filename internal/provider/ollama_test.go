@@ -975,7 +975,7 @@ func TestOllamaRunStreaming_ServerError(t *testing.T) {
 }
 
 func TestOllamaRunStreaming_CancelledContext(t *testing.T) {
-	// Server that blocks until the client context is cancelled.
+	// Server that blocks until the client context is canceled.
 	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		<-r.Context().Done()
@@ -997,11 +997,11 @@ func TestOllamaRunStreaming_CancelledContext(t *testing.T) {
 			resps = append(resps, resp)
 		}
 	}
-	// With a cancelled context the streaming path returns without yielding an
+	// With a canceled context the streaming path returns without yielding an
 	// ErrorCode response (it silently returns).
 	for _, r := range resps {
 		if r.ErrorCode != "" {
-			t.Error("did not expect ErrorCode for cancelled context")
+			t.Error("did not expect ErrorCode for canceled context")
 		}
 	}
 }

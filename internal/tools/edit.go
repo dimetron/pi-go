@@ -42,7 +42,7 @@ func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
 	return editHandlerWithCache(sb, input, nil)
 }
 
-func editHandlerWithCache(sb *Sandbox, input EditInput, cache *fileContentCache) (EditOutput, error) {
+func editHandlerWithCache(sb *Sandbox, input EditInput, cache *FileContentCache) (EditOutput, error) {
 	if input.FilePath == "" {
 		return EditOutput{}, fmt.Errorf("file_path is required")
 	}
@@ -89,7 +89,7 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *fileContentCache)
 }
 
 // performEdit does the actual string replacement and file write.
-func performEdit(sb *Sandbox, cache *fileContentCache, input EditInput, content string, count int) (EditOutput, error) {
+func performEdit(sb *Sandbox, cache *FileContentCache, input EditInput, content string, count int) (EditOutput, error) {
 	if count > 1 && !input.ReplaceAll {
 		// Find line numbers for all occurrences to help the caller
 		lines := strings.Split(content, "\n")

@@ -54,7 +54,7 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		return FindOutput{}, err
 	}
 
-	fs.WalkDir(fsys, rel, func(path string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(fsys, rel, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

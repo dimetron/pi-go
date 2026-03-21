@@ -272,3 +272,241 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// -----------------------------------------------------------------------
+// Additional runAudit and handleStrip error path tests
+// -----------------------------------------------------------------------
+
+func TestRunAuditOutputWriteError(t *testing.T) {
+	// Trying to write to a read-only directory should produce an error.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+	os.WriteFile(path, []byte("Clean content"), 0644)
+
+	// Create a directory we can't write to.
+	readOnlyDir := filepath.Join(dir, "readonly")
+	os.MkdirAll(readOnlyDir, 0555)
+	outPath := filepath.Join(readOnlyDir, "out.txt")
+
+	err := runAudit(nil, "", path, false, false, false, false, "text", outPath)
+	if err == nil {
+		t.Error("expected error when writing to read-only directory")
+	}
+}
+
+func TestRunAuditDefaultDirsWithNoSkills(t *testing.T) {
+	// When no skill directories exist, runAudit should handle gracefully.
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	t.Setenv("HOME", tmpDir)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	// runAudit scans defaultSkillDirs() — with HOME set to tmpDir
+	// there are no skill dirs under the standard paths, so it should
+	// return a result (possibly empty or with warnings about missing dirs).
+	err := runAudit(nil, "", "", false, false, false, false, "text", "")
+	if err != nil {
+		t.Fatalf("runAudit with no skill dirs returned error: %v", err)
+	}
+}
+
+func TestHandleStripNilFindings(t *testing.T) {
+	// With nil findings slice (not empty), should still say "No dangerous characters".
+	result := &audit.ScanResult{
+		Findings: nil,
+	}
+	stdout := captureStdout(t, func() {
+		err := handleStrip(result, false, false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "No dangerous characters") {
+		t.Errorf("expected 'No dangerous characters' message, got: %q", stdout)
+	}
+}
+
+func TestHandleStripUserAborts(t *testing.T) {
+	// When the user answers "n" to the confirmation prompt, should return nil.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.md")
+	os.WriteFile(path, []byte("Hello \u202E World"), 0644)
+
+	result := &audit.ScanResult{
+		Files: []string{path},
+		Findings: []audit.ScanFinding{
+			{
+				File:        path,
+				Line:        1,
+				Col:         7,
+				Codepoint:   "U+202E",
+				Severity:    audit.SeverityCritical,
+				Description: "BiDi override",
+			},
+		},
+	}
+
+	// Simulate user typing "n".
+	r, w, _ := os.Pipe()
+	origStdin := os.Stdin
+	os.Stdin = r
+	w.WriteString("n\n")
+	w.Close()
+	defer func() { os.Stdin = origStdin }()
+
+	stdout := captureStdout(t, func() {
+		err := handleStrip(result, false, false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Aborted") {
+		t.Errorf("expected 'Aborted' message, got: %q", stdout)
+	}
+}
+
+func TestHandleStripUserConfirms(t *testing.T) {
+	// When the user answers "y" to the confirmation prompt, should strip files.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.md")
+	os.WriteFile(path, []byte("Hello \u202E World"), 0644)
+
+	result := &audit.ScanResult{
+		Files: []string{path},
+		Findings: []audit.ScanFinding{
+			{
+				File:        path,
+				Line:        1,
+				Col:         7,
+				Codepoint:   "U+202E",
+				Severity:    audit.SeverityCritical,
+				Description: "BiDi override",
+			},
+		},
+	}
+
+	// Simulate user typing "y".
+	r, w, _ := os.Pipe()
+	origStdin := os.Stdin
+	os.Stdin = r
+	w.WriteString("y\n")
+	w.Close()
+	defer func() { os.Stdin = origStdin }()
+
+	original, _ := os.ReadFile(path)
+
+	stdout := captureStdout(t, func() {
+		err := handleStrip(result, false, false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	after, _ := os.ReadFile(path)
+
+	if string(original) == string(after) {
+		t.Error("file should have been modified after user confirmed")
+	}
+	if !strings.Contains(stdout, "Done") {
+		t.Errorf("expected 'Done' message, got: %q", stdout)
+	}
+}
+
+func TestHandleStripStripError(t *testing.T) {
+	// When stripping a file fails (e.g., permission denied), should return an error.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.md")
+	os.WriteFile(path, []byte("Hello \u202E World"), 0644)
+
+	result := &audit.ScanResult{
+		Files: []string{path},
+		Findings: []audit.ScanFinding{
+			{
+				File:        path,
+				Line:        1,
+				Col:         7,
+				Codepoint:   "U+202E",
+				Severity:    audit.SeverityCritical,
+				Description: "BiDi override",
+			},
+		},
+	}
+
+	// Make the file read-only so stripping fails.
+	os.Chmod(path, 0444)
+	t.Cleanup(func() { os.Chmod(path, 0644) }) // Restore for cleanup.
+
+	// Use --force to skip confirmation.
+	err := handleStrip(result, false, true, false)
+	if err == nil {
+		t.Error("expected error when stripping read-only file")
+	}
+}
+
+func TestHandleStripDryRunWithFindings(t *testing.T) {
+	// dry-run should show detailed findings without modifying files.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.md")
+	os.WriteFile(path, []byte("Hello \u202E World"), 0644)
+
+	result := &audit.ScanResult{
+		Files: []string{path},
+		Findings: []audit.ScanFinding{
+			{
+				File:        path,
+				Line:        1,
+				Col:         7,
+				Codepoint:   "U+202E",
+				Severity:    audit.SeverityCritical,
+				Description: "BiDi override",
+			},
+		},
+	}
+
+	original, _ := os.ReadFile(path)
+
+	stdout := captureStdout(t, func() {
+		err := handleStrip(result, true, false, false) // dry-run=true
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	after, _ := os.ReadFile(path)
+
+	if string(original) != string(after) {
+		t.Error("file should not be modified in dry-run mode")
+	}
+	if !strings.Contains(stdout, "dry-run") && !strings.Contains(stdout, "[dry-run]") {
+		t.Errorf("expected dry-run message in output, got: %q", stdout)
+	}
+}
+
+func TestRunAuditDirScan(t *testing.T) {
+	// Test scanning a directory instead of a single file.
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "skill")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "SKILL.md"), []byte("Clean skill"), 0644)
+	os.WriteFile(filepath.Join(subDir, "ANOTHER.md"), []byte("Also clean"), 0644)
+
+	err := runAudit(nil, dir, "", false, false, false, false, "text", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunAuditDirScanWithFindings(t *testing.T) {
+	// Test scanning a directory with a file containing dangerous characters.
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "skill")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "SKILL.md"), []byte("Clean"), 0644)
+	os.WriteFile(filepath.Join(subDir, "BAD.md"), []byte("Bad \u202E char"), 0644)
+
+	err := runAudit(nil, dir, "", false, false, false, false, "text", "")
+	// Should not error, but will produce findings and exit non-zero.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

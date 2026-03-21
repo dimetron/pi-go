@@ -102,7 +102,7 @@ func TestPlanCommand_OverrideCancel(t *testing.T) {
 	// Should have cancel message.
 	var found bool
 	for _, msg := range m.chatModel.Messages {
-		if strings.Contains(msg.content, "cancelled") {
+		if strings.Contains(msg.content, "canceled") {
 			found = true
 			break
 		}

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -167,7 +168,7 @@ func (s *SQLiteStore) Timeline(ctx context.Context, anchorID int64, before, afte
 		"SELECT project, created_at_epoch FROM observations WHERE id = ?", anchorID,
 	).Scan(&project, &epoch)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("memory: anchor observation %d not found", anchorID)
 		}
 		return nil, fmt.Errorf("memory: get anchor: %w", err)
