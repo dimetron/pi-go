@@ -13,6 +13,13 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 )
 
+// TestMain globally disables real browser opens and process restart for every test in this package.
+func TestMain(m *testing.M) {
+	openBrowser = func(string) error { return nil }
+	execRestart = func() {}
+	os.Exit(m.Run())
+}
+
 // mockBrowser records all URLs passed to openBrowser.
 type mockBrowser struct {
 	mu   sync.Mutex
@@ -136,6 +143,7 @@ func TestHandleLoginCommand_Anthropic(t *testing.T) {
 }
 
 func TestHandleLoginCommand_CodexPKCEFlow(t *testing.T) {
+	withMockBrowser(t)
 	m := &model{}
 	// Codex uses PKCE browser flow (opens browser, waits for callback).
 	// TLS preflight runs first; if it fails with tls-cert, login is blocked.
@@ -162,6 +170,7 @@ func TestHandleLoginCommand_CodexPKCEFlow(t *testing.T) {
 }
 
 func TestHandleLoginCommand_OpenAIDeviceFlow(t *testing.T) {
+	withMockBrowser(t)
 	m := &model{}
 	m.handleLoginCommand([]string{"openai"})
 	// OpenAI uses device flow (no TLS preflight).
@@ -445,6 +454,7 @@ func TestLoginStart_ManualFallback(t *testing.T) {
 
 func TestLoginStart_DeviceFlow(t *testing.T) {
 	// Provider with DeviceURL+UseDeviceFlow → device flow (will fail on network).
+	withMockBrowser(t)
 	m := &model{}
 	prov := auth.Provider{
 		Name:          "test",
@@ -472,6 +482,7 @@ func TestLoginStart_DeviceFlow(t *testing.T) {
 func TestLoginStart_TLSPreflightBlock(t *testing.T) {
 	// Can't easily mock TLS preflight failure since it hits a real URL,
 	// but verify the TLSPreflight flag path is exercised.
+	withMockBrowser(t)
 	m := &model{}
 	prov := auth.Provider{
 		Name:         "test",
@@ -498,6 +509,7 @@ func TestLoginStart_TLSPreflightBlock(t *testing.T) {
 
 func TestHandleLoginCommand_IgnoresFlags(t *testing.T) {
 	// Old --sso flags should be silently ignored.
+	withMockBrowser(t)
 	m := &model{}
 	m.handleLoginCommand([]string{"--sso", "gemini"})
 
@@ -511,6 +523,7 @@ func TestHandleLoginCommand_IgnoresFlags(t *testing.T) {
 }
 
 func TestHandleLoginCommand_GeminiPKCE(t *testing.T) {
+	withMockBrowser(t)
 	m := &model{}
 	m.handleLoginCommand([]string{"gemini"})
 
@@ -527,6 +540,7 @@ func TestHandleLoginCommand_GeminiPKCE(t *testing.T) {
 
 func TestLoginStartPKCEFlow_StateAndMessage(t *testing.T) {
 	// Verify loginStartPKCEFlow sets correct state and returns a cmd.
+	withMockBrowser(t)
 	m := &model{}
 	prov := auth.Provider{
 		Name:     "test",
@@ -630,6 +644,7 @@ func TestLoginStartDeviceFlow_CmdExecution(t *testing.T) {
 }
 
 func TestLoginStart_DeviceFlowSuccess(t *testing.T) {
+	withMockBrowser(t)
 	attempt := 0
 	srv := newMockDeviceServer(t, &attempt)
 	defer srv.Close()

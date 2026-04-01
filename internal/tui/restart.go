@@ -17,7 +17,9 @@ func (m *model) handleRestartCommand() (tea.Model, tea.Cmd) {
 }
 
 // execRestart replaces the current process with a fresh copy of itself.
-func execRestart() {
+var execRestart = execRestartDefault
+
+func execRestartDefault() {
 	exe, err := os.Executable()
 	if err != nil {
 		os.Exit(1)
