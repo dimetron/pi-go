@@ -15,7 +15,7 @@ import (
 	"google.golang.org/genai"
 )
 
-const defaultMaxTokens = 8192
+const defaultMaxTokens int64 = 8192
 
 // anthropicModel implements model.LLM for the Anthropic API.
 type anthropicModel struct {
@@ -65,7 +65,7 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			modelName = "claude-sonnet-4-6"
 		}
 
-		maxTokens := int64(defaultMaxTokens)
+		maxTokens := defaultMaxTokens
 		thinkingCfg := antThinkingConfig(m.thinkingLevel)
 		if thinkingCfg != nil {
 			// Thinking requires higher max_tokens to accommodate the thinking budget.
