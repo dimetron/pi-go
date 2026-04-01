@@ -316,28 +316,30 @@ func TestHandleKey_RunningAgentCtrlC(t *testing.T) {
 	m := &model{
 		running:    true,
 		ctrlCCount: 0,
+		cancel:     func() {},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: ""},
+		inputModel: InputModel{Text: "", CyclingIdx: -1},
 	}
 
-	// First Ctrl+C
+	// First Ctrl+C while running cancels the agent
 	newM, cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
 	mm := newM.(*model)
 
-	if mm.ctrlCCount != 1 {
-		t.Errorf("ctrlCCount should be 1, got %d", mm.ctrlCCount)
+	if mm.running {
+		t.Error("agent should be cancelled (running=false)")
 	}
-	if cmd == nil {
-		t.Error("should return command to schedule counter reset")
+	if cmd != nil {
+		t.Error("cancelAgent should not return a command")
 	}
 }
 
 func TestHandleKey_RunningAgentDoubleCtrlC(t *testing.T) {
+	// Double Ctrl+C when NOT running should quit
 	m := &model{
-		running:    true,
+		running:    false,
 		ctrlCCount: 1,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: ""},
+		inputModel: InputModel{Text: "", CyclingIdx: -1},
 	}
 
 	// Second Ctrl+C - should quit
@@ -356,7 +358,7 @@ func TestHandleKey_TabWhileRunning(t *testing.T) {
 	m := &model{
 		running:    true,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: ""},
+		inputModel: InputModel{Text: "", CyclingIdx: -1},
 	}
 
 	// Tab while running - should not trigger autocomplete
@@ -373,7 +375,7 @@ func TestHandleKey_TabAutocomplete(t *testing.T) {
 	m := &model{
 		running:    false,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "/he"},
+		inputModel: InputModel{Text: "/he", CyclingIdx: -1},
 	}
 
 	// Tab should complete to /help
@@ -389,21 +391,20 @@ func TestHandleKey_TabMultipleMatches(t *testing.T) {
 	m := &model{
 		running:    false,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "/c"},
+		inputModel: InputModel{Text: "/c", CyclingIdx: -1},
 	}
 
-	// Tab with multiple matches - should not change text
-	newM, cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	// Tab with multiple matches - should enter completion mode
+	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	mm := newM.(*model)
 
 	if mm.inputModel.Text != "/c" {
 		t.Errorf("text should remain /c with multiple matches, got %q", mm.inputModel.Text)
 	}
-	// Should show command list
-	if len(mm.chatModel.Messages) == 0 {
-		t.Error("should show command list for multiple matches")
+	// Should enter completion mode on InputModel
+	if !mm.inputModel.CompletionMode {
+		t.Error("should enter completion mode for multiple matches")
 	}
-	_ = cmd
 }
 
 func TestHandleKey_EscapeDismissesCompletion(t *testing.T) {
