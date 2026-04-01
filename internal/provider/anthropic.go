@@ -73,7 +73,7 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 		}
 
 		params := anthropic.MessageNewParams{
-			Model:     anthropic.Model(modelName),
+			Model:     modelName,
 			Messages:  messages,
 			MaxTokens: maxTokens,
 		}

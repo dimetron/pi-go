@@ -326,7 +326,7 @@ func TestHandleKey_RunningAgentCtrlC(t *testing.T) {
 	mm := newM.(*model)
 
 	if mm.running {
-		t.Error("agent should be cancelled (running=false)")
+		t.Error("agent should be canceled (running=false)")
 	}
 	if cmd != nil {
 		t.Error("cancelAgent should not return a command")
