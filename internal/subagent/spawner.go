@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -98,11 +97,7 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 	}
 
 	// Ensure the process and its children are killed on cancel.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// Kill the process group to include child processes (e.g. sleep).
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	setPlatformAttrs(cmd)
 	cmd.WaitDelay = 3 * time.Second
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
