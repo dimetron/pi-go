@@ -3,90 +3,53 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
   release:
-    name: Release
+    name: GoReleaser
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Set version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Run tests
-        run: go test -race -count=1 ./...
-
-      - name: Build binaries
-        run: |
-          mkdir -p dist
-
-          # Linux amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/dimetron/pi-go/internal/cli.Version=${{ steps.version.outputs.version }}" -o dist/pi-linux-amd64 ./cmd/pi
-          # Linux arm64
-          GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X github.com/dimetron/pi-go/internal/cli.Version=${{ steps.version.outputs.version }}" -o dist/pi-linux-arm64 ./cmd/pi
-          # macOS amd64
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X github.com/dimetron/pi-go/internal/cli.Version=${{ steps.version.outputs.version }}" -o dist/pi-darwin-amd64 ./cmd/pi
-          # macOS arm64
-          GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X github.com/dimetron/pi-go/internal/cli.Version=${{ steps.version.outputs.version }}" -o dist/pi-darwin-arm64 ./cmd/pi
-
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum * > checksums.txt
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get commits since last tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            CHANGES=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges)
-          else
-            CHANGES=$(git log --pretty=format:"- %s" --no-merges -20)
-          fi
-          echo "changes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$CHANGES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          body: |
-            ## pi-go ${{ steps.version.outputs.version }}
-
-            ### Changes
-            ${{ steps.changelog.outputs.changes }}
-
-            ### Installation
-
-            ```bash
-            # macOS (Apple Silicon)
-            curl -fsSL https://github.com/dimetron/pi-go/releases/download/${{ steps.version.outputs.version }}/pi-darwin-arm64 -o pi
-            chmod +x pi && sudo mv pi /usr/local/bin/
-
-            # macOS (Intel)
-            curl -fsSL https://github.com/dimetron/pi-go/releases/download/${{ steps.version.outputs.version }}/pi-darwin-amd64 -o pi
-            chmod +x pi && sudo mv pi /usr/local/bin/
-
-            # Linux (amd64)
-            curl -fsSL https://github.com/dimetron/pi-go/releases/download/${{ steps.version.outputs.version }}/pi-linux-amd64 -o pi
-            chmod +x pi && sudo mv pi /usr/local/bin/
-
-            # Linux (arm64)
-            curl -fsSL https://github.com/dimetron/pi-go/releases/download/${{ steps.version.outputs.version }}/pi-linux-arm64 -o pi
-            chmod +x pi && sudo mv pi /usr/local/bin/
-            ```
-          files: |
-            dist/*
-          generate_release_notes: true
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

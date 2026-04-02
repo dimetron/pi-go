@@ -29,6 +29,9 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# GoReleaser
+/dist/
+
 # pi-go specific
 .pi-go/
 *.sock
