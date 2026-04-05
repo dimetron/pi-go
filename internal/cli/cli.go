@@ -580,6 +580,7 @@ type jsonEvent struct {
 	Content   string `json:"content,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
 	ToolInput any    `json:"tool_input,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // runJSON runs the agent and emits JSONL events to stdout.
@@ -608,9 +609,10 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		// Emit message_start on the first event from the assistant.
 		if !started {
 			_ = enc.Encode(jsonEvent{
-				Type:  "message_start",
-				Agent: ev.Author,
-				Role:  ev.Content.Role,
+				Type:      "message_start",
+				Agent:     ev.Author,
+				Role:      ev.Content.Role,
+				SessionID: sessionID,
 			})
 			started = true
 		}
