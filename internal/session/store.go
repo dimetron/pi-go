@@ -343,10 +343,15 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 		),
 	}
 
-	// Rebuild state from event deltas.
+	// Rebuild state from event deltas and ATIF trajectory from existing events.
 	for _, e := range events {
 		if e.Actions.StateDelta != nil {
 			maps.Copy(sess.state, e.Actions.StateDelta)
+		}
+		if sess.atifWriter != nil {
+			if err := sess.atifWriter.AppendEvent(e); err != nil {
+				slog.Warn("atif: failed to rebuild event on load", "session", sessionID, "error", err)
+			}
 		}
 	}
 
