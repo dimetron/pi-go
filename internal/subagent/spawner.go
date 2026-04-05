@@ -158,7 +158,7 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 			case "tool_result":
 				proc.sendEvent(Event{Type: "tool_result", Content: ev.Content})
 			case "message_start":
-				proc.sendEvent(Event{Type: "message_start"})
+				proc.sendEvent(Event{Type: "message_start", SessionID: ev.SessionID})
 			case "message_end":
 				proc.sendEvent(Event{Type: "message_end"})
 			default:
@@ -212,4 +212,5 @@ type jsonEvent struct {
 	Content   string `json:"content,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
 	ToolInput any    `json:"tool_input,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }

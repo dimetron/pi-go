@@ -61,12 +61,13 @@ type SubagentOutput struct {
 
 // AgentResult holds the result from a single agent execution.
 type AgentResult struct {
-	Agent    string `json:"agent"`
-	AgentID  string `json:"agent_id"`
-	Status   string `json:"status"` // "completed", "failed", "timeout"
-	Result   string `json:"result"`
-	Error    string `json:"error,omitempty"`
-	Duration string `json:"duration"`
+	Agent     string `json:"agent"`
+	AgentID   string `json:"agent_id"`
+	Status    string `json:"status"` // "completed", "failed", "timeout"
+	Result    string `json:"result"`
+	Error     string `json:"error,omitempty"`
+	Duration  string `json:"duration"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // SubagentEvent extends agent events with pipeline metadata for the TUI.
@@ -206,10 +207,11 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 	})
 
 	// Consume events, forward to TUI, accumulate result.
-	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string) {
+	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string, string) {
 		var result strings.Builder
 		st := "completed"
 		var em string
+		var sessID string
 		for ev := range events {
 			evContent := ev.Content
 			if ev.Type == "error" && evContent == "" {
@@ -225,12 +227,16 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 			case "error":
 				st = "failed"
 				em = ev.Error
+			case "message_start":
+				if ev.SessionID != "" {
+					sessID = ev.SessionID
+				}
 			}
 		}
-		return truncateOutput(result.String()), st, em
+		return truncateOutput(result.String()), st, em, sessID
 	}
 
-	resultText, status, errMsg := forwardAndConsume(events)
+	resultText, status, errMsg, subSessionID := forwardAndConsume(events)
 
 	emitEvent(onEvent, SubagentEvent{
 		AgentID: agentID, Kind: "done",
@@ -242,12 +248,13 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 	return SubagentOutput{
 		Mode: "single",
 		Results: []AgentResult{{
-			Agent:    input.Agent,
-			AgentID:  agentID,
-			Status:   status,
-			Result:   resultText,
-			Error:    errMsg,
-			Duration: duration,
+			Agent:     input.Agent,
+			AgentID:   agentID,
+			Status:    status,
+			Result:    resultText,
+			Error:     errMsg,
+			Duration:  duration,
+			SessionID: subSessionID,
 		}},
 		Summary: fmt.Sprintf("%s %s in %s", input.Agent, status, duration),
 	}, nil
@@ -331,6 +338,7 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 			var result strings.Builder
 			status := "completed"
 			var errMsg string
+			var sessID string
 
 			for ev := range events {
 				evContent := ev.Content
@@ -353,6 +361,10 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 				case "error":
 					status = "failed"
 					errMsg = ev.Error
+				case "message_start":
+					if ev.SessionID != "" {
+						sessID = ev.SessionID
+					}
 				}
 			}
 
@@ -367,12 +379,13 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 			})
 
 			results[idx] = AgentResult{
-				Agent:    t.Agent,
-				AgentID:  agentID,
-				Status:   status,
-				Result:   truncateOutput(result.String()),
-				Error:    errMsg,
-				Duration: time.Since(taskStart).Truncate(time.Millisecond).String(),
+				Agent:     t.Agent,
+				AgentID:   agentID,
+				Status:    status,
+				Result:    truncateOutput(result.String()),
+				Error:     errMsg,
+				Duration:  time.Since(taskStart).Truncate(time.Millisecond).String(),
+				SessionID: sessID,
 			}
 		}(i, task)
 	}
@@ -467,6 +480,7 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 		var result strings.Builder
 		status := "completed"
 		var errMsg string
+		var sessID string
 
 		for ev := range events {
 			evContent := ev.Content
@@ -489,6 +503,10 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 			case "error":
 				status = "failed"
 				errMsg = ev.Error
+			case "message_start":
+				if ev.SessionID != "" {
+					sessID = ev.SessionID
+				}
 			}
 		}
 
@@ -504,12 +522,13 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 
 		resultText := truncateOutput(result.String())
 		results = append(results, AgentResult{
-			Agent:    step.Agent,
-			AgentID:  agentID,
-			Status:   status,
-			Result:   resultText,
-			Error:    errMsg,
-			Duration: time.Since(stepStart).Truncate(time.Millisecond).String(),
+			Agent:     step.Agent,
+			AgentID:   agentID,
+			Status:    status,
+			Result:    resultText,
+			Error:     errMsg,
+			Duration:  time.Since(stepStart).Truncate(time.Millisecond).String(),
+			SessionID: sessID,
 		})
 
 		// Chain stops on failure.

@@ -287,6 +287,8 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 		if atifErr := sess.atifWriter.AppendEvent(event); atifErr != nil {
 			slog.Warn("atif: failed to append event", "session", sessionID, "error", atifErr)
 		}
+		// Link subagent trajectories if this event contains subagent tool responses.
+		sess.atifWriter.LinkSubagentTrajectories(event, sessionDir, s.baseDir)
 	}
 
 	// Update meta.json with new timestamp.
