@@ -3,9 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ var (
 	flagServeAddr           string
 	flagServeProject        string
 	flagServePairingTimeout time.Duration
+	flagServeModel          string
 )
 
 func newServeCmd() *cobra.Command {
@@ -34,12 +36,12 @@ Each browser tab gets its own isolated agent session.`,
 	cmd.Flags().StringVar(&flagServeAddr, "addr", ":8080", "Listen address for the web server")
 	cmd.Flags().StringVar(&flagServeProject, "project", "", "Default project path (default: current directory)")
 	cmd.Flags().DurationVar(&flagServePairingTimeout, "pairing-timeout", 5*time.Minute, "Pairing code expiry time")
+	cmd.Flags().StringVar(&flagServeModel, "model", "", "LLM model to use for the web terminal (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
 
 	return cmd
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// Determine project path
 	project := flagServeProject
 	if project == "" {
 		cwd, err := os.Getwd()
@@ -49,20 +51,26 @@ func runServe(cmd *cobra.Command, args []string) error {
 		project = cwd
 	}
 
-	// Resolve static files directory
-	staticDir, err := findStaticDir()
+	// Open serve.log for streaming structured logs.
+	logFile, err := os.OpenFile("serve.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("finding static directory: %w", err)
+		return fmt.Errorf("opening serve.log: %w", err)
 	}
+	defer logFile.Close()
 
-	// Create server configuration
+	logger := slog.New(slog.NewJSONHandler(
+		io.MultiWriter(os.Stderr, logFile),
+		&slog.HandlerOptions{Level: slog.LevelInfo},
+	))
+
 	cfg := webserver.Config{
 		Addr:           flagServeAddr,
 		PairingTimeout: flagServePairingTimeout,
-		StaticDir:      staticDir,
+		Project:        project,
+		Model:          flagServeModel,
+		Logger:         logger,
 	}
 
-	// Create server
 	server := webserver.NewServerV2(cfg)
 
 	// Handle shutdown signals
@@ -73,10 +81,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("starting server: %w", err)
 	}
+	code, _, err := server.BootstrapPair(project)
+	if err != nil {
+		return fmt.Errorf("creating initial pair code: %w", err)
+	}
 
 	fmt.Printf("Pi-Go web server started at http://%s\n", flagServeAddr)
 	fmt.Printf("Project: %s\n", project)
+	if flagServeModel != "" {
+		fmt.Printf("Model: %s\n", flagServeModel)
+	}
 	fmt.Printf("Pairing timeout: %s\n", flagServePairingTimeout)
+	fmt.Printf("Pair code: %s\n", code)
+	fmt.Println("Open /pair in your browser, then enter this pair code in mobile app.")
 	fmt.Println("\nPress Ctrl+C to stop the server")
 
 	// Wait for shutdown signal
@@ -92,32 +109,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Server stopped")
 	return nil
-}
-
-// findStaticDir finds the static directory relative to the executable.
-func findStaticDir() (string, error) {
-	// Try executable directory first
-	exe, err := os.Executable()
-	if err == nil {
-		staticDir := filepath.Join(filepath.Dir(exe), "internal", "webserver", "static")
-		if _, err := os.Stat(staticDir); err == nil {
-			return filepath.Dir(exe), nil
-		}
-	}
-
-	// Try current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-
-	staticDir := filepath.Join(cwd, "internal", "webserver", "static")
-	if _, err := os.Stat(staticDir); err == nil {
-		return cwd, nil
-	}
-
-	// Fallback to cwd
-	return cwd, nil
 }
 
 // GetServePairingManager returns the pairing manager from the server for mobile app approval.

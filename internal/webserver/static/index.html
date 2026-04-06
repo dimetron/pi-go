@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pi-Go Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <link rel="stylesheet" href="/static/style.css">
     <style>
@@ -79,7 +80,9 @@
         const terminal = new Terminal({
             cursorBlink: true,
             fontSize: 14,
-            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            lineHeight: 1.2,
+            letterSpacing: 0,
+            fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
             theme: {
                 background: '#1e1e1e',
                 foreground: '#d4d4d4',
@@ -121,47 +124,67 @@
             statusEl.textContent = text;
         }
         
-        // Get token from cookie
-        function getCookie(name) {
-            const value = '; ' + document.cookie;
-            const parts = value.split('; ' + name + '=');
-            if (parts.length === 2) return parts.pop().split(';').shift();
-            return '';
-        }
-        
-        const token = getCookie('pi_token');
-        
-        if (!token) {
-            // Redirect to pair page
-            window.location.href = '/pair';
-        }
-        
-        // Generate session ID
-        const sessionID = crypto.randomUUID ? crypto.randomUUID() : 
-            'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                const r = Math.random() * 16 | 0;
-                const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            });
+        // Persist session ID across page refreshes so reconnects reattach
+        // to the same PTY process.
+        const sessionID = sessionStorage.getItem('pi_session') || (function() {
+            const id = crypto.randomUUID ? crypto.randomUUID() :
+                'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    const r = Math.random() * 16 | 0;
+                    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            sessionStorage.setItem('pi_session', id);
+            return id;
+        })();
         
         // WebSocket connection
         let ws;
         let reconnectAttempts = 0;
-        const maxReconnectAttempts = 5;
+        const maxReconnectAttempts = 20;
+        
+        // Keep-alive: send app-level pings and detect dead connections.
+        let heartbeatTimer = null;
+        let pongReceived = true;
+        const HEARTBEAT_INTERVAL = 25000; // 25s — under the server's 30s ping
+        
+        function startHeartbeat() {
+            stopHeartbeat();
+            pongReceived = true;
+            heartbeatTimer = setInterval(function() {
+                if (!pongReceived) {
+                    console.warn('heartbeat: no pong, closing');
+                    ws.close();
+                    return;
+                }
+                pongReceived = false;
+                sendMessage('ping', '');
+            }, HEARTBEAT_INTERVAL);
+        }
+        
+        function stopHeartbeat() {
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+        }
         
         function connect() {
-            setStatus('connecting', 'Connecting...');
+            setStatus('connecting', reconnectAttempts > 0 ? 'Reconnecting...' : 'Connecting...');
             
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsURL = `${protocol}//${window.location.host}/ws/${sessionID}?token=${encodeURIComponent(token)}`;
+            const wsURL = `${protocol}//${window.location.host}/ws/${sessionID}`;
             
             ws = new WebSocket(wsURL);
             
             ws.onopen = function() {
                 setStatus('connected', 'Connected');
+                if (reconnectAttempts > 0) {
+                    terminal.write('\r\n[Reconnected]\r\n');
+                }
                 reconnectAttempts = 0;
+                startHeartbeat();
                 
-                // Send initial terminal size
+                // Send terminal size so the PTY is resized to match.
                 const dims = fitAddon.proposeDimensions();
                 if (dims) {
                     sendMessage('resize', `${dims.cols}x${dims.rows}`);
@@ -173,28 +196,32 @@
                     const msg = JSON.parse(event.data);
                     if (msg.type === 'output') {
                         terminal.write(msg.data);
+                    } else if (msg.type === 'pong') {
+                        pongReceived = true;
                     } else if (msg.type === 'close') {
-                        terminal.write('\r\n\r\n[Connection closed]\r\n');
+                        terminal.write('\r\n\r\n[Session ended]\r\n');
+                        sessionStorage.removeItem('pi_session');
+                        stopHeartbeat();
                     }
                 } catch (e) {
-                    // If not JSON, treat as raw terminal output
                     terminal.write(event.data);
                 }
             };
             
             ws.onclose = function() {
                 setStatus('disconnected', 'Disconnected');
+                stopHeartbeat();
                 
-                // Attempt reconnect
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectAttempts++;
-                    setTimeout(connect, 2000 * reconnectAttempts);
+                    const delay = Math.min(2000 * reconnectAttempts, 15000);
+                    terminal.write(`\r\n[Reconnecting in ${delay/1000}s...]\r\n`);
+                    setTimeout(connect, delay);
                 }
             };
             
             ws.onerror = function(error) {
                 console.error('WebSocket error:', error);
-                setStatus('disconnected', 'Connection error');
             };
         }
         

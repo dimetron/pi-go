@@ -58,7 +58,7 @@ func (wh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reque
 	defer wh.sessionManager.CloseSession(session.ID)
 
 	// Create PTY bridge
-	bridge := NewPtyBridge(session.Project)
+	bridge := NewPtyBridge(session.Project, "", nil)
 	defer bridge.Close()
 
 	// Handle bidirectional I/O

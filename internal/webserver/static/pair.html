@@ -11,18 +11,19 @@
         <h1>Pi-Go Pairing</h1>
         
         <div id="pairing-form">
-            <p>Click the button below to generate a pairing code.</p>
-            <button id="generate-btn">Generate Pairing Code</button>
+            <p>Loading active pairing session...</p>
         </div>
         
         <div id="pairing-info" class="hidden">
-            <div class="code-display">
-                <span id="pair-code">------</span>
-            </div>
+            <form class="code-entry" id="code-submit-form" action="/api/pair/submit" method="post">
+                <input id="code-input" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit pair code" />
+                <button id="submit-code-btn" type="submit">Submit Code</button>
+            </form>
             <div class="qr-container">
-                <canvas id="qr-canvas" width="200" height="200"></canvas>
+                <img id="qr-image" width="200" height="200" alt="Pairing QR code" />
             </div>
-            <p class="instructions">Scan this code with the Pi-Go mobile app, or enter the code manually.</p>
+            <p class="instructions" id="qr-host"></p>
+            <p class="instructions">Scan this QR with the Pi-Go mobile app, or enter the pair code from the terminal.</p>
             <div id="status" class="status pending">
                 <span id="status-text">Waiting for approval...</span>
             </div>
@@ -33,20 +34,23 @@
         </div>
     </div>
     
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <script>
         let pollInterval;
         let currentToken = '';
         
-        const generateBtn = document.getElementById('generate-btn');
         const pairingForm = document.getElementById('pairing-form');
         const pairingInfo = document.getElementById('pairing-info');
         const errorDiv = document.getElementById('error');
         const errorText = document.getElementById('error-text');
-        const pairCode = document.getElementById('pair-code');
-        const qrCanvas = document.getElementById('qr-canvas');
+        const codeSubmitForm = document.getElementById('code-submit-form');
+        const codeInput = document.getElementById('code-input');
+        const submitCodeBtn = document.getElementById('submit-code-btn');
+        const qrImage = document.getElementById('qr-image');
+        const qrHost = document.getElementById('qr-host');
         const statusDiv = document.getElementById('status');
         const statusText = document.getElementById('status-text');
+
+        qrHost.textContent = 'Server: ' + window.location.host;
         
         function showError(msg) {
             errorDiv.classList.remove('hidden');
@@ -67,12 +71,14 @@
                     statusText.textContent = 'Approved! Redirecting...';
                     break;
                 case 'expired':
-                    statusText.textContent = 'Code expired. Click generate to try again.';
+                    statusText.textContent = 'Code expired. Generating a new code...';
                     clearInterval(pollInterval);
+                    setTimeout(generateCode, 500);
                     break;
                 case 'unknown':
-                    statusText.textContent = 'Code not found. Generate a new code.';
+                    statusText.textContent = 'Code not found. Generating a new code...';
                     clearInterval(pollInterval);
+                    setTimeout(generateCode, 500);
                     break;
             }
         }
@@ -97,51 +103,64 @@
             checkStatus(token);
             pollInterval = setInterval(() => checkStatus(token), 2000);
         }
+
+        function normalizeCode(value) {
+            return (value || '').replace(/\s+/g, '').trim();
+        }
+
+        function validateCodeInput() {
+            const entered = normalizeCode(codeInput.value);
+            console.log('Validating code:', entered, 'length:', entered.length);
+            if (!entered) {
+                showError('Please enter the 6-digit pair code.');
+                return false;
+            }
+            if (entered.length !== 6) {
+                showError('Pair code must be exactly 6 digits.');
+                return false;
+            }
+            if (!/^\d{6}$/.test(entered)) {
+                showError('Pair code must contain only digits.');
+                return false;
+            }
+            hideError();
+            return true;
+        }
         
         function generateCode() {
             hideError();
-            generateBtn.disabled = true;
-            generateBtn.textContent = 'Generating...';
             
-            fetch('/api/pair', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project: '' })
-            })
+            fetch('/api/pair')
             .then(r => {
                 if (!r.ok) throw new Error('Failed to generate code');
                 return r.json();
             })
             .then(data => {
-                // Display the code
-                pairCode.textContent = data.code;
+                currentToken = data.token;
+                codeInput.value = '';
+                codeInput.disabled = false;
+                submitCodeBtn.disabled = false;
                 
-                // Generate QR code
-                const qrData = atob(data.qr);
-                QRCode.toCanvas(qrCanvas, qrData, {
-                    width: 200,
-                    margin: 2
-                });
+                // Render server-generated QR PNG.
+                qrImage.src = 'data:image/png;base64,' + data.qr;
                 
                 // Show pairing info
                 pairingForm.classList.add('hidden');
                 pairingInfo.classList.remove('hidden');
-                
-                // Start polling
-                startPolling(data.token);
+                statusDiv.className = 'status pending';
+                statusText.textContent = 'Enter pair code and submit to start waiting for approval.';
             })
             .catch(err => {
                 showError('Failed to generate code: ' + err.message);
-                generateBtn.disabled = false;
-                generateBtn.textContent = 'Generate Pairing Code';
+                pairingForm.classList.remove('hidden');
+                pairingForm.querySelector('p').textContent = 'Failed to generate code. Retrying...';
+                setTimeout(generateCode, 2000);
             });
         }
         
         // Handle approved status
         function handleApproved() {
             clearInterval(pollInterval);
-            // Set cookie and redirect
-            document.cookie = 'pi_token=' + currentToken + '; path=/; max-age=86400; HttpOnly';
             setTimeout(() => {
                 window.location.href = '/';
             }, 1000);
@@ -155,17 +174,44 @@
                 handleApproved();
             }
         };
-        
-        generateBtn.addEventListener('click', generateCode);
+
+        codeSubmitForm.addEventListener('submit', function(e) {
+            console.log('Form submit triggered, code value:', codeInput.value);
+            console.log('Pairing info visible:', !pairingInfo.classList.contains('hidden'));
+            
+            // Prevent submission if pairing info is not visible
+            if (pairingInfo.classList.contains('hidden')) {
+                console.log('Pairing info not visible, preventing submit');
+                e.preventDefault();
+                return false;
+            }
+            
+            if (!validateCodeInput()) {
+                console.log('Validation failed, preventing submit');
+                e.preventDefault();
+                return false;
+            }
+            console.log('Validation passed, allowing submit');
+            // Let form submit naturally to server
+            submitCodeBtn.disabled = true;
+            codeInput.disabled = true;
+        });
         
         // Check URL for existing token
         const urlParams = new URLSearchParams(window.location.search);
         const token = urlParams.get('token');
+        const submitError = urlParams.get('error');
+        if (submitError) {
+            showError(submitError);
+        }
         if (token) {
             // Show existing pairing info
             pairingForm.classList.add('hidden');
             pairingInfo.classList.remove('hidden');
             startPolling(token);
+        } else {
+            // Automatically create a fresh pairing code on page load.
+            generateCode();
         }
     </script>
 </body>

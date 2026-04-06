@@ -73,6 +73,29 @@ button:disabled {
     display: inline-block;
 }
 
+.code-entry {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin: 15px 0 10px;
+}
+
+.code-entry input {
+    width: 170px;
+    padding: 12px 14px;
+    border: 2px solid #667eea;
+    border-radius: 8px;
+    font-size: 18px;
+    letter-spacing: 2px;
+    text-align: center;
+    font-family: 'Courier New', monospace;
+}
+
+.code-entry button {
+    padding: 12px 18px;
+    font-size: 16px;
+}
+
 .qr-container {
     margin: 30px 0;
     display: flex;
@@ -80,6 +103,11 @@ button:disabled {
 }
 
 #qr-canvas {
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+#qr-image {
     border-radius: 8px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
 }

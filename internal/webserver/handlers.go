@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,9 @@ type Config struct {
 	Addr           string
 	PairingTimeout time.Duration
 	StaticDir      string
+	Project        string
+	Model          string
+	Logger         *slog.Logger // if nil, a no-op logger is used
 }
 
 // NewServer creates a new web server with the given configuration.
@@ -244,7 +248,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Create PTY bridge for this session
-	bridge := NewPtyBridge(project)
+	bridge := NewPtyBridge(project, "", nil)
 	defer bridge.Close()
 
 	// Handle bidirectional I/O

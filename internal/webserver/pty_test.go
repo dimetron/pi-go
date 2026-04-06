@@ -5,12 +5,15 @@ import (
 )
 
 func TestNewPtyBridge(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project")
+	bridge := NewPtyBridge("/tmp/test-project", "test-model", nil)
 	if bridge == nil {
 		t.Fatal("NewPtyBridge should not return nil")
 	}
 	if bridge.project != "/tmp/test-project" {
 		t.Errorf("expected project /tmp/test-project, got %q", bridge.project)
+	}
+	if bridge.model != "test-model" {
+		t.Errorf("expected model test-model, got %q", bridge.model)
 	}
 	if bridge.done == nil {
 		t.Error("done channel should be initialized")
@@ -18,12 +21,14 @@ func TestNewPtyBridge(t *testing.T) {
 }
 
 func TestPtyBridge_Close(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project")
+	bridge := NewPtyBridge("/tmp/test-project", "", nil)
 
-	// Close should not panic
-	err := bridge.Close()
-	if err != nil {
-		t.Errorf("Close should not return error: %v", err)
+	// Close should not panic even when called multiple times
+	if err := bridge.Close(); err != nil {
+		t.Errorf("first Close should not return error: %v", err)
+	}
+	if err := bridge.Close(); err != nil {
+		t.Errorf("second Close should not panic or return error: %v", err)
 	}
 }
 
@@ -39,4 +44,9 @@ func TestWSMessage_JSON(t *testing.T) {
 	if msg.Data != "hello" {
 		t.Errorf("expected data hello, got %q", msg.Data)
 	}
+}
+
+func TestPtyPool_CloseAll(t *testing.T) {
+	pool := NewPtyPool(nil)
+	pool.CloseAll()
 }
