@@ -385,7 +385,7 @@ func TestCliRunJSONWithLogger(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// runPrint with cancelled context — exercises the context error path
+// runPrint with canceled context — exercises the context error path
 // -----------------------------------------------------------------------
 
 func TestCliRunPrintCancelledContext(t *testing.T) {
@@ -395,7 +395,7 @@ func TestCliRunPrintCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	// With a cancelled context, runPrint may return nil (context.Canceled
+	// With a canceled context, runPrint may return nil (context.Canceled
 	// is suppressed) or an error. Either is acceptable — we just verify no panic.
 	_ = captureStdout(t, func() {
 		_ = runPrint(ctx, ag, sessionID, "hello", nil)
