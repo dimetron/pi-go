@@ -3,11 +3,15 @@ package tui
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	llmmodel "google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 func TestCommitCommand_NoLLM(t *testing.T) {
@@ -366,5 +370,199 @@ func TestNormalizeCommitMessage(t *testing.T) {
 				t.Errorf("normalizeCommitMessage(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// commitMockLLM is a configurable mock for GenerateCommitMsgFunc tests.
+type commitMockLLM struct {
+	// responses is the sequence of (parts, error) to yield.
+	responses []commitMockResponse
+}
+
+type commitMockResponse struct {
+	parts []string // text parts in Content; nil means Content is nil
+	err   error
+}
+
+func (m *commitMockLLM) Name() string { return "commit-mock" }
+
+func (m *commitMockLLM) GenerateContent(_ context.Context, _ *llmmodel.LLMRequest, _ bool) iter.Seq2[*llmmodel.LLMResponse, error] {
+	return func(yield func(*llmmodel.LLMResponse, error) bool) {
+		for _, r := range m.responses {
+			if r.err != nil {
+				if !yield(nil, r.err) {
+					return
+				}
+				continue
+			}
+			resp := &llmmodel.LLMResponse{}
+			if r.parts != nil {
+				parts := make([]*genai.Part, len(r.parts))
+				for i, txt := range r.parts {
+					parts[i] = &genai.Part{Text: txt}
+				}
+				resp.Content = &genai.Content{
+					Role:  string(genai.RoleModel),
+					Parts: parts,
+				}
+			}
+			if !yield(resp, nil) {
+				return
+			}
+		}
+	}
+}
+
+func TestGenerateCommitMsgFunc_Success(t *testing.T) {
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{parts: []string{"feat(auth): add OAuth2 login flow"}},
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	msg, err := fn(context.Background(), "diff --git a/auth.go ...")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != "feat(auth): add OAuth2 login flow" {
+		t.Errorf("expected %q, got %q", "feat(auth): add OAuth2 login flow", msg)
+	}
+}
+
+func TestGenerateCommitMsgFunc_LLMError(t *testing.T) {
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{err: fmt.Errorf("rate limit exceeded")},
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	_, err := fn(context.Background(), "some diff")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "LLM error") {
+		t.Errorf("expected wrapped LLM error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Errorf("expected original error message, got %q", err.Error())
+	}
+}
+
+func TestGenerateCommitMsgFunc_EmptyResponse(t *testing.T) {
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{parts: []string{""}},
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	_, err := fn(context.Background(), "some diff")
+	if err == nil {
+		t.Fatal("expected error for empty response, got nil")
+	}
+	if !strings.Contains(err.Error(), "LLM returned empty commit message") {
+		t.Errorf("expected empty message error, got %q", err.Error())
+	}
+}
+
+func TestGenerateCommitMsgFunc_NilContent(t *testing.T) {
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{parts: nil}, // Content will be nil
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	_, err := fn(context.Background(), "some diff")
+	if err == nil {
+		t.Fatal("expected error for nil content, got nil")
+	}
+	if !strings.Contains(err.Error(), "LLM returned empty commit message") {
+		t.Errorf("expected empty message error, got %q", err.Error())
+	}
+}
+
+func TestGenerateCommitMsgFunc_NormalizesQuotesAndWhitespace(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		expected string
+	}{
+		{
+			name:     "surrounding double quotes",
+			raw:      `"fix(core): handle nil pointer"`,
+			expected: "fix(core): handle nil pointer",
+		},
+		{
+			name:     "surrounding whitespace",
+			raw:      "  chore: update deps  ",
+			expected: "chore: update deps",
+		},
+		{
+			name:     "surrounding backticks",
+			raw:      "`refactor(tui): simplify render`",
+			expected: "refactor(tui): simplify render",
+		},
+		{
+			name:     "surrounding single quotes",
+			raw:      "'feat: add new command'",
+			expected: "feat: add new command",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &commitMockLLM{
+				responses: []commitMockResponse{
+					{parts: []string{tt.raw}},
+				},
+			}
+			fn := GenerateCommitMsgFunc(llm)
+			msg, err := fn(context.Background(), "diff")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, msg)
+			}
+		})
+	}
+}
+
+func TestGenerateCommitMsgFunc_MultiPartResponse(t *testing.T) {
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{parts: []string{"feat(api):", " add pagination", " support"}},
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	msg, err := fn(context.Background(), "diff with pagination changes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != "feat(api): add pagination support" {
+		t.Errorf("expected %q, got %q", "feat(api): add pagination support", msg)
+	}
+}
+
+func TestGenerateCommitMsgFunc_MultiYieldResponse(t *testing.T) {
+	// Simulates streaming: multiple yields each with a part.
+	llm := &commitMockLLM{
+		responses: []commitMockResponse{
+			{parts: []string{"fix(db): "}},
+			{parts: []string{"close connection on error"}},
+		},
+	}
+
+	fn := GenerateCommitMsgFunc(llm)
+	msg, err := fn(context.Background(), "diff with db fix")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != "fix(db): close connection on error" {
+		t.Errorf("expected %q, got %q", "fix(db): close connection on error", msg)
 	}
 }

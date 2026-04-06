@@ -37,3 +37,4 @@ Thumbs.db
 *.sock
 /PI.md
 /research/*
+/hack/test/rust/target/
