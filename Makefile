@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama lint vet e2e clean
+.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean
 
 build:
 	go build ./cmd/pi
@@ -24,6 +24,13 @@ test-coverage:
 
 test-ollama: build
 	@bash scripts/test-ollama-e2e.sh
+
+check-cve:
+	go mod tidy -v
+	grype db update || :
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck ./... | grep -A7 Vulnerability || :
+	grype .
 
 lint:
 	golangci-lint run ./...
