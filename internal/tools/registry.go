@@ -41,13 +41,17 @@ func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
 	return tools, nil
 }
 
-// lenientSchema generates a JSON schema for T that allows additional properties.
-// This prevents LLM tool calls from failing when the model sends extra/unknown parameters.
+// lenientSchema generates a JSON schema for T that allows additional properties
+// and makes all required properties optional. This prevents LLM tool calls from
+// failing when the model sends extra/unknown parameters or omits optional fields.
 func lenientSchema[T any]() *jsonschema.Schema {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
 		return nil // fall back to auto-inference
 	}
+	// Remove required constraints - make all properties optional
+	// This fixes "validating root: required: missing properties" errors
+	schema.Required = nil
 	relaxSchema(schema)
 	return schema
 }
@@ -79,8 +83,9 @@ func relaxSchema(s *jsonschema.Schema) {
 	}
 }
 
-// collectCoerceProps inspects a schema and returns sets of property names
-// that should be coerced from string to their expected types.
+// collectCoerceProps recursively inspects a schema and returns sets of property names
+// that should be coerced from string to their expected types. It handles nested
+// properties using dot notation (e.g., "tasks.0.agent").
 func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps, jsonProps map[string]bool) {
 	intProps = make(map[string]bool)
 	boolProps = make(map[string]bool)
@@ -88,17 +93,49 @@ func collectCoerceProps(schema *jsonschema.Schema) (intProps, boolProps, jsonPro
 	if schema == nil {
 		return
 	}
+	collectFromSchema(schema, "", intProps, boolProps, jsonProps)
+	return
+}
+
+// collectFromSchema recursively traverses the schema to collect properties needing coercion.
+// It registers paths using both full dot-notation paths (e.g., "tasks.$.agent") and
+// simple property names (e.g., "agent") to support flexible matching during coercion.
+func collectFromSchema(schema *jsonschema.Schema, prefix string, intProps, boolProps, jsonProps map[string]bool) {
+	if schema == nil {
+		return
+	}
 	for name, prop := range schema.Properties {
+		fullName := name
+		if prefix != "" {
+			fullName = prefix + "." + name
+		}
 		switch prop.Type {
 		case "integer", "number":
-			intProps[name] = true
+			intProps[fullName] = true
+			// Also register the base name for array item matching flexibility
+			if prefix != "" {
+				intProps[name] = true
+			}
 		case "boolean":
-			boolProps[name] = true
+			boolProps[fullName] = true
+			if prefix != "" {
+				boolProps[name] = true
+			}
 		case "array", "object":
-			jsonProps[name] = true
+			jsonProps[fullName] = true
+			if prefix != "" {
+				jsonProps[name] = true
+			}
+		}
+		// Recurse into nested objects
+		if len(prop.Properties) > 0 {
+			collectFromSchema(prop, fullName, intProps, boolProps, jsonProps)
+		}
+		// Recurse into array items - use ".$" suffix to mark array item context
+		if prop.Items != nil {
+			collectFromSchema(prop.Items, fullName+".$", intProps, boolProps, jsonProps)
 		}
 	}
-	return
 }
 
 // helper to create a function tool with less boilerplate.
@@ -210,66 +247,160 @@ func (c *coercingTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 }
 
 // aliasArgs remaps common LLM parameter name mistakes to their canonical names.
-// Only applies if the canonical name is not already present.
+// If both alias and canonical are present, canonical wins but alias is still removed.
+// If only alias is present, it gets renamed to the canonical name.
 func (c *coercingTool) aliasArgs(m map[string]any) {
 	for from, to := range c.aliases {
-		if _, hasCanonical := m[to]; hasCanonical {
-			continue
-		}
 		if v, hasAlias := m[from]; hasAlias {
-			m[to] = v
+			// Only use alias if canonical is not present
+			if _, hasCanonical := m[to]; !hasCanonical {
+				m[to] = v
+			}
+			// Always remove the alias
 			delete(m, from)
 		}
 	}
 }
 
 // coerceArgs converts string values to their expected types based on schema info.
+// It handles both top-level and nested properties using dot notation (e.g., "tasks.$").
 func (c *coercingTool) coerceArgs(m map[string]any) {
-	for k, v := range m {
-		// Handle string → expected type conversion
-		if s, ok := v.(string); ok {
-			if c.intProps[k] {
-				if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-					m[k] = float64(i) // JSON numbers are float64 in Go maps
-				} else if f, err := strconv.ParseFloat(s, 64); err == nil {
-					m[k] = f
-				}
-			} else if c.boolProps[k] {
-				if b, err := strconv.ParseBool(s); err == nil {
-					m[k] = b
-				}
-			} else if c.jsonProps[k] {
-				// LLMs sometimes stringify JSON arrays/objects. Parse them back.
-				s = strings.TrimSpace(s)
-				if (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
-					(strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
-					var parsed any
-					if err := json.Unmarshal([]byte(s), &parsed); err == nil {
-						m[k] = parsed
-					}
+	for key := range m {
+		c.coerceValueAtKey(m, key)
+	}
+}
+
+// coerceValueAtKey processes the value at the given key, coercing if needed and recursing into nested structures.
+func (c *coercingTool) coerceValueAtKey(m map[string]any, k string) {
+	val := m[k]
+
+	// Check if this key should be coerced
+	if c.intProps[k] || c.boolProps[k] || c.jsonProps[k] {
+		if coerced := c.tryCoerce(val, k); coerced != nil {
+			m[k] = coerced
+			val = coerced // Update val for potential recursion
+		}
+	}
+
+	// Recurse into nested structures
+	switch v := val.(type) {
+	case map[string]any:
+		for nestedK := range v {
+			c.coerceValueAtKey(v, nestedK)
+		}
+	case []any:
+		for i := range v {
+			c.coerceArrayItem(v, i, k)
+		}
+	}
+}
+
+// coerceArrayItem processes an array item, building the path for nested coercion.
+// When processing array items that are objects, it checks if any properties match
+// the parent's ".$" suffixed paths (e.g., "tasks.$.depth" matches "depth" in array items).
+func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
+	item := arr[idx]
+
+	// Check if array itself needs coercion (e.g., string -> array)
+	itemPath := parentPath
+	if c.jsonProps[itemPath] {
+		if coerced := c.tryCoerce(item, itemPath); coerced != nil {
+			arr[idx] = coerced
+			item = coerced
+		}
+	}
+
+	// Recurse into the array item
+	switch vv := item.(type) {
+	case map[string]any:
+		// Array of objects - check each property against parent.$ paths
+		for nestedK, nestedV := range vv {
+			// Check both the nested key itself and parent.$ nestedK
+			nestedPath := parentPath + "." + nestedK
+			parentItemPath := parentPath + ".$." + nestedK
+
+			// Try to coerce using the full nested path
+			if c.intProps[nestedPath] || c.boolProps[nestedPath] || c.jsonProps[nestedPath] {
+				if coerced := c.tryCoerce(nestedV, nestedPath); coerced != nil {
+					vv[nestedK] = coerced
 				}
 			}
-			continue
-		}
+			// Also check parent.$ paths (for array item properties)
+			if c.intProps[parentItemPath] || c.boolProps[parentItemPath] || c.jsonProps[parentItemPath] {
+				if coerced := c.tryCoerce(nestedV, parentItemPath); coerced != nil {
+					vv[nestedK] = coerced
+				}
+			}
 
-		// Handle number → integer conversion (LLMs sometimes send integers as floats)
-		if c.intProps[k] {
+			// Recurse into nested objects/arrays
+			switch nv := vv[nestedK].(type) {
+			case map[string]any:
+				c.coerceValueAtKey(nv, nestedK)
+			case []any:
+				for i := range nv {
+					c.coerceArrayItem(nv, i, nestedPath)
+				}
+			}
+		}
+	case []any:
+		// Nested array
+		for i := range vv {
+			c.coerceArrayItem(vv, i, parentPath)
+		}
+	}
+}
+
+// tryCoerce attempts to coerce a value based on the property path.
+// Returns the coerced value or nil if coercion was not applied.
+func (c *coercingTool) tryCoerce(val any, path string) any {
+	switch v := val.(type) {
+	case string:
+		if c.intProps[path] {
+			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return float64(i) // JSON numbers are float64 in Go maps
+			} else if f, err := strconv.ParseFloat(v, 64); err == nil {
+				return f
+			}
+		} else if c.boolProps[path] {
+			if b, err := strconv.ParseBool(v); err == nil {
+				return b
+			}
+		} else if c.jsonProps[path] {
+			// LLMs sometimes stringify JSON arrays/objects. Parse them back.
+			v = strings.TrimSpace(v)
+			if (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) ||
+				(strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) {
+				var parsed any
+				if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+					return parsed
+				}
+			}
+		}
+	case float64:
+		// Already float64 from JSON
+		return nil
+	case float32, int, int64, int32:
+		// Numbers - keep as-is for intProps, convert to float64
+		if c.intProps[path] {
 			switch n := v.(type) {
 			case float64:
-				// Already float64 from JSON, keep as-is (this is correct)
+				return n
 			case float32:
-				m[k] = float64(n)
+				return float64(n)
 			case int:
-				m[k] = float64(n)
+				return float64(n)
 			case int64:
-				m[k] = float64(n)
+				return float64(n)
 			case int32:
-				m[k] = float64(n)
-			case json.Number:
-				if f, err := n.Float64(); err == nil {
-					m[k] = f
-				}
+				return float64(n)
+			}
+		}
+	case json.Number:
+		if c.intProps[path] {
+			if f, err := v.Float64(); err == nil {
+				return f
 			}
 		}
 	}
+	return nil
 }

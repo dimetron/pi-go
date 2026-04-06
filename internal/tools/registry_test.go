@@ -110,6 +110,55 @@ func TestCoerceArgs(t *testing.T) {
 			t.Errorf("verbose = %v, want notabool", m["verbose"])
 		}
 	})
+
+	t.Run("nested array items coerced", func(t *testing.T) {
+		// Test that array items (objects) have their nested properties coerced
+		// The schema collection produces "tasks.$.depth" for array item properties
+		c := &coercingTool{
+			intProps: map[string]bool{"tasks.$.depth": true}, // Path from schema collection
+		}
+		m := map[string]any{
+			"tasks": []any{
+				map[string]any{"depth": "5"},
+				map[string]any{"depth": "10"},
+			},
+		}
+		c.coerceArgs(m)
+
+		tasks, ok := m["tasks"].([]any)
+		if !ok {
+			t.Fatalf("expected tasks to be []any, got %T", m["tasks"])
+		}
+		for i, task := range tasks {
+			tm, ok := task.(map[string]any)
+			if !ok {
+				t.Fatalf("task %d: expected map, got %T", i, task)
+			}
+			d, ok := tm["depth"].(float64)
+			if !ok || d != float64(i+1)*5 {
+				t.Errorf("task %d: depth = %v (%T), want %v.0", i, tm["depth"], tm["depth"], float64(i+1)*5)
+			}
+		}
+	})
+
+	t.Run("stringified array JSON parsed back", func(t *testing.T) {
+		// Test that stringified JSON arrays are parsed back
+		c := &coercingTool{
+			jsonProps: map[string]bool{"tasks": true},
+		}
+		m := map[string]any{
+			"tasks": `[{"agent":"worker","task":"do stuff"}]`,
+		}
+		c.coerceArgs(m)
+
+		tasks, ok := m["tasks"].([]any)
+		if !ok {
+			t.Fatalf("expected tasks to be []any after parsing, got %T", m["tasks"])
+		}
+		if len(tasks) != 1 {
+			t.Fatalf("expected 1 task, got %d", len(tasks))
+		}
+	})
 }
 
 // treeInputWithDepth has an integer field, so newTool should produce a coercingTool.
@@ -324,4 +373,68 @@ func TestCoercingTool_Run_NonMapArgs(t *testing.T) {
 		defer func() { recover() }() //nolint:errcheck
 		ct.Run(nil, "not-a-map")     //nolint:errcheck
 	}()
+}
+
+func TestAliasArgs_CommonLLMMistakes(t *testing.T) {
+	ct := &coercingTool{
+		intProps:  map[string]bool{},
+		boolProps: map[string]bool{},
+		aliases: map[string]string{
+			"type":    "agent",
+			"prompt":  "task",
+			"message": "task",
+			"items":   "tasks",
+			"steps":   "chain",
+		},
+	}
+
+	tests := []struct {
+		name        string
+		input       map[string]any
+		wantKey     string
+		wantValue   any
+		wantRemoved string
+	}{
+		{
+			name:        "type to agent",
+			input:       map[string]any{"type": "worker"},
+			wantKey:     "agent",
+			wantValue:   "worker",
+			wantRemoved: "type",
+		},
+		{
+			name:        "prompt to task",
+			input:       map[string]any{"prompt": "do something"},
+			wantKey:     "task",
+			wantValue:   "do something",
+			wantRemoved: "prompt",
+		},
+		{
+			name:        "message to task",
+			input:       map[string]any{"message": "urgent task"},
+			wantKey:     "task",
+			wantValue:   "urgent task",
+			wantRemoved: "message",
+		},
+		{
+			name:        "canonical name preserved over alias",
+			input:       map[string]any{"agent": "correct", "type": "wrong"},
+			wantKey:     "agent",
+			wantValue:   "correct", // canonical should win
+			wantRemoved: "type",    // alias should still be removed even if canonical exists
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ct.aliasArgs(tt.input)
+			if v, ok := tt.input[tt.wantKey].(string); !ok || v != tt.wantValue.(string) {
+				t.Errorf("aliasArgs: %s = %v, want %v", tt.wantKey, tt.input[tt.wantKey], tt.wantValue)
+			}
+			// Check alias was removed
+			if _, exists := tt.input[tt.wantRemoved]; exists {
+				t.Errorf("aliasArgs: %s should be removed but still exists", tt.wantRemoved)
+			}
+		})
+	}
 }

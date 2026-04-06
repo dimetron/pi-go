@@ -36,4 +36,4 @@ Thumbs.db
 .pi-go/
 *.sock
 /PI.md
-/research/
+/research/*
