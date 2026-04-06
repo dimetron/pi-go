@@ -562,9 +562,9 @@ func (m *model) View() tea.View {
 
 	visibleMessages := strings.Join(msgLines[startLine:endLine], "\n")
 
-	// Pad to fill available space.
+	// Pad to fill available space, leaving 1 blank line between messages and status bar.
 	visibleLineCount := strings.Count(visibleMessages, "\n") + 1
-	for visibleLineCount < availableHeight {
+	for visibleLineCount < availableHeight-1 {
 		visibleMessages += "\n"
 		visibleLineCount++
 	}
