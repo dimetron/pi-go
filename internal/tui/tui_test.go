@@ -5,15 +5,15 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
+	"google.golang.org/adk/session"
+
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
-
-	tea "charm.land/bubbletea/v2"
-	"google.golang.org/adk/session"
 )
 
 func TestHandleSlashCommandHelp(t *testing.T) {
