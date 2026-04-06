@@ -159,13 +159,12 @@ func (c *ChatModel) MaxScroll(height int) int {
 // UpdateRenderer recreates the glamour renderer for the given terminal width.
 func (c *ChatModel) UpdateRenderer(width int) {
 	c.Width = width
-	contentWidth := width - 4
-	if contentWidth < 40 {
-		contentWidth = 40
+	if width < 40 {
+		width = 40
 	}
 	c.Renderer, _ = glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(contentWidth),
+		glamour.WithWordWrap(width),
 		glamour.WithEmoji(),
 	)
 }
@@ -193,7 +192,7 @@ func (c *ChatModel) RenderMessages(running bool) string {
 
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("● ")
-	sepWidth := c.Width - 4
+	sepWidth := c.Width
 	if sepWidth < 20 {
 		sepWidth = 20
 	}

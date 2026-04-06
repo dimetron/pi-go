@@ -525,7 +525,6 @@ func (m *model) View() tea.View {
 	if !showSidebar {
 		sidebarWidth = 0
 	}
-	mainWidth := m.width - sidebarWidth
 
 	// Render components.
 	messagesView := m.chatModel.RenderMessages(m.running)
@@ -569,9 +568,8 @@ func (m *model) View() tea.View {
 		visibleLineCount++
 	}
 
-	// Constrain chat area to main width.
-	chatStyle := lipgloss.NewStyle().Width(mainWidth)
-	visibleMessages = chatStyle.Render(visibleMessages)
+	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
+	// lipgloss.Width() counts raw bytes including invisible ANSI codes, causing wrapping issues.
 
 	var b strings.Builder
 	b.WriteString(visibleMessages)
@@ -585,7 +583,7 @@ func (m *model) View() tea.View {
 	}
 
 	b.WriteString(statusBar)
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(inputArea)
 
 	leftPanel := b.String()
