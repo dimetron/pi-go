@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1324,5 +1325,513 @@ func TestSessionLastUpdateTime(t *testing.T) {
 	lut2 := getResp.Session.LastUpdateTime()
 	if !lut2.After(lut) {
 		t.Errorf("LastUpdateTime should advance after event, got %v vs %v", lut2, lut)
+	}
+}
+
+// --- ATIF integration tests ---
+
+func TestATIFFileCreatedOnAppendEvent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	sessionID := resp.Session.ID()
+	sessionDir := filepath.Join(svc.baseDir, sessionID)
+
+	// Before any events, no ATIF file should exist (writer defers until first event).
+	atifPath := filepath.Join(sessionDir, "trajectory.atif.json")
+	if _, err := os.Stat(atifPath); err == nil {
+		t.Fatal("trajectory.atif.json should not exist before first event")
+	}
+
+	// Append a user event.
+	event := &session.Event{
+		ID:        "ev1",
+		Timestamp: time.Now(),
+		Author:    "user",
+	}
+	event.Content = genai.NewContentFromText("hello world", genai.RoleUser)
+
+	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+		t.Fatalf("AppendEvent() error: %v", err)
+	}
+
+	// ATIF file should now exist and be valid JSON.
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("reading trajectory.atif.json: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("trajectory.atif.json is not valid JSON: %v", err)
+	}
+
+	if v, _ := trajectory["schema_version"].(string); v != "ATIF-v1.6" {
+		t.Errorf("schema_version = %q, want %q", v, "ATIF-v1.6")
+	}
+
+	steps, ok := trajectory["steps"].([]any)
+	if !ok || len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %v", trajectory["steps"])
+	}
+}
+
+func TestATIFMultipleEventsProduceSequentialSteps(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	sessionID := resp.Session.ID()
+	atifPath := filepath.Join(svc.baseDir, sessionID, "trajectory.atif.json")
+
+	// Append 3 events with different authors.
+	authors := []string{"user", "model", "user"}
+	for i, author := range authors {
+		event := &session.Event{
+			ID:        fmt.Sprintf("ev%d", i+1),
+			Timestamp: time.Now(),
+			Author:    author,
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("message %d", i+1), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent(%d) error: %v", i, err)
+		}
+	}
+
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("reading trajectory.atif.json: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	steps, ok := trajectory["steps"].([]any)
+	if !ok || len(steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(steps))
+	}
+
+	// Verify step_ids are sequential 1, 2, 3.
+	for i, s := range steps {
+		step := s.(map[string]any)
+		stepID := int(step["step_id"].(float64))
+		if stepID != i+1 {
+			t.Errorf("step[%d].step_id = %d, want %d", i, stepID, i+1)
+		}
+	}
+}
+
+func TestATIFWriteFailureDoesNotBreakAppendEvent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	sessionID := resp.Session.ID()
+	sessionDir := filepath.Join(svc.baseDir, sessionID)
+
+	// Make the session directory read-only so ATIF write will fail.
+	atifPath := filepath.Join(sessionDir, "trajectory.atif.json")
+	// Create a directory at the atif path to cause a write error.
+	if err := os.MkdirAll(atifPath, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	event := &session.Event{
+		ID:        "ev1",
+		Timestamp: time.Now(),
+		Author:    "user",
+	}
+	event.Content = genai.NewContentFromText("hello", genai.RoleUser)
+
+	// AppendEvent should succeed even though ATIF write fails.
+	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+		t.Fatalf("AppendEvent should succeed despite ATIF failure: %v", err)
+	}
+
+	// Verify the session event was still persisted.
+	events, err := readEvents(sessionDir)
+	if err != nil {
+		t.Fatalf("readEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("expected 1 event in JSONL, got %d", len(events))
+	}
+}
+
+func TestATIFWriterAccessor(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	w := svc.ATIFWriter(resp.Session.ID())
+	if w == nil {
+		t.Fatal("ATIFWriter should not be nil for created session")
+	}
+
+	w2 := svc.ATIFWriter("nonexistent")
+	if w2 != nil {
+		t.Error("ATIFWriter should be nil for nonexistent session")
+	}
+}
+
+func TestATIFPartialEventsSkipped(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Append a partial event (should be skipped entirely, including ATIF).
+	partial := &session.Event{
+		ID:        "partial1",
+		Timestamp: time.Now(),
+		Author:    "model",
+	}
+	partial.Partial = true
+	partial.Content = genai.NewContentFromText("partial...", genai.RoleModel)
+	if err := svc.AppendEvent(ctx, resp.Session, partial); err != nil {
+		t.Fatalf("AppendEvent(partial) error: %v", err)
+	}
+
+	// No ATIF file because no non-partial events.
+	atifPath := filepath.Join(svc.baseDir, resp.Session.ID(), "trajectory.atif.json")
+	if _, err := os.Stat(atifPath); err == nil {
+		t.Error("trajectory.atif.json should not exist after only partial events")
+	}
+
+	// Now append a real event.
+	real := &session.Event{
+		ID:        "real1",
+		Timestamp: time.Now(),
+		Author:    "user",
+	}
+	real.Content = genai.NewContentFromText("hello", genai.RoleUser)
+	if err := svc.AppendEvent(ctx, resp.Session, real); err != nil {
+		t.Fatalf("AppendEvent(real) error: %v", err)
+	}
+
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("reading trajectory.atif.json: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	steps := trajectory["steps"].([]any)
+	if len(steps) != 1 {
+		t.Errorf("expected 1 step (partial skipped), got %d", len(steps))
+	}
+}
+
+func TestATIFCreatedOnSessionLoad(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "load-test",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Append an event so session has data.
+	event := &session.Event{
+		ID:        "ev1",
+		Timestamp: time.Now(),
+		Author:    "user",
+	}
+	event.Content = genai.NewContentFromText("hello", genai.RoleUser)
+	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+		t.Fatalf("AppendEvent() error: %v", err)
+	}
+
+	// Create a fresh service (simulating restart) and load the session.
+	svc2, err := NewFileService(svc.baseDir)
+	if err != nil {
+		t.Fatalf("NewFileService() error: %v", err)
+	}
+
+	_, err = svc2.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "load-test",
+	})
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	// The loaded session should have an ATIF writer.
+	w := svc2.ATIFWriter("load-test")
+	if w == nil {
+		t.Fatal("ATIFWriter should not be nil for loaded session")
+	}
+}
+
+func TestATIFRebuiltOnSessionResume(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "resume-test",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Append 5 events.
+	for i := 1; i <= 5; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("ev%d", i),
+			Timestamp: time.Now(),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("message %d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent(%d) error: %v", i, err)
+		}
+	}
+
+	// Create a fresh service (simulating restart) and load the session.
+	svc2, err := NewFileService(svc.baseDir)
+	if err != nil {
+		t.Fatalf("NewFileService() error: %v", err)
+	}
+
+	_, err = svc2.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "resume-test",
+	})
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	// ATIF file should be rebuilt with all 5 events' steps.
+	atifPath := filepath.Join(svc.baseDir, "resume-test", "trajectory.atif.json")
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("reading trajectory.atif.json: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("trajectory.atif.json is not valid JSON: %v", err)
+	}
+
+	steps, ok := trajectory["steps"].([]any)
+	if !ok || len(steps) != 5 {
+		t.Fatalf("expected 5 steps after resume, got %d", len(steps))
+	}
+
+	// Verify sequential step IDs.
+	for i, s := range steps {
+		step := s.(map[string]any)
+		wantID := float64(i + 1)
+		if step["step_id"] != wantID {
+			t.Errorf("step[%d].step_id = %v, want %v", i, step["step_id"], wantID)
+		}
+	}
+}
+
+func TestATIFRebuiltWhenFileDeleted(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "deleted-atif",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Append events.
+	for i := 1; i <= 3; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("ev%d", i),
+			Timestamp: time.Now(),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("msg %d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent(%d) error: %v", i, err)
+		}
+	}
+
+	// Delete the ATIF file.
+	atifPath := filepath.Join(svc.baseDir, "deleted-atif", "trajectory.atif.json")
+	os.Remove(atifPath)
+	if _, err := os.Stat(atifPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("ATIF file should be deleted")
+	}
+
+	// Reload in a fresh service — should recreate ATIF.
+	svc2, err := NewFileService(svc.baseDir)
+	if err != nil {
+		t.Fatalf("NewFileService() error: %v", err)
+	}
+
+	_, err = svc2.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "deleted-atif",
+	})
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	// ATIF file should be recreated.
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("ATIF file not recreated: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	steps := trajectory["steps"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps after rebuild, got %d", len(steps))
+	}
+}
+
+func TestATIFResumedSessionContinuesStepIDs(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "continue-ids",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Append 3 events.
+	for i := 1; i <= 3; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("ev%d", i),
+			Timestamp: time.Now(),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("msg %d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent(%d) error: %v", i, err)
+		}
+	}
+
+	// Simulate restart.
+	svc2, err := NewFileService(svc.baseDir)
+	if err != nil {
+		t.Fatalf("NewFileService() error: %v", err)
+	}
+
+	getResp, err := svc2.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "continue-ids",
+	})
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	// Append 2 more events after resume.
+	for i := 4; i <= 5; i++ {
+		event := &session.Event{
+			ID:        fmt.Sprintf("ev%d", i),
+			Timestamp: time.Now(),
+			Author:    "model",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("response %d", i), genai.RoleModel)
+		if err := svc2.AppendEvent(ctx, getResp.Session, event); err != nil {
+			t.Fatalf("AppendEvent(%d) error: %v", i, err)
+		}
+	}
+
+	// Read ATIF and verify all 5 steps with sequential IDs.
+	atifPath := filepath.Join(svc.baseDir, "continue-ids", "trajectory.atif.json")
+	data, err := os.ReadFile(atifPath)
+	if err != nil {
+		t.Fatalf("reading trajectory.atif.json: %v", err)
+	}
+
+	var trajectory map[string]any
+	if err := json.Unmarshal(data, &trajectory); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	steps, ok := trajectory["steps"].([]any)
+	if !ok || len(steps) != 5 {
+		t.Fatalf("expected 5 steps, got %d", len(steps))
+	}
+
+	// All step IDs should be sequential 1..5.
+	for i, s := range steps {
+		step := s.(map[string]any)
+		wantID := float64(i + 1)
+		if step["step_id"] != wantID {
+			t.Errorf("step[%d].step_id = %v, want %v", i, step["step_id"], wantID)
+		}
+	}
+
+	// First 3 should be from "user", last 2 from "agent".
+	for i, s := range steps {
+		step := s.(map[string]any)
+		var wantSource string
+		if i < 3 {
+			wantSource = "user"
+		} else {
+			wantSource = "agent"
+		}
+		if step["source"] != wantSource {
+			t.Errorf("step[%d].source = %v, want %q", i, step["source"], wantSource)
+		}
 	}
 }

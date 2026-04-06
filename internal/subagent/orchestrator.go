@@ -147,6 +147,10 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	env := input.Env
 	if o.worktree != nil {
 		env = append(append([]string(nil), env...), "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
+		// Also pass the worktree path so subagent can normalize relative paths
+		if workDir != "" {
+			env = append(env, "PI_WORKTREE_ROOT="+workDir)
+		}
 	}
 
 	// Spawn the process.
