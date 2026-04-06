@@ -177,6 +177,8 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	if sandboxRoot == "" {
 		sandboxRoot = cwd
 	}
+	// Worktree directory for subagent path normalization
+	worktreeDir := os.Getenv("PI_WORKTREE_ROOT")
 
 	// Resolve --continue early (before TUI) so errors surface immediately.
 	if flagContinue {
@@ -198,11 +200,11 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Interactive mode: show TUI immediately, initialize in background.
 	if mode == "interactive" {
-		return runInteractive(cmd.Context(), cfg, llm, info, tokenTracker, activeRole, cwd, sandboxRoot)
+		return runInteractive(cmd.Context(), cfg, llm, info, tokenTracker, activeRole, cwd, sandboxRoot, worktreeDir)
 	}
 
 	// Non-interactive modes: synchronous initialization.
-	return runNonInteractive(cmd.Context(), cmd, cfg, llm, info, tokenTracker, cwd, sandboxRoot, mode, prompt)
+	return runNonInteractive(cmd.Context(), cmd, cfg, llm, info, tokenTracker, cwd, sandboxRoot, worktreeDir, mode, prompt)
 }
 
 // runNonInteractive performs synchronous initialization and runs print/json/rpc modes.
@@ -213,9 +215,9 @@ func runNonInteractive(
 	llm adkmodel.LLM,
 	info provider.Info,
 	tokenTracker *guardrail.Tracker,
-	cwd, sandboxRoot, mode, prompt string,
+	cwd, sandboxRoot, worktreeDir, mode, prompt string,
 ) error {
-	sandbox, err := tools.NewSandbox(sandboxRoot)
+	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
 		return fmt.Errorf("creating sandbox: %w", err)
 	}

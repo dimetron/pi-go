@@ -91,7 +91,16 @@ func NewSubagentTool(orch *subagent.Orchestrator, onEvent SubagentEventCallback)
 	return newTool("subagent", desc,
 		func(ctx tool.Context, input SubagentInput) (SubagentOutput, error) {
 			return subagentHandler(ctx, orch, input, onEvent)
-		})
+		},
+		// Common LLM parameter name mistakes
+		map[string]string{
+			"type":    "agent", // LLM sends "type" instead of "agent"
+			"prompt":  "task",  // LLM sends "prompt" instead of "task"
+			"message": "task",  // LLM sends "message" instead of "task"
+			"items":   "tasks", // LLM sends "items" instead of "tasks"
+			"steps":   "chain", // LLM sends "steps" instead of "chain"
+		},
+	)
 }
 
 // SubagentTools returns tools containing the subagent tool.
@@ -140,19 +149,30 @@ func subagentHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subage
 	case "chain":
 		return chainModeHandler(ctx, orch, input, onEvent)
 	default:
-		return SubagentOutput{}, fmt.Errorf("could not detect mode: provide {agent, task} for single, {tasks: [...]} for parallel, or {chain: [...]} for chain mode")
+		return SubagentOutput{}, fmt.Errorf(
+			"could not detect mode: provide exactly ONE of:\n"+
+				"  Single: {agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"} — spawn one agent\n"+
+				"  Parallel: {tasks: [{agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"}, ...]} — run multiple agents concurrently\n"+
+				"  Chain: {chain: [{agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"}, ...]} — run agents sequentially\n"+
+				"Received: agent=%q, task=%q, tasks=%d, chain=%d",
+			input.Agent, input.Task, len(input.Tasks), len(input.Chain))
 	}
 }
 
 // detectMode determines the execution mode from the input fields.
+// Chain takes priority over parallel, which takes priority over single.
 func detectMode(input SubagentInput) string {
+	// Chain mode takes priority
 	if len(input.Chain) > 0 {
 		return "chain"
 	}
+	// Parallel mode
 	if len(input.Tasks) > 0 {
 		return "parallel"
 	}
-	if input.Agent != "" && input.Task != "" {
+	// Single mode: allow if either agent or task is present
+	// This is lenient - we accept partial input to help recover from LLM mistakes
+	if input.Agent != "" || input.Task != "" {
 		return "single"
 	}
 	return ""

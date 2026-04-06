@@ -2,12 +2,24 @@ package tools
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"google.golang.org/adk/tool"
 )
 
 const defaultReadLimit = 2000 // max lines returned when no limit specified
+
+// base64ImagePattern matches markdown image references with base64 data URIs
+// e.g., ![Alt](data:image/png;base64,iVBORw0KG...)
+var base64ImagePattern = regexp.MustCompile(`!\[([^\]]*)\]\(data:[^)]+\)`)
+
+// stripBase64Images replaces markdown image references with base64 data URIs
+// with a placeholder to reduce output size. This helps prevent LLM confusion
+// when reading markdown files that contain embedded screenshots.
+func stripBase64Images(content string) string {
+	return base64ImagePattern.ReplaceAllString(content, "![$1](data:image/png;base64,...[stripped])")
+}
 
 // ReadInput defines the parameters for the read tool.
 type ReadInput struct {
@@ -108,6 +120,8 @@ func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *FileContentCache)
 	}
 
 	content := sb2.String()
+	// Strip base64 images from markdown files to reduce output size
+	content = stripBase64Images(content)
 	if truncated {
 		content += fmt.Sprintf("\n... (truncated: showing %d of %d lines, use offset/limit to read more)", endIdx-startIdx, totalLines)
 	}

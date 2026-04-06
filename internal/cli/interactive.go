@@ -68,7 +68,7 @@ func runInteractive(
 	llm adkmodel.LLM,
 	info provider.Info,
 	tokenTracker *guardrail.Tracker,
-	activeRole, cwd, sandboxRoot string,
+	activeRole, cwd, sandboxRoot, worktreeDir string,
 ) error {
 	initCh := make(chan tui.InitEvent, 32)
 
@@ -81,7 +81,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, tokenTracker, cwd, sandboxRoot, initCh, &res)
+		deferredInit(initCtx, cfg, llm, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -109,7 +109,7 @@ func deferredInit(
 	cfg config.Config,
 	llm adkmodel.LLM,
 	tokenTracker *guardrail.Tracker,
-	cwd, sandboxRoot string,
+	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
 	res *initResources,
 ) {
@@ -123,7 +123,7 @@ func deferredInit(
 	// --- Phase 1: Core tools (fast, needed by everything) ---
 	send("tools", false)
 
-	sandbox, err := tools.NewSandbox(sandboxRoot)
+	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
 		fail(fmt.Errorf("creating sandbox: %w", err))
 		return

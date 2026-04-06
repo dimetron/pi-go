@@ -492,3 +492,160 @@ func TestIsTransientReadError_NotFound(t *testing.T) {
 		t.Error("ErrNotExist should not be transient")
 	}
 }
+
+// --- Worktree path normalization ---
+
+func TestSandbox_Resolve_WorktreeRelativePath(t *testing.T) {
+	// Simulate subagent worktree scenario:
+	// - Sandbox root is the repo root
+	// - Worktree is a subdirectory
+	// - Agent tries to access files using ../.. patterns relative to worktree
+
+	repoRoot := t.TempDir()
+	worktreeDir := filepath.Join(repoRoot, "worktrees", "agent-123")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("creating worktree dir: %v", err)
+	}
+
+	// Create a file in the repo root
+	os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example"), 0o644)
+
+	// Create sandbox with worktree context
+	sb, err := NewSandbox(repoRoot, worktreeDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// Test resolving ../../go.mod from worktree perspective
+	rel, err := sb.Resolve("../../go.mod")
+	if err != nil {
+		t.Fatalf("Resolve(../../go.mod): %v", err)
+	}
+	if rel != "go.mod" {
+		t.Errorf("Resolve(../../go.mod) = %q, want %q", rel, "go.mod")
+	}
+}
+
+func TestSandbox_Resolve_WorktreeRelativePathDeep(t *testing.T) {
+	repoRoot := t.TempDir()
+	worktreeDir := filepath.Join(repoRoot, "worktrees", "agent-456", "subdir")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("creating worktree dir: %v", err)
+	}
+
+	// Create files at various levels
+	os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module root"), 0o644)
+	os.WriteFile(filepath.Join(repoRoot, "worktrees", "go.sum"), []byte("checksums"), 0o644)
+
+	sb, err := NewSandbox(repoRoot, worktreeDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	tests := []struct {
+		path string
+		want string
+		desc string
+	}{
+		// ../../ from subdir = worktrees/agent-456
+		{"../../go.mod", "worktrees/go.mod", "file in worktrees dir"},
+		{"../go.sum", filepath.Join("worktrees", "agent-456", "go.sum"), "file in agent dir"},
+		{"../..", "worktrees", "parent of agent dir"},
+	}
+
+	for _, tt := range tests {
+		rel, err := sb.Resolve(tt.path)
+		if err != nil {
+			t.Errorf("%s: Resolve(%q): %v", tt.desc, tt.path, err)
+			continue
+		}
+		if rel != tt.want {
+			t.Errorf("%s: Resolve(%q) = %q, want %q", tt.desc, tt.path, rel, tt.want)
+		}
+	}
+}
+
+func TestSandbox_Resolve_WorktreePathEscapes(t *testing.T) {
+	// Test that worktree-relative paths that would escape the sandbox are rejected
+	repoRoot := t.TempDir()
+	worktreeDir := filepath.Join(repoRoot, "worktrees", "agent-789")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("creating worktree dir: %v", err)
+	}
+
+	sb, err := NewSandbox(repoRoot, worktreeDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// This should fail: ../../../../../etc/passwd would escape the sandbox
+	_, err = sb.Resolve("../../../../../etc/passwd")
+	if err == nil {
+		t.Error("expected error for path that escapes sandbox")
+	}
+}
+
+func TestSandbox_Resolve_WorktreeNoEscapeWithoutWorktree(t *testing.T) {
+	// Without worktree context, ../ paths should still be blocked
+	dir := t.TempDir()
+	sb, err := NewSandbox(dir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// Without worktree, ../ paths should be rejected
+	_, err = sb.Resolve("../go.mod")
+	if err == nil {
+		t.Error("expected error for ../ path without worktree context")
+	}
+}
+
+func TestSandbox_SetWorktreeDir(t *testing.T) {
+	dir := t.TempDir()
+	sb, err := NewSandbox(dir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// Without worktree, ../ paths are blocked
+	_, err = sb.Resolve("../go.mod")
+	if err == nil {
+		t.Error("expected error without worktree set")
+	}
+
+	// Set worktree: dir/worktrees/agent
+	worktreeDir := filepath.Join(dir, "worktrees", "agent")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("creating worktree: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module"), 0o644)
+
+	if err := sb.SetWorktreeDir(worktreeDir); err != nil {
+		t.Fatalf("SetWorktreeDir: %v", err)
+	}
+
+	// Now ../ should work (but we need ../../ from worktrees/agent)
+	rel, err := sb.Resolve("../../go.mod")
+	if err != nil {
+		t.Fatalf("Resolve with worktree: %v", err)
+	}
+	if rel != "go.mod" {
+		t.Errorf("Resolve = %q, want %q", rel, "go.mod")
+	}
+
+	// Clear worktree
+	if err := sb.SetWorktreeDir(""); err != nil {
+		t.Fatalf("SetWorktreeDir: %v", err)
+	}
+
+	// ../ should fail again
+	_, err = sb.Resolve("../go.mod")
+	if err == nil {
+		t.Error("expected error after clearing worktree")
+	}
+}

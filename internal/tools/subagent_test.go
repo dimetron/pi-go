@@ -49,10 +49,21 @@ func TestDetectMode_Empty(t *testing.T) {
 	}
 }
 
-func TestDetectMode_AgentOnlyNoTask(t *testing.T) {
+func TestDetectMode_SingleWithOnlyAgent(t *testing.T) {
+	// Lenient: single mode should work with just agent (task might be empty)
+	// This helps recover from LLM mistakes where task isn't provided
 	input := SubagentInput{Agent: "explore"}
-	if mode := detectMode(input); mode != "" {
-		t.Errorf("detectMode = %q, want empty (agent without task)", mode)
+	if mode := detectMode(input); mode != "single" {
+		t.Errorf("detectMode = %q, want 'single' (lenient with only agent)", mode)
+	}
+}
+
+func TestDetectMode_SingleWithOnlyTask(t *testing.T) {
+	// Lenient: single mode should work with just task (agent might be empty)
+	// This helps recover from LLM mistakes where agent isn't provided
+	input := SubagentInput{Task: "some task"}
+	if mode := detectMode(input); mode != "single" {
+		t.Errorf("detectMode = %q, want 'single' (lenient with only task)", mode)
 	}
 }
 
