@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/atif"
 )
 
 // Meta holds session metadata persisted in meta.json.
@@ -107,6 +110,15 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 		events:    nil,
 		state:     state,
 		updatedAt: now,
+		atifWriter: atif.NewWriter(
+			filepath.Join(sessionDir, "trajectory.atif.json"),
+			atif.SessionMeta{
+				SessionID: sessionID,
+				AgentName: meta.AppName,
+				Model:     meta.Model,
+				WorkDir:   meta.WorkDir,
+			},
+		),
 	}
 	s.sessions[sessionID] = sess
 
@@ -270,6 +282,15 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 		return fmt.Errorf("persisting event: %w", err)
 	}
 
+	// Write ATIF trajectory (non-fatal).
+	if sess.atifWriter != nil {
+		if atifErr := sess.atifWriter.AppendEvent(event); atifErr != nil {
+			slog.Warn("atif: failed to append event", "session", sessionID, "error", atifErr)
+		}
+		// Link subagent trajectories if this event contains subagent tool responses.
+		sess.atifWriter.LinkSubagentTrajectories(event, sessionDir, s.baseDir)
+	}
+
 	// Update meta.json with new timestamp.
 	if err := writeMeta(sessionDir, &sess.meta); err != nil {
 		return fmt.Errorf("updating meta: %w", err)
@@ -313,17 +334,41 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 		events:    events,
 		state:     make(map[string]any),
 		updatedAt: meta.UpdatedAt,
+		atifWriter: atif.NewWriter(
+			filepath.Join(sessionDir, "trajectory.atif.json"),
+			atif.SessionMeta{
+				SessionID: sessionID,
+				AgentName: meta.AppName,
+				Model:     meta.Model,
+				WorkDir:   meta.WorkDir,
+			},
+		),
 	}
 
-	// Rebuild state from event deltas.
+	// Rebuild state from event deltas and ATIF trajectory from existing events.
 	for _, e := range events {
 		if e.Actions.StateDelta != nil {
 			maps.Copy(sess.state, e.Actions.StateDelta)
+		}
+		if sess.atifWriter != nil {
+			if err := sess.atifWriter.AppendEvent(e); err != nil {
+				slog.Warn("atif: failed to rebuild event on load", "session", sessionID, "error", err)
+			}
 		}
 	}
 
 	s.sessions[sessionID] = sess
 	return sess, nil
+}
+
+// ATIFWriter returns the ATIF writer for the given session, or nil if not found.
+func (s *FileService) ATIFWriter(sessionID string) *atif.Writer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if sess, ok := s.sessions[sessionID]; ok {
+		return sess.atifWriter
+	}
+	return nil
 }
 
 // LastSessionID returns the most recently updated session ID, or "" if none.
@@ -358,11 +403,12 @@ func (s *FileService) LastSessionID(appName, userID string) string {
 
 // fileSession holds session data in memory, backed by disk.
 type fileSession struct {
-	mu        sync.RWMutex
-	meta      Meta
-	events    []*session.Event
-	state     map[string]any
-	updatedAt time.Time
+	mu         sync.RWMutex
+	meta       Meta
+	events     []*session.Event
+	state      map[string]any
+	updatedAt  time.Time
+	atifWriter *atif.Writer
 }
 
 func (s *fileSession) live() *liveSession {

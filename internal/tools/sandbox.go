@@ -53,12 +53,15 @@ func isTransientReadError(err error) bool {
 //   - Change the working directory to access different files
 //   - Use tools that explicitly access external resources (e.g., fetch URLs)
 type Sandbox struct {
-	root *os.Root
-	dir  string // absolute path of the root directory
+	root        *os.Root
+	dir         string // absolute path of the root directory
+	worktreeDir string // absolute path of worktree (if subagent context)
 }
 
 // NewSandbox opens an os.Root anchored at dir.
-func NewSandbox(dir string) (*Sandbox, error) {
+// Optionally pass worktreeDir if this is a subagent sandbox that needs to
+// resolve relative paths from a different working directory.
+func NewSandbox(dir string, worktreeDir ...string) (*Sandbox, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("resolving sandbox dir: %w", err)
@@ -67,7 +70,14 @@ func NewSandbox(dir string) (*Sandbox, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening sandbox root %s: %w", abs, err)
 	}
-	return &Sandbox{root: root, dir: abs}, nil
+	wt := ""
+	if len(worktreeDir) > 0 && worktreeDir[0] != "" {
+		wt, err = filepath.Abs(worktreeDir[0])
+		if err != nil {
+			return nil, fmt.Errorf("resolving worktree dir: %w", err)
+		}
+	}
+	return &Sandbox{root: root, dir: abs, worktreeDir: wt}, nil
 }
 
 // Close releases the underlying os.Root file descriptor.
@@ -85,14 +95,38 @@ func (s *Sandbox) Dir() string {
 	return s.dir
 }
 
+// SetWorktreeDir sets the worktree directory for path normalization.
+// This is used by subagent sandboxes that need to resolve relative paths
+// from a different working directory than the sandbox root.
+func (s *Sandbox) SetWorktreeDir(dir string) error {
+	if dir == "" {
+		s.worktreeDir = ""
+		return nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving worktree dir: %w", err)
+	}
+	s.worktreeDir = abs
+	return nil
+}
+
 // Resolve converts an absolute or relative path to a relative path
 // under the sandbox root. Returns an error with the sandbox root path
 // if the resolved path would escape the directory tree.
+//
+// For subagent contexts with worktree directories, paths like "../../go.mod"
+// are resolved relative to the worktree, then made relative to the sandbox root.
 //
 // SECURITY: This is intentional. The sandbox restricts file system
 // access to prevent the agent from reading/writing files outside
 // the working directory.
 func (s *Sandbox) Resolve(name string) (string, error) {
+	// Handle worktree-relative paths (../../ patterns from subagent worktree)
+	if s.worktreeDir != "" && strings.HasPrefix(name, "../") {
+		return s.resolveWorktreePath(name)
+	}
+
 	var rel string
 	if filepath.IsAbs(name) {
 		var err error
@@ -108,6 +142,31 @@ func (s *Sandbox) Resolve(name string) (string, error) {
 	cleaned := filepath.Clean(rel)
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes sandbox root %s — use absolute paths starting with %s/", name, s.dir, s.dir)
+	}
+
+	return rel, nil
+}
+
+// resolveWorktreePath handles paths like "../../go.mod" from subagent worktrees.
+// It converts the worktree-relative path to an absolute path, then makes it
+// relative to the sandbox root while ensuring it doesn't escape.
+func (s *Sandbox) resolveWorktreePath(name string) (string, error) {
+	// Convert worktree-relative path to absolute
+	abs, err := filepath.Abs(filepath.Join(s.worktreeDir, name))
+	if err != nil {
+		return "", fmt.Errorf("resolving worktree-relative path %q: %w", name, err)
+	}
+
+	// Make it relative to sandbox root
+	rel, err := filepath.Rel(s.dir, abs)
+	if err != nil {
+		return "", fmt.Errorf("path %q resolves to %s which is outside sandbox root %s", name, abs, s.dir)
+	}
+
+	// Verify the relative path doesn't escape the sandbox
+	cleaned := filepath.Clean(rel)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes sandbox root %s", name, s.dir)
 	}
 
 	return rel, nil

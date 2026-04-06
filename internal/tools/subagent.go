@@ -61,12 +61,13 @@ type SubagentOutput struct {
 
 // AgentResult holds the result from a single agent execution.
 type AgentResult struct {
-	Agent    string `json:"agent"`
-	AgentID  string `json:"agent_id"`
-	Status   string `json:"status"` // "completed", "failed", "timeout"
-	Result   string `json:"result"`
-	Error    string `json:"error,omitempty"`
-	Duration string `json:"duration"`
+	Agent     string `json:"agent"`
+	AgentID   string `json:"agent_id"`
+	Status    string `json:"status"` // "completed", "failed", "timeout"
+	Result    string `json:"result"`
+	Error     string `json:"error,omitempty"`
+	Duration  string `json:"duration"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // SubagentEvent extends agent events with pipeline metadata for the TUI.
@@ -90,7 +91,16 @@ func NewSubagentTool(orch *subagent.Orchestrator, onEvent SubagentEventCallback)
 	return newTool("subagent", desc,
 		func(ctx tool.Context, input SubagentInput) (SubagentOutput, error) {
 			return subagentHandler(ctx, orch, input, onEvent)
-		})
+		},
+		// Common LLM parameter name mistakes
+		map[string]string{
+			"type":    "agent", // LLM sends "type" instead of "agent"
+			"prompt":  "task",  // LLM sends "prompt" instead of "task"
+			"message": "task",  // LLM sends "message" instead of "task"
+			"items":   "tasks", // LLM sends "items" instead of "tasks"
+			"steps":   "chain", // LLM sends "steps" instead of "chain"
+		},
+	)
 }
 
 // SubagentTools returns tools containing the subagent tool.
@@ -139,19 +149,30 @@ func subagentHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subage
 	case "chain":
 		return chainModeHandler(ctx, orch, input, onEvent)
 	default:
-		return SubagentOutput{}, fmt.Errorf("could not detect mode: provide {agent, task} for single, {tasks: [...]} for parallel, or {chain: [...]} for chain mode")
+		return SubagentOutput{}, fmt.Errorf(
+			"could not detect mode: provide exactly ONE of:\n"+
+				"  Single: {agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"} — spawn one agent\n"+
+				"  Parallel: {tasks: [{agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"}, ...]} — run multiple agents concurrently\n"+
+				"  Chain: {chain: [{agent: \"\\u003cname\\u003e\", task: \"\\u003cprompt\\u003e\"}, ...]} — run agents sequentially\n"+
+				"Received: agent=%q, task=%q, tasks=%d, chain=%d",
+			input.Agent, input.Task, len(input.Tasks), len(input.Chain))
 	}
 }
 
 // detectMode determines the execution mode from the input fields.
+// Chain takes priority over parallel, which takes priority over single.
 func detectMode(input SubagentInput) string {
+	// Chain mode takes priority
 	if len(input.Chain) > 0 {
 		return "chain"
 	}
+	// Parallel mode
 	if len(input.Tasks) > 0 {
 		return "parallel"
 	}
-	if input.Agent != "" && input.Task != "" {
+	// Single mode: allow if either agent or task is present
+	// This is lenient - we accept partial input to help recover from LLM mistakes
+	if input.Agent != "" || input.Task != "" {
 		return "single"
 	}
 	return ""
@@ -206,10 +227,11 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 	})
 
 	// Consume events, forward to TUI, accumulate result.
-	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string) {
+	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string, string) {
 		var result strings.Builder
 		st := "completed"
 		var em string
+		var sessID string
 		for ev := range events {
 			evContent := ev.Content
 			if ev.Type == "error" && evContent == "" {
@@ -225,12 +247,16 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 			case "error":
 				st = "failed"
 				em = ev.Error
+			case "message_start":
+				if ev.SessionID != "" {
+					sessID = ev.SessionID
+				}
 			}
 		}
-		return truncateOutput(result.String()), st, em
+		return truncateOutput(result.String()), st, em, sessID
 	}
 
-	resultText, status, errMsg := forwardAndConsume(events)
+	resultText, status, errMsg, subSessionID := forwardAndConsume(events)
 
 	emitEvent(onEvent, SubagentEvent{
 		AgentID: agentID, Kind: "done",
@@ -242,12 +268,13 @@ func singleModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Suba
 	return SubagentOutput{
 		Mode: "single",
 		Results: []AgentResult{{
-			Agent:    input.Agent,
-			AgentID:  agentID,
-			Status:   status,
-			Result:   resultText,
-			Error:    errMsg,
-			Duration: duration,
+			Agent:     input.Agent,
+			AgentID:   agentID,
+			Status:    status,
+			Result:    resultText,
+			Error:     errMsg,
+			Duration:  duration,
+			SessionID: subSessionID,
 		}},
 		Summary: fmt.Sprintf("%s %s in %s", input.Agent, status, duration),
 	}, nil
@@ -331,6 +358,7 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 			var result strings.Builder
 			status := "completed"
 			var errMsg string
+			var sessID string
 
 			for ev := range events {
 				evContent := ev.Content
@@ -353,6 +381,10 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 				case "error":
 					status = "failed"
 					errMsg = ev.Error
+				case "message_start":
+					if ev.SessionID != "" {
+						sessID = ev.SessionID
+					}
 				}
 			}
 
@@ -367,12 +399,13 @@ func parallelModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Su
 			})
 
 			results[idx] = AgentResult{
-				Agent:    t.Agent,
-				AgentID:  agentID,
-				Status:   status,
-				Result:   truncateOutput(result.String()),
-				Error:    errMsg,
-				Duration: time.Since(taskStart).Truncate(time.Millisecond).String(),
+				Agent:     t.Agent,
+				AgentID:   agentID,
+				Status:    status,
+				Result:    truncateOutput(result.String()),
+				Error:     errMsg,
+				Duration:  time.Since(taskStart).Truncate(time.Millisecond).String(),
+				SessionID: sessID,
 			}
 		}(i, task)
 	}
@@ -467,6 +500,7 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 		var result strings.Builder
 		status := "completed"
 		var errMsg string
+		var sessID string
 
 		for ev := range events {
 			evContent := ev.Content
@@ -489,6 +523,10 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 			case "error":
 				status = "failed"
 				errMsg = ev.Error
+			case "message_start":
+				if ev.SessionID != "" {
+					sessID = ev.SessionID
+				}
 			}
 		}
 
@@ -504,12 +542,13 @@ func chainModeHandler(ctx tool.Context, orch *subagent.Orchestrator, input Subag
 
 		resultText := truncateOutput(result.String())
 		results = append(results, AgentResult{
-			Agent:    step.Agent,
-			AgentID:  agentID,
-			Status:   status,
-			Result:   resultText,
-			Error:    errMsg,
-			Duration: time.Since(stepStart).Truncate(time.Millisecond).String(),
+			Agent:     step.Agent,
+			AgentID:   agentID,
+			Status:    status,
+			Result:    resultText,
+			Error:     errMsg,
+			Duration:  time.Since(stepStart).Truncate(time.Millisecond).String(),
+			SessionID: sessID,
 		})
 
 		// Chain stops on failure.
