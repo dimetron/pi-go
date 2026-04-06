@@ -253,10 +253,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		// Only handle left click events
 		switch msg := msg.(type) {
 		case tea.MouseClickMsg:
 			return m.handleMouseClick(msg)
+		case tea.MouseWheelMsg:
+			return m.handleMouseWheel(msg)
 		}
 		return m, nil
 
@@ -338,6 +339,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleMouseClick processes mouse click events.
 func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	return m, nil
+}
+
+// handleMouseWheel processes mouse wheel events for scrolling the chat viewport.
+func (m *model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
+	mouse := msg.Mouse()
+	switch mouse.Button {
+	case tea.MouseWheelUp:
+		m.chatModel.ScrollUp(3, m.height)
+	case tea.MouseWheelDown:
+		m.chatModel.ScrollDown(3)
+	}
 	return m, nil
 }
 
@@ -618,6 +631,7 @@ func (m *model) View() tea.View {
 
 	v := tea.NewView(final)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 

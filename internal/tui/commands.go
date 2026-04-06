@@ -484,49 +484,66 @@ func (m *model) showCommandList() {
 func (m *model) formatHelp() string {
 	var b strings.Builder
 
-	b.WriteString("**Commands:**\n")
-	b.WriteString("  `/help`                — Show this help\n")
-	b.WriteString("  `/clear`               — Clear conversation\n")
-	b.WriteString("  `/model`               — Show current model and roles\n")
-	b.WriteString("  `/session`             — Show session info\n")
-	b.WriteString("  `/context`             — Show context usage\n")
-	b.WriteString("  `/compact`             — Compact session context\n")
-	b.WriteString("  `/history [query]`     — Command history\n")
-	b.WriteString("  `/exit`, `/quit`       — Exit\n")
+	b.WriteString("**Commands:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/help` | Show this help |\n")
+	b.WriteString("| `/clear` | Clear conversation |\n")
+	b.WriteString("| `/model` | Show current model and roles |\n")
+	b.WriteString("| `/session` | Show session info |\n")
+	b.WriteString("| `/context` | Show context usage |\n")
+	b.WriteString("| `/compact` | Compact session context |\n")
+	b.WriteString("| `/history [query]` | Command history |\n")
+	b.WriteString("| `/exit`, `/quit` | Exit |\n")
 
-	b.WriteString("\n**Git & Planning:**\n")
-	b.WriteString("  `/commit`              — Generate commit from staged changes\n")
-	b.WriteString("  `/branch <name>`       — Create/switch/list branches\n")
-	b.WriteString("  `/plan <idea>`         — Start PDD planning session\n")
-	b.WriteString("  `/run <spec>`          — Execute a spec with task agent\n")
+	b.WriteString("\n**Git & Planning:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/commit` | Generate commit from staged changes |\n")
+	b.WriteString("| `/branch <name>` | Create/switch/list branches |\n")
+	b.WriteString("| `/plan <idea>` | Start PDD planning session |\n")
+	b.WriteString("| `/run <spec>` | Execute a spec with task agent |\n")
 
-	b.WriteString("\n**Display:**\n")
-	b.WriteString("  `/theme [name]`        — List or switch themes\n")
+	b.WriteString("\n**Display:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/theme [name]` | List or switch themes |\n")
 
-	b.WriteString("\n**System:**\n")
-	b.WriteString("  `/agents`              — Show running subagents\n")
-	b.WriteString("  `/rtk`                 — Output compaction stats\n")
-	b.WriteString("  `/login <provider>`    — Configure API keys\n")
-	b.WriteString("  `/restart`             — Restart pi process\n")
+	b.WriteString("\n**System:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/agents` | Show running subagents |\n")
+	b.WriteString("| `/rtk` | Output compaction stats |\n")
+	b.WriteString("| `/login <provider>` | Configure API keys |\n")
+	b.WriteString("| `/restart` | Restart pi process |\n")
 
-	b.WriteString("\n**Skills:**\n")
-	b.WriteString("  `/skills`              — List available skills\n")
-	b.WriteString("  `/skills create <n>`   — Create a new skill\n")
-	b.WriteString("  `/skills load`         — Reload skills from disk\n")
+	b.WriteString("\n**Skills:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/skills` | List available skills |\n")
+	b.WriteString("| `/skills create <n>` | Create a new skill |\n")
+	b.WriteString("| `/skills load` | Reload skills from disk |\n")
 
 	if len(m.cfg.Skills) > 0 {
-		b.WriteString("\n**Available skills:**\n")
+		b.WriteString("\n**Available skills:**\n\n")
+		b.WriteString("| Skill | Description |\n")
+		b.WriteString("|-------|-------------|\n")
 		for _, s := range m.cfg.Skills {
-			fmt.Fprintf(&b, "  `/%s`", s.Name)
-			if s.Description != "" {
-				b.WriteString(" — " + s.Description)
+			desc := s.Description
+			if len(desc) > 80 {
+				desc = desc[:77] + "..."
 			}
-			b.WriteString("\n")
+			fmt.Fprintf(&b, "| `/%s` | %s |\n", s.Name, desc)
 		}
 	}
 
-	b.WriteString("\n**Keyboard shortcuts:**\n")
-	b.WriteString("  `Enter` — Submit  `Ctrl+C`/`Esc` — Cancel  `Up/Down` — History  `PgUp/PgDn` — Scroll\n")
+	b.WriteString("\n**Keyboard shortcuts:**\n\n")
+	b.WriteString("| Key | Action |\n")
+	b.WriteString("|-----|--------|\n")
+	b.WriteString("| `Enter` | Submit |\n")
+	b.WriteString("| `Ctrl+C` / `Esc` | Cancel |\n")
+	b.WriteString("| `Up/Down` | History |\n")
+	b.WriteString("| `PgUp/PgDn` | Scroll |\n")
 
 	return b.String()
 }
