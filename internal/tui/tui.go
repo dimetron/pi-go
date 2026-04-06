@@ -299,7 +299,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleRunAgentEvent(msg)
 
 	case runAgentDoneMsg:
-		return m.handleRunAgentDone()
+		return m.handleRunAgentDone(msg)
 
 	case runGateResultMsg:
 		return m.handleRunGateResult(msg)
@@ -608,7 +608,7 @@ func (m *model) View() tea.View {
 
 	var final string
 	if showSidebar {
-		sidebar := RenderSidebar(SidebarRenderInput{
+		sidebarInput := SidebarRenderInput{
 			Width:        sidebarWidth,
 			Height:       m.height,
 			Eyes:         m.eyes(),
@@ -623,7 +623,15 @@ func (m *model) View() tea.View {
 			Messages:     m.chatModel.Messages,
 			ActiveTool:   m.statusModel.ActiveTool,
 			LoadingItems: m.loadingItems,
-		})
+		}
+		if m.run != nil && m.run.phase != "" {
+			sidebarInput.RunChecklist = m.run.checklist
+			sidebarInput.RunPhase = m.run.phase
+			sidebarInput.RunSpec = m.run.specName
+			sidebarInput.RunCycle = m.run.retries + 1
+			sidebarInput.RunMaxCycle = m.run.maxRetries
+		}
+		sidebar := RenderSidebar(sidebarInput)
 		final = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sidebar)
 	} else {
 		final = leftPanel

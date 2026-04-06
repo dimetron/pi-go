@@ -486,9 +486,9 @@ func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 - [x] Run `go test ./internal/tools/...` ✅
 
 ### Phase 5: Orchestrator
-- [ ] **5.1** Improve graceful shutdown
-- [ ] **5.2** Add shutdown timeout
-- [ ] Run `go test ./internal/subagent/...`
+- [x] **5.1** Improve graceful shutdown ✅
+- [x] **5.2** Add shutdown timeout ✅
+- [x] Run `go test ./internal/subagent/...` ✅
 
 ### Final Verification
 - [x] Run full test suite: `go test ./...` ✅

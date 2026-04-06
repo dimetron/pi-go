@@ -55,6 +55,28 @@ User input → CLI → Agent → LLM provider → Tool calls → Sandbox → Res
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.
 
+## Installation
+
+### go install (recommended)
+
+```bash
+go install github.com/dimetron/pi-go/cmd/pi@latest
+```
+
+Make sure your `GOPATH/bin` is in your `PATH`. The binary will be installed as `pi`.
+
+### Build from source
+
+```bash
+git clone https://github.com/dimetron/pi-go.git
+cd pi-go
+go install ./cmd/pi
+```
+
+### Pre-built binaries
+
+Download the latest release for your platform from the [Releases page](https://github.com/dimetron/pi-go/releases).
+
 ## Requirements
 
 - Go 1.25+

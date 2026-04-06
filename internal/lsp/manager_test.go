@@ -89,10 +89,10 @@ func TestManager_MissingServer(t *testing.T) {
 		t.Error("fake server should not be available")
 	}
 
-	// ServerFor should return (nil, nil) for unavailable server.
+	// ServerFor should return an error with install hint for unavailable server.
 	srv, err := mgr.ServerFor("/tmp/test.fake")
-	if err != nil {
-		t.Errorf("expected nil error for missing server, got: %v", err)
+	if err == nil {
+		t.Error("expected error for missing server binary")
 	}
 	if srv != nil {
 		t.Error("expected nil server for missing server binary")
@@ -478,10 +478,10 @@ func TestManager_ServerFor_NoRootMarker(t *testing.T) {
 	mgr := NewManager(cfg)
 	defer mgr.Shutdown()
 
-	// Since the binary doesn't exist, ServerFor should return (nil, nil)
+	// Since the binary doesn't exist, ServerFor should return an error with install hint.
 	srv, err := mgr.ServerFor(tmpDir + "/test.go")
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
+	if err == nil {
+		t.Error("expected error for missing server binary")
 	}
 	if srv != nil {
 		t.Error("expected nil server (binary not found)")

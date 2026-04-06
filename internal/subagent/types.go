@@ -73,7 +73,7 @@ type AgentOutput struct {
 type AgentStatus struct {
 	AgentID   string    `json:"agent_id"`
 	Type      string    `json:"type"`
-	Status    string    `json:"status"` // "running", "completed", "failed", "canceled"
+	Status    string    `json:"status"` // "running", "completed", "failed", "canceled", "killed"
 	Prompt    string    `json:"prompt"`
 	StartedAt time.Time `json:"started_at"`
 	Duration  string    `json:"duration,omitempty"`

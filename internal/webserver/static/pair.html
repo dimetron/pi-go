@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pi-Go Pairing</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Pi-Go Pairing</h1>
+        
+        <div id="pairing-form">
+            <p>Click the button below to generate a pairing code.</p>
+            <button id="generate-btn">Generate Pairing Code</button>
+        </div>
+        
+        <div id="pairing-info" class="hidden">
+            <div class="code-display">
+                <span id="pair-code">------</span>
+            </div>
+            <div class="qr-container">
+                <canvas id="qr-canvas" width="200" height="200"></canvas>
+            </div>
+            <p class="instructions">Scan this code with the Pi-Go mobile app, or enter the code manually.</p>
+            <div id="status" class="status pending">
+                <span id="status-text">Waiting for approval...</span>
+            </div>
+        </div>
+        
+        <div id="error" class="hidden error">
+            <span id="error-text"></span>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script>
+        let pollInterval;
+        let currentToken = '';
+        
+        const generateBtn = document.getElementById('generate-btn');
+        const pairingForm = document.getElementById('pairing-form');
+        const pairingInfo = document.getElementById('pairing-info');
+        const errorDiv = document.getElementById('error');
+        const errorText = document.getElementById('error-text');
+        const pairCode = document.getElementById('pair-code');
+        const qrCanvas = document.getElementById('qr-canvas');
+        const statusDiv = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
+        
+        function showError(msg) {
+            errorDiv.classList.remove('hidden');
+            errorText.textContent = msg;
+        }
+        
+        function hideError() {
+            errorDiv.classList.add('hidden');
+        }
+        
+        function updateStatus(status) {
+            statusDiv.className = 'status ' + status;
+            switch (status) {
+                case 'pending':
+                    statusText.textContent = 'Waiting for approval...';
+                    break;
+                case 'approved':
+                    statusText.textContent = 'Approved! Redirecting...';
+                    break;
+                case 'expired':
+                    statusText.textContent = 'Code expired. Click generate to try again.';
+                    clearInterval(pollInterval);
+                    break;
+                case 'unknown':
+                    statusText.textContent = 'Code not found. Generate a new code.';
+                    clearInterval(pollInterval);
+                    break;
+            }
+        }
+        
+        function checkStatus(token) {
+            return fetch('/api/status?token=' + encodeURIComponent(token))
+                .then(r => {
+                    if (!r.ok) throw new Error('Status check failed');
+                    return r.json();
+                })
+                .then(data => {
+                    updateStatus(data.status);
+                    return data;
+                })
+                .catch(err => {
+                    showError('Failed to check status: ' + err.message);
+                });
+        }
+        
+        function startPolling(token) {
+            currentToken = token;
+            checkStatus(token);
+            pollInterval = setInterval(() => checkStatus(token), 2000);
+        }
+        
+        function generateCode() {
+            hideError();
+            generateBtn.disabled = true;
+            generateBtn.textContent = 'Generating...';
+            
+            fetch('/api/pair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: '' })
+            })
+            .then(r => {
+                if (!r.ok) throw new Error('Failed to generate code');
+                return r.json();
+            })
+            .then(data => {
+                // Display the code
+                pairCode.textContent = data.code;
+                
+                // Generate QR code
+                const qrData = atob(data.qr);
+                QRCode.toCanvas(qrCanvas, qrData, {
+                    width: 200,
+                    margin: 2
+                });
+                
+                // Show pairing info
+                pairingForm.classList.add('hidden');
+                pairingInfo.classList.remove('hidden');
+                
+                // Start polling
+                startPolling(data.token);
+            })
+            .catch(err => {
+                showError('Failed to generate code: ' + err.message);
+                generateBtn.disabled = false;
+                generateBtn.textContent = 'Generate Pairing Code';
+            });
+        }
+        
+        // Handle approved status
+        function handleApproved() {
+            clearInterval(pollInterval);
+            // Set cookie and redirect
+            document.cookie = 'pi_token=' + currentToken + '; path=/; max-age=86400; HttpOnly';
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 1000);
+        }
+        
+        // Override updateStatus to handle approved
+        const originalUpdateStatus = updateStatus;
+        updateStatus = function(status) {
+            originalUpdateStatus(status);
+            if (status === 'approved') {
+                handleApproved();
+            }
+        };
+        
+        generateBtn.addEventListener('click', generateCode);
+        
+        // Check URL for existing token
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        if (token) {
+            // Show existing pairing info
+            pairingForm.classList.add('hidden');
+            pairingInfo.classList.remove('hidden');
+            startPolling(token);
+        }
+    </script>
+</body>
+</html>

@@ -65,6 +65,11 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			Messages: messages,
 		}
 
+		// Cloud models (e.g. "model:cloud") support large context windows.
+		if strings.HasSuffix(modelName, ":cloud") {
+			chatReq.Options = map[string]any{"num_ctx": 262144} // 256K
+		}
+
 		// Configure thinking.
 		thinkCfg := ollamaThinkingConfig(m.thinkingLevel)
 		if thinkCfg != nil {

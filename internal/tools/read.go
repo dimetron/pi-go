@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -9,6 +10,33 @@ import (
 )
 
 const defaultReadLimit = 2000 // max lines returned when no limit specified
+
+// sourceCodeExts lists file extensions for which the default line limit is
+// skipped so that source files are returned in full (the 256KB byte safety
+// net still applies).
+var sourceCodeExts = map[string]bool{
+	".go":    true,
+	".rs":    true,
+	".py":    true,
+	".ts":    true,
+	".tsx":   true,
+	".js":    true,
+	".jsx":   true,
+	".java":  true,
+	".c":     true,
+	".cpp":   true,
+	".h":     true,
+	".hpp":   true,
+	".cs":    true,
+	".rb":    true,
+	".swift": true,
+	".kt":    true,
+	".scala": true,
+	".zig":   true,
+	".lua":   true,
+	".sh":    true,
+	".sql":   true,
+}
 
 // base64ImagePattern matches markdown image references with base64 data URIs
 // e.g., ![Alt](data:image/png;base64,iVBORw0KG...)
@@ -101,10 +129,17 @@ func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *FileContentCache)
 
 	startIdx := offset - 1
 
-	// Determine effective limit
+	// Determine effective limit.
+	// For source code files, skip the default line limit so the full file
+	// is returned (the 256KB byte safety net still applies).
 	limit := input.Limit
 	if limit <= 0 {
-		limit = defaultReadLimit
+		ext := strings.ToLower(filepath.Ext(input.FilePath))
+		if sourceCodeExts[ext] {
+			limit = totalLines // no line truncation for source code
+		} else {
+			limit = defaultReadLimit
+		}
 	}
 
 	endIdx := startIdx + limit

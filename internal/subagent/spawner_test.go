@@ -241,8 +241,11 @@ echo '{"type":"message_end"}'
 
 func TestSpawner_DefaultBinary(t *testing.T) {
 	s := NewSpawner("")
-	if s.PiBinary != "pi" {
-		t.Errorf("expected default binary 'pi', got %q", s.PiBinary)
+	// When no binary is specified, NewSpawner uses os.Executable()
+	// to ensure subagents run the same version as the parent process.
+	// In tests, this will be the test binary path.
+	if s.PiBinary == "" {
+		t.Error("expected non-empty PiBinary when using default (should be os.Executable())")
 	}
 
 	s2 := NewSpawner("/usr/local/bin/pi")

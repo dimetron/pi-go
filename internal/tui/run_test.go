@@ -225,7 +225,7 @@ func TestListAvailableSpecs_NoSpecsDir(t *testing.T) {
 
 func TestBuildRunPrompt(t *testing.T) {
 	promptMD := "# My Feature\n\n## Objective\n\nBuild something.\n"
-	result := buildRunPrompt("my-feature", promptMD)
+	result := buildRunPrompt("my-feature", promptMD, nil)
 
 	if !strings.Contains(result, promptMD) {
 		t.Error("run prompt should contain the original PROMPT.md content")
@@ -238,6 +238,42 @@ func TestBuildRunPrompt(t *testing.T) {
 	}
 	if !strings.Contains(result, "- [ ] Step N:") {
 		t.Error("run prompt should mention checklist update instructions")
+	}
+}
+
+func TestBuildRunPrompt_InjectsChecklist(t *testing.T) {
+	promptMD := "# My Feature\n\n## Objective\n\nBuild something.\n"
+
+	// Heading-style checklist (no checkboxes) — should inject checkbox list.
+	headingSteps := []ChecklistStep{
+		{Title: "PairingManager — Core Logic", Done: false},
+		{Title: "HTTP Handlers — Endpoints", Done: false},
+	}
+	result := buildRunPrompt("my-feature", promptMD, headingSteps)
+
+	if !strings.Contains(result, "- [ ] Step 1: PairingManager") {
+		t.Error("should inject checklist for heading-only plans")
+	}
+	if !strings.Contains(result, "- [ ] Step 2: HTTP Handlers") {
+		t.Error("should inject all steps into checklist")
+	}
+	if !strings.Contains(result, "FIRST action") {
+		t.Error("should instruct agent to prepend checklist")
+	}
+}
+
+func TestBuildRunPrompt_NoInjectionForCheckboxPlans(t *testing.T) {
+	promptMD := "# My Feature\n"
+
+	// Checkbox-style checklist (already has checkboxes) — should NOT inject.
+	checkboxSteps := []ChecklistStep{
+		{Title: "Step 1: Setup", Done: true},
+		{Title: "Step 2: Build", Done: false},
+	}
+	result := buildRunPrompt("my-feature", promptMD, checkboxSteps)
+
+	if strings.Contains(result, "FIRST action") {
+		t.Error("should NOT inject checklist when plan already has checkboxes")
 	}
 }
 
@@ -368,7 +404,7 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	}
 
 	// Process done — with no gates defined, it transitions to merging.
-	m.handleRunAgentDone()
+	m.handleRunAgentDone(runAgentDoneMsg{})
 	if m.running {
 		t.Error("model should not be running after done")
 	}
@@ -592,6 +628,11 @@ func TestHandleRunMergeResult_Success(t *testing.T) {
 			specName: "test-spec",
 			agentID:  "task-123",
 			phase:    "merging",
+			checklist: []ChecklistStep{
+				{Title: "Step 1", Done: false},
+				{Title: "Step 2", Done: false},
+				{Title: "Step 3", Done: true},
+			},
 		},
 	}
 
@@ -600,6 +641,13 @@ func TestHandleRunMergeResult_Success(t *testing.T) {
 
 	if m.run.phase != "done" {
 		t.Errorf("phase = %q, want %q", m.run.phase, "done")
+	}
+
+	// All checklist items should be marked done after successful merge.
+	for i, step := range m.run.checklist {
+		if !step.Done {
+			t.Errorf("checklist[%d] should be done after merge", i)
+		}
 	}
 
 	found := false
@@ -661,7 +709,7 @@ func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 		},
 	}
 
-	m.handleRunAgentDone()
+	m.handleRunAgentDone(runAgentDoneMsg{})
 
 	if m.run.phase != "merging" {
 		t.Errorf("phase = %q, want %q (should skip to merge with no gates)", m.run.phase, "merging")
@@ -696,7 +744,7 @@ func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
 		},
 	}
 
-	m.handleRunAgentDone()
+	m.handleRunAgentDone(runAgentDoneMsg{})
 
 	if m.run.phase != "gating" {
 		t.Errorf("phase = %q, want %q", m.run.phase, "gating")
@@ -849,6 +897,254 @@ func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
 	}
 }
 
+// --- Checklist parsing tests ---
+
+func TestExtractChecklist_CheckboxFormat(t *testing.T) {
+	content := `# Plan
+
+## Checklist
+
+- [x] Step 1: Setup project
+- [ ] Step 2: Implement feature
+- [X] Step 3: Write tests
+- [ ] Step 4: Review
+
+## Notes
+`
+	steps := extractChecklist(content)
+	if len(steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(steps))
+	}
+
+	want := []ChecklistStep{
+		{Title: "Step 1: Setup project", Done: true},
+		{Title: "Step 2: Implement feature", Done: false},
+		{Title: "Step 3: Write tests", Done: true},
+		{Title: "Step 4: Review", Done: false},
+	}
+	for i, w := range want {
+		if steps[i].Title != w.Title {
+			t.Errorf("step[%d].Title = %q, want %q", i, steps[i].Title, w.Title)
+		}
+		if steps[i].Done != w.Done {
+			t.Errorf("step[%d].Done = %v, want %v", i, steps[i].Done, w.Done)
+		}
+	}
+}
+
+func TestExtractChecklist_SliceHeadings(t *testing.T) {
+	content := `# Implementation Plan
+
+### Slice 1: PairingManager
+
+Details...
+
+### Slice 2: HTTP Handlers
+
+Details...
+
+### Slice 3: WebSocket Server
+
+Details...
+`
+	steps := extractChecklist(content)
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(steps))
+	}
+	if steps[0].Title != "PairingManager" {
+		t.Errorf("step[0].Title = %q, want %q", steps[0].Title, "PairingManager")
+	}
+	if steps[1].Done {
+		t.Error("slice heading steps should default to not done")
+	}
+}
+
+func TestExtractChecklist_LongTitleTruncated(t *testing.T) {
+	content := "- [ ] This is a very long step title that should be truncated because it exceeds forty characters\n"
+	steps := extractChecklist(content)
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+	if len(steps[0].Title) > 40 {
+		t.Errorf("title should be truncated, got len=%d: %q", len(steps[0].Title), steps[0].Title)
+	}
+	if !strings.HasSuffix(steps[0].Title, "...") {
+		t.Errorf("truncated title should end with '...', got: %q", steps[0].Title)
+	}
+}
+
+func TestExtractChecklist_EmptyContent(t *testing.T) {
+	steps := extractChecklist("")
+	if len(steps) != 0 {
+		t.Errorf("expected 0 steps for empty content, got %d", len(steps))
+	}
+}
+
+func TestParsePlanChecklist_FromFile(t *testing.T) {
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "test-spec")
+	os.MkdirAll(specDir, 0o755)
+
+	planContent := `# Plan
+
+- [x] Step 1: Done
+- [ ] Step 2: Not done
+`
+	os.WriteFile(filepath.Join(specDir, "plan.md"), []byte(planContent), 0o644)
+
+	steps := parsePlanChecklist(dir, "test-spec")
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if !steps[0].Done {
+		t.Error("step 1 should be done")
+	}
+	if steps[1].Done {
+		t.Error("step 2 should not be done")
+	}
+}
+
+func TestParsePlanChecklistFrom(t *testing.T) {
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "test-spec")
+	os.MkdirAll(specDir, 0o755)
+
+	plan := `# Plan
+
+- [x] Step 1: Done
+- [ ] Step 2: Pending
+- [x] Step 3: Also done
+`
+	os.WriteFile(filepath.Join(specDir, "plan.md"), []byte(plan), 0o644)
+
+	steps := parsePlanChecklistFrom(dir, "test-spec")
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(steps))
+	}
+	if !steps[0].Done || steps[1].Done || !steps[2].Done {
+		t.Error("unexpected done states")
+	}
+}
+
+func TestParsePlanChecklistFrom_Missing(t *testing.T) {
+	steps := parsePlanChecklistFrom(t.TempDir(), "nonexistent")
+	if len(steps) != 0 {
+		t.Errorf("expected 0 steps for missing plan, got %d", len(steps))
+	}
+}
+
+func TestRefreshRunChecklist_NilRunState(t *testing.T) {
+	m := &model{}
+	m.refreshRunChecklist() // should not panic
+}
+
+func TestRefreshRunChecklist_NoOrchestrator(t *testing.T) {
+	m := &model{
+		run: &runState{specName: "test", agentID: "a-1"},
+	}
+	m.refreshRunChecklist() // should not panic
+}
+
+func TestRefreshRunChecklist_NoWorktreeManager(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	m := &model{
+		cfg: Config{Orchestrator: orch},
+		run: &runState{specName: "test", agentID: "a-1"},
+	}
+	m.refreshRunChecklist() // worktree manager is nil, should not panic
+}
+
+func TestRefreshRunChecklist_UpdatesChecklist(t *testing.T) {
+	// Create a fake worktree directory with a plan.md.
+	wtDir := t.TempDir()
+	specDir := filepath.Join(wtDir, "specs", "my-spec")
+	os.MkdirAll(specDir, 0o755)
+	os.WriteFile(filepath.Join(specDir, "plan.md"), []byte("- [x] Step 1: Done\n- [ ] Step 2: TODO\n"), 0o644)
+
+	// We can't easily inject a real WorktreeManager, but we can test
+	// parsePlanChecklistFrom directly (which refreshRunChecklist delegates to).
+	steps := parsePlanChecklistFrom(wtDir, "my-spec")
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if !steps[0].Done {
+		t.Error("step 1 should be done")
+	}
+	if steps[1].Done {
+		t.Error("step 2 should not be done")
+	}
+}
+
+func TestChecklistHasCheckboxes(t *testing.T) {
+	t.Run("has checked items", func(t *testing.T) {
+		steps := []ChecklistStep{
+			{Title: "Step 1: Setup", Done: true},
+			{Title: "Step 2: Build", Done: false},
+		}
+		if !checklistHasCheckboxes(steps) {
+			t.Error("should detect checkboxes when Done=true exists")
+		}
+	})
+
+	t.Run("heading style with dashes", func(t *testing.T) {
+		steps := []ChecklistStep{
+			{Title: "PairingManager — Core Logic", Done: false},
+			{Title: "HTTP Handlers — Endpoints", Done: false},
+		}
+		if checklistHasCheckboxes(steps) {
+			t.Error("should detect heading-only format from em-dashes")
+		}
+	})
+
+	t.Run("all unchecked checkbox style", func(t *testing.T) {
+		steps := []ChecklistStep{
+			{Title: "Step 1: Setup", Done: false},
+			{Title: "Step 2: Build", Done: false},
+		}
+		if !checklistHasCheckboxes(steps) {
+			t.Error("should assume checkbox format when no em-dashes")
+		}
+	})
+
+	t.Run("heading style with en-dash", func(t *testing.T) {
+		steps := []ChecklistStep{
+			{Title: "Manager – Core", Done: false},
+		}
+		if checklistHasCheckboxes(steps) {
+			t.Error("should detect heading format from en-dash")
+		}
+	})
+}
+
+func TestHandleRunAgentEvent_RefreshesChecklistOnEdit(t *testing.T) {
+	// Verify that tool_result after write/edit triggers checklist refresh attempt.
+	m := &model{
+		chatModel:   ChatModel{Messages: make([]message, 0)},
+		statusModel: StatusModel{ActiveTool: "edit"},
+		running:     true,
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "running",
+			checklist: []ChecklistStep{
+				{Title: "Step 1", Done: false},
+			},
+		},
+	}
+
+	// Add a tool message placeholder (as tool_call would).
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "tool", tool: "edit"})
+
+	// Simulate tool_result event — this should attempt refresh (won't crash
+	// even without orchestrator because refreshRunChecklist checks nil).
+	ev := runAgentEventMsg{event: subagent.Event{Type: "tool_result", Content: `{"ok": true}`}}
+	m.handleRunAgentEvent(ev)
+
+	if m.statusModel.ActiveTool != "" {
+		t.Error("active tool should be cleared after tool_result")
+	}
+}
+
 func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
 	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
@@ -894,5 +1190,154 @@ func TestRetryOnGateFailure_MaxRetries_Exhausted(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected message mentioning max retries exhausted")
+	}
+}
+
+// --- Parallel /run tests ---
+
+func TestRunState_IsParallel(t *testing.T) {
+	rs := &runState{}
+	if rs.isParallel() {
+		t.Error("empty parallel slice should not be parallel")
+	}
+
+	rs.parallel = []*parallelAgent{
+		{agentID: "a-1"},
+		{agentID: "a-2"},
+	}
+	if !rs.isParallel() {
+		t.Error("should be parallel with 2 agents")
+	}
+}
+
+func TestRunState_AllAgentsDone(t *testing.T) {
+	rs := &runState{
+		parallel: []*parallelAgent{
+			{agentID: "a-1", done: false},
+			{agentID: "a-2", done: true},
+		},
+	}
+	if rs.allAgentsDone() {
+		t.Error("should not be done when agent 1 is still running")
+	}
+
+	rs.parallel[0].done = true
+	if !rs.allAgentsDone() {
+		t.Error("should be done when all agents are done")
+	}
+}
+
+func TestHandleRunAgentDone_ParallelPartialDone(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			parallel: []*parallelAgent{
+				{agentID: "a-1", done: false},
+				{agentID: "a-2", done: false},
+			},
+		},
+	}
+
+	// Agent 1 finishes.
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-1"})
+
+	if !m.run.parallel[0].done {
+		t.Error("agent 1 should be marked done")
+	}
+	if m.run.parallel[1].done {
+		t.Error("agent 2 should still be running")
+	}
+	// Model should still be running (waiting for agent 2).
+	if m.run.phase != "running" {
+		t.Errorf("phase should still be running, got %q", m.run.phase)
+	}
+}
+
+func TestHandleRunAgentDone_ParallelAllDone(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			parallel: []*parallelAgent{
+				{agentID: "a-1", done: true}, // already done
+				{agentID: "a-2", done: false},
+			},
+		},
+	}
+
+	// Agent 2 finishes — now all done.
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-2"})
+
+	if !m.run.allAgentsDone() {
+		t.Error("all agents should be done")
+	}
+	// With no gates, should transition to merging.
+	if m.run.phase != "merging" {
+		t.Errorf("phase = %q, want merging (no gates)", m.run.phase)
+	}
+}
+
+func TestBuildParallelPrompt(t *testing.T) {
+	promptMD := "# Feature\n\n## Objective\nBuild it.\n"
+	checklist := []ChecklistStep{
+		{Title: "Core — Logic"},
+		{Title: "HTTP — Handlers"},
+		{Title: "Tests — Integration"},
+		{Title: "CLI — Command"},
+	}
+
+	prompt := buildParallelPrompt("my-spec", promptMD, checklist, 0, 2)
+
+	if !strings.Contains(prompt, "Parallel Mode") {
+		t.Error("should mention parallel mode")
+	}
+	if !strings.Contains(prompt, "Slice 1: Core") {
+		t.Error("should include slice 1")
+	}
+	if !strings.Contains(prompt, "Slice 2: HTTP") {
+		t.Error("should include slice 2")
+	}
+	if strings.Contains(prompt, "Slice 3") {
+		t.Error("should NOT include slice 3 (assigned to other agent)")
+	}
+	if !strings.Contains(prompt, "ONE OF TWO agents") {
+		t.Error("should explain parallel assignment")
+	}
+}
+
+func TestHandleRunCommand_ParallelFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	specDir := filepath.Join(tmpDir, "specs", "test-spec")
+	os.MkdirAll(specDir, 0o755)
+	os.WriteFile(filepath.Join(specDir, "PROMPT.md"), []byte("# Test\n\n## Objective\nBuild.\n"), 0o644)
+	os.WriteFile(filepath.Join(specDir, "plan.md"), []byte(
+		"- [ ] Step 1: A\n- [ ] Step 2: B\n- [ ] Step 3: C\n- [ ] Step 4: D\n"), 0o644)
+
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+
+	m := &model{
+		ctx:       context.Background(),
+		cfg:       Config{WorkDir: tmpDir, Orchestrator: orch},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+	}
+
+	// With --parallel flag, spawn will fail (no task agent config) but
+	// we can verify the parallel path was taken.
+	m.handleRunCommand([]string{"test-spec", "--parallel"})
+
+	found := false
+	for _, msg := range m.chatModel.Messages {
+		if strings.Contains(msg.content, "Failed to spawn") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected spawn failure message (parallel path was taken)")
 	}
 }

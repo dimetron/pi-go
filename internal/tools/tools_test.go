@@ -496,6 +496,47 @@ func TestFindNestedDirs(t *testing.T) {
 	}
 }
 
+func TestFindDoublestarGlob(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+	sub := filepath.Join(dir, "pkg", "api")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+	os.WriteFile(filepath.Join(sub, "handler.go"), []byte("package api"), 0o644)
+	os.WriteFile(filepath.Join(sub, "handler_test.go"), []byte("package api"), 0o644)
+	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("# readme"), 0o644)
+
+	t.Run("**/*.go finds all go files recursively", func(t *testing.T) {
+		out, err := findHandler(sb, FindInput{Pattern: "**/*.go", Path: "."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.TotalFiles != 3 {
+			t.Errorf("expected 3 files, got %d: %v", out.TotalFiles, out.Files)
+		}
+	})
+
+	t.Run("pkg/**/*.go finds go files under pkg/", func(t *testing.T) {
+		out, err := findHandler(sb, FindInput{Pattern: "pkg/**/*.go", Path: "."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.TotalFiles != 2 {
+			t.Errorf("expected 2 files, got %d: %v", out.TotalFiles, out.Files)
+		}
+	})
+
+	t.Run("**/*_test.go finds test files", func(t *testing.T) {
+		out, err := findHandler(sb, FindInput{Pattern: "**/*_test.go", Path: "."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.TotalFiles != 1 {
+			t.Errorf("expected 1 file, got %d: %v", out.TotalFiles, out.Files)
+		}
+	})
+}
+
 func TestLsEmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
@@ -557,6 +598,23 @@ func TestReadTruncatesLargeFiles(t *testing.T) {
 		}
 		if out.Truncated {
 			t.Error("expected Truncated=false for small file")
+		}
+	})
+
+	t.Run("source code files not truncated by default", func(t *testing.T) {
+		for _, ext := range []string{".go", ".rs", ".py", ".ts"} {
+			codePath := filepath.Join(dir, "large"+ext)
+			os.WriteFile(codePath, []byte(b.String()), 0o644)
+			out, err := readHandler(sb, ReadInput{FilePath: codePath})
+			if err != nil {
+				t.Fatalf("ext %s: %v", ext, err)
+			}
+			if out.Truncated {
+				t.Errorf("ext %s: expected Truncated=false for source code file", ext)
+			}
+			if out.TotalLines != 3001 { // 3000 lines + trailing empty
+				t.Errorf("ext %s: expected 3001 total lines, got %d", ext, out.TotalLines)
+			}
 		}
 	})
 }
@@ -707,4 +765,64 @@ func TestCoreTools(t *testing.T) {
 	for name := range expected {
 		t.Errorf("missing tool: %s", name)
 	}
+}
+
+func TestReadHandlerWithCache(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+	path := filepath.Join(dir, "cached.go")
+	os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644)
+
+	cache := NewFileContentCache(10, 0) // no age limit
+
+	t.Run("first read populates cache", func(t *testing.T) {
+		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.TotalLines != 4 { // 3 lines + trailing empty
+			t.Errorf("expected 4 lines, got %d", out.TotalLines)
+		}
+		if cache.Len() != 1 {
+			t.Errorf("expected 1 cache entry, got %d", cache.Len())
+		}
+	})
+
+	t.Run("second read hits cache", func(t *testing.T) {
+		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.Content, "line1") {
+			t.Error("expected cached content to contain line1")
+		}
+	})
+
+	t.Run("modified file invalidates cache", func(t *testing.T) {
+		os.WriteFile(path, []byte("new1\nnew2\n"), 0o644)
+		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.Content, "new1") {
+			t.Error("expected fresh content after file modification")
+		}
+	})
+
+	t.Run("source code file not truncated via cache", func(t *testing.T) {
+		bigPath := filepath.Join(dir, "big.go")
+		var b strings.Builder
+		for i := 0; i < 3000; i++ {
+			b.WriteString("code line\n")
+		}
+		os.WriteFile(bigPath, []byte(b.String()), 0o644)
+
+		out, err := readHandlerWithCache(sb, ReadInput{FilePath: bigPath}, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Truncated {
+			t.Error("source code file should not be truncated")
+		}
+	})
 }

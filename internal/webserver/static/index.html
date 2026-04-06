@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pi-Go Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        body {
+            background: #1e1e1e;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .container {
+            background: transparent;
+            box-shadow: none;
+            padding: 0;
+            max-width: 100%;
+            height: 100vh;
+        }
+        
+        #terminal {
+            height: 100vh;
+            padding: 10px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            z-index: 1000;
+        }
+        
+        .connection-status.connected {
+            background: #28a745;
+            color: white;
+        }
+        
+        .connection-status.disconnected {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .connection-status.connecting {
+            background: #ffc107;
+            color: black;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+        
+        /* Override body styles for terminal page */
+        body.terminal-page {
+            display: block;
+            align-items: unset;
+            justify-content: unset;
+        }
+    </style>
+</head>
+<body class="terminal-page">
+    <div class="connection-status connecting" id="status">
+        Connecting...
+    </div>
+    <div id="terminal"></div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script>
+        // Terminal setup
+        const terminal = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#d4d4d4',
+                cursor: '#ffffff',
+                selection: 'rgba(255, 255, 255, 0.3)',
+                black: '#1e1e1e',
+                red: '#f44747',
+                green: '#6a9955',
+                yellow: '#dcdcaa',
+                blue: '#569cd6',
+                magenta: '#c586c0',
+                cyan: '#4ec9b0',
+                white: '#d4d4d4',
+                brightBlack: '#808080',
+                brightRed: '#f44747',
+                brightGreen: '#6a9955',
+                brightYellow: '#dcdcaa',
+                brightBlue: '#569cd6',
+                brightMagenta: '#c586c0',
+                brightCyan: '#4ec9b0',
+                brightWhite: '#ffffff'
+            }
+        });
+        
+        // Addons
+        const fitAddon = new FitAddon.FitAddon();
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        
+        terminal.loadAddon(fitAddon);
+        terminal.loadAddon(webLinksAddon);
+        terminal.open(document.getElementById('terminal'));
+        fitAddon.fit();
+        
+        // Connection status
+        const statusEl = document.getElementById('status');
+        
+        function setStatus(status, text) {
+            statusEl.className = 'connection-status ' + status;
+            statusEl.textContent = text;
+        }
+        
+        // Get token from cookie
+        function getCookie(name) {
+            const value = '; ' + document.cookie;
+            const parts = value.split('; ' + name + '=');
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return '';
+        }
+        
+        const token = getCookie('pi_token');
+        
+        if (!token) {
+            // Redirect to pair page
+            window.location.href = '/pair';
+        }
+        
+        // Generate session ID
+        const sessionID = crypto.randomUUID ? crypto.randomUUID() : 
+            'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        
+        // WebSocket connection
+        let ws;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        function connect() {
+            setStatus('connecting', 'Connecting...');
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsURL = `${protocol}//${window.location.host}/ws/${sessionID}?token=${encodeURIComponent(token)}`;
+            
+            ws = new WebSocket(wsURL);
+            
+            ws.onopen = function() {
+                setStatus('connected', 'Connected');
+                reconnectAttempts = 0;
+                
+                // Send initial terminal size
+                const dims = fitAddon.proposeDimensions();
+                if (dims) {
+                    sendMessage('resize', `${dims.cols}x${dims.rows}`);
+                }
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'output') {
+                        terminal.write(msg.data);
+                    } else if (msg.type === 'close') {
+                        terminal.write('\r\n\r\n[Connection closed]\r\n');
+                    }
+                } catch (e) {
+                    // If not JSON, treat as raw terminal output
+                    terminal.write(event.data);
+                }
+            };
+            
+            ws.onclose = function() {
+                setStatus('disconnected', 'Disconnected');
+                
+                // Attempt reconnect
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connect, 2000 * reconnectAttempts);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                setStatus('disconnected', 'Connection error');
+            };
+        }
+        
+        function sendMessage(type, data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type, data }));
+            }
+        }
+        
+        // Handle terminal input
+        terminal.onData(function(data) {
+            sendMessage('input', data);
+        });
+        
+        // Handle resize
+        window.addEventListener('resize', function() {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+                sendMessage('resize', `${dims.cols}x${dims.rows}`);
+            }
+        });
+        
+        // Initial resize
+        setTimeout(function() {
+            fitAddon.fit();
+        }, 100);
+        
+        // Connect
+        connect();
+    </script>
+</body>
+</html>

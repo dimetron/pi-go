@@ -26,6 +26,11 @@ type SidebarRenderInput struct {
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
+	RunChecklist []ChecklistStep // steps from plan.md during /run
+	RunPhase     string          // current /run phase (empty if not running)
+	RunSpec      string          // spec name during /run
+	RunCycle     int             // current retry cycle
+	RunMaxCycle  int             // max retries
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -108,25 +113,70 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, "")
 	}
 
-	// --- Mode section ---
-	lines = append(lines, heading.Render("  Mode"))
-	mode := in.Mode
-	if mode == "" {
-		mode = "chat"
-	}
-	if mode == "plan" {
-		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-		lines = append(lines, modeStyle.Render("  [plan]"))
-	} else {
-		lines = append(lines, dim.Render("  ["+mode+"]"))
-	}
+	// --- Mode / Run section ---
+	if len(in.RunChecklist) > 0 && in.RunPhase != "" {
+		// Show run checklist instead of plain mode when /run is active.
+		runHeading := fmt.Sprintf("  Run: %s", in.RunSpec)
+		if len(runHeading) > innerW+2 {
+			runHeading = runHeading[:innerW+1] + "…"
+		}
+		lines = append(lines, heading.Render(runHeading))
 
-	// Status
-	if in.Running {
-		if in.ActiveTool != "" {
-			lines = append(lines, dim.Render("  ⚡ "+in.ActiveTool))
+		// Phase and cycle info.
+		phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		lines = append(lines, phaseStyle.Render(fmt.Sprintf("  cycle %d/%d · %s",
+			in.RunCycle, in.RunMaxCycle, in.RunPhase)))
+		lines = append(lines, "")
+
+		// Checklist items.
+		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))  // green
+		todoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246")) // gray
+
+		for _, step := range in.RunChecklist {
+			title := step.Title
+			maxTitle := innerW - 5 // room for "  [x] " prefix
+			if maxTitle < 10 {
+				maxTitle = 10
+			}
+			if len(title) > maxTitle {
+				title = title[:maxTitle-1] + "…"
+			}
+			if step.Done {
+				lines = append(lines, doneStyle.Render("  [x] "+title))
+			} else {
+				lines = append(lines, todoStyle.Render("  [ ] "+title))
+			}
+		}
+
+		// Status
+		if in.Running {
+			lines = append(lines, "")
+			if in.ActiveTool != "" {
+				lines = append(lines, dim.Render("  ⚡ "+in.ActiveTool))
+			} else {
+				lines = append(lines, dim.Render("  thinking..."))
+			}
+		}
+	} else {
+		lines = append(lines, heading.Render("  Mode"))
+		mode := in.Mode
+		if mode == "" {
+			mode = "chat"
+		}
+		if mode == "plan" {
+			modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+			lines = append(lines, modeStyle.Render("  [plan]"))
 		} else {
-			lines = append(lines, dim.Render("  thinking..."))
+			lines = append(lines, dim.Render("  ["+mode+"]"))
+		}
+
+		// Status
+		if in.Running {
+			if in.ActiveTool != "" {
+				lines = append(lines, dim.Render("  ⚡ "+in.ActiveTool))
+			} else {
+				lines = append(lines, dim.Render("  thinking..."))
+			}
 		}
 	}
 	lines = append(lines, "")

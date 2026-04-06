@@ -205,6 +205,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			var runningNames []string
 			total := len(agents)
 			failed := 0
+			killed := 0
 			for _, a := range agents {
 				switch a.Status {
 				case "running":
@@ -215,6 +216,8 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 					runningNames = append(runningNames, name)
 				case "failed":
 					failed++
+				case "killed":
+					killed++
 				}
 			}
 			agentFg := lipgloss.Color("35") // green
@@ -222,7 +225,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 				agentFg = lipgloss.Color("214") // orange when active
 			}
 			if failed > 0 {
-				agentFg = lipgloss.Color("196") // red if any failed
+				agentFg = lipgloss.Color("196") // red if any failed (not killed)
 			}
 			agentStyle := lipgloss.NewStyle().Background(bg).Foreground(agentFg)
 			var label string
@@ -233,6 +236,9 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			}
 			if failed > 0 {
 				label += fmt.Sprintf(" (%d failed)", failed)
+			}
+			if killed > 0 {
+				label += fmt.Sprintf(" (%d killed)", killed)
 			}
 			parts = append(parts, agentStyle.Render(label))
 		}
