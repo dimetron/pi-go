@@ -6,6 +6,7 @@
 package webserver
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 // PairStatus represents the status of a pairing request.
@@ -63,6 +65,11 @@ func NewPairingManager(timeout time.Duration) *PairingManager {
 // CreatePair generates a new 6-digit pairing code and returns the code,
 // token, and QR data.
 func (pm *PairingManager) CreatePair(project string) (code, token string, qrData []byte, err error) {
+	return pm.CreatePairWithContext(project, "pi-go", "")
+}
+
+// CreatePairWithContext generates a pair and embeds server context in the QR payload.
+func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL string) (code, token string, qrData []byte, err error) {
 	// Generate 6-digit code
 	codeNum, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
@@ -86,15 +93,18 @@ func (pm *PairingManager) CreatePair(project string) (code, token string, qrData
 	pm.pending[code] = pp
 	pm.mu.Unlock()
 
-	// Generate QR data (JSON with pairing info for scanning)
-	qrInfo := map[string]string{
-		"code":   code,
-		"token":  token,
-		"server": "pi-go",
+	if strings.TrimSpace(serverHost) == "" {
+		serverHost = "pi-go"
 	}
-	qrData, err = json.Marshal(qrInfo)
+
+	qrPayload, err := buildQRPayload(code, token, serverHost, pairURL)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("encoding QR data: %w", err)
+	}
+
+	qrData, err = GenerateQRCode(string(qrPayload))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("generating QR image: %w", err)
 	}
 
 	return code, token, qrData, nil
@@ -191,7 +201,7 @@ func (pm *PairingManager) CleanupExpired() {
 type PairResponse struct {
 	Code  string `json:"code"`
 	Token string `json:"token"`
-	QR    string `json:"qr"` // base64 encoded QR data
+	QR    string `json:"qr"` // base64 encoded PNG image
 }
 
 // StatusResponse represents the API response for status check.
@@ -203,11 +213,23 @@ type StatusResponse struct {
 // GenerateQRCode generates a QR code image for the pairing data.
 // Returns PNG data or an error.
 func GenerateQRCode(data string) ([]byte, error) {
-	// Use a simple QR code generation approach
-	// For a full implementation, you could use a QR library
-	// For now, we'll create a simple placeholder that indicates
-	// the data to be encoded
-	return []byte(data), nil
+	png, err := qrcode.Encode(data, qrcode.Medium, 256)
+	if err != nil {
+		return nil, fmt.Errorf("encode QR PNG: %w", err)
+	}
+	if !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
+		return nil, fmt.Errorf("generated QR is not valid PNG")
+	}
+	return png, nil
+}
+
+// BuildPairQRCode builds a QR PNG for a pairing code/token and server context.
+func BuildPairQRCode(code, token, serverHost, pairURL string) ([]byte, error) {
+	payload, err := buildQRPayload(code, token, serverHost, pairURL)
+	if err != nil {
+		return nil, fmt.Errorf("encoding QR payload: %w", err)
+	}
+	return GenerateQRCode(string(payload))
 }
 
 // ValidateCode checks if a code is valid (6 digits).
@@ -235,4 +257,16 @@ func ParseQRData(data string) (code, token string, err error) {
 		return "", "", fmt.Errorf("parsing QR data: %w", err)
 	}
 	return qrInfo["code"], qrInfo["token"], nil
+}
+
+func buildQRPayload(code, token, serverHost, pairURL string) ([]byte, error) {
+	qrInfo := map[string]string{
+		"code":   code,
+		"token":  token,
+		"server": serverHost,
+	}
+	if strings.TrimSpace(pairURL) != "" {
+		qrInfo["url"] = pairURL
+	}
+	return json.Marshal(qrInfo)
 }

@@ -388,11 +388,7 @@ func runNonInteractive(
 				Args:    s.Args,
 			}
 		}
-		var err error
-		mcpToolsets, err = extension.BuildMCPToolsets(mcpServers)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP setup failed: %v\n", err)
-		}
+		mcpToolsets, _ = extension.BuildMCPToolsets(mcpServers)
 	}
 
 	skillDirs := []string{}

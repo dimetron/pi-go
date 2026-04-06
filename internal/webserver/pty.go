@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,125 +22,259 @@ type WSMessage struct {
 	Data string `json:"data"`
 }
 
-// PtyBridge manages a PTY process for terminal I/O.
+// PtyBridge manages a long-lived PTY process that survives WebSocket reconnects.
 type PtyBridge struct {
 	project   string
 	sessionID string
+	model     string
+	log       *slog.Logger
 	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdout    io.ReadCloser
-	stderr    io.ReadCloser
-	pty       *os.File
-	mu        sync.Mutex
-	done      chan struct{}
+	ptyFile   io.ReadWriteCloser
+
+	mu   sync.Mutex
+	conn *websocket.Conn // current attached WebSocket (nil when detached)
+
+	done      chan struct{} // closed when PTY process exits
+	closeOnce sync.Once
 }
 
-// NewPtyBridge creates a new PTY bridge for the given project.
-func NewPtyBridge(project string) *PtyBridge {
+// pipeWrapper wraps stdin/stdout/stderr pipes to implement io.ReadWriteCloser
+type pipeWrapper struct {
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+}
+
+func (pw *pipeWrapper) Read(p []byte) (n int, err error) {
+	return pw.stdout.Read(p)
+}
+
+func (pw *pipeWrapper) Write(p []byte) (n int, err error) {
+	return pw.stdin.Write(p)
+}
+
+func (pw *pipeWrapper) Close() error {
+	pw.stdin.Close()
+	pw.stdout.Close()
+	pw.stderr.Close()
+	return nil
+}
+
+// NewPtyBridge creates a new PTY bridge for the given project and model.
+func NewPtyBridge(project, model string, logger *slog.Logger) *PtyBridge {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &PtyBridge{
 		project: project,
+		model:   model,
+		log:     logger,
 		done:    make(chan struct{}),
 	}
 }
 
-// HandleWebSocket handles bidirectional I/O between WebSocket and PTY.
-func (pb *PtyBridge) HandleWebSocket(conn *websocket.Conn, sessionID string) {
+// Start launches the PTY child process. Must be called before AttachWebSocket.
+func (pb *PtyBridge) Start() error {
+	return pb.startProcess()
+}
+
+// Alive reports whether the PTY process is still running.
+func (pb *PtyBridge) Alive() bool {
+	select {
+	case <-pb.done:
+		return false
+	default:
+		return pb.cmd != nil && pb.cmd.Process != nil
+	}
+}
+
+// AttachWebSocket connects a WebSocket to this PTY bridge.
+// Blocks until the WebSocket disconnects or the PTY process exits.
+// After return the PTY is still alive; call Close() to kill it.
+func (pb *PtyBridge) AttachWebSocket(conn *websocket.Conn, sessionID string) {
 	pb.sessionID = sessionID
 
-	// Set read/write deadlines with ping interval
+	// Register connection.
+	pb.mu.Lock()
+	pb.conn = conn
+	pb.mu.Unlock()
+
+	// Detach on exit.
+	defer func() {
+		pb.mu.Lock()
+		if pb.conn == conn {
+			pb.conn = nil
+		}
+		pb.mu.Unlock()
+	}()
+
+	// Per-connection done channel — closed when this WS session ends,
+	// NOT when the PTY exits.
+	wsDone := make(chan struct{})
+	wsOnce := sync.Once{}
+	closeWS := func() { wsOnce.Do(func() { close(wsDone) }) }
+
+	// Keep-alive pings.
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
+			case <-wsDone:
+				return
 			case <-pb.done:
+				closeWS()
 				return
 			case <-ticker.C:
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					closeWS()
 					return
 				}
 			}
 		}
 	}()
 
-	// Set pong handler
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
 	})
+	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
-	// Start PTY process
-	if err := pb.startProcess(); err != nil {
-		// Send error to client
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// PTY → WebSocket
+	go func() {
+		defer wg.Done()
+		pb.copyPtyToWS(conn, wsDone)
+		closeWS()
+	}()
+
+	// WebSocket → PTY
+	go func() {
+		defer wg.Done()
+		pb.copyWSToPty(conn, wsDone)
+		closeWS()
+	}()
+
+	wg.Wait()
+}
+
+// HandleWebSocket is a convenience wrapper: Start + AttachWebSocket + Close.
+// Used when session persistence is not needed.
+func (pb *PtyBridge) HandleWebSocket(conn *websocket.Conn, sessionID string) {
+	if err := pb.Start(); err != nil {
+		pb.log.Error("pty start failed", "session", sessionID, "err", err)
 		msg := WSMessage{Type: "error", Data: err.Error()}
 		conn.WriteJSON(msg)
 		return
 	}
-	defer pb.closeProcess()
-
-	// Goroutine to read from PTY and send to WebSocket
-	go pb.copyPtyToWS(conn)
-
-	// Goroutine to read from WebSocket and write to PTY
-	go pb.copyWSToPty(conn)
-
-	// Wait for disconnect
-	<-pb.done
+	pb.AttachWebSocket(conn, sessionID)
+	pb.Close()
 }
 
-// startProcess starts the pi-go process with PTY.
+// startProcess starts the pi-go TUI process with PTY.
 func (pb *PtyBridge) startProcess() error {
-	// Find the pi-go binary
 	piBin, err := os.Executable()
 	if err != nil {
-		// Fallback to looking in PATH
 		piBin = "pi"
 	}
 
-	// Start pi-go with interactive terminal
-	cmd := exec.Command(piBin, "run")
+	args := []string{}
+	if pb.model != "" {
+		args = append(args, "--model", pb.model)
+	}
+	cmd := exec.Command(piBin, args...)
 	cmd.Dir = pb.project
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+		"CLICOLOR_FORCE=1",
+		"TERMENV=truecolor",
+	)
 
-	// Create PTY
-	pty, err := newPty()
+	sz := &pty.Winsize{Rows: 24, Cols: 80}
+	ptyFile, err := pty.StartWithSize(cmd, sz)
 	if err != nil {
-		return fmt.Errorf("creating PTY: %w", err)
-	}
-	pb.pty = pty.master
-
-	// Set PTY as process's stdin/stdout/stderr
-	cmd.Stdin = pty.master
-	cmd.Stdout = pty.master
-	cmd.Stderr = pty.master
-
-	// Set process group
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,
-		Setctty: true,
-		Ctty:    int(pty.master.Fd()),
+		return pb.startProcessWithPipes()
 	}
 
-	// Start the process
+	pb.cmd = cmd
+	pb.ptyFile = ptyFile
+
+	go func() {
+		err := pb.cmd.Wait()
+		pb.log.Info("pty process exited", "session", pb.sessionID, "err", err)
+		pb.closeOnce.Do(func() { close(pb.done) })
+	}()
+
+	pb.log.Info("pty started", "session", pb.sessionID, "pid", cmd.Process.Pid, "mode", "pty")
+	return nil
+}
+
+// startProcessWithPipes starts the pi-go TUI process with regular pipes (fallback).
+func (pb *PtyBridge) startProcessWithPipes() error {
+	piBin, err := os.Executable()
+	if err != nil {
+		piBin = "pi"
+	}
+
+	args := []string{}
+	if pb.model != "" {
+		args = append(args, "--model", pb.model)
+	}
+	cmd := exec.Command(piBin, args...)
+	cmd.Dir = pb.project
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+		"CLICOLOR_FORCE=1",
+		"TERMENV=truecolor",
+	)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("creating stdin pipe: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return fmt.Errorf("creating stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		return fmt.Errorf("creating stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
-		pty.master.Close()
-		pty.slave.Close()
+		stdin.Close()
+		stdout.Close()
+		stderr.Close()
 		return fmt.Errorf("starting process: %w", err)
 	}
 
 	pb.cmd = cmd
-	pb.stdin = pty.master
-	pb.stdout = pty.master // Same as stdin for PTY
-	pb.stderr = nil
+	pb.ptyFile = &pipeWrapper{stdin: stdin, stdout: stdout, stderr: stderr}
 
-	// Close slave PTY - master is what we use
-	pty.slave.Close()
+	go func() {
+		err := pb.cmd.Wait()
+		pb.log.Info("pty process exited", "session", pb.sessionID, "err", err, "mode", "pipes")
+		pb.closeOnce.Do(func() { close(pb.done) })
+	}()
 
+	pb.log.Info("pty started", "session", pb.sessionID, "pid", cmd.Process.Pid, "mode", "pipes")
 	return nil
 }
 
-// closeProcess terminates the PTY process.
-func (pb *PtyBridge) closeProcess() {
+// Close kills the child process and releases the PTY fd.
+func (pb *PtyBridge) Close() error {
+	pb.closeOnce.Do(func() { close(pb.done) })
+
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
@@ -150,45 +284,37 @@ func (pb *PtyBridge) closeProcess() {
 		pb.cmd = nil
 	}
 
-	if pb.stdin != nil {
-		pb.stdin.Close()
-		pb.stdin = nil
+	if pb.ptyFile != nil {
+		pb.ptyFile.Close()
+		pb.ptyFile = nil
 	}
-
-	if pb.pty != nil {
-		pb.pty.Close()
-		pb.pty = nil
-	}
-
-	close(pb.done)
-}
-
-// Close terminates the PTY process.
-func (pb *PtyBridge) Close() error {
-	pb.closeProcess()
 	return nil
 }
 
 // copyPtyToWS reads from PTY and writes to WebSocket.
-func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn) {
+func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 	buf := make([]byte, 4096)
 	for {
 		select {
+		case <-wsDone:
+			return
 		case <-pb.done:
 			return
 		default:
 		}
 
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-		n, err := pb.stdout.Read(buf)
+		n, err := pb.ptyFile.Read(buf)
 		if n > 0 {
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			msg := WSMessage{Type: "output", Data: string(buf[:n])}
-			if err := conn.WriteJSON(msg); err != nil {
+			if writeErr := conn.WriteJSON(msg); writeErr != nil {
+				pb.log.Warn("ws write failed", "session", pb.sessionID, "err", writeErr)
 				return
 			}
 		}
 		if err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "use of closed") {
+				pb.log.Warn("pty read error", "session", pb.sessionID, "err", err)
 				msg := WSMessage{Type: "close", Data: err.Error()}
 				conn.WriteJSON(msg)
 			}
@@ -198,20 +324,20 @@ func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn) {
 }
 
 // copyWSToPty reads from WebSocket and writes to PTY.
-func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn) {
+func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 	for {
 		select {
+		case <-wsDone:
+			return
 		case <-pb.done:
 			return
 		default:
 		}
 
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-
 		msgType, reader, err := conn.NextReader()
 		if err != nil {
-			if !websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				return
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				pb.log.Warn("ws read error", "session", pb.sessionID, "err", err)
 			}
 			return
 		}
@@ -220,19 +346,16 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn) {
 			continue
 		}
 
-		// Read the full message
 		data, err := io.ReadAll(reader)
 		if err != nil {
 			return
 		}
 
-		// Parse message
 		var msg WSMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			// Try as raw input if not JSON
 			pb.mu.Lock()
-			if pb.stdin != nil {
-				pb.stdin.Write(data)
+			if pb.ptyFile != nil {
+				pb.ptyFile.Write(data)
 			}
 			pb.mu.Unlock()
 			continue
@@ -241,12 +364,11 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn) {
 		switch msg.Type {
 		case "input":
 			pb.mu.Lock()
-			if pb.stdin != nil {
-				pb.stdin.Write([]byte(msg.Data))
+			if pb.ptyFile != nil {
+				pb.ptyFile.Write([]byte(msg.Data))
 			}
 			pb.mu.Unlock()
 		case "resize":
-			// Parse WxH format
 			parts := strings.Split(msg.Data, "x")
 			if len(parts) == 2 {
 				w, _ := strconv.Atoi(parts[0])
@@ -254,7 +376,6 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn) {
 				pb.resize(w, h)
 			}
 		case "ping":
-			// Respond with pong
 			conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 		}
 	}
@@ -262,101 +383,68 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn) {
 
 // resize resizes the PTY to the given dimensions.
 func (pb *PtyBridge) resize(cols, rows int) {
-	// On Unix, we can use ioctl to resize
-	if pb.pty == nil {
+	if pb.ptyFile == nil {
 		return
 	}
+	if ptyFile, ok := pb.ptyFile.(*os.File); ok {
+		pty.Setsize(ptyFile, &pty.Winsize{
+			Rows: uint16(rows),
+			Cols: uint16(cols),
+		})
+	}
+}
 
-	// Set window size using TIOCSWINSZ
-	ws := &windowSize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-		X:    0,
-		Y:    0,
+// PtyPool manages long-lived PTY bridges keyed by session ID.
+type PtyPool struct {
+	mu      sync.Mutex
+	bridges map[string]*PtyBridge
+	log     *slog.Logger
+}
+
+// NewPtyPool creates a new PTY pool.
+func NewPtyPool(logger *slog.Logger) *PtyPool {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &PtyPool{bridges: make(map[string]*PtyBridge), log: logger}
+}
+
+// GetOrCreate returns an existing live PTY bridge for the session,
+// or creates and starts a new one.
+func (p *PtyPool) GetOrCreate(sessionID, project, model string) (*PtyBridge, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if b, ok := p.bridges[sessionID]; ok && b.Alive() {
+		p.log.Info("pty reused", "session", sessionID)
+		return b, nil
 	}
 
-	// TIOCSWINSZ = 0x5414 on most systems
-	ioctl(uintptr(pb.pty.Fd()), uintptr(0x5414), uintptr(unsafe.Pointer(ws)))
-}
-
-// pty represents a pseudo-terminal pair.
-type pty struct {
-	master *os.File
-	slave  *os.File
-}
-
-// windowSize represents the size of a terminal window.
-type windowSize struct {
-	Rows uint16
-	Cols uint16
-	X    uint16
-	Y    uint16
-}
-
-// newPty creates a new pseudo-terminal pair.
-func newPty() (*pty, error) {
-	// Open master PTY
-	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
-	if err != nil {
+	b := NewPtyBridge(project, model, p.log)
+	if err := b.Start(); err != nil {
 		return nil, err
 	}
+	p.bridges[sessionID] = b
 
-	// Grant access to slave
-	if err := grantPty(master); err != nil {
-		master.Close()
-		return nil, err
-	}
+	go func() {
+		<-b.done
+		p.mu.Lock()
+		if p.bridges[sessionID] == b {
+			delete(p.bridges, sessionID)
+			p.log.Info("pty removed from pool", "session", sessionID)
+		}
+		p.mu.Unlock()
+	}()
 
-	// Unlock slave
-	if err := unlockPty(master); err != nil {
-		master.Close()
-		return nil, err
-	}
-
-	// Get slave name
-	name, err := ptsname(master)
-	if err != nil {
-		master.Close()
-		return nil, err
-	}
-
-	// Open slave PTY
-	slave, err := os.OpenFile(name, os.O_RDWR, 0)
-	if err != nil {
-		master.Close()
-		return nil, err
-	}
-
-	return &pty{master: master, slave: slave}, nil
+	return b, nil
 }
 
-// grantPty grants access to the PTY.
-func grantPty(f *os.File) error {
-	// TIOCGRANT = 0x5419
-	return ioctl(uintptr(f.Fd()), 0x5419, 0)
-}
-
-// unlockPty unlocks the PTY.
-func unlockPty(f *os.File) error {
-	// TIOCUNLOCK = 0x5418
-	return ioctl(uintptr(f.Fd()), 0x5418, 0)
-}
-
-// ptsname returns the name of the slave PTY.
-func ptsname(f *os.File) (string, error) {
-	var n int
-	err := ioctl(uintptr(f.Fd()), uintptr(TIOCGPTN), uintptr(unsafe.Pointer(&n)))
-	if err != nil {
-		return "", err
+// CloseAll terminates all PTY bridges in the pool.
+func (p *PtyPool) CloseAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, b := range p.bridges {
+		b.Close()
+		delete(p.bridges, id)
 	}
-	return "/dev/pts/" + strconv.Itoa(n), nil
 }
-
-// ioctl performs an ioctl syscall.
-func ioctl(fd, req, arg uintptr) error {
-	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, fd, req, arg)
-	return err
-}
-
-// TIOCGPTN is the ioctl number for getting PTY name.
-const TIOCGPTN = 0x80045430

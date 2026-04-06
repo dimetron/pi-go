@@ -1,6 +1,8 @@
 package webserver
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -281,5 +283,43 @@ func TestParseQRData(t *testing.T) {
 	_, _, err = ParseQRData("invalid")
 	if err == nil {
 		t.Error("expected error for invalid format")
+	}
+}
+
+func TestGenerateQRCode(t *testing.T) {
+	png, err := GenerateQRCode(`{"code":"123456","token":"abc-123","server":"pi-go"}`)
+	if err != nil {
+		t.Fatalf("GenerateQRCode failed: %v", err)
+	}
+	if len(png) == 0 {
+		t.Fatal("GenerateQRCode returned empty PNG")
+	}
+	if !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
+		t.Fatalf("GenerateQRCode did not return PNG data")
+	}
+}
+
+func TestBuildQRPayload_IncludesHostAndURL(t *testing.T) {
+	payload, err := buildQRPayload("123456", "abc-token", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
+	if err != nil {
+		t.Fatalf("buildQRPayload failed: %v", err)
+	}
+
+	var decoded map[string]string
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if decoded["code"] != "123456" {
+		t.Fatalf("unexpected code in payload: %q", decoded["code"])
+	}
+	if decoded["token"] != "abc-token" {
+		t.Fatalf("unexpected token in payload: %q", decoded["token"])
+	}
+	if decoded["server"] != "127.0.0.1:8080" {
+		t.Fatalf("unexpected server in payload: %q", decoded["server"])
+	}
+	if decoded["url"] != "http://127.0.0.1:8080/pair" {
+		t.Fatalf("unexpected url in payload: %q", decoded["url"])
 	}
 }

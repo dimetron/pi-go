@@ -5,11 +5,11 @@
 | Field | Value |
 |-------|-------|
 | Spec | `web-serve` |
-| Agent | `task-1775485323079643000` |
+| Agent | `task-1775487233085149000` |
 | Outcome | **completed** |
 | Retries | 0 / 10 |
-| Started | 2026-04-06T16:22:03+02:00 |
-| Duration | 10m6s |
+| Started | 2026-04-06T16:53:53+02:00 |
+| Duration | 5m29s |
 
 ## Gates
 
