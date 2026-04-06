@@ -54,13 +54,13 @@ func NewWriter(filePath string, meta SessionMeta) *Writer {
 // to the trajectory. The updated trajectory is atomically flushed to disk.
 // Returns nil if the event produces no steps (e.g., empty or partial events).
 func (w *Writer) AppendEvent(event *session.Event) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	steps := ConvertEvent(event, w.stepCounter)
 	if len(steps) == 0 {
 		return nil
 	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	w.trajectory.Steps = append(w.trajectory.Steps, steps...)
 	w.stepCounter += len(steps)
