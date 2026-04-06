@@ -29,6 +29,63 @@ func TestHandleMouseClick(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
+// handleMouseWheel tests
+// -----------------------------------------------------------------------
+
+func TestHandleMouseWheel_ScrollUp(t *testing.T) {
+	// Need enough messages to have scrollable content.
+	msgs := make([]message, 0)
+	for i := 0; i < 50; i++ {
+		msgs = append(msgs, message{role: "user", content: "line"})
+	}
+	m := &model{
+		chatModel: ChatModel{Messages: msgs, Scroll: 0},
+		height:    20,
+	}
+
+	msg := tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp})
+	newM, cmd := m.handleMouseWheel(msg)
+	mm := newM.(*model)
+
+	if mm.chatModel.Scroll != 3 {
+		t.Errorf("expected Scroll=3 after wheel up, got %d", mm.chatModel.Scroll)
+	}
+	if cmd != nil {
+		t.Error("handleMouseWheel should not return a command")
+	}
+}
+
+func TestHandleMouseWheel_ScrollDown(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0), Scroll: 10},
+		height:    40,
+	}
+
+	msg := tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown})
+	newM, _ := m.handleMouseWheel(msg)
+	mm := newM.(*model)
+
+	if mm.chatModel.Scroll != 7 {
+		t.Errorf("expected Scroll=7 after wheel down, got %d", mm.chatModel.Scroll)
+	}
+}
+
+func TestHandleMouseWheel_ScrollDownClampsToZero(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0), Scroll: 1},
+		height:    40,
+	}
+
+	msg := tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown})
+	newM, _ := m.handleMouseWheel(msg)
+	mm := newM.(*model)
+
+	if mm.chatModel.Scroll != 0 {
+		t.Errorf("expected Scroll=0 when clamped, got %d", mm.chatModel.Scroll)
+	}
+}
+
+// -----------------------------------------------------------------------
 // handleBranchSelect tests
 // -----------------------------------------------------------------------
 

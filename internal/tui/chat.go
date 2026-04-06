@@ -10,8 +10,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// renderWelcome builds the startup welcome screen.
-func renderWelcome() string {
+// renderWelcome builds the startup welcome screen, constrained to available width.
+func (c *ChatModel) renderWelcome() string {
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	cmd := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
@@ -187,7 +187,7 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 // RenderMessages renders all messages into a string for display.
 func (c *ChatModel) RenderMessages(running bool) string {
 	if len(c.Messages) == 0 {
-		return renderWelcome()
+		return c.renderWelcome()
 	}
 
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))

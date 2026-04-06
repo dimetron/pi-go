@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/glamour"
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
@@ -1286,7 +1287,9 @@ func TestFormatHistoryOutput(t *testing.T) {
 }
 
 func TestRenderWelcome(t *testing.T) {
-	got := renderWelcome()
+	renderer, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(80))
+	cm := ChatModel{Renderer: renderer}
+	got := cm.renderWelcome()
 	// Check for key content (some words may be split by ANSI style codes).
 	checks := []string{
 		"Welcome to pi-go",
