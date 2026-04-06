@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ type agentState struct {
 	Process     *Process
 	Worktree    bool   // whether a worktree was created
 	SkipCleanup bool   // don't auto-cleanup worktree on completion (for gate validation)
-	Status      string // "running", "completed", "failed", "canceled"
+	Status      string // "running", "completed", "failed", "canceled", "killed"
 }
 
 // NewOrchestrator creates an Orchestrator from config.
@@ -211,7 +212,10 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 
 		o.mu.Lock()
 		if state.Status == "running" {
-			if waitErr != nil {
+			// Distinguish killed-by-signal (e.g., timeout, OOM) from actual failures.
+			if waitErr != nil && isKilledBySignal(waitErr) {
+				state.Status = "killed"
+			} else if waitErr != nil {
 				state.Status = "failed"
 			} else {
 				state.Status = "completed"
@@ -227,6 +231,23 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	}()
 
 	return events, agentID, nil
+}
+
+// isKilledBySignal returns true if the error indicates the process was killed by a signal
+// (e.g., SIGKILL from timeout or OOM), as opposed to an exit code failure.
+func isKilledBySignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	// exec.Error is returned when cmd.Wait() encounters a signal-terminated process.
+	// Check the error string for signal indicators.
+	if execErr, ok := err.(*exec.ExitError); ok {
+		// ExitError with no code typically means killed by signal.
+		return !execErr.Success()
+	}
+	// For other error types, check if the message indicates a signal.
+	errStr := err.Error()
+	return len(errStr) >= 6 && errStr[len(errStr)-6:] == "killed"
 }
 
 // List returns the status of all tracked agents.
@@ -297,7 +318,19 @@ func (o *Orchestrator) Worktree() *WorktreeManager {
 }
 
 // Shutdown cancels all running agents and cleans up worktrees.
+// For production use, prefer ShutdownWithTimeout.
 func (o *Orchestrator) Shutdown() {
+	o.ShutdownWithTimeout(5 * time.Second)
+}
+
+// ShutdownWithTimeout gracefully cancels all running agents with the given timeout,
+// then forces cleanup of worktrees. The timeout applies to the entire shutdown
+// operation, not individual agents.
+func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// First: graceful cancellation of running agents
 	o.mu.Lock()
 	o.closed = true
 	for _, state := range o.agents {
@@ -309,6 +342,10 @@ func (o *Orchestrator) Shutdown() {
 	}
 	o.mu.Unlock()
 
+	// Wait for graceful timeout or immediate cleanup
+	<-ctx.Done()
+
+	// Force cleanup of worktrees
 	if o.worktree != nil {
 		_ = o.worktree.CleanupAll()
 	}

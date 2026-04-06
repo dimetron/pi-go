@@ -121,3 +121,96 @@ func TestRenderCompactTool_NoContent(t *testing.T) {
 		t.Error("expected no checkmark when content is empty")
 	}
 }
+
+func TestContentWidth_DefaultWhenZero(t *testing.T) {
+	td := ToolDisplayModel{Width: 0}
+	cw := td.contentWidth()
+	// Width 0 → default 80, 80*8/10 - 4 = 60
+	if cw != 60 {
+		t.Errorf("expected 60, got %d", cw)
+	}
+}
+
+func TestContentWidth_NormalWidth(t *testing.T) {
+	td := ToolDisplayModel{Width: 120}
+	cw := td.contentWidth()
+	// 120*8/10 - 4 = 92
+	if cw != 92 {
+		t.Errorf("expected 92, got %d", cw)
+	}
+}
+
+func TestContentWidth_SmallWidth(t *testing.T) {
+	td := ToolDisplayModel{Width: 30}
+	cw := td.contentWidth()
+	// Width 30 < 40 → default 80, 80*8/10 - 4 = 60
+	if cw != 60 {
+		t.Errorf("expected 60, got %d", cw)
+	}
+}
+
+func TestSoftWrap_ShortLine(t *testing.T) {
+	lines := softWrap("hello world", 80)
+	if len(lines) != 1 || lines[0] != "hello world" {
+		t.Errorf("expected no wrap, got %v", lines)
+	}
+}
+
+func TestSoftWrap_LongLine(t *testing.T) {
+	long := strings.Repeat("abcdef ", 20) // 140 chars
+	lines := softWrap(long, 40)
+	if len(lines) < 2 {
+		t.Error("expected wrapping for long line")
+	}
+	for _, l := range lines {
+		if len(l) > 42 { // allow small overflow for word boundaries
+			t.Errorf("wrapped line too long: %d chars", len(l))
+		}
+	}
+}
+
+func TestSoftWrap_ZeroWidth(t *testing.T) {
+	lines := softWrap("hello", 0)
+	if len(lines) != 1 || lines[0] != "hello" {
+		t.Errorf("expected no wrap for zero width, got %v", lines)
+	}
+}
+
+func TestRenderRegularTool_SoftWrapsLongContent(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	td := ToolDisplayModel{Width: 100}
+	msg := message{
+		role:    "tool",
+		tool:    "bash",
+		content: long,
+	}
+	result := td.RenderToolMessage(msg)
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	// First line is the tool header, remaining lines are content.
+	// Content should be wrapped into multiple lines.
+	contentLines := 0
+	for _, l := range lines {
+		if strings.Contains(l, "│") {
+			contentLines++
+		}
+	}
+	if contentLines < 2 {
+		t.Errorf("expected long content to wrap into multiple lines, got %d content lines", contentLines)
+	}
+}
+
+func TestRenderAgentTool_SoftWrapsLongResult(t *testing.T) {
+	long := strings.Repeat("y", 200)
+	td := ToolDisplayModel{Width: 100}
+	msg := message{
+		role:      "tool",
+		tool:      "agent",
+		agentType: "task",
+		agentID:   "sub-1",
+		content:   long[:100], // capped at 100 by renderAgentTool
+	}
+	result := td.RenderToolMessage(msg)
+	if !strings.Contains(result, "│") {
+		t.Error("expected bordered result summary")
+	}
+}

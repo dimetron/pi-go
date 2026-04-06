@@ -17,6 +17,20 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// ChecklistStep represents a single step from the plan.md checklist.
+type ChecklistStep struct {
+	Title string
+	Done  bool
+}
+
+// parallelAgent tracks a single agent within a parallel /run.
+type parallelAgent struct {
+	agentID string
+	events  <-chan subagent.Event
+	slices  []int // which checklist indices this agent handles
+	done    bool  // true when events channel has closed
+}
+
 // runState tracks the state of a /run command execution.
 type runState struct {
 	specName    string
@@ -26,21 +40,41 @@ type runState struct {
 	phase       string // "running", "gating", "merging", "done", "failed"
 	retries     int
 	maxRetries  int
-	events      <-chan subagent.Event // subagent event channel
+	events      <-chan subagent.Event // subagent event channel (single-agent mode)
 	gateOutput  string                // formatted gate failure output (for retry prompts)
 	gateResults []GateResult          // latest gate results (for summary report)
 	startTime   time.Time             // when the run started
+	checklist   []ChecklistStep       // parsed from plan.md
+	parallel    []*parallelAgent      // parallel agents (nil for single-agent mode)
+}
+
+// isParallel returns true if this run uses multiple parallel agents.
+func (rs *runState) isParallel() bool {
+	return len(rs.parallel) > 0
+}
+
+// allAgentsDone returns true when all parallel agents have finished.
+func (rs *runState) allAgentsDone() bool {
+	for _, pa := range rs.parallel {
+		if !pa.done {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Message types for /run streaming ---
 
 // runAgentEventMsg wraps a subagent event for the TUI update loop.
 type runAgentEventMsg struct {
-	event subagent.Event
+	event   subagent.Event
+	agentID string // which agent emitted this event (for parallel mode)
 }
 
-// runAgentDoneMsg signals that the subagent has finished (events channel closed).
-type runAgentDoneMsg struct{}
+// runAgentDoneMsg signals that a subagent has finished (events channel closed).
+type runAgentDoneMsg struct {
+	agentID string // which agent finished (for parallel mode)
+}
 
 // GateResult holds the result of running a single gate command.
 type GateResult struct {
@@ -63,24 +97,58 @@ type runMergeResultMsg struct {
 }
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
-func buildRunPrompt(specName, promptMD string) string {
+// If the plan.md uses heading-only format (no checkboxes), it injects a
+// checklist so the agent can mark steps as completed.
+func buildRunPrompt(specName, promptMD string, checklist []ChecklistStep) string {
 	var b strings.Builder
 	b.WriteString(promptMD)
 	b.WriteString("\n\n## Execution Instructions\n")
 	b.WriteString("- Follow the plan in specs/")
 	b.WriteString(specName)
 	b.WriteString("/plan.md step by step\n")
-	b.WriteString("- After completing each step, update the plan.md checklist: change `- [ ] Step N:` to `- [x] Step N:`\n")
 	b.WriteString("- Run tests after each step to verify correctness\n")
 	b.WriteString("- Work in the current directory (worktree)\n")
+
+	// If the plan has no checkboxes, inject a checklist and instruct the
+	// agent to prepend one to plan.md on first edit.
+	if len(checklist) > 0 && !checklistHasCheckboxes(checklist) {
+		b.WriteString("- IMPORTANT: The plan.md has no progress checklist. As your FIRST action, prepend the following checklist to the top of plan.md:\n")
+		b.WriteString("```\n## Progress\n\n")
+		for i, step := range checklist {
+			fmt.Fprintf(&b, "- [ ] Step %d: %s\n", i+1, step.Title)
+		}
+		b.WriteString("```\n")
+	}
+	b.WriteString("- After completing each step, update the plan.md checklist: change `- [ ] Step N:` to `- [x] Step N:`\n")
+
 	return b.String()
 }
 
-// handleRunCommand handles the /run <spec-name> slash command.
+// checklistHasCheckboxes returns true if any step was parsed from checkbox format.
+// When the checklist was built from ### headings, all steps start as Done=false
+// and we know there are no actual checkbox lines.
+func checklistHasCheckboxes(steps []ChecklistStep) bool {
+	for _, s := range steps {
+		if s.Done {
+			return true // at least one [x] was parsed → real checkboxes
+		}
+	}
+	// All unchecked — could be real checkboxes or headings. Check titles for
+	// heading-style format (no "Step N:" prefix typically present in checkboxes).
+	// If any title starts with a heading keyword, it's likely from headings.
+	for _, s := range steps {
+		if strings.Contains(s.Title, "—") || strings.Contains(s.Title, "–") {
+			return false // heading style: "PairingManager — Core Logic"
+		}
+	}
+	return true // assume checkbox format
+}
+
+// handleRunCommand handles the /run <spec-name> [--parallel] slash command.
 func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
 		specs, _ := listAvailableSpecs(m.cfg.WorkDir)
-		msg := "Usage: `/run <spec-name>`\n\nExecutes a spec's PROMPT.md using an isolated task agent."
+		msg := "Usage: `/run <spec-name> [--parallel]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents."
 		if len(specs) > 0 {
 			msg += "\n\n**Available specs:** " + strings.Join(specs, ", ")
 		}
@@ -96,7 +164,23 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	specName := args[0]
+	// Parse args: spec-name [--parallel|-p]
+	var specName string
+	parallel := false
+	for _, arg := range args {
+		switch arg {
+		case "--parallel", "-p":
+			parallel = true
+		default:
+			if specName == "" {
+				specName = arg
+			}
+		}
+	}
+	if specName == "" {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: "Missing spec name."})
+		return m, nil
+	}
 
 	// Read PROMPT.md.
 	promptMD, err := readPromptMD(m.cfg.WorkDir, specName)
@@ -113,10 +197,27 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	// Parse gates.
 	gates := parseGates(promptMD)
 
-	// Build augmented prompt.
-	prompt := buildRunPrompt(specName, promptMD)
+	// Parse plan.md checklist for sidebar display.
+	checklist := parsePlanChecklist(m.cfg.WorkDir, specName)
 
-	// Spawn task subagent with SkipCleanup so we can run gates before merge.
+	// Format gate info for display.
+	gateInfo := "none"
+	if len(gates) > 0 {
+		names := make([]string, len(gates))
+		for i, g := range gates {
+			names[i] = g.Name
+		}
+		gateInfo = strings.Join(names, ", ")
+	}
+
+	// Parallel mode: split slices across 2 agents.
+	if parallel && len(checklist) >= 2 {
+		return m.handleRunParallel(specName, promptMD, gates, checklist, gateInfo)
+	}
+
+	// Single-agent mode.
+	prompt := buildRunPrompt(specName, promptMD, checklist)
+
 	useWorktree := true
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 		Type:        "task",
@@ -132,7 +233,6 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Initialize run state.
 	m.run = &runState{
 		specName:   specName,
 		promptMD:   promptMD,
@@ -142,45 +242,144 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		maxRetries: 10,
 		events:     events,
 		startTime:  time.Now(),
+		checklist:  checklist,
 	}
 
-	// Show run start message.
-	gateInfo := "none"
-	if len(gates) > 0 {
-		names := make([]string, len(gates))
-		for i, g := range gates {
-			names[i] = g.Name
-		}
-		gateInfo = strings.Join(names, ", ")
-	}
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf("**Running spec `%s`** [cycle 1/%d] — agent `%s` spawned in worktree\nGates: %s",
 			specName, m.run.maxRetries, agentID, gateInfo),
 	})
 
-	// Add empty assistant message for streaming.
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 	m.running = true
 	m.chatModel.Scroll = 0
 
-	// Start consuming events from the subagent.
-	return m, waitForRunAgent(events)
+	return m, waitForRunAgent(events, agentID)
+}
+
+// handleRunParallel spawns 2 agents, each handling a subset of the plan slices.
+// Slices are split into first-half / second-half. Each agent gets its own worktree.
+func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, checklist []ChecklistStep, gateInfo string) (tea.Model, tea.Cmd) {
+	mid := len(checklist) / 2
+
+	// Build prompts for each agent with their assigned slices.
+	prompt1 := buildParallelPrompt(specName, promptMD, checklist, 0, mid)
+	prompt2 := buildParallelPrompt(specName, promptMD, checklist, mid, len(checklist))
+
+	useWorktree := true
+
+	// Spawn agent 1.
+	events1, agentID1, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
+		Type:        "task",
+		Prompt:      prompt1,
+		Worktree:    &useWorktree,
+		SkipCleanup: true,
+	})
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Failed to spawn agent 1: %v", err),
+		})
+		return m, nil
+	}
+
+	// Spawn agent 2.
+	events2, agentID2, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
+		Type:        "task",
+		Prompt:      prompt2,
+		Worktree:    &useWorktree,
+		SkipCleanup: true,
+	})
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Failed to spawn agent 2 (agent 1 `%s` is running): %v", agentID1, err),
+		})
+		return m, nil
+	}
+
+	// Build slice index arrays.
+	slices1 := make([]int, mid)
+	for i := range slices1 {
+		slices1[i] = i
+	}
+	slices2 := make([]int, len(checklist)-mid)
+	for i := range slices2 {
+		slices2[i] = mid + i
+	}
+
+	m.run = &runState{
+		specName:   specName,
+		promptMD:   promptMD,
+		gates:      gates,
+		agentID:    agentID1, // primary agent for fallback
+		phase:      "running",
+		maxRetries: 10,
+		startTime:  time.Now(),
+		checklist:  checklist,
+		parallel: []*parallelAgent{
+			{agentID: agentID1, events: events1, slices: slices1},
+			{agentID: agentID2, events: events2, slices: slices2},
+		},
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf("**Running spec `%s` in parallel** [cycle 1/%d]\n"+
+			"Agent 1: `%s` → slices 1–%d\n"+
+			"Agent 2: `%s` → slices %d–%d\n"+
+			"Gates: %s",
+			specName, m.run.maxRetries,
+			agentID1, mid,
+			agentID2, mid+1, len(checklist),
+			gateInfo),
+	})
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
+	m.running = true
+	m.chatModel.Scroll = 0
+
+	// Start consuming events from both agents via fan-in.
+	return m, m.waitForParallelRunEvents()
+}
+
+// buildParallelPrompt builds a prompt for a parallel agent that handles
+// a subset of the plan slices (from index `from` to `to`, exclusive).
+func buildParallelPrompt(specName, promptMD string, checklist []ChecklistStep, from, to int) string {
+	var b strings.Builder
+	b.WriteString(promptMD)
+	b.WriteString("\n\n## Execution Instructions (Parallel Mode)\n")
+	b.WriteString("You are ONE OF TWO agents working on this spec in parallel.\n")
+	b.WriteString("You are responsible for implementing ONLY these slices:\n\n")
+	for i := from; i < to; i++ {
+		fmt.Fprintf(&b, "- Slice %d: %s\n", i+1, checklist[i].Title)
+	}
+	b.WriteString("\nDo NOT implement slices assigned to the other agent.\n")
+	b.WriteString("- Follow the plan in specs/")
+	b.WriteString(specName)
+	b.WriteString("/plan.md for details on your assigned slices\n")
+	b.WriteString("- After completing each slice, update plan.md: change `- [ ] Step N:` to `- [x] Step N:`\n")
+	b.WriteString("- Run tests after each slice to verify correctness\n")
+	b.WriteString("- Work in the current directory (worktree)\n")
+	return b.String()
 }
 
 // waitForRunAgent returns a tea.Cmd that reads the next event from the subagent channel.
-func waitForRunAgent(events <-chan subagent.Event) tea.Cmd {
+func waitForRunAgent(events <-chan subagent.Event, agentID string) tea.Cmd {
 	if events == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		ev, ok := <-events
 		if !ok {
-			return runAgentDoneMsg{}
+			return runAgentDoneMsg{agentID: agentID}
 		}
-		return runAgentEventMsg{event: ev}
+		return runAgentEventMsg{event: ev, agentID: agentID}
 	}
 }
 
@@ -219,6 +418,7 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 		})
 
 	case "tool_result":
+		prevTool := m.statusModel.ActiveTool
 		m.statusModel.ActiveTool = ""
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_result", summary: "<<< result",
@@ -230,6 +430,12 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 				m.chatModel.Messages[i].content = toolResultSummary(ev.Content)
 				break
 			}
+		}
+
+		// Refresh checklist after write/edit operations — the agent may have
+		// updated plan.md checkboxes. This is a cheap disk read.
+		if m.run != nil && (prevTool == "write" || prevTool == "edit") {
+			m.refreshRunChecklist()
 		}
 
 	case "message_start":
@@ -255,21 +461,44 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 	return m, m.waitForRunEvents()
 }
 
-// handleRunAgentDone is called when the subagent events channel closes.
+// handleRunAgentDone is called when a subagent events channel closes.
 // It transitions to gate validation if gates are defined, or directly to merge.
-func (m *model) handleRunAgentDone() (tea.Model, tea.Cmd) {
+func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
+	if m.run == nil {
+		m.running = false
+		return m, nil
+	}
+
+	// Parallel mode: mark the specific agent as done.
+	if m.run.isParallel() {
+		for _, pa := range m.run.parallel {
+			if pa.agentID == msg.agentID {
+				pa.done = true
+				break
+			}
+		}
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("**Agent `%s` finished.**", msg.agentID),
+		})
+		m.chatModel.Streaming = ""
+
+		// If other agents are still running, keep consuming their events.
+		if !m.run.allAgentsDone() {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+			return m, m.waitForRunEvents()
+		}
+		// All parallel agents done — fall through to gate validation.
+	}
+
 	m.running = false
 	m.statusModel.ActiveTool = ""
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 
-	if m.run == nil {
-		return m, nil
-	}
-
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: fmt.Sprintf("**Agent `%s` finished** — validating gates...", m.run.agentID),
+		content: fmt.Sprintf("**All agents finished** — validating gates..."),
 	})
 
 	// If no gates, skip directly to merge.
@@ -300,7 +529,12 @@ func (m *model) runGatesCmd() tea.Cmd {
 		}
 	}
 
-	worktreePath := wm.PathFor(m.run.agentID)
+	// In parallel mode, use the first agent's worktree for gate validation.
+	agentID := m.run.agentID
+	if m.run.isParallel() {
+		agentID = m.run.parallel[0].agentID
+	}
+	worktreePath := wm.PathFor(agentID)
 	if worktreePath == "" {
 		// No worktree path found — treat as pass (agent may not have used worktree).
 		return func() tea.Msg {
@@ -448,7 +682,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		m.running = true
 		m.chatModel.Scroll = 0
 
-		return m, waitForRunAgent(events)
+		return m, waitForRunAgent(events, agentID)
 	}
 
 	// Retries exhausted.
@@ -478,6 +712,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 }
 
 // mergeWorktreeCmd returns a tea.Cmd that merges the worktree branch and cleans up.
+// In parallel mode, it merges all agent worktrees sequentially.
 func (m *model) mergeWorktreeCmd() tea.Cmd {
 	if m.run == nil || m.cfg.Orchestrator == nil {
 		return nil
@@ -490,15 +725,29 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 		}
 	}
 
-	agentID := m.run.agentID
-	return func() tea.Msg {
-		out, err := wm.MergeBack(agentID)
-		if err != nil {
-			return runMergeResultMsg{output: out, err: err}
+	// Collect agent IDs to merge (parallel or single).
+	var agentIDs []string
+	if m.run.isParallel() {
+		for _, pa := range m.run.parallel {
+			agentIDs = append(agentIDs, pa.agentID)
 		}
-		// Cleanup worktree after successful merge.
-		_ = wm.Cleanup(agentID)
-		return runMergeResultMsg{output: out}
+	} else {
+		agentIDs = []string{m.run.agentID}
+	}
+
+	return func() tea.Msg {
+		var allOutput strings.Builder
+		for _, aid := range agentIDs {
+			out, err := wm.MergeBack(aid)
+			if err != nil {
+				return runMergeResultMsg{output: allOutput.String() + out, err: fmt.Errorf("merge %s: %w", aid, err)}
+			}
+			_ = wm.Cleanup(aid)
+			if out != "" {
+				allOutput.WriteString(fmt.Sprintf("[%s] %s\n", aid, out))
+			}
+		}
+		return runMergeResultMsg{output: allOutput.String()}
 	}
 }
 
@@ -534,6 +783,12 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 	}
 
 	m.run.phase = "done"
+
+	// Mark all checklist items as completed on successful merge.
+	for i := range m.run.checklist {
+		m.run.checklist[i].Done = true
+	}
+
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: fmt.Sprintf("**Spec `%s` completed** — changes merged successfully.", m.run.specName),
@@ -668,19 +923,77 @@ func formatGateFailures(results []GateResult) string {
 	return b.String()
 }
 
+// refreshRunChecklist re-reads plan.md from the worktree and updates checklist state.
+func (m *model) refreshRunChecklist() {
+	if m.run == nil || m.cfg.Orchestrator == nil {
+		return
+	}
+	wm := m.cfg.Orchestrator.Worktree()
+	if wm == nil {
+		return
+	}
+	wtPath := wm.PathFor(m.run.agentID)
+	if wtPath == "" {
+		return
+	}
+	if updated := parsePlanChecklistFrom(wtPath, m.run.specName); len(updated) > 0 {
+		m.run.checklist = updated
+	}
+}
+
 // waitForRunEvents returns a tea.Cmd to consume the next event from the running subagent.
 // It looks up the events channel via the orchestrator using the stored agent ID.
 func (m *model) waitForRunEvents() tea.Cmd {
-	if m.run == nil || m.run.agentID == "" {
+	if m.run == nil {
 		return nil
 	}
-	// We reuse the orchestrator's event channel. Since Spawn() already returned
-	// the channel and we passed it to the initial waitForRunAgent, we need to
-	// keep a reference. Store it on runState.
-	if m.run.events == nil {
+
+	// Parallel mode: wait on all active agent channels.
+	if m.run.isParallel() {
+		return m.waitForParallelRunEvents()
+	}
+
+	// Single-agent mode.
+	if m.run.agentID == "" || m.run.events == nil {
 		return nil
 	}
-	return waitForRunAgent(m.run.events)
+	return waitForRunAgent(m.run.events, m.run.agentID)
+}
+
+// waitForParallelRunEvents returns a tea.Cmd that listens on all active
+// parallel agent event channels simultaneously using a select-style fan-in.
+func (m *model) waitForParallelRunEvents() tea.Cmd {
+	// Collect active agents.
+	var active []*parallelAgent
+	for _, pa := range m.run.parallel {
+		if !pa.done && pa.events != nil {
+			active = append(active, pa)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+
+	// Fan-in: start one goroutine per active agent, first result wins.
+	type result struct {
+		msg tea.Msg
+	}
+	ch := make(chan result, len(active))
+	for _, pa := range active {
+		pa := pa // capture
+		go func() {
+			ev, ok := <-pa.events
+			if !ok {
+				ch <- result{msg: runAgentDoneMsg{agentID: pa.agentID}}
+			} else {
+				ch <- result{msg: runAgentEventMsg{event: ev, agentID: pa.agentID}}
+			}
+		}()
+	}
+	return func() tea.Msg {
+		r := <-ch
+		return r.msg
+	}
 }
 
 // Gate represents a validation command parsed from the ## Gates section of PROMPT.md.
@@ -745,6 +1058,76 @@ func readPromptMD(workDir, specName string) (string, error) {
 		return "", fmt.Errorf("failed to read PROMPT.md: %w", err)
 	}
 	return string(content), nil
+}
+
+// parsePlanChecklist reads plan.md from the spec directory and extracts checklist steps.
+// It looks for lines matching "### Slice N: Title" patterns.
+func parsePlanChecklist(workDir, specName string) []ChecklistStep {
+	planPath := filepath.Join(workDir, "specs", specName, "plan.md")
+	content, err := os.ReadFile(planPath)
+	if err != nil {
+		return nil
+	}
+	return extractChecklist(string(content))
+}
+
+// parsePlanChecklistFrom reads plan.md from an arbitrary directory (e.g. worktree).
+func parsePlanChecklistFrom(dir, specName string) []ChecklistStep {
+	planPath := filepath.Join(dir, "specs", specName, "plan.md")
+	content, err := os.ReadFile(planPath)
+	if err != nil {
+		return nil
+	}
+	return extractChecklist(string(content))
+}
+
+// sliceHeadingRe matches "### Slice N: Title" headings in plan.md.
+var sliceHeadingRe = regexp.MustCompile(`^###\s+(?:Slice\s+(\d+):?\s*)?(.+)`)
+
+// checkboxRe matches "- [ ] Step N:" or "- [x] Step N:" lines.
+var checkboxRe = regexp.MustCompile(`^-\s+\[([ xX])\]\s+(.+)`)
+
+// extractChecklist parses plan.md content to extract steps.
+// It first looks for "- [ ] / - [x]" checkbox lines. If none found,
+// falls back to "### Slice N: Title" headings.
+func extractChecklist(content string) []ChecklistStep {
+	lines := strings.Split(content, "\n")
+
+	// Try checkbox format first.
+	var steps []ChecklistStep
+	for _, line := range lines {
+		m := checkboxRe.FindStringSubmatch(strings.TrimSpace(line))
+		if m != nil {
+			title := m[2]
+			// Truncate long titles
+			if len(title) > 40 {
+				title = title[:37] + "..."
+			}
+			steps = append(steps, ChecklistStep{
+				Title: title,
+				Done:  m[1] == "x" || m[1] == "X",
+			})
+		}
+	}
+	if len(steps) > 0 {
+		return steps
+	}
+
+	// Fallback: extract from ### Slice headings.
+	for _, line := range lines {
+		m := sliceHeadingRe.FindStringSubmatch(strings.TrimSpace(line))
+		if m != nil {
+			title := strings.TrimSpace(m[2])
+			if len(title) > 40 {
+				title = title[:37] + "..."
+			}
+			steps = append(steps, ChecklistStep{
+				Title: title,
+				Done:  false,
+			})
+		}
+	}
+	return steps
 }
 
 // listAvailableSpecs scans the specs/ directory for subdirectories containing PROMPT.md.

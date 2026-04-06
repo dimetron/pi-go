@@ -102,6 +102,26 @@ func TestOrchestrator_Shutdown(t *testing.T) {
 	orch.Shutdown()
 }
 
+func TestOrchestrator_ShutdownWithTimeout(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	// Test ShutdownWithTimeout with various timeouts.
+	tests := []time.Duration{
+		0, // immediate
+		10 * time.Millisecond,
+		100 * time.Millisecond,
+		5 * time.Second,
+	}
+
+	for _, timeout := range tests {
+		t.Run(timeout.String(), func(t *testing.T) {
+			// ShutdownWithTimeout should not panic.
+			orch.ShutdownWithTimeout(timeout)
+		})
+	}
+}
+
 func TestOrchestrator_ConcurrencyLimit(t *testing.T) {
 	cfg := testConfig()
 	orch := NewOrchestrator(cfg, "", nil)

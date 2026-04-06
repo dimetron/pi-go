@@ -54,6 +54,12 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		return FindOutput{}, err
 	}
 
+	// Normalize doublestar patterns: since WalkDir already recurses,
+	// strip "**/" prefixes so filepath.Match can handle the rest.
+	// e.g. "**/*.go" → "*.go", "src/**/*.go" → "src/**/*.go" (handled below)
+	pattern := input.Pattern
+	filePattern := normalizeGlobPattern(pattern)
+
 	_ = fs.WalkDir(fsys, rel, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -66,14 +72,18 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 			return nil
 		}
 
-		// Match against the filename and also the relative path
+		// Match against the filename using the normalized pattern
 		name := d.Name()
-		matched, _ := filepath.Match(input.Pattern, name)
+		matched, _ := filepath.Match(filePattern, name)
 		if !matched {
-			// Try matching against relative path for patterns like "src/**/*.go"
+			// Try matching against relative path for patterns like "src/*.go"
 			relPath, relErr := filepath.Rel(rel, path)
 			if relErr == nil {
-				matched, _ = filepath.Match(input.Pattern, relPath)
+				matched, _ = filepath.Match(filePattern, relPath)
+				if !matched {
+					// For patterns like "src/**/*.go", match each path segment
+					matched = matchDoublestar(pattern, relPath)
+				}
 			}
 		}
 
@@ -91,4 +101,41 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		TotalFiles: total,
 		Truncated:  total > len(files),
 	}, nil
+}
+
+// normalizeGlobPattern strips leading "**/" from glob patterns since WalkDir
+// already recurses into all directories. e.g. "**/*.go" → "*.go".
+func normalizeGlobPattern(pattern string) string {
+	for strings.HasPrefix(pattern, "**/") {
+		pattern = pattern[3:]
+	}
+	return pattern
+}
+
+// matchDoublestar handles glob patterns containing "**" by splitting on "**/"
+// and checking that each segment matches the corresponding part of the path.
+// e.g. "src/**/*.go" matches "src/pkg/main.go".
+func matchDoublestar(pattern, path string) bool {
+	parts := strings.Split(pattern, "**/")
+	if len(parts) < 2 {
+		return false
+	}
+
+	// The prefix before ** must match the start of the path
+	prefix := parts[0]
+	if prefix != "" {
+		prefix = strings.TrimSuffix(prefix, "/")
+		if !strings.HasPrefix(path, prefix+"/") && path != prefix {
+			return false
+		}
+	}
+
+	// The suffix after the last ** must match the filename
+	suffix := parts[len(parts)-1]
+	if suffix != "" {
+		name := filepath.Base(path)
+		matched, _ := filepath.Match(suffix, name)
+		return matched
+	}
+	return true
 }

@@ -1118,6 +1118,7 @@ func TestAgentStatusIcon(t *testing.T) {
 		{"completed", "✓ "},
 		{"failed", "✗ "},
 		{"canceled", "◼ "},
+		{"killed", "⚠ "},
 		{"unknown", "  "},
 	}
 	for _, tt := range tests {

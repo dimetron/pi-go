@@ -32,6 +32,14 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/clear":
 		m.chatModel.Messages = m.chatModel.Messages[:0]
 		m.chatModel.Scroll = 0
+		m.chatModel.Streaming = ""
+		m.chatModel.Thinking = ""
+		m.chatModel.TraceLog = nil
+		m.running = false
+		m.run = nil
+		m.statusModel.ActiveTool = ""
+		m.statusModel.ToolStart = time.Time{}
+		m.loadingItems = nil
 	case "/model":
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
@@ -225,6 +233,7 @@ func countAgentsByStatus(agents []subagent.AgentStatus) (running, done, failed i
 			done++
 		case "failed":
 			failed++
+			// "killed" and "canceled" are not counted as failed
 		}
 	}
 	return
@@ -241,6 +250,8 @@ func agentStatusIcon(status string) string {
 		return "✗ "
 	case "canceled":
 		return "◼ "
+	case "killed":
+		return "⚠ "
 	default:
 		return "  "
 	}

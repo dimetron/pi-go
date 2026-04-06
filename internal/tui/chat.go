@@ -4,11 +4,52 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/glamour"
 
 	"charm.land/lipgloss/v2"
 )
+
+// wordWrap wraps text to fit within maxWidth columns.
+func wordWrap(text string, maxWidth int) []string {
+	if maxWidth < 10 || text == "" {
+		return []string{text}
+	}
+	var lines []string
+	var current strings.Builder
+	for _, r := range text {
+		if r == '\n' {
+			lines = append(lines, current.String())
+			current.Reset()
+			continue
+		}
+		if current.Len() >= maxWidth {
+			// Break at word boundary.
+			s := current.String()
+			lastSpace := strings.LastIndexByte(s, ' ')
+			if lastSpace > 0 {
+				lines = append(lines, strings.TrimRightFunc(s[:lastSpace], unicode.IsSpace))
+				remaining := strings.TrimLeftFunc(s[lastSpace+1:], unicode.IsSpace)
+				current.Reset()
+				current.WriteString(remaining)
+				if r != ' ' {
+					current.WriteRune(r)
+				}
+			} else {
+				lines = append(lines, s)
+				current.Reset()
+				current.WriteRune(r)
+			}
+		} else {
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
+}
 
 // renderWelcome builds the startup welcome screen, constrained to available width.
 func (c *ChatModel) renderWelcome() string {
@@ -159,6 +200,7 @@ func (c *ChatModel) MaxScroll(height int) int {
 // UpdateRenderer recreates the glamour renderer for the given terminal width.
 func (c *ChatModel) UpdateRenderer(width int) {
 	c.Width = width
+	c.ToolDisplay.Width = width
 	if width < 40 {
 		width = 40
 	}
@@ -211,7 +253,17 @@ func (c *ChatModel) RenderMessages(running bool) string {
 				Bold(true).
 				Render("> ")
 			b.WriteString(label)
-			b.WriteString(msg.content)
+			contentWidth := c.Width - 3 // "> " = 3 visible chars
+			if contentWidth < 20 {
+				contentWidth = 20
+			}
+			wrapped := wordWrap(msg.content, contentWidth)
+			for j, line := range wrapped {
+				if j > 0 {
+					b.WriteString("\n   ")
+				}
+				b.WriteString(line)
+			}
 			b.WriteString("\n")
 
 		case "tool":
@@ -230,11 +282,23 @@ func (c *ChatModel) RenderMessages(running bool) string {
 				if len(lines) > maxLines {
 					lines = lines[len(lines)-maxLines:]
 				}
+				// Content width accounting for the bullet prefix.
+				contentWidth := c.Width - 3 // "💭 " = 3 visible chars
+				if contentWidth < 20 {
+					contentWidth = 20
+				}
 				for j, line := range lines {
 					if j > 0 {
 						b.WriteString("   ")
 					}
-					b.WriteString(thinkStyle.Render(line))
+					// Wrap each line to fit available width.
+					wrapped := wordWrap(line, contentWidth)
+					for k, wl := range wrapped {
+						if k > 0 {
+							b.WriteString("\n")
+						}
+						b.WriteString(thinkStyle.Render(wl))
+					}
 					if j < len(lines)-1 {
 						b.WriteString("\n")
 					}

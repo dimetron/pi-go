@@ -228,9 +228,11 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// Check which servers are installed.
 	available := make(map[string]bool, len(langs))
 	for name, lcfg := range langs {
-		_, err := exec.LookPath(lcfg.Command)
-		available[name] = err == nil
-		// silently skip unavailable servers
+		cmd := resolveCommand(lcfg.Command)
+		if cmd != "" {
+			lcfg.Command = cmd
+			available[name] = true
+		}
 	}
 
 	return &Manager{
@@ -250,7 +252,8 @@ func (m *Manager) ServerFor(filePath string) (*Server, error) {
 	}
 
 	if !m.available[lang] {
-		return nil, nil
+		return nil, fmt.Errorf("%s not found in PATH (install with: %s)",
+			m.languages[lang].Command, installHint(lang))
 	}
 
 	lcfg := m.languages[lang]
@@ -399,6 +402,46 @@ func fileURI(path string) string {
 func pathToURI(path string) string {
 	u := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
 	return u.String()
+}
+
+// resolveCommand tries exec.LookPath first, then checks well-known locations
+// like GOPATH/bin, GOROOT/bin, CARGO_HOME/bin, and ~/.local/bin.
+func resolveCommand(cmd string) string {
+	if p, err := exec.LookPath(cmd); err == nil {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, "go", "bin", cmd),
+		filepath.Join(home, ".cargo", "bin", cmd),
+		filepath.Join(home, ".local", "bin", cmd),
+	}
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		candidates = append([]string{filepath.Join(gopath, "bin", cmd)}, candidates...)
+	}
+	if goroot := os.Getenv("GOROOT"); goroot != "" {
+		candidates = append([]string{filepath.Join(goroot, "bin", cmd)}, candidates...)
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// installHint returns an install command suggestion for a language server.
+func installHint(lang string) string {
+	hints := map[string]string{
+		"go":         "go install golang.org/x/tools/gopls@latest",
+		"typescript": "npm install -g typescript-language-server typescript",
+		"python":     "pip install pyright",
+		"rust":       "rustup component add rust-analyzer",
+	}
+	if h, ok := hints[lang]; ok {
+		return h
+	}
+	return "see language server documentation"
 }
 
 // parseLocations parses a JSON result that may be a single Location,

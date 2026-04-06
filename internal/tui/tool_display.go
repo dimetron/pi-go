@@ -10,6 +10,7 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/muesli/reflow/wrap"
 
 	"charm.land/lipgloss/v2"
 )
@@ -99,6 +100,8 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 	}
 	b.WriteString("\n")
 
+	cw := t.contentWidth()
+
 	// Show event stream (last N events).
 	if len(msg.agentEvents) > 0 {
 		evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -112,38 +115,65 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 			b.WriteString(dim.Render(fmt.Sprintf("│ ... %d earlier events\n", skipped)))
 		}
 		for _, ev := range events {
-			b.WriteString("  ")
-			b.WriteString(dim.Render("│ "))
+			var evLine string
 			switch ev.kind {
 			case "tool_call":
-				b.WriteString(evToolStyle.Render("⚙ " + ev.content))
+				evLine = evToolStyle.Render("⚙ " + ev.content)
 			case "tool_result":
 				summary := ev.content
 				if len(summary) > 80 {
 					summary = summary[:77] + "..."
 				}
-				b.WriteString(evStyle.Render("  ✓ " + summary))
+				evLine = evStyle.Render("  ✓ " + summary)
 			case "text":
 				// Skip text deltas in event stream to avoid clutter.
+				continue
 			default:
-				b.WriteString(evStyle.Render(ev.kind + ": " + ev.content))
+				evLine = evStyle.Render(ev.kind + ": " + ev.content)
 			}
-			b.WriteString("\n")
+			for _, sl := range softWrap(evLine, cw) {
+				b.WriteString("  ")
+				b.WriteString(dim.Render("│ "))
+				b.WriteString(sl)
+				b.WriteString("\n")
+			}
 		}
 	}
 
 	// Show result summary when done.
 	if msg.content != "" {
-		b.WriteString("  ")
-		b.WriteString(dim.Render("│ "))
 		summary := msg.content
 		if len(summary) > 100 {
 			summary = summary[:97] + "..."
 		}
-		b.WriteString(dim.Render("→ " + summary))
-		b.WriteString("\n")
+		for _, sl := range softWrap(dim.Render("→ "+summary), cw) {
+			b.WriteString("  ")
+			b.WriteString(dim.Render("│ "))
+			b.WriteString(sl)
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
+}
+
+// contentWidth returns the available width for tool/subagent output content.
+// Uses 80% of terminal width minus the "  │ " prefix (4 visible chars).
+func (t *ToolDisplayModel) contentWidth() int {
+	w := t.Width
+	if w < 40 {
+		w = 80 // sensible default when width unknown
+	}
+	return w*8/10 - 4
+}
+
+// softWrap wraps a string to fit within width, returning sub-lines.
+// It is ANSI-aware so it handles syntax-highlighted text correctly.
+func softWrap(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	wrapped := wrap.String(s, width)
+	return strings.Split(wrapped, "\n")
 }
 
 // renderRegularTool renders a standard tool message with name, args, and
@@ -173,6 +203,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		if len(lines) > maxLines {
 			lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
 		}
+		cw := t.contentWidth()
 		var styled []string
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
@@ -184,17 +215,21 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		}
 		if styled != nil {
 			for _, line := range styled {
-				b.WriteString("  ")
-				b.WriteString(dim.Render("│ "))
-				b.WriteString(line)
-				b.WriteString("\n")
+				for _, sl := range softWrap(line, cw) {
+					b.WriteString("  ")
+					b.WriteString(dim.Render("│ "))
+					b.WriteString(sl)
+					b.WriteString("\n")
+				}
 			}
 		} else {
 			for _, line := range lines {
-				b.WriteString("  ")
-				b.WriteString(dim.Render("│ "))
-				b.WriteString(dim.Render(line))
-				b.WriteString("\n")
+				for _, sl := range softWrap(line, cw) {
+					b.WriteString("  ")
+					b.WriteString(dim.Render("│ "))
+					b.WriteString(dim.Render(sl))
+					b.WriteString("\n")
+				}
 			}
 		}
 	}

@@ -39,3 +39,5 @@ Thumbs.db
 /research/*
 /hack/test/rust/target/
 /.ralph/
+.worktrees/
+/pi-test

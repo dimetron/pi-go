@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -24,14 +25,21 @@ type SpawnOpts struct {
 
 // Spawner creates and manages subagent pi processes.
 type Spawner struct {
-	// PiBinary is the path to the pi binary. Defaults to "pi" (from PATH).
+	// PiBinary is the path to the pi binary. Defaults to os.Executable() when
+	// created via NewSpawner(""), ensuring subagents match the parent version.
 	PiBinary string
 }
 
-// NewSpawner creates a new Spawner. If piBinary is empty, uses "pi" from PATH.
+// NewSpawner creates a new Spawner. If piBinary is empty, uses the currently
+// running executable path (via os.Executable) to ensure subagents run the same
+// version as the parent process.
 func NewSpawner(piBinary string) *Spawner {
 	if piBinary == "" {
-		piBinary = "pi"
+		if exe, err := os.Executable(); err == nil {
+			piBinary = exe
+		} else {
+			piBinary = "pi"
+		}
 	}
 	return &Spawner{PiBinary: piBinary}
 }

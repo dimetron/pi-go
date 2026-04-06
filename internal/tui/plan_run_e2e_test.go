@@ -111,7 +111,7 @@ See design.md.
 	}
 
 	// Verify prompt construction includes content and execution instructions.
-	prompt := buildRunPrompt("my-feature", content)
+	prompt := buildRunPrompt("my-feature", content, nil)
 	if !strings.Contains(prompt, "Add Rate Limiting") {
 		t.Error("run prompt should contain PROMPT.md content")
 	}
@@ -392,7 +392,7 @@ func TestE2E_RunWithOnlyPromptMD(t *testing.T) {
 	}
 
 	// Build prompt should still work.
-	prompt := buildRunPrompt("no-plan-spec", content)
+	prompt := buildRunPrompt("no-plan-spec", content, nil)
 	if !strings.Contains(prompt, "Build it.") {
 		t.Error("prompt should contain PROMPT.md content")
 	}
@@ -589,7 +589,7 @@ func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
 	}
 
 	// Step 1: Agent done → transitions to gating.
-	m.handleRunAgentDone()
+	m.handleRunAgentDone(runAgentDoneMsg{})
 	if m.run.phase != "gating" {
 		t.Fatalf("phase after done = %q, want %q", m.run.phase, "gating")
 	}

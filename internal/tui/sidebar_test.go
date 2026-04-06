@@ -225,6 +225,95 @@ func TestCancelAgent_WithFace(t *testing.T) {
 	}
 }
 
+func TestRenderSidebar_RunChecklist(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		RunChecklist: []ChecklistStep{
+			{Title: "Setup project", Done: true},
+			{Title: "Implement feature", Done: false},
+			{Title: "Write tests", Done: true},
+		},
+		RunPhase:    "running",
+		RunSpec:     "my-spec",
+		RunCycle:    2,
+		RunMaxCycle: 10,
+		Running:     true,
+		ActiveTool:  "edit",
+	})
+
+	if !strings.Contains(result, "Run: my-spec") {
+		t.Error("expected run heading")
+	}
+	if !strings.Contains(result, "cycle 2/10") {
+		t.Error("expected cycle info")
+	}
+	if !strings.Contains(result, "[x] Setup project") {
+		t.Error("expected checked item with [x]")
+	}
+	if !strings.Contains(result, "[ ] Implement feature") {
+		t.Error("expected unchecked item with [ ]")
+	}
+	if !strings.Contains(result, "edit") {
+		t.Error("expected active tool shown")
+	}
+	// Should NOT show the normal [chat] mode section.
+	if strings.Contains(result, "[chat]") {
+		t.Error("should not show chat mode when run checklist is active")
+	}
+}
+
+func TestRenderSidebar_RunChecklistTruncatesLongTitles(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 20,
+		RunChecklist: []ChecklistStep{
+			{Title: "This is a very long title that should get truncated", Done: false},
+		},
+		RunPhase:    "running",
+		RunSpec:     "spec",
+		RunCycle:    1,
+		RunMaxCycle: 5,
+	})
+
+	if !strings.Contains(result, "…") {
+		t.Error("expected truncated title with ellipsis")
+	}
+}
+
+func TestRenderSidebar_RunChecklistThinkingNoTool(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 20,
+		RunChecklist: []ChecklistStep{
+			{Title: "Step 1", Done: false},
+		},
+		RunPhase:    "running",
+		RunSpec:     "spec",
+		RunCycle:    1,
+		RunMaxCycle: 5,
+		Running:     true,
+	})
+
+	if !strings.Contains(result, "thinking") {
+		t.Error("expected thinking status when running with no active tool")
+	}
+}
+
+func TestRenderSidebar_EmptyChecklistShowsNormalMode(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:    30,
+		Height:   20,
+		RunPhase: "running",
+		RunSpec:  "spec",
+	})
+
+	// Empty checklist should fall through to normal mode display.
+	if !strings.Contains(result, "Mode") {
+		t.Error("expected normal Mode section with empty checklist")
+	}
+}
+
 // sidebarMockTokenTracker implements TokenTracker for sidebar tests.
 type sidebarMockTokenTracker struct {
 	totalUsed   int64
