@@ -121,13 +121,15 @@ download_binary() {
     local version="$1"
     local platform="$2"
 
-    # GoReleaser default archive template: {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    # ProjectName defaults to the repo name 'pi-go'
+    # GoReleaser strips 'v' from version in asset names
+    # Tag is v0.0.13, asset is pi-go_0.0.13_darwin_arm64.tar.gz
+    local version_nov="${version#v}"
     local ext="tar.gz"
     if [[ "$platform" == windows-* ]]; then
         ext="zip"
     fi
-    local download_url="https://github.com/${REPO}/releases/download/${version}/pi-go_${version#v}_${platform}.${ext}"
+    # Assets use underscore: pi-go_0.0.13_darwin_arm64.tar.gz
+    local download_url="https://github.com/${REPO}/releases/download/${version}/pi-go_${version_nov}_${platform//-/_}.${ext}"
     local temp_file="/tmp/pi-install.$$.archive"
 
     log_step "Downloading pi-go ${BOLD}${version}${NC} for ${BOLD}${platform}${NC}..."
