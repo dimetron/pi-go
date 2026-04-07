@@ -1,4 +1,0 @@
-# Requirements
-
-## Questions & Answers
-
