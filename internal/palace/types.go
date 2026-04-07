@@ -148,6 +148,12 @@ type KGStats struct {
 	Predicates    []string `json:"predicates,omitempty"`
 }
 
+// ScoredResult is a drawer ID paired with a similarity score, used for ranking.
+type ScoredResult struct {
+	DrawerID   string  `json:"drawer_id"`
+	Similarity float32 `json:"similarity"`
+}
+
 // GraphStats are statistics about the palace graph.
 type GraphStats struct {
 	TotalRooms  int      `json:"total_rooms"`
