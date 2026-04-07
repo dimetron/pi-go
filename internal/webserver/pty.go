@@ -2,6 +2,7 @@ package webserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -126,7 +127,7 @@ func (pb *PtyBridge) AttachWebSocket(conn *websocket.Conn, sessionID string) {
 				closeWS()
 				return
 			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					closeWS()
 					return
@@ -136,10 +137,10 @@ func (pb *PtyBridge) AttachWebSocket(conn *websocket.Conn, sessionID string) {
 	}()
 
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
 	})
-	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -167,7 +168,7 @@ func (pb *PtyBridge) HandleWebSocket(conn *websocket.Conn, sessionID string) {
 	if err := pb.Start(); err != nil {
 		pb.log.Error("pty start failed", "session", sessionID, "err", err)
 		msg := WSMessage{Type: "error", Data: err.Error()}
-		conn.WriteJSON(msg)
+		_ = conn.WriteJSON(msg)
 		return
 	}
 	pb.AttachWebSocket(conn, sessionID)
@@ -279,8 +280,8 @@ func (pb *PtyBridge) Close() error {
 	defer pb.mu.Unlock()
 
 	if pb.cmd != nil && pb.cmd.Process != nil {
-		pb.cmd.Process.Kill()
-		pb.cmd.Wait()
+		_ = pb.cmd.Process.Kill()
+		_ = pb.cmd.Wait()
 		pb.cmd = nil
 	}
 
@@ -305,7 +306,7 @@ func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 
 		n, err := pb.ptyFile.Read(buf)
 		if n > 0 {
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			msg := WSMessage{Type: "output", Data: string(buf[:n])}
 			if writeErr := conn.WriteJSON(msg); writeErr != nil {
 				pb.log.Warn("ws write failed", "session", pb.sessionID, "err", writeErr)
@@ -313,10 +314,10 @@ func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 			}
 		}
 		if err != nil {
-			if err != io.EOF && !strings.Contains(err.Error(), "use of closed") {
+			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "use of closed") {
 				pb.log.Warn("pty read error", "session", pb.sessionID, "err", err)
 				msg := WSMessage{Type: "close", Data: err.Error()}
-				conn.WriteJSON(msg)
+				_ = conn.WriteJSON(msg)
 			}
 			return
 		}
@@ -355,7 +356,7 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 		if err := json.Unmarshal(data, &msg); err != nil {
 			pb.mu.Lock()
 			if pb.ptyFile != nil {
-				pb.ptyFile.Write(data)
+				_, _ = pb.ptyFile.Write(data)
 			}
 			pb.mu.Unlock()
 			continue
@@ -365,7 +366,7 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 		case "input":
 			pb.mu.Lock()
 			if pb.ptyFile != nil {
-				pb.ptyFile.Write([]byte(msg.Data))
+				_, _ = pb.ptyFile.Write([]byte(msg.Data))
 			}
 			pb.mu.Unlock()
 		case "resize":
@@ -376,7 +377,7 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 				pb.resize(w, h)
 			}
 		case "ping":
-			conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 		}
 	}
 }
@@ -387,7 +388,7 @@ func (pb *PtyBridge) resize(cols, rows int) {
 		return
 	}
 	if ptyFile, ok := pb.ptyFile.(*os.File); ok {
-		pty.Setsize(ptyFile, &pty.Winsize{
+		_ = pty.Setsize(ptyFile, &pty.Winsize{
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})

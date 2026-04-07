@@ -498,7 +498,7 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: fmt.Sprintf("**All agents finished** — validating gates..."),
+		content: "**All agents finished** — validating gates...",
 	})
 
 	// If no gates, skip directly to merge.
@@ -744,7 +744,7 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 			}
 			_ = wm.Cleanup(aid)
 			if out != "" {
-				allOutput.WriteString(fmt.Sprintf("[%s] %s\n", aid, out))
+				fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
 			}
 		}
 		return runMergeResultMsg{output: allOutput.String()}
@@ -980,15 +980,14 @@ func (m *model) waitForParallelRunEvents() tea.Cmd {
 	}
 	ch := make(chan result, len(active))
 	for _, pa := range active {
-		pa := pa // capture
-		go func() {
+		go func(pa *parallelAgent) {
 			ev, ok := <-pa.events
 			if !ok {
 				ch <- result{msg: runAgentDoneMsg{agentID: pa.agentID}}
 			} else {
 				ch <- result{msg: runAgentEventMsg{event: ev, agentID: pa.agentID}}
 			}
-		}()
+		}(pa)
 	}
 	return func() tea.Msg {
 		r := <-ch

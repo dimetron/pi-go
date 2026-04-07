@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -240,8 +241,9 @@ func isKilledBySignal(err error) bool {
 		return false
 	}
 	// exec.Error is returned when cmd.Wait() encounters a signal-terminated process.
-	// Check the error string for signal indicators.
-	if execErr, ok := err.(*exec.ExitError); ok {
+	// Check the error using errors.As for proper wrapped error handling.
+	var execErr *exec.ExitError
+	if errors.As(err, &execErr) {
 		// ExitError with no code typically means killed by signal.
 		return !execErr.Success()
 	}

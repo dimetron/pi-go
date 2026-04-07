@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Server is the main web server.
+// ServerV2 is the main web server.
 type ServerV2 struct {
 	httpServer *http.Server
 	pairingMgr *PairingManager
@@ -304,21 +304,13 @@ func (s *ServerV2) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Error("pty create failed", "session", sessionID, "err", err)
 		msg := WSMessage{Type: "error", Data: err.Error()}
-		conn.WriteJSON(msg)
+		_ = conn.WriteJSON(msg)
 		return
 	}
 
 	s.log.Info("ws attached", "session", sessionID, "reconnect", bridge.Alive())
 	bridge.AttachWebSocket(conn, sessionID)
 	s.log.Info("ws detached", "session", sessionID, "pty_alive", bridge.Alive())
-}
-
-// getToken extracts the token from cookie or query parameter.
-func getToken(r *http.Request) string {
-	if cookie, err := r.Cookie("pi_token"); err == nil {
-		return cookie.Value
-	}
-	return r.URL.Query().Get("token")
 }
 
 // decodeJSON decodes JSON from request body.
@@ -329,7 +321,7 @@ func decodeJSON(r *http.Request, v interface{}) error {
 // writeJSON writes JSON response.
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func requestOriginAndHost(r *http.Request) (origin, host string) {
