@@ -104,30 +104,30 @@ make clean      # remove binary
 
 ```bash
 # Default interactive mode
-./pi
+pi
 
 # Select a model by prefix
-./pi --model claude:sonnet
-./pi --model openai:gpt-4o
-./pi --model gemini:gemini-2.5-pro
-./pi --model ollama:qwen3.5:latest
-./pi --model minimax-m2.5:cloud #automatically detect ollama if :cloud
+pi --model claude:sonnet
+pi --model openai:gpt-4o
+pi --model gemini:gemini-2.5-pro
+pi --model ollama/qwen3.5:latest
+pi --model minimax-m2.5:cloud # automatically detect ollama if :cloud
 
 # Use model roles
-./pi --smol          # fast, cheap model
-./pi --slow          # most capable model
-./pi --plan          # planning-oriented model
+pi --smol          # fast, cheap model
+pi --slow          # most capable model
+pi --plan          # planning-oriented model
 
 # Additional options
-./pi --continue      # continue last session
-./pi --session <id>  # resume specific session
-./pi --system "..." # custom system instructions
-./pi --url "..."    # custom API endpoint URL
+pi --continue      # continue last session
+pi --session <id>  # resume specific session
+pi --system "..." # custom system instructions
+pi --url "..."    # custom API endpoint URL
 
 # Non-interactive modes
-./pi --mode print "explain this codebase"
-./pi --mode json "list all TODO comments"
-./pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
+pi --mode print "explain this codebase"
+pi --mode json "list all TODO comments"
+pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
 ```
 
 ### Slash commands
@@ -156,22 +156,22 @@ make clean      # remove binary
 
 ```bash
 # Scan all skill files for hidden Unicode characters
-./pi audit
+pi audit
 
 # Scan with verbose output (include info-level findings)
-./pi audit -v
+pi audit -v
 
 # Output as JSON for CI pipelines
-./pi audit --format json --output report.json
+pi audit --format json --output report.json
 
 # Auto-remove dangerous characters (creates .bak backups)
-./pi audit --strip
+pi audit --strip
 
 # Preview what would be removed
-./pi audit --strip --dry-run
+pi audit --strip --dry-run
 
 # Scan a specific file
-./pi audit --file path/to/SKILL.md
+pi audit --file path/to/SKILL.md
 ```
 
 Skills are automatically scanned on load — skills with critical findings (Unicode tags, BiDi overrides, variation selector attacks) are blocked from loading.
