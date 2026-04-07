@@ -63,6 +63,14 @@ type Config struct {
 	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
 	Compactor       *CompactorConfig      `json:"compactor,omitempty"`
 	Memory          *MemoryConfig         `json:"memory,omitempty"`
+	Palace          *PalaceConfig         `json:"palace,omitempty"`
+}
+
+// PalaceConfig holds settings for the MemPalace memory system.
+type PalaceConfig struct {
+	Enabled   *bool  `json:"enabled,omitempty"`
+	DBPath    string `json:"db_path,omitempty"`
+	ModelPath string `json:"model_path,omitempty"`
 }
 
 // CompactorConfig holds user-overridable compaction settings.
