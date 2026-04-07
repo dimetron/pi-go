@@ -87,6 +87,56 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 	return drawer, nil
 }
 
+// Search performs a dual search: semantic vector search when the embedder is
+// available, FTS5 keyword search as fallback. Returns results sorted by
+// relevance (similarity for semantic, rank for FTS5).
+func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchResult, error) {
+	if q.Query == "" {
+		return nil, fmt.Errorf("palace: search query must not be empty")
+	}
+	if q.Limit <= 0 {
+		q.Limit = 5
+	}
+
+	filter := DrawerFilter{
+		Wing: q.Wing,
+		Room: q.Room,
+	}
+
+	// Semantic search when embedder is available.
+	if ds.embedder != nil {
+		vecs, err := ds.embedder.Embed([]string{q.Query})
+		if err != nil {
+			slog.Warn("palace: search embedding failed, falling back to keyword", "error", err)
+			return ds.store.KeywordSearch(ctx, q.Query, filter, q.Limit)
+		}
+		if len(vecs) > 0 {
+			candidates, err := ds.store.GetAllEmbeddings(ctx, filter)
+			if err != nil {
+				return nil, fmt.Errorf("palace: search get embeddings: %w", err)
+			}
+			ranked := RankBySimilarity(vecs[0], candidates, q.Limit)
+
+			results := make([]SearchResult, 0, len(ranked))
+			for _, sr := range ranked {
+				drawer, err := ds.store.GetDrawer(ctx, sr.DrawerID)
+				if err != nil {
+					slog.Warn("palace: search get drawer", "id", sr.DrawerID, "error", err)
+					continue
+				}
+				results = append(results, SearchResult{
+					Drawer:     *drawer,
+					Similarity: sr.Similarity,
+				})
+			}
+			return results, nil
+		}
+	}
+
+	// FTS5 keyword fallback.
+	return ds.store.KeywordSearch(ctx, q.Query, filter, q.Limit)
+}
+
 // DeleteDrawer removes a drawer by ID.
 func (ds *DrawerService) DeleteDrawer(ctx context.Context, id string) error {
 	return ds.store.DeleteDrawer(ctx, id)
