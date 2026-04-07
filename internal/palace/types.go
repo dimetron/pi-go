@@ -161,3 +161,18 @@ type GraphStats struct {
 	EdgeCount   int      `json:"edge_count"`
 	TopTunnels  []string `json:"top_tunnels,omitempty"`
 }
+
+// TraverseResult is a room discovered during BFS graph traversal.
+type TraverseResult struct {
+	Room        string   `json:"room"`
+	Wings       []string `json:"wings"`
+	DrawerCount int      `json:"drawer_count"`
+	Hops        int      `json:"hops"`
+}
+
+// Tunnel is a room that appears in multiple wings, bridging them.
+type Tunnel struct {
+	Room        string   `json:"room"`
+	Wings       []string `json:"wings"`
+	DrawerCount int      `json:"drawer_count"`
+}
