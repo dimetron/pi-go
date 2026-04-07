@@ -158,7 +158,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				Status: PairStatusUnknown,
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

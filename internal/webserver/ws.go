@@ -51,11 +51,11 @@ func (wh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reque
 	// Upgrade to WebSocket
 	conn, err := wh.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		wh.sessionManager.CloseSession(session.ID)
+		_ = wh.sessionManager.CloseSession(session.ID)
 		return
 	}
 	defer conn.Close()
-	defer wh.sessionManager.CloseSession(session.ID)
+	_ = wh.sessionManager.CloseSession(session.ID)
 
 	// Create PTY bridge
 	bridge := NewPtyBridge(session.Project, "", nil)
