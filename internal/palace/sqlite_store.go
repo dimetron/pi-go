@@ -188,6 +188,133 @@ func (s *SQLitePalaceStore) GetAllEmbeddings(ctx context.Context, filter DrawerF
 	return results, rows.Err()
 }
 
+// KeywordSearch performs an FTS5 keyword search on the drawers_fts table,
+// falling back to LIKE if FTS5 is unavailable. Results are ordered by FTS5 rank.
+func (s *SQLitePalaceStore) KeywordSearch(ctx context.Context, query string, filter DrawerFilter, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	ftsQuery := sanitizeFTS5Query(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+
+	q := `SELECT d.id, d.wing, d.room, d.hall, d.content, d.source_file,
+	             d.chunk_index, d.added_by, d.importance, d.embedding, d.created_at,
+	             rank
+	      FROM drawers_fts f
+	      JOIN drawers d ON d.rowid = f.rowid
+	      WHERE f.drawers_fts MATCH ?`
+
+	var args []any
+	args = append(args, ftsQuery)
+
+	if filter.Wing != "" {
+		q += " AND d.wing = ?"
+		args = append(args, filter.Wing)
+	}
+	if filter.Room != "" {
+		q += " AND d.room = ?"
+		args = append(args, filter.Room)
+	}
+
+	q += " ORDER BY rank LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		// Fall back to LIKE search if FTS5 fails
+		return s.likeSearch(ctx, query, filter, limit)
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var d Drawer
+		var blob []byte
+		var createdAt string
+		var rank float64
+		if err := rows.Scan(
+			&d.ID, &d.Wing, &d.Room, &d.Hall,
+			&d.Content, &d.SourceFile, &d.ChunkIndex,
+			&d.AddedBy, &d.Importance, &blob, &createdAt,
+			&rank,
+		); err != nil {
+			return nil, fmt.Errorf("palace: scan keyword search: %w", err)
+		}
+		d.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		d.Embedding = UnmarshalEmbedding(blob)
+		results = append(results, SearchResult{
+			Drawer:     d,
+			Similarity: 0, // FTS5 rank is negative; similarity=0 signals keyword match
+		})
+	}
+	return results, rows.Err()
+}
+
+// likeSearch is a fallback when FTS5 is unavailable.
+func (s *SQLitePalaceStore) likeSearch(ctx context.Context, query string, filter DrawerFilter, limit int) ([]SearchResult, error) {
+	q := `SELECT id, wing, room, hall, content, source_file,
+	             chunk_index, added_by, importance, embedding, created_at
+	      FROM drawers WHERE content LIKE ?`
+	var args []any
+	args = append(args, "%"+query+"%")
+
+	if filter.Wing != "" {
+		q += " AND wing = ?"
+		args = append(args, filter.Wing)
+	}
+	if filter.Room != "" {
+		q += " AND room = ?"
+		args = append(args, filter.Room)
+	}
+
+	q += " ORDER BY importance DESC, created_at_epoch DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("palace: like search: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var d Drawer
+		var blob []byte
+		var createdAt string
+		if err := rows.Scan(
+			&d.ID, &d.Wing, &d.Room, &d.Hall,
+			&d.Content, &d.SourceFile, &d.ChunkIndex,
+			&d.AddedBy, &d.Importance, &blob, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("palace: scan like search: %w", err)
+		}
+		d.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		d.Embedding = UnmarshalEmbedding(blob)
+		results = append(results, SearchResult{Drawer: d})
+	}
+	return results, rows.Err()
+}
+
+// sanitizeFTS5Query escapes special FTS5 characters by quoting each term.
+func sanitizeFTS5Query(query string) string {
+	terms := strings.Fields(query)
+	if len(terms) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(terms))
+	for _, term := range terms {
+		clean := strings.ReplaceAll(term, "\"", "")
+		if clean == "" {
+			continue
+		}
+		quoted = append(quoted, "\""+clean+"\"")
+	}
+	return strings.Join(quoted, " ")
+}
+
 // ListWings returns aggregate wing summaries.
 func (s *SQLitePalaceStore) ListWings(ctx context.Context) ([]WingSummary, error) {
 	rows, err := s.db.QueryContext(ctx,

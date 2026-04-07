@@ -15,6 +15,9 @@ type PalaceStore interface {
 	GetEmbedding(ctx context.Context, id string) (*EmbeddingRow, error)
 	GetAllEmbeddings(ctx context.Context, filter DrawerFilter) ([]EmbeddingRow, error)
 
+	// Search operations
+	KeywordSearch(ctx context.Context, query string, filter DrawerFilter, limit int) ([]SearchResult, error)
+
 	// Hierarchy operations
 	ListWings(ctx context.Context) ([]WingSummary, error)
 	ListRooms(ctx context.Context, wing string) ([]RoomSummary, error)
