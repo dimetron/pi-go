@@ -57,7 +57,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.
 
 ## Installation
 
-### go install (recommended)
+### Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install.sh | bash
+```
+
+This script detects your OS/arch, downloads the latest release binary, and installs it to `/usr/local/bin` (or `~/.local/bin` if needed).
+
+### go install
 
 ```bash
 go install github.com/dimetron/pi-go/cmd/pi@latest
