@@ -24,6 +24,7 @@ import (
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -308,6 +309,31 @@ func runNonInteractive(
 			fmt.Fprintf(os.Stderr, "pi-go: warning: memory tools disabled: %v\n", memErr)
 		} else if memTools != nil {
 			coreTools = append(coreTools, memTools...)
+		}
+	}
+
+	// Initialize palace tools if enabled.
+	palaceEnabled := cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled
+	if palaceEnabled {
+		palaceCfg := palaceConfigFromCLI(&cfg)
+		if palaceCfg.DBPath != "" {
+			if _, statErr := os.Stat(palaceCfg.DBPath); statErr == nil {
+				p, pErr := palace.New(
+					palace.WithDBPath(palaceCfg.DBPath),
+					palace.WithModelPath(palaceCfg.ModelPath),
+				)
+				if pErr != nil {
+					fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", pErr)
+				} else {
+					defer p.Close()
+					pTools, ptErr := palace.PalaceTools(p)
+					if ptErr != nil {
+						fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", ptErr)
+					} else if pTools != nil {
+						coreTools = append(coreTools, pTools...)
+					}
+				}
+			}
 		}
 	}
 
@@ -778,6 +804,26 @@ func loadDotEnv() {
 			_ = os.Setenv(key, val)
 		}
 	}
+}
+
+// palaceConfigFromCLI derives palace.Option parameters from the application config.
+func palaceConfigFromCLI(cfg *config.Config) struct{ DBPath, ModelPath string } {
+	var dbPath, modelPath string
+	if cfg.Palace != nil {
+		dbPath = cfg.Palace.DBPath
+		modelPath = cfg.Palace.ModelPath
+	}
+	if dbPath == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dbPath = filepath.Join(home, ".pi-go", "palace.db")
+		}
+	}
+	if modelPath == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			modelPath = filepath.Join(home, ".pi-go", "models", "KnightsAnalytics_all-MiniLM-L6-v2")
+		}
+	}
+	return struct{ DBPath, ModelPath string }{dbPath, modelPath}
 }
 
 // Execute runs the root command.
