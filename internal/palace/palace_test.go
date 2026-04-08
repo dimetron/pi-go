@@ -372,4 +372,3 @@ func TestPalace_KGInvalidate(t *testing.T) {
 		t.Errorf("timeline = %d, want 1", len(timeline))
 	}
 }
-

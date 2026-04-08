@@ -167,4 +167,3 @@ func TestScanRoomCandidates(t *testing.T) {
 		t.Error("node_modules should be excluded")
 	}
 }
-
