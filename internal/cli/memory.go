@@ -13,6 +13,7 @@ initialize palace databases, and view palace status.`,
 	cmd.AddCommand(newMemoryModelCmd())
 	cmd.AddCommand(newMemoryInitCmd())
 	cmd.AddCommand(newMemoryStatusCmd())
+	cmd.AddCommand(newMemoryMineCmd())
 
 	return cmd
 }
