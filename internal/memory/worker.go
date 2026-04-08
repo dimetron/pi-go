@@ -16,6 +16,10 @@ type Compressor interface {
 	CompressObservation(ctx context.Context, raw RawObservation) (*Observation, error)
 }
 
+// AfterStoreHook is called after an observation is successfully stored.
+// Implementations must not block the pipeline — errors should be logged, not returned.
+type AfterStoreHook func(ctx context.Context, obs *Observation)
+
 // Worker is a background goroutine that drains raw observations,
 // applies privacy filtering, compresses them, and stores the results.
 type Worker struct {
@@ -24,6 +28,7 @@ type Worker struct {
 	obsChan    chan RawObservation
 	done       chan struct{}
 	wg         sync.WaitGroup
+	afterStore []AfterStoreHook
 }
 
 // NewWorker creates a Worker with the given buffer size for the observation channel.
@@ -37,6 +42,12 @@ func NewWorker(store Store, compressor Compressor, bufSize int) *Worker {
 		obsChan:    make(chan RawObservation, bufSize),
 		done:       make(chan struct{}),
 	}
+}
+
+// OnAfterStore registers a hook that runs after each observation is stored.
+// Must be called before Start.
+func (w *Worker) OnAfterStore(hook AfterStoreHook) {
+	w.afterStore = append(w.afterStore, hook)
 }
 
 // Enqueue sends a raw observation to the worker. Non-blocking: drops and logs if full.
@@ -99,6 +110,12 @@ func (w *Worker) processOne(ctx context.Context, raw RawObservation) {
 			"tool", raw.ToolName,
 			"error", err,
 		)
+		return
+	}
+
+	// Run post-store hooks (e.g. palace bridge).
+	for _, hook := range w.afterStore {
+		hook(ctx, obs)
 	}
 }
 
