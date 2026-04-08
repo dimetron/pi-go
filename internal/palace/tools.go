@@ -14,6 +14,13 @@ func PalaceTools(p *Palace) ([]tool.Tool, error) {
 		newPalaceStatusTool,
 		newPalaceSearchTool,
 		newPalaceAddDrawerTool,
+		newPalaceKGAddTool,
+		newPalaceKGQueryTool,
+		newPalaceKGInvalidateTool,
+		newPalaceKGTimelineTool,
+		newPalaceDiaryWriteTool,
+		newPalaceDiaryReadTool,
+		newPalaceTraverseTool,
 	}
 	tools := make([]tool.Tool, 0, len(builders))
 	for _, b := range builders {
