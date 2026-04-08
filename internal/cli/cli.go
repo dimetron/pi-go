@@ -332,6 +332,11 @@ func runNonInteractive(
 					} else if pTools != nil {
 						coreTools = append(coreTools, pTools...)
 					}
+					// Wire observation bridge: auto-file observations as palace drawers.
+					if memWorker != nil {
+						bridge := palace.NewObservationBridge(p)
+						memWorker.OnAfterStore(bridge.ConvertAndStore)
+					}
 				}
 			}
 		}
