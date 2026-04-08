@@ -313,7 +313,8 @@ func runNonInteractive(
 	}
 
 	// Initialize palace tools if enabled.
-	palaceEnabled := cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled
+	var palaceContext string
+	palaceEnabled := !flagMemoryOff && (cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled)
 	if palaceEnabled {
 		palaceCfg := palaceConfigFromCLI(&cfg)
 		if palaceCfg.DBPath != "" {
@@ -337,6 +338,10 @@ func runNonInteractive(
 						bridge := palace.NewObservationBridge(p)
 						memWorker.OnAfterStore(bridge.ConvertAndStore)
 					}
+					// Load palace wake-up context for system prompt injection.
+					if wakeUp, wErr := p.WakeUp(context.Background(), ""); wErr == nil && wakeUp != "" {
+						palaceContext = wakeUp
+					}
 				}
 			}
 		}
@@ -347,6 +352,9 @@ func runNonInteractive(
 		instruction = flagSystem
 	} else {
 		instruction = agent.LoadInstruction(agent.SystemInstruction)
+	}
+	if palaceContext != "" {
+		instruction += "\n\n## Palace Memory Context\n\n" + palaceContext
 	}
 
 	compactorCfg := tools.DefaultCompactorConfig()
