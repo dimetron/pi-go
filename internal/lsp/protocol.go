@@ -263,3 +263,52 @@ type ReferenceParams struct {
 type ReferenceContext struct {
 	IncludeDeclaration bool `json:"includeDeclaration"`
 }
+
+// --- Workspace Symbol types ---
+
+// WorkspaceSymbolParams for workspace/symbol.
+type WorkspaceSymbolParams struct {
+	Query string `json:"query"`
+}
+
+// WorkspaceSymbol represents a symbol found via workspace/symbol.
+type WorkspaceSymbol struct {
+	Name          string   `json:"name"`
+	Kind          int      `json:"kind"`
+	Location      Location `json:"location"`
+	ContainerName string   `json:"containerName,omitempty"`
+}
+
+// --- Code Action types ---
+
+// CodeActionParams for textDocument/codeAction.
+type CodeActionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Range        Range                  `json:"range"`
+	Context      CodeActionContext      `json:"context"`
+}
+
+// CodeActionContext contains information about the code action request.
+type CodeActionContext struct {
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+// CodeAction represents a code action that can be executed.
+type CodeAction struct {
+	Title       string         `json:"title"`
+	Kind        string         `json:"kind,omitempty"`
+	Edit        *WorkspaceEdit `json:"edit,omitempty"`
+	Command     *Command       `json:"command,omitempty"`
+	IsPreferred bool           `json:"isPreferred,omitempty"`
+}
+
+// WorkspaceEdit represents changes to be applied to a workspace.
+type WorkspaceEdit struct {
+	Changes map[string][]TextEdit `json:"changes,omitempty"`
+}
+
+// Command represents a command to execute.
+type Command struct {
+	Command   string `json:"command"`
+	Arguments []any  `json:"arguments,omitempty"`
+}

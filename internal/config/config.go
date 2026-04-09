@@ -64,6 +64,7 @@ type Config struct {
 	Compactor       *CompactorConfig      `json:"compactor,omitempty"`
 	Memory          *MemoryConfig         `json:"memory,omitempty"`
 	Palace          *PalaceConfig         `json:"palace,omitempty"`
+	A2A             *A2AConfig            `json:"a2a,omitempty"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -90,6 +91,17 @@ type MCPServer struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
+}
+
+// A2AAgentConfig defines a single A2A-capable agent endpoint.
+type A2AAgentConfig struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// A2AConfig holds configuration for A2A agent connections.
+type A2AConfig struct {
+	Agents []A2AAgentConfig `json:"agents,omitempty"`
 }
 
 // Defaults returns a Config with default values.

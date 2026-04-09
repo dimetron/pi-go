@@ -45,13 +45,17 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		searchPath = "."
 	}
 
-	var files []string
-	total := 0
-
 	fsys := sb.FS()
 	rel, err := sb.Resolve(searchPath)
 	if err != nil {
 		return FindOutput{}, err
+	}
+
+	// Load .gitignore patterns
+	patterns, err := sb.LoadGitignorePatterns()
+	if err != nil {
+		// Non-fatal: continue without filtering
+		patterns = nil
 	}
 
 	// Normalize doublestar patterns: since WalkDir already recurses,
@@ -60,15 +64,26 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 	pattern := input.Pattern
 	filePattern := normalizeGlobPattern(pattern)
 
+	var files []string
+	total := 0
+
 	_ = fs.WalkDir(fsys, rel, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			base := d.Name()
-			if strings.HasPrefix(base, ".") && base != "." || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+			if shouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			// Apply .gitignore: if any pattern says skip this directory, skip it
+			if shouldSkipPath(path, d, patterns) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Apply .gitignore file filters
+		if shouldSkipPath(path, d, patterns) {
 			return nil
 		}
 
@@ -101,6 +116,14 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		TotalFiles: total,
 		Truncated:  total > len(files),
 	}, nil
+}
+
+// shouldSkipDir returns true for directories that should always be skipped.
+func shouldSkipDir(base string) bool {
+	return (strings.HasPrefix(base, ".") && base != ".") ||
+		base == "node_modules" ||
+		base == "vendor" ||
+		base == "__pycache__"
 }
 
 // normalizeGlobPattern strips leading "**/" from glob patterns since WalkDir

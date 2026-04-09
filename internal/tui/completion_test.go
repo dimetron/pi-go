@@ -16,14 +16,14 @@ func TestComplete_CommandCompletion(t *testing.T) {
 		expected int    // expected number of matches
 		first    string // first match should be this
 	}{
-		{"plan matches", "/pl", 1, "/plan"},
+		{"plan matches", "/pl", 2, "/plan"}, // /plan and /plan resume
 		{"run matches", "/ru", 1, "/run"},
 		{"help matches", "/he", 1, "/help"},
 		{"commit matches", "/co", 3, "/commit"}, // /commit, /compact, /context
 		{"all commands", "/", 0, ""},            // "/" alone doesn't return completions (handled by showCommandList)
 		{"no match", "/xyz", 0, ""},
-		{"exact match", "/plan", 1, "/plan"},    // exact match with single candidate stays
-		{"skill-like", "/skills", 1, "/skills"}, // /skills is a built-in command
+		{"exact match single", "/plan", 1, "/plan resume"}, // single alternative: keep exact match
+		{"skill-like single", "/skills", 1, "/skills"},     // single alternative: keep exact match
 	}
 
 	for _, tt := range tests {
@@ -319,8 +319,9 @@ func TestComplete_PlanSpecCompletion(t *testing.T) {
 	setupTestSpecs(t, tmpDir, "existing-plan", "another-plan")
 
 	result := Complete("/plan ", nil, tmpDir)
-	if len(result.Candidates) != 2 {
-		t.Fatalf("expected 2 candidates for '/plan ', got %d", len(result.Candidates))
+	// Should have 3 candidates: /plan another-plan, /plan existing-plan, /plan resume
+	if len(result.Candidates) != 3 {
+		t.Fatalf("expected 3 candidates for '/plan ', got %d: %v", len(result.Candidates), result.Candidates)
 	}
 	if result.Candidates[0].Text != "/plan another-plan" {
 		t.Errorf("first = %q, want '/plan another-plan'", result.Candidates[0].Text)

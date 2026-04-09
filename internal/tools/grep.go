@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -151,6 +150,12 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 		return GrepOutput{}, fmt.Errorf("path not found: %w", err)
 	}
 
+	// Load .gitignore patterns
+	patterns, err := sb.LoadGitignorePatterns()
+	if err != nil {
+		patterns = nil
+	}
+
 	var matches []GrepMatch
 	total := 0
 
@@ -160,10 +165,15 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 				return nil // skip errors
 			}
 			if d.IsDir() {
-				base := d.Name()
-				if strings.HasPrefix(base, ".") && base != "." || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+				if shouldSkipDir(d.Name()) {
 					return filepath.SkipDir
 				}
+				if shouldSkipPath(path, d, patterns) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if shouldSkipPath(path, d, patterns) {
 				return nil
 			}
 			if input.Glob != "" {

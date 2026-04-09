@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
 
 	tea "charm.land/bubbletea/v2"
@@ -270,6 +271,94 @@ func (m *model) handlePlanCancel() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handlePlanResumeCommand processes "/plan resume".
+// Resumes the last interrupted plan session from session metadata.
+func (m *model) handlePlanResumeCommand() (tea.Model, tea.Cmd) {
+	// Get plan context from session metadata.
+	if m.cfg.SessionService == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Plan resume not available (no session service configured).",
+		})
+		return m, nil
+	}
+
+	ctx, err := m.cfg.SessionService.GetPlanContext(m.cfg.SessionID)
+	if err != nil || ctx == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "No active plan session to resume.\n\nStart a new plan with `/plan <rough idea>`",
+		})
+		return m, nil
+	}
+
+	// Validate spec directory still exists.
+	if _, err := os.Stat(ctx.SpecDir); err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Spec directory no longer exists: `%s`\n\nStart a new plan with `/plan %s`", ctx.SpecDir, ctx.RoughIdea),
+		})
+		return m, nil
+	}
+
+	// Reload the PDD SOP.
+	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error loading PDD SOP: %v", err),
+		})
+		return m, nil
+	}
+
+	// Rebuild agent with SOP instruction (reuse session — key resume behavior).
+	instruction := sopText + "\n\n## Current Task\n" +
+		"- Task name: " + ctx.TaskName + "\n" +
+		"- Spec directory: specs/" + ctx.TaskName + "/\n" +
+		"- Rough idea: " + ctx.RoughIdea + "\n\n" +
+		"## Instructions\n" +
+		"The spec skeleton has been created at `" + ctx.SpecDir + "`. " +
+		"Begin the PDD process starting with Step 2 (Initial Process Planning).\n" +
+		"Artifacts should be written to `specs/" + ctx.TaskName + "/` using the write and edit tools.\n"
+
+	if m.cfg.Agent == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Error: no agent configured for /plan",
+		})
+		return m, nil
+	}
+	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error configuring agent: %v", err),
+		})
+		return m, nil
+	}
+
+	// Clear conversation and inject resume prompt.
+	m.chatModel.Messages = m.chatModel.Messages[:0]
+	m.chatModel.Scroll = 0
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
+
+	resumePrompt := fmt.Sprintf("Resume the plan session for **%s**.\n\nThe spec directory `specs/%s/` already exists. Continue the PDD process from where it left off, using the existing artifacts and conversation history to guide your next steps.", ctx.TaskName, ctx.TaskName)
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Resuming PDD session for **%s**\n\nSpec directory: `%s`", ctx.TaskName, ctx.SpecDir),
+	})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: resumePrompt})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+
+	m.mode = "plan"
+	m.running = true
+
+	m.agentCh = make(chan agentMsg, 64)
+	go m.runAgentLoop(resumePrompt)
+
+	return m, waitForAgent(m.agentCh)
+}
+
 // startPlanSession loads the SOP, rebuilds the agent, and starts streaming.
 func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model, tea.Cmd) {
 	// Load PDD SOP (project override → global override → embedded default).
@@ -322,6 +411,16 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 		return m, nil
 	}
 	m.cfg.SessionID = newSessionID
+
+	// Persist plan context for resume (non-fatal).
+	if m.cfg.SessionService != nil {
+		_ = m.cfg.SessionService.UpdatePlanContext(newSessionID, &session.PlanContext{
+			TaskName:  taskName,
+			RoughIdea: roughIdea,
+			SpecDir:   specDir,
+			Phase:     "plan",
+		})
+	}
 
 	// Clear the TUI conversation (like /clear).
 	m.chatModel.Messages = m.chatModel.Messages[:0]

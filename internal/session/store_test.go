@@ -1835,3 +1835,119 @@ func TestATIFResumedSessionContinuesStepIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdatePlanContext_Set(t *testing.T) {
+	svc := newTestService(t)
+	sessionID := createTestSession(t, svc)
+
+	ctx := &PlanContext{
+		TaskName:  "tools/001-test",
+		RoughIdea: "add rate limiting",
+		SpecDir:   "/tmp/specs/tools/001-test",
+		Phase:     "plan",
+	}
+
+	err := svc.UpdatePlanContext(sessionID, ctx)
+	if err != nil {
+		t.Fatalf("UpdatePlanContext() error: %v", err)
+	}
+
+	// Verify it was saved.
+	got, err := svc.GetPlanContext(sessionID)
+	if err != nil {
+		t.Fatalf("GetPlanContext() error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetPlanContext() returned nil")
+	}
+	if got.TaskName != ctx.TaskName {
+		t.Errorf("TaskName = %q, want %q", got.TaskName, ctx.TaskName)
+	}
+	if got.RoughIdea != ctx.RoughIdea {
+		t.Errorf("RoughIdea = %q, want %q", got.RoughIdea, ctx.RoughIdea)
+	}
+	if got.SpecDir != ctx.SpecDir {
+		t.Errorf("SpecDir = %q, want %q", got.SpecDir, ctx.SpecDir)
+	}
+	if got.Phase != ctx.Phase {
+		t.Errorf("Phase = %q, want %q", got.Phase, ctx.Phase)
+	}
+}
+
+func TestUpdatePlanContext_Clear(t *testing.T) {
+	svc := newTestService(t)
+	sessionID := createTestSession(t, svc)
+
+	// Set context first.
+	err := svc.UpdatePlanContext(sessionID, &PlanContext{
+		TaskName: "tools/001-test",
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlanContext() set error: %v", err)
+	}
+
+	// Clear it.
+	err = svc.UpdatePlanContext(sessionID, nil)
+	if err != nil {
+		t.Fatalf("UpdatePlanContext() clear error: %v", err)
+	}
+
+	got, err := svc.GetPlanContext(sessionID)
+	if err != nil {
+		t.Fatalf("GetPlanContext() error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("GetPlanContext() = %v, want nil", got)
+	}
+}
+
+func TestUpdatePlanContext_NotFound(t *testing.T) {
+	svc := newTestService(t)
+
+	err := svc.UpdatePlanContext("nonexistent", &PlanContext{TaskName: "x"})
+	if err == nil {
+		t.Error("UpdatePlanContext() expected error for nonexistent session, got nil")
+	}
+
+	_, err = svc.GetPlanContext("nonexistent")
+	if err == nil {
+		t.Error("GetPlanContext() expected error for nonexistent session, got nil")
+	}
+}
+
+func TestMetaPlanContext(t *testing.T) {
+	// Test that Meta with PlanContext marshals and unmarshals correctly.
+	meta := Meta{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		PlanContext: &PlanContext{
+			TaskName:  "tools/002-foo",
+			RoughIdea: "implement feature",
+			SpecDir:   "/workspace/specs/tools/002-foo",
+			Phase:     "plan",
+		},
+	}
+
+	// Marshal.
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("json.Marshal() error: %v", err)
+	}
+
+	// Unmarshal.
+	var got Meta
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error: %v", err)
+	}
+
+	if got.PlanContext == nil {
+		t.Fatal("PlanContext is nil after unmarshal")
+	}
+	if got.PlanContext.TaskName != meta.PlanContext.TaskName {
+		t.Errorf("TaskName = %q, want %q", got.PlanContext.TaskName, meta.PlanContext.TaskName)
+	}
+	if got.PlanContext.SpecDir != meta.PlanContext.SpecDir {
+		t.Errorf("SpecDir = %q, want %q", got.PlanContext.SpecDir, meta.PlanContext.SpecDir)
+	}
+}

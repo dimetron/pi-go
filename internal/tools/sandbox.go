@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,6 +126,16 @@ func (s *Sandbox) Close() error {
 		_ = r.Close()
 	}
 	return s.root.Close()
+}
+
+// LoadGitignorePatterns loads .gitignore patterns from the sandbox root.
+// Returns nil if no patterns found (non-fatal).
+func (s *Sandbox) LoadGitignorePatterns() ([]GitignorePattern, error) {
+	patterns, err := s.loadGitignore()
+	if err != nil || len(patterns) == 0 {
+		return nil, err
+	}
+	return patterns, nil
 }
 
 // FS returns an fs.FS scoped to the sandbox root directory.
@@ -323,4 +335,156 @@ func (s *Sandbox) MkdirAll(name string, perm os.FileMode) error {
 		return err
 	}
 	return root.MkdirAll(rel, perm)
+}
+
+// GitignorePattern represents a parsed .gitignore pattern.
+type GitignorePattern struct {
+	dir     string // directory the pattern applies to ("" = root)
+	pattern string // the pattern text
+	isNeg   bool   // true if negated (!pattern)
+	isDir   bool   // true if pattern ends with /
+}
+
+// ParseGitignoreLine parses a single .gitignore line into a pattern.
+// Handles negation (!prefix), directory-only (/suffix), and recursive (**) patterns.
+func parseGitignoreLine(line string, dir string) (GitignorePattern, bool) {
+	line = strings.TrimRight(line, "\r")
+
+	// Skip empty lines and comments
+	if line == "" || strings.HasPrefix(line, "#") {
+		return GitignorePattern{}, false
+	}
+
+	isNeg := strings.HasPrefix(line, "!")
+	if isNeg {
+		line = line[1:]
+	}
+
+	isDir := strings.HasSuffix(line, "/")
+	if isDir {
+		line = strings.TrimSuffix(line, "/")
+	}
+
+	// Convert .gitignore pattern to filepath.Match pattern
+	// ** anywhere becomes * with recursive handling
+	pattern := line
+	pattern = strings.ReplaceAll(pattern, "**/", "**/")
+	pattern = strings.ReplaceAll(pattern, "**", "*")
+
+	return GitignorePattern{
+		dir:     dir,
+		pattern: pattern,
+		isNeg:   isNeg,
+		isDir:   isDir,
+	}, true
+}
+
+// matchesGitignore reports whether path matches the given gitignore pattern.
+// The path is relative to the sandbox root.
+func (p GitignorePattern) matches(path string) bool {
+	// Get the directory portion of the path
+	dir := filepath.Dir(path)
+	name := filepath.Base(path)
+
+	// Pattern applies to its own directory or subdirectories
+	if p.dir != "" && dir != p.dir && !strings.HasPrefix(dir, p.dir+string(filepath.Separator)) {
+		return false
+	}
+
+	matched, _ := filepath.Match(p.pattern, name)
+	if matched && p.isDir {
+		// Directory pattern: only match if path is a directory
+		// (handled by caller checking d.IsDir())
+		return true
+	}
+	return matched
+}
+
+// loadGitignore reads and parses .gitignore files from the sandbox,
+// building a list of patterns applicable to each directory.
+func (s *Sandbox) loadGitignore() ([]GitignorePattern, error) {
+	var patterns []GitignorePattern
+	dirPatterns := make(map[string][]GitignorePattern)
+
+	fsys := s.root.FS()
+
+	// Walk the directory tree collecting .gitignore files
+	err := fs.WalkDir(fsys, ".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if d.Name() == ".gitignore" {
+			gitignoreData, readErr := readFileFromFS(fsys, path)
+			if readErr != nil {
+				return nil
+			}
+			gitignoreDir := filepath.Dir(path)
+			if gitignoreDir == "." {
+				gitignoreDir = ""
+			}
+			scanner := bufio.NewScanner(strings.NewReader(string(gitignoreData)))
+			for scanner.Scan() {
+				if pat, ok := parseGitignoreLine(scanner.Text(), gitignoreDir); ok {
+					dirPatterns[gitignoreDir] = append(dirPatterns[gitignoreDir], pat)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge all patterns into one list
+	for _, patList := range dirPatterns {
+		patterns = append(patterns, patList...)
+	}
+
+	return patterns, nil
+}
+
+// readFileFromFS reads a file from an fs.FS.
+func readFileFromFS(fsys fs.FS, path string) ([]byte, error) {
+	f, err := fsys.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// shouldSkipPath reports whether the given path (relative to sandbox root)
+// should be skipped based on .gitignore patterns and hardcoded rules.
+func shouldSkipPath(relPath string, d fs.DirEntry, patterns []GitignorePattern) bool {
+	base := d.Name()
+
+	// Hardcoded directory skips
+	if strings.HasPrefix(base, ".") && base != "." || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+		return true
+	}
+
+	// Check binary directories
+	if base == "target" {
+		return true
+	}
+
+	// Apply .gitignore patterns
+	for _, pat := range patterns {
+		if pat.matches(relPath) {
+			if pat.isNeg {
+				// Negation: don't skip
+				return false
+			}
+			// Match: skip unless it's a directory-only pattern and we're looking at a file
+			if pat.isDir && !d.IsDir() {
+				continue
+			}
+			return true
+		}
+	}
+
+	return false
 }
