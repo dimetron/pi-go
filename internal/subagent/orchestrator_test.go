@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -407,6 +408,174 @@ func TestResolveWorktreeUsage(t *testing.T) {
 			got := resolveWorktreeUsage(tt.agentDefault, tt.inputOverride, tt.workDir)
 			if got != tt.want {
 				t.Errorf("resolveWorktreeUsage = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeTaskKey(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Hello World", "hello world"},
+		{"  extra   spaces  ", "extra spaces"},
+		{"ALLCAPS", "allcaps"},
+		{"", ""},
+		{strings.Repeat("a", 250), strings.Repeat("a", 200)},
+	}
+	for _, tt := range tests {
+		got := normalizeTaskKey(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeTaskKey(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestOrchestrator_RecordAndFindTask(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	// No task initially.
+	if r := orch.FindRecentTask("do something"); r != nil {
+		t.Fatal("expected nil for unrecorded task")
+	}
+
+	// Record a task.
+	orch.RecordTask("do something", "it worked", "completed")
+
+	// Should find it now.
+	r := orch.FindRecentTask("do something")
+	if r == nil {
+		t.Fatal("expected to find recorded task")
+	}
+	if r.Summary != "it worked" {
+		t.Errorf("summary = %q, want %q", r.Summary, "it worked")
+	}
+	if r.Status != "completed" {
+		t.Errorf("status = %q, want %q", r.Status, "completed")
+	}
+
+	// Normalized key lookup should also work.
+	r2 := orch.FindRecentTask("  Do   Something  ")
+	if r2 == nil {
+		t.Fatal("expected normalized lookup to find task")
+	}
+
+	// Record with long summary — should be truncated.
+	orch.RecordTask("long task", strings.Repeat("x", 300), "completed")
+	r3 := orch.FindRecentTask("long task")
+	if r3 == nil {
+		t.Fatal("expected to find long task")
+	}
+	if len(r3.Summary) > 200 {
+		t.Errorf("summary should be truncated, got len %d", len(r3.Summary))
+	}
+}
+
+func TestOrchestrator_FindRecentTask_Expired(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	// Manually insert an expired task.
+	key := normalizeTaskKey("expired task")
+	orch.recentTasksMu.Lock()
+	orch.recentTasks[key] = recentTask{
+		CompletedAt: time.Now().Add(-2 * recentTaskTTL),
+		Summary:     "old result",
+		Status:      "completed",
+	}
+	orch.recentTasksMu.Unlock()
+
+	if r := orch.FindRecentTask("expired task"); r != nil {
+		t.Error("expected nil for expired task")
+	}
+}
+
+func TestOrchestrator_ListWithAgents(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	now := time.Now()
+	// Add mock agents directly.
+	orch.mu.Lock()
+	orch.agents["a1"] = &agentState{
+		ID: "a1", Type: "explore", Prompt: "test",
+		Status: "running", StartedAt: now,
+	}
+	orch.agents["a2"] = &agentState{
+		ID: "a2", Type: "task", Prompt: "build",
+		Status: "completed", StartedAt: now.Add(-time.Second), FinishedAt: now,
+	}
+	orch.mu.Unlock()
+
+	statuses := orch.List()
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(statuses))
+	}
+
+	// Check that the completed agent has a duration.
+	for _, s := range statuses {
+		if s.Status == "completed" && s.Duration == "" {
+			t.Error("completed agent should have a duration")
+		}
+		if s.Status == "running" && s.Duration != "" {
+			t.Error("running agent should not have a duration")
+		}
+	}
+}
+
+func TestOrchestrator_CancelRunningAgent(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	orch.mu.Lock()
+	orch.agents["run1"] = &agentState{
+		ID:        "run1",
+		Type:      "explore",
+		Prompt:    "test",
+		Status:    "running",
+		StartedAt: time.Now(),
+		Process:   &Process{cancel: cancel, done: make(chan struct{})},
+	}
+	orch.mu.Unlock()
+
+	if err := orch.Cancel("run1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	// Verify context was canceled.
+	select {
+	case <-ctx.Done():
+		// ok
+	default:
+		t.Error("expected context to be canceled")
+	}
+
+	// Try canceling again — should fail.
+	if err := orch.Cancel("run1"); err == nil {
+		t.Error("expected error canceling non-running agent")
+	}
+}
+
+func TestIsKilledBySignal(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"generic error", fmt.Errorf("something went wrong"), false},
+		{"error ending with killed", fmt.Errorf("process killed"), true},
+		{"short error", fmt.Errorf("fail"), false},
+		{"error not ending with killed", fmt.Errorf("signal: terminated"), false},
+		{"exactly six chars killed", fmt.Errorf("killed"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isKilledBySignal(tt.err)
+			if got != tt.want {
+				t.Errorf("isKilledBySignal(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

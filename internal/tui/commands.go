@@ -40,6 +40,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.statusModel.ActiveTool = ""
 		m.statusModel.ToolStart = time.Time{}
 		m.loadingItems = nil
+		m.matrix.clear()
+		m.matrix.feed("pi-go", m.mainWidth())
 	case "/model":
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",

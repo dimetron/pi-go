@@ -414,3 +414,116 @@ func TestParseAgentFile_FileNotFound(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestParseAgentFrontmatterLine(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		wantKey   string
+		wantValue string
+		wantOK    bool
+	}{
+		{"valid key-value", "name: explore", "name", "explore", true},
+		{"value with spaces", "description: A long description here", "description", "A long description here", true},
+		{"empty value", "role:", "role", "", true},
+		{"value with colon", "description: foo: bar", "description", "foo: bar", true},
+		{"no colon", "just-a-line", "", "", false},
+		{"empty line", "", "", "", false},
+		{"only whitespace", "   ", "", "", false},
+		{"leading spaces", "  name: test", "name", "test", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, value, ok := parseAgentFrontmatterLine(tt.line)
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if key != tt.wantKey {
+				t.Errorf("key = %q, want %q", key, tt.wantKey)
+			}
+			if value != tt.wantValue {
+				t.Errorf("value = %q, want %q", value, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestParseAgentContent_UnknownFrontmatterKeys(t *testing.T) {
+	content := `---
+name: test
+unknown_key: some_value
+another: 42
+description: valid desc
+---
+Body text.`
+	cfg, err := parseAgentContent(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Name != "test" {
+		t.Errorf("name = %q, want test", cfg.Name)
+	}
+	if cfg.Description != "valid desc" {
+		t.Errorf("description = %q, want 'valid desc'", cfg.Description)
+	}
+}
+
+func TestParseAgentContent_InvalidTimeout(t *testing.T) {
+	content := `---
+name: test
+timeout: notanumber
+---
+Body.`
+	cfg, err := parseAgentContent(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Timeout != 0 {
+		t.Errorf("timeout = %d, want 0 (invalid should be ignored)", cfg.Timeout)
+	}
+}
+
+func TestParseAgentContent_NegativeTimeout(t *testing.T) {
+	content := `---
+name: test
+timeout: -500
+---
+Body.`
+	cfg, err := parseAgentContent(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Timeout != 0 {
+		t.Errorf("timeout = %d, want 0 (negative should be ignored)", cfg.Timeout)
+	}
+}
+
+func TestParseAgentContent_ToolsWithEmptyEntries(t *testing.T) {
+	content := `---
+name: test
+tools: read, , write, , grep
+---
+Body.`
+	cfg, err := parseAgentContent(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Tools) != 3 {
+		t.Errorf("expected 3 tools (skipping empty), got %d: %v", len(cfg.Tools), cfg.Tools)
+	}
+}
+
+func TestParseAgentContent_WorktreeTrue(t *testing.T) {
+	content := `---
+name: test
+worktree: TRUE
+---
+Body.`
+	cfg, err := parseAgentContent(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Worktree {
+		t.Error("expected worktree true for case-insensitive 'TRUE'")
+	}
+}

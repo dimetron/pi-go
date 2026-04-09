@@ -160,6 +160,98 @@ func TestMineProject_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestMineProject_WithProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	writeTestFile(t, filepath.Join(tmpDir, "main.go"),
+		"package main\n\n// Main function with enough content to pass the minimum chunk size for the miner.\nfunc main() {\n\tprintln(\"progress test\")\n}")
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	var progressCalls int
+	cfg := &MineConfig{
+		Wing: "test",
+		Progress: func(file string, added, skipped, errors int) {
+			progressCalls++
+		},
+	}
+
+	_, err := MineProject(ctx, p, tmpDir, cfg)
+	if err != nil {
+		t.Fatalf("MineProject: %v", err)
+	}
+	if progressCalls == 0 {
+		t.Error("expected progress callback to be called")
+	}
+}
+
+func TestMineProject_EmptyContentSkipped(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Empty file and whitespace-only file should be skipped
+	writeTestFile(t, filepath.Join(tmpDir, "empty.go"), "")
+	writeTestFile(t, filepath.Join(tmpDir, "spaces.go"), "   \n\t\n  ")
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	result, err := MineProject(ctx, p, tmpDir, &MineConfig{Wing: "test"})
+	if err != nil {
+		t.Fatalf("MineProject: %v", err)
+	}
+	if result.Added != 0 {
+		t.Errorf("expected 0 added for empty files, got %d", result.Added)
+	}
+}
+
+func TestMineProject_NilConfig_WithYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	yamlContent := `wing: configured-wing
+rooms:
+  - name: core
+    keywords: ["main"]
+`
+	writeTestFile(t, filepath.Join(tmpDir, "mempalace.yaml"), yamlContent)
+	writeTestFile(t, filepath.Join(tmpDir, "app.go"),
+		"package main\n\n// Application entry point with enough content for chunk threshold.\nfunc main() {\n\tprintln(\"hello world from configured project\")\n}")
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	result, err := MineProject(ctx, p, tmpDir, nil)
+	if err != nil {
+		t.Fatalf("MineProject: %v", err)
+	}
+	if result.Added == 0 {
+		t.Error("expected at least 1 added")
+	}
+
+	drawers, _ := p.ListDrawers(ctx, DrawerFilter{Wing: "configured-wing"})
+	if len(drawers) == 0 {
+		t.Error("expected drawers in configured-wing from mempalace.yaml")
+	}
+}
+
+func TestMineProject_UnsupportedExtSkipped(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	writeTestFile(t, filepath.Join(tmpDir, "image.png"), "binary content here enough data")
+	writeTestFile(t, filepath.Join(tmpDir, "data.csv"), "col1,col2\nval1,val2\n")
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	result, err := MineProject(ctx, p, tmpDir, &MineConfig{Wing: "test"})
+	if err != nil {
+		t.Fatalf("MineProject: %v", err)
+	}
+	if result.Processed != 0 {
+		t.Errorf("expected 0 processed for unsupported extensions, got %d", result.Processed)
+	}
+}
+
 // --- helpers ---
 
 func writeTestFile(t *testing.T, path, content string) {

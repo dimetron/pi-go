@@ -203,6 +203,10 @@ func Run(ctx context.Context, cfg Config) error {
 	_, err := p.Run()
 	drainTerminalResponses()
 	if m.initErr != nil {
+		// Log the fatal init error so crash loops are diagnosable.
+		if m.cfg.Logger != nil {
+			m.cfg.Logger.Errorf("fatal init error: %v", m.initErr)
+		}
 		return m.initErr
 	}
 	return err
@@ -335,11 +339,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			content += fmt.Sprintf("\n\n✗ Ping failed: %v", msg.err)
 		}
-		// Replace the "Pinging model..." placeholder.
-		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].content == "Pinging model..." {
-			m.chatModel.Messages[len(m.chatModel.Messages)-1].content = content
+		// Replace the "Pinging model..." thinking placeholder with assistant response.
+		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+			m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: content}
 		} else {
 			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: content})
+		}
+		// Update matrix rain with the model's reply.
+		if msg.reply != "" {
+			m.matrix.feed(msg.reply, m.mainWidth())
 		}
 		return m, nil
 	}

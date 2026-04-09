@@ -117,6 +117,30 @@ func TestInactivityTimer(t *testing.T) {
 		}
 	})
 
+	t.Run("reset after timer fired drains channel", func(t *testing.T) {
+		timer := NewInactivityTimer(20 * time.Millisecond)
+		defer timer.Stop()
+
+		// Wait for the timer to fire.
+		select {
+		case <-timer.C():
+			// Timer fired as expected.
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("timer should have fired")
+		}
+
+		// Reset after fire — this exercises the drain branch in Reset().
+		timer.Reset()
+
+		// Timer should fire again after reset.
+		select {
+		case <-timer.C():
+			// Expected.
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("timer should have fired again after reset")
+		}
+	})
+
 	t.Run("multiple resets work", func(t *testing.T) {
 		timer := NewInactivityTimer(60 * time.Millisecond)
 		defer timer.Stop()

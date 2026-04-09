@@ -35,6 +35,7 @@ type initResources struct {
 	memStore   memory.Store
 	memWorker  *memory.Worker
 	sessionLog *logger.Logger
+	sessionID  string // captured for resume hint on exit
 }
 
 func (r *initResources) cleanup() {
@@ -98,6 +99,12 @@ func runInteractive(
 
 	initCancel() // signal deferred init to stop
 	<-initDone
+
+	// Print session ID and resume command on exit.
+	if res.sessionID != "" {
+		fmt.Fprintf(os.Stderr, "\nSession: %s\nResume:  pi --session %s\n", res.sessionID, res.sessionID)
+	}
+
 	res.cleanup()
 	return tuiErr
 }
@@ -477,6 +484,9 @@ func deferredInit(
 			return
 		}
 	}
+
+	// Store session ID for resume hint on exit.
+	res.sessionID = sessionID
 
 	// Activate memory capture.
 	if ps.memStore != nil {

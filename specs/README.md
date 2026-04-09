@@ -57,6 +57,12 @@ Each spec follows a phased workflow from rough idea through implementation.
 | [issues-fix](issues-fix/) | Bug fix plan |
 | [subagent-execution-modes](subagent-execution-modes/) | Prompt only |
 
+### Review
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| [code-review-codex](code-review-codex/) | idea, req, research | Code review using OpenAI Codex CLI |
+
 ## Conventions
 
 ### Directory structure

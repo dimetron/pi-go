@@ -12,6 +12,12 @@ import (
 
 func TestMemoryRecent_NoDB(t *testing.T) {
 	// When no DB exists, findMemoryDB returns an error.
+	// (Skip if global memory DB exists — fallback will find it instead of erroring.)
+	home, _ := os.UserHomeDir()
+	globalDB := filepath.Join(home, ".pi-go", "memory", "claude-mem.db")
+	if _, err := os.Stat(globalDB); err == nil {
+		t.Skip("global memory DB exists — fallback will be used instead of erroring")
+	}
 	err := runMemoryRecent("/nonexistent/project", 20, "", false)
 	if err == nil {
 		t.Error("expected error when no memory database exists")

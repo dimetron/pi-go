@@ -83,6 +83,12 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 		}
 	}
 
+	// SIGPIPE (exit 141 = signal 13 + 128) is benign — the consumer closed the pipe
+	// before the producer finished writing. Treat it as success.
+	if exitCode == 141 {
+		exitCode = 0
+	}
+
 	return BashOutput{
 		Stdout:   redactSecrets(truncateOutput(stdout.String())),
 		Stderr:   redactSecrets(truncateOutput(stderr.String())),

@@ -192,6 +192,101 @@ func TestDeriveRoom(t *testing.T) {
 	}
 }
 
+func TestBridge_UnknownObservationType(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	p := NewWithStore(store, nil)
+	bridge := NewObservationBridge(p)
+
+	obs := &memory.Observation{
+		Project:     "/Users/dev/proj",
+		Type:        memory.ObservationType("unknown_type"),
+		Text:        "Some observation with unknown type.",
+		SourceFiles: []string{"internal/foo/bar.go"},
+		ToolName:    "test_tool",
+	}
+
+	bridge.ConvertAndStore(context.Background(), obs)
+
+	drawers, err := store.ListDrawers(context.Background(), DrawerFilter{Wing: "proj"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(drawers) != 1 {
+		t.Fatalf("expected 1 drawer, got %d", len(drawers))
+	}
+	// Unknown type should get empty hall and default importance of 5.
+	if drawers[0].Hall != "" {
+		t.Errorf("hall = %q, want empty for unknown type", drawers[0].Hall)
+	}
+	if drawers[0].Importance != 5 {
+		t.Errorf("importance = %d, want 5 for unknown type", drawers[0].Importance)
+	}
+}
+
+func TestDeriveRoom_InternalOnly(t *testing.T) {
+	t.Parallel()
+	// When the only meaningful directory is "internal" itself.
+	got := deriveRoom([]string{"internal/file.go"})
+	if got != "internal" {
+		t.Errorf("deriveRoom([internal/file.go]) = %q, want internal", got)
+	}
+}
+
+func TestBridge_ConvertAndStore_EmptyText(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	p := NewWithStore(store, nil)
+	bridge := NewObservationBridge(p)
+
+	obs := &memory.Observation{
+		Project:     "/Users/dev/proj",
+		Type:        memory.TypeChange,
+		Text:        "", // empty text → AddDrawer returns error
+		SourceFiles: []string{"test.go"},
+		ToolName:    "test_tool",
+	}
+
+	// Should not panic — error is logged and swallowed.
+	bridge.ConvertAndStore(context.Background(), obs)
+
+	// No drawers should be added.
+	drawers, _ := store.ListDrawers(context.Background(), DrawerFilter{Wing: "proj"})
+	if len(drawers) != 0 {
+		t.Errorf("expected 0 drawers for empty text, got %d", len(drawers))
+	}
+}
+
+func TestBridge_ConvertAndStore_MultipleSourceFiles(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	p := NewWithStore(store, nil)
+	bridge := NewObservationBridge(p)
+
+	obs := &memory.Observation{
+		Project:     "/Users/dev/proj",
+		Type:        memory.TypeFeature,
+		Text:        "Added cross-cutting feature.",
+		SourceFiles: []string{"internal/auth/handler.go", "internal/api/router.go"},
+		ToolName:    "edit_file",
+	}
+
+	bridge.ConvertAndStore(context.Background(), obs)
+
+	drawers, _ := store.ListDrawers(context.Background(), DrawerFilter{Wing: "proj"})
+	if len(drawers) != 1 {
+		t.Fatalf("expected 1 drawer, got %d", len(drawers))
+	}
+	// Should use first source file's room
+	if drawers[0].Room != "auth" {
+		t.Errorf("room = %q, want auth", drawers[0].Room)
+	}
+	// SourceFile should be the first
+	if drawers[0].SourceFile != "internal/auth/handler.go" {
+		t.Errorf("source_file = %q", drawers[0].SourceFile)
+	}
+}
+
 func TestBridge_ErrorDoesNotPropagate(t *testing.T) {
 	t.Parallel()
 	// Use a store that will cause an error (e.g., closed DB).

@@ -27,11 +27,11 @@ func newPingCmd() *cobra.Command {
 		Long: `Performs a verbose connectivity check to the configured LLM provider, similar to curl -vvv.
 Shows DNS resolution, TCP connection, TLS handshake, HTTP request/response, and a model API call.
 
-The default test sends "Prompt" and expects "Prompt". If a prompt is provided as positional args,
+The default test sends "prompt-prompt" and expects "prompt-prompt". If a prompt is provided as positional args,
 it is sent instead and the full response is displayed with all trace-level data.
 
 Examples:
-  pi ping                     # Prompt:Prompt connectivity test
+  pi ping                     # prompt-prompt connectivity test
   pi ping 2+2                 # custom prompt with full trace
   pi ping --smol Explain Go   # test smol role with custom prompt`,
 		Args: cobra.ArbitraryArgs,
@@ -351,7 +351,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	prompt := strings.Join(args, " ")
 	isPingPong := prompt == ""
 	if isPingPong {
-		prompt = "Prompt"
+		prompt = "prompt-prompt"
 	}
 
 	w("* ─── Model Ping ───\n")
@@ -426,7 +426,7 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 
 	systemMsg := "You are a connectivity test. Reply briefly and concisely."
 	if isPingPong {
-		systemMsg = `You are a connectivity test. When the user says "Prompt", reply with exactly "Prompt:Prompt" and nothing else.`
+		systemMsg = `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
 	}
 
 	req := &llmmodel.LLMRequest{
@@ -576,7 +576,7 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 
 	systemMsg := "You are a connectivity test. Reply briefly and concisely."
 	if isPingPong {
-		systemMsg = `You are a connectivity test. When the user says "Prompt", reply with exactly "Prompt:Prompt" and nothing else.`
+		systemMsg = `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
 	}
 
 	req := &llmmodel.LLMRequest{

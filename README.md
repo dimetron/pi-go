@@ -22,6 +22,7 @@ A terminal-based coding agent built on [Google ADK Go](https://google.github.io/
 - **LSP integration** — JSON-RPC client for Go, TypeScript/JS, Python, Rust with auto-format and diagnostics hooks
 - **AI Git tools** — Repository overview, file diffs, hunk parsing, and LLM-generated conventional commits (`/commit`)
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
+- **Memory Palace** — 4-layer contextual memory with SQLite storage, semantic embeddings (all-MiniLM-L6-v2), temporal knowledge graph, and project/conversation miners
 - **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and MCP server support
 - **Skills audit** — Security scanning for hidden Unicode characters, BiDi attacks, and supply-chain threats in skill files (`pi audit`)
 
@@ -36,6 +37,7 @@ internal/
 ├── audit/          Security scanner for skills (hidden Unicode, supply-chain threats)
 ├── extension/      Hooks, skills, MCP server integration
 ├── lsp/            LSP JSON-RPC client, language registry, manager, hooks
+├── palace/         Memory Palace — drawers, layers, KG, miners, embedder, search
 ├── provider/       LLM providers implementing genai model interface
 ├── rpc/            Unix socket JSON-RPC 2.0 server
 ├── session/        JSONL persistence, branching, compaction
@@ -48,9 +50,10 @@ internal/
 
 ```
 User input → CLI → Agent → LLM provider → Tool calls → Sandbox → Response → TUI
-                     ↕                        ↕
-              Session store              LSP servers
-              (JSONL events)          (format, diagnostics)
+                     ↕           ↕            ↕
+              Session store   Palace       LSP servers
+              (JSONL events)  (memory,   (format, diagnostics)
+                              KG, search)
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.
@@ -95,7 +98,7 @@ Download the latest release for your platform from the [Releases page](https://g
 ```bash
 make build      # build the pi binary
 make test       # run unit tests
-make lint       # go vet
+make lint       # golangci-lint (vet, staticcheck, errcheck, …)
 make e2e        # run E2E integration tests
 make clean      # remove binary
 ```
@@ -147,10 +150,63 @@ pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
 | `/skill-create`  | Create a new skill                        |
 | `/skill-list`    | List available skills                     |
 | `/skill-load`    | Reload skills from disk                   |
+| `/memory`        | Memory Palace commands (see below)        |
 | `/audit`         | Scan skills for hidden Unicode threats    |
 | `/restart`       | Restart pi-go                             |
 | `/clear`         | Clear conversation                        |
 | `/exit`          | Exit the agent                            |
+
+### Memory Palace
+
+A 4-layer contextual memory system that gives the agent persistent awareness across sessions.
+
+**Layers:**
+
+| Layer | Name | Description |
+|-------|------|-------------|
+| L0 | Identity | Static identity file |
+| L1 | Essential Story | Top-15 drawers by importance, injected into system prompt |
+| L2 | On-Demand Recall | Context-filtered drawer chunks |
+| L3 | Search | Semantic (embedding) or keyword (FTS5) search |
+
+**CLI commands:**
+
+```bash
+# Setup
+pi memory model download         # download all-MiniLM-L6-v2 embedding model
+pi memory model status           # check model path and status
+pi memory init [dir]             # create palace.db + generate mempalace.yaml
+
+# Ingest
+pi memory mine <dir>             # mine source files into drawers
+pi memory mine --convos <dir>    # mine conversation files (JSONL/text)
+
+# Query
+pi memory status                 # palace overview (drawers, wings, rooms, KG)
+pi memory search <query>         # semantic or keyword search
+pi memory wake-up                # print L0+L1 context for system prompt
+pi memory recent [project]       # recent memory observations
+
+# Knowledge Graph
+pi memory kg query <entity>      # query triples involving an entity
+pi memory kg add <s> <p> <o>     # add a fact triple
+pi memory kg timeline <entity>   # chronological timeline of facts
+```
+
+**Configuration** via `mempalace.yaml` in the project root:
+
+```yaml
+wing: my-project
+rooms:
+  - name: auth
+    patterns: ["internal/auth/**"]
+    keywords: [jwt, token, session]
+  - name: api
+    patterns: ["internal/api/**"]
+    keywords: [handler, endpoint, route]
+```
+
+When the Palace is enabled, the agent also gains tool access: `palace-search`, `palace-add-drawer`, `palace-kg-query`, `palace-kg-add`, `palace-diary-write`, `palace-traverse`, and more.
 
 ### Security audit
 

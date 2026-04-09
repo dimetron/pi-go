@@ -253,13 +253,16 @@ func TestAddDrawer_DeterministicID(t *testing.T) {
 		t.Fatalf("AddDrawer: %v", err)
 	}
 
-	// Same input should generate same ID — insert will fail (PRIMARY KEY conflict)
-	_, err = ds.AddDrawer(ctx, input)
-	if err == nil {
-		t.Fatal("expected error for duplicate ID insertion")
+	// Same input generates same ID — INSERT OR REPLACE upserts silently
+	drawer2, err := ds.AddDrawer(ctx, input)
+	if err != nil {
+		t.Fatalf("expected upsert to succeed: %v", err)
+	}
+	if drawer1.ID != drawer2.ID {
+		t.Errorf("IDs differ: %q vs %q", drawer1.ID, drawer2.ID)
 	}
 
-	// Verify the first drawer's ID is deterministic
+	// Verify the drawer's ID is deterministic
 	expectedID := GenerateDrawerID(input.Wing, input.Room, input.SourceFile, input.ChunkIndex, input.Content)
 	if drawer1.ID != expectedID {
 		t.Errorf("ID = %q, want %q", drawer1.ID, expectedID)
