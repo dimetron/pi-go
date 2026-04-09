@@ -9,7 +9,7 @@
 
 A terminal-based coding agent built on [Google ADK Go](https://google.github.io/adk-go/) with multi-provider LLM support, sandboxed tool execution, LSP integration, and a subagent system.
 
-![pi-go TUI](docs/screen/pi-go.png)
+![pi-go TUI](docs/screen/pi-go.gif)
 
 ## Features
 
