@@ -137,6 +137,51 @@ func (s *Server) Format(ctx context.Context, file string) ([]TextEdit, error) {
 	return edits, nil
 }
 
+// WorkspaceSymbols sends workspace/symbol and returns symbols matching a query.
+func (s *Server) WorkspaceSymbols(ctx context.Context, query string) ([]WorkspaceSymbol, error) {
+	params := WorkspaceSymbolParams{Query: query}
+	result, err := s.client.Request(ctx, "workspace/symbol", params)
+	if err != nil {
+		return nil, err
+	}
+	if string(result) == "null" || len(result) == 0 {
+		return nil, nil
+	}
+	var symbols []WorkspaceSymbol
+	if err := json.Unmarshal(result, &symbols); err != nil {
+		return nil, fmt.Errorf("parsing workspace symbols: %w", err)
+	}
+	return symbols, nil
+}
+
+// CodeActions sends textDocument/codeAction and returns available code actions.
+func (s *Server) CodeActions(ctx context.Context, file string, startLine, startChar, endLine, endChar int) ([]CodeAction, error) {
+	if err := s.ensureOpen(file); err != nil {
+		return nil, err
+	}
+	uri := fileURI(file)
+	params := CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Range: Range{
+			Start: Position{Line: startLine, Character: startChar},
+			End:   Position{Line: endLine, Character: endChar},
+		},
+		Context: CodeActionContext{},
+	}
+	result, err := s.client.Request(ctx, "textDocument/codeAction", params)
+	if err != nil {
+		return nil, err
+	}
+	if string(result) == "null" || len(result) == 0 {
+		return nil, nil
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(result, &actions); err != nil {
+		return nil, fmt.Errorf("parsing code actions: %w", err)
+	}
+	return actions, nil
+}
+
 // NotifyChange sends a didChange notification for an already-open file.
 func (s *Server) NotifyChange(file string, content string) error {
 	uri := fileURI(file)

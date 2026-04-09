@@ -68,6 +68,10 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/commit":
 		return m.handleCommitCommand()
 	case "/plan":
+		// Check for /plan resume subcommand.
+		if len(parts) > 1 && strings.ToLower(parts[1]) == "resume" {
+			return m.handlePlanResumeCommand()
+		}
 		return m.handlePlanCommand(parts[1:])
 	case "/run":
 		return m.handleRunCommand(parts[1:])
@@ -515,6 +519,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/commit` | Generate commit from staged changes |\n")
 	b.WriteString("| `/branch <name>` | Create/switch/list branches |\n")
 	b.WriteString("| `/plan <idea>` | Start PDD planning session |\n")
+	b.WriteString("| `/plan resume` | Resume interrupted plan session |\n")
 	b.WriteString("| `/run <spec>` | Execute a spec with task agent |\n")
 
 	b.WriteString("\n**Display:**\n\n")

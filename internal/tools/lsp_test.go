@@ -14,17 +14,19 @@ func TestLSPTools_Count(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LSPTools: %v", err)
 	}
-	if len(tools) != 5 {
-		t.Fatalf("expected 5 LSP tools, got %d", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("expected 7 LSP tools, got %d", len(tools))
 	}
 
 	// Verify tool names.
 	expected := map[string]bool{
-		"lsp-diagnostics": false,
-		"lsp-definition":  false,
-		"lsp-references":  false,
-		"lsp-hover":       false,
-		"lsp-symbols":     false,
+		"lsp-diagnostics":      false,
+		"lsp-definition":       false,
+		"lsp-references":       false,
+		"lsp-hover":            false,
+		"lsp-symbols":          false,
+		"lsp-workspace-symbol": false,
+		"lsp-code-action":      false,
 	}
 	for _, tool := range tools {
 		name := tool.Name()

@@ -81,6 +81,50 @@ type SymbolEntry struct {
 	EndLine int    `json:"end_line"`
 }
 
+// LSPWorkspaceSymbolInput is input for workspace symbol search.
+type LSPWorkspaceSymbolInput struct {
+	Query string `json:"query"`
+}
+
+// LSPWorkspaceSymbolOutput is output for workspace symbol search.
+type LSPWorkspaceSymbolOutput struct {
+	Symbols []WorkspaceSymbolEntry `json:"symbols"`
+	Error   string                 `json:"error,omitempty"`
+}
+
+// WorkspaceSymbolEntry is a single workspace symbol for tool output.
+type WorkspaceSymbolEntry struct {
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	File          string `json:"file"`
+	Line          int    `json:"line"`
+	Column        int    `json:"column"`
+	ContainerName string `json:"containerName,omitempty"`
+}
+
+// LSPCodeActionInput is input for code action tool.
+type LSPCodeActionInput struct {
+	File      string `json:"file"`
+	StartLine int    `json:"startLine"`
+	StartCol  int    `json:"startCol"`
+	EndLine   int    `json:"endLine"`
+	EndCol    int    `json:"endCol"`
+}
+
+// LSPCodeActionOutput is output for code action tool.
+type LSPCodeActionOutput struct {
+	File    string        `json:"file"`
+	Actions []ActionEntry `json:"actions"`
+	Error   string        `json:"error,omitempty"`
+}
+
+// ActionEntry is a single code action for tool output.
+type ActionEntry struct {
+	Title       string `json:"title"`
+	Kind        string `json:"kind,omitempty"`
+	IsPreferred bool   `json:"isPreferred"`
+}
+
 // --- Tool constructors ---
 
 func newLSPDiagnosticsTool(mgr *lsp.Manager) (tool.Tool, error) {
@@ -139,7 +183,31 @@ type declarations, constants, and variables with their line ranges.`,
 		}, lspFileAliases)
 }
 
-// LSPTools returns the 5 explicit LSP ADK tools.
+func newLSPWorkspaceSymbolTool(mgr *lsp.Manager) (tool.Tool, error) {
+	return newTool("lsp-workspace-symbol",
+		`Search for symbols across the entire project workspace.
+
+Returns symbols matching a query string from all source files,
+including functions, types, constants, and variables across modules.
+Useful for finding where a symbol is defined without knowing the file.`,
+		func(ctx tool.Context, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
+			return lspWorkspaceSymbolHandler(ctx, mgr, input)
+		}, nil)
+}
+
+func newLSPCodeActionTool(mgr *lsp.Manager) (tool.Tool, error) {
+	return newTool("lsp-code-action",
+		`Get available code actions (quick fixes, refactorings) for a selection.
+
+Returns available code actions such as error fixes, imports, refactorings,
+and other quick fixes. The selection is specified by start and end positions.
+Line and column are 0-based.`,
+		func(ctx tool.Context, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
+			return lspCodeActionHandler(ctx, mgr, input)
+		}, lspFileAliases)
+}
+
+// LSPTools returns the LSP ADK tools.
 func LSPTools(mgr *lsp.Manager) ([]tool.Tool, error) {
 	builders := []func(*lsp.Manager) (tool.Tool, error){
 		newLSPDiagnosticsTool,
@@ -147,6 +215,8 @@ func LSPTools(mgr *lsp.Manager) ([]tool.Tool, error) {
 		newLSPReferencesTool,
 		newLSPHoverTool,
 		newLSPSymbolsTool,
+		newLSPWorkspaceSymbolTool,
+		newLSPCodeActionTool,
 	}
 
 	result := make([]tool.Tool, 0, len(builders))
@@ -170,6 +240,24 @@ func getServerOrSkip(mgr *lsp.Manager, file string) (*lsp.Server, string) {
 	if srv == nil {
 		ext := filepath.Ext(file)
 		return nil, fmt.Sprintf("no language server configured for %s files", ext)
+	}
+	return srv, ""
+}
+
+func getServerOrSkipForLanguage(mgr *lsp.Manager, lang string) (*lsp.Server, string) {
+	if !mgr.Available(lang) {
+		return nil, fmt.Sprintf("%s not available", lang)
+	}
+	// Create a dummy file path for the language's file extension.
+	exts := mgr.Languages()[lang].FileExtensions
+	if len(exts) == 0 {
+		return nil, fmt.Sprintf("no file extension for %s", lang)
+	}
+	// Use a temp file path just to get a server instance.
+	tmpFile := "/tmp/dummy" + exts[0]
+	srv, err := mgr.ServerFor(tmpFile)
+	if err != nil {
+		return nil, fmt.Sprintf("language server error: %v", err)
 	}
 	return srv, ""
 }
@@ -276,6 +364,67 @@ func lspSymbolsHandler(_ tool.Context, mgr *lsp.Manager, input LSPFileInput) (LS
 	return LSPSymbolsOutput{
 		File:    input.File,
 		Symbols: entries,
+	}, nil
+}
+
+func lspWorkspaceSymbolHandler(_ tool.Context, mgr *lsp.Manager, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
+	// Get the first available server (workspace symbols don't require a specific file).
+	var srv *lsp.Server
+	var errMsg string
+	for lang := range mgr.Languages() {
+		srv, errMsg = getServerOrSkipForLanguage(mgr, lang)
+		if errMsg == "" && srv != nil {
+			break
+		}
+	}
+	if srv == nil {
+		return LSPWorkspaceSymbolOutput{Error: "no language server available"}, nil
+	}
+
+	symbols, err := srv.WorkspaceSymbols(context.Background(), input.Query)
+	if err != nil {
+		return LSPWorkspaceSymbolOutput{Error: err.Error()}, nil
+	}
+
+	entries := make([]WorkspaceSymbolEntry, 0, len(symbols))
+	for _, sym := range symbols {
+		file := uriToPath(sym.Location.URI)
+		entries = append(entries, WorkspaceSymbolEntry{
+			Name:          sym.Name,
+			Kind:          symbolKindName(sym.Kind),
+			File:          file,
+			Line:          sym.Location.Range.Start.Line,
+			Column:        sym.Location.Range.Start.Character,
+			ContainerName: sym.ContainerName,
+		})
+	}
+
+	return LSPWorkspaceSymbolOutput{Symbols: entries}, nil
+}
+
+func lspCodeActionHandler(_ tool.Context, mgr *lsp.Manager, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
+	srv, errMsg := getServerOrSkip(mgr, input.File)
+	if errMsg != "" {
+		return LSPCodeActionOutput{File: input.File, Error: errMsg}, nil
+	}
+
+	actions, err := srv.CodeActions(context.Background(), input.File, input.StartLine, input.StartCol, input.EndLine, input.EndCol)
+	if err != nil {
+		return LSPCodeActionOutput{File: input.File, Error: err.Error()}, nil
+	}
+
+	entries := make([]ActionEntry, 0, len(actions))
+	for _, a := range actions {
+		entries = append(entries, ActionEntry{
+			Title:       a.Title,
+			Kind:        a.Kind,
+			IsPreferred: a.IsPreferred,
+		})
+	}
+
+	return LSPCodeActionOutput{
+		File:    input.File,
+		Actions: entries,
 	}, nil
 }
 

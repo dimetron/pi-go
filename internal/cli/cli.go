@@ -457,6 +457,14 @@ func runNonInteractive(
 		mcpToolsets, _ = extension.BuildMCPToolsets(mcpServers)
 	}
 
+	// Add A2A toolsets if configured
+	var a2aToolsets []adktool.Toolset
+	if cfg.A2A != nil && len(cfg.A2A.Agents) > 0 {
+		a2aToolsets = append(a2aToolsets, tools.NewA2AToolset(cfg.A2A))
+	}
+	// Merge MCP and A2A toolsets
+	allToolsets := append(mcpToolsets, a2aToolsets...)
+
 	skillDirs := []string{}
 	if homeDir, hErr := os.UserHomeDir(); hErr == nil {
 		skillDirs = append(skillDirs, filepath.Join(homeDir, ".pi-go", "skills"))
@@ -501,7 +509,7 @@ func runNonInteractive(
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
 		Tools:               coreTools,
-		Toolsets:            mcpToolsets,
+		Toolsets:            allToolsets,
 		Instruction:         instruction,
 		SessionService:      sessionSvc,
 		BeforeToolCallbacks: beforeCBs,

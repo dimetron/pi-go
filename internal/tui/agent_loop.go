@@ -405,6 +405,7 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 		break
 	}
 	m.matrix.feed(msg.name+msg.content, m.mainWidth())
+	m.matrix.shiftLeft()
 	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 		time:    time.Now(),
 		kind:    "tool_result",

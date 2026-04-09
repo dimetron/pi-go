@@ -826,3 +826,94 @@ func TestReadHandlerWithCache(t *testing.T) {
 		}
 	})
 }
+
+func TestFindSkipsGitignoredFiles(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// Create normal file
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+
+	// Create a file that would be gitignored
+	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("password"), 0o644)
+
+	// Create .gitignore that ignores *.txt
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.txt\n"), 0o644)
+
+	out, err := findHandler(sb, FindInput{Pattern: "*", Path: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TotalFiles != 1 {
+		t.Errorf("expected 1 file (main.go only), got %d: %v", out.TotalFiles, out.Files)
+	}
+	if out.Files[0] != "main.go" {
+		t.Errorf("expected main.go, got %v", out.Files)
+	}
+}
+
+func TestFindSkipsTargetDir(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+
+	// Create target/ directory with a binary
+	targetBin := filepath.Join(dir, "target", "bin", "output")
+	os.MkdirAll(filepath.Dir(targetBin), 0o755)
+	os.WriteFile(targetBin, []byte("binary content"), 0o644)
+
+	out, err := findHandler(sb, FindInput{Pattern: "*", Path: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range out.Files {
+		if strings.Contains(f, "target") {
+			t.Errorf("target directory should be skipped, but found %s", f)
+		}
+	}
+}
+
+func TestGrepSkipsTargetDir(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("func main() {}"), 0o644)
+
+	// Create target/ directory with a binary containing the pattern
+	targetBin := filepath.Join(dir, "target", "output")
+	os.MkdirAll(filepath.Dir(targetBin), 0o755)
+	os.WriteFile(targetBin, []byte("func main() {}"), 0o644)
+
+	out, err := grepHandler(sb, GrepInput{Pattern: "func"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range out.Matches {
+		if strings.Contains(m.File, "target") {
+			t.Errorf("target directory should be skipped, but found match in %s", m.File)
+		}
+	}
+}
+
+func TestGrepSkipsGitignoredFiles(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("password = secret\n"), 0o644)
+
+	// Create a .env file that would be gitignored
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("password = secret\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".env\n"), 0o644)
+
+	out, err := grepHandler(sb, GrepInput{Pattern: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 1 {
+		t.Errorf("expected 1 match (main.go only), got %d: %v", len(out.Matches), out.Matches)
+	}
+	if out.Matches[0].File != "main.go" {
+		t.Errorf("expected match in main.go, got %s", out.Matches[0].File)
+	}
+}

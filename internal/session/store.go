@@ -23,15 +23,24 @@ import (
 	"github.com/dimetron/pi-go/internal/atif"
 )
 
+// PlanContext holds the /plan session context for resume.
+type PlanContext struct {
+	TaskName  string `json:"taskName,omitempty"`
+	RoughIdea string `json:"roughIdea,omitempty"`
+	SpecDir   string `json:"specDir,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+}
+
 // Meta holds session metadata persisted in meta.json.
 type Meta struct {
-	ID        string    `json:"id"`
-	AppName   string    `json:"appName"`
-	UserID    string    `json:"userID"`
-	WorkDir   string    `json:"workDir,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID          string       `json:"id"`
+	AppName     string       `json:"appName"`
+	UserID      string       `json:"userID"`
+	WorkDir     string       `json:"workDir,omitempty"`
+	Model       string       `json:"model,omitempty"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	UpdatedAt   time.Time    `json:"updatedAt"`
+	PlanContext *PlanContext `json:"planContext,omitempty"`
 }
 
 // FileService implements session.Service with file-based JSONL persistence.
@@ -369,6 +378,37 @@ func (s *FileService) ATIFWriter(sessionID string) *atif.Writer {
 		return sess.atifWriter
 	}
 	return nil
+}
+
+// UpdatePlanContext updates the plan session context in the session metadata.
+// Pass nil to clear the context.
+func (s *FileService) UpdatePlanContext(sessionID string, ctx *PlanContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.PlanContext = ctx
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	return writeMeta(sessionDir, &sess.meta)
+}
+
+// GetPlanContext returns the plan context for the given session, or nil if not found.
+func (s *FileService) GetPlanContext(sessionID string) (*PlanContext, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	return sess.meta.PlanContext, nil
 }
 
 // LastSessionID returns the most recently updated session ID, or "" if none.

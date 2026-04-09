@@ -59,16 +59,39 @@ func Complete(input string, skills []extension.Skill, workDir string) *CompleteR
 	case CompletionTypeSkill:
 		candidates = matchingSkills(input, skills)
 	case CompletionTypeSpec:
+		// For /run <arg> and /plan <arg>, show spec completions.
 		candidates = matchingSpecs(input, workDir)
 	}
 
-	// Filter out exact matches for single candidates (no ghost for exact match)
-	// But keep them if there are multiple candidates
-	if len(candidates) > 1 {
+	// For /plan <arg>, also include command completions like /plan resume
+	// (both spec and command completions are valid after "/plan ")
+	if strings.HasPrefix(input, "/plan ") {
+		candidates = append(candidates, matchingCommands(input)...)
+	}
+
+	// Deduplicate by Text (specs and commands may overlap).
+	seen := make(map[string]bool)
+	deduped := make([]CompletionCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if !seen[c.Text] {
+			seen[c.Text] = true
+			deduped = append(deduped, c)
+		}
+	}
+	candidates = deduped
+
+	// Filter out exact matches for command completion only when there are multiple candidates.
+	// If user types a full command like "/skills", don't offer it as ghost when there are
+	// alternatives. But if it's the only match, keep it so Tab confirms the input.
+	if completionType == CompletionTypeCommand && len(candidates) > 1 {
 		filtered := make([]CompletionCandidate, 0)
 		for _, c := range candidates {
+			// Remove exact matches
 			if c.Text != input {
-				filtered = append(filtered, c)
+				// Remove candidates shorter than input (e.g., "/plan" when input is "/plan ")
+				if len(c.Text) >= len(input) {
+					filtered = append(filtered, c)
+				}
 			}
 		}
 		candidates = filtered
@@ -93,8 +116,10 @@ func detectCompletionType(input string) CompletionType {
 		return CompletionTypeCommand
 	}
 
-	// Check for spec completion (/plan <arg> or /run <arg>)
-	if strings.HasPrefix(input, "/plan ") || strings.HasPrefix(input, "/run ") {
+	// Check for spec completion.
+	// Both /run <arg> and /plan <arg> complete from specs directory.
+	// NOTE: /plan resume is handled as command completion (matched by /plan r).
+	if strings.HasPrefix(input, "/run ") || strings.HasPrefix(input, "/plan ") {
 		return CompletionTypeSpec
 	}
 
@@ -104,18 +129,38 @@ func detectCompletionType(input string) CompletionType {
 		return CompletionTypeCommand
 	}
 
+	// Input has a space after / - check if it's a command with arguments (e.g., "/plan ")
+	// These should still be matched as commands (e.g., "/plan " matches "/plan resume")
+	if strings.HasPrefix(input, "/") {
+		return CompletionTypeCommand
+	}
+
 	return CompletionTypeNone
 }
 
 // matchingCommands returns all command candidates matching the prefix.
 func matchingCommands(prefix string) []CompletionCandidate {
-	prefix = strings.ToLower(prefix)
+	prefixLower := strings.ToLower(prefix)
 
 	var candidates []CompletionCandidate
 
 	// Check against slash commands
 	for _, cmd := range slashCommands {
-		if strings.HasPrefix(strings.ToLower(cmd), prefix) {
+		cmdLower := strings.ToLower(cmd)
+		// Match if command starts with prefix
+		if strings.HasPrefix(cmdLower, prefixLower) {
+			// If prefix has a trailing space (e.g., "/plan "), only match commands
+			// that have more content after that space (e.g., "/plan resume")
+			// Don't match "/plan" alone since that's just the command name
+			if strings.HasSuffix(prefix, " ") {
+				// Check if there's actually something after the space in the command
+				// e.g., prefix="/plan " should match "/plan resume" but not "/plan"
+				afterPrefix := cmdLower[len(prefixLower):]
+				if afterPrefix == "" {
+					// Command ends at the space (e.g., "/plan"), skip it
+					continue
+				}
+			}
 			desc := slashCommandDesc(cmd)
 			candidates = append(candidates, CompletionCandidate{
 				Text:        cmd,
@@ -182,8 +227,9 @@ func matchingSpecs(input string, workDir string) []CompletionCandidate {
 	return candidates
 }
 
-// listSpecs scans the specs/ directory for subdirectories containing PROMPT.md.
-// Returns a sorted list of spec names.
+// listSpecs scans the specs/ directory (including nested subdirectories) for
+// subdirectories containing PROMPT.md. Returns a sorted list of spec names.
+// Nested specs use relative paths (e.g. "tools/001-a2a-client").
 func listSpecs(workDir string) ([]string, error) {
 	if workDir == "" {
 		return nil, nil
@@ -191,23 +237,32 @@ func listSpecs(workDir string) ([]string, error) {
 
 	specsDir := filepath.Join(workDir, "specs")
 
-	entries, err := os.ReadDir(specsDir)
+	var specs []string
+	err := filepath.WalkDir(specsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		// Only consider directories that contain PROMPT.md
+		if !d.IsDir() {
+			return nil
+		}
+		promptPath := filepath.Join(path, "PROMPT.md")
+		if _, err := os.Stat(promptPath); err != nil {
+			return nil
+		}
+		// Compute the relative path from specsDir
+		rel, err := filepath.Rel(specsDir, path)
+		if err != nil {
+			return nil
+		}
+		specs = append(specs, rel)
+		return nil
+	})
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
-	}
-
-	var specs []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		promptPath := filepath.Join(specsDir, entry.Name(), "PROMPT.md")
-		if _, err := os.Stat(promptPath); err == nil {
-			specs = append(specs, entry.Name())
-		}
 	}
 
 	sort.Strings(specs)

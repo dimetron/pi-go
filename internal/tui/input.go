@@ -141,9 +141,29 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.SelectedIndex = im.CompletionResult.Selected
 		} else if im.Text == "/" || im.CyclingIdx >= 0 {
 			allCmds := im.AllCommandNames()
-			if len(allCmds) > 0 {
-				im.CyclingIdx = (im.CyclingIdx + 1) % len(allCmds)
-				im.Text = allCmds[im.CyclingIdx]
+			// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
+			// but NOT when input is "/" alone or a complete command (don't filter by "/agents")
+			prefix := strings.ToLower(im.Text)
+			var filteredCmds []string
+			for _, cmd := range allCmds {
+				if strings.HasPrefix(strings.ToLower(cmd), prefix) {
+					filteredCmds = append(filteredCmds, cmd)
+				}
+			}
+			// Determine which list to cycle through:
+			// - Use filtered list if it has more than 1 match
+			// - Use all commands if filtered list has 0 or 1 match (cycling should go through all)
+			cycleCmds := filteredCmds
+			if len(filteredCmds) <= 1 {
+				cycleCmds = allCmds
+			}
+			if len(cycleCmds) > 0 {
+				if im.CyclingIdx < 0 || im.CyclingIdx >= len(cycleCmds) {
+					im.CyclingIdx = 0
+				} else {
+					im.CyclingIdx = (im.CyclingIdx + 1) % len(cycleCmds)
+				}
+				im.Text = cycleCmds[im.CyclingIdx]
 				im.CursorPos = len(im.Text)
 			}
 		} else {
@@ -365,8 +385,21 @@ func (im *InputModel) View(running bool) string {
 		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 		allCmds := im.AllCommandNames()
+		// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
+		prefix := strings.ToLower(im.Text)
+		var filteredCmds []string
+		for _, cmd := range allCmds {
+			if strings.HasPrefix(strings.ToLower(cmd), prefix) {
+				filteredCmds = append(filteredCmds, cmd)
+			}
+		}
+		// Use filtered list if it has more than 1 match, otherwise show all
+		cycleCmds := filteredCmds
+		if len(filteredCmds) <= 1 {
+			cycleCmds = allCmds
+		}
 		var menu strings.Builder
-		for i, cmd := range allCmds {
+		for i, cmd := range cycleCmds {
 			desc := slashCommandDesc(cmd)
 			if desc == "" {
 				for _, skill := range im.Skills {
@@ -508,6 +541,7 @@ var slashCommands = []string{
 	"/login",
 	"/commit",
 	"/plan",
+	"/plan resume",
 	"/run",
 	"/skills",
 	"/theme",
@@ -547,6 +581,8 @@ func slashCommandDesc(cmd string) string {
 		return "Create commit from staged changes"
 	case "/plan":
 		return "Start PDD planning session"
+	case "/plan resume":
+		return "Resume interrupted plan session"
 	case "/run":
 		return "Execute a spec with task agent"
 	case "/theme":
