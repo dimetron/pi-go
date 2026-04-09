@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 
 	"google.golang.org/adk/tool"
 
@@ -31,9 +32,10 @@ type LSPPositionInput struct {
 
 // LSPDiagnosticsOutput is the output of the lsp-diagnostics tool.
 type LSPDiagnosticsOutput struct {
-	File        string            `json:"file"`
-	Diagnostics []DiagnosticEntry `json:"diagnostics"`
-	Error       string            `json:"error,omitempty"`
+	File           string            `json:"file"`
+	Diagnostics    []DiagnosticEntry `json:"diagnostics"`
+	LSPDiagnostics string            `json:"lsp_diagnostics"` // styled string for display (compatible with formatToolResult)
+	Error          string            `json:"error,omitempty"`
 }
 
 // DiagnosticEntry is a single diagnostic for tool output.
@@ -186,9 +188,34 @@ func lspDiagnosticsHandler(_ tool.Context, mgr *lsp.Manager, input LSPFileInput)
 	cached := mgr.CachedDiagnostics(uri)
 
 	return LSPDiagnosticsOutput{
-		File:        input.File,
-		Diagnostics: convertDiagnostics(cached),
+		File:           input.File,
+		Diagnostics:    convertDiagnostics(cached),
+		LSPDiagnostics: formatDiagnosticsForDisplay(input.File, cached),
 	}, nil
+}
+
+// formatDiagnosticsForDisplay formats diagnostics for human-readable display.
+func formatDiagnosticsForDisplay(file string, diags []lsp.Diagnostic) string {
+	if len(diags) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, d := range diags {
+		if d.Severity > lsp.SeverityWarning {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s:%d:%d: %s: %s",
+			filepath.Base(file),
+			d.Range.Start.Line+1,
+			d.Range.Start.Character+1,
+			d.SeverityString(),
+			d.Message,
+		))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "⚠ " + strings.Join(lines, "\n⚠ ")
 }
 
 func lspDefinitionHandler(_ tool.Context, mgr *lsp.Manager, input LSPPositionInput) (LSPLocationsOutput, error) {

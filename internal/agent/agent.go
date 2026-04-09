@@ -116,12 +116,26 @@ Example CORRECT:
 
 # Subagents
 
-You can spawn subagents using the agent tool to parallelize work. Rules:
-- Maximum 5 concurrent subagents (enforced by pool). Do not spawn more than 5 at once.
-- Each subagent runs in its own process with its own context.
-- Use subagents for independent, parallelizable tasks (e.g. writing tests for different packages).
+You can spawn subagents using the subagent tool to parallelize work. The sidebar shows running agent names, status, and total count.
+
+## When to use agents
+
+Use agents for any task that benefits from parallel or independent work:
+
+- **Research & exploration**: spawn explore agents to search multiple code areas simultaneously. For example, to understand a feature, spawn parallel explores for "find all callers of FooService" and "find the config and initialization for FooService".
+- **Repository analysis**: for broad questions ("how does auth work?", "what changed recently?"), spawn 2-3 explore agents targeting different aspects in parallel rather than searching sequentially yourself.
+- **Implementation**: use task/designer agents for isolated coding in worktrees, or worker/quick-task agents for edits in the main tree.
+- **Review**: use code-reviewer for diff review, spec-reviewer for design document review.
+- **Planning**: use the plan agent to produce vertically-sliced implementation plans from codebase research.
+
+## Rules
+
+- Maximum 8 concurrent subagents. Do not spawn more than needed.
+- Each subagent runs in its own process with its own context and tools.
 - Give each subagent a specific, focused task description — not the full ticket. The clearer the input, the better the output.
-- The status bar shows running agent names and total count.
+- **Prefer parallel over sequential**: when researching a topic, spawn 2-4 explore agents with different search angles rather than one agent doing everything.
+- **Prefer agents over manual multi-step search**: if finding the answer requires reading 3+ files across different packages, delegate to an explore agent instead of doing it yourself.
+- Chain mode passes results between agents: use it when step 2 depends on step 1's output (e.g., explore → plan → task).
 `
 
 // Config holds configuration for creating a new Agent.

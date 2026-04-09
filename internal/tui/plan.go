@@ -51,7 +51,86 @@ func toKebabCase(idea string) string {
 	return s
 }
 
+// specCategories maps keywords to spec category folders.
+// Order matters: first match wins, so more specific keywords come first.
+var specCategories = []struct {
+	category string
+	keywords []string
+}{
+	{"skills", []string{"skill", "audit skill", "skill-", "SKILL.md"}},
+	{"memory", []string{"memory", "palace", "mem-", "memoir", "remember", "recall", "embedding"}},
+	{"sessions", []string{"session", "log optim", "conversation", "recovery", "replay", "trajectory", "atif"}},
+	{"tools", []string{"tool", "lsp", "completion", "command", "tui", "sidebar", "provider", "ollama", "oauth", "login", "web-serve", "webserver", "subagent", "agent", "test", "bench", "eval"}},
+}
+
+// detectCategory inspects the rough idea text and returns the matching
+// spec category. Returns "tools" as the default if no keywords match.
+func detectCategory(roughIdea string) string {
+	lower := strings.ToLower(roughIdea)
+	for _, cat := range specCategories {
+		for _, kw := range cat.keywords {
+			if strings.Contains(lower, kw) {
+				return cat.category
+			}
+		}
+	}
+	return "tools" // default category
+}
+
+// nextSpecNumber scans a category directory under specs/ and returns the
+// next zero-padded number prefix (e.g. "004"). If the category directory
+// doesn't exist yet, returns "001".
+func nextSpecNumber(workDir, category string) string {
+	catDir := filepath.Join(workDir, "specs", category)
+	entries, err := os.ReadDir(catDir)
+	if err != nil {
+		return "001"
+	}
+
+	maxNum := 0
+	numRe := regexp.MustCompile(`^(\d{3})-`)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		m := numRe.FindStringSubmatch(e.Name())
+		if m != nil {
+			n := 0
+			for _, c := range m[1] {
+				n = n*10 + int(c-'0')
+			}
+			if n > maxNum {
+				maxNum = n
+			}
+		}
+	}
+	return fmt.Sprintf("%03d", maxNum+1)
+}
+
+// findExistingSpec searches a category directory for an existing spec whose
+// name (after the NNN- prefix) matches baseName. Returns the full relative
+// path from specs/ (e.g. "tools/001-my-feature") or "" if not found.
+func findExistingSpec(workDir, category, baseName string) string {
+	catDir := filepath.Join(workDir, "specs", category)
+	entries, err := os.ReadDir(catDir)
+	if err != nil {
+		return ""
+	}
+	numPrefix := regexp.MustCompile(`^\d{3}-`)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		stripped := numPrefix.ReplaceAllString(e.Name(), "")
+		if stripped == baseName {
+			return filepath.Join(category, e.Name())
+		}
+	}
+	return ""
+}
+
 // createSpecSkeleton creates the spec directory skeleton for a /plan task.
+// The taskName may include a category prefix (e.g. "tools/003-my-feature").
 // Returns the spec directory path or an error if the directory already exists.
 func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 	specDir := filepath.Join(workDir, "specs", taskName)
@@ -107,7 +186,17 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	}
 
 	roughIdea := strings.Join(parts, " ")
-	taskName := toKebabCase(roughIdea)
+	baseName := toKebabCase(roughIdea)
+
+	// Detect category and check for existing spec with the same base name.
+	category := detectCategory(roughIdea)
+	var taskName string
+	if existing := findExistingSpec(m.cfg.WorkDir, category, baseName); existing != "" {
+		taskName = existing
+	} else {
+		num := nextSpecNumber(m.cfg.WorkDir, category)
+		taskName = filepath.Join(category, num+"-"+baseName)
+	}
 
 	specDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
 	if err != nil {

@@ -210,6 +210,51 @@ func TestListAvailableSpecs(t *testing.T) {
 	}
 }
 
+func TestListAvailableSpecs_Nested(t *testing.T) {
+	tmpDir := t.TempDir()
+	specsDir := filepath.Join(tmpDir, "specs")
+
+	// Flat spec.
+	flat := filepath.Join(specsDir, "flat-spec")
+	if err := os.MkdirAll(flat, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flat, "PROMPT.md"), []byte("# Flat"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nested spec under a focus area subfolder.
+	nested := filepath.Join(specsDir, "skills", "skills-audit")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "PROMPT.md"), []byte("# Nested"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Subfolder without PROMPT.md (should be excluded).
+	noPrompt := filepath.Join(specsDir, "skills", "no-prompt")
+	if err := os.MkdirAll(noPrompt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	specs, err := listAvailableSpecs(tmpDir)
+	if err != nil {
+		t.Fatalf("listAvailableSpecs failed: %v", err)
+	}
+
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs, got %d: %v", len(specs), specs)
+	}
+	if specs[0] != "flat-spec" {
+		t.Errorf("specs[0] = %q, want %q", specs[0], "flat-spec")
+	}
+	expected := filepath.Join("skills", "skills-audit")
+	if specs[1] != expected {
+		t.Errorf("specs[1] = %q, want %q", specs[1], expected)
+	}
+}
+
 func TestListAvailableSpecs_NoSpecsDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	specs, err := listAvailableSpecs(tmpDir)

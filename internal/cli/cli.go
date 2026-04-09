@@ -226,6 +226,13 @@ func runNonInteractive(
 	}
 	defer func() { _ = sandbox.Close() }()
 
+	// Allow agent tools to access ~/.pi-go/ (logs, sessions, config).
+	if home, hErr := os.UserHomeDir(); hErr == nil {
+		if aErr := sandbox.AddExtraDir(filepath.Join(home, ".pi-go")); aErr != nil {
+			fmt.Fprintf(os.Stderr, "pi-go: warning: could not add ~/.pi-go to sandbox: %v\n", aErr)
+		}
+	}
+
 	coreTools, err := tools.CoreTools(sandbox)
 	if err != nil {
 		return fmt.Errorf("creating core tools: %w", err)

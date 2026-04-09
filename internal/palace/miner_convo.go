@@ -73,6 +73,7 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 			return nil
 		}
 
+		fileAdded, fileSkipped, fileErrors := 0, 0, 0
 		for i, ex := range exchanges {
 			result.Processed++
 
@@ -91,13 +92,20 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 				var dupErr *DuplicateError
 				if errors.As(addErr, &dupErr) {
 					result.Skipped++
+					fileSkipped++
 				} else {
 					result.Errors++
+					fileErrors++
 					slog.Warn("mine-convo: add drawer", "file", relPath, "exchange", i, "error", addErr)
 				}
 				continue
 			}
 			result.Added++
+			fileAdded++
+		}
+
+		if cfg.Progress != nil {
+			cfg.Progress(relPath, fileAdded, fileSkipped, fileErrors)
 		}
 		return nil
 	})

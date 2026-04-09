@@ -2,9 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
+
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // SidebarWidth is the fixed width of the right sidebar.
@@ -26,11 +30,14 @@ type SidebarRenderInput struct {
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep // steps from plan.md during /run
-	RunPhase     string          // current /run phase (empty if not running)
-	RunSpec      string          // spec name during /run
-	RunCycle     int             // current retry cycle
-	RunMaxCycle  int             // max retries
+	RunChecklist []ChecklistStep        // steps from plan.md during /run
+	RunPhase     string                 // current /run phase (empty if not running)
+	RunSpec      string                 // spec name during /run
+	RunCycle     int                    // current retry cycle
+	RunMaxCycle  int                    // max retries
+	MatrixLines  string                 // pre-rendered matrix rain (2 lines)
+	StatusLine   string                 // status text shown above matrix
+	Orchestrator *subagent.Orchestrator // may be nil — for agents section
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -40,10 +47,10 @@ func RenderSidebar(in SidebarRenderInput) string {
 		w = 10
 	}
 
-	fg := lipgloss.Color("252")
-	dimFg := lipgloss.Color("246")
-	borderFg := lipgloss.Color("245")
-	headingFg := lipgloss.Color("75") // blue
+	fg := lipgloss.Color("#cdd6f4")        // Mocha text
+	dimFg := lipgloss.Color("#a6adc8")     // Mocha subtext0
+	borderFg := lipgloss.Color("#45475a")  // Mocha surface1
+	headingFg := lipgloss.Color("#89b4fa") // Mocha blue
 
 	dim := lipgloss.NewStyle().Foreground(dimFg)
 	heading := lipgloss.NewStyle().Foreground(headingFg).Bold(true)
@@ -56,12 +63,13 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	// --- Eyes / mood ---
 	if in.Eyes != "" {
-		eyeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+		eyeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
 		moodLine := eyeStyle.Render(fmt.Sprintf("  %s", in.Eyes))
 		lines = append(lines, "", moodLine, "")
 	}
 
 	// --- Context section ---
+	sidebarBg := lipgloss.Color("#181825") // Catppuccin Mocha mantle (subtle dark)
 	lines = append(lines, heading.Render("  Context"))
 	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
 		total := tt.TotalUsed()
@@ -69,7 +77,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 		pct := tt.PercentUsed()
 		lines = append(lines, dim.Render(fmt.Sprintf("  %s / %s",
 			formatTokenCount(total), formatTokenCount(limit))))
-		lines = append(lines, "  "+renderContextBar(pct, lipgloss.NoColor{}))
+		lines = append(lines, "  "+renderContextBar(pct, sidebarBg))
 	} else {
 		ctxChars := 0
 		for _, msg := range in.Messages {
@@ -103,8 +111,8 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, heading.Render("  Git"))
 		lines = append(lines, dim.Render(fmt.Sprintf("  ⎇ %s", in.GitBranch)))
 		if in.DiffAdded > 0 || in.DiffRemoved > 0 {
-			addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-			delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
+			delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
 			lines = append(lines, "  "+
 				addStyle.Render(fmt.Sprintf("+%d", in.DiffAdded))+
 				dim.Render(" ")+
@@ -123,14 +131,14 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, heading.Render(runHeading))
 
 		// Phase and cycle info.
-		phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
 		lines = append(lines, phaseStyle.Render(fmt.Sprintf("  cycle %d/%d · %s",
 			in.RunCycle, in.RunMaxCycle, in.RunPhase)))
 		lines = append(lines, "")
 
 		// Checklist items.
-		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))  // green
-		todoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246")) // gray
+		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")) // green
+		todoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086")) // gray
 
 		for _, step := range in.RunChecklist {
 			title := step.Title
@@ -164,7 +172,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 			mode = "chat"
 		}
 		if mode == "plan" {
-			modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+			modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
 			lines = append(lines, modeStyle.Render("  [plan]"))
 		} else {
 			lines = append(lines, dim.Render("  ["+mode+"]"))
@@ -181,38 +189,171 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	lines = append(lines, "")
 
+	// --- Agents section ---
+	if in.Orchestrator != nil {
+		agents := in.Orchestrator.List()
+		if len(agents) > 0 {
+			// Sort agents for stable rendering: running first, then by start time.
+			sort.Slice(agents, func(i, j int) bool {
+				pi, pj := agentStatusPriority(agents[i].Status), agentStatusPriority(agents[j].Status)
+				if pi != pj {
+					return pi < pj
+				}
+				if !agents[i].StartedAt.Equal(agents[j].StartedAt) {
+					return agents[i].StartedAt.Before(agents[j].StartedAt)
+				}
+				return agents[i].AgentID < agents[j].AgentID
+			})
+
+			var running, failed int
+			for _, a := range agents {
+				switch a.Status {
+				case "running":
+					running++
+				case "failed":
+					failed++
+				}
+			}
+
+			agentHeadingFg := lipgloss.Color("#a6e3a1") // green
+			if running > 0 {
+				agentHeadingFg = lipgloss.Color("#fab387") // orange when active
+			}
+			if failed > 0 {
+				agentHeadingFg = lipgloss.Color("#f38ba8") // red if any failed
+			}
+			agentHeading := lipgloss.NewStyle().Foreground(agentHeadingFg).Bold(true)
+			lines = append(lines, agentHeading.Render(fmt.Sprintf("  Agents [%d]", len(agents))))
+
+			// Show individual agents with name and status.
+			// Add incrementing suffix when multiple agents share the same type.
+			runStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
+			doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
+			failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
+			killStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086"))
+
+			typeCounts := make(map[string]int) // count occurrences of each type
+			for _, a := range agents {
+				t := a.Type
+				if t == "" {
+					t = "agent"
+				}
+				typeCounts[t]++
+			}
+			typeSeq := make(map[string]int) // running sequence per type
+
+			for _, a := range agents {
+				name := a.Type
+				if name == "" {
+					name = "agent"
+				}
+				if typeCounts[name] > 1 {
+					typeSeq[name]++
+					name = fmt.Sprintf("%s-%d", name, typeSeq[name])
+				}
+				maxName := innerW - 6 // room for "  ⚡ " prefix + status icon
+				if maxName < 6 {
+					maxName = 6
+				}
+				if len(name) > maxName {
+					name = name[:maxName-1] + "…"
+				}
+				switch a.Status {
+				case "running":
+					lines = append(lines, runStyle.Render("  ⚡ "+name))
+				case "done":
+					lines = append(lines, doneStyle.Render("  ✓ "+name))
+				case "failed":
+					lines = append(lines, failStyle.Render("  ✗ "+name))
+				case "killed":
+					lines = append(lines, killStyle.Render("  ⊘ "+name))
+				default:
+					lines = append(lines, dim.Render("  · "+name))
+				}
+			}
+			lines = append(lines, "")
+		}
+	}
+
 	// --- Loading section ---
 	if in.LoadingItems != nil {
 		lines = append(lines, heading.Render("  Loading"))
 		for _, name := range sortedKeys(in.LoadingItems) {
 			if in.LoadingItems[name] {
-				okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+				okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
 				lines = append(lines, okStyle.Render("  ✓ "+name))
 			} else {
-				loadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+				loadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
 				lines = append(lines, loadStyle.Render("  ◌ "+name+"..."))
 			}
 		}
 		lines = append(lines, "")
 	}
 
-	// Join content and pad to fill height.
+	// Join content and pad to fill height, reserving 3 lines for status + matrix.
+	hasMatrix := in.MatrixLines != ""
+	matrixH := 0
+	statusH := 0
+	if hasMatrix {
+		matrixH = matrixLines
+		statusH = 1 // 1 line for status separator
+	}
 	content := strings.Join(lines, "\n")
 	contentLines := strings.Split(content, "\n")
-	for len(contentLines) < in.Height {
-		contentLines = append(contentLines, "")
+	targetH := in.Height - matrixH - statusH
+	if len(contentLines) < targetH {
+		// Fill remaining space with subtle dim separators or spacer text.
+		fillerStyle := lipgloss.NewStyle().Foreground(dimFg)
+		for len(contentLines) < targetH {
+			contentLines = append(contentLines, fillerStyle.Render("  ···"))
+		}
 	}
-	if len(contentLines) > in.Height {
-		contentLines = contentLines[:in.Height]
+	if len(contentLines) > targetH {
+		contentLines = contentLines[:targetH]
+	}
+
+	// Add status separator line above matrix (if active).
+	if hasMatrix {
+		statusStyle := lipgloss.NewStyle().Foreground(dimFg)
+		statusText := in.StatusLine
+		if statusText == "" {
+			statusText = "──── tokens ────"
+		}
+		// Truncate status text to fit (rune-safe)
+		maxStatusW := w - 4
+		if runewidth.StringWidth(statusText) > maxStatusW {
+			statusText = runewidth.Truncate(statusText, maxStatusW-1, "─")
+		}
+		contentLines = append(contentLines, statusStyle.Render(statusText))
+		contentLines = append(contentLines, strings.Split(in.MatrixLines, "\n")...)
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with left border.
+	// Wrap in a styled box with subtle dark background (Mocha mantle),
+	// left border to separate from main panel.
 	box := lipgloss.NewStyle().
 		Width(w).
+		Background(sidebarBg).
 		BorderStyle(lipgloss.Border{Left: "│"}).
 		BorderLeft(true).
 		BorderForeground(borderFg)
 
 	return box.Render(content)
+}
+
+// agentStatusPriority returns a sort key for agent status.
+// Running agents appear first, then done, then failed/killed.
+func agentStatusPriority(status string) int {
+	switch status {
+	case "running":
+		return 0
+	case "done", "completed":
+		return 1
+	case "failed":
+		return 2
+	case "killed":
+		return 3
+	default:
+		return 4
+	}
 }

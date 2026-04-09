@@ -408,6 +408,10 @@ func formatToolResult(data map[string]any) string {
 	if r, ok := data["replacements"].(float64); ok {
 		return fmt.Sprintf("%d replacements", int(r))
 	}
+	// lsp_diagnostics: show diagnostics (already prefixed with ⚠ by formatDiagnosticsForDisplay)
+	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
+		return diag
+	}
 	// bash tool: show exit code + truncated stdout
 	if code, ok := data["exit_code"].(float64); ok {
 		stdout, _ := data["stdout"].(string)

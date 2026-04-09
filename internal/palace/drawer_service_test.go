@@ -6,26 +6,6 @@ import (
 	"testing"
 )
 
-// mockEmbedder is a test helper that returns pre-configured embeddings.
-type mockEmbedder struct {
-	vectors  map[string][]float32 // content → embedding
-	fallback []float32
-}
-
-func (m *mockEmbedder) embed(texts []string) ([][]float32, error) {
-	result := make([][]float32, len(texts))
-	for i, t := range texts {
-		if v, ok := m.vectors[t]; ok {
-			result[i] = v
-		} else if m.fallback != nil {
-			result[i] = m.fallback
-		} else {
-			result[i] = make([]float32, 4)
-		}
-	}
-	return result, nil
-}
-
 // newTestDrawerService creates an in-memory store + DrawerService with a fakeEmbedder.
 // The fakeEmbedder uses a stub Embedder wrapper so we can inject mock vectors.
 func newTestDrawerService(t *testing.T, embedder *Embedder) *DrawerService {

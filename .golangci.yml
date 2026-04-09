@@ -68,8 +68,8 @@ linters:
       - path: internal/tools/
         linters:
           - nilerr
-      # LSP/hook/callback wrappers intentionally swallow errors into result fields.
-      - path: internal/(lsp|cli|memory|tui)/
+      # LSP/hook/callback wrappers and miners intentionally swallow errors into result fields.
+      - path: internal/(lsp|cli|memory|tui|palace)/
         linters:
           - nilerr
       # Package comments: internal packages don't need them.

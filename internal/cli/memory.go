@@ -17,6 +17,7 @@ initialize palace databases, and view palace status.`,
 	cmd.AddCommand(newMemorySearchCmd())
 	cmd.AddCommand(newMemoryKGCmd())
 	cmd.AddCommand(newMemoryWakeUpCmd())
+	cmd.AddCommand(newMemoryRecentCmd())
 
 	return cmd
 }

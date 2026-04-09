@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // StatusModel manages the status bar display at the bottom of the TUI.
@@ -31,11 +29,10 @@ type StatusRenderInput struct {
 	ProviderName string
 	ModelName    string
 	Running      bool
-	Mode         string                 // "chat" or "plan"
-	Eyes         string                 // mood eyes e.g. "◕ ◕"
-	Messages     []message              // for context estimate
-	TokenTracker TokenTracker           // may be nil
-	Orchestrator *subagent.Orchestrator // may be nil
+	Mode         string       // "chat" or "plan"
+	Eyes         string       // mood eyes e.g. "◕ ◕"
+	Messages     []message    // for context estimate
+	TokenTracker TokenTracker // may be nil
 	DiffAdded    int
 	DiffRemoved  int
 	RunCycle     *runCycleInfo   // may be nil
@@ -71,15 +68,15 @@ func renderContextBar(pct float64, bg color.Color) string {
 	var fg color.Color
 	switch {
 	case pct >= 80:
-		fg = lipgloss.Color("196") // red
+		fg = lipgloss.Color("#f38ba8") // Mocha red
 	case pct >= 60:
-		fg = lipgloss.Color("214") // orange
+		fg = lipgloss.Color("#fab387") // Mocha peach
 	default:
-		fg = lipgloss.Color("35") // green
+		fg = lipgloss.Color("#a6e3a1") // Mocha green
 	}
 
 	filledStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
-	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("240"))
+	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("#585b70")) // Mocha surface2
 	pctStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
 
 	return filledStyle.Render(strings.Repeat("█", filled)) +
@@ -89,35 +86,39 @@ func renderContextBar(pct float64, bg color.Color) string {
 
 // Render renders the status bar string.
 func (s *StatusModel) Render(in StatusRenderInput) string {
-	bg := lipgloss.Color("236")
-	fg := lipgloss.Color("252")
-	dimFg := lipgloss.Color("246")
+	fg := lipgloss.Color("#cdd6f4")    // Mocha text
+	dimFg := lipgloss.Color("#bac2de") // Mocha subtext1
 
-	bright := lipgloss.NewStyle().Background(bg).Foreground(fg)
-	dim := lipgloss.NewStyle().Background(bg).Foreground(dimFg)
-	bar := lipgloss.NewStyle().Background(bg).Width(s.Width)
+	bright := lipgloss.NewStyle().Foreground(fg)
+	dim := lipgloss.NewStyle().Foreground(dimFg)
+	bar := lipgloss.NewStyle().Width(s.Width)
 
-	sep := dim.Render("  |  ")
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+	sep := sepStyle.Render("  │  ")
 
 	var parts []string
 
-	// Mode indicator: [chat] or [plan].
+	// Mode indicator: [chat] or [plan], with spinner verb when running.
 	mode := in.Mode
 	if mode == "" {
 		mode = "chat"
 	}
 	if mode == "plan" {
-		modeStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange/warning
+		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
 		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", mode)))
+	} else if in.Running && s.ActiveTool == "" {
+		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
+		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
 	} else {
 		parts = append(parts, dim.Render(fmt.Sprintf(" [%s]", mode)))
 	}
 
 	// Provider | Model.
+	modelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af")) // Mocha yellow
 	if in.ProviderName != "" {
-		parts = append(parts, bright.Render(fmt.Sprintf("%s | %s", in.ProviderName, in.ModelName)))
+		parts = append(parts, bright.Render(in.ProviderName+" │ ")+modelStyle.Render(in.ModelName))
 	} else {
-		parts = append(parts, bright.Render(in.ModelName))
+		parts = append(parts, modelStyle.Render(in.ModelName))
 	}
 
 	// Loading progress (replaces normal status content during init).
@@ -125,10 +126,10 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		var items []string
 		for _, name := range sortedKeys(in.LoadingItems) {
 			if in.LoadingItems[name] {
-				okStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("35")) // green
+				okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")) // Mocha green
 				items = append(items, okStyle.Render(name+" \u2713"))
 			} else {
-				loadStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange
+				loadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
 				items = append(items, loadStyle.Render(name+"..."))
 			}
 		}
@@ -137,9 +138,10 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	}
 
 	// Context % bar (visual bar with color coding).
+	noBg := lipgloss.Color("#00000000") // transparent for context bar
 	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
 		pct := tt.PercentUsed()
-		parts = append(parts, renderContextBar(pct, bg))
+		parts = append(parts, renderContextBar(pct, noBg))
 	} else {
 		// Fallback: rough context size estimate (~4 chars per token).
 		ctxChars := 0
@@ -164,9 +166,9 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			var tokenStyle lipgloss.Style
 			switch {
 			case pct >= 100:
-				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("196")) // red
+				tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8")) // Mocha red
 			case pct >= 80:
-				tokenStyle = lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214")) // orange
+				tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
 			default:
 				tokenStyle = dim
 			}
@@ -179,74 +181,27 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 
 	// Git branch.
 	if s.GitBranch != "" {
-		parts = append(parts, bright.Render(fmt.Sprintf("\u2387 %s", s.GitBranch)))
+		branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")) // Mocha teal
+		parts = append(parts, branchStyle.Render(fmt.Sprintf("\u2387 %s", s.GitBranch)))
 	}
 
 	// Active tools or thinking status.
+	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
 	if len(s.ActiveTools) > 1 {
-		// Multiple tools running in parallel.
 		var toolNames []string
 		for name := range s.ActiveTools {
 			toolNames = append(toolNames, name)
 		}
 		sort.Strings(toolNames)
-		parts = append(parts, bright.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", "))))
+		parts = append(parts, toolStyle.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", "))))
 	} else if s.ActiveTool != "" {
 		elapsed := time.Since(s.ToolStart).Truncate(time.Millisecond)
-		parts = append(parts, bright.Render(fmt.Sprintf("tool: %s (%s)", s.ActiveTool, elapsed)))
-	} else if in.Running {
-		parts = append(parts, dim.Render("thinking..."))
-	}
-
-	// Subagent status.
-	if in.Orchestrator != nil {
-		agents := in.Orchestrator.List()
-		if len(agents) > 0 {
-			var runningNames []string
-			total := len(agents)
-			failed := 0
-			killed := 0
-			for _, a := range agents {
-				switch a.Status {
-				case "running":
-					name := a.Type
-					if len(name) > 12 {
-						name = name[:12]
-					}
-					runningNames = append(runningNames, name)
-				case "failed":
-					failed++
-				case "killed":
-					killed++
-				}
-			}
-			agentFg := lipgloss.Color("35") // green
-			if len(runningNames) > 0 {
-				agentFg = lipgloss.Color("214") // orange when active
-			}
-			if failed > 0 {
-				agentFg = lipgloss.Color("196") // red if any failed (not killed)
-			}
-			agentStyle := lipgloss.NewStyle().Background(bg).Foreground(agentFg)
-			var label string
-			if len(runningNames) > 0 {
-				label = fmt.Sprintf("agents[%d]: %s", total, strings.Join(runningNames, ", "))
-			} else {
-				label = fmt.Sprintf("agents: %d done", total)
-			}
-			if failed > 0 {
-				label += fmt.Sprintf(" (%d failed)", failed)
-			}
-			if killed > 0 {
-				label += fmt.Sprintf(" (%d killed)", killed)
-			}
-			parts = append(parts, agentStyle.Render(label))
-		}
+		parts = append(parts, toolStyle.Render(fmt.Sprintf("tool: %s (%s)", s.ActiveTool, elapsed)))
 	}
 
 	// /run cycle indicator.
 	if in.RunCycle != nil {
-		runStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("214"))
+		runStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
 		parts = append(parts, runStyle.Render(fmt.Sprintf("run[%s]: cycle %d/%d",
 			in.RunCycle.SpecName, in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
 	}
