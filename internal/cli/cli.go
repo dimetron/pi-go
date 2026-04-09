@@ -49,7 +49,19 @@ var (
 	flagPlan      bool
 	flagMemoryOff bool
 	flagSystem    string
+
+	// lastSessionFile persists the last session start metadata across invocations.
+	// Used to detect rapid restart loops (e.g. print mode crashes).
+	lastSessionFile = filepath.Join(os.Getenv("HOME"), ".pi-go", "last-session.json")
 )
+
+// lastSessionData is written to lastSessionFile on each print-mode start.
+type lastSessionData struct {
+	Timestamp time.Time `json:"timestamp"`
+	SessionID string    `json:"session_id"`
+	WorkDir   string    `json:"work_dir"`
+	Model     string    `json:"model"`
+}
 
 // Version is set at build time via -ldflags.
 var Version = "dev"
@@ -200,6 +212,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 		flagSession = lastID
 	}
+
+	// Check for rapid restart BEFORE writing the new session.
+	// If last session started within 3s, warn the user.
+	checkForRapidRestartAndWarn(cwd)
+
+	// Track this session start for the next invocation's rapid-restart check.
+	_ = writeLastSession(cwd, info.Provider, llm.Name())
 
 	// Interactive mode: show TUI immediately, initialize in background.
 	if mode == "interactive" {
@@ -572,6 +591,56 @@ func detectMode() string {
 		}
 	}
 	return "interactive"
+}
+
+// writeLastSession persists session start metadata for rapid-restart detection.
+func writeLastSession(workDir, provider, model string) error {
+	data := lastSessionData{
+		Timestamp: time.Now(),
+		WorkDir:   workDir,
+		Model:     model,
+	}
+	blob, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(lastSessionFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(lastSessionFile, blob, 0o600)
+}
+
+// readLastSession reads the last session metadata, or nil if unavailable.
+func readLastSession() (*lastSessionData, error) {
+	data := &lastSessionData{}
+	blob, err := os.ReadFile(lastSessionFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := json.Unmarshal(blob, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// checkForRapidRestartAndWarn detects if print mode is restarting repeatedly.
+// If the same workdir started a session within 3 seconds, it shows the warning.
+func checkForRapidRestartAndWarn(workDir string) {
+	prev, err := readLastSession()
+	if err != nil || prev == nil || prev.WorkDir != workDir {
+		return
+	}
+	elapsed := time.Since(prev.Timestamp)
+	if elapsed < 3*time.Second {
+		fmt.Fprintf(os.Stderr,
+			"pi-go: warning: rapid restart detected (%.0fs since last session). "+
+				"If init keeps failing, check ~/.pi-go/log/ for errors.\n",
+			elapsed.Seconds())
+	}
 }
 
 // runPrint runs the agent and prints text responses to stdout.

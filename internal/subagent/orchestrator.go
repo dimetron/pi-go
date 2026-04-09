@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,16 @@ import (
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
 const DefaultPoolSize = 5
+
+// recentTaskTTL is how long a completed subagent result is kept before being evicted.
+const recentTaskTTL = 30 * time.Minute
+
+// recentTask tracks a recently completed subagent result for deduplication.
+type recentTask struct {
+	CompletedAt time.Time
+	Summary     string // short summary of the result (first line or truncated)
+	Status      string // "completed", "failed"
+}
 
 // Orchestrator composes Pool, Spawner, and WorktreeManager to manage subagent lifecycle.
 type Orchestrator struct {
@@ -24,6 +35,11 @@ type Orchestrator struct {
 	agents   map[string]*agentState
 	mu       sync.Mutex
 	closed   bool // set by Shutdown to reject new Spawn calls
+
+	// recentTasks tracks completed subagent research tasks for deduplication.
+	// Key is a normalized version of the task prompt.
+	recentTasks   map[string]recentTask
+	recentTasksMu sync.RWMutex
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -54,12 +70,13 @@ func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentCo
 	}
 
 	return &Orchestrator{
-		pool:     NewPool(DefaultPoolSize),
-		spawner:  NewSpawner(""),
-		worktree: wm,
-		cfg:      cfg,
-		registry: registry,
-		agents:   make(map[string]*agentState),
+		pool:        NewPool(DefaultPoolSize),
+		spawner:     NewSpawner(""),
+		worktree:    wm,
+		cfg:         cfg,
+		registry:    registry,
+		agents:      make(map[string]*agentState),
+		recentTasks: make(map[string]recentTask),
 	}
 }
 
@@ -82,6 +99,73 @@ func (o *Orchestrator) AgentNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// normalizeTaskKey produces a stable lowercase key from a task prompt for deduplication.
+func normalizeTaskKey(prompt string) string {
+	// Normalize: lowercase, collapse whitespace, truncate to 200 chars.
+	// This captures semantic similarity without triggering on minor differences.
+	norm := prompt
+	norm = strings.ToLower(norm)
+	norm = strings.Join(strings.Fields(norm), " ")
+	if len(norm) > 200 {
+		norm = norm[:200]
+	}
+	return norm
+}
+
+// RecentTaskResult holds the result of a recently completed subagent task.
+type RecentTaskResult struct {
+	CompletedAt time.Time
+	Summary     string
+	Status      string
+}
+
+// FindRecentTask checks if a task matching the given prompt was completed recently.
+// Returns the result if found and not expired, nil otherwise.
+func (o *Orchestrator) FindRecentTask(prompt string) *RecentTaskResult {
+	o.recentTasksMu.RLock()
+	defer o.recentTasksMu.RUnlock()
+
+	key := normalizeTaskKey(prompt)
+	task, ok := o.recentTasks[key]
+	if !ok {
+		return nil
+	}
+	if time.Since(task.CompletedAt) > recentTaskTTL {
+		return nil
+	}
+	return &RecentTaskResult{
+		CompletedAt: task.CompletedAt,
+		Summary:     task.Summary,
+		Status:      task.Status,
+	}
+}
+
+// RecordTask marks a completed subagent task for deduplication.
+func (o *Orchestrator) RecordTask(prompt string, summary, status string) {
+	o.recentTasksMu.Lock()
+	defer o.recentTasksMu.Unlock()
+
+	key := normalizeTaskKey(prompt)
+	// Truncate summary to first line, max 200 chars.
+	summary = strings.TrimSpace(summary)
+	if len(summary) > 200 {
+		summary = summary[:200]
+	}
+	o.recentTasks[key] = recentTask{
+		CompletedAt: time.Now(),
+		Summary:     summary,
+		Status:      status,
+	}
+
+	// Prune expired entries.
+	cutoff := time.Now().Add(-recentTaskTTL)
+	for k, v := range o.recentTasks {
+		if v.CompletedAt.Before(cutoff) {
+			delete(o.recentTasks, k)
+		}
+	}
 }
 
 // LookupAgent returns the AgentConfig for the given name, or an error if not found.

@@ -561,3 +561,83 @@ func TestFTS5TriggersFireOnInsertDelete(t *testing.T) {
 		t.Errorf("FTS5 matches after delete = %d, want 0", count)
 	}
 }
+
+func TestLikeSearch_Basic(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	_ = store.InsertDrawer(ctx, makeDrawer("d1", "backend", "auth", "JWT token validation"))
+	_ = store.InsertDrawer(ctx, makeDrawer("d2", "backend", "db", "database migrations"))
+	_ = store.InsertDrawer(ctx, makeDrawer("d3", "frontend", "ui", "button styles"))
+
+	results, err := store.likeSearch(ctx, "JWT", DrawerFilter{}, 10)
+	if err != nil {
+		t.Fatalf("likeSearch: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Drawer.ID != "d1" {
+		t.Errorf("expected d1, got %q", results[0].Drawer.ID)
+	}
+}
+
+func TestLikeSearch_WithWingFilter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	_ = store.InsertDrawer(ctx, makeDrawer("d1", "backend", "auth", "button handler"))
+	_ = store.InsertDrawer(ctx, makeDrawer("d2", "frontend", "ui", "button component"))
+
+	results, err := store.likeSearch(ctx, "button", DrawerFilter{Wing: "frontend"}, 10)
+	if err != nil {
+		t.Fatalf("likeSearch: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Drawer.Wing != "frontend" {
+		t.Errorf("expected frontend, got %q", results[0].Drawer.Wing)
+	}
+}
+
+func TestLikeSearch_WithRoomFilter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	_ = store.InsertDrawer(ctx, makeDrawer("d1", "backend", "auth", "test content one"))
+	_ = store.InsertDrawer(ctx, makeDrawer("d2", "backend", "db", "test content two"))
+
+	results, err := store.likeSearch(ctx, "test", DrawerFilter{Room: "db"}, 10)
+	if err != nil {
+		t.Fatalf("likeSearch: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Drawer.Room != "db" {
+		t.Errorf("expected db, got %q", results[0].Drawer.Room)
+	}
+}
+
+func TestOpenDB_WithFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/nested/dir/test.db"
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB with file path: %v", err)
+	}
+	defer db.Close()
+
+	// Verify it's functional
+	store := NewSQLitePalaceStore(db)
+	ctx := context.Background()
+	count, err := store.CountDrawers(ctx)
+	if err != nil {
+		t.Fatalf("CountDrawers: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+}

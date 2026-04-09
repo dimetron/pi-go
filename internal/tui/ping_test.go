@@ -62,7 +62,7 @@ func (m *pingEmptyLLM) GenerateContent(_ context.Context, _ *llmmodel.LLMRequest
 
 func TestExecutePing_OutputContainsProviderAndModel(t *testing.T) {
 	llm := &pingMockLLM{name: "test-model", response: "Pong"}
-	output, err := executePing(context.Background(), llm, "anthropic", "claude-sonnet-4-20250514", "")
+	output, _, err := executePing(context.Background(), llm, "anthropic", "claude-sonnet-4-20250514", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,11 +80,14 @@ func TestExecutePing_OutputContainsProviderAndModel(t *testing.T) {
 
 func TestExecutePing_OllamaModel(t *testing.T) {
 	llm := &pingMockLLM{name: "qwen3.5:latest", response: "Pong"}
-	output, err := executePing(context.Background(), llm, "ollama", "qwen3.5:latest", "")
+	output, reply, err := executePing(context.Background(), llm, "ollama", "qwen3.5:latest", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if reply != "Pong" {
+		t.Errorf("expected reply 'Pong', got %q", reply)
+	}
 	if !strings.Contains(output, "**Provider:** ollama") {
 		t.Errorf("output missing Provider ollama, got:\n%s", output)
 	}
@@ -98,7 +101,7 @@ func TestExecutePing_OllamaModel(t *testing.T) {
 
 func TestExecutePing_CustomPrompt(t *testing.T) {
 	llm := &pingMockLLM{name: "test-model", response: "4"}
-	output, err := executePing(context.Background(), llm, "openai", "gpt-4o", "What is 2+2")
+	output, _, err := executePing(context.Background(), llm, "openai", "gpt-4o", "What is 2+2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,19 +116,19 @@ func TestExecutePing_CustomPrompt(t *testing.T) {
 
 func TestExecutePing_TokensDisplayed(t *testing.T) {
 	llm := &pingMockLLM{name: "test-model", response: "Pong"}
-	output, err := executePing(context.Background(), llm, "anthropic", "test-model", "")
+	output, _, err := executePing(context.Background(), llm, "anthropic", "test-model", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(output, "tokens(in=10 out=5)") {
+	if !strings.Contains(output, "**Tokens:** 10in / 5out") {
 		t.Errorf("output missing token counts, got:\n%s", output)
 	}
 }
 
 func TestExecutePing_LLMError(t *testing.T) {
 	llm := &pingErrorLLM{}
-	output, err := executePing(context.Background(), llm, "anthropic", "error-model", "")
+	_, _, err := executePing(context.Background(), llm, "anthropic", "error-model", "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -133,14 +136,11 @@ func TestExecutePing_LLMError(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("expected connection refused error, got: %v", err)
 	}
-	if !strings.Contains(output, "ERROR:") {
-		t.Errorf("output should contain ERROR, got:\n%s", output)
-	}
 }
 
 func TestExecutePing_EmptyResponse(t *testing.T) {
 	llm := &pingEmptyLLM{}
-	_, err := executePing(context.Background(), llm, "anthropic", "empty-model", "")
+	_, _, err := executePing(context.Background(), llm, "anthropic", "empty-model", "")
 	if err == nil {
 		t.Fatal("expected error for empty response, got nil")
 	}
@@ -193,6 +193,9 @@ func TestHandlePingCommand_SetsPlaceholder(t *testing.T) {
 	if len(mm.chatModel.Messages) != 1 {
 		t.Fatalf("expected 1 placeholder message, got %d", len(mm.chatModel.Messages))
 	}
+	if mm.chatModel.Messages[0].role != "thinking" {
+		t.Errorf("expected role 'thinking', got %q", mm.chatModel.Messages[0].role)
+	}
 	if mm.chatModel.Messages[0].content != "Pinging model..." {
 		t.Errorf("expected placeholder 'Pinging model...', got %q", mm.chatModel.Messages[0].content)
 	}
@@ -222,16 +225,19 @@ func TestHandlePingCommand_NoLLM(t *testing.T) {
 func TestPingDoneMsg_ReplacesPlaceholder(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: []message{
-			{role: "assistant", content: "Pinging model..."},
+			{role: "thinking", content: "Pinging model..."},
 		}},
 	}
 
-	msg := pingDoneMsg{output: "**Provider:** test\n✓ Model **test** is ALIVE"}
+	msg := pingDoneMsg{output: "**Provider:** test\n✓ Model **test** is ALIVE", reply: "Pong"}
 	newM, _ := m.Update(msg)
 	mm := newM.(*model)
 
 	if len(mm.chatModel.Messages) != 1 {
 		t.Fatalf("expected 1 message (replaced), got %d", len(mm.chatModel.Messages))
+	}
+	if mm.chatModel.Messages[0].role != "assistant" {
+		t.Errorf("expected role 'assistant' after replacement, got %q", mm.chatModel.Messages[0].role)
 	}
 	if strings.Contains(mm.chatModel.Messages[0].content, "Pinging model...") {
 		t.Error("placeholder should have been replaced")
@@ -244,7 +250,7 @@ func TestPingDoneMsg_ReplacesPlaceholder(t *testing.T) {
 func TestPingDoneMsg_ErrorIncluded(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: []message{
-			{role: "assistant", content: "Pinging model..."},
+			{role: "thinking", content: "Pinging model..."},
 		}},
 	}
 
@@ -252,7 +258,32 @@ func TestPingDoneMsg_ErrorIncluded(t *testing.T) {
 	newM, _ := m.Update(msg)
 	mm := newM.(*model)
 
+	if mm.chatModel.Messages[0].role != "assistant" {
+		t.Errorf("expected role 'assistant', got %q", mm.chatModel.Messages[0].role)
+	}
 	if !strings.Contains(mm.chatModel.Messages[0].content, "Ping failed: timeout") {
 		t.Errorf("expected error in output, got %q", mm.chatModel.Messages[0].content)
+	}
+}
+
+func TestPingDoneMsg_UpdatesMatrix(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: []message{
+			{role: "thinking", content: "Pinging model..."},
+		}},
+		matrix: matrixState{},
+	}
+	m.matrix.feed("init", 80) // Activate matrix
+
+	msg := pingDoneMsg{output: "**Provider:** test\n✓ Model **test** is ALIVE", reply: "Pong"}
+	newM, _ := m.Update(msg)
+	mm := newM.(*model)
+
+	// Matrix should have been fed the reply text.
+	if !mm.matrix.active {
+		t.Error("expected matrix to be active after ping")
+	}
+	if len(mm.matrix.grid) == 0 {
+		t.Error("expected matrix grid to have content")
 	}
 }

@@ -16,6 +16,103 @@ func newTestRenderer(t *testing.T) *glamour.TermRenderer {
 	return r
 }
 
+// --- wordWrap ---
+
+func TestWordWrap_EmptyText(t *testing.T) {
+	result := wordWrap("", 80)
+	if len(result) != 1 || result[0] != "" {
+		t.Errorf("expected [\"\"], got %v", result)
+	}
+}
+
+func TestWordWrap_NarrowWidth(t *testing.T) {
+	// maxWidth < 10 returns text as-is
+	result := wordWrap("hello world", 5)
+	if len(result) != 1 || result[0] != "hello world" {
+		t.Errorf("expected [\"hello world\"], got %v", result)
+	}
+}
+
+func TestWordWrap_ShortText(t *testing.T) {
+	result := wordWrap("hello", 80)
+	if len(result) != 1 || result[0] != "hello" {
+		t.Errorf("expected [\"hello\"], got %v", result)
+	}
+}
+
+func TestWordWrap_ExactWidth(t *testing.T) {
+	text := strings.Repeat("a", 20)
+	result := wordWrap(text, 20)
+	if len(result) != 1 || result[0] != text {
+		t.Errorf("expected single line of 20 chars, got %v", result)
+	}
+}
+
+func TestWordWrap_BreaksAtWordBoundary(t *testing.T) {
+	// "hello world foo bar" with width 12 should break at spaces
+	result := wordWrap("hello world foo bar", 12)
+	if len(result) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d: %v", len(result), result)
+	}
+	// First line should break at a word boundary
+	for _, line := range result {
+		if len(line) > 13 { // allow slight overflow before next char triggers wrap
+			t.Errorf("line too long (%d): %q", len(line), line)
+		}
+	}
+}
+
+func TestWordWrap_LongWordNoSpaces(t *testing.T) {
+	// A single long word with no spaces should be force-broken
+	text := strings.Repeat("x", 30)
+	result := wordWrap(text, 10)
+	if len(result) < 2 {
+		t.Fatalf("expected multiple lines for long word, got %d: %v", len(result), result)
+	}
+	// Rejoin should give us the original text
+	joined := strings.Join(result, "")
+	if joined != text {
+		t.Errorf("joined text mismatch: got %q, want %q", joined, text)
+	}
+}
+
+func TestWordWrap_NewlinesPreserved(t *testing.T) {
+	result := wordWrap("line1\nline2\nline3", 80)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %v", len(result), result)
+	}
+	if result[0] != "line1" || result[1] != "line2" || result[2] != "line3" {
+		t.Errorf("unexpected lines: %v", result)
+	}
+}
+
+func TestWordWrap_MixedNewlinesAndWrapping(t *testing.T) {
+	// First part is short, second part needs wrapping
+	text := "short\n" + strings.Repeat("word ", 20)
+	result := wordWrap(text, 30)
+	if len(result) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d: %v", len(result), result)
+	}
+	if result[0] != "short" {
+		t.Errorf("first line should be 'short', got %q", result[0])
+	}
+}
+
+func TestWordWrap_SpaceAtBreakPoint(t *testing.T) {
+	// When the character at the break point is a space, it should be handled
+	text := "aaa bbb ccc ddd"
+	result := wordWrap(text, 10)
+	if len(result) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d: %v", len(result), result)
+	}
+	// No line should have leading/trailing spaces from the break
+	for _, line := range result {
+		if strings.HasPrefix(line, " ") {
+			t.Errorf("line has leading space: %q", line)
+		}
+	}
+}
+
 // --- NewChatModel ---
 
 func TestChatModel_NewChatModel_NilRenderer(t *testing.T) {

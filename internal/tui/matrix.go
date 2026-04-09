@@ -134,7 +134,9 @@ func (ms *matrixState) renderLine(row int) string {
 	return sb.String()
 }
 
-// feed mixes token text into the entropy and shifts all characters left by one.
+// feed mixes token text into the entropy and shifts characters left.
+// The number of shifts scales with input length so that large tool outputs
+// (e.g. bash results) produce a visible burst of motion.
 func (ms *matrixState) feed(tokenText string, width int) {
 	for _, b := range []byte(tokenText) {
 		ms.seed = ms.seed*31 + int64(b)
@@ -146,7 +148,22 @@ func (ms *matrixState) feed(tokenText string, width int) {
 		matrixW = width
 	}
 	ms.ensureWidth(matrixW)
-	ms.shiftLeft()
+
+	// Scale shifts: 1 per ~64 bytes, minimum 1, capped at 1/4 of width.
+	shifts := len(tokenText) / 64
+	if shifts < 1 {
+		shifts = 1
+	}
+	maxShifts := matrixW / 4
+	if maxShifts < 1 {
+		maxShifts = 1
+	}
+	if shifts > maxShifts {
+		shifts = maxShifts
+	}
+	for i := 0; i < shifts; i++ {
+		ms.shiftLeft()
+	}
 }
 
 // render returns the matrix rain string centered at 60% width, or empty if inactive.

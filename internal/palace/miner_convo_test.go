@@ -237,6 +237,141 @@ func TestPairExchanges_ConsecutiveAssistant(t *testing.T) {
 	}
 }
 
+func TestMineConversations_NilConfig_WithMempalaceYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a mempalace.yaml
+	yamlContent := `wing: testproject
+rooms:
+  - name: api
+    keywords: ["endpoint"]
+`
+	writeTestFile(t, filepath.Join(tmpDir, "mempalace.yaml"), yamlContent)
+
+	// Create a conversation file
+	content := `{"role":"user","content":"How do I add an endpoint?"}
+{"role":"assistant","content":"Create a handler function."}
+`
+	writeTestFile(t, filepath.Join(tmpDir, "session.jsonl"), content)
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	// nil config triggers readMempalaceYAML
+	result, err := MineConversations(ctx, p, tmpDir, nil)
+	if err != nil {
+		t.Fatalf("MineConversations: %v", err)
+	}
+	if result.Added != 1 {
+		t.Errorf("expected 1 added, got %d", result.Added)
+	}
+
+	drawers, _ := p.ListDrawers(ctx, DrawerFilter{Wing: "testproject"})
+	if len(drawers) != 1 {
+		t.Errorf("expected 1 drawer in wing testproject, got %d", len(drawers))
+	}
+}
+
+func TestMineConversations_NilConfig_NoYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `{"role":"user","content":"question"}
+{"role":"assistant","content":"answer"}
+`
+	writeTestFile(t, filepath.Join(tmpDir, "chat.jsonl"), content)
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	// nil config, no mempalace.yaml → falls back to dir basename as wing
+	result, err := MineConversations(ctx, p, tmpDir, nil)
+	if err != nil {
+		t.Fatalf("MineConversations: %v", err)
+	}
+	if result.Added != 1 {
+		t.Errorf("expected 1 added, got %d", result.Added)
+	}
+}
+
+func TestMineConversations_WithProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `{"role":"user","content":"question"}
+{"role":"assistant","content":"answer"}
+`
+	writeTestFile(t, filepath.Join(tmpDir, "s.jsonl"), content)
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	var progressCalls int
+	cfg := &MineConfig{
+		Wing: "test",
+		Progress: func(file string, added, skipped, errors int) {
+			progressCalls++
+		},
+	}
+
+	_, err := MineConversations(ctx, p, tmpDir, cfg)
+	if err != nil {
+		t.Fatalf("MineConversations: %v", err)
+	}
+	if progressCalls == 0 {
+		t.Error("expected progress callback to be called")
+	}
+}
+
+func TestDetectPlatformOnnxFile(t *testing.T) {
+	result := DetectPlatformOnnxFile()
+	if result == "" {
+		t.Fatal("expected non-empty result")
+	}
+	// Should always return an onnx path
+	if !findSubstr(result, "onnx") {
+		t.Errorf("expected onnx in path, got %q", result)
+	}
+}
+
+func TestReadMempalaceYAML_Valid(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := `wing: myproject
+rooms:
+  - name: api
+    keywords: ["endpoint", "route"]
+  - name: auth
+    patterns: ["internal/auth/*"]
+`
+	writeTestFile(t, filepath.Join(tmpDir, "mempalace.yaml"), yamlContent)
+
+	cfg, err := readMempalaceYAML(tmpDir)
+	if err != nil {
+		t.Fatalf("readMempalaceYAML: %v", err)
+	}
+	if cfg.Wing != "myproject" {
+		t.Errorf("wing = %q, want myproject", cfg.Wing)
+	}
+	if len(cfg.Rooms) != 2 {
+		t.Errorf("rooms = %d, want 2", len(cfg.Rooms))
+	}
+}
+
+func TestReadMempalaceYAML_Missing(t *testing.T) {
+	_, err := readMempalaceYAML(t.TempDir())
+	if err == nil {
+		t.Error("expected error for missing mempalace.yaml")
+	}
+}
+
+func TestReadMempalaceYAML_Invalid(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeTestFile(t, filepath.Join(tmpDir, "mempalace.yaml"), "{{not yaml}}")
+
+	_, err := readMempalaceYAML(tmpDir)
+	if err == nil {
+		t.Error("expected error for invalid YAML")
+	}
+}
+
 // --- helpers ---
 
 func containsStr(s, substr string) bool {

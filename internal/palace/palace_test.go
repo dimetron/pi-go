@@ -328,6 +328,40 @@ func TestPalace_Recall(t *testing.T) {
 	}
 }
 
+func TestConfigOptions(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+
+	// WithModelPath
+	opt := WithModelPath("/models/embedder")
+	opt(&cfg)
+	if cfg.ModelPath != "/models/embedder" {
+		t.Errorf("ModelPath = %q, want /models/embedder", cfg.ModelPath)
+	}
+
+	// WithDeduplicationThreshold
+	opt2 := WithDeduplicationThreshold(0.85)
+	opt2(&cfg)
+	if cfg.DeduplicationThreshold != 0.85 {
+		t.Errorf("DeduplicationThreshold = %f, want 0.85", cfg.DeduplicationThreshold)
+	}
+
+	// WithDBPath
+	opt3 := WithDBPath("/tmp/test.db")
+	opt3(&cfg)
+	if cfg.DBPath != "/tmp/test.db" {
+		t.Errorf("DBPath = %q, want /tmp/test.db", cfg.DBPath)
+	}
+
+	// WithIdentityFile
+	opt4 := WithIdentityFile("/tmp/id.txt")
+	opt4(&cfg)
+	if cfg.IdentityFile != "/tmp/id.txt" {
+		t.Errorf("IdentityFile = %q, want /tmp/id.txt", cfg.IdentityFile)
+	}
+}
+
 func TestPalace_KGInvalidate(t *testing.T) {
 	t.Parallel()
 

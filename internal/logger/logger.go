@@ -97,6 +97,11 @@ func (l *Logger) Error(msg string) {
 	l.Log(Entry{Type: "error", Content: msg})
 }
 
+// Errorf logs an error with formatting.
+func (l *Logger) Errorf(format string, v ...any) {
+	l.Log(Entry{Type: "error", Content: fmt.Sprintf(format, v...)})
+}
+
 // UserMessage logs a user prompt.
 func (l *Logger) UserMessage(prompt string) {
 	l.Log(Entry{Type: "user", Content: prompt})

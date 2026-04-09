@@ -78,19 +78,19 @@ func (m *cliThinkingLLM) GenerateContent(_ context.Context, _ *model.LLMRequest,
 // ---------------------------------------------------------------------------
 
 // TestModelPingPingPong verifies that modelPing succeeds and returns the model
-// reply when isPingPong=true and the mock LLM echoes "Prompt:Prompt".
+// reply when isPingPong=true and the mock LLM echoes "prompt-prompt".
 func TestModelPingPingPong(t *testing.T) {
 	llm := &pingMockLLM{
 		name:      "mock-ping-pong",
-		responses: []*model.LLMResponse{{Content: genai.NewContentFromText("Prompt:Prompt", genai.RoleModel)}},
+		responses: []*model.LLMResponse{{Content: genai.NewContentFromText("prompt-prompt", genai.RoleModel)}},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "Prompt", true)
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true)
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
-	if reply != "Prompt:Prompt" {
-		t.Errorf("modelPing reply = %q, want %q", reply, "Prompt:Prompt")
+	if reply != "prompt-prompt" {
+		t.Errorf("modelPing reply = %q, want %q", reply, "prompt-prompt")
 	}
 }
 
