@@ -92,8 +92,8 @@ func TestRenderSidebar_RunningNoTool(t *testing.T) {
 		Height:  10,
 		Running: true,
 	})
-	if !strings.Contains(result, "thinking") {
-		t.Error("expected 'thinking...' when running without active tool")
+	if !strings.Contains(result, "...") {
+		t.Error("expected spinner verb with '...' when running without active tool")
 	}
 }
 
@@ -296,7 +296,7 @@ func TestRenderSidebar_RunChecklistThinkingNoTool(t *testing.T) {
 	})
 
 	if !strings.Contains(result, "thinking") {
-		t.Error("expected thinking status when running with no active tool")
+		t.Error("expected 'thinking...' when running without active tool")
 	}
 }
 

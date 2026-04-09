@@ -56,6 +56,8 @@ type Sandbox struct {
 	root        *os.Root
 	dir         string // absolute path of the root directory
 	worktreeDir string // absolute path of worktree (if subagent context)
+	extraRoots  []*os.Root
+	extraDirs   []string // absolute paths of extra allowed directories
 }
 
 // NewSandbox opens an os.Root anchored at dir.
@@ -80,8 +82,47 @@ func NewSandbox(dir string, worktreeDir ...string) (*Sandbox, error) {
 	return &Sandbox{root: root, dir: abs, worktreeDir: wt}, nil
 }
 
+// AddExtraDir registers an additional directory that the sandbox can access.
+// Paths under this directory are resolved using a separate os.Root.
+func (s *Sandbox) AddExtraDir(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving extra dir: %w", err)
+	}
+	// Create the directory if it doesn't exist.
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return fmt.Errorf("creating extra dir %s: %w", abs, err)
+	}
+	root, err := os.OpenRoot(abs)
+	if err != nil {
+		return fmt.Errorf("opening extra root %s: %w", abs, err)
+	}
+	s.extraRoots = append(s.extraRoots, root)
+	s.extraDirs = append(s.extraDirs, abs)
+	return nil
+}
+
+// matchExtraRoot returns the extra os.Root and the relative path if the
+// absolute path falls under one of the extra allowed directories.
+// Returns nil, "" if no match.
+func (s *Sandbox) matchExtraRoot(absPath string) (*os.Root, string) {
+	for i, dir := range s.extraDirs {
+		if absPath == dir || strings.HasPrefix(absPath, dir+string(filepath.Separator)) {
+			rel, err := filepath.Rel(dir, absPath)
+			if err != nil {
+				continue
+			}
+			return s.extraRoots[i], rel
+		}
+	}
+	return nil, ""
+}
+
 // Close releases the underlying os.Root file descriptor.
 func (s *Sandbox) Close() error {
+	for _, r := range s.extraRoots {
+		_ = r.Close()
+	}
 	return s.root.Close()
 }
 
@@ -172,18 +213,36 @@ func (s *Sandbox) resolveWorktreePath(name string) (string, error) {
 	return rel, nil
 }
 
+// resolveToRoot returns the os.Root and relative path for the given name.
+// It first checks extra roots (for absolute paths under allowed dirs),
+// then falls back to the primary sandbox root.
+func (s *Sandbox) resolveToRoot(name string) (*os.Root, string, error) {
+	// Check extra roots for absolute paths.
+	if filepath.IsAbs(name) {
+		if root, rel := s.matchExtraRoot(name); root != nil {
+			return root, rel, nil
+		}
+	}
+	// Fall back to the primary sandbox root.
+	rel, err := s.Resolve(name)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.root, rel, nil
+}
+
 // ReadFile reads the named file within the sandbox.
 // Transient errors (e.g. "text file busy") are retried up to 3 times
 // with increasing delay. Non-transient errors are returned immediately.
 func (s *Sandbox) ReadFile(name string) ([]byte, error) {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return nil, err
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxReadRetries; attempt++ {
-		data, err := s.root.ReadFile(rel)
+		data, err := root.ReadFile(rel)
 		if err == nil {
 			return data, nil
 		}
@@ -203,17 +262,17 @@ func (s *Sandbox) ReadFile(name string) ([]byte, error) {
 // WriteFile writes data to the named file within the sandbox, creating it if
 // necessary (parent directories are created automatically).
 func (s *Sandbox) WriteFile(name string, data []byte, perm os.FileMode) error {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(rel)
 	if dir != "." {
-		if err := s.root.MkdirAll(dir, 0o755); err != nil {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating directories: %w", err)
 		}
 	}
-	f, err := s.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
@@ -227,29 +286,29 @@ func (s *Sandbox) WriteFile(name string, data []byte, perm os.FileMode) error {
 
 // Open opens a file for reading within the sandbox.
 func (s *Sandbox) Open(name string) (*os.File, error) {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return nil, err
 	}
-	return s.root.Open(rel)
+	return root.Open(rel)
 }
 
 // Stat returns FileInfo for a path within the sandbox.
 func (s *Sandbox) Stat(name string) (os.FileInfo, error) {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return nil, err
 	}
-	return s.root.Lstat(rel)
+	return root.Lstat(rel)
 }
 
 // ReadDir lists entries in a directory within the sandbox.
 func (s *Sandbox) ReadDir(name string) ([]os.DirEntry, error) {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return nil, err
 	}
-	f, err := s.root.Open(rel)
+	f, err := root.Open(rel)
 	if err != nil {
 		return nil, err
 	}
@@ -259,9 +318,9 @@ func (s *Sandbox) ReadDir(name string) ([]os.DirEntry, error) {
 
 // MkdirAll creates a directory path within the sandbox.
 func (s *Sandbox) MkdirAll(name string, perm os.FileMode) error {
-	rel, err := s.Resolve(name)
+	root, rel, err := s.resolveToRoot(name)
 	if err != nil {
 		return err
 	}
-	return s.root.MkdirAll(rel, perm)
+	return root.MkdirAll(rel, perm)
 }

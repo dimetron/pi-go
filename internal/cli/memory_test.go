@@ -14,7 +14,7 @@ func TestMemoryCmd_SubcommandsRegistered(t *testing.T) {
 		subcommands[sub.Name()] = true
 	}
 
-	for _, name := range []string{"model", "init", "status", "mine", "search", "kg", "wake-up"} {
+	for _, name := range []string{"model", "init", "status", "mine", "search", "kg", "wake-up", "recent"} {
 		if !subcommands[name] {
 			t.Errorf("missing subcommand %q", name)
 		}

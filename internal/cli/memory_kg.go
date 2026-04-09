@@ -26,9 +26,9 @@ func newMemoryKGCmd() *cobra.Command {
 
 func newMemoryKGQueryCmd() *cobra.Command {
 	var (
-		flagDB    string
-		flagAsOf  string
-		flagDir   string
+		flagDB   string
+		flagAsOf string
+		flagDir  string
 	)
 
 	cmd := &cobra.Command{

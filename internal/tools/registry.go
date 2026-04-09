@@ -58,13 +58,15 @@ func lenientSchema[T any]() *jsonschema.Schema {
 
 // relaxSchema recursively sets AdditionalProperties to an open schema on all
 // nested object schemas, so LLMs sending extra fields won't trigger validation errors.
+// It also removes required constraints from nested schemas.
 func relaxSchema(s *jsonschema.Schema) {
 	if s == nil {
 		return
 	}
-	// Open up additional properties on any object schema.
+	// Open up additional properties and remove required on any object schema.
 	if s.Type == "object" || len(s.Properties) > 0 {
 		s.AdditionalProperties = &jsonschema.Schema{}
+		s.Required = nil
 	}
 	// Recurse into properties.
 	for _, prop := range s.Properties {
@@ -109,7 +111,18 @@ func collectFromSchema(schema *jsonschema.Schema, prefix string, intProps, boolP
 		if prefix != "" {
 			fullName = prefix + "." + name
 		}
-		switch prop.Type {
+		// Resolve effective type. The jsonschema library uses Type for single types
+		// and Types for multi-types (e.g., ["null", "array"] for nullable arrays).
+		effectiveType := prop.Type
+		if effectiveType == "" && len(prop.Types) > 0 {
+			for _, t := range prop.Types {
+				if t != "null" {
+					effectiveType = t
+					break
+				}
+			}
+		}
+		switch effectiveType {
 		case "integer", "number":
 			intProps[fullName] = true
 			// Also register the base name for array item matching flexibility

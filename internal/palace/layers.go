@@ -140,10 +140,10 @@ func (ms *MemoryStack) Recall(ctx context.Context, wing, room string) (string, e
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## %s / %s\n\n", wing, room))
+	fmt.Fprintf(&sb, "## %s / %s\n\n", wing, room)
 	for _, d := range drawers {
 		content := truncateChars(d.Content, maxCharsPerDrawer)
-		sb.WriteString(fmt.Sprintf("- %s\n", content))
+		fmt.Fprintf(&sb, "- %s\n", content)
 	}
 
 	return strings.TrimSpace(sb.String()), nil

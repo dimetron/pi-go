@@ -47,6 +47,40 @@ func TestCollectCoerceProps(t *testing.T) {
 			t.Error("expected empty maps for schema with no properties")
 		}
 	})
+
+	t.Run("detects nullable array via Types field", func(t *testing.T) {
+		// When jsonschema generates type: ["null", "array"], prop.Type is ""
+		// and prop.Types is ["null", "array"]. This must still be detected.
+		schema := &jsonschema.Schema{
+			Properties: map[string]*jsonschema.Schema{
+				"tasks": {Types: []string{"null", "array"}, Items: &jsonschema.Schema{Type: "object"}},
+				"chain": {Types: []string{"null", "array"}, Items: &jsonschema.Schema{Type: "object"}},
+				"name":  {Type: "string"},
+			},
+		}
+		_, _, jsonP := collectCoerceProps(schema)
+		if !jsonP["tasks"] {
+			t.Error("expected tasks in jsonProps (nullable array)")
+		}
+		if !jsonP["chain"] {
+			t.Error("expected chain in jsonProps (nullable array)")
+		}
+		if jsonP["name"] {
+			t.Error("string props should not appear in jsonProps")
+		}
+	})
+
+	t.Run("detects nullable integer via Types field", func(t *testing.T) {
+		schema := &jsonschema.Schema{
+			Properties: map[string]*jsonschema.Schema{
+				"timeout": {Types: []string{"null", "integer"}},
+			},
+		}
+		intP, _, _ := collectCoerceProps(schema)
+		if !intP["timeout"] {
+			t.Error("expected timeout in intProps (nullable integer)")
+		}
+	})
 }
 
 func TestCoerceArgs(t *testing.T) {

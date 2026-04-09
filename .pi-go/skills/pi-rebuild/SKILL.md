@@ -9,13 +9,17 @@ Rebuild and reinstall the pi binary from source, then restart the process.
 
 ## Steps
 
-1. Run from the project root:
+1. Run linters from the project root:
+
+       golangci-lint run ./...
+
+2. If linters pass, build and install:
 
        go build ./cmd/pi && go install ./cmd/pi/
 
-2. If build succeeds, call the `restart` tool to relaunch pi with the updated binary.
+3. If build succeeds, call the `restart` tool to relaunch pi with the updated binary.
 
-3. If build fails, show the errors so the user can fix them. Do not restart on failure.
+4. If linters or build fail, show the errors so the user can fix them. Do not restart on failure.
 
 ## Examples
 

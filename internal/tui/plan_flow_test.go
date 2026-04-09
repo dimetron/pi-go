@@ -16,8 +16,8 @@ import (
 func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Pre-create the spec directory.
-	specDir := filepath.Join(tmpDir, "specs", "add-logging")
+	// "add logging" maps to category "tools", first spec → "tools/001-add-logging".
+	specDir := filepath.Join(tmpDir, "specs", "tools", "001-add-logging")
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,9 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 	if m.plan.phase != "confirming_override" {
 		t.Errorf("plan.phase = %q, want %q", m.plan.phase, "confirming_override")
 	}
-	if m.plan.taskName != "add-logging" {
-		t.Errorf("plan.taskName = %q, want %q", m.plan.taskName, "add-logging")
+	wantTaskName := filepath.Join("tools", "001-add-logging")
+	if m.plan.taskName != wantTaskName {
+		t.Errorf("plan.taskName = %q, want %q", m.plan.taskName, wantTaskName)
 	}
 	if m.plan.roughIdea != "add logging" {
 		t.Errorf("plan.roughIdea = %q, want %q", m.plan.roughIdea, "add logging")
@@ -74,8 +75,8 @@ func TestPlanCommand_ExistingSpec_PromptsOverride(t *testing.T) {
 func TestPlanCommand_OverrideCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Pre-create the spec directory.
-	specDir := filepath.Join(tmpDir, "specs", "my-feature")
+	// "my feature" maps to category "tools".
+	specDir := filepath.Join(tmpDir, "specs", "tools", "001-my-feature")
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -120,8 +121,8 @@ func TestPlanCommand_OverrideCancel(t *testing.T) {
 func TestPlanCommand_OverrideConfirm_RemovesOldDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Pre-create the spec directory with content.
-	specDir := filepath.Join(tmpDir, "specs", "my-feature")
+	// "my feature" → category "tools", first spec.
+	specDir := filepath.Join(tmpDir, "specs", "tools", "001-my-feature")
 	if err := os.MkdirAll(filepath.Join(specDir, "research"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestPlanCommand_OverrideConfirm_RemovesOldDir(t *testing.T) {
 		t.Fatalf("RemoveAll failed: %v", err)
 	}
 
-	// Recreate skeleton.
+	// Recreate skeleton — taskName now includes category prefix.
 	newSpecDir, err := createSpecSkeleton(tmpDir, taskName, roughIdea)
 	if err != nil {
 		t.Fatalf("createSpecSkeleton failed: %v", err)
@@ -237,18 +238,19 @@ func TestPlanCommand_NewSpec_NotStuck(t *testing.T) {
 		t.Error("should not be running when agent is nil")
 	}
 
-	// The skeleton should have been created.
-	specDir := filepath.Join(tmpDir, "specs", "new-feature")
+	// The skeleton should have been created under the detected category.
+	// "new feature" → category "tools", first spec.
+	specDir := filepath.Join(tmpDir, "specs", "tools", "001-new-feature")
 	if _, err := os.Stat(specDir); os.IsNotExist(err) {
-		t.Error("spec directory should have been created")
+		t.Error("spec directory should have been created at " + specDir)
 	}
 }
 
 func TestPlanCommand_ExistingSpec_NotStuck(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Pre-create the spec directory.
-	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "existing-feature"), 0o755); err != nil {
+	// "existing feature" → category "tools", first spec.
+	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "tools", "001-existing-feature"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -371,8 +373,8 @@ func TestPlanCommand_ExistingSpec_WithOrchestrator_NotStuck(t *testing.T) {
 	tmpDir := t.TempDir()
 	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
-	// Pre-create spec.
-	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "rate-limiting"), 0o755); err != nil {
+	// "rate limiting" → category "tools", first spec.
+	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "tools", "001-rate-limiting"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -440,5 +442,85 @@ func TestPlanCommand_RapidCalls_NoDeadlock(t *testing.T) {
 		// Not stuck.
 	case <-time.After(5 * time.Second):
 		t.Fatal("rapid plan commands got stuck")
+	}
+}
+
+// --- Category detection tests ---
+
+func TestDetectCategory(t *testing.T) {
+	tests := []struct {
+		idea    string
+		wantCat string
+	}{
+		{"add skill audit", "skills"},
+		{"improve SKILL.md loading", "skills"},
+		{"add memory search", "memory"},
+		{"palace drawer improvements", "memory"},
+		{"session log optimizations", "sessions"},
+		{"ATIF export support", "sessions"},
+		{"conversation replay", "sessions"},
+		{"add rate limiting to API", "tools"},
+		{"improve TUI sidebar", "tools"},
+		{"new ollama provider", "tools"},
+		{"add subagent execution modes", "tools"},
+		{"something completely generic", "tools"}, // default
+	}
+	for _, tt := range tests {
+		t.Run(tt.idea, func(t *testing.T) {
+			got := detectCategory(tt.idea)
+			if got != tt.wantCat {
+				t.Errorf("detectCategory(%q) = %q, want %q", tt.idea, got, tt.wantCat)
+			}
+		})
+	}
+}
+
+func TestNextSpecNumber(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// No category dir yet → 001.
+	if got := nextSpecNumber(tmpDir, "tools"); got != "001" {
+		t.Errorf("empty dir: got %q, want %q", got, "001")
+	}
+
+	// Create some numbered specs.
+	catDir := filepath.Join(tmpDir, "specs", "tools")
+	for _, name := range []string{"001-alpha", "002-beta", "005-gamma"} {
+		if err := os.MkdirAll(filepath.Join(catDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Also create a non-numbered dir (should be ignored).
+	if err := os.MkdirAll(filepath.Join(catDir, "legacy-spec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := nextSpecNumber(tmpDir, "tools"); got != "006" {
+		t.Errorf("with 001,002,005: got %q, want %q", got, "006")
+	}
+}
+
+func TestFindExistingSpec(t *testing.T) {
+	tmpDir := t.TempDir()
+	catDir := filepath.Join(tmpDir, "specs", "skills")
+	if err := os.MkdirAll(filepath.Join(catDir, "003-skills-audit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should find it.
+	got := findExistingSpec(tmpDir, "skills", "skills-audit")
+	want := filepath.Join("skills", "003-skills-audit")
+	if got != want {
+		t.Errorf("findExistingSpec = %q, want %q", got, want)
+	}
+
+	// Should not find a non-existent base name.
+	if got := findExistingSpec(tmpDir, "skills", "nonexistent"); got != "" {
+		t.Errorf("findExistingSpec for nonexistent = %q, want empty", got)
+	}
+
+	// Should not find in a non-existent category.
+	if got := findExistingSpec(tmpDir, "nosuch", "skills-audit"); got != "" {
+		t.Errorf("findExistingSpec for nosuch category = %q, want empty", got)
 	}
 }

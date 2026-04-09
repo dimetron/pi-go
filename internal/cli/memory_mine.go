@@ -48,7 +48,19 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	}
 	defer p.Close()
 
-	cfg := &palace.MineConfig{Wing: wing}
+	fileCount := 0
+	progress := func(file string, added, skipped, errors int) {
+		fileCount++
+		status := "ok"
+		if errors > 0 {
+			status = fmt.Sprintf("%d errors", errors)
+		} else if added == 0 && skipped > 0 {
+			status = "unchanged"
+		}
+		fmt.Printf("  [%d] %s (%d chunks, %s)\n", fileCount, file, added+skipped+errors, status)
+	}
+
+	cfg := &palace.MineConfig{Wing: wing, Progress: progress}
 	ctx := context.Background()
 
 	var result *palace.MineResult

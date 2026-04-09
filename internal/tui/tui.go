@@ -45,6 +45,9 @@ type model struct {
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
+	// Matrix rain animation state for sidebar.
+	matrix matrixState
+
 	// Deferred initialization state.
 	loading      bool
 	loadingItems map[string]bool // item name -> done?
@@ -243,6 +246,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusModel.Width = mainWidth
 		m.chatModel.UpdateRenderer(mainWidth)
+		// Pre-render matrix bar on first size so it's visible immediately.
+		if !m.matrix.active {
+			m.matrix.feed("pi-go", mainWidth)
+		}
 
 	case tea.PasteMsg:
 		if !m.running {
@@ -312,6 +319,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commitGeneratedMsg:
 		return m.handleCommitGenerated(msg)
+
+	case matrixTickMsg:
+		if m.running {
+			m.matrix.tick(m.mainWidth())
+			return m, matrixTickCmd()
+		}
+		return m, nil
 
 	case commitDoneMsg:
 		return m.handleCommitDone(msg)
@@ -548,7 +562,12 @@ func (m *model) View() tea.View {
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
 
-	availableHeight := m.height - statusLines - inputLines - 1
+	// -4: top blank/matrix line, hr above status, hr below status, hr below input
+	availableHeight := m.height - statusLines - inputLines - 4
+	// Reserve extra lines for matrix hr separators when active.
+	if m.matrix.render() != "" {
+		availableHeight -= 2 // hr above + hr below matrix bar
+	}
 	// Reserve space for the branch popup overlay when open.
 	if m.branchPopup != nil {
 		// popup lines: 1 header + visible branches + 2 border + 1 footer + 2 newlines
@@ -584,9 +603,29 @@ func (m *model) View() tea.View {
 	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
 	// lipgloss.Width() counts raw bytes including invisible ANSI codes, causing wrapping issues.
 
+	// Render matrix rain as full-width top bar (when active).
+	matrixBar := m.matrix.render()
+
+	// Horizontal rule for separating sections.
+	mainWidth := m.width - sidebarWidth
+	if mainWidth < 1 {
+		mainWidth = m.width
+	}
+	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
+	hr := hrStyle.Render(strings.Repeat("─", mainWidth))
+
 	var b strings.Builder
+	if matrixBar != "" {
+		b.WriteString(hr)
+		b.WriteString("\n")
+		b.WriteString(matrixBar)
+		b.WriteString("\n")
+		b.WriteString(hr)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n") // blank line at top when no matrix
+	}
 	b.WriteString(visibleMessages)
-	b.WriteString("\n")
 
 	// Render branch popup if open.
 	if m.branchPopup != nil {
@@ -595,9 +634,15 @@ func (m *model) View() tea.View {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(hr)
+	b.WriteString("\n")
 	b.WriteString(statusBar)
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString(hr)
+	b.WriteString("\n")
 	b.WriteString(inputArea)
+	b.WriteString("\n")
+	b.WriteString(hr)
 
 	leftPanel := b.String()
 
@@ -623,6 +668,9 @@ func (m *model) View() tea.View {
 			Messages:     m.chatModel.Messages,
 			ActiveTool:   m.statusModel.ActiveTool,
 			LoadingItems: m.loadingItems,
+			MatrixLines:  "",
+			StatusLine:   "",
+			Orchestrator: m.cfg.Orchestrator,
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -663,6 +711,14 @@ func drainTerminalResponses() {
 			break
 		}
 	}
+}
+
+// mainWidth returns the width of the main panel (excluding sidebar).
+func (m *model) mainWidth() int {
+	if m.width > 80 {
+		return m.width - SidebarWidth
+	}
+	return m.width
 }
 
 func (m *model) eyes() string {
@@ -749,7 +805,6 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		Eyes:         m.eyes(),
 		Messages:     m.chatModel.Messages,
 		TokenTracker: m.cfg.TokenTracker,
-		Orchestrator: m.cfg.Orchestrator,
 		DiffAdded:    m.diffAdded,
 		DiffRemoved:  m.diffRemoved,
 		RunCycle:     rc,

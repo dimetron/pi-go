@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -24,21 +25,32 @@ func newMemoryModelCmd() *cobra.Command {
 
 func newMemoryModelDownloadCmd() *cobra.Command {
 	var flagDest string
+	var flagOnnx string
 
 	cmd := &cobra.Command{
 		Use:   "download",
 		Short: "Download the embedding model (all-MiniLM-L6-v2)",
+		Long: `Download the embedding model (all-MiniLM-L6-v2).
+
+By default, auto-selects the optimal ONNX file for your platform:
+  - Apple Silicon (arm64): model_qint8_arm64.onnx
+  - x86_64 with AVX512 VNNI: model_qint8_avx512_vnni.onnx
+  - Other: model.onnx
+
+Use --onnx to specify a specific ONNX file, e.g.:
+  pi memory model download --onnx onnx/model.onnx`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMemoryModelDownload(flagDest)
+			return runMemoryModelDownload(flagDest, flagOnnx)
 		},
 	}
 
 	cmd.Flags().StringVar(&flagDest, "dest", "", "Destination directory (default: ~/.pi-go/models/)")
+	cmd.Flags().StringVar(&flagOnnx, "onnx", "", "ONNX file path within the model (e.g., onnx/model.onnx). Default: auto-detect for platform")
 
 	return cmd
 }
 
-func runMemoryModelDownload(dest string) error {
+func runMemoryModelDownload(dest string, onnxFilePath string) error {
 	if dest == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -51,9 +63,15 @@ func runMemoryModelDownload(dest string) error {
 		return fmt.Errorf("creating model directory: %w", err)
 	}
 
+	// Auto-detect ONNX file if not specified
+	if onnxFilePath == "" {
+		onnxFilePath = palace.DetectPlatformOnnxFile()
+		fmt.Printf("Auto-detected ONNX file for %s/%s: %s\n", runtime.GOOS, runtime.GOARCH, onnxFilePath)
+	}
+
 	fmt.Printf("Downloading embedding model to %s ...\n", dest)
 
-	modelPath, err := palace.DownloadModel(dest)
+	modelPath, err := palace.DownloadModel(dest, onnxFilePath)
 	if err != nil {
 		return fmt.Errorf("downloading model: %w", err)
 	}

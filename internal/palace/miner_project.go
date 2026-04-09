@@ -99,6 +99,7 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		room := detectRoom(relPath, cfg.Rooms)
 		chunks := chunkText(content, defaultChunkSize, defaultChunkOverlap)
 
+		fileAdded, fileSkipped, fileErrors := 0, 0, 0
 		for i, chunk := range chunks {
 			result.Processed++
 
@@ -115,13 +116,20 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 				var dupErr *DuplicateError
 				if errors.As(addErr, &dupErr) {
 					result.Skipped++
+					fileSkipped++
 				} else {
 					result.Errors++
+					fileErrors++
 					slog.Warn("mine: add drawer", "file", relPath, "chunk", i, "error", addErr)
 				}
 				continue
 			}
 			result.Added++
+			fileAdded++
+		}
+
+		if cfg.Progress != nil {
+			cfg.Progress(relPath, fileAdded, fileSkipped, fileErrors)
 		}
 
 		return nil

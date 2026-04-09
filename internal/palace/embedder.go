@@ -3,6 +3,7 @@ package palace
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 
 	"github.com/knights-analytics/hugot"
@@ -52,12 +53,30 @@ func (e *Embedder) Close() {
 }
 
 // DownloadModel fetches the all-MiniLM-L6-v2 model to dest and returns the local path.
-func DownloadModel(dest string) (string, error) {
+func DownloadModel(dest string, onnxFilePath string) (string, error) {
+	opts := hugot.NewDownloadOptions()
+	if onnxFilePath != "" {
+		opts.OnnxFilePath = onnxFilePath
+	}
 	return hugot.DownloadModel(
 		"sentence-transformers/all-MiniLM-L6-v2",
 		dest,
-		hugot.NewDownloadOptions(),
+		opts,
 	)
+}
+
+// DetectPlatformOnnxFile returns the recommended ONNX file for the current platform.
+func DetectPlatformOnnxFile() string {
+	// Detect ARM64 (Apple Silicon)
+	if runtime.GOARCH == "arm64" {
+		return "onnx/model_qint8_arm64.onnx"
+	}
+	// For x86_64, use the base model (AVX512 variants need CPU feature probing)
+	if runtime.GOARCH == "amd64" {
+		return "onnx/model.onnx"
+	}
+	// Fallback to base model
+	return "onnx/model.onnx"
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.

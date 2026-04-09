@@ -130,6 +130,11 @@ func deferredInit(
 	}
 	res.sandbox = sandbox
 
+	// Allow agent tools to access ~/.pi-go/ (logs, sessions, config).
+	if home, hErr := os.UserHomeDir(); hErr == nil {
+		_ = sandbox.AddExtraDir(filepath.Join(home, ".pi-go"))
+	}
+
 	coreTools, err := tools.CoreTools(sandbox)
 	if err != nil {
 		fail(fmt.Errorf("creating core tools: %w", err))

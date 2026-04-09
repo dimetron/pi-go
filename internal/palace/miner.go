@@ -10,10 +10,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ProgressFunc is called after each file is processed during mining.
+// file is the relative path, added/skipped/errors are counts for that file.
+type ProgressFunc func(file string, added, skipped, errors int)
+
 // MineConfig is the per-project configuration loaded from mempalace.yaml.
 type MineConfig struct {
-	Wing  string    `yaml:"wing"`
-	Rooms []RoomDef `yaml:"rooms"`
+	Wing     string       `yaml:"wing"`
+	Rooms    []RoomDef    `yaml:"rooms"`
+	Progress ProgressFunc `yaml:"-"`
 }
 
 // RoomDef defines a room with glob patterns and optional keywords for

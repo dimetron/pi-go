@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	stdlog "log"
@@ -10,6 +12,91 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 )
+
+const (
+	// maxRepeatToolCalls is the number of identical consecutive tool calls
+	// before the loop is considered stuck and aborted.
+	maxRepeatToolCalls = 10
+
+	// recentWindowSize is the sliding window of tool-call fingerprints kept
+	// for repetition detection.
+	recentWindowSize = 12
+)
+
+// stuckDetector tracks recent tool calls and detects repetition loops.
+type stuckDetector struct {
+	recent    []string // ring of fingerprints (len <= recentWindowSize)
+	lastPrint string   // fingerprint of last tool call
+	streak    int      // consecutive identical tool calls
+}
+
+// toolFingerprint produces a short hash of a tool call for comparison.
+func toolFingerprint(name string, args map[string]any) string {
+	h := sha256.New()
+	h.Write([]byte(name))
+	b, _ := json.Marshal(args)
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// observe records a tool call and returns true if the loop appears stuck.
+func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, detail string) {
+	fp := toolFingerprint(name, args)
+
+	// Consecutive identical call detection.
+	if fp == s.lastPrint {
+		s.streak++
+	} else {
+		s.streak = 1
+		s.lastPrint = fp
+	}
+
+	// Sliding window.
+	s.recent = append(s.recent, fp)
+	if len(s.recent) > recentWindowSize {
+		s.recent = s.recent[1:]
+	}
+
+	if s.streak >= maxRepeatToolCalls {
+		return true, fmt.Sprintf("identical tool call %q repeated %d times", name, s.streak)
+	}
+
+	// Detect short repeating cycles (AB AB AB) in the window.
+	if cycle := s.detectCycle(); cycle != "" {
+		return true, fmt.Sprintf("repeating tool cycle detected: %s", cycle)
+	}
+
+	return false, ""
+}
+
+// detectCycle checks the recent window for repeating subsequences.
+// Returns a description if found, empty string otherwise.
+func (s *stuckDetector) detectCycle() string {
+	n := len(s.recent)
+	if n < 6 {
+		return ""
+	}
+	// Check cycle lengths 2 and 3.
+	for cycleLen := 2; cycleLen <= 3; cycleLen++ {
+		need := cycleLen * 3 // require 3 full repetitions
+		if n < need {
+			continue
+		}
+		tail := s.recent[n-need:]
+		cycle := tail[:cycleLen]
+		match := true
+		for i := cycleLen; i < need; i++ {
+			if tail[i] != cycle[i%cycleLen] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return fmt.Sprintf("length-%d cycle repeated %d times", cycleLen, need/cycleLen)
+		}
+	}
+	return ""
+}
 
 // agentMsg wraps messages coming from the agent goroutine via a channel.
 type agentMsg interface{ agentMsg() }
@@ -130,9 +217,10 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	}
 
 	m.agentCh = make(chan agentMsg, 64)
+	m.matrix.feed("init", m.mainWidth())
 	go m.runAgentLoop(promptText)
 
-	return m, waitForAgent(m.agentCh)
+	return m, tea.Batch(waitForAgent(m.agentCh), matrixTickCmd())
 }
 
 // runAgentLoop runs the agent and sends events to the channel.
@@ -153,6 +241,7 @@ func (m *model) runAgentLoop(prompt string) {
 	}
 
 	log := m.cfg.Logger
+	detector := &stuckDetector{}
 
 	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
@@ -177,6 +266,17 @@ func (m *model) runAgentLoop(prompt string) {
 				m.agentCh <- agentTextMsg{text: part.Text}
 			}
 			if part.FunctionCall != nil {
+				// Check for stuck/repeating tool calls.
+				if stuck, detail := detector.observe(part.FunctionCall.Name, part.FunctionCall.Args); stuck {
+					if log != nil {
+						log.Error("agent loop stuck: " + detail)
+					}
+					m.agentCh <- agentDoneMsg{
+						err: fmt.Errorf("agent loop aborted: %s", detail),
+					}
+					return
+				}
+
 				if log != nil {
 					log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 				}
@@ -204,6 +304,7 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 	if m.face != nil {
 		m.face.SetMood(MoodThinking)
 	}
+	m.matrix.feed(msg.text, m.mainWidth())
 	m.chatModel.Thinking += msg.text
 	if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
 		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = m.chatModel.Thinking
@@ -227,6 +328,7 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 			m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: ""}
 		}
 	}
+	m.matrix.feed(msg.text, m.mainWidth())
 	m.chatModel.Streaming += msg.text
 	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
 		if m.chatModel.Messages[i].role == "assistant" {
@@ -256,6 +358,7 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 	m.statusModel.ActiveTools[msg.name] = time.Now()
 	m.statusModel.ActiveTool = msg.name
 	m.statusModel.ToolStart = time.Now()
+	m.matrix.feed(msg.name, m.mainWidth())
 	argsJSON, _ := json.MarshalIndent(msg.args, "", "  ")
 	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 		time:    time.Now(),
@@ -301,6 +404,7 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 		m.statusModel.ToolStart = m.statusModel.ActiveTools[name]
 		break
 	}
+	m.matrix.feed(msg.name+msg.content, m.mainWidth())
 	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 		time:    time.Now(),
 		kind:    "tool_result",
@@ -319,6 +423,7 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 
 // handleAgentSubEvent processes an agentSubEventMsg.
 func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
+	m.matrix.feed(msg.kind+msg.content, m.mainWidth())
 	if msg.kind == "spawn" {
 		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
 			if (m.chatModel.Messages[i].tool == "agent" || m.chatModel.Messages[i].tool == "subagent") && m.chatModel.Messages[i].agentID == "" {
@@ -352,6 +457,7 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 // handleAgentDone processes an agentDoneMsg.
 func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.running = false
+	m.matrix.clear()
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
 	if msg.err != nil {

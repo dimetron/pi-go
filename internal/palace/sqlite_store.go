@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -44,7 +45,7 @@ func (s *SQLitePalaceStore) InsertDrawer(ctx context.Context, d *Drawer) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch)
+		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID,
 		d.Wing,
@@ -85,7 +86,7 @@ func (s *SQLitePalaceStore) GetDrawer(ctx context.Context, id string) (*Drawer, 
 		 FROM drawers WHERE id = ?`, id)
 
 	d, err := scanDrawer(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("palace: drawer %q not found", id)
 	}
 	if err != nil {
@@ -141,7 +142,7 @@ func (s *SQLitePalaceStore) CountDrawers(ctx context.Context) (int, error) {
 func (s *SQLitePalaceStore) GetEmbedding(ctx context.Context, id string) (*EmbeddingRow, error) {
 	var blob []byte
 	err := s.db.QueryRowContext(ctx, "SELECT embedding FROM drawers WHERE id = ?", id).Scan(&blob)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("palace: drawer %q not found", id)
 	}
 	if err != nil {
@@ -434,7 +435,7 @@ func (s *SQLitePalaceStore) GetEntity(ctx context.Context, id string) (*Entity, 
 	err := s.db.QueryRowContext(ctx,
 		"SELECT id, name, type, created_at FROM entities WHERE id = ?", id).
 		Scan(&e.ID, &e.Name, &e.Type, &createdAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("palace: entity %q not found", id)
 	}
 	if err != nil {

@@ -1,0 +1,112 @@
+# MemPalace configuration
+# See: pi memory mine --help
+
+wing: pi-go
+
+rooms:
+  - name: cmd
+    patterns:
+      - "cmd/**"
+  - name: agent
+    patterns:
+      - "internal/agent/**"
+      - "internal/subagent/**"
+    keywords:
+      - agent
+      - orchestrator
+      - spawner
+  - name: palace
+    patterns:
+      - "internal/palace/**"
+    keywords:
+      - palace
+      - drawer
+      - miner
+      - embedding
+      - knowledge graph
+  - name: memory
+    patterns:
+      - "internal/memory/**"
+    keywords:
+      - memory
+      - compress
+      - privacy
+  - name: tui
+    patterns:
+      - "internal/tui/**"
+    keywords:
+      - bubbletea
+      - sidebar
+      - layout
+      - theme
+  - name: tools
+    patterns:
+      - "internal/tools/**"
+    keywords:
+      - tool
+      - bash
+      - grep
+      - edit
+      - sandbox
+  - name: provider
+    patterns:
+      - "internal/provider/**"
+    keywords:
+      - anthropic
+      - ollama
+      - openai
+      - gemini
+  - name: cli
+    patterns:
+      - "internal/cli/**"
+    keywords:
+      - command
+      - cobra
+  - name: lsp
+    patterns:
+      - "internal/lsp/**"
+    keywords:
+      - language server
+      - diagnostics
+  - name: extension
+    patterns:
+      - "internal/extension/**"
+    keywords:
+      - hooks
+      - mcp
+      - skills
+  - name: webserver
+    patterns:
+      - "internal/webserver/**"
+    keywords:
+      - websocket
+      - pty
+      - pairing
+  - name: infra
+    patterns:
+      - "internal/atif/**"
+      - "internal/audit/**"
+      - "internal/auth/**"
+      - "internal/config/**"
+      - "internal/guardrail/**"
+      - "internal/jsonrpc/**"
+      - "internal/logger/**"
+      - "internal/session/**"
+      - "internal/sop/**"
+      - "internal/mode/**"
+  - name: docs
+    patterns:
+      - "docs/**"
+  - name: skills
+    patterns:
+      - "skills/**"
+  - name: specs
+    patterns:
+      - "specs/**"
+  - name: scripts
+    patterns:
+      - "scripts/**"
+      - "hack/**"
+  - name: research
+    patterns:
+      - "research/**"

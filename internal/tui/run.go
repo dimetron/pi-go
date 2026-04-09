@@ -1129,28 +1129,33 @@ func extractChecklist(content string) []ChecklistStep {
 	return steps
 }
 
-// listAvailableSpecs scans the specs/ directory for subdirectories containing PROMPT.md.
-// Returns a sorted list of spec names.
+// listAvailableSpecs recursively scans the specs/ directory for subdirectories
+// containing PROMPT.md. Returns a sorted list of spec names (relative paths
+// from specs/, e.g. "skills/skills-audit" or "simple-ollama-test").
 func listAvailableSpecs(workDir string) ([]string, error) {
 	specsDir := filepath.Join(workDir, "specs")
 
-	entries, err := os.ReadDir(specsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read specs directory: %w", err)
+	if _, err := os.Stat(specsDir); os.IsNotExist(err) {
+		return nil, nil
 	}
 
 	var specs []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	err := filepath.WalkDir(specsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable dirs
 		}
-		promptPath := filepath.Join(specsDir, entry.Name(), "PROMPT.md")
-		if _, err := os.Stat(promptPath); err == nil {
-			specs = append(specs, entry.Name())
+		if !d.IsDir() {
+			return nil
 		}
+		promptPath := filepath.Join(path, "PROMPT.md")
+		if _, statErr := os.Stat(promptPath); statErr == nil {
+			rel, _ := filepath.Rel(specsDir, path)
+			specs = append(specs, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk specs directory: %w", err)
 	}
 
 	sort.Strings(specs)

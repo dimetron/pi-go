@@ -649,3 +649,96 @@ func TestSandbox_SetWorktreeDir(t *testing.T) {
 		t.Error("expected error after clearing worktree")
 	}
 }
+
+// --- Extra roots ---
+
+func TestSandbox_ExtraDir_ReadWrite(t *testing.T) {
+	// Primary sandbox root.
+	projectDir := t.TempDir()
+	// Extra directory (simulates ~/.pi-go/).
+	extraDir := t.TempDir()
+
+	sb, err := NewSandbox(projectDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// Before adding extra dir, absolute paths under it should fail.
+	testFile := filepath.Join(extraDir, "log", "test.log")
+	_, err = sb.ReadFile(testFile)
+	if err == nil {
+		t.Error("expected error reading from non-allowed extra dir")
+	}
+
+	// Add extra dir.
+	if err := sb.AddExtraDir(extraDir); err != nil {
+		t.Fatalf("AddExtraDir: %v", err)
+	}
+
+	// Write a file via the extra root.
+	if err := sb.WriteFile(testFile, []byte("log entry"), 0o644); err != nil {
+		t.Fatalf("WriteFile to extra dir: %v", err)
+	}
+
+	// Read it back.
+	data, err := sb.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("ReadFile from extra dir: %v", err)
+	}
+	if string(data) != "log entry" {
+		t.Errorf("ReadFile = %q, want %q", data, "log entry")
+	}
+
+	// Stat should work.
+	info, err := sb.Stat(testFile)
+	if err != nil {
+		t.Fatalf("Stat extra dir file: %v", err)
+	}
+	if info.Name() != "test.log" {
+		t.Errorf("Stat name = %q, want %q", info.Name(), "test.log")
+	}
+
+	// ReadDir should work.
+	entries, err := sb.ReadDir(filepath.Join(extraDir, "log"))
+	if err != nil {
+		t.Fatalf("ReadDir extra dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "test.log" {
+		t.Errorf("ReadDir = %v, want [test.log]", entries)
+	}
+
+	// Primary sandbox still works.
+	if err := sb.WriteFile("project.txt", []byte("project"), 0o644); err != nil {
+		t.Fatalf("WriteFile to primary: %v", err)
+	}
+	pData, err := sb.ReadFile("project.txt")
+	if err != nil {
+		t.Fatalf("ReadFile from primary: %v", err)
+	}
+	if string(pData) != "project" {
+		t.Errorf("primary ReadFile = %q, want %q", pData, "project")
+	}
+}
+
+func TestSandbox_ExtraDir_StillBlocksOtherPaths(t *testing.T) {
+	projectDir := t.TempDir()
+	extraDir := t.TempDir()
+	otherDir := t.TempDir()
+
+	sb, err := NewSandbox(projectDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	if err := sb.AddExtraDir(extraDir); err != nil {
+		t.Fatalf("AddExtraDir: %v", err)
+	}
+
+	// Paths under a different directory should still be blocked.
+	_, err = sb.ReadFile(filepath.Join(otherDir, "secret.txt"))
+	if err == nil {
+		t.Error("expected error reading from non-allowed directory")
+	}
+}
