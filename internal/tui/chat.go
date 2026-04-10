@@ -104,6 +104,9 @@ type message struct {
 	pipelineMode  string    // "single", "parallel", "chain"
 	pipelineStep  int       // 1-based step in pipeline
 	pipelineTotal int       // total steps in pipeline
+	// Render cache: stores pre-rendered output to avoid repeated glamour calls.
+	renderCache      string // cached rendered output
+	renderCacheWidth int    // terminal width when cached
 }
 
 // agentEv is a single event from a subagent's event stream.
@@ -209,6 +212,16 @@ func (c *ChatModel) UpdateRenderer(width int) {
 		glamour.WithWordWrap(width),
 		glamour.WithEmoji(),
 	)
+	// Invalidate render caches — width changed so all cached output is stale.
+	c.invalidateRenderCaches()
+}
+
+// invalidateRenderCaches clears cached rendered output for all messages.
+func (c *ChatModel) invalidateRenderCaches() {
+	for i := range c.Messages {
+		c.Messages[i].renderCache = ""
+		c.Messages[i].renderCacheWidth = 0
+	}
 }
 
 // RenderMarkdown renders text as markdown using the glamour renderer.
@@ -241,18 +254,30 @@ func (c *ChatModel) RenderMessages(running bool) string {
 	separator := dim.Render(strings.Repeat("─", sepWidth))
 
 	var b strings.Builder
-	for i, msg := range c.Messages {
+	lastIdx := len(c.Messages) - 1
+	for i := range c.Messages {
+		msg := &c.Messages[i]
+
+		// Use cached render if available and width hasn't changed.
+		// Skip cache for the last message while streaming — it's still being updated.
+		isLastAndStreaming := running && i == lastIdx
+		if !isLastAndStreaming && msg.renderCache != "" && msg.renderCacheWidth == c.Width {
+			b.WriteString(msg.renderCache)
+			continue
+		}
+
+		var msgBuf strings.Builder
 		switch msg.role {
 		case "user":
 			if i > 0 {
-				b.WriteString(separator)
-				b.WriteString("\n")
+				msgBuf.WriteString(separator)
+				msgBuf.WriteString("\n")
 			}
 			label := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("39")).
 				Bold(true).
 				Render("> ")
-			b.WriteString(label)
+			msgBuf.WriteString(label)
 			contentWidth := c.Width - 3 // "> " = 3 visible chars
 			if contentWidth < 20 {
 				contentWidth = 20
@@ -260,22 +285,22 @@ func (c *ChatModel) RenderMessages(running bool) string {
 			wrapped := wordWrap(msg.content, contentWidth)
 			for j, line := range wrapped {
 				if j > 0 {
-					b.WriteString("\n   ")
+					msgBuf.WriteString("\n   ")
 				}
-				b.WriteString(line)
+				msgBuf.WriteString(line)
 			}
-			b.WriteString("\n")
+			msgBuf.WriteString("\n")
 
 		case "tool":
-			b.WriteString("\n")
-			b.WriteString(c.ToolDisplay.RenderToolMessage(msg))
+			msgBuf.WriteString("\n")
+			msgBuf.WriteString(c.ToolDisplay.RenderToolMessage(*msg))
 
 		case "thinking":
 			if msg.content != "" {
 				thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
 				thinkBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("💭 ")
-				b.WriteString("\n")
-				b.WriteString(thinkBullet)
+				msgBuf.WriteString("\n")
+				msgBuf.WriteString(thinkBullet)
 				// Show last few lines of thinking to keep it compact.
 				lines := strings.Split(msg.content, "\n")
 				maxLines := 6
@@ -289,42 +314,51 @@ func (c *ChatModel) RenderMessages(running bool) string {
 				}
 				for j, line := range lines {
 					if j > 0 {
-						b.WriteString("   ")
+						msgBuf.WriteString("   ")
 					}
 					// Wrap each line to fit available width.
 					wrapped := wordWrap(line, contentWidth)
 					for k, wl := range wrapped {
 						if k > 0 {
-							b.WriteString("\n")
+							msgBuf.WriteString("\n")
 						}
-						b.WriteString(thinkStyle.Render(wl))
+						msgBuf.WriteString(thinkStyle.Render(wl))
 					}
 					if j < len(lines)-1 {
-						b.WriteString("\n")
+						msgBuf.WriteString("\n")
 					}
 				}
-				b.WriteString("\n")
+				msgBuf.WriteString("\n")
 			}
 
 		case "assistant":
 			content := msg.content
-			if content == "" && running && i == len(c.Messages)-1 {
+			if content == "" && isLastAndStreaming {
 				content = "..."
 			}
 			if content != "" {
-				b.WriteString("\n")
+				msgBuf.WriteString("\n")
 				if msg.isWarning {
 					warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
 					warnBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true).Render("⚠ ")
-					b.WriteString(warnBullet)
-					b.WriteString(warnStyle.Render(content))
+					msgBuf.WriteString(warnBullet)
+					msgBuf.WriteString(warnStyle.Render(content))
 				} else {
-					b.WriteString(bullet)
+					msgBuf.WriteString(bullet)
 					rendered := c.RenderMarkdown(content)
-					b.WriteString(rendered)
+					msgBuf.WriteString(rendered)
 				}
-				b.WriteString("\n")
+				msgBuf.WriteString("\n")
 			}
+		}
+
+		rendered := msgBuf.String()
+		b.WriteString(rendered)
+
+		// Cache the rendered output for non-streaming messages.
+		if !isLastAndStreaming {
+			msg.renderCache = rendered
+			msg.renderCacheWidth = c.Width
 		}
 	}
 
