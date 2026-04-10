@@ -21,14 +21,34 @@ if [ ! -d "$LOG_DIR" ]; then
   exit 1
 fi
 
-# Collect log files (non-empty). -print0 handles spaces in paths.
+# Time window: default last 24h, override with HOURS=N env var.
+export HOURS="${HOURS:-24}"
+
+# Compute cutoff timestamp (seconds since epoch) — works on both macOS and Linux.
+if date -v-1d +%s &>/dev/null 2>&1; then
+  # macOS (BSD date)
+  CUTOFF=$(date -v-"${HOURS}"H +%s)
+else
+  # Linux (GNU date)
+  CUTOFF=$(date -d "${HOURS} hours ago" +%s)
+fi
+
+# Collect log files modified within the time window (non-empty).
 LOG_FILES=()
 while IFS= read -r -d '' f; do
-  LOG_FILES+=("$f")
+  # File mtime in epoch seconds.
+  if stat -f%m "$f" &>/dev/null 2>&1; then
+    mtime=$(stat -f%m "$f")  # macOS
+  else
+    mtime=$(stat -c%Y "$f")  # Linux
+  fi
+  if [ "$mtime" -ge "$CUTOFF" ]; then
+    LOG_FILES+=("$f")
+  fi
 done < <(find "$LOG_DIR" -name '*.log' -size +0c -print0 2>/dev/null)
 
 if [ ${#LOG_FILES[@]} -eq 0 ]; then
-  echo "No log files found."
+  echo "No log files found in the last ${HOURS}h."
   exit 0
 fi
 
@@ -114,7 +134,7 @@ FNR == 1 { files++ }
 }
 
 END {
-  print "## Session Log Analysis"
+  print "## Session Log Analysis (last " ENVIRON["HOURS"] "h)"
   print ""
   print "- **Log files scanned**: " files
   print "- **Total log entries**: " lines
