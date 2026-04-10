@@ -61,7 +61,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.handleBranchCommand(parts[1:])
 	case "/compact":
 		m.handleCompactCommand()
-	case "/agents":
+	case "/subagents":
 		m.handleAgentsCommand()
 	case "/history":
 		m.handleHistoryCommand(parts[1:])
@@ -530,7 +530,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("\n**System:**\n\n")
 	b.WriteString("| Command | Description |\n")
 	b.WriteString("|---------|-------------|\n")
-	b.WriteString("| `/agents` | Show running subagents |\n")
+	b.WriteString("| `/subagents` | Show running subagents |\n")
 	b.WriteString("| `/rtk` | Output compaction stats |\n")
 	b.WriteString("| `/login <provider>` | Configure API keys |\n")
 	b.WriteString("| `/restart` | Restart pi process |\n")

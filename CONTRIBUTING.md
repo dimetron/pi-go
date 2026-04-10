@@ -17,11 +17,11 @@ First off, thank you for considering contributing to pi-go! It's a complex proje
    ```
 2. Build the binary:
    ```bash
-   make build
+   make install
    ```
 3. Run the agent:
    ```bash
-   ./pi
+   pi --model minimax-m2.7:cloud
    ```
 
 ## Development Workflow
@@ -67,6 +67,64 @@ make lint   # Run go vet and linters
   ```bash
   make e2e
   ```
+
+## Profiling
+
+pi-go includes built-in pprof profiling support via the `--pprof` flag.
+
+### Quick Start
+
+```bash
+# Start with memory (heap) profiling
+pi --pprof mem --model minimax-m2.7:cloud 
+
+#PROMPT: explore repository but do not run tests and then check memory usage at go tool pprof http://localhost:6060/debug/pprof/heap
+
+# Then analyze the profile
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+### Available Profiles
+
+| Profile | Flag Value | URL | Description |
+|---------|-----------|-----|-------------|
+| Heap/Memory | `mem` | `/debug/pprof/heap` | Memory allocations and live objects |
+| CPU | `cpu` | `/debug/pprof/profile` | CPU usage (30s collection by default) |
+| Goroutines | `goroutine` | `/debug/pprof/goroutine?debug=1` | All goroutines dump |
+| Mutex | `mutex` | `/debug/pprof/mutex?debug=1` | Mutex contention |
+| Block | `block` | `/debug/pprof/block?debug=1` | Blocking operations |
+| Trace | `trace` | `/debug/pprof/trace` | Execution tracer |
+
+### Custom Port
+
+```bash
+pi --pprof mem --pprof-port 9090 "your prompt"
+
+pi --pprof mem --pprof-port 9090 --model minimax-m2.7:cloud
+
+```
+
+### Analyzing Profiles
+
+```bash
+# Heap profile (default for 'mem')
+go tool pprof http://localhost:6060/debug/pprof/heap
+
+# CPU profile (requires manual collection while profiling)
+go tool pprof http://localhost:6060/debug/pprof/profile
+
+# Goroutine dump (text)
+curl http://localhost:6060/debug/pprof/goroutine?debug=1
+
+# Execution trace (requires stopping trace separately)
+go tool trace http://localhost:6060/debug/pprof/trace
+```
+
+### Notes
+
+- CPU and trace profiles require manually starting/stopping collection via the respective endpoints
+- The pprof server runs in a background goroutine alongside the main app
+- Default port is `6060`; change with `--pprof-port`
 
 ## Pull Request Process
 

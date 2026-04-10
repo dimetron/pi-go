@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"net/http"
+	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
 	"os"
 	"os/exec"
 	"os/signal"
@@ -49,6 +51,8 @@ var (
 	flagPlan      bool
 	flagMemoryOff bool
 	flagSystem    string
+	flagPprof     string
+	flagPprofPort string
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).
@@ -89,6 +93,8 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
+	cmd.Flags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (cpu, mem, goroutine, mutex, block, trace)")
+	cmd.Flags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for pprof HTTP server (default 6060)")
 
 	cmd.AddCommand(newPingCmd())
 	cmd.AddCommand(newAuditCmd())
@@ -101,6 +107,25 @@ func newRootCmd() *cobra.Command {
 func runRoot(cmd *cobra.Command, args []string) error {
 	// Load API keys from ~/.pi-go/.env (set by /login command).
 	loadDotEnv()
+
+	// Optionally start pprof server.
+	if flagPprof != "" {
+		addr := ":" + flagPprofPort
+		go func() {
+			fmt.Printf("pprof server listening on %s (profile: %s)\n", addr, flagPprof)
+			switch flagPprof {
+			case "cpu":
+				// CPU profiling is started separately via runtime/pprof.
+				fmt.Println("note: cpu profiling started via runtime/pprof; run: go tool pprof http://localhost:" + flagPprofPort + "/profile")
+			case "trace":
+				// Trace profiling is started separately via runtime/trace.
+				fmt.Println("note: trace profiling started via runtime/trace; run: go tool trace http://localhost:" + flagPprofPort + "/trace")
+			}
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
+			}
+		}()
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

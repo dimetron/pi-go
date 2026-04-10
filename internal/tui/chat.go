@@ -80,7 +80,7 @@ func (c *ChatModel) renderWelcome() string {
 			cmd.Render("/commit") + dim.Render(" ") +
 			cmd.Render("/plan") + dim.Render(" ") +
 			cmd.Render("/run") + dim.Render(" ") +
-			cmd.Render("/agents") + dim.Render(" ") +
+			cmd.Render("/subagents") + dim.Render(" ") +
 			cmd.Render("/ping"),
 		dim.Render("  Press ") + cmd.Render("Tab") + dim.Render(" to cycle commands, ") +
 			cmd.Render("@") + dim.Render(" to mention files"),

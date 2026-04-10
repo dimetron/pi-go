@@ -1197,9 +1197,9 @@ func TestSlashCommand_Session(t *testing.T) {
 
 func TestSlashCommand_Agents_NoOrchestrator(t *testing.T) {
 	m := newTestModel(t)
-	m.handleSlashCommand("/agents")
+	m.handleSlashCommand("/subagents")
 	if len(m.chatModel.Messages) == 0 {
-		t.Fatal("expected message from /agents")
+		t.Fatal("expected message from /subagents")
 	}
 }
 

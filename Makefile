@@ -3,6 +3,9 @@
 build:
 	go build ./cmd/pi
 
+install: build
+	go install ./cmd/pi/
+
 test: test-unit
 
 test-unit:

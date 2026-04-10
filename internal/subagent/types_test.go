@@ -10,8 +10,8 @@ func TestBundledAgents_AllDefined(t *testing.T) {
 		t.Fatalf("LoadBundledAgents failed: %v", err)
 	}
 
-	// Should have exactly 9 bundled agents
-	expected := []string{"explore", "plan", "designer", "task", "quick-task", "worker", "code-reviewer", "spec-reviewer", "memory-compressor"}
+	// Should have exactly 10 bundled agents
+	expected := []string{"explore", "plan", "designer", "task", "quick-task", "worker", "code-reviewer", "spec-reviewer", "memory-compressor", "discovery"}
 	if len(agents) != len(expected) {
 		t.Errorf("expected %d bundled agents, got %d: %v", len(expected), len(agents), agentNames(agents))
 	}
@@ -37,6 +37,7 @@ func TestBundledAgents_RoleMappings(t *testing.T) {
 		"smol":    true,
 		"slow":    true,
 		"plan":    true,
+		"system":  true, // discovery agent uses system role
 	}
 
 	agents, err := LoadBundledAgents()
