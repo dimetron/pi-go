@@ -1,0 +1,1 @@
+I did not detect any staged, unstaged, or untracked changes in the working tree, and `HEAD` matches `origin/main`, so there is no patch to review. With no code changes present, there are no actionable findings.

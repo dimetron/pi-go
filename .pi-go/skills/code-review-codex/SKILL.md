@@ -1,24 +1,18 @@
----
-name: code-review-codex
-description: Use the OpenAI Codex CLI in read-only mode to review pi-go diffs, commits, or branches and save the final review to ./specs/issues/002-code-review-codex/PROMPT.md.
-metadata:
-  author: dimetron
-  version: "1.0"
----
-
 # Codex Review
 
 Use the external `codex` CLI as a second-opinion reviewer for `pi-go`.
 This skill is for read-only review and findings, not code editing.
 The only intended output is `./specs/issues/002-code-review-codex/PROMPT.md`.
 
-The command surface below was verified locally against `codex-cli`.
-
 ## CLI constraint: `--uncommitted`/`--base`/`--commit` vs `[PROMPT]`
 
 These flags are **mutually exclusive** with a positional prompt argument.
-If you need custom instructions alongside one of these flags, pass `-` as the
-prompt and pipe instructions via heredoc stdin:
+
+### Verified behavior in `codex-cli 0.117.0`
+
+In this version, passing `-` as a positional prompt still counts as `[PROMPT]` and fails with exit code 2 when combined with `--uncommitted`, `--base`, or `--commit`.
+
+This means the previously documented pattern below does **not** work on `codex-cli 0.117.0`:
 
 ```bash
 codex exec -s read-only review --uncommitted -m gpt-5.4 -o file.md - <<'EOF'
@@ -26,7 +20,23 @@ Your instructions here
 EOF
 ```
 
-**Never** combine `--uncommitted "prompt text"` — it will fail with exit code 2.
+Observed error:
+
+```text
+error: the argument '--uncommitted' cannot be used with '[PROMPT]'
+```
+
+### Working pattern in `codex-cli 0.117.0`
+
+If you need custom instructions alongside one of these flags, pipe stdin **without** any positional prompt argument:
+
+```bash
+cat <<'EOF' | codex exec -s read-only review --uncommitted -m gpt-5.4 -o file.md
+Your instructions here
+EOF
+```
+
+Do **not** combine `--uncommitted`, `--base`, or `--commit` with `-` as a prompt argument on this version.
 
 ## Default output path
 
@@ -110,21 +120,21 @@ The only allowed local writes are:
 
 ### 1. Review uncommitted changes and save the result
 
-**Important:** `--uncommitted` and a positional `[PROMPT]` are mutually exclusive in `codex exec review`.
-Pass custom instructions via stdin with `-` as the prompt argument.
+With `codex-cli 0.117.0`, pipe custom instructions on stdin **without** a positional prompt argument:
 
 ```bash
 mkdir -p ./specs/issues/002-code-review-codex
-codex exec -s read-only review \
+cat <<'EOF' | codex exec -s read-only review \
   -m gpt-5.4 \
   --uncommitted \
   --ephemeral \
-  -o ./specs/issues/002-code-review-codex/PROMPT.md \
-  - <<'EOF'
+  -o ./specs/issues/002-code-review-codex/PROMPT.md
 Review this pi-go change in read-only mode. Do not propose or apply edits.
 Only generate a review report. Focus on bugs, regressions, missing tests,
 missing error context, ADK misuse, sandbox escapes, and docs drift.
 Report only high-confidence findings with file:line references.
+If you detect no issues, briefly summarize the project structure you reviewed
+and include concise positive feedback on what looks solid.
 EOF
 ```
 
@@ -143,21 +153,21 @@ Use this before committing local work. This is the default saved-review workflow
 
 ### 2. Review the current branch against `origin/main` and save the result
 
-**Note:** `--base` also conflicts with a positional prompt. Use stdin via `-`.
+`codex-cli 0.117.0` also treats `-` as a conflicting positional prompt with `--base`, so use stdin piping with no prompt argument:
 
 ```bash
 mkdir -p ./specs/issues/002-code-review-codex
-codex exec -s read-only review \
+cat <<'EOF' | codex exec -s read-only review \
   -m gpt-5.4 \
   --base origin/main \
   --ephemeral \
-  -o ./specs/issues/002-code-review-codex/PROMPT.md \
-  - <<'EOF'
+  -o ./specs/issues/002-code-review-codex/PROMPT.md
 Review this pi-go branch against origin/main in read-only mode.
 Do not propose or apply edits. Only generate a review report.
 Prioritize correctness, compatibility, tests, os.Root sandboxing,
 tool.NewFunctionTool/tools.CoreTools wiring, %w error wrapping,
-and documentation updates.
+and documentation updates. If you detect no issues, briefly summarize
+the project structure reviewed and include concise positive feedback.
 EOF
 ```
 
@@ -167,15 +177,16 @@ Use this for a PR-style review.
 
 ```bash
 mkdir -p ./specs/issues/002-code-review-codex
-codex exec -s read-only review \
+cat <<'EOF' | codex exec -s read-only review \
   -m gpt-5.4 \
   --commit HEAD \
   --ephemeral \
-  -o ./specs/issues/002-code-review-codex/PROMPT.md \
-  - <<'EOF'
+  -o ./specs/issues/002-code-review-codex/PROMPT.md
 Review this pi-go commit in read-only mode. Do not propose or apply edits.
 Only generate a review report. Flag only important issues,
-with severity and file:line references.
+with severity and file:line references. If you detect no issues,
+briefly summarize the project structure reviewed and include concise
+positive feedback.
 EOF
 ```
 
@@ -186,7 +197,7 @@ Replace `HEAD` with any commit SHA when needed.
 ### Short prompt
 
 ```text
-Review this pi-go change in read-only mode. Do not propose or apply edits. Only generate a review report in ./specs/issues/002-code-review-codex/PROMPT.md. Focus on bugs, regressions, missing tests, ADK misuse, sandbox escapes, missing %w error wrapping, and docs drift. Report only high-confidence findings with file:line references.
+Review this pi-go change in read-only mode. Do not propose or apply edits. Only generate a review report in ./specs/issues/002-code-review-codex/PROMPT.md. Focus on bugs, regressions, missing tests, ADK misuse, sandbox escapes, missing %w error wrapping, and docs drift. Report only high-confidence findings with file:line references. If no issues are found, briefly summarize the project structure reviewed and include concise positive feedback.
 ```
 
 ### Deep prompt
@@ -207,6 +218,7 @@ Prioritize:
 - documentation drift in README.md, ARCHITECTURE.md, or skill docs
 
 Return only high-confidence findings. Include severity, file:line references, and a concrete fix.
+If no issues are found, briefly summarize the project structure reviewed and include concise positive feedback.
 ```
 
 ## Option reference
@@ -222,7 +234,7 @@ Important:
 - Use `-s read-only` on `codex exec` so the model cannot mutate the repo
 - Use `-o ./specs/issues/002-code-review-codex/PROMPT.md` so the review result lands in the canonical file
 - Do not use the top-level `codex review` form for this skill because the skill requires a saved artifact and explicit read-only sandboxing
-- If you need a multiline prompt, pass `-` as the prompt and provide the instructions on stdin
+- On `codex-cli 0.117.0`, do not use `-` as a prompt argument with `--uncommitted`, `--base`, or `--commit`; pipe stdin without a prompt argument instead
 
 ## Review checklist for pi-go
 
@@ -263,7 +275,7 @@ go test ./internal/agent/...
 go test -race ./...
 ```
 
-## What this skill found (2026-04-09)
+## What this skill found
 
 This skill caught two real regressions that tests and linters would not catch:
 
@@ -277,6 +289,12 @@ actual `HandleKey` logic and caught this.
 This confirms that Codex finds issues that `make vet`/`make lint` miss — especially
 behavioral regressions and unintended side effects in the TUI and CLI layers.
 
+### Additional CLI lesson learned on 2026-04-10
+
+On `codex-cli 0.117.0`, the documented `- <<'EOF'` pattern is not compatible with `--uncommitted`.
+Piping stdin without any positional prompt argument works and should be the preferred invocation
+for custom review instructions until the CLI behavior changes.
+
 ## Guidelines
 
 - Prefer `origin/main` as the review base for branch reviews
@@ -285,4 +303,5 @@ behavioral regressions and unintended side effects in the TUI and CLI layers.
 - Do not use this skill for ad-hoc review output, JSONL automation output, or code-editing workflows
 - Keep prompts specific to pi-go conventions; generic prompts miss important repo rules
 - Ask for high-confidence findings only
+- If no issues are found, ask Codex to summarize the reviewed project structure and provide brief positive feedback
 - Do not use `--dangerously-bypass-approvals-and-sandbox` for review
