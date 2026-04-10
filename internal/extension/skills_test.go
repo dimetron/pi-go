@@ -116,8 +116,8 @@ Deploy steps.
 		t.Fatal(err)
 	}
 
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills, got %d", len(skills))
+	if len(skills) != 3 {
+		t.Fatalf("expected 3 skills (including bundled), got %d", len(skills))
 	}
 
 	// lint should be overridden by project version.
@@ -140,8 +140,8 @@ func TestLoadSkillsEmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skills) != 0 {
-		t.Errorf("expected 0 skills, got %d", len(skills))
+	if len(skills) != 1 {
+		t.Errorf("expected 1 skill (bundled only), got %d", len(skills))
 	}
 }
 
@@ -176,11 +176,11 @@ func TestLoadSkillsWithOptionsBlockCritical(t *testing.T) {
 	}
 
 	// dirty should be blocked.
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill (dirty blocked), got %d", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills (clean + bundled; dirty blocked), got %d", len(skills))
 	}
-	if skills[0].Name != "clean" {
-		t.Errorf("expected clean skill, got %q", skills[0].Name)
+	if _, ok := FindSkill(skills, "clean"); !ok {
+		t.Error("expected clean skill to be loaded")
 	}
 }
 
@@ -195,11 +195,11 @@ func TestLoadSkillsWithOptionsWarnCritical(t *testing.T) {
 	}
 
 	// In warn mode, skill should still load.
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill in warn mode, got %d", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills in warn mode (tagged + bundled), got %d", len(skills))
 	}
-	if skills[0].Name != "tagged" {
-		t.Errorf("expected tagged skill, got %q", skills[0].Name)
+	if _, ok := FindSkill(skills, "tagged"); !ok {
+		t.Error("expected tagged skill to be loaded")
 	}
 }
 
@@ -213,8 +213,8 @@ func TestLoadSkillsWithOptionsSkipMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill in skip mode, got %d", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills in skip mode (critical + bundled), got %d", len(skills))
 	}
 }
 
@@ -228,8 +228,8 @@ func TestLoadSkillsWithOptionsWarningOnlyLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill (warning-only should load), got %d", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills (warning-only + bundled), got %d", len(skills))
 	}
 }
 
@@ -244,11 +244,11 @@ func TestLoadSkillsDefaultUsesBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill (blocked by default), got %d", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills (ok + bundled; blocked excluded), got %d", len(skills))
 	}
-	if skills[0].Name != "ok" {
-		t.Errorf("expected ok skill, got %q", skills[0].Name)
+	if _, ok := FindSkill(skills, "ok"); !ok {
+		t.Error("expected ok skill to be loaded")
 	}
 }
 
@@ -257,7 +257,93 @@ func TestLoadSkillsNonExistentDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skills) != 0 {
-		t.Errorf("expected 0 skills for nonexistent dir, got %d", len(skills))
+	if len(skills) != 1 {
+		t.Errorf("expected 1 skill for nonexistent dir (bundled only), got %d", len(skills))
+	}
+}
+
+func TestLoadBundledSkills(t *testing.T) {
+	bundled, err := LoadBundledSkills()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundled) == 0 {
+		t.Fatal("expected at least one bundled skill (agents-md)")
+	}
+
+	agentsMD, ok := bundled["agents-md"]
+	if !ok {
+		t.Fatal("expected agents-md bundled skill")
+	}
+	if len(agentsMD) == 0 {
+		t.Fatal("expected at least one file in agents-md skill")
+	}
+
+	// Should have SKILL.md
+	hasSKILL := false
+	for _, f := range agentsMD {
+		if f.RelPath == "bundled_skills/agents-md/SKILL.md" {
+			hasSKILL = true
+			break
+		}
+	}
+	if !hasSKILL {
+		t.Error("expected SKILL.md in agents-md skill files")
+	}
+}
+
+func TestLoadBundledSkills_WithSource(t *testing.T) {
+	// LoadSkillsWithOptions should include bundled skills.
+	// When no filesystem dirs provided, should still get bundled.
+	skills, err := LoadSkillsWithOptions(LoadOptions{AuditMode: AuditSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) == 0 {
+		t.Fatal("expected bundled skills even with no dirs")
+	}
+	var found bool
+	for _, s := range skills {
+		if s.Name == "agents-md" {
+			found = true
+			if s.Source != "bundled" {
+				t.Errorf("expected source=bundled, got %q", s.Source)
+			}
+			if s.Description == "" {
+				t.Error("expected non-empty description for agents-md")
+			}
+			if s.Instruction == "" {
+				t.Error("expected non-empty instruction for agents-md")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected agents-md in loaded skills")
+	}
+}
+
+func TestLoadBundledSkills_Override(t *testing.T) {
+	// A filesystem skill should override the bundled one.
+	dir := t.TempDir()
+	setupSkillWithContent(t, dir, "agents-md", `---
+name: agents-md
+description: Custom agents-md override
+---
+Custom instruction.
+`)
+	skills, err := LoadSkillsWithOptions(LoadOptions{AuditMode: AuditSkip}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) == 0 {
+		t.Fatal("expected at least one skill")
+	}
+	// Should use the filesystem version, not the bundled one.
+	for _, s := range skills {
+		if s.Name == "agents-md" {
+			if s.Source != "user" {
+				t.Errorf("expected source=user (filesystem override), got %q", s.Source)
+			}
+		}
 	}
 }

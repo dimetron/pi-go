@@ -40,6 +40,8 @@ type Orchestrator struct {
 	// Key is a normalized version of the task prompt.
 	recentTasks   map[string]recentTask
 	recentTasksMu sync.RWMutex
+	pruneTicker   *time.Ticker // periodic cleanup of expired recentTasks
+	pruneTickerMu sync.Mutex
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -77,6 +79,21 @@ func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentCo
 		registry:    registry,
 		agents:      make(map[string]*agentState),
 		recentTasks: make(map[string]recentTask),
+	}
+}
+
+// ensurePruneLoop starts the periodic cleanup goroutine if not already running.
+// It's called lazily on first Spawn to avoid starting goroutines in tests.
+func (o *Orchestrator) ensurePruneLoop() {
+	o.pruneTickerMu.Lock()
+	defer o.pruneTickerMu.Unlock()
+	if o.pruneTicker == nil {
+		o.pruneTicker = time.NewTicker(recentTaskTTL)
+		go func() {
+			for range o.pruneTicker.C {
+				o.pruneRecentTasks()
+			}
+		}()
 	}
 }
 
@@ -121,6 +138,19 @@ type RecentTaskResult struct {
 	Status      string
 }
 
+// pruneRecentTasks removes expired entries from recentTasks map.
+// Called periodically or on shutdown to prevent unbounded growth.
+func (o *Orchestrator) pruneRecentTasks() {
+	cutoff := time.Now().Add(-recentTaskTTL)
+	o.recentTasksMu.Lock()
+	defer o.recentTasksMu.Unlock()
+	for k, v := range o.recentTasks {
+		if v.CompletedAt.Before(cutoff) {
+			delete(o.recentTasks, k)
+		}
+	}
+}
+
 // FindRecentTask checks if a task matching the given prompt was completed recently.
 // Returns the result if found and not expired, nil otherwise.
 func (o *Orchestrator) FindRecentTask(prompt string) *RecentTaskResult {
@@ -158,14 +188,7 @@ func (o *Orchestrator) RecordTask(prompt string, summary, status string) {
 		Summary:     summary,
 		Status:      status,
 	}
-
-	// Prune expired entries.
-	cutoff := time.Now().Add(-recentTaskTTL)
-	for k, v := range o.recentTasks {
-		if v.CompletedAt.Before(cutoff) {
-			delete(o.recentTasks, k)
-		}
-	}
+	// Note: pruneRecentTasks should be called periodically or on shutdown
 }
 
 // LookupAgent returns the AgentConfig for the given name, or an error if not found.
@@ -186,6 +209,9 @@ func (o *Orchestrator) LookupAgent(name string) (AgentConfig, error) {
 // Spawn starts a new subagent and returns an event channel.
 // It acquires a pool slot, optionally creates a worktree, and spawns the pi process.
 func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
+	// Start the prune loop lazily on first use
+	o.ensurePruneLoop()
+
 	o.mu.Lock()
 	if o.closed {
 		o.mu.Unlock()
@@ -415,6 +441,14 @@ func (o *Orchestrator) Shutdown() {
 func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	// Stop the prune ticker if it was started and do final cleanup
+	o.pruneTickerMu.Lock()
+	if o.pruneTicker != nil {
+		o.pruneTicker.Stop()
+	}
+	o.pruneTickerMu.Unlock()
+	o.pruneRecentTasks()
 
 	// First: graceful cancellation of running agents
 	o.mu.Lock()

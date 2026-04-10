@@ -110,3 +110,69 @@ rooms:
   - name: research
     patterns:
       - "research/**"
+  # ── Feature Spec Rooms ────────────────────────────────────────────────────
+  # Each specs/features/<WING>/ directory is a "room" in the memory palace.
+  # The pi-go SPEC hierarchy maps directly to Aristotle's method of loci:
+  #   Wing  → top-level category (MEM, SOP, SUB, TST, TUI, WEB, COD)
+  #   Room  → individual feature spec directory
+  #   Station → 7-phase file progression (idea → requirements → research → design → plan → prompt → summary)
+  - name: MEM
+    patterns:
+      - "specs/features/MEM/**"
+    keywords:
+      - memory
+      - palace
+      - miner
+      - drawer
+      - embedding
+      - compression
+  - name: SOP
+    patterns:
+      - "specs/features/SOP/**"
+    keywords:
+      - plan
+      - run
+      - workflow
+      - sop
+      - command
+  - name: SUB
+    patterns:
+      - "specs/features/SUB/**"
+    keywords:
+      - subagent
+      - spawn
+      - agent
+      - executor
+  - name: TST
+    patterns:
+      - "specs/features/TST/**"
+    keywords:
+      - test
+      - audit
+      - atif
+      - e2e
+      - coverage
+  - name: TUI
+    patterns:
+      - "specs/features/TUI/**"
+    keywords:
+      - bubbletea
+      - tui
+      - terminal
+      - sidebar
+  - name: WEB
+    patterns:
+      - "specs/features/WEB/**"
+    keywords:
+      - websocket
+      - web
+      - server
+      - serve
+  - name: COD
+    patterns:
+      - "specs/features/COD/**"
+    keywords:
+      - code
+      - review
+      - refactor
+      - coverage

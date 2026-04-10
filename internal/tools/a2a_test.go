@@ -64,6 +64,115 @@ func TestClientCacheGetClient(t *testing.T) {
 	}
 }
 
+func TestClientCacheUpdateAgents(t *testing.T) {
+	// Create cache with one agent
+	cfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent1", URL: "http://localhost:8080"},
+			{Name: "agent2", URL: "http://localhost:8081"},
+		},
+	}
+	cache := NewClientCache(cfg)
+
+	// Create clients for both agents
+	_, err := cache.GetClient(context.Background(), "agent1")
+	if err != nil {
+		t.Fatalf("GetClient(agent1) error = %v", err)
+	}
+	_, err = cache.GetClient(context.Background(), "agent2")
+	if err != nil {
+		t.Fatalf("GetClient(agent2) error = %v", err)
+	}
+
+	// Update agents: remove agent1, keep agent2, add agent3
+	newCfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent2", URL: "http://localhost:8081"}, // kept, same URL
+			{Name: "agent3", URL: "http://localhost:8082"}, // new
+		},
+	}
+	cache.UpdateAgents(newCfg)
+
+	// agent1 should be gone (client evicted)
+	_, err = cache.GetClient(context.Background(), "agent1")
+	if err == nil {
+		t.Error("GetClient(agent1) should fail after UpdateAgents removed it")
+	}
+
+	// agent2 should still work
+	_, err = cache.GetClient(context.Background(), "agent2")
+	if err != nil {
+		t.Errorf("GetClient(agent2) error = %v", err)
+	}
+
+	// agent3 should work
+	_, err = cache.GetClient(context.Background(), "agent3")
+	if err != nil {
+		t.Errorf("GetClient(agent3) error = %v", err)
+	}
+}
+
+func TestClientCacheUpdateAgents_URLChanged(t *testing.T) {
+	cfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent1", URL: "http://localhost:8080"},
+		},
+	}
+	cache := NewClientCache(cfg)
+
+	// Create client
+	client1, err := cache.GetClient(context.Background(), "agent1")
+	if err != nil {
+		t.Fatalf("GetClient() error = %v", err)
+	}
+
+	// Update with changed URL - client should be evicted
+	newCfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent1", URL: "http://localhost:9090"}, // changed URL
+		},
+	}
+	cache.UpdateAgents(newCfg)
+
+	// New client should be created (not cached)
+	client2, err := cache.GetClient(context.Background(), "agent1")
+	if err != nil {
+		t.Fatalf("GetClient() error = %v", err)
+	}
+	if client1 == client2 {
+		t.Error("GetClient() should return new client after URL change")
+	}
+}
+
+func TestClientCacheClose(t *testing.T) {
+	cfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent1", URL: "http://localhost:8080"},
+			{Name: "agent2", URL: "http://localhost:8081"},
+		},
+	}
+	cache := NewClientCache(cfg)
+
+	// Create clients
+	_, err := cache.GetClient(context.Background(), "agent1")
+	if err != nil {
+		t.Fatalf("GetClient(agent1) error = %v", err)
+	}
+	_, err = cache.GetClient(context.Background(), "agent2")
+	if err != nil {
+		t.Fatalf("GetClient(agent2) error = %v", err)
+	}
+
+	// Close the cache
+	cache.Close()
+
+	// Clients should be evicted (but GetClient should still work for new clients)
+	_, err = cache.GetClient(context.Background(), "agent1")
+	if err != nil {
+		t.Errorf("GetClient(agent1) error after Close = %v", err)
+	}
+}
+
 func TestClientCacheGetClient_UnknownAgent(t *testing.T) {
 	cfg := &config.A2AConfig{
 		Agents: []config.A2AAgentConfig{

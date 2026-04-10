@@ -33,6 +33,7 @@ type A2AOutput struct {
 }
 
 // ClientCache manages A2A client instances for each configured agent.
+// It automatically evicts stale clients when agent configurations change.
 type ClientCache struct {
 	agents    map[string]config.A2AAgentConfig
 	clients   map[string]*a2aclient.Client
@@ -51,6 +52,49 @@ func NewClientCache(cfg *config.A2AConfig) *ClientCache {
 		}
 	}
 	return cache
+}
+
+// UpdateAgents replaces the agent configuration and evicts stale clients.
+// Clients for removed agents are closed and removed from the cache.
+func (c *ClientCache) UpdateAgents(cfg *config.A2AConfig) {
+	c.clientsMu.Lock()
+	defer c.clientsMu.Unlock()
+
+	// Build new agent map
+	newAgents := make(map[string]config.A2AAgentConfig)
+	if cfg != nil {
+		for _, agent := range cfg.Agents {
+			newAgents[agent.Name] = agent
+		}
+	}
+
+	// Evict clients for agents that no longer exist or have changed config
+	for name, client := range c.clients {
+		if _, exists := newAgents[name]; !exists {
+			// Agent removed - destroy and evict client
+			_ = client.Destroy()
+			delete(c.clients, name)
+		} else if oldCfg, wasConfigured := c.agents[name]; wasConfigured {
+			// Check if URL changed
+			if newAgents[name].URL != oldCfg.URL {
+				_ = client.Destroy()
+				delete(c.clients, name)
+			}
+		}
+	}
+
+	c.agents = newAgents
+}
+
+// Close destroys all cached clients and clears the cache.
+func (c *ClientCache) Close() {
+	c.clientsMu.Lock()
+	defer c.clientsMu.Unlock()
+
+	for _, client := range c.clients {
+		_ = client.Destroy()
+	}
+	c.clients = make(map[string]*a2aclient.Client)
 }
 
 // GetClient returns or creates an A2A client for the given agent name.

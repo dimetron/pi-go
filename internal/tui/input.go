@@ -142,7 +142,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		} else if im.Text == "/" || im.CyclingIdx >= 0 {
 			allCmds := im.AllCommandNames()
 			// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
-			// but NOT when input is "/" alone or a complete command (don't filter by "/agents")
+			// but NOT when input is "/" alone or a complete command (don't filter by "/subagents")
 			prefix := strings.ToLower(im.Text)
 			var filteredCmds []string
 			for _, cmd := range allCmds {
@@ -536,7 +536,7 @@ var slashCommands = []string{
 	"/context",
 	"/branch",
 	"/compact",
-	"/agents",
+	"/subagents",
 	"/history",
 	"/login",
 	"/commit",
@@ -569,7 +569,7 @@ func slashCommandDesc(cmd string) string {
 		return "Manage branches"
 	case "/compact":
 		return "Compact context"
-	case "/agents":
+	case "/subagents":
 		return "Show subagents"
 	case "/rtk":
 		return "Output compaction stats"

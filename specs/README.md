@@ -3,6 +3,24 @@
 This directory contains Plan-Driven Design (PDD) specs for pi-go features.
 Each spec follows a phased workflow from rough idea through implementation.
 
+## Organization
+
+```
+specs/
+├── 000-evaluations/       # Benchmark/evaluation specs
+├── 001-features/          # Feature implementations by component
+│   ├── 000-MEM/          # Memory system
+│   ├── 001-SOP/          # Standard Operating Procedures
+│   ├── 002-SUB/          # Subagents
+│   ├── 003-TST/          # Testing & audit
+│   ├── 004-TUI/           # Terminal UI
+│   └── 005-WEB/          # Web server
+├── 002-improvements/       # Architecture improvements
+├── 003-issues/            # Issue tracking/fixes
+├── 004-research/          # Research documents
+└── 005-tools/             # Tool specifications
+```
+
 ## Phases
 
 | Phase | File | Description |
@@ -17,51 +35,73 @@ Each spec follows a phased workflow from rough idea through implementation.
 
 ## Spec Index
 
-### Complete (all phases)
-
-| Spec | Focus | Description |
-|------|-------|-------------|
-| [claude-mem](claude-mem/) | memory | Native claude-mem implementation in pi-go |
-| [enhance-from-oh-my-pi](enhance-from-oh-my-pi/) | tools | Enhance pi-go with oh-my-pi features |
-| [nanocoder-tui](nanocoder-tui/) | tools | TUI design patterns from nanocoder |
-| [plan-command-sop](plan-command-sop/) | tools | `/plan` and `/run` commands with PDD SOP workflow |
-| [research-coding-agents-session-log-optimizations](research-coding-agents-session-log-optimizations/) | sessions | Session log error patterns and optimizations |
-| [simple-ollama-test](simple-ollama-test/) | tools | E2E test with actual Ollama provider |
-| [skills-audit](skills-audit/) | skills | Security audit for SKILL.md files |
-| [web-serve](web-serve/) | tools | Web-based serving interface |
-| [improve-test-coverage](improve-test-coverage/) | tools | Test coverage improvements |
-
-### In Progress (some phases done)
+### 001-Features / 000-MEM (Memory)
 
 | Spec | Phases | Description |
 |------|--------|-------------|
-| [atif-support](atif-support/) | idea, research, summary | ATIF (Agent Trajectory Interchange Format) export |
-| [better-completion-commands](better-completion-commands/) | idea..prompt | Improved completion/autocomplete commands |
-| [evaluation-terminal-bench](evaluation-terminal-bench/) | idea..plan, summary | Terminal-Bench evaluation harness |
-| [rtk-hooks-optimizer](rtk-hooks-optimizer/) | idea..plan, summary | RTK output compactor hooks |
-| [skills-subagents](skills-subagents/) | idea..plan, summary | Skills-based subagent system |
+| claude-mem/ | idea..summary | Native claude-mem implementation in pi-go |
 
-### Early Stage (idea/requirements only)
+### 001-Features / 001-SOP (Standard Operating Procedures)
 
 | Spec | Phases | Description |
 |------|--------|-------------|
-| [login-with-openai-codex](login-with-openai-codex/) | idea, req, research | OAuth login for OpenAI Codex provider |
-| [skill-commands-list-create-load-pull](skill-commands-list-create-load-pull/) | idea, req, research | Skill CRUD commands |
-| [terminal-bench-evaluations](terminal-bench-evaluations/) | idea, req, research | Terminal bench evaluation (earlier iteration) |
+| plan-command-sop/ | idea..summary | `/plan` and `/run` commands with PDD SOP workflow |
+| plan-resume/ | idea..plan | Resume interrupted plan execution |
+| enhance-from-oh-my-pi/ | idea..summary | Enhance pi-go with oh-my-pi features |
 
-### Other
-
-| Spec | Notes |
-|------|-------|
-| [improvements](improvements/) | Architecture and gap analysis docs |
-| [issues-fix](issues-fix/) | Bug fix plan |
-| [subagent-execution-modes](subagent-execution-modes/) | Prompt only |
-
-### Review
+### 001-Features / 002-SUB (Subagents)
 
 | Spec | Phases | Description |
 |------|--------|-------------|
-| [code-review-codex](code-review-codex/) | idea, req, research | Code review using OpenAI Codex CLI |
+| skills-subagents/ | idea..summary | Skills-based subagent system |
+| subagent-execution-modes/ | prompt | Subagent execution modes |
+
+### 001-Features / 003-TST (Testing & Audit)
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| atif-support/ | idea, research, summary | ATIF (Agent Trajectory Interchange Format) export |
+| simple-ollama-test/ | idea..summary | E2E test with actual Ollama provider |
+| skills-audit/ | idea..summary | Security audit for SKILL.md files |
+| skill-commands-list-create-load-pull/ | idea, req, research | Skill CRUD commands |
+
+### 001-Features / 004-TUI (Terminal UI)
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| nanocoder-tui/ | idea..summary | TUI design patterns from nanocoder |
+| better-completion-commands/ | idea..prompt | Improved completion/autocomplete commands |
+| login-with-openai-codex/ | idea, req, research | OAuth login for OpenAI Codex provider |
+
+### 001-Features / 005-WEB (Web Server)
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| web-serve/ | idea..summary | Web-based serving interface |
+
+### 000-Evaluations
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| evaluation-terminal-bench/ | idea..plan, summary | Terminal-Bench evaluation harness |
+| terminal-bench-evaluations/ | idea, req, research | Terminal bench evaluation (earlier iteration) |
+
+### 004-Research
+
+| Spec | Phases | Description |
+|------|--------|-------------|
+| code-review-codex/ | idea, req, research | Code review using OpenAI Codex CLI |
+| improve-test-coverage/ | idea..summary | Test coverage improvements |
+| research-coding-agents-session-log-optimizations/ | idea..summary | Session log error patterns and optimizations |
+| rtk-hooks-optimizer/ | idea..plan, summary | RTK output compactor hooks |
+
+### Other Categories
+
+| Category | Contents |
+|----------|----------|
+| 002-improvements/ | Architecture and gap analysis docs |
+| 003-issues/ | Bug fix plans (issues-fix, session-errors) |
+| 005-tools/ | Tool specifications (001-a2a-client) |
 
 ## Conventions
 
@@ -69,25 +109,22 @@ Each spec follows a phased workflow from rough idea through implementation.
 
 ```
 specs/
-  <feature-name>/
-    rough-idea.md
-    requirements.md
-    research/
-      01-topic.md
-      02-topic.md
-    design.md
-    plan.md
-    PROMPT.md
-    summary.md
+├── 001-features/
+│   └── 001-SOP/
+│       └── plan-command-sop/
+│           rough-idea.md
+│           requirements.md
+│           research/
+│           design.md
+│           plan.md
+│           PROMPT.md
+│           summary.md
 ```
 
 ### Naming
 
 - Use kebab-case for folder names
-- Number research files to indicate reading order (`001-`, `002-`, ...)
+- Number categories: `000-`, `001-`, `002-`, ...
+- Number components within features: `000-`, `001-`, ...
+- Number research files: `001-`, `002-`, ...
 - Keep names descriptive but concise
-
-### Future improvements
-
-- **Focus area grouping**: Organize specs into subdirectories by focus area (`sessions/`, `skills/`, `memory/`, `tools/`)
-- **Versioning**: Number features in implementation order within each focus area (`001-feature/`, `002-feature/`)

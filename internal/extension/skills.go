@@ -20,6 +20,8 @@ type Skill struct {
 	Instruction string
 	// Tools lists tool names this skill is allowed to use (from frontmatter).
 	Tools []string
+	// Source is where the skill came from: "bundled", "user", or "project".
+	Source string
 }
 
 // AuditMode controls how skill loading handles audit findings.
@@ -48,10 +50,40 @@ func LoadSkills(dirs ...string) ([]Skill, error) {
 }
 
 // LoadSkillsWithOptions discovers and loads skills with configurable audit behavior.
+// Bundled skills (embedded in the binary) are loaded first and can be overridden
+// by user or project skills.
 func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	seen := make(map[string]int) // name → index in result
 	var skills []Skill
 	var blocked []string
+
+	// Load bundled skills first (lowest priority).
+	bundledMap, err := LoadBundledSkills()
+	if err == nil {
+		for skillName, files := range bundledMap {
+			var mainFile []byte
+			for _, f := range files {
+				if f.RelPath == "bundled_skills/"+skillName+"/SKILL.md" {
+					mainFile = f.Content
+					break
+				}
+			}
+			if len(mainFile) == 0 && len(files) > 0 {
+				mainFile = files[0].Content
+			}
+			if len(mainFile) == 0 {
+				continue
+			}
+			skill, err := parseSkillContent(string(mainFile), skillName)
+			if err != nil {
+				continue
+			}
+			skill.Source = "bundled"
+			skillName := skill.Name
+			seen[skillName] = len(skills)
+			skills = append(skills, skill)
+		}
+	}
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -94,8 +126,14 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 			if skill.Name == "" {
 				skill.Name = entry.Name()
 			}
+			// Determine source based on whether the path is absolute.
+			source := "user"
+			if !filepath.IsAbs(dir) {
+				source = "project"
+			}
+			skill.Source = source
 			if idx, ok := seen[skill.Name]; ok {
-				// Override with project-level skill.
+				// Override with project/user-level skill.
 				skills[idx] = skill
 			} else {
 				seen[skill.Name] = len(skills)
@@ -129,9 +167,15 @@ func parseSkillFile(path string) (Skill, error) {
 	// Derive default name from parent directory: skills/my-skill/SKILL.md → my-skill
 	name := filepath.Base(filepath.Dir(path))
 
-	skill := Skill{Name: name}
+	return parseSkillContent(string(data), name)
+}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+// parseSkillContent parses skill content from a string with a given skill name.
+// Used by both file-based and embedded skill loading.
+func parseSkillContent(content, skillName string) (Skill, error) {
+	skill := Skill{Name: skillName}
+
+	scanner := bufio.NewScanner(strings.NewReader(content))
 	inFrontmatter := false
 	frontmatterDone := false
 	var body strings.Builder
