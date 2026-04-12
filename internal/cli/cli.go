@@ -828,8 +828,12 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	baseURLs := config.BaseURLs()
-	baseURL := baseURLs[info.Provider]
+	// Resolve base URL: --url flag takes precedence over env var, then Ollama default.
+	baseURL := flagURL
+	if baseURL == "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[info.Provider]
+	}
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}

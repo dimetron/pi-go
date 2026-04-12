@@ -19,6 +19,7 @@ type SidebarRenderInput struct {
 	Width        int
 	Height       int
 	Eyes         string
+	Mascot       string // full 3-line mascot face (mutually exclusive with Eyes)
 	Mode         string
 	ProviderName string
 	ModelName    string
@@ -62,7 +63,11 @@ func RenderSidebar(in SidebarRenderInput) string {
 	var lines []string
 
 	// --- Eyes / mood ---
-	if in.Eyes != "" {
+	if in.Mascot != "" {
+		mascotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
+		moodLine := mascotStyle.Render(fmt.Sprintf("  %s", in.Mascot))
+		lines = append(lines, "", moodLine, "")
+	} else if in.Eyes != "" {
 		eyeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
 		moodLine := eyeStyle.Render(fmt.Sprintf("  %s", in.Eyes))
 		lines = append(lines, "", moodLine, "")

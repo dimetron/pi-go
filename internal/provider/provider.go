@@ -117,10 +117,21 @@ func Resolve(modelName string) (Info, error) {
 	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, qwen, minimax, deepseek, llama, mistral, phi, codellama, gemma, or use ollama/ prefix for Ollama)", modelName)
 }
 
+func normalizeBaseURL(baseURL string) string {
+	if baseURL == "" {
+		return ""
+	}
+	if !strings.Contains(baseURL, "://") {
+		return "http://" + baseURL
+	}
+	return baseURL
+}
+
 // CheckOllama verifies that the Ollama server at baseURL is reachable.
 // It first checks TCP connectivity on the port, then issues a GET to the root
 // endpoint (Ollama returns "Ollama is running").
 func CheckOllama(baseURL string) error {
+	baseURL = normalizeBaseURL(baseURL)
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)

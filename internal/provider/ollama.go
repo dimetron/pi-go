@@ -28,6 +28,7 @@ func NewOllama(_ context.Context, modelName, baseURL, thinkingLevel string, opts
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
+	baseURL = normalizeBaseURL(baseURL)
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}

@@ -1,10 +1,15 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean
+.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
 
 build:
 	go build ./cmd/pi
+	go build ./cmd/pi-sandbox
 
 install: build
 	go install ./cmd/pi/
+	go install ./cmd/pi-sandbox
+
+run: install
+	pi --model minimax-m2.7:cloud
 
 test: test-unit
 
@@ -43,3 +48,18 @@ vet:
 
 clean:
 	rm -f pi coverage.out
+
+## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
+sandbox-run: install
+ifeq ($(shell uname),Darwin)
+	pi-sandbox --model minimax-m2.7:cloud
+else
+	pi --model minimax-m2.7:cloud
+endif
+
+sandbox-log:
+ifeq ($(shell uname),Darwin)
+	/usr/bin/log show --predicate 'eventMessage CONTAINS "sandbox" AND eventMessage CONTAINS "deny"' --last $(or $(LAST),1m) --style compact
+else
+	@echo "sandbox-log is only available on macOS"
+endif
