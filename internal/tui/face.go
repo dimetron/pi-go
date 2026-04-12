@@ -26,6 +26,38 @@ var moodEyes = map[AgentMood]string{
 	MoodSad:        "◡ ◡",
 }
 
+// moodMascot maps each mood to a full mascot face (multi-line).
+var moodMascot = map[AgentMood]string{
+	MoodIdle: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ◕ ◕ )\n" +
+		"    ╱ π ╲",
+	MoodThinking: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ◔ ◕ )\n" +
+		"    ╱ ~ ╲",
+	MoodProcessing: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ◑ ◑ )\n" +
+		"    ╱ ⚙ ╲",
+	MoodToolCall: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ▸ ◂ )\n" +
+		"    ╱ ⇢ ╲",
+	MoodSpeaking: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ◕ ◡ )\n" +
+		"    ╱ ~ ╲",
+	MoodHappy: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ✧ ✧ )\n" +
+		"    ╱ ★ ╲",
+	MoodSad: "" +
+		" ╱╲___╱╲\n" +
+		"   ( ◡ ◡ )\n" +
+		"    ╱ · ╲",
+}
+
 // String returns a human-readable name for the mood.
 func (m AgentMood) String() string {
 	switch m {
@@ -54,6 +86,14 @@ func (m AgentMood) Eyes() string {
 		return e
 	}
 	return moodEyes[MoodIdle]
+}
+
+// Mascot returns the full mascot face for this mood.
+func (m AgentMood) Mascot() string {
+	if f, ok := moodMascot[m]; ok {
+		return f
+	}
+	return moodMascot[MoodIdle]
 }
 
 // FaceRenderer tracks the agent's current mood (thread-safe).
@@ -86,4 +126,11 @@ func (f *FaceRenderer) Eyes() string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.mood.Eyes()
+}
+
+// Mascot returns the full mascot face for the current mood.
+func (f *FaceRenderer) Mascot() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.mood.Mascot()
 }

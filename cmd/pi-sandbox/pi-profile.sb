@@ -1,0 +1,67 @@
+(version 1)
+(deny default)
+(trace default) ;; logs all denials to: log show --predicate 'eventMessage CONTAINS "pi(" AND eventMessage CONTAINS "deny"' --last 1m
+
+;; Usage:
+;;   sandbox-exec -p "$(sed -e '/^(param /d' -e "s|(param \"HOME\")|\"$HOME\"|g" -e "s|(param \"CWD\")|\"$PWD\"|g" pi-profile.sb)" pi [args...]
+;;
+;; NOTE: -D flag does NOT work with (param) declarations — use sed substitution instead.
+;; NOTE: DTrace sandbox probes (sandbox*:::sandbox-deny) are blocked by SIP.
+;;       Use (trace default) + system log to diagnose denials.
+(param "HOME" "")
+(param "CWD" "")
+
+;; --- Process ---
+(allow process-exec)
+(allow process-fork) ;; needed for tool execution (pi spawns subprocesses)
+
+;; --- Filesystem: root and symlink traversal ---
+(allow file-read-data (literal "/"))      ;; Go runtime path resolution
+(allow file-read-metadata (literal "/"))
+(allow file-read-metadata (literal "/etc"))              ;; symlink to /private/etc (DNS)
+(allow file-read-metadata (literal "/var"))              ;; symlink to /private/var
+(allow file-read-metadata (literal "/System/Volumes/Data"))
+(allow file-read-metadata (literal "/Users"))            ;; parent dir traversal
+(allow file-read-metadata (literal (param "HOME")))      ;; SQLite needs HOME metadata to resolve ~/.pi-go/memory/
+
+;; --- Filesystem: system libraries and data ---
+(allow file-read* (subpath "/usr"))                      ;; system binaries and libs
+(allow file-read* (subpath "/System"))                   ;; system frameworks
+(allow file-read* (subpath "/opt/homebrew"))              ;; Homebrew — Go toolchain, linked libs
+(allow file-read* (subpath "/private/etc"))               ;; /etc/hosts, /etc/resolv.conf for DNS
+(allow file-read* (subpath "/private/var/run"))           ;; mDNSResponder socket lives here
+(allow file-read* (subpath "/private/var/db/timezone"))   ;; timezone data (Go time package)
+(allow file-read* (subpath "/Library/Preferences"))       ;; system preferences
+(allow file-read* (literal "/private/var/db/sandbox"))    ;; sandbox metadata
+
+;; --- Filesystem: device nodes ---
+(allow file-read* (literal "/dev/dtracehelper"))
+(allow file-write-data (literal "/dev/dtracehelper"))     ;; Go runtime profiling
+(allow file-ioctl (literal "/dev/dtracehelper"))          ;; ioctl for dtrace
+(allow file-read* (literal "/dev/null"))
+(allow file-read* (literal "/dev/urandom"))               ;; crypto/rand entropy source
+(allow file-read* (literal "/dev/tty"))                    ;; bubbletea TUI needs /dev/tty
+(allow file-write-data (literal "/dev/tty"))               ;; TUI output to controlling terminal
+(allow file-ioctl (subpath "/dev"))                        ;; terminal ioctl (tty size, raw mode for TUI)
+
+;; --- Filesystem: application directories ---
+(allow file-read* (subpath (string-append (param "HOME") "/go")))      ;; Go bin + GOPATH (pi binary lives here)
+(allow file-read* (subpath (param "CWD")))                              ;; project working directory
+(allow file-read* (subpath (string-append (param "HOME") "/.pi-go")))  ;; pi-go config + sessions + memory DB
+(allow file-write* (subpath (string-append (param "HOME") "/.pi-go"))) ;; sessions, SQLite WAL/SHM files
+(allow file-write* (subpath "/tmp"))                                    ;; temp files
+(allow file-write* (subpath (param "CWD")))                             ;; project writes
+
+;; --- IPC ---
+(allow ipc-posix-shm*)  ;; SQLite WAL mode uses shared memory (-shm files)
+(allow mach-lookup)      ;; macOS IPC (required for DNS, system services)
+(allow mach-register)
+(allow sysctl-read)      ;; Go runtime reads sysctl for CPU/memory info
+
+;; --- Network: LLM providers + local Ollama ---
+(allow system-socket)    ;; Go net poller uses AF_SYSTEM sockets (domain:32)
+(allow network-bind)     ;; Go binds ephemeral ports for outbound connections
+(allow network-outbound (remote unix-socket))      ;; DNS via /private/var/run/mDNSResponder
+(allow network-outbound (remote tcp "*:11434"))    ;; Ollama API (local)
+(allow network-outbound (remote tcp "*:443"))      ;; HTTPS — LLM APIs (Anthropic, OpenAI, Gemini)
+(deny network-outbound)  ;; block all other outbound (HTTP, non-standard ports)

@@ -664,7 +664,7 @@ func (m *model) View() tea.View {
 		sidebarInput := SidebarRenderInput{
 			Width:        sidebarWidth,
 			Height:       m.height,
-			Eyes:         m.eyes(),
+			Mascot:       m.mascot(),
 			Mode:         m.mode,
 			ProviderName: m.cfg.ProviderName,
 			ModelName:    m.cfg.ModelName,
@@ -734,6 +734,13 @@ func (m *model) eyes() string {
 		return m.face.Eyes()
 	}
 	return MoodIdle.Eyes()
+}
+
+func (m *model) mascot() string {
+	if m.face != nil {
+		return m.face.Mascot()
+	}
+	return MoodIdle.Mascot()
 }
 
 // refreshDiffStats updates the git diff line counts.

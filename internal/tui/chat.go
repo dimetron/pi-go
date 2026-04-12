@@ -58,15 +58,15 @@ func (c *ChatModel) renderWelcome() string {
 	cmd := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 
 	face := accent.Render(
-		"  ┌─────┐\n" +
-			"  │ ◕ ◕ │\n" +
-			"  │  ▽  │\n" +
-			"  └─────┘")
+		"" +
+			"  ╱╲___╱╲\n" +
+			"  ( ◕ ◕ )\n" +
+			"   ╱ π ╲")
 
 	lines := []string{
 		face,
 		"",
-		accent.Render("  Welcome to pi-go") + dim.Render(" — your AI coding agent"),
+		accent.Render("  Welcome to pi-go.sh") + dim.Render(" — your AI coding agent"),
 		"",
 		dim.Render("  Ask me anything or describe a task:"),
 		dim.Render("    - ") + dim.Render(`"research this codebase and explain the architecture"`),

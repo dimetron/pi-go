@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -136,6 +137,23 @@ func TestCheckOllamaOK(t *testing.T) {
 	err := CheckOllama(srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckOllamaOKNoScheme(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ollama is running"))
+	}))
+	defer srv.Close()
+
+	// Extract host:port from the server URL (e.g. "http://127.0.0.1:PORT" -> "127.0.0.1:PORT")
+	u, _ := url.Parse(srv.URL)
+	noScheme := u.Host // "127.0.0.1:PORT" — no scheme
+
+	err := CheckOllama(noScheme)
+	if err != nil {
+		t.Fatalf("unexpected error for URL %q: %v", noScheme, err)
 	}
 }
 

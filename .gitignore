@@ -42,3 +42,6 @@ Thumbs.db
 /.agents/
 .worktrees/
 /pi-test
+sandbox-trace.log
+sandbox.log
+/pi-sandbox

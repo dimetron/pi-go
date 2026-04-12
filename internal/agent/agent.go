@@ -54,6 +54,13 @@ Rules for efficient exploration:
 - Include file:line references in your explanations so the user can navigate directly.
 - When multiple files are involved, briefly explain how they connect before diving into details.
 
+# Environment management
+
+Prefer modern, fast package managers:
+
+- **Python**: Use uv instead of pip. Run scripts with "uv run", manage dependencies with "uv add". Example: "uv run pytest", "uv run python script.py", "uv add requests".
+- **Node.js**: Use bun instead of npm/yarn/pnpm. Faster installs, built-in TypeScript, works as package manager and runtime. Example: "bun install", "bun run dev", "bun test".
+
 # Coding tasks
 
 Follow this workflow for every coding task — move fast, verify, deliver:
