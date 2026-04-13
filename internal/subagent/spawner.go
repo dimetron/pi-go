@@ -21,6 +21,9 @@ type SpawnOpts struct {
 	Instruction string   // System instruction for the subagent
 	Timeout     int      // Timeout in milliseconds (0 = use default)
 	Env         []string // Additional environment variables (merged with filtered process env)
+	BaseURL     string   // LLM API base URL (passed as --url flag)
+	Insecure    bool     // Skip TLS verification (passed as --insecure flag)
+	Headers     []string // Extra HTTP headers (passed as --header flags)
 }
 
 // Spawner creates and manages subagent pi processes.
@@ -88,6 +91,15 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 	args := []string{"--mode", "json"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	if opts.BaseURL != "" {
+		args = append(args, "--url", opts.BaseURL)
+	}
+	if opts.Insecure {
+		args = append(args, "--insecure")
+	}
+	for _, h := range opts.Headers {
+		args = append(args, "--header", h)
 	}
 	if opts.Instruction != "" {
 		args = append(args, "--system", opts.Instruction)

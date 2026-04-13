@@ -51,7 +51,10 @@ func runMemoryInit(dir, wing string) error {
 	}
 
 	// Open the palace to run migrations and verify the DB is usable.
-	p, err := palace.New(palace.WithDBPath(dbPath))
+	p, err := palace.New(
+		palace.WithDBPath(dbPath),
+		palace.WithModelPath(defaultPalaceModelPath()),
+	)
 	if err != nil {
 		return fmt.Errorf("initializing palace: %w", err)
 	}

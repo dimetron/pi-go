@@ -68,14 +68,15 @@ type Info struct {
 
 // Known model prefixes mapped to providers.
 var modelPrefixes = map[string]string{
-	"claude": "anthropic",
-	"gpt":    "openai",
-	"gpt-5":  "openai",
-	"gemini": "gemini",
+	"claude":  "anthropic",
+	"gpt":     "openai",
+	"gpt-5":   "openai",
+	"gemini":  "gemini",
+	"mistral": "mistral",
 }
 
 // OllamaModelPrefixes are common Ollama model name prefixes.
-var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "mistral", "phi", "codellama", "gemma"}
+var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "phi", "codellama", "gemma"}
 
 // Resolve determines the provider from a model name.
 // Ollama models are routed to the native "ollama" provider.
@@ -114,7 +115,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, qwen, minimax, deepseek, llama, mistral, phi, codellama, gemma, or use ollama/ prefix for Ollama)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, qwen, minimax, deepseek, llama, phi, codellama, gemma, or use ollama/ prefix for Ollama)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -187,6 +188,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewOpenAI(ctx, info.Model, apiKey, baseURL, opts)
 	case "anthropic":
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
+	case "mistral":
+		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

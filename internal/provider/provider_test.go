@@ -196,7 +196,7 @@ func TestResolveOllamaModelPrefixes(t *testing.T) {
 	}{
 		{"qwen2.5", "qwen2.5:latest"},
 		{"deepseek-coder", "deepseek-coder:latest"},
-		{"mistral-7b", "mistral-7b:latest"},
+		// mistral prefix now routes to the Mistral cloud provider; use ollama/mistral for local.
 		{"phi-3", "phi-3:latest"},
 		{"codellama", "codellama:latest"},
 		{"gemma-2", "gemma-2:latest"},

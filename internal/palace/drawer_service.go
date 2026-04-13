@@ -87,9 +87,10 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 	return drawer, nil
 }
 
-// Search performs a dual search: semantic vector search when the embedder is
-// available, FTS5 keyword search as fallback. Returns results sorted by
-// relevance (similarity for semantic, rank for FTS5).
+// Search performs a combined search using both semantic vector similarity and
+// FTS5 keyword matching. When the embedder is available, results from both methods
+// are merged and deduplicated by drawer ID, with semantic results prioritized.
+// Returns results sorted by combined relevance score.
 func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchResult, error) {
 	if q.Query == "" {
 		return nil, fmt.Errorf("palace: search query must not be empty")
@@ -103,38 +104,118 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 		Room: q.Room,
 	}
 
-	// Semantic search when embedder is available.
-	if ds.embedder != nil {
-		vecs, err := ds.embedder.Embed([]string{q.Query})
-		if err != nil {
-			slog.Warn("palace: search embedding failed, falling back to keyword", "error", err)
-			return ds.store.KeywordSearch(ctx, q.Query, filter, q.Limit)
-		}
-		if len(vecs) > 0 {
-			candidates, err := ds.store.GetAllEmbeddings(ctx, filter)
-			if err != nil {
-				return nil, fmt.Errorf("palace: search get embeddings: %w", err)
-			}
-			ranked := RankBySimilarity(vecs[0], candidates, q.Limit)
+	// Fetch FTS5 results (always available).
+	ftsResults, err := ds.store.KeywordSearch(ctx, q.Query, filter, q.Limit*3)
+	if err != nil {
+		slog.Warn("palace: FTS5 search failed", "error", err)
+		ftsResults = nil
+	}
 
-			results := make([]SearchResult, 0, len(ranked))
-			for _, sr := range ranked {
-				drawer, err := ds.store.GetDrawer(ctx, sr.DrawerID)
-				if err != nil {
-					slog.Warn("palace: search get drawer", "id", sr.DrawerID, "error", err)
-					continue
-				}
-				results = append(results, SearchResult{
-					Drawer:     *drawer,
-					Similarity: sr.Similarity,
-				})
+	// If no embedder, return FTS5 results only.
+	if ds.embedder == nil {
+		// Ensure FTS5 results have proper similarity scores.
+		maxRank := 1
+		for _, r := range ftsResults {
+			if r.Rank > maxRank {
+				maxRank = r.Rank
 			}
-			return results, nil
+		}
+		if maxRank == 0 {
+			maxRank = 1
+		}
+		for i := range ftsResults {
+			if ftsResults[i].Rank != 0 {
+				ftsResults[i].Similarity = float32(0.5 + (0.5 * float64(maxRank-ftsResults[i].Rank) / float64(maxRank)))
+			}
+		}
+		if len(ftsResults) > q.Limit {
+			ftsResults = ftsResults[:q.Limit]
+		}
+		return ftsResults, nil
+	}
+
+	// Semantic search.
+	vecs, err := ds.embedder.Embed([]string{q.Query})
+	if err != nil {
+		slog.Warn("palace: search embedding failed, falling back to keyword", "error", err)
+		return ftsResults, nil
+	}
+	if len(vecs) == 0 {
+		return ftsResults, nil
+	}
+
+	candidates, err := ds.store.GetAllEmbeddings(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("palace: search get embeddings: %w", err)
+	}
+
+	ranked := RankBySimilarity(vecs[0], candidates, q.Limit*3)
+
+	// Build a map of semantic results keyed by drawer ID.
+	semanticMap := make(map[string]SearchResult)
+	for _, sr := range ranked {
+		drawer, err := ds.store.GetDrawer(ctx, sr.DrawerID)
+		if err != nil {
+			continue
+		}
+		semanticMap[sr.DrawerID] = SearchResult{
+			Drawer:     *drawer,
+			Similarity: sr.Similarity,
 		}
 	}
 
-	// FTS5 keyword fallback.
-	return ds.store.KeywordSearch(ctx, q.Query, filter, q.Limit)
+	// Merge FTS5 results into semantic map.
+	// FTS5 results get a boosted score: 0.5 + (0.5 * normalizedRank)
+	// This ensures exact keyword matches rank high but semantic still matters.
+	maxRank := 1
+	for _, r := range ftsResults {
+		if r.Rank > maxRank {
+			maxRank = r.Rank
+		}
+	}
+	if maxRank == 0 {
+		maxRank = 1
+	}
+
+	merged := make([]SearchResult, 0, len(semanticMap)+len(ftsResults))
+	seen := make(map[string]bool)
+
+	// Add semantic results first (they have true similarity scores).
+	for _, sr := range ranked {
+		if result, ok := semanticMap[sr.DrawerID]; ok {
+			merged = append(merged, result)
+			seen[sr.DrawerID] = true
+		}
+	}
+
+	// Add FTS5 results not already in semantic results.
+	for _, fts := range ftsResults {
+		if seen[fts.Drawer.ID] {
+			continue
+		}
+		// Convert FTS5 rank to a relevance score (higher = better).
+		// FTS5 rank is negative (more negative = more relevant), so we normalize.
+		var ftsScore float64
+		if maxRank > 0 {
+			// Normalize: most negative = highest score
+			ftsScore = 0.5 + (0.5 * float64(maxRank-fts.Rank) / float64(maxRank))
+		} else {
+			ftsScore = 0.5
+		}
+		merged = append(merged, SearchResult{
+			Drawer:     fts.Drawer,
+			Similarity: float32(ftsScore),
+			Rank:       fts.Rank,
+		})
+		seen[fts.Drawer.ID] = true
+	}
+
+	// Trim to requested limit.
+	if len(merged) > q.Limit {
+		merged = merged[:q.Limit]
+	}
+
+	return merged, nil
 }
 
 // DeleteDrawer removes a drawer by ID.

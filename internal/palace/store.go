@@ -6,6 +6,7 @@ import "context"
 type PalaceStore interface {
 	// Drawer operations
 	InsertDrawer(ctx context.Context, d *Drawer) error
+	BatchInsertDrawers(ctx context.Context, drawers []*Drawer) (int, error)
 	DeleteDrawer(ctx context.Context, id string) error
 	GetDrawer(ctx context.Context, id string) (*Drawer, error)
 	ListDrawers(ctx context.Context, filter DrawerFilter) ([]*Drawer, error)

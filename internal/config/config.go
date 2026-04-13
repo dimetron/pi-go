@@ -229,6 +229,7 @@ func APIKeys() map[string]string {
 		"anthropic": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
 		"openai":    {"OPENAI_API_KEY"},
 		"gemini":    {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
+		"mistral":   {"MISTRAL_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -249,6 +250,7 @@ func BaseURLs() map[string]string {
 		"anthropic": "ANTHROPIC_BASE_URL",
 		"openai":    "OPENAI_BASE_URL",
 		"gemini":    "GEMINI_BASE_URL",
+		"mistral":   "MISTRAL_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {

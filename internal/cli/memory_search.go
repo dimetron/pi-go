@@ -43,7 +43,10 @@ func runMemorySearch(query, dbPath, wing, room string, limit int) error {
 		dbPath = filepath.Join(".pi-go", "palace.db")
 	}
 
-	p, err := palace.New(palace.WithDBPath(dbPath))
+	p, err := palace.New(
+		palace.WithDBPath(dbPath),
+		palace.WithModelPath(defaultPalaceModelPath()),
+	)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
 	}

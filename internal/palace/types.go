@@ -113,10 +113,11 @@ type SearchQuery struct {
 	Limit int
 }
 
-// SearchResult is a single search match with similarity score.
+// SearchResult is a single search match with similarity score and optional FTS5 rank.
 type SearchResult struct {
 	Drawer     Drawer  `json:"drawer"`
 	Similarity float32 `json:"similarity"`
+	Rank       int     `json:"rank,omitempty"` // FTS5 rank (negative = more relevant), 0 if semantic-only
 }
 
 // DuplicateResult describes a potential duplicate drawer.
