@@ -10,6 +10,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Default chunk size for project mining.
+const defaultChunkSize = 1500
+
+// Default overlap between chunks.
+const defaultChunkOverlap = 200
+
 // ProgressFunc is called after each file is processed during mining.
 // file is the relative path, added/skipped/errors are counts for that file.
 type ProgressFunc func(file string, added, skipped, errors int)

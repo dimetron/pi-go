@@ -42,6 +42,11 @@ type Orchestrator struct {
 	recentTasksMu sync.RWMutex
 	pruneTicker   *time.Ticker // periodic cleanup of expired recentTasks
 	pruneTickerMu sync.Mutex
+
+	// LLM provider settings passed to child subagents
+	BaseURL  string   // LLM API base URL
+	Insecure bool     // Skip TLS verification
+	Headers  []string // Extra HTTP headers
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -80,6 +85,14 @@ func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentCo
 		agents:      make(map[string]*agentState),
 		recentTasks: make(map[string]recentTask),
 	}
+}
+
+// SetProviderOptions configures the LLM provider settings that will be passed
+// to child subagents. Call this after NewOrchestrator to propagate CLI flags.
+func (o *Orchestrator) SetProviderOptions(baseURL string, insecure bool, headers []string) {
+	o.BaseURL = baseURL
+	o.Insecure = insecure
+	o.Headers = headers
 }
 
 // ensurePruneLoop starts the periodic cleanup goroutine if not already running.
@@ -265,7 +278,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		}
 	}
 
-	// Spawn the process.
+	// Spawn the process with LLM provider settings from parent.
 	proc, err := o.spawner.Spawn(ctx, SpawnOpts{
 		AgentID:     agentID,
 		Model:       model,
@@ -274,6 +287,9 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		Instruction: agent.Instruction,
 		Timeout:     agent.Timeout,
 		Env:         env,
+		BaseURL:     o.BaseURL,
+		Insecure:    o.Insecure,
+		Headers:     o.Headers,
 	})
 	if err != nil {
 		if useWorktree && o.worktree != nil {

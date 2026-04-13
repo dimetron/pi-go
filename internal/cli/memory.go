@@ -1,6 +1,19 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+)
+
+// defaultPalaceModelPath returns the default embedding model path.
+func defaultPalaceModelPath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".pi-go", "models", "sentence-transformers_all-MiniLM-L6-v2")
+	}
+	return ""
+}
 
 func newMemoryCmd() *cobra.Command {
 	cmd := &cobra.Command{

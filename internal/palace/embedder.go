@@ -10,6 +10,21 @@ import (
 	"github.com/knights-analytics/hugot/pipelines"
 )
 
+const (
+	// maxTokenLength is the maximum number of tokens the embedder will process.
+	// This is set to 128 to match the tokenizer's truncation config (max_length=128)
+	// and to stay within the GoMLX sequence bucket (128). Without truncation, inputs
+	// exceeding 128 tokens cause GoMLX graph compilation failures due to bucket
+	// mismatches between dynamic token lengths and fixed embedding weight tensors.
+	maxTokenLength = 128
+
+	// maxCharLength is the maximum character length to send to the embedder.
+	// Calculated as: 128 tokens * ~4 chars/token = 512 chars.
+	// Prevents token counts exceeding 128, which would cause GoMLX graph
+	// compilation failures due to bucket mismatches.
+	maxCharLength = maxTokenLength * 4
+)
+
 // Embedder wraps a hugot session for in-process text embedding.
 type Embedder struct {
 	session  *hugot.Session
@@ -37,7 +52,19 @@ func NewEmbedder(modelPath string) (*Embedder, error) {
 }
 
 // Embed returns embedding vectors for the given texts.
+// Inputs exceeding maxTokenLength (128) tokens are truncated to stay within
+// GoMLX sequence bucket limits and prevent bucket mismatch panics during
+// graph compilation.
 func (e *Embedder) Embed(texts []string) ([][]float32, error) {
+	// Truncate texts to prevent GoMLX graph compilation failures from
+	// bucket mismatches. BERT tokenization produces ~1 token per 3-4 chars,
+	// so 128 tokens * 4 chars/token = 512 chars is a safe limit.
+	for i := range texts {
+		if len(texts[i]) > maxCharLength {
+			texts[i] = texts[i][:maxCharLength]
+		}
+	}
+
 	result, err := e.pipeline.RunPipeline(texts)
 	if err != nil {
 		return nil, fmt.Errorf("run embedding pipeline: %w", err)

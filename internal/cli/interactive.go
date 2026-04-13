@@ -341,6 +341,7 @@ func deferredInit(
 
 	// Build orchestrator (needs git results).
 	orch := subagent.NewOrchestrator(&cfg, ps.repoRoot, ps.agentConfigs)
+	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
 	res.orch = orch
 
 	// Create memory worker now that orchestrator is available.

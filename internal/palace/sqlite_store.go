@@ -66,6 +66,61 @@ func (s *SQLitePalaceStore) InsertDrawer(ctx context.Context, d *Drawer) error {
 	return nil
 }
 
+// BatchInsertDrawers inserts multiple drawers in a single transaction.
+// Returns the number of drawers inserted.
+func (s *SQLitePalaceStore) BatchInsertDrawers(ctx context.Context, drawers []*Drawer) (int, error) {
+	if len(drawers) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("palace: begin batch transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("palace: prepare batch statement: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for _, d := range drawers {
+		var embeddingBlob []byte
+		if len(d.Embedding) > 0 {
+			embeddingBlob = MarshalEmbedding(d.Embedding)
+		}
+
+		_, err := stmt.ExecContext(ctx,
+			d.ID,
+			d.Wing,
+			d.Room,
+			d.Hall,
+			d.Content,
+			d.SourceFile,
+			d.ChunkIndex,
+			d.AddedBy,
+			d.Importance,
+			embeddingBlob,
+			d.CreatedAt.UTC().Format(time.RFC3339),
+			d.CreatedAt.Unix(),
+		)
+		if err != nil {
+			return count, fmt.Errorf("palace: batch insert drawer: %w", err)
+		}
+		count++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return count, fmt.Errorf("palace: commit batch: %w", err)
+	}
+
+	return count, nil
+}
+
 // DeleteDrawer removes a drawer by ID.
 func (s *SQLitePalaceStore) DeleteDrawer(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM drawers WHERE id = ?", id)
@@ -248,7 +303,7 @@ func (s *SQLitePalaceStore) KeywordSearch(ctx context.Context, query string, fil
 		d.Embedding = UnmarshalEmbedding(blob)
 		results = append(results, SearchResult{
 			Drawer:     d,
-			Similarity: 0, // FTS5 rank is negative; similarity=0 signals keyword match
+			Similarity: 0, Rank: int(rank),
 		})
 	}
 	return results, rows.Err()
@@ -294,7 +349,7 @@ func (s *SQLitePalaceStore) likeSearch(ctx context.Context, query string, filter
 		}
 		d.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		d.Embedding = UnmarshalEmbedding(blob)
-		results = append(results, SearchResult{Drawer: d})
+		results = append(results, SearchResult{Drawer: d, Rank: -1})
 	}
 	return results, rows.Err()
 }

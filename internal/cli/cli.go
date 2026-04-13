@@ -292,6 +292,7 @@ func runNonInteractive(
 		agentConfigs = discovery.All
 	}
 	orch := subagent.NewOrchestrator(&cfg, repoRoot, agentConfigs)
+	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
 	defer orch.Shutdown()
 
 	agentEventCh := make(chan tui.AgentSubEvent, 128)

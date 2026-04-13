@@ -89,7 +89,10 @@ func openPalaceDB(dbPath string) (*palace.Palace, error) {
 	if dbPath == "" {
 		dbPath = filepath.Join(".pi-go", "palace.db")
 	}
-	return palace.New(palace.WithDBPath(dbPath))
+	return palace.New(
+		palace.WithDBPath(dbPath),
+		palace.WithModelPath(defaultPalaceModelPath()),
+	)
 }
 
 func runMemoryKGQuery(entity, dbPath, asOf, direction string) error {

@@ -39,7 +39,10 @@ func runMemoryStatus(dbPath string) error {
 		return nil
 	}
 
-	p, err := palace.New(palace.WithDBPath(dbPath))
+	p, err := palace.New(
+		palace.WithDBPath(dbPath),
+		palace.WithModelPath(defaultPalaceModelPath()),
+	)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
 	}
