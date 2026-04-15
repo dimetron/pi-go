@@ -97,11 +97,9 @@ func TestNew(t *testing.T) {
 	if a == nil {
 		t.Fatal("New() returned nil agent")
 	}
-	//lint:ignore SA5011 // linter false positive after nil check above
 	if a.runner == nil {
 		t.Error("agent.runner is nil")
 	}
-	//lint:ignore SA5011 // linter false positive after nil check above
 	if a.sessionService == nil {
 		t.Error("agent.sessionService is nil")
 	}
