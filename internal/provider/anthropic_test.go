@@ -841,13 +841,14 @@ func TestAnthropicNonStreamingToolCallResponse(t *testing.T) {
 	if fcPart == nil {
 		t.Fatal("expected a FunctionCall part in response")
 	}
-	if fcPart.FunctionCall.Name != "get_weather" {
-		t.Errorf("function name = %q, want get_weather", fcPart.FunctionCall.Name)
+	fc := fcPart.FunctionCall
+	if got := fc.Name; got != "get_weather" {
+		t.Errorf("function name = %q, want get_weather", got)
 	}
-	if fcPart.FunctionCall.ID != "toolu_abc123" {
-		t.Errorf("function call ID = %q, want toolu_abc123", fcPart.FunctionCall.ID)
+	if fc.ID != "toolu_abc123" {
+		t.Errorf("function call ID = %q, want toolu_abc123", fc.ID)
 	}
-	loc, _ := fcPart.FunctionCall.Args["location"].(string)
+	loc, _ := fc.Args["location"].(string)
 	if loc != "San Francisco" {
 		t.Errorf("location arg = %q, want San Francisco", loc)
 	}
@@ -900,17 +901,20 @@ func TestBuildAntFinalResponse_WithToolUse(t *testing.T) {
 	if len(resp.Content.Parts) != 1 {
 		t.Fatalf("expected 1 part, got %d", len(resp.Content.Parts))
 	}
-	fc := resp.Content.Parts[0].FunctionCall
+	p := resp.Content.Parts[0]
+	fc := p.FunctionCall
 	if fc == nil {
 		t.Fatal("expected FunctionCall part")
 	}
-	if fc.Name != "bash" {
-		t.Errorf("name = %q, want bash", fc.Name)
-	}
-	if fc.ID != "tool_123" {
-		t.Errorf("ID = %q, want tool_123", fc.ID)
-	}
+	name := fc.Name
+	id := fc.ID
 	cmd, _ := fc.Args["command"].(string)
+	if name != "bash" {
+		t.Errorf("name = %q, want bash", name)
+	}
+	if id != "tool_123" {
+		t.Errorf("ID = %q, want tool_123", id)
+	}
 	if cmd != "ls" {
 		t.Errorf("command arg = %q, want ls", cmd)
 	}
