@@ -255,16 +255,17 @@ func TestValidateModel(t *testing.T) {
 	}{
 		// Valid cloud models.
 		{Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, false},
-		{Info{Provider: "anthropic", Model: "claude-3-opus-20240229"}, false},
-		{Info{Provider: "openai", Model: "gpt-4o"}, false},
+		{Info{Provider: "anthropic", Model: "claude-opus-4-6"}, false},
+		{Info{Provider: "anthropic", Model: "claude-haiku-4-5"}, false},
+		{Info{Provider: "openai", Model: "gpt-5.4-pro"}, false},
 		{Info{Provider: "openai", Model: "gpt-5.4"}, false},
-		{Info{Provider: "openai", Model: "o3-mini"}, false},
+		{Info{Provider: "openai", Model: "gpt-5.4-mini"}, false},
 		{Info{Provider: "gemini", Model: "gemini-2.5-pro"}, false},
-		{Info{Provider: "gemini", Model: "gemini-2.0-flash"}, false},
+		{Info{Provider: "gemini", Model: "gemini-2.5-flash"}, false},
 		{Info{Provider: "mistral", Model: "mistral-large-latest"}, false},
-		{Info{Provider: "mistral", Model: "codestral-latest"}, false},
-		{Info{Provider: "mistral", Model: "pixtral-large-latest"}, false},
-		{Info{Provider: "mistral", Model: "ministral-8b-latest"}, false},
+		{Info{Provider: "mistral", Model: "codestral"}, false},
+		{Info{Provider: "mistral", Model: "pixtral"}, false},
+		{Info{Provider: "mistral", Model: "ministral"}, false},
 		// Ollama models are always valid.
 		{Info{Provider: "ollama", Model: "whatever:latest", Ollama: true}, false},
 		// Unknown provider is always valid (no known list).
@@ -329,9 +330,9 @@ func TestResolveKnownProviders(t *testing.T) {
 		model    string
 		provider string
 	}{
-		{"claude-3-opus", "anthropic"},
-		{"gpt-4o-mini", "openai"},
-		{"gemini-2.0-flash", "gemini"},
+		{"claude-opus-4-6", "anthropic"},
+		{"gpt-5.4-mini", "openai"},
+		{"gemini-2.5-flash", "gemini"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -102,7 +103,7 @@ func TestCheckForRapidRestartAndWarn_Within3Seconds(t *testing.T) {
 	tmpDir := t.TempDir()
 	f := filepath.Join(tmpDir, "last-session.json")
 	// Use current time so elapsed < 3s.
-	content := `{"timestamp":"` + nowJSON() + `","session_id":"s1","work_dir":"/tmp","model":"gpt-4o"}`
+	content := `{"timestamp":"` + nowJSON() + `","session_id":"s1","work_dir":"/tmp","model":"gpt-5.4"}`
 	if err := os.WriteFile(f, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +319,7 @@ func TestWriteLastSession_JSONError(t *testing.T) {
 	lastSessionFile = f
 	defer func() { lastSessionFile = orig }()
 
-	err := writeLastSession("/tmp", "anthropic", "claude-3")
+	err := writeLastSession("/tmp", "anthropic", "claude-sonnet-4-6")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -334,18 +335,39 @@ func TestRunServe_CwdError(t *testing.T) {
 	// Simulate Getwd failure by pointing to a path that doesn't exist.
 	// However, we can't easily inject that in runServe since it calls os.Getwd().
 	// Instead, test that with a project path, the file opening errors properly.
+	// Use a goroutine with timeout to prevent test from hanging forever.
+	//
+	// Skip if running as root (CI often runs as root and can write anywhere).
+	if os.Getuid() == 0 {
+		t.Skip("skipping: running as root can write to any path")
+	}
+
 	orig := flagServeProject
 	flagServeProject = "/nonexistent/project/path"
 	defer func() { flagServeProject = orig }()
 
-	cmd := &cobra.Command{}
-	args := []string{}
-	err := runServe(cmd, args)
-	// Should fail when trying to open serve.log in non-existent dir or when
-	// starting the web server. Either way, we test the error path.
-	if err == nil {
-		// If no error, that's ok (some environments may succeed)
-		t.Log("runServe succeeded in this environment")
+	done := make(chan error, 1)
+	go func() {
+		cmd := &cobra.Command{}
+		done <- runServe(cmd, nil)
+	}()
+
+	// Send SIGINT after a short delay to trigger graceful shutdown.
+	// This prevents the test from hanging forever.
+	time.Sleep(500 * time.Millisecond)
+	proc, _ := os.FindProcess(os.Getpid())
+	_ = proc.Signal(syscall.SIGINT)
+
+	select {
+	case err := <-done:
+		// Should fail when trying to open serve.log in non-existent dir or when
+		// starting the web server. Either way, we test the error path.
+		if err == nil {
+			// If no error, that's ok (some environments may succeed)
+			t.Log("runServe succeeded in this environment")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runServe timed out after 5s")
 	}
 }
 

@@ -216,7 +216,7 @@ func TestCliPrintModeNoPromptExitsCleanly(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "--mode", "print"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -229,7 +229,7 @@ func TestCliJSONModeNoPromptExitsCleanly(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "--mode", "json"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "json"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
