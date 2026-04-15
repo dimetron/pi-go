@@ -274,8 +274,7 @@ func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
 	default:
 		return nil
 	}
-	cfg := anthropic.ThinkingConfigParamOfEnabled(budget)
-	return &cfg
+	return new(anthropic.ThinkingConfigParamOfEnabled(budget))
 }
 
 // antToolUseAcc accumulates a single Anthropic tool_use block during streaming.

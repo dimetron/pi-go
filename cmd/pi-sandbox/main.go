@@ -113,8 +113,7 @@ func main() {
 
 	exitCode := 0
 	if err := piCmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			fmt.Fprintf(os.Stderr, "pi-sandbox: exec failed: %v\n", err)

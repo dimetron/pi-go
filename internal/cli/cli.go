@@ -166,6 +166,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolving model: %w", err)
 	}
+	if err := provider.ValidateModel(info); err != nil {
+		return fmt.Errorf("model validation: %w", err)
+	}
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
@@ -205,6 +208,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Create token usage tracker and wrap LLM with guardrail.
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
+	tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	prompt := strings.Join(args, " ")
@@ -610,7 +614,7 @@ func providerEnvVar(p string) string {
 	case "openai":
 		return "OPENAI_API_KEY"
 	case "gemini":
-		return "GOOGLE_API_KEY"
+		return "GEMINI_API_KEY"
 	default:
 		return strings.ToUpper(p) + "_API_KEY"
 	}
@@ -825,6 +829,9 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 	}
 	if commitProvider != "" {
 		info.Provider = commitProvider
+	}
+	if err := provider.ValidateModel(info); err != nil {
+		return nil
 	}
 
 	keys := config.APIKeys()

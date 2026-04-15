@@ -95,6 +95,11 @@ type TokenTracker interface {
 	Remaining() int64     // -1 if unlimited
 	PercentUsed() float64 // 0-100+
 	TotalUsed() int64     // total tokens consumed today
+
+	// Session context window tracking.
+	LastPromptTokens() int64     // most recent prompt tokens from LLM response
+	ContextWindowSize() int64    // model's context window size (0 = unknown)
+	ContextPercentUsed() float64 // context window usage 0-100+
 }
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.

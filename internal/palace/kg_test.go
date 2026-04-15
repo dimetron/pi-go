@@ -176,11 +176,8 @@ func TestKG_Query_PointInTime(t *testing.T) {
 	kg, _ := setupKG(t)
 	ctx := context.Background()
 
-	jan := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
-	mar := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-
-	kg.Add(ctx, TripleInput{Subject: "Alice", Predicate: "works_on", Object: "auth", ValidFrom: &jan})
-	kg.Add(ctx, TripleInput{Subject: "Alice", Predicate: "assigned_to", Object: "billing", ValidFrom: &mar})
+	kg.Add(ctx, TripleInput{Subject: "Alice", Predicate: "works_on", Object: "auth", ValidFrom: new(time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))})
+	kg.Add(ctx, TripleInput{Subject: "Alice", Predicate: "assigned_to", Object: "billing", ValidFrom: new(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))})
 
 	// Query as of Feb 2026 — only auth should match
 	feb := "2026-02-01T00:00:00Z"

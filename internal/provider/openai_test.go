@@ -7,8 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"google.golang.org/adk/model"
-
 	"google.golang.org/genai"
 )
 
@@ -974,5 +975,157 @@ func TestBuildOaiFinalResponse_MaxTokens(t *testing.T) {
 
 	if resp.FinishReason != genai.FinishReasonMaxTokens {
 		t.Errorf("FinishReason = %v, want MaxTokens", resp.FinishReason)
+	}
+}
+
+func TestNewAzureOpenAI_MissingAPIKey(t *testing.T) {
+	// Save original and restore after test.
+	orig := osGetenv
+	t.Cleanup(func() { osGetenv = orig })
+
+	// Mock env vars to return empty strings.
+	osGetenv = func(key string) string { return "" }
+
+	_, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for missing API key")
+	}
+}
+
+func TestNewAzureOpenAI_MissingEndpoint(t *testing.T) {
+	orig := osGetenv
+	t.Cleanup(func() { osGetenv = orig })
+
+	osGetenv = func(key string) string {
+		if key == "AZURE_OPENAI_API_KEY" {
+			return "test-key"
+		}
+		return ""
+	}
+
+	_, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for missing endpoint")
+	}
+}
+
+func TestNewAzureOpenAI_Success(t *testing.T) {
+	orig := osGetenv
+	t.Cleanup(func() { osGetenv = orig })
+
+	osGetenv = func(key string) string {
+		switch key {
+		case "AZURE_OPENAI_API_KEY":
+			return "test-azure-key"
+		case "AZURE_OPENAI_ENDPOINT":
+			return "https://my-resource.openai.azure.com"
+		case "OPENAI_API_VERSION":
+			return "2024-02-15-preview"
+		}
+		return ""
+	}
+
+	llm, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "", "", nil)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAI() error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewAzureOpenAI() returned nil")
+	}
+	if llm.Name() != "my-deployment" {
+		t.Errorf("Name() = %q, want %q", llm.Name(), "my-deployment")
+	}
+}
+
+func TestNewAzureOpenAI_WithOverrides(t *testing.T) {
+	orig := osGetenv
+	t.Cleanup(func() { osGetenv = orig })
+
+	// Override only API key; endpoint and api-version come from arguments.
+	osGetenv = func(key string) string {
+		if key == "AZURE_OPENAI_API_KEY" {
+			return "test-azure-key"
+		}
+		return ""
+	}
+
+	llm, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "https://custom.openai.azure.com/", "2024-06-01", nil)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAI() with overrides error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewAzureOpenAI() with overrides returned nil")
+	}
+}
+
+func TestAzurePathRewriteMiddleware(t *testing.T) {
+	// Create a test server that records the request path.
+	var receivedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"content":"test"}}]}`))
+	}))
+	defer srv.Close()
+
+	// Create Azure client with the middleware.
+	client := openai.NewClient(
+		option.WithBaseURL(srv.URL+"/"),
+		option.WithMiddleware(azurePathRewriteMiddleware()),
+		option.WithAPIKey("test"),
+	)
+
+	ctx := context.Background()
+	_, _ = client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{Model: "test-model"})
+
+	if receivedPath != "/openai/deployments/test-model/chat/completions" {
+		t.Errorf("received path = %q, want %q", receivedPath, "/openai/deployments/test-model/chat/completions")
+	}
+}
+
+func TestAzurePathRewriteMiddleware_Embedding(t *testing.T) {
+	var receivedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	client := openai.NewClient(
+		option.WithBaseURL(srv.URL+"/"),
+		option.WithMiddleware(azurePathRewriteMiddleware()),
+		option.WithAPIKey("test"),
+	)
+
+	ctx := context.Background()
+	_, _ = client.Embeddings.New(ctx, openai.EmbeddingNewParams{Model: "embed-model"})
+
+	if receivedPath != "/openai/deployments/embed-model/embeddings" {
+		t.Errorf("received path = %q, want %q", receivedPath, "/openai/deployments/embed-model/embeddings")
+	}
+}
+
+func TestAzurePathRewriteMiddleware_PreservesBasePath(t *testing.T) {
+	var receivedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"content":"test"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := openai.NewClient(
+		option.WithBaseURL(srv.URL+"/api/v1/proxy/"),
+		option.WithMiddleware(azurePathRewriteMiddleware()),
+		option.WithAPIKey("test"),
+	)
+
+	ctx := context.Background()
+	_, _ = client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{Model: "test-model"})
+
+	expected := "/api/v1/proxy/openai/deployments/test-model/chat/completions"
+	if receivedPath != expected {
+		t.Errorf("received path = %q, want %q", receivedPath, expected)
 	}
 }

@@ -2,10 +2,13 @@ package tools
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/fs"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +82,18 @@ func (c *regexCache) put(key string, re *regexp.Regexp) {
 // Global regex cache - shared across all grep calls.
 var grepRegexCache = newRegexCache(50, 10*time.Minute)
 
+// ripgrepAvailable checks if rg (ripgrep) is installed.
+func ripgrepAvailable() bool {
+	cmd := exec.Command("rg", "--version")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
+}
+
+// rgAvailable is set at startup based on whether ripgrep is installed.
+var rgAvailable = ripgrepAvailable()
+
 // GrepInput defines the parameters for the grep tool.
 type GrepInput struct {
 	// The regex pattern to search for.
@@ -109,7 +124,11 @@ type GrepMatch struct {
 }
 
 func newGrepTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("grep", "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ tool.Context, input GrepInput) (GrepOutput, error) {
+	grepToolName := "grep"
+	if rgAvailable {
+		grepToolName = "ripgrep"
+	}
+	return newTool(grepToolName, "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ tool.Context, input GrepInput) (GrepOutput, error) {
 		return grepHandler(sb, input)
 	})
 }
@@ -117,6 +136,24 @@ func newGrepTool(sb *Sandbox) (tool.Tool, error) {
 func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 	if input.Pattern == "" {
 		return GrepOutput{}, fmt.Errorf("pattern is required")
+	}
+
+	searchPath := input.Path
+	if searchPath == "" {
+		searchPath = "."
+	}
+
+	info, err := sb.Stat(searchPath)
+	if err != nil {
+		return GrepOutput{}, fmt.Errorf("path not found: %w", err)
+	}
+
+	// Try ripgrep first if available
+	if rgAvailable && !grepRGDisabled {
+		if result, err := grepWithRG(sb, input, searchPath); err == nil {
+			return result, nil
+		}
+		// Fall back to Go implementation on error
 	}
 
 	// Build cache key including case-insensitive flag
@@ -138,16 +175,6 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 			return GrepOutput{}, fmt.Errorf("invalid regex pattern: %w", err)
 		}
 		grepRegexCache.put(cacheKey, re)
-	}
-
-	searchPath := input.Path
-	if searchPath == "" {
-		searchPath = "."
-	}
-
-	info, err := sb.Stat(searchPath)
-	if err != nil {
-		return GrepOutput{}, fmt.Errorf("path not found: %w", err)
 	}
 
 	// Load .gitignore patterns
@@ -238,3 +265,77 @@ func grepFileSandbox(sb *Sandbox, re *regexp.Regexp, path string) []GrepMatch {
 	}
 	return matches
 }
+
+// grepWithRG runs ripgrep (rg) and parses its output into GrepOutput.
+// Returns an error if rg fails or parsing fails.
+// Note: rg already respects .gitignore by default.
+func grepWithRG(sb *Sandbox, input GrepInput, searchPath string) (GrepOutput, error) {
+	ctx := context.Background()
+
+	args := []string{
+		"--no-heading",    // Show file:line:content format
+		"--with-filename", // Always show filename
+		"--line-number",   // Show line numbers
+		"--max-count", fmt.Sprintf("%d", maxGrepMatches),
+	}
+
+	// Handle case insensitive
+	if input.CaseInsensitive {
+		args = append(args, "-i")
+	}
+
+	// Handle glob pattern
+	if input.Glob != "" {
+		args = append(args, "--glob", input.Glob)
+	}
+
+	// Add the pattern and path
+	args = append(args, input.Pattern, searchPath)
+
+	cmd := exec.CommandContext(ctx, "rg", args...)
+	cmd.Dir = sb.Dir()
+
+	output, err := cmd.Output()
+	if err != nil {
+		return GrepOutput{}, fmt.Errorf("rg failed: %w", err)
+	}
+
+	// Parse rg output: "file:line:content" format
+	var matches []GrepMatch
+	total := 0
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		file := parts[0]
+		// Skip the filename line that rg adds with --with-filename on single files
+		if strings.HasPrefix(file, "=== ") {
+			continue
+		}
+		var lineNum int
+		if _, err := fmt.Sscanf(parts[1], "%d", &lineNum); err != nil {
+			continue
+		}
+		content := parts[2]
+		total++
+		if len(matches) < maxGrepMatches {
+			matches = append(matches, GrepMatch{
+				File:    file,
+				Line:    lineNum,
+				Content: truncateLine(content),
+			})
+		}
+	}
+
+	return GrepOutput{
+		Matches:      matches,
+		TotalMatches: total,
+		Truncated:    total > len(matches),
+	}, nil
+}
+
+// grepRGDisabled is set to true during tests to force use of the Go implementation.
+var grepRGDisabled = false

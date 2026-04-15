@@ -251,7 +251,7 @@ func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
 
 func TestRootCmdMissingAPIKey(t *testing.T) {
 	// Ensure no API keys are set
-	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"} {
 		if err := os.Unsetenv(key); err != nil {
 			t.Logf("failed to unset %s: %v", key, err)
 		}
@@ -273,7 +273,7 @@ func TestProviderEnvVar(t *testing.T) {
 	}{
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"openai", "OPENAI_API_KEY"},
-		{"gemini", "GOOGLE_API_KEY"},
+		{"gemini", "GEMINI_API_KEY"},
 		{"custom", "CUSTOM_API_KEY"},
 	}
 
@@ -1249,7 +1249,7 @@ func TestProviderEnvVarAllCases(t *testing.T) {
 	}{
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"openai", "OPENAI_API_KEY"},
-		{"gemini", "GOOGLE_API_KEY"},
+		{"gemini", "GEMINI_API_KEY"},
 		{"custom", "CUSTOM_API_KEY"},
 		{"ollama", "OLLAMA_API_KEY"},
 		{"azure", "AZURE_API_KEY"},

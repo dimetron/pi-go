@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/lsp"
@@ -330,5 +331,219 @@ func TestExtractHoverContent_WithResult(t *testing.T) {
 	got := extractHoverContent(result)
 	if got != "func Foo() int" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestGetServerOrSkipForLanguage_NotAvailable(t *testing.T) {
+	mgr := lsp.NewManager(&lsp.ManagerConfig{
+		Disabled: []string{"go", "typescript", "python", "rust"},
+	})
+	defer mgr.Shutdown()
+
+	srv, errMsg := getServerOrSkipForLanguage(mgr, "go")
+	if srv != nil {
+		t.Error("expected nil server")
+	}
+	if errMsg == "" {
+		t.Fatal("expected error message for unavailable language")
+	}
+	if errMsg != "go not available" {
+		t.Errorf("got error %q, want 'go not available'", errMsg)
+	}
+}
+
+func TestGetServerOrSkipForLanguage_NoExtensions(t *testing.T) {
+	// Create a manager and mock a language without file extensions
+	mgr := lsp.NewManager(nil)
+	defer mgr.Shutdown()
+
+	// Test with a language that exists but has no extensions
+	// This would require internal knowledge of how Languages() works
+	// For now, test the no-server path via getServerOrSkip
+	srv, errMsg := getServerOrSkip(mgr, "/tmp/test.txt")
+	if srv != nil {
+		t.Error("expected nil server for unknown file type")
+	}
+	if errMsg == "" {
+		t.Fatal("expected error for unknown file type")
+	}
+}
+
+func TestFormatDiagnosticsForDisplay_Empty(t *testing.T) {
+	got := formatDiagnosticsForDisplay("/tmp/test.go", nil)
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestFormatDiagnosticsForDisplay_OnlyErrors(t *testing.T) {
+	// The condition is d.Severity > SeverityWarning (2), so:
+	// - SeverityWarning (2) is shown (2 > 2 is false)
+	// - SeverityError (1) is shown (1 > 2 is false)
+	// - SeverityInformation (3) and SeverityHint (4) are filtered
+	diags := []lsp.Diagnostic{
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 1}},
+			Severity: lsp.SeverityError, // 1 - shown
+			Message:  "error message",
+		},
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 2}},
+			Severity: lsp.SeverityWarning, // 2 - shown
+			Message:  "warning message",
+		},
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 3}},
+			Severity: lsp.SeverityInformation, // 3 - filtered
+			Message:  "info message",
+		},
+	}
+	got := formatDiagnosticsForDisplay("/tmp/test.go", diags)
+	// Errors and warnings are shown, info is filtered
+	if got == "" {
+		t.Error("expected formatted output for errors/warnings")
+	}
+	if !strings.Contains(got, "error message") {
+		t.Errorf("should contain error, got %q", got)
+	}
+	if !strings.Contains(got, "warning message") {
+		t.Errorf("should contain warning, got %q", got)
+	}
+	if strings.Contains(got, "info message") {
+		t.Error("should not contain info (filtered)")
+	}
+}
+
+func TestFormatDiagnosticsForDisplay_OnlyErrorsFiltered(t *testing.T) {
+	// Diagnostics with severity > SeverityWarning (2) are filtered out.
+	// This includes SeverityInformation (3) and SeverityHint (4).
+	diags := []lsp.Diagnostic{
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 1}},
+			Severity: lsp.SeverityInformation, // 3 - filtered OUT (3 > 2)
+			Message:  "info message",
+		},
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 2}},
+			Severity: lsp.SeverityHint, // 4 - filtered OUT (4 > 2)
+			Message:  "hint message",
+		},
+	}
+	got := formatDiagnosticsForDisplay("/tmp/test.go", diags)
+	if got != "" {
+		t.Errorf("got %q, want empty (info/hint filtered)", got)
+	}
+}
+
+func TestFormatDiagnosticsForDisplay_ZeroSeverity(t *testing.T) {
+	diags := []lsp.Diagnostic{
+		{
+			Range:    lsp.Range{Start: lsp.Position{Line: 0}},
+			Severity: 0, // 0 < 2, so shown
+			Message:  "info message",
+		},
+	}
+	got := formatDiagnosticsForDisplay("/tmp/test.go", diags)
+	// Severity 0 is shown (0 < 2)
+	if got == "" {
+		t.Error("expected output for severity 0")
+	}
+}
+
+func TestLSPCodeAction_NoServer(t *testing.T) {
+	mgr := lsp.NewManager(&lsp.ManagerConfig{
+		Disabled: []string{"go", "typescript", "python", "rust"},
+	})
+	defer mgr.Shutdown()
+
+	input := LSPCodeActionInput{
+		File:      "/tmp/test.go",
+		StartLine: 10, StartCol: 0,
+		EndLine: 20, EndCol: 10,
+	}
+	output, err := lspCodeActionHandler(nil, mgr, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Error == "" {
+		t.Fatal("expected error for no server")
+	}
+	if output.File != "/tmp/test.go" {
+		t.Errorf("File = %q, want '/tmp/test.go'", output.File)
+	}
+}
+
+func TestLSPWorkspaceSymbol_NoServerAvailable(t *testing.T) {
+	mgr := lsp.NewManager(&lsp.ManagerConfig{
+		Disabled: []string{"go", "typescript", "python", "rust"},
+	})
+	defer mgr.Shutdown()
+
+	input := LSPWorkspaceSymbolInput{Query: "main"}
+	output, err := lspWorkspaceSymbolHandler(nil, mgr, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Error == "" {
+		t.Fatal("expected error for no available servers")
+	}
+	if output.Error != "no language server available" {
+		t.Errorf("got error %q", output.Error)
+	}
+}
+
+func TestLSPWorkspaceSymbolInput(t *testing.T) {
+	input := LSPWorkspaceSymbolInput{Query: "findThis"}
+	if input.Query != "findThis" {
+		t.Errorf("Query = %q, want 'findThis'", input.Query)
+	}
+}
+
+func TestLSPCodeActionInput(t *testing.T) {
+	input := LSPCodeActionInput{
+		File:      "/tmp/test.go",
+		StartLine: 5, StartCol: 10,
+		EndLine: 10, EndCol: 20,
+	}
+	if input.File != "/tmp/test.go" {
+		t.Errorf("File = %q", input.File)
+	}
+	if input.StartLine != 5 || input.StartCol != 10 {
+		t.Errorf("Start = %d:%d, want 5:10", input.StartLine, input.StartCol)
+	}
+	if input.EndLine != 10 || input.EndCol != 20 {
+		t.Errorf("End = %d:%d, want 10:20", input.EndLine, input.EndCol)
+	}
+}
+
+func TestLSPWorkspaceSymbolOutput(t *testing.T) {
+	output := LSPWorkspaceSymbolOutput{
+		Symbols: []WorkspaceSymbolEntry{
+			{Name: "Main", Kind: "function", File: "/tmp/main.go", Line: 10, Column: 0},
+		},
+	}
+	if len(output.Symbols) != 1 {
+		t.Fatalf("expected 1 symbol, got %d", len(output.Symbols))
+	}
+	if output.Symbols[0].Name != "Main" {
+		t.Errorf("Name = %q", output.Symbols[0].Name)
+	}
+}
+
+func TestLSPCodeActionOutput(t *testing.T) {
+	output := LSPCodeActionOutput{
+		File: "/tmp/test.go",
+		Actions: []ActionEntry{
+			{Title: "Add import", Kind: "quickfix", IsPreferred: true},
+		},
+	}
+	if len(output.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(output.Actions))
+	}
+	if output.Actions[0].Title != "Add import" {
+		t.Errorf("Title = %q", output.Actions[0].Title)
+	}
+	if !output.Actions[0].IsPreferred {
+		t.Error("IsPreferred should be true")
 	}
 }

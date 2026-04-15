@@ -216,8 +216,7 @@ func TestGitOverview_StagedFiles(t *testing.T) {
 	}
 
 	// Test filtering: exclude staged
-	f := false
-	out2, err := gitOverviewHandler(sb, nil, GitOverviewInput{IncludeStaged: &f})
+	out2, err := gitOverviewHandler(sb, nil, GitOverviewInput{IncludeStaged: new(false)})
 	if err != nil {
 		t.Fatal(err)
 	}

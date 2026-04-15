@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+// TestMain sets up test environment.
+func TestMain(m *testing.M) {
+	// Disable ripgrep during tests to use Go implementation
+	// This ensures consistent behavior across environments
+	grepRGDisabled = true
+	os.Exit(m.Run())
+}
+
 // testSandbox creates a Sandbox rooted at the given directory for testing.
 func testSandbox(t *testing.T, dir string) *Sandbox {
 	t.Helper()
@@ -753,8 +761,13 @@ func TestCoreTools(t *testing.T) {
 
 	expected := map[string]bool{
 		"read": true, "write": true, "edit": true, "bash": true,
-		"grep": true, "find": true, "ls": true, "tree": true,
+		"find": true, "ls": true, "tree": true,
 		"git-overview": true, "git-file-diff": true, "git-hunk": true,
+	}
+	if rgAvailable {
+		expected["ripgrep"] = true
+	} else {
+		expected["grep"] = true
 	}
 	for _, tool := range tools {
 		if !expected[tool.Name()] {
@@ -915,5 +928,55 @@ func TestGrepSkipsGitignoredFiles(t *testing.T) {
 	}
 	if out.Matches[0].File != "main.go" {
 		t.Errorf("expected match in main.go, got %s", out.Matches[0].File)
+	}
+}
+
+func TestGrepWithRipgrep(t *testing.T) {
+	// Only run if ripgrep is available
+	if !ripgrepAvailable() {
+		t.Skip("ripgrep not installed")
+	}
+
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// Create test files
+	os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("hello world\nfoo bar\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "file2.txt"), []byte("hello there\nworld peace\n"), 0o644)
+
+	// Test basic search with ripgrep
+	out, err := grepHandler(sb, GrepInput{Pattern: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 2 {
+		t.Errorf("expected 2 matches, got %d", len(out.Matches))
+	}
+
+	// Test case insensitive
+	out, err = grepHandler(sb, GrepInput{Pattern: "HELLO", CaseInsensitive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 2 {
+		t.Errorf("expected 2 matches with case insensitive, got %d", len(out.Matches))
+	}
+
+	// Test glob filter
+	out, err = grepHandler(sb, GrepInput{Pattern: "hello", Glob: "*.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 2 {
+		t.Errorf("expected 2 matches with glob, got %d", len(out.Matches))
+	}
+
+	// Test no matches
+	out, err = grepHandler(sb, GrepInput{Pattern: "nonexistent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Matches) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(out.Matches))
 	}
 }

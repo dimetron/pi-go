@@ -55,7 +55,7 @@ func TestResolve(t *testing.T) {
 
 func TestNewLLMWithProvider(t *testing.T) {
 	t.Run("creates gemini provider", func(t *testing.T) {
-		if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
+		if os.Getenv("GEMINI_API_KEY") == "" && os.Getenv("GOOGLE_API_KEY") == "" {
 			t.Skip("skipping: no Google/Gemini API key set")
 		}
 		llm, err := NewLLM(context.TODO(), Info{Provider: "gemini", Model: "gemini-2.5-flash"}, "key", "", "", nil)
@@ -96,6 +96,32 @@ func TestResolveWithOllamaPrefix(t *testing.T) {
 	}
 	if info.Ollama != true {
 		t.Error("expected Ollama = true")
+	}
+}
+
+func TestResolveWithAzurePrefix(t *testing.T) {
+	info, err := Resolve("azure/gpt-4o-deployment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "azure" {
+		t.Errorf("provider = %q, want azure", info.Provider)
+	}
+	if info.Model != "gpt-4o-deployment" {
+		t.Errorf("model = %q, want %q", info.Model, "gpt-4o-deployment")
+	}
+}
+
+func TestResolveWithAzurePrefixCaseInsensitive(t *testing.T) {
+	info, err := Resolve("AZURE/my-deployment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "azure" {
+		t.Errorf("provider = %q, want azure", info.Provider)
+	}
+	if info.Model != "my-deployment" {
+		t.Errorf("model = %q, want %q", info.Model, "my-deployment")
 	}
 }
 
@@ -158,7 +184,7 @@ func TestCheckOllamaOKNoScheme(t *testing.T) {
 }
 
 func TestNewGemini(t *testing.T) {
-	if os.Getenv("GOOGLE_API_KEY") == "" && os.Getenv("GEMINI_API_KEY") == "" {
+	if os.Getenv("GEMINI_API_KEY") == "" && os.Getenv("GOOGLE_API_KEY") == "" {
 		t.Skip("skipping: no Google/Gemini API key set")
 	}
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
@@ -217,6 +243,46 @@ func TestResolveOllamaModelPrefixes(t *testing.T) {
 			}
 			if info.Model != tt.wantModel {
 				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+			}
+		})
+	}
+}
+
+func TestValidateModel(t *testing.T) {
+	tests := []struct {
+		info    Info
+		wantErr bool
+	}{
+		// Valid cloud models.
+		{Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, false},
+		{Info{Provider: "anthropic", Model: "claude-3-opus-20240229"}, false},
+		{Info{Provider: "openai", Model: "gpt-4o"}, false},
+		{Info{Provider: "openai", Model: "gpt-5.4"}, false},
+		{Info{Provider: "openai", Model: "o3-mini"}, false},
+		{Info{Provider: "gemini", Model: "gemini-2.5-pro"}, false},
+		{Info{Provider: "gemini", Model: "gemini-2.0-flash"}, false},
+		{Info{Provider: "mistral", Model: "mistral-large-latest"}, false},
+		{Info{Provider: "mistral", Model: "codestral-latest"}, false},
+		{Info{Provider: "mistral", Model: "pixtral-large-latest"}, false},
+		{Info{Provider: "mistral", Model: "ministral-8b-latest"}, false},
+		// Ollama models are always valid.
+		{Info{Provider: "ollama", Model: "whatever:latest", Ollama: true}, false},
+		// Unknown provider is always valid (no known list).
+		{Info{Provider: "custom", Model: "some-model"}, false},
+		// Invalid models.
+		{Info{Provider: "anthropic", Model: "bogus-model"}, true},
+		{Info{Provider: "openai", Model: "davinci-002"}, true},
+		{Info{Provider: "gemini", Model: "palm-2"}, true},
+		{Info{Provider: "mistral", Model: "llama-3"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.info.Provider+"/"+tt.info.Model, func(t *testing.T) {
+			err := ValidateModel(tt.info)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error for %s model %q", tt.info.Provider, tt.info.Model)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}
@@ -374,7 +440,7 @@ func TestNewLLMWithExtraHeaders(t *testing.T) {
 }
 
 func TestNewGeminiWithExtraHeaders(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("GEMINI_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", &LLMOptions{
 		ExtraHeaders: map[string]string{
@@ -391,7 +457,7 @@ func TestNewGeminiWithExtraHeaders(t *testing.T) {
 }
 
 func TestNewGeminiWithBaseURL(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("GEMINI_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom-gemini.example.com", nil)
 	if err != nil {
@@ -403,7 +469,7 @@ func TestNewGeminiWithBaseURL(t *testing.T) {
 }
 
 func TestNewGeminiWithBaseURLAndHeaders(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("GEMINI_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "https://custom.example.com", &LLMOptions{
 		ExtraHeaders: map[string]string{"X-Custom": "val"},
@@ -416,13 +482,13 @@ func TestNewGeminiWithBaseURLAndHeaders(t *testing.T) {
 	}
 }
 
-func TestNewGeminiWithGeminiAPIKeyEnv(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "")
-	t.Setenv("GEMINI_API_KEY", "test-gemini-key")
+func TestNewGeminiWithGoogleAPIKeyFallback(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", nil)
 	if err != nil {
-		t.Fatalf("NewGemini() with GEMINI_API_KEY error: %v", err)
+		t.Fatalf("NewGemini() with GOOGLE_API_KEY fallback error: %v", err)
 	}
 	if llm == nil {
 		t.Fatal("NewGemini() returned nil")
@@ -430,8 +496,8 @@ func TestNewGeminiWithGeminiAPIKeyEnv(t *testing.T) {
 }
 
 func TestNewGeminiNoAPIKeyEnvVars(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
 
 	// Without API keys, NewGemini may still succeed (using ADC) or fail depending on environment.
 	// We just verify it doesn't panic.
@@ -581,7 +647,7 @@ func TestCheckOllamaHTTPSPortInference(t *testing.T) {
 
 func TestNewGeminiInsecureTLSOnly(t *testing.T) {
 	// Exercise the InsecureSkipTLS path in NewGemini without extra headers.
-	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("GEMINI_API_KEY", "test-google-key")
 
 	llm, err := NewGemini(context.TODO(), "gemini-2.5-flash", "", &LLMOptions{
 		InsecureSkipTLS: true,

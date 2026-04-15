@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -419,3 +420,150 @@ func TestA2AOutputError(t *testing.T) {
 }
 
 var _ *a2aclient.Client = (*a2aclient.Client)(nil)
+
+// --- extractSendMessageResult tests ---
+
+func TestExtractSendMessageResult_Message(t *testing.T) {
+	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("hello from message"))
+	result := extractSendMessageResult(msg)
+	if result != "hello from message" {
+		t.Errorf("got %q, want 'hello from message'", result)
+	}
+}
+
+func TestExtractSendMessageResult_Task(t *testing.T) {
+	task := &a2a.Task{
+		History: []*a2a.Message{
+			a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("task result")),
+		},
+	}
+	result := extractSendMessageResult(task)
+	if result != "task result" {
+		t.Errorf("got %q, want 'task result'", result)
+	}
+}
+
+// --- extractMessageText tests ---
+
+func TestExtractMessageText_Nil(t *testing.T) {
+	result := extractMessageText(nil)
+	if result != "" {
+		t.Errorf("got %q, want empty", result)
+	}
+}
+
+func TestExtractMessageText_MultipleParts(t *testing.T) {
+	msg := a2a.NewMessage(a2a.MessageRoleAgent,
+		a2a.NewTextPart("part1 "),
+		a2a.NewTextPart("part2"),
+	)
+	result := extractMessageText(msg)
+	if result != "part1 part2" {
+		t.Errorf("got %q, want 'part1 part2'", result)
+	}
+}
+
+func TestExtractMessageText_EmptyParts(t *testing.T) {
+	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(""))
+	result := extractMessageText(msg)
+	if result != "" {
+		t.Errorf("got %q, want empty", result)
+	}
+}
+
+// --- extractTaskResult tests ---
+
+func TestExtractTaskResult_Nil(t *testing.T) {
+	result := extractTaskResult(nil)
+	if result != "" {
+		t.Errorf("got %q, want empty", result)
+	}
+}
+
+func TestExtractTaskResult_Empty(t *testing.T) {
+	task := &a2a.Task{}
+	result := extractTaskResult(task)
+	if result != "" {
+		t.Errorf("got %q, want empty", result)
+	}
+}
+
+func TestExtractTaskResult_FromHistory(t *testing.T) {
+	task := &a2a.Task{
+		History: []*a2a.Message{
+			a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("from history")),
+		},
+	}
+	result := extractTaskResult(task)
+	if result != "from history" {
+		t.Errorf("got %q, want 'from history'", result)
+	}
+}
+
+func TestExtractTaskResult_EmptyMessage(t *testing.T) {
+	task := &a2a.Task{
+		History: []*a2a.Message{
+			a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("")),
+		},
+	}
+	result := extractTaskResult(task)
+	if result != "" {
+		t.Errorf("got %q, want empty", result)
+	}
+}
+
+func TestBuildA2ADescription_NilCache(t *testing.T) {
+	result := buildA2ADescription(nil)
+	if !strings.Contains(result, "No A2A agents configured") {
+		t.Errorf("should mention no agents configured, got %q", result)
+	}
+}
+
+func TestBuildA2ADescription_EmptyAgents(t *testing.T) {
+	cache := NewClientCache(nil)
+	result := buildA2ADescription(cache)
+	if !strings.Contains(result, "No A2A agents configured") {
+		t.Errorf("should mention no agents configured, got %q", result)
+	}
+}
+
+func TestBuildA2ADescription_WithAgents(t *testing.T) {
+	cfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "agent1", URL: "http://localhost:8080"},
+			{Name: "agent2", URL: "http://localhost:8081"},
+		},
+	}
+	cache := NewClientCache(cfg)
+	result := buildA2ADescription(cache)
+
+	if !strings.Contains(result, "agent1") {
+		t.Errorf("should list agent1, got %q", result)
+	}
+	if !strings.Contains(result, "agent2") {
+		t.Errorf("should list agent2, got %q", result)
+	}
+}
+
+// --- ClientCache availableAgents tests ---
+
+func TestClientCache_AvailableAgents(t *testing.T) {
+	cfg := &config.A2AConfig{
+		Agents: []config.A2AAgentConfig{
+			{Name: "alpha", URL: "http://localhost:8080"},
+			{Name: "beta", URL: "http://localhost:8081"},
+			{Name: "gamma", URL: "http://localhost:8082"},
+		},
+	}
+	cache := NewClientCache(cfg)
+
+	// availableAgents is private, but we can test via error message
+	_, err := cache.GetClient(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent")
+	}
+	// Error should contain available agents
+	if !strings.Contains(err.Error(), "alpha") && !strings.Contains(err.Error(), "beta") && !strings.Contains(err.Error(), "gamma") {
+		t.Errorf("error should list available agents, got %q", err.Error())
+	}
+}

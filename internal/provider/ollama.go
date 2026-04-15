@@ -85,8 +85,7 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		if stream {
 			ollamaRunStreaming(ctx, m.client, chatReq, yield)
 		} else {
-			streamOff := false
-			chatReq.Stream = &streamOff
+			chatReq.Stream = new(false)
 			ollamaRunNonStreaming(ctx, m.client, chatReq, yield)
 		}
 	}

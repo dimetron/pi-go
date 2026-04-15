@@ -48,10 +48,7 @@ func (s *FileService) CreateBranch(sessionID, appName, userID, branchName string
 
 	// Fork point is the current head of the active branch.
 	activeBranch := bs.Branches[bs.Active]
-	forkPoint := activeBranch.Head
-	parentName := bs.Active
-
-	// Create branch directory and copy events up to fork point.
+	forkPoint := activeBranch.Head // Create branch directory and copy events up to fork point.
 	branchDir := filepath.Join(sessionDir, "branches", branchName)
 	if err := os.MkdirAll(branchDir, 0o755); err != nil {
 		return fmt.Errorf("creating branch dir: %w", err)
@@ -70,7 +67,7 @@ func (s *FileService) CreateBranch(sessionID, appName, userID, branchName string
 	bs.Branches[branchName] = BranchInfo{
 		Name:      branchName,
 		Head:      forkPoint,
-		Parent:    &parentName,
+		Parent:    new(bs.Active),
 		ForkPoint: forkPoint,
 	}
 

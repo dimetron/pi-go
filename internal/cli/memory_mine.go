@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -208,6 +209,7 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	chunkCount := 0
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	spinnerIdx := 0
+	startTime := time.Now()
 
 	// Helper to generate progress bar string.
 	progressBar := func(filled, width int) string {
@@ -243,9 +245,10 @@ func runMemoryMine(dir, wing string, convos bool) error {
 			}
 
 			// Erase line and redraw with spinner.
-			fmt.Printf("\r[%s] [%s] %s (%d/%d files, %d chunks)\x1b[K\n",
+			fmt.Printf("\r[%s] [%s] %s (%d/%d files, %d chunks) %s\x1b[K\r",
 				spinnerFrames[spinnerIdx], displayFile,
-				progressBar(filled, barWidth), fileCount, totalFiles, chunkCount)
+				progressBar(filled, barWidth), fileCount, totalFiles, chunkCount,
+				time.Since(startTime).Round(time.Second))
 		} else {
 			// Embedding/insert phase: file="" with percentage in 'added'.
 			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
@@ -262,9 +265,9 @@ func runMemoryMine(dir, wing string, convos bool) error {
 			}
 
 			// Erase line and redraw.
-			fmt.Printf("\r[%s] [%s] %s %d%%\x1b[K\n",
+			fmt.Printf("\r[%s] [%s] %s %d%% %s\x1b[K\r",
 				spinnerFrames[spinnerIdx], stage,
-				progressBar(filled, barWidth), int(progressPct))
+				progressBar(filled, barWidth), int(progressPct), time.Since(startTime).Round(time.Second))
 		}
 	}
 

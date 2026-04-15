@@ -218,11 +218,10 @@ func TestOrchestrator_WorktreeOverride(t *testing.T) {
 	orch.spawner.PiBinary = "/nonexistent/pi"
 
 	// Override worktree=false for a task type (which normally uses worktree).
-	noWorktree := false
 	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
 		Type:     "task",
 		Prompt:   "test no worktree override",
-		Worktree: &noWorktree,
+		Worktree: new(false),
 	})
 
 	if err == nil {

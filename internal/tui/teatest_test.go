@@ -256,10 +256,13 @@ type mockTokenTracker struct {
 	totalUsed   int64
 }
 
-func (m *mockTokenTracker) Limit() int64         { return m.limit }
-func (m *mockTokenTracker) Remaining() int64     { return m.remaining }
-func (m *mockTokenTracker) PercentUsed() float64 { return m.percentUsed }
-func (m *mockTokenTracker) TotalUsed() int64     { return m.totalUsed }
+func (m *mockTokenTracker) Limit() int64                { return m.limit }
+func (m *mockTokenTracker) Remaining() int64            { return m.remaining }
+func (m *mockTokenTracker) PercentUsed() float64        { return m.percentUsed }
+func (m *mockTokenTracker) TotalUsed() int64            { return m.totalUsed }
+func (m *mockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *mockTokenTracker) ContextWindowSize() int64    { return 0 }
+func (m *mockTokenTracker) ContextPercentUsed() float64 { return 0 }
 
 func TestFormatContextUsage_WithTracker(t *testing.T) {
 	m := newTestModel(t)

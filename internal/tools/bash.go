@@ -69,10 +69,9 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 
 	exitCode := 0
 	if err != nil {
-		exitErr := &exec.ExitError{}
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
-		} else if cmdCtx.Err() == context.DeadlineExceeded {
+		} else if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
 			return BashOutput{
 				Stdout:   redactSecrets(truncateOutput(stdout.String())),
 				Stderr:   "command timed out",

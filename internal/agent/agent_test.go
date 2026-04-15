@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
+	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -227,22 +228,28 @@ func TestLoadInstruction(t *testing.T) {
 	base := "Base instruction."
 	result := LoadInstruction(base)
 
-	// Without an AGENTS.md file in cwd, should return base unchanged.
-	if result != base {
-		t.Errorf("LoadInstruction() = %q, want %q", result, base)
+	if !strings.Contains(result, base) {
+		t.Errorf("LoadInstruction() should contain base instruction, got %q", result)
+	}
+	if strings.Contains(result, "# Project Rules") {
+		t.Errorf("LoadInstruction() should not contain project rules without AGENTS.md, got %q", result)
 	}
 }
 
 func TestLoadInstructionWithAgentsFile(t *testing.T) {
-	// Create a temp dir with .pi-go/AGENTS.md
 	dir := t.TempDir()
 	agentsDir := filepath.Join(dir, ".pi-go")
-	os.MkdirAll(agentsDir, 0o755)
-	os.WriteFile(filepath.Join(agentsDir, "AGENTS.md"), []byte("# Custom Rules\n- Rule 1"), 0o644)
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "AGENTS.md"), []byte("# Custom Rules\n- Rule 1"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
 
-	// Change to temp dir, restore after test
 	origDir, _ := os.Getwd()
-	os.Chdir(dir)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error: %v", err)
+	}
 	defer os.Chdir(origDir)
 
 	base := "Base instruction."
@@ -253,6 +260,93 @@ func TestLoadInstructionWithAgentsFile(t *testing.T) {
 	}
 	if !strings.Contains(result, base) {
 		t.Errorf("LoadInstruction() should contain base instruction, got %q", result)
+	}
+}
+
+func TestLoadInstructionWithAgentFileInCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENT.md"), []byte("# Local Rules\n- Rule A"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	base := "Base instruction."
+	result := LoadInstruction(base)
+
+	if !strings.Contains(result, "Local Rules") {
+		t.Errorf("LoadInstruction() should contain AGENT.md content, got %q", result)
+	}
+	if !strings.Contains(result, base) {
+		t.Errorf("LoadInstruction() should contain base instruction, got %q", result)
+	}
+}
+
+func TestLoadInstructionPrefersAgentFileInCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENT.md"), []byte("# Local Rules\n- Local"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	agentsDir := filepath.Join(dir, ".pi-go")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "AGENTS.md"), []byte("# Project Rules\n- Project"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	result := LoadInstruction("Base instruction.")
+
+	if !strings.Contains(result, "Local Rules") {
+		t.Errorf("LoadInstruction() should prefer AGENT.md content, got %q", result)
+	}
+	if strings.Contains(result, "- Project") {
+		t.Errorf("LoadInstruction() should not append .pi-go/AGENTS.md when AGENT.md exists, got %q", result)
+	}
+}
+
+func TestLoadInstructionWithSkills(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".pi-go", "skills", "lint")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	content := `---
+description: Run lint checks before finishing.
+---
+# Lint Skill
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	result := LoadInstruction("Base instruction.")
+	if skills, err := extension.LoadSkills(filepath.Join(dir, ".pi-go", "skills")); err != nil {
+		t.Fatalf("LoadSkills() error: %v", err)
+	} else if len(skills) == 0 {
+		t.Fatalf("LoadSkills() returned no skills")
+	}
+	if !strings.Contains(result, "# Available Skills") {
+		t.Fatalf("LoadInstruction() should contain skills section, got %q", result)
+	}
+	if !strings.Contains(result, "/lint: Run lint checks before finishing.") {
+		t.Fatalf("LoadInstruction() should contain discovered skill summary, got %q", result)
 	}
 }
 

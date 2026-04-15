@@ -350,10 +350,13 @@ type cmdMockTokenTracker struct {
 	percentUsed float64
 }
 
-func (m *cmdMockTokenTracker) TotalUsed() int64     { return m.totalUsed }
-func (m *cmdMockTokenTracker) Limit() int64         { return m.limit }
-func (m *cmdMockTokenTracker) Remaining() int64     { return m.remaining }
-func (m *cmdMockTokenTracker) PercentUsed() float64 { return m.percentUsed }
+func (m *cmdMockTokenTracker) TotalUsed() int64            { return m.totalUsed }
+func (m *cmdMockTokenTracker) Limit() int64                { return m.limit }
+func (m *cmdMockTokenTracker) Remaining() int64            { return m.remaining }
+func (m *cmdMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
+func (m *cmdMockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *cmdMockTokenTracker) ContextWindowSize() int64    { return 0 }
+func (m *cmdMockTokenTracker) ContextPercentUsed() float64 { return 0 }
 
 func TestCommandFormatContextUsage_WithTokenTracker(t *testing.T) {
 	m := &model{

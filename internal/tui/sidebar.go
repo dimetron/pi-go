@@ -73,17 +73,23 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, "", moodLine, "")
 	}
 
-	// --- Context section ---
+	// --- Context section (session context window usage) ---
 	sidebarBg := lipgloss.Color("#181825") // Catppuccin Mocha mantle (subtle dark)
 	lines = append(lines, heading.Render("  Context"))
-	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
-		total := tt.TotalUsed()
-		limit := tt.Limit()
-		pct := tt.PercentUsed()
+	if tt := in.TokenTracker; tt != nil && tt.ContextWindowSize() > 0 {
+		// Known context window: show prompt tokens / window size with bar.
+		promptTokens := tt.LastPromptTokens()
+		ctxWindow := tt.ContextWindowSize()
+		pct := tt.ContextPercentUsed()
 		lines = append(lines, dim.Render(fmt.Sprintf("  %s / %s",
-			formatTokenCount(total), formatTokenCount(limit))))
+			formatTokenCount(promptTokens), formatTokenCount(ctxWindow))))
 		lines = append(lines, "  "+renderContextBar(pct, sidebarBg))
+	} else if tt := in.TokenTracker; tt != nil && tt.LastPromptTokens() > 0 {
+		// Unknown window but have actual prompt tokens from LLM.
+		lines = append(lines, dim.Render(fmt.Sprintf("  %s tokens",
+			formatTokenCount(tt.LastPromptTokens()))))
 	} else {
+		// No LLM response yet: estimate from message chars.
 		ctxChars := 0
 		for _, msg := range in.Messages {
 			ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)

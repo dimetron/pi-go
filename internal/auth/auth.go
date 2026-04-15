@@ -34,6 +34,7 @@ type Provider struct {
 	DeviceURL     string // device authorization endpoint (optional)
 	UseDeviceFlow bool   // prefer device code flow over PKCE
 	TLSPreflight  bool   // run TLS preflight before OAuth (OpenAI Codex)
+	CodexOAuth    bool   // use Codex OAuth callback + token-exchange semantics
 }
 
 // TokenResponse holds the OAuth token response.
@@ -44,7 +45,9 @@ type TokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	Scope        string `json:"scope"`
 	IDToken      string `json:"id_token"`
-	APIKey       string `json:"api_key"` // some providers return key directly
+	APIKey       string `json:"api_key"`        // some providers return key directly
+	APIKeyCamel  string `json:"apiKey"`         // alternate camelCase response key
+	OpenAIAPIKey string `json:"openai_api_key"` // alternate token-exchange response key
 }
 
 // DeviceCodeResponse holds the device authorization response.
@@ -105,23 +108,38 @@ func Providers() []Provider {
 			EnvVar:   "OPENAI_API_KEY",
 			AuthURL:  "https://auth.openai.com/authorize",
 			TokenURL: "https://auth.openai.com/oauth/token",
-			ClientID: "pi-go-cli",
-			Scopes:   []string{"openid", "profile", "email", "offline_access"},
+			ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
+			Scopes: []string{
+				"openid",
+				"profile",
+				"email",
+				"offline_access",
+				"api.connectors.read",
+				"api.connectors.invoke",
+			},
 			ExtraParams: map[string]string{
-				"audience": "https://api.openai.com/v1",
+				"id_token_add_organizations": "true",
+				"codex_cli_simplified_flow":  "true",
 			},
 			TokenToKey: func(tok *TokenResponse) string {
 				if tok.APIKey != "" {
 					return tok.APIKey
 				}
+				if tok.APIKeyCamel != "" {
+					return tok.APIKeyCamel
+				}
+				if tok.OpenAIAPIKey != "" {
+					return tok.OpenAIAPIKey
+				}
 				return tok.AccessToken
 			},
 			KeyPageURL:   "https://platform.openai.com/api-keys",
 			TLSPreflight: true,
+			CodexOAuth:   true,
 		},
 		{
 			Name:     "gemini",
-			EnvVar:   "GOOGLE_API_KEY",
+			EnvVar:   "GEMINI_API_KEY",
 			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
 			TokenURL: "https://oauth2.googleapis.com/token",
 			ClientID: "pi-go-cli",
@@ -154,13 +172,15 @@ func FindProvider(name string) (Provider, bool) {
 func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error) (*Result, error) {
 	verifier, challenge := generatePKCE()
 
-	// Start local callback server on a random port.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listenAddr, callbackHost, callbackPath := callbackConfig(prov)
+
+	// Start local callback server.
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("starting callback server: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port //nolint:errcheck // type assertion is guaranteed for TCP listener
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://%s:%d%s", callbackHost, port, callbackPath)
 
 	state := generateState()
 
@@ -171,7 +191,7 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 	codeCh := make(chan codeResult, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		handleCallback(w, r, state, codeCh)
 	})
 
@@ -200,6 +220,12 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 		tok, err := exchangeCode(ctx, prov, cr.code, redirectURI, verifier)
 		if err != nil {
 			return &Result{Provider: prov.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
+		}
+		if prov.CodexOAuth {
+			tok, err = exchangeCodexAPIKey(ctx, prov, tok)
+			if err != nil {
+				return &Result{Provider: prov.Name, Err: fmt.Errorf("codex token exchange: %w", err)}, nil
+			}
 		}
 		apiKey := prov.TokenToKey(tok)
 		return &Result{
@@ -305,6 +331,13 @@ func generateState() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+func callbackConfig(prov Provider) (listenAddr, callbackHost, callbackPath string) {
+	if prov.CodexOAuth {
+		return "localhost:1455", "localhost", "/auth/callback"
+	}
+	return "127.0.0.1:0", "127.0.0.1", "/callback"
+}
+
 func buildAuthURL(prov Provider, redirectURI, state, challenge string) string {
 	params := url.Values{
 		"response_type":         {"code"},
@@ -388,6 +421,46 @@ func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifie
 		return nil, fmt.Errorf("parsing token response: %w", err)
 	}
 	return &tok, nil
+}
+
+func exchangeCodexAPIKey(ctx context.Context, prov Provider, tok *TokenResponse) (*TokenResponse, error) {
+	if tok != nil && (tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "") {
+		return tok, nil
+	}
+	if tok == nil || tok.IDToken == "" {
+		return nil, fmt.Errorf("id_token missing from codex OAuth token response")
+	}
+
+	data := url.Values{
+		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"client_id":          {prov.ClientID},
+		"requested_token":    {"openai-api-key"},
+		"subject_token":      {tok.IDToken},
+		"subject_token_type": {"urn:ietf:params:oauth:token-type:id_token"},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("api key exchange failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
+	}
+
+	var exchanged TokenResponse
+	if err := json.Unmarshal(body, &exchanged); err != nil {
+		return nil, fmt.Errorf("parsing api key exchange response: %w", err)
+	}
+	return &exchanged, nil
 }
 
 func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (*TokenResponse, error) {

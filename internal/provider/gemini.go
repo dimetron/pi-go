@@ -12,7 +12,7 @@ import (
 )
 
 // NewGemini creates a Gemini model.LLM using ADK Go's native Gemini support.
-// It reads the API key from GOOGLE_API_KEY or GEMINI_API_KEY env vars.
+// It reads the API key from GEMINI_API_KEY or GOOGLE_API_KEY env vars.
 // If neither is set, it falls back to Application Default Credentials.
 // If baseURL is non-empty, it overrides the default API endpoint.
 func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions) (model.LLM, error) {
@@ -21,9 +21,9 @@ func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions)
 	}
 
 	// Check for API key in env vars
-	apiKey := os.Getenv("GOOGLE_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
 	if apiKey != "" {
 		cfg.APIKey = apiKey

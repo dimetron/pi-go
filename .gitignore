@@ -45,3 +45,4 @@ Thumbs.db
 sandbox-trace.log
 sandbox.log
 /pi-sandbox
+/internal/cli/.cache/

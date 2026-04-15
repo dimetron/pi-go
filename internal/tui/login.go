@@ -131,13 +131,19 @@ func (m *model) loginStartPKCEFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 		provider: prov.Name,
 	}
 
+	title := fmt.Sprintf("Starting **%s** login...", prov.Name)
+	browserLine := "A browser window will open for authentication."
+	if prov.CodexOAuth {
+		title = "Starting **codex OAuth** login..."
+		browserLine = "A browser window will open for Codex OAuth."
+	}
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
-			"Starting **%s** login...\n\n"+
-				"A browser window will open for authentication.\n"+
+			"%s\n\n"+
+				"%s\n"+
 				"Press **Esc** to cancel.",
-			prov.Name),
+			title, browserLine),
 	})
 
 	// Run PKCE flow in background.
