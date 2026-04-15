@@ -418,6 +418,12 @@ func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params opena
 func NewAzureOpenAI(_ context.Context, deploymentName, apiKey, endpoint, apiVersion string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		apiKey = osGetenv("AZURE_OPENAI_API_KEY")
+		if apiKey == "" {
+			apiKey = osGetenv("AZUREOPENAI_API_KEY")
+		}
+		if apiKey == "" {
+			apiKey = osGetenv("AZURE_API_KEY")
+		}
 	}
 	if endpoint == "" {
 		endpoint = osGetenv("AZURE_OPENAI_ENDPOINT")
@@ -428,19 +434,23 @@ func NewAzureOpenAI(_ context.Context, deploymentName, apiKey, endpoint, apiVers
 	if apiVersion == "" {
 		apiVersion = "2024-02-15-preview"
 	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("azure OpenAI API key is required (set AZURE_OPENAI_API_KEY)")
-	}
 	if endpoint == "" {
 		return nil, fmt.Errorf("azure OpenAI endpoint is required (set AZURE_OPENAI_ENDPOINT)")
 	}
 
 	baseURL := strings.TrimSuffix(endpoint, "/") + "/"
-	opts := []option.RequestOption{
-		option.WithBaseURL(baseURL),
-		option.WithQueryAdd("api-version", apiVersion),
-		option.WithHeader("Api-Key", apiKey),
-		option.WithMiddleware(azurePathRewriteMiddleware()),
+	opts := []option.RequestOption{option.WithBaseURL(baseURL)}
+	// Some enterprise gateways expose Azure models behind an OpenAI-compatible
+	// proxy path (for example, /api/v1/proxy). In that mode, Azure-specific path
+	// rewriting and forced api-version query parameters break routing/auth.
+	if !isAzureOpenAICompatProxyEndpoint(endpoint) {
+		opts = append(opts,
+			option.WithQueryAdd("api-version", apiVersion),
+			option.WithMiddleware(azurePathRewriteMiddleware()),
+		)
+	}
+	if apiKey != "" {
+		opts = append(opts, option.WithHeader("Api-Key", apiKey))
 	}
 	if llmOpts != nil {
 		for k, v := range llmOpts.ExtraHeaders {
@@ -453,6 +463,18 @@ func NewAzureOpenAI(_ context.Context, deploymentName, apiKey, endpoint, apiVers
 
 	client := openai.NewClient(opts...)
 	return &openaiModel{modelName: deploymentName, client: client}, nil
+}
+
+func isAzureOpenAICompatProxyEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(strings.TrimSpace(u.Path))
+	if path == "" || path == "/" {
+		return false
+	}
+	return strings.Contains(path, "/openai/v1")
 }
 
 // azurePathRewriteMiddleware rewrites .../chat/completions to

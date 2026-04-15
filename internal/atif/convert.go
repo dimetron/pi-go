@@ -1,6 +1,7 @@
 package atif
 
 import (
+	"strings"
 	"time"
 
 	"google.golang.org/adk/session"
@@ -17,7 +18,7 @@ func ConvertEvent(event *session.Event, stepID int) []Step {
 	step := Step{
 		StepID:    stepID,
 		Timestamp: event.Timestamp.Format(time.RFC3339Nano),
-		Source:    mapSource(event.Author),
+		Source:    mapSource(event),
 	}
 
 	var texts []string
@@ -65,15 +66,37 @@ func ConvertEvent(event *session.Event, stepID int) []Step {
 }
 
 // mapSource converts session event author to ATIF source.
-func mapSource(author string) string {
-	switch author {
-	case "user":
-		return "user"
-	case "model":
-		return "agent"
-	default:
+func mapSource(event *session.Event) string {
+	if event == nil {
 		return "system"
 	}
+	switch event.Author {
+	case "user":
+		return "user"
+	case "model", "pi", "assistant", "agent":
+		return "agent"
+	}
+
+	// Prefer explicit content role when available; some runtimes persist model
+	// events with non-standard authors (e.g. "pi").
+	if event.Content != nil {
+		switch strings.ToLower(strings.TrimSpace(event.Content.Role)) {
+		case "model", "assistant":
+			return "agent"
+		}
+	}
+
+	// Fallback for completed model turns that carry visible text but may have a
+	// custom author label. This keeps final answers visible in ATIF consumers.
+	if event.Content != nil && event.TurnComplete && strings.EqualFold(strings.TrimSpace(string(event.FinishReason)), "STOP") {
+		for _, part := range event.Content.Parts {
+			if part != nil && part.Text != "" && !part.Thought {
+				return "agent"
+			}
+		}
+	}
+
+	return "system"
 }
 
 // buildMessage converts text parts into the appropriate message value.

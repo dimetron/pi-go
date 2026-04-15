@@ -94,6 +94,7 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"claude-sonnet-4-6", "anthropic"},
 		{"gpt-4o", "openai"},
 		{"gpt-5.4", "openai"},
+		{"azure/gpt-5.4", "azure"},
 		{"gemini-2.5-pro", "gemini"},
 		{"minimax-m2.5:cloud", "ollama"},
 	}
@@ -207,10 +208,16 @@ func TestLoadFile_LegacyDefaultModel(t *testing.T) {
 func TestAPIKeys(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "")
+	t.Setenv("AZUREOPENAI_API_KEY", "azure-test-key")
+	t.Setenv("AZURE_API_KEY", "")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
 		t.Errorf("expected anthropic key, got %q", keys["anthropic"])
+	}
+	if keys["azure"] != "azure-test-key" {
+		t.Errorf("expected azure key, got %q", keys["azure"])
 	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")

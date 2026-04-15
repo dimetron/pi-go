@@ -258,10 +258,10 @@ func (c *ChatModel) RenderMessages(running bool) string {
 	for i := range c.Messages {
 		msg := &c.Messages[i]
 
-		// Use cached render if available and width hasn't changed.
-		// Skip cache for the last message while streaming — it's still being updated.
+		// Avoid cache reads/writes while running because earlier messages can still
+		// be updated (e.g. assistant text continues after tool events).
 		isLastAndStreaming := running && i == lastIdx
-		if !isLastAndStreaming && msg.renderCache != "" && msg.renderCacheWidth == c.Width {
+		if !running && msg.renderCache != "" && msg.renderCacheWidth == c.Width {
 			b.WriteString(msg.renderCache)
 			continue
 		}
@@ -355,8 +355,8 @@ func (c *ChatModel) RenderMessages(running bool) string {
 		rendered := msgBuf.String()
 		b.WriteString(rendered)
 
-		// Cache the rendered output for non-streaming messages.
-		if !isLastAndStreaming {
+		// Cache only when idle to prevent stale render reuse during streaming.
+		if !running && !isLastAndStreaming {
 			msg.renderCache = rendered
 			msg.renderCacheWidth = c.Width
 		}

@@ -93,6 +93,35 @@ func TestConvertEvent_UnknownAuthorMapsToSystem(t *testing.T) {
 	}
 }
 
+func TestConvertEvent_CustomAuthorModelRoleMapsToAgent(t *testing.T) {
+	ev := makeTextEvent("pi", "Final answer")
+	ev.Content.Role = "model"
+	ev.TurnComplete = true
+	ev.FinishReason = "STOP"
+
+	steps := ConvertEvent(ev, 1)
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+	if steps[0].Source != "agent" {
+		t.Errorf("source = %q, want %q", steps[0].Source, "agent")
+	}
+}
+
+func TestConvertEvent_CustomAuthorStopWithTextMapsToAgent(t *testing.T) {
+	ev := makeTextEvent("runtime", "Visible model completion")
+	ev.TurnComplete = true
+	ev.FinishReason = "STOP"
+
+	steps := ConvertEvent(ev, 1)
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+	if steps[0].Source != "agent" {
+		t.Errorf("source = %q, want %q", steps[0].Source, "agent")
+	}
+}
+
 func TestConvertEvent_SingleToolCall(t *testing.T) {
 	ev := &session.Event{}
 	ev.Author = "model"

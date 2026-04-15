@@ -156,6 +156,10 @@ func (c *Config) ResolveRole(role string) (model string, prov string, err error)
 
 // autoDetectProvider detects the provider from model name prefix.
 func autoDetectProvider(modelName string) string {
+	// azure/ prefix → Azure OpenAI provider.
+	if strings.HasPrefix(strings.ToLower(modelName), "azure/") {
+		return "azure"
+	}
 	// Ollama suffixes → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, ":local") {
 		return "ollama"
@@ -228,6 +232,7 @@ func APIKeys() map[string]string {
 	envVars := map[string][]string{
 		"anthropic": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
 		"openai":    {"OPENAI_API_KEY"},
+		"azure":     {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
 		"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		"mistral":   {"MISTRAL_API_KEY"},
 	}

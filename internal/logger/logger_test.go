@@ -1,9 +1,12 @@
 package logger
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNew(t *testing.T) {
@@ -199,6 +202,150 @@ func TestLLMText(t *testing.T) {
 	log.LLMText("agent1", "some llm text")
 }
 
+func TestLLMTextCoalescesContiguousChunks(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	log.LLMText("pi", " use")
+	log.LLMText("pi", " `")
+	log.LLMText("pi", "g")
+	log.LLMText("pi", "pt")
+	log.LLMText("pi", "-")
+	log.LLMText("pi", "5")
+	log.LLMText("pi", ".")
+	log.LLMText("pi", "4")
+	log.LLMText("pi", "`,")
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if entries[0].Type != "llm_text" {
+		t.Fatalf("expected llm_text entry, got %q", entries[0].Type)
+	}
+	if entries[0].Agent != "pi" {
+		t.Fatalf("expected agent pi, got %q", entries[0].Agent)
+	}
+	if entries[0].Content != " use `gpt-5.4`," {
+		t.Fatalf("unexpected merged content: %q", entries[0].Content)
+	}
+}
+
+func TestLLMTextFlushesOnNonLLMEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	log.LLMText("pi", "hello")
+	log.LLMText("pi", " world")
+	log.ToolCall("pi", "search", map[string]string{"query": "docs"})
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+
+	if entries[0].Type != "llm_text" || entries[0].Content != "hello world" {
+		t.Fatalf("unexpected first entry: %+v", entries[0])
+	}
+	if entries[1].Type != "tool_call" || entries[1].Tool != "search" {
+		t.Fatalf("unexpected second entry: %+v", entries[1])
+	}
+}
+
+func TestLLMTextFlushesWhenAgentChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	log.LLMText("pi", "hello")
+	log.LLMText("subagent", "world")
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+
+	if entries[0].Type != "llm_text" || entries[0].Agent != "pi" || entries[0].Content != "hello" {
+		t.Fatalf("unexpected first entry: %+v", entries[0])
+	}
+	if entries[1].Type != "llm_text" || entries[1].Agent != "subagent" || entries[1].Content != "world" {
+		t.Fatalf("unexpected second entry: %+v", entries[1])
+	}
+}
+
+func TestLLMTextFlushesAfterWindow(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	log.llmFlushWindow = 5 * time.Millisecond
+
+	log.LLMText("pi", "hel")
+	time.Sleep(10 * time.Millisecond)
+	log.LLMText("pi", "lo")
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].Type != "llm_text" || entries[0].Content != "hel" {
+		t.Fatalf("unexpected first entry: %+v", entries[0])
+	}
+	if entries[1].Type != "llm_text" || entries[1].Content != "lo" {
+		t.Fatalf("unexpected second entry: %+v", entries[1])
+	}
+}
+
 func TestToolCall(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -248,4 +395,29 @@ func TestSessionStart(t *testing.T) {
 	defer func() { log.Close() }() //nolint:errcheck
 
 	log.SessionStart("session-123", "claude-3", "print")
+}
+
+func readEntries(t *testing.T, path string) []Entry {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open log file: %v", err)
+	}
+	defer func() { f.Close() }() //nolint:errcheck
+
+	var entries []Entry
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var e Entry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			t.Fatalf("unmarshal log entry: %v", err)
+		}
+		entries = append(entries, e)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan log file: %v", err)
+	}
+
+	return entries
 }

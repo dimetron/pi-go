@@ -91,6 +91,10 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role (planning model)")
 	cmd.Flags().StringVar(&flagSystem, "system", "", "System instruction (overrides default)")
 	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
+	// Allow bare --header so a following flag is not consumed as a header value.
+	if f := cmd.Flags().Lookup("header"); f != nil {
+		f.NoOptDefVal = ""
+	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
 	cmd.Flags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (cpu, mem, goroutine, mutex, block, trace)")
@@ -172,7 +176,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && !info.Ollama {
+	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}
@@ -613,6 +617,8 @@ func providerEnvVar(p string) string {
 		return "ANTHROPIC_API_KEY"
 	case "openai":
 		return "OPENAI_API_KEY"
+	case "azure":
+		return "AZURE_OPENAI_API_KEY"
 	case "gemini":
 		return "GEMINI_API_KEY"
 	default:
@@ -678,7 +684,69 @@ func checkForRapidRestartAndWarn(workDir string) {
 			"pi-go: warning: rapid restart detected (%.0fs since last session). "+
 				"If init keeps failing, check ~/.pi-go/log/ for errors.\n",
 			elapsed.Seconds())
+		path, msg, readErr := lastLoggedError()
+		switch {
+		case readErr != nil:
+			fmt.Fprintf(os.Stderr, "pi-go: warning: failed to inspect session logs: %v\n", readErr)
+		case msg != "":
+			fmt.Fprintf(os.Stderr, "pi-go: last logged error (%s): %s\n", path, msg)
+		default:
+			fmt.Fprintln(os.Stderr, "pi-go: no recent logged errors found.")
+		}
 	}
+}
+
+// lastLoggedError returns the most recent "error" entry from session logs.
+func lastLoggedError() (path, msg string, err error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("getting home dir: %w", err)
+	}
+	logRoot := filepath.Join(home, ".pi-go", "log")
+	dateDirs, err := os.ReadDir(logRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	for i := len(dateDirs) - 1; i >= 0; i-- {
+		d := dateDirs[i]
+		if !d.IsDir() {
+			continue
+		}
+		datePath := filepath.Join(logRoot, d.Name())
+		files, listErr := os.ReadDir(datePath)
+		if listErr != nil {
+			continue
+		}
+		for j := len(files) - 1; j >= 0; j-- {
+			f := files[j]
+			if f.IsDir() || !strings.HasPrefix(f.Name(), "session-") || !strings.HasSuffix(f.Name(), ".log") {
+				continue
+			}
+			p := filepath.Join(datePath, f.Name())
+			blob, readErr := os.ReadFile(p)
+			if readErr != nil {
+				continue
+			}
+			lines := strings.Split(string(blob), "\n")
+			for k := len(lines) - 1; k >= 0; k-- {
+				line := strings.TrimSpace(lines[k])
+				if line == "" {
+					continue
+				}
+				var entry logger.Entry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					continue
+				}
+				if entry.Type == "error" && entry.Content != "" {
+					return p, entry.Content, nil
+				}
+			}
+		}
+	}
+	return "", "", nil
 }
 
 // runPrint runs the agent and prints text responses to stdout.
@@ -806,6 +874,11 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
 			}
 		}
+	}
+	if !started {
+		const warn = "pi-go: warning: no assistant events received before message_end"
+		fmt.Fprintln(os.Stderr, warn)
+		log.Error(warn)
 	}
 	_ = enc.Encode(jsonEvent{Type: "message_end"})
 	return nil
