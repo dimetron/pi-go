@@ -42,12 +42,16 @@ linters:
     presets:
       - std-error-handling
     rules:
-      # Test files: relax errcheck, bodyclose, nilerr, unusedwrite.
+      # Test files: relax errcheck, bodyclose, nilerr, unusedwrite, SA5011.
       - path: _test\.go
         linters:
           - errcheck
           - bodyclose
           - nilerr
+      - path: _test\.go
+        linters:
+          - staticcheck
+        text: "SA5011"
       - path: _test\.go
         text: unusedwrite
       # Research directory is experimental.
