@@ -171,7 +171,7 @@ func TestRootCmdNoPromptExitsCleanly(t *testing.T) {
 	defer os.Unsetenv("OPENAI_API_KEY")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "--mode", "print"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -191,7 +191,7 @@ func TestCLI_SmolFlag(t *testing.T) {
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
 		"roles": {
 			"default": {"model": "claude-sonnet-4-6"},
-			"smol": {"model": "gpt-4o-mini", "provider": "openai"}
+			"smol": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
 
@@ -209,7 +209,7 @@ func TestCLI_ModelFlagOverridesDefault(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "--mode", "print"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -258,7 +258,7 @@ func TestRootCmdMissingAPIKey(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "hello"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "hello"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -296,7 +296,7 @@ func TestContinueNoSessionError(t *testing.T) {
 	defer os.Unsetenv("HOME")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-4o", "--continue", "hello"})
+	cmd.SetArgs([]string{"--model", "gpt-5.4", "--continue", "hello"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -1074,7 +1074,7 @@ func TestBuildCommitMsgFuncWithDefaultRole(t *testing.T) {
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
 		"roles": {
-			"default": {"model": "gpt-4o-mini", "provider": "openai"}
+			"default": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
 
@@ -1101,8 +1101,8 @@ func TestBuildCommitMsgFuncCommitRoleFallback(t *testing.T) {
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
 		"roles": {
-			"default": {"model": "gpt-4o", "provider": "openai"},
-			"commit": {"model": "gpt-4o-mini", "provider": "openai"}
+			"default": {"model": "gpt-5.4", "provider": "openai"},
+			"commit": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
 
