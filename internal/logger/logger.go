@@ -17,6 +17,10 @@ type Logger struct {
 	file *os.File
 	path string
 	enc  *json.Encoder
+
+	pendingLLM      *Entry
+	pendingLLMSince time.Time
+	llmFlushWindow  time.Duration
 }
 
 // Entry represents a single log entry.
@@ -57,7 +61,12 @@ func New() (*Logger, error) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	return &Logger{file: f, path: logPath, enc: enc}, nil
+	return &Logger{
+		file:           f,
+		path:           logPath,
+		enc:            enc,
+		llmFlushWindow: 500 * time.Millisecond,
+	}, nil
 }
 
 // Path returns the log file path.
@@ -67,10 +76,24 @@ func (l *Logger) Path() string {
 
 // Close closes the log file.
 func (l *Logger) Close() error {
-	if l == nil || l.file == nil {
+	if l == nil {
 		return nil
 	}
-	return l.file.Close()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.file == nil {
+		return nil
+	}
+
+	l.flushPendingLLMLocked()
+
+	err := l.file.Close()
+	l.file = nil
+	l.enc = nil
+
+	return err
 }
 
 // Log writes a structured entry.
@@ -84,7 +107,36 @@ func (l *Logger) Log(e Entry) {
 	if e.Time == "" {
 		e.Time = time.Now().Format(time.RFC3339Nano)
 	}
-	_ = l.enc.Encode(e)
+
+	if e.Type == "llm_text" {
+		if l.pendingLLM == nil {
+			pending := e
+			l.pendingLLM = &pending
+			l.pendingLLMSince = time.Now()
+			return
+		}
+
+		if l.pendingLLM.Agent == e.Agent {
+			if l.llmFlushWindow > 0 && time.Since(l.pendingLLMSince) >= l.llmFlushWindow {
+				l.flushPendingLLMLocked()
+				pending := e
+				l.pendingLLM = &pending
+				l.pendingLLMSince = time.Now()
+				return
+			}
+			l.pendingLLM.Content += e.Content
+			return
+		}
+
+		l.flushPendingLLMLocked()
+		pending := e
+		l.pendingLLM = &pending
+		l.pendingLLMSince = time.Now()
+		return
+	}
+
+	l.flushPendingLLMLocked()
+	l.writeEntryLocked(e)
 }
 
 // Info logs an informational message.
@@ -125,4 +177,20 @@ func (l *Logger) ToolResult(agent, tool, content string) {
 // SessionStart logs session metadata at the beginning.
 func (l *Logger) SessionStart(sessionID, model, mode string) {
 	l.Log(Entry{Type: "session_start", Session: sessionID, Model: model, Content: mode})
+}
+
+func (l *Logger) flushPendingLLMLocked() {
+	if l.pendingLLM == nil {
+		return
+	}
+	l.writeEntryLocked(*l.pendingLLM)
+	l.pendingLLM = nil
+	l.pendingLLMSince = time.Time{}
+}
+
+func (l *Logger) writeEntryLocked(e Entry) {
+	if l.enc == nil {
+		return
+	}
+	_ = l.enc.Encode(e)
 }

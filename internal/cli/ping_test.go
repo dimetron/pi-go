@@ -342,11 +342,14 @@ func TestNewPingCmd(t *testing.T) {
 		t.Errorf("unexpected Use: %s", cmd.Use)
 	}
 	// Verify flags exist.
-	flags := []string{"model", "url", "smol", "slow", "plan"}
+	flags := []string{"model", "url", "header", "insecure", "smol", "slow", "plan"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag: %s", name)
 		}
+	}
+	if f := cmd.Flags().Lookup("header"); f == nil || f.NoOptDefVal != "" {
+		t.Errorf("header flag NoOptDefVal = %q, want empty string", f.NoOptDefVal)
 	}
 }
 

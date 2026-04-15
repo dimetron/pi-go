@@ -1069,6 +1069,31 @@ func TestAgentTextMsg_AccumulatesStreaming(t *testing.T) {
 	}
 }
 
+func TestAgentTextMsg_AppendsAfterToolForCorrectOrder(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: []message{
+			{role: "assistant", content: ""},
+			{role: "tool", tool: "read", content: "42 lines"},
+		}},
+		running: true,
+		agentCh: make(chan agentMsg, 64),
+	}
+
+	newM, _ := m.Update(agentTextMsg{text: "Final answer"})
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(mm.chatModel.Messages))
+	}
+	last := mm.chatModel.Messages[len(mm.chatModel.Messages)-1]
+	if last.role != "assistant" {
+		t.Fatalf("expected last message to be assistant, got %q", last.role)
+	}
+	if last.content != "Final answer" {
+		t.Fatalf("expected last assistant content %q, got %q", "Final answer", last.content)
+	}
+}
+
 func TestAgentDoneMsg_ClearsRunning(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{

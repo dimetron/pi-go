@@ -39,6 +39,11 @@ Examples:
 	}
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use")
 	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the LLM API endpoint")
+	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
+	if f := cmd.Flags().Lookup("header"); f != nil {
+		f.NoOptDefVal = ""
+	}
+	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().BoolVar(&flagSmol, "smol", false, "Use the smol role")
 	cmd.Flags().BoolVar(&flagSlow, "slow", false, "Use the slow role")
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role")
@@ -118,6 +123,10 @@ func runPing(cmd *cobra.Command, args []string) error {
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
+	llmOpts := &provider.LLMOptions{
+		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+	}
 
 	baseURL := flagURL
 	if baseURL == "" {
@@ -202,7 +211,10 @@ func runPing(cmd *cobra.Command, args []string) error {
 		tlsConn, tlsErr := tls.DialWithDialer(
 			&net.Dialer{Timeout: 10 * time.Second},
 			"tcp", net.JoinHostPort(host, port),
-			&tls.Config{ServerName: host},
+			&tls.Config{
+				ServerName:         host,
+				InsecureSkipVerify: llmOpts.InsecureSkipTLS, //nolint:gosec // user-requested
+			},
 		)
 		tlsDur := time.Since(tlsStart)
 		if tlsErr != nil {
@@ -270,12 +282,19 @@ func runPing(cmd *cobra.Command, args []string) error {
 		if apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
+	case "azure":
+		if apiKey != "" {
+			req.Header.Set("Api-Key", apiKey)
+		}
 	case "gemini":
 		if apiKey != "" {
 			q := req.URL.Query()
 			q.Set("key", apiKey)
 			req.URL.RawQuery = q.Encode()
 		}
+	}
+	for k, v := range llmOpts.ExtraHeaders {
+		req.Header.Set(k, v)
 	}
 	req.Header.Set("User-Agent", "pi-go/"+Version)
 
@@ -292,7 +311,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	w(">\n")
 
 	httpStart := time.Now()
-	resp, httpErr := http.DefaultClient.Do(req)
+	resp, httpErr := provider.BuildHTTPClient(llmOpts, 30*time.Second).Do(req)
 	httpDur := time.Since(httpStart)
 
 	if httpErr != nil {
@@ -321,18 +340,35 @@ func runPing(cmd *cobra.Command, args []string) error {
 		w("* Status: %s\n", resp.Status)
 		httpAlive = true
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		w("* ✗ Authentication failed (HTTP %d)\n", resp.StatusCode)
-		w("* The API endpoint is reachable but the API key is invalid or missing.\n")
-		w("* Check %s\n", providerEnvVar(info.Provider))
+		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
+			w("* ⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)\n", resp.StatusCode)
+			httpAlive = true
+		} else {
+			w("* ✗ Authentication failed (HTTP %d)\n", resp.StatusCode)
+			w("* The API endpoint is reachable but the API key is invalid or missing.\n")
+			w("* Check %s\n", providerEnvVar(info.Provider))
+		}
 	case resp.StatusCode == 404:
-		w("* ✗ Endpoint not found (HTTP %d)\n", resp.StatusCode)
-		w("* The server is reachable but the model endpoint was not found.\n")
-		w("* Base URL: %s\n", baseURL)
+		if info.Provider == "azure" {
+			w("* ⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)\n")
+			httpAlive = true
+		} else {
+			w("* ✗ Endpoint not found (HTTP %d)\n", resp.StatusCode)
+			w("* The server is reachable but the model endpoint was not found.\n")
+			w("* Base URL: %s\n", baseURL)
+		}
 	case resp.StatusCode == 405:
 		// Method Not Allowed is fine for POST-only endpoints — server is alive.
 		w("* ✓ Endpoint reachable via %s (endpoint requires POST)\n", info.Provider)
 		w("* Status: %s\n", resp.Status)
 		httpAlive = true
+	case resp.StatusCode == 422:
+		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
+			w("* ⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)\n")
+			httpAlive = true
+		} else {
+			w("* ? Unexpected status: %s\n", resp.Status)
+		}
 	case resp.StatusCode == 429:
 		w("* ⚠ Rate limited (HTTP %d) — endpoint reachable but throttled\n", resp.StatusCode)
 		httpAlive = true
@@ -390,7 +426,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none", nil)
+	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none", llmOpts)
 	if llmErr != nil {
 		w("* ✗ Failed to create LLM client: %v\n", llmErr)
 		return fmt.Errorf("creating LLM for ping: %w", llmErr)

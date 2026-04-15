@@ -1252,7 +1252,7 @@ func TestProviderEnvVarAllCases(t *testing.T) {
 		{"gemini", "GEMINI_API_KEY"},
 		{"custom", "CUSTOM_API_KEY"},
 		{"ollama", "OLLAMA_API_KEY"},
-		{"azure", "AZURE_API_KEY"},
+		{"azure", "AZURE_OPENAI_API_KEY"},
 		{"", "_API_KEY"},
 	}
 

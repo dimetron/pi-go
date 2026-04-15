@@ -330,11 +330,16 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 	}
 	m.matrix.feed(msg.text, m.mainWidth())
 	m.chatModel.Streaming += msg.text
-	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
-		if m.chatModel.Messages[i].role == "assistant" {
-			m.chatModel.Messages[i].content = m.chatModel.Streaming
-			break
-		}
+	// Keep chronology stable: only update a trailing assistant message.
+	// If the latest message is a tool event, append a new assistant message
+	// so rendered order matches event order.
+	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" {
+		m.chatModel.Messages[n-1].content = m.chatModel.Streaming
+	} else {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: m.chatModel.Streaming,
+		})
 	}
 	m.chatModel.Scroll = 0
 	if len(m.chatModel.TraceLog) > 0 && m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].kind == "llm" {

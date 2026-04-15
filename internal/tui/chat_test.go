@@ -377,6 +377,26 @@ func TestChatModel_RenderMessages_RunningEmptyAssistant(t *testing.T) {
 	}
 }
 
+func TestChatModel_RenderMessages_RunningDoesNotUseStaleCache(t *testing.T) {
+	cm := NewChatModel(nil)
+	cm.Messages = append(cm.Messages,
+		message{role: "assistant", content: "This"},
+		message{role: "tool", tool: "tree", content: "58 dirs"},
+	)
+
+	first := cm.RenderMessages(true)
+	if !strings.Contains(first, "This") {
+		t.Fatal("expected initial assistant content in output")
+	}
+
+	// Simulate later streaming updates to an earlier assistant message.
+	cm.Messages[0].content = "This repository is pi-go."
+	second := cm.RenderMessages(true)
+	if !strings.Contains(second, "This repository is pi-go.") {
+		t.Fatalf("expected updated assistant content while running, got: %q", second)
+	}
+}
+
 func TestChatModel_RenderMessages_Separator(t *testing.T) {
 	cm := NewChatModel(nil)
 	cm.Width = 80

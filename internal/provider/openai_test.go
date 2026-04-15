@@ -1058,6 +1058,29 @@ func TestNewAzureOpenAI_WithOverrides(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAI_AcceptsLegacyAPIKeyEnvName(t *testing.T) {
+	orig := osGetenv
+	t.Cleanup(func() { osGetenv = orig })
+
+	osGetenv = func(key string) string {
+		switch key {
+		case "AZUREOPENAI_API_KEY":
+			return "legacy-azure-key"
+		case "AZURE_OPENAI_ENDPOINT":
+			return "https://my-resource.openai.azure.com"
+		}
+		return ""
+	}
+
+	llm, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "", "", nil)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAI() with AZUREOPENAI_API_KEY error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("NewAzureOpenAI() with AZUREOPENAI_API_KEY returned nil")
+	}
+}
+
 func TestAzurePathRewriteMiddleware(t *testing.T) {
 	// Create a test server that records the request path.
 	var receivedPath string
@@ -1127,5 +1150,56 @@ func TestAzurePathRewriteMiddleware_PreservesBasePath(t *testing.T) {
 	expected := "/api/v1/proxy/openai/deployments/test-model/chat/completions"
 	if receivedPath != expected {
 		t.Errorf("received path = %q, want %q", receivedPath, expected)
+	}
+}
+
+func TestNewAzureOpenAI_OpenAICompatEndpointSkipsRewriteAndAPIVersion(t *testing.T) {
+	var (
+		receivedPath     string
+		receivedRawQuery string
+		receivedUsername string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedRawQuery = r.URL.RawQuery
+		receivedUsername = r.Header.Get("username")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	llm, err := NewAzureOpenAI(
+		context.Background(),
+		"gpt-5.4",
+		"",
+		srv.URL+"/openai/v1",
+		"",
+		&LLMOptions{
+			ExtraHeaders: map[string]string{"username": "dmitriyr"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAI() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText("ping", genai.RoleUser),
+		},
+	}
+	for _, genErr := range llm.GenerateContent(context.Background(), req, false) {
+		if genErr != nil {
+			t.Fatalf("GenerateContent() error: %v", genErr)
+		}
+	}
+
+	if receivedPath != "/openai/v1/chat/completions" {
+		t.Errorf("received path = %q, want %q", receivedPath, "/openai/v1/chat/completions")
+	}
+	if receivedRawQuery != "" {
+		t.Errorf("raw query = %q, want empty", receivedRawQuery)
+	}
+	if receivedUsername != "dmitriyr" {
+		t.Errorf("username header = %q, want %q", receivedUsername, "dmitriyr")
 	}
 }
