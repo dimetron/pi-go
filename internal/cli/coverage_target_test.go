@@ -67,13 +67,10 @@ func TestReadLastSession_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLastSession: %v", err)
 	}
-	if data == nil {
-		t.Fatal("expected non-nil data")
-	}
-	if data.SessionID != "test-sess" {
+	if data == nil || data.SessionID != "test-sess" {
 		t.Errorf("SessionID = %q, want %q", data.SessionID, "test-sess")
 	}
-	if data.Model != "gpt-4o" {
+	if data == nil || data.Model != "gpt-4o" {
 		t.Errorf("Model = %q, want %q", data.Model, "gpt-4o")
 	}
 }
