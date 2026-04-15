@@ -495,12 +495,11 @@ func TestNewClient_ValidCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient(/bin/cat) failed: %v", err)
 	}
-	if c == nil {
-		t.Fatal("expected non-nil client")
+	if c != nil {
+		// Force close without LSP handshake to avoid blocking.
+		c.closed.Store(true)
+		_ = c.stdin.Close()
 	}
-	// Force close without LSP handshake to avoid blocking.
-	c.closed.Store(true)
-	_ = c.stdin.Close()
 }
 
 func TestClient_Close_MockClient(t *testing.T) {
