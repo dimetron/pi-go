@@ -38,8 +38,7 @@ func TestOllamaThinkingConfig(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatalf("ollamaThinkingConfig(%q) = nil, want non-nil", tt.level)
-			}
-			if got.Value != tt.wantVal {
+			} else if got.Value != tt.wantVal {
 				t.Errorf("ollamaThinkingConfig(%q).Value = %q, want %q", tt.level, got.Value, tt.wantVal)
 			}
 		})
