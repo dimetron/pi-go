@@ -602,12 +602,13 @@ func TestBuildHTTPClient(t *testing.T) {
 		c := BuildHTTPClient(nil, 5*time.Second)
 		if c == nil {
 			t.Fatal("expected non-nil client")
-		}
-		if c.Timeout != 5*time.Second {
-			t.Errorf("timeout = %v, want 5s", c.Timeout)
-		}
-		if c.Transport != nil {
-			t.Error("expected nil transport for default client")
+		} else {
+			if c.Timeout != 5*time.Second {
+				t.Errorf("timeout = %v, want 5s", c.Timeout)
+			}
+			if c.Transport != nil {
+				t.Error("expected nil transport for default client")
+			}
 		}
 	})
 

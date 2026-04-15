@@ -1859,18 +1859,19 @@ func TestUpdatePlanContext_Set(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("GetPlanContext() returned nil")
-	}
-	if got.TaskName != ctx.TaskName {
-		t.Errorf("TaskName = %q, want %q", got.TaskName, ctx.TaskName)
-	}
-	if got.RoughIdea != ctx.RoughIdea {
-		t.Errorf("RoughIdea = %q, want %q", got.RoughIdea, ctx.RoughIdea)
-	}
-	if got.SpecDir != ctx.SpecDir {
-		t.Errorf("SpecDir = %q, want %q", got.SpecDir, ctx.SpecDir)
-	}
-	if got.Phase != ctx.Phase {
-		t.Errorf("Phase = %q, want %q", got.Phase, ctx.Phase)
+	} else {
+		if got.TaskName != ctx.TaskName {
+			t.Errorf("TaskName = %q, want %q", got.TaskName, ctx.TaskName)
+		}
+		if got.RoughIdea != ctx.RoughIdea {
+			t.Errorf("RoughIdea = %q, want %q", got.RoughIdea, ctx.RoughIdea)
+		}
+		if got.SpecDir != ctx.SpecDir {
+			t.Errorf("SpecDir = %q, want %q", got.SpecDir, ctx.SpecDir)
+		}
+		if got.Phase != ctx.Phase {
+			t.Errorf("Phase = %q, want %q", got.Phase, ctx.Phase)
+		}
 	}
 }
 

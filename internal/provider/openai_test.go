@@ -792,17 +792,18 @@ func TestOpenAINonStreamingToolCallResponse(t *testing.T) {
 	}
 	if fcPart == nil {
 		t.Fatal("expected a FunctionCall part in response")
-	}
-	fc := fcPart.FunctionCall
-	if got := fc.Name; got != "get_weather" {
-		t.Errorf("function name = %q, want get_weather", got)
-	}
-	if fc.ID != "call_abc123" {
-		t.Errorf("function call ID = %q, want call_abc123", fc.ID)
-	}
-	loc, _ := fc.Args["location"].(string)
-	if loc != "San Francisco" {
-		t.Errorf("location arg = %q, want San Francisco", loc)
+	} else {
+		fc := fcPart.FunctionCall
+		if got := fc.Name; got != "get_weather" {
+			t.Errorf("function name = %q, want get_weather", got)
+		}
+		if fc.ID != "call_abc123" {
+			t.Errorf("function call ID = %q, want call_abc123", fc.ID)
+		}
+		loc, _ := fc.Args["location"].(string)
+		if loc != "San Francisco" {
+			t.Errorf("location arg = %q, want San Francisco", loc)
+		}
 	}
 }
 
