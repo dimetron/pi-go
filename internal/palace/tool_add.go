@@ -66,8 +66,7 @@ func palaceAddDrawerHandler(ctx context.Context, p *Palace, input AddDrawerToolI
 		Importance: importance,
 	})
 	if err != nil {
-		var dupErr *DuplicateError
-		if errors.As(err, &dupErr) {
+		if dupErr, ok := errors.AsType[*DuplicateError](err); ok {
 			return AddDrawerToolOutput{
 				Content: fmt.Sprintf("Duplicate detected (similarity %.2f with drawer %s). Content not added.",
 					dupErr.Result.Similarity, dupErr.Result.ExistingID),

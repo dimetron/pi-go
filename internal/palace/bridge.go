@@ -45,8 +45,7 @@ func (b *ObservationBridge) ConvertAndStore(ctx context.Context, obs *memory.Obs
 
 	if _, err := b.palace.AddDrawer(ctx, input); err != nil {
 		// DuplicateError is expected and fine — just skip.
-		var dupErr *DuplicateError
-		if errors.As(err, &dupErr) {
+		if _, ok := errors.AsType[*DuplicateError](err); ok {
 			slog.Debug("palace bridge: skipped duplicate observation",
 				"title", obs.Title,
 				"wing", wing,

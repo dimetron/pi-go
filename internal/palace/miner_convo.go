@@ -89,8 +89,7 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 				Importance: 4,
 			})
 			if addErr != nil {
-				var dupErr *DuplicateError
-				if errors.As(addErr, &dupErr) {
+				if _, ok := errors.AsType[*DuplicateError](addErr); ok {
 					result.Skipped++
 					fileSkipped++
 				} else {

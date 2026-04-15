@@ -395,7 +395,7 @@ func TestCodexLoginE2E_403HTML(t *testing.T) {
 	}
 }
 
-// TestCodexProviderConfig verifies the codex provider is configured for PKCE.
+// TestCodexProviderConfig verifies the codex provider is configured for Codex OAuth.
 func TestCodexProviderConfig(t *testing.T) {
 	p, ok := FindProvider("codex")
 	if !ok {
@@ -404,30 +404,41 @@ func TestCodexProviderConfig(t *testing.T) {
 	if p.EnvVar != "OPENAI_API_KEY" {
 		t.Errorf("expected OPENAI_API_KEY, got %q", p.EnvVar)
 	}
+	if !p.CodexOAuth {
+		t.Error("codex should use Codex OAuth semantics")
+	}
 	if p.UseDeviceFlow {
-		t.Error("codex should NOT use device flow (uses PKCE browser flow)")
+		t.Error("codex should NOT use the generic device flow")
 	}
 	if p.DeviceURL != "" {
-		t.Error("codex should not have DeviceURL (PKCE only)")
+		t.Error("codex should not have DeviceURL")
 	}
 	if p.AuthURL == "" {
-		t.Error("codex must have AuthURL for PKCE")
+		t.Error("codex must have AuthURL")
 	}
 	if p.TokenURL == "" {
-		t.Error("codex must have TokenURL for PKCE")
+		t.Error("codex must have TokenURL")
 	}
 	if p.TLSPreflight != true {
 		t.Error("codex should have TLS preflight enabled")
 	}
-	// Verify scopes include OpenID Connect scopes.
+	if p.ClientID != "app_EMoamEEZ73f0CkXaXp7hrann" {
+		t.Errorf("unexpected codex client ID: %q", p.ClientID)
+	}
+	// Verify scopes include OpenID Connect and Codex connector scopes.
 	scopes := strings.Join(p.Scopes, " ")
-	for _, expected := range []string{"openid", "profile", "email"} {
+	for _, expected := range []string{"openid", "profile", "email", "api.connectors.read", "api.connectors.invoke"} {
 		if !strings.Contains(scopes, expected) {
 			t.Errorf("expected scope %q in codex scopes", expected)
 		}
 	}
-	// Verify audience extra param.
-	if p.ExtraParams["audience"] != "https://api.openai.com/v1" {
-		t.Errorf("expected audience extra param, got %v", p.ExtraParams)
+	if p.ExtraParams["id_token_add_organizations"] != "true" {
+		t.Errorf("expected id_token_add_organizations=true, got %v", p.ExtraParams)
+	}
+	if p.ExtraParams["codex_cli_simplified_flow"] != "true" {
+		t.Errorf("expected codex_cli_simplified_flow=true, got %v", p.ExtraParams)
+	}
+	if _, ok := p.ExtraParams["audience"]; ok {
+		t.Errorf("codex provider should not set audience, got %v", p.ExtraParams)
 	}
 }

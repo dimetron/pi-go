@@ -112,6 +112,9 @@ func runPing(cmd *cobra.Command, args []string) error {
 	if providerName != "" {
 		info.Provider = providerName
 	}
+	if err := provider.ValidateModel(info); err != nil {
+		return fmt.Errorf("model validation: %w", err)
+	}
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]

@@ -12,5 +12,6 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama login
 
 #install tailscale
+sudo chattr -i /etc/resolv.conf
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up

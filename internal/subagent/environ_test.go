@@ -103,7 +103,7 @@ func TestDefaultEnvAllowlist(t *testing.T) {
 	})
 
 	t.Run("contains LLM API keys for subagent processes", func(t *testing.T) {
-		required := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
+		required := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"}
 		for _, req := range required {
 			if !slices.Contains(DefaultEnvAllowlist, req) {
 				t.Errorf("DefaultEnvAllowlist missing required LLM key %q", req)

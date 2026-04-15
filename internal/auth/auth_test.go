@@ -92,6 +92,49 @@ func TestBuildAuthURL(t *testing.T) {
 	}
 }
 
+func TestBuildAuthURL_CodexOAuthProvider(t *testing.T) {
+	prov, ok := FindProvider("codex")
+	if !ok {
+		t.Fatal("codex provider not found")
+	}
+
+	authURL := buildAuthURL(prov, "http://localhost:1455/auth/callback", "test-state", "test-challenge")
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("failed to parse URL: %v", err)
+	}
+
+	q := u.Query()
+	if q.Get("client_id") != "app_EMoamEEZ73f0CkXaXp7hrann" {
+		t.Errorf("wrong codex client_id: %q", q.Get("client_id"))
+	}
+	if q.Get("redirect_uri") != "http://localhost:1455/auth/callback" {
+		t.Errorf("wrong redirect_uri: %q", q.Get("redirect_uri"))
+	}
+	if q.Get("id_token_add_organizations") != "true" {
+		t.Error("missing codex organization claim request")
+	}
+	if q.Get("codex_cli_simplified_flow") != "true" {
+		t.Error("missing codex simplified flow flag")
+	}
+	if !strings.Contains(q.Get("scope"), "api.connectors.read") {
+		t.Errorf("missing codex connector scope in %q", q.Get("scope"))
+	}
+}
+
+func TestCallbackConfig_CodexOAuth(t *testing.T) {
+	listenAddr, callbackHost, callbackPath := callbackConfig(Provider{CodexOAuth: true})
+	if listenAddr != "localhost:1455" {
+		t.Errorf("listenAddr = %q, want localhost:1455", listenAddr)
+	}
+	if callbackHost != "localhost" {
+		t.Errorf("callbackHost = %q, want localhost", callbackHost)
+	}
+	if callbackPath != "/auth/callback" {
+		t.Errorf("callbackPath = %q, want /auth/callback", callbackPath)
+	}
+}
+
 func TestHandleCallback_Success(t *testing.T) {
 	ch := make(chan codeResult, 1)
 	state := "test-state"
@@ -247,6 +290,60 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 	}
 	if result.Provider != "test" {
 		t.Errorf("expected provider 'test', got %q", result.Provider)
+	}
+}
+
+func TestExchangeCodexAPIKey(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = r.ParseForm()
+
+		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:token-exchange" {
+			t.Errorf("wrong grant_type: %q", r.FormValue("grant_type"))
+		}
+		if r.FormValue("client_id") != "app_EMoamEEZ73f0CkXaXp7hrann" {
+			t.Errorf("wrong client_id: %q", r.FormValue("client_id"))
+		}
+		if r.FormValue("requested_token") != "openai-api-key" {
+			t.Errorf("wrong requested_token: %q", r.FormValue("requested_token"))
+		}
+		if r.FormValue("subject_token") != "mock-id-token" {
+			t.Errorf("wrong subject_token: %q", r.FormValue("subject_token"))
+		}
+		if r.FormValue("subject_token_type") != "urn:ietf:params:oauth:token-type:id_token" {
+			t.Errorf("wrong subject_token_type: %q", r.FormValue("subject_token_type"))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{APIKey: "sk-codex-exchanged"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:     "codex",
+		TokenURL: tokenServer.URL,
+		ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
+	}
+
+	exchanged, err := exchangeCodexAPIKey(context.Background(), prov, &TokenResponse{IDToken: "mock-id-token"})
+	if err != nil {
+		t.Fatalf("exchangeCodexAPIKey error: %v", err)
+	}
+	if exchanged.APIKey != "sk-codex-exchanged" {
+		t.Errorf("expected exchanged API key, got %q", exchanged.APIKey)
+	}
+}
+
+func TestExchangeCodexAPIKey_MissingIDToken(t *testing.T) {
+	_, err := exchangeCodexAPIKey(context.Background(), Provider{Name: "codex"}, &TokenResponse{})
+	if err == nil {
+		t.Fatal("expected missing id_token error")
+	}
+	if !strings.Contains(err.Error(), "id_token") {
+		t.Errorf("expected id_token error, got: %v", err)
 	}
 }
 
@@ -543,6 +640,28 @@ func TestProviders_TokenToKey_APIKey(t *testing.T) {
 				t.Errorf("expected 'access-token', got %q", key)
 			}
 		})
+	}
+}
+
+func TestCodexProviderTokenToKey_OpenAIAPIKey(t *testing.T) {
+	p, ok := FindProvider("codex")
+	if !ok {
+		t.Fatal("codex provider not found")
+	}
+	key := p.TokenToKey(&TokenResponse{OpenAIAPIKey: "sk-openai-api-key", AccessToken: "access-token"})
+	if key != "sk-openai-api-key" {
+		t.Errorf("expected openai_api_key, got %q", key)
+	}
+}
+
+func TestCodexProviderTokenToKey_APIKeyCamel(t *testing.T) {
+	p, ok := FindProvider("codex")
+	if !ok {
+		t.Fatal("codex provider not found")
+	}
+	key := p.TokenToKey(&TokenResponse{APIKeyCamel: "sk-camel-api-key", AccessToken: "access-token"})
+	if key != "sk-camel-api-key" {
+		t.Errorf("expected apiKey, got %q", key)
 	}
 }
 

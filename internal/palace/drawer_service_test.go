@@ -236,6 +236,62 @@ func TestAddDrawer_SetsFieldsCorrectly(t *testing.T) {
 	}
 }
 
+func TestCheckDuplicate_EmptyCandidates(t *testing.T) {
+	store := newTestStore(t)
+	ds := NewDrawerService(store, nil, DefaultConfig())
+	ctx := context.Background()
+
+	// No drawers in store - CheckDuplicate with nil embedder returns nil
+	result, err := ds.CheckDuplicate(ctx, "some content", DrawerFilter{})
+	if err != nil {
+		t.Fatalf("CheckDuplicate: %v", err)
+	}
+	if result != nil {
+		t.Error("expected nil result for nil embedder")
+	}
+}
+
+func TestSearch_NilEmbedderFallback(t *testing.T) {
+	store := newTestStore(t)
+	insertTestDrawers(t, store)
+
+	ds := NewDrawerService(store, nil, DefaultConfig())
+	ctx := context.Background()
+
+	// Verify FTS5 fallback works when embedder is nil
+	results, err := ds.Search(ctx, SearchQuery{Query: "language", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	// Should find language-related content (Go, Python)
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results for 'language', got %d", len(results))
+	}
+
+	// Results with non-zero rank should have similarity scores
+	for _, r := range results {
+		if r.Rank != 0 && (r.Similarity <= 0 || r.Similarity > 1) {
+			t.Errorf("unexpected similarity score for rank=%d: %.3f", r.Rank, r.Similarity)
+		}
+	}
+}
+
+func TestSearch_FTS5Fails(t *testing.T) {
+	store := newTestStore(t)
+	ds := NewDrawerService(store, nil, DefaultConfig())
+	ctx := context.Background()
+
+	// Search with no drawers - FTS5 returns empty but no error
+	results, err := ds.Search(ctx, SearchQuery{Query: "test", Limit: 5})
+	if err != nil {
+		t.Fatalf("Search should not error on empty results: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for empty store, got %d", len(results))
+	}
+}
+
 func TestAddDrawer_DeterministicID(t *testing.T) {
 	ds := newTestDrawerService(t, nil)
 	ctx := context.Background()

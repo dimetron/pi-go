@@ -48,8 +48,8 @@ var DefaultEnvAllowlist = []string{
 	"ANTHROPIC_BASE_URL",
 	"OPENAI_API_KEY",
 	"OPENAI_BASE_URL",
-	"GOOGLE_API_KEY",
 	"GEMINI_API_KEY",
+	"GOOGLE_API_KEY", // legacy fallback
 	"GEMINI_BASE_URL",
 	"OLLAMA_HOST", // Ollama server address override.
 

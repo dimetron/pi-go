@@ -416,7 +416,7 @@ func TestSaveBranchesAndLoadBranches(t *testing.T) {
 		Active: "feature",
 		Branches: map[string]BranchInfo{
 			"main":    {Name: "main", Head: 5, Parent: nil, ForkPoint: 0},
-			"feature": {Name: "feature", Head: 3, Parent: strPtr("main"), ForkPoint: 3},
+			"feature": {Name: "feature", Head: 3, Parent: new("main"), ForkPoint: 3},
 		},
 	}
 	if err := saveBranches(dir, bs); err != nil {
@@ -498,9 +498,6 @@ func TestListBranchesInvalidSession(t *testing.T) {
 		t.Error("expected error listing branches of nonexistent session")
 	}
 }
-
-// strPtr is a helper to get a pointer to a string value.
-func strPtr(s string) *string { return &s }
 
 func TestActiveBranch(t *testing.T) {
 	svc := newTestService(t)

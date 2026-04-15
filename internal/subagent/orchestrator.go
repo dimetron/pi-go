@@ -13,7 +13,7 @@ import (
 )
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
-const DefaultPoolSize = 5
+const DefaultPoolSize = 2
 
 // recentTaskTTL is how long a completed subagent result is kept before being evicted.
 const recentTaskTTL = 30 * time.Minute
@@ -368,8 +368,7 @@ func isKilledBySignal(err error) bool {
 	}
 	// exec.Error is returned when cmd.Wait() encounters a signal-terminated process.
 	// Check the error using errors.As for proper wrapped error handling.
-	var execErr *exec.ExitError
-	if errors.As(err, &execErr) {
+	if execErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		// ExitError with no code typically means killed by signal.
 		return !execErr.Success()
 	}

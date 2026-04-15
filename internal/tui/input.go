@@ -601,8 +601,10 @@ func slashCommandDesc(cmd string) string {
 }
 
 // completeSlashCommand returns the best matching slash command for the current input.
+// Only suggests completions when at least 2 characters have been typed after '/'.
 func completeSlashCommand(input string) string {
-	if !strings.HasPrefix(input, "/") || len(input) < 2 {
+	// Require at least 2 chars after '/' before suggesting completions
+	if !strings.HasPrefix(input, "/") || len(input) < 3 {
 		return ""
 	}
 	prefix := strings.ToLower(input)

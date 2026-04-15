@@ -322,7 +322,10 @@ type sidebarMockTokenTracker struct {
 	percentUsed float64
 }
 
-func (m *sidebarMockTokenTracker) TotalUsed() int64     { return m.totalUsed }
-func (m *sidebarMockTokenTracker) Limit() int64         { return m.limit }
-func (m *sidebarMockTokenTracker) Remaining() int64     { return m.remaining }
-func (m *sidebarMockTokenTracker) PercentUsed() float64 { return m.percentUsed }
+func (m *sidebarMockTokenTracker) TotalUsed() int64            { return m.totalUsed }
+func (m *sidebarMockTokenTracker) Limit() int64                { return m.limit }
+func (m *sidebarMockTokenTracker) Remaining() int64            { return m.remaining }
+func (m *sidebarMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
+func (m *sidebarMockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *sidebarMockTokenTracker) ContextWindowSize() int64    { return 0 }
+func (m *sidebarMockTokenTracker) ContextPercentUsed() float64 { return 0 }

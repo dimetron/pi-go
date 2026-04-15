@@ -142,18 +142,22 @@ func TestHandleLoginCommand_Anthropic(t *testing.T) {
 	_ = mb
 }
 
-func TestHandleLoginCommand_CodexPKCEFlow(t *testing.T) {
+func TestHandleLoginCommand_CodexOAuthFlow(t *testing.T) {
 	withMockBrowser(t)
 	m := &model{}
-	// Codex uses PKCE browser flow (opens browser, waits for callback).
+	// Codex uses Codex OAuth (opens browser, waits for callback, then exchanges for an API key).
 	// TLS preflight runs first; if it fails with tls-cert, login is blocked.
-	// Otherwise PKCE starts.
+	// Otherwise OAuth starts.
 	m.handleLoginCommand([]string{"codex"})
 
 	if m.login != nil && m.login.phase == "sso" {
-		// PKCE flow started — TLS preflight passed.
+		// OAuth flow started — TLS preflight passed.
 		if m.login.provider != "codex" {
 			t.Errorf("expected provider codex, got %q", m.login.provider)
+		}
+		lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+		if !strings.Contains(lastMsg.content, "codex OAuth") {
+			t.Errorf("expected codex OAuth message, got: %s", lastMsg.content)
 		}
 		return
 	}
@@ -582,8 +586,7 @@ func TestLoginStartDeviceFlow_CmdExecution(t *testing.T) {
 	mb := withMockBrowser(t)
 
 	// Mock device code and token endpoints.
-	attempt := 0
-	srv := newMockDeviceServer(t, &attempt)
+	srv := newMockDeviceServer(t, new(0))
 	defer srv.Close()
 
 	m := &model{}
@@ -645,8 +648,7 @@ func TestLoginStartDeviceFlow_CmdExecution(t *testing.T) {
 
 func TestLoginStart_DeviceFlowSuccess(t *testing.T) {
 	withMockBrowser(t)
-	attempt := 0
-	srv := newMockDeviceServer(t, &attempt)
+	srv := newMockDeviceServer(t, new(0))
 	defer srv.Close()
 
 	m := &model{}

@@ -218,11 +218,10 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	// Single-agent mode.
 	prompt := buildRunPrompt(specName, promptMD, checklist)
 
-	useWorktree := true
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 		Type:        "task",
 		Prompt:      prompt,
-		Worktree:    &useWorktree,
+		Worktree:    new(true),
 		SkipCleanup: true,
 	})
 	if err != nil {

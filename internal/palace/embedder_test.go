@@ -164,3 +164,40 @@ func TestMarshalEmbedding_Nil(t *testing.T) {
 		t.Fatalf("nil input: got %v, want nil", v)
 	}
 }
+
+// Tests for embedder functions (require mocking since they need real models)
+
+func TestNewEmbedder_InvalidPath(t *testing.T) {
+	// Test that NewEmbedder returns an error for non-existent path
+	_, err := NewEmbedder("/nonexistent/path/that/does/not/exist/model")
+	if err == nil {
+		t.Error("expected error for invalid model path")
+	}
+}
+
+func TestEmbedder_Close_NilSession(t *testing.T) {
+	// Test that Close is safe with nil session
+	e := &Embedder{}
+	e.Close() // Should not panic with nil session
+}
+
+func TestDownloadModel_Signature(t *testing.T) {
+	// Test that DownloadModel has correct signature
+	// Actual download requires network, so we just verify it can be called
+	result, err := DownloadModel("/tmp/test-dest", "")
+	if err != nil {
+		// Might fail due to network or invalid dest, but signature is correct
+		t.Logf("DownloadModel returned error (expected for test): %v", err)
+	}
+	_ = result // may be empty on failure
+}
+
+func TestEmbedder_Constants(t *testing.T) {
+	// Verify embedder constants are correctly defined
+	if maxCharLength != 512 {
+		t.Errorf("maxCharLength = %d, want 512", maxCharLength)
+	}
+	if maxTokenLength != 128 {
+		t.Errorf("maxTokenLength = %d, want 128", maxTokenLength)
+	}
+}

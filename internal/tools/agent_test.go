@@ -28,8 +28,7 @@ func TestAgentTool_Registration(t *testing.T) {
 }
 
 func TestAgentTools_LegacyCallbackWrapping(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	var receivedID, receivedKind, receivedContent string
 	cb := func(agentID, eventType, content string) {

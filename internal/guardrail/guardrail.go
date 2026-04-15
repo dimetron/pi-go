@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// DefaultMaxDailyTokens is the default daily token limit (0 = unlimited).
-const DefaultMaxDailyTokens = 0
+// DefaultMaxDailyTokens is the default daily token limit.
+const DefaultMaxDailyTokens = 50000000
 
 // Usage tracks token consumption for the current day.
 type Usage struct {
@@ -32,6 +32,10 @@ type Tracker struct {
 	usage    Usage
 	limit    int64  // max total tokens per day (0 = unlimited)
 	filePath string // persistence path
+
+	// Session context window tracking.
+	lastPromptTokens  int64 // most recent PromptTokenCount from LLM response
+	contextWindowSize int64 // model's context window size (0 = unknown)
 }
 
 // New creates a tracker with the given daily token limit.
@@ -82,6 +86,10 @@ func (t *Tracker) Add(inputTokens, outputTokens int32) error {
 	t.usage.InputTokens += int64(inputTokens)
 	t.usage.OutputTokens += int64(outputTokens)
 	t.usage.Requests++
+	// Track the latest prompt token count for context window display.
+	if inputTokens > 0 {
+		t.lastPromptTokens = int64(inputTokens)
+	}
 	t.save()
 	return nil
 }
@@ -205,6 +213,39 @@ func (t *Tracker) save() {
 
 	_ = os.MkdirAll(filepath.Dir(t.filePath), 0700)
 	_ = os.WriteFile(t.filePath, data, 0600)
+}
+
+// SetContextWindowSize sets the model's context window size for display.
+func (t *Tracker) SetContextWindowSize(size int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.contextWindowSize = size
+}
+
+// ContextWindowSize returns the model's context window size.
+func (t *Tracker) ContextWindowSize() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.contextWindowSize
+}
+
+// LastPromptTokens returns the most recent prompt token count from an LLM response.
+// This represents how much of the context window is currently used.
+func (t *Tracker) LastPromptTokens() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastPromptTokens
+}
+
+// ContextPercentUsed returns the percentage of the context window used (0-100+).
+// Returns 0 if context window size is unknown.
+func (t *Tracker) ContextPercentUsed() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.contextWindowSize <= 0 || t.lastPromptTokens <= 0 {
+		return 0
+	}
+	return float64(t.lastPromptTokens) / float64(t.contextWindowSize) * 100
 }
 
 // LimitExceededError is returned when the daily token limit is reached.

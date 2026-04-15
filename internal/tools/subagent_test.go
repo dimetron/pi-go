@@ -70,11 +70,10 @@ func TestDetectMode_SingleWithOnlyTask(t *testing.T) {
 // --- Single mode tests ---
 
 func TestSubagentSingleMode_UnknownAgent(t *testing.T) {
-	cfg := config.Defaults()
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(&cfg, "", agents)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
 
 	input := SubagentInput{Agent: "nonexistent", Task: "find main.go"}
 	output, err := subagentHandler(nil, orch, input, nil)
@@ -100,8 +99,7 @@ func TestSubagentSingleMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentSingleMode_NoModeDetected(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	input := SubagentInput{} // empty — no mode
 	_, err := subagentHandler(nil, orch, input, nil)
@@ -113,11 +111,10 @@ func TestSubagentSingleMode_NoModeDetected(t *testing.T) {
 // --- Parallel mode tests ---
 
 func TestSubagentParallelMode_UnknownAgent(t *testing.T) {
-	cfg := config.Defaults()
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(&cfg, "", agents)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
 
 	input := SubagentInput{Tasks: []TaskItem{
 		{Agent: "explore", Task: "a"},
@@ -142,8 +139,7 @@ func TestSubagentParallelMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentParallelMode_TooManyTasks(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	tasks := make([]TaskItem, maxParallelTasks+1)
 	for i := range tasks {
@@ -169,8 +165,7 @@ func TestSubagentParallelMode_TooManyTasks(t *testing.T) {
 }
 
 func TestSubagentParallelMode_AllUnknownAgents(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	// All agents unknown — fails at validation before spawning.
 	input := SubagentInput{Tasks: []TaskItem{
@@ -195,11 +190,10 @@ func TestSubagentParallelMode_AllUnknownAgents(t *testing.T) {
 // --- Chain mode tests ---
 
 func TestSubagentChainMode_UnknownAgent(t *testing.T) {
-	cfg := config.Defaults()
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(&cfg, "", agents)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
 
 	input := SubagentInput{Chain: []ChainItem{
 		{Agent: "explore", Task: "step 1"},
@@ -224,8 +218,7 @@ func TestSubagentChainMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentChainMode_TooManySteps(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	chain := make([]ChainItem, maxChainSteps+1)
 	for i := range chain {
@@ -251,8 +244,7 @@ func TestSubagentChainMode_TooManySteps(t *testing.T) {
 }
 
 func TestSubagentChainMode_AllUnknownAgents(t *testing.T) {
-	cfg := config.Defaults()
-	orch := subagent.NewOrchestrator(&cfg, "", nil)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
 
 	input := SubagentInput{Chain: []ChainItem{
 		{Agent: "unknown1", Task: "step 1"},
@@ -390,12 +382,11 @@ func TestExpandChainTemplate(t *testing.T) {
 // --- buildSubagentDescription tests ---
 
 func TestBuildSubagentDescription(t *testing.T) {
-	cfg := config.Defaults()
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "Fast codebase exploration", Role: "default"},
 		{Name: "task", Description: "Complete coding tasks", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(&cfg, "", agents)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
 
 	desc := buildSubagentDescription(orch)
 	if !strings.Contains(desc, "Single") {
@@ -419,11 +410,10 @@ func TestBuildSubagentDescription(t *testing.T) {
 // --- SubagentTools registration test ---
 
 func TestSubagentTools_Registration(t *testing.T) {
-	cfg := config.Defaults()
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(&cfg, "", agents)
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
 
 	tools, err := SubagentTools(orch, nil)
 	if err != nil {
@@ -547,5 +537,194 @@ func TestBuildChainSummary_StoppedEarly(t *testing.T) {
 	got := buildChainSummary(results, 4, "7s")
 	if !strings.Contains(got, "stopped at step 2/4") {
 		t.Errorf("got %q", got)
+	}
+}
+
+// --- NewSubagentTool tests ---
+
+func TestNewSubagentTool(t *testing.T) {
+	agents := []subagent.AgentConfig{
+		{Name: "explore", Description: "test", Role: "default"},
+	}
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+
+	tool, err := NewSubagentTool(orch, nil)
+	if err != nil {
+		t.Fatalf("NewSubagentTool() error = %v", err)
+	}
+	if tool == nil {
+		t.Fatal("NewSubagentTool() returned nil tool")
+	}
+	if tool.Name() != "subagent" {
+		t.Errorf("Name() = %q, want 'subagent'", tool.Name())
+	}
+}
+
+// --- expandChainTemplate edge cases ---
+
+func TestExpandChainTemplate_NewlinesAndSpecialChars(t *testing.T) {
+	tests := []struct {
+		name     string
+		task     string
+		prev     string
+		expected string
+	}{
+		{
+			name:     "tab character",
+			task:     "data: {previous}",
+			prev:     "col1\tcol2",
+			expected: "data: col1\tcol2",
+		},
+		{
+			name:     "quote in json",
+			task:     `{json: "{previous_json}"}`,
+			prev:     `say "hello"`,
+			expected: `{json: "say \"hello\""}`,
+		},
+		{
+			name:     "unicode placeholder",
+			task:     "result: {previous}",
+			prev:     "日本語",
+			expected: "result: 日本語",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := expandChainTemplate(tt.task, tt.prev)
+			if result != tt.expected {
+				t.Errorf("got %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// --- detectMode edge cases ---
+
+func TestDetectMode_ParallelOverridesSingle(t *testing.T) {
+	// When both agent/task and tasks are provided, tasks should win
+	input := SubagentInput{
+		Agent: "explore",
+		Task:  "some task",
+		Tasks: []TaskItem{{Agent: "task", Task: "b"}},
+	}
+	if mode := detectMode(input); mode != "parallel" {
+		t.Errorf("detectMode = %q, want 'parallel'", mode)
+	}
+}
+
+func TestDetectMode_ChainOverridesBoth(t *testing.T) {
+	input := SubagentInput{
+		Agent: "explore",
+		Task:  "some task",
+		Tasks: []TaskItem{{Agent: "task", Task: "b"}},
+		Chain: []ChainItem{{Agent: "task", Task: "c"}},
+	}
+	if mode := detectMode(input); mode != "chain" {
+		t.Errorf("detectMode = %q, want 'chain'", mode)
+	}
+}
+
+// --- SubagentEvent tests ---
+
+func TestSubagentEvent(t *testing.T) {
+	ev := SubagentEvent{
+		AgentID:    "agent-123",
+		Kind:       "spawn",
+		Content:    "explore",
+		PipelineID: "pipe-456",
+		Mode:       "single",
+		Step:       1,
+		Total:      1,
+	}
+
+	if ev.AgentID != "agent-123" {
+		t.Errorf("AgentID = %q", ev.AgentID)
+	}
+	if ev.Kind != "spawn" {
+		t.Errorf("Kind = %q", ev.Kind)
+	}
+	if ev.PipelineID != "pipe-456" {
+		t.Errorf("PipelineID = %q", ev.PipelineID)
+	}
+	if ev.Mode != "single" {
+		t.Errorf("Mode = %q", ev.Mode)
+	}
+	if ev.Step != 1 {
+		t.Errorf("Step = %d", ev.Step)
+	}
+	if ev.Total != 1 {
+		t.Errorf("Total = %d", ev.Total)
+	}
+}
+
+func TestSubagentOutput(t *testing.T) {
+	output := SubagentOutput{
+		Mode: "single",
+		Results: []AgentResult{
+			{
+				Agent:    "explore",
+				AgentID:  "id-1",
+				Status:   "completed",
+				Result:   "analysis complete",
+				Duration: "5s",
+			},
+		},
+		Summary: "explore completed in 5s",
+	}
+
+	if output.Mode != "single" {
+		t.Errorf("Mode = %q", output.Mode)
+	}
+	if len(output.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(output.Results))
+	}
+	if output.Results[0].Status != "completed" {
+		t.Errorf("Status = %q", output.Results[0].Status)
+	}
+	if output.Results[0].Result != "analysis complete" {
+		t.Errorf("Result = %q", output.Results[0].Result)
+	}
+}
+
+func TestAgentResult(t *testing.T) {
+	result := AgentResult{
+		Agent:     "task",
+		AgentID:   "id-2",
+		Status:    "failed",
+		Result:    "",
+		Error:     "connection refused",
+		Duration:  "1s",
+		SessionID: "session-123",
+	}
+
+	if result.Agent != "task" {
+		t.Errorf("Agent = %q", result.Agent)
+	}
+	if result.Status != "failed" {
+		t.Errorf("Status = %q", result.Status)
+	}
+	if result.Error != "connection refused" {
+		t.Errorf("Error = %q", result.Error)
+	}
+	if result.SessionID != "session-123" {
+		t.Errorf("SessionID = %q", result.SessionID)
+	}
+}
+
+// --- subagentHandler error mode tests ---
+
+func TestSubagentHandler_AmbiguousInput(t *testing.T) {
+	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+
+	// Both agent AND tasks provided - should be parallel mode
+	input := SubagentInput{
+		Agent: "someagent",
+		Tasks: []TaskItem{{Agent: "a", Task: "b"}},
+	}
+	_, err := subagentHandler(nil, orch, input, nil)
+	// This should error for unknown agent "someagent" (in parallel validation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

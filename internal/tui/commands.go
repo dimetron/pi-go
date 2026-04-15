@@ -436,6 +436,38 @@ func (m *model) formatContextUsage() string {
 		}
 	}
 
+	// Context window usage (from last LLM response).
+	if tt := m.cfg.TokenTracker; tt != nil && tt.LastPromptTokens() > 0 {
+		promptTokens := tt.LastPromptTokens()
+		ctxWindow := tt.ContextWindowSize()
+
+		b.WriteString("\n*Context window*\n")
+		if ctxWindow > 0 {
+			pct := tt.ContextPercentUsed()
+			freeTokens := ctxWindow - promptTokens
+			if freeTokens < 0 {
+				freeTokens = 0
+			}
+
+			const ctxBarLen = 20
+			ctxUsedBlocks := int(pct / 100 * ctxBarLen)
+			if ctxUsedBlocks > ctxBarLen {
+				ctxUsedBlocks = ctxBarLen
+			}
+			ctxBar := strings.Repeat("█", ctxUsedBlocks) + strings.Repeat("░", ctxBarLen-ctxUsedBlocks)
+
+			fmt.Fprintf(&b, "`%s`  %s / %s (%.0f%%)\n",
+				ctxBar,
+				formatTokenCount(promptTokens), formatTokenCount(ctxWindow), pct)
+			fmt.Fprintf(&b, "- **Used**: %s tokens\n", formatTokenCount(promptTokens))
+			fmt.Fprintf(&b, "- **Free**: %s tokens (%.0f%%)\n",
+				formatTokenCount(freeTokens), 100-pct)
+		} else {
+			fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
+				formatTokenCount(promptTokens))
+		}
+	}
+
 	// Subagents.
 	if m.cfg.Orchestrator != nil {
 		agents := m.cfg.Orchestrator.List()

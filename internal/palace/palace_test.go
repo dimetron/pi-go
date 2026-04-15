@@ -406,3 +406,82 @@ func TestPalace_KGInvalidate(t *testing.T) {
 		t.Errorf("timeline = %d, want 1", len(timeline))
 	}
 }
+
+func TestPalace_Close_NilEmbedder(t *testing.T) {
+	t.Parallel()
+
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	store := NewSQLitePalaceStore(db)
+	p := NewWithStore(store, nil)
+
+	// Close should work even with nil embedder
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close with nil embedder: %v", err)
+	}
+}
+
+func TestPalace_New_NonExistentModelPath(t *testing.T) {
+	t.Parallel()
+
+	// Model path that doesn't exist - should create palace without embedder
+	p, err := New(WithDBPath(":memory:"), WithModelPath("/nonexistent/model"))
+	if err != nil {
+		t.Fatalf("New with non-existent model: %v", err)
+	}
+	defer p.Close()
+
+	// Palace should work without embedder
+	ctx := context.Background()
+	_, err = p.AddDrawer(ctx, DrawerInput{
+		Wing: "test", Room: "room", Content: "test content",
+	})
+	if err != nil {
+		t.Fatalf("AddDrawer: %v", err)
+	}
+}
+
+func TestPalace_New_WithStoreAndEmbedder(t *testing.T) {
+	t.Parallel()
+
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	store := NewSQLitePalaceStore(db)
+
+	// NewWithStore with nil embedder
+	p := NewWithStore(store, nil)
+	defer p.Close()
+
+	ctx := context.Background()
+	status, err := p.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.ModelLoaded {
+		t.Error("expected ModelLoaded=false with nil embedder")
+	}
+}
+
+func TestPalace_Close_DoubleClose(t *testing.T) {
+	t.Parallel()
+
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	store := NewSQLitePalaceStore(db)
+	p := NewWithStore(store, nil)
+
+	// First close should succeed
+	if err := p.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	// Second close should also succeed (no-op)
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
