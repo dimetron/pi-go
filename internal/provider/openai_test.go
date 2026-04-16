@@ -9,6 +9,8 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -1297,8 +1299,50 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should produce an input item list (function call rounds need list form).
-	_ = input
+	if input.OfInputItemList == nil {
+		t.Fatal("expected input item list")
+	}
+	items := input.OfInputItemList
+	if len(items) != 3 {
+		t.Fatalf("expected 3 input items, got %d", len(items))
+	}
+	if items[1].OfFunctionCall == nil {
+		t.Fatal("expected function call item")
+	}
+	if items[1].OfFunctionCall.CallID != "call_123" {
+		t.Fatalf("function call CallID = %q, want %q", items[1].OfFunctionCall.CallID, "call_123")
+	}
+	if items[2].OfFunctionCallOutput == nil {
+		t.Fatal("expected function call output item")
+	}
+	if items[2].OfFunctionCallOutput.CallID != "call_123" {
+		t.Fatalf("function output CallID = %q, want %q", items[2].OfFunctionCallOutput.CallID, "call_123")
+	}
+}
+
+func TestOaiContentsToResponsesInput_SkipsFunctionCallsWithoutID(t *testing.T) {
+	fc := genai.NewPartFromFunctionCall("read_file", map[string]any{"path": "/tmp/test.go"})
+	fc.FunctionCall.ID = ""
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Read the file"}}},
+		{Role: "model", Parts: []*genai.Part{fc}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if input.OfInputItemList == nil {
+		t.Fatal("expected input item list")
+	}
+	items := input.OfInputItemList
+	if len(items) != 1 {
+		t.Fatalf("expected only user message item, got %d", len(items))
+	}
+	if items[0].OfMessage == nil {
+		t.Fatal("expected first item to be a message")
+	}
 }
 
 func TestOaiContentsToResponsesInput_NilConfig(t *testing.T) {
@@ -1392,5 +1436,43 @@ func TestOpenAIResponsesStreaming_MultiTurnState(t *testing.T) {
 	// Verify the model starts with no multi-turn state.
 	if mode := m.endpointMode(); mode != "responses" {
 		t.Errorf("endpointMode() = %q, want %q", mode, "responses")
+	}
+}
+
+func TestOpenAIResponsesRequestUsesPreviousResponseID(t *testing.T) {
+	m := &openaiModel{
+		modelName: "gpt-5-codex",
+		responseState: &responsesState{
+			previousResponseID: "resp_prev_123",
+		},
+	}
+
+	input, instructions, err := oaiContentsToResponsesInput([]*genai.Content{{
+		Role:  string(genai.RoleUser),
+		Parts: []*genai.Part{{Text: "review this"}},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("oaiContentsToResponsesInput() error: %v", err)
+	}
+
+	params := responses.ResponseNewParams{
+		Model: m.modelName,
+		Input: input,
+	}
+	if instructions != "" {
+		params.Instructions = param.NewOpt(instructions)
+	}
+	if m.responseState != nil && m.responseState.previousResponseID != "" {
+		params.PreviousResponseID = param.NewOpt(m.responseState.previousResponseID)
+	}
+
+	if !params.PreviousResponseID.Valid() {
+		t.Fatal("PreviousResponseID should be set when response state exists")
+	}
+	if got := params.PreviousResponseID.Value; got != "resp_prev_123" {
+		t.Fatalf("PreviousResponseID = %q, want %q", got, "resp_prev_123")
+	}
+	if params.Store.Valid() {
+		t.Fatalf("Store should be unset so Responses API can retain server-side state; got valid=%v value=%v", params.Store.Valid(), params.Store.Value)
 	}
 }
