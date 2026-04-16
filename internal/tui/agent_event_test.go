@@ -1012,21 +1012,65 @@ func TestRenderMessages_Empty(t *testing.T) {
 
 // --- isUserInput ---
 
-func TestIsUserInput_Normal(t *testing.T) {
-	if !isUserInput("hello") {
-		t.Error("expected 'hello' to be user input")
+func TestIsUserInput_SingleChar(t *testing.T) {
+	// Real keystrokes are single runes — must always pass.
+	for _, ch := range []string{"a", "Z", "/", "@", "1", ";", "é", "中"} {
+		if !isUserInput(ch) {
+			t.Errorf("single char %q should be accepted", ch)
+		}
+	}
+}
+
+func TestIsUserInput_RejectsMultiChar(t *testing.T) {
+	// Multi-character text in a KeyPressMsg is always terminal garbage.
+	for _, s := range []string{
+		"hello",
+		";2$y",
+		"gb:0a0a/0e0e/1414",
+		"]11;rgb:ffff/ffff/ffff",
+		"[38;4R",
+		"rgb:0a0a/0e0e/1414[38;4R",
+		"0a/0e0e/1414[38;4R",
+	} {
+		if isUserInput(s) {
+			t.Errorf("multi-char %q should be rejected", s)
+		}
 	}
 }
 
 func TestIsUserInput_NonPrintable(t *testing.T) {
-	if isUserInput("\x00invalid") {
-		t.Error("expected non-printable chars to be rejected")
+	if isUserInput("\x00") {
+		t.Error("expected non-printable char to be rejected")
 	}
 }
 
-func TestIsUserInput_TerminalEscape(t *testing.T) {
-	if isUserInput("]11;rgb:ffff/ffff/ffff") {
-		t.Error("expected terminal escape sequence to be rejected")
+func TestIsUserInput_Empty(t *testing.T) {
+	if isUserInput("") {
+		t.Error("expected empty string to be rejected")
+	}
+}
+
+// --- isUserPaste ---
+
+func TestIsUserPaste_Normal(t *testing.T) {
+	if !isUserPaste("hello world") {
+		t.Error("expected normal text to be accepted as paste")
+	}
+	if !isUserPaste("line1\nline2") {
+		t.Error("expected multiline paste to be accepted")
+	}
+}
+
+func TestIsUserPaste_RejectsTerminalResponses(t *testing.T) {
+	for _, s := range []string{
+		"]11;rgb:0a0a/0e0e/1414",
+		"rgb:0a0a/0e0e/1414[38;4R",
+		";2$ygb:0a0a/0e0e/1414",
+		"0a0a/0e0e/1414",
+	} {
+		if isUserPaste(s) {
+			t.Errorf("terminal response %q should be rejected as paste", s)
+		}
 	}
 }
 
