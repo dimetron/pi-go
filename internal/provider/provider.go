@@ -107,6 +107,12 @@ var KnownModels = map[string][]string{
 		"gpt-5.4",
 		"gpt-5.4-mini",
 		"gpt-5.4-nano",
+		// Responses-only codex models.
+		"gpt-5.3-codex",
+		"gpt-5.2-codex",
+		"gpt-5.1-codex",
+		"gpt-5.1-codex-mini",
+		"gpt-5.1-codex-max",
 	},
 	"gemini": {
 		// Latest Gemini tiers: 3.1 Pro, 3 Flash, and 3.1 Flash-Lite.
@@ -144,11 +150,14 @@ var contextWindowSizes = map[string]int64{
 	"claude-sonnet-4-6": 1_000_000,
 	"claude-haiku-4-5":  200_000,
 	// OpenAI
-	"gpt-5.4-pro":  1_050_000,
-	"gpt-5.4-mini": 400_000,
-	"gpt-5.4-nano": 400_000,
-	"gpt-5.4":      1_050_000,
-	"gpt-5":        400_000,
+	"gpt-5.4-pro":   1_050_000,
+	"gpt-5.4-mini":  400_000,
+	"gpt-5.4-nano":  400_000,
+	"gpt-5.4":       1_050_000,
+	"gpt-5.3-codex": 1_050_000,
+	"gpt-5.2-codex": 1_050_000,
+	"gpt-5.1-codex": 1_050_000,
+	"gpt-5":         400_000,
 	// Gemini
 	"gemini-3.1-pro-preview":        1_048_576,
 	"gemini-3-flash-preview":        1_048_576,
