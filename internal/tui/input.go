@@ -1,14 +1,28 @@
 package tui
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/dimetron/pi-go/internal/extension"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+)
+
+// terminalResponseRe matches common terminal response fragments that leak
+// through as text: CSI params (digits, semicolons, question marks) ending
+// with a letter, DECRPM ($y), OSC color payloads (rgb:/hex colons+slashes),
+// and cursor position reports.
+var terminalResponseRe = regexp.MustCompile(
+	`\[\d+;\d+[A-Z]` + // CSI CPR like [38;4R
+		`|\d+\$[A-Za-z]` + // DECRPM tails like ;2$y
+		`|[0-9a-f]{4}/[0-9a-f]{4}/[0-9a-f]{4}` + // hex triplet XXXX/XXXX/XXXX
+		`|rgb:` + // OSC color payload
+		`|\]\d+;`, // OSC intro like ]11;
 )
 
 // InputSubmitMsg is emitted when the user presses Enter with non-empty input.
@@ -629,20 +643,38 @@ func matchingSlashCommands(input string) []string {
 }
 
 // isUserInput returns true if the string represents genuine user keyboard input.
+// Real keyboard input via KeyPressMsg is always a single rune. Multi-character
+// text values are terminal response fragments (CSI, OSC, DECRPM) that leaked
+// through Bubble Tea's parser when escape sequences get split at arbitrary
+// byte boundaries during resize or color queries.
 func isUserInput(s string) bool {
+	if s == "" {
+		return false
+	}
 	for _, r := range s {
 		if !unicode.IsPrint(r) {
 			return false
 		}
 	}
-	if len(s) > 2 && s[0] == ']' && s[1] >= '0' && s[1] <= '9' {
-		return false
-	}
-	if len(s) > 2 && s[0] == '[' && (s[len(s)-1] >= 'A' && s[len(s)-1] <= 'Z') {
-		return false
-	}
-	if strings.Contains(s, ";rgb:") || strings.Contains(s, "rgb:") {
+	// Real keystrokes produce exactly one rune. Multi-char text in a
+	// KeyPressMsg is always terminal response garbage. Actual multi-char
+	// input (paste) arrives via PasteMsg which is filtered separately.
+	if utf8.RuneCountInString(s) > 1 {
 		return false
 	}
 	return true
+}
+
+// isUserPaste returns true if a PasteMsg contains real pasted text rather than
+// terminal response sequences that were misidentified as bracketed paste.
+func isUserPaste(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) && r != '\n' && r != '\r' && r != '\t' {
+			return false
+		}
+	}
+	return !terminalResponseRe.MatchString(s)
 }

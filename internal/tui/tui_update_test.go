@@ -48,6 +48,29 @@ func TestUpdatePasteMsg(t *testing.T) {
 	}
 }
 
+func TestUpdatePasteMsg_TerminalEscapeRejected(t *testing.T) {
+	m := &model{
+		running:    false,
+		inputModel: InputModel{Text: ""},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+	}
+
+	// OSC 11 background color response should not be pasted.
+	for _, garbage := range []string{
+		"]11;rgb:0a0a/0e0e/1414",
+		"rgb:0a0a/0e0e/1414[38;4R",
+		"0a/0e0e/1414[38;4R",
+		";2$ygb:0a0a/0e0e/1414",
+	} {
+		m.inputModel.Text = ""
+		newM, _ := m.Update(tea.PasteMsg{Content: garbage})
+		mm := newM.(*model)
+		if mm.inputModel.Text != "" {
+			t.Errorf("terminal escape in paste should be rejected, got %q for input %q", mm.inputModel.Text, garbage)
+		}
+	}
+}
+
 func TestUpdatePasteMsgWhileRunning(t *testing.T) {
 	m := &model{
 		running:    true, // agent running
