@@ -169,9 +169,6 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 			params.PreviousResponseID = param.NewOpt(state.previousResponseID)
 		}
 
-		// Do not persist sessions on OpenAI's side.
-		params.Store = param.NewOpt(false)
-
 		if req.Config != nil && len(req.Config.Tools) > 0 {
 			params.Tools = oaiGenaiToolsToResponses(req.Config.Tools)
 		}
@@ -269,6 +266,9 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 
 	// Function call and response rounds.
 	for _, fc := range functionCalls {
+		if fc == nil || strings.TrimSpace(fc.ID) == "" {
+			continue
+		}
 		argsJSON, _ := json.Marshal(fc.Args)
 
 		// Function call item.
@@ -288,6 +288,7 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 		}
 		outItem := responses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+				CallID: fc.ID,
 				Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 					OfString: param.NewOpt(contentStr),
 				},
@@ -659,6 +660,9 @@ func oaiContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 			toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(functionCalls))
 			var toolResponseMessages []openai.ChatCompletionMessageParamUnion
 			for _, fc := range functionCalls {
+				if fc == nil || strings.TrimSpace(fc.ID) == "" {
+					continue
+				}
 				argsJSON, _ := json.Marshal(fc.Args)
 				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
