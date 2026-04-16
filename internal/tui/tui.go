@@ -81,6 +81,11 @@ type model struct {
 
 	// Ctrl+C handling: show warning on first press, quit on second.
 	ctrlCCount int
+
+	// resizeAt records when the last WindowSizeMsg arrived. Key/paste input
+	// is suppressed briefly after resize to let terminal response sequences
+	// (OSC color replies, DECRPM, CPR) drain without leaking into the input.
+	resizeAt time.Time
 }
 
 // branchPopupState manages the git branch list popup.
@@ -242,6 +247,7 @@ func waitForRestart(ch chan struct{}) tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.resizeAt = time.Now()
 		m.width = msg.Width
 		m.height = msg.Height
 		mainWidth := m.width
@@ -256,11 +262,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		if !m.running {
+		if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
 			m.inputModel.InsertText(msg.Content)
 		}
 
 	case tea.KeyPressMsg:
+		if m.resizeDraining() {
+			return m, nil
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -719,6 +728,13 @@ func drainTerminalResponses() {
 			break
 		}
 	}
+}
+
+// resizeDraining returns true for a short window after a terminal resize,
+// during which key and paste input is suppressed to let terminal response
+// sequences (OSC color replies, DECRPM, cursor position reports) drain.
+func (m *model) resizeDraining() bool {
+	return !m.resizeAt.IsZero() && time.Since(m.resizeAt) < 150*time.Millisecond
 }
 
 // mainWidth returns the width of the main panel (excluding sidebar).

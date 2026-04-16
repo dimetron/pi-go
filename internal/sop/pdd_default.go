@@ -114,6 +114,15 @@ You can reference rough-idea.md for the original idea.
 - <constraints discovered during planning>
 ` + "```" + `
 
+## Naming Conventions
+
+Follow the conventions in specs/AGENTS.md for spec directory structure and naming:
+
+- Use kebab-case for folder names (e.g., plan-command-sop/, not plan_command_sop/)
+- Number folders within categories: 000-, 001-, 002-, ...
+- Phase files use specific names: rough-idea.md, requirements.md, design.md, plan.md, PROMPT.md, summary.md
+- Keep names descriptive but concise
+
 ## Guidelines
 
 - **NEVER modify source code** — /plan only reads code for research, all writes go to specs/*
