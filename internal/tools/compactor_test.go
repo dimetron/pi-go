@@ -1389,3 +1389,48 @@ func TestCompactToolResult_UnknownTool(t *testing.T) {
 		t.Errorf("expected nil for unknown tool, got %v", result)
 	}
 }
+
+// fakeCompactTool implements tool.Tool for testing compactor callback.
+type fakeCompactTool struct{ name string }
+
+func (f *fakeCompactTool) Name() string        { return f.name }
+func (f *fakeCompactTool) Description() string { return "" }
+func (f *fakeCompactTool) IsLongRunning() bool { return false }
+
+func TestBuildCompactorCallback_KnownToolCompacts(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	cfg.Enabled = true
+	// Force aggressive truncation so bash output is compacted.
+	cfg.MaxChars = 32
+	cfg.MaxLines = 4
+
+	metrics := NewCompactMetrics()
+	cb := BuildCompactorCallback(cfg, metrics)
+
+	// Build multi-line stdout that exceeds the configured limits.
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = strings.Repeat("A", 32)
+	}
+	bigOutput := strings.Join(lines, "\n")
+
+	result := map[string]any{
+		"stdout":    bigOutput,
+		"stderr":    "",
+		"exit_code": 0,
+	}
+	args := map[string]any{"command": "echo hi"}
+
+	got, err := cb(nil, &fakeCompactTool{name: "bash"}, args, result, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Something should have been compacted.
+	if s, _ := got["stdout"].(string); len(s) >= len(bigOutput) {
+		t.Errorf("expected compacted stdout, got size %d (was %d)", len(s), len(bigOutput))
+	}
+	summary := metrics.Summary()
+	if summary.TotalOrig == 0 {
+		t.Errorf("expected compactor metrics to record compaction, got empty summary")
+	}
+}

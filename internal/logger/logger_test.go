@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -166,6 +167,35 @@ func TestError(t *testing.T) {
 	defer func() { log.Close() }() //nolint:errcheck
 
 	log.Error("test error message")
+}
+
+func TestErrorf(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", tmpDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer func() { log.Close() }() //nolint:errcheck
+
+	log.Errorf("formatted %s %d", "error", 42)
+
+	// Verify the formatted content was written to the log file.
+	data, err := os.ReadFile(log.Path())
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	if !strings.Contains(string(data), "formatted error 42") {
+		t.Errorf("expected log to contain formatted content, got %q", string(data))
+	}
+	if !strings.Contains(string(data), `"type":"error"`) {
+		t.Errorf("expected log entry type to be error, got %q", string(data))
+	}
 }
 
 func TestUserMessage(t *testing.T) {

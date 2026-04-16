@@ -223,10 +223,10 @@ func TestE2EGitStagedDiffWorkflow(t *testing.T) {
 func TestE2ERoleResolution(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Roles = map[string]config.RoleConfig{
-		"default": {Model: "claude-sonnet-4-6"},
+		"default": {Model: "claude-opus-4-7"},
 		"smol":    {Model: "claude-haiku-4-5-20251001"},
-		"slow":    {Model: "claude-opus-4-6"},
-		"plan":    {Model: "claude-opus-4-6"},
+		"slow":    {Model: "claude-opus-4-7"},
+		"plan":    {Model: "claude-opus-4-7"},
 		"commit":  {Model: "claude-haiku-4-5-20251001"},
 	}
 
@@ -237,8 +237,8 @@ func TestE2ERoleResolution(t *testing.T) {
 	}{
 		{"default", "claude-sonnet-4-6", "anthropic"},
 		{"smol", "claude-haiku-4-5-20251001", "anthropic"},
-		{"slow", "claude-opus-4-6", "anthropic"},
-		{"plan", "claude-opus-4-6", "anthropic"},
+		{"slow", "claude-opus-4-7", "anthropic"},
+		{"plan", "claude-opus-4-7", "anthropic"},
 		{"commit", "claude-haiku-4-5-20251001", "anthropic"},
 		{"unknown", "claude-sonnet-4-6", "anthropic"}, // falls back to default
 	}

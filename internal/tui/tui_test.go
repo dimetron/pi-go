@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -82,7 +83,7 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 			Roles: map[string]config.RoleConfig{
 				"default": {Model: "claude-sonnet-4-6"},
 				"smol":    {Model: "gemini-2.5-flash"},
-				"slow":    {Model: "claude-opus-4-6", Provider: "anthropic"},
+				"slow":    {Model: "claude-opus-4-7", Provider: "anthropic"},
 			},
 		},
 	}
@@ -1304,5 +1305,120 @@ func TestRenderWelcome(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("welcome screen missing %q", want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// mascot and eyes helper tests
+// ---------------------------------------------------------------------------
+
+func TestMascot_WithFace(t *testing.T) {
+	m := &model{
+		face: NewFaceRenderer(),
+	}
+	got := m.mascot()
+	// With a face, it delegates to the face renderer
+	if got == "" {
+		t.Error("mascot() returned empty string with face")
+	}
+}
+
+func TestMascot_NoFace(t *testing.T) {
+	m := &model{face: nil}
+	got := m.mascot()
+	// Without a face, returns MoodIdle.Mascot()
+	if got == "" {
+		t.Error("mascot() returned empty string without face")
+	}
+}
+
+func TestEyes_WithFace(t *testing.T) {
+	m := &model{
+		face: NewFaceRenderer(),
+	}
+	got := m.eyes()
+	if got == "" {
+		t.Error("eyes() returned empty string with face")
+	}
+}
+
+func TestEyes_NoFace(t *testing.T) {
+	m := &model{face: nil}
+	got := m.eyes()
+	// Without a face, returns MoodIdle.Eyes()
+	if got == "" {
+		t.Error("eyes() returned empty string without face")
+	}
+}
+
+func TestEyes_IdleMood(t *testing.T) {
+	m := &model{
+		face: nil,
+	}
+	got := m.eyes()
+	if got == "" {
+		t.Error("eyes() returned empty for nil face (uses MoodIdle)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// countUntrackedLines tests
+// ---------------------------------------------------------------------------
+
+func TestCountUntrackedLines_GitError(t *testing.T) {
+	// Calling with a directory that isn't a git repo returns 0
+	got := countUntrackedLines("/nonexistent/path")
+	if got != 0 {
+		t.Errorf("countUntrackedLines(non-git-dir) = %d, want 0", got)
+	}
+}
+
+func TestCountUntrackedLines_EmptyRepo(t *testing.T) {
+	// Create a temp git repo with no untracked files
+	tmp := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmp, "init")
+	runGit(t, tmp, "config", "user.email", "test@test.com")
+	runGit(t, tmp, "config", "user.name", "Test")
+
+	got := countUntrackedLines(tmp)
+	if got != 0 {
+		t.Errorf("countUntrackedLines(empty repo) = %d, want 0", got)
+	}
+}
+
+func TestCountUntrackedLines_WithUntrackedFiles(t *testing.T) {
+	tmp := t.TempDir()
+	runGit(t, tmp, "init")
+	runGit(t, tmp, "config", "user.email", "test@test.com")
+	runGit(t, tmp, "config", "user.name", "Test")
+
+	// Create untracked files with newlines using sh -c with echo
+	// echo adds trailing newline, so wc -l will count correctly
+	cmd := exec.Command("sh", "-c", "echo -e 'line1\\nline2\\nline3' > untracked1.txt")
+	cmd.Dir = tmp
+	if err := cmd.Run(); err != nil {
+		t.Logf("creating untracked1.txt: %v", err)
+	}
+	cmd = exec.Command("sh", "-c", "echo -e 'lineA\\nlineB\\nlineC' > untracked2.txt")
+	cmd.Dir = tmp
+	if err := cmd.Run(); err != nil {
+		t.Logf("creating untracked2.txt: %v", err)
+	}
+
+	got := countUntrackedLines(tmp)
+	// 3 + 3 = 6 lines total
+	if got != 6 {
+		t.Errorf("countUntrackedLines() = %d, want 6", got)
+	}
+}
+
+// runGit runs a git command in the specified directory.
+func runGit(t *testing.T, dir string, args ...string) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Logf("git %v in %s: %v", args, dir, err)
 	}
 }

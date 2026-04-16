@@ -262,19 +262,18 @@ func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
 }
 
 // antThinkingConfig maps a thinking level string to Anthropic thinking config.
+// Uses adaptive type as "enabled" is not supported by all models.
 func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
-	var budget int64
 	switch level {
-	case "low":
-		budget = 2048
-	case "medium":
-		budget = 4096
-	case "high":
-		budget = 8192
+	case "low", "medium", "high":
+		return &anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+			},
+		}
 	default:
 		return nil
 	}
-	return new(anthropic.ThinkingConfigParamOfEnabled(budget))
 }
 
 // antToolUseAcc accumulates a single Anthropic tool_use block during streaming.

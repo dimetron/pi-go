@@ -348,3 +348,52 @@ func TestFormatUsage_OverLimit(t *testing.T) {
 		t.Errorf("expected over-limit formatting, got: %s", s)
 	}
 }
+
+func TestContextWindow_GetSet(t *testing.T) {
+	tr := New(0)
+
+	// Initially unknown.
+	if got := tr.ContextWindowSize(); got != 0 {
+		t.Errorf("expected default ContextWindowSize 0, got %d", got)
+	}
+	if got := tr.LastPromptTokens(); got != 0 {
+		t.Errorf("expected default LastPromptTokens 0, got %d", got)
+	}
+	if got := tr.ContextPercentUsed(); got != 0 {
+		t.Errorf("expected 0%% when unknown, got %f", got)
+	}
+
+	// Set a context window.
+	tr.SetContextWindowSize(200_000)
+	if got := tr.ContextWindowSize(); got != 200_000 {
+		t.Errorf("expected 200000, got %d", got)
+	}
+
+	// Still 0 when no prompt tokens have been recorded.
+	if got := tr.ContextPercentUsed(); got != 0 {
+		t.Errorf("expected 0%% with no prompt tokens, got %f", got)
+	}
+
+	// Record prompt tokens via Add (sets lastPromptTokens).
+	if err := tr.Add(50_000, 1_000); err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if got := tr.LastPromptTokens(); got != 50_000 {
+		t.Errorf("expected LastPromptTokens 50000, got %d", got)
+	}
+	got := tr.ContextPercentUsed()
+	if got < 24.9 || got > 25.1 {
+		t.Errorf("expected ContextPercentUsed ~25, got %f", got)
+	}
+}
+
+func TestContextPercentUsed_ZeroWindow(t *testing.T) {
+	tr := New(0)
+	// No context window set, but add some tokens.
+	if err := tr.Add(10, 1); err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if got := tr.ContextPercentUsed(); got != 0 {
+		t.Errorf("expected 0%% with unknown context window, got %f", got)
+	}
+}

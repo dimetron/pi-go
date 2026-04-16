@@ -29,7 +29,7 @@ func TestResolveRole_ExactMatch(t *testing.T) {
 		Roles: map[string]RoleConfig{
 			"default": {Model: "claude-sonnet-4-6"},
 			"smol":    {Model: "gemini-2.5-flash"},
-			"slow":    {Model: "claude-opus-4-6", Provider: "anthropic"},
+			"slow":    {Model: "claude-opus-4-7", Provider: "anthropic"},
 		},
 		DefaultProvider: "anthropic",
 	}

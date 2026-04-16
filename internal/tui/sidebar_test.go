@@ -329,3 +329,23 @@ func (m *sidebarMockTokenTracker) PercentUsed() float64        { return m.percen
 func (m *sidebarMockTokenTracker) LastPromptTokens() int64     { return 0 }
 func (m *sidebarMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *sidebarMockTokenTracker) ContextPercentUsed() float64 { return 0 }
+
+func TestAgentStatusPriority(t *testing.T) {
+	tests := []struct {
+		status string
+		want   int
+	}{
+		{"running", 0},
+		{"done", 1},
+		{"completed", 1},
+		{"failed", 2},
+		{"killed", 3},
+		{"", 4},
+		{"unknown", 4},
+	}
+	for _, tt := range tests {
+		if got := agentStatusPriority(tt.status); got != tt.want {
+			t.Errorf("agentStatusPriority(%q) = %d, want %d", tt.status, got, tt.want)
+		}
+	}
+}

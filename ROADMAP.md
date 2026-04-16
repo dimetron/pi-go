@@ -4,7 +4,7 @@
 ### Features
 
 - [ ] A2A Agent as a tool
-- [ ] ACP Coding Agent protocol
+- [ ] ACP Coding Agent protocol https://agentclientprotocol.com/protocol/overview
 - [ ] evaluations using terminal bench harbor https://harborframework.com/registry
 - [ ] temporal remote distributed workflows for long-running tasks
 - [ ] distributed tracing
@@ -15,7 +15,7 @@
 
 ### Tools
 
-- [ ] chrome-devtools mcp
-- [ ] agentic wiki
+- [ ] Chrome-devtools mcp
 - [ ] WhatsApp gateway
+- [ ] Agentic wiki
  

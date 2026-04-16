@@ -93,9 +93,9 @@ var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "phi"
 // contextWindowSizes in the same change.
 var KnownModels = map[string][]string{
 	"anthropic": {
-		// Latest Claude tiers: Opus 4.6 (large), Sonnet 4.6 (medium),
+		// Latest Claude tiers: Opus 4.7 (large), Sonnet 4.6 (medium),
 		// Haiku 4.5 (small/fast). Haiku has both snapshot ID and alias.
-		"claude-opus-4-6",
+		"claude-opus-4-7",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5-20251001",
 		"claude-haiku-4-5",
@@ -146,7 +146,7 @@ var KnownModels = map[string][]string{
 // contextWindowSizes maps model name prefixes to context window sizes (in tokens).
 var contextWindowSizes = map[string]int64{
 	// Anthropic
-	"claude-opus-4-6":   1_000_000,
+	"claude-opus-4-7":   1_000_000,
 	"claude-sonnet-4-6": 1_000_000,
 	"claude-haiku-4-5":  200_000,
 	// OpenAI
