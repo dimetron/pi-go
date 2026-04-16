@@ -53,6 +53,37 @@ func TestRegexCache_Expiry(t *testing.T) {
 	}
 }
 
+func TestRegexCache_EvictOldestAtCapacity(t *testing.T) {
+	c := newRegexCache(2, 10*time.Minute)
+
+	// Fill to capacity.
+	c.put("first", nil)
+	// Ensure monotonic ordering between entries.
+	time.Sleep(2 * time.Millisecond)
+	c.put("second", nil)
+
+	if len(c.entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(c.entries))
+	}
+
+	// Adding a third entry should evict the oldest ("first").
+	time.Sleep(2 * time.Millisecond)
+	c.put("third", nil)
+
+	if len(c.entries) != 2 {
+		t.Errorf("expected 2 entries after eviction, got %d", len(c.entries))
+	}
+	if _, ok := c.entries["first"]; ok {
+		t.Error("expected oldest entry 'first' to be evicted")
+	}
+	if _, ok := c.entries["second"]; !ok {
+		t.Error("expected 'second' to remain")
+	}
+	if _, ok := c.entries["third"]; !ok {
+		t.Error("expected 'third' to be stored")
+	}
+}
+
 func TestGrepInput(t *testing.T) {
 	input := GrepInput{
 		Pattern:         "func.*Test",

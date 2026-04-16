@@ -18,7 +18,7 @@ func TestResolve(t *testing.T) {
 		wantErr  bool
 	}{
 		{"claude-sonnet-4-6", "anthropic", false},
-		{"claude-opus-4-6", "anthropic", false},
+		{"claude-opus-4-7", "anthropic", false},
 		{"gpt-4o", "openai", false},
 		{"gpt-5.4", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
@@ -255,7 +255,7 @@ func TestValidateModel(t *testing.T) {
 	}{
 		// Valid cloud models.
 		{Info{Provider: "anthropic", Model: "claude-sonnet-4-6"}, false},
-		{Info{Provider: "anthropic", Model: "claude-opus-4-6"}, false},
+		{Info{Provider: "anthropic", Model: "claude-opus-4-7"}, false},
 		{Info{Provider: "anthropic", Model: "claude-haiku-4-5"}, false},
 		{Info{Provider: "openai", Model: "gpt-5.4-pro"}, false},
 		{Info{Provider: "openai", Model: "gpt-5.4"}, false},
@@ -330,7 +330,7 @@ func TestResolveKnownProviders(t *testing.T) {
 		model    string
 		provider string
 	}{
-		{"claude-opus-4-6", "anthropic"},
+		{"claude-opus-4-7", "anthropic"},
 		{"gpt-5.4-mini", "openai"},
 		{"gemini-2.5-flash", "gemini"},
 	}
