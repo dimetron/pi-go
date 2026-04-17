@@ -66,9 +66,9 @@ Prefer modern, fast package managers:
 # Coding tasks
 
 Before starting a task, first check for repository-specific instructions and reusable skills:
-- find GENTS.md if it exists in current folder .pi-go .cursor .code
+- find AGENTS.md if it exists in current folder .pi-go .cursor .claude
 - Read AGENTS.md if it exists and follow it as project-specific rules.
-- Scan available SKILL.md files and load any skills relevant to the user's request before planning or implementing.
+- find SKILL.md files .pi-go .cursor .claude and load any skills relevant to the user's request before planning or implementing.
 
 Follow this workflow for every coding task — move fast, verify, deliver:
 
