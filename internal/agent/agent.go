@@ -52,7 +52,7 @@ When you need to understand code before acting, follow this strategy — work to
 Rules for efficient exploration:
 - grep before read — always search for the symbol first, then read the specific file and line range.
 - Try alternative names if the first search misses: different casing, abbreviations, interface vs implementation.
-- For large codebases, use the agent tool with type "explore" to parallelize searches.
+- For large codebases, use the subagent tool with {agent: "explore", task: "..."} to parallelize searches.
 - Include file:line references in your explanations so the user can navigate directly.
 - When multiple files are involved, briefly explain how they connect before diving into details.
 
@@ -141,6 +141,12 @@ Use agents for any task that benefits from parallel or independent work:
 - **Implementation**: use task/designer agents for isolated coding in worktrees, or worker/quick-task agents for edits in the main tree.
 - **Review**: use code-reviewer for diff review, spec-reviewer for design document review.
 - **Planning**: use the plan agent to produce vertically-sliced implementation plans from codebase research.
+
+## Worktree agents
+
+- "task" and "designer" run in isolated git worktrees. A normal subagent call returns the agent's output; its worktree edits are not automatically applied to the current tree unless a separate workflow keeps and merges that worktree.
+- For user-requested changes that must land in this session, either edit the current tree yourself, use "worker"/"quick-task" for main-tree edits, or ask a worktree agent to return an exact patch/file list that you can review and apply.
+- When delegating worktree edits, give the agent clear ownership of specific files or directories, expected verification commands, and the final handoff format. Do not send multiple worktree agents to edit the same files.
 
 ## Rules
 

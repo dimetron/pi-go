@@ -9,6 +9,11 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
+func defaultConfigPtr() *config.Config {
+	cfg := config.Defaults()
+	return &cfg
+}
+
 // --- Mode detection tests ---
 
 func TestDetectMode_Single(t *testing.T) {
@@ -73,7 +78,7 @@ func TestSubagentSingleMode_UnknownAgent(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	input := SubagentInput{Agent: "nonexistent", Task: "find main.go"}
 	output, err := subagentHandler(nil, orch, input, nil)
@@ -99,7 +104,7 @@ func TestSubagentSingleMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentSingleMode_NoModeDetected(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	input := SubagentInput{} // empty — no mode
 	_, err := subagentHandler(nil, orch, input, nil)
@@ -114,7 +119,7 @@ func TestSubagentParallelMode_UnknownAgent(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	input := SubagentInput{Tasks: []TaskItem{
 		{Agent: "explore", Task: "a"},
@@ -139,7 +144,7 @@ func TestSubagentParallelMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentParallelMode_TooManyTasks(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	tasks := make([]TaskItem, maxParallelTasks+1)
 	for i := range tasks {
@@ -165,7 +170,7 @@ func TestSubagentParallelMode_TooManyTasks(t *testing.T) {
 }
 
 func TestSubagentParallelMode_AllUnknownAgents(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	// All agents unknown — fails at validation before spawning.
 	input := SubagentInput{Tasks: []TaskItem{
@@ -193,7 +198,7 @@ func TestSubagentChainMode_UnknownAgent(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	input := SubagentInput{Chain: []ChainItem{
 		{Agent: "explore", Task: "step 1"},
@@ -218,7 +223,7 @@ func TestSubagentChainMode_UnknownAgent(t *testing.T) {
 }
 
 func TestSubagentChainMode_TooManySteps(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	chain := make([]ChainItem, maxChainSteps+1)
 	for i := range chain {
@@ -244,7 +249,7 @@ func TestSubagentChainMode_TooManySteps(t *testing.T) {
 }
 
 func TestSubagentChainMode_AllUnknownAgents(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	input := SubagentInput{Chain: []ChainItem{
 		{Agent: "unknown1", Task: "step 1"},
@@ -384,9 +389,9 @@ func TestExpandChainTemplate(t *testing.T) {
 func TestBuildSubagentDescription(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "Fast codebase exploration", Role: "default"},
-		{Name: "task", Description: "Complete coding tasks", Role: "default"},
+		{Name: "task", Description: "Complete coding tasks", Role: "default", Worktree: true},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	desc := buildSubagentDescription(orch)
 	if !strings.Contains(desc, "Single") {
@@ -405,6 +410,15 @@ func TestBuildSubagentDescription(t *testing.T) {
 	if !strings.Contains(desc, "task") {
 		t.Error("description should list 'task' agent")
 	}
+	if !strings.Contains(desc, "task [worktree]") {
+		t.Error("description should mark worktree agents")
+	}
+	if !strings.Contains(desc, "not applied to the current tree") {
+		t.Error("description should explain worktree edits are not automatically applied")
+	}
+	if !strings.Contains(desc, "exact patch/file list") {
+		t.Error("description should explain the handoff needed for worktree edits")
+	}
 }
 
 // --- SubagentTools registration test ---
@@ -413,7 +427,7 @@ func TestSubagentTools_Registration(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	tools, err := SubagentTools(orch, nil)
 	if err != nil {
@@ -546,7 +560,7 @@ func TestNewSubagentTool(t *testing.T) {
 	agents := []subagent.AgentConfig{
 		{Name: "explore", Description: "test", Role: "default"},
 	}
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", agents)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", agents)
 
 	tool, err := NewSubagentTool(orch, nil)
 	if err != nil {
@@ -715,7 +729,7 @@ func TestAgentResult(t *testing.T) {
 // --- subagentHandler error mode tests ---
 
 func TestSubagentHandler_AmbiguousInput(t *testing.T) {
-	orch := subagent.NewOrchestrator(new(config.Defaults()), "", nil)
+	orch := subagent.NewOrchestrator(defaultConfigPtr(), "", nil)
 
 	// Both agent AND tasks provided - should be parallel mode
 	input := SubagentInput{
