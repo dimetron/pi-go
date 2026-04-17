@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -86,6 +87,29 @@ func TestBundledAgents_WorktreeTypes(t *testing.T) {
 		}
 		if !worktreeTypes[agent.Name] && agent.Worktree {
 			t.Errorf("agent %q should NOT require worktree", agent.Name)
+		}
+	}
+}
+
+func TestBundledAgents_WorktreeInstructionsDescribeHandoff(t *testing.T) {
+	agents, err := LoadBundledAgents()
+	if err != nil {
+		t.Fatalf("LoadBundledAgents failed: %v", err)
+	}
+
+	for _, agent := range agents {
+		if !agent.Worktree {
+			continue
+		}
+		for _, phrase := range []string{
+			"local to this worktree",
+			"main working tree",
+			"changed files",
+			"verification commands",
+		} {
+			if !strings.Contains(agent.Instruction, phrase) {
+				t.Errorf("worktree agent %q instruction should contain %q", agent.Name, phrase)
+			}
 		}
 	}
 }
