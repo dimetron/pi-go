@@ -310,6 +310,9 @@ func CheckOllama(baseURL string) error {
 type LLMOptions struct {
 	ExtraHeaders    map[string]string
 	InsecureSkipTLS bool
+	AdvisorModel    string // Advisor model (e.g., "claude-opus-4-7")
+	AdvisorMaxUses  int    // Max advisor calls per request (0 = unlimited)
+	AdvisorCaching  bool   // Enable ephemeral prompt caching for advisor
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.

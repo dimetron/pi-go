@@ -239,7 +239,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	}
 
 	// Resolve model for this agent's role.
-	model, _, err := o.cfg.ResolveRole(agent.Role)
+	model, _, _, _, _, err := o.cfg.ResolveRole(agent.Role)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolving role %q for agent %q: %w", agent.Role, agent.Name, err)
 	}

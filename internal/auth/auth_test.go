@@ -1194,3 +1194,190 @@ func TestRunTLSPreflight_TLSCertKind(t *testing.T) {
 		t.Error("expected TLS error detection for Go's x509 error message")
 	}
 }
+
+func TestStartManualCodeFlow_AnthropicProvider(t *testing.T) {
+	prov, ok := FindProvider("anthropic")
+	if !ok {
+		t.Fatal("anthropic provider not found")
+	}
+	if !prov.ManualCode {
+		t.Fatal("anthropic provider should have ManualCode=true")
+	}
+
+	sess, err := StartManualCodeFlow(prov)
+	if err != nil {
+		t.Fatalf("StartManualCodeFlow error: %v", err)
+	}
+	if sess.RedirectURI != "https://platform.claude.com/oauth/code/callback" {
+		t.Errorf("wrong redirect_uri: %q", sess.RedirectURI)
+	}
+	u, err := url.Parse(sess.AuthURL)
+	if err != nil {
+		t.Fatalf("parse auth URL: %v", err)
+	}
+	if u.Host != "platform.claude.com" || u.Path != "/oauth/authorize" {
+		t.Errorf("expected platform.claude.com/oauth/authorize, got %s%s", u.Host, u.Path)
+	}
+	q := u.Query()
+	if q.Get("code") != "true" {
+		t.Error("expected code=true in auth URL")
+	}
+	if q.Get("client_id") != "9d1c250a-e61b-44d9-88ed-5944d1962f5e" {
+		t.Errorf("wrong client_id: %q", q.Get("client_id"))
+	}
+	if q.Get("redirect_uri") != "https://platform.claude.com/oauth/code/callback" {
+		t.Errorf("wrong redirect_uri in query: %q", q.Get("redirect_uri"))
+	}
+	if !strings.Contains(q.Get("scope"), "org:create_api_key") {
+		t.Errorf("expected org:create_api_key in scope, got %q", q.Get("scope"))
+	}
+	if sess.Verifier == "" || sess.State == "" {
+		t.Error("verifier and state should be non-empty")
+	}
+}
+
+func TestStartManualCodeFlow_NotConfigured(t *testing.T) {
+	if _, err := StartManualCodeFlow(Provider{Name: "nope"}); err == nil {
+		t.Error("expected error for provider without ManualCode=true")
+	}
+	if _, err := StartManualCodeFlow(Provider{Name: "x", ManualCode: true}); err == nil {
+		t.Error("expected error when ManualRedirectURI is empty")
+	}
+}
+
+func TestCompleteManualCodeFlow_Success(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("code") != "abc123" {
+			t.Errorf("wrong code sent to token endpoint: %q", r.FormValue("code"))
+		}
+		if r.FormValue("redirect_uri") != "https://example.com/callback" {
+			t.Errorf("wrong redirect_uri sent: %q", r.FormValue("redirect_uri"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "sk-ant-test"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		ManualRedirectURI: "https://example.com/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "abc123#state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if result.APIKey != "sk-ant-test" {
+		t.Errorf("expected api key sk-ant-test, got %q", result.APIKey)
+	}
+	if result.EnvVar != "TEST_KEY" {
+		t.Errorf("expected env TEST_KEY, got %q", result.EnvVar)
+	}
+}
+
+func TestCompleteManualCodeFlow_JSONBodyAndAPIKeyExchange(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type=application/json, got %q", ct)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["grant_type"] != "authorization_code" {
+			t.Errorf("wrong grant_type: %q", body["grant_type"])
+		}
+		if body["state"] != "state-xyz" {
+			t.Errorf("missing/wrong state in body: %q", body["state"])
+		}
+		if body["code"] != "abc123" {
+			t.Errorf("wrong code: %q", body["code"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "oauth-access-token"})
+	}))
+	defer tokenServer.Close()
+
+	apiKeyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer oauth-access-token" {
+			t.Errorf("expected bearer auth, got %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"raw_key":"sk-ant-api-XYZ"}`))
+	}))
+	defer apiKeyServer.Close()
+
+	prov := Provider{
+		Name:              "test-json",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		APIKeyURL:         apiKeyServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		TokenJSONBody:     true,
+		ManualRedirectURI: "https://example.com/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "abc123#state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if result.APIKey != "sk-ant-api-XYZ" {
+		t.Errorf("expected raw_key-derived api key, got %q", result.APIKey)
+	}
+}
+
+func TestCompleteManualCodeFlow_MissingState(t *testing.T) {
+	sess := &ManualCodeSession{State: "s"}
+	if _, err := CompleteManualCodeFlow(context.Background(), sess, "plain-code-no-hash"); err == nil {
+		t.Error("expected error when pasted code has no #state suffix")
+	}
+}
+
+func TestCompleteManualCodeFlow_StateMismatch(t *testing.T) {
+	sess := &ManualCodeSession{
+		Provider: Provider{Name: "test"},
+		State:    "expected",
+	}
+	if _, err := CompleteManualCodeFlow(context.Background(), sess, "code#wrong"); err == nil {
+		t.Error("expected state mismatch error")
+	}
+}
+
+func TestSplitCodeState(t *testing.T) {
+	code, state := splitCodeState("  abc#xyz  ")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = splitCodeState("plain-code")
+	if code != "plain-code" || state != "" {
+		t.Errorf("got %q,%q want plain-code,''", code, state)
+	}
+}

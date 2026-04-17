@@ -19,8 +19,11 @@ type HookConfig struct {
 
 // RoleConfig maps a role to a specific model and optional provider override.
 type RoleConfig struct {
-	Model    string `json:"model"`
-	Provider string `json:"provider,omitempty"`
+	Model          string `json:"model"`
+	Provider       string `json:"provider,omitempty"`
+	AdvisorModel   string `json:"advisorModel,omitempty"`   // Advisor model for advisor tool (e.g., "claude-opus-4-7")
+	AdvisorMaxUses int    `json:"advisorMaxUses,omitempty"` // Max advisor calls per request (0 = unlimited)
+	AdvisorCaching bool   `json:"advisorCaching,omitempty"` // Enable advisor prompt caching
 }
 
 // ErrNoDefaultRole is returned when no default role is configured.
@@ -125,23 +128,23 @@ var modelPrefixes = map[string]string{
 	"gemini": "gemini",
 }
 
-// ResolveRole returns the model name and provider for a given role.
+// ResolveRole returns the model name, provider, and advisor settings for a given role.
 // Falls back: requested role → "default" role → error.
-func (c *Config) ResolveRole(role string) (model string, prov string, err error) {
+func (c *Config) ResolveRole(role string) (model string, prov string, advisorModel string, advisorMaxUses int, advisorCaching bool, err error) {
 	if len(c.Roles) == 0 {
-		return "", "", ErrNoDefaultRole
+		return "", "", "", 0, false, ErrNoDefaultRole
 	}
 
 	rc, ok := c.Roles[role]
 	if !ok {
 		rc, ok = c.Roles["default"]
 		if !ok {
-			return "", "", ErrNoDefaultRole
+			return "", "", "", 0, false, ErrNoDefaultRole
 		}
 	}
 
 	if rc.Model == "" {
-		return "", "", fmt.Errorf("role %q has no model configured", role)
+		return "", "", "", 0, false, fmt.Errorf("role %q has no model configured", role)
 	}
 
 	prov = rc.Provider
@@ -152,7 +155,7 @@ func (c *Config) ResolveRole(role string) (model string, prov string, err error)
 		}
 	}
 
-	return rc.Model, prov, nil
+	return rc.Model, prov, rc.AdvisorModel, rc.AdvisorMaxUses, rc.AdvisorCaching, nil
 }
 
 // autoDetectProvider detects the provider from model name prefix.

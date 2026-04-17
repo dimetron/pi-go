@@ -126,7 +126,7 @@ func TestHandleLoginCommand_UnknownProvider(t *testing.T) {
 func TestHandleLoginCommand_Anthropic(t *testing.T) {
 	mb := withMockBrowser(t)
 	m := &model{}
-	// Anthropic has AuthURL+TokenURL but no device flow → PKCE.
+	// Anthropic uses PKCE with manual-code paste (no local listener).
 	m.handleLoginCommand([]string{"anthropic"})
 	if m.login == nil {
 		t.Fatal("expected login state to be set")
@@ -134,11 +134,18 @@ func TestHandleLoginCommand_Anthropic(t *testing.T) {
 	if m.login.provider != "anthropic" {
 		t.Errorf("expected provider anthropic, got %q", m.login.provider)
 	}
-	if m.login.phase != "sso" {
-		t.Errorf("expected phase sso (PKCE), got %q", m.login.phase)
+	if m.login.phase != "manual-code" {
+		t.Errorf("expected phase manual-code, got %q", m.login.phase)
 	}
-	// PKCE flow passes openBrowser to auth.PKCEFlow which calls it async.
-	// The cmd is not executed here, so no browser call yet.
+	if m.login.manualCode == nil {
+		t.Fatal("expected manualCode session to be set")
+	}
+	if !strings.Contains(m.login.manualCode.AuthURL, "platform.claude.com/oauth/authorize") {
+		t.Errorf("expected platform.claude.com auth URL, got %q", m.login.manualCode.AuthURL)
+	}
+	if !strings.Contains(m.login.manualCode.AuthURL, "code=true") {
+		t.Errorf("expected code=true in auth URL, got %q", m.login.manualCode.AuthURL)
+	}
 	_ = mb
 }
 
