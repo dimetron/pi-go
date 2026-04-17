@@ -462,7 +462,9 @@ func shouldSkipPath(relPath string, d fs.DirEntry, patterns []GitignorePattern) 
 	base := d.Name()
 
 	// Hardcoded directory skips
-	if strings.HasPrefix(base, ".") && base != "." || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+	// Explicitly do NOT skip .pi-go, .cursor, .claude - these contain agent/skill files
+	agentDirs := map[string]bool{".pi-go": true, ".cursor": true, ".claude": true}
+	if strings.HasPrefix(base, ".") && base != "." && !agentDirs[base] || base == "node_modules" || base == "vendor" || base == "__pycache__" {
 		return true
 	}
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -570,5 +571,322 @@ func TestAutoDetectProviderOllamaPrefix(t *testing.T) {
 	}
 	if prov != "ollama" {
 		t.Errorf("expected ollama provider for ollama/ prefix model, got %q", prov)
+	}
+}
+
+// --- MCP config tests ---
+
+func TestLoadMCPServers_GlobalOnly(t *testing.T) {
+	home := t.TempDir()
+
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"mcpServers": [{"name": "global-server", "command": "echo", "args": ["global"]}]}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", home)
+	servers := LoadMCPServers()
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if servers[0].Name != "global-server" {
+		t.Errorf("expected global-server, got %q", servers[0].Name)
+	}
+}
+
+func TestLoadMCPServers_ProjectOverridesGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+
+	// Global has a server.
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	globalJSON := `{"mcpServers": [{"name": "global", "command": "echo", "args": ["global"]}]}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(globalJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Project has a different server.
+	projectDir := filepath.Join(tmp, ".pi-go")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	projectJSON := `{"mcpServers": [{"name": "project", "command": "echo", "args": ["project"]}]}`
+	if err := os.WriteFile(filepath.Join(projectDir, "mcp.json"), []byte(projectJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+	t.Setenv("HOME", home)
+
+	servers := LoadMCPServers()
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server (project override), got %d", len(servers))
+	}
+	if servers[0].Name != "project" {
+		t.Errorf("expected project server, got %q", servers[0].Name)
+	}
+}
+
+func TestLoadMCPServers_NoFiles(t *testing.T) {
+	// Use a temp dir with no mcp.json anywhere.
+	tmp := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	servers := LoadMCPServers()
+	if len(servers) != 0 {
+		t.Errorf("expected 0 servers when no files exist, got %d", len(servers))
+	}
+}
+
+func TestLoad_MergesMCPJSON(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+
+	// Global config.json with no MCP servers.
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfgJSON := `{"roles": {"default": {"model": "gpt-4o"}}}`
+	if err := os.WriteFile(filepath.Join(globalDir, "config.json"), []byte(cfgJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"mcpServers": [{"name": "json-server", "command": "echo", "args": ["from-mcp-json"]}]}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+	t.Setenv("HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		t.Fatal("expected MCP servers from mcp.json to be merged")
+	}
+	if cfg.MCP.Servers[0].Name != "json-server" {
+		t.Errorf("expected json-server, got %q", cfg.MCP.Servers[0].Name)
+	}
+}
+
+func TestLoad_MCPConfigOverridesMCPJSON(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// config.json has MCP servers.
+	cfgJSON := `{
+		"roles": {"default": {"model": "gpt-4o"}},
+		"mcp": {"servers": [{"name": "config-server", "command": "echo", "args": ["from-config"]}]}
+	}`
+	if err := os.WriteFile(filepath.Join(globalDir, "config.json"), []byte(cfgJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// mcp.json has different servers.
+	mcpJSON := `{"mcpServers": [{"name": "json-server", "command": "echo", "args": ["from-mcp-json"]}]}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+	t.Setenv("HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		t.Fatal("expected MCP servers")
+	}
+	// config.json should win over mcp.json.
+	if cfg.MCP.Servers[0].Name != "config-server" {
+		t.Errorf("expected config-server (config.json should override mcp.json), got %q", cfg.MCP.Servers[0].Name)
+	}
+}
+
+func TestLoadMCPServers_ObjectFormat(t *testing.T) {
+	// Claude Desktop format: mcpServers is an object keyed by server name.
+	tmp := t.TempDir()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Object format (Claude Desktop / NPM compatible).
+	objJSON := `{"mcpServers": {"everything": {"command": "go", "args": ["run", "hack/test/mcp/main.go"]}, "cloudflare-api": {"url": "https://mcp.cloudflare.com/mcp"}}}`
+	if err := os.WriteFile(filepath.Join(home, ".pi-go", "mcp.json"), []byte(objJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+	t.Setenv("HOME", home)
+
+	servers := LoadMCPServers()
+	if len(servers) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(servers))
+	}
+	// Servers should be keyed by name.
+	byName := make(map[string]MCPServer)
+	for _, s := range servers {
+		byName[s.Name] = s
+	}
+	if s, ok := byName["everything"]; !ok {
+		t.Error("expected 'everything' server")
+	} else if s.Command != "go" || len(s.Args) != 2 || s.Args[0] != "run" {
+		t.Errorf("unexpected everything command/args: %+v", s)
+	}
+	if s, ok := byName["cloudflare-api"]; !ok {
+		t.Error("expected 'cloudflare-api' server")
+	} else if s.URL != "https://mcp.cloudflare.com/mcp" {
+		t.Errorf("unexpected cloudflare-api URL: %+v", s)
+	}
+}
+
+// TestParseMCPServers_SkipsDisabledServers verifies that servers with neither
+// command nor URL are skipped (e.g., "disabled" servers from Claude Desktop config).
+func TestParseMCPServers_SkipsDisabledServers_ObjectFormat(t *testing.T) {
+	// Simulate Claude Desktop config with a disabled server.
+	objJSON := `{"mcpServers": {
+		"tavily": {"disabled": true, "env": {"TAVILY_API_KEY": "secret"}},
+		"enabled-server": {"command": "echo", "args": ["hello"]}
+	}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server (disabled 'tavily' skipped), got %d", len(servers))
+	}
+	if servers[0].Name != "enabled-server" {
+		t.Errorf("expected enabled-server, got %q", servers[0].Name)
+	}
+}
+
+func TestParseMCPServers_SkipsDisabledServers_ArrayFormat(t *testing.T) {
+	// Legacy array format with disabled server.
+	arrJSON := `{"mcpServers": [
+		{"name": "tavily", "disabled": true},
+		{"name": "enabled", "command": "echo", "args": ["hello"]}
+	]}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(arrJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server (disabled 'tavily' skipped), got %d", len(servers))
+	}
+	if servers[0].Name != "enabled" {
+		t.Errorf("expected enabled, got %q", servers[0].Name)
+	}
+}
+
+// TestParseMCPServers_URLOnly verifies that servers with only URL work.
+func TestParseMCPServers_URLOnly(t *testing.T) {
+	objJSON := `{"mcpServers": {"web-search": {"url": "https://api.example.com/mcp"}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if servers[0].Name != "web-search" {
+		t.Errorf("expected web-search, got %q", servers[0].Name)
+	}
+	if servers[0].URL != "https://api.example.com/mcp" {
+		t.Errorf("expected URL, got %q", servers[0].URL)
+	}
+}
+
+func TestSubstituteEnvVars(t *testing.T) {
+	// substituteEnvVars loads from .env file, so we test it indirectly
+	// by ensuring it handles servers with no variables correctly.
+	servers := []MCPServer{
+		{Name: "static", URL: "https://static.example.com/mcp"},
+		{Name: "empty", URL: "https://empty.example.com/mcp"},
+	}
+
+	result := substituteEnvVars(servers)
+
+	// Static URLs should remain unchanged.
+	if result[0].URL != "https://static.example.com/mcp" {
+		t.Errorf("expected unchanged URL, got %q", result[0].URL)
+	}
+}
+
+func TestSubstituteEnv(t *testing.T) {
+	env := map[string]string{
+		"TAVILY_API_KEY": "tvly-test-key-123",
+		"OTHER_KEY":      "other-value",
+	}
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}",
+			"https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-test-key-123"},
+		{"https://example.com/mcp?key=${OTHER_KEY}",
+			"https://example.com/mcp?key=other-value"},
+		{"https://static.example.com/mcp",
+			"https://static.example.com/mcp"},
+	}
+
+	for _, tt := range tests {
+		result := substituteEnv(env, tt.input)
+		if result != tt.expected {
+			t.Errorf("substituteEnv(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestSubstituteEnv_MissingVar(t *testing.T) {
+	env := map[string]string{"EXISTING": "val"}
+	result := substituteEnv(env, "https://example.com/?key=${MISSING}")
+	if result != "https://example.com/?key=" {
+		t.Errorf("expected missing var replaced with empty, got %q", result)
 	}
 }

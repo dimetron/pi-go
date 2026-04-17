@@ -13,6 +13,8 @@ import (
 	"github.com/charmbracelet/glamour"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/dimetron/pi-go/internal/extension"
 )
 
 // model is the Bubble Tea model for the interactive TUI.
@@ -62,9 +64,6 @@ type model struct {
 
 	// Login flow state.
 	login *loginState
-
-	// Plan flow state (/plan override confirmation).
-	plan *planState
 
 	// Skill-create pending overwrite confirmation.
 	pendingSkillCreate *pendingSkillCreate
@@ -436,20 +435,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Handle plan override confirmation.
-	if !m.running && m.plan != nil && m.plan.phase == "confirming_override" {
-		switch {
-		case key.Code == tea.KeyEnter:
-			return m.handlePlanOverride()
-		case key.Code == tea.KeyEsc:
-			return m.handlePlanCancel()
-		case key.Code == 'c' && key.Mod == tea.ModCtrl:
-			return m.handlePlanCancel()
-		default:
-			return m, nil
-		}
-	}
-
 	// Handle branch popup.
 	if m.branchPopup != nil {
 		switch key.Code {
@@ -688,6 +673,7 @@ func (m *model) View() tea.View {
 			MatrixLines:  "",
 			StatusLine:   "",
 			Orchestrator: m.cfg.Orchestrator,
+			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -964,6 +950,8 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.statusModel.GitBranch = r.GitBranch
 		m.diffAdded = r.DiffAdded
 		m.diffRemoved = r.DiffRemoved
+		m.cfg.MCPToolsets = r.MCPToolsets
+		m.cfg.MCPServers = r.MCPServers
 
 		// Update input model with loaded skills.
 		m.inputModel.Skills = r.Skills

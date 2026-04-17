@@ -555,12 +555,12 @@ var slashCommands = []string{
 	"/login",
 	"/commit",
 	"/plan",
-	"/plan resume",
 	"/run",
 	"/skills",
 	"/theme",
 	"/ping",
 	"/rtk",
+	"/mcp",
 	"/restart",
 	"/exit",
 	"/quit",
@@ -587,6 +587,8 @@ func slashCommandDesc(cmd string) string {
 		return "Show subagents"
 	case "/rtk":
 		return "Output compaction stats"
+	case "/mcp":
+		return "List MCP servers and tool status"
 	case "/history":
 		return "Command history"
 	case "/login":
@@ -595,8 +597,6 @@ func slashCommandDesc(cmd string) string {
 		return "Create commit from staged changes"
 	case "/plan":
 		return "Start PDD planning session"
-	case "/plan resume":
-		return "Resume interrupted plan session"
 	case "/run":
 		return "Execute a spec with task agent"
 	case "/theme":

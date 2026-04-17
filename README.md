@@ -135,26 +135,26 @@ pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
 
 ### Slash commands
 
-| Command          | Description                                |
-|------------------|--------------------------------------------|
-| `/help`          | Show available commands                   |
-| `/model`         | Switch model mid-conversation             |
-| `/session`       | List and switch sessions                  |
-| `/branch`        | Create a conversation branch              |
-| `/commit`        | Generate and apply a git commit           |
-| `/compact`       | Compact session history                   |
-| `/agents`        | Show running subagents                    |
-| `/history`       | Show command history                      |
-| `/plan`          | Start PDD planning session                |
-| `/run`           | Execute a spec with task agent            |
-| `/skill-create`  | Create a new skill                        |
-| `/skill-list`    | List available skills                     |
-| `/skill-load`    | Reload skills from disk                   |
-| `/memory`        | Memory Palace commands (see below)        |
-| `/audit`         | Scan skills for hidden Unicode threats    |
-| `/restart`       | Restart pi-go                             |
-| `/clear`         | Clear conversation                        |
-| `/exit`          | Exit the agent                            |
+| Command         | Description                                              |
+|-----------------|----------------------------------------------------------|
+| `/help`         | Show available commands                                  |
+| `/model`        | Switch model mid-conversation                            |
+| `/session`      | List and switch sessions                                 |
+| `/branch`       | Create a conversation branch                             |
+| `/commit`       | Generate and apply a git commit                          |
+| `/compact`      | Compact session history                                  |
+| `/agents`       | Show running subagents                                   |
+| `/history`      | Show command history                                     |
+| `/plan`         | Start PDD planning session (auto-resumes if spec exists) |
+| `/run`          | Execute a spec with task agent                           |
+| `/skill-create` | Create a new skill                                       |
+| `/skill-list`   | List available skills                                    |
+| `/skill-load`   | Reload skills from disk                                  |
+| `/memory`       | Memory Palace commands (see below)                       |
+| `/audit`        | Scan skills for hidden Unicode threats                   |
+| `/restart`      | Restart pi-go                                            |
+| `/clear`        | Clear conversation                                       |
+| `/exit`         | Exit the agent                                           |
 
 ### Memory Palace
 
@@ -240,6 +240,60 @@ Pi looks for configuration in `~/.pi-go/config.json` (global) and `.pi-go/config
 - **Hooks** — Shell commands triggered on tool events (e.g., post-write formatting)
 - **MCP servers** — External tool servers via Model Context Protocol
 - **Themes** — Terminal color schemes via `theme` config field
+
+### MCP Server Integration
+
+Pi supports the [Model Context Protocol](https://modelcontextprotocol.io/) for extending the agent with external tools.
+Configure servers in `~/.pi-go/config.json`:
+
+```json
+{
+  "mcp": {
+    "servers": [
+      {
+        "name": "tavily-search",
+        "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
+      },
+      {
+        "name": "filesystem",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "/tmp"
+        ]
+      }
+    ]
+  }
+}
+```
+
+Or in standalone `~/.pi-go/mcp.json` (Claude Desktop compatible format):
+
+```json
+{
+  "mcpServers": {
+    "tavily-search": {
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp"
+      ]
+    }
+  }
+}
+```
+
+**Supported transports:**
+
+- **HTTP/Streamable** — `url` field for cloud-based MCP servers
+- **Stdio** — `command` + `args` for local subprocess servers
+
+**Environment variable substitution:** Pi automatically expands `${ENV_VAR}` patterns in server URLs using `.pi-go/.env`
 
 ## License
 

@@ -89,8 +89,9 @@ type MCPConfig struct {
 
 type MCPServer struct {
 	Name    string   `json:"name"`
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"` // HTTP transport (e.g., cloudflare-api)
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -185,7 +186,8 @@ func autoDetectProvider(modelName string) string {
 }
 
 // Load reads config from global (~/.pi-go/config.json) and project (.pi-go/config.json),
-// merging project overrides onto global.
+// merging project overrides onto global. MCP servers are also loaded from
+// separate .pi-go/mcp.json files if present.
 func Load() (Config, error) {
 	cfg := Defaults()
 
@@ -202,6 +204,15 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 
+	// Load MCP config from separate mcp.json files if present.
+	mcpServers := LoadMCPServers()
+	if len(mcpServers) > 0 {
+		// Merge: mcp.json servers take precedence if none in config.json.
+		if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+			cfg.MCP = &MCPConfig{Servers: mcpServers}
+		}
+	}
+
 	// Migrate deprecated DefaultModel to roles if roles not set.
 	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
 		cfg.Roles = map[string]RoleConfig{
@@ -215,6 +226,184 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// mcpServerFile represents the JSON structure of a standalone mcp.json file.
+// MCP JSON Schema v1 (Claude Desktop / NPM compatible) — mcpServers as object.
+// Also supports the legacy array format used in config.json.
+type mcpServerFile struct {
+	MCPServers any `json:"mcpServers"` // object (Claude Desktop) or []MCPServer (legacy)
+}
+
+// LoadMCPServers reads MCP server configurations from standalone mcp.json files.
+// Resolution order: project .pi-go/mcp.json overrides global ~/.pi-go/mcp.json.
+// Supports both the Claude Desktop object format (servers keyed by name) and
+// the legacy array format.
+func LoadMCPServers() []MCPServer {
+	var servers []MCPServer
+
+	// Try global path first.
+	if home, err := os.UserHomeDir(); err == nil {
+		globalPath := filepath.Join(home, ".pi-go", "mcp.json")
+		servers = loadMCPServersFromFile(globalPath)
+	}
+
+	// Project path overrides global (only if project file exists).
+	projectPath := filepath.Join(".pi-go", "mcp.json")
+	if projectServers := loadMCPServersFromFile(projectPath); projectServers != nil {
+		servers = projectServers
+	}
+
+	return servers
+}
+
+// loadMCPServersFromFile reads MCP servers from a single mcp.json file.
+// Returns nil if the file does not exist. Supports both object format
+// (Claude Desktop) and array format.
+func loadMCPServersFromFile(path string) []MCPServer {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return nil
+	}
+	var f mcpServerFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil
+	}
+	servers := parseMCPServers(f.MCPServers)
+	return substituteEnvVars(servers)
+}
+
+// SubstituteEnvVars replaces ${VAR} patterns in server URLs with values from
+// ~/.pi-go/.env (or project .pi-go/.env). Secrets stay in the file and are
+// never exposed in logs or TUI.
+func substituteEnvVars(servers []MCPServer) []MCPServer {
+	// Load env from ~/.pi-go/.env
+	env := loadEnvFile()
+	for i := range servers {
+		if servers[i].URL != "" {
+			servers[i].URL = substituteEnv(env, servers[i].URL)
+		}
+	}
+	return servers
+}
+
+// loadEnvFile reads key=value pairs from ~/.pi-go/.env and project
+// .pi-go/.env, with project values overriding global ones.
+func loadEnvFile() map[string]string {
+	result := make(map[string]string)
+	if home, err := os.UserHomeDir(); err == nil {
+		mergeEnvFile(result, filepath.Join(home, ".pi-go", ".env"))
+	}
+	mergeEnvFile(result, filepath.Join(".pi-go", ".env"))
+	return result
+}
+
+// mergeEnvFile parses a single .env file and writes entries into dst.
+// Missing files are silently ignored.
+func mergeEnvFile(dst map[string]string, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		dst[strings.TrimSpace(key)] = strings.TrimSpace(val)
+	}
+}
+
+// substituteEnv replaces ${VAR} patterns in s with values from env map.
+func substituteEnv(env map[string]string, s string) string {
+	return os.Expand(s, func(key string) string {
+		if v, ok := env[key]; ok {
+			return v
+		}
+		return os.Getenv(key) // fallback to real env
+	})
+}
+
+// parseMCPServers handles both Claude Desktop object format and legacy array format.
+func parseMCPServers(v any) []MCPServer {
+	if v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		// Claude Desktop object format: mcpServers is a map keyed by server name.
+		// Each value is { "command": "...", "args": [...] } or { "url": "..." }.
+		servers := make([]MCPServer, 0, len(x))
+		for name, val := range x {
+			srv := MCPServer{Name: name}
+			if m, ok := val.(map[string]any); ok {
+				if cmd, ok := m["command"].(string); ok {
+					srv.Command = cmd
+				}
+				if args, ok := m["args"].([]any); ok {
+					srv.Args = toStringSlice(args)
+				}
+				if url, ok := m["url"].(string); ok {
+					srv.URL = url
+				}
+			}
+			// Skip servers that have neither command nor URL (e.g., disabled servers).
+			if srv.Command == "" && srv.URL == "" {
+				continue
+			}
+			servers = append(servers, srv)
+		}
+		return servers
+	case []any:
+		// Legacy array format.
+		servers := make([]MCPServer, 0, len(x))
+		for _, item := range x {
+			if m, ok := item.(map[string]any); ok {
+				srv := MCPServer{}
+				if n, ok := m["name"].(string); ok {
+					srv.Name = n
+				}
+				if cmd, ok := m["command"].(string); ok {
+					srv.Command = cmd
+				}
+				if args, ok := m["args"].([]any); ok {
+					srv.Args = toStringSlice(args)
+				}
+				if url, ok := m["url"].(string); ok {
+					srv.URL = url
+				}
+				// Skip servers that have neither command nor URL.
+				if srv.Command == "" && srv.URL == "" {
+					continue
+				}
+				servers = append(servers, srv)
+			}
+		}
+		return servers
+	default:
+		return nil
+	}
+}
+
+// toStringSlice converts []any to []string.
+func toStringSlice(v []any) []string {
+	if v == nil {
+		return nil
+	}
+	s := make([]string, len(v))
+	for i, x := range v {
+		if str, ok := x.(string); ok {
+			s[i] = str
+		}
+	}
+	return s
 }
 
 func loadFile(path string, cfg *Config) error {
