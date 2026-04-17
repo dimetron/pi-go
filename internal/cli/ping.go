@@ -105,7 +105,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 		activeRole = "plan"
 	}
 
-	modelName, providerName, err := cfg.ResolveRole(activeRole)
+	modelName, providerName, _, _, _, err := cfg.ResolveRole(activeRole)
 	if err != nil {
 		return fmt.Errorf("resolving model role: %w", err)
 	}

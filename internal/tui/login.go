@@ -16,8 +16,9 @@ import (
 
 // loginState tracks the /login interactive flow.
 type loginState struct {
-	phase    string // "waiting" (manual key), "sso" (browser SSO), "device" (device code)
-	provider string // selected provider
+	phase      string // "waiting" (manual key), "sso" (browser SSO), "device" (device code), "manual-code" (browser + paste code)
+	provider   string // selected provider
+	manualCode *auth.ManualCodeSession
 }
 
 // loginSSOResultMsg is sent when the SSO flow completes asynchronously.
@@ -93,14 +94,53 @@ func (m *model) loginStart(prov auth.Provider) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Auto-select: device flow > PKCE > manual.
+	// Auto-select: device flow > manual-code > PKCE > manual.
 	if prov.UseDeviceFlow && prov.DeviceURL != "" {
 		return m.loginStartDeviceFlow(prov)
+	}
+	if prov.ManualCode && prov.AuthURL != "" && prov.TokenURL != "" {
+		return m.loginStartManualCode(prov)
 	}
 	if prov.AuthURL != "" && prov.TokenURL != "" {
 		return m.loginStartPKCEFlow(prov)
 	}
 	return m.loginStartManual(prov)
+}
+
+// loginStartManualCode runs the PKCE flow for providers (Anthropic) that
+// display the authorization code in the browser instead of redirecting back to
+// a local listener. The user pastes the code into the prompt.
+func (m *model) loginStartManualCode(prov auth.Provider) (tea.Model, tea.Cmd) {
+	sess, err := auth.StartManualCodeFlow(prov)
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Login error for %s: %v", prov.Name, err),
+		})
+		return m, nil
+	}
+
+	_ = openBrowser(sess.AuthURL)
+
+	m.login = &loginState{
+		phase:      "manual-code",
+		provider:   prov.Name,
+		manualCode: sess,
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf(
+			"**%s Login**\n\n"+
+				"1. Approve access in your browser (opened automatically).\n"+
+				"2. Copy the code shown on the page.\n"+
+				"3. Paste it here and press **Enter**.\n\n"+
+				"If the browser did not open, visit:\n%s\n\n"+
+				"Press **Esc** to cancel.",
+			prov.Name, sess.AuthURL),
+	})
+
+	return m, nil
 }
 
 // loginStartManual opens the provider key page and waits for manual key entry.
@@ -281,6 +321,35 @@ func (m *model) handleLoginSave(apiKey string) (tea.Model, tea.Cmd) {
 			provName, masked),
 	})
 	return m, nil
+}
+
+// handleLoginCodeSubmit exchanges a pasted manual-code for an API key.
+func (m *model) handleLoginCodeSubmit(pasted string) (tea.Model, tea.Cmd) {
+	sess := m.login.manualCode
+	provName := m.login.provider
+	if sess == nil {
+		m.login = nil
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Internal error: no manual-code session.",
+		})
+		return m, nil
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Exchanging code for **%s** API key...", provName),
+	})
+
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := auth.CompleteManualCodeFlow(ctx, sess, pasted)
+		if err != nil {
+			result = &auth.Result{Provider: provName, Err: err}
+		}
+		return loginSSOResultMsg{result: result}
+	}
 }
 
 // handleLoginCancel cancels the login flow.

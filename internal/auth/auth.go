@@ -22,19 +22,23 @@ import (
 
 // Provider holds OAuth configuration for an LLM provider.
 type Provider struct {
-	Name          string
-	EnvVar        string
-	AuthURL       string // OAuth authorization endpoint
-	TokenURL      string // OAuth token endpoint
-	ClientID      string // OAuth client ID (public client)
-	Scopes        []string
-	ExtraParams   map[string]string // additional auth URL params
-	TokenToKey    func(tok *TokenResponse) string
-	KeyPageURL    string // fallback manual key page
-	DeviceURL     string // device authorization endpoint (optional)
-	UseDeviceFlow bool   // prefer device code flow over PKCE
-	TLSPreflight  bool   // run TLS preflight before OAuth (OpenAI Codex)
-	CodexOAuth    bool   // use Codex OAuth callback + token-exchange semantics
+	Name              string
+	EnvVar            string
+	AuthURL           string // OAuth authorization endpoint
+	TokenURL          string // OAuth token endpoint
+	ClientID          string // OAuth client ID (public client)
+	Scopes            []string
+	ExtraParams       map[string]string // additional auth URL params
+	TokenToKey        func(tok *TokenResponse) string
+	KeyPageURL        string // fallback manual key page
+	DeviceURL         string // device authorization endpoint (optional)
+	UseDeviceFlow     bool   // prefer device code flow over PKCE
+	TLSPreflight      bool   // run TLS preflight before OAuth (OpenAI Codex)
+	CodexOAuth        bool   // use Codex OAuth callback + token-exchange semantics
+	ManualCode        bool   // browser displays code; user pastes it (no local listener)
+	ManualRedirectURI string // fixed redirect URI for manual-code flow
+	TokenJSONBody     bool   // POST token exchange as JSON (Anthropic) instead of form-encoded
+	APIKeyURL         string // optional: exchange OAuth access_token for an API key via this endpoint
 }
 
 // TokenResponse holds the OAuth token response.
@@ -48,6 +52,7 @@ type TokenResponse struct {
 	APIKey       string `json:"api_key"`        // some providers return key directly
 	APIKeyCamel  string `json:"apiKey"`         // alternate camelCase response key
 	OpenAIAPIKey string `json:"openai_api_key"` // alternate token-exchange response key
+	RawKey       string `json:"raw_key"`        // Anthropic create_api_key response
 }
 
 // DeviceCodeResponse holds the device authorization response.
@@ -73,10 +78,22 @@ func Providers() []Provider {
 		{
 			Name:     "anthropic",
 			EnvVar:   "ANTHROPIC_API_KEY",
-			AuthURL:  "https://console.anthropic.com/oauth/authorize",
-			TokenURL: "https://console.anthropic.com/oauth/token",
-			ClientID: "pi-go-cli",
-			Scopes:   []string{"api"},
+			AuthURL:  "https://platform.claude.com/oauth/authorize",
+			TokenURL: "https://platform.claude.com/v1/oauth/token",
+			ClientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+			Scopes: []string{
+				"org:create_api_key",
+				"user:profile",
+				"user:inference",
+				"user:sessions:claude_code",
+				"user:mcp_servers",
+				"user:file_upload",
+			},
+			ExtraParams:       map[string]string{"code": "true"},
+			ManualCode:        true,
+			ManualRedirectURI: "https://platform.claude.com/oauth/code/callback",
+			APIKeyURL:         "https://api.anthropic.com/api/oauth/claude_cli/create_api_key",
+			TokenJSONBody:     true,
 			TokenToKey: func(tok *TokenResponse) string {
 				if tok.APIKey != "" {
 					return tok.APIKey
@@ -234,6 +251,170 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 			EnvVar:   prov.EnvVar,
 		}, nil
 	}
+}
+
+// --- Manual Code Flow ---
+
+// ManualCodeSession holds the state needed to complete a manual-code OAuth flow.
+// The caller builds the auth URL via StartManualCodeFlow, opens a browser, then
+// asks the user to paste the code displayed by the OAuth server and passes it to
+// CompleteManualCodeFlow.
+type ManualCodeSession struct {
+	Provider    Provider
+	AuthURL     string
+	Verifier    string
+	State       string
+	RedirectURI string
+}
+
+// StartManualCodeFlow builds an authorization URL for a provider that expects the
+// user to copy a code from the browser and paste it into the CLI. No local HTTP
+// listener is started; the OAuth server's own page shows the code.
+func StartManualCodeFlow(prov Provider) (*ManualCodeSession, error) {
+	if !prov.ManualCode {
+		return nil, fmt.Errorf("provider %s is not configured for manual-code flow", prov.Name)
+	}
+	if prov.ManualRedirectURI == "" {
+		return nil, fmt.Errorf("provider %s has no ManualRedirectURI", prov.Name)
+	}
+	verifier, challenge := generatePKCE()
+	state := generateState()
+	authURL := buildAuthURL(prov, prov.ManualRedirectURI, state, challenge)
+	return &ManualCodeSession{
+		Provider:    prov,
+		AuthURL:     authURL,
+		Verifier:    verifier,
+		State:       state,
+		RedirectURI: prov.ManualRedirectURI,
+	}, nil
+}
+
+// CompleteManualCodeFlow exchanges a pasted authorization code for a token.
+// Anthropic's manual-code flow emits codes formatted as "<code>#<state>"; the
+// trailing state fragment is validated against the session state before the
+// token exchange. When the provider has an APIKeyURL, the OAuth access token is
+// exchanged for a provider-managed API key.
+func CompleteManualCodeFlow(ctx context.Context, sess *ManualCodeSession, pasted string) (*Result, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nil session")
+	}
+	code, state := splitCodeState(pasted)
+	if state == "" || state != sess.State {
+		return nil, fmt.Errorf("state missing or mismatched — paste the full code including the #state suffix")
+	}
+	tok, err := exchangeCodeManual(ctx, sess.Provider, code, sess.RedirectURI, sess.Verifier, state)
+	if err != nil {
+		return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
+	}
+	apiKey := sess.Provider.TokenToKey(tok)
+	if sess.Provider.APIKeyURL != "" && tok.AccessToken != "" {
+		raw, err := createAPIKey(ctx, sess.Provider, tok.AccessToken)
+		if err != nil {
+			return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("api key creation: %w", err)}, nil
+		}
+		apiKey = raw
+	}
+	return &Result{
+		Provider: sess.Provider.Name,
+		APIKey:   apiKey,
+		EnvVar:   sess.Provider.EnvVar,
+	}, nil
+}
+
+// exchangeCodeManual exchanges an authorization code for a token, using JSON
+// body + state (required by Anthropic) when Provider.TokenJSONBody is set.
+func exchangeCodeManual(ctx context.Context, prov Provider, code, redirectURI, verifier, state string) (*TokenResponse, error) {
+	var req *http.Request
+	var err error
+	if prov.TokenJSONBody {
+		payload := map[string]string{
+			"grant_type":    "authorization_code",
+			"code":          code,
+			"redirect_uri":  redirectURI,
+			"client_id":     prov.ClientID,
+			"code_verifier": verifier,
+			"state":         state,
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+	} else {
+		data := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {code},
+			"redirect_uri":  {redirectURI},
+			"client_id":     {prov.ClientID},
+			"code_verifier": {verifier},
+			"state":         {state},
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
+	}
+	var tok TokenResponse
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return nil, fmt.Errorf("parsing token response: %w", err)
+	}
+	return &tok, nil
+}
+
+// createAPIKey exchanges an OAuth access token for a provider-managed API key.
+// Anthropic exposes POST /api/oauth/claude_cli/create_api_key with a bearer
+// token; the response body contains {"raw_key": "sk-ant-..."}.
+func createAPIKey(ctx context.Context, prov Provider, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.APIKeyURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("create_api_key failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
+	}
+	var out struct {
+		RawKey string `json:"raw_key"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("parsing create_api_key response: %w", err)
+	}
+	if out.RawKey == "" {
+		return "", fmt.Errorf("create_api_key response missing raw_key")
+	}
+	return out.RawKey, nil
+}
+
+func splitCodeState(pasted string) (code, state string) {
+	pasted = strings.TrimSpace(pasted)
+	if i := strings.Index(pasted, "#"); i >= 0 {
+		return pasted[:i], pasted[i+1:]
+	}
+	return pasted, ""
 }
 
 // --- Device Code Flow ---

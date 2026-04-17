@@ -152,7 +152,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		activeRole = "plan"
 	}
 
-	modelName, providerName, err := cfg.ResolveRole(activeRole)
+	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole(activeRole)
 	if err != nil {
 		return fmt.Errorf("resolving model role: %w", err)
 	}
@@ -198,10 +198,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build LLM options: extra headers + insecure TLS.
+	// Build LLM options: extra headers + insecure TLS + advisor config.
 	llmOpts := &provider.LLMOptions{
 		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+		AdvisorModel:    advisorModel,
+		AdvisorMaxUses:  advisorMaxUses,
+		AdvisorCaching:  advisorCaching,
 	}
 
 	// Create the LLM provider.
@@ -889,9 +892,9 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 // It resolves the "commit" role (falling back to "default") and creates a one-shot LLM.
 func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Context, string) (string, error) {
 	// Resolve commit role, fall back to default.
-	commitModel, commitProvider, err := cfg.ResolveRole("commit")
+	commitModel, commitProvider, _, _, _, err := cfg.ResolveRole("commit")
 	if err != nil {
-		commitModel, commitProvider, err = cfg.ResolveRole("default")
+		commitModel, commitProvider, _, _, _, err = cfg.ResolveRole("default")
 		if err != nil {
 			return nil // no model available
 		}

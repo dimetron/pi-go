@@ -415,8 +415,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.inputModel.Clear()
 			return m.handleLoginSave(apiKey)
+		case key.Code == tea.KeyEnter && m.login.phase == "manual-code":
+			code := strings.TrimSpace(m.inputModel.Text)
+			if code == "" {
+				return m, nil
+			}
+			m.inputModel.Clear()
+			return m.handleLoginCodeSubmit(code)
 		}
-		if m.login.phase != "waiting" {
+		if m.login.phase != "waiting" && m.login.phase != "manual-code" {
 			return m, nil
 		}
 	}
