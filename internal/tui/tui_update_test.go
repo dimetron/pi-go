@@ -269,38 +269,6 @@ func TestHandleKey_LoginCancelEsc(t *testing.T) {
 	}
 }
 
-func TestHandleKey_PlanConfirmingOverride(t *testing.T) {
-	m := &model{
-		running:   false,
-		plan:      &planState{phase: "confirming_override"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	// Press Enter to confirm override
-	newM, cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	mm := newM.(*model)
-
-	// Plan should proceed or be cleared depending on implementation
-	_ = mm.plan
-	_ = cmd
-}
-
-func TestHandleKey_PlanConfirmingCancel(t *testing.T) {
-	m := &model{
-		running:   false,
-		plan:      &planState{phase: "confirming_override"},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	// Press Escape to cancel
-	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
-	mm := newM.(*model)
-
-	if mm.plan != nil {
-		t.Error("plan should be cleared on cancel")
-	}
-}
-
 func TestHandleKey_RunningAgent(t *testing.T) {
 	m := &model{
 		running:    true,

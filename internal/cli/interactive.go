@@ -299,6 +299,7 @@ func deferredInit(
 				Name:    s.Name,
 				Command: s.Command,
 				Args:    s.Args,
+				URL:     s.URL,
 			}
 		}
 		ts, _ := extension.BuildMCPToolsets(mcpServers)
@@ -532,6 +533,8 @@ func deferredInit(
 			GitBranch:         ps.gitBranch,
 			DiffAdded:         ps.diffAdded,
 			DiffRemoved:       ps.diffRemoved,
+			MCPToolsets:       ps.mcpToolsets,
+			MCPServers:        buildMCPServerConfigs(cfg),
 		},
 	}
 }
@@ -597,4 +600,20 @@ func countUntrackedLines(cwd string) int {
 		}
 	}
 	return total
+}
+
+// buildMCPServerConfigs converts config.MCPServer slice to extension.MCPServerConfig slice.
+func buildMCPServerConfigs(cfg config.Config) []extension.MCPServerConfig {
+	if cfg.MCP == nil {
+		return nil
+	}
+	out := make([]extension.MCPServerConfig, len(cfg.MCP.Servers))
+	for i, s := range cfg.MCP.Servers {
+		out[i] = extension.MCPServerConfig{
+			Name:    s.Name,
+			Command: s.Command,
+			Args:    s.Args,
+		}
+	}
+	return out
 }

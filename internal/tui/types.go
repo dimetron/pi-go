@@ -12,6 +12,7 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	llmmodel "google.golang.org/adk/model"
+	adktool "google.golang.org/adk/tool"
 )
 
 // Config holds configuration for the TUI.
@@ -54,6 +55,11 @@ type Config struct {
 	// initialization progress updates. The final event carries the fully
 	// initialized subsystems in its Result field.
 	DeferredInit <-chan InitEvent
+
+	// MCPToolsets holds the live MCP toolsets, used by /mcp to show status.
+	MCPToolsets []adktool.Toolset
+	// MCPServers holds the configured MCP server definitions.
+	MCPServers []extension.MCPServerConfig
 }
 
 // InitEvent reports progress from deferred initialization.
@@ -82,6 +88,10 @@ type InitResult struct {
 	GitBranch         string
 	DiffAdded         int
 	DiffRemoved       int
+	// MCPToolsets holds the live MCP toolsets for /mcp status display.
+	MCPToolsets []adktool.Toolset
+	// MCPServers holds the configured MCP server definitions.
+	MCPServers []extension.MCPServerConfig
 }
 
 // CompactStatsProvider provides compaction statistics for TUI display.

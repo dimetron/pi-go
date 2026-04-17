@@ -164,14 +164,6 @@ func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 	return specDir, nil
 }
 
-// planState tracks the /plan interactive flow (override confirmation).
-type planState struct {
-	phase     string // "confirming_override"
-	taskName  string
-	roughIdea string
-	specDir   string // existing spec directory path
-}
-
 // handlePlanCommand processes "/plan <rough idea>" input.
 // Creates the spec skeleton, loads the PDD SOP, injects it as the system
 // instruction, clears the conversation, and sends the rough idea as the
@@ -201,21 +193,11 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 
 	specDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
 	if err != nil {
-		// Check if it's an "already exists" error — prompt for override.
+		// Directory exists — auto-resume the existing plan.
 		existingDir := filepath.Join(m.cfg.WorkDir, "specs", taskName)
 		if strings.Contains(err.Error(), "already exists") {
-			m.plan = &planState{
-				phase:     "confirming_override",
-				taskName:  taskName,
-				roughIdea: roughIdea,
-				specDir:   existingDir,
-			}
-			m.chatModel.Messages = append(m.chatModel.Messages, message{
-				role: "assistant",
-				content: fmt.Sprintf("Spec directory already exists: `%s`\n\nPress **Enter** to override, **Esc** to cancel.",
-					existingDir),
-			})
-			return m, nil
+			specDir = existingDir
+			return m.startPlanSession(taskName, roughIdea, specDir)
 		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
@@ -226,137 +208,6 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	}
 
 	return m.startPlanSession(taskName, roughIdea, specDir)
-}
-
-// handlePlanOverride removes the existing spec directory and restarts the plan flow.
-func (m *model) handlePlanOverride() (tea.Model, tea.Cmd) {
-	if m.plan == nil || m.plan.phase != "confirming_override" {
-		return m, nil
-	}
-
-	taskName := m.plan.taskName
-	roughIdea := m.plan.roughIdea
-	specDir := m.plan.specDir
-	m.plan = nil
-
-	// Remove the existing spec directory.
-	if err := os.RemoveAll(specDir); err != nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Error removing spec directory: %v", err),
-		})
-		return m, nil
-	}
-
-	// Recreate the skeleton.
-	newSpecDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
-	if err != nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Error: %v", err),
-		})
-		return m, nil
-	}
-
-	return m.startPlanSession(taskName, roughIdea, newSpecDir)
-}
-
-// handlePlanCancel cancels the plan override prompt.
-func (m *model) handlePlanCancel() (tea.Model, tea.Cmd) {
-	m.plan = nil
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role:    "assistant",
-		content: "Plan canceled.",
-	})
-	return m, nil
-}
-
-// handlePlanResumeCommand processes "/plan resume".
-// Resumes the last interrupted plan session from session metadata.
-func (m *model) handlePlanResumeCommand() (tea.Model, tea.Cmd) {
-	// Get plan context from session metadata.
-	if m.cfg.SessionService == nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "Plan resume not available (no session service configured).",
-		})
-		return m, nil
-	}
-
-	ctx, err := m.cfg.SessionService.GetPlanContext(m.cfg.SessionID)
-	if err != nil || ctx == nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "No active plan session to resume.\n\nStart a new plan with `/plan <rough idea>`",
-		})
-		return m, nil
-	}
-
-	// Validate spec directory still exists.
-	if _, err := os.Stat(ctx.SpecDir); err != nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Spec directory no longer exists: `%s`\n\nStart a new plan with `/plan %s`", ctx.SpecDir, ctx.RoughIdea),
-		})
-		return m, nil
-	}
-
-	// Reload the PDD SOP.
-	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
-	if err != nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Error loading PDD SOP: %v", err),
-		})
-		return m, nil
-	}
-
-	// Rebuild agent with SOP instruction (reuse session — key resume behavior).
-	instruction := sopText + "\n\n## Current Task\n" +
-		"- Task name: " + ctx.TaskName + "\n" +
-		"- Spec directory: specs/" + ctx.TaskName + "/\n" +
-		"- Rough idea: " + ctx.RoughIdea + "\n\n" +
-		"## Instructions\n" +
-		"The spec skeleton has been created at `" + ctx.SpecDir + "`. " +
-		"Begin the PDD process starting with Step 2 (Initial Process Planning).\n" +
-		"Artifacts should be written to `specs/" + ctx.TaskName + "/` using the write and edit tools.\n"
-
-	if m.cfg.Agent == nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "Error: no agent configured for /plan",
-		})
-		return m, nil
-	}
-	if err := m.cfg.Agent.RebuildWithInstruction(instruction); err != nil {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Error configuring agent: %v", err),
-		})
-		return m, nil
-	}
-
-	// Clear conversation and inject resume prompt.
-	m.chatModel.Messages = m.chatModel.Messages[:0]
-	m.chatModel.Scroll = 0
-	m.chatModel.Streaming = ""
-	m.chatModel.Thinking = ""
-
-	resumePrompt := fmt.Sprintf("Resume the plan session for **%s**.\n\nThe spec directory `specs/%s/` already exists. Continue the PDD process from where it left off, using the existing artifacts and conversation history to guide your next steps.", ctx.TaskName, ctx.TaskName)
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role:    "assistant",
-		content: fmt.Sprintf("Resuming PDD session for **%s**\n\nSpec directory: `%s`", ctx.TaskName, ctx.SpecDir),
-	})
-	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: resumePrompt})
-	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
-
-	m.mode = "plan"
-	m.running = true
-
-	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(resumePrompt)
-
-	return m, waitForAgent(m.agentCh)
 }
 
 // startPlanSession loads the SOP, rebuilds the agent, and starts streaming.
