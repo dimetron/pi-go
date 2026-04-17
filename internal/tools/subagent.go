@@ -122,6 +122,10 @@ Modes:
 - Parallel: {tasks: [{agent: "<name>", task: "<prompt>"}, ...]} — run multiple agents concurrently (max 8)
 - Chain: {chain: [{agent: "<name>", task: "<prompt>"}, ...]} — run agents sequentially, passing results forward
 
+Worktree agents:
+- Agents marked [worktree] edit an isolated git worktree. Normal subagent calls return only the agent output; those edits are not applied to the current tree unless the caller keeps and merges that worktree.
+- If changes need to land in the current tree, ask the worktree agent for an exact patch/file list to apply, or choose a non-worktree editing agent.
+
 `)
 
 	b.WriteString("Available agents:\n")
@@ -130,7 +134,11 @@ Modes:
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s: %s\n", ac.Name, ac.Description)
+		marker := ""
+		if ac.Worktree {
+			marker = " [worktree]"
+		}
+		fmt.Fprintf(&b, "- %s%s: %s\n", ac.Name, marker, ac.Description)
 	}
 
 	fmt.Fprintf(&b, "\nMaximum %d concurrent subagents. Each agent runs as a separate process.", maxParallelTasks)

@@ -105,6 +105,19 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestSystemInstruction_SubagentWorktreeGuidance(t *testing.T) {
+	for _, phrase := range []string{
+		"isolated git worktrees",
+		"not automatically applied to the current tree",
+		"exact patch/file list",
+		`"worker"/"quick-task"`,
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
 func TestNewWithCustomInstruction(t *testing.T) {
 	llm := &mockLLM{name: "test-model", response: "Hello!"}
 
