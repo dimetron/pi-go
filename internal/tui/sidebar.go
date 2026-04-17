@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -31,14 +32,15 @@ type SidebarRenderInput struct {
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep        // steps from plan.md during /run
-	RunPhase     string                 // current /run phase (empty if not running)
-	RunSpec      string                 // spec name during /run
-	RunCycle     int                    // current retry cycle
-	RunMaxCycle  int                    // max retries
-	MatrixLines  string                 // pre-rendered matrix rain (2 lines)
-	StatusLine   string                 // status text shown above matrix
-	Orchestrator *subagent.Orchestrator // may be nil — for agents section
+	RunChecklist []ChecklistStep          // steps from plan.md during /run
+	RunPhase     string                   // current /run phase (empty if not running)
+	RunSpec      string                   // spec name during /run
+	RunCycle     int                      // current retry cycle
+	RunMaxCycle  int                      // max retries
+	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
+	StatusLine   string                   // status text shown above matrix
+	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
+	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -284,6 +286,47 @@ func RenderSidebar(in SidebarRenderInput) string {
 			}
 			lines = append(lines, "")
 		}
+	}
+
+	// --- MCP Tools section ---
+	if len(in.MCPTools) > 0 {
+		mcpHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true) // Mocha mauve
+		toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))             // dim
+
+		// Group tools by server name.
+		type serverGroup struct {
+			name  string
+			tools []string
+		}
+		seenOrder := []string{}
+		grouped := map[string]*serverGroup{}
+		for _, e := range in.MCPTools {
+			if _, ok := grouped[e.Server]; !ok {
+				seenOrder = append(seenOrder, e.Server)
+				grouped[e.Server] = &serverGroup{name: e.Server}
+			}
+			grouped[e.Server].tools = append(grouped[e.Server].tools, e.Tool)
+		}
+
+		totalTools := len(in.MCPTools)
+		lines = append(lines, mcpHeading.Render(fmt.Sprintf("  MCP Tools [%d]", totalTools)))
+
+		for _, srv := range seenOrder {
+			g := grouped[srv]
+			srvLabel := g.name
+			if len(srvLabel) > innerW-4 {
+				srvLabel = srvLabel[:innerW-5] + "…"
+			}
+			lines = append(lines, dim.Render("  ⬡ "+srvLabel))
+			for _, t := range g.tools {
+				tName := t
+				if len(tName) > innerW-6 {
+					tName = tName[:innerW-7] + "…"
+				}
+				lines = append(lines, toolStyle.Render("    · "+tName))
+			}
+		}
+		lines = append(lines, "")
 	}
 
 	// --- Loading section ---

@@ -980,3 +980,124 @@ func TestGrepWithRipgrep(t *testing.T) {
 		t.Errorf("expected 0 matches, got %d", len(out.Matches))
 	}
 }
+
+func TestFindIncludesAgentDirs(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// Create files in agent directories that should NOT be skipped
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+
+	// Create .pi-go, .cursor, .claude directories with files
+	piGoFile := filepath.Join(dir, ".pi-go", "config.json")
+	os.MkdirAll(filepath.Dir(piGoFile), 0o755)
+	os.WriteFile(piGoFile, []byte(`{"key": "value"}`), 0o644)
+
+	cursorFile := filepath.Join(dir, ".cursor", "settings.json")
+	os.MkdirAll(filepath.Dir(cursorFile), 0o755)
+	os.WriteFile(cursorFile, []byte(`{}`), 0o644)
+
+	claudeFile := filepath.Join(dir, ".claude", "commands.json")
+	os.MkdirAll(filepath.Dir(claudeFile), 0o755)
+	os.WriteFile(claudeFile, []byte(`[]`), 0o644)
+
+	out, err := findHandler(sb, FindInput{Pattern: "**/*", Path: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all files are found
+	foundFiles := make(map[string]bool)
+	for _, f := range out.Files {
+		foundFiles[filepath.Base(filepath.Dir(f))] = true // Check parent dir
+		foundFiles[f] = true
+	}
+
+	// Check .pi-go is included
+	hasPiGo := false
+	for _, f := range out.Files {
+		if strings.Contains(f, ".pi-go") {
+			hasPiGo = true
+			break
+		}
+	}
+	if !hasPiGo {
+		t.Errorf(".pi-go directory should NOT be skipped, but found no files in it")
+	}
+
+	// Check .cursor is included
+	hasCursor := false
+	for _, f := range out.Files {
+		if strings.Contains(f, ".cursor") {
+			hasCursor = true
+			break
+		}
+	}
+	if !hasCursor {
+		t.Errorf(".cursor directory should NOT be skipped, but found no files in it")
+	}
+
+	// Check .claude is included
+	hasClaude := false
+	for _, f := range out.Files {
+		if strings.Contains(f, ".claude") {
+			hasClaude = true
+			break
+		}
+	}
+	if !hasClaude {
+		t.Errorf(".claude directory should NOT be skipped, but found no files in it")
+	}
+}
+
+func TestGrepIncludesAgentDirs(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// Create files in agent directories that should NOT be skipped
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("func main() {}\n"), 0o644)
+
+	// Create .pi-go, .cursor, .claude directories with files containing the pattern
+	piGoFile := filepath.Join(dir, ".pi-go", "config.json")
+	os.MkdirAll(filepath.Dir(piGoFile), 0o755)
+	os.WriteFile(piGoFile, []byte(`{"agent": "pi"}`), 0o644)
+
+	cursorFile := filepath.Join(dir, ".cursor", "settings.json")
+	os.MkdirAll(filepath.Dir(cursorFile), 0o755)
+	os.WriteFile(cursorFile, []byte(`{"agent": "cursor"}`), 0o644)
+
+	claudeFile := filepath.Join(dir, ".claude", "commands.json")
+	os.MkdirAll(filepath.Dir(claudeFile), 0o755)
+	os.WriteFile(claudeFile, []byte(`{"agent": "claude"}`), 0o644)
+
+	out, err := grepHandler(sb, GrepInput{Pattern: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify matches from all agent directories are found
+	foundPiGo := false
+	foundCursor := false
+	foundClaude := false
+	for _, m := range out.Matches {
+		if strings.Contains(m.File, ".pi-go") {
+			foundPiGo = true
+		}
+		if strings.Contains(m.File, ".cursor") {
+			foundCursor = true
+		}
+		if strings.Contains(m.File, ".claude") {
+			foundClaude = true
+		}
+	}
+
+	if !foundPiGo {
+		t.Errorf(".pi-go directory should NOT be skipped, but found no matches in it")
+	}
+	if !foundCursor {
+		t.Errorf(".cursor directory should NOT be skipped, but found no matches in it")
+	}
+	if !foundClaude {
+		t.Errorf(".claude directory should NOT be skipped, but found no matches in it")
+	}
+}

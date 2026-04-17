@@ -19,8 +19,9 @@ var mcpConnectTimeout = 15 * time.Second
 // MCPServerConfig matches the config.MCPServer structure.
 type MCPServerConfig struct {
 	Name    string   `json:"name"`
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"` // HTTP transport (Streamable HTTP)
 }
 
 // BuildMCPToolsets creates ADK Toolsets from MCP server configurations.
@@ -106,10 +107,85 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 	return r.tools, nil
 }
 
+// MCPToolEntry is a single resolved tool from a named MCP server.
+type MCPToolEntry struct {
+	Server string
+	Tool   string
+}
+
+// BuildMCPToolEntries returns a flat list of {Server, Tool} pairs for all
+// connected MCP toolsets. Only toolsets whose tools have already been loaded
+// (via a previous Tools() call) contribute entries — pending/failed servers
+// are silently skipped.
+func BuildMCPToolEntries(toolsets []tool.Toolset) []MCPToolEntry {
+	var entries []MCPToolEntry
+	for _, ts := range toolsets {
+		rt, ok := ts.(*resilientToolset)
+		if !ok || rt.failed || len(rt.tools) == 0 {
+			continue
+		}
+		for _, t := range rt.tools {
+			entries = append(entries, MCPToolEntry{
+				Server: rt.name,
+				Tool:   t.Name(),
+			})
+		}
+	}
+	return entries
+}
+
+type MCPServerStatus struct {
+	Name      string
+	Connected bool   // true if Tools() succeeded at least once
+	Failed    bool   // true if Tools() timed out or returned an error
+	ToolCount int    // number of tools reported; 0 if not yet loaded
+	Status    string // "connected", "failed", "pending"
+}
+
+// ToolsetStatuses returns the current status for each toolset that was created
+// by BuildMCPToolsets. Toolsets that haven't been queried yet are reported as "pending".
+func ToolsetStatuses(toolsets []tool.Toolset) []MCPServerStatus {
+	statuses := make([]MCPServerStatus, 0, len(toolsets))
+	for _, ts := range toolsets {
+		rt, ok := ts.(*resilientToolset)
+		if !ok {
+			statuses = append(statuses, MCPServerStatus{
+				Name:   ts.Name(),
+				Status: "pending",
+			})
+			continue
+		}
+		s := MCPServerStatus{
+			Name:      rt.name,
+			Connected: len(rt.tools) > 0,
+			Failed:    rt.failed,
+			ToolCount: len(rt.tools),
+		}
+		switch {
+		case rt.failed:
+			s.Status = "failed"
+		case len(rt.tools) > 0:
+			s.Status = "connected"
+		default:
+			s.Status = "pending"
+		}
+		statuses = append(statuses, s)
+	}
+	return statuses
+}
+
 func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
-	transport := &respawnTransport{
-		command: srv.Command,
-		args:    srv.Args,
+	var transport mcp.Transport
+	switch {
+	case srv.URL != "":
+		transport = &mcp.StreamableClientTransport{Endpoint: srv.URL}
+	case srv.Command != "":
+		transport = &respawnTransport{
+			command: srv.Command,
+			args:    srv.Args,
+		}
+	default:
+		return nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
 	}
 
 	ts, err := mcptoolset.New(mcptoolset.Config{

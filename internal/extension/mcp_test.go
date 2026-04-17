@@ -8,7 +8,11 @@ import (
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/config"
 )
+
+// --- BuildMCPToolsets unit tests ---
 
 func TestBuildMCPToolsetsEmpty(t *testing.T) {
 	toolsets, err := BuildMCPToolsets(nil)
@@ -51,7 +55,7 @@ func TestBuildMCPToolsets_SkipsBadServers(t *testing.T) {
 	_ = toolsets
 }
 
-// --- resilientToolset tests ---
+// --- resilientToolset mock tests ---
 
 type failingToolset struct{}
 
@@ -142,6 +146,9 @@ func TestResilientToolset_SuccessPassesThrough(t *testing.T) {
 // --- respawnTransport tests ---
 
 func TestRespawnTransport_FreshCmdOnEachConnect(t *testing.T) {
+	// Test that respawnTransport creates a fresh exec.Cmd on each Connect.
+	// If the same Cmd object were reused, exec.Cmd.Stdout would already be set
+	// and subsequent Connect calls would fail with "Stdout already set".
 	rt := &respawnTransport{
 		command: "false",
 		args:    nil,
@@ -149,12 +156,44 @@ func TestRespawnTransport_FreshCmdOnEachConnect(t *testing.T) {
 
 	ctx := context.Background()
 
+	// First connect — will fail (false exits with code 1).
 	_, err1 := rt.Connect(ctx)
 
+	// Second connect — if Cmd is reused, fails with "Stdout already set".
+	// If Cmd is fresh, fails with the command exit status (acceptable).
 	_, err2 := rt.Connect(ctx)
 	if err2 != nil && err2.Error() == "exec: Stdout already set" {
 		t.Fatalf("second Connect reused exec.Cmd: %v", err2)
 	}
 
+	// err1 may be non-nil (command failed) — that's fine.
 	_ = err1
+}
+
+// --- config integration tests ---
+
+// TestMCPServerConfigFromConfigStruct verifies that extension.MCPServerConfig
+// is compatible with config.MCPServer.
+func TestMCPServerConfigFromConfigStruct(t *testing.T) {
+	cfg := config.MCPServer{
+		Name:    "test-server",
+		Command: "echo",
+		Args:    []string{"test"},
+	}
+
+	extCfg := MCPServerConfig{
+		Name:    cfg.Name,
+		Command: cfg.Command,
+		Args:    cfg.Args,
+	}
+
+	if extCfg.Name != "test-server" {
+		t.Errorf("expected name 'test-server', got %q", extCfg.Name)
+	}
+	if extCfg.Command != "echo" {
+		t.Errorf("expected command 'echo', got %q", extCfg.Command)
+	}
+	if len(extCfg.Args) != 1 || extCfg.Args[0] != "test" {
+		t.Errorf("expected args ['test'], got %v", extCfg.Args)
+	}
 }

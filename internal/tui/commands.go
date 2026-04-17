@@ -68,10 +68,6 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/commit":
 		return m.handleCommitCommand()
 	case "/plan":
-		// Check for /plan resume subcommand.
-		if len(parts) > 1 && strings.ToLower(parts[1]) == "resume" {
-			return m.handlePlanResumeCommand()
-		}
 		return m.handlePlanCommand(parts[1:])
 	case "/run":
 		return m.handleRunCommand(parts[1:])
@@ -93,6 +89,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handlePingCommand(parts[1:])
 	case "/restart":
 		return m.handleRestartCommand()
+	case "/mcp":
+		m.handleMCPCommand()
 	case "/exit", "/quit":
 		m.quitting = true
 		return m, tea.Quit
@@ -564,6 +562,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("|---------|-------------|\n")
 	b.WriteString("| `/subagents` | Show running subagents |\n")
 	b.WriteString("| `/rtk` | Output compaction stats |\n")
+	b.WriteString("| `/mcp` | List MCP servers and tool status |\n")
 	b.WriteString("| `/login <provider>` | Configure API keys |\n")
 	b.WriteString("| `/restart` | Restart pi process |\n")
 
@@ -710,4 +709,94 @@ func (m *model) handleRTKCommand(args []string) {
 			content: "Usage: `/rtk` or `/rtk stats` — Show output compaction statistics",
 		})
 	}
+}
+
+// handleMCPCommand shows the status of configured MCP servers and their tools.
+func (m *model) handleMCPCommand() {
+	servers := m.cfg.MCPServers
+	toolsets := m.cfg.MCPToolsets
+
+	if len(servers) == 0 {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "No MCP servers configured. Add servers under `mcp.servers` in `~/.pi-go/config.json`.",
+		})
+		return
+	}
+
+	statuses := extension.ToolsetStatuses(toolsets)
+	// Index statuses by name for lookup.
+	statusByName := make(map[string]extension.MCPServerStatus, len(statuses))
+	for _, s := range statuses {
+		statusByName[s.Name] = s
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**MCP Servers** — %d configured\n\n", len(servers))
+	b.WriteString("| Server | URL | Status | Tools |\n")
+	b.WriteString("|--------|-----|--------|-------|\n")
+	for _, srv := range servers {
+		st, ok := statusByName[srv.Name]
+		statusIcon := "⏳ pending"
+		toolCount := "—"
+		if ok {
+			switch st.Status {
+			case "connected":
+				statusIcon = "✓ connected"
+				toolCount = fmt.Sprintf("%d", st.ToolCount)
+			case "failed":
+				statusIcon = "✗ failed"
+				toolCount = "—"
+			default:
+				statusIcon = "⏳ pending"
+			}
+		}
+		displayURL := maskServerURL(srv.URL)
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", srv.Name, displayURL, statusIcon, toolCount)
+	}
+
+	// Hint about pending tool counts.
+	var connected []extension.MCPServerStatus
+	for _, s := range statuses {
+		if s.Status == "connected" {
+			connected = append(connected, s)
+		}
+	}
+	if len(connected) > 0 {
+		b.WriteString("\n> Tool counts are available after the first agent interaction with each server.\n")
+	} else if len(statuses) > 0 {
+		b.WriteString("\n> MCP tool counts populate after the first agent request — start a task to connect.\n")
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: b.String(),
+	})
+}
+
+// maskServerURL masks API keys in MCP server URLs for TUI display.
+// Replaces query parameter values (e.g., ?key=xxx) with "***".
+func maskServerURL(url string) string {
+	if url == "" {
+		return "_none_"
+	}
+	if !strings.Contains(url, "?") {
+		return url
+	}
+	masked := url
+	sensitive := []string{
+		"tavilyApiKey", "apiKey", "key", "token", "secret", "password",
+	}
+	for _, param := range sensitive {
+		prefix := param + "="
+		if idx := strings.Index(masked, prefix); idx >= 0 {
+			end := idx + len(prefix)
+			if amp := strings.Index(masked[end:], "&"); amp >= 0 {
+				masked = masked[:idx] + param + "=" + "***" + masked[end+amp:]
+			} else {
+				masked = masked[:idx] + param + "=***"
+			}
+		}
+	}
+	return masked
 }

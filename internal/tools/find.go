@@ -120,10 +120,12 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 
 // shouldSkipDir returns true for directories that should always be skipped.
 func shouldSkipDir(base string) bool {
-	return (strings.HasPrefix(base, ".") && base != ".") ||
-		base == "node_modules" ||
-		base == "vendor" ||
-		base == "__pycache__"
+	// Explicitly do NOT skip .pi-go, .cursor, .claude - these contain agent/skill files
+	agentDirs := map[string]bool{".pi-go": true, ".cursor": true, ".claude": true}
+	if strings.HasPrefix(base, ".") && base != "." && !agentDirs[base] {
+		return true
+	}
+	return base == "node_modules" || base == "vendor" || base == "__pycache__"
 }
 
 // normalizeGlobPattern strips leading "**/" from glob patterns since WalkDir
