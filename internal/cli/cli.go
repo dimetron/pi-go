@@ -486,6 +486,7 @@ func runNonInteractive(
 				Name:    s.Name,
 				Command: s.Command,
 				Args:    s.Args,
+				URL:     s.URL,
 			}
 		}
 		mcpToolsets, _ = extension.BuildMCPToolsets(mcpServers)

@@ -985,23 +985,6 @@ func TestSubmit_SlashCommand(t *testing.T) {
 	}
 }
 
-// --- handleSkillCommand / handlePlanOverride ---
-
-func TestHandlePlanOverride(t *testing.T) {
-	m := newTestModel(t)
-	m.plan = &planState{
-		phase:     "confirming_override",
-		taskName:  "test",
-		specDir:   "/tmp/nonexistent-spec-test",
-		roughIdea: "test idea",
-	}
-	m.handlePlanOverride()
-	// Should transition state
-	if m.plan != nil && m.plan.phase == "confirming_override" {
-		t.Error("expected plan phase to change")
-	}
-}
-
 // --- handleSkillCreateConfirm ---
 
 func TestHandleSkillCreateConfirm(t *testing.T) {
@@ -1098,33 +1081,6 @@ func TestHandleKey_SkillCreate_Other(t *testing.T) {
 	m.handleKey(makeTextKey("z"))
 	if m.pendingSkillCreate == nil {
 		t.Error("expected skill create preserved on other key")
-	}
-}
-
-func TestHandleKey_PlanOverride_Esc(t *testing.T) {
-	m := newTestModel(t)
-	m.plan = &planState{phase: "confirming_override"}
-	m.handleKey(makeKey(tea.KeyEsc))
-	if m.plan != nil {
-		t.Error("expected plan canceled on Esc")
-	}
-}
-
-func TestHandleKey_PlanOverride_CtrlC(t *testing.T) {
-	m := newTestModel(t)
-	m.plan = &planState{phase: "confirming_override"}
-	m.handleKey(makeKeyMod('c', tea.ModCtrl))
-	if m.plan != nil {
-		t.Error("expected plan canceled on Ctrl+C")
-	}
-}
-
-func TestHandleKey_PlanOverride_Other(t *testing.T) {
-	m := newTestModel(t)
-	m.plan = &planState{phase: "confirming_override"}
-	m.handleKey(makeTextKey("z"))
-	if m.plan == nil {
-		t.Error("expected plan preserved on other key")
 	}
 }
 

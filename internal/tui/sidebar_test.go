@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/extension"
 )
 
 func TestRenderSidebar_Minimal(t *testing.T) {
@@ -348,4 +350,62 @@ func TestAgentStatusPriority(t *testing.T) {
 			t.Errorf("agentStatusPriority(%q) = %d, want %d", tt.status, got, tt.want)
 		}
 	}
+}
+
+func TestRenderSidebar_MCPTools(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 40,
+		MCPTools: []extension.MCPToolEntry{
+			{Server: "filesystem", Tool: "read_file"},
+			{Server: "filesystem", Tool: "write_file"},
+			{Server: "search", Tool: "web_search"},
+		},
+	})
+	if !strings.Contains(result, "MCP Tools") {
+		t.Error("expected 'MCP Tools' heading in sidebar")
+	}
+	if !strings.Contains(result, "filesystem") {
+		t.Error("expected server name 'filesystem' in sidebar")
+	}
+	if !strings.Contains(result, "read_file") {
+		t.Error("expected tool 'read_file' in sidebar")
+	}
+	if !strings.Contains(result, "write_file") {
+		t.Error("expected tool 'write_file' in sidebar")
+	}
+	if !strings.Contains(result, "search") {
+		t.Error("expected server name 'search' in sidebar")
+	}
+	if !strings.Contains(result, "web_search") {
+		t.Error("expected tool 'web_search' in sidebar")
+	}
+	if !strings.Contains(result, "[3]") {
+		t.Error("expected '[3]' tool count in MCP Tools heading")
+	}
+}
+
+func TestRenderSidebar_MCPTools_Empty(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:    30,
+		Height:   20,
+		MCPTools: nil,
+	})
+	if strings.Contains(result, "MCP Tools") {
+		t.Error("expected no 'MCP Tools' section when MCPTools is nil")
+	}
+}
+
+func TestRenderSidebar_MCPTools_LongNames(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		MCPTools: []extension.MCPToolEntry{
+			{Server: "very-long-server-name-that-exceeds-width", Tool: "a_very_long_tool_name_that_also_exceeds_sidebar_width"},
+		},
+	})
+	if !strings.Contains(result, "MCP Tools") {
+		t.Error("expected 'MCP Tools' heading")
+	}
+	_ = result
 }

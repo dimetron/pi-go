@@ -761,3 +761,25 @@ func TestHandleAgentsCommand_NilOrchestrator(t *testing.T) {
 		t.Errorf("expected 'not available' message, got %q", m.chatModel.Messages[0].content)
 	}
 }
+
+// --- maskServerURL tests ---
+
+func TestMaskServerURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"", "_none_"},
+		{"https://example.com/mcp", "https://example.com/mcp"},
+		{"https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-real-key", "https://mcp.tavily.com/mcp/?tavilyApiKey=***"},
+		{"https://api.example.com/mcp?key=secret123", "https://api.example.com/mcp?key=***"},
+		{"https://api.example.com/mcp?apiKey=abc123&other=value", "https://api.example.com/mcp?apiKey=***&other=value"},
+	}
+
+	for _, tt := range tests {
+		result := maskServerURL(tt.input)
+		if result != tt.expected {
+			t.Errorf("maskServerURL(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}

@@ -268,7 +268,7 @@ func grepFileSandbox(sb *Sandbox, re *regexp.Regexp, path string) []GrepMatch {
 
 // grepWithRG runs ripgrep (rg) and parses its output into GrepOutput.
 // Returns an error if rg fails or parsing fails.
-// Note: rg already respects .gitignore by default.
+// Note: Uses --no-ignore to explicitly search .pi-go, .cursor, .claude directories.
 func grepWithRG(sb *Sandbox, input GrepInput, searchPath string) (GrepOutput, error) {
 	ctx := context.Background()
 
@@ -276,6 +276,7 @@ func grepWithRG(sb *Sandbox, input GrepInput, searchPath string) (GrepOutput, er
 		"--no-heading",    // Show file:line:content format
 		"--with-filename", // Always show filename
 		"--line-number",   // Show line numbers
+		"--no-ignore",     // Explicitly search .pi-go, .cursor, .claude directories
 		"--max-count", fmt.Sprintf("%d", maxGrepMatches),
 	}
 
