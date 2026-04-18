@@ -118,10 +118,11 @@ func Providers() []Provider {
 		{
 			Name:     "anthropic",
 			EnvVar:   "ANTHROPIC_API_KEY",
-			AuthURL:  "https://claude.ai/oauth/authorize",
+			AuthURL:  "https://claude.com/cai/oauth/authorize",
 			TokenURL: "https://platform.claude.com/v1/oauth/token",
 			ClientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
 			Scopes: []string{
+				"org:create_api_key",
 				"user:profile",
 				"user:inference",
 				"user:sessions:claude_code",
@@ -130,9 +131,14 @@ func Providers() []Provider {
 			},
 			ExtraParams:       map[string]string{"code": "true"},
 			ManualCode:        true,
-			ManualRedirectURI: "http://localhost:53692/callback",
+			ManualRedirectURI: "https://platform.claude.com/oauth/code/callback",
 			TokenJSONBody:     true,
+			APIKeyURL:         "https://console.anthropic.com/api/oauth/claude_cli/create_api_key",
 			TokenToKey: func(tok *TokenResponse) string {
+				// Prefer a minted API key from createAPIKey (via RawKey field).
+				if tok.RawKey != "" {
+					return tok.RawKey
+				}
 				return tok.AccessToken
 			},
 			KeyPageURL: "https://console.anthropic.com/settings/keys",
