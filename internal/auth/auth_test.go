@@ -487,7 +487,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 }
 
 func TestFindProvider(t *testing.T) {
-	for _, name := range []string{"anthropic", "openai", "codex", "gemini", "Anthropic", "OPENAI", "Codex"} {
+	for _, name := range []string{"codex", "Codex", "CODEX"} {
 		p, ok := FindProvider(name)
 		if !ok {
 			t.Errorf("expected to find provider %q", name)
@@ -497,9 +497,10 @@ func TestFindProvider(t *testing.T) {
 		}
 	}
 
-	_, ok := FindProvider("unknown")
-	if ok {
-		t.Error("should not find unknown provider")
+	for _, name := range []string{"anthropic", "openai", "gemini", "unknown"} {
+		if _, ok := FindProvider(name); ok {
+			t.Errorf("should not find provider %q", name)
+		}
 	}
 }
 
