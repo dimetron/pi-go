@@ -613,10 +613,20 @@ func TestLoadDotEnv(t *testing.T) {
 			wantValue:  "",
 		},
 		{
-			name:       "existing env not overridden",
+			// The saved credential wins over shell-exported env so that
+			// `/login` actually takes effect even when the user already
+			// has a stale OPENAI_API_KEY exported in their shell.
+			name:       "file overrides existing env",
 			envContent: "TEST_KEY=from-file\n",
-			setEnv:     "from-file",
+			setEnv:     "from-shell",
 			wantValue:  "from-file",
+		},
+		{
+			// Empty values in the file must not wipe a value the shell set.
+			name:       "empty file value keeps shell env",
+			envContent: "TEST_KEY=\n",
+			setEnv:     "from-shell",
+			wantValue:  "from-shell",
 		},
 		{
 			name:       "whitespace trimmed",
@@ -1024,7 +1034,11 @@ func TestLoadDotEnvMultipleKeys(t *testing.T) {
 	}
 }
 
-func TestLoadDotEnvExistingVarNotOverridden(t *testing.T) {
+func TestLoadDotEnvFileWinsOverShellEnv(t *testing.T) {
+	// ~/.pi-go/.env is the authoritative source for credentials managed
+	// by /login, so a value there must beat anything the shell exported
+	// earlier. Otherwise `/login codex` is silently ignored when the user
+	// already has a stale OPENAI_API_KEY in their shell.
 	tmpDir := t.TempDir()
 	piGoDir := filepath.Join(tmpDir, ".pi-go")
 	if err := os.MkdirAll(piGoDir, 0755); err != nil {
@@ -1039,8 +1053,8 @@ func TestLoadDotEnvExistingVarNotOverridden(t *testing.T) {
 
 	loadDotEnv()
 
-	if got := os.Getenv("TEST_EXISTING"); got != "from-env" {
-		t.Errorf("TEST_EXISTING = %q, want %q (should not be overridden)", got, "from-env")
+	if got := os.Getenv("TEST_EXISTING"); got != "from-file" {
+		t.Errorf("TEST_EXISTING = %q, want %q (file must override shell env)", got, "from-file")
 	}
 }
 

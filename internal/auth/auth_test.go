@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -117,8 +118,19 @@ func TestBuildAuthURL_CodexOAuthProvider(t *testing.T) {
 	if q.Get("codex_cli_simplified_flow") != "true" {
 		t.Error("missing codex simplified flow flag")
 	}
-	if !strings.Contains(q.Get("scope"), "api.connectors.read") {
-		t.Errorf("missing codex connector scope in %q", q.Get("scope"))
+	if q.Get("originator") != "pi-go" {
+		t.Errorf("missing or wrong originator in %q", q.Get("originator"))
+	}
+	scope := q.Get("scope")
+	for _, required := range []string{"openid", "profile", "email", "offline_access"} {
+		if !strings.Contains(scope, required) {
+			t.Errorf("scope missing %q: got %q", required, scope)
+		}
+	}
+	// pi-go follows pi-mono: the api.connectors.* scopes are NOT requested,
+	// because we never call the token-exchange that needs them.
+	if strings.Contains(scope, "api.connectors") {
+		t.Errorf("unexpected api.connectors scope in %q", scope)
 	}
 }
 
@@ -293,57 +305,71 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 	}
 }
 
-func TestExchangeCodexAPIKey(t *testing.T) {
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		_ = r.ParseForm()
-
-		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:token-exchange" {
-			t.Errorf("wrong grant_type: %q", r.FormValue("grant_type"))
-		}
-		if r.FormValue("client_id") != "app_EMoamEEZ73f0CkXaXp7hrann" {
-			t.Errorf("wrong client_id: %q", r.FormValue("client_id"))
-		}
-		if r.FormValue("requested_token") != "openai-api-key" {
-			t.Errorf("wrong requested_token: %q", r.FormValue("requested_token"))
-		}
-		if r.FormValue("subject_token") != "mock-id-token" {
-			t.Errorf("wrong subject_token: %q", r.FormValue("subject_token"))
-		}
-		if r.FormValue("subject_token_type") != "urn:ietf:params:oauth:token-type:id_token" {
-			t.Errorf("wrong subject_token_type: %q", r.FormValue("subject_token_type"))
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(TokenResponse{APIKey: "sk-codex-exchanged"})
-	}))
-	defer tokenServer.Close()
-
-	prov := Provider{
-		Name:     "codex",
-		TokenURL: tokenServer.URL,
-		ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
-	}
-
-	exchanged, err := exchangeCodexAPIKey(context.Background(), prov, &TokenResponse{IDToken: "mock-id-token"})
+func makeFakeJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("exchangeCodexAPIKey error: %v", err)
+		t.Fatalf("marshal payload: %v", err)
 	}
-	if exchanged.APIKey != "sk-codex-exchanged" {
-		t.Errorf("expected exchanged API key, got %q", exchanged.APIKey)
+	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".sig"
+}
+
+func TestIdentifyKey(t *testing.T) {
+	codex := makeFakeJWT(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1"},
+	})
+	otherJWT := makeFakeJWT(t, map[string]any{"sub": "user-1", "iss": "example.com"})
+
+	cases := []struct {
+		name string
+		key  string
+		want KeyKind
+	}{
+		{"empty", "", KeyKindUnknown},
+		{"whitespace", "   ", KeyKindUnknown},
+		{"sk-prefix", "sk-abcdef123", KeyKindAPIKey},
+		{"sk-proj", "sk-proj-xyz", KeyKindAPIKey},
+		{"sk-underscore", "sk_live_abc", KeyKindAPIKey},
+		{"codex jwt", codex, KeyKindCodexOAuth},
+		{"unrelated jwt", otherJWT, KeyKindUnknown},
+		{"not a jwt", "random-token", KeyKindUnknown},
+		{"two segments", "a.b", KeyKindUnknown},
+		{"bad base64", "a.%%%.c", KeyKindUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IdentifyKey(tc.key); got != tc.want {
+				t.Errorf("IdentifyKey(%q) = %q, want %q", tc.key, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestExchangeCodexAPIKey_MissingIDToken(t *testing.T) {
-	_, err := exchangeCodexAPIKey(context.Background(), Provider{Name: "codex"}, &TokenResponse{})
-	if err == nil {
-		t.Fatal("expected missing id_token error")
+func TestIsCodexOAuthToken(t *testing.T) {
+	codex := makeFakeJWT(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1"},
+	})
+	if !IsCodexOAuthToken(codex) {
+		t.Error("expected codex JWT to be recognized")
 	}
-	if !strings.Contains(err.Error(), "id_token") {
-		t.Errorf("expected id_token error, got: %v", err)
+	if IsCodexOAuthToken("sk-abc") {
+		t.Error("sk- key should not be treated as codex OAuth")
+	}
+}
+
+// TestCodexProviderUsesAccessTokenDirectly verifies that the codex provider's
+// TokenToKey returns the OAuth access_token unchanged — pi-go follows pi-mono
+// and does not attempt the `requested_token=openai-api-key` exchange that
+// fails for ChatGPT accounts without a platform organization.
+func TestCodexProviderUsesAccessTokenDirectly(t *testing.T) {
+	p, ok := FindProvider("codex")
+	if !ok {
+		t.Fatal("codex provider not found")
+	}
+	got := p.TokenToKey(&TokenResponse{AccessToken: "eyJ-chatgpt-access-token"})
+	if got != "eyJ-chatgpt-access-token" {
+		t.Errorf("TokenToKey = %q, want raw access_token", got)
 	}
 }
 
@@ -623,45 +649,26 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 	}
 }
 
-func TestProviders_TokenToKey_APIKey(t *testing.T) {
-	// Cover the tok.APIKey != "" branches in all provider TokenToKey closures.
+func TestProviders_TokenToKey(t *testing.T) {
+	// The codex provider passes the OAuth access_token through unchanged
+	// (pi-mono parity); other providers prefer api_key when present and
+	// fall back to access_token.
 	for _, p := range Providers() {
-		t.Run(p.Name+"_apikey", func(t *testing.T) {
-			tok := &TokenResponse{APIKey: "direct-key", AccessToken: "access-token"}
-			key := p.TokenToKey(tok)
-			if key != "direct-key" {
-				t.Errorf("expected 'direct-key', got %q", key)
-			}
-		})
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
-			key := p.TokenToKey(tok)
-			if key != "access-token" {
-				t.Errorf("expected 'access-token', got %q", key)
+			if got := p.TokenToKey(tok); got != "access-token" {
+				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-	}
-}
-
-func TestCodexProviderTokenToKey_OpenAIAPIKey(t *testing.T) {
-	p, ok := FindProvider("codex")
-	if !ok {
-		t.Fatal("codex provider not found")
-	}
-	key := p.TokenToKey(&TokenResponse{OpenAIAPIKey: "sk-openai-api-key", AccessToken: "access-token"})
-	if key != "sk-openai-api-key" {
-		t.Errorf("expected openai_api_key, got %q", key)
-	}
-}
-
-func TestCodexProviderTokenToKey_APIKeyCamel(t *testing.T) {
-	p, ok := FindProvider("codex")
-	if !ok {
-		t.Fatal("codex provider not found")
-	}
-	key := p.TokenToKey(&TokenResponse{APIKeyCamel: "sk-camel-api-key", AccessToken: "access-token"})
-	if key != "sk-camel-api-key" {
-		t.Errorf("expected apiKey, got %q", key)
+		if p.Name == "codex" {
+			continue
+		}
+		t.Run(p.Name+"_apikey", func(t *testing.T) {
+			tok := &TokenResponse{APIKey: "direct-key", AccessToken: "access-token"}
+			if got := p.TokenToKey(tok); got != "direct-key" {
+				t.Errorf("expected 'direct-key', got %q", got)
+			}
+		})
 	}
 }
 

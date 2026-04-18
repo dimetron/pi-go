@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -278,6 +280,83 @@ func TestNewOpenAIEmptyAPIKey(t *testing.T) {
 	_, err := NewOpenAI(context.Background(), "gpt-4o", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for empty API key")
+	}
+}
+
+func TestExtractChatGPTAccountID(t *testing.T) {
+	// JWT payload: {"https://api.openai.com/auth":{"chatgpt_account_id":"acct-42"}}
+	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
+	if got := extractChatGPTAccountID(jwt); got != "acct-42" {
+		t.Errorf("extractChatGPTAccountID = %q, want %q", got, "acct-42")
+	}
+	for _, bad := range []string{"", "sk-abc", "a.b", "not.json.here"} {
+		if got := extractChatGPTAccountID(bad); got != "" {
+			t.Errorf("extractChatGPTAccountID(%q) = %q, want empty", bad, got)
+		}
+	}
+}
+
+func TestNewOpenAI_CodexBackendRouting(t *testing.T) {
+	// Codex OAuth JWT + a model the ChatGPT backend accepts — must flip to
+	// codex backend and force Responses path.
+	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
+	llm, err := NewOpenAI(context.Background(), "gpt-5.3-codex", jwt, "", nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI(codex jwt) error: %v", err)
+	}
+	om, ok := llm.(*openaiModel)
+	if !ok {
+		t.Fatal("expected *openaiModel")
+	}
+	if !om.codexBackend {
+		t.Error("codexBackend flag should be true for codex OAuth token")
+	}
+	if mode := om.endpointMode(); mode != "responses" {
+		t.Errorf("endpointMode = %q, want %q (codex backend forces Responses)", mode, "responses")
+	}
+}
+
+func TestNewOpenAI_CodexBackendRejectsUnsupportedModel(t *testing.T) {
+	// The ChatGPT backend 400s "The '<id>' model is not supported when
+	// using Codex with a ChatGPT account." for models outside its allowed
+	// list. We pre-flight and fail with an actionable error.
+	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
+	_, err := NewOpenAI(context.Background(), "gpt-5.4-codex", jwt, "", nil)
+	if err == nil {
+		t.Fatal("expected NewOpenAI to reject unsupported codex model")
+	}
+	if !strings.Contains(err.Error(), "not supported by the ChatGPT codex backend") {
+		t.Errorf("error message missing codex-backend hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gpt-5.3-codex") {
+		t.Errorf("error should list supported models including gpt-5.3-codex: %v", err)
+	}
+}
+
+func TestNewOpenAI_ExplicitBaseURLOverridesCodexRouting(t *testing.T) {
+	// When the caller explicitly supplies a baseURL (e.g. self-hosted
+	// proxy), we must not hijack it to chatgpt.com even if the key looks
+	// like a codex JWT. The supported-models guard also relaxes since the
+	// caller is explicitly targeting a non-ChatGPT endpoint.
+	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
+	llm, err := NewOpenAI(context.Background(), "gpt-5.4-codex", jwt, "https://proxy.example/v1", nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI error: %v", err)
+	}
+	om := llm.(*openaiModel)
+	if om.codexBackend {
+		t.Error("codexBackend must not be set when baseURL was provided")
+	}
+}
+
+func TestNewOpenAI_PlainAPIKeyUsesDefaultBackend(t *testing.T) {
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-plain", "", nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI error: %v", err)
+	}
+	om := llm.(*openaiModel)
+	if om.codexBackend {
+		t.Error("sk- keys must not trigger codex backend routing")
 	}
 }
 
@@ -1254,8 +1333,49 @@ func TestOaiContentsToResponsesInput_SimpleText(t *testing.T) {
 	if instructions != "" {
 		t.Errorf("instructions = %q, want empty", instructions)
 	}
-	// Should be a simple string input.
-	_ = input
+	// Input must be a list — the ChatGPT codex backend rejects a bare
+	// string with `{"detail":"Input must be a list"}`.
+	if input.OfInputItemList == nil {
+		t.Fatal("expected input item list, got string form")
+	}
+	if len(input.OfInputItemList) != 1 || input.OfInputItemList[0].OfMessage == nil {
+		t.Fatalf("expected single user message item, got %+v", input.OfInputItemList)
+	}
+}
+
+func TestOaiContentsToResponsesInput_PreservesMessageOrderAndRoles(t *testing.T) {
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "first"}}},
+		{Role: "model", Parts: []*genai.Part{{Text: "assistant reply"}}},
+		{Role: "user", Parts: []*genai.Part{{Text: "second"}}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items := input.OfInputItemList
+	if len(items) != 3 {
+		t.Fatalf("expected 3 input items, got %d", len(items))
+	}
+
+	wantRoles := []responses.EasyInputMessageRole{
+		responses.EasyInputMessageRoleUser,
+		responses.EasyInputMessageRoleAssistant,
+		responses.EasyInputMessageRoleUser,
+	}
+	wantText := []string{"first", "assistant reply", "second"}
+	for i, item := range items {
+		if item.OfMessage == nil {
+			t.Fatalf("item %d: expected message, got %+v", i, item)
+		}
+		if item.OfMessage.Role != wantRoles[i] {
+			t.Errorf("item %d role = %q, want %q", i, item.OfMessage.Role, wantRoles[i])
+		}
+		if !item.OfMessage.Content.OfString.Valid() || item.OfMessage.Content.OfString.Value != wantText[i] {
+			t.Errorf("item %d text = %q, want %q", i, item.OfMessage.Content.OfString.Value, wantText[i])
+		}
+	}
 }
 
 func TestOaiContentsToResponsesInput_WithSystemInstruction(t *testing.T) {
@@ -1317,6 +1437,34 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 	}
 	if items[2].OfFunctionCallOutput.CallID != "call_123" {
 		t.Fatalf("function output CallID = %q, want %q", items[2].OfFunctionCallOutput.CallID, "call_123")
+	}
+}
+
+func TestOaiContentsToResponsesInput_DoesNotInventMissingFunctionOutput(t *testing.T) {
+	fc := genai.NewPartFromFunctionCall("find", map[string]any{"pattern": "*.go"})
+	fc.FunctionCall.ID = "call_find"
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Search files"}}},
+		{Role: "model", Parts: []*genai.Part{fc}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items := input.OfInputItemList
+	if len(items) != 2 {
+		t.Fatalf("expected message + function call only, got %d items", len(items))
+	}
+	if items[1].OfFunctionCall == nil {
+		t.Fatalf("expected second item to be function call, got %+v", items[1])
+	}
+	if items[1].OfFunctionCall.CallID != "call_find" {
+		t.Errorf("function call CallID = %q, want call_find", items[1].OfFunctionCall.CallID)
+	}
+	if items[1].OfFunctionCall.Arguments != `{"pattern":"*.go"}` {
+		t.Errorf("function call arguments = %q, want pattern JSON", items[1].OfFunctionCall.Arguments)
 	}
 }
 
@@ -1385,6 +1533,50 @@ func TestOaiGenaiToolsToResponses(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
+	if result[0].OfFunction == nil {
+		t.Fatal("expected function tool")
+	}
+	if !result[0].OfFunction.Strict.Valid() || result[0].OfFunction.Strict.Value {
+		t.Fatalf("Responses function tools should set strict=false, got valid=%v value=%v", result[0].OfFunction.Strict.Valid(), result[0].OfFunction.Strict.Value)
+	}
+}
+
+func TestOaiGenaiToolsToResponses_ConvertsJSONSchemaObject(t *testing.T) {
+	type schemaInput struct {
+		Pattern string `json:"pattern"`
+		Path    string `json:"path,omitempty"`
+	}
+	schema, err := jsonschema.For[schemaInput](nil)
+	if err != nil {
+		t.Fatalf("jsonschema.For: %v", err)
+	}
+
+	result := oaiGenaiToolsToResponses([]*genai.Tool{{
+		FunctionDeclarations: []*genai.FunctionDeclaration{{
+			Name:                 "find",
+			Description:          "Find files",
+			ParametersJsonSchema: schema,
+		}},
+	}})
+	if len(result) != 1 || result[0].OfFunction == nil {
+		t.Fatalf("expected one function tool, got %+v", result)
+	}
+
+	params := result[0].OfFunction.Parameters
+	requiredJSON, err := json.Marshal(params["required"])
+	if err != nil {
+		t.Fatalf("marshal required: %v", err)
+	}
+	if string(requiredJSON) != `["pattern"]` {
+		t.Fatalf("required = %s, want [\"pattern\"]", requiredJSON)
+	}
+	properties, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %T, want map[string]any", params["properties"])
+	}
+	if _, ok := properties["pattern"]; !ok {
+		t.Fatalf("properties missing pattern: %+v", properties)
+	}
 }
 
 func TestParseResponsesOutput_TextOnly(t *testing.T) {
@@ -1396,6 +1588,27 @@ func TestParseResponsesOutput_TextOnly(t *testing.T) {
 	}
 	if finishReason != "" {
 		t.Errorf("finishReason = %q, want empty", finishReason)
+	}
+}
+
+func TestBuildResponsesFinalParts_UsesDoneOnlyToolArguments(t *testing.T) {
+	state := &responsesStreamState{toolCalls: make(map[int64]toolCallAcc)}
+	updateResponsesToolCall(state, 0, "call_find", "find", "", false)
+	updateResponsesToolCall(state, 0, "", "", `{"pattern":"*.go"}`, false)
+
+	parts := buildResponsesFinalParts(state)
+	if len(parts) != 1 {
+		t.Fatalf("expected one function call part, got %d", len(parts))
+	}
+	fc := parts[0].FunctionCall
+	if fc == nil {
+		t.Fatalf("expected function call part, got %+v", parts[0])
+	}
+	if fc.ID != "call_find" || fc.Name != "find" {
+		t.Fatalf("function call = id %q name %q, want call_find/find", fc.ID, fc.Name)
+	}
+	if fc.Args["pattern"] != "*.go" {
+		t.Fatalf("function call pattern arg = %v, want *.go", fc.Args["pattern"])
 	}
 }
 
