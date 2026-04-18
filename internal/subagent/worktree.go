@@ -152,7 +152,11 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 	m.mu.Unlock()
 
 	if !exists {
-		return "", fmt.Errorf("no worktree found for agent %s", agentID)
+		var err error
+		info, err = m.recoverWorktreeInfo(agentID)
+		if err != nil {
+			return "", fmt.Errorf("no worktree found for agent %s", agentID)
+		}
 	}
 
 	out, err := m.git("merge", "--no-ff", info.Branch, "-m", fmt.Sprintf("Merge subagent %s", shortID(agentID)))
@@ -160,6 +164,25 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 		return out, fmt.Errorf("merge failed: %w: %s", err, out)
 	}
 	return out, nil
+}
+
+func (m *WorktreeManager) recoverWorktreeInfo(agentID string) (worktreeInfo, error) {
+	sid := shortID(agentID)
+	info := worktreeInfo{
+		Path:   filepath.Join(m.repoRoot, ".pi-go", "worktrees", sid),
+		Branch: "pi-agent-" + sid,
+	}
+
+	if _, err := os.Stat(info.Path); err == nil {
+		return info, nil
+	}
+
+	out, err := m.git("branch", "--list", info.Branch)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return info, nil
+	}
+
+	return worktreeInfo{}, fmt.Errorf("worktree metadata not found for agent %s", agentID)
 }
 
 // CleanupAll removes all active worktrees. Used during shutdown.

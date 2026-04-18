@@ -721,8 +721,10 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 	}
 
 	msg := runMergeResultMsg{
-		output: "CONFLICT (content): Merge conflict in foo.go",
-		err:    fmt.Errorf("merge failed: exit status 1"),
+		output:          "CONFLICT (content): Merge conflict in foo.go",
+		err:             fmt.Errorf("merge failed: exit status 1"),
+		failedAgentID:   "task-456",
+		preservedWTPath: "/tmp/pi-go/worktrees/task-456",
 	}
 	m.handleRunMergeResult(msg)
 
@@ -732,13 +734,13 @@ func TestHandleRunMergeResult_Conflict(t *testing.T) {
 
 	found := false
 	for _, msg := range m.chatModel.Messages {
-		if strings.Contains(msg.content, "Merge failed") {
+		if strings.Contains(msg.content, "Merge failed") && strings.Contains(msg.content, "/tmp/pi-go/worktrees/task-456") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected 'Merge failed' message")
+		t.Error("expected merge failure message with preserved worktree path")
 	}
 }
 

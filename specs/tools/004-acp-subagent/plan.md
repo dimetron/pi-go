@@ -1,0 +1,179 @@
+# ACP Implementation Plan
+
+- [x] Slice 1: Add ACP dependency and shared runtime types
+    - What to implement:
+        - Add `github.com/coder/acp-go-sdk` to `go.mod`.
+        - Create shared ACP package scaffolding under `internal/acp/`.
+        - Add core shared types for runtime requests/results/events and small validation helpers.
+        - Add package-level tests for request validation and zero-value behavior.
+    - Files and changes:
+        - `go.mod`
+        - `go.sum`
+        - `internal/acp/types.go`
+        - `internal/acp/types_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/...`
+    - Dependencies:
+        - None
+
+- [ ] Slice 2: Build ACP client subprocess session runner
+    - What to implement:
+        - Add client-side runner that launches a local ACP subprocess over stdio.
+        - Establish `acp.NewClientSideConnection(...)` and implement the minimal initialize/new-session/prompt flow.
+        - Expose a `RunningSession` implementation with event channel, wait, and cancel behavior.
+        - Convert basic streamed agent text into local ACP `Event` values and accumulate final `RunResult`.
+    - Files and changes:
+        - `internal/acp/client/runner.go`
+        - `internal/acp/client/session.go`
+        - `internal/acp/client/runner_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/client/...`
+    - Dependencies:
+        - Slice 1
+
+- [ ] Slice 3: Add deterministic ACP client integration test target
+    - What to implement:
+        - Add a deterministic local ACP test target strategy using `coder/acp-go-sdk` example agent semantics or an
+          equivalent lightweight local test double.
+        - Add integration coverage proving the ACP client runner can complete a full local prompt turn.
+        - Capture session ID propagation if available from the chosen test target.
+    - Files and changes:
+        - `internal/acp/client/integration_test.go`
+        - optional ACP test helper files under `internal/acp/testdata/` or `hack/test/`
+    - Verification checkpoint:
+        - `go test ./internal/acp/client/...`
+    - Dependencies:
+        - Slice 2
+
+- [ ] Slice 4: Add ACP client filesystem callbacks
+    - What to implement:
+        - Implement client-side file bridges for ACP read/write requests.
+        - Support absolute-path reads and writes, including line/limit behavior if requested by ACP.
+        - Add unit tests for file callback success and validation/failure paths.
+    - Files and changes:
+        - `internal/acp/client/files.go`
+        - `internal/acp/client/files_test.go`
+        - updates in `internal/acp/client/runner.go` as needed
+    - Verification checkpoint:
+        - `go test ./internal/acp/client/...`
+    - Dependencies:
+        - Slice 2
+
+- [ ] Slice 5: Add ACP client terminal and permission callbacks
+    - What to implement:
+        - Implement terminal lifecycle support for create/output/wait/kill/release.
+        - Add deterministic permission policy handling for ACP client requests.
+        - Add tests for terminal lifecycle and permission responses.
+    - Files and changes:
+        - `internal/acp/client/terminal.go`
+        - `internal/acp/client/terminal_test.go`
+        - `internal/acp/client/permissions.go`
+        - `internal/acp/client/permissions_test.go`
+        - updates in `internal/acp/client/runner.go` as needed
+    - Verification checkpoint:
+        - `go test ./internal/acp/client/...`
+    - Dependencies:
+        - Slice 4
+
+- [ ] Slice 6: Add ACP client streaming polish and full callback integration
+    - What to implement:
+        - Expand session update translation beyond basic text to include progress/tool-related updates in the local
+          event stream.
+        - Ensure all supported client callbacks work together during a prompt turn.
+        - Add integration coverage for streamed updates and callback-driven flows.
+    - Files and changes:
+        - `internal/acp/client/stream.go`
+        - `internal/acp/client/stream_test.go`
+        - updates in `internal/acp/client/integration_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/client/...`
+    - Dependencies:
+        - Slice 5
+
+- [ ] Slice 7: Add pi ACP server skeleton and stdio entrypoint
+    - What to implement:
+        - Create ACP server package and a dedicated pi ACP server entrypoint over stdio.
+        - Implement minimal `acp.Agent` wrapper for pi that supports initialize, new session, and prompt.
+        - Bridge a basic ACP prompt request into existing pi runtime/model execution through a thin internal adapter.
+    - Files and changes:
+        - `internal/acp/server/agent.go`
+        - `internal/acp/server/session.go`
+        - `internal/acp/server/agent_test.go`
+        - `cmd/pi/main.go` or related CLI wiring for ACP server mode
+    - Verification checkpoint:
+        - `go test ./internal/acp/server/...`
+    - Dependencies:
+        - Slice 1
+
+- [ ] Slice 8: Add ACP server integration test with local ACP client
+    - What to implement:
+        - Add integration coverage that launches pi in ACP server mode over stdio.
+        - Connect using a local ACP client and verify initialize/session/prompt succeeds.
+        - Verify streamed response data is observable by the client.
+    - Files and changes:
+        - `internal/acp/server/integration_test.go`
+        - supporting test helpers as needed
+    - Verification checkpoint:
+        - `go test ./internal/acp/server/...`
+    - Dependencies:
+        - Slice 7
+
+- [ ] Slice 9: Add ACP server session load and cancellation
+    - What to implement:
+        - Extend the pi ACP agent implementation to support session loading if supported by the selected server model.
+        - Add request handling for session cancellation and map it onto pi execution control.
+        - Add tests covering load/cancel behavior.
+    - Files and changes:
+        - `internal/acp/server/load.go`
+        - `internal/acp/server/cancel.go`
+        - `internal/acp/server/load_test.go`
+        - `internal/acp/server/cancel_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/server/...`
+    - Dependencies:
+        - Slice 8
+
+- [ ] Slice 10: Add ACP server mode and extension handling
+    - What to implement:
+        - Add support for ACP mode-related flows supported by the SDK/spec surface in use.
+        - Add extension method handling and capability advertisement via `_meta` where appropriate.
+        - Add tests for supported mode/extension paths and unsupported-path behavior.
+    - Files and changes:
+        - `internal/acp/server/modes.go`
+        - `internal/acp/server/extensions.go`
+        - `internal/acp/server/modes_test.go`
+        - `internal/acp/server/extensions_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/server/...`
+    - Dependencies:
+        - Slice 9
+
+- [ ] Slice 11: Add ACP server progress/tool streaming alignment
+    - What to implement:
+        - Translate pi incremental output, tool activity, and progress into ACP session updates as fully as the current
+          pi runtime makes practical.
+        - Add tests verifying streaming behavior and stable final responses.
+    - Files and changes:
+        - `internal/acp/server/stream.go`
+        - `internal/acp/server/stream_test.go`
+        - updates in `internal/acp/server/integration_test.go`
+    - Verification checkpoint:
+        - `go test ./internal/acp/server/...`
+    - Dependencies:
+        - Slice 10
+
+- [ ] Slice 12: Add user-facing ACP client entrypoint and bidirectional hardening
+    - What to implement:
+        - Add a user-facing entrypoint for ACP client mode in pi.
+        - Finalize CLI wiring and error messaging for both ACP client and server modes.
+        - Add cross-package tests for buildability and basic command wiring.
+        - Update documentation/help text as needed for discoverability.
+    - Files and changes:
+        - `cmd/pi/main.go`
+        - relevant CLI files under `internal/cli/`
+        - ACP package docs/tests as needed
+        - user-facing docs if appropriate
+    - Verification checkpoint:
+        - `make build && make test`
+    - Dependencies:
+        - Slices 6 and 11

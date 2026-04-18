@@ -9,6 +9,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/anthropics/anthropic-sdk-go v1.36.0
 	github.com/charmbracelet/glamour v1.0.0
+	github.com/coder/acp-go-sdk v0.11.7
 	github.com/creack/pty v1.1.24
 	github.com/google/jsonschema-go v0.4.2
 	github.com/google/uuid v1.6.0

@@ -92,8 +92,10 @@ type runGateResultMsg struct {
 
 // runMergeResultMsg carries the result of merging the worktree branch.
 type runMergeResultMsg struct {
-	output string
-	err    error
+	output          string
+	err             error
+	failedAgentID   string
+	preservedWTPath string
 }
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
@@ -739,7 +741,12 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 		for _, aid := range agentIDs {
 			out, err := wm.MergeBack(aid)
 			if err != nil {
-				return runMergeResultMsg{output: allOutput.String() + out, err: fmt.Errorf("merge %s: %w", aid, err)}
+				return runMergeResultMsg{
+					output:          allOutput.String() + out,
+					err:             fmt.Errorf("merge %s: %w", aid, err),
+					failedAgentID:   aid,
+					preservedWTPath: wm.PathFor(aid),
+				}
 			}
 			_ = wm.Cleanup(aid)
 			if out != "" {
@@ -759,10 +766,16 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 	if msg.err != nil {
 		m.run.phase = "failed"
 
-		wm := m.cfg.Orchestrator.Worktree()
-		wtPath := ""
-		if wm != nil {
-			wtPath = wm.PathFor(m.run.agentID)
+		wtPath := msg.preservedWTPath
+		if wtPath == "" {
+			wm := m.cfg.Orchestrator.Worktree()
+			if wm != nil {
+				targetAgentID := m.run.agentID
+				if msg.failedAgentID != "" {
+					targetAgentID = msg.failedAgentID
+				}
+				wtPath = wm.PathFor(targetAgentID)
+			}
 		}
 
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
