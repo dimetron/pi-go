@@ -16,7 +16,7 @@ import (
 
 // loginState tracks the /login interactive flow.
 type loginState struct {
-	phase      string // "waiting" (manual key), "sso" (browser SSO), "device" (device code), "manual-code" (browser + paste code)
+	phase      string // "waiting" (manual key), "sso" (browser SSO), "device" (device code), "manual-code" (browser + paste callback)
 	provider   string // selected provider
 	manualCode *auth.ManualCodeSession
 }
@@ -124,9 +124,8 @@ func (m *model) loginStart(prov auth.Provider) (tea.Model, tea.Cmd) {
 	}
 }
 
-// loginStartManualCode runs the PKCE flow for providers (Anthropic) that
-// display the authorization code in the browser instead of redirecting back to
-// a local listener. The user pastes the code into the prompt.
+// loginStartManualCode runs the PKCE flow for providers (Anthropic) where the
+// user pastes the final callback URL or authorization code into the prompt.
 func (m *model) loginStartManualCode(prov auth.Provider) (tea.Model, tea.Cmd) {
 	sess, err := auth.StartManualCodeFlow(prov)
 	if err != nil {
@@ -150,8 +149,8 @@ func (m *model) loginStartManualCode(prov auth.Provider) (tea.Model, tea.Cmd) {
 		content: fmt.Sprintf(
 			"**%s Login**\n\n"+
 				"1. Approve access in your browser (opened automatically).\n"+
-				"2. Copy the code shown on the page.\n"+
-				"3. Paste it here and press **Enter**.\n\n"+
+				"2. Paste the final redirect URL here and press **Enter**.\n"+
+				"   If you only have the authorization code, paste that instead.\n\n"+
 				"If the browser did not open, visit:\n%s\n\n"+
 				"Press **Esc** to cancel.",
 			prov.Name, sess.AuthURL),

@@ -75,7 +75,7 @@ type Provider struct {
 	UseDeviceFlow     bool   // prefer device code flow over PKCE
 	TLSPreflight      bool   // run TLS preflight before OAuth (OpenAI Codex)
 	CodexOAuth        bool   // use Codex OAuth callback + token-exchange semantics
-	ManualCode        bool   // browser displays code; user pastes it (no local listener)
+	ManualCode        bool   // user pastes a code or callback URL (no local listener)
 	ManualRedirectURI string // fixed redirect URI for manual-code flow
 	TokenJSONBody     bool   // POST token exchange as JSON (Anthropic) instead of form-encoded
 	APIKeyURL         string // optional: exchange OAuth access_token for an API key via this endpoint
@@ -118,11 +118,10 @@ func Providers() []Provider {
 		{
 			Name:     "anthropic",
 			EnvVar:   "ANTHROPIC_API_KEY",
-			AuthURL:  "https://platform.claude.com/oauth/authorize",
+			AuthURL:  "https://claude.ai/oauth/authorize",
 			TokenURL: "https://platform.claude.com/v1/oauth/token",
 			ClientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
 			Scopes: []string{
-				"org:create_api_key",
 				"user:profile",
 				"user:inference",
 				"user:sessions:claude_code",
@@ -131,13 +130,9 @@ func Providers() []Provider {
 			},
 			ExtraParams:       map[string]string{"code": "true"},
 			ManualCode:        true,
-			ManualRedirectURI: "https://platform.claude.com/oauth/code/callback",
-			APIKeyURL:         "https://api.anthropic.com/api/oauth/claude_cli/create_api_key",
+			ManualRedirectURI: "http://localhost:53692/callback",
 			TokenJSONBody:     true,
 			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
 				return tok.AccessToken
 			},
 			KeyPageURL: "https://console.anthropic.com/settings/keys",
@@ -291,8 +286,8 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 
 // ManualCodeSession holds the state needed to complete a manual-code OAuth flow.
 // The caller builds the auth URL via StartManualCodeFlow, opens a browser, then
-// asks the user to paste the code displayed by the OAuth server and passes it to
-// CompleteManualCodeFlow.
+// asks the user to paste the callback URL or authorization code and passes it
+// to CompleteManualCodeFlow.
 type ManualCodeSession struct {
 	Provider    Provider
 	AuthURL     string
@@ -302,8 +297,8 @@ type ManualCodeSession struct {
 }
 
 // StartManualCodeFlow builds an authorization URL for a provider that expects the
-// user to copy a code from the browser and paste it into the CLI. No local HTTP
-// listener is started; the OAuth server's own page shows the code.
+// user to copy a callback URL or code from the browser and paste it into the
+// CLI. No local HTTP listener is started.
 func StartManualCodeFlow(prov Provider) (*ManualCodeSession, error) {
 	if !prov.ManualCode {
 		return nil, fmt.Errorf("provider %s is not configured for manual-code flow", prov.Name)
@@ -324,17 +319,28 @@ func StartManualCodeFlow(prov Provider) (*ManualCodeSession, error) {
 }
 
 // CompleteManualCodeFlow exchanges a pasted authorization code for a token.
-// Anthropic's manual-code flow emits codes formatted as "<code>#<state>"; the
-// trailing state fragment is validated against the session state before the
-// token exchange. When the provider has an APIKeyURL, the OAuth access token is
-// exchanged for a provider-managed API key.
+// Anthropic's manual-code flow may provide either a full redirect URL
+// ("http://localhost:53692/callback?code=...&state=..."), a query string, a
+// "<code>#<state>" pair, or just the code. When state is present it is
+// validated against the session state before the token exchange. When the
+// provider has an APIKeyURL, the OAuth access token is exchanged for a
+// provider-managed API key.
 func CompleteManualCodeFlow(ctx context.Context, sess *ManualCodeSession, pasted string) (*Result, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("nil session")
 	}
-	code, state := splitCodeState(pasted)
-	if state == "" || state != sess.State {
-		return nil, fmt.Errorf("state missing or mismatched — paste the full code including the #state suffix")
+	code, state := parseAuthorizationInput(pasted)
+	if state != "" && state != sess.State {
+		return nil, fmt.Errorf("OAuth state mismatch")
+	}
+	if code == "" {
+		if looksLikeAuthorizationRequest(pasted) {
+			return nil, fmt.Errorf("missing authorization code; paste the final redirect URL containing code=... or the authorization code, not the authorization request parameters")
+		}
+		return nil, fmt.Errorf("missing authorization code")
+	}
+	if state == "" {
+		state = sess.State
 	}
 	tok, err := exchangeCodeManual(ctx, sess.Provider, code, sess.RedirectURI, sess.Verifier, state)
 	if err != nil {
@@ -443,12 +449,47 @@ func createAPIKey(ctx context.Context, prov Provider, accessToken string) (strin
 	return out.RawKey, nil
 }
 
-func splitCodeState(pasted string) (code, state string) {
+func parseAuthorizationInput(pasted string) (code, state string) {
 	pasted = strings.TrimSpace(pasted)
+	if pasted == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(pasted, "{") {
+		var body map[string]string
+		if err := json.Unmarshal([]byte(pasted), &body); err == nil {
+			return body["code"], body["state"]
+		}
+	}
+	if u, err := url.Parse(pasted); err == nil && u.IsAbs() {
+		q := u.Query()
+		return q.Get("code"), q.Get("state")
+	}
 	if i := strings.Index(pasted, "#"); i >= 0 {
 		return pasted[:i], pasted[i+1:]
 	}
+	if strings.Contains(pasted, "code=") {
+		q, err := url.ParseQuery(strings.TrimPrefix(pasted, "?"))
+		if err == nil {
+			return q.Get("code"), q.Get("state")
+		}
+	}
 	return pasted, ""
+}
+
+func looksLikeAuthorizationRequest(pasted string) bool {
+	pasted = strings.TrimSpace(pasted)
+	if strings.HasPrefix(pasted, "{") {
+		var body map[string]string
+		if err := json.Unmarshal([]byte(pasted), &body); err != nil {
+			return false
+		}
+		return body["response_type"] == "code" && body["redirect_uri"] != "" && body["code"] == ""
+	}
+	q, err := url.ParseQuery(strings.TrimPrefix(pasted, "?"))
+	if err != nil {
+		return false
+	}
+	return q.Get("response_type") == "code" && q.Get("redirect_uri") != "" && q.Get("code") == ""
 }
 
 // --- Device Code Flow ---

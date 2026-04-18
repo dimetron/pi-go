@@ -456,3 +456,50 @@ func BaseURLs() map[string]string {
 	}
 	return urls
 }
+
+// Save writes the config to the global ~/.pi-go/config.json file.
+// It does not overwrite project-level config.
+func (c *Config) Save() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("user home dir: %w", err)
+	}
+	path := filepath.Join(home, ".pi-go", "config.json")
+
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}
+
+// SaveDefaultRole updates the "default" role in the global config and saves it.
+// If the default role doesn't exist, it creates it. If a model is already set,
+// it updates only the model field (preserving provider, advisor, etc.).
+func SaveDefaultRole(model, provider string) error {
+	cfg, err := Load()
+	if err != nil {
+		// If no config exists yet, start with defaults.
+		cfg = Defaults()
+	}
+
+	if cfg.Roles == nil {
+		cfg.Roles = make(map[string]RoleConfig)
+	}
+
+	role := cfg.Roles["default"]
+	role.Model = model
+	if provider != "" {
+		role.Provider = provider
+	}
+	cfg.Roles["default"] = role
+
+	return cfg.Save()
+}

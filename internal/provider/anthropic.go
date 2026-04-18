@@ -17,6 +17,8 @@ import (
 )
 
 const defaultMaxTokens int64 = 8192
+const anthropicOAuthBetaHeader = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+const anthropicOAuthUserAgent = "claude-cli/2.1.75"
 
 // anthropicModel implements model.LLM for the Anthropic API.
 type anthropicModel struct {
@@ -41,7 +43,18 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 	}
 	var opts []anthropicopt.RequestOption
 	if apiKey != "" {
-		opts = append(opts, anthropicopt.WithAPIKey(apiKey))
+		if isAnthropicOAuthToken(apiKey) {
+			opts = append(opts,
+				anthropicopt.WithAuthToken(apiKey),
+				anthropicopt.WithHeaderDel("X-Api-Key"),
+				anthropicopt.WithHeader("accept", "application/json"),
+				anthropicopt.WithHeader("anthropic-beta", anthropicOAuthBetaHeader),
+				anthropicopt.WithHeader("user-agent", anthropicOAuthUserAgent),
+				anthropicopt.WithHeader("x-app", "cli"),
+			)
+		} else {
+			opts = append(opts, anthropicopt.WithAPIKey(apiKey))
+		}
 	}
 	if baseURL != "" {
 		opts = append(opts, anthropicopt.WithBaseURL(baseURL))
@@ -82,6 +95,10 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 
 func (m *anthropicModel) Name() string { return m.modelName }
 
+func isAnthropicOAuthToken(apiKey string) bool {
+	return strings.Contains(apiKey, "sk-ant-oat")
+}
+
 func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		messages, systemPrompt := antContentsToMessages(req.Contents, req.Config)
@@ -91,7 +108,7 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			modelName = req.Model
 		}
 		if modelName == "" || modelName == "anthropic" {
-			modelName = "claude-sonnet-4-6"
+			modelName = "claude-opus-4-7"
 		}
 
 		maxTokens := defaultMaxTokens
