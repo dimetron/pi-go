@@ -24,14 +24,11 @@ func newLoginCmd() *cobra.Command {
 		Long: `Authenticate with an LLM provider and save the credentials.
 
 Supported providers:
-  anthropic    Anthropic (claude.ai) — browser code flow
   openai       OpenAI (api.openai.com) — device code flow
   codex        ChatGPT (chatgpt.com) — browser OAuth PKCE
   gemini       Google AI (ai.google.dev) — browser OAuth PKCE
 
 Examples:
-  pi login anthropic                    # Authenticate with Anthropic
-  pi login anthropic --model claude-opus-4-7  # Authenticate and set default model
   pi login openai                       # Authenticate with OpenAI
   pi login                              # Interactive provider selection`,
 		Args: cobra.MaximumNArgs(1),
@@ -61,7 +58,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Find the provider.
 	prov, ok := auth.FindProvider(providerName)
 	if !ok {
-		return fmt.Errorf("unknown provider %q — supported: anthropic, openai, codex, gemini", providerName)
+		return fmt.Errorf("unknown provider %q — supported: codex", providerName)
 	}
 
 	fmt.Printf("Logging in to %s...\n\n", prov.Name)

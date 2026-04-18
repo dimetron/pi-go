@@ -116,52 +116,6 @@ type Result struct {
 func Providers() []Provider {
 	return []Provider{
 		{
-			Name:     "anthropic",
-			EnvVar:   "ANTHROPIC_API_KEY",
-			AuthURL:  "https://claude.com/cai/oauth/authorize",
-			TokenURL: "https://platform.claude.com/v1/oauth/token",
-			ClientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-			Scopes: []string{
-				"org:create_api_key",
-				"user:profile",
-				"user:inference",
-				"user:sessions:claude_code",
-				"user:mcp_servers",
-				"user:file_upload",
-			},
-			ExtraParams:       map[string]string{"code": "true"},
-			ManualCode:        true,
-			ManualRedirectURI: "https://platform.claude.com/oauth/code/callback",
-			TokenJSONBody:     true,
-			APIKeyURL:         "https://console.anthropic.com/api/oauth/claude_cli/create_api_key",
-			TokenToKey: func(tok *TokenResponse) string {
-				// Prefer a minted API key from createAPIKey (via RawKey field).
-				if tok.RawKey != "" {
-					return tok.RawKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://console.anthropic.com/settings/keys",
-		},
-		{
-			Name:          "openai",
-			EnvVar:        "OPENAI_API_KEY",
-			AuthURL:       "https://auth.openai.com/oauth/authorize",
-			TokenURL:      "https://auth.openai.com/oauth/token",
-			DeviceURL:     "https://auth.openai.com/oauth/device/code",
-			ClientID:      "pi-go-cli",
-			Scopes:        []string{"openai.public"},
-			UseDeviceFlow: true,
-			ExtraParams:   map[string]string{"audience": "https://api.openai.com/v1"},
-			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://platform.openai.com/api-keys",
-		},
-		{
 			// Codex ChatGPT OAuth: the OAuth access_token itself is the
 			// credential we send to OpenAI. We deliberately do NOT attempt
 			// the `requested_token=openai-api-key` token-exchange, because
@@ -184,21 +138,6 @@ func Providers() []Provider {
 			KeyPageURL:   "https://platform.openai.com/api-keys",
 			TLSPreflight: true,
 			CodexOAuth:   true,
-		},
-		{
-			Name:     "gemini",
-			EnvVar:   "GEMINI_API_KEY",
-			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
-			TokenURL: "https://oauth2.googleapis.com/token",
-			ClientID: "pi-go-cli",
-			Scopes:   []string{"https://www.googleapis.com/auth/generative-language"},
-			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://aistudio.google.com/apikey",
 		},
 	}
 }
