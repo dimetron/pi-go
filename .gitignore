@@ -46,3 +46,4 @@ sandbox-trace.log
 sandbox.log
 /pi-sandbox
 /internal/cli/.cache/
+/.playwright-mcp/

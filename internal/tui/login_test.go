@@ -126,9 +126,9 @@ func TestHandleLoginCommand_UnknownProvider(t *testing.T) {
 func TestHandleLoginCommand_Anthropic(t *testing.T) {
 	mb := withMockBrowser(t)
 	m := &model{}
-	// Anthropic uses the manual-code flow: browser opens claude.ai with
-	// code=true and the user pastes the localhost callback URL or code back
-	// into the CLI.
+	// Anthropic uses the manual-code flow: browser opens claude.com with
+	// code=true and the user pastes the platform.claude.com callback URL or code
+	// back into the CLI.
 	m.handleLoginCommand([]string{"anthropic"})
 	if m.login == nil {
 		t.Fatal("expected login state to be set")
@@ -142,14 +142,14 @@ func TestHandleLoginCommand_Anthropic(t *testing.T) {
 	if m.login.manualCode == nil {
 		t.Fatal("expected manualCode session to be set")
 	}
-	if !strings.Contains(m.login.manualCode.AuthURL, "claude.ai/oauth/authorize") {
-		t.Errorf("expected claude.ai auth URL, got %q", m.login.manualCode.AuthURL)
+	if !strings.Contains(m.login.manualCode.AuthURL, "claude.com/cai/oauth/authorize") {
+		t.Errorf("expected claude.com/cai/oauth/authorize URL, got %q", m.login.manualCode.AuthURL)
 	}
 	if !strings.Contains(m.login.manualCode.AuthURL, "code=true") {
 		t.Errorf("expected code=true in auth URL, got %q", m.login.manualCode.AuthURL)
 	}
-	if !strings.Contains(m.login.manualCode.AuthURL, "http%3A%2F%2Flocalhost%3A53692%2Fcallback") {
-		t.Errorf("expected localhost callback redirect_uri, got %q", m.login.manualCode.AuthURL)
+	if !strings.Contains(m.login.manualCode.AuthURL, "platform.claude.com%2Foauth%2Fcode%2Fcallback") {
+		t.Errorf("expected platform.claude.com redirect_uri, got %q", m.login.manualCode.AuthURL)
 	}
 	_ = mb
 }
