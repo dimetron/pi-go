@@ -146,6 +146,16 @@ func checklistHasCheckboxes(steps []ChecklistStep) bool {
 	return true // assume checkbox format
 }
 
+func runWorktreeName(specName string, suffix string) string {
+	name := strings.Trim(specName, "/")
+	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	if suffix != "" {
+		name += "-" + suffix
+	}
+	return name
+}
+
 // handleRunCommand handles the /run <spec-name> [--parallel] slash command.
 func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
@@ -221,10 +231,11 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	prompt := buildRunPrompt(specName, promptMD, checklist)
 
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt,
-		Worktree:    new(true),
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt,
+		Worktree:     new(true),
+		WorktreeName: runWorktreeName(specName, ""),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -274,10 +285,11 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 
 	// Spawn agent 1.
 	events1, agentID1, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt1,
-		Worktree:    &useWorktree,
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt1,
+		Worktree:     &useWorktree,
+		WorktreeName: runWorktreeName(specName, "part-1"),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -289,10 +301,11 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 
 	// Spawn agent 2.
 	events2, agentID2, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt2,
-		Worktree:    &useWorktree,
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt2,
+		Worktree:     &useWorktree,
+		WorktreeName: runWorktreeName(specName, "part-2"),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{

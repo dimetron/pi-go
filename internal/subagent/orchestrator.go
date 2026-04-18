@@ -259,7 +259,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	if input.WorkDir != "" {
 		workDir = input.WorkDir
 	} else if useWorktree && o.worktree != nil {
-		wtPath, err := o.worktree.Create(agentID)
+		wtPath, err := o.worktree.Create(agentID, input.WorktreeName)
 		if err != nil {
 			o.pool.Release()
 			return nil, "", fmt.Errorf("creating worktree: %w", err)
