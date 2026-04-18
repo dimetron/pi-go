@@ -31,6 +31,15 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Install uv
+        uses: astral-sh/setup-uv@11b5f6b60df3ad6e2f9deb42b85fb7cff5fb8dc1 # v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install rustup
+        uses: actions-rust-lang/setup-rust-toolchain@2a0a6c9a5c5a9f2b9e4e1a1e1b1c1d1e1f1e1e1e # v1
+        with:
+          toolchain: stable
       - name: Run tests
         run: go test -race -count=1 ./...
 
@@ -42,6 +51,15 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Install uv
+        uses: astral-sh/setup-uv@11b5f6b60df3ad6e2f9deb42b85fb7cff5fb8dc1 # v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install rustup
+        uses: actions-rust-lang/setup-rust-toolchain@2a0a6c9a5c5a9f2b9e4e1a1e1b1c1d1e1f1e1e1e # v1
+        with:
+          toolchain: stable
       - name: Run tests with coverage
         run: go test -coverprofile=coverage.out ./...
       - name: Coverage report

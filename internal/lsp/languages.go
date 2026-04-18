@@ -34,8 +34,8 @@ func DefaultLanguages() map[string]*LanguageConfig {
 			LanguageID:     "typescript",
 		},
 		"python": {
-			Command:        "pyright-langserver",
-			Args:           []string{"--stdio"},
+			Command:        "uvx",
+			Args:           []string{"ty", "server"},
 			FileExtensions: []string{".py", ".pyi"},
 			RootMarkers:    []string{"pyproject.toml", "setup.py", "requirements.txt"},
 			LanguageID:     "python",

@@ -38,7 +38,7 @@ The design targets pi-go's Go/ADK architecture and allows clean-slate restructur
 
 ### LSP Integration
 - 6 operations: diagnostics, definition, references, hover, symbols, format-on-write
-- 4 languages out-of-box: Go (gopls), TypeScript/JS (typescript-language-server), Python (pyright), Rust (rust-analyzer)
+- 4 languages out-of-box: Go (gopls), TypeScript/JS (typescript-language-server), Python (ruff), Rust (rust-analyzer)
 - On-demand + persistent lifecycle (start on first use, keep alive for session)
 - Dual integration: auto hooks (format-on-write, diagnostics-on-edit) + explicit ADK tools
 
@@ -448,7 +448,7 @@ graph TB
     subgraph Servers["Language Servers (subprocesses)"]
         GOPLS[gopls]
         TSSERVER[tsserver]
-        PYRIGHT[pyright]
+        RUFF[ruff]
         RA[rust-analyzer]
     end
 
@@ -942,3 +942,4 @@ internal/
 | **Total** | **~18** | **~2,750** | — |
 
 This represents ~27% growth from the current ~10,356 LOC codebase.
+

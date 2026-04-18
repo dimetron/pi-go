@@ -480,7 +480,7 @@ func installHint(lang string) string {
 	hints := map[string]string{
 		"go":         "go install golang.org/x/tools/gopls@latest",
 		"typescript": "npm install -g typescript-language-server typescript",
-		"python":     "pip install pyright",
+		"python":     "uvx ruff server -s",
 		"rust":       "rustup component add rust-analyzer",
 	}
 	if h, ok := hints[lang]; ok {

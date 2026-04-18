@@ -650,9 +650,9 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 }
 
 func TestProviders_TokenToKey(t *testing.T) {
-	// The codex provider passes the OAuth access_token through unchanged
-	// (pi-mono parity); other providers prefer api_key when present and
-	// fall back to access_token.
+	// The codex and anthropic OAuth providers pass access_token through
+	// unchanged (pi-mono parity); other providers prefer api_key when present
+	// and fall back to access_token.
 	for _, p := range Providers() {
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
@@ -660,7 +660,7 @@ func TestProviders_TokenToKey(t *testing.T) {
 				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-		if p.Name == "codex" {
+		if p.Name == "codex" || p.Name == "anthropic" {
 			continue
 		}
 		t.Run(p.Name+"_apikey", func(t *testing.T) {
@@ -1210,33 +1210,39 @@ func TestStartManualCodeFlow_AnthropicProvider(t *testing.T) {
 	if !prov.ManualCode {
 		t.Fatal("anthropic provider should have ManualCode=true")
 	}
+	if prov.TokenURL != "https://platform.claude.com/v1/oauth/token" {
+		t.Errorf("wrong token URL: %q", prov.TokenURL)
+	}
 
 	sess, err := StartManualCodeFlow(prov)
 	if err != nil {
 		t.Fatalf("StartManualCodeFlow error: %v", err)
 	}
-	if sess.RedirectURI != "https://platform.claude.com/oauth/code/callback" {
+	if sess.RedirectURI != "http://localhost:53692/callback" {
 		t.Errorf("wrong redirect_uri: %q", sess.RedirectURI)
 	}
 	u, err := url.Parse(sess.AuthURL)
 	if err != nil {
 		t.Fatalf("parse auth URL: %v", err)
 	}
-	if u.Host != "platform.claude.com" || u.Path != "/oauth/authorize" {
-		t.Errorf("expected platform.claude.com/oauth/authorize, got %s%s", u.Host, u.Path)
+	if u.Host != "claude.ai" || u.Path != "/oauth/authorize" {
+		t.Errorf("expected claude.ai/oauth/authorize, got %s%s", u.Host, u.Path)
 	}
 	q := u.Query()
 	if q.Get("code") != "true" {
-		t.Error("expected code=true in auth URL")
+		t.Errorf("expected code=true in auth URL, got %q", q.Get("code"))
 	}
 	if q.Get("client_id") != "9d1c250a-e61b-44d9-88ed-5944d1962f5e" {
 		t.Errorf("wrong client_id: %q", q.Get("client_id"))
 	}
-	if q.Get("redirect_uri") != "https://platform.claude.com/oauth/code/callback" {
+	if q.Get("redirect_uri") != "http://localhost:53692/callback" {
 		t.Errorf("wrong redirect_uri in query: %q", q.Get("redirect_uri"))
 	}
-	if !strings.Contains(q.Get("scope"), "org:create_api_key") {
-		t.Errorf("expected org:create_api_key in scope, got %q", q.Get("scope"))
+	if !strings.Contains(q.Get("scope"), "user:file_upload") {
+		t.Errorf("expected user:file_upload in scope, got %q", q.Get("scope"))
+	}
+	if strings.Contains(q.Get("scope"), "org:create_api_key") {
+		t.Errorf("did not expect org:create_api_key in scope, got %q", q.Get("scope"))
 	}
 	if sess.Verifier == "" || sess.State == "" {
 		t.Error("verifier and state should be non-empty")
@@ -1361,10 +1367,112 @@ func TestCompleteManualCodeFlow_JSONBodyAndAPIKeyExchange(t *testing.T) {
 	}
 }
 
-func TestCompleteManualCodeFlow_MissingState(t *testing.T) {
-	sess := &ManualCodeSession{State: "s"}
-	if _, err := CompleteManualCodeFlow(context.Background(), sess, "plain-code-no-hash"); err == nil {
-		t.Error("expected error when pasted code has no #state suffix")
+func TestCompleteManualCodeFlow_FullRedirectURLKeepsLocalhostRedirectURI(t *testing.T) {
+	var gotRedirectURI string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type=application/json, got %q", ct)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["code"] != "manual-code" {
+			t.Errorf("wrong code: %q", body["code"])
+		}
+		if body["state"] != "state-xyz" {
+			t.Errorf("wrong state: %q", body["state"])
+		}
+		gotRedirectURI = body["redirect_uri"]
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "oauth-access-token"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test-json",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		TokenJSONBody:     true,
+		ManualRedirectURI: "http://localhost:53692/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "http://localhost:53692/callback?code=manual-code&state=state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if gotRedirectURI != "http://localhost:53692/callback" {
+		t.Errorf("redirect_uri = %q, want localhost callback", gotRedirectURI)
+	}
+	if result.APIKey != "oauth-access-token" {
+		t.Errorf("expected oauth-access-token, got %q", result.APIKey)
+	}
+}
+
+func TestCompleteManualCodeFlow_PlainCodeUsesSessionState(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("code") != "plain-code" {
+			t.Errorf("wrong code: %q", r.FormValue("code"))
+		}
+		if r.FormValue("state") != "state-xyz" {
+			t.Errorf("wrong state: %q", r.FormValue("state"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "token"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		ManualRedirectURI: "http://localhost:53692/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "plain-code")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+}
+
+func TestCompleteManualCodeFlow_RejectsAuthorizationRequestJSON(t *testing.T) {
+	sess := &ManualCodeSession{
+		Provider: Provider{Name: "test"},
+		State:    "state-xyz",
+	}
+	pasted := `{"response_type":"code","client_id":"client","redirect_uri":"http://localhost:53692/callback","state":"state-xyz","code_challenge":"challenge","code_challenge_method":"S256"}`
+
+	_, err := CompleteManualCodeFlow(context.Background(), sess, pasted)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "not the authorization request parameters") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -1378,13 +1486,41 @@ func TestCompleteManualCodeFlow_StateMismatch(t *testing.T) {
 	}
 }
 
-func TestSplitCodeState(t *testing.T) {
-	code, state := splitCodeState("  abc#xyz  ")
+func TestParseAuthorizationInput(t *testing.T) {
+	code, state := parseAuthorizationInput("  abc#xyz  ")
 	if code != "abc" || state != "xyz" {
 		t.Errorf("got %q,%q want abc,xyz", code, state)
 	}
-	code, state = splitCodeState("plain-code")
+	code, state = parseAuthorizationInput("http://localhost:53692/callback?code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("?code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput(`{"code":"abc","state":"xyz"}`)
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("plain-code")
 	if code != "plain-code" || state != "" {
 		t.Errorf("got %q,%q want plain-code,''", code, state)
+	}
+}
+
+func TestLooksLikeAuthorizationRequest(t *testing.T) {
+	if !looksLikeAuthorizationRequest(`{"response_type":"code","redirect_uri":"http://localhost:53692/callback","state":"s"}`) {
+		t.Error("expected JSON authorization request to be detected")
+	}
+	if !looksLikeAuthorizationRequest("response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback&state=s") {
+		t.Error("expected query authorization request to be detected")
+	}
+	if looksLikeAuthorizationRequest(`{"code":"abc","state":"s"}`) {
+		t.Error("callback/code JSON should not be treated as authorization request")
 	}
 }
