@@ -5,13 +5,6 @@
     },
     "exa": {
       "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
-    },
-    "playwright": {
-      "command": "bunx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest"
-      ]
     }
   }
 }
