@@ -53,12 +53,13 @@ func (a AgentInput) ToSpawnInput() (SpawnInput, error) {
 	}
 
 	return SpawnInput{
-		Agent:       agent,
-		Prompt:      a.Prompt,
-		Worktree:    a.Worktree,
-		WorkDir:     a.WorkDir,
-		Background:  a.Background,
-		SkipCleanup: a.SkipCleanup,
+		Agent:        agent,
+		Prompt:       a.Prompt,
+		Worktree:     a.Worktree,
+		WorktreeName: a.WorktreeName,
+		WorkDir:      a.WorkDir,
+		Background:   a.Background,
+		SkipCleanup:  a.SkipCleanup,
 	}, nil
 }
 

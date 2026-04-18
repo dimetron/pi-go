@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -46,9 +47,32 @@ func shortID(agentID string) string {
 	return agentID
 }
 
+var nonWorktreeNameChars = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+func sanitizeWorktreeName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	name = nonWorktreeNameChars.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-.")
+	name = strings.Trim(strings.ReplaceAll(name, "--", "-"), "-.")
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+func worktreeNames(agentID, requested string) (pathID, branch string) {
+	if name := sanitizeWorktreeName(requested); name != "" {
+		return name, name
+	}
+	sid := shortID(agentID)
+	return sid, "pi-agent-" + sid
+}
+
 // Create creates a new git worktree for the given agent ID.
 // Returns the filesystem path to the worktree.
-func (m *WorktreeManager) Create(agentID string) (string, error) {
+func (m *WorktreeManager) Create(agentID string, requestedName ...string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -60,9 +84,12 @@ func (m *WorktreeManager) Create(agentID string) (string, error) {
 		return "", fmt.Errorf("worktree already exists for agent %s", agentID)
 	}
 
-	sid := shortID(agentID)
-	branch := "pi-agent-" + sid
-	wtPath := filepath.Join(m.repoRoot, ".pi-go", "worktrees", sid)
+	name := ""
+	if len(requestedName) > 0 {
+		name = requestedName[0]
+	}
+	pathID, branch := worktreeNames(agentID, name)
+	wtPath := filepath.Join(m.repoRoot, ".pi-go", "worktrees", pathID)
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
