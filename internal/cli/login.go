@@ -20,16 +20,14 @@ var flagLoginModel string
 func newLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login [provider]",
-		Short: "Authenticate with an LLM provider",
-		Long: `Authenticate with an LLM provider and save the credentials.
+		Short: "Authenticate with Codex",
+		Long: `Authenticate with Codex and save the credentials.
 
 Supported providers:
-  openai       OpenAI (api.openai.com) — device code flow
   codex        ChatGPT (chatgpt.com) — browser OAuth PKCE
-  gemini       Google AI (ai.google.dev) — browser OAuth PKCE
 
 Examples:
-  pi login openai                       # Authenticate with OpenAI
+  pi login codex                        # Authenticate with Codex
   pi login                              # Interactive provider selection`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runLogin,
