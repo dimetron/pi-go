@@ -3,6 +3,9 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -206,6 +209,35 @@ func TestOrchestrator_SpawnTaskWithWorktree(t *testing.T) {
 	// Worktree should be cleaned up on spawn failure.
 	if orch.worktree.Active() != 0 {
 		t.Errorf("expected 0 active worktrees after failure, got %d", orch.worktree.Active())
+	}
+}
+
+func TestOrchestrator_SpawnTaskWithNamedWorktree(t *testing.T) {
+	cfg := testConfig()
+	repo := initTestRepo(t)
+	orch := NewOrchestrator(cfg, repo, nil)
+	defer orch.Shutdown()
+
+	orch.spawner.PiBinary = "/nonexistent/pi"
+
+	_, _, err := orch.SpawnWithInput(context.Background(), AgentInput{
+		Type:         "task",
+		Prompt:       "test task",
+		WorktreeName: "my-feature",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing binary")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repo, ".pi-go", "worktrees", "my-feature")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected named worktree path to be cleaned up, stat err=%v", statErr)
+	}
+
+	cmd := exec.Command("git", "branch", "--list", "my-feature")
+	cmd.Dir = repo
+	out, _ := cmd.CombinedOutput()
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("expected named worktree branch to be cleaned up, got %q", string(out))
 	}
 }
 
