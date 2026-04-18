@@ -41,47 +41,58 @@ func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
 	return tools, nil
 }
 
-// lenientSchema generates a JSON schema for T that allows additional properties
-// and makes all required properties optional. This prevents LLM tool calls from
-// failing when the model sends extra/unknown parameters or omits optional fields.
-func lenientSchema[T any]() *jsonschema.Schema {
+func inputSchema[T any](removeRequired bool) *jsonschema.Schema {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
 		return nil // fall back to auto-inference
 	}
-	// Remove required constraints - make all properties optional
-	// This fixes "validating root: required: missing properties" errors
-	schema.Required = nil
-	relaxSchema(schema)
+	relaxSchema(schema, removeRequired)
 	return schema
+}
+
+// lenientSchema generates a JSON schema for T that allows additional properties
+// and makes all required properties optional. This prevents LLM tool calls from
+// failing before the tool can return a useful, model-visible validation error.
+func lenientSchema[T any]() *jsonschema.Schema {
+	return inputSchema[T](true)
+}
+
+// declarationSchema keeps required properties visible to the model while still
+// allowing extra properties. The runtime schema is more forgiving; the
+// declaration should remain precise so required args like find.pattern are not
+// advertised as optional.
+func declarationSchema[T any]() *jsonschema.Schema {
+	return inputSchema[T](false)
 }
 
 // relaxSchema recursively sets AdditionalProperties to an open schema on all
 // nested object schemas, so LLMs sending extra fields won't trigger validation errors.
-// It also removes required constraints from nested schemas.
-func relaxSchema(s *jsonschema.Schema) {
+// It optionally removes required constraints from nested schemas.
+func relaxSchema(s *jsonschema.Schema, removeRequired bool) {
 	if s == nil {
 		return
 	}
 	// Open up additional properties and remove required on any object schema.
 	if s.Type == "object" || len(s.Properties) > 0 {
 		s.AdditionalProperties = &jsonschema.Schema{}
-		s.Required = nil
+		if removeRequired {
+			s.Required = nil
+		}
 	}
 	// Recurse into properties.
 	for _, prop := range s.Properties {
-		relaxSchema(prop)
+		relaxSchema(prop, removeRequired)
 	}
 	// Recurse into array items.
 	if s.Items != nil {
-		relaxSchema(s.Items)
+		relaxSchema(s.Items, removeRequired)
 	}
 	// Recurse into definitions (used by $ref).
 	for _, def := range s.Definitions {
-		relaxSchema(def)
+		relaxSchema(def, removeRequired)
 	}
 	for _, def := range s.Defs {
-		relaxSchema(def)
+		relaxSchema(def, removeRequired)
 	}
 }
 
@@ -157,6 +168,7 @@ func collectFromSchema(schema *jsonschema.Schema, prefix string, intProps, boolP
 // and parameter alias resolution for common LLM naming mistakes.
 func newTool[TArgs, TResults any](name, description string, handler functiontool.Func[TArgs, TResults], aliases ...map[string]string) (tool.Tool, error) {
 	schema := lenientSchema[TArgs]()
+	declSchema := declarationSchema[TArgs]()
 	inner, err := functiontool.New(functiontool.Config{
 		Name:        name,
 		Description: description,
@@ -177,10 +189,7 @@ func newTool[TArgs, TResults any](name, description string, handler functiontool
 		}
 	}
 
-	if len(intProps) > 0 || len(boolProps) > 0 || len(jsonProps) > 0 || len(mergedAliases) > 0 {
-		return &coercingTool{Tool: inner, intProps: intProps, boolProps: boolProps, jsonProps: jsonProps, aliases: mergedAliases}, nil
-	}
-	return inner, nil
+	return &coercingTool{Tool: inner, intProps: intProps, boolProps: boolProps, jsonProps: jsonProps, aliases: mergedAliases, declarationSchema: declSchema}, nil
 }
 
 // coercingTool wraps a tool to coerce string parameter values to their
@@ -188,19 +197,25 @@ func newTool[TArgs, TResults any](name, description string, handler functiontool
 // send e.g. depth:"3" instead of depth:3.
 type coercingTool struct {
 	tool.Tool
-	intProps  map[string]bool
-	boolProps map[string]bool
-	jsonProps map[string]bool   // array/object props that may arrive as JSON strings
-	aliases   map[string]string // from → to parameter name remapping
+	intProps          map[string]bool
+	boolProps         map[string]bool
+	jsonProps         map[string]bool   // array/object props that may arrive as JSON strings
+	aliases           map[string]string // from → to parameter name remapping
+	declarationSchema *jsonschema.Schema
 }
 
-// Declaration delegates to the inner tool.
+// Declaration delegates to the inner tool, then restores the model-facing schema
+// with required properties preserved.
 func (c *coercingTool) Declaration() *genai.FunctionDeclaration {
 	type declarer interface {
 		Declaration() *genai.FunctionDeclaration
 	}
 	if d, ok := c.Tool.(declarer); ok {
-		return d.Declaration()
+		decl := d.Declaration()
+		if decl != nil && c.declarationSchema != nil {
+			decl.ParametersJsonSchema = c.declarationSchema
+		}
+		return decl
 	}
 	return nil
 }

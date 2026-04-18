@@ -989,7 +989,11 @@ func detectGitRoot(dir string) string {
 }
 
 // loadDotEnv loads environment variables from ~/.pi-go/.env.
-// This file is written by the /login command.
+// This file is written by the /login command and takes precedence over
+// the inherited shell environment — a user who ran `/login codex` expects
+// the saved credential to be used even if their shell still exports a
+// different OPENAI_API_KEY from earlier. Lines in the file override the
+// process env; missing keys fall through to whatever the shell set.
 func loadDotEnv() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1010,10 +1014,10 @@ func loadDotEnv() {
 		}
 		key = strings.TrimSpace(key)
 		val = strings.TrimSpace(val)
-		// Don't override existing env vars.
-		if os.Getenv(key) == "" {
-			_ = os.Setenv(key, val)
+		if val == "" {
+			continue
 		}
+		_ = os.Setenv(key, val)
 	}
 }
 

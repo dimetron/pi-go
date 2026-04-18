@@ -17,8 +17,48 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+// DebugLog is an optional callback invoked with low-level auth diagnostics
+// (callback hits, token-exchange status codes, redacted error bodies). It is
+// nil by default so the package has no stdout/stderr side effects; callers
+// that want OAuth tracing in the pi-go session log set it to a logger.Info-
+// compatible function during startup.
+var debugLog atomic.Pointer[func(string)]
+
+// SetDebugLogger installs a diagnostic sink for auth flows. Passing nil
+// disables logging. The function is invoked from goroutines handling OAuth
+// callbacks, so implementations must be goroutine-safe.
+func SetDebugLogger(fn func(string)) {
+	if fn == nil {
+		debugLog.Store(nil)
+		return
+	}
+	debugLog.Store(&fn)
+}
+
+func logf(format string, args ...any) {
+	p := debugLog.Load()
+	if p == nil || *p == nil {
+		return
+	}
+	(*p)(fmt.Sprintf(format, args...))
+}
+
+// Debug emits a pre-formatted diagnostic line to the debug sink installed
+// via SetDebugLogger. Used by adjacent packages (e.g. provider/openai.go's
+// codex backend transport) so they can share the session logger the TUI
+// already wires for auth events, without each package plumbing its own
+// logger interface.
+func Debug(msg string) {
+	p := debugLog.Load()
+	if p == nil || *p == nil {
+		return
+	}
+	(*p)(msg)
+}
 
 // Provider holds OAuth configuration for an LLM provider.
 type Provider struct {
@@ -105,9 +145,9 @@ func Providers() []Provider {
 		{
 			Name:          "openai",
 			EnvVar:        "OPENAI_API_KEY",
-			AuthURL:       "https://auth.openai.com/authorize",
+			AuthURL:       "https://auth.openai.com/oauth/authorize",
 			TokenURL:      "https://auth.openai.com/oauth/token",
-			DeviceURL:     "https://auth.openai.com/device/code",
+			DeviceURL:     "https://auth.openai.com/oauth/device/code",
 			ClientID:      "pi-go-cli",
 			Scopes:        []string{"openai.public"},
 			UseDeviceFlow: true,
@@ -121,33 +161,23 @@ func Providers() []Provider {
 			KeyPageURL: "https://platform.openai.com/api-keys",
 		},
 		{
+			// Codex ChatGPT OAuth: the OAuth access_token itself is the
+			// credential we send to OpenAI. We deliberately do NOT attempt
+			// the `requested_token=openai-api-key` token-exchange, because
+			// ChatGPT accounts without a platform organization cannot mint
+			// API keys. Matches pi-mono's openai-codex provider.
 			Name:     "codex",
 			EnvVar:   "OPENAI_API_KEY",
-			AuthURL:  "https://auth.openai.com/authorize",
+			AuthURL:  "https://auth.openai.com/oauth/authorize",
 			TokenURL: "https://auth.openai.com/oauth/token",
 			ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
-			Scopes: []string{
-				"openid",
-				"profile",
-				"email",
-				"offline_access",
-				"api.connectors.read",
-				"api.connectors.invoke",
-			},
+			Scopes:   []string{"openid", "profile", "email", "offline_access"},
 			ExtraParams: map[string]string{
 				"id_token_add_organizations": "true",
 				"codex_cli_simplified_flow":  "true",
+				"originator":                 "pi-go",
 			},
 			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				if tok.APIKeyCamel != "" {
-					return tok.APIKeyCamel
-				}
-				if tok.OpenAIAPIKey != "" {
-					return tok.OpenAIAPIKey
-				}
 				return tok.AccessToken
 			},
 			KeyPageURL:   "https://platform.openai.com/api-keys",
@@ -220,6 +250,8 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 		_ = srv.Shutdown(shutCtx)
 	}()
 
+	logf("pkce: authorize redirect_uri=%s state_len=%d", redirectURI, len(state))
+
 	// Open browser.
 	if err := openBrowser(authURL); err != nil {
 		return nil, fmt.Errorf("opening browser: %w", err)
@@ -228,23 +260,25 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 	// Wait for callback or timeout.
 	select {
 	case <-ctx.Done():
+		logf("pkce: ctx done before callback: %v", ctx.Err())
 		return &Result{Provider: prov.Name, Err: ctx.Err()}, nil
 	case cr := <-codeCh:
 		if cr.err != nil {
+			logf("pkce: callback error: %v", cr.err)
 			return &Result{Provider: prov.Name, Err: cr.err}, nil
 		}
+		logf("pkce: callback ok code_len=%d; exchanging code", len(cr.code))
 		// Exchange code for token.
 		tok, err := exchangeCode(ctx, prov, cr.code, redirectURI, verifier)
 		if err != nil {
+			logf("pkce: token exchange failed: %v", err)
 			return &Result{Provider: prov.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
 		}
-		if prov.CodexOAuth {
-			tok, err = exchangeCodexAPIKey(ctx, prov, tok)
-			if err != nil {
-				return &Result{Provider: prov.Name, Err: fmt.Errorf("codex token exchange: %w", err)}, nil
-			}
-		}
+		logf("pkce: token exchange ok access_len=%d id_len=%d refresh_len=%d api_key_present=%v",
+			len(tok.AccessToken), len(tok.IDToken), len(tok.RefreshToken),
+			tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "")
 		apiKey := prov.TokenToKey(tok)
+		logf("pkce: final api_key_present=%v", apiKey != "")
 		return &Result{
 			Provider: prov.Name,
 			APIKey:   apiKey,
@@ -537,18 +571,22 @@ func buildAuthURL(prov Provider, redirectURI, state, challenge string) string {
 
 func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string, ch chan<- codeResult) {
 	q := r.URL.Query()
+	logf("callback: path=%s has_code=%v has_state=%v has_error=%v",
+		r.URL.Path, q.Get("code") != "", q.Get("state") != "", q.Get("error") != "")
 
 	if errParam := q.Get("error"); errParam != "" {
 		desc := q.Get("error_description")
 		if desc == "" {
 			desc = errParam
 		}
+		logf("callback: oauth error=%s description=%q", errParam, desc)
 		ch <- codeResult{err: fmt.Errorf("OAuth error: %s", desc)}
 		http.Error(w, "Authentication failed: "+desc, http.StatusBadRequest)
 		return
 	}
 
 	if q.Get("state") != expectedState {
+		logf("callback: state mismatch got_len=%d want_len=%d", len(q.Get("state")), len(expectedState))
 		ch <- codeResult{err: fmt.Errorf("state mismatch")}
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
 		return
@@ -556,11 +594,13 @@ func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string
 
 	code := q.Get("code")
 	if code == "" {
+		logf("callback: no code received")
 		ch <- codeResult{err: fmt.Errorf("no authorization code received")}
 		http.Error(w, "No code received", http.StatusBadRequest)
 		return
 	}
 
+	logf("callback: ok code_len=%d", len(code))
 	ch <- codeResult{code: code}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -604,46 +644,6 @@ func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifie
 	return &tok, nil
 }
 
-func exchangeCodexAPIKey(ctx context.Context, prov Provider, tok *TokenResponse) (*TokenResponse, error) {
-	if tok != nil && (tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "") {
-		return tok, nil
-	}
-	if tok == nil || tok.IDToken == "" {
-		return nil, fmt.Errorf("id_token missing from codex OAuth token response")
-	}
-
-	data := url.Values{
-		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
-		"client_id":          {prov.ClientID},
-		"requested_token":    {"openai-api-key"},
-		"subject_token":      {tok.IDToken},
-		"subject_token_type": {"urn:ietf:params:oauth:token-type:id_token"},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api key exchange failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
-	}
-
-	var exchanged TokenResponse
-	if err := json.Unmarshal(body, &exchanged); err != nil {
-		return nil, fmt.Errorf("parsing api key exchange response: %w", err)
-	}
-	return &exchanged, nil
-}
-
 func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (*TokenResponse, error) {
 	data := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -684,6 +684,58 @@ func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (
 		return nil, fmt.Errorf("parsing token response: %w", err)
 	}
 	return &tok, nil
+}
+
+// KeyKind identifies the shape of an OpenAI credential. "api-key" is a
+// classic `sk-…` platform key; "codex-oauth" is a ChatGPT OAuth access
+// token (a JWT whose payload carries the `https://api.openai.com/auth`
+// claim). "unknown" is anything else — treat as opaque.
+type KeyKind string
+
+const (
+	KeyKindAPIKey     KeyKind = "api-key"
+	KeyKindCodexOAuth KeyKind = "codex-oauth"
+	KeyKindUnknown    KeyKind = "unknown"
+)
+
+// IdentifyKey classifies an OpenAI credential. Detection is structural —
+// `sk-` / `sk_live_` / `sk-proj-` prefixes indicate a platform API key;
+// a three-segment JWT whose payload decodes to JSON and contains the
+// `https://api.openai.com/auth` claim indicates a codex OAuth token.
+// The token itself is never logged or returned.
+func IdentifyKey(key string) KeyKind {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return KeyKindUnknown
+	}
+	if strings.HasPrefix(k, "sk-") || strings.HasPrefix(k, "sk_") {
+		return KeyKindAPIKey
+	}
+	parts := strings.Split(k, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return KeyKindUnknown
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if payload, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return KeyKindUnknown
+		}
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(payload, &raw) != nil {
+		return KeyKindUnknown
+	}
+	if _, ok := raw["https://api.openai.com/auth"]; ok {
+		return KeyKindCodexOAuth
+	}
+	// JWT-shaped but not an OpenAI-issued OAuth token.
+	return KeyKindUnknown
+}
+
+// IsCodexOAuthToken is a convenience wrapper reporting whether key is a
+// ChatGPT OAuth access token (as minted by `/login codex`).
+func IsCodexOAuthToken(key string) bool {
+	return IdentifyKey(key) == KeyKindCodexOAuth
 }
 
 // SaveKey saves an API key to ~/.pi-go/.env.

@@ -16,9 +16,14 @@ import (
 	llmmodel "google.golang.org/adk/model"
 	"google.golang.org/genai"
 
+	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/provider"
 )
+
+// codexPingBaseURL is the ChatGPT backend used when OPENAI_API_KEY holds a
+// codex OAuth token; the platform /v1/* endpoints reject those tokens.
+const codexPingBaseURL = "https://chatgpt.com/backend-api/codex"
 
 func newPingCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -129,15 +134,28 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 
 	baseURL := flagURL
+	explicitBaseURL := baseURL != ""
 	if baseURL == "" {
 		baseURLs := config.BaseURLs()
 		baseURL = baseURLs[info.Provider]
+		if baseURL != "" {
+			explicitBaseURL = true
+		}
 	}
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
 	if baseURL == "" {
 		baseURL = defaultAPIBaseURL(info.Provider)
+	}
+	// A codex ChatGPT OAuth token (JWT with the OpenAI auth claim) cannot
+	// talk to api.openai.com — the platform API requires an sk- key with
+	// api.responses.write scope. Redirect the health check and the model
+	// ping to the ChatGPT backend (/codex/responses), mirroring pi-mono's
+	// openai-codex-responses provider.
+	codexBackend := info.Provider == "openai" && !explicitBaseURL && auth.IsCodexOAuthToken(apiKey)
+	if codexBackend {
+		baseURL = codexPingBaseURL
 	}
 
 	out := os.Stderr
@@ -161,6 +179,12 @@ func runPing(cmd *cobra.Command, args []string) error {
 
 	// Parse the target URL.
 	endpoint := pingEndpoint(info.Provider)
+	if codexBackend {
+		// The codex backend only exposes POST /responses — use it as a
+		// reachability target (it will 405 for GET, which we treat as
+		// "server alive, endpoint requires POST").
+		endpoint = "/responses"
+	}
 	targetURL := strings.TrimRight(baseURL, "/") + endpoint
 	u, err := url.Parse(targetURL)
 	if err != nil {
@@ -426,7 +450,15 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, "none", llmOpts)
+	// For codex OAuth tokens, hand an empty baseURL to the provider so its
+	// own auto-routing (chatgpt.com/codex/responses + required headers)
+	// applies. Passing the rewritten ping baseURL would defeat that because
+	// NewOpenAI treats any non-empty baseURL as caller-controlled.
+	llmBaseURL := baseURL
+	if codexBackend {
+		llmBaseURL = ""
+	}
+	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, llmBaseURL, "none", llmOpts)
 	if llmErr != nil {
 		w("* ✗ Failed to create LLM client: %v\n", llmErr)
 		return fmt.Errorf("creating LLM for ping: %w", llmErr)
