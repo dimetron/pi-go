@@ -28,7 +28,7 @@ type loginSSOResultMsg struct {
 
 // handleLoginCommand initiates the /login flow.
 // Usage: /login [provider]
-// Providers: codex, openai, anthropic, gemini
+// Providers: codex
 // Auto-selects the best auth flow (device code, PKCE, or manual key entry).
 func (m *model) handleLoginCommand(args []string) (tea.Model, tea.Cmd) {
 	var provName string
@@ -49,7 +49,7 @@ func (m *model) handleLoginCommand(args []string) (tea.Model, tea.Cmd) {
 		m.logLogin("unknown provider requested: %q", provName)
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown provider: `%s`. Available: codex, openai, anthropic, gemini", provName),
+			content: fmt.Sprintf("Unknown provider: `%s`. Available: codex", provName),
 		})
 		return m, nil
 	}

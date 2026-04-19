@@ -98,10 +98,8 @@ func TestHandleLoginCommand_NoArgs(t *testing.T) {
 		t.Errorf("expected assistant role, got %q", msg.role)
 	}
 	// Should show provider status including codex.
-	for _, want := range []string{"anthropic", "openai", "codex", "gemini"} {
-		if !strings.Contains(msg.content, want) {
-			t.Errorf("expected %q in output, got: %s", want, msg.content)
-		}
+	if !strings.Contains(msg.content, "codex") {
+		t.Errorf("expected %q in output, got: %s", "codex", msg.content)
 	}
 	// Should show simple usage without --sso.
 	if strings.Contains(msg.content, "--sso") {
@@ -121,37 +119,6 @@ func TestHandleLoginCommand_UnknownProvider(t *testing.T) {
 	if !strings.Contains(m.chatModel.Messages[0].content, "codex") {
 		t.Errorf("expected codex in available providers list, got: %s", m.chatModel.Messages[0].content)
 	}
-}
-
-func TestHandleLoginCommand_Anthropic(t *testing.T) {
-	mb := withMockBrowser(t)
-	m := &model{}
-	// Anthropic uses the manual-code flow: browser opens claude.com with
-	// code=true and the user pastes the platform.claude.com callback URL or code
-	// back into the CLI.
-	m.handleLoginCommand([]string{"anthropic"})
-	if m.login == nil {
-		t.Fatal("expected login state to be set")
-	}
-	if m.login.provider != "anthropic" {
-		t.Errorf("expected provider anthropic, got %q", m.login.provider)
-	}
-	if m.login.phase != "manual-code" {
-		t.Errorf("expected phase manual-code, got %q", m.login.phase)
-	}
-	if m.login.manualCode == nil {
-		t.Fatal("expected manualCode session to be set")
-	}
-	if !strings.Contains(m.login.manualCode.AuthURL, "claude.com/cai/oauth/authorize") {
-		t.Errorf("expected claude.com/cai/oauth/authorize URL, got %q", m.login.manualCode.AuthURL)
-	}
-	if !strings.Contains(m.login.manualCode.AuthURL, "code=true") {
-		t.Errorf("expected code=true in auth URL, got %q", m.login.manualCode.AuthURL)
-	}
-	if !strings.Contains(m.login.manualCode.AuthURL, "platform.claude.com%2Foauth%2Fcode%2Fcallback") {
-		t.Errorf("expected platform.claude.com redirect_uri, got %q", m.login.manualCode.AuthURL)
-	}
-	_ = mb
 }
 
 func TestHandleLoginCommand_CodexOAuthFlow(t *testing.T) {
@@ -213,10 +180,10 @@ func TestHandleLoginSave(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	m := &model{
-		login: &loginState{phase: "waiting", provider: "anthropic"},
+		login: &loginState{phase: "waiting", provider: "codex"},
 	}
 
-	m.handleLoginSave("sk-ant-test-key-12345")
+	m.handleLoginSave("sk-test-key-12345")
 
 	if m.login != nil {
 		t.Error("expected login state to be nil after save")
@@ -227,14 +194,14 @@ func TestHandleLoginSave(t *testing.T) {
 		t.Fatalf("error reading .env: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "ANTHROPIC_API_KEY=sk-ant-test-key-12345") {
+	if !strings.Contains(content, "OPENAI_API_KEY=sk-test-key-12345") {
 		t.Errorf("expected API key in .env, got: %s", content)
 	}
 
-	if os.Getenv("ANTHROPIC_API_KEY") != "sk-ant-test-key-12345" {
-		t.Error("expected ANTHROPIC_API_KEY to be set in environment")
+	if os.Getenv("OPENAI_API_KEY") != "sk-test-key-12345" {
+		t.Error("expected OPENAI_API_KEY to be set in environment")
 	}
-	os.Unsetenv("ANTHROPIC_API_KEY")
+	os.Unsetenv("OPENAI_API_KEY")
 }
 
 func TestHandleLoginCancel(t *testing.T) {
@@ -429,7 +396,7 @@ func TestHandleLoginSave_SaveError(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	m := &model{
-		login: &loginState{phase: "waiting", provider: "anthropic"},
+		login: &loginState{phase: "waiting", provider: "codex"},
 	}
 
 	m.handleLoginSave("sk-test-key")
@@ -527,30 +494,11 @@ func TestHandleLoginCommand_IgnoresFlags(t *testing.T) {
 	// Old --sso flags should be silently ignored.
 	withMockBrowser(t)
 	m := &model{}
-	m.handleLoginCommand([]string{"--sso", "gemini"})
+	m.handleLoginCommand([]string{"--sso", "codex"})
 
-	// Should find gemini provider and start login.
-	if m.login == nil {
-		t.Fatal("expected login state")
-	}
-	if m.login.provider != "gemini" {
-		t.Errorf("expected gemini, got %q", m.login.provider)
-	}
-}
-
-func TestHandleLoginCommand_GeminiPKCE(t *testing.T) {
-	withMockBrowser(t)
-	m := &model{}
-	m.handleLoginCommand([]string{"gemini"})
-
-	if m.login == nil {
-		t.Fatal("expected login state")
-	}
-	if m.login.phase != "sso" {
-		t.Errorf("expected sso phase for gemini PKCE, got %q", m.login.phase)
-	}
-	if m.login.provider != "gemini" {
-		t.Errorf("expected gemini, got %q", m.login.provider)
+	// Should find codex provider and start login (or block on TLS preflight).
+	if m.login != nil && m.login.provider != "codex" {
+		t.Errorf("expected codex, got %q", m.login.provider)
 	}
 }
 

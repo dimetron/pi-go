@@ -1203,53 +1203,6 @@ func TestRunTLSPreflight_TLSCertKind(t *testing.T) {
 	}
 }
 
-func TestStartManualCodeFlow_AnthropicProvider(t *testing.T) {
-	prov, ok := FindProvider("anthropic")
-	if !ok {
-		t.Fatal("anthropic provider not found")
-	}
-	if !prov.ManualCode {
-		t.Fatal("anthropic provider should have ManualCode=true")
-	}
-	if prov.TokenURL != "https://platform.claude.com/v1/oauth/token" {
-		t.Errorf("wrong token URL: %q", prov.TokenURL)
-	}
-
-	sess, err := StartManualCodeFlow(prov)
-	if err != nil {
-		t.Fatalf("StartManualCodeFlow error: %v", err)
-	}
-	if sess.RedirectURI != "https://platform.claude.com/oauth/code/callback" {
-		t.Errorf("wrong redirect_uri: %q", sess.RedirectURI)
-	}
-	u, err := url.Parse(sess.AuthURL)
-	if err != nil {
-		t.Fatalf("parse auth URL: %v", err)
-	}
-	if u.Host != "claude.com" || u.Path != "/cai/oauth/authorize" {
-		t.Errorf("expected claude.com/cai/oauth/authorize, got %s%s", u.Host, u.Path)
-	}
-	q := u.Query()
-	if q.Get("code") != "true" {
-		t.Errorf("expected code=true in auth URL, got %q", q.Get("code"))
-	}
-	if q.Get("client_id") != "9d1c250a-e61b-44d9-88ed-5944d1962f5e" {
-		t.Errorf("wrong client_id: %q", q.Get("client_id"))
-	}
-	if q.Get("redirect_uri") != "https://platform.claude.com/oauth/code/callback" {
-		t.Errorf("wrong redirect_uri in query: %q", q.Get("redirect_uri"))
-	}
-	if !strings.Contains(q.Get("scope"), "user:file_upload") {
-		t.Errorf("expected user:file_upload in scope, got %q", q.Get("scope"))
-	}
-	if !strings.Contains(q.Get("scope"), "org:create_api_key") {
-		t.Errorf("expected org:create_api_key in scope for API key creation, got %q", q.Get("scope"))
-	}
-	if sess.Verifier == "" || sess.State == "" {
-		t.Error("verifier and state should be non-empty")
-	}
-}
-
 func TestStartManualCodeFlow_NotConfigured(t *testing.T) {
 	if _, err := StartManualCodeFlow(Provider{Name: "nope"}); err == nil {
 		t.Error("expected error for provider without ManualCode=true")
