@@ -77,6 +77,11 @@ type RunningSession struct {
 
 	events chan shared.Event
 	done   chan struct{}
+	// stderrDone closes once streamStderr returns so waitProcess can
+	// synchronize with the drain goroutine before reading s.stderr. Without
+	// it, slow-scheduled goroutines (observed on CI) may leave the buffer
+	// empty even after the subprocess has written and exited.
+	stderrDone chan struct{}
 
 	closeStdin sync.Once
 
@@ -203,11 +208,12 @@ func (r Runner) clientInfo() acp.Implementation {
 
 func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *RunningSession {
 	rs := &RunningSession{
-		cmd:    cmd,
-		stdin:  stdin,
-		stderr: &stderrBuffer{},
-		events: make(chan shared.Event, 32),
-		done:   make(chan struct{}),
+		cmd:        cmd,
+		stdin:      stdin,
+		stderr:     &stderrBuffer{},
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		stderrDone: make(chan struct{}),
 	}
 	rs.toolFilter = shared.NewToolCallTitleFilter(func(title string) {
 		rs.mu.Lock()
@@ -225,6 +231,11 @@ func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *Runnin
 // the user has no way to tell whether a hung subagent is waiting for an API
 // key, downloading dependencies, or something else.
 func (s *RunningSession) streamStderr(r io.Reader) {
+	defer func() {
+		if s.stderrDone != nil {
+			close(s.stderrDone)
+		}
+	}()
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -397,6 +408,13 @@ func (s *RunningSession) finish(result shared.RunResult) {
 
 func (s *RunningSession) waitProcess() error {
 	err := s.cmd.Wait()
+	// cmd.Wait returns when the subprocess exits; streamStderr's goroutine
+	// may still be flushing the last lines into s.stderr. Waiting on the
+	// drain channel prevents the stderr read below from observing an empty
+	// buffer when the subprocess had already printed diagnostics.
+	if s.stderrDone != nil {
+		<-s.stderrDone
+	}
 	if err == nil {
 		return nil
 	}

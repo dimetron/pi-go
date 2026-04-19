@@ -76,6 +76,12 @@ type RunningSession struct {
 
 	events chan shared.Event
 	done   chan struct{}
+	// stderrDone closes once streamStderr returns, so waitProcess can
+	// synchronize with the drain goroutine before reading stderr. Without
+	// this, slow-scheduled goroutines (observed on CI) may leave the buffer
+	// empty when the test checks it, even though the subprocess has
+	// already written and exited.
+	stderrDone chan struct{}
 
 	closeStdin sync.Once
 
@@ -220,11 +226,12 @@ func (r Runner) clientInfo() acp.Implementation {
 
 func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *RunningSession {
 	rs := &RunningSession{
-		cmd:    cmd,
-		stdin:  stdin,
-		stderr: &stderrBuffer{},
-		events: make(chan shared.Event, 32),
-		done:   make(chan struct{}),
+		cmd:        cmd,
+		stdin:      stdin,
+		stderr:     &stderrBuffer{},
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		stderrDone: make(chan struct{}),
 	}
 	rs.toolFilter = shared.NewToolCallTitleFilter(func(title string) {
 		rs.mu.Lock()
@@ -240,6 +247,11 @@ func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *Runnin
 // surfacing each line as a progress event so the parent UI sees diagnostics
 // (missing API key, "interactive auth required", etc.) in real time.
 func (s *RunningSession) streamStderr(r io.Reader) {
+	defer func() {
+		if s.stderrDone != nil {
+			close(s.stderrDone)
+		}
+	}()
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -411,6 +423,13 @@ func (s *RunningSession) finish(result shared.RunResult) {
 
 func (s *RunningSession) waitProcess() error {
 	err := s.cmd.Wait()
+	// cmd.Wait returns once the subprocess exits; streamStderr's goroutine
+	// may still be flushing the last lines into s.stderr. Waiting on the
+	// drain channel removes the race where the stderr read below returns
+	// empty even though the subprocess printed diagnostics.
+	if s.stderrDone != nil {
+		<-s.stderrDone
+	}
 	if err == nil {
 		return nil
 	}
