@@ -1,6 +1,6 @@
-// Package gemini provides an ACP client for Google Gemini CLI via the
-// Gemini CLI subprocess adapter.
-package gemini
+// Package cursor provides an ACP client for Cursor CLI via its
+// `agent acp` subprocess (https://cursor.com/docs/cli/acp).
+package cursor
 
 import (
 	"bufio"
@@ -20,29 +20,41 @@ import (
 	shared "github.com/dimetron/pi-go/internal/acp"
 )
 
-// BinaryName is the expected name of the Gemini CLI binary.
-const BinaryName = "gemini"
-
 // rpcTimeout caps Initialize and NewSession against a hung subprocess. See
 // claudecode for the rationale; 60s is enough for a normal startup but short
 // enough to surface a missing API key or missing binary quickly.
 const rpcTimeout = 60 * time.Second
 
-// DefaultBinaryPaths lists common installation locations for gemini CLI.
+// BinaryName is the preferred name of the Cursor CLI binary.
+// Cursor's documentation calls the binary `agent`; we prefer the
+// disambiguated `cursor-agent` name and fall back to `agent`.
+const BinaryName = "cursor-agent"
+
+// ACPSubcommand is the subcommand that puts Cursor CLI into ACP mode.
+const ACPSubcommand = "acp"
+
+// DefaultBinaryPaths lists common installation locations for the Cursor
+// CLI binary. The Cursor installer places the binary at ~/.local/bin/agent;
+// we also look for a disambiguated `cursor-agent` in the same locations.
 var DefaultBinaryPaths = []string{
-	"gemini",
-	".local/bin/gemini",
-	"/usr/local/bin/gemini",
-	"/usr/bin/gemini",
+	"cursor-agent",
+	"agent",
+	".local/bin/cursor-agent",
+	".local/bin/agent",
+	"/usr/local/bin/cursor-agent",
+	"/usr/local/bin/agent",
+	"/usr/bin/cursor-agent",
+	"/usr/bin/agent",
 }
 
-// Runner launches Gemini CLI via the gemini subprocess adapter
-// and manages the ACP client-side connection.
+// Runner launches Cursor CLI in ACP mode and manages the client-side
+// connection. Authentication is taken from the environment
+// (CURSOR_API_KEY / CURSOR_AUTH_TOKEN) unless explicitly overridden.
 type Runner struct {
 	// ClientInfo identifies this client to the agent.
 	ClientInfo acp.Implementation
 
-	// Binary is the path to the gemini binary.
+	// Binary is the path to the cursor-agent (or `agent`) binary.
 	// If empty, uses the first found in DefaultBinaryPaths.
 	Binary string
 
@@ -53,21 +65,23 @@ type Runner struct {
 	ExtraEnv []string
 }
 
-// RunRequest describes a Gemini CLI prompt turn.
+// RunRequest describes a Cursor CLI prompt turn.
 type RunRequest struct {
-	Prompt    string   // Prompt to send to Gemini CLI
+	Prompt    string   // Prompt to send to Cursor CLI
 	SessionID string   // Optional session ID to resume
 	CWD       string   // Working directory
 	Env       []string // Additional environment variables
-	Command   []string // Optional command override for testing (defaults to gemini)
+	Command   []string // Optional command override for testing (defaults to cursor-agent acp)
 
-	// Options for Gemini CLI
-	Model   string // Optional model override (e.g., "gemini-2.5-flash")
-	Sandbox string // Optional sandbox mode (e.g., "no-sandbox", "docker")
-	Debug   bool   // Enable debug output
+	// Cursor-specific options
+	APIKey    string // Optional; if set, passed as --api-key. Prefer CURSOR_API_KEY env var.
+	AuthToken string // Optional; if set, passed as --auth-token. Prefer CURSOR_AUTH_TOKEN env var.
+	Endpoint  string // Optional API endpoint override (e.g. https://api2.cursor.sh).
+	Model     string // Optional model hint (informational; Cursor picks per-task).
+	Debug     bool   // Enable verbose/debug output if supported by the CLI.
 }
 
-// RunningSession represents one in-flight Gemini CLI prompt turn.
+// RunningSession represents one in-flight Cursor CLI prompt turn.
 type RunningSession struct {
 	cmd    *exec.Cmd
 	stdin  io.Closer
@@ -102,7 +116,7 @@ func (s *RunningSession) Cancel() error {
 		return nil
 	}
 	if err := cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("kill gemini subprocess: %w", err)
+		return fmt.Errorf("kill %s subprocess: %w", BinaryName, err)
 	}
 	return nil
 }
@@ -115,11 +129,11 @@ func (s *RunningSession) Wait() shared.RunResult {
 	return s.result
 }
 
-// envACPGeminiCmd is the environment variable that overrides the Gemini ACP command.
-// Format: "binary arg1 arg2 ..." or just "binary" (args default to "--acp").
-const envACPGeminiCmd = "PI_ACP_GEMINI_CMD"
+// envACPCursorCmd is the environment variable that overrides the Cursor ACP command.
+// Format: "binary arg1 arg2 ..." or just "binary" (args default to "acp").
+const envACPCursorCmd = "PI_ACP_CURSOR_CMD"
 
-// Start launches the Gemini CLI subprocess and begins the ACP flow.
+// Start launches the Cursor CLI subprocess and begins the ACP flow.
 func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, fmt.Errorf("prompt is required")
@@ -127,46 +141,38 @@ func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, err
 
 	binary := r.Binary
 	var cmdArgs []string
-	// When req.Command is supplied (test override) honor it verbatim — no
-	// --acp injection and no optional flag appending, so helper processes
-	// can be exercised without the real gemini CLI argument shape. This
-	// mirrors claude/cursor behavior.
-	if binary == "" && len(req.Command) > 0 {
+
+	// Check for env var override before switch
+	envCmd := os.Getenv(envACPCursorCmd)
+	switch {
+	case binary != "":
+		cmdArgs = buildArgs(req, true)
+	case len(req.Command) > 0:
 		binary = req.Command[0]
+		// Caller supplied a full argv; honor it verbatim so tests can point
+		// at a helper process without having the `acp` subcommand injected.
 		cmdArgs = append([]string(nil), req.Command[1:]...)
-	} else {
-		if binary == "" {
-			if envCmd := os.Getenv(envACPGeminiCmd); envCmd != "" {
-				// PI_ACP_GEMINI_CMD overrides the default binary. Parse
-				// "binary arg1 arg2 ..." from the env var; a bare binary
-				// falls back to the default --acp subcommand.
-				parts := strings.Fields(envCmd)
-				if len(parts) > 0 {
-					binary = parts[0]
-					if len(parts) > 1 {
-						cmdArgs = parts[1:]
-					}
-				}
+	case envCmd != "":
+		// PI_ACP_CURSOR_CMD overrides the default binary.
+		// Parse "binary arg1 arg2 ..." from the env var.
+		parts := strings.Fields(envCmd)
+		if len(parts) > 0 {
+			binary = parts[0]
+			// If only one word (just the binary), use default "acp" subcommand.
+			// Otherwise use the remaining parts as args.
+			if len(parts) > 1 {
+				cmdArgs = parts[1:]
 			} else {
-				var err error
-				binary, err = findBinary(DefaultBinaryPaths)
-				if err != nil {
-					return nil, fmt.Errorf("finding %s: %w", BinaryName, err)
-				}
+				cmdArgs = buildArgs(req, true)
 			}
 		}
-		if len(cmdArgs) == 0 {
-			cmdArgs = []string{"--acp"}
+	default:
+		found, err := findBinary(DefaultBinaryPaths)
+		if err != nil {
+			return nil, fmt.Errorf("finding %s: %w", BinaryName, err)
 		}
-		if req.Model != "" {
-			cmdArgs = append(cmdArgs, "--model", req.Model)
-		}
-		if req.Sandbox != "" {
-			cmdArgs = append(cmdArgs, "--sandbox", req.Sandbox)
-		}
-		if req.Debug {
-			cmdArgs = append(cmdArgs, "--debug")
-		}
+		binary = found
+		cmdArgs = buildArgs(req, true)
 	}
 
 	cmd := exec.CommandContext(ctx, binary, cmdArgs...)
@@ -211,6 +217,26 @@ func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, err
 	return session, nil
 }
 
+// buildArgs constructs the CLI argument list for launching Cursor in ACP mode.
+// When includeSubcommand is false the caller has already provided a command
+// that should be invoked verbatim (e.g. a test helper process).
+func buildArgs(req RunRequest, includeSubcommand bool) []string {
+	var args []string
+	if req.Endpoint != "" {
+		args = append(args, "-e", req.Endpoint)
+	}
+	if req.APIKey != "" {
+		args = append(args, "--api-key", req.APIKey)
+	}
+	if req.AuthToken != "" {
+		args = append(args, "--auth-token", req.AuthToken)
+	}
+	if includeSubcommand {
+		args = append(args, ACPSubcommand)
+	}
+	return args
+}
+
 func (r Runner) clientInfo() acp.Implementation {
 	if strings.TrimSpace(r.ClientInfo.Name) != "" {
 		return r.ClientInfo
@@ -238,7 +264,7 @@ func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *Runnin
 
 // streamStderr scans stderr line-by-line, buffering for error reports and
 // surfacing each line as a progress event so the parent UI sees diagnostics
-// (missing API key, "interactive auth required", etc.) in real time.
+// (auth required, network errors, etc.) in real time.
 func (s *RunningSession) streamStderr(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -272,7 +298,7 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 	ctx := context.Background()
 
 	initCtx, initCancel := context.WithTimeout(ctx, rpcTimeout)
-	initResp, err := s.conn.Initialize(initCtx, acp.InitializeRequest{
+	_, err := s.conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		ClientInfo:      &clientInfo,
 	})
@@ -301,8 +327,6 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 	if sessionID == "" {
 		sessionID = req.SessionID
 	}
-
-	_, _ = initResp, req.SessionID
 
 	// Prompt is bounded by the orchestrator's absolute timeout only.
 	promptResp, err := s.conn.Prompt(ctx, acp.PromptRequest{
@@ -421,19 +445,17 @@ func (s *RunningSession) waitProcess() error {
 	return fmt.Errorf("%s subprocess: %w: %s", BinaryName, err, stderr)
 }
 
-// callbackClient implements the acp.Agent interface for Gemini CLI callbacks.
+// callbackClient implements the acp.Agent interface for Cursor CLI callbacks.
 type callbackClient struct {
 	session *RunningSession
 }
 
 func (c *callbackClient) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
-	// Gemini CLI can read files directly; delegate to the subprocess.
-	// For now, return a redirect response.
-	return acp.ReadTextFileResponse{}, fmt.Errorf("readTextFile not implemented: use terminal for file operations")
+	return acp.ReadTextFileResponse{}, fmt.Errorf("readTextFile not implemented: Cursor CLI reads files directly")
 }
 
 func (c *callbackClient) WriteTextFile(ctx context.Context, req acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
-	return acp.WriteTextFileResponse{}, fmt.Errorf("writeTextFile not implemented: use terminal for file operations")
+	return acp.WriteTextFileResponse{}, fmt.Errorf("writeTextFile not implemented: Cursor CLI writes files directly")
 }
 
 func (c *callbackClient) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
@@ -448,8 +470,7 @@ func (c *callbackClient) SessionUpdate(ctx context.Context, params acp.SessionNo
 }
 
 func (c *callbackClient) CreateTerminal(ctx context.Context, req acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	// Terminal management is handled by Gemini CLI directly.
-	return acp.CreateTerminalResponse{}, fmt.Errorf("createTerminal not implemented: Gemini CLI manages terminals")
+	return acp.CreateTerminalResponse{}, fmt.Errorf("createTerminal not implemented")
 }
 
 func (c *callbackClient) KillTerminal(ctx context.Context, req acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
@@ -468,20 +489,18 @@ func (c *callbackClient) WaitForTerminalExit(ctx context.Context, req acp.WaitFo
 	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("waitForTerminalExit not implemented")
 }
 
-// findBinary searches for the gemini binary in the given paths.
+// findBinary searches for the Cursor CLI binary in the given paths.
 func findBinary(paths []string) (string, error) {
 	for _, path := range paths {
 		if path == "" {
 			continue
 		}
-		// Check if it's a full path that exists
 		if filepath.IsAbs(path) || strings.HasPrefix(path, ".") {
 			if _, err := os.Stat(path); err == nil {
 				return path, nil
 			}
 			continue
 		}
-		// Try using LookPath for commands in PATH
 		if fullPath, err := exec.LookPath(path); err == nil {
 			return fullPath, nil
 		}

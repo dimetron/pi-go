@@ -288,6 +288,14 @@ func (m *model) runAgentLoop(prompt string) {
 	log := m.cfg.Logger
 	detector := &stuckDetector{}
 
+	// streamedText tracks whether any Partial=true text delta has been
+	// forwarded for the current turn. Providers like ollama/minimax emit
+	// per-token partial events AND a final Partial=false event containing
+	// the full aggregated text — forwarding both would duplicate the text
+	// on screen (observed in the TUI as "I'll spawn...I'll spawn..."). Skip
+	// the aggregate when deltas already covered the turn.
+	streamedText := false
+
 	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
 			if log != nil {
@@ -299,12 +307,26 @@ func (m *model) runAgentLoop(prompt string) {
 		if ev == nil || ev.Content == nil {
 			continue
 		}
+		// A new turn begins when we see a user/tool-result event; reset the
+		// dedup guard so the next turn's aggregate can pass through when no
+		// deltas precede it. "model" / "thinking" are the model-author roles.
+		role := ev.Content.Role
+		if role != "model" && role != "thinking" {
+			streamedText = false
+		}
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" && ev.Content.Role == "thinking" {
 				m.agentCh <- agentThinkingMsg{text: part.Text}
 				continue
 			}
 			if part.Text != "" {
+				if !ev.Partial && streamedText {
+					// Aggregate final event — text already forwarded via deltas.
+					continue
+				}
+				if ev.Partial {
+					streamedText = true
+				}
 				if log != nil {
 					log.LLMText(ev.Author, part.Text)
 				}
@@ -421,21 +443,113 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		role: "tool", tool: msg.name, toolIn: toolIn,
 	}
 	if msg.name == "agent" || msg.name == "subagent" {
-		newMsg.agentType = extractAgentType(msg.args)
-		prompt, _ := msg.args["prompt"].(string)
-		if prompt == "" {
-			prompt, _ = msg.args["task"].(string)
-		}
-		if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
-			prompt = prompt[:idx]
-		}
-		if len(prompt) > 60 {
-			prompt = prompt[:57] + "..."
-		}
-		newMsg.agentTitle = prompt
+		// A single subagent tool call in parallel/chain mode spawns N children.
+		// Render one card per child so the user sees agent[pi], agent[claude],
+		// ... instead of a collapsed agent[pi+claude+...] card. Each card
+		// carries its own type + title and will later be matched to its spawn
+		// event by agent-ID prefix.
+		subMsgs := splitSubagentCards(newMsg, msg.args)
+		m.chatModel.Messages = append(m.chatModel.Messages, subMsgs...)
+		return m, waitForAgent(m.agentCh)
 	}
 	m.chatModel.Messages = append(m.chatModel.Messages, newMsg)
 	return m, waitForAgent(m.agentCh)
+}
+
+// splitSubagentCards fans a single subagent tool call out into one visual
+// tool-message card per spawned child. Single-agent mode returns one card
+// with the agent/type name and prompt; parallel (tasks[]) and chain (chain[])
+// modes return one card per entry so the event stream for each child renders
+// under its own agent[...] header.
+func splitSubagentCards(base message, args map[string]any) []message {
+	if cards := buildListCards(base, args["tasks"]); len(cards) > 0 {
+		return cards
+	}
+	if cards := buildListCards(base, args["chain"]); len(cards) > 0 {
+		return cards
+	}
+	single := base
+	single.agentType = extractAgentType(args)
+	prompt, _ := args["prompt"].(string)
+	if prompt == "" {
+		prompt, _ = args["task"].(string)
+	}
+	single.agentTitle = truncatePrompt(prompt)
+	return []message{single}
+}
+
+// buildListCards expands a tasks[]/chain[] array into one message per entry.
+// Returns nil when the value isn't an array of {agent, task} maps.
+func buildListCards(base message, raw any) []message {
+	list, ok := raw.([]any)
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	var out []message
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		agent, _ := m["agent"].(string)
+		if agent == "" {
+			continue
+		}
+		prompt, _ := m["task"].(string)
+		if prompt == "" {
+			prompt, _ = m["prompt"].(string)
+		}
+		card := base
+		card.agentType = agent
+		card.agentTitle = truncatePrompt(prompt)
+		out = append(out, card)
+	}
+	return out
+}
+
+// findUnassignedAgentCard locates the best tool-message card to bind to an
+// incoming spawn event. Preference order:
+//  1. Walk newest-to-oldest, pick an unassigned card whose agentType is the
+//     name prefix of agentID (e.g. agentID "claude-1720…" matches the card
+//     with agentType "claude").
+//  2. Fall back to the first unassigned card, so single-agent invocations
+//     (where the spawned ID may not carry a matching prefix) still bind.
+//
+// Returns -1 if no unassigned card exists.
+func findUnassignedAgentCard(messages []message, agentID string) int {
+	agentName := agentID
+	if dash := strings.IndexByte(agentID, '-'); dash > 0 {
+		agentName = agentID[:dash]
+	}
+	fallback := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.tool != "agent" && m.tool != "subagent" {
+			continue
+		}
+		if m.agentID != "" {
+			continue
+		}
+		if agentName != "" && m.agentType == agentName {
+			return i
+		}
+		if fallback == -1 {
+			fallback = i
+		}
+	}
+	return fallback
+}
+
+// truncatePrompt shortens a prompt to a single-line 60-char preview for the
+// agent card header.
+func truncatePrompt(prompt string) string {
+	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+		prompt = prompt[:idx]
+	}
+	if len(prompt) > 60 {
+		prompt = prompt[:57] + "..."
+	}
+	return prompt
 }
 
 // handleAgentToolResult processes an agentToolResultMsg.
@@ -472,15 +586,17 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 	m.matrix.feed(msg.kind+msg.content, m.mainWidth())
 	if msg.kind == "spawn" {
-		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
-			if (m.chatModel.Messages[i].tool == "agent" || m.chatModel.Messages[i].tool == "subagent") && m.chatModel.Messages[i].agentID == "" {
-				m.chatModel.Messages[i].agentID = msg.agentID
-				m.chatModel.Messages[i].pipelineID = msg.pipelineID
-				m.chatModel.Messages[i].pipelineMode = msg.pipelineMode
-				m.chatModel.Messages[i].pipelineStep = msg.pipelineStep
-				m.chatModel.Messages[i].pipelineTotal = msg.pipelineTotal
-				break
-			}
+		// Agent IDs from the orchestrator are "<agent-name>-<unix-nano>".
+		// Prefer matching the spawn to an unassigned card whose agentType
+		// matches the name prefix; fall back to the first unassigned card
+		// so legacy single-agent calls still work.
+		idx := findUnassignedAgentCard(m.chatModel.Messages, msg.agentID)
+		if idx >= 0 {
+			m.chatModel.Messages[idx].agentID = msg.agentID
+			m.chatModel.Messages[idx].pipelineID = msg.pipelineID
+			m.chatModel.Messages[idx].pipelineMode = msg.pipelineMode
+			m.chatModel.Messages[idx].pipelineStep = msg.pipelineStep
+			m.chatModel.Messages[idx].pipelineTotal = msg.pipelineTotal
 		}
 	} else {
 		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
@@ -489,10 +605,18 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 				if evKind == "text_delta" {
 					evKind = "text"
 				}
-				m.chatModel.Messages[i].agentEvents = append(m.chatModel.Messages[i].agentEvents, agentEv{
-					kind:    evKind,
-					content: msg.content,
-				})
+				// Merge consecutive text chunks so streaming deltas render as
+				// one growing line instead of a stack of one-char rows.
+				evs := m.chatModel.Messages[i].agentEvents
+				if evKind == "text" && len(evs) > 0 && evs[len(evs)-1].kind == "text" {
+					evs[len(evs)-1].content += msg.content
+					m.chatModel.Messages[i].agentEvents = evs
+				} else {
+					m.chatModel.Messages[i].agentEvents = append(evs, agentEv{
+						kind:    evKind,
+						content: msg.content,
+					})
+				}
 				break
 			}
 		}

@@ -91,7 +91,7 @@ func TestRunRequestValidation(t *testing.T) {
 			name: "valid prompt with binary",
 			req: RunRequest{
 				Prompt:  "Hello",
-				Command: []string{os.Args[0], "-test.run=TestACPClientHelperProcess", "--"},
+				Command: []string{"/bin/true"},
 			},
 			wantErr: false,
 		},

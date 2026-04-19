@@ -1,5 +1,6 @@
 # Binaries
 /pi
+/pi-*
 
 # Go build
 *.exe

@@ -1,6 +1,6 @@
 ---
 name: claude
-description: Claude Code ACP agent — spawn Claude Code via the @zed-industries/claude-code-acp subprocess adapter
+description: Claude Code ACP agent — spawn Claude Code via the @agentclientprotocol/claude-agent-acp subprocess adapter
 role: default
 worktree: false
 tools: read, grep, find, tree, ls, bash, edit, write

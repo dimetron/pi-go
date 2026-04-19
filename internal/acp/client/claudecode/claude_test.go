@@ -90,8 +90,11 @@ func TestRunRequestValidation(t *testing.T) {
 		{
 			name: "valid prompt with binary",
 			req: RunRequest{
-				Prompt:  "Hello",
-				Command: []string{os.Args[0], "-test.run=TestACPClientHelperProcess", "--"},
+				Prompt: "Hello",
+				// Use /bin/true — a fast-exit process that won't speak ACP.
+				// Start() succeeds (subprocess launches); the session then
+				// fails quickly, but this case only checks start-path errors.
+				Command: []string{"/bin/true"},
 			},
 			wantErr: false,
 		},
@@ -236,31 +239,33 @@ func (TestHelperAgent) SetSessionMode(context.Context, acp.SetSessionModeRequest
 	return acp.SetSessionModeResponse{}, nil
 }
 
-// runTestHelperAgent runs the test helper agent. Use with test binary:
-//
-//	go test -test.run=TestACPClientHelperProcess
+// runTestHelperAgent runs the test helper agent from TestMain (below) when
+// GO_WANT_HELPER_PROCESS=1. Calling os.Exit inside a running test function
+// panics since Go 1.26, so this path lives in TestMain where os.Exit is safe.
 func runTestHelperAgent() error {
 	agentConn := acp.NewAgentSideConnection(TestHelperAgent{}, os.Stdout, os.Stdin)
 	<-agentConn.Done()
 	return nil
 }
 
-// TestACPClientHelperProcess is the test helper process entry point.
-func TestACPClientHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
-		return
+// TestMain intercepts helper-process invocations before the testing framework
+// starts, so the ACP dance can complete without test-runtime output (PASS,
+// coverage:...) corrupting the stdout pipe the parent reads as JSON-RPC.
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		if err := runTestHelperAgent(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
-	if err := runTestHelperAgent(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	os.Exit(0)
+	os.Exit(m.Run())
 }
 
 // TestRunnerWithHelperAgent tests the Runner with a test helper ACP agent.
 func TestRunnerWithHelperAgent(t *testing.T) {
 	runner := Runner{}
-	cmd := []string{os.Args[0], "-test.run=TestACPClientHelperProcess", "--"}
+	cmd := []string{os.Args[0], "--"}
 	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
 
 	session, err := runner.Start(context.Background(), RunRequest{

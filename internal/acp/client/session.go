@@ -138,11 +138,11 @@ func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementatio
 	s.mu.Lock()
 	result := s.result
 	s.mu.Unlock()
-	if strings.TrimSpace(result.Result) == "" {
-		result.Result = stopReasonText(promptResp.StopReason)
-	}
 	result.Status = shared.StatusSuccess
 	result.SessionID = sessionID
+	if stop := promptResp.StopReason; strings.TrimSpace(string(stop)) != "" {
+		result.StopReason = string(stop)
+	}
 	s.finish(result)
 }
 
@@ -206,6 +206,10 @@ func (s *RunningSession) finish(result shared.RunResult) {
 		}
 		return
 	}
+	// Capture stderr for diagnostics, especially on errors.
+	if s.result.Stderr == "" {
+		s.result.Stderr = strings.TrimSpace(s.stderr.String())
+	}
 	if strings.TrimSpace(result.Error) == "" {
 		result.Error = strings.TrimSpace(s.stderr.String())
 	}
@@ -233,11 +237,4 @@ func contentBlockText(block acp.ContentBlock) string {
 		return block.ResourceLink.Uri
 	}
 	return ""
-}
-
-func stopReasonText(reason acp.StopReason) string {
-	if strings.TrimSpace(string(reason)) == "" {
-		return ""
-	}
-	return string(reason)
 }

@@ -411,6 +411,57 @@ func TestChatModel_RenderMessages_Separator(t *testing.T) {
 	}
 }
 
+func TestCollapseBlankLines(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "single blank stays",
+			in:   "a\n\nb",
+			want: "a\n\nb",
+		},
+		{
+			name: "double blank collapsed",
+			in:   "a\n\n\nb",
+			want: "a\n\nb",
+		},
+		{
+			name: "triple blank collapsed",
+			in:   "a\n\n\n\n\nb",
+			want: "a\n\nb",
+		},
+		{
+			name: "whitespace-only line treated as blank",
+			in:   "a\n   \n\t\nb",
+			want: "a\n\nb",
+		},
+		{
+			name: "ANSI-styled blank line collapsed",
+			in:   "a\n\x1b[31m\x1b[0m\n\nb",
+			want: "a\n\nb",
+		},
+		{
+			name: "preserves non-blank content verbatim including styling",
+			in:   "  │ \x1b[32mhello\x1b[0m\n",
+			want: "  │ \x1b[32mhello\x1b[0m\n",
+		},
+		{
+			name: "empty input",
+			in:   "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := collapseBlankLines(tt.in); got != tt.want {
+				t.Errorf("collapseBlankLines(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestChatModel_RenderMessages_ThinkingTruncatesLongContent(t *testing.T) {
 	cm := NewChatModel(nil)
 	var lines []string

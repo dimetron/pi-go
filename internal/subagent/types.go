@@ -85,8 +85,9 @@ type AgentStatus struct {
 
 // Event is a streaming event from a subagent process.
 type Event struct {
-	Type      string `json:"type"`                 // "text_delta", "tool_call", "tool_result", "message_end", "error"
-	Content   string `json:"content,omitempty"`    // Text content for text_delta
-	Error     string `json:"error,omitempty"`      // Error message for error events
-	SessionID string `json:"session_id,omitempty"` // Subprocess session ID (from message_start)
+	Type       string `json:"type"`                 // "text_delta", "tool_call", "tool_result", "message_end", "error"
+	Content    string `json:"content,omitempty"`    // Text content for text_delta
+	Error      string `json:"error,omitempty"`      // Error message for error events
+	SessionID  string `json:"session_id,omitempty"` // Subprocess session ID (from message_start)
+	StopReason string `json:"stopReason,omitempty"` // ACP stopReason on message_end
 }

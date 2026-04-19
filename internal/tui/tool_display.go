@@ -20,6 +20,31 @@ import (
 var acpBundledAgents = map[string]struct{}{
 	"claude": {},
 	"gemini": {},
+	"cursor": {},
+}
+
+// agentToolColor returns the foreground color used for tool/command lines
+// emitted by the named ACP-backed subagent. Each ACP agent gets its own hue
+// so parallel runs are easy to tell apart at a glance:
+//
+//	claude → orange (208)
+//	cursor → gray   (245)
+//	gemini → blue   (39)
+//
+// Compound types like "claude+gemini" use the color of the first ACP
+// component found. Anything else returns the default tool color (35).
+func agentToolColor(agentType string) string {
+	for _, p := range strings.Split(agentType, "+") {
+		switch strings.TrimSpace(p) {
+		case "claude":
+			return "208"
+		case "cursor":
+			return "245"
+		case "gemini":
+			return "39"
+		}
+	}
+	return "35"
 }
 
 // agentBracketLabel returns the string rendered inside "agent[...]" for a
@@ -141,33 +166,68 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 
 	cw := t.contentWidth()
 
-	// Show event stream (last N events).
+	// Show event stream. Structural events (message_start/end/done/spawn)
+	// are filtered out first so they never crowd the visible window; from the
+	// renderable remainder, keep the newest maxVisibleAgentEvents so the user
+	// always sees the latest activity — not a stream truncated into silence.
 	if len(msg.agentEvents) > 0 {
 		evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-		maxEvents := 8
-		events := msg.agentEvents
-		if len(events) > maxEvents {
-			skipped := len(events) - maxEvents
-			events = events[len(events)-maxEvents:]
+		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(agentToolColor(msg.agentType)))
+
+		renderable := make([]agentEv, 0, len(msg.agentEvents))
+		for _, ev := range msg.agentEvents {
+			switch ev.kind {
+			case "message_start", "message_end", "done", "spawn":
+				continue
+			case "text", "text_delta":
+				if strings.TrimSpace(ev.content) == "" {
+					continue
+				}
+			}
+			renderable = append(renderable, ev)
+		}
+
+		const maxVisibleAgentEvents = 5
+		events := renderable
+		if len(events) > maxVisibleAgentEvents {
+			skipped := len(events) - maxVisibleAgentEvents
+			events = events[len(events)-maxVisibleAgentEvents:]
 			b.WriteString("  ")
-			b.WriteString(dim.Render(fmt.Sprintf("│ ... %d earlier events\n", skipped)))
+			b.WriteString(dim.Render("│ "))
+			b.WriteString(dim.Render(fmt.Sprintf("... %d earlier events", skipped)))
+			b.WriteString("\n")
 		}
 		for _, ev := range events {
 			var evLine string
 			switch ev.kind {
 			case "tool_call":
-				evLine = evToolStyle.Render("⚙ " + ev.content)
+				// Collapse embedded newlines so tool-call headers occupy one
+				// visual row — otherwise markdown prose inside a tool title
+				// (e.g. Gemini's "**Identifying...**\n\n\n...") drops blank
+				// rows into the card gutter.
+				evLine = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
 			case "tool_result":
 				summary := collapseToSingleLine(ev.content)
 				if len(summary) > 80 {
 					summary = summary[:77] + "..."
 				}
 				evLine = evStyle.Render("  ✓ " + summary)
-			case "text", "text_delta", "message_start", "message_end", "done", "spawn":
-				// Structural/no-op events carry no user-visible signal; skip
-				// them so the event stream stays focused on tool activity.
-				continue
+			case "stderr":
+				// Subprocess stderr — diagnostic chatter. Color it with the
+				// per-agent hue (orange/gray/blue) so users can tell at a
+				// glance which subagent is writing what when several run in
+				// parallel. The thin "▎" marker still distinguishes stderr
+				// from real tool calls, which use the "⚙" prefix.
+				summary := collapseToSingleLine(ev.content)
+				if len(summary) > 120 {
+					summary = summary[:117] + "..."
+				}
+				evLine = evToolStyle.Render("▎ " + summary)
+			case "text", "text_delta":
+				// Subagent message text — what the agent actually said.
+				// Collapse internal blank-line runs so paragraph spacing
+				// from streamed chunks doesn't produce wide gaps in the card.
+				evLine = evStyle.Render("» " + collapseToSingleLine(ev.content))
 			default:
 				content := collapseToSingleLine(ev.content)
 				if content == "" {
