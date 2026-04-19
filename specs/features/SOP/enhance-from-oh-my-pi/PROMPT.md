@@ -12,7 +12,10 @@ Implement 4 feature areas in the pi-go coding agent, following the design and pl
 
 3. **Subagent System** — New `internal/subagent/` package. Process-based: spawn `pi --mode json` subprocesses. 6 types: explore, plan, designer, reviewer, task, quick_task. Concurrency pool (default 5). Git worktree isolation for task/reviewer/designer. Role-based model per type. Streaming events via JSON. `agent` ADK tool for LLM to spawn subagents.
 
-4. **LSP Integration** — New `internal/lsp/` package. JSON-RPC 2.0 client with Content-Length framing over stdio. Manager with on-demand+persistent server lifecycle. 4 languages: Go (gopls), TypeScript (typescript-language-server), Python (pyright), Rust (rust-analyzer). Auto hooks: format-on-write + diagnostics-on-edit after write/edit tools. 5 explicit ADK tools: lsp-diagnostics, lsp-definition, lsp-references, lsp-hover, lsp-symbols.
+4. **LSP Integration** — New `internal/lsp/` package. JSON-RPC 2.0 client with Content-Length framing over stdio.
+   Manager with on-demand+persistent server lifecycle. 4 languages: Go (gopls), TypeScript (typescript-language-server),
+   Python (ruff), Rust (rust-analyzer). Auto hooks: format-on-write + diagnostics-on-edit after write/edit tools. 5
+   explicit ADK tools: lsp-diagnostics, lsp-definition, lsp-references, lsp-hover, lsp-symbols.
 
 ## Acceptance Criteria
 

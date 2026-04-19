@@ -101,6 +101,30 @@ func TestWorktree_BranchNaming(t *testing.T) {
 	}
 }
 
+func TestWorktree_CreateWithRequestedName(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	path, err := mgr.Create("agent-abc12345", "tools/004-acp-subagent")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer func() { _ = mgr.Cleanup("agent-abc12345") }()
+
+	relPath, _ := filepath.Rel(repo, path)
+	expectedPath := filepath.Join(".pi-go", "worktrees", "tools-004-acp-subagent")
+	if relPath != expectedPath {
+		t.Fatalf("worktree path = %q, want %q", relPath, expectedPath)
+	}
+
+	cmd := exec.Command("git", "branch", "--list", "tools-004-acp-subagent")
+	cmd.Dir = repo
+	out, _ := cmd.CombinedOutput()
+	if strings.TrimSpace(string(out)) == "" {
+		t.Fatalf("expected branch %q to exist; got %q", "tools-004-acp-subagent", string(out))
+	}
+}
+
 func TestWorktree_DuplicateCreate(t *testing.T) {
 	repo := initTestRepo(t)
 	mgr := NewWorktreeManager(repo)
@@ -301,5 +325,49 @@ func TestWorktree_CleanupNonexistent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no worktree found") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestWorktree_MergeBack_RecoversMissingActiveEntry(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	wtPath, err := mgr.Create("merge-recover-test")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer func() { _ = mgr.Cleanup("merge-recover-test") }()
+
+	testFile := filepath.Join(wtPath, "recovered-file.txt")
+	if err := os.WriteFile(testFile, []byte("hello from recovered worktree\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", "recovered-file.txt"},
+		{"git", "commit", "-m", "add recovered file from worktree"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = wtPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s in worktree failed: %v: %s", args, err, out)
+		}
+	}
+
+	mgr.mu.Lock()
+	delete(mgr.active, "merge-recover-test")
+	mgr.mu.Unlock()
+
+	out, err := mgr.MergeBack("merge-recover-test")
+	if err != nil {
+		t.Fatalf("MergeBack with recovered metadata: %v\noutput: %s", err, out)
+	}
+
+	mainFile := filepath.Join(repo, "recovered-file.txt")
+	content, err := os.ReadFile(mainFile)
+	if err != nil {
+		t.Fatalf("merged file not found: %v", err)
+	}
+	if string(content) != "hello from recovered worktree\n" {
+		t.Errorf("unexpected content: %q", content)
 	}
 }

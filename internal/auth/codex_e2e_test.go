@@ -425,12 +425,18 @@ func TestCodexProviderConfig(t *testing.T) {
 	if p.ClientID != "app_EMoamEEZ73f0CkXaXp7hrann" {
 		t.Errorf("unexpected codex client ID: %q", p.ClientID)
 	}
-	// Verify scopes include OpenID Connect and Codex connector scopes.
+	// Verify scopes include OpenID Connect only — pi-go uses the ChatGPT
+	// OAuth access_token directly, so the `api.connectors.*` scopes that
+	// gate the token-exchange path are intentionally omitted (pi-mono
+	// parity).
 	scopes := strings.Join(p.Scopes, " ")
-	for _, expected := range []string{"openid", "profile", "email", "api.connectors.read", "api.connectors.invoke"} {
+	for _, expected := range []string{"openid", "profile", "email", "offline_access"} {
 		if !strings.Contains(scopes, expected) {
 			t.Errorf("expected scope %q in codex scopes", expected)
 		}
+	}
+	if strings.Contains(scopes, "api.connectors") {
+		t.Errorf("unexpected api.connectors scope in %q", scopes)
 	}
 	if p.ExtraParams["id_token_add_organizations"] != "true" {
 		t.Errorf("expected id_token_add_organizations=true, got %v", p.ExtraParams)

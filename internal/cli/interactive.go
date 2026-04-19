@@ -490,6 +490,9 @@ func deferredInit(
 	// Store session ID for resume hint on exit.
 	res.sessionID = sessionID
 
+	// Capture ACP subagent events (claude, gemini) under the session dir.
+	res.orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
+
 	// Activate memory capture.
 	if ps.memStore != nil {
 		memSessionID = sessionID

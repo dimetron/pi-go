@@ -104,6 +104,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newAuditCmd())
 	cmd.AddCommand(newServeCmd())
 	cmd.AddCommand(newMemoryCmd())
+	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newACPServerCmd())
 
 	return cmd
 }
@@ -152,7 +154,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		activeRole = "plan"
 	}
 
-	modelName, providerName, err := cfg.ResolveRole(activeRole)
+	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole(activeRole)
 	if err != nil {
 		return fmt.Errorf("resolving model role: %w", err)
 	}
@@ -198,10 +200,13 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build LLM options: extra headers + insecure TLS.
+	// Build LLM options: extra headers + insecure TLS + advisor config.
 	llmOpts := &provider.LLMOptions{
 		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+		AdvisorModel:    advisorModel,
+		AdvisorMaxUses:  advisorMaxUses,
+		AdvisorCaching:  advisorCaching,
 	}
 
 	// Create the LLM provider.
@@ -573,6 +578,9 @@ func runNonInteractive(
 		}
 	}
 
+	// Capture ACP subagent events (claude, gemini) under the session dir.
+	orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
+
 	if memStore != nil {
 		memSessionID = sessionID
 		_ = memStore.CreateSession(ctx, &memory.Session{
@@ -889,9 +897,9 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 // It resolves the "commit" role (falling back to "default") and creates a one-shot LLM.
 func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Context, string) (string, error) {
 	// Resolve commit role, fall back to default.
-	commitModel, commitProvider, err := cfg.ResolveRole("commit")
+	commitModel, commitProvider, _, _, _, err := cfg.ResolveRole("commit")
 	if err != nil {
-		commitModel, commitProvider, err = cfg.ResolveRole("default")
+		commitModel, commitProvider, _, _, _, err = cfg.ResolveRole("default")
 		if err != nil {
 			return nil // no model available
 		}
@@ -986,7 +994,11 @@ func detectGitRoot(dir string) string {
 }
 
 // loadDotEnv loads environment variables from ~/.pi-go/.env.
-// This file is written by the /login command.
+// This file is written by the /login command and takes precedence over
+// the inherited shell environment — a user who ran `/login codex` expects
+// the saved credential to be used even if their shell still exports a
+// different OPENAI_API_KEY from earlier. Lines in the file override the
+// process env; missing keys fall through to whatever the shell set.
 func loadDotEnv() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1007,10 +1019,10 @@ func loadDotEnv() {
 		}
 		key = strings.TrimSpace(key)
 		val = strings.TrimSpace(val)
-		// Don't override existing env vars.
-		if os.Getenv(key) == "" {
-			_ = os.Setenv(key, val)
+		if val == "" {
+			continue
 		}
+		_ = os.Setenv(key, val)
 	}
 }
 

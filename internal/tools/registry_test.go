@@ -204,6 +204,15 @@ type coercingTestOutput struct {
 	Result string `json:"result"`
 }
 
+type requiredDeclarationInput struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+}
+
+type requiredDeclarationOutput struct {
+	Result string `json:"result"`
+}
+
 // makeCoercingTool returns a *coercingTool by creating a tool with int/bool fields.
 func makeCoercingTool(t *testing.T) *coercingTool {
 	t.Helper()
@@ -220,6 +229,48 @@ func makeCoercingTool(t *testing.T) *coercingTool {
 		t.Fatalf("expected *coercingTool, got %T", inner)
 	}
 	return ct
+}
+
+func TestNewTool_DeclarationPreservesRequiredFields(t *testing.T) {
+	inner, err := newTool("required-test", "test required schema",
+		func(_ tool.Context, input requiredDeclarationInput) (requiredDeclarationOutput, error) {
+			return requiredDeclarationOutput{Result: input.Pattern}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newTool: %v", err)
+	}
+	ct, ok := inner.(*coercingTool)
+	if !ok {
+		t.Fatalf("expected *coercingTool, got %T", inner)
+	}
+
+	decl := ct.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+	schema, ok := decl.ParametersJsonSchema.(*jsonschema.Schema)
+	if !ok {
+		t.Fatalf("ParametersJsonSchema = %T, want *jsonschema.Schema", decl.ParametersJsonSchema)
+	}
+	if !stringSliceContains(schema.Required, "pattern") {
+		t.Fatalf("required fields = %v, want pattern", schema.Required)
+	}
+	if stringSliceContains(schema.Required, "path") {
+		t.Fatalf("required fields = %v, did not expect optional path", schema.Required)
+	}
+	if schema.AdditionalProperties == nil {
+		t.Fatal("expected declaration schema to allow additional properties")
+	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCoercingTool_Declaration(t *testing.T) {

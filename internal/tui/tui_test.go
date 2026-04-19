@@ -816,6 +816,39 @@ func TestRenderStatusBar_WithProvider(t *testing.T) {
 	}
 }
 
+func TestProviderDisplayName_CodexOAuthTokenRelabelsOpenAI(t *testing.T) {
+	// Construct a minimal fake codex OAuth JWT: header.payload.sig, where the
+	// payload carries the OpenAI auth claim IdentifyKey looks for.
+	header := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
+	// {"https://api.openai.com/auth":{"chatgpt_account_id":"acct-1"}}
+	payload := "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC0xIn19"
+	jwt := header + "." + payload + ".sig"
+
+	t.Setenv("OPENAI_API_KEY", jwt)
+	m := &model{cfg: Config{ProviderName: "openai", ModelName: "gpt-5"}}
+	if got := m.providerDisplayName(); got != "codex" {
+		t.Errorf("providerDisplayName with codex JWT = %q, want %q", got, "codex")
+	}
+}
+
+func TestProviderDisplayName_PlainAPIKeyStaysOpenAI(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-proj-abcdef")
+	m := &model{cfg: Config{ProviderName: "openai", ModelName: "gpt-5"}}
+	if got := m.providerDisplayName(); got != "openai" {
+		t.Errorf("providerDisplayName with sk- key = %q, want %q", got, "openai")
+	}
+}
+
+func TestProviderDisplayName_NonOpenAIUnchanged(t *testing.T) {
+	// Even if OPENAI_API_KEY happens to be a JWT, non-openai providers
+	// should render their own label.
+	t.Setenv("OPENAI_API_KEY", "eyJh.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig")
+	m := &model{cfg: Config{ProviderName: "anthropic", ModelName: "claude"}}
+	if got := m.providerDisplayName(); got != "anthropic" {
+		t.Errorf("providerDisplayName for anthropic = %q, want %q", got, "anthropic")
+	}
+}
+
 func TestRenderStatusBar_WithoutProvider(t *testing.T) {
 	m := &model{
 		cfg:         Config{ModelName: "gpt-4o"},

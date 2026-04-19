@@ -2,8 +2,10 @@ package subagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -13,7 +15,7 @@ import (
 )
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
-const DefaultPoolSize = 2
+const DefaultPoolSize = 5
 
 // recentTaskTTL is how long a completed subagent result is kept before being evicted.
 const recentTaskTTL = 30 * time.Minute
@@ -47,6 +49,26 @@ type Orchestrator struct {
 	BaseURL  string   // LLM API base URL
 	Insecure bool     // Skip TLS verification
 	Headers  []string // Extra HTTP headers
+
+	// ACP event log — when set, events from ACP subagents (claude, gemini) are
+	// appended as JSONL to this path.
+	acpLogPath string
+	acpLogMu   sync.Mutex
+}
+
+// acpAgentNames is the set of bundled agent names that are ACP subprocess
+// adapters; their event streams are tee'd to the session's acp.jsonl when an
+// ACP log path is configured on the orchestrator.
+var acpAgentNames = map[string]struct{}{
+	"claude": {},
+	"gemini": {},
+	"cursor": {},
+}
+
+// isACPAgent reports whether the named agent is an ACP subprocess adapter.
+func isACPAgent(name string) bool {
+	_, ok := acpAgentNames[name]
+	return ok
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -93,6 +115,46 @@ func (o *Orchestrator) SetProviderOptions(baseURL string, insecure bool, headers
 	o.BaseURL = baseURL
 	o.Insecure = insecure
 	o.Headers = headers
+}
+
+// SetACPLogPath configures where ACP subagent events (claude, gemini) are
+// captured as JSONL. Pass an empty string to disable.
+func (o *Orchestrator) SetACPLogPath(path string) {
+	o.acpLogMu.Lock()
+	defer o.acpLogMu.Unlock()
+	o.acpLogPath = path
+}
+
+// writeACPEvent appends a single event entry to the configured acp.jsonl.
+// Each entry wraps the underlying Event with agent metadata and a timestamp
+// so a single file can hold events from multiple ACP subagent runs.
+func (o *Orchestrator) writeACPEvent(agentID, agentType string, ev Event) {
+	o.acpLogMu.Lock()
+	path := o.acpLogPath
+	if path == "" {
+		o.acpLogMu.Unlock()
+		return
+	}
+	entry := struct {
+		Timestamp time.Time `json:"timestamp"`
+		AgentID   string    `json:"agent_id"`
+		Agent     string    `json:"agent"`
+		Event     Event     `json:"event"`
+	}{time.Now(), agentID, agentType, ev}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		o.acpLogMu.Unlock()
+		return
+	}
+	data = append(data, '\n')
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		o.acpLogMu.Unlock()
+		return
+	}
+	_, _ = f.Write(data)
+	_ = f.Close()
+	o.acpLogMu.Unlock()
 }
 
 // ensurePruneLoop starts the periodic cleanup goroutine if not already running.
@@ -219,6 +281,75 @@ func (o *Orchestrator) LookupAgent(name string) (AgentConfig, error) {
 	return ac, nil
 }
 
+// SpawnWithRetry spawns a subagent with automatic retry on crash (up to maxRetries).
+// It monitors the subagent and re-spawns if the subagent crashes with status "failed" or "killed".
+// Returns the final events channel, agentID, and error (nil on success).
+func (o *Orchestrator) SpawnWithRetry(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
+	maxRetries := input.MaxRetries
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if maxRetries > 3 {
+		maxRetries = 3
+	}
+
+	var lastErr error
+	var finalAgentID string
+	var finalEvents <-chan Event
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		events, agentID, err := o.Spawn(ctx, input)
+		if err != nil {
+			lastErr = err
+			// On spawn error, retry if we have attempts left.
+			if attempt < maxRetries {
+				continue
+			}
+			return nil, "", fmt.Errorf("spawn failed after %d attempts: %w", attempt+1, lastErr)
+		}
+
+		finalAgentID = agentID
+		finalEvents = events
+
+		// If no retries configured, return immediately.
+		if maxRetries == 0 {
+			return finalEvents, finalAgentID, nil
+		}
+
+		// Wait for the subagent to complete and check status.
+		var status string
+		for ev := range events {
+			// Forward events to caller (consume the channel).
+			if ev.Type == "message_end" || ev.Type == "error" {
+				// Check agent state.
+				o.mu.Lock()
+				state := o.agents[agentID]
+				if state != nil {
+					status = state.Status
+				}
+				o.mu.Unlock()
+
+				if status == "failed" || status == "killed" {
+					// Crash detected — retry if we have attempts left.
+					if attempt < maxRetries {
+						break
+					}
+					return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
+				}
+				return finalEvents, finalAgentID, nil
+			}
+		}
+
+		// If we broke out of the loop for retry, continue to next attempt.
+		if attempt < maxRetries {
+			continue
+		}
+		return finalEvents, finalAgentID, nil
+	}
+
+	return finalEvents, finalAgentID, lastErr
+}
+
 // Spawn starts a new subagent and returns an event channel.
 // It acquires a pool slot, optionally creates a worktree, and spawns the pi process.
 func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
@@ -239,7 +370,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	}
 
 	// Resolve model for this agent's role.
-	model, _, err := o.cfg.ResolveRole(agent.Role)
+	model, _, _, _, _, err := o.cfg.ResolveRole(agent.Role)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolving role %q for agent %q: %w", agent.Role, agent.Name, err)
 	}
@@ -259,7 +390,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	if input.WorkDir != "" {
 		workDir = input.WorkDir
 	} else if useWorktree && o.worktree != nil {
-		wtPath, err := o.worktree.Create(agentID)
+		wtPath, err := o.worktree.Create(agentID, input.WorktreeName)
 		if err != nil {
 			o.pool.Release()
 			return nil, "", fmt.Errorf("creating worktree: %w", err)
@@ -278,8 +409,8 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		}
 	}
 
-	// Spawn the process with LLM provider settings from parent.
-	proc, err := o.spawner.Spawn(ctx, SpawnOpts{
+	// Build spawn options shared by the pi spawner and the ACP dispatcher.
+	spawnOpts := SpawnOpts{
 		AgentID:     agentID,
 		Model:       model,
 		WorkDir:     workDir,
@@ -290,7 +421,16 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,
 		Headers:     o.Headers,
-	})
+	}
+
+	// ACP-bundled agents (claude/gemini/cursor) launch their own CLI binary
+	// via the ACP adapter; everyone else runs as a child pi --mode json.
+	var proc *Process
+	if isACPAgent(agent.Name) {
+		proc, err = dispatchACP(ctx, spawnOpts, agent.Name)
+	} else {
+		proc, err = o.spawner.Spawn(ctx, spawnOpts)
+	}
 	if err != nil {
 		if useWorktree && o.worktree != nil {
 			_ = o.worktree.Cleanup(agentID)
@@ -326,11 +466,15 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 
 	// Create a forwarding channel that handles cleanup on completion.
 	events := make(chan Event, 64)
+	logACP := isACPAgent(agent.Name)
 	go func() {
 		defer close(events)
 		defer o.pool.Release()
 
 		for ev := range proc.Events() {
+			if logACP {
+				o.writeACPEvent(agentID, agent.Name, ev)
+			}
 			events <- ev
 		}
 

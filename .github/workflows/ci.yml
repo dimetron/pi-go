@@ -31,6 +31,21 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          # Cache must stay off: pyproject.toml only lives under the LSP
+          # Python fixture, so the action's post-job cache-save step would
+          # error with "Cache path ... does not exist" and fail the job.
+          enable-cache: false
+      - name: Install rustup
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
+        with:
+          toolchain: stable
+          # Cargo.toml lives under the LSP rust fixture, not the repo root,
+          # so point the action at it — otherwise the implicit workspace
+          # lookup fails the step with "could not find Cargo.toml".
+          cache-workspaces: hack/test/lsp/rust
       - name: Run tests
         run: go test -race -count=1 ./...
 
@@ -42,6 +57,18 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          # Cache must stay off: pyproject.toml only lives under the LSP
+          # Python fixture, so the action's post-job cache-save step would
+          # error with "Cache path ... does not exist" and fail the job.
+          enable-cache: false
+      - name: Install rustup
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
+        with:
+          toolchain: stable
+          cache-workspaces: hack/test/lsp/rust
       - name: Run tests with coverage
         run: go test -coverprofile=coverage.out ./...
       - name: Coverage report
