@@ -281,6 +281,14 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	return nil
 }
 
+// modelNamer is satisfied by session services that can record the model name
+// for an existing session (notably *session.FileService). Sessions backed by
+// services without this capability still get the default "unknown" placeholder
+// written by the file backend.
+type modelNamer interface {
+	SetSessionModel(sessionID, modelName string) error
+}
+
 // CreateSession creates a new session and returns its ID.
 func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 	resp, err := a.sessionService.Create(ctx, &session.CreateRequest{
@@ -290,7 +298,15 @@ func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating session: %w", err)
 	}
-	return resp.Session.ID(), nil
+	sid := resp.Session.ID()
+	if mn, ok := a.sessionService.(modelNamer); ok {
+		modelName := ""
+		if a.config.Model != nil {
+			modelName = a.config.Model.Name()
+		}
+		_ = mn.SetSessionModel(sid, modelName) // best-effort; meta defaults to "unknown"
+	}
+	return sid, nil
 }
 
 // Run sends a user message and returns an iterator over agent events.

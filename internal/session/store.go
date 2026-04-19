@@ -4,6 +4,8 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -16,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
@@ -31,13 +32,19 @@ type PlanContext struct {
 	Phase     string `json:"phase,omitempty"`
 }
 
+// UnknownModel is the placeholder written to meta.Model when the caller did
+// not supply one. meta.json always carries a non-empty "model" field so log
+// consumers (CLI status, /sessions list, the ATIF trajectory) never have to
+// branch on absence.
+const UnknownModel = "unknown"
+
 // Meta holds session metadata persisted in meta.json.
 type Meta struct {
 	ID          string       `json:"id"`
 	AppName     string       `json:"appName"`
 	UserID      string       `json:"userID"`
 	WorkDir     string       `json:"workDir,omitempty"`
-	Model       string       `json:"model,omitempty"`
+	Model       string       `json:"model"`
 	CreatedAt   time.Time    `json:"createdAt"`
 	UpdatedAt   time.Time    `json:"updatedAt"`
 	PlanContext *PlanContext `json:"planContext,omitempty"`
@@ -64,6 +71,30 @@ func NewFileService(baseDir string) (*FileService, error) {
 	}, nil
 }
 
+// GenerateSessionID creates a time-sortable session ID.
+// Format: yymmdd-hhmm-xxxxx-xxxxx (23 chars total).
+// The yymmdd-hhmm prefix makes IDs naturally sortable by creation time.
+func GenerateSessionID() string {
+	now := time.Now()
+	prefix := fmt.Sprintf("%02d%02d%02d-%02d%02d",
+		now.Year()%100, // 2-digit year
+		now.Month(),
+		now.Day(),
+		now.Hour(),
+		now.Minute(),
+	)
+	b := make([]byte, 5) // 5 bytes = 10 hex chars, split into 5+5
+	if _, err := rand.Read(b); err != nil {
+		// Fallback when crypto/rand fails: encode second + nanosecond
+		// so repeated calls within the same minute still yield unique IDs.
+		sec := now.Second()
+		nano := now.Nanosecond()
+		return fmt.Sprintf("%s-%05d-%05d", prefix, sec*1000+nano/1_000_000, nano%100_000)
+	}
+	hexStr := hex.EncodeToString(b)
+	return prefix + "-" + hexStr[:5] + "-" + hexStr[5:]
+}
+
 func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*session.CreateResponse, error) {
 	if req.AppName == "" || req.UserID == "" {
 		return nil, fmt.Errorf("app_name and user_id are required")
@@ -71,7 +102,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 
 	sessionID := req.SessionID
 	if sessionID == "" {
-		sessionID = uuid.NewString()
+		sessionID = GenerateSessionID()
 	}
 
 	s.mu.Lock()
@@ -95,6 +126,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 		AppName:   req.AppName,
 		UserID:    req.UserID,
 		WorkDir:   cwd,
+		Model:     UnknownModel,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -227,7 +259,9 @@ func (s *FileService) List(_ context.Context, req *session.ListRequest) (*sessio
 	}, nil
 }
 
-func (s *FileService) Delete(_ context.Context, req *session.DeleteRequest) error {
+// Archive moves the session directory under baseDir to archiveDir/yyyy/mm/dd/
+// using the current time. It removes the session from the in-memory cache.
+func (s *FileService) Archive(_ context.Context, req *session.DeleteRequest) error {
 	if req.AppName == "" || req.UserID == "" || req.SessionID == "" {
 		return fmt.Errorf("app_name, user_id, session_id are required")
 	}
@@ -237,11 +271,46 @@ func (s *FileService) Delete(_ context.Context, req *session.DeleteRequest) erro
 
 	delete(s.sessions, req.SessionID)
 
-	sessionDir := filepath.Join(s.baseDir, req.SessionID)
-	if err := os.RemoveAll(sessionDir); err != nil {
-		return fmt.Errorf("deleting session dir: %w", err)
+	srcDir := filepath.Join(s.baseDir, req.SessionID)
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return nil // Already gone, nothing to archive
 	}
+
+	// Build archive path: archiveDir/YYYY/MM/DD/<sessionID>/
+	now := time.Now()
+	archiveDir := filepath.Join(s.baseDir, "archive", fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", now.Month()), fmt.Sprintf("%02d", now.Day()))
+	dstDir := filepath.Join(archiveDir, req.SessionID)
+
+	// Create archive directory structure.
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return fmt.Errorf("creating archive dir: %w", err)
+	}
+
+	// Move session files to archive.
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("reading session dir: %w", err)
+	}
+	for _, entry := range entries {
+		src := filepath.Join(srcDir, entry.Name())
+		dst := filepath.Join(dstDir, entry.Name())
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("moving %s to archive: %w", entry.Name(), err)
+		}
+	}
+
+	// Remove now-empty session source directory.
+	if err := os.Remove(srcDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing empty session dir: %w", err)
+	}
+
 	return nil
+}
+
+// Delete archives the session (moves to archive/yyyy/mm/dd/) instead of deleting.
+func (s *FileService) Delete(ctx context.Context, req *session.DeleteRequest) error {
+	return s.Archive(ctx, req)
 }
 
 func (s *FileService) AppendEvent(_ context.Context, curSession session.Session, event *session.Event) error {
@@ -378,6 +447,27 @@ func (s *FileService) ATIFWriter(sessionID string) *atif.Writer {
 		return sess.atifWriter
 	}
 	return nil
+}
+
+// SetSessionModel records the model name used by the agent for the given
+// session and persists it to meta.json. Empty model names are normalized to
+// UnknownModel so meta.json's "model" field is never blank.
+func (s *FileService) SetSessionModel(sessionID, modelName string) error {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = UnknownModel
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Model = modelName
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
 }
 
 // UpdatePlanContext updates the plan session context in the session metadata.
@@ -558,6 +648,9 @@ func (e eventList) At(i int) *session.Event {
 // File I/O helpers.
 
 func writeMeta(sessionDir string, meta *Meta) error {
+	if strings.TrimSpace(meta.Model) == "" {
+		meta.Model = UnknownModel
+	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling meta: %w", err)

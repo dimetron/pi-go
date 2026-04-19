@@ -1,296 +1,264 @@
-# Code Review: pi-go Codebase
+# pi-go Codebase Review
 
-**Review Date:** 2025-01-15  
-**Reviewers:** Claude Code (Bug Detection, Error Handling, Style, Performance) + Gemini (Security, API Design, Tests,
-Documentation)  
-**Duration:** 2m32s (parallel)
+> Multi-agent review conducted by Cursor, Claude, and Gemini on the `feature/acp-client-server` branch.
 
 ---
 
-## 🐛 Critical Bugs
+## Overall Verdict
 
-### 1. Undefined variable `abs` in sandbox.go
+**No blockers for release.** The codebase is mature, well-tested, and production-ready. The multi-provider abstraction
+is a highlight — adding a new LLM requires implementing one interface. Main risks are file-length growth, hardcoded
+model catalogs, and string-matched transient error detection that will rot as SDKs evolve.
 
-**File:** `internal/tools/sandbox.go:95-96`
+| Reviewer | Duration | Grade                                                 |
+|----------|----------|-------------------------------------------------------|
+| Gemini   | 1m 51s   | Excellent — clean layered architecture                |
+| Cursor   | 2m 52s   | Well-layered with modern Go and thoughtful safeguards |
+| Claude   | 4m 36s   | Strong — production-ready, 12 quick wins identified   |
 
-```go
-// Create the directory if it doesn't exist.
-if err := os.MkdirAll(abs, 0o700); err != nil {  // ❌ 'abs' undefined
-return fmt.Errorf("creating extra dir %s: %w", abs, err) // ❌ 'abs' undefined
-}
+---
+
+## 1. Architecture & Structure
+
+**Shape:**
+```
+cmd/pi/main.go              # thin entrypoint (15 lines) — delegates to internal/cli
+internal/
+  agent/        ADK runner wrapper + retry logic
+  provider/     LLM abstraction (Anthropic, OpenAI, Azure, Gemini, Mistral, Ollama)
+  tools/        Sandbox + core tools (read/write/edit/bash/grep/find/git/lsp/mem)
+  session/      File-backed JSONL session service with ATIF trajectories
+  acp/          ACP client (subprocess runner) + server (agent adapter)
+  tui/          Bubble Tea v2 interactive interface
+  cli/          Cobra entry, mode dispatch (interactive/print/json/rpc)
+  subagent/     Concurrency pool, git worktree isolation, orchestration
+  lsp/          Language server manager, JSON-RPC client, diagnostics
+  extension/    Hooks, skills (SKILL.md), MCP tool integration
+  memory/       SQLite + AI compression (marked not-yet-production-ready)
+  guardrail/    Usage limits and daily rollover
+  palace/       (advanced memory)
 ```
 
-**Issue:** The variable `abs` is not defined in the `AddExtraDir` function. The correct variable should be `absPath`.
-This will cause a **compile error** if `AddExtraDir` is ever called with a path that triggers the `os.MkdirAll` call.
+**Strengths:**
 
-**Fix:** Replace `abs` with `absPath` on both lines.
+- `internal/` correctly hides implementation from external importers
+- Provider system abstracts 6+ LLM backends through a single `model.LLM` interface
+- Sandbox uses Go 1.24+ `os.Root` — a real OS-level filesystem jail, not a path-prefix check
+- Session persistence uses atomic `tmp+rename` for safe rewrites
+- Streaming-first: `iter.Seq2[*session.Event, error]` iterators throughout
+- Subagent orchestration with git worktree isolation is advanced engineering
+- Hidden character scanner in skills auditing is a unique prompt-injection defense
+- `coercingTool` in `registry.go` elegantly handles LLM type hallucinations (e.g. stringified numbers)
 
----
+**Weak points — file size / function length:**
 
-### 2. Shadowed error variable in readLastSession
+| File                             | Lines | Concern                                                  |
+|----------------------------------|-------|----------------------------------------------------------|
+| `internal/tui/run.go`            | ~1195 | God-file candidate                                       |
+| `internal/tui/tui.go`            | ~1083 | Borderline god-file                                      |
+| `internal/cli/cli.go`            | ~1053 | `runNonInteractive` alone is ~340 lines                  |
+| `internal/provider/anthropic.go` | ~814  | Streaming + non-streaming + beta advisor variants inline |
 
-**File:** `internal/cli/cli.go:674`
-
-```go
-func readLastSession() (*lastSessionData, error) {
-data := &lastSessionData{}  // ✅ initialized
-blob, err := os.ReadFile(lastSessionFile)
-if err != nil {
-if os.IsNotExist(err) {
-return nil, nil
-}
-return nil, err
-}
-if err := json.Unmarshal(blob, data); err != nil {  // ⚠️ 'err' shadowed
-return nil, err
-}
-return data, nil
-}
-```
-
-**Issue:** The shadowing of `err` from `os.ReadFile` by the second `if err :=` is confusing and could cause subtle bugs.
-
-**Fix:** Use a different variable name:
-
-```go
-if unmarshalErr := json.Unmarshal(blob, data); unmarshalErr != nil {
-return nil, unmarshalErr
-}
-```
+`runNonInteractive` (`cli.go:271-621`) initializes sandbox, tools, subagents, memory, palace, LSP, MCP, A2A, hooks,
+skills, session, and callbacks in one sequential block. Recommend extracting `buildToolChain()`, `initMemory()`,
+`initPalace()`, `buildCallbacks()` helpers.
 
 ---
 
-## ⚠️ Error Handling Issues
+## 2. Code Quality & Go Best Practices
 
-### 3. Non-fatal errors not logged in grep.go
+**Good:**
 
-**File:** `internal/tools/grep.go:181-184`
+- Error wrapping uses `%w` consistently at all boundaries
+- Package docs on key packages (`agent`, `session`, `sandbox`)
+- Compile-time interface checks: `var _ session.Service = (*FileService)(nil)`
+- `iter.Seq2` idiom adopted pervasively for streaming
+- Contextual cancellation threaded through bash/LLM calls
+- Modern `errors.AsType[E]` (Go 1.26) used over manual `errors.As` + cast
 
-```go
-// Load .gitignore patterns
-patterns, err := sb.LoadGitignorePatterns()
-if err != nil {
-patterns = nil // Silently ignored
-}
-```
+**Concerns:**
 
-**Issue:** Non-fatal errors are silently ignored, making debugging difficult.
-
-**Recommendation:** Add logging for debugging purposes.
-
----
-
-### 4. Unchecked error in subagent spawner
-
-**File:** `internal/subagent/spawner.go:121`
-
-```go
-// Ensure the process and its children are killed on cancel.
-setPlatformAttrs(cmd)
-cmd.WaitDelay = 3 * time.Second // ⚠️ setPlatformAttrs return value unchecked
-```
-
-**Issue:** `setPlatformAttrs` may return an error that is being ignored. While likely non-fatal, it should be logged or
-handled.
+1. **`agent.RebuildWithInstruction` duplicates `New` logic** (`agent.go:248-282`). Extract a private
+   `buildRunner(cfg) (*runner.Runner, error)` and call it from both.
+2. **Hardcoded model fallback / user-agent** in `anthropic.go:20-21, 111`:
+   ```go
+   const anthropicOAuthUserAgent = "claude-cli/2.1.75"   // drifts with upstream
+   modelName = "claude-opus-4-7"                         // buried default
+   ```
+   Move to config or constants with a comment tying them to an upstream version.
+3. **`KnownModels` maintenance** (`provider.go:94-170`): a hand-curated snapshot requiring a code change per new model.
+   Consider moving to `configs/models.yaml` or replacing with "warn-on-unknown" and trusting provider 400 errors.
+4. **`registry.go coercingTool.Run` uses a runtime interface assertion** (`registry.go:268-274`). Drop the fallback and
+   assert at construction time — the impossible branch creates misleading error messages.
 
 ---
 
-### 5. Startup availability check for ripgrep
+## 3. Error Handling
 
-**File:** `internal/tools/grep.go:87-95`
+**Strong:**
 
-```go
-func ripgrepAvailable() bool {
-cmd := exec.Command("rg", "--version")
-if err := cmd.Run(); err != nil {
-return false
-}
-return true
-}
+- `agent/retry.go isTransient` catches `Timeout()`/`Temporary()` interfaces in addition to string patterns — good
+  defense in depth
+- `WithRetry` correctly **does not retry** after partial events have been yielded — prevents duplicate tool calls
+- Bash tool maps `exec.ExitError`, timeouts, and other errors distinctly
 
-var rgAvailable = ripgrepAvailable() // Runs at program startup
-```
+**Weak:**
 
-**Issue:** If `rg` is not installed, this check runs at program startup. Consider lazy initialization or deferred check.
-
----
-
-## 📏 Code Style Inconsistencies
-
-### 6. Mixed error handling patterns
-
-**Files:** Various
-
-The codebase uses multiple patterns for error handling:
-
-```go
-// Pattern 1: Direct if
-if err != nil {
-return ..., err
-}
-
-// Pattern 2: Short-circuit with early return (preferred)
-if err := something(); err != nil {
-return ..., err
-}
-```
-
-**Recommendation:** Standardize on the short-circuit style. It is more idiomatic in modern Go and reduces nesting.
+1. **String-match transient detection** (`retry.go:43-62`) is fragile across provider versions. Add provider-specific
+   typed errors (e.g. `anthropic.RateLimitError`) via `errors.As` as a primary path, falling back to strings.
+2. **Bash timeout path discards stderr** (`bash.go:75-79`):
+   ```go
+   return BashOutput{Stdout: ..., Stderr: "command timed out", ExitCode: -1}, nil
+   ```
+   The original `stderr.String()` is dropped — users lose diagnostic output when a command is killed. Fix:
+   `"command timed out\n" + stderr.String()`.
+3. **ACP client callbacks return generic errors** (`runner.go:78-112`). Use `acp.NewMethodNotFound(...)` instead of
+   `fmt.Errorf` so peers can distinguish "not implemented" from transient failures.
+4. **Dropped events on full channel** (`session.go:190-195`) — silently discarded with no log. At minimum, add a `WARN`
+   log line.
 
 ---
 
-### 7. Magic numbers without constants
+## 4. Potential Bugs
 
-**File:** `internal/tools/grep.go:83`
+1. **`session.AppendEvent` holds global lock across disk I/O** (`store.go:329-387`): `appendEventToFile`, `writeMeta`,
+   and `saveBranches` are synchronous disk writes under the service-wide mutex. A slow disk blocks every other session
+   operation. Fix: use the per-session `sess.mu` already present and release the service lock sooner.
 
-```go
-var grepRegexCache = newRegexCache(50, 10*time.Minute)
-```
+2. **`sandbox.shouldSkipPath` operator precedence ambiguity** (`sandbox.go:467`):
+   ```go
+   if strings.HasPrefix(base, ".") && base != "." && !agentDirs[base] || base == "node_modules" || ...
+   ```
+   Go binds `&&` tighter than `||` — probably correct, but add parentheses to prevent future edits from breaking it.
 
-**Issue:** The magic numbers `50` and `10*time.Minute` should be named constants for maintainability.
+3. **`agent.LoadInstruction` has no size bound** (`agent.go:331-369`):
+   ```go
+   data, err := os.ReadFile(agentsFile)
+   instruction += "\n\n# Project Rules\n\n" + string(data)
+   ```
+   A 10MB `AGENTS.md` goes straight into every system prompt. Add a 128KB cap with a warning.
 
-**Recommendation:** Extract to:
+4. **Grep regex cache eviction is O(n) in `put`** (`grep.go:60-74`). Cache maxes at 50 entries — fine today, but switch
+   to a proper LRU if it grows.
 
-```go
-const (
-defaultRegexCacheSize = 50
-defaultRegexCacheTTL = 10 * time.Minute
-)
-```
+5. **`BashTimeout` max clamp is silent** (`bash.go:48-50`). An LLM requesting a 15-min timeout gets 10 min with no
+   signal. Return a warning in `BashOutput`.
 
----
-
-### 8. Inconsistent parameter validation
-
-**File:** `internal/tools/bash.go:41-43` vs `internal/tools/edit.go:46-54`
-
-```go
-// bash.go - minimal validation
-if input.Command == "" {
-return BashOutput{}, fmt.Errorf("command is required")
-}
-
-// edit.go - multiple validations
-if input.FilePath == "" {
-return EditOutput{}, fmt.Errorf("file_path is required")
-}
-if input.OldString == "" {
-return EditOutput{}, fmt.Errorf("old_string is required")
-}
-if input.OldString == input.NewString {
-return EditOutput{}, fmt.Errorf("old_string and new_string must be different")
-}
-```
-
-**Recommendation:** Consider consistent validation patterns across all tools. At minimum, validate that required fields
-are non-empty.
+6. **Session `GenerateSessionID` fallback** (`store.go:86-92`): falls back to nanosecond-based non-random IDs if
+   `crypto/rand.Read` fails. On Linux this essentially never fails — if it does, something is badly wrong; consider
+   failing loudly instead.
 
 ---
 
-## ⚡ Performance Issues
+## 5. Security
 
-### 9. Regex cache uses simple Mutex instead of RWMutex
+**Solid:**
 
-**File:** `internal/tools/grep.go:22-27`
+- **`os.Root` filesystem sandbox** (`sandbox.go`) — symlink escape, `..` escape, absolute-path escape all blocked at OS
+  level
+- **Secret redaction** on bash stdout/stderr (`redact.go`) covers `sk-*`, `ghp_*`, `gho_*`, `sk-ant-*`, Bearer tokens,
+  `KEY=value` env patterns
+- **OAuth PKCE and device-code flows** with keys stored in `~/.pi-go/.env` at mode `0o600`
+- **Hidden character auditing** in skills prevents prompt injection via Unicode tricks
 
-```go
-type regexCache struct {
-mu      sync.Mutex // ⚠️ Could use RWMutex for better read performance
-entries map[string]*cachedRegex
-maxSize int
-maxAge  time.Duration
-}
-```
+**Gaps:**
 
-**Issue:** The `get()` method only reads, while `put()` modifies. Using `sync.RWMutex` would allow concurrent readers:
-
-```go
-type regexCache struct {
-mu      sync.RWMutex
-entries map[string]*cachedRegex
-maxSize int
-maxAge  time.Duration
-}
-
-func (c *regexCache) get(key string) *regexp.Regexp {
-c.mu.RLock()
-defer c.mu.RUnlock()
-// ...
-}
-```
+1. **pprof binds to all interfaces** — code says `":"+ flagPprofPort` but startup message says "localhost". **Fix:
+   listen on `127.0.0.1` only.**
+2. **`redact.go` misses common patterns**: JWT tokens (`eyJ...`), GCP service-account keys, AWS `AKIA[0-9A-Z]{16}`.
+3. **`.pi-go/.env` is readable by the agent** — sandbox explicitly un-blocks `.pi-go/` to allow skill files. Consider
+   denylisting `.env` specifically within the sandbox.
+4. **`--insecure` / `InsecureSkipVerify: true`** has `nolint:gosec` comment but no runtime warning. Emit a startup
+   warning to stderr when active.
+5. **`AutoApproveOutcome`** (`acp/permissions.go`) falls back to the first option if no `allow_*` action is found. Add a
+   godoc note that this is **unsuitable for multi-tenant or untrusted ACP servers**.
 
 ---
 
-### 10. Global regex compilation at package init
+## 6. Performance
 
-**File:** `internal/tools/read.go:43`
+**Strengths:**
 
-```go
-var base64ImagePattern = regexp.MustCompile(`!\\[([^\\]]*)\\]\\(data:[^)]+\\)`)
-```
+- Ripgrep-first, Go-fallback grep strategy
+- `FileContentCache` with mtime-based invalidation
+- Streaming LLM responses via `iter.Seq2`
+- Deferred TUI initialization ensures immediate UI presence
+- Token compaction for large bash/git outputs maximizes context window value
+- Subagent concurrency pool with buffered event channel (size 256)
 
-**Issue:** This regex is compiled once at program startup. For large regexes, consider lazy initialization, though this
-is acceptable for small patterns.
+**Bottlenecks:**
 
----
-
-### 11. Repeated directory walking in grep.go
-
-**File:** `internal/tools/grep.go:180-184`
-
-```go
-// Load .gitignore patterns
-patterns, err := sb.LoadGitignorePatterns()
-if err != nil {
-patterns = nil // Silently ignored
-}
-```
-
-**Issue:** The `LoadGitignorePatterns()` is called on **every grep invocation**, which walks the entire directory tree.
-This is expensive for large codebases.
-
-**Recommendation:** Consider caching with invalidation on file changes or a TTL-based cache.
+1. **`FileService.AppendEvent` global lock + disk I/O** — see Bug #1 above.
+2. **`session.List` walks disk under RLock** (`store.go:218-260`). With hundreds of sessions this is O(n) `os.Stat`
+   calls on every `pi sessions list`. Add an in-memory index refreshed on write.
+3. **`estimateEventTokens` walks every event on every call** (`store.go:833-855`). Trivially cached as a running total
+   updated in `AppendEvent`.
+4. **`toolFingerprint` hashes full JSON of args every call** — cheap vs LLM latency, but large payloads could show up in
+   CPU profiles.
 
 ---
 
-## 🔒 Security Considerations
+## 7. Test Coverage
 
-*(Reviewed by Gemini)*
+- **~90% test-file ratio** (161 test files / 178 source files) — excellent
+- **~78% statement coverage** overall
+- Strong packages: `internal/audit` ~95%, `internal/guardrail` ~98%, `internal/acp` ~90%, `internal/agent` ~88%
+- Weaker: `internal/acp/client/cursor` ~62%, `internal/cli` ~72%, `internal/provider` ~72% (expected for I/O-heavy code)
+- TUI tested with `teatest_test.go` (1654 lines) and golden file snapshots
+- E2E tests gated behind `e2e` build tag; dedicated shell scripts per provider
 
-- Sandbox security model using `os.Root` is well-designed
-- Path validation appears robust
-- No obvious SQL injection or command injection vulnerabilities
-- Consider auditing tool inputs for path traversal attacks
+**Currently failing tests (block CI green):**
 
----
+| Package         | Test                                        | Likely Cause                                                 |
+|-----------------|---------------------------------------------|--------------------------------------------------------------|
+| `internal/auth` | `TestStartManualCodeFlow_AnthropicProvider` | Provider registry vs. environment mismatch                   |
+| `internal/lsp`  | `TestRuffDiagnostics`                       | Missing temp file — race in test setup                       |
+| `internal/tui`  | Several `login_test.go` cases               | Expects anthropic/openai/gemini but runtime shows codex-only |
 
-## 📋 Summary Table
+**Coverage gaps:**
 
-| Category       | Severity | Count | Files                             |
-|----------------|----------|-------|-----------------------------------|
-| Critical Bugs  | High     | 1     | `sandbox.go:95-96`                |
-| Error Handling | Medium   | 3     | `cli.go`, `grep.go`, `spawner.go` |
-| Style          | Low      | 3     | Various                           |
-| Performance    | Low      | 3     | `grep.go`, `read.go`              |
-
----
-
-## 🔧 Recommended Fixes (Priority Order)
-
-1. **Fix `abs` variable bug** in `sandbox.go:95-96` → should be `absPath`
-2. **Add RWMutex** to `regexCache` for better read concurrency
-3. **Cache gitignore patterns** or add TTL-based caching
-4. **Standardize error handling** patterns across tools
-5. **Extract magic numbers** to named constants
-6. **Fix shadowed `err` variable** in `readLastSession()`
+- `cli.go runNonInteractive` — monolithic, no direct unit tests (only covered via e2e)
+- `agent.go LoadInstruction` — no test for the missing size-cap behavior
+- `retry.go isTransient` — string patterns should have property-style tests against real provider error types
 
 ---
 
-## ✅ Positive Findings
+## 8. Quick Wins
 
-1. **Sandbox security model** (`internal/tools/sandbox.go`) - Excellent use of `os.Root` for path restriction
-2. **Retry logic** (`internal/agent/retry.go`) - Clean exponential backoff implementation
-3. **Tool registry pattern** (`internal/tools/registry.go`) - Good abstraction for tool creation
-4. **Graceful degradation** - grep falls back to Go implementation if ripgrep unavailable
-5. **Clean error wrapping** with `fmt.Errorf("context: %w", err)` pattern
-6. **Good use of ADK interfaces** over custom abstractions
+Sorted by effort vs. value:
+
+| #  | File:Line                            | Change                                                                                  |
+|----|--------------------------------------|-----------------------------------------------------------------------------------------|
+| 1  | `internal/tools/bash.go:75`          | Include original stderr in timeout error output                                         |
+| 2  | `internal/agent/agent.go:248`        | Extract shared `buildRunner` helper; remove ~35 LoC duplication                         |
+| 3  | `internal/acp/client/runner.go:78`   | Return `acp.NewMethodNotFound(...)` from unimplemented callbacks                        |
+| 4  | `internal/acp/client/session.go:190` | Log dropped events instead of silently discarding                                       |
+| 5  | `internal/tools/sandbox.go:467`      | Add parentheses to mixed `&&`/`\|\|` expression                                         |
+| 6  | `internal/agent/agent.go:343`        | Cap `AGENTS.md` file size at 128KB with a warning                                       |
+| 7  | `internal/session/store.go:316`      | Move disk I/O out of service-wide lock (use per-session mutex)                          |
+| 8  | `internal/provider/provider.go:29`   | Emit stderr warning when `InsecureSkipTLS` is active                                    |
+| 9  | `internal/tools/redact.go`           | Add JWT (`eyJ...`) and `AKIA[0-9A-Z]{16}` redact patterns                               |
+| 10 | `internal/cli/cli.go:271`            | Split `runNonInteractive` into `buildToolChain`, `initMemory`, `buildCallbacks` helpers |
+| 11 | `internal/provider/anthropic.go:20`  | Move OAuth user-agent and default model to versioned `const` block                      |
+| 12 | `internal/session/store.go:833`      | Cache token count as running total on `AppendEvent`                                     |
+
+---
+
+## 9. Consensus Summary
+
+All three reviewers independently agreed on:
+
+1. **Architecture is strong** — clean layering, good dependency direction, no circular imports
+2. **`os.Root` sandbox** is modern and excellent — OS-level guarantee, not a path-prefix check
+3. **Large files** (`tui/run.go`, `cli/cli.go`, `provider/anthropic.go`) are the main maintainability risk
+4. **Test suite needs fixes** — failing tests undermine CI confidence before anything else
+5. **No critical blockers** — the codebase is production-ready overall
+
+**Recommended priority order:**
+
+1. 🔴 Fix failing tests (`auth`, `lsp/ruff`, `tui/login`) so `go test ./...` is green
+2. 🟠 Cap `AGENTS.md` size in `LoadInstruction` (silent correctness bug)
+3. 🟠 Fix session global lock + disk I/O (latency under load)
+4. 🟡 Bind pprof to `127.0.0.1` (security hardening)
+5. 🟡 Include stderr in bash timeout output (UX/debuggability)
+6. 🟢 Remaining quick wins from the table above

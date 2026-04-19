@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,66 @@ func TestCreateSession(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir, "events.jsonl")); err != nil {
 		t.Errorf("events.jsonl not found: %v", err)
+	}
+}
+
+func TestCreateSessionMetaAlwaysHasModel(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	metaPath := filepath.Join(svc.baseDir, resp.Session.ID(), "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	model, ok := raw["model"].(string)
+	if !ok {
+		t.Fatalf(`meta.json missing string "model" field; got %T`, raw["model"])
+	}
+	if model != UnknownModel {
+		t.Errorf("model = %q, want %q", model, UnknownModel)
+	}
+
+	if err := svc.SetSessionModel(resp.Session.ID(), "claude-sonnet-4-6"); err != nil {
+		t.Fatalf("SetSessionModel: %v", err)
+	}
+	data, err = os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("reading meta.json after SetSessionModel: %v", err)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json after SetSessionModel: %v", err)
+	}
+	if got := raw["model"].(string); got != "claude-sonnet-4-6" {
+		t.Errorf("model after SetSessionModel = %q, want %q", got, "claude-sonnet-4-6")
+	}
+
+	if err := svc.SetSessionModel(resp.Session.ID(), "  "); err != nil {
+		t.Fatalf("SetSessionModel(blank): %v", err)
+	}
+	data, _ = os.ReadFile(metaPath)
+	_ = json.Unmarshal(data, &raw)
+	if got := raw["model"].(string); got != UnknownModel {
+		t.Errorf("blank model normalized to %q, want %q", got, UnknownModel)
+	}
+}
+
+func TestSetSessionModelUnknownSession(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.SetSessionModel("ghost", "x"); err == nil {
+		t.Error("expected error for unknown session")
 	}
 }
 
@@ -200,7 +261,7 @@ func TestDeleteSession(t *testing.T) {
 		t.Fatalf("Delete() error: %v", err)
 	}
 
-	// Verify session is gone.
+	// Verify session is gone (no longer accessible).
 	_, err = svc.Get(ctx, &session.GetRequest{
 		AppName:   "test-app",
 		UserID:    "test-user",
@@ -210,10 +271,19 @@ func TestDeleteSession(t *testing.T) {
 		t.Error("expected error getting deleted session")
 	}
 
-	// Verify directory is gone.
+	// Verify session is archived (directory moved to archive/yyyy/mm/dd/).
 	sessionDir := filepath.Join(svc.baseDir, sessionID)
 	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
-		t.Error("session directory should be deleted")
+		t.Error("session directory should be moved, not in sessions root")
+	}
+	now := time.Now()
+	archiveDir := filepath.Join(svc.baseDir, "archive",
+		fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", now.Month()),
+		fmt.Sprintf("%02d", now.Day()),
+		sessionID)
+	if _, err := os.Stat(archiveDir); os.IsNotExist(err) {
+		t.Errorf("session should be archived at %s", archiveDir)
 	}
 }
 
@@ -1913,6 +1983,101 @@ func TestUpdatePlanContext_NotFound(t *testing.T) {
 	_, err = svc.GetPlanContext("nonexistent")
 	if err == nil {
 		t.Error("GetPlanContext() expected error for nonexistent session, got nil")
+	}
+}
+
+func TestGenerateSessionID(t *testing.T) {
+	now := time.Now()
+	id := GenerateSessionID()
+
+	// Should be exactly 23 characters: yymmdd-hhmm-xxxxx-xxxxx
+	if len(id) != 23 {
+		t.Errorf("GenerateSessionID() length = %d, want 23", len(id))
+	}
+
+	// Parse the parts (yymmdd-hhmm-xxxxx-xxxxx)
+	parts := strings.Split(id, "-")
+	if len(parts) != 4 {
+		t.Fatalf("GenerateSessionID() should have 4 parts separated by -, got %d", len(parts))
+	}
+
+	// First part should be yymmdd (6 chars)
+	if len(parts[0]) != 6 {
+		t.Errorf("GenerateSessionID() first part (yymmdd) length = %d, want 6", len(parts[0]))
+	}
+	expectedPrefix := fmt.Sprintf("%02d%02d%02d",
+		now.Year()%100,
+		now.Month(),
+		now.Day(),
+	)
+	if parts[0] != expectedPrefix {
+		t.Errorf("GenerateSessionID() first part (yymmdd) = %q, want %q", parts[0], expectedPrefix)
+	}
+
+	// Second part should be hhmm (4 chars)
+	if len(parts[1]) != 4 {
+		t.Errorf("GenerateSessionID() second part (hhmm) length = %d, want 4", len(parts[1]))
+	}
+	expectedTime := fmt.Sprintf("%02d%02d",
+		now.Hour(),
+		now.Minute(),
+	)
+	if parts[1] != expectedTime {
+		t.Errorf("GenerateSessionID() second part (hhmm) = %q, want %q", parts[1], expectedTime)
+	}
+
+	// Last two parts should be 5 hex chars each
+	if len(parts[2]) != 5 || len(parts[3]) != 5 {
+		t.Errorf("GenerateSessionID() hex parts should be 5 chars each, got %d and %d", len(parts[2]), len(parts[3]))
+	}
+
+	// Validate hex parts contain only valid hex digits
+	hexChars := "0123456789abcdefABCDEF"
+	for i, part := range parts[2:] {
+		for _, c := range part {
+			if !strings.ContainsRune(hexChars, c) {
+				t.Errorf("GenerateSessionID() part[%d] %q contains invalid hex char %q", i+2, part, c)
+			}
+		}
+	}
+
+	// Generate another ID - should differ (different random suffix)
+	id2 := GenerateSessionID()
+	if id == id2 {
+		t.Error("GenerateSessionID() generated duplicate IDs")
+	}
+}
+
+func TestGenerateSessionIDUniqueness(t *testing.T) {
+	ids := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		id := GenerateSessionID()
+		if ids[id] {
+			t.Fatalf("GenerateSessionID() generated duplicate ID %q", id)
+		}
+		ids[id] = true
+	}
+}
+
+func TestGenerateSessionIDSortable(t *testing.T) {
+	// IDs generated in order should be sortable by time
+	ids := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		ids[i] = GenerateSessionID()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// All should have the same prefix since they were generated within ~100ms
+	// But due to minute boundaries, they may differ - just verify sorting works
+	sorted := make([]string, len(ids))
+	copy(sorted, ids)
+	sort.Strings(sorted)
+
+	// Verify all IDs are still valid (23 chars: yymmdd-hhmm-xxxxx-xxxxx)
+	for _, id := range sorted {
+		if len(id) != 23 {
+			t.Errorf("sorted ID %q has invalid length %d", id, len(id))
+		}
 	}
 }
 

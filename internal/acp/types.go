@@ -10,6 +10,11 @@ const (
 	EventTypeProgress = "progress"
 	EventTypeTool     = "tool"
 	EventTypeError    = "error"
+	// EventTypeStderr carries a single line of subprocess stderr. Distinct
+	// from Progress so the UI can render diagnostic chatter (npm install
+	// progress, "API key required", protocol error dumps) differently from
+	// real tool calls or agent thinking.
+	EventTypeStderr = "stderr"
 )
 
 // RunRequest describes a local ACP turn request shared by client and server code.
@@ -30,10 +35,12 @@ type Event struct {
 
 // RunResult is the shared local result model for ACP executions.
 type RunResult struct {
-	Status    string `json:"status"`
-	Result    string `json:"result,omitempty"`
-	Error     string `json:"error,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Status     string `json:"status"`
+	Result     string `json:"result,omitempty"`
+	Error      string `json:"error,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`     // Captured subprocess stderr for diagnostics
+	StopReason string `json:"stopReason,omitempty"` // ACP stopReason from PromptResponse
 }
 
 // Validate checks whether the request has the required fields for execution.
@@ -55,7 +62,7 @@ func (r RunRequest) Validate() error {
 // Validate checks whether the event carries a supported type and payload.
 func (e Event) Validate() error {
 	switch e.Type {
-	case EventTypeMessage, EventTypeProgress, EventTypeTool:
+	case EventTypeMessage, EventTypeProgress, EventTypeTool, EventTypeStderr:
 		if strings.TrimSpace(e.Content) == "" {
 			return validationError("content is required")
 		}

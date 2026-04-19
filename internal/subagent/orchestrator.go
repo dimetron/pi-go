@@ -15,7 +15,7 @@ import (
 )
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
-const DefaultPoolSize = 2
+const DefaultPoolSize = 5
 
 // recentTaskTTL is how long a completed subagent result is kept before being evicted.
 const recentTaskTTL = 30 * time.Minute
@@ -62,6 +62,7 @@ type Orchestrator struct {
 var acpAgentNames = map[string]struct{}{
 	"claude": {},
 	"gemini": {},
+	"cursor": {},
 }
 
 // isACPAgent reports whether the named agent is an ACP subprocess adapter.
@@ -408,8 +409,8 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		}
 	}
 
-	// Spawn the process with LLM provider settings from parent.
-	proc, err := o.spawner.Spawn(ctx, SpawnOpts{
+	// Build spawn options shared by the pi spawner and the ACP dispatcher.
+	spawnOpts := SpawnOpts{
 		AgentID:     agentID,
 		Model:       model,
 		WorkDir:     workDir,
@@ -420,7 +421,16 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,
 		Headers:     o.Headers,
-	})
+	}
+
+	// ACP-bundled agents (claude/gemini/cursor) launch their own CLI binary
+	// via the ACP adapter; everyone else runs as a child pi --mode json.
+	var proc *Process
+	if isACPAgent(agent.Name) {
+		proc, err = dispatchACP(ctx, spawnOpts, agent.Name)
+	} else {
+		proc, err = o.spawner.Spawn(ctx, spawnOpts)
+	}
 	if err != nil {
 		if useWorktree && o.worktree != nil {
 			_ = o.worktree.Cleanup(agentID)

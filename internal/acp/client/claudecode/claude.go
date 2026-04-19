@@ -1,8 +1,9 @@
 // Package claudecode provides an ACP client for Claude Code via the
-// @zed-industries/claude-code-acp subprocess adapter.
+// @agentclientprotocol/claude-agent-acp subprocess adapter.
 package claudecode
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -12,30 +13,42 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	shared "github.com/dimetron/pi-go/internal/acp"
 )
 
-// BinaryName is the expected name of the Claude Code ACP binary.
-const BinaryName = "claude-code-acp"
+// BinaryName is the preferred launcher for the Claude Code ACP subprocess adapter.
+const BinaryName = "bunx"
 
-// DefaultBinaryPaths lists common installation locations for claude-code-acp.
+// rpcTimeout caps how long Initialize and NewSession may block on the
+// subprocess. Without a cap, a hung subprocess (missing API key, npm install
+// in progress, no TTY for interactive auth, etc.) makes the call wait for the
+// orchestrator's absolute timeout — typically 10 minutes — producing "stuck"
+// subagents in the parent UI. 60s is comfortably more than a normal startup
+// yet short enough to surface real problems quickly.
+const rpcTimeout = 60 * time.Second
+
+// DefaultCommand is the default command used to launch Claude Code ACP.
+var DefaultCommand = []string{"bunx", "-y", "@agentclientprotocol/claude-agent-acp@latest"}
+
+// DefaultBinaryPaths lists common installation locations for the launcher binary.
 var DefaultBinaryPaths = []string{
-	"claude-code-acp",
-	".claude/bin/claude-code-acp",
-	"/usr/local/bin/claude-code-acp",
-	"/usr/bin/claude-code-acp",
+	"bunx",
+	"/opt/homebrew/bin/bunx",
+	"/usr/local/bin/bunx",
+	"/usr/bin/bunx",
 }
 
-// Runner launches Claude Code via the claude-code-acp subprocess adapter
+// Runner launches Claude Code via the claude-agent-acp subprocess adapter
 // and manages the ACP client-side connection.
 type Runner struct {
 	// ClientInfo identifies this client to the agent.
 	ClientInfo acp.Implementation
 
-	// Binary is the path to the claude-code-acp binary.
+	// Binary is the path to the claude-agent-acp binary.
 	// If empty, uses the first found in DefaultBinaryPaths.
 	Binary string
 
@@ -52,7 +65,7 @@ type RunRequest struct {
 	SessionID string   // Optional session ID to resume
 	CWD       string   // Working directory
 	Env       []string // Additional environment variables
-	Command   []string // Optional command override for testing (defaults to claude-code-acp)
+	Command   []string // Optional command override for testing (defaults to claude-agent-acp)
 }
 
 // RunningSession represents one in-flight Claude Code prompt turn.
@@ -67,9 +80,11 @@ type RunningSession struct {
 
 	closeStdin sync.Once
 
-	mu       sync.Mutex
-	result   shared.RunResult
-	finished bool
+	mu         sync.Mutex
+	result     shared.RunResult
+	finished   bool
+	toolFilter *shared.ToolCallTitleFilter
+	curSession string // sessionID captured for filter-driven emissions
 }
 
 // Events returns the translated local ACP event stream.
@@ -101,6 +116,10 @@ func (s *RunningSession) Wait() shared.RunResult {
 	return s.result
 }
 
+// envACPClaudeCmd is the environment variable that overrides the Claude ACP command.
+// Format: "binary arg1 arg2 ..." or just "binary" (args come from DefaultCommand).
+const envACPClaudeCmd = "PI_ACP_CLAUDE_CMD"
+
 // Start launches the Claude Code subprocess and begins the ACP flow.
 func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
@@ -108,22 +127,29 @@ func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, err
 	}
 
 	binary := r.Binary
+	cmdArgs := []string{}
 	if binary == "" {
-		// Use Command if provided (for testing), otherwise find the binary.
 		if len(req.Command) > 0 {
 			binary = req.Command[0]
+			if len(req.Command) > 1 {
+				cmdArgs = req.Command[1:]
+			}
+		} else if envCmd := os.Getenv(envACPClaudeCmd); envCmd != "" {
+			// PI_ACP_CLAUDE_CMD overrides the default launcher entirely.
+			// Parse "binary arg1 arg2 ..." from the env var.
+			parts := strings.Fields(envCmd)
+			if len(parts) > 0 {
+				binary = parts[0]
+				cmdArgs = parts[1:]
+			}
 		} else {
 			var err error
 			binary, err = findBinary(DefaultBinaryPaths)
 			if err != nil {
 				return nil, fmt.Errorf("finding %s: %w", BinaryName, err)
 			}
+			cmdArgs = append(cmdArgs, DefaultCommand[1:]...)
 		}
-	}
-
-	cmdArgs := []string{}
-	if len(req.Command) > 1 {
-		cmdArgs = req.Command[1:]
 	}
 
 	cmd := exec.CommandContext(ctx, binary, cmdArgs...)
@@ -183,8 +209,35 @@ func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *Runnin
 		events: make(chan shared.Event, 32),
 		done:   make(chan struct{}),
 	}
-	go rs.stderr.readFrom(stderr)
+	rs.toolFilter = shared.NewToolCallTitleFilter(func(title string) {
+		rs.mu.Lock()
+		sid := rs.curSession
+		rs.mu.Unlock()
+		rs.emit(shared.Event{Type: shared.EventTypeTool, Content: title, SessionID: sid})
+	})
+	go rs.streamStderr(stderr)
 	return rs
+}
+
+// streamStderr scans the subprocess's stderr line-by-line, appending to the
+// internal buffer (used in error reports) and emitting each non-empty line as
+// a progress event so the parent UI sees real-time diagnostics. Without this
+// the user has no way to tell whether a hung subagent is waiting for an API
+// key, downloading dependencies, or something else.
+func (s *RunningSession) streamStderr(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		_, _ = s.stderr.Write([]byte(line + "\n"))
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		s.mu.Lock()
+		sid := s.curSession
+		s.mu.Unlock()
+		s.emit(shared.Event{Type: shared.EventTypeStderr, Content: line, SessionID: sid})
+	}
 }
 
 func (s *RunningSession) closeStdinOnce() {
@@ -198,14 +251,17 @@ func (s *RunningSession) closeStdinOnce() {
 func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 	defer close(s.done)
 	defer close(s.events)
+	defer s.toolFilter.Flush()
 	defer s.closeStdinOnce()
 
 	ctx := context.Background()
 
-	initResp, err := s.conn.Initialize(ctx, acp.InitializeRequest{
+	initCtx, initCancel := context.WithTimeout(ctx, rpcTimeout)
+	initResp, err := s.conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		ClientInfo:      &clientInfo,
 	})
+	initCancel()
 	if err != nil {
 		s.closeStdinOnce()
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("initialize: %v", err)})
@@ -213,10 +269,12 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 		return
 	}
 
-	newSessionResp, err := s.conn.NewSession(ctx, acp.NewSessionRequest{
+	newCtx, newCancel := context.WithTimeout(ctx, rpcTimeout)
+	newSessionResp, err := s.conn.NewSession(newCtx, acp.NewSessionRequest{
 		Cwd:        absDir(req.CWD),
 		McpServers: []acp.McpServer{},
 	})
+	newCancel()
 	if err != nil {
 		s.closeStdinOnce()
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("new session: %v", err)})
@@ -231,6 +289,8 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 
 	_, _ = initResp, req.SessionID
 
+	// Prompt is intentionally bounded only by the orchestrator's absolute
+	// timeout (typically 10 minutes); a long-form answer is normal here.
 	promptResp, err := s.conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: newSessionResp.SessionId,
 		Prompt:    []acp.ContentBlock{acp.TextBlock(req.Prompt)},
@@ -253,11 +313,11 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 	s.mu.Lock()
 	result := s.result
 	s.mu.Unlock()
-	if strings.TrimSpace(result.Result) == "" {
-		result.Result = stopReasonText(promptResp.StopReason)
-	}
 	result.Status = shared.StatusSuccess
 	result.SessionID = sessionID
+	if stop := promptResp.StopReason; strings.TrimSpace(string(stop)) != "" {
+		result.StopReason = string(stop)
+	}
 	s.finish(result)
 }
 
@@ -269,6 +329,7 @@ func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
 	if s.result.SessionID == "" {
 		s.result.SessionID = sessionID
 	}
+	s.curSession = sessionID
 	s.mu.Unlock()
 
 	if chunk := update.AgentMessageChunk; chunk != nil {
@@ -285,14 +346,20 @@ func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
 		}
 	}
 	if toolCall := update.ToolCall; toolCall != nil {
-		if title := strings.TrimSpace(toolCall.Title); title != "" {
-			s.emit(shared.Event{Type: shared.EventTypeTool, Content: title, SessionID: sessionID})
-		}
+		s.toolFilter.OnToolCall(
+			string(toolCall.ToolCallId),
+			shared.EnrichToolCallTitle(toolCall.Title, toolCall.RawInput),
+		)
 	}
 	if toolUpdate := update.ToolCallUpdate; toolUpdate != nil {
-		if title := toolUpdate.Title; title != nil && strings.TrimSpace(*title) != "" {
-			s.emit(shared.Event{Type: shared.EventTypeTool, Content: *title, SessionID: sessionID})
+		title := ""
+		if toolUpdate.Title != nil {
+			title = *toolUpdate.Title
 		}
+		s.toolFilter.OnToolCallUpdate(
+			string(toolUpdate.ToolCallId),
+			shared.EnrichToolCallTitle(title, toolUpdate.RawInput),
+		)
 	}
 }
 
@@ -356,11 +423,10 @@ func (c *callbackClient) WriteTextFile(ctx context.Context, req acp.WriteTextFil
 }
 
 func (c *callbackClient) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	// By default, deny permissions for safety.
-	// Claude Code should handle permissions via its own flow.
-	return acp.RequestPermissionResponse{
-		Outcome: acp.NewRequestPermissionOutcomeCancelled(),
-	}, nil
+	// pi-go runs ACP subagents under an already-authorized user session, so
+	// auto-approve every tool call rather than gating each one on a prompt
+	// the parent process has no UI for. See shared.AutoApproveOutcome.
+	return acp.RequestPermissionResponse{Outcome: shared.AutoApproveOutcome(req)}, nil
 }
 
 func (c *callbackClient) SessionUpdate(ctx context.Context, params acp.SessionNotification) error {
@@ -389,7 +455,7 @@ func (c *callbackClient) WaitForTerminalExit(ctx context.Context, req acp.WaitFo
 	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("waitForTerminalExit not implemented")
 }
 
-// findBinary searches for the claude-code-acp binary in the given paths.
+// findBinary searches for the claude-agent-acp binary in the given paths.
 func findBinary(paths []string) (string, error) {
 	for _, path := range paths {
 		if path == "" {
@@ -445,10 +511,6 @@ func stopReasonText(reason acp.StopReason) string {
 type stderrBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder
-}
-
-func (b *stderrBuffer) readFrom(r io.Reader) {
-	_, _ = io.Copy(b, r)
 }
 
 func (b *stderrBuffer) Write(p []byte) (int, error) {

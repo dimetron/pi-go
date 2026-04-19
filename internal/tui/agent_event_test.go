@@ -144,14 +144,177 @@ func TestAgentBracketLabel(t *testing.T) {
 		{"", ""},
 		{"claude", "claude"},
 		{"gemini", "gemini"},
+		{"cursor", "cursor"},
 		{"explore", "pi"},
 		{"task", "pi"},
 		{"plan", "pi"},
 		{"code-reviewer", "pi"},
+		{"claude+gemini", "claude+gemini"},
+		{"claude+cursor+gemini", "claude+cursor+gemini"},
+		{"cursor+task", "cursor+pi"},
+		{"claude+explore", "claude+pi"},
+		{"explore+task", "pi"},
+		{"claude+gemini+task", "claude+gemini+pi"},
 	}
 	for _, tc := range tests {
 		if got := agentBracketLabel(tc.in); got != tc.want {
 			t.Errorf("agentBracketLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestExtractAgentType(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"type field", map[string]any{"type": "claude"}, "claude"},
+		{"agent field fallback", map[string]any{"agent": "gemini"}, "gemini"},
+		{"type wins over agent", map[string]any{"type": "claude", "agent": "gemini"}, "claude"},
+		{"tasks parallel", map[string]any{
+			"tasks": []any{
+				map[string]any{"agent": "claude"},
+				map[string]any{"agent": "gemini"},
+			},
+		}, "claude+gemini"},
+		{"chain", map[string]any{
+			"chain": []any{
+				map[string]any{"agent": "explore"},
+				map[string]any{"agent": "task"},
+			},
+		}, "explore+task"},
+		{"tasks dedupe", map[string]any{
+			"tasks": []any{
+				map[string]any{"agent": "claude"},
+				map[string]any{"agent": "claude"},
+			},
+		}, "claude"},
+		{"empty", map[string]any{}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractAgentType(tc.args); got != tc.want {
+				t.Errorf("extractAgentType() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSplitSubagentCards_Single(t *testing.T) {
+	base := message{role: "tool", tool: "subagent"}
+	cards := splitSubagentCards(base, map[string]any{
+		"agent": "explore",
+		"task":  "find all TODO comments",
+	})
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(cards))
+	}
+	if cards[0].agentType != "explore" {
+		t.Errorf("agentType = %q, want %q", cards[0].agentType, "explore")
+	}
+	if cards[0].agentTitle != "find all TODO comments" {
+		t.Errorf("agentTitle = %q, want %q", cards[0].agentTitle, "find all TODO comments")
+	}
+}
+
+func TestSplitSubagentCards_Parallel(t *testing.T) {
+	base := message{role: "tool", tool: "subagent"}
+	cards := splitSubagentCards(base, map[string]any{
+		"tasks": []any{
+			map[string]any{"agent": "claude", "task": "review A"},
+			map[string]any{"agent": "gemini", "task": "review B"},
+			map[string]any{"agent": "cursor", "task": "review C"},
+			map[string]any{"agent": "task", "task": "review D"},
+		},
+	})
+	if len(cards) != 4 {
+		t.Fatalf("expected 4 cards, got %d", len(cards))
+	}
+	wantTypes := []string{"claude", "gemini", "cursor", "task"}
+	wantTitles := []string{"review A", "review B", "review C", "review D"}
+	for i, card := range cards {
+		if card.agentType != wantTypes[i] {
+			t.Errorf("card[%d].agentType = %q, want %q", i, card.agentType, wantTypes[i])
+		}
+		if card.agentTitle != wantTitles[i] {
+			t.Errorf("card[%d].agentTitle = %q, want %q", i, card.agentTitle, wantTitles[i])
+		}
+	}
+}
+
+func TestSplitSubagentCards_Chain(t *testing.T) {
+	base := message{role: "tool", tool: "subagent"}
+	cards := splitSubagentCards(base, map[string]any{
+		"chain": []any{
+			map[string]any{"agent": "explore", "task": "step 1"},
+			map[string]any{"agent": "task", "task": "step 2"},
+		},
+	})
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards, got %d", len(cards))
+	}
+	if cards[0].agentType != "explore" || cards[1].agentType != "task" {
+		t.Errorf("chain card types = %q/%q, want explore/task", cards[0].agentType, cards[1].agentType)
+	}
+}
+
+func TestFindUnassignedAgentCard_PrefersTypeMatch(t *testing.T) {
+	msgs := []message{
+		{tool: "subagent", agentType: "claude"},
+		{tool: "subagent", agentType: "gemini"},
+		{tool: "subagent", agentType: "cursor"},
+	}
+	idx := findUnassignedAgentCard(msgs, "gemini-1700000000")
+	if idx != 1 {
+		t.Errorf("expected gemini card at index 1, got %d", idx)
+	}
+}
+
+func TestFindUnassignedAgentCard_FallbackWhenNoPrefixMatch(t *testing.T) {
+	msgs := []message{
+		{tool: "subagent", agentType: "explore"},
+		{tool: "subagent", agentType: "task"},
+	}
+	// agentID starts with "plan" which matches neither; fallback to first
+	// unassigned card (walking newest-to-oldest, that's index 1).
+	idx := findUnassignedAgentCard(msgs, "plan-123")
+	if idx != 1 {
+		t.Errorf("expected fallback to index 1, got %d", idx)
+	}
+}
+
+func TestFindUnassignedAgentCard_SkipsAlreadyBound(t *testing.T) {
+	msgs := []message{
+		{tool: "subagent", agentType: "claude", agentID: "claude-1"},
+		{tool: "subagent", agentType: "claude"},
+	}
+	idx := findUnassignedAgentCard(msgs, "claude-2")
+	if idx != 1 {
+		t.Errorf("expected second claude card (index 1), got %d", idx)
+	}
+}
+
+func TestFindUnassignedAgentCard_NoneAvailable(t *testing.T) {
+	msgs := []message{
+		{tool: "subagent", agentType: "claude", agentID: "claude-1"},
+	}
+	if idx := findUnassignedAgentCard(msgs, "claude-2"); idx != -1 {
+		t.Errorf("expected -1 when all cards bound, got %d", idx)
+	}
+}
+
+func TestCollapseToSingleLine(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{"hello", "hello"},
+		{"line one\nline two", "line one line two"},
+		{"a\r\nb\tc", "a b c"},
+		{"  multi   spaces\n\n  here ", "multi spaces here"},
+	}
+	for _, tc := range tests {
+		if got := collapseToSingleLine(tc.in); got != tc.want {
+			t.Errorf("collapseToSingleLine(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
