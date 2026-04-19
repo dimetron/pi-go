@@ -422,14 +422,13 @@ func (s *RunningSession) finish(result shared.RunResult) {
 }
 
 func (s *RunningSession) waitProcess() error {
-	err := s.cmd.Wait()
-	// cmd.Wait returns once the subprocess exits; streamStderr's goroutine
-	// may still be flushing the last lines into s.stderr. Waiting on the
-	// drain channel removes the race where the stderr read below returns
-	// empty even though the subprocess printed diagnostics.
+	// See claudecode.waitProcess — draining stderr before cmd.Wait avoids
+	// the race where Wait closes our pipe read-end before the scanner has
+	// read the subprocess's last lines.
 	if s.stderrDone != nil {
 		<-s.stderrDone
 	}
+	err := s.cmd.Wait()
 	if err == nil {
 		return nil
 	}
