@@ -40,6 +40,10 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
         with:
           toolchain: stable
+          # Cargo.toml lives under the LSP rust fixture, not the repo root,
+          # so point the action at it — otherwise the implicit workspace
+          # lookup fails the step with "could not find Cargo.toml".
+          cache-workspaces: hack/test/lsp/rust
       - name: Run tests
         run: go test -race -count=1 ./...
 
@@ -60,6 +64,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
         with:
           toolchain: stable
+          cache-workspaces: hack/test/lsp/rust
       - name: Run tests with coverage
         run: go test -coverprofile=coverage.out ./...
       - name: Coverage report
