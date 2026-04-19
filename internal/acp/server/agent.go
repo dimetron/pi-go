@@ -53,7 +53,8 @@ type Agent struct {
 }
 
 type sessionState struct {
-	cwd string
+	cwd    string
+	cancel context.CancelFunc
 }
 
 var _ acp.Agent = (*Agent)(nil)
@@ -94,7 +95,7 @@ func (a *Agent) Initialize(context.Context, acp.InitializeRequest) (acp.Initiali
 	return acp.InitializeResponse{
 		ProtocolVersion:   acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		AgentInfo:         &info,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: false},
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: true},
 	}, nil
 }
 
@@ -111,7 +112,9 @@ func (a *Agent) NewSession(_ context.Context, params acp.NewSessionRequest) (acp
 }
 
 // Prompt bridges a prompt request through the configured handler and, on
-// success, streams the final reply as a single AgentMessageText update.
+// success, streams the final reply as a single AgentMessageText update. The
+// handler is invoked with a cancelable context registered on the session so
+// an inbound ACP Cancel notification can abort the in-flight turn.
 func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	sid := string(params.SessionId)
 	a.mu.Lock()
@@ -121,6 +124,18 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		return acp.PromptResponse{}, fmt.Errorf("session %s not found", sid)
 	}
 
+	promptCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	a.mu.Lock()
+	state.cancel = cancel
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		state.cancel = nil
+		a.mu.Unlock()
+	}()
+
 	updater := a.updater(acp.SessionId(sid))
 	turn := PromptTurn{
 		SessionID: sid,
@@ -128,7 +143,10 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		Prompt:    extractPromptText(params.Prompt),
 		Updater:   updater,
 	}
-	result, err := a.handler()(ctx, turn)
+	result, err := a.handler()(promptCtx, turn)
+	if promptCtx.Err() != nil {
+		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+	}
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -142,11 +160,6 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		stop = acp.StopReasonEndTurn
 	}
 	return acp.PromptResponse{StopReason: stop}, nil
-}
-
-// Cancel currently acknowledges; real cancellation support is Slice 9.
-func (a *Agent) Cancel(context.Context, acp.CancelNotification) error {
-	return nil
 }
 
 // ListSessions is not yet supported; advertise method-not-found so clients
