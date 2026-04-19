@@ -15,6 +15,47 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// acpBundledAgents lists agent names backed by ACP subprocess adapters; the
+// rest are regular pi-based subagents and render under the "pi" label.
+var acpBundledAgents = map[string]struct{}{
+	"claude": {},
+	"gemini": {},
+}
+
+// agentBracketLabel returns the string rendered inside "agent[...]" for a
+// given subagent type. ACP-backed agents (claude, gemini) keep their name;
+// all other pi-based subagents collapse to "pi". Parallel/chain calls encode
+// multiple agents as "claude+gemini" — each component is mapped individually
+// and duplicates are deduped, so [claude+explore+task] becomes [claude+pi].
+// An empty agentType yields an empty string so the caller can omit the
+// bracket entirely.
+func agentBracketLabel(agentType string) string {
+	if agentType == "" {
+		return ""
+	}
+	parts := strings.Split(agentType, "+")
+	seen := make(map[string]struct{}, len(parts))
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var label string
+		if _, ok := acpBundledAgents[p]; ok {
+			label = p
+		} else {
+			label = "pi"
+		}
+		if _, dup := seen[label]; dup {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	return strings.Join(out, "+")
+}
+
 // ToolDisplayModel manages the formatting and rendering of tool call/result
 // messages in the chat view. It owns per-tool formatters, syntax highlighting,
 // and summary generation.
@@ -89,10 +130,8 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 	var b strings.Builder
 	b.WriteString(agentBullet)
 	b.WriteString(typeStyle.Render("agent"))
-	if msg.agentType != "" {
-		b.WriteString(dim.Render("["))
-		b.WriteString(typeStyle.Render(msg.agentType))
-		b.WriteString(dim.Render("]"))
+	if label := agentBracketLabel(msg.agentType); label != "" {
+		b.WriteString(typeStyle.Render("[" + label + "]"))
 	}
 	if msg.agentTitle != "" {
 		b.WriteString(" ")
@@ -120,16 +159,22 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 			case "tool_call":
 				evLine = evToolStyle.Render("⚙ " + ev.content)
 			case "tool_result":
-				summary := ev.content
+				summary := collapseToSingleLine(ev.content)
 				if len(summary) > 80 {
 					summary = summary[:77] + "..."
 				}
 				evLine = evStyle.Render("  ✓ " + summary)
-			case "text":
-				// Skip text deltas in event stream to avoid clutter.
+			case "text", "text_delta", "message_start", "message_end", "done", "spawn":
+				// Structural/no-op events carry no user-visible signal; skip
+				// them so the event stream stays focused on tool activity.
 				continue
 			default:
-				evLine = evStyle.Render(ev.kind + ": " + ev.content)
+				content := collapseToSingleLine(ev.content)
+				if content == "" {
+					evLine = evStyle.Render(ev.kind)
+				} else {
+					evLine = evStyle.Render(ev.kind + ": " + content)
+				}
 			}
 			for _, sl := range softWrap(evLine, cw) {
 				b.WriteString("  ")
@@ -140,11 +185,12 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 		}
 	}
 
-	// Show result summary when done.
+	// Show result summary when done. Collapse newlines so multiline JSON
+	// results render as a single wrapped line under the "│ " gutter.
 	if msg.content != "" {
-		summary := msg.content
-		if len(summary) > 100 {
-			summary = summary[:97] + "..."
+		summary := collapseToSingleLine(msg.content)
+		if len(summary) > 160 {
+			summary = summary[:157] + "..."
 		}
 		for _, sl := range softWrap(dim.Render("→ "+summary), cw) {
 			b.WriteString("  ")
@@ -164,6 +210,19 @@ func (t *ToolDisplayModel) contentWidth() int {
 		w = 80 // sensible default when width unknown
 	}
 	return w*8/10 - 4
+}
+
+// collapseToSingleLine replaces newlines and tabs with spaces and collapses
+// runs of whitespace, so long multi-line content renders on a single wrapped
+// line under the agent tool's "│ " gutter rather than drifting to column 0.
+func collapseToSingleLine(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // softWrap wraps a string to fit within width, returning sub-lines.

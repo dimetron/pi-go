@@ -139,6 +139,23 @@ func TestToolCallSummary_Unknown(t *testing.T) {
 	}
 }
 
+func TestAgentBracketLabel(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{"claude", "claude"},
+		{"gemini", "gemini"},
+		{"explore", "pi"},
+		{"task", "pi"},
+		{"plan", "pi"},
+		{"code-reviewer", "pi"},
+	}
+	for _, tc := range tests {
+		if got := agentBracketLabel(tc.in); got != tc.want {
+			t.Errorf("agentBracketLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // --- formatToolResult for read ---
 
 func TestFormatToolResult_ReadContent(t *testing.T) {
@@ -746,10 +763,11 @@ func TestRenderMessages_AgentWithTitle(t *testing.T) {
 
 	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "agent") {
-		t.Error("expected 'agent' in rendered output")
+		t.Error("expected 'agent' label in rendered output")
 	}
-	if !strings.Contains(output, "task") {
-		t.Error("expected agent type 'task' in rendered output")
+	// Regular pi-based subagents (task, explore, …) collapse to "agent[pi]".
+	if !strings.Contains(output, "[pi]") {
+		t.Error("expected '[pi]' bracketed label for pi-based subagent in rendered output")
 	}
 	if !strings.Contains(output, "Fix linter issues") {
 		t.Error("expected agent title in rendered output")

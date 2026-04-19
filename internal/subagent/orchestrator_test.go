@@ -98,6 +98,53 @@ func TestOrchestrator_CancelNotFound(t *testing.T) {
 	}
 }
 
+func TestIsACPAgent(t *testing.T) {
+	for _, name := range []string{"claude", "gemini"} {
+		if !isACPAgent(name) {
+			t.Errorf("isACPAgent(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"", "explore", "task", "plan"} {
+		if isACPAgent(name) {
+			t.Errorf("isACPAgent(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestOrchestrator_ACPLogPathWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "acp.jsonl")
+
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	orch.SetACPLogPath(path)
+
+	orch.writeACPEvent("claude-123", "claude", Event{Type: "text_delta", Content: "hi"})
+	orch.writeACPEvent("gemini-456", "gemini", Event{Type: "tool_call", Content: "read"})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading acp.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), string(data))
+	}
+	if !strings.Contains(lines[0], `"agent":"claude"`) || !strings.Contains(lines[0], `"agent_id":"claude-123"`) {
+		t.Errorf("line 0 missing claude metadata: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"agent":"gemini"`) || !strings.Contains(lines[1], `"type":"tool_call"`) {
+		t.Errorf("line 1 missing gemini/tool_call metadata: %s", lines[1])
+	}
+}
+
+func TestOrchestrator_ACPLogPathDisabled(t *testing.T) {
+	cfg := testConfig()
+	orch := NewOrchestrator(cfg, "", nil)
+	// No SetACPLogPath call — should be a no-op.
+	orch.writeACPEvent("claude-0", "claude", Event{Type: "text_delta", Content: "noop"})
+}
+
 func TestOrchestrator_Shutdown(t *testing.T) {
 	cfg := testConfig()
 	orch := NewOrchestrator(cfg, "", nil)

@@ -578,6 +578,9 @@ func runNonInteractive(
 		}
 	}
 
+	// Capture ACP subagent events (claude, gemini) under the session dir.
+	orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
+
 	if memStore != nil {
 		memSessionID = sessionID
 		_ = memStore.CreateSession(ctx, &memory.Session{

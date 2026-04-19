@@ -401,6 +401,13 @@ func waitForRunAgent(events <-chan subagent.Event, agentID string) tea.Cmd {
 func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 	ev := msg.event
 
+	// Feed the matrix rain widget so it visibly reacts to ACP subagent output.
+	if ev.Content != "" {
+		m.matrix.feed(ev.Content, m.mainWidth())
+	} else if ev.Type != "" {
+		m.matrix.feed(ev.Type, m.mainWidth())
+	}
+
 	switch ev.Type {
 	case "text_delta":
 		m.chatModel.Streaming += ev.Content
