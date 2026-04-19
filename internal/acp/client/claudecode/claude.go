@@ -407,14 +407,15 @@ func (s *RunningSession) finish(result shared.RunResult) {
 }
 
 func (s *RunningSession) waitProcess() error {
-	err := s.cmd.Wait()
-	// cmd.Wait returns when the subprocess exits; streamStderr's goroutine
-	// may still be flushing the last lines into s.stderr. Waiting on the
-	// drain channel prevents the stderr read below from observing an empty
-	// buffer when the subprocess had already printed diagnostics.
+	// Drain the stderr goroutine first: it exits naturally on EOF (which
+	// arrives when the subprocess closes its write-end on exit). Waiting
+	// here keeps cmd.Wait from closing our read-end of the pipe before the
+	// scanner has consumed the last buffered bytes — the race behind the
+	// intermittent TestWaitProcessErrorWithStderr failure in CI.
 	if s.stderrDone != nil {
 		<-s.stderrDone
 	}
+	err := s.cmd.Wait()
 	if err == nil {
 		return nil
 	}
