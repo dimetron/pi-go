@@ -105,6 +105,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newServeCmd())
 	cmd.AddCommand(newMemoryCmd())
 	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newACPServerCmd())
 
 	return cmd
 }
