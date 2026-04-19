@@ -2,8 +2,10 @@ package subagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -47,6 +49,25 @@ type Orchestrator struct {
 	BaseURL  string   // LLM API base URL
 	Insecure bool     // Skip TLS verification
 	Headers  []string // Extra HTTP headers
+
+	// ACP event log — when set, events from ACP subagents (claude, gemini) are
+	// appended as JSONL to this path.
+	acpLogPath string
+	acpLogMu   sync.Mutex
+}
+
+// acpAgentNames is the set of bundled agent names that are ACP subprocess
+// adapters; their event streams are tee'd to the session's acp.jsonl when an
+// ACP log path is configured on the orchestrator.
+var acpAgentNames = map[string]struct{}{
+	"claude": {},
+	"gemini": {},
+}
+
+// isACPAgent reports whether the named agent is an ACP subprocess adapter.
+func isACPAgent(name string) bool {
+	_, ok := acpAgentNames[name]
+	return ok
 }
 
 // agentState tracks the runtime state of a subagent.
@@ -93,6 +114,46 @@ func (o *Orchestrator) SetProviderOptions(baseURL string, insecure bool, headers
 	o.BaseURL = baseURL
 	o.Insecure = insecure
 	o.Headers = headers
+}
+
+// SetACPLogPath configures where ACP subagent events (claude, gemini) are
+// captured as JSONL. Pass an empty string to disable.
+func (o *Orchestrator) SetACPLogPath(path string) {
+	o.acpLogMu.Lock()
+	defer o.acpLogMu.Unlock()
+	o.acpLogPath = path
+}
+
+// writeACPEvent appends a single event entry to the configured acp.jsonl.
+// Each entry wraps the underlying Event with agent metadata and a timestamp
+// so a single file can hold events from multiple ACP subagent runs.
+func (o *Orchestrator) writeACPEvent(agentID, agentType string, ev Event) {
+	o.acpLogMu.Lock()
+	path := o.acpLogPath
+	if path == "" {
+		o.acpLogMu.Unlock()
+		return
+	}
+	entry := struct {
+		Timestamp time.Time `json:"timestamp"`
+		AgentID   string    `json:"agent_id"`
+		Agent     string    `json:"agent"`
+		Event     Event     `json:"event"`
+	}{time.Now(), agentID, agentType, ev}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		o.acpLogMu.Unlock()
+		return
+	}
+	data = append(data, '\n')
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		o.acpLogMu.Unlock()
+		return
+	}
+	_, _ = f.Write(data)
+	_ = f.Close()
+	o.acpLogMu.Unlock()
 }
 
 // ensurePruneLoop starts the periodic cleanup goroutine if not already running.
@@ -395,11 +456,15 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 
 	// Create a forwarding channel that handles cleanup on completion.
 	events := make(chan Event, 64)
+	logACP := isACPAgent(agent.Name)
 	go func() {
 		defer close(events)
 		defer o.pool.Release()
 
 		for ev := range proc.Events() {
+			if logACP {
+				o.writeACPEvent(agentID, agent.Name, ev)
+			}
 			events <- ev
 		}
 

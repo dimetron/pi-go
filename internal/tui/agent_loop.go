@@ -23,6 +23,51 @@ const (
 	recentWindowSize = 12
 )
 
+// extractAgentType returns a label for the subagent tool call by inspecting
+// its args. For single-agent mode it returns the "type"/"agent" field. For
+// parallel (tasks[]) or chain (chain[]) invocations it concatenates unique
+// agent names with "+" — so "agent[claude+gemini]" renders for a parallel
+// call. Returns "" when no type information is available.
+func extractAgentType(args map[string]any) string {
+	if t, _ := args["type"].(string); t != "" {
+		return t
+	}
+	if a, _ := args["agent"].(string); a != "" {
+		return a
+	}
+	collect := func(list []any) string {
+		seen := make(map[string]struct{})
+		var names []string
+		for _, item := range list {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["agent"].(string)
+			if name == "" {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+		return strings.Join(names, "+")
+	}
+	if tasks, ok := args["tasks"].([]any); ok {
+		if label := collect(tasks); label != "" {
+			return label
+		}
+	}
+	if chain, ok := args["chain"].([]any); ok {
+		if label := collect(chain); label != "" {
+			return label
+		}
+	}
+	return ""
+}
+
 // stuckDetector tracks recent tool calls and detects repetition loops.
 type stuckDetector struct {
 	recent    []string // ring of fingerprints (len <= recentWindowSize)
@@ -376,11 +421,7 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		role: "tool", tool: msg.name, toolIn: toolIn,
 	}
 	if msg.name == "agent" || msg.name == "subagent" {
-		agentType, _ := msg.args["type"].(string)
-		if agentType == "" {
-			agentType, _ = msg.args["agent"].(string)
-		}
-		newMsg.agentType = agentType
+		newMsg.agentType = extractAgentType(msg.args)
 		prompt, _ := msg.args["prompt"].(string)
 		if prompt == "" {
 			prompt, _ = msg.args["task"].(string)
