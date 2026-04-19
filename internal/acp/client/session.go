@@ -23,6 +23,8 @@ type RunningSession struct {
 	events chan shared.Event
 	done   chan struct{}
 
+	closeStdin sync.Once
+
 	mu       sync.Mutex
 	result   shared.RunResult
 	finished bool
@@ -38,6 +40,14 @@ func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *Runnin
 	}
 	go rs.stderr.readFrom(stderr)
 	return rs
+}
+
+func (s *RunningSession) closeStdinOnce() {
+	s.closeStdin.Do(func() {
+		if s.stdin != nil {
+			_ = s.stdin.Close()
+		}
+	})
 }
 
 // Events returns the translated local ACP event stream.
@@ -72,11 +82,7 @@ func (s *RunningSession) Wait() shared.RunResult {
 func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementation) {
 	defer close(s.done)
 	defer close(s.events)
-	defer func() {
-		if s.stdin != nil {
-			_ = s.stdin.Close()
-		}
-	}()
+	defer s.closeStdinOnce()
 
 	ctx := context.Background()
 	initResp, err := s.conn.Initialize(ctx, acp.InitializeRequest{
@@ -84,13 +90,18 @@ func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementatio
 		ClientInfo:      &clientInfo,
 	})
 	if err != nil {
+		s.closeStdinOnce()
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("initialize: %v", err)})
 		_ = s.waitProcess()
 		return
 	}
 
-	newSessionResp, err := s.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: absDir(req.CWD)})
+	newSessionResp, err := s.conn.NewSession(ctx, acp.NewSessionRequest{
+		Cwd:        absDir(req.CWD),
+		McpServers: []acp.McpServer{},
+	})
 	if err != nil {
+		s.closeStdinOnce()
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("new session: %v", err)})
 		_ = s.waitProcess()
 		return
@@ -108,10 +119,16 @@ func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementatio
 		Prompt:    []acp.ContentBlock{acp.TextBlock(req.Prompt)},
 	})
 	if err != nil {
+		s.closeStdinOnce()
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("prompt: %v", err), SessionID: sessionID})
 		_ = s.waitProcess()
 		return
 	}
+
+	// Signal end-of-stream to the agent so it can exit cleanly; otherwise
+	// agents that block on their stdin EOF (e.g. <-agentConn.Done()) would
+	// deadlock with our cmd.Wait below.
+	s.closeStdinOnce()
 
 	if err := s.waitProcess(); err != nil {
 		s.finish(shared.RunResult{Status: shared.StatusError, Error: err.Error(), SessionID: sessionID})

@@ -219,6 +219,75 @@ func (o *Orchestrator) LookupAgent(name string) (AgentConfig, error) {
 	return ac, nil
 }
 
+// SpawnWithRetry spawns a subagent with automatic retry on crash (up to maxRetries).
+// It monitors the subagent and re-spawns if the subagent crashes with status "failed" or "killed".
+// Returns the final events channel, agentID, and error (nil on success).
+func (o *Orchestrator) SpawnWithRetry(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
+	maxRetries := input.MaxRetries
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if maxRetries > 3 {
+		maxRetries = 3
+	}
+
+	var lastErr error
+	var finalAgentID string
+	var finalEvents <-chan Event
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		events, agentID, err := o.Spawn(ctx, input)
+		if err != nil {
+			lastErr = err
+			// On spawn error, retry if we have attempts left.
+			if attempt < maxRetries {
+				continue
+			}
+			return nil, "", fmt.Errorf("spawn failed after %d attempts: %w", attempt+1, lastErr)
+		}
+
+		finalAgentID = agentID
+		finalEvents = events
+
+		// If no retries configured, return immediately.
+		if maxRetries == 0 {
+			return finalEvents, finalAgentID, nil
+		}
+
+		// Wait for the subagent to complete and check status.
+		var status string
+		for ev := range events {
+			// Forward events to caller (consume the channel).
+			if ev.Type == "message_end" || ev.Type == "error" {
+				// Check agent state.
+				o.mu.Lock()
+				state := o.agents[agentID]
+				if state != nil {
+					status = state.Status
+				}
+				o.mu.Unlock()
+
+				if status == "failed" || status == "killed" {
+					// Crash detected — retry if we have attempts left.
+					if attempt < maxRetries {
+						break
+					}
+					return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
+				}
+				return finalEvents, finalAgentID, nil
+			}
+		}
+
+		// If we broke out of the loop for retry, continue to next attempt.
+		if attempt < maxRetries {
+			continue
+		}
+		return finalEvents, finalAgentID, nil
+	}
+
+	return finalEvents, finalAgentID, lastErr
+}
+
 // Spawn starts a new subagent and returns an event channel.
 // It acquires a pool slot, optionally creates a worktree, and spawns the pi process.
 func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {

@@ -15,6 +15,7 @@ type SpawnInput struct {
 	Background   bool        `json:"background,omitempty"`    // Run in background
 	SkipCleanup  bool        `json:"skip_cleanup,omitempty"`  // Don't auto-cleanup worktree on completion
 	Env          []string    `json:"env,omitempty"`           // Additional environment variables
+	MaxRetries   int         `json:"max_retries,omitempty"`   // Max retry attempts on crash (default 0, max 3)
 }
 
 // AgentInput is the legacy input to spawn a subagent (deprecated, use SpawnInput).
