@@ -12,7 +12,7 @@ import (
 )
 
 func newACPServerCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "acp-server",
 		Short: "Run pi as an ACP agent over stdio",
 		Long: `Run pi as an ACP (Agent Client Protocol) agent that communicates with an
@@ -22,14 +22,28 @@ process receives SIGINT.`,
 		Args: cobra.NoArgs,
 		RunE: runACPServer,
 	}
+	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use for ACP prompt handling")
+	return cmd
 }
 
 func runACPServer(cmd *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
+	model := flagModel
+	if model == "" {
+		model = "minimax-m2.7:cloud"
+	}
+
 	agent := &acpserver.Agent{
 		AgentInfo: acp.Implementation{Name: "pi-go", Version: Version},
+		Handler: acpserver.NewPromptHandler(acpserver.RuntimeConfig{
+			Model:    model,
+			BaseURL:  flagURL,
+			Headers:  flagHeaders,
+			Insecure: flagInsecure,
+			System:   flagSystem,
+		}),
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
 		Agent: agent,

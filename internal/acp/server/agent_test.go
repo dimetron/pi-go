@@ -10,6 +10,8 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/dimetron/pi-go/internal/config"
 )
 
 type capturingClient struct {
@@ -241,6 +243,27 @@ func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 	}
 	if _, err := a.SetSessionMode(context.Background(), acp.SetSessionModeRequest{}); !isMethodNotFound(err) {
 		t.Fatalf("SetSessionMode err = %v, want method-not-found", err)
+	}
+}
+
+func TestNewPromptHandlerModelOverrideUsesRealConfig(t *testing.T) {
+	h := NewPromptHandler(RuntimeConfig{
+		Model: "minimax-m2.7:cloud",
+		LoadConfig: func() (config.Config, error) {
+			return config.Config{Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.4"},
+			}}, nil
+		},
+	})
+	res, err := h(context.Background(), PromptTurn{Prompt: "hello", CWD: t.TempDir()})
+	if err != nil {
+		if strings.Contains(err.Error(), "echo:") {
+			t.Fatalf("handler fell back to echo stub: %v", err)
+		}
+		return
+	}
+	if strings.Contains(res.FinalText, "echo: hello") {
+		t.Fatalf("handler returned echo stub output %q; want real runtime path", res.FinalText)
 	}
 }
 
