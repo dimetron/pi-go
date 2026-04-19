@@ -35,7 +35,7 @@ func TestResolveRole_ExactMatch(t *testing.T) {
 		DefaultProvider: "anthropic",
 	}
 
-	model, prov, err := cfg.ResolveRole("smol")
+	model, prov, _, _, _, err := cfg.ResolveRole("smol")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestResolveRole_FallbackToDefault(t *testing.T) {
 		DefaultProvider: "anthropic",
 	}
 
-	model, prov, err := cfg.ResolveRole("plan")
+	model, prov, _, _, _, err := cfg.ResolveRole("plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestResolveRole_NoDefault(t *testing.T) {
 		Roles: map[string]RoleConfig{},
 	}
 
-	_, _, err := cfg.ResolveRole("default")
+	_, _, _, _, _, err := cfg.ResolveRole("default")
 	if !errors.Is(err, ErrNoDefaultRole) {
 		t.Errorf("expected ErrNoDefaultRole, got %v", err)
 	}
@@ -81,7 +81,7 @@ func TestResolveRole_NoDefault(t *testing.T) {
 func TestResolveRole_NilRoles(t *testing.T) {
 	cfg := Config{}
 
-	_, _, err := cfg.ResolveRole("default")
+	_, _, _, _, _, err := cfg.ResolveRole("default")
 	if !errors.Is(err, ErrNoDefaultRole) {
 		t.Errorf("expected ErrNoDefaultRole, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 				},
 				DefaultProvider: "anthropic",
 			}
-			_, prov, err := cfg.ResolveRole("default")
+			_, prov, _, _, _, err := cfg.ResolveRole("default")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +126,7 @@ func TestResolveRole_ExplicitProvider(t *testing.T) {
 		},
 	}
 
-	_, prov, err := cfg.ResolveRole("default")
+	_, prov, _, _, _, err := cfg.ResolveRole("default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestResolveRole_UnknownModelFallsToDefaultProvider(t *testing.T) {
 		DefaultProvider: "anthropic",
 	}
 
-	_, prov, err := cfg.ResolveRole("default")
+	_, prov, _, _, _, err := cfg.ResolveRole("default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestResolveRole_EmptyModel(t *testing.T) {
 		},
 	}
 
-	_, _, err := cfg.ResolveRole("default")
+	_, _, _, _, _, err := cfg.ResolveRole("default")
 	if err == nil {
 		t.Fatal("expected error for empty model in role")
 	}
@@ -565,7 +565,7 @@ func TestAutoDetectProviderOllamaPrefix(t *testing.T) {
 		},
 	}
 
-	_, prov, err := cfg.ResolveRole("default")
+	_, prov, _, _, _, err := cfg.ResolveRole("default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

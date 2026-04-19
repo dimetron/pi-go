@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -415,8 +416,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.inputModel.Clear()
 			return m.handleLoginSave(apiKey)
+		case key.Code == tea.KeyEnter && m.login.phase == "manual-code":
+			code := strings.TrimSpace(m.inputModel.Text)
+			if code == "" {
+				return m, nil
+			}
+			m.inputModel.Clear()
+			return m.handleLoginCodeSubmit(code)
 		}
-		if m.login.phase != "waiting" {
+		if m.login.phase != "waiting" && m.login.phase != "manual-code" {
 			return m, nil
 		}
 	}
@@ -660,7 +668,7 @@ func (m *model) View() tea.View {
 			Height:       m.height,
 			Mascot:       m.mascot(),
 			Mode:         m.mode,
-			ProviderName: m.cfg.ProviderName,
+			ProviderName: m.providerDisplayName(),
 			ModelName:    m.cfg.ModelName,
 			GitBranch:    m.statusModel.GitBranch,
 			DiffAdded:    m.diffAdded,
@@ -815,7 +823,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		mode = "chat"
 	}
 	return StatusRenderInput{
-		ProviderName: m.cfg.ProviderName,
+		ProviderName: m.providerDisplayName(),
 		ModelName:    m.cfg.ModelName,
 		Running:      m.running,
 		Mode:         mode,
@@ -827,6 +835,19 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		RunCycle:     rc,
 		LoadingItems: m.loadingItems,
 	}
+}
+
+// providerDisplayName returns the provider label shown in the status bar
+// and sidebar. When the configured provider is "openai" but the loaded
+// OPENAI_API_KEY is actually a codex ChatGPT OAuth token (a JWT with the
+// OpenAI auth claim), "codex" is shown instead so the user knows which
+// credential is active.
+func (m *model) providerDisplayName() string {
+	name := m.cfg.ProviderName
+	if strings.EqualFold(name, "openai") && auth.IsCodexOAuthToken(os.Getenv("OPENAI_API_KEY")) {
+		return "codex"
+	}
+	return name
 }
 
 // detectBranch returns the current git branch name, or empty string.
@@ -939,6 +960,11 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.SessionService = r.SessionService
 		m.cfg.Orchestrator = r.Orchestrator
 		m.cfg.Logger = r.Logger
+		if r.Logger != nil {
+			auth.SetDebugLogger(func(msg string) { r.Logger.Info("auth: " + msg) })
+		} else {
+			auth.SetDebugLogger(nil)
+		}
 		m.cfg.Skills = r.Skills
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg

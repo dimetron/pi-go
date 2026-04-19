@@ -93,12 +93,38 @@ var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "phi"
 // contextWindowSizes in the same change.
 var KnownModels = map[string][]string{
 	"anthropic": {
-		// Latest Claude tiers: Opus 4.7 (large), Sonnet 4.6 (medium),
-		// Haiku 4.5 (small/fast). Haiku has both snapshot ID and alias.
-		"claude-opus-4-7",
-		"claude-sonnet-4-6",
+		// April 2026 Anthropic models (from llm-anthropic reference).
+		// See https://docs.anthropic.com/claude/docs/models-overview
+		//
+		// Claude 3 series (legacy, still available)
+		"claude-3-opus-20240229",
+		"claude-3-opus-latest",
+		"claude-3-sonnet-20240229",
+		"claude-3-sonnet-latest",
+		"claude-3-haiku-20240307",
+		"claude-3-haiku-latest",
+		// Claude 3.5 series
+		"claude-3-5-sonnet-20240620",
+		"claude-3-5-sonnet-20241022",
+		"claude-3-5-sonnet-latest",
+		"claude-3-5-haiku-latest",
+		// Claude 3.7 series
+		"claude-3-7-sonnet-20250219",
+		"claude-3-7-sonnet-latest",
+		// Claude 4 series
+		"claude-opus-4-0",
+		"claude-sonnet-4-0",
+		"claude-opus-4-1-20250805",
+		// Claude 4.5 series
+		"claude-sonnet-4-5",
 		"claude-haiku-4-5-20251001",
 		"claude-haiku-4-5",
+		"claude-opus-4-5-20251101",
+		// Claude 4.6 series (current best)
+		"claude-opus-4-6",
+		"claude-sonnet-4-6",
+		// Claude 4.7 series (current flagship)
+		"claude-opus-4-7",
 	},
 	"openai": {
 		// Latest OpenAI frontier tiers: GPT-5.4 pro/max, GPT-5.4
@@ -145,10 +171,29 @@ var KnownModels = map[string][]string{
 
 // contextWindowSizes maps model name prefixes to context window sizes (in tokens).
 var contextWindowSizes = map[string]int64{
-	// Anthropic
-	"claude-opus-4-7":   1_000_000,
+	// Anthropic Claude 4.7 series (flagship, 128K output)
+	"claude-opus-4-7": 1_000_000,
+	// Anthropic Claude 4.6 series (current best, 64K output)
 	"claude-sonnet-4-6": 1_000_000,
+	"claude-opus-4-6":   1_000_000,
+	// Anthropic Claude 4.5 series
 	"claude-haiku-4-5":  200_000,
+	"claude-sonnet-4-5": 1_000_000,
+	"claude-opus-4-5":   1_000_000,
+	// Anthropic Claude 4.1 series
+	"claude-opus-4-1": 1_000_000,
+	// Anthropic Claude 4.0 series
+	"claude-opus-4-0":   1_000_000,
+	"claude-sonnet-4-0": 1_000_000,
+	// Anthropic Claude 3.7 series
+	"claude-3-7-sonnet": 200_000,
+	// Anthropic Claude 3.5 series
+	"claude-3-5-sonnet": 200_000,
+	"claude-3-5-haiku":  200_000,
+	// Anthropic Claude 3 series
+	"claude-3-opus":   200_000,
+	"claude-3-sonnet": 200_000,
+	"claude-3-haiku":  200_000,
 	// OpenAI
 	"gpt-5.4-pro":   1_050_000,
 	"gpt-5.4-mini":  400_000,
@@ -310,6 +355,9 @@ func CheckOllama(baseURL string) error {
 type LLMOptions struct {
 	ExtraHeaders    map[string]string
 	InsecureSkipTLS bool
+	AdvisorModel    string // Advisor model (e.g., "claude-opus-4-7")
+	AdvisorMaxUses  int    // Max advisor calls per request (0 = unlimited)
+	AdvisorCaching  bool   // Enable ephemeral prompt caching for advisor
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.

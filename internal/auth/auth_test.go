@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -117,8 +118,19 @@ func TestBuildAuthURL_CodexOAuthProvider(t *testing.T) {
 	if q.Get("codex_cli_simplified_flow") != "true" {
 		t.Error("missing codex simplified flow flag")
 	}
-	if !strings.Contains(q.Get("scope"), "api.connectors.read") {
-		t.Errorf("missing codex connector scope in %q", q.Get("scope"))
+	if q.Get("originator") != "pi-go" {
+		t.Errorf("missing or wrong originator in %q", q.Get("originator"))
+	}
+	scope := q.Get("scope")
+	for _, required := range []string{"openid", "profile", "email", "offline_access"} {
+		if !strings.Contains(scope, required) {
+			t.Errorf("scope missing %q: got %q", required, scope)
+		}
+	}
+	// pi-go follows pi-mono: the api.connectors.* scopes are NOT requested,
+	// because we never call the token-exchange that needs them.
+	if strings.Contains(scope, "api.connectors") {
+		t.Errorf("unexpected api.connectors scope in %q", scope)
 	}
 }
 
@@ -293,57 +305,71 @@ func TestPKCEFlow_ExchangeSuccess(t *testing.T) {
 	}
 }
 
-func TestExchangeCodexAPIKey(t *testing.T) {
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		_ = r.ParseForm()
-
-		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:token-exchange" {
-			t.Errorf("wrong grant_type: %q", r.FormValue("grant_type"))
-		}
-		if r.FormValue("client_id") != "app_EMoamEEZ73f0CkXaXp7hrann" {
-			t.Errorf("wrong client_id: %q", r.FormValue("client_id"))
-		}
-		if r.FormValue("requested_token") != "openai-api-key" {
-			t.Errorf("wrong requested_token: %q", r.FormValue("requested_token"))
-		}
-		if r.FormValue("subject_token") != "mock-id-token" {
-			t.Errorf("wrong subject_token: %q", r.FormValue("subject_token"))
-		}
-		if r.FormValue("subject_token_type") != "urn:ietf:params:oauth:token-type:id_token" {
-			t.Errorf("wrong subject_token_type: %q", r.FormValue("subject_token_type"))
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(TokenResponse{APIKey: "sk-codex-exchanged"})
-	}))
-	defer tokenServer.Close()
-
-	prov := Provider{
-		Name:     "codex",
-		TokenURL: tokenServer.URL,
-		ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
-	}
-
-	exchanged, err := exchangeCodexAPIKey(context.Background(), prov, &TokenResponse{IDToken: "mock-id-token"})
+func makeFakeJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("exchangeCodexAPIKey error: %v", err)
+		t.Fatalf("marshal payload: %v", err)
 	}
-	if exchanged.APIKey != "sk-codex-exchanged" {
-		t.Errorf("expected exchanged API key, got %q", exchanged.APIKey)
+	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".sig"
+}
+
+func TestIdentifyKey(t *testing.T) {
+	codex := makeFakeJWT(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1"},
+	})
+	otherJWT := makeFakeJWT(t, map[string]any{"sub": "user-1", "iss": "example.com"})
+
+	cases := []struct {
+		name string
+		key  string
+		want KeyKind
+	}{
+		{"empty", "", KeyKindUnknown},
+		{"whitespace", "   ", KeyKindUnknown},
+		{"sk-prefix", "sk-abcdef123", KeyKindAPIKey},
+		{"sk-proj", "sk-proj-xyz", KeyKindAPIKey},
+		{"sk-underscore", "sk_live_abc", KeyKindAPIKey},
+		{"codex jwt", codex, KeyKindCodexOAuth},
+		{"unrelated jwt", otherJWT, KeyKindUnknown},
+		{"not a jwt", "random-token", KeyKindUnknown},
+		{"two segments", "a.b", KeyKindUnknown},
+		{"bad base64", "a.%%%.c", KeyKindUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IdentifyKey(tc.key); got != tc.want {
+				t.Errorf("IdentifyKey(%q) = %q, want %q", tc.key, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestExchangeCodexAPIKey_MissingIDToken(t *testing.T) {
-	_, err := exchangeCodexAPIKey(context.Background(), Provider{Name: "codex"}, &TokenResponse{})
-	if err == nil {
-		t.Fatal("expected missing id_token error")
+func TestIsCodexOAuthToken(t *testing.T) {
+	codex := makeFakeJWT(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1"},
+	})
+	if !IsCodexOAuthToken(codex) {
+		t.Error("expected codex JWT to be recognized")
 	}
-	if !strings.Contains(err.Error(), "id_token") {
-		t.Errorf("expected id_token error, got: %v", err)
+	if IsCodexOAuthToken("sk-abc") {
+		t.Error("sk- key should not be treated as codex OAuth")
+	}
+}
+
+// TestCodexProviderUsesAccessTokenDirectly verifies that the codex provider's
+// TokenToKey returns the OAuth access_token unchanged — pi-go follows pi-mono
+// and does not attempt the `requested_token=openai-api-key` exchange that
+// fails for ChatGPT accounts without a platform organization.
+func TestCodexProviderUsesAccessTokenDirectly(t *testing.T) {
+	p, ok := FindProvider("codex")
+	if !ok {
+		t.Fatal("codex provider not found")
+	}
+	got := p.TokenToKey(&TokenResponse{AccessToken: "eyJ-chatgpt-access-token"})
+	if got != "eyJ-chatgpt-access-token" {
+		t.Errorf("TokenToKey = %q, want raw access_token", got)
 	}
 }
 
@@ -461,7 +487,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 }
 
 func TestFindProvider(t *testing.T) {
-	for _, name := range []string{"anthropic", "openai", "codex", "gemini", "Anthropic", "OPENAI", "Codex"} {
+	for _, name := range []string{"codex", "Codex", "CODEX"} {
 		p, ok := FindProvider(name)
 		if !ok {
 			t.Errorf("expected to find provider %q", name)
@@ -471,9 +497,10 @@ func TestFindProvider(t *testing.T) {
 		}
 	}
 
-	_, ok := FindProvider("unknown")
-	if ok {
-		t.Error("should not find unknown provider")
+	for _, name := range []string{"anthropic", "openai", "gemini", "unknown"} {
+		if _, ok := FindProvider(name); ok {
+			t.Errorf("should not find provider %q", name)
+		}
 	}
 }
 
@@ -623,45 +650,26 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 	}
 }
 
-func TestProviders_TokenToKey_APIKey(t *testing.T) {
-	// Cover the tok.APIKey != "" branches in all provider TokenToKey closures.
+func TestProviders_TokenToKey(t *testing.T) {
+	// The codex and anthropic OAuth providers pass access_token through
+	// unchanged (pi-mono parity); other providers prefer api_key when present
+	// and fall back to access_token.
 	for _, p := range Providers() {
-		t.Run(p.Name+"_apikey", func(t *testing.T) {
-			tok := &TokenResponse{APIKey: "direct-key", AccessToken: "access-token"}
-			key := p.TokenToKey(tok)
-			if key != "direct-key" {
-				t.Errorf("expected 'direct-key', got %q", key)
-			}
-		})
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
-			key := p.TokenToKey(tok)
-			if key != "access-token" {
-				t.Errorf("expected 'access-token', got %q", key)
+			if got := p.TokenToKey(tok); got != "access-token" {
+				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-	}
-}
-
-func TestCodexProviderTokenToKey_OpenAIAPIKey(t *testing.T) {
-	p, ok := FindProvider("codex")
-	if !ok {
-		t.Fatal("codex provider not found")
-	}
-	key := p.TokenToKey(&TokenResponse{OpenAIAPIKey: "sk-openai-api-key", AccessToken: "access-token"})
-	if key != "sk-openai-api-key" {
-		t.Errorf("expected openai_api_key, got %q", key)
-	}
-}
-
-func TestCodexProviderTokenToKey_APIKeyCamel(t *testing.T) {
-	p, ok := FindProvider("codex")
-	if !ok {
-		t.Fatal("codex provider not found")
-	}
-	key := p.TokenToKey(&TokenResponse{APIKeyCamel: "sk-camel-api-key", AccessToken: "access-token"})
-	if key != "sk-camel-api-key" {
-		t.Errorf("expected apiKey, got %q", key)
+		if p.Name == "codex" || p.Name == "anthropic" {
+			continue
+		}
+		t.Run(p.Name+"_apikey", func(t *testing.T) {
+			tok := &TokenResponse{APIKey: "direct-key", AccessToken: "access-token"}
+			if got := p.TokenToKey(tok); got != "direct-key" {
+				t.Errorf("expected 'direct-key', got %q", got)
+			}
+		})
 	}
 }
 
@@ -1192,5 +1200,281 @@ func TestRunTLSPreflight_TLSCertKind(t *testing.T) {
 	msg := "tls: failed to verify certificate: x509: certificate signed by unknown authority"
 	if !isTLSError(msg) {
 		t.Error("expected TLS error detection for Go's x509 error message")
+	}
+}
+
+func TestStartManualCodeFlow_NotConfigured(t *testing.T) {
+	if _, err := StartManualCodeFlow(Provider{Name: "nope"}); err == nil {
+		t.Error("expected error for provider without ManualCode=true")
+	}
+	if _, err := StartManualCodeFlow(Provider{Name: "x", ManualCode: true}); err == nil {
+		t.Error("expected error when ManualRedirectURI is empty")
+	}
+}
+
+func TestCompleteManualCodeFlow_Success(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("code") != "abc123" {
+			t.Errorf("wrong code sent to token endpoint: %q", r.FormValue("code"))
+		}
+		if r.FormValue("redirect_uri") != "https://example.com/callback" {
+			t.Errorf("wrong redirect_uri sent: %q", r.FormValue("redirect_uri"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "sk-ant-test"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		ManualRedirectURI: "https://example.com/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "abc123#state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if result.APIKey != "sk-ant-test" {
+		t.Errorf("expected api key sk-ant-test, got %q", result.APIKey)
+	}
+	if result.EnvVar != "TEST_KEY" {
+		t.Errorf("expected env TEST_KEY, got %q", result.EnvVar)
+	}
+}
+
+func TestCompleteManualCodeFlow_JSONBodyAndAPIKeyExchange(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type=application/json, got %q", ct)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["grant_type"] != "authorization_code" {
+			t.Errorf("wrong grant_type: %q", body["grant_type"])
+		}
+		if body["state"] != "state-xyz" {
+			t.Errorf("missing/wrong state in body: %q", body["state"])
+		}
+		if body["code"] != "abc123" {
+			t.Errorf("wrong code: %q", body["code"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "oauth-access-token"})
+	}))
+	defer tokenServer.Close()
+
+	apiKeyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer oauth-access-token" {
+			t.Errorf("expected bearer auth, got %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"raw_key":"sk-ant-api-XYZ"}`))
+	}))
+	defer apiKeyServer.Close()
+
+	prov := Provider{
+		Name:              "test-json",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		APIKeyURL:         apiKeyServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		TokenJSONBody:     true,
+		ManualRedirectURI: "https://example.com/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "abc123#state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if result.APIKey != "sk-ant-api-XYZ" {
+		t.Errorf("expected raw_key-derived api key, got %q", result.APIKey)
+	}
+}
+
+func TestCompleteManualCodeFlow_FullRedirectURLKeepsLocalhostRedirectURI(t *testing.T) {
+	var gotRedirectURI string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type=application/json, got %q", ct)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["code"] != "manual-code" {
+			t.Errorf("wrong code: %q", body["code"])
+		}
+		if body["state"] != "state-xyz" {
+			t.Errorf("wrong state: %q", body["state"])
+		}
+		gotRedirectURI = body["redirect_uri"]
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "oauth-access-token"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test-json",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		TokenJSONBody:     true,
+		ManualRedirectURI: "http://localhost:53692/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "http://localhost:53692/callback?code=manual-code&state=state-xyz")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+	if gotRedirectURI != "http://localhost:53692/callback" {
+		t.Errorf("redirect_uri = %q, want localhost callback", gotRedirectURI)
+	}
+	if result.APIKey != "oauth-access-token" {
+		t.Errorf("expected oauth-access-token, got %q", result.APIKey)
+	}
+}
+
+func TestCompleteManualCodeFlow_PlainCodeUsesSessionState(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("code") != "plain-code" {
+			t.Errorf("wrong code: %q", r.FormValue("code"))
+		}
+		if r.FormValue("state") != "state-xyz" {
+			t.Errorf("wrong state: %q", r.FormValue("state"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "token"})
+	}))
+	defer tokenServer.Close()
+
+	prov := Provider{
+		Name:              "test",
+		EnvVar:            "TEST_KEY",
+		TokenURL:          tokenServer.URL,
+		ClientID:          "test-client",
+		ManualCode:        true,
+		ManualRedirectURI: "http://localhost:53692/callback",
+		TokenToKey:        func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+	sess := &ManualCodeSession{
+		Provider:    prov,
+		Verifier:    "verifier",
+		State:       "state-xyz",
+		RedirectURI: prov.ManualRedirectURI,
+	}
+
+	result, err := CompleteManualCodeFlow(context.Background(), sess, "plain-code")
+	if err != nil {
+		t.Fatalf("CompleteManualCodeFlow error: %v", err)
+	}
+	if result.Err != nil {
+		t.Fatalf("result err: %v", result.Err)
+	}
+}
+
+func TestCompleteManualCodeFlow_RejectsAuthorizationRequestJSON(t *testing.T) {
+	sess := &ManualCodeSession{
+		Provider: Provider{Name: "test"},
+		State:    "state-xyz",
+	}
+	pasted := `{"response_type":"code","client_id":"client","redirect_uri":"http://localhost:53692/callback","state":"state-xyz","code_challenge":"challenge","code_challenge_method":"S256"}`
+
+	_, err := CompleteManualCodeFlow(context.Background(), sess, pasted)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "not the authorization request parameters") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCompleteManualCodeFlow_StateMismatch(t *testing.T) {
+	sess := &ManualCodeSession{
+		Provider: Provider{Name: "test"},
+		State:    "expected",
+	}
+	if _, err := CompleteManualCodeFlow(context.Background(), sess, "code#wrong"); err == nil {
+		t.Error("expected state mismatch error")
+	}
+}
+
+func TestParseAuthorizationInput(t *testing.T) {
+	code, state := parseAuthorizationInput("  abc#xyz  ")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("http://localhost:53692/callback?code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("?code=abc&state=xyz")
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput(`{"code":"abc","state":"xyz"}`)
+	if code != "abc" || state != "xyz" {
+		t.Errorf("got %q,%q want abc,xyz", code, state)
+	}
+	code, state = parseAuthorizationInput("plain-code")
+	if code != "plain-code" || state != "" {
+		t.Errorf("got %q,%q want plain-code,''", code, state)
+	}
+}
+
+func TestLooksLikeAuthorizationRequest(t *testing.T) {
+	if !looksLikeAuthorizationRequest(`{"response_type":"code","redirect_uri":"http://localhost:53692/callback","state":"s"}`) {
+		t.Error("expected JSON authorization request to be detected")
+	}
+	if !looksLikeAuthorizationRequest("response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback&state=s") {
+		t.Error("expected query authorization request to be detected")
+	}
+	if looksLikeAuthorizationRequest(`{"code":"abc","state":"s"}`) {
+		t.Error("callback/code JSON should not be treated as authorization request")
 	}
 }

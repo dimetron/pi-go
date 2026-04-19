@@ -92,8 +92,10 @@ type runGateResultMsg struct {
 
 // runMergeResultMsg carries the result of merging the worktree branch.
 type runMergeResultMsg struct {
-	output string
-	err    error
+	output          string
+	err             error
+	failedAgentID   string
+	preservedWTPath string
 }
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
@@ -142,6 +144,16 @@ func checklistHasCheckboxes(steps []ChecklistStep) bool {
 		}
 	}
 	return true // assume checkbox format
+}
+
+func runWorktreeName(specName string, suffix string) string {
+	name := strings.Trim(specName, "/")
+	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	if suffix != "" {
+		name += "-" + suffix
+	}
+	return name
 }
 
 // handleRunCommand handles the /run <spec-name> [--parallel] slash command.
@@ -219,10 +231,11 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	prompt := buildRunPrompt(specName, promptMD, checklist)
 
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt,
-		Worktree:    new(true),
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt,
+		Worktree:     new(true),
+		WorktreeName: runWorktreeName(specName, ""),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -272,10 +285,11 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 
 	// Spawn agent 1.
 	events1, agentID1, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt1,
-		Worktree:    &useWorktree,
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt1,
+		Worktree:     &useWorktree,
+		WorktreeName: runWorktreeName(specName, "part-1"),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -287,10 +301,11 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 
 	// Spawn agent 2.
 	events2, agentID2, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt2,
-		Worktree:    &useWorktree,
-		SkipCleanup: true,
+		Type:         "task",
+		Prompt:       prompt2,
+		Worktree:     &useWorktree,
+		WorktreeName: runWorktreeName(specName, "part-2"),
+		SkipCleanup:  true,
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -385,6 +400,13 @@ func waitForRunAgent(events <-chan subagent.Event, agentID string) tea.Cmd {
 // handleRunAgentEvent processes a streaming event from the /run subagent.
 func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 	ev := msg.event
+
+	// Feed the matrix rain widget so it visibly reacts to ACP subagent output.
+	if ev.Content != "" {
+		m.matrix.feed(ev.Content, m.mainWidth())
+	} else if ev.Type != "" {
+		m.matrix.feed(ev.Type, m.mainWidth())
+	}
 
 	switch ev.Type {
 	case "text_delta":
@@ -739,7 +761,12 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 		for _, aid := range agentIDs {
 			out, err := wm.MergeBack(aid)
 			if err != nil {
-				return runMergeResultMsg{output: allOutput.String() + out, err: fmt.Errorf("merge %s: %w", aid, err)}
+				return runMergeResultMsg{
+					output:          allOutput.String() + out,
+					err:             fmt.Errorf("merge %s: %w", aid, err),
+					failedAgentID:   aid,
+					preservedWTPath: wm.PathFor(aid),
+				}
 			}
 			_ = wm.Cleanup(aid)
 			if out != "" {
@@ -759,10 +786,16 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 	if msg.err != nil {
 		m.run.phase = "failed"
 
-		wm := m.cfg.Orchestrator.Worktree()
-		wtPath := ""
-		if wm != nil {
-			wtPath = wm.PathFor(m.run.agentID)
+		wtPath := msg.preservedWTPath
+		if wtPath == "" {
+			wm := m.cfg.Orchestrator.Worktree()
+			if wm != nil {
+				targetAgentID := m.run.agentID
+				if msg.failedAgentID != "" {
+					targetAgentID = msg.failedAgentID
+				}
+				wtPath = wm.PathFor(targetAgentID)
+			}
 		}
 
 		m.chatModel.Messages = append(m.chatModel.Messages, message{

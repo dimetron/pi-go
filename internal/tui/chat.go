@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
 )
@@ -362,7 +363,37 @@ func (c *ChatModel) RenderMessages(running bool) string {
 		}
 	}
 
-	return b.String()
+	// Subagent blocks, assistant markdown, and tool transitions each emit
+	// their own surrounding "\n", and they compound to runs of 2-3 blank
+	// lines between blocks — visually noisy when several subagents run in
+	// parallel. Collapse to at most one blank line between content.
+	return collapseBlankLines(b.String())
+}
+
+// collapseBlankLines replaces every run of two or more blank/whitespace-only
+// lines with a single empty line, preserving all non-blank content verbatim
+// (including its leading whitespace, gutter prefixes, and ANSI styling). The
+// final trailing newline state is also preserved.
+func collapseBlankLines(s string) string {
+	if s == "" {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	prevBlank := false
+	for _, line := range lines {
+		if strings.TrimSpace(ansi.Strip(line)) == "" {
+			if prevBlank {
+				continue
+			}
+			prevBlank = true
+			out = append(out, "")
+			continue
+		}
+		prevBlank = false
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // countByRole counts messages with the given role.

@@ -69,7 +69,8 @@ Pick any combination (e.g., "explore, plan, task") or "all":
 - **B) Core languages** — Go, TypeScript/JavaScript, Python, Rust (~5 language servers)
 - **C) Broad** — 10-15 popular languages (Go, TS/JS, Python, Rust, Java, C/C++, Ruby, PHP, etc.)
 
-**A7:** B — Core languages: Go (gopls), TypeScript/JavaScript (typescript-language-server), Python (pyright/pylsp), Rust (rust-analyzer). User-configurable for more.
+**A7:** B — Core languages: Go (gopls), TypeScript/JavaScript (typescript-language-server), Python (ruff), Rust (
+rust-analyzer). User-configurable for more.
 
 ### Q8: Subagent Concurrency & Isolation
 **Q:** For process-based subagents, how should concurrency and isolation work?

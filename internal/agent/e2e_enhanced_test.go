@@ -245,7 +245,7 @@ func TestE2ERoleResolution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.role, func(t *testing.T) {
-			model, prov, err := cfg.ResolveRole(tt.role)
+			model, prov, _, _, _, err := cfg.ResolveRole(tt.role)
 			if err != nil {
 				t.Fatalf("ResolveRole(%q) error: %v", tt.role, err)
 			}

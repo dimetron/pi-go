@@ -17,24 +17,68 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
+// DebugLog is an optional callback invoked with low-level auth diagnostics
+// (callback hits, token-exchange status codes, redacted error bodies). It is
+// nil by default so the package has no stdout/stderr side effects; callers
+// that want OAuth tracing in the pi-go session log set it to a logger.Info-
+// compatible function during startup.
+var debugLog atomic.Pointer[func(string)]
+
+// SetDebugLogger installs a diagnostic sink for auth flows. Passing nil
+// disables logging. The function is invoked from goroutines handling OAuth
+// callbacks, so implementations must be goroutine-safe.
+func SetDebugLogger(fn func(string)) {
+	if fn == nil {
+		debugLog.Store(nil)
+		return
+	}
+	debugLog.Store(&fn)
+}
+
+func logf(format string, args ...any) {
+	p := debugLog.Load()
+	if p == nil || *p == nil {
+		return
+	}
+	(*p)(fmt.Sprintf(format, args...))
+}
+
+// Debug emits a pre-formatted diagnostic line to the debug sink installed
+// via SetDebugLogger. Used by adjacent packages (e.g. provider/openai.go's
+// codex backend transport) so they can share the session logger the TUI
+// already wires for auth events, without each package plumbing its own
+// logger interface.
+func Debug(msg string) {
+	p := debugLog.Load()
+	if p == nil || *p == nil {
+		return
+	}
+	(*p)(msg)
+}
+
 // Provider holds OAuth configuration for an LLM provider.
 type Provider struct {
-	Name          string
-	EnvVar        string
-	AuthURL       string // OAuth authorization endpoint
-	TokenURL      string // OAuth token endpoint
-	ClientID      string // OAuth client ID (public client)
-	Scopes        []string
-	ExtraParams   map[string]string // additional auth URL params
-	TokenToKey    func(tok *TokenResponse) string
-	KeyPageURL    string // fallback manual key page
-	DeviceURL     string // device authorization endpoint (optional)
-	UseDeviceFlow bool   // prefer device code flow over PKCE
-	TLSPreflight  bool   // run TLS preflight before OAuth (OpenAI Codex)
-	CodexOAuth    bool   // use Codex OAuth callback + token-exchange semantics
+	Name              string
+	EnvVar            string
+	AuthURL           string // OAuth authorization endpoint
+	TokenURL          string // OAuth token endpoint
+	ClientID          string // OAuth client ID (public client)
+	Scopes            []string
+	ExtraParams       map[string]string // additional auth URL params
+	TokenToKey        func(tok *TokenResponse) string
+	KeyPageURL        string // fallback manual key page
+	DeviceURL         string // device authorization endpoint (optional)
+	UseDeviceFlow     bool   // prefer device code flow over PKCE
+	TLSPreflight      bool   // run TLS preflight before OAuth (OpenAI Codex)
+	CodexOAuth        bool   // use Codex OAuth callback + token-exchange semantics
+	ManualCode        bool   // user pastes a code or callback URL (no local listener)
+	ManualRedirectURI string // fixed redirect URI for manual-code flow
+	TokenJSONBody     bool   // POST token exchange as JSON (Anthropic) instead of form-encoded
+	APIKeyURL         string // optional: exchange OAuth access_token for an API key via this endpoint
 }
 
 // TokenResponse holds the OAuth token response.
@@ -48,6 +92,7 @@ type TokenResponse struct {
 	APIKey       string `json:"api_key"`        // some providers return key directly
 	APIKeyCamel  string `json:"apiKey"`         // alternate camelCase response key
 	OpenAIAPIKey string `json:"openai_api_key"` // alternate token-exchange response key
+	RawKey       string `json:"raw_key"`        // Anthropic create_api_key response
 }
 
 // DeviceCodeResponse holds the device authorization response.
@@ -71,86 +116,28 @@ type Result struct {
 func Providers() []Provider {
 	return []Provider{
 		{
-			Name:     "anthropic",
-			EnvVar:   "ANTHROPIC_API_KEY",
-			AuthURL:  "https://console.anthropic.com/oauth/authorize",
-			TokenURL: "https://console.anthropic.com/oauth/token",
-			ClientID: "pi-go-cli",
-			Scopes:   []string{"api"},
-			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://console.anthropic.com/settings/keys",
-		},
-		{
-			Name:          "openai",
-			EnvVar:        "OPENAI_API_KEY",
-			AuthURL:       "https://auth.openai.com/authorize",
-			TokenURL:      "https://auth.openai.com/oauth/token",
-			DeviceURL:     "https://auth.openai.com/device/code",
-			ClientID:      "pi-go-cli",
-			Scopes:        []string{"openai.public"},
-			UseDeviceFlow: true,
-			ExtraParams:   map[string]string{"audience": "https://api.openai.com/v1"},
-			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://platform.openai.com/api-keys",
-		},
-		{
+			// Codex ChatGPT OAuth: the OAuth access_token itself is the
+			// credential we send to OpenAI. We deliberately do NOT attempt
+			// the `requested_token=openai-api-key` token-exchange, because
+			// ChatGPT accounts without a platform organization cannot mint
+			// API keys. Matches pi-mono's openai-codex provider.
 			Name:     "codex",
 			EnvVar:   "OPENAI_API_KEY",
-			AuthURL:  "https://auth.openai.com/authorize",
+			AuthURL:  "https://auth.openai.com/oauth/authorize",
 			TokenURL: "https://auth.openai.com/oauth/token",
 			ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
-			Scopes: []string{
-				"openid",
-				"profile",
-				"email",
-				"offline_access",
-				"api.connectors.read",
-				"api.connectors.invoke",
-			},
+			Scopes:   []string{"openid", "profile", "email", "offline_access"},
 			ExtraParams: map[string]string{
 				"id_token_add_organizations": "true",
 				"codex_cli_simplified_flow":  "true",
+				"originator":                 "pi-go",
 			},
 			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				if tok.APIKeyCamel != "" {
-					return tok.APIKeyCamel
-				}
-				if tok.OpenAIAPIKey != "" {
-					return tok.OpenAIAPIKey
-				}
 				return tok.AccessToken
 			},
 			KeyPageURL:   "https://platform.openai.com/api-keys",
 			TLSPreflight: true,
 			CodexOAuth:   true,
-		},
-		{
-			Name:     "gemini",
-			EnvVar:   "GEMINI_API_KEY",
-			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
-			TokenURL: "https://oauth2.googleapis.com/token",
-			ClientID: "pi-go-cli",
-			Scopes:   []string{"https://www.googleapis.com/auth/generative-language"},
-			TokenToKey: func(tok *TokenResponse) string {
-				if tok.APIKey != "" {
-					return tok.APIKey
-				}
-				return tok.AccessToken
-			},
-			KeyPageURL: "https://aistudio.google.com/apikey",
 		},
 	}
 }
@@ -203,6 +190,8 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 		_ = srv.Shutdown(shutCtx)
 	}()
 
+	logf("pkce: authorize redirect_uri=%s state_len=%d", redirectURI, len(state))
+
 	// Open browser.
 	if err := openBrowser(authURL); err != nil {
 		return nil, fmt.Errorf("opening browser: %w", err)
@@ -211,29 +200,241 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 	// Wait for callback or timeout.
 	select {
 	case <-ctx.Done():
+		logf("pkce: ctx done before callback: %v", ctx.Err())
 		return &Result{Provider: prov.Name, Err: ctx.Err()}, nil
 	case cr := <-codeCh:
 		if cr.err != nil {
+			logf("pkce: callback error: %v", cr.err)
 			return &Result{Provider: prov.Name, Err: cr.err}, nil
 		}
+		logf("pkce: callback ok code_len=%d; exchanging code", len(cr.code))
 		// Exchange code for token.
 		tok, err := exchangeCode(ctx, prov, cr.code, redirectURI, verifier)
 		if err != nil {
+			logf("pkce: token exchange failed: %v", err)
 			return &Result{Provider: prov.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
 		}
-		if prov.CodexOAuth {
-			tok, err = exchangeCodexAPIKey(ctx, prov, tok)
-			if err != nil {
-				return &Result{Provider: prov.Name, Err: fmt.Errorf("codex token exchange: %w", err)}, nil
-			}
-		}
+		logf("pkce: token exchange ok access_len=%d id_len=%d refresh_len=%d api_key_present=%v",
+			len(tok.AccessToken), len(tok.IDToken), len(tok.RefreshToken),
+			tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "")
 		apiKey := prov.TokenToKey(tok)
+		logf("pkce: final api_key_present=%v", apiKey != "")
 		return &Result{
 			Provider: prov.Name,
 			APIKey:   apiKey,
 			EnvVar:   prov.EnvVar,
 		}, nil
 	}
+}
+
+// --- Manual Code Flow ---
+
+// ManualCodeSession holds the state needed to complete a manual-code OAuth flow.
+// The caller builds the auth URL via StartManualCodeFlow, opens a browser, then
+// asks the user to paste the callback URL or authorization code and passes it
+// to CompleteManualCodeFlow.
+type ManualCodeSession struct {
+	Provider    Provider
+	AuthURL     string
+	Verifier    string
+	State       string
+	RedirectURI string
+}
+
+// StartManualCodeFlow builds an authorization URL for a provider that expects the
+// user to copy a callback URL or code from the browser and paste it into the
+// CLI. No local HTTP listener is started.
+func StartManualCodeFlow(prov Provider) (*ManualCodeSession, error) {
+	if !prov.ManualCode {
+		return nil, fmt.Errorf("provider %s is not configured for manual-code flow", prov.Name)
+	}
+	if prov.ManualRedirectURI == "" {
+		return nil, fmt.Errorf("provider %s has no ManualRedirectURI", prov.Name)
+	}
+	verifier, challenge := generatePKCE()
+	state := generateState()
+	authURL := buildAuthURL(prov, prov.ManualRedirectURI, state, challenge)
+	return &ManualCodeSession{
+		Provider:    prov,
+		AuthURL:     authURL,
+		Verifier:    verifier,
+		State:       state,
+		RedirectURI: prov.ManualRedirectURI,
+	}, nil
+}
+
+// CompleteManualCodeFlow exchanges a pasted authorization code for a token.
+// Anthropic's manual-code flow may provide either a full redirect URL
+// ("http://localhost:53692/callback?code=...&state=..."), a query string, a
+// "<code>#<state>" pair, or just the code. When state is present it is
+// validated against the session state before the token exchange. When the
+// provider has an APIKeyURL, the OAuth access token is exchanged for a
+// provider-managed API key.
+func CompleteManualCodeFlow(ctx context.Context, sess *ManualCodeSession, pasted string) (*Result, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nil session")
+	}
+	code, state := parseAuthorizationInput(pasted)
+	if state != "" && state != sess.State {
+		return nil, fmt.Errorf("OAuth state mismatch")
+	}
+	if code == "" {
+		if looksLikeAuthorizationRequest(pasted) {
+			return nil, fmt.Errorf("missing authorization code; paste the final redirect URL containing code=... or the authorization code, not the authorization request parameters")
+		}
+		return nil, fmt.Errorf("missing authorization code")
+	}
+	if state == "" {
+		state = sess.State
+	}
+	tok, err := exchangeCodeManual(ctx, sess.Provider, code, sess.RedirectURI, sess.Verifier, state)
+	if err != nil {
+		return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
+	}
+	apiKey := sess.Provider.TokenToKey(tok)
+	if sess.Provider.APIKeyURL != "" && tok.AccessToken != "" {
+		raw, err := createAPIKey(ctx, sess.Provider, tok.AccessToken)
+		if err != nil {
+			return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("api key creation: %w", err)}, nil
+		}
+		apiKey = raw
+	}
+	return &Result{
+		Provider: sess.Provider.Name,
+		APIKey:   apiKey,
+		EnvVar:   sess.Provider.EnvVar,
+	}, nil
+}
+
+// exchangeCodeManual exchanges an authorization code for a token, using JSON
+// body + state (required by Anthropic) when Provider.TokenJSONBody is set.
+func exchangeCodeManual(ctx context.Context, prov Provider, code, redirectURI, verifier, state string) (*TokenResponse, error) {
+	var req *http.Request
+	var err error
+	if prov.TokenJSONBody {
+		payload := map[string]string{
+			"grant_type":    "authorization_code",
+			"code":          code,
+			"redirect_uri":  redirectURI,
+			"client_id":     prov.ClientID,
+			"code_verifier": verifier,
+			"state":         state,
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+	} else {
+		data := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {code},
+			"redirect_uri":  {redirectURI},
+			"client_id":     {prov.ClientID},
+			"code_verifier": {verifier},
+			"state":         {state},
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
+	}
+	var tok TokenResponse
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return nil, fmt.Errorf("parsing token response: %w", err)
+	}
+	return &tok, nil
+}
+
+// createAPIKey exchanges an OAuth access token for a provider-managed API key.
+// Anthropic exposes POST /api/oauth/claude_cli/create_api_key with a bearer
+// token; the response body contains {"raw_key": "sk-ant-..."}.
+func createAPIKey(ctx context.Context, prov Provider, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.APIKeyURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("create_api_key failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
+	}
+	var out struct {
+		RawKey string `json:"raw_key"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("parsing create_api_key response: %w", err)
+	}
+	if out.RawKey == "" {
+		return "", fmt.Errorf("create_api_key response missing raw_key")
+	}
+	return out.RawKey, nil
+}
+
+func parseAuthorizationInput(pasted string) (code, state string) {
+	pasted = strings.TrimSpace(pasted)
+	if pasted == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(pasted, "{") {
+		var body map[string]string
+		if err := json.Unmarshal([]byte(pasted), &body); err == nil {
+			return body["code"], body["state"]
+		}
+	}
+	if u, err := url.Parse(pasted); err == nil && u.IsAbs() {
+		q := u.Query()
+		return q.Get("code"), q.Get("state")
+	}
+	if i := strings.Index(pasted, "#"); i >= 0 {
+		return pasted[:i], pasted[i+1:]
+	}
+	if strings.Contains(pasted, "code=") {
+		q, err := url.ParseQuery(strings.TrimPrefix(pasted, "?"))
+		if err == nil {
+			return q.Get("code"), q.Get("state")
+		}
+	}
+	return pasted, ""
+}
+
+func looksLikeAuthorizationRequest(pasted string) bool {
+	pasted = strings.TrimSpace(pasted)
+	if strings.HasPrefix(pasted, "{") {
+		var body map[string]string
+		if err := json.Unmarshal([]byte(pasted), &body); err != nil {
+			return false
+		}
+		return body["response_type"] == "code" && body["redirect_uri"] != "" && body["code"] == ""
+	}
+	q, err := url.ParseQuery(strings.TrimPrefix(pasted, "?"))
+	if err != nil {
+		return false
+	}
+	return q.Get("response_type") == "code" && q.Get("redirect_uri") != "" && q.Get("code") == ""
 }
 
 // --- Device Code Flow ---
@@ -356,18 +557,22 @@ func buildAuthURL(prov Provider, redirectURI, state, challenge string) string {
 
 func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string, ch chan<- codeResult) {
 	q := r.URL.Query()
+	logf("callback: path=%s has_code=%v has_state=%v has_error=%v",
+		r.URL.Path, q.Get("code") != "", q.Get("state") != "", q.Get("error") != "")
 
 	if errParam := q.Get("error"); errParam != "" {
 		desc := q.Get("error_description")
 		if desc == "" {
 			desc = errParam
 		}
+		logf("callback: oauth error=%s description=%q", errParam, desc)
 		ch <- codeResult{err: fmt.Errorf("OAuth error: %s", desc)}
 		http.Error(w, "Authentication failed: "+desc, http.StatusBadRequest)
 		return
 	}
 
 	if q.Get("state") != expectedState {
+		logf("callback: state mismatch got_len=%d want_len=%d", len(q.Get("state")), len(expectedState))
 		ch <- codeResult{err: fmt.Errorf("state mismatch")}
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
 		return
@@ -375,11 +580,13 @@ func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string
 
 	code := q.Get("code")
 	if code == "" {
+		logf("callback: no code received")
 		ch <- codeResult{err: fmt.Errorf("no authorization code received")}
 		http.Error(w, "No code received", http.StatusBadRequest)
 		return
 	}
 
+	logf("callback: ok code_len=%d", len(code))
 	ch <- codeResult{code: code}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -423,46 +630,6 @@ func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifie
 	return &tok, nil
 }
 
-func exchangeCodexAPIKey(ctx context.Context, prov Provider, tok *TokenResponse) (*TokenResponse, error) {
-	if tok != nil && (tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "") {
-		return tok, nil
-	}
-	if tok == nil || tok.IDToken == "" {
-		return nil, fmt.Errorf("id_token missing from codex OAuth token response")
-	}
-
-	data := url.Values{
-		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
-		"client_id":          {prov.ClientID},
-		"requested_token":    {"openai-api-key"},
-		"subject_token":      {tok.IDToken},
-		"subject_token_type": {"urn:ietf:params:oauth:token-type:id_token"},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api key exchange failed (%d): %s", resp.StatusCode, sanitizeErrorBody(body))
-	}
-
-	var exchanged TokenResponse
-	if err := json.Unmarshal(body, &exchanged); err != nil {
-		return nil, fmt.Errorf("parsing api key exchange response: %w", err)
-	}
-	return &exchanged, nil
-}
-
 func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (*TokenResponse, error) {
 	data := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -503,6 +670,58 @@ func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (
 		return nil, fmt.Errorf("parsing token response: %w", err)
 	}
 	return &tok, nil
+}
+
+// KeyKind identifies the shape of an OpenAI credential. "api-key" is a
+// classic `sk-…` platform key; "codex-oauth" is a ChatGPT OAuth access
+// token (a JWT whose payload carries the `https://api.openai.com/auth`
+// claim). "unknown" is anything else — treat as opaque.
+type KeyKind string
+
+const (
+	KeyKindAPIKey     KeyKind = "api-key"
+	KeyKindCodexOAuth KeyKind = "codex-oauth"
+	KeyKindUnknown    KeyKind = "unknown"
+)
+
+// IdentifyKey classifies an OpenAI credential. Detection is structural —
+// `sk-` / `sk_live_` / `sk-proj-` prefixes indicate a platform API key;
+// a three-segment JWT whose payload decodes to JSON and contains the
+// `https://api.openai.com/auth` claim indicates a codex OAuth token.
+// The token itself is never logged or returned.
+func IdentifyKey(key string) KeyKind {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return KeyKindUnknown
+	}
+	if strings.HasPrefix(k, "sk-") || strings.HasPrefix(k, "sk_") {
+		return KeyKindAPIKey
+	}
+	parts := strings.Split(k, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return KeyKindUnknown
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if payload, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return KeyKindUnknown
+		}
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(payload, &raw) != nil {
+		return KeyKindUnknown
+	}
+	if _, ok := raw["https://api.openai.com/auth"]; ok {
+		return KeyKindCodexOAuth
+	}
+	// JWT-shaped but not an OpenAI-issued OAuth token.
+	return KeyKindUnknown
+}
+
+// IsCodexOAuthToken is a convenience wrapper reporting whether key is a
+// ChatGPT OAuth access token (as minted by `/login codex`).
+func IsCodexOAuthToken(key string) bool {
+	return IdentifyKey(key) == KeyKindCodexOAuth
 }
 
 // SaveKey saves an API key to ~/.pi-go/.env.

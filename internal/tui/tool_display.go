@@ -15,6 +15,72 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// acpBundledAgents lists agent names backed by ACP subprocess adapters; the
+// rest are regular pi-based subagents and render under the "pi" label.
+var acpBundledAgents = map[string]struct{}{
+	"claude": {},
+	"gemini": {},
+	"cursor": {},
+}
+
+// agentToolColor returns the foreground color used for tool/command lines
+// emitted by the named ACP-backed subagent. Each ACP agent gets its own hue
+// so parallel runs are easy to tell apart at a glance:
+//
+//	claude → orange (208)
+//	cursor → gray   (245)
+//	gemini → blue   (39)
+//
+// Compound types like "claude+gemini" use the color of the first ACP
+// component found. Anything else returns the default tool color (35).
+func agentToolColor(agentType string) string {
+	for _, p := range strings.Split(agentType, "+") {
+		switch strings.TrimSpace(p) {
+		case "claude":
+			return "208"
+		case "cursor":
+			return "245"
+		case "gemini":
+			return "39"
+		}
+	}
+	return "35"
+}
+
+// agentBracketLabel returns the string rendered inside "agent[...]" for a
+// given subagent type. ACP-backed agents (claude, gemini) keep their name;
+// all other pi-based subagents collapse to "pi". Parallel/chain calls encode
+// multiple agents as "claude+gemini" — each component is mapped individually
+// and duplicates are deduped, so [claude+explore+task] becomes [claude+pi].
+// An empty agentType yields an empty string so the caller can omit the
+// bracket entirely.
+func agentBracketLabel(agentType string) string {
+	if agentType == "" {
+		return ""
+	}
+	parts := strings.Split(agentType, "+")
+	seen := make(map[string]struct{}, len(parts))
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var label string
+		if _, ok := acpBundledAgents[p]; ok {
+			label = p
+		} else {
+			label = "pi"
+		}
+		if _, dup := seen[label]; dup {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	return strings.Join(out, "+")
+}
+
 // ToolDisplayModel manages the formatting and rendering of tool call/result
 // messages in the chat view. It owns per-tool formatters, syntax highlighting,
 // and summary generation.
@@ -89,10 +155,8 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 	var b strings.Builder
 	b.WriteString(agentBullet)
 	b.WriteString(typeStyle.Render("agent"))
-	if msg.agentType != "" {
-		b.WriteString(dim.Render("["))
-		b.WriteString(typeStyle.Render(msg.agentType))
-		b.WriteString(dim.Render("]"))
+	if label := agentBracketLabel(msg.agentType); label != "" {
+		b.WriteString(typeStyle.Render("[" + label + "]"))
 	}
 	if msg.agentTitle != "" {
 		b.WriteString(" ")
@@ -102,34 +166,75 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 
 	cw := t.contentWidth()
 
-	// Show event stream (last N events).
+	// Show event stream. Structural events (message_start/end/done/spawn)
+	// are filtered out first so they never crowd the visible window; from the
+	// renderable remainder, keep the newest maxVisibleAgentEvents so the user
+	// always sees the latest activity — not a stream truncated into silence.
 	if len(msg.agentEvents) > 0 {
 		evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-		maxEvents := 8
-		events := msg.agentEvents
-		if len(events) > maxEvents {
-			skipped := len(events) - maxEvents
-			events = events[len(events)-maxEvents:]
+		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(agentToolColor(msg.agentType)))
+
+		renderable := make([]agentEv, 0, len(msg.agentEvents))
+		for _, ev := range msg.agentEvents {
+			switch ev.kind {
+			case "message_start", "message_end", "done", "spawn":
+				continue
+			case "text", "text_delta":
+				if strings.TrimSpace(ev.content) == "" {
+					continue
+				}
+			}
+			renderable = append(renderable, ev)
+		}
+
+		const maxVisibleAgentEvents = 5
+		events := renderable
+		if len(events) > maxVisibleAgentEvents {
+			skipped := len(events) - maxVisibleAgentEvents
+			events = events[len(events)-maxVisibleAgentEvents:]
 			b.WriteString("  ")
-			b.WriteString(dim.Render(fmt.Sprintf("│ ... %d earlier events\n", skipped)))
+			b.WriteString(dim.Render("│ "))
+			b.WriteString(dim.Render(fmt.Sprintf("... %d earlier events", skipped)))
+			b.WriteString("\n")
 		}
 		for _, ev := range events {
 			var evLine string
 			switch ev.kind {
 			case "tool_call":
-				evLine = evToolStyle.Render("⚙ " + ev.content)
+				// Collapse embedded newlines so tool-call headers occupy one
+				// visual row — otherwise markdown prose inside a tool title
+				// (e.g. Gemini's "**Identifying...**\n\n\n...") drops blank
+				// rows into the card gutter.
+				evLine = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
 			case "tool_result":
-				summary := ev.content
+				summary := collapseToSingleLine(ev.content)
 				if len(summary) > 80 {
 					summary = summary[:77] + "..."
 				}
 				evLine = evStyle.Render("  ✓ " + summary)
-			case "text":
-				// Skip text deltas in event stream to avoid clutter.
-				continue
+			case "stderr":
+				// Subprocess stderr — diagnostic chatter. Color it with the
+				// per-agent hue (orange/gray/blue) so users can tell at a
+				// glance which subagent is writing what when several run in
+				// parallel. The thin "▎" marker still distinguishes stderr
+				// from real tool calls, which use the "⚙" prefix.
+				summary := collapseToSingleLine(ev.content)
+				if len(summary) > 120 {
+					summary = summary[:117] + "..."
+				}
+				evLine = evToolStyle.Render("▎ " + summary)
+			case "text", "text_delta":
+				// Subagent message text — what the agent actually said.
+				// Collapse internal blank-line runs so paragraph spacing
+				// from streamed chunks doesn't produce wide gaps in the card.
+				evLine = evStyle.Render("» " + collapseToSingleLine(ev.content))
 			default:
-				evLine = evStyle.Render(ev.kind + ": " + ev.content)
+				content := collapseToSingleLine(ev.content)
+				if content == "" {
+					evLine = evStyle.Render(ev.kind)
+				} else {
+					evLine = evStyle.Render(ev.kind + ": " + content)
+				}
 			}
 			for _, sl := range softWrap(evLine, cw) {
 				b.WriteString("  ")
@@ -140,11 +245,12 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 		}
 	}
 
-	// Show result summary when done.
+	// Show result summary when done. Collapse newlines so multiline JSON
+	// results render as a single wrapped line under the "│ " gutter.
 	if msg.content != "" {
-		summary := msg.content
-		if len(summary) > 100 {
-			summary = summary[:97] + "..."
+		summary := collapseToSingleLine(msg.content)
+		if len(summary) > 160 {
+			summary = summary[:157] + "..."
 		}
 		for _, sl := range softWrap(dim.Render("→ "+summary), cw) {
 			b.WriteString("  ")
@@ -164,6 +270,19 @@ func (t *ToolDisplayModel) contentWidth() int {
 		w = 80 // sensible default when width unknown
 	}
 	return w*8/10 - 4
+}
+
+// collapseToSingleLine replaces newlines and tabs with spaces and collapses
+// runs of whitespace, so long multi-line content renders on a single wrapped
+// line under the agent tool's "│ " gutter rather than drifting to column 0.
+func collapseToSingleLine(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // softWrap wraps a string to fit within width, returning sub-lines.

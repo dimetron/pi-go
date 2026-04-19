@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/model"
@@ -578,6 +579,61 @@ func TestNewAnthropicWithBaseURLAndKey(t *testing.T) {
 	}
 	if llm.Name() != "custom-model" {
 		t.Errorf("Name() = %q, want custom-model", llm.Name())
+	}
+}
+
+func TestNewAnthropicWithOAuthTokenUsesBearerHeaders(t *testing.T) {
+	var sawRequest bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		if auth := r.Header.Get("Authorization"); auth != "Bearer sk-ant-oat-test" {
+			t.Errorf("Authorization = %q, want bearer OAuth token", auth)
+		}
+		if apiKey := r.Header.Get("X-Api-Key"); apiKey != "" {
+			t.Errorf("X-Api-Key = %q, want empty for OAuth token", apiKey)
+		}
+		if beta := r.Header.Get("anthropic-beta"); !strings.Contains(beta, "oauth-2025-04-20") {
+			t.Errorf("anthropic-beta = %q, want oauth beta", beta)
+		}
+		if app := r.Header.Get("x-app"); app != "cli" {
+			t.Errorf("x-app = %q, want cli", app)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":            "msg_123",
+			"type":          "message",
+			"role":          "assistant",
+			"model":         "claude-sonnet-4-6",
+			"stop_reason":   "end_turn",
+			"stop_sequence": nil,
+			"usage": map[string]any{
+				"input_tokens":  1,
+				"output_tokens": 1,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello world"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-ant-oat-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Say hello"}}},
+		},
+	}
+	for _, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+	}
+	if !sawRequest {
+		t.Fatal("expected server request")
 	}
 }
 
