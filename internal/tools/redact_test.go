@@ -58,6 +58,91 @@ func TestRedactSecrets(t *testing.T) {
 			input: `export PASSWORD=mysupersecretpassword123`,
 			want:  `export PASSWORD=***`,
 		},
+		{
+			name:  "empty string",
+			input: ``,
+			want:  ``,
+		},
+		{
+			name:  "GitHub OAuth token gho_",
+			input: `token: gho_abcdefghijklmnopqrstuvwxyz1234`,
+			want:  `token: ***`,
+		},
+		{
+			name:  "access_key assignment",
+			input: `ACCESS_KEY=abcdef123456deadbeef`,
+			want:  `ACCESS_KEY=***`,
+		},
+		{
+			name:  "secret_key assignment quoted",
+			input: `secret_key="deadbeef12345678deadbeef"`,
+			want:  `secret_key="***"`,
+		},
+		{
+			name:  "auth_token assignment",
+			input: `AUTH_TOKEN=mysupersecrettoken999`,
+			want:  `AUTH_TOKEN=***`,
+		},
+		{
+			name:  "bearer_token assignment",
+			input: `BEARER_TOKEN=abcdefghijklmno12345678`,
+			want:  `BEARER_TOKEN=***`,
+		},
+		{
+			name:  "private_key assignment",
+			input: `PRIVATE_KEY=abcdef1234567890abcd`,
+			want:  `PRIVATE_KEY=***`,
+		},
+		{
+			name:  "client_secret assignment",
+			input: `CLIENT_SECRET=xyz789abcdef12345678`,
+			want:  `CLIENT_SECRET=***`,
+		},
+		{
+			name:  "passwd assignment",
+			input: `passwd=abcdef123456789abcdef`,
+			want:  `passwd=***`,
+		},
+		{
+			name:  "mixed case with token",
+			input: `TOKEN=abcdef123456789ABCDEF`,
+			want:  `TOKEN=***`,
+		},
+		{
+			name:  "short bearer token not redacted",
+			input: `Authorization: Bearer short`,
+			want:  `Authorization: Bearer short`,
+		},
+		{
+			name:  "sk- too short not redacted",
+			input: `key=sk-tooshort`,
+			want:  `key=sk-tooshort`,
+		},
+		{
+			name:  "ghp short not redacted",
+			input: `ghp_short`,
+			want:  `ghp_short`,
+		},
+		{
+			name:  "AKIA wrong length not redacted",
+			input: `AKIA12345`,
+			want:  `AKIA12345`,
+		},
+		{
+			name:  "export token with underscore suffix",
+			input: `export MY_SECRET_TOKEN=abcdefghijklmno12345`,
+			want:  `export MY_SECRET_TOKEN=***`,
+		},
+		{
+			name:  "multiple secrets on same line",
+			input: `API_KEY=abcdef123456deadbeef TOKEN=xyz789abcdef12345678`,
+			want:  `API_KEY=*** TOKEN=***`,
+		},
+		{
+			name:  "plain text unchanged",
+			input: `The quick brown fox jumps over the lazy dog`,
+			want:  `The quick brown fox jumps over the lazy dog`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -67,5 +152,23 @@ func TestRedactSecrets(t *testing.T) {
 				t.Errorf("redactSecrets(%q)\n  got:  %q\n  want: %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRedactSecrets_Idempotent verifies redactSecrets is idempotent — running
+// it twice produces the same output as running it once.
+func TestRedactSecrets_Idempotent(t *testing.T) {
+	inputs := []string{
+		"API_KEY=abcdefghijklmno12345",
+		"no secret",
+		"Bearer abcdefghijklmno12345",
+		"sk-abcdefghijklmnopqrstuvwxyz12345",
+	}
+	for _, in := range inputs {
+		once := redactSecrets(in)
+		twice := redactSecrets(once)
+		if once != twice {
+			t.Errorf("redactSecrets not idempotent for %q: once=%q twice=%q", in, once, twice)
+		}
 	}
 }

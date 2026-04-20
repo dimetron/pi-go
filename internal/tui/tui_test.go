@@ -354,8 +354,9 @@ func TestViewLoading(t *testing.T) {
 		height: 0,
 	}
 	v := m.View()
-	if v.Content != "Loading..." {
-		t.Errorf("expected loading message, got %q", v.Content)
+	// Should contain "Loading" with at least one dot (loadingDots starts at 0).
+	if !strings.Contains(v.Content, "Loading") || !strings.Contains(v.Content, ".") {
+		t.Errorf("expected loading message with dots, got %q", v.Content)
 	}
 }
 
