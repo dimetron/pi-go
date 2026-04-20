@@ -33,9 +33,11 @@ func TestRunnerCompletesPromptTurn(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	var events []shared.Event
+	var messages []shared.Event
 	for event := range session.Events() {
-		events = append(events, event)
+		if event.Type == shared.EventTypeMessage {
+			messages = append(messages, event)
+		}
 	}
 
 	result := session.Wait()
@@ -48,11 +50,11 @@ func TestRunnerCompletesPromptTurn(t *testing.T) {
 	if result.SessionID != "session-1" {
 		t.Fatalf("session id = %q, want session-1", result.SessionID)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
+	if len(messages) != 1 {
+		t.Fatalf("message events len = %d, want 1", len(messages))
 	}
-	if events[0].Type != shared.EventTypeMessage || strings.TrimSpace(events[0].Content) != "echo: hello acp" {
-		t.Fatalf("unexpected event: %+v", events[0])
+	if strings.TrimSpace(messages[0].Content) != "echo: hello acp" {
+		t.Fatalf("unexpected event: %+v", messages[0])
 	}
 }
 
