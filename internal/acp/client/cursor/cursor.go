@@ -18,6 +18,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	shared "github.com/dimetron/pi-go/internal/acp"
+	client "github.com/dimetron/pi-go/internal/acp/client"
 )
 
 // rpcTimeout caps Initialize and NewSession against a hung subprocess. See
@@ -306,68 +307,32 @@ func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
 	defer s.toolFilter.Flush()
 	defer s.closeStdinOnce()
 
-	ctx := context.Background()
-
-	initCtx, initCancel := context.WithTimeout(ctx, rpcTimeout)
-	_, err := s.conn.Initialize(initCtx, acp.InitializeRequest{
-		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
-		ClientInfo:      &clientInfo,
-	})
-	initCancel()
-	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("initialize: %v", err)})
-		_ = s.waitProcess()
-		return
-	}
-
-	newCtx, newCancel := context.WithTimeout(ctx, rpcTimeout)
-	newSessionResp, err := s.conn.NewSession(newCtx, acp.NewSessionRequest{
-		Cwd:        absDir(req.CWD),
-		McpServers: []acp.McpServer{},
-	})
-	newCancel()
-	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("new session: %v", err)})
-		_ = s.waitProcess()
-		return
-	}
-
-	sessionID := string(newSessionResp.SessionId)
-	if sessionID == "" {
-		sessionID = req.SessionID
-	}
-
-	// Prompt is bounded by the orchestrator's absolute timeout only.
-	promptResp, err := s.conn.Prompt(ctx, acp.PromptRequest{
-		SessionId: newSessionResp.SessionId,
-		Prompt:    []acp.ContentBlock{acp.TextBlock(req.Prompt)},
-	})
-	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("prompt: %v", err), SessionID: sessionID})
-		_ = s.waitProcess()
-		return
-	}
-
-	// Signal end-of-stream to the agent so it can exit cleanly.
-	s.closeStdinOnce()
-
-	if err := s.waitProcess(); err != nil {
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: err.Error(), SessionID: sessionID})
-		return
-	}
-
-	s.mu.Lock()
-	result := s.result
-	s.mu.Unlock()
-	result.Status = shared.StatusSuccess
-	result.SessionID = sessionID
-	if stop := promptResp.StopReason; strings.TrimSpace(string(stop)) != "" {
-		result.StopReason = string(stop)
-	}
-	s.finish(result)
+	client.RunACPFlow(
+		context.Background(),
+		s.conn,
+		shared.RunRequest{
+			Command:    req.Command,
+			Prompt:     req.Prompt,
+			SessionID:  req.SessionID,
+			CWD:        req.CWD,
+			RPCTimeout: rpcTimeout,
+		},
+		clientInfo,
+		func(sessionID string) {
+			s.mu.Lock()
+			s.curSession = sessionID
+			s.mu.Unlock()
+		},
+		s.handleUpdate,
+		s.finish,
+		s.waitProcess,
+		s.closeStdinOnce,
+		func() shared.RunResult {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.result
+		},
+	)
 }
 
 func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {

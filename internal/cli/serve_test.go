@@ -161,6 +161,15 @@ func TestNewServeCmd_FlagDefaults(t *testing.T) {
 		t.Errorf("model default = %q, want empty", modelVal)
 	}
 
+	// Check url default is empty
+	urlVal, err := cmd.Flags().GetString("url")
+	if err != nil {
+		t.Fatalf("getting url flag: %v", err)
+	}
+	if urlVal != "" {
+		t.Errorf("url default = %q, want empty", urlVal)
+	}
+
 	// Check project default is empty (uses cwd)
 	projectVal, err := cmd.Flags().GetString("project")
 	if err != nil {

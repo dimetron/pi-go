@@ -28,6 +28,7 @@ type Config struct {
 	StaticDir      string
 	Project        string
 	Model          string
+	BaseURL        string
 	Logger         *slog.Logger // if nil, a no-op logger is used
 }
 
@@ -248,7 +249,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Create PTY bridge for this session
-	bridge := NewPtyBridge(project, "", nil)
+	bridge := NewPtyBridge(project, "", "", nil)
 	defer bridge.Close()
 
 	// Handle bidirectional I/O
