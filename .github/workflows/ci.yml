@@ -70,7 +70,7 @@ jobs:
           toolchain: stable
           cache-workspaces: hack/test/lsp/rust
       - name: Run tests with coverage
-        run: go test -coverprofile=coverage.out ./...
+        run: go test -coverprofile=coverage.out -coverpkg=./internal/... ./internal/...
       - name: Coverage report
         run: go tool cover -func=coverage.out
       - name: Upload coverage to Codecov

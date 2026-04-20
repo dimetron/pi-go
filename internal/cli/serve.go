@@ -22,6 +22,8 @@ var (
 	flagServePairingTimeout time.Duration
 	flagServeModel          string
 	flagServeURL            string
+	flagServeHeaders        []string
+	flagServeInsecure       bool
 )
 
 func newServeCmd() *cobra.Command {
@@ -39,11 +41,19 @@ Each browser tab gets its own isolated agent session.`,
 	cmd.Flags().DurationVar(&flagServePairingTimeout, "pairing-timeout", 5*time.Minute, "Pairing code expiry time")
 	cmd.Flags().StringVar(&flagServeModel, "model", "", "LLM model to use for the web terminal (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
 	cmd.Flags().StringVar(&flagServeURL, "url", "", "LLM API base URL to use for the web terminal")
+	cmd.Flags().StringArrayVar(&flagServeHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
+	cmd.Flags().BoolVar(&flagServeInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 
 	return cmd
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	for _, h := range flagServeHeaders {
+		if !strings.Contains(h, "=") {
+			return fmt.Errorf("invalid --header %q: expected key=value", h)
+		}
+	}
+
 	project := flagServeProject
 	if project == "" {
 		cwd, err := os.Getwd()
@@ -71,6 +81,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Project:        project,
 		Model:          flagServeModel,
 		BaseURL:        flagServeURL,
+		Headers:        flagServeHeaders,
+		Insecure:       flagServeInsecure,
 		Logger:         logger,
 	}
 
@@ -96,6 +108,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	if flagServeURL != "" {
 		fmt.Printf("URL: %s\n", flagServeURL)
+	}
+	for _, h := range flagServeHeaders {
+		fmt.Printf("Header: %s\n", h)
+	}
+	if flagServeInsecure {
+		fmt.Println("TLS verification: disabled (--insecure)")
 	}
 	fmt.Printf("Pairing timeout: %s\n", flagServePairingTimeout)
 	fmt.Printf("Pair code: %s\n", code)

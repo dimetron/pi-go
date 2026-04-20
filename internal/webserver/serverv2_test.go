@@ -644,14 +644,14 @@ func TestPipeWrapper_ReadWriteClose(t *testing.T) {
 }
 
 func TestPtyBridge_Alive_NewBridge(t *testing.T) {
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	if b.Alive() {
 		t.Error("new bridge without cmd should not be alive")
 	}
 }
 
 func TestPtyBridge_Alive_AfterClose(t *testing.T) {
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	_ = b.Close()
 	if b.Alive() {
 		t.Error("closed bridge should not be alive")
@@ -659,7 +659,7 @@ func TestPtyBridge_Alive_AfterClose(t *testing.T) {
 }
 
 func TestPtyBridge_Resize_NilPtyFile(t *testing.T) {
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.Resize(80, 24)
 }
 
@@ -667,7 +667,7 @@ func TestPtyBridge_Resize_NonOsFile(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -957,7 +957,7 @@ func TestPtyBridge_CopyPtyToWS(t *testing.T) {
 	// Create an io.Pipe to simulate PTY output
 	pr, pw := io.Pipe()
 	defer pw.Close()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -1014,7 +1014,7 @@ func TestPtyBridge_CopyWSToPty(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -1059,7 +1059,7 @@ func TestPtyBridge_CopyWSToPty_Resize(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -1103,7 +1103,7 @@ func TestPtyBridge_CopyWSToPty_RawData(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -1144,14 +1144,14 @@ func TestPtyBridge_CopyWSToPty_RawData(t *testing.T) {
 }
 
 func TestPtyBridge_Start_NonexistentDir(t *testing.T) {
-	b := NewPtyBridge("/nonexistent/path/that/doesnt/exist", "", "", nil)
+	b := NewPtyBridge("/nonexistent/path/that/doesnt/exist", "", "", nil, false, nil)
 	if err := b.Start(); err == nil {
 		t.Fatal("expected error for nonexistent directory")
 	}
 }
 
 func TestPtyBridge_Start_ErrorSentToWS(t *testing.T) {
-	b := NewPtyBridge("/nonexistent/path/that/doesnt/exist", "", "", nil)
+	b := NewPtyBridge("/nonexistent/path/that/doesnt/exist", "", "", nil, false, nil)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -1181,7 +1181,7 @@ func TestPtyBridge_Start_ErrorSentToWS(t *testing.T) {
 
 func TestPtyBridge_Close_WithPtyFile(t *testing.T) {
 	pr, pw := io.Pipe()
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	b.ptyFile = struct {
 		io.Reader
 		io.Writer
@@ -1197,8 +1197,8 @@ func TestPtyBridge_Close_WithPtyFile(t *testing.T) {
 
 func TestPtyPool_CloseAll_WithBridges(t *testing.T) {
 	pool := NewPtyPool(nil)
-	b1 := NewPtyBridge("/tmp", "", "", nil)
-	b2 := NewPtyBridge("/tmp", "", "", nil)
+	b1 := NewPtyBridge("/tmp", "", "", nil, false, nil)
+	b2 := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	pool.bridges["1"] = b1
 	pool.bridges["2"] = b2
 	pool.CloseAll()
@@ -1307,7 +1307,7 @@ func TestServer_HandleWebSocket_NoPanicOnUpgradeFail(t *testing.T) {
 }
 
 func TestPtyBridge_AttachWebSocket(t *testing.T) {
-	b := NewPtyBridge("/tmp", "", "", nil)
+	b := NewPtyBridge("/tmp", "", "", nil, false, nil)
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()

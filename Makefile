@@ -28,7 +28,7 @@ e2e: test-e2e
 test-all: test-unit test-integration test-e2e
 
 test-coverage:
-	go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+	go test -coverprofile=coverage.out -coverpkg=./internal/... ./internal/... && go tool cover -func=coverage.out | tail -1
 
 test-ollama: build
 	@bash scripts/test-ollama-e2e.sh

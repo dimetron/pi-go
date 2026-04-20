@@ -29,6 +29,8 @@ type PtyBridge struct {
 	sessionID string
 	model     string
 	baseURL   string
+	headers   []string
+	insecure  bool
 	log       *slog.Logger
 	cmd       *exec.Cmd
 	ptyFile   io.ReadWriteCloser
@@ -62,17 +64,21 @@ func (pw *pipeWrapper) Close() error {
 	return nil
 }
 
-// NewPtyBridge creates a new PTY bridge for the given project, model, and base URL.
-func NewPtyBridge(project, model, baseURL string, logger *slog.Logger) *PtyBridge {
+// NewPtyBridge creates a new PTY bridge for the given project, model, base URL,
+// optional extra HTTP headers (key=value), and insecure TLS toggle. All of these
+// are forwarded to the spawned pi subprocess via command-line flags.
+func NewPtyBridge(project, model, baseURL string, headers []string, insecure bool, logger *slog.Logger) *PtyBridge {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &PtyBridge{
-		project: project,
-		model:   model,
-		baseURL: baseURL,
-		log:     logger,
-		done:    make(chan struct{}),
+		project:  project,
+		model:    model,
+		baseURL:  baseURL,
+		headers:  headers,
+		insecure: insecure,
+		log:      logger,
+		done:     make(chan struct{}),
 	}
 }
 
@@ -177,13 +183,8 @@ func (pb *PtyBridge) HandleWebSocket(conn *websocket.Conn, sessionID string) {
 	pb.Close()
 }
 
-// startProcess starts the pi-go TUI process with PTY.
-func (pb *PtyBridge) startProcess() error {
-	piBin, err := os.Executable()
-	if err != nil {
-		piBin = "pi"
-	}
-
+// childArgs builds the CLI args passed through to the spawned pi subprocess.
+func (pb *PtyBridge) childArgs() []string {
 	args := []string{}
 	if pb.model != "" {
 		args = append(args, "--model", pb.model)
@@ -191,7 +192,23 @@ func (pb *PtyBridge) startProcess() error {
 	if pb.baseURL != "" {
 		args = append(args, "--url", pb.baseURL)
 	}
-	cmd := exec.Command(piBin, args...)
+	for _, h := range pb.headers {
+		args = append(args, "--header", h)
+	}
+	if pb.insecure {
+		args = append(args, "--insecure")
+	}
+	return args
+}
+
+// startProcess starts the pi-go TUI process with PTY.
+func (pb *PtyBridge) startProcess() error {
+	piBin, err := os.Executable()
+	if err != nil {
+		piBin = "pi"
+	}
+
+	cmd := exec.Command(piBin, pb.childArgs()...)
 	cmd.Dir = pb.project
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
@@ -226,14 +243,7 @@ func (pb *PtyBridge) startProcessWithPipes() error {
 		piBin = "pi"
 	}
 
-	args := []string{}
-	if pb.model != "" {
-		args = append(args, "--model", pb.model)
-	}
-	if pb.baseURL != "" {
-		args = append(args, "--url", pb.baseURL)
-	}
-	cmd := exec.Command(piBin, args...)
+	cmd := exec.Command(piBin, pb.childArgs()...)
 	cmd.Dir = pb.project
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
@@ -394,7 +404,7 @@ func NewPtyPool(logger *slog.Logger) *PtyPool {
 
 // GetOrCreate returns an existing live PTY bridge for the session,
 // or creates and starts a new one.
-func (p *PtyPool) GetOrCreate(sessionID, project, model, baseURL string) (*PtyBridge, error) {
+func (p *PtyPool) GetOrCreate(sessionID, project, model, baseURL string, headers []string, insecure bool) (*PtyBridge, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -403,7 +413,7 @@ func (p *PtyPool) GetOrCreate(sessionID, project, model, baseURL string) (*PtyBr
 		return b, nil
 	}
 
-	b := NewPtyBridge(project, model, baseURL, p.log)
+	b := NewPtyBridge(project, model, baseURL, headers, insecure, p.log)
 	if err := b.Start(); err != nil {
 		return nil, err
 	}
