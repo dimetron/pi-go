@@ -244,6 +244,91 @@ Sorted by effort vs. value:
 
 ---
 
+## 9. Additional Subagent Review — Duplicates, Large Files, Complexity
+
+A focused follow-up review was run with **pi/code-reviewer** and **Claude** specifically targeting duplicate code,
+oversized files, and complexity hotspots.
+
+### Duplicates
+
+- **ACP client runners are heavily duplicated across providers**:
+    - `internal/acp/client/claudecode/*.go`
+    - `internal/acp/client/gemini/*.go`
+    - `internal/acp/client/cursor/*.go`
+
+  Claude found these three runner implementations are near-identical large siblings, each carrying the same
+  lifecycle/process-management logic, callback client methods, stderr handling, and helper functions, with only small
+  provider-specific differences such as binary name and argument building. This is the strongest duplicate-code hotspot
+  in the codebase and creates bug-drift risk because fixes need to be applied in multiple places.
+
+- **Shared CLI/runtime helper logic is duplicated** between:
+    - `internal/cli/cli.go`
+    - `internal/acp/server/runtime.go`
+
+  The pi reviewer called out duplicate helpers such as `providerEnvVar`, `mergeExtraHeaders`, `convertHooks`, and
+  `detectGitRoot`. These should likely move into a shared internal package so behavior stays consistent.
+
+- **Anthropic provider flow contains parallel implementation paths** in:
+    - `internal/provider/anthropic.go`
+
+  Claude noted repeated streaming/non-streaming and beta/non-beta execution paths. While not literal copy-paste in the
+  same way as ACP runners, it has the same maintenance shape and is worth consolidating.
+
+### Large Files
+
+Largest implementation files highlighted by the reviewers:
+
+- `internal/tui/run.go` — ~1195 LOC
+- `internal/tui/tui.go` — ~1083 LOC
+- `internal/cli/cli.go` — ~1052 LOC
+- `internal/session/store.go` — ~891 LOC
+- `internal/auth/auth.go` — ~887 LOC
+- `internal/provider/anthropic.go` — ~814 LOC
+- `internal/cli/ping.go` — ~749 LOC
+
+These were consistently identified as maintainability risks because each mixes multiple concerns in one place, making
+changes harder to reason about and review.
+
+### Complexity Hotspots
+
+- **`internal/cli/cli.go`**
+    - pi reviewer flagged this as a major orchestration hotspot: config loading, model resolution, sandboxing, memory,
+      palace, LSP, MCP, hooks, and session wiring all pass through one large startup path.
+
+- **`internal/tui/tui.go`**
+    - pi reviewer flagged `Update`, `handleKey`, and `View` as long state-machine-style handlers mixing rendering,
+      input, modal flows, and agent lifecycle concerns.
+
+- **`internal/tui/run.go`**
+    - Claude highlighted it as one of the densest files in the repo, combining run-state management, gates, worktree
+      merge logic, checklist parsing, and prompt/spec handling.
+
+- **`internal/auth/auth.go`**
+    - pi reviewer noted the file bundles parsing, OAuth/device flow, token exchange, persistence, TLS preflight, and key
+      classification together, giving it too many responsibilities.
+
+- **ACP runner lifecycle management**
+    - Claude identified the runner/session process lifecycle, stdin/stderr coordination, cancellation, callbacks, and
+      event fan-out as subtle logic duplicated in three places. This is both a duplication issue and a complexity issue.
+
+- **Moderate growth hotspots in TUI support files**
+    - `internal/tui/input.go`
+    - `internal/tui/sidebar.go`
+
+  pi reviewer noted repeated branching and rendering patterns here that are not yet critical, but are showing early
+  feature-accretion pressure.
+
+### Recommended Refactoring Priorities
+
+1. **Unify ACP client runners behind a shared base implementation** with a small provider-specific adapter layer.
+2. **Extract shared helper functions** now duplicated between CLI and ACP runtime paths.
+3. **Split the TUI and CLI god files** by concern before adding more features:
+    - `internal/tui/run.go`
+    - `internal/tui/tui.go`
+    - `internal/cli/cli.go`
+4. **Decompose `internal/auth/auth.go`** into parsing, transport, and persistence responsibilities.
+5. **Reduce anthropic flow duplication** by consolidating parallel execution paths where possible.
+
 ## 9. Consensus Summary
 
 All three reviewers independently agreed on:

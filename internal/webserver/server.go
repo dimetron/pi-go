@@ -300,7 +300,7 @@ func (s *ServerV2) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Get existing PTY or create a new one for this session.
-	bridge, err := s.ptyPool.GetOrCreate(sessionID, project, s.cfg.Model)
+	bridge, err := s.ptyPool.GetOrCreate(sessionID, project, s.cfg.Model, s.cfg.BaseURL)
 	if err != nil {
 		s.log.Error("pty create failed", "session", sessionID, "err", err)
 		msg := WSMessage{Type: "error", Data: err.Error()}

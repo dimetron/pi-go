@@ -110,6 +110,155 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
+type rootRuntime struct {
+	cfg          config.Config
+	llm          adkmodel.LLM
+	info         provider.Info
+	tokenTracker *guardrail.Tracker
+	activeRole   string
+	mode         string
+	prompt       string
+	cwd          string
+	sandboxRoot  string
+	worktreeDir  string
+}
+
+func resolveActiveRole() string {
+	activeRole := "default"
+	switch {
+	case flagSmol:
+		activeRole = "smol"
+	case flagSlow:
+		activeRole = "slow"
+	case flagPlan:
+		activeRole = "plan"
+	}
+	return activeRole
+}
+
+func resolveMode() string {
+	if flagMode != "" {
+		return flagMode
+	}
+	return detectMode()
+}
+
+func loadRootConfig() (config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return config.Config{}, fmt.Errorf("loading config: %w", err)
+	}
+	if flagModel != "" {
+		cfg.Roles["default"] = config.RoleConfig{Model: flagModel}
+	}
+	return cfg, nil
+}
+
+func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
+	cfg, err := loadRootConfig()
+	if err != nil {
+		return rootRuntime{}, err
+	}
+
+	activeRole := resolveActiveRole()
+	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole(activeRole)
+	if err != nil {
+		return rootRuntime{}, fmt.Errorf("resolving model role: %w", err)
+	}
+
+	mode := resolveMode()
+	info, err := provider.Resolve(modelName)
+	if err != nil {
+		return rootRuntime{}, fmt.Errorf("resolving model: %w", err)
+	}
+	if providerName != "" {
+		info.Provider = providerName
+	}
+	if err := provider.ValidateModel(info); err != nil {
+		return rootRuntime{}, fmt.Errorf("model validation: %w", err)
+	}
+
+	keys := config.APIKeys()
+	apiKey := keys[info.Provider]
+	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+		envVar := providerEnvVar(info.Provider)
+		return rootRuntime{}, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
+	}
+
+	baseURL := flagURL
+	if baseURL == "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[info.Provider]
+	}
+	if baseURL == "" && info.Ollama {
+		baseURL = "http://localhost:11434"
+	}
+	if info.Ollama {
+		if err := provider.CheckOllama(baseURL); err != nil {
+			return rootRuntime{}, fmt.Errorf("ollama health check: %w", err)
+		}
+	}
+
+	llmOpts := &provider.LLMOptions{
+		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+		AdvisorModel:    advisorModel,
+		AdvisorMaxUses:  advisorMaxUses,
+		AdvisorCaching:  advisorCaching,
+	}
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
+	if err != nil {
+		return rootRuntime{}, fmt.Errorf("creating LLM provider: %w", err)
+	}
+
+	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
+	tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
+	llm = guardrail.WrapModel(llm, tokenTracker)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return rootRuntime{}, fmt.Errorf("getting working directory: %w", err)
+	}
+	sandboxRoot := os.Getenv("PI_SANDBOX_ROOT")
+	if sandboxRoot == "" {
+		sandboxRoot = cwd
+	}
+	worktreeDir := os.Getenv("PI_WORKTREE_ROOT")
+
+	if flagContinue {
+		homeDir, hErr := os.UserHomeDir()
+		if hErr != nil {
+			return rootRuntime{}, fmt.Errorf("getting home dir: %w", hErr)
+		}
+		sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
+		sessionSvc, sErr := pisession.NewFileService(sessionsDir)
+		if sErr != nil {
+			return rootRuntime{}, fmt.Errorf("creating session service: %w", sErr)
+		}
+		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
+		if lastID == "" {
+			return rootRuntime{}, fmt.Errorf("no previous session found to continue")
+		}
+		flagSession = lastID
+	}
+
+	checkForRapidRestartAndWarn(cwd)
+	_ = writeLastSession(cwd, info.Provider, llm.Name())
+
+	return rootRuntime{
+		cfg:          cfg,
+		llm:          llm,
+		info:         info,
+		tokenTracker: tokenTracker,
+		activeRole:   activeRole,
+		mode:         mode,
+		prompt:       strings.Join(args, " "),
+		cwd:          cwd,
+		sandboxRoot:  sandboxRoot,
+		worktreeDir:  worktreeDir,
+	}, nil
+}
+
 func runRoot(cmd *cobra.Command, args []string) error {
 	// Load API keys from ~/.pi-go/.env (set by /login command).
 	loadDotEnv()
@@ -121,10 +270,8 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			fmt.Printf("pprof server listening on %s (profile: %s)\n", addr, flagPprof)
 			switch flagPprof {
 			case "cpu":
-				// CPU profiling is started separately via runtime/pprof.
 				fmt.Println("note: cpu profiling started via runtime/pprof; run: go tool pprof http://localhost:" + flagPprofPort + "/profile")
 			case "trace":
-				// Trace profiling is started separately via runtime/trace.
 				fmt.Println("note: trace profiling started via runtime/trace; run: go tool trace http://localhost:" + flagPprofPort + "/trace")
 			}
 			if err := http.ListenAndServe(addr, nil); err != nil {
@@ -133,138 +280,110 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
-	cfg, err := config.Load()
+	runtime, err := buildRootRuntime(cmd.Context(), args)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	// Resolve model: CLI flag overrides default role.
-	if flagModel != "" {
-		cfg.Roles["default"] = config.RoleConfig{Model: flagModel}
+	if runtime.mode == "interactive" {
+		return runInteractive(
+			cmd.Context(),
+			runtime.cfg,
+			runtime.llm,
+			runtime.info,
+			runtime.tokenTracker,
+			runtime.activeRole,
+			runtime.cwd,
+			runtime.sandboxRoot,
+			runtime.worktreeDir,
+		)
 	}
 
-	// Determine active role from flags.
-	activeRole := "default"
-	switch {
-	case flagSmol:
-		activeRole = "smol"
-	case flagSlow:
-		activeRole = "slow"
-	case flagPlan:
-		activeRole = "plan"
-	}
+	return runNonInteractive(
+		cmd.Context(),
+		cmd,
+		runtime.cfg,
+		runtime.llm,
+		runtime.info,
+		runtime.tokenTracker,
+		runtime.cwd,
+		runtime.sandboxRoot,
+		runtime.worktreeDir,
+		runtime.mode,
+		runtime.prompt,
+	)
+}
 
-	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole(activeRole)
+type nonInteractiveRuntime struct {
+	sandbox      *tools.Sandbox
+	coreTools    []adktool.Tool
+	orch         *subagent.Orchestrator
+	agentEventCh chan tui.AgentSubEvent
+}
+
+func initNonInteractiveRuntime(cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
+	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
-		return fmt.Errorf("resolving model role: %w", err)
+		return nil, fmt.Errorf("creating sandbox: %w", err)
 	}
 
-	mode := flagMode
-	if mode == "" {
-		mode = detectMode()
-	}
-
-	info, err := provider.Resolve(modelName)
-	// If config explicitly set a provider, use it over auto-detection.
-	if err == nil && providerName != "" {
-		info.Provider = providerName
-	}
-	if err != nil {
-		return fmt.Errorf("resolving model: %w", err)
-	}
-	if err := provider.ValidateModel(info); err != nil {
-		return fmt.Errorf("model validation: %w", err)
-	}
-
-	keys := config.APIKeys()
-	apiKey := keys[info.Provider]
-	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
-		envVar := providerEnvVar(info.Provider)
-		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
-	}
-
-	// Resolve base URL: --url flag takes precedence over env var, then Ollama default.
-	baseURL := flagURL
-	if baseURL == "" {
-		baseURLs := config.BaseURLs()
-		baseURL = baseURLs[info.Provider]
-	}
-	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
-	}
-
-	// Check Ollama is online before proceeding.
-	if info.Ollama {
-		if err := provider.CheckOllama(baseURL); err != nil {
-			return fmt.Errorf("ollama health check: %w", err)
+	if home, hErr := os.UserHomeDir(); hErr == nil {
+		if aErr := sandbox.AddExtraDir(filepath.Join(home, ".pi-go")); aErr != nil {
+			fmt.Fprintf(os.Stderr, "pi-go: warning: could not add ~/.pi-go to sandbox: %v\n", aErr)
 		}
 	}
 
-	// Build LLM options: extra headers + insecure TLS + advisor config.
-	llmOpts := &provider.LLMOptions{
-		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
-		AdvisorModel:    advisorModel,
-		AdvisorMaxUses:  advisorMaxUses,
-		AdvisorCaching:  advisorCaching,
-	}
-
-	// Create the LLM provider.
-	llm, err := provider.NewLLM(cmd.Context(), info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
+	coreTools, err := tools.CoreTools(sandbox)
 	if err != nil {
-		return fmt.Errorf("creating LLM provider: %w", err)
+		_ = sandbox.Close()
+		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
 
-	// Create token usage tracker and wrap LLM with guardrail.
-	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
-	llm = guardrail.WrapModel(llm, tokenTracker)
-
-	prompt := strings.Join(args, " ")
-
-	cwd, err := os.Getwd()
+	repoRoot := detectGitRoot(cwd)
+	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
 	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
+		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
 	}
-	sandboxRoot := os.Getenv("PI_SANDBOX_ROOT")
-	if sandboxRoot == "" {
-		sandboxRoot = cwd
+	var agentConfigs []subagent.AgentConfig
+	if discovery != nil {
+		agentConfigs = discovery.All
 	}
-	// Worktree directory for subagent path normalization
-	worktreeDir := os.Getenv("PI_WORKTREE_ROOT")
+	orch := subagent.NewOrchestrator(cfg, repoRoot, agentConfigs)
+	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
 
-	// Resolve --continue early (before TUI) so errors surface immediately.
-	if flagContinue {
-		homeDir, hErr := os.UserHomeDir()
-		if hErr != nil {
-			return fmt.Errorf("getting home dir: %w", hErr)
+	agentEventCh := make(chan tui.AgentSubEvent, 128)
+	agentEventCB := func(agentID, eventType, content string) {
+		select {
+		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
+		default:
 		}
-		sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
-		sessionSvc, sErr := pisession.NewFileService(sessionsDir)
-		if sErr != nil {
-			return fmt.Errorf("creating session service: %w", sErr)
-		}
-		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
-		if lastID == "" {
-			return fmt.Errorf("no previous session found to continue")
-		}
-		flagSession = lastID
 	}
-
-	// Check for rapid restart BEFORE writing the new session.
-	// If last session started within 3s, warn the user.
-	checkForRapidRestartAndWarn(cwd)
-
-	// Track this session start for the next invocation's rapid-restart check.
-	_ = writeLastSession(cwd, info.Provider, llm.Name())
-
-	// Interactive mode: show TUI immediately, initialize in background.
-	if mode == "interactive" {
-		return runInteractive(cmd.Context(), cfg, llm, info, tokenTracker, activeRole, cwd, sandboxRoot, worktreeDir)
+	agentTools, err := tools.AgentTools(orch, agentEventCB)
+	if err != nil {
+		orch.Shutdown()
+		_ = sandbox.Close()
+		return nil, fmt.Errorf("creating agent tools: %w", err)
 	}
+	coreTools = append(coreTools, agentTools...)
 
-	// Non-interactive modes: synchronous initialization.
-	return runNonInteractive(cmd.Context(), cmd, cfg, llm, info, tokenTracker, cwd, sandboxRoot, worktreeDir, mode, prompt)
+	return &nonInteractiveRuntime{
+		sandbox:      sandbox,
+		coreTools:    coreTools,
+		orch:         orch,
+		agentEventCh: agentEventCh,
+	}, nil
+}
+
+func (r *nonInteractiveRuntime) close() {
+	if r == nil {
+		return
+	}
+	if r.orch != nil {
+		r.orch.Shutdown()
+	}
+	if r.sandbox != nil {
+		_ = r.sandbox.Close()
+	}
 }
 
 // runNonInteractive performs synchronous initialization and runs print/json/rpc modes.
@@ -277,49 +396,14 @@ func runNonInteractive(
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir, mode, prompt string,
 ) error {
-	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
+	runtime, err := initNonInteractiveRuntime(&cfg, cwd, sandboxRoot, worktreeDir)
 	if err != nil {
-		return fmt.Errorf("creating sandbox: %w", err)
+		return err
 	}
-	defer func() { _ = sandbox.Close() }()
+	defer runtime.close()
 
-	// Allow agent tools to access ~/.pi-go/ (logs, sessions, config).
-	if home, hErr := os.UserHomeDir(); hErr == nil {
-		if aErr := sandbox.AddExtraDir(filepath.Join(home, ".pi-go")); aErr != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: could not add ~/.pi-go to sandbox: %v\n", aErr)
-		}
-	}
-
-	coreTools, err := tools.CoreTools(sandbox)
-	if err != nil {
-		return fmt.Errorf("creating core tools: %w", err)
-	}
-
-	repoRoot := detectGitRoot(cwd)
-	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
-	}
-	var agentConfigs []subagent.AgentConfig
-	if discovery != nil {
-		agentConfigs = discovery.All
-	}
-	orch := subagent.NewOrchestrator(&cfg, repoRoot, agentConfigs)
-	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
-	defer orch.Shutdown()
-
-	agentEventCh := make(chan tui.AgentSubEvent, 128)
-	agentEventCB := func(agentID, eventType, content string) {
-		select {
-		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
-		default:
-		}
-	}
-	agentTools, err := tools.AgentTools(orch, agentEventCB)
-	if err != nil {
-		return fmt.Errorf("creating agent tools: %w", err)
-	}
-	coreTools = append(coreTools, agentTools...)
+	coreTools := runtime.coreTools
+	orch := runtime.orch
 
 	// Initialize memory system.
 	var memStore memory.Store
