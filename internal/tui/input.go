@@ -13,6 +13,24 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// charOffsetToByteOffset converts a UTF-8 character offset within a string
+// to a byte offset. Returns 0 if pos is out of bounds.
+func charOffsetToByteOffset(s string, charPos int) int {
+	if charPos <= 0 {
+		return 0
+	}
+	byteOffset := 0
+	for i := 0; i < charPos && byteOffset < len(s); {
+		_, size := utf8.DecodeRuneInString(s[byteOffset:])
+		if size == 0 {
+			break
+		}
+		byteOffset += size
+		i++
+	}
+	return byteOffset
+}
+
 // terminalResponseRe matches common terminal response fragments that leak
 // through as text: CSI params (digits, semicolons, question marks) ending
 // with a letter, DECRPM ($y), OSC color payloads (rgb:/hex colons+slashes),
@@ -34,7 +52,7 @@ type InputSubmitMsg struct {
 // InputModel manages the text input area: cursor, history, and completion.
 type InputModel struct {
 	Text       string
-	CursorPos  int
+	CursorPos  int // character position (not byte offset)
 	History    []HistoryEntry
 	HistoryIdx int
 
@@ -84,23 +102,23 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
 			selected := im.MentionResult.Candidates[im.MentionSelectedIndex].Text
 			// Replace @prefix with @selected-path
-			before := im.Text[:im.MentionStart]
-			after := im.Text[im.CursorPos:]
-			im.Text = before + "@" + selected + after
-			im.CursorPos = im.MentionStart + 1 + len(selected)
+			beforeByte := charOffsetToByteOffset(im.Text, im.MentionStart)
+			afterByte := charOffsetToByteOffset(im.Text, im.CursorPos)
+			im.Text = im.Text[:beforeByte] + "@" + selected + im.Text[afterByte:]
+			im.CursorPos = im.MentionStart + 1 + utf8.RuneCountInString(selected)
 			im.dismissMention()
 			return nil
 		}
 		// Cycling: place command, dismiss menu.
 		if im.CyclingIdx >= 0 {
 			im.CyclingIdx = -1
-			im.CursorPos = len(im.Text)
+			im.CursorPos = utf8.RuneCountInString(im.Text)
 			return nil
 		}
 		// Completion: apply selection.
 		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
 			im.Text = im.CompletionResult.ApplySelection(im.SelectedIndex)
-			im.CursorPos = len(im.Text)
+			im.CursorPos = utf8.RuneCountInString(im.Text)
 			im.CompletionMode = false
 			im.CompletionResult = nil
 			im.SelectedIndex = 0
@@ -140,7 +158,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 					im.CyclingIdx--
 				}
 				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = len(im.Text)
+				im.CursorPos = utf8.RuneCountInString(im.Text)
 			}
 		}
 
@@ -178,13 +196,13 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 					im.CyclingIdx = (im.CyclingIdx + 1) % len(cycleCmds)
 				}
 				im.Text = cycleCmds[im.CyclingIdx]
-				im.CursorPos = len(im.Text)
+				im.CursorPos = utf8.RuneCountInString(im.Text)
 			}
 		} else {
 			im.CompletionResult = Complete(im.Text, im.Skills, im.WorkDir)
 			if len(im.CompletionResult.Candidates) == 1 {
 				im.Text = im.CompletionResult.Candidates[0].Text
-				im.CursorPos = len(im.Text)
+				im.CursorPos = utf8.RuneCountInString(im.Text)
 				im.CompletionResult = nil
 			} else if len(im.CompletionResult.Candidates) > 1 {
 				im.CompletionMode = true
@@ -195,7 +213,9 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	case key.Code == tea.KeyBackspace:
 		if im.CursorPos > 0 {
-			im.Text = im.Text[:im.CursorPos-1] + im.Text[im.CursorPos:]
+			bytePos := charOffsetToByteOffset(im.Text, im.CursorPos)
+			_, prevRuneSize := utf8.DecodeLastRuneInString(im.Text[:bytePos])
+			im.Text = im.Text[:bytePos-prevRuneSize] + im.Text[bytePos:]
 			im.CursorPos--
 			if im.Text == "" {
 				im.CyclingIdx = -1
@@ -214,25 +234,32 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 
 	case key.Code == tea.KeyDelete:
-		if im.CursorPos < len(im.Text) {
-			im.Text = im.Text[:im.CursorPos] + im.Text[im.CursorPos+1:]
+		if im.CursorPos < utf8.RuneCountInString(im.Text) {
+			bytePos := charOffsetToByteOffset(im.Text, im.CursorPos)
+			_, nextRuneSize := utf8.DecodeRuneInString(im.Text[bytePos:])
+			im.Text = im.Text[:bytePos] + im.Text[bytePos+nextRuneSize:]
 		}
 
 	case key.Code == tea.KeyLeft:
-		if im.CursorPos > 0 {
+		if im.CyclingIdx >= 0 {
+			im.CyclingIdx = -1
+			im.CursorPos = 0
+		} else if im.CursorPos > 0 {
 			im.CursorPos--
 		}
 
 	case key.Code == tea.KeyRight:
-		if im.CursorPos < len(im.Text) {
+		if im.CyclingIdx >= 0 {
+			im.CyclingIdx = -1
+			im.CursorPos = utf8.RuneCountInString(im.Text)
+		} else if im.CursorPos < utf8.RuneCountInString(im.Text) {
 			im.CursorPos++
 		}
-
 	case key.Code == tea.KeyHome || (key.Code == 'a' && key.Mod == tea.ModCtrl):
 		im.CursorPos = 0
 
 	case key.Code == tea.KeyEnd || (key.Code == 'e' && key.Mod == tea.ModCtrl):
-		im.CursorPos = len(im.Text)
+		im.CursorPos = utf8.RuneCountInString(im.Text)
 
 	case key.Code == tea.KeyUp:
 		if im.CyclingIdx >= 0 {
@@ -244,7 +271,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 					im.CyclingIdx--
 				}
 				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = len(im.Text)
+				im.CursorPos = utf8.RuneCountInString(im.Text)
 			}
 		} else if len(im.History) > 0 {
 			if im.HistoryIdx < 0 {
@@ -261,7 +288,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			if len(allCmds) > 0 {
 				im.CyclingIdx = (im.CyclingIdx + 1) % len(allCmds)
 				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = len(im.Text)
+				im.CursorPos = utf8.RuneCountInString(im.Text)
 			}
 		} else if im.HistoryIdx >= 0 {
 			im.HistoryIdx++
@@ -291,12 +318,14 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 				allCmds := im.AllCommandNames()
 				if len(allCmds) > 0 {
 					im.Text = allCmds[0]
-					im.CursorPos = len(im.Text)
+					im.CursorPos = utf8.RuneCountInString(im.Text)
 				}
 				return nil
 			}
-			im.Text = im.Text[:im.CursorPos] + key.Text + im.Text[im.CursorPos:]
-			im.CursorPos += len(key.Text)
+			// Insert text at cursor position (properly handling UTF-8)
+			beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
+			im.Text = im.Text[:beforeByte] + key.Text + im.Text[beforeByte:]
+			im.CursorPos++
 			im.CyclingIdx = -1
 
 			// Enter mention mode when @ is typed.
@@ -323,7 +352,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	// Update ghost autocomplete.
-	if im.CursorPos == len(im.Text) {
+	if im.CursorPos == utf8.RuneCountInString(im.Text) {
 		result := Complete(im.Text, im.Skills, im.WorkDir)
 		if result != nil && len(result.Candidates) > 0 && len(result.Candidates) == 1 {
 			im.Completion = result.Candidates[0].Text
@@ -356,18 +385,23 @@ func (im *InputModel) View(running bool) string {
 		return prefix + dim.Render("(waiting for response...)")
 	}
 
-	before := im.Text[:im.CursorPos]
-	after := im.Text[im.CursorPos:]
+	// Convert character positions to byte offsets for proper UTF-8 handling
+	beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
+	before := im.Text[:beforeByte]
+	after := im.Text[beforeByte:]
+
 	cursor := lipgloss.NewStyle().
 		Background(lipgloss.Color("252")).
 		Foreground(lipgloss.Color("0")).
 		Render(" ")
-	if im.CursorPos < len(im.Text) {
+	if im.CursorPos < utf8.RuneCountInString(im.Text) {
+		_, runeSize := utf8.DecodeRuneInString(im.Text[beforeByte:])
 		cursor = lipgloss.NewStyle().
 			Background(lipgloss.Color("252")).
 			Foreground(lipgloss.Color("0")).
-			Render(string(im.Text[im.CursorPos]))
-		after = im.Text[im.CursorPos+1:]
+			Render(im.Text[beforeByte : beforeByte+runeSize])
+		afterByte := beforeByte + runeSize
+		after = im.Text[afterByte:]
 	}
 
 	// Completion menu.
@@ -400,10 +434,11 @@ func (im *InputModel) View(running bool) string {
 
 		allCmds := im.AllCommandNames()
 		// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
-		prefix := strings.ToLower(im.Text)
+		// but NOT when input is "/" alone or a complete command (don't filter by "/subagents")
+		cmdPrefix := strings.ToLower(im.Text)
 		var filteredCmds []string
 		for _, cmd := range allCmds {
-			if strings.HasPrefix(strings.ToLower(cmd), prefix) {
+			if strings.HasPrefix(strings.ToLower(cmd), cmdPrefix) {
 				filteredCmds = append(filteredCmds, cmd)
 			}
 		}
@@ -460,8 +495,8 @@ func (im *InputModel) View(running bool) string {
 
 	// Ghost autocomplete.
 	ghost := ""
-	if im.Completion != "" && im.CursorPos == len(im.Text) {
-		suffix := im.Completion[len(im.Text):]
+	if im.Completion != "" && im.CursorPos == utf8.RuneCountInString(im.Text) {
+		suffix := im.Completion[beforeByte:]
 		ghost = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(suffix + " [tab]")
 	}
 
@@ -470,8 +505,9 @@ func (im *InputModel) View(running bool) string {
 
 // InsertText inserts pasted or programmatic text at cursor position.
 func (im *InputModel) InsertText(text string) {
-	im.Text = im.Text[:im.CursorPos] + text + im.Text[im.CursorPos:]
-	im.CursorPos += len(text)
+	beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
+	im.Text = im.Text[:beforeByte] + text + im.Text[beforeByte:]
+	im.CursorPos += utf8.RuneCountInString(text)
 }
 
 // Clear resets the input text and cursor.
@@ -500,7 +536,7 @@ func (im *InputModel) DismissCompletion() {
 func (im *InputModel) restoreHistoryEntry(idx int) {
 	entry := im.History[idx]
 	im.Text = entry.Text
-	im.CursorPos = len(im.Text)
+	im.CursorPos = utf8.RuneCountInString(im.Text)
 }
 
 // dismissMention exits mention completion mode.
@@ -557,6 +593,9 @@ var slashCommands = []string{
 	"/plan",
 	"/run",
 	"/skills",
+	"/skill-list",
+	"/skill-load",
+	"/skill-create",
 	"/theme",
 	"/ping",
 	"/rtk",
@@ -603,6 +642,12 @@ func slashCommandDesc(cmd string) string {
 		return "Switch theme or list themes"
 	case "/skills":
 		return "List skills (create, load)"
+	case "/skill-list":
+		return "List all loaded skills"
+	case "/skill-load":
+		return "Reload skills from disk"
+	case "/skill-create":
+		return "Create a new skill"
 	case "/ping":
 		return "Test LLM connectivity"
 	case "/restart":
