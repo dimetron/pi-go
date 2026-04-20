@@ -250,15 +250,26 @@ func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
 }
 
 func TestRootCmdMissingAPIKey(t *testing.T) {
-	// Ensure no API keys are set
+	// Isolate HOME so loadDotEnv cannot pull credentials from the real machine.
+	t.Setenv("HOME", t.TempDir())
+
+	// Ensure no provider API keys are set.
 	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"} {
-		if err := os.Unsetenv(key); err != nil {
-			t.Logf("failed to unset %s: %v", key, err)
-		}
+		t.Setenv(key, "")
 	}
 
+	// Reset global flags that may leak across tests.
+	flagContinue = false
+	flagSession = ""
+	flagURL = ""
+	flagHeaders = nil
+	flagInsecure = false
+	flagMemoryOff = false
+	flagPprof = ""
+	flagPprofPort = "6060"
+
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-5.4", "hello"})
+	cmd.SetArgs([]string{"--mode", "print", "--model", "gpt-5.4", "hello"})
 
 	err := cmd.Execute()
 	if err == nil {

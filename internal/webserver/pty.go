@@ -28,6 +28,7 @@ type PtyBridge struct {
 	project   string
 	sessionID string
 	model     string
+	baseURL   string
 	log       *slog.Logger
 	cmd       *exec.Cmd
 	ptyFile   io.ReadWriteCloser
@@ -61,14 +62,15 @@ func (pw *pipeWrapper) Close() error {
 	return nil
 }
 
-// NewPtyBridge creates a new PTY bridge for the given project and model.
-func NewPtyBridge(project, model string, logger *slog.Logger) *PtyBridge {
+// NewPtyBridge creates a new PTY bridge for the given project, model, and base URL.
+func NewPtyBridge(project, model, baseURL string, logger *slog.Logger) *PtyBridge {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &PtyBridge{
 		project: project,
 		model:   model,
+		baseURL: baseURL,
 		log:     logger,
 		done:    make(chan struct{}),
 	}
@@ -186,6 +188,9 @@ func (pb *PtyBridge) startProcess() error {
 	if pb.model != "" {
 		args = append(args, "--model", pb.model)
 	}
+	if pb.baseURL != "" {
+		args = append(args, "--url", pb.baseURL)
+	}
 	cmd := exec.Command(piBin, args...)
 	cmd.Dir = pb.project
 	cmd.Env = append(os.Environ(),
@@ -224,6 +229,9 @@ func (pb *PtyBridge) startProcessWithPipes() error {
 	args := []string{}
 	if pb.model != "" {
 		args = append(args, "--model", pb.model)
+	}
+	if pb.baseURL != "" {
+		args = append(args, "--url", pb.baseURL)
 	}
 	cmd := exec.Command(piBin, args...)
 	cmd.Dir = pb.project
@@ -264,7 +272,7 @@ func (pb *PtyBridge) startProcessWithPipes() error {
 
 	go func() {
 		err := pb.cmd.Wait()
-		pb.log.Info("pty process exited", "session", pb.sessionID, "err", err, "mode", "pipes")
+		pb.log.Info("pipe process exited", "session", pb.sessionID, "err", err)
 		pb.closeOnce.Do(func() { close(pb.done) })
 	}()
 
@@ -272,27 +280,6 @@ func (pb *PtyBridge) startProcessWithPipes() error {
 	return nil
 }
 
-// Close kills the child process and releases the PTY fd.
-func (pb *PtyBridge) Close() error {
-	pb.closeOnce.Do(func() { close(pb.done) })
-
-	pb.mu.Lock()
-	defer pb.mu.Unlock()
-
-	if pb.cmd != nil && pb.cmd.Process != nil {
-		_ = pb.cmd.Process.Kill()
-		_ = pb.cmd.Wait()
-		pb.cmd = nil
-	}
-
-	if pb.ptyFile != nil {
-		pb.ptyFile.Close()
-		pb.ptyFile = nil
-	}
-	return nil
-}
-
-// copyPtyToWS reads from PTY and writes to WebSocket.
 func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 	buf := make([]byte, 4096)
 	for {
@@ -306,25 +293,21 @@ func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 
 		n, err := pb.ptyFile.Read(buf)
 		if n > 0 {
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			msg := WSMessage{Type: "output", Data: string(buf[:n])}
-			if writeErr := conn.WriteJSON(msg); writeErr != nil {
-				pb.log.Warn("ws write failed", "session", pb.sessionID, "err", writeErr)
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if werr := conn.WriteJSON(msg); werr != nil {
 				return
 			}
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "use of closed") {
-				pb.log.Warn("pty read error", "session", pb.sessionID, "err", err)
-				msg := WSMessage{Type: "close", Data: err.Error()}
-				_ = conn.WriteJSON(msg)
+			if !errors.Is(err, io.EOF) {
+				pb.log.Debug("pty read ended", "err", err)
 			}
 			return
 		}
 	}
 }
 
-// copyWSToPty reads from WebSocket and writes to PTY.
 func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 	for {
 		select {
@@ -335,67 +318,66 @@ func (pb *PtyBridge) copyWSToPty(conn *websocket.Conn, wsDone <-chan struct{}) {
 		default:
 		}
 
-		msgType, reader, err := conn.NextReader()
-		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				pb.log.Warn("ws read error", "session", pb.sessionID, "err", err)
-			}
-			return
-		}
-
-		if msgType != websocket.TextMessage && msgType != websocket.BinaryMessage {
-			continue
-		}
-
-		data, err := io.ReadAll(reader)
+		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
 
 		var msg WSMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			pb.mu.Lock()
-			if pb.ptyFile != nil {
-				_, _ = pb.ptyFile.Write(data)
-			}
-			pb.mu.Unlock()
+			// Legacy raw input support.
+			_, _ = pb.ptyFile.Write(data)
 			continue
 		}
 
 		switch msg.Type {
 		case "input":
-			pb.mu.Lock()
-			if pb.ptyFile != nil {
-				_, _ = pb.ptyFile.Write([]byte(msg.Data))
-			}
-			pb.mu.Unlock()
+			_, _ = pb.ptyFile.Write([]byte(msg.Data))
 		case "resize":
-			parts := strings.Split(msg.Data, "x")
+			parts := strings.Split(msg.Data, ",")
 			if len(parts) == 2 {
-				w, _ := strconv.Atoi(parts[0])
-				h, _ := strconv.Atoi(parts[1])
-				pb.resize(w, h)
+				cols, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+				rows, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+				pb.Resize(cols, rows)
 			}
-		case "ping":
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 		}
 	}
 }
 
-// resize resizes the PTY to the given dimensions.
-func (pb *PtyBridge) resize(cols, rows int) {
-	if pb.ptyFile == nil {
+// Resize updates the PTY size. No-op when running in pipe fallback mode.
+func (pb *PtyBridge) Resize(cols, rows int) {
+	f, ok := pb.ptyFile.(*os.File)
+	if !ok || f == nil {
 		return
 	}
-	if ptyFile, ok := pb.ptyFile.(*os.File); ok {
-		_ = pty.Setsize(ptyFile, &pty.Winsize{
-			Rows: uint16(rows),
-			Cols: uint16(cols),
-		})
-	}
+	_ = pty.Setsize(f, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 }
 
-// PtyPool manages long-lived PTY bridges keyed by session ID.
+// Close terminates the PTY bridge and underlying process.
+func (pb *PtyBridge) Close() error {
+	var retErr error
+	pb.closeOnce.Do(func() {
+		close(pb.done)
+		if pb.conn != nil {
+			_ = pb.conn.Close()
+			pb.conn = nil
+		}
+		if pb.ptyFile != nil {
+			if err := pb.ptyFile.Close(); err != nil && retErr == nil {
+				retErr = err
+			}
+			pb.ptyFile = nil
+		}
+		if pb.cmd != nil && pb.cmd.Process != nil {
+			if err := pb.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && retErr == nil {
+				retErr = err
+			}
+		}
+	})
+	return retErr
+}
+
+// PtyPool manages PTY bridges keyed by session ID.
 type PtyPool struct {
 	mu      sync.Mutex
 	bridges map[string]*PtyBridge
@@ -412,7 +394,7 @@ func NewPtyPool(logger *slog.Logger) *PtyPool {
 
 // GetOrCreate returns an existing live PTY bridge for the session,
 // or creates and starts a new one.
-func (p *PtyPool) GetOrCreate(sessionID, project, model string) (*PtyBridge, error) {
+func (p *PtyPool) GetOrCreate(sessionID, project, model, baseURL string) (*PtyBridge, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -421,7 +403,7 @@ func (p *PtyPool) GetOrCreate(sessionID, project, model string) (*PtyBridge, err
 		return b, nil
 	}
 
-	b := NewPtyBridge(project, model, p.log)
+	b := NewPtyBridge(project, model, baseURL, p.log)
 	if err := b.Start(); err != nil {
 		return nil, err
 	}
@@ -445,7 +427,7 @@ func (p *PtyPool) CloseAll() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for id, b := range p.bridges {
-		b.Close()
+		_ = b.Close()
 		delete(p.bridges, id)
 	}
 }

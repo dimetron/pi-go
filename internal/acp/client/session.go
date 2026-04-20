@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -22,24 +23,53 @@ type RunningSession struct {
 
 	events chan shared.Event
 	done   chan struct{}
+	// stderrDone closes once streamStderr returns so waitProcess can synchronize
+	// with the drain goroutine before reading stderr.
+	stderrDone chan struct{}
 
 	closeStdin sync.Once
 
-	mu       sync.Mutex
-	result   shared.RunResult
-	finished bool
+	mu         sync.Mutex
+	result     shared.RunResult
+	finished   bool
+	toolFilter *shared.ToolCallTitleFilter
+	curSession string
 }
 
 func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *RunningSession {
 	rs := &RunningSession{
-		cmd:    cmd,
-		stdin:  stdin,
-		stderr: &stderrBuffer{},
-		events: make(chan shared.Event, 32),
-		done:   make(chan struct{}),
+		cmd:        cmd,
+		stdin:      stdin,
+		stderr:     &stderrBuffer{},
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		stderrDone: make(chan struct{}),
 	}
-	go rs.stderr.readFrom(stderr)
+	rs.toolFilter = shared.NewToolCallTitleFilter(func(title string) {
+		rs.mu.Lock()
+		sid := rs.curSession
+		rs.mu.Unlock()
+		rs.emit(shared.Event{Type: shared.EventTypeTool, Content: title, SessionID: sid})
+	})
+	go rs.streamStderr(stderr)
 	return rs
+}
+
+func (s *RunningSession) streamStderr(r io.Reader) {
+	defer close(s.stderrDone)
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		_, _ = s.stderr.Write([]byte(line + "\n"))
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		s.mu.Lock()
+		sid := s.curSession
+		s.mu.Unlock()
+		s.emit(shared.Event{Type: shared.EventTypeStderr, Content: line, SessionID: sid})
+	}
 }
 
 func (s *RunningSession) closeStdinOnce() {
@@ -79,31 +109,52 @@ func (s *RunningSession) Wait() shared.RunResult {
 	return s.result
 }
 
-func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementation) {
-	defer close(s.done)
-	defer close(s.events)
-	defer s.closeStdinOnce()
-
-	ctx := context.Background()
-	initResp, err := s.conn.Initialize(ctx, acp.InitializeRequest{
+// RunACPFlow executes the shared ACP initialize/new-session/prompt lifecycle
+// against an already-started client connection, delegating state/result details
+// back to the caller.
+func RunACPFlow(
+	ctx context.Context,
+	conn *acp.ClientSideConnection,
+	req shared.RunRequest,
+	clientInfo acp.Implementation,
+	handleSessionID func(string),
+	handleUpdate func(acp.SessionNotification),
+	finish func(shared.RunResult),
+	waitProcess func() error,
+	closeStdin func(),
+	readResult func() shared.RunResult,
+) {
+	initCtx := ctx
+	initCancel := func() {}
+	if req.RPCTimeout > 0 {
+		initCtx, initCancel = context.WithTimeout(ctx, req.RPCTimeout)
+	}
+	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		ClientInfo:      &clientInfo,
 	})
+	initCancel()
 	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("initialize: %v", err)})
-		_ = s.waitProcess()
+		closeStdin()
+		finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("initialize: %v", err)})
+		_ = waitProcess()
 		return
 	}
 
-	newSessionResp, err := s.conn.NewSession(ctx, acp.NewSessionRequest{
+	newCtx := ctx
+	newCancel := func() {}
+	if req.RPCTimeout > 0 {
+		newCtx, newCancel = context.WithTimeout(ctx, req.RPCTimeout)
+	}
+	newSessionResp, err := conn.NewSession(newCtx, acp.NewSessionRequest{
 		Cwd:        absDir(req.CWD),
 		McpServers: []acp.McpServer{},
 	})
+	newCancel()
 	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("new session: %v", err)})
-		_ = s.waitProcess()
+		closeStdin()
+		finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("new session: %v", err)})
+		_ = waitProcess()
 		return
 	}
 
@@ -111,39 +162,64 @@ func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementatio
 	if sessionID == "" {
 		sessionID = req.SessionID
 	}
+	if handleSessionID != nil {
+		handleSessionID(sessionID)
+	}
 
-	_, _ = initResp, req.SessionID
+	_, _ = initResp, handleUpdate
 
-	promptResp, err := s.conn.Prompt(ctx, acp.PromptRequest{
+	promptResp, err := conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: newSessionResp.SessionId,
 		Prompt:    []acp.ContentBlock{acp.TextBlock(req.Prompt)},
 	})
 	if err != nil {
-		s.closeStdinOnce()
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("prompt: %v", err), SessionID: sessionID})
-		_ = s.waitProcess()
+		closeStdin()
+		finish(shared.RunResult{Status: shared.StatusError, Error: fmt.Sprintf("prompt: %v", err), SessionID: sessionID})
+		_ = waitProcess()
 		return
 	}
 
-	// Signal end-of-stream to the agent so it can exit cleanly; otherwise
-	// agents that block on their stdin EOF (e.g. <-agentConn.Done()) would
-	// deadlock with our cmd.Wait below.
-	s.closeStdinOnce()
+	closeStdin()
 
-	if err := s.waitProcess(); err != nil {
-		s.finish(shared.RunResult{Status: shared.StatusError, Error: err.Error(), SessionID: sessionID})
+	if err := waitProcess(); err != nil {
+		finish(shared.RunResult{Status: shared.StatusError, Error: err.Error(), SessionID: sessionID})
 		return
 	}
 
-	s.mu.Lock()
-	result := s.result
-	s.mu.Unlock()
+	result := readResult()
 	result.Status = shared.StatusSuccess
 	result.SessionID = sessionID
 	if stop := promptResp.StopReason; strings.TrimSpace(string(stop)) != "" {
 		result.StopReason = string(stop)
 	}
-	s.finish(result)
+	finish(result)
+}
+
+func (s *RunningSession) run(req shared.RunRequest, clientInfo acp.Implementation) {
+	defer close(s.done)
+	defer close(s.events)
+	defer s.closeStdinOnce()
+
+	RunACPFlow(
+		context.Background(),
+		s.conn,
+		req,
+		clientInfo,
+		func(sessionID string) {
+			s.mu.Lock()
+			s.curSession = sessionID
+			s.mu.Unlock()
+		},
+		s.handleUpdate,
+		s.finish,
+		s.waitProcess,
+		s.closeStdinOnce,
+		func() shared.RunResult {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.result
+		},
+	)
 }
 
 func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
@@ -153,6 +229,9 @@ func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
 	s.mu.Lock()
 	if s.result.SessionID == "" {
 		s.result.SessionID = sessionID
+	}
+	if sessionID != "" {
+		s.curSession = sessionID
 	}
 	s.mu.Unlock()
 
@@ -170,14 +249,20 @@ func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
 		}
 	}
 	if toolCall := update.ToolCall; toolCall != nil {
-		if title := strings.TrimSpace(toolCall.Title); title != "" {
-			s.emit(shared.Event{Type: shared.EventTypeTool, Content: title, SessionID: sessionID})
-		}
+		s.toolFilter.OnToolCall(
+			string(toolCall.ToolCallId),
+			shared.EnrichToolCallTitle(toolCall.Title, toolCall.RawInput),
+		)
 	}
 	if toolUpdate := update.ToolCallUpdate; toolUpdate != nil {
-		if title := toolUpdate.Title; title != nil && strings.TrimSpace(*title) != "" {
-			s.emit(shared.Event{Type: shared.EventTypeTool, Content: *title, SessionID: sessionID})
+		title := ""
+		if toolUpdate.Title != nil {
+			title = *toolUpdate.Title
 		}
+		s.toolFilter.OnToolCallUpdate(
+			string(toolUpdate.ToolCallId),
+			shared.EnrichToolCallTitle(title, toolUpdate.RawInput),
+		)
 	}
 }
 
@@ -206,7 +291,6 @@ func (s *RunningSession) finish(result shared.RunResult) {
 		}
 		return
 	}
-	// Capture stderr for diagnostics, especially on errors.
 	if s.result.Stderr == "" {
 		s.result.Stderr = strings.TrimSpace(s.stderr.String())
 	}
@@ -218,6 +302,7 @@ func (s *RunningSession) finish(result shared.RunResult) {
 }
 
 func (s *RunningSession) waitProcess() error {
+	<-s.stderrDone
 	err := s.cmd.Wait()
 	if err == nil {
 		return nil

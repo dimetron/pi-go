@@ -21,6 +21,7 @@ var (
 	flagServeProject        string
 	flagServePairingTimeout time.Duration
 	flagServeModel          string
+	flagServeURL            string
 )
 
 func newServeCmd() *cobra.Command {
@@ -37,6 +38,7 @@ Each browser tab gets its own isolated agent session.`,
 	cmd.Flags().StringVar(&flagServeProject, "project", "", "Default project path (default: current directory)")
 	cmd.Flags().DurationVar(&flagServePairingTimeout, "pairing-timeout", 5*time.Minute, "Pairing code expiry time")
 	cmd.Flags().StringVar(&flagServeModel, "model", "", "LLM model to use for the web terminal (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
+	cmd.Flags().StringVar(&flagServeURL, "url", "", "LLM API base URL to use for the web terminal")
 
 	return cmd
 }
@@ -68,6 +70,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		PairingTimeout: flagServePairingTimeout,
 		Project:        project,
 		Model:          flagServeModel,
+		BaseURL:        flagServeURL,
 		Logger:         logger,
 	}
 
@@ -90,6 +93,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Project: %s\n", project)
 	if flagServeModel != "" {
 		fmt.Printf("Model: %s\n", flagServeModel)
+	}
+	if flagServeURL != "" {
+		fmt.Printf("URL: %s\n", flagServeURL)
 	}
 	fmt.Printf("Pairing timeout: %s\n", flagServePairingTimeout)
 	fmt.Printf("Pair code: %s\n", code)

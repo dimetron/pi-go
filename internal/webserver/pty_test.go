@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewPtyBridge(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project", "test-model", nil)
+	bridge := NewPtyBridge("/tmp/test-project", "test-model", "http://localhost:11434", nil)
 	if bridge == nil {
 		t.Fatal("NewPtyBridge should not return nil")
 	}
@@ -15,13 +15,16 @@ func TestNewPtyBridge(t *testing.T) {
 	if bridge.model != "test-model" {
 		t.Errorf("expected model test-model, got %q", bridge.model)
 	}
+	if bridge.baseURL != "http://localhost:11434" {
+		t.Errorf("expected baseURL http://localhost:11434, got %q", bridge.baseURL)
+	}
 	if bridge.done == nil {
 		t.Error("done channel should be initialized")
 	}
 }
 
 func TestPtyBridge_Close(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project", "", nil)
+	bridge := NewPtyBridge("/tmp/test-project", "", "", nil)
 
 	// Close should not panic even when called multiple times
 	if err := bridge.Close(); err != nil {
