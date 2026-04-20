@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewPtyBridge(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project", "test-model", "http://localhost:11434", nil)
+	bridge := NewPtyBridge("/tmp/test-project", "test-model", "http://localhost:11434", nil, false, nil)
 	if bridge == nil {
 		t.Fatal("NewPtyBridge should not return nil")
 	}
@@ -24,7 +24,7 @@ func TestNewPtyBridge(t *testing.T) {
 }
 
 func TestPtyBridge_Close(t *testing.T) {
-	bridge := NewPtyBridge("/tmp/test-project", "", "", nil)
+	bridge := NewPtyBridge("/tmp/test-project", "", "", nil, false, nil)
 
 	// Close should not panic even when called multiple times
 	if err := bridge.Close(); err != nil {
