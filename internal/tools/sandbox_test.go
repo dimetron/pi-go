@@ -742,3 +742,428 @@ func TestSandbox_ExtraDir_StillBlocksOtherPaths(t *testing.T) {
 		t.Error("expected error reading from non-allowed directory")
 	}
 }
+
+// TestSandbox_AddExtraDir_CreatesMissingDir verifies AddExtraDir creates the
+// directory if it does not already exist.
+func TestSandbox_AddExtraDir_CreatesMissingDir(t *testing.T) {
+	projectDir := t.TempDir()
+	sb, err := NewSandbox(projectDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	extraDir := filepath.Join(t.TempDir(), "new", "nested")
+	if err := sb.AddExtraDir(extraDir); err != nil {
+		t.Fatalf("AddExtraDir: %v", err)
+	}
+	info, err := os.Stat(extraDir)
+	if err != nil {
+		t.Fatalf("extra dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected directory, got file")
+	}
+}
+
+// TestSandbox_AddExtraDir_MkdirAllError verifies AddExtraDir returns an error
+// when the parent path is a file (mkdir would fail).
+func TestSandbox_AddExtraDir_MkdirAllError(t *testing.T) {
+	projectDir := t.TempDir()
+	sb, err := NewSandbox(projectDir)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	// Make a file, then try to use a path beneath it as an extra dir.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatalf("writing blocker: %v", err)
+	}
+	badDir := filepath.Join(blocker, "child")
+	err = sb.AddExtraDir(badDir)
+	if err == nil {
+		t.Error("expected AddExtraDir error when path parent is a file")
+	}
+}
+
+// TestSandbox_WriteFile_MkdirAllError covers the branch where creating
+// intermediate directories fails because the target path includes a file
+// component that is not a directory.
+func TestSandbox_WriteFile_BlockedByFile(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// Make a plain file, then try to write under it as if it were a dir.
+	if err := sb.WriteFile("notadir", []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	err := sb.WriteFile("notadir/child.txt", []byte("x"), 0o644)
+	if err == nil {
+		t.Error("expected error when writing under a regular file")
+	}
+}
+
+// TestSandbox_Open_OnDirectoryUnreadableFile covers the Open path when the
+// target is a directory (which Open succeeds on) and verifies content.
+func TestSandbox_Open_OnDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	f, err := sb.Open("sub")
+	if err != nil {
+		t.Fatalf("Open on directory: %v", err)
+	}
+	defer f.Close()
+
+	// reading a directory as a file should error or return early.
+	// Just verify Open succeeded (covers the happy path).
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected IsDir=true")
+	}
+}
+
+// TestSandbox_ReadDir_OnFile covers ReadDir's error path when the name is a
+// regular file rather than a directory.
+func TestSandbox_ReadDir_OnFile(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	if err := sb.WriteFile("file.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := sb.ReadDir("file.txt")
+	if err == nil {
+		t.Error("expected ReadDir on regular file to fail")
+	}
+}
+
+// TestSandbox_SetWorktreeDir_Empty verifies clearing via empty string.
+func TestSandbox_SetWorktreeDir_Empty(t *testing.T) {
+	dir := t.TempDir()
+	sb, err := NewSandbox(dir, filepath.Join(dir, "wt"))
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	defer sb.Close()
+	if err := sb.SetWorktreeDir(""); err != nil {
+		t.Fatalf("SetWorktreeDir(''): %v", err)
+	}
+}
+
+// --- parseGitignoreLine ---
+
+func TestParseGitignoreLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		dir     string
+		wantOK  bool
+		wantNeg bool
+		wantDir bool
+		wantPat string
+	}{
+		{"empty line", "", "", false, false, false, ""},
+		{"whitespace-only not skipped", "   ", "", true, false, false, "   "},
+		{"comment", "# this is a comment", "", false, false, false, ""},
+		{"simple pattern", "*.log", "", true, false, false, "*.log"},
+		{"negation", "!important.log", "", true, true, false, "important.log"},
+		{"directory pattern", "build/", "", true, false, true, "build"},
+		{"negated directory", "!keep/", "", true, true, true, "keep"},
+		{"double-star collapse", "**", "", true, false, false, "*"},
+		{"recursive glob", "**/foo", "", true, false, false, "*/foo"},
+		{"trailing CR stripped", "*.tmp\r", "", true, false, false, "*.tmp"},
+		{"with dir context", "out", "src", true, false, false, "out"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseGitignoreLine(tt.line, tt.dir)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if got.isNeg != tt.wantNeg {
+				t.Errorf("isNeg = %v, want %v", got.isNeg, tt.wantNeg)
+			}
+			if got.isDir != tt.wantDir {
+				t.Errorf("isDir = %v, want %v", got.isDir, tt.wantDir)
+			}
+			if got.pattern != tt.wantPat {
+				t.Errorf("pattern = %q, want %q", got.pattern, tt.wantPat)
+			}
+			if got.dir != tt.dir {
+				t.Errorf("dir = %q, want %q", got.dir, tt.dir)
+			}
+		})
+	}
+}
+
+// --- GitignorePattern.matches ---
+
+func TestGitignorePattern_Matches(t *testing.T) {
+	tests := []struct {
+		name string
+		p    GitignorePattern
+		path string
+		want bool
+	}{
+		{
+			name: "simple match",
+			p:    GitignorePattern{pattern: "*.log"},
+			path: "app.log",
+			want: true,
+		},
+		{
+			name: "simple no match",
+			p:    GitignorePattern{pattern: "*.log"},
+			path: "app.go",
+			want: false,
+		},
+		{
+			name: "dir-scoped match",
+			p:    GitignorePattern{dir: "src", pattern: "*.go"},
+			path: "src/main.go",
+			want: true,
+		},
+		{
+			name: "dir-scoped outside dir",
+			p:    GitignorePattern{dir: "src", pattern: "*.go"},
+			path: "lib/main.go",
+			want: false,
+		},
+		{
+			name: "dir-scoped subdir match",
+			p:    GitignorePattern{dir: "src", pattern: "*.go"},
+			path: "src/sub/main.go",
+			want: true,
+		},
+		{
+			name: "isDir flag forwarded",
+			p:    GitignorePattern{pattern: "build", isDir: true},
+			path: "build",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.matches(tt.path); got != tt.want {
+				t.Errorf("matches(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- loadGitignore / LoadGitignorePatterns ---
+
+func TestSandbox_LoadGitignorePatterns_RootOnly(t *testing.T) {
+	dir := t.TempDir()
+	// Write a root .gitignore and a .git dir that must be skipped.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"),
+		[]byte("# comment\n\n*.log\n!keep.log\nbuild/\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	// .git directory with a nested .gitignore that must NOT be read.
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", ".gitignore"),
+		[]byte("SHOULD_NOT_LOAD\n"), 0o644); err != nil {
+		t.Fatalf("write .git gitignore: %v", err)
+	}
+
+	sb := testSandbox(t, dir)
+	patterns, err := sb.LoadGitignorePatterns()
+	if err != nil {
+		t.Fatalf("LoadGitignorePatterns: %v", err)
+	}
+	if len(patterns) == 0 {
+		t.Fatal("expected at least one pattern")
+	}
+	for _, p := range patterns {
+		if p.pattern == "SHOULD_NOT_LOAD" {
+			t.Error(".git/.gitignore should be skipped")
+		}
+	}
+}
+
+func TestSandbox_LoadGitignorePatterns_Nested(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"),
+		[]byte("*.log\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", ".gitignore"),
+		[]byte("*.tmp\n"), 0o644); err != nil {
+		t.Fatalf("write nested gitignore: %v", err)
+	}
+
+	sb := testSandbox(t, dir)
+	patterns, err := sb.LoadGitignorePatterns()
+	if err != nil {
+		t.Fatalf("LoadGitignorePatterns: %v", err)
+	}
+
+	hasLog, hasTmp := false, false
+	for _, p := range patterns {
+		if p.pattern == "*.log" && p.dir == "" {
+			hasLog = true
+		}
+		if p.pattern == "*.tmp" && p.dir == "sub" {
+			hasTmp = true
+		}
+	}
+	if !hasLog {
+		t.Error("missing *.log root pattern")
+	}
+	if !hasTmp {
+		t.Error("missing *.tmp sub pattern")
+	}
+}
+
+func TestSandbox_LoadGitignorePatterns_NoFile(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	patterns, err := sb.LoadGitignorePatterns()
+	if err != nil {
+		t.Fatalf("LoadGitignorePatterns: %v", err)
+	}
+	if patterns != nil {
+		t.Errorf("expected nil patterns when no .gitignore present, got %v", patterns)
+	}
+}
+
+// --- shouldSkipPath ---
+
+// fakeDirEntry is a minimal fs.DirEntry for unit tests.
+type fakeDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (f fakeDirEntry) Name() string               { return f.name }
+func (f fakeDirEntry) IsDir() bool                { return f.isDir }
+func (f fakeDirEntry) Type() os.FileMode          { return 0 }
+func (f fakeDirEntry) Info() (os.FileInfo, error) { return nil, nil }
+
+func TestShouldSkipPath(t *testing.T) {
+	patterns := []GitignorePattern{
+		{pattern: "*.log"},              // file matches
+		{pattern: "build", isDir: true}, // dir-only
+	}
+
+	tests := []struct {
+		name    string
+		relPath string
+		entry   fakeDirEntry
+		want    bool
+	}{
+		{"node_modules skipped", "node_modules", fakeDirEntry{name: "node_modules", isDir: true}, true},
+		{"vendor skipped", "vendor", fakeDirEntry{name: "vendor", isDir: true}, true},
+		{"__pycache__ skipped", "__pycache__", fakeDirEntry{name: "__pycache__", isDir: true}, true},
+		{"hidden dir skipped", ".secret", fakeDirEntry{name: ".secret", isDir: true}, true},
+		{"agent .pi-go NOT skipped", ".pi-go", fakeDirEntry{name: ".pi-go", isDir: true}, false},
+		{"agent .cursor NOT skipped", ".cursor", fakeDirEntry{name: ".cursor", isDir: true}, false},
+		{"agent .claude NOT skipped", ".claude", fakeDirEntry{name: ".claude", isDir: true}, false},
+		{"target dir skipped", "target", fakeDirEntry{name: "target", isDir: true}, true},
+		{"plain file not skipped", "main.go", fakeDirEntry{name: "main.go", isDir: false}, false},
+		{"dot path allowed", ".", fakeDirEntry{name: ".", isDir: true}, false},
+		{"gitignore *.log matches", "app.log", fakeDirEntry{name: "app.log", isDir: false}, true},
+		{"gitignore isDir pattern skips dir", "build", fakeDirEntry{name: "build", isDir: true}, true},
+		{"gitignore isDir pattern NOT skip file", "build", fakeDirEntry{name: "build", isDir: false}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldSkipPath(tt.relPath, tt.entry, patterns)
+			if got != tt.want {
+				t.Errorf("shouldSkipPath(%q) = %v, want %v", tt.relPath, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestShouldSkipPath_Negation covers the negation short-circuit.
+func TestShouldSkipPath_Negation(t *testing.T) {
+	// Negation pattern alone — when it matches, returns false immediately.
+	patterns := []GitignorePattern{
+		{pattern: "keep.log", isNeg: true},
+	}
+	entry := fakeDirEntry{name: "keep.log", isDir: false}
+	if shouldSkipPath("keep.log", entry, patterns) {
+		t.Error("expected negation to prevent skip")
+	}
+}
+
+// --- readFileFromFS ---
+
+func TestReadFileFromFS(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	sb := testSandbox(t, dir)
+
+	data, err := readFileFromFS(sb.FS(), "hello.txt")
+	if err != nil {
+		t.Fatalf("readFileFromFS: %v", err)
+	}
+	if string(data) != "hi" {
+		t.Errorf("got %q, want %q", data, "hi")
+	}
+}
+
+func TestReadFileFromFS_Missing(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	_, err := readFileFromFS(sb.FS(), "missing.txt")
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+// --- NewSandbox worktreeDir validation ---
+
+func TestNewSandbox_WithEmptyWorktree(t *testing.T) {
+	dir := t.TempDir()
+	sb, err := NewSandbox(dir, "")
+	if err != nil {
+		t.Fatalf("NewSandbox(empty worktree): %v", err)
+	}
+	defer sb.Close()
+
+	// Without a worktree, ../ paths should be rejected.
+	_, err = sb.Resolve("../escape")
+	if err == nil {
+		t.Error("expected error with empty worktree")
+	}
+}
+
+// --- Resolve edge cases ---
+
+func TestSandbox_Resolve_AbsoluteOutsideReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	// An absolute path unrelated to sandbox should yield a relative path
+	// containing "..", which Resolve detects and rejects.
+	_, err := sb.Resolve("/completely/unrelated/path")
+	if err == nil {
+		t.Error("expected error for absolute path outside sandbox")
+	}
+}
