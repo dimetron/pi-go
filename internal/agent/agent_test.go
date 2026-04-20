@@ -328,6 +328,37 @@ func TestLoadInstructionPrefersAgentFileInCurrentDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadInstructionWithOversizedAgentsFile(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".pi-go")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	oversized := strings.Repeat("A", maxInstructionFileSize+1)
+	if err := os.WriteFile(filepath.Join(agentsDir, "AGENTS.md"), []byte(oversized), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	base := "Base instruction."
+	result := LoadInstruction(base)
+
+	if !strings.Contains(result, base) {
+		t.Fatalf("LoadInstruction() should contain base instruction, got %q", result)
+	}
+	if strings.Contains(result, "# Project Rules") {
+		t.Fatalf("LoadInstruction() should skip oversized AGENTS.md, got %q", result)
+	}
+	if strings.Contains(result, oversized) {
+		t.Fatalf("LoadInstruction() should not include oversized AGENTS.md contents")
+	}
+}
+
 func TestLoadInstructionWithSkills(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, ".pi-go", "skills", "lint")

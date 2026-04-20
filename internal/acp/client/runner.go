@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -20,18 +19,19 @@ import (
 type Runner struct {
 	ClientInfo acp.Implementation
 	Logger     *slog.Logger
+	ExtraEnv   []string
 }
 
-// Start launches the subprocess and begins the ACP initialize/session/prompt flow.
-func (r Runner) Start(ctx context.Context, req shared.RunRequest) (*RunningSession, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-
-	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
+func (r Runner) startCommand(ctx context.Context, cmd *exec.Cmd, req shared.RunRequest) (*RunningSession, error) {
 	cmd.Env = os.Environ()
 	if req.CWD != "" {
 		cmd.Dir = req.CWD
+	}
+	if len(r.ExtraEnv) > 0 {
+		cmd.Env = append(cmd.Env, r.ExtraEnv...)
+	}
+	if len(req.Env) > 0 {
+		cmd.Env = append(cmd.Env, req.Env...)
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -64,6 +64,22 @@ func (r Runner) Start(ctx context.Context, req shared.RunRequest) (*RunningSessi
 	return session, nil
 }
 
+// StartCommand launches an already-resolved ACP subprocess command with the
+// shared client-side connection/session wiring.
+func (r Runner) StartCommand(ctx context.Context, cmd *exec.Cmd, req shared.RunRequest) (*RunningSession, error) {
+	return r.startCommand(ctx, cmd, req)
+}
+
+// Start launches the subprocess and begins the ACP initialize/session/prompt flow.
+func (r Runner) Start(ctx context.Context, req shared.RunRequest) (*RunningSession, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
+	return r.startCommand(ctx, cmd, req)
+}
+
 func (r Runner) clientInfo() acp.Implementation {
 	if strings.TrimSpace(r.ClientInfo.Name) != "" {
 		return r.ClientInfo
@@ -83,8 +99,8 @@ func (c *callbackClient) WriteTextFile(context.Context, acp.WriteTextFileRequest
 	return acp.WriteTextFileResponse{}, fmt.Errorf("writeTextFile not implemented")
 }
 
-func (c *callbackClient) RequestPermission(context.Context, acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	return acp.RequestPermissionResponse{}, fmt.Errorf("requestPermission not implemented")
+func (c *callbackClient) RequestPermission(_ context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	return acp.RequestPermissionResponse{Outcome: shared.AutoApproveOutcome(req)}, nil
 }
 
 func (c *callbackClient) SessionUpdate(_ context.Context, params acp.SessionNotification) error {
@@ -93,23 +109,23 @@ func (c *callbackClient) SessionUpdate(_ context.Context, params acp.SessionNoti
 }
 
 func (c *callbackClient) CreateTerminal(context.Context, acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	return acp.CreateTerminalResponse{}, fmt.Errorf("createTerminal not implemented")
+	return acp.CreateTerminalResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalCreate)
 }
 
 func (c *callbackClient) KillTerminal(context.Context, acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
-	return acp.KillTerminalResponse{}, fmt.Errorf("killTerminal not implemented")
+	return acp.KillTerminalResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalKill)
 }
 
 func (c *callbackClient) TerminalOutput(context.Context, acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
-	return acp.TerminalOutputResponse{}, fmt.Errorf("terminalOutput not implemented")
+	return acp.TerminalOutputResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalOutput)
 }
 
 func (c *callbackClient) ReleaseTerminal(context.Context, acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
-	return acp.ReleaseTerminalResponse{}, fmt.Errorf("releaseTerminal not implemented")
+	return acp.ReleaseTerminalResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalRelease)
 }
 
 func (c *callbackClient) WaitForTerminalExit(context.Context, acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
-	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("waitForTerminalExit not implemented")
+	return acp.WaitForTerminalExitResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalWaitForExit)
 }
 
 func absDir(path string) string {
@@ -130,10 +146,6 @@ func absDir(path string) string {
 type stderrBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder
-}
-
-func (b *stderrBuffer) readFrom(r io.Reader) {
-	_, _ = io.Copy(b, r)
 }
 
 func (b *stderrBuffer) Write(p []byte) (int, error) {

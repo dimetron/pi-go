@@ -17,8 +17,10 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`()(ghp_[a-zA-Z0-9]{20,})`),
 	// gho_... (GitHub OAuth)
 	regexp.MustCompile(`()(gho_[a-zA-Z0-9]{20,})`),
-	// anthropic keys (sk-ant-...)
-	regexp.MustCompile(`()(sk-ant-[a-zA-Z0-9-]{20,})`),
+	// JWTs
+	regexp.MustCompile(`()(eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)`),
+	// AWS access key IDs
+	regexp.MustCompile(`()(AKIA[0-9A-Z]{16})`),
 }
 
 // redactSecrets replaces known API key/secret values with "***" in the given string.

@@ -34,6 +34,16 @@ func TestRedactSecrets(t *testing.T) {
 			want:  `Authorization: Bearer ***`,
 		},
 		{
+			name:  "JWT token in text",
+			input: `id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature123`,
+			want:  `id_token=***`,
+		},
+		{
+			name:  "AWS access key id",
+			input: `aws_access_key_id=AKIA1234567890ABCDEF`,
+			want:  `aws_access_key_id=***`,
+		},
+		{
 			name:  "no secrets",
 			input: `just normal output with no secrets`,
 			want:  `just normal output with no secrets`,

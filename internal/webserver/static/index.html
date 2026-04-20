@@ -209,14 +209,15 @@
             };
             
             ws.onclose = function() {
-                setStatus('disconnected', 'Disconnected');
                 stopHeartbeat();
-                
+
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectAttempts++;
                     const delay = Math.min(2000 * reconnectAttempts, 15000);
-                    terminal.write(`\r\n[Reconnecting in ${delay/1000}s...]\r\n`);
+                    setStatus('connecting', `Reconnecting in ${delay / 1000}s...`);
                     setTimeout(connect, delay);
+                } else {
+                    setStatus('disconnected', 'Disconnected');
                 }
             };
             

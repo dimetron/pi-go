@@ -1,6 +1,9 @@
 package acp
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	StatusSuccess = "success"
@@ -19,10 +22,12 @@ const (
 
 // RunRequest describes a local ACP turn request shared by client and server code.
 type RunRequest struct {
-	Command   []string
-	Prompt    string
-	SessionID string
-	CWD       string
+	Command    []string
+	Prompt     string
+	SessionID  string
+	CWD        string
+	Env        []string
+	RPCTimeout time.Duration
 }
 
 // Event is the shared local streaming model for ACP updates.

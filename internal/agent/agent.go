@@ -191,20 +191,9 @@ type Agent struct {
 	config         Config // stored for RebuildWithInstruction
 }
 
-// New creates a new Agent with the given configuration.
-func New(cfg Config) (*Agent, error) {
-	instruction := cfg.Instruction
-	if instruction == "" {
-		instruction = SystemInstruction
-	}
+const maxInstructionFileSize = 128 * 1024
 
-	// Add working directory context to the instruction.
-	cwd, err := os.Getwd()
-	if err == nil {
-		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
-	}
-
-	// Create the LLM agent.
+func buildRunner(cfg Config, instruction string, sessionSvc session.Service) (*runner.Runner, error) {
 	llmAgent, err := llmagent.New(llmagent.Config{
 		Name:                "pi",
 		Description:         "A coding agent that helps with software engineering tasks.",
@@ -219,13 +208,6 @@ func New(cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("creating LLM agent: %w", err)
 	}
 
-	// Set up session service.
-	sessionSvc := cfg.SessionService
-	if sessionSvc == nil {
-		sessionSvc = session.InMemoryService()
-	}
-
-	// Create the runner.
 	r, err := runner.New(runner.Config{
 		AppName:        AppName,
 		Agent:          llmAgent,
@@ -233,6 +215,33 @@ func New(cfg Config) (*Agent, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating runner: %w", err)
+	}
+	return r, nil
+}
+
+// New creates a new Agent with the given configuration.
+func New(cfg Config) (*Agent, error) {
+	instruction := cfg.Instruction
+	if instruction == "" {
+		instruction = SystemInstruction
+	}
+
+	// Add working directory context to the instruction.
+	cwd, err := os.Getwd()
+	if err == nil {
+		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
+	}
+
+	// Set up session service.
+	sessionSvc := cfg.SessionService
+	if sessionSvc == nil {
+		sessionSvc = session.InMemoryService()
+	}
+
+	// Create the runner.
+	r, err := buildRunner(cfg, instruction, sessionSvc)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Agent{
@@ -253,25 +262,7 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 		return fmt.Errorf("instruction must not be empty")
 	}
 
-	llmAgent, err := llmagent.New(llmagent.Config{
-		Name:                "pi",
-		Description:         "A coding agent that helps with software engineering tasks.",
-		Model:               cfg.Model,
-		Instruction:         instruction,
-		Tools:               cfg.Tools,
-		Toolsets:            cfg.Toolsets,
-		BeforeToolCallbacks: cfg.BeforeToolCallbacks,
-		AfterToolCallbacks:  cfg.AfterToolCallbacks,
-	})
-	if err != nil {
-		return fmt.Errorf("rebuilding LLM agent: %w", err)
-	}
-
-	r, err := runner.New(runner.Config{
-		AppName:        AppName,
-		Agent:          llmAgent,
-		SessionService: a.sessionService,
-	})
+	r, err := buildRunner(cfg, instruction, a.sessionService)
 	if err != nil {
 		return fmt.Errorf("rebuilding runner: %w", err)
 	}
@@ -342,6 +333,9 @@ func LoadInstruction(baseInstruction string) string {
 	} {
 		data, err := os.ReadFile(agentsFile)
 		if err == nil {
+			if len(data) > maxInstructionFileSize {
+				continue
+			}
 			instruction += "\n\n# Project Rules\n\n" + string(data)
 			break
 		}
