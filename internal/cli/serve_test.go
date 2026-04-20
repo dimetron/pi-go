@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -211,6 +212,48 @@ func TestNewServeCmd_FlagParsing(t *testing.T) {
 	modelVal, _ := cmd.Flags().GetString("model")
 	if modelVal != "gpt-5" {
 		t.Errorf("model = %q, want 'gpt-5'", modelVal)
+	}
+}
+
+func TestNewServeCmd_HeaderInsecureFlags(t *testing.T) {
+	cmd := newServeCmd()
+	args := []string{
+		"--header", "Authorization=Bearer x",
+		"--header", "X-Trace=abc",
+		"--insecure",
+		"--url", "https://example.test",
+	}
+	if err := cmd.ParseFlags(args); err != nil {
+		t.Fatalf("ParseFlags error: %v", err)
+	}
+
+	headers, _ := cmd.Flags().GetStringArray("header")
+	if len(headers) != 2 || headers[0] != "Authorization=Bearer x" || headers[1] != "X-Trace=abc" {
+		t.Errorf("headers = %v, want [Authorization=Bearer x X-Trace=abc]", headers)
+	}
+
+	insecure, _ := cmd.Flags().GetBool("insecure")
+	if !insecure {
+		t.Error("insecure should be true")
+	}
+
+	urlVal, _ := cmd.Flags().GetString("url")
+	if urlVal != "https://example.test" {
+		t.Errorf("url = %q, want 'https://example.test'", urlVal)
+	}
+}
+
+func TestRunServe_InvalidHeaderReturnsError(t *testing.T) {
+	oldHeaders := flagServeHeaders
+	t.Cleanup(func() { flagServeHeaders = oldHeaders })
+	flagServeHeaders = []string{"no-equals-sign"}
+
+	err := runServe(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for header without '='")
+	}
+	if !strings.Contains(err.Error(), "key=value") {
+		t.Errorf("expected key=value hint, got %v", err)
 	}
 }
 

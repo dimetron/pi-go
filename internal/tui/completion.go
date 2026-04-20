@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dimetron/pi-go/internal/extension"
 )
@@ -347,13 +348,17 @@ func fuzzyMatchPath(path, query string) bool {
 }
 
 // findMentionAtCursor finds the @mention prefix at the cursor position.
-// Returns the start index of '@' and the text after it, or -1 if no mention found.
+// cursorPos is a character position. Returns the character position of '@' and the prefix after it, or -1 if no mention found.
 func findMentionAtCursor(text string, cursorPos int) (start int, prefix string) {
 	for i := cursorPos - 1; i >= 0; i-- {
-		if text[i] == '@' {
-			return i, text[i+1 : cursorPos]
+		charByteIdx := charOffsetToByteOffset(text, i)
+		if text[charByteIdx] == '@' {
+			prefixByteStart := charOffsetToByteOffset(text, i+1)
+			return i, text[prefixByteStart:charOffsetToByteOffset(text, cursorPos)]
 		}
-		if text[i] == ' ' || text[i] == '\t' || text[i] == '\n' {
+		charByteIdx = charOffsetToByteOffset(text, i)
+		r, _ := utf8.DecodeRuneInString(text[charByteIdx:])
+		if r == ' ' || r == '\t' || r == '\n' {
 			break
 		}
 	}

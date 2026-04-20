@@ -17,6 +17,8 @@ func initTestRepo(t *testing.T) string {
 		{"git", "init"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
+		{"git", "config", "commit.gpgsign", "false"},
+		{"git", "config", "tag.gpgsign", "false"},
 		{"git", "commit", "--allow-empty", "-m", "initial commit"},
 	}
 	for _, args := range cmds {

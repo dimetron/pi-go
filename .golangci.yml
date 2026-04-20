@@ -31,6 +31,10 @@ linters:
     - errname
     - errorlint
     - fatcontext
+    # Complexity linters (cyclop / gocyclo / gocognit) are intentionally NOT enabled.
+    # They are configured below as "nice to have" and can be run on demand via:
+    #   golangci-lint run --enable=cyclop,gocyclo,gocognit ./...
+    # See docs/review.md for the current inventory of complexity hotspots.
     - misspell
     - nilerr
     - revive
@@ -48,6 +52,9 @@ linters:
           - errcheck
           - bodyclose
           - nilerr
+          - cyclop
+          - gocyclo
+          - gocognit
       - path: _test\.go
         linters:
           - staticcheck
@@ -68,6 +75,9 @@ linters:
           - unconvert
           - unused
           - wastedassign
+          - cyclop
+          - gocyclo
+          - gocognit
       # ADK tool handlers return errors inside result structs, not as Go errors.
       - path: internal/tools/
         linters:
@@ -124,6 +134,16 @@ linters:
 
     staticcheck:
       checks: ["all"]
+
+    cyclop:
+      max-complexity: 15
+      package-average: 10.0
+
+    gocyclo:
+      min-complexity: 15
+
+    gocognit:
+      min-complexity: 20
 
     misspell:
       locale: US

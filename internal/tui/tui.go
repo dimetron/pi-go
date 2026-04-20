@@ -55,6 +55,7 @@ type model struct {
 	loading      bool
 	loadingItems map[string]bool // item name -> done?
 	initCh       <-chan InitEvent
+	loadingDots  int // animation dots (0-3): ., .., ..., ....
 
 	// Git diff stats (refreshed after tool completions).
 	diffAdded   int
@@ -221,7 +222,10 @@ func (m *model) Init() tea.Cmd {
 	if m.initCh != nil {
 		// Deferred init: start listening for init events.
 		// Heavy initialization runs in a background goroutine (started by cli).
-		return waitForInitEvent(m.initCh)
+		return tea.Batch(
+			waitForInitEvent(m.initCh),
+			tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} }),
+		)
 	}
 
 	// Synchronous init (non-deferred path, used by tests and non-interactive modes).
@@ -299,6 +303,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resetCtrlCCountMsg:
 		return m.handleResetCtrlCCount()
+
+	case loadingTickMsg:
+		m.loadingDots = (m.loadingDots + 1) % 4
+		return m, tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} })
 
 	case agentTextMsg:
 		return m.handleAgentText(msg)
@@ -553,7 +561,23 @@ func (m *model) View() tea.View {
 	}
 
 	if m.width == 0 {
-		return tea.NewView("Loading...")
+		// Show loading items if available, otherwise just animated dots.
+		if m.loadingItems != nil {
+			dots := strings.Repeat(".", m.loadingDots+1)
+			var lines []string
+			lines = append(lines, "Initializing")
+			lines = append(lines, "  "+dots)
+			for item, done := range m.loadingItems {
+				mark := " "
+				if done {
+					mark = "✓"
+				}
+				lines = append(lines, "  "+mark+" "+item)
+			}
+			return tea.NewView(strings.Join(lines, "\n") + "\n")
+		}
+		dots := strings.Repeat(".", m.loadingDots+1)
+		return tea.NewView("Loading" + dots + "\n")
 	}
 
 	// Layout: sidebar on the right, chat+status+input on the left.
@@ -909,6 +933,9 @@ func resetCtrlCCount(m *model) tea.Cmd {
 // msgResetCtrlCCount resets the Ctrl+C counter.
 type resetCtrlCCountMsg struct{}
 
+// loadingTickMsg advances the loading dots animation.
+type loadingTickMsg struct{}
+
 func (m *model) handleResetCtrlCCount() (tea.Model, tea.Cmd) {
 	m.ctrlCCount = 0
 	return m, nil
@@ -940,6 +967,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
 		m.loading = false
 		m.loadingItems = nil
+		m.loadingDots = 0
 		m.initErr = ev.Err
 		return m, tea.Quit
 	}
@@ -953,6 +981,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 	if ev.Result != nil {
 		m.loading = false
 		m.loadingItems = nil
+		m.loadingDots = 0
 
 		r := ev.Result
 		m.cfg.Agent = r.Agent
