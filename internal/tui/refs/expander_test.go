@@ -236,6 +236,80 @@ func TestExpander_ExpandFolder(t *testing.T) {
 	}
 }
 
+func TestExpandStaged(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "refs-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	exp := NewExpander(tempDir)
+	content, hint := exp.expandStaged(ParsedRef{Type: RefStaged})
+	if content != "" {
+		t.Errorf("expandStaged expected empty content, got %q", content)
+	}
+	if !strings.Contains(hint, "not yet implemented") {
+		t.Errorf("expandStaged expected 'not yet implemented' hint, got %q", hint)
+	}
+}
+
+func TestExpandGitLog(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "refs-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	exp := NewExpander(tempDir)
+	content, hint := exp.expandGitLog(ParsedRef{Type: RefGit})
+	if content != "" {
+		t.Errorf("expandGitLog expected empty content, got %q", content)
+	}
+	if !strings.Contains(hint, "not yet implemented") {
+		t.Errorf("expandGitLog expected 'not yet implemented' hint, got %q", hint)
+	}
+}
+
+func TestExpandURL(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "refs-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	exp := NewExpander(tempDir)
+	content, hint := exp.expandURL(ParsedRef{Type: RefURL})
+	if content != "" {
+		t.Errorf("expandURL expected empty content, got %q", content)
+	}
+	if !strings.Contains(hint, "not yet implemented") {
+		t.Errorf("expandURL expected 'not yet implemented' hint, got %q", hint)
+	}
+}
+
+func TestFormatSize(t *testing.T) {
+	tests := []struct {
+		input    int64
+		expected string
+	}{
+		{0, "0B"},
+		{512, "512B"},
+		{1023, "1023B"},
+		{1024, "1.0KB"},
+		{1536, "1.5KB"},
+		{1024 * 1024, "1.0MB"},
+		{1024*1024*100 + 512*1024, "100.5MB"},
+		{1024 * 1024 * 1024, "1.0GB"},
+	}
+
+	for _, tt := range tests {
+		got := formatSize(tt.input)
+		if got != tt.expected {
+			t.Errorf("formatSize(%d) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name      string

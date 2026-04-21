@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -89,6 +90,11 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	}
 
 	if state.parent != "" {
+		// Include args in the content line for better visibility
+		argsLine := formatArgsForDisplay(args)
+		if argsLine != "" {
+			return string(id), s.appendToParent(ctx, state.parent, fmt.Sprintf("▶ %s(%s)", name, argsLine))
+		}
 		return string(id), s.appendToParent(ctx, state.parent, "▶ "+name)
 	}
 
@@ -100,7 +106,7 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	if loc := locationFromArgs(args); loc != "" {
 		opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: loc}}))
 	}
-	if err := s.updater.Update(ctx, acp.StartToolCall(id, name, opts...)); err != nil {
+	if err := s.updater.Update(ctx, acp.StartToolCall(id, buildTitle(name, args), opts...)); err != nil {
 		return string(id), fmt.Errorf("stream: tool-call start: %w", err)
 	}
 	return string(id), nil
@@ -109,7 +115,7 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 // OnToolEnd emits the terminal SessionUpdate for callID. Unknown ids are
 // a no-op so the adapter tolerates a dropped/filtered start without
 // surfacing a protocol error; the call simply never materializes in Zed.
-func (s *Stream) OnToolEnd(ctx context.Context, callID string, result any, runErr error) error {
+func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error {
 	state, ok := s.toolCalls[callID]
 	if !ok {
 		return nil
@@ -127,6 +133,11 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, result any, runEr
 		marker := "✓"
 		if runErr != nil {
 			marker = "✗"
+		}
+		// Include args in the content line for better visibility
+		argsLine := formatArgsForDisplay(args)
+		if argsLine != "" {
+			return s.appendToParent(ctx, state.parent, fmt.Sprintf("%s %s(%s)", marker, state.name, argsLine))
 		}
 		return s.appendToParent(ctx, state.parent, marker+" "+state.name)
 	}
@@ -151,6 +162,107 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, result any, runEr
 		return fmt.Errorf("stream: tool-call end: %w", err)
 	}
 	return nil
+}
+
+// buildTitle produces the ACP tool-call title — the string Zed renders as
+// the card header. The bare tool name ("bash", "read") tells the user
+// *which* tool is running but not *what* it's doing; buildTitle folds the
+// most informative argument into the title so the header conveys both.
+//
+// Rules, by tool name:
+//   - bash/shell: the command itself replaces the name — a command like
+//     "git status -s" is self-describing and the kind icon already marks
+//     it as an execute.
+//   - read/ls/edit/write: append the path.
+//   - grep/find/glob: append the pattern or query.
+//   - subagent/agent: append the target agent name.
+//   - anything else: append a compact arg summary, or fall back to the
+//     bare name if nothing useful is available.
+func buildTitle(name string, args map[string]any) string {
+	switch name {
+	case "bash", "shell":
+		if cmd := firstString(args, "command", "cmd"); cmd != "" {
+			return truncate(cmd, 80)
+		}
+	case "read", "ls", "edit", "write":
+		if p := locationFromArgs(args); p != "" {
+			return name + " " + p
+		}
+	case "grep", "find", "glob":
+		if q := firstString(args, "pattern", "query"); q != "" {
+			return name + " " + truncate(q, 60)
+		}
+	case "subagent", "agent":
+		if a := firstString(args, "agent", "name"); a != "" {
+			return name + ": " + a
+		}
+	}
+	if summary := formatArgsForDisplay(args); summary != "" {
+		return name + " " + summary
+	}
+	return name
+}
+
+// firstString returns the first non-empty string value in args among the
+// given keys, in order. Returns "" if none match.
+func firstString(args map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := args[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// truncate clips s to at most n runes, appending a single-character
+// ellipsis when truncation occurs. n must be >= 1.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+// formatArgsForDisplay creates a compact string representation of tool arguments
+// for display in nested tool content. Returns a summary of the most relevant args.
+func formatArgsForDisplay(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	// Keys to prioritize for display (most useful for tool visibility)
+	priorityKeys := []string{"path", "file_path", "command", "cmd", "prompt", "query", "pattern", "name", "url", "description"}
+
+	// First try to find a relevant key
+	for _, key := range priorityKeys {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				// Truncate long values
+				if len(s) > 50 {
+					s = s[:47] + "..."
+				}
+				return s
+			}
+		}
+	}
+
+	// Fall back to first few keys from args
+	var parts []string
+	i := 0
+	for k, v := range args {
+		if i >= 3 {
+			break
+		}
+		if s, ok := v.(string); ok && s != "" {
+			if len(s) > 30 {
+				s = s[:27] + "..."
+			}
+			parts = append(parts, fmt.Sprintf("%s=%s", k, s))
+		}
+		i++
+	}
+	return strings.Join(parts, ", ")
 }
 
 // appendToParent records line as nested content on the sub-agent parent

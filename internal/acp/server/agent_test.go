@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,10 +13,24 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/extension"
 )
+
+type mockUpdater struct {
+	err error
+}
+
+func (m *mockUpdater) Update(context.Context, acp.SessionUpdate) error {
+	return m.err
+}
 
 type capturingClient struct {
 	messages atomic.Pointer[[]string]
+
+	mu                    sync.Mutex
+	availableCommandsByID map[string][]acp.AvailableCommand
+	availableCommandsSeen atomic.Int32
+	failCommandsCount     atomic.Int32
 }
 
 func (c *capturingClient) append(text string) {
@@ -39,7 +54,58 @@ func (c *capturingClient) SessionUpdate(_ context.Context, n acp.SessionNotifica
 			c.append(blk.Text.Text)
 		}
 	}
+	if n.Update.AvailableCommandsUpdate != nil {
+		c.availableCommandsSeen.Add(1)
+		for {
+			cur := c.failCommandsCount.Load()
+			if cur <= 0 {
+				break
+			}
+			if c.failCommandsCount.CompareAndSwap(cur, cur-1) {
+				return errors.New("inject available_commands_update failure")
+			}
+		}
+		cmds := append([]acp.AvailableCommand(nil), n.Update.AvailableCommandsUpdate.AvailableCommands...)
+		c.mu.Lock()
+		if c.availableCommandsByID == nil {
+			c.availableCommandsByID = make(map[string][]acp.AvailableCommand)
+		}
+		c.availableCommandsByID[string(n.SessionId)] = cmds
+		c.mu.Unlock()
+	}
 	return nil
+}
+
+func (c *capturingClient) availableCommands(sessionID string) ([]acp.AvailableCommand, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cmds, ok := c.availableCommandsByID[sessionID]
+	if !ok {
+		return nil, false
+	}
+	return append([]acp.AvailableCommand(nil), cmds...), true
+}
+
+func waitForAvailableCommands(t *testing.T, c *capturingClient, sessionID string) []acp.AvailableCommand {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmds, ok := c.availableCommands(sessionID); ok {
+			return cmds
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for available commands for session %s", sessionID)
+	return nil
+}
+
+func hasAvailableCommand(cmds []acp.AvailableCommand, name string) bool {
+	for _, cmd := range cmds {
+		if cmd.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *capturingClient) RequestPermission(context.Context, acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
@@ -196,6 +262,100 @@ func TestAgentNewSessionAndPromptFlow(t *testing.T) {
 	}
 }
 
+func TestAgentLoadSessionSendsAvailableCommandsUpdate(t *testing.T) {
+	clientRW, agentRW := pipePair()
+	defer clientRW.Close()
+
+	a := &Agent{
+		Skills: []extension.Skill{{Name: "review", Description: "Review code"}},
+	}
+	defer wireAgent(t, a, agentRW)()
+
+	captures := &capturingClient{}
+	clientConn := acp.NewClientSideConnection(captures, clientRW, clientRW)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := clientConn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
+	}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	const sid = "sess_load_commands"
+	if _, err := clientConn.LoadSession(ctx, acp.LoadSessionRequest{
+		SessionId:  acp.SessionId(sid),
+		Cwd:        "/tmp/load-commands",
+		McpServers: []acp.McpServer{},
+	}); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+
+	cmds := waitForAvailableCommands(t, captures, sid)
+	if !hasAvailableCommand(cmds, "help") {
+		t.Fatalf("available commands = %+v, want help to be advertised", cmds)
+	}
+	if !hasAvailableCommand(cmds, "review") {
+		t.Fatalf("available commands = %+v, want review skill to be advertised", cmds)
+	}
+}
+
+func TestAgentSendAvailableCommandsCanRetryAfterFailure(t *testing.T) {
+	a := &Agent{
+		Skills: []extension.Skill{{Name: "review", Description: "Review code"}},
+	}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{
+		Cwd:        "/tmp/retry-commands",
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		state := a.sessions[string(sessResp.SessionId)]
+		pending := state != nil && state.commandsPending
+		a.mu.Unlock()
+		if !pending {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.mu.Lock()
+	state := a.sessions[string(sessResp.SessionId)]
+	initiallySent := state != nil && state.commandsSent
+	a.mu.Unlock()
+	if initiallySent {
+		t.Fatal("expected commands to remain unsent when no connection exists")
+	}
+
+	clientRW, agentRW := pipePair()
+	defer clientRW.Close()
+	defer wireAgent(t, a, agentRW)()
+
+	captures := &capturingClient{}
+	clientConn := acp.NewClientSideConnection(captures, clientRW, clientRW)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := clientConn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
+	}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	a.sendAvailableCommands(string(sessResp.SessionId))
+
+	cmds := waitForAvailableCommands(t, captures, string(sessResp.SessionId))
+	if !hasAvailableCommand(cmds, "review") {
+		t.Fatalf("available commands after retry = %+v, want review skill", cmds)
+	}
+}
+
 // TestAgentPromptEchoesMessageId asserts the agent echoes PromptRequest.MessageId
 // as PromptResponse.UserMessageId so Zed can correlate prompts with replies.
 func TestAgentPromptEchoesMessageId(t *testing.T) {
@@ -246,6 +406,71 @@ func TestAgentPromptOmitsUserMessageIdWhenAbsent(t *testing.T) {
 	}
 	if resp.UserMessageId != nil {
 		t.Fatalf("UserMessageId = %q, want nil when client omits MessageId", *resp.UserMessageId)
+	}
+}
+
+func TestAgentAuthenticate(t *testing.T) {
+	a := &Agent{}
+	_, err := a.Authenticate(context.Background(), acp.AuthenticateRequest{})
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v, want nil", err)
+	}
+}
+
+func TestEchoPromptHandlerUpdaterError(t *testing.T) {
+	wantErr := errors.New("updater failed")
+	_, err := EchoPromptHandler(context.Background(), PromptTurn{
+		Prompt:  "hello",
+		Updater: &mockUpdater{err: wantErr},
+	})
+	if err == nil {
+		t.Fatal("expected error from EchoPromptHandler when updater fails")
+	}
+	if !strings.Contains(err.Error(), "echo session update") {
+		t.Fatalf("error = %v, want it to mention 'echo session update'", err)
+	}
+}
+
+func TestAgentPrompt_PanicRecovery(t *testing.T) {
+	a := &Agent{
+		Handler: func(context.Context, PromptTurn) (PromptResult, error) {
+			panic("oops handler panicked")
+		},
+	}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{
+		Cwd:        "/tmp",
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	_, err = a.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sessResp.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("x")},
+	})
+	if err == nil {
+		t.Fatal("expected error after handler panic")
+	}
+}
+
+func TestAvailableCommandsForCWD_WithResolver(t *testing.T) {
+	wantCWD := "/some/path"
+	var sawCWD string
+	wantCmds := []acp.AvailableCommand{
+		{Name: "my-cmd", Description: "my custom command"},
+	}
+	a := &Agent{
+		AvailableCommandsResolver: func(cwd string) []acp.AvailableCommand {
+			sawCWD = cwd
+			return wantCmds
+		},
+	}
+	cmds := a.availableCommandsForCWD(wantCWD)
+	if sawCWD != wantCWD {
+		t.Fatalf("resolver received cwd = %q, want %q", sawCWD, wantCWD)
+	}
+	if len(cmds) != len(wantCmds) || cmds[0].Name != wantCmds[0].Name {
+		t.Fatalf("availableCommandsForCWD() = %+v, want %+v", cmds, wantCmds)
 	}
 }
 

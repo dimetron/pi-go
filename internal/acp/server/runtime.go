@@ -12,7 +12,9 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	adksession "google.golang.org/adk/session"
+	adktool "google.golang.org/adk/tool"
 
+	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 	piagent "github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
@@ -22,6 +24,9 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
 )
+
+// getwd wraps os.Getwd so tests can inject failures.
+var getwd = os.Getwd
 
 // RuntimeConfig controls how the ACP prompt handler resolves and builds the pi runtime.
 type RuntimeConfig struct {
@@ -36,11 +41,22 @@ type RuntimeConfig struct {
 
 // NewPromptHandler returns a real pi-backed ACP prompt handler.
 func NewPromptHandler(rt RuntimeConfig) PromptHandler {
-	loadConfig := rt.LoadConfig
-	if loadConfig == nil {
-		loadConfig = config.Load
-	}
 	return func(ctx context.Context, turn PromptTurn) (PromptResult, error) {
+		cwd := turn.CWD
+		if strings.TrimSpace(cwd) == "" {
+			wd, err := getwd()
+			if err != nil {
+				return PromptResult{}, fmt.Errorf("getting working directory: %w", err)
+			}
+			cwd = wd
+		}
+
+		loadConfig := rt.LoadConfig
+		if loadConfig == nil {
+			loadConfig = func() (config.Config, error) {
+				return config.LoadFrom(cwd)
+			}
+		}
 		cfg, err := loadConfig()
 		if err != nil {
 			return PromptResult{}, fmt.Errorf("loading config: %w", err)
@@ -100,14 +116,6 @@ func NewPromptHandler(rt RuntimeConfig) PromptHandler {
 		tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
 		llm = guardrail.WrapModel(llm, tokenTracker)
 
-		cwd := turn.CWD
-		if strings.TrimSpace(cwd) == "" {
-			wd, err := os.Getwd()
-			if err != nil {
-				return PromptResult{}, fmt.Errorf("getting working directory: %w", err)
-			}
-			cwd = wd
-		}
 		sandboxRoot := cwd
 		if rt.SandboxRootFunc != nil {
 			sandboxRoot = rt.SandboxRootFunc(turn)
@@ -151,6 +159,14 @@ func NewPromptHandler(rt RuntimeConfig) PromptHandler {
 		beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
 		afterCBs := extension.BuildAfterToolCallbacks(hooks)
 
+		// Wire ACP tool call reporting so the ACP peer (e.g. Zed) sees tool cards.
+		// The Stream buffers nested content for sub-agent calls; we use the turn's
+		// SessionUpdater directly since adapter.New also accepts a nil updater.
+		stream := adapter.New(turn.Updater)
+		toolBefore, toolAfter := extension.BuildToolCallCallbacks(stream)
+		beforeCBs = append(beforeCBs, toolBefore...)
+		afterCBs = append(afterCBs, toolAfter...)
+
 		lspMgr := lsp.NewManager(nil)
 		defer lspMgr.Shutdown()
 		lspTools, err := tools.LSPTools(lspMgr)
@@ -160,6 +176,8 @@ func NewPromptHandler(rt RuntimeConfig) PromptHandler {
 		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 		coreTools = append(coreTools, lspTools...)
 
+		mcpToolsets := buildMCPToolsetsFromCfg(cfg)
+
 		instruction := rt.System
 		if instruction == "" {
 			instruction = piagent.LoadInstruction(piagent.SystemInstruction)
@@ -168,6 +186,7 @@ func NewPromptHandler(rt RuntimeConfig) PromptHandler {
 		ag, err := piagent.New(piagent.Config{
 			Model:               llm,
 			Tools:               coreTools,
+			Toolsets:            mcpToolsets,
 			Instruction:         instruction,
 			BeforeToolCallbacks: beforeCBs,
 			AfterToolCallbacks:  afterCBs,
@@ -259,6 +278,26 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 		}
 	}
 	return hooks
+}
+
+// buildMCPToolsetsFromCfg converts cfg.MCP servers into resilient ADK toolsets
+// so the ACP server exposes the same MCP tools that the TUI/interactive paths
+// already use. A nil return means no MCP servers are configured.
+func buildMCPToolsetsFromCfg(cfg config.Config) []adktool.Toolset {
+	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		return nil
+	}
+	servers := make([]extension.MCPServerConfig, len(cfg.MCP.Servers))
+	for i, s := range cfg.MCP.Servers {
+		servers[i] = extension.MCPServerConfig{
+			Name:    s.Name,
+			Command: s.Command,
+			Args:    s.Args,
+			URL:     s.URL,
+		}
+	}
+	ts, _ := extension.BuildMCPToolsets(servers)
+	return ts
 }
 
 func detectGitRoot(dir string) string {

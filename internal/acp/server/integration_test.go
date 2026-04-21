@@ -75,8 +75,8 @@ func moduleRoot() (string, error) {
 
 // TestPiACPServerRoundTrip spawns the real pi binary in acp-server mode and
 // drives a full Initialize -> NewSession -> Prompt turn through the local ACP
-// client runner. It asserts that the skeleton echo handler streams a message
-// chunk and returns a successful result.
+// client runner. It asserts that the real pi runtime processes the prompt,
+// streams message chunks, and returns a successful result.
 func TestPiACPServerRoundTrip(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping acp server integration test in -short mode")
@@ -107,9 +107,9 @@ func TestPiACPServerRoundTrip(t *testing.T) {
 		t.Fatalf("status = %q, error = %q", result.Status, result.Error)
 	}
 
-	want := "echo: hello bidirectional"
-	if !strings.Contains(result.Result, want) {
-		t.Fatalf("result = %q, want it to contain %q", result.Result, want)
+	// Verify we got a non-empty response (the real pi runtime produces a greeting).
+	if strings.TrimSpace(result.Result) == "" {
+		t.Fatal("result is empty; expected a greeting from the pi runtime")
 	}
 	if strings.TrimSpace(result.SessionID) == "" {
 		t.Fatal("SessionID is empty; expected server-assigned id")
@@ -117,8 +117,9 @@ func TestPiACPServerRoundTrip(t *testing.T) {
 	if len(messages) == 0 {
 		t.Fatal("no streamed message chunks captured")
 	}
-	if got := strings.TrimSpace(strings.Join(messages, "")); got != want {
-		t.Fatalf("streamed message = %q, want %q", got, want)
+	// Verify streamed chunks concatenate to the final result.
+	if got := strings.TrimSpace(strings.Join(messages, "")); got != strings.TrimSpace(result.Result) {
+		t.Fatalf("streamed message = %q, want %q", got, result.Result)
 	}
 }
 

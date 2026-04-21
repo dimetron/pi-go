@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -225,11 +226,42 @@ func (c *ChatModel) invalidateRenderCaches() {
 	}
 }
 
+// markdownLinkRe matches markdown links with both text and URL.
+// Pattern: [text](url) where url starts with file://, http://, or https://
+var markdownLinkRe = regexp.MustCompile(`\[([^\]]+)\]\((file://[^)]+|http://[^)]+|https://[^)]+)\)`)
+
+// expandLinks expands markdown links into inline format when the link text differs from the URL.
+// For example: [Link Text](file:///path) becomes "Link Text (/path)"
+// But: [https://example.com](https://example.com) stays as-is since text equals URL.
+func expandLinks(text string) string {
+	return markdownLinkRe.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract text and URL from the match.
+		parts := markdownLinkRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match // safety check, should not happen
+		}
+		textPart := parts[1]
+		urlPart := parts[2]
+
+		// Skip if text equals URL (already expanded/stylized by glamour).
+		if textPart == urlPart {
+			return match
+		}
+
+		// Return inline format: "text (url)" - keep the full URL including file://
+		return textPart + " (" + urlPart + ")"
+	})
+}
+
 // RenderMarkdown renders text as markdown using the glamour renderer.
+// It first expands markdown links (like [text](url)) into inline format
+// when the link has both a display name and an actual file:// or http:// URL.
 func (c *ChatModel) RenderMarkdown(text string) string {
 	if text == "" {
 		return ""
 	}
+	// Expand markdown links into inline format for better visibility in terminal.
+	text = expandLinks(text)
 	if c.Renderer == nil {
 		return text
 	}
