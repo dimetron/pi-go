@@ -134,6 +134,12 @@ func TestAgentInitializeAdvertisesPi(t *testing.T) {
 	if int(resp.ProtocolVersion) != acp.ProtocolVersionNumber {
 		t.Fatalf("ProtocolVersion = %d, want %d", resp.ProtocolVersion, acp.ProtocolVersionNumber)
 	}
+	if !resp.AgentCapabilities.LoadSession {
+		t.Fatalf("LoadSession = false, want true")
+	}
+	if !resp.AgentCapabilities.PromptCapabilities.EmbeddedContext {
+		t.Fatalf("PromptCapabilities.EmbeddedContext = false, want true so Zed can inline file context")
+	}
 }
 
 func TestAgentNewSessionAndPromptFlow(t *testing.T) {
@@ -181,9 +187,65 @@ func TestAgentNewSessionAndPromptFlow(t *testing.T) {
 	if msgs == nil || len(*msgs) == 0 {
 		t.Fatalf("no session updates captured")
 	}
+	if len(*msgs) != 1 {
+		t.Fatalf("captured %d message chunks, want exactly 1 (dedup regression): %q", len(*msgs), *msgs)
+	}
 	got := strings.TrimSpace(strings.Join(*msgs, ""))
 	if got != "echo: hello pi" {
 		t.Fatalf("captured message = %q, want %q", got, "echo: hello pi")
+	}
+}
+
+// TestAgentPromptEchoesMessageId asserts the agent echoes PromptRequest.MessageId
+// as PromptResponse.UserMessageId so Zed can correlate prompts with replies.
+func TestAgentPromptEchoesMessageId(t *testing.T) {
+	a := &Agent{}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{
+		Cwd:        "/tmp",
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	msgID := "7b4d6e2a-1f3c-4c2a-9b0d-0e1a2b3c4d5e"
+	resp, err := a.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sessResp.SessionId,
+		MessageId: &msgID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if resp.UserMessageId == nil {
+		t.Fatalf("UserMessageId = nil, want %q", msgID)
+	}
+	if *resp.UserMessageId != msgID {
+		t.Fatalf("UserMessageId = %q, want %q", *resp.UserMessageId, msgID)
+	}
+}
+
+// TestAgentPromptOmitsUserMessageIdWhenAbsent guards against fabricating an id
+// when the client didn't supply one.
+func TestAgentPromptOmitsUserMessageIdWhenAbsent(t *testing.T) {
+	a := &Agent{}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{
+		Cwd:        "/tmp",
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	resp, err := a.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sessResp.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if resp.UserMessageId != nil {
+		t.Fatalf("UserMessageId = %q, want nil when client omits MessageId", *resp.UserMessageId)
 	}
 }
 

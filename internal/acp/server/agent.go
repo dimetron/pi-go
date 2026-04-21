@@ -89,13 +89,18 @@ func (a *Agent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.Auth
 	return acp.AuthenticateResponse{}, nil
 }
 
-// Initialize advertises pi's baseline capabilities.
+// Initialize advertises pi's baseline capabilities. EmbeddedContext is on so
+// Zed can inline file context; Image defaults to false until zed-09 wires the
+// provider gate.
 func (a *Agent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	info := a.info()
 	return acp.InitializeResponse{
-		ProtocolVersion:   acp.ProtocolVersion(acp.ProtocolVersionNumber),
-		AgentInfo:         &info,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true},
+		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
+		AgentInfo:       &info,
+		AgentCapabilities: acp.AgentCapabilities{
+			LoadSession:        true,
+			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: true},
+		},
 	}, nil
 }
 
@@ -111,10 +116,12 @@ func (a *Agent) NewSession(_ context.Context, params acp.NewSessionRequest) (acp
 	return acp.NewSessionResponse{SessionId: acp.SessionId(sid)}, nil
 }
 
-// Prompt bridges a prompt request through the configured handler and, on
-// success, streams the final reply as a single AgentMessageText update. The
-// handler is invoked with a cancelable context registered on the session so
-// an inbound ACP Cancel notification can abort the in-flight turn.
+// Prompt bridges a prompt request through the configured handler. Handlers
+// own all session-update emission through turn.Updater; Prompt itself does
+// not emit an AgentMessageText summary, avoiding the duplicate-message bug.
+// The handler runs under a cancelable context registered on the session so
+// an inbound ACP Cancel notification can abort the in-flight turn. When the
+// request carries a MessageId it is echoed back as UserMessageId.
 func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	sid := string(params.SessionId)
 	a.mu.Lock()
@@ -145,21 +152,26 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	}
 	result, err := a.handler()(promptCtx, turn)
 	if promptCtx.Err() != nil {
-		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		resp := acp.PromptResponse{StopReason: acp.StopReasonCancelled}
+		if params.MessageId != nil {
+			mid := *params.MessageId
+			resp.UserMessageId = &mid
+		}
+		return resp, nil
 	}
 	if err != nil {
 		return acp.PromptResponse{}, err
-	}
-	if strings.TrimSpace(result.FinalText) != "" && updater != nil {
-		if err := updater.Update(ctx, acp.UpdateAgentMessageText(result.FinalText)); err != nil {
-			return acp.PromptResponse{}, fmt.Errorf("session update: %w", err)
-		}
 	}
 	stop := result.StopReason
 	if strings.TrimSpace(string(stop)) == "" {
 		stop = acp.StopReasonEndTurn
 	}
-	return acp.PromptResponse{StopReason: stop}, nil
+	resp := acp.PromptResponse{StopReason: stop}
+	if params.MessageId != nil {
+		mid := *params.MessageId
+		resp.UserMessageId = &mid
+	}
+	return resp, nil
 }
 
 // ListSessions is not yet supported; advertise method-not-found so clients
@@ -179,11 +191,18 @@ func (a *Agent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.
 }
 
 // EchoPromptHandler is the default PromptHandler used when none is configured.
-// It returns a deterministic "echo: <prompt>" reply so the skeleton is
-// independently testable without the pi runtime.
-func EchoPromptHandler(_ context.Context, turn PromptTurn) (PromptResult, error) {
+// It streams a deterministic "echo: <prompt>" reply through the turn's
+// updater and returns the same text as PromptResult.FinalText. The stream is
+// the sole emission surface so Prompt no longer needs to re-send FinalText.
+func EchoPromptHandler(ctx context.Context, turn PromptTurn) (PromptResult, error) {
+	reply := "echo: " + turn.Prompt
+	if turn.Updater != nil {
+		if err := turn.Updater.Update(ctx, acp.UpdateAgentMessageText(reply)); err != nil {
+			return PromptResult{}, fmt.Errorf("echo session update: %w", err)
+		}
+	}
 	return PromptResult{
-		FinalText:  "echo: " + turn.Prompt,
+		FinalText:  reply,
 		StopReason: acp.StopReasonEndTurn,
 	}, nil
 }
