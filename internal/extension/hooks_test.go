@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -177,6 +178,108 @@ func TestBuildAfterToolCallbacksMultipleHooks(t *testing.T) {
 	cbs := BuildAfterToolCallbacks(hooks)
 	if len(cbs) != 2 {
 		t.Errorf("expected 2 after callbacks, got %d", len(cbs))
+	}
+}
+
+type mockToolCallReporter struct {
+	startedCalls []struct {
+		name string
+		args map[string]any
+	}
+	endedCalls []struct {
+		args   map[string]any
+		result any
+		runErr error
+	}
+}
+
+type mockTool struct {
+	nameVal string
+}
+
+func (m mockTool) Name() string        { return m.nameVal }
+func (m mockTool) Description() string { return "mock tool for testing" }
+func (m mockTool) IsLongRunning() bool { return false }
+
+func (m *mockToolCallReporter) OnToolStart(ctx context.Context, name string, args map[string]any) (string, error) {
+	m.startedCalls = append(m.startedCalls, struct {
+		name string
+		args map[string]any
+	}{name, args})
+	return "call_test", nil
+}
+
+func (m *mockToolCallReporter) OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error {
+	m.endedCalls = append(m.endedCalls, struct {
+		args   map[string]any
+		result any
+		runErr error
+	}{args, result, runErr})
+	return nil
+}
+
+func TestBuildToolCallCallbacks(t *testing.T) {
+	m := &mockToolCallReporter{}
+	beforeCBs, afterCBs := BuildToolCallCallbacks(m)
+
+	if len(beforeCBs) != 1 {
+		t.Fatalf("expected 1 before callback, got %d", len(beforeCBs))
+	}
+	if len(afterCBs) != 1 {
+		t.Fatalf("expected 1 after callback, got %d", len(afterCBs))
+	}
+
+	// Simulate a before tool callback.
+	args := map[string]any{"path": "/foo/bar"}
+	tool := mockTool{}
+	tool.nameVal = "read"
+	_, err := beforeCBs[0](nil, tool, args)
+	if err != nil {
+		t.Fatalf("before callback failed: %v", err)
+	}
+
+	if len(m.startedCalls) != 1 {
+		t.Fatalf("expected 1 started call, got %d", len(m.startedCalls))
+	}
+	if m.startedCalls[0].name != "read" {
+		t.Errorf("tool name = %q, want %q", m.startedCalls[0].name, "read")
+	}
+	if m.startedCalls[0].args["path"] != "/foo/bar" {
+		t.Errorf("tool args[path] = %v, want /foo/bar", m.startedCalls[0].args["path"])
+	}
+
+	// Simulate an after tool callback.
+	result := map[string]any{"content": "hello world"}
+	afterCBs[0](nil, tool, args, result, nil)
+
+	if len(m.endedCalls) != 1 {
+		t.Fatalf("expected 1 ended call, got %d", len(m.endedCalls))
+	}
+	if m.endedCalls[0].result.(map[string]any)["content"] != "hello world" {
+		t.Errorf("result content = %v, want hello world", m.endedCalls[0].result.(map[string]any)["content"])
+	}
+	if m.endedCalls[0].runErr != nil {
+		t.Errorf("runErr = %v, want nil", m.endedCalls[0].runErr)
+	}
+}
+
+func TestBuildToolCallCallbacksAfterError(t *testing.T) {
+	m := &mockToolCallReporter{}
+	_, afterCBs := BuildToolCallCallbacks(m)
+
+	tool := mockTool{}
+	tool.nameVal = "bash"
+	result := map[string]any{"stdout": "oops"}
+	_, err := afterCBs[0](nil, tool, nil, result, fmt.Errorf("exit 1"))
+	if err != nil {
+		t.Fatalf("after callback returned error: %v", err)
+	}
+
+	if len(m.endedCalls) != 1 {
+		t.Fatalf("expected 1 ended call, got %d", len(m.endedCalls))
+	}
+	if m.endedCalls[0].runErr == nil {
+		t.Error("runErr = nil, want the error")
 	}
 }
 

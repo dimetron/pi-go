@@ -28,6 +28,9 @@ func (a *Agent) LoadSession(_ context.Context, params acp.LoadSessionRequest) (a
 		a.sessions[sid] = st
 	}
 	st.cwd = params.Cwd
+	st.commandsSent = false
+	st.commandsPending = false
 	a.mu.Unlock()
+	go a.sendAvailableCommands(sid)
 	return acp.LoadSessionResponse{}, nil
 }

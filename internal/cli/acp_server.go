@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/spf13/cobra"
@@ -30,13 +34,34 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
+	// Create error log file for acp-server failures in $HOME/.pi-go/sessions/.
+	logDir, err := os.UserHomeDir()
+	if err == nil {
+		logDir = filepath.Join(logDir, ".pi-go", "sessions")
+	}
+	errFile := filepath.Join(logDir, "acp-server.err.log")
+	if err == nil {
+		_ = os.MkdirAll(logDir, 0o755)
+	}
+	f, err := os.OpenFile(errFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err == nil {
+		defer f.Close()
+	}
+
+	// Build a logger that writes INFO+ to the err log file for crash RCA.
+	var logger *slog.Logger
+	if f != nil {
+		logger = slog.New(&logHandler{f: f})
+	}
+
 	model := flagModel
 	if model == "" {
 		model = "minimax-m2.7:cloud"
 	}
 
 	agent := &acpserver.Agent{
-		AgentInfo: acp.Implementation{Name: "pi-go", Version: Version},
+		AgentInfo:                 acp.Implementation{Name: "pi-go", Version: Version},
+		AvailableCommandsResolver: acpserver.DiscoverAvailableCommands,
 		Handler: acpserver.NewPromptHandler(acpserver.RuntimeConfig{
 			Model:    model,
 			BaseURL:  flagURL,
@@ -44,13 +69,31 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 			Insecure: flagInsecure,
 			System:   flagSystem,
 		}),
+		Logger: logger,
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
 		Agent: agent,
 		In:    os.Stdin,
 		Out:   os.Stdout,
 	}); err != nil {
+		if f != nil {
+			_, _ = io.WriteString(f, fmt.Sprintf("%v\n", err))
+		}
 		return fmt.Errorf("acp server: %w", err)
 	}
 	return nil
 }
+
+// logHandler writes slog records to a file.
+type logHandler struct {
+	f io.Writer
+}
+
+func (h *logHandler) Handle(_ context.Context, r slog.Record) error {
+	_, err := fmt.Fprintf(h.f, "%s\t%s\t%s\n", r.Time.Format("2006-01-02T15:04:05.000"), r.Level, r.Message)
+	return err
+}
+
+func (h *logHandler) WithAttrs(_ []slog.Attr) slog.Handler         { return h }
+func (h *logHandler) WithGroup(_ string) slog.Handler              { return h }
+func (h *logHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }

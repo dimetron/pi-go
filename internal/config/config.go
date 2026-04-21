@@ -188,10 +188,17 @@ func autoDetectProvider(modelName string) string {
 	return ""
 }
 
-// Load reads config from global (~/.pi-go/config.json) and project (.pi-go/config.json),
-// merging project overrides onto global. MCP servers are also loaded from
-// separate .pi-go/mcp.json files if present.
+// Load reads config from global (~/.pi-go/config.json) and project
+// (.pi-go/config.json) relative to the current process working directory.
 func Load() (Config, error) {
+	return LoadFrom(".")
+}
+
+// LoadFrom reads config from global (~/.pi-go/config.json) and the nearest
+// project .pi-go/config.json relative to cwd, merging project overrides onto
+// global. MCP servers are also loaded from separate .pi-go/mcp.json files if
+// present.
+func LoadFrom(cwd string) (Config, error) {
 	cfg := Defaults()
 
 	home, err := os.UserHomeDir()
@@ -202,13 +209,14 @@ func Load() (Config, error) {
 		}
 	}
 
-	projectPath := filepath.Join(".pi-go", "config.json")
-	if err := loadFile(projectPath, &cfg); err != nil && !os.IsNotExist(err) {
-		return cfg, err
+	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "config.json")); projectPath != "" {
+		if err := loadFile(projectPath, &cfg); err != nil && !os.IsNotExist(err) {
+			return cfg, err
+		}
 	}
 
 	// Load MCP config from separate mcp.json files if present.
-	mcpServers := LoadMCPServers()
+	mcpServers := LoadMCPServersFrom(cwd)
 	if len(mcpServers) > 0 {
 		// Merge: mcp.json servers take precedence if none in config.json.
 		if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
@@ -238,11 +246,17 @@ type mcpServerFile struct {
 	MCPServers any `json:"mcpServers"` // object (Claude Desktop) or []MCPServer (legacy)
 }
 
-// LoadMCPServers reads MCP server configurations from standalone mcp.json files.
-// Resolution order: project .pi-go/mcp.json overrides global ~/.pi-go/mcp.json.
-// Supports both the Claude Desktop object format (servers keyed by name) and
-// the legacy array format.
+// LoadMCPServers reads MCP server configurations from standalone mcp.json files
+// relative to the current process working directory.
 func LoadMCPServers() []MCPServer {
+	return LoadMCPServersFrom(".")
+}
+
+// LoadMCPServersFrom reads MCP server configurations from standalone mcp.json
+// files relative to cwd. Resolution order: project .pi-go/mcp.json overrides
+// global ~/.pi-go/mcp.json. Supports both the Claude Desktop object format
+// (servers keyed by name) and the legacy array format.
+func LoadMCPServersFrom(cwd string) []MCPServer {
 	var servers []MCPServer
 
 	// Try global path first.
@@ -252,12 +266,32 @@ func LoadMCPServers() []MCPServer {
 	}
 
 	// Project path overrides global (only if project file exists).
-	projectPath := filepath.Join(".pi-go", "mcp.json")
-	if projectServers := loadMCPServersFromFile(projectPath); projectServers != nil {
-		servers = projectServers
+	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "mcp.json")); projectPath != "" {
+		if projectServers := loadMCPServersFromFile(projectPath); projectServers != nil {
+			servers = projectServers
+		}
 	}
 
-	return servers
+	return substituteEnvVarsFrom(cwd, servers)
+}
+
+func findNearestProjectFile(cwd, rel string) string {
+	start := strings.TrimSpace(cwd)
+	if start == "" {
+		start = "."
+	}
+	dir := filepath.Clean(start)
+	for {
+		candidate := filepath.Join(dir, rel)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // loadMCPServersFromFile reads MCP servers from a single mcp.json file.
@@ -275,16 +309,18 @@ func loadMCPServersFromFile(path string) []MCPServer {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil
 	}
-	servers := parseMCPServers(f.MCPServers)
-	return substituteEnvVars(servers)
+	return parseMCPServers(f.MCPServers)
 }
 
 // SubstituteEnvVars replaces ${VAR} patterns in server URLs with values from
 // ~/.pi-go/.env (or project .pi-go/.env). Secrets stay in the file and are
 // never exposed in logs or TUI.
 func substituteEnvVars(servers []MCPServer) []MCPServer {
-	// Load env from ~/.pi-go/.env
-	env := loadEnvFile()
+	return substituteEnvVarsFrom(".", servers)
+}
+
+func substituteEnvVarsFrom(cwd string, servers []MCPServer) []MCPServer {
+	env := loadEnvFileFrom(cwd)
 	for i := range servers {
 		if servers[i].URL != "" {
 			servers[i].URL = substituteEnv(env, servers[i].URL)
@@ -293,14 +329,14 @@ func substituteEnvVars(servers []MCPServer) []MCPServer {
 	return servers
 }
 
-// loadEnvFile reads key=value pairs from ~/.pi-go/.env and project
-// .pi-go/.env, with project values overriding global ones.
-func loadEnvFile() map[string]string {
+func loadEnvFileFrom(cwd string) map[string]string {
 	result := make(map[string]string)
 	if home, err := os.UserHomeDir(); err == nil {
 		mergeEnvFile(result, filepath.Join(home, ".pi-go", ".env"))
 	}
-	mergeEnvFile(result, filepath.Join(".pi-go", ".env"))
+	if projectEnv := findNearestProjectFile(cwd, filepath.Join(".pi-go", ".env")); projectEnv != "" {
+		mergeEnvFile(result, projectEnv)
+	}
 	return result
 }
 

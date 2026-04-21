@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -32,16 +33,32 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		return fmt.Errorf("serve: in and out are required")
 	}
 
-	conn := acp.NewAgentSideConnection(cfg.Agent, cfg.Out, cfg.In)
-	if cfg.Logger != nil {
-		conn.SetLogger(cfg.Logger)
+	// If no logger provided, create a discard logger so we always have somewhere
+	// to log diagnostics even in production (errors still go to err.log file
+	// in cli.acp_server.go).
+	var logger *slog.Logger
+	if cfg.Logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	} else {
+		logger = cfg.Logger
 	}
+
+	logger.Log(ctx, slog.LevelInfo, "acp-server: starting")
+	start := time.Now()
+
+	conn := acp.NewAgentSideConnection(cfg.Agent, cfg.Out, cfg.In)
+	conn.SetLogger(logger)
+
+	logger.Log(ctx, slog.LevelDebug, "acp-server: connection created")
+
 	cfg.Agent.SetAgentConnection(conn)
 
 	select {
 	case <-conn.Done():
+		logger.Log(ctx, slog.LevelInfo, "acp-server: peer disconnected", "uptime", time.Since(start))
 		return nil
 	case <-ctx.Done():
+		logger.Log(ctx, slog.LevelInfo, "acp-server: context canceled", "uptime", time.Since(start))
 		return ctx.Err()
 	}
 }

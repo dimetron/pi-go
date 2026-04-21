@@ -735,6 +735,52 @@ func TestLoad_MCPConfigOverridesMCPJSON(t *testing.T) {
 	}
 }
 
+func TestLoadFrom_UsesProvidedCWDForProjectMCPJSON(t *testing.T) {
+	launcherDir := t.TempDir()
+	projectRoot := t.TempDir()
+	sessionCWD := filepath.Join(projectRoot, "nested", "workspace")
+	if err := os.MkdirAll(sessionCWD, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	globalJSON := `{"mcpServers": [{"name": "global-server", "command": "echo", "args": ["global"]}]}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(globalJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := filepath.Join(projectRoot, ".pi-go")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	projectJSON := `{"mcpServers": [{"name": "project-server", "command": "echo", "args": ["project"]}]}`
+	if err := os.WriteFile(filepath.Join(projectDir, "mcp.json"), []byte(projectJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(launcherDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+	t.Setenv("HOME", home)
+
+	cfg, err := LoadFrom(sessionCWD)
+	if err != nil {
+		t.Fatalf("LoadFrom() error: %v", err)
+	}
+	if cfg.MCP == nil || len(cfg.MCP.Servers) != 1 {
+		t.Fatalf("expected exactly 1 MCP server, got %+v", cfg.MCP)
+	}
+	if cfg.MCP.Servers[0].Name != "project-server" {
+		t.Fatalf("expected project-server from provided cwd, got %+v", cfg.MCP.Servers[0])
+	}
+}
+
 func TestLoadMCPServers_ObjectFormat(t *testing.T) {
 	// Claude Desktop format: mcpServers is an object keyed by server name.
 	tmp := t.TempDir()
@@ -888,5 +934,140 @@ func TestSubstituteEnv_MissingVar(t *testing.T) {
 	result := substituteEnv(env, "https://example.com/?key=${MISSING}")
 	if result != "https://example.com/?key=" {
 		t.Errorf("expected missing var replaced with empty, got %q", result)
+	}
+}
+
+func TestLoadEnvFileFrom_FileNotFound(t *testing.T) {
+	// When the .env file doesn't exist, should return empty map (not error).
+	// However, loadEnvFileFrom also checks HOME/.pi-go/.env which may exist.
+	// So we test the underlying mergeEnvFile function directly.
+	dst := make(map[string]string)
+	mergeEnvFile(dst, "/nonexistent/path/.env")
+	if len(dst) != 0 {
+		t.Errorf("expected empty map for non-existent .env, got %v", dst)
+	}
+}
+
+func TestMergeEnvFile_ValidEnvFile(t *testing.T) {
+	// Create a temporary .env file and verify it gets loaded.
+	tmpDir := t.TempDir()
+	envPath := tmpDir + "/test.env"
+	envContent := "TEST_KEY=test_value\nANOTHER=value\n"
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+		t.Fatalf("failed to write .env: %v", err)
+	}
+
+	result := make(map[string]string)
+	mergeEnvFile(result, envPath)
+	if result["TEST_KEY"] != "test_value" {
+		t.Errorf("expected TEST_KEY=test_value, got %q", result["TEST_KEY"])
+	}
+	if result["ANOTHER"] != "value" {
+		t.Errorf("expected ANOTHER=value, got %q", result["ANOTHER"])
+	}
+}
+
+func TestMergeEnvFile_CommentsAndBlankLines(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := tmpDir + "/test.env"
+	// Include comments and blank lines that should be skipped.
+	envContent := "# This is a comment\n\nTEST=value\n  # indented comment\nOTHER=val2\n"
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+		t.Fatalf("failed to write .env: %v", err)
+	}
+
+	result := make(map[string]string)
+	mergeEnvFile(result, envPath)
+	if result["TEST"] != "value" {
+		t.Errorf("expected TEST=value, got %q", result["TEST"])
+	}
+	if result["OTHER"] != "val2" {
+		t.Errorf("expected OTHER=val2, got %q", result["OTHER"])
+	}
+}
+
+func TestMergeEnvFile_PreservesExistingKeys(t *testing.T) {
+	// Test that mergeEnvFile preserves existing keys in the map.
+	tmpDir := t.TempDir()
+	envPath := tmpDir + "/test.env"
+	if err := os.WriteFile(envPath, []byte("NEW=value\n"), 0600); err != nil {
+		t.Fatalf("failed to write .env: %v", err)
+	}
+
+	result := map[string]string{"EXISTING": "old_value"}
+	mergeEnvFile(result, envPath)
+
+	if result["EXISTING"] != "old_value" {
+		t.Errorf("expected existing key preserved, got %q", result["EXISTING"])
+	}
+	if result["NEW"] != "value" {
+		t.Errorf("expected NEW=value, got %q", result["NEW"])
+	}
+}
+
+func TestConfig_Save(t *testing.T) {
+	// Create a temp HOME directory.
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := &Config{
+		DefaultModel: "test-model",
+		Roles: map[string]RoleConfig{
+			"default": {Model: "default-model"},
+		},
+	}
+
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	// Verify the file was written.
+	configPath := filepath.Join(tmpDir, ".pi-go", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+
+	// Verify JSON is valid and contains expected fields.
+	var loaded Config
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal saved config: %v", err)
+	}
+
+	if loaded.DefaultModel != "test-model" {
+		t.Errorf("expected DefaultModel=test-model, got %q", loaded.DefaultModel)
+	}
+}
+
+func TestSaveDefaultRole(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// SaveDefaultRole is a package-level function.
+	if err := SaveDefaultRole("my-model", "openai"); err != nil {
+		t.Fatalf("SaveDefaultRole() failed: %v", err)
+	}
+
+	// Verify the default role was saved.
+	configPath := filepath.Join(tmpDir, ".pi-go", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read saved config: %v", err)
+	}
+
+	var loaded Config
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("failed to unmarshal saved config: %v", err)
+	}
+
+	if loaded.Roles["default"].Model != "my-model" {
+		t.Errorf("expected default role model=my-model, got %q", loaded.Roles["default"].Model)
+	}
+	if loaded.Roles["default"].Provider != "openai" {
+		t.Errorf("expected default role provider=openai, got %q", loaded.Roles["default"].Provider)
 	}
 }
