@@ -129,9 +129,7 @@ func TestStream_IgnoresUserRoleAndEmptyAndNil(t *testing.T) {
 	}
 }
 
-func TestStream_SkipsThoughtParts(t *testing.T) {
-	// Zed-03 will surface thoughts; Zed-02 skips them so they do not leak
-	// into the assistant message stream.
+func TestStream_ThoughtPartsEmitThoughtChunkAndStayOutOfFinal(t *testing.T) {
 	up := &fakeUpdater{}
 	s := New(up)
 
@@ -140,15 +138,57 @@ func TestStream_SkipsThoughtParts(t *testing.T) {
 		t.Fatalf("OnEvent: %v", err)
 	}
 
-	if got, want := len(up.updates), 1; got != want {
+	if got, want := len(up.updates), 2; got != want {
 		t.Fatalf("updates = %d, want %d", got, want)
 	}
-	chunk := up.updates[0].AgentMessageChunk
-	if chunk == nil || chunk.Content.Text == nil || chunk.Content.Text.Text != "answer" {
-		t.Fatalf("expected only 'answer' chunk, got %+v", up.updates[0])
+	thought := up.updates[0].AgentThoughtChunk
+	if thought == nil || thought.Content.Text == nil || thought.Content.Text.Text != "reasoning" {
+		t.Fatalf("expected thought chunk 'reasoning', got %+v", up.updates[0])
+	}
+	msg := up.updates[1].AgentMessageChunk
+	if msg == nil || msg.Content.Text == nil || msg.Content.Text.Text != "answer" {
+		t.Fatalf("expected message chunk 'answer', got %+v", up.updates[1])
 	}
 	if got, want := s.Final(), "answer"; got != want {
 		t.Fatalf("Final() = %q, want %q", got, want)
+	}
+}
+
+func TestStream_EmptyThoughtPartEmitsNothing(t *testing.T) {
+	// ADK occasionally emits zero-length thought parts between reasoning
+	// segments. They should not produce empty panel entries in Zed.
+	up := &fakeUpdater{}
+	s := New(up)
+
+	if err := s.OnEvent(context.Background(), textEvent("model", thoughtPart(""))); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if len(up.updates) != 0 {
+		t.Fatalf("unexpected updates: %+v", up.updates)
+	}
+	if got := s.Final(); got != "" {
+		t.Fatalf("Final() = %q, want empty", got)
+	}
+}
+
+func TestStream_ThoughtUpdaterErrorPropagates(t *testing.T) {
+	sentinel := errors.New("boom")
+	up := &fakeUpdater{err: sentinel}
+	s := New(up)
+
+	err := s.OnEvent(context.Background(), textEvent("model", thoughtPart("x")))
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want to wrap %v", err, sentinel)
+	}
+}
+
+func TestStream_ThoughtWithNilUpdaterIsNoOp(t *testing.T) {
+	s := New(nil)
+	if err := s.OnEvent(context.Background(), textEvent("model", thoughtPart("silent"))); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if got := s.Final(); got != "" {
+		t.Fatalf("Final() = %q, want empty", got)
 	}
 }
 
