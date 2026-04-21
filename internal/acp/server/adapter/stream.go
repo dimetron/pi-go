@@ -5,9 +5,8 @@
 // text accumulation, (future) tool-call tracking, and (future) sub-agent
 // nesting.
 //
-// This file ships the text path only — the skeleton consumed by the runtime
-// rewrite in Zed-08. Thought parts (Zed-03) and tool-call lifecycle (Zed-04)
-// arrive in follow-up tasks.
+// This file ships the text and thought paths consumed by the runtime rewrite
+// in Zed-08. Tool-call lifecycle (Zed-04) arrives in a follow-up task.
 package adapter
 
 import (
@@ -40,13 +39,13 @@ func New(u SessionUpdater) *Stream {
 	return &Stream{updater: u}
 }
 
-// OnEvent consumes one ADK event and forwards its text parts to the peer.
+// OnEvent consumes one ADK event and forwards its parts to the peer.
 //
 // Rules:
 //   - Nil event or nil content: no-op.
 //   - User-role events are ignored; the ACP peer already knows the prompt.
-//   - Thought parts (part.Thought == true) are skipped here — Zed-03 adds
-//     thought-surface emission.
+//   - Thought parts (part.Thought == true) emit agent_thought_chunk and are
+//     kept out of the assistant message accumulator.
 //   - Function-call and function-response parts are skipped — Zed-04 emits
 //     them via Before/AfterToolCallbacks.
 //   - Plain text parts are streamed as agent_message_chunk and accumulated
@@ -62,10 +61,13 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 		if part == nil {
 			continue
 		}
-		if part.Thought {
+		if part.FunctionCall != nil || part.FunctionResponse != nil {
 			continue
 		}
-		if part.FunctionCall != nil || part.FunctionResponse != nil {
+		if part.Thought {
+			if err := s.emitThought(ctx, part.Text); err != nil {
+				return err
+			}
 			continue
 		}
 		if part.Text == "" {
