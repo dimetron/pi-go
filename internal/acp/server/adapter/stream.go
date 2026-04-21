@@ -2,11 +2,10 @@
 //
 // The adapter is the single place where ACP protocol concerns touch the pi
 // runtime, so the runtime can stay acp-agnostic. Stream owns per-turn state:
-// text accumulation, (future) tool-call tracking, and (future) sub-agent
-// nesting.
+// text accumulation, tool-call tracking, and sub-agent nesting.
 //
-// This file ships the text and thought paths consumed by the runtime rewrite
-// in Zed-08. Tool-call lifecycle (Zed-04) arrives in a follow-up task.
+// This file ships the text and thought paths; tool-call lifecycle lives in
+// toolcall.go. The runtime rewrite in Zed-08 wires these together.
 package adapter
 
 import (
@@ -28,15 +27,18 @@ type SessionUpdater interface {
 // Stream holds per-turn state for a single ACP prompt turn. It is intended to
 // be used from a single goroutine; no locking is performed.
 type Stream struct {
-	updater   SessionUpdater
-	finalText strings.Builder
+	updater     SessionUpdater
+	finalText   strings.Builder
+	toolCalls   map[string]*callState
+	subagentID  string
+	nextCallSeq int
 }
 
 // New constructs a Stream that emits updates through u. A nil updater is
 // accepted and results in updates being discarded — useful for tests that
 // only care about Final().
 func New(u SessionUpdater) *Stream {
-	return &Stream{updater: u}
+	return &Stream{updater: u, toolCalls: map[string]*callState{}}
 }
 
 // OnEvent consumes one ADK event and forwards its parts to the peer.
