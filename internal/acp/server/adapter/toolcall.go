@@ -1,0 +1,174 @@
+package adapter
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	acp "github.com/coder/acp-go-sdk"
+)
+
+// callState tracks a single tool call across its start/end boundary.
+// Sub-agent parents also accumulate content so nested inner calls can be
+// appended without losing earlier lines — WithUpdateContent replaces the
+// entire collection, so the adapter keeps the running copy here.
+type callState struct {
+	id      acp.ToolCallId
+	name    string
+	kind    acp.ToolKind
+	parent  acp.ToolCallId
+	content []acp.ToolCallContent
+}
+
+// toolKind maps a pi-go tool name to an ACP ToolKind. Unknown tools fall
+// back to ToolKindOther, which Zed renders as a generic card.
+func toolKind(name string) acp.ToolKind {
+	switch name {
+	case "read", "ls":
+		return acp.ToolKindRead
+	case "grep", "find", "glob":
+		return acp.ToolKindSearch
+	case "edit", "write":
+		return acp.ToolKindEdit
+	case "bash", "shell":
+		return acp.ToolKindExecute
+	case "subagent", "agent":
+		return acp.ToolKindThink
+	default:
+		return acp.ToolKindOther
+	}
+}
+
+// isSubagentTool returns true for tool names that dispatch a sub-agent.
+// Sub-agents become parent "think" cards under which inner tool calls are
+// nested. pi-go's dispatch tool is named "subagent"; "agent" is kept as a
+// synonym to match the spec vocabulary.
+func isSubagentTool(name string) bool {
+	return name == "subagent" || name == "agent"
+}
+
+// locationFromArgs pulls a file path out of common tool-argument shapes.
+// pi-go tools use both "path" and "file_path" — either yields a
+// ToolCallLocation that drives Zed's follow-along UI.
+func locationFromArgs(args map[string]any) string {
+	for _, key := range []string{"path", "file_path"} {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// OnToolStart records a new tool invocation and emits the initial
+// SessionUpdate for it. The returned call id pairs this start with its
+// later OnToolEnd — the runtime bridge (Zed-08) threads it through the
+// ADK Before/After tool callbacks.
+//
+// When the tool is a sub-agent dispatch, the call is marked as the
+// active parent: subsequent tool starts fold their progress into the
+// parent's content instead of creating new top-level cards. Nesting is
+// single-level — a sub-agent spawned inside another sub-agent is treated
+// as a plain nested call.
+func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]any) (string, error) {
+	s.nextCallSeq++
+	id := acp.ToolCallId("call_" + strconv.Itoa(s.nextCallSeq))
+	state := &callState{id: id, name: name, kind: toolKind(name)}
+
+	switch {
+	case isSubagentTool(name):
+		s.subagentID = string(id)
+	case s.subagentID != "":
+		state.parent = acp.ToolCallId(s.subagentID)
+	}
+	s.toolCalls[string(id)] = state
+
+	if s.updater == nil {
+		return string(id), nil
+	}
+
+	if state.parent != "" {
+		return string(id), s.appendToParent(ctx, state.parent, "▶ "+name)
+	}
+
+	opts := []acp.ToolCallStartOpt{
+		acp.WithStartKind(state.kind),
+		acp.WithStartStatus(acp.ToolCallStatusInProgress),
+		acp.WithStartRawInput(args),
+	}
+	if loc := locationFromArgs(args); loc != "" {
+		opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: loc}}))
+	}
+	if err := s.updater.Update(ctx, acp.StartToolCall(id, name, opts...)); err != nil {
+		return string(id), fmt.Errorf("stream: tool-call start: %w", err)
+	}
+	return string(id), nil
+}
+
+// OnToolEnd emits the terminal SessionUpdate for callID. Unknown ids are
+// a no-op so the adapter tolerates a dropped/filtered start without
+// surfacing a protocol error; the call simply never materializes in Zed.
+func (s *Stream) OnToolEnd(ctx context.Context, callID string, result any, runErr error) error {
+	state, ok := s.toolCalls[callID]
+	if !ok {
+		return nil
+	}
+	delete(s.toolCalls, callID)
+	if s.subagentID == callID {
+		s.subagentID = ""
+	}
+
+	if s.updater == nil {
+		return nil
+	}
+
+	if state.parent != "" {
+		marker := "✓"
+		if runErr != nil {
+			marker = "✗"
+		}
+		return s.appendToParent(ctx, state.parent, marker+" "+state.name)
+	}
+
+	status := acp.ToolCallStatusCompleted
+	if runErr != nil {
+		status = acp.ToolCallStatusFailed
+	}
+	opts := []acp.ToolCallUpdateOpt{acp.WithUpdateStatus(status)}
+	switch {
+	case runErr != nil:
+		opts = append(opts, acp.WithUpdateRawOutput(map[string]any{"error": runErr.Error()}))
+	case result != nil:
+		opts = append(opts, acp.WithUpdateRawOutput(result))
+	}
+	// Re-send accumulated nested content if any was recorded during the
+	// sub-agent's lifetime, so the final UpdateToolCall carries it too.
+	if len(state.content) > 0 {
+		opts = append(opts, acp.WithUpdateContent(state.content))
+	}
+	if err := s.updater.Update(ctx, acp.UpdateToolCall(state.id, opts...)); err != nil {
+		return fmt.Errorf("stream: tool-call end: %w", err)
+	}
+	return nil
+}
+
+// appendToParent records line as nested content on the sub-agent parent
+// and re-sends the full accumulated collection via WithUpdateContent
+// (which replaces, not appends, server-side).
+func (s *Stream) appendToParent(ctx context.Context, parentID acp.ToolCallId, line string) error {
+	parent, ok := s.toolCalls[string(parentID)]
+	if !ok {
+		return nil
+	}
+	parent.content = append(parent.content, acp.ToolCallContent{
+		Content: &acp.ToolCallContentContent{
+			Type:    "content",
+			Content: acp.TextBlock(line),
+		},
+	})
+	if err := s.updater.Update(ctx, acp.UpdateToolCall(parentID, acp.WithUpdateContent(parent.content))); err != nil {
+		return fmt.Errorf("stream: nested tool-call content: %w", err)
+	}
+	return nil
+}
