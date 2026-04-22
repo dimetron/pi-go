@@ -214,3 +214,36 @@ func TestStripTrailingPunctuation(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAlphanumericByte(t *testing.T) {
+	tests := []struct {
+		input    byte
+		expected bool
+	}{
+		// Lowercase letters
+		{'a', true},
+		{'z', true},
+		// Uppercase letters
+		{'A', true},
+		{'Z', true},
+		// Digits
+		{'0', true},
+		{'9', true},
+		// Non-alphanumeric
+		{' ', false},
+		{'.', false},
+		{'/', false},
+		{'_', false},
+		{'-', false},
+		{':', false},
+		{'@', false},
+		{0, false},
+	}
+
+	for _, tt := range tests {
+		got := isAlphanumericByte(tt.input)
+		if got != tt.expected {
+			t.Errorf("isAlphanumericByte(%q) = %v, want %v", tt.input, got, tt.expected)
+		}
+	}
+}

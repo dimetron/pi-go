@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -19,6 +20,14 @@ func (a *Agent) Cancel(_ context.Context, params acp.CancelNotification) error {
 		st.cancel = nil
 	}
 	a.mu.Unlock()
+
+	log := a.log()
+	log.Log(context.Background(), slog.LevelDebug,
+		"acp-server: cancel received",
+		"session_id", sid,
+		"had_cancel", cancel != nil,
+	)
+
 	if cancel != nil {
 		cancel()
 	}
