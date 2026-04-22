@@ -6,11 +6,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/dimetron/pi-go/internal/acp/server/adapter"
+	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // PromptHandler runs one ACP prompt turn for a session. The skeleton uses
@@ -46,6 +54,15 @@ type Agent struct {
 	AgentInfo acp.Implementation
 	// Handler processes one prompt turn. If nil, EchoPromptHandler is used.
 	Handler PromptHandler
+	// AvailableCommandsResolver resolves slash commands for a session cwd.
+	// If nil, the agent falls back to the static Skills/Subagents slices.
+	AvailableCommandsResolver func(cwd string) []acp.AvailableCommand
+	// Skills are the loaded skill definitions used to populate AvailableCommands.
+	Skills []extension.Skill
+	// Subagents are the loaded sub-agent definitions used to populate AvailableCommands.
+	Subagents []subagent.AgentConfig
+	// Logger is used for diagnostic output. If nil, a discard logger is used.
+	Logger *slog.Logger
 
 	mu       sync.Mutex
 	conn     *acp.AgentSideConnection
@@ -53,8 +70,10 @@ type Agent struct {
 }
 
 type sessionState struct {
-	cwd    string
-	cancel context.CancelFunc
+	cwd             string
+	cancel          context.CancelFunc
+	commandsSent    bool
+	commandsPending bool
 }
 
 var _ acp.Agent = (*Agent)(nil)
@@ -74,6 +93,16 @@ func (a *Agent) info() acp.Implementation {
 	return acp.Implementation{Name: "pi-go", Version: "dev"}
 }
 
+func (a *Agent) log() *slog.Logger {
+	a.mu.Lock()
+	l := a.Logger
+	a.mu.Unlock()
+	if l == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return l
+}
+
 func (a *Agent) handler() PromptHandler {
 	a.mu.Lock()
 	h := a.Handler
@@ -89,13 +118,18 @@ func (a *Agent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.Auth
 	return acp.AuthenticateResponse{}, nil
 }
 
-// Initialize advertises pi's baseline capabilities.
-func (a *Agent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
+// Initialize advertises pi's baseline capabilities. EmbeddedContext is on so
+// Zed can inline file context; Image defaults to false until zed-09 wires the
+// provider gate.
+func (a *Agent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
 	info := a.info()
 	return acp.InitializeResponse{
-		ProtocolVersion:   acp.ProtocolVersion(acp.ProtocolVersionNumber),
-		AgentInfo:         &info,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true},
+		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
+		AgentInfo:       &info,
+		AgentCapabilities: acp.AgentCapabilities{
+			LoadSession:        true,
+			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: true},
+		},
 	}, nil
 }
 
@@ -108,13 +142,27 @@ func (a *Agent) NewSession(_ context.Context, params acp.NewSessionRequest) (acp
 	}
 	a.sessions[sid] = &sessionState{cwd: params.Cwd}
 	a.mu.Unlock()
+
+	a.log().Log(context.Background(), slog.LevelDebug,
+		"acp-server: new session",
+		"session_id", sid,
+		"cwd", params.Cwd,
+		"pid", pid(),
+	)
+
+	// Send AvailableCommandsUpdate to the new session so Zed shows the
+	// slash-command list (clear, compact, help, skills, subagents).
+	go a.sendAvailableCommands(sid)
+
 	return acp.NewSessionResponse{SessionId: acp.SessionId(sid)}, nil
 }
 
-// Prompt bridges a prompt request through the configured handler and, on
-// success, streams the final reply as a single AgentMessageText update. The
-// handler is invoked with a cancelable context registered on the session so
-// an inbound ACP Cancel notification can abort the in-flight turn.
+// Prompt bridges a prompt request through the configured handler. Handlers
+// own all session-update emission through turn.Updater; Prompt itself does
+// not emit an AgentMessageText summary, avoiding the duplicate-message bug.
+// The handler runs under a cancelable context registered on the session so
+// an inbound ACP Cancel notification can abort the in-flight turn. When the
+// request carries a MessageId it is echoed back as UserMessageId.
 func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	sid := string(params.SessionId)
 	a.mu.Lock()
@@ -123,6 +171,10 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	if !ok {
 		return acp.PromptResponse{}, fmt.Errorf("session %s not found", sid)
 	}
+
+	// Retry advertising slash commands on later turns if the initial session
+	// notification failed or the session was loaded before a connection existed.
+	go a.sendAvailableCommands(sid)
 
 	promptCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -136,6 +188,14 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		a.mu.Unlock()
 	}()
 
+	log := a.log()
+	log.Log(ctx, slog.LevelDebug,
+		"acp-server: prompt start",
+		"session_id", sid,
+		"prompt_len", len(params.Prompt),
+		"message_id", params.MessageId != nil,
+	)
+
 	updater := a.updater(acp.SessionId(sid))
 	turn := PromptTurn{
 		SessionID: sid,
@@ -143,23 +203,56 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		Prompt:    extractPromptText(params.Prompt),
 		Updater:   updater,
 	}
-	result, err := a.handler()(promptCtx, turn)
+
+	var panicked atomic.Bool
+	result, err := func() (PromptResult, error) {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked.Store(true)
+				log.Log(ctx, slog.LevelError,
+					"acp-server: prompt panic",
+					"session_id", sid,
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+			}
+		}()
+		return a.handler()(promptCtx, turn)
+	}()
+
+	if panicked.Load() {
+		return acp.PromptResponse{}, fmt.Errorf("handler panicked")
+	}
+
+	log.Log(ctx, slog.LevelDebug,
+		"acp-server: prompt done",
+		"session_id", sid,
+		"err", err,
+		"stop_reason", result.StopReason,
+		"final_text_len", len(result.FinalText),
+	)
+
 	if promptCtx.Err() != nil {
-		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		resp := acp.PromptResponse{StopReason: acp.StopReasonCancelled}
+		if params.MessageId != nil {
+			mid := *params.MessageId
+			resp.UserMessageId = &mid
+		}
+		return resp, nil
 	}
 	if err != nil {
 		return acp.PromptResponse{}, err
-	}
-	if strings.TrimSpace(result.FinalText) != "" && updater != nil {
-		if err := updater.Update(ctx, acp.UpdateAgentMessageText(result.FinalText)); err != nil {
-			return acp.PromptResponse{}, fmt.Errorf("session update: %w", err)
-		}
 	}
 	stop := result.StopReason
 	if strings.TrimSpace(string(stop)) == "" {
 		stop = acp.StopReasonEndTurn
 	}
-	return acp.PromptResponse{StopReason: stop}, nil
+	resp := acp.PromptResponse{StopReason: stop}
+	if params.MessageId != nil {
+		mid := *params.MessageId
+		resp.UserMessageId = &mid
+	}
+	return resp, nil
 }
 
 // ListSessions is not yet supported; advertise method-not-found so clients
@@ -179,11 +272,18 @@ func (a *Agent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.
 }
 
 // EchoPromptHandler is the default PromptHandler used when none is configured.
-// It returns a deterministic "echo: <prompt>" reply so the skeleton is
-// independently testable without the pi runtime.
-func EchoPromptHandler(_ context.Context, turn PromptTurn) (PromptResult, error) {
+// It streams a deterministic "echo: <prompt>" reply through the turn's
+// updater and returns the same text as PromptResult.FinalText. The stream is
+// the sole emission surface so Prompt no longer needs to re-send FinalText.
+func EchoPromptHandler(ctx context.Context, turn PromptTurn) (PromptResult, error) {
+	reply := "echo: " + turn.Prompt
+	if turn.Updater != nil {
+		if err := turn.Updater.Update(ctx, acp.UpdateAgentMessageText(reply)); err != nil {
+			return PromptResult{}, fmt.Errorf("echo session update: %w", err)
+		}
+	}
 	return PromptResult{
-		FinalText:  "echo: " + turn.Prompt,
+		FinalText:  reply,
 		StopReason: acp.StopReasonEndTurn,
 	}, nil
 }
@@ -208,6 +308,19 @@ func (a *Agent) updater(sid acp.SessionId) SessionUpdater {
 	return connectionUpdater{conn: conn, sessionID: sid}
 }
 
+func (a *Agent) availableCommandsForCWD(cwd string) []acp.AvailableCommand {
+	a.mu.Lock()
+	resolver := a.AvailableCommandsResolver
+	skills := append([]extension.Skill(nil), a.Skills...)
+	subagents := append([]subagent.AgentConfig(nil), a.Subagents...)
+	a.mu.Unlock()
+
+	if resolver != nil {
+		return resolver(cwd)
+	}
+	return adapter.BuildAvailableCommands(skills, subagents)
+}
+
 type connectionUpdater struct {
 	conn      *acp.AgentSideConnection
 	sessionID acp.SessionId
@@ -220,10 +333,66 @@ func (u connectionUpdater) Update(ctx context.Context, update acp.SessionUpdate)
 	})
 }
 
+// sendAvailableCommands sends the list of available slash commands to the
+// newly created session. It is called from NewSession after the session state
+// is initialized. If commands were already sent to this session, it is a no-op.
+func (a *Agent) sendAvailableCommands(sid string) {
+	a.mu.Lock()
+	state, ok := a.sessions[sid]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+	if state.commandsSent || state.commandsPending {
+		a.mu.Unlock()
+		return
+	}
+	state.commandsPending = true
+	cwd := state.cwd
+	a.mu.Unlock()
+
+	success := false
+	defer func() {
+		a.mu.Lock()
+		if st, ok := a.sessions[sid]; ok {
+			st.commandsPending = false
+			if success {
+				st.commandsSent = true
+			}
+		}
+		a.mu.Unlock()
+	}()
+
+	updater := a.updater(acp.SessionId(sid))
+	if updater == nil {
+		return
+	}
+	cmds := a.availableCommandsForCWD(cwd)
+	if len(cmds) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := updater.Update(ctx, acp.SessionUpdate{
+		AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+			AvailableCommands: cmds,
+		},
+	}); err != nil {
+		return
+	}
+	success = true
+}
+
 func randomSessionID() string {
 	var b [12]byte
 	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
 		return fmt.Sprintf("sess_%d", time.Now().UnixNano())
 	}
 	return "sess_" + hex.EncodeToString(b[:])
+}
+
+var pid = func() int { return 0 } // replaced at init
+
+func init() {
+	pid = func() int { return syscall.Getpid() }
 }

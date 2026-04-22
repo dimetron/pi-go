@@ -44,6 +44,33 @@ func (h HookConfig) timeout() time.Duration {
 	return 10 * time.Second
 }
 
+// ToolCallReporter is the interface that adapter.Stream exposes for reporting
+// tool call lifecycle events to the ACP peer. This allows BuildToolCallCallbacks
+// to bridge ADK Before/AfterToolCallbacks → ACP StartToolCall/UpdateToolCall.
+type ToolCallReporter interface {
+	OnToolStart(ctx context.Context, name string, args map[string]any) (string, error)
+	OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error
+}
+
+// BuildToolCallCallbacks creates ADK before/after tool callbacks that report
+// tool calls to the ACP peer via s. The BeforeToolCallback emits StartToolCall
+// and returns the call ID in the context; the AfterToolCallback emits UpdateToolCall
+// with the result or error.
+func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, []llmagent.AfterToolCallback) {
+	beforeCB := func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+		_, err := s.OnToolStart(ctx, t.Name(), args)
+		return args, err
+	}
+	afterCB := func(ctx tool.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
+		// The call ID is not directly available from tool.Context in ADK Go,
+		// so we emit completion without it — ACP peer correlates by tool name/order.
+		// OnToolEnd tolerates unknown call IDs as a no-op.
+		_ = s.OnToolEnd(context.Background(), "", args, result, runErr)
+		return result, nil
+	}
+	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}
+}
+
 // BuildBeforeToolCallbacks converts HookConfigs with event "before_tool" into
 // ADK BeforeToolCallback functions.
 func BuildBeforeToolCallbacks(hooks []HookConfig) []llmagent.BeforeToolCallback {

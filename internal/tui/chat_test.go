@@ -608,3 +608,98 @@ func TestChatModel_FormatTokenCount(t *testing.T) {
 		}
 	}
 }
+
+// --- expandLinks ---
+
+func TestExpandLinks_BasicLink(t *testing.T) {
+	input := "[Link Text](https://example.com)"
+	got := expandLinks(input)
+	want := "Link Text (https://example.com)"
+	if got != want {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestExpandLinks_FileProtocol(t *testing.T) {
+	input := "[Open me](file:///path/to/file.txt)"
+	got := expandLinks(input)
+	want := "Open me (file:///path/to/file.txt)"
+	if got != want {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestExpandLinks_HttpProtocol(t *testing.T) {
+	input := "[Google](http://google.com)"
+	got := expandLinks(input)
+	want := "Google (http://google.com)"
+	if got != want {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestExpandLinks_SameTextAndURL(t *testing.T) {
+	// When text equals URL, keep original markdown link
+	input := "[https://example.com](https://example.com)"
+	got := expandLinks(input)
+	if got != input {
+		t.Errorf("expandLinks(%q) = %q, want %q (should stay as-is)", input, got, input)
+	}
+}
+
+func TestExpandLinks_MultipleLinks(t *testing.T) {
+	input := "[First](http://a.com) and [Second](https://b.com)"
+	got := expandLinks(input)
+	want := "First (http://a.com) and Second (https://b.com)"
+	if got != want {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestExpandLinks_MixedWithOtherText(t *testing.T) {
+	input := "Check [the docs](file:///docs/guide.md) for more info."
+	got := expandLinks(input)
+	want := "Check the docs (file:///docs/guide.md) for more info."
+	if got != want {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestExpandLinks_NoLinks(t *testing.T) {
+	input := "Just plain text without any links."
+	got := expandLinks(input)
+	if got != input {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, input)
+	}
+}
+
+func TestExpandLinks_EmptyString(t *testing.T) {
+	input := ""
+	got := expandLinks(input)
+	if got != "" {
+		t.Errorf("expandLinks(%q) = %q, want %q", input, got, "")
+	}
+}
+
+func TestExpandLinks_PartialMatch(t *testing.T) {
+	// Only file://, http://, https:// are expanded
+	input := "[Link](ftp://example.com)"
+	got := expandLinks(input)
+	// Should remain unchanged since ftp is not in the list
+	if got != input {
+		t.Errorf("expandLinks(%q) = %q, want %q (ftp not expanded)", input, got, input)
+	}
+}
+
+// --- RenderMarkdown with link expansion ---
+
+func TestChatModel_RenderMarkdown_ExpandsLinks(t *testing.T) {
+	cm := NewChatModel(newTestRenderer(t))
+	// When link text differs from URL, it should be expanded before rendering.
+	input := "[Google](https://google.com)"
+	got := cm.RenderMarkdown(input)
+	// The expanded form should appear in the output.
+	if !strings.Contains(got, "Google") || !strings.Contains(got, "https://google.com") {
+		t.Errorf("expected expanded link in output, got %q", got)
+	}
+}

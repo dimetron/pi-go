@@ -80,11 +80,14 @@ func withStdin(t *testing.T, content string, fn func()) {
 	}
 	orig := os.Stdin
 	os.Stdin = r
-	// Write synchronously and close so fmt.Fscan sees EOF if needed.
-	go func() {
-		_, _ = w.WriteString(content)
-		_ = w.Close()
-	}()
+	// Write synchronously and close so fmt.Fscan sees the content if needed.
+	if content != "" {
+		_, err = w.WriteString(content)
+		if err != nil {
+			t.Fatalf("WriteString: %v", err)
+		}
+	}
+	_ = w.Close()
 	defer func() {
 		os.Stdin = orig
 		_ = r.Close()
