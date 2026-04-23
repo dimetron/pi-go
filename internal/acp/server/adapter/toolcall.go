@@ -72,9 +72,13 @@ func locationFromArgs(args map[string]any) string {
 // parent's content instead of creating new top-level cards. Nesting is
 // single-level — a sub-agent spawned inside another sub-agent is treated
 // as a plain nested call.
+//
+// The mutex is held only for state mutations. Top-level tool updates are
+// sent after unlock so concurrent parallel tool calls do not serialize on
+// the protocol write. Nested (sub-agent child) updates keep the lock
+// during the write to preserve content line-ordering on the parent card.
 func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]any) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.nextCallSeq++
 	id := acp.ToolCallId("call_" + strconv.Itoa(s.nextCallSeq))
@@ -89,26 +93,41 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	s.toolCalls[string(id)] = state
 
 	if s.updater == nil {
+		s.mu.Unlock()
 		return string(id), nil
 	}
 
+	// Nested into a sub-agent card: hold the lock during the Update to
+	// preserve content line-ordering in the parent.
 	if state.parent != "" {
 		argsLine := formatArgsForDisplay(args)
+		var line string
 		if argsLine != "" {
-			return string(id), s.appendToParentLocked(ctx, state.parent, fmt.Sprintf("▶ %s(%s)", name, argsLine))
+			line = fmt.Sprintf("▶ %s(%s)", name, argsLine)
+		} else {
+			line = "▶ " + name
 		}
-		return string(id), s.appendToParentLocked(ctx, state.parent, "▶ "+name)
+		err := s.appendToParentLocked(ctx, state.parent, line)
+		s.mu.Unlock()
+		return string(id), err
 	}
 
+	// Top-level tool: capture what is needed for the Update, then release
+	// the lock before network I/O so concurrent tool starts don't block
+	// each other at the protocol layer.
+	updater := s.updater
+	kind := state.kind
+	s.mu.Unlock()
+
 	opts := []acp.ToolCallStartOpt{
-		acp.WithStartKind(state.kind),
+		acp.WithStartKind(kind),
 		acp.WithStartStatus(acp.ToolCallStatusInProgress),
 		acp.WithStartRawInput(args),
 	}
 	if loc := locationFromArgs(args); loc != "" {
 		opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: loc}}))
 	}
-	if err := s.updater.Update(ctx, acp.StartToolCall(id, buildTitle(name, args), opts...)); err != nil {
+	if err := updater.Update(ctx, acp.StartToolCall(id, buildTitle(name, args), opts...)); err != nil {
 		return string(id), fmt.Errorf("stream: tool-call start: %w", err)
 	}
 	return string(id), nil
@@ -117,12 +136,15 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 // OnToolEnd emits the terminal SessionUpdate for callID. Unknown ids are
 // a no-op so the adapter tolerates a dropped/filtered start without
 // surfacing a protocol error; the call simply never materializes in Zed.
+//
+// Like OnToolStart, the lock is released before network I/O for top-level
+// calls and held through the write for nested calls.
 func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	state, ok := s.toolCalls[callID]
 	if !ok {
+		s.mu.Unlock()
 		return nil
 	}
 	delete(s.toolCalls, callID)
@@ -131,21 +153,33 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]a
 	}
 
 	if s.updater == nil {
+		s.mu.Unlock()
 		return nil
 	}
 
+	// Nested into a sub-agent card: hold the lock during the Update.
 	if state.parent != "" {
 		marker := "✓"
 		if runErr != nil {
 			marker = "✗"
 		}
 		argsLine := formatArgsForDisplay(args)
+		var line string
 		if argsLine != "" {
-			return s.appendToParentLocked(ctx, state.parent, fmt.Sprintf("%s %s(%s)", marker, state.name, argsLine))
+			line = fmt.Sprintf("%s %s(%s)", marker, state.name, argsLine)
+		} else {
+			line = marker + " " + state.name
 		}
-		return s.appendToParentLocked(ctx, state.parent, marker+" "+state.name)
+		err := s.appendToParentLocked(ctx, state.parent, line)
+		s.mu.Unlock()
+		return err
 	}
 
+	// Top-level: build the update payload while the lock is held (state is
+	// deleted from the map so no other goroutine can reach it after we
+	// unlock), then send after releasing.
+	updater := s.updater
+	stateID := state.id
 	status := acp.ToolCallStatusCompleted
 	if runErr != nil {
 		status = acp.ToolCallStatusFailed
@@ -160,7 +194,9 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]a
 	if len(state.content) > 0 {
 		opts = append(opts, acp.WithUpdateContent(state.content))
 	}
-	if err := s.updater.Update(ctx, acp.UpdateToolCall(state.id, opts...)); err != nil {
+	s.mu.Unlock()
+
+	if err := updater.Update(ctx, acp.UpdateToolCall(stateID, opts...)); err != nil {
 		return fmt.Errorf("stream: tool-call end: %w", err)
 	}
 	return nil

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os/exec"
 	"slices"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
@@ -59,19 +60,41 @@ type ToolCallReporter interface {
 }
 
 // BuildToolCallCallbacks creates ADK before/after tool callbacks that report
-// tool calls to the ACP peer via s. The BeforeToolCallback emits StartToolCall
-// and returns the call ID in the context; the AfterToolCallback emits UpdateToolCall
-// with the result or error.
+// tool calls to the ACP peer via s. The BeforeToolCallback emits StartToolCall;
+// the AfterToolCallback emits UpdateToolCall with the result or error.
+//
+// Correlation: ctx.FunctionCallID() is the ADK-assigned unique identifier for
+// each tool invocation. It is the same value in both the before and after
+// callback, so it is used as the key to carry the ACP call ID (returned by
+// OnToolStart) across the two callbacks. Without this, the result of every
+// tool call would be silently dropped because OnToolEnd would receive an empty
+// call ID and treat it as a no-op.
 func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, []llmagent.AfterToolCallback) {
+	var mu sync.Mutex
+	pending := map[string]string{} // ADK FunctionCallID → ACP call ID
+
 	beforeCB := func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-		_, err := s.OnToolStart(ctx, t.Name(), args)
-		return args, err
+		acpID, err := s.OnToolStart(ctx, t.Name(), args)
+		if ctx != nil && acpID != "" {
+			if fid := ctx.FunctionCallID(); fid != "" {
+				mu.Lock()
+				pending[fid] = acpID
+				mu.Unlock()
+			}
+		}
+		return nil, err
 	}
 	afterCB := func(ctx tool.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
-		// The call ID is not directly available from tool.Context in ADK Go,
-		// so we emit completion without it — ACP peer correlates by tool name/order.
-		// OnToolEnd tolerates unknown call IDs as a no-op.
-		_ = s.OnToolEnd(context.Background(), "", args, result, runErr)
+		var acpID string
+		if ctx != nil {
+			if fid := ctx.FunctionCallID(); fid != "" {
+				mu.Lock()
+				acpID = pending[fid]
+				delete(pending, fid)
+				mu.Unlock()
+			}
+		}
+		_ = s.OnToolEnd(context.Background(), acpID, args, result, runErr)
 		return result, nil
 	}
 	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}
@@ -88,13 +111,13 @@ func BuildBeforeToolCallbacks(hooks []HookConfig) []llmagent.BeforeToolCallback 
 		hook := h // capture
 		cbs = append(cbs, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			if !hook.matchesTool(t.Name()) {
-				return args, nil
+				return nil, nil
 			}
 			if err := runHookCommand(ctx, hook, t.Name(), args); err != nil {
 				log.Printf("hook %q failed for tool %q: %v", hook.Command, t.Name(), err)
 				// Non-fatal: log and continue.
 			}
-			return args, nil
+			return nil, nil
 		})
 	}
 	return cbs
@@ -135,7 +158,7 @@ func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToo
 			otel.AttributeInt("tool.args_count", len(args)),
 		)
 		_ = span // span lifetime managed by afterCB
-		return args, nil
+		return nil, nil
 	}
 
 	afterCB := func(ctx tool.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
