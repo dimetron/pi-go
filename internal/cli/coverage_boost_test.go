@@ -919,6 +919,9 @@ func TestDetectMode_PipedStdin(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestRunInteractive_CancelContext(t *testing.T) {
+	if raceEnabled {
+		t.Skip("Bubble Tea/cancelreader shutdown races under -race in this TTY simulation")
+	}
 	resetGlobalFlags(t)
 	flagMemoryOff = true
 	tmpHome := t.TempDir()

@@ -351,16 +351,8 @@ func LoadInstruction(baseInstruction string) string {
 		}
 	}
 
-	skillDirs := []string{}
-	if homeDir, hErr := os.UserHomeDir(); hErr == nil {
-		skillDirs = append(skillDirs, filepath.Join(homeDir, ".pi-go", "skills"))
-	}
-	skillDirs = append(skillDirs,
-		filepath.Join(cwd, ".pi-go", "skills"),
-		filepath.Join(cwd, ".claude", "skills"),
-		filepath.Join(cwd, ".cursor", "skills"),
-	)
-
+	// Get skills.
+	skillDirs := extension.DefaultSkillDirsIn(cwd)
 	skills, err := extension.LoadSkills(skillDirs...)
 	if err == nil && len(skills) > 0 {
 		instruction += "\n\n# Available Skills\n\n"
