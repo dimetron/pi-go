@@ -8,7 +8,10 @@ import (
 	"os/exec"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 const defaultBashTimeout = 120 * time.Second
@@ -55,6 +58,14 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 	if ctx != nil {
 		parentCtx = ctx
 	}
+
+	parentCtx, span := otel.Tracer("pi-go").Start(parentCtx, "tool.bash")
+	span.SetAttributes(
+		attribute.String("bash.command", input.Command),
+		attribute.String("bash.cwd", sb.Dir()),
+	)
+	defer span.End()
+
 	cmdCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
@@ -72,12 +83,18 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		} else if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			span.SetAttributes(
+				attribute.Int("bash.exit_code", -1),
+				attribute.Int("bash.stdout_len", stdout.Len()),
+				attribute.Int("bash.stderr_len", stderr.Len()),
+			)
 			return BashOutput{
 				Stdout:   redactSecrets(truncateOutput(stdout.String())),
 				Stderr:   redactSecrets(truncateOutput("command timed out\n" + stderr.String())),
 				ExitCode: -1,
 			}, nil
 		} else {
+			span.RecordError(err)
 			return BashOutput{}, fmt.Errorf("executing command: %w", err)
 		}
 	}
@@ -88,6 +105,11 @@ func bashHandler(sb *Sandbox, ctx tool.Context, input BashInput) (BashOutput, er
 		exitCode = 0
 	}
 
+	span.SetAttributes(
+		attribute.Int("bash.exit_code", exitCode),
+		attribute.Int("bash.stdout_len", stdout.Len()),
+		attribute.Int("bash.stderr_len", stderr.Len()),
+	)
 	return BashOutput{
 		Stdout:   redactSecrets(truncateOutput(stdout.String())),
 		Stderr:   redactSecrets(truncateOutput(stderr.String())),

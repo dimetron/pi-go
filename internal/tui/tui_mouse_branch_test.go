@@ -258,7 +258,6 @@ func TestHandleInitEvent_ProgressItem(t *testing.T) {
 
 func TestHandleInitEvent_FinalResult(t *testing.T) {
 	agentEventCh := make(chan AgentSubEvent, 1)
-	restartCh := make(chan struct{}, 1)
 
 	m := &model{
 		loading:      true,
@@ -271,7 +270,6 @@ func TestHandleInitEvent_FinalResult(t *testing.T) {
 			Done: true,
 			Result: &InitResult{
 				AgentEventCh: agentEventCh,
-				RestartCh:    restartCh,
 				GitBranch:    "main",
 				DiffAdded:    10,
 				DiffRemoved:  5,
@@ -288,9 +286,6 @@ func TestHandleInitEvent_FinalResult(t *testing.T) {
 	}
 	if mm.cfg.AgentEventCh == nil {
 		t.Error("AgentEventCh should be set")
-	}
-	if mm.cfg.RestartCh == nil {
-		t.Error("RestartCh should be set")
 	}
 	if mm.statusModel.GitBranch != "main" {
 		t.Errorf("expected GitBranch 'main', got %q", mm.statusModel.GitBranch)

@@ -1098,16 +1098,14 @@ func TestInit_WithAgentEventCh(t *testing.T) {
 
 func TestInit_WithBothChannels(t *testing.T) {
 	eventCh := make(chan AgentSubEvent, 1)
-	restartCh := make(chan struct{}, 1)
 	m := &model{
 		cfg: Config{
 			AgentEventCh: eventCh,
-			RestartCh:    restartCh,
 		},
 	}
 	cmd := m.Init()
 	if cmd == nil {
-		t.Error("expected non-nil cmd when both channels are set")
+		t.Error("expected non-nil cmd when AgentEventCh is set")
 	}
 }
 
@@ -1252,23 +1250,6 @@ func TestIsUserPaste_RejectsTerminalResponses(t *testing.T) {
 		if isUserPaste(s) {
 			t.Errorf("terminal response %q should be rejected as paste", s)
 		}
-	}
-}
-
-// --- Screen ---
-
-func TestScreen_UpdateAndRead(t *testing.T) {
-	s := &Screen{}
-	s.update("test content")
-	if s.ScreenContent() != "test content" {
-		t.Errorf("expected 'test content', got %q", s.ScreenContent())
-	}
-}
-
-func TestScreen_Empty(t *testing.T) {
-	s := &Screen{}
-	if s.ScreenContent() != "" {
-		t.Errorf("expected empty string, got %q", s.ScreenContent())
 	}
 }
 

@@ -112,9 +112,6 @@ func TestUpdateMouseMoveMsg(t *testing.T) {
 func TestUpdateRestartMsg(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
-		cfg: Config{
-			RestartCh: make(chan struct{}, 1),
-		},
 	}
 
 	newM, cmd := m.Update(restartMsg{})
