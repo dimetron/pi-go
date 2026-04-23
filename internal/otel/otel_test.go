@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func TestTracerReturnsTracer(t *testing.T) {
@@ -68,5 +70,113 @@ func TestLoadEnvFromDotEnv(t *testing.T) {
 	val = loadEnvFromDotEnv(path, "DOES_NOT_EXIST")
 	if val != "" {
 		t.Errorf("loadEnvFromDotEnv unknown key: got %q, want empty", val)
+	}
+}
+
+func TestLoadEnvFromDotEnv_AbsolutePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "test.env")
+
+	content := "# comment\nMY_KEY=plain-value\nQUOTED_KEY=\"quoted-value\"\nEMPTY_KEY=\n"
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"MY_KEY", "plain-value"},
+		{"QUOTED_KEY", "quoted-value"},
+		{"EMPTY_KEY", ""},
+		{"MISSING_KEY", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			got := loadEnvFromDotEnv(envFile, tc.key)
+			if got != tc.want {
+				t.Fatalf("loadEnvFromDotEnv(%q) = %q, want %q", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadEnvFromDotEnv_NonExistentFile(t *testing.T) {
+	t.Parallel()
+	got := loadEnvFromDotEnv("/nonexistent/path/.env", "ANY_KEY")
+	if got != "" {
+		t.Fatalf("got %q, want empty for missing file", got)
+	}
+}
+
+func TestNormalizeEndpointURL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		desc     string
+		endpoint string
+		protocol string
+		want     string
+	}{
+		{"empty grpc uses default gRPC port", "", "grpc", "http://localhost:4317"},
+		{"empty http uses default HTTP port", "", "http", "http://localhost:4318"},
+		{"empty unknown uses HTTP port", "", "anything", "http://localhost:4318"},
+		{"bare host:port gets http:// prefix", "127.0.0.1:4317", "grpc", "http://127.0.0.1:4317"},
+		{"already-schemed URL is unchanged", "http://collector:4318", "http", "http://collector:4318"},
+		{"https scheme is preserved", "https://secure:4318", "http", "https://secure:4318"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := normalizeEndpointURL(tc.endpoint, tc.protocol)
+			if got != tc.want {
+				t.Fatalf("normalizeEndpointURL(%q, %q) = %q, want %q", tc.endpoint, tc.protocol, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsEnabled(t *testing.T) {
+	cases := []struct {
+		envVal string
+		want   bool
+	}{
+		{"otlp", true},
+		{"console", true},
+		{"none", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.envVal, func(t *testing.T) {
+			t.Setenv("OTEL_TRACES_EXPORTER", tc.envVal)
+			// IsEnabled reads from process env as fallback when .env key is absent.
+			got := IsEnabled()
+			if got != tc.want {
+				t.Fatalf("IsEnabled() = %v, want %v (exporter=%q)", got, tc.want, tc.envVal)
+			}
+		})
+	}
+}
+
+func TestShutdown(t *testing.T) {
+	// Ensure the provider is initialized so we exercise the non-nil branch.
+	Tracer("shutdown-test")
+	if err := Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestAttributeHelpers(t *testing.T) {
+	t.Parallel()
+	str := AttributeString("k", "v")
+	if str != attribute.String("k", "v") {
+		t.Fatalf("AttributeString = %v, want attribute.String", str)
+	}
+	b := AttributeBool("flag", true)
+	if b != attribute.Bool("flag", true) {
+		t.Fatalf("AttributeBool = %v, want attribute.Bool", b)
+	}
+	n := AttributeInt("n", 42)
+	if n != attribute.Int("n", 42) {
+		t.Fatalf("AttributeInt = %v, want attribute.Int", n)
 	}
 }
