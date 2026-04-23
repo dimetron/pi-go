@@ -11,12 +11,19 @@
 #### Short term
 - [x] OAuth with Codex, ~~Claude~~
 - [x] ACP Coding Agent protocol https://agentclientprotocol.com/protocol/overview
-- [ ] A2A Agent as a tool to work with other agents like KAgent
-- [ ] Agent Sandbox via ssh
+- [x] OTEL tracing https://opentelemetry.io/docs/
+- [x] Go LSP server
+- [x] Rust LSP server
+- [x] Python LSP server
+- [ ] Kotlin LSP server `brew install JetBrains/utils/kotlin-lsp`
+- [ ] Switch between models for plan/run tasks
 - [ ] Kanban board for agent tasks
 - [ ] OAuth with Google/Microsoft for web UI
+- [ ] A2A Agent as a tool to work with other agents like KAgent
 
 #### Long term
+
+- [ ] Agent Sandbox via ssh
 - [ ] Submit pi-go to ACP registry https://agentclientprotocol.com/get-started/agents
 - [ ] Evaluations using terminal bench harbor https://harborframework.com/registry
 - [ ] Temporal remote distributed workflows for long-running tasks
@@ -28,7 +35,8 @@
 
 ### Sub Agents
 - [ ] research agent with cli gh, tavily, exa, perplexity plugins
-- [ ] excalidraw agent for visual planning and diagramming
+- [ ] excalidraw for visual planning and diagramming https://excalidraw.com
+- [ ] Notebook LM https://notebooklm.google.com
 
 ### TUI
 - [ ] Tabs for sessions
@@ -39,3 +47,17 @@
 - [x] Browser mcp support
 - [ ] WhatsApp/Telegrtam gateway
 - [ ] Agentic wiki with vector search
+
+### AI providers
+
+- [x] Ollama (local/cloud)
+- [x] Ollama (open ai)
+- [ ] Ollama (anthropic)
+- [x] OpenAI (API / Codex)
+- [x] Anthropic (API)
+- [x] Google Gemini
+- [ ] Google Vertex AI
+- [x] Microsoft Azure OpenAI
+- [ ] Amazon
+- [ ] Open Router
+- [ ] Fireworks AI

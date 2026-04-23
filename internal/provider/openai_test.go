@@ -300,7 +300,7 @@ func TestNewOpenAI_CodexBackendRouting(t *testing.T) {
 	// Codex OAuth JWT + a model the ChatGPT backend accepts — must flip to
 	// codex backend and force Responses path.
 	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
-	llm, err := NewOpenAI(context.Background(), "gpt-5.3-codex", jwt, "", nil)
+	llm, err := NewOpenAI(context.Background(), "gpt-5.5", jwt, "", nil)
 	if err != nil {
 		t.Fatalf("NewOpenAI(codex jwt) error: %v", err)
 	}
@@ -328,8 +328,8 @@ func TestNewOpenAI_CodexBackendRejectsUnsupportedModel(t *testing.T) {
 	if !strings.Contains(err.Error(), "not supported by the ChatGPT codex backend") {
 		t.Errorf("error message missing codex-backend hint: %v", err)
 	}
-	if !strings.Contains(err.Error(), "gpt-5.3-codex") {
-		t.Errorf("error should list supported models including gpt-5.3-codex: %v", err)
+	if !strings.Contains(err.Error(), "gpt-5.5") {
+		t.Errorf("error should list supported models including gpt-5.5: %v", err)
 	}
 }
 
@@ -1304,8 +1304,8 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"GPT-5-CODEX", true},
 		{"Gpt-5.1-Codex-Mini", true},
 		// Non-codex models (Chat Completions compatible)
+		{"gpt-5.5", false},
 		{"gpt-5.4", false},
-		{"gpt-5.4-pro", false},
 		{"gpt-4o", false},
 		{"o3-mini", false},
 		{"gpt-5-mini", false},

@@ -241,3 +241,66 @@ func FindSkill(skills []Skill, name string) (Skill, bool) {
 	}
 	return Skill{}, false
 }
+
+// DefaultSkillDirs returns the default skill directories to search.
+// It returns user-level (~/.pi-go/skills) plus project-level directories
+// (.pi-go/skills, .claude/skills, .cursor/skills) found by walking up
+// from the current working directory.
+func DefaultSkillDirs() []string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	return DefaultSkillDirsIn(cwd)
+}
+
+// DefaultSkillDirsIn returns skill directories relative to the given root.
+// User-level skill directory (~/.pi-go/skills) plus project-level directories
+// (.pi-go/skills, .claude/skills, .cursor/skills) found by walking up from root.
+func DefaultSkillDirsIn(root string) []string {
+	dirs := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+
+	// User-level skill directory.
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		userDir := filepath.Join(homeDir, ".pi-go", "skills")
+		if _, ok := seen[userDir]; !ok {
+			seen[userDir] = struct{}{}
+			dirs = append(dirs, userDir)
+		}
+	}
+
+	// Project-level skill directories, walking up from root.
+	for _, rel := range []string{
+		filepath.Join(".pi-go", "skills"),
+		filepath.Join(".claude", "skills"),
+		filepath.Join(".cursor", "skills"),
+	} {
+		dir := findNearestDir(root, rel)
+		if dir != "" {
+			if _, ok := seen[dir]; !ok {
+				seen[dir] = struct{}{}
+				dirs = append(dirs, dir)
+			}
+		}
+	}
+
+	return dirs
+}
+
+// findNearestDir searches for rel starting at start and walking up the directory tree.
+// Returns the first directory found, or empty string if not found.
+func findNearestDir(start, rel string) string {
+	dir := start
+	for {
+		candidate := filepath.Join(dir, rel)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}

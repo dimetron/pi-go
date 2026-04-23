@@ -294,15 +294,7 @@ func deferredInit(
 	go func() {
 		defer wg.Done()
 		send("skills", false)
-		dirs := []string{}
-		if homeDir, hErr := os.UserHomeDir(); hErr == nil {
-			dirs = append(dirs, filepath.Join(homeDir, ".pi-go", "skills"))
-		}
-		dirs = append(dirs,
-			filepath.Join(".pi-go", "skills"),
-			filepath.Join(".claude", "skills"),
-			filepath.Join(".cursor", "skills"),
-		)
+		dirs := extension.DefaultSkillDirs()
 		sk, _ := extension.LoadSkills(dirs...)
 		ps.mu.Lock()
 		ps.skills = sk
