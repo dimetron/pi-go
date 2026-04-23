@@ -171,7 +171,7 @@ func TestRootCmdNoPromptExitsCleanly(t *testing.T) {
 	defer os.Unsetenv("OPENAI_API_KEY")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
+	cmd.SetArgs([]string{"--model", "gpt-5.5", "--mode", "print"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -209,7 +209,7 @@ func TestCLI_ModelFlagOverridesDefault(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
+	cmd.SetArgs([]string{"--model", "gpt-5.5", "--mode", "print"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -255,7 +255,7 @@ func TestRootCmdMissingAPIKey(t *testing.T) {
 	flagPprofPort = "6060"
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--mode", "print", "--model", "gpt-5.4", "hello"})
+	cmd.SetArgs([]string{"--mode", "print", "--model", "gpt-5.5", "hello"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -293,7 +293,7 @@ func TestContinueNoSessionError(t *testing.T) {
 	defer os.Unsetenv("HOME")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-5.4", "--continue", "hello"})
+	cmd.SetArgs([]string{"--model", "gpt-5.5", "--continue", "hello"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -1112,7 +1112,7 @@ func TestBuildCommitMsgFuncCommitRoleFallback(t *testing.T) {
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
 		"roles": {
-			"default": {"model": "gpt-5.4", "provider": "openai"},
+			"default": {"model": "gpt-5.5", "provider": "openai"},
 			"commit": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
