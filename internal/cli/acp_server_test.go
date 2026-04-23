@@ -203,9 +203,15 @@ func TestRunACPServer_ContextCanceled(t *testing.T) {
 func TestRunACPServer_ExplicitModel(t *testing.T) {
 	origStdin := os.Stdin
 	origStdout := os.Stdout
+	origModel := flagModel
+	origURL := flagURL
+	origHeaders := flagHeaders
 	defer func() {
 		os.Stdin = origStdin
 		os.Stdout = origStdout
+		flagModel = origModel
+		flagURL = origURL
+		flagHeaders = origHeaders
 	}()
 
 	stdinR, stdinW, err := os.Pipe()
@@ -229,9 +235,9 @@ func TestRunACPServer_ExplicitModel(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(ctx)
 
-	origModel := flagModel
-	defer func() { flagModel = origModel }()
 	flagModel = "gpt-4o" // Exercise the branch where model != "".
+	flagURL = "https://example.invalid"
+	flagHeaders = []string{"X-Test=1", "Authorization=Bearer token"}
 
 	done := make(chan error, 1)
 	go func() { done <- runACPServer(cmd, nil) }()
@@ -243,6 +249,16 @@ func TestRunACPServer_ExplicitModel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("runACPServer did not return within 5 seconds")
+	}
+}
+
+func TestLogHandlerIdentityMethods(t *testing.T) {
+	h := &logHandler{f: io.Discard}
+	if got := h.WithAttrs(nil); got != h {
+		t.Fatal("WithAttrs should return the same handler")
+	}
+	if got := h.WithGroup("group"); got != h {
+		t.Fatal("WithGroup should return the same handler")
 	}
 }
 
