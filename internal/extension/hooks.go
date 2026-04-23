@@ -12,8 +12,14 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 // HookConfig defines a shell command hook that runs before or after tool calls.
@@ -114,6 +120,73 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 		})
 	}
 	return cbs
+}
+
+// BuildTracingCallbacks returns before/after tool callbacks that emit OTEL spans
+// for every tool invocation. The parent span context is propagated from the
+// context passed to the callback, so spans are linked to the agent's trace.
+func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToolCallback) {
+	tracer := otel.Tracer("pi-go")
+
+	beforeCB := func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+		_, span := tracer.Start(ctx, "tool."+t.Name())
+		span.SetAttributes(
+			otel.AttributeString("tool.name", t.Name()),
+			otel.AttributeInt("tool.args_count", len(args)),
+		)
+		_ = span // span lifetime managed by afterCB
+		return args, nil
+	}
+
+	afterCB := func(ctx tool.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
+		span := trace.SpanFromContext(ctx)
+		if span.IsRecording() {
+			if runErr != nil {
+				span.RecordError(runErr)
+				span.SetStatus(codes.Error, runErr.Error())
+			} else {
+				span.SetStatus(codes.Ok, "")
+			}
+			span.SetAttributes(
+				otel.AttributeString("tool.name", t.Name()),
+				otel.AttributeBool("tool.success", runErr == nil),
+			)
+			span.End()
+		}
+		return result, nil
+	}
+
+	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}
+}
+
+// BuildLLMTracingCallbacks returns before/after model callbacks that emit OTEL spans
+// for each LLM invocation inside the agent loop.
+func BuildLLMTracingCallbacks() ([]llmagent.BeforeModelCallback, []llmagent.AfterModelCallback) {
+	tracer := otel.Tracer("pi-go")
+
+	beforeCB := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+		_, span := tracer.Start(ctx, "llm."+req.Model)
+		span.SetAttributes(
+			otel.AttributeString("llm.model", req.Model),
+		)
+		return nil, nil
+	}
+
+	afterCB := func(ctx agent.CallbackContext, resp *model.LLMResponse, respErr error) (*model.LLMResponse, error) {
+		span := trace.SpanFromContext(ctx)
+		if span.IsRecording() {
+			if respErr != nil {
+				span.RecordError(respErr)
+				span.SetStatus(codes.Error, respErr.Error())
+			} else {
+				span.SetStatus(codes.Ok, "")
+			}
+			span.End()
+		}
+		return resp, nil
+	}
+
+	return []llmagent.BeforeModelCallback{beforeCB}, []llmagent.AfterModelCallback{afterCB}
 }
 
 // runHookCommand executes a hook's shell command with the tool name and data as JSON on stdin.

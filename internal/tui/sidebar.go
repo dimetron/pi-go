@@ -41,6 +41,7 @@ type SidebarRenderInput struct {
 	StatusLine   string                   // status text shown above matrix
 	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
+	OTELEnabled  bool                     // OTEL tracing is active
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -116,6 +117,10 @@ func RenderSidebar(in SidebarRenderInput) string {
 			name = name[:innerW-1] + "…"
 		}
 		lines = append(lines, dim.Render("  "+name))
+	}
+	if in.OTELEnabled {
+		otelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")).Bold(true)
+		lines = append(lines, otelStyle.Render("  ◉ OTEL"))
 	}
 	lines = append(lines, "")
 

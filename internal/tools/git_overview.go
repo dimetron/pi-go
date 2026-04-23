@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/adk/tool"
+
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 const defaultGitTimeout = 10 * time.Second
@@ -53,9 +56,19 @@ func newGitOverviewTool(sb *Sandbox) (tool.Tool, error) {
 func gitOverviewHandler(sb *Sandbox, ctx tool.Context, input GitOverviewInput) (GitOverviewOutput, error) {
 	dir := sb.Dir()
 
+	var parentCtx = context.Background()
+	if ctx != nil {
+		parentCtx = ctx
+	}
+	_, span := otel.Tracer("pi-go").Start(parentCtx, "tool.git-overview")
+	span.SetAttributes(attribute.String("git.dir", dir))
+	defer span.End()
+
 	// Check if directory is a git repo
 	if _, err := runGit(ctx, dir, "rev-parse", "--git-dir"); err != nil {
-		return GitOverviewOutput{}, fmt.Errorf("not a git repository")
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("git.error", "not_a_git_repository"))
+		return GitOverviewOutput{}, fmt.Errorf("not a git repository: %w", err)
 	}
 
 	var out GitOverviewOutput
@@ -106,6 +119,13 @@ func gitOverviewHandler(sb *Sandbox, ctx tool.Context, input GitOverviewInput) (
 		}
 	}
 
+	span.SetAttributes(
+		attribute.String("git.branch", out.Branch),
+		attribute.Int("git.staged_count", len(out.StagedFiles)),
+		attribute.Int("git.unstaged_count", len(out.UnstagedFiles)),
+		attribute.Int("git.untracked_count", len(out.UntrackedFiles)),
+		attribute.Int("git.commit_count", len(out.RecentCommits)),
+	)
 	return out, nil
 }
 

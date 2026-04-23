@@ -15,9 +15,11 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -179,6 +181,14 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	promptCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	promptCtx, span := otel.Tracer("acp-server").Start(promptCtx, "acp.Prompt")
+	span.SetAttributes(
+		attribute.String("session.id", sid),
+		attribute.String("session.cwd", state.cwd),
+		attribute.Int("prompt.len", len(extractPromptText(params.Prompt))),
+	)
+	defer span.End()
+
 	a.mu.Lock()
 	state.cancel = cancel
 	a.mu.Unlock()
@@ -291,11 +301,31 @@ func EchoPromptHandler(ctx context.Context, turn PromptTurn) (PromptResult, erro
 func extractPromptText(blocks []acp.ContentBlock) string {
 	var parts []string
 	for _, b := range blocks {
-		if b.Text != nil && b.Text.Text != "" {
+		switch {
+		case b.Text != nil && b.Text.Text != "":
 			parts = append(parts, b.Text.Text)
+		case b.Resource != nil:
+			parts = append(parts, formatEmbeddedResource(b.Resource))
+		case b.ResourceLink != nil:
+			parts = append(parts, "[Reference: "+b.ResourceLink.Uri+"]")
 		}
 	}
-	return strings.Join(parts, "")
+	return strings.Join(parts, "\n")
+}
+
+// formatEmbeddedResource converts an ACP embedded-resource block (produced when
+// the user @-mentions a file in Zed) into a text snippet the LLM can read.
+// TextResourceContents carries the actual file text; BlobResourceContents is
+// binary and only the URI is surfaced.
+func formatEmbeddedResource(r *acp.ContentBlockResource) string {
+	if r.Resource.TextResourceContents != nil {
+		rc := r.Resource.TextResourceContents
+		return fmt.Sprintf("[File: %s]\n```\n%s\n```", rc.Uri, rc.Text)
+	}
+	if r.Resource.BlobResourceContents != nil {
+		return "[Binary file: " + r.Resource.BlobResourceContents.Uri + "]"
+	}
+	return ""
 }
 
 func (a *Agent) updater(sid acp.SessionId) SessionUpdater {

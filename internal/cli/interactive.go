@@ -148,26 +148,6 @@ func deferredInit(
 		return
 	}
 
-	screen := &tui.Screen{}
-	screenTool, err := tools.NewScreenTool(screen)
-	if err != nil {
-		fail(fmt.Errorf("creating screen tool: %w", err))
-		return
-	}
-	coreTools = append(coreTools, screenTool)
-
-	restartCh := make(chan struct{}, 1)
-	restartTool, err := tools.NewRestartTool(func() {
-		select {
-		case restartCh <- struct{}{}:
-		default:
-		}
-	})
-	if err != nil {
-		fail(fmt.Errorf("creating restart tool: %w", err))
-		return
-	}
-	coreTools = append(coreTools, restartTool)
 	send("tools", true)
 
 	// --- Phase 2: Parallel subsystems ---
@@ -414,10 +394,18 @@ func deferredInit(
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
 	afterCBs := extension.BuildAfterToolCallbacks(hooks)
+
+	// Always add OTEL tracing callbacks so all tool calls are traced.
+	tracingBefore, tracingAfter := extension.BuildTracingCallbacks()
+	beforeCBs = append(beforeCBs, tracingBefore...)
+	afterCBs = append(afterCBs, tracingAfter...)
 	if ps.lspMgr != nil {
 		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(ps.lspMgr))
 	}
 	afterCBs = append(afterCBs, compactorCB)
+
+	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
+	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
 
 	// Memory after-tool callback.
 	var memSessionID string
@@ -464,13 +452,15 @@ func deferredInit(
 
 	// Create agent.
 	ag, err := agent.New(agent.Config{
-		Model:               llm,
-		Tools:               coreTools,
-		Toolsets:            ps.mcpToolsets,
-		Instruction:         instruction,
-		SessionService:      sessionSvc,
-		BeforeToolCallbacks: beforeCBs,
-		AfterToolCallbacks:  afterCBs,
+		Model:                llm,
+		Tools:                coreTools,
+		Toolsets:             ps.mcpToolsets,
+		Instruction:          instruction,
+		SessionService:       sessionSvc,
+		BeforeToolCallbacks:  beforeCBs,
+		AfterToolCallbacks:   afterCBs,
+		BeforeModelCallbacks: llmBefore,
+		AfterModelCallbacks:  llmAfter,
 	})
 	if err != nil {
 		fail(fmt.Errorf("creating agent: %w", err))
@@ -531,8 +521,6 @@ func deferredInit(
 			AgentEventCh:      agentEventCh,
 			TokenTracker:      tokenTracker,
 			CompactMetrics:    compactMetrics,
-			RestartCh:         restartCh,
-			Screen:            screen,
 			GitBranch:         ps.gitBranch,
 			DiffAdded:         ps.diffAdded,
 			DiffRemoved:       ps.diffRemoved,
