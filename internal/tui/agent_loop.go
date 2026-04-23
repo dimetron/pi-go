@@ -11,6 +11,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 const (
@@ -296,7 +298,16 @@ func (m *model) runAgentLoop(prompt string) {
 	// the aggregate when deltas already covered the turn.
 	streamedText := false
 
-	for ev, err := range m.cfg.Agent.RunStreaming(m.ctx, m.cfg.SessionID, prompt) {
+	// Start a top-level OTEL span for the entire agent run, inheriting the
+	// model context so child tool spans are linked to this trace.
+	tracer := otel.Tracer("pi-go")
+	ctx, span := tracer.Start(m.ctx, "agent.prompt")
+	defer span.End()
+	span.SetAttributes(
+		otel.AttributeInt("prompt.length", len(prompt)),
+	)
+
+	for ev, err := range m.cfg.Agent.RunStreaming(ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
 			if log != nil {
 				log.Error(err.Error())

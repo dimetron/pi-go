@@ -33,6 +33,7 @@ type Orchestrator struct {
 	spawner  *Spawner
 	worktree *WorktreeManager
 	cfg      *config.Config
+	repoRoot string                 // git repo root; used as default WorkDir for subagents
 	registry map[string]AgentConfig // agent name → config (from discovery)
 	agents   map[string]*agentState
 	mu       sync.Mutex
@@ -103,6 +104,7 @@ func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentCo
 		spawner:     NewSpawner(""),
 		worktree:    wm,
 		cfg:         cfg,
+		repoRoot:    repoRoot,
 		registry:    registry,
 		agents:      make(map[string]*agentState),
 		recentTasks: make(map[string]recentTask),
@@ -386,7 +388,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	// Determine if worktree is needed.
 	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir)
 
-	workDir := ""
+	workDir := o.repoRoot // default to project root so subagents run in the right directory
 	if input.WorkDir != "" {
 		workDir = input.WorkDir
 	} else if useWorktree && o.worktree != nil {

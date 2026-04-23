@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
 	adksession "google.golang.org/adk/session"
@@ -24,10 +25,12 @@ type SessionUpdater interface {
 	Update(ctx context.Context, update acp.SessionUpdate) error
 }
 
-// Stream holds per-turn state for a single ACP prompt turn. It is intended to
-// be used from a single goroutine; no locking is performed.
+// Stream holds per-turn state for a single ACP prompt turn. mu serializes all
+// state mutations and Update() calls because the ADK invokes BeforeToolCallbacks
+// from concurrent goroutines (one per parallel tool call).
 type Stream struct {
 	updater     SessionUpdater
+	mu          sync.Mutex
 	finalText   strings.Builder
 	toolCalls   map[string]*callState
 	subagentID  string
@@ -59,6 +62,8 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 	if ev.Content.Role == "user" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, part := range ev.Content.Parts {
 		if part == nil {
 			continue

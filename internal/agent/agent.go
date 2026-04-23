@@ -22,8 +22,10 @@ import (
 
 // re-export callback types for use by CLI without importing llmagent directly.
 type (
-	BeforeToolCallback = llmagent.BeforeToolCallback
-	AfterToolCallback  = llmagent.AfterToolCallback
+	BeforeToolCallback  = llmagent.BeforeToolCallback
+	AfterToolCallback   = llmagent.AfterToolCallback
+	BeforeModelCallback = llmagent.BeforeModelCallback
+	AfterModelCallback  = llmagent.AfterModelCallback
 )
 
 const (
@@ -182,6 +184,12 @@ type Config struct {
 
 	// AfterToolCallbacks run after each tool execution.
 	AfterToolCallbacks []AfterToolCallback
+
+	// BeforeModelCallbacks run before each LLM invocation.
+	BeforeModelCallbacks []BeforeModelCallback
+
+	// AfterModelCallbacks run after each LLM invocation.
+	AfterModelCallbacks []AfterModelCallback
 }
 
 // Agent wraps an ADK Runner and session management for the coding agent.
@@ -195,14 +203,16 @@ const maxInstructionFileSize = 128 * 1024
 
 func buildRunner(cfg Config, instruction string, sessionSvc session.Service) (*runner.Runner, error) {
 	llmAgent, err := llmagent.New(llmagent.Config{
-		Name:                "pi",
-		Description:         "A coding agent that helps with software engineering tasks.",
-		Model:               cfg.Model,
-		Instruction:         instruction,
-		Tools:               cfg.Tools,
-		Toolsets:            cfg.Toolsets,
-		BeforeToolCallbacks: cfg.BeforeToolCallbacks,
-		AfterToolCallbacks:  cfg.AfterToolCallbacks,
+		Name:                 "pi",
+		Description:          "A coding agent that helps with software engineering tasks.",
+		Model:                cfg.Model,
+		Instruction:          instruction,
+		Tools:                cfg.Tools,
+		Toolsets:             cfg.Toolsets,
+		BeforeToolCallbacks:  cfg.BeforeToolCallbacks,
+		AfterToolCallbacks:   cfg.AfterToolCallbacks,
+		BeforeModelCallbacks: cfg.BeforeModelCallbacks,
+		AfterModelCallbacks:  cfg.AfterModelCallbacks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating LLM agent: %w", err)

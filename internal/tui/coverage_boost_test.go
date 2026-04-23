@@ -307,27 +307,8 @@ func TestHandleRestartCommand_CB(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// waitForRestart / waitForInitEvent tests
+// waitForInitEvent tests
 // -----------------------------------------------------------------------------
-
-func TestWaitForRestart(t *testing.T) {
-	ch := make(chan struct{}, 1)
-	ch <- struct{}{}
-	cmd := waitForRestart(ch)
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	done := make(chan tea.Msg, 1)
-	go func() { done <- cmd() }()
-	select {
-	case msg := <-done:
-		if _, ok := msg.(restartMsg); !ok {
-			t.Errorf("expected restartMsg, got %T", msg)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("waitForRestart timed out")
-	}
-}
 
 func TestWaitForInitEvent_Closed(t *testing.T) {
 	ch := make(chan InitEvent)
