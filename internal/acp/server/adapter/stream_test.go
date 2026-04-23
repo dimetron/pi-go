@@ -213,6 +213,19 @@ func TestStream_SkipsFunctionCallAndResponseParts(t *testing.T) {
 	}
 }
 
+func TestEmitThought_EmptyTextIsNoOp(t *testing.T) {
+	// emitThought guards against empty text as a safety check even though
+	// OnEvent pre-filters them; test it directly to keep the guard covered.
+	up := &fakeUpdater{}
+	s := New(up)
+	if err := s.emitThought(context.Background(), ""); err != nil {
+		t.Fatalf("emitThought(\"\") = %v, want nil", err)
+	}
+	if len(up.updates) != 0 {
+		t.Fatalf("unexpected updates for empty thought: %+v", up.updates)
+	}
+}
+
 func TestStream_NilUpdaterStillAccumulates(t *testing.T) {
 	s := New(nil)
 	if err := s.OnEvent(context.Background(), textEvent("model", textPart("hi"))); err != nil {
