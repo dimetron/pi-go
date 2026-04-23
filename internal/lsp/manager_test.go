@@ -911,6 +911,241 @@ func TestStartServer_WithMockClient(t *testing.T) {
 	_ = client.stdin.Close()
 }
 
+func TestServer_WorkspaceSymbols(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "workspace/symbol" {
+			return json.RawMessage(`[{"name":"main","kind":12,"location":{"uri":"file:///a.go","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":5}}}}]`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   make(map[string]int),
+	}
+
+	ctx := context.Background()
+	syms, err := srv.WorkspaceSymbols(ctx, "main")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols failed: %v", err)
+	}
+	if len(syms) != 1 || syms[0].Name != "main" {
+		t.Errorf("unexpected symbols: %+v", syms)
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_WorkspaceSymbols_NullResult(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "workspace/symbol" {
+			return json.RawMessage(`null`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   make(map[string]int),
+	}
+
+	ctx := context.Background()
+	syms, err := srv.WorkspaceSymbols(ctx, "foo")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols failed: %v", err)
+	}
+	if syms != nil {
+		t.Errorf("expected nil symbols for null result, got: %+v", syms)
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_WorkspaceSymbols_EmptyArray(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "workspace/symbol" {
+			return json.RawMessage(`[]`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   make(map[string]int),
+	}
+
+	ctx := context.Background()
+	syms, err := srv.WorkspaceSymbols(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols failed: %v", err)
+	}
+	if syms == nil {
+		t.Error("expected empty slice, got nil")
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_CodeActions(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "textDocument/codeAction" {
+			return json.RawMessage(`[{"title":"Remove unused import","kind":"quickfix","edit":{"changes":{"file:///a.go":[{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":10}},"newText":""}]}}}]`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   map[string]int{fileURI(tmpFile): 1},
+	}
+
+	ctx := context.Background()
+	actions, err := srv.CodeActions(ctx, tmpFile, 0, 0, 5, 10)
+	if err != nil {
+		t.Fatalf("CodeActions failed: %v", err)
+	}
+	if len(actions) != 1 || actions[0].Title != "Remove unused import" {
+		t.Errorf("unexpected code actions: %+v", actions)
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_CodeActions_NullResult(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "textDocument/codeAction" {
+			return json.RawMessage(`null`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   map[string]int{fileURI(tmpFile): 1},
+	}
+
+	ctx := context.Background()
+	actions, err := srv.CodeActions(ctx, tmpFile, 0, 0, 5, 10)
+	if err != nil {
+		t.Fatalf("CodeActions failed: %v", err)
+	}
+	if actions != nil {
+		t.Errorf("expected nil actions for null result, got: %+v", actions)
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_CodeActions_EmptyArray(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "textDocument/codeAction" {
+			return json.RawMessage(`[]`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   map[string]int{fileURI(tmpFile): 1},
+	}
+
+	ctx := context.Background()
+	actions, err := srv.CodeActions(ctx, tmpFile, 0, 0, 5, 10)
+	if err != nil {
+		t.Fatalf("CodeActions failed: %v", err)
+	}
+	if actions == nil {
+		t.Error("expected empty slice, got nil")
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
+func TestServer_CodeActions_InvalidJSON(t *testing.T) {
+	handler := func(req Request) (json.RawMessage, *ResponseError) {
+		if req.Method == "textDocument/codeAction" {
+			return json.RawMessage(`"not-an-array"`), nil
+		}
+		return json.RawMessage(`null`), nil
+	}
+
+	client, _ := newClientWithMock(handler)
+	tmpFile := t.TempDir() + "/test.go"
+	if err := writeTestFile(tmpFile, "package main\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		client:   client,
+		language: "go",
+		rootURI:  "file:///tmp",
+		opened:   map[string]int{fileURI(tmpFile): 1},
+	}
+
+	ctx := context.Background()
+	_, err := srv.CodeActions(ctx, tmpFile, 0, 0, 5, 10)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON code action result")
+	}
+
+	client.closed.Store(true)
+	_ = client.stdin.Close()
+}
+
 func TestStartServer_DiagnosticNotificationCaching(t *testing.T) {
 	// Test the notification handler that startServer sets up.
 	// We create a manager and simulate what startServer's notification handler does.
