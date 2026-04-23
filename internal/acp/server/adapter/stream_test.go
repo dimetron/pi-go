@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -12,12 +13,16 @@ import (
 )
 
 // fakeUpdater captures every update sent through it for assertion.
+// It is safe for concurrent use by multiple goroutines.
 type fakeUpdater struct {
+	mu      sync.Mutex
 	updates []acp.SessionUpdate
 	err     error
 }
 
 func (f *fakeUpdater) Update(_ context.Context, u acp.SessionUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.updates = append(f.updates, u)
 	return f.err
 }
