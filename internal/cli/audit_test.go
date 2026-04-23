@@ -114,6 +114,22 @@ func TestRunAuditStripForce(t *testing.T) {
 }
 
 func TestDefaultSkillDirs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".pi-go", "skills"), 0o755); err != nil {
+		t.Fatalf("create .pi-go skills dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude", "skills"), 0o755); err != nil {
+		t.Fatalf("create .claude skills dir: %v", err)
+	}
+	origCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origCwd) })
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir temp root: %v", err)
+	}
+
 	dirs := defaultSkillDirs()
 	if len(dirs) < 3 {
 		t.Errorf("expected at least 3 dirs, got %d", len(dirs))

@@ -590,15 +590,7 @@ func runNonInteractive(
 	// Merge MCP and A2A toolsets
 	allToolsets := append(mcpToolsets, a2aToolsets...)
 
-	skillDirs := []string{}
-	if homeDir, hErr := os.UserHomeDir(); hErr == nil {
-		skillDirs = append(skillDirs, filepath.Join(homeDir, ".pi-go", "skills"))
-	}
-	skillDirs = append(skillDirs,
-		filepath.Join(".pi-go", "skills"),
-		filepath.Join(".claude", "skills"),
-		filepath.Join(".cursor", "skills"),
-	)
+	skillDirs := extension.DefaultSkillDirs()
 	skills, _ := extension.LoadSkills(skillDirs...)
 	if len(skills) > 0 {
 		instruction += "\n\n# Available Skills\n\n"

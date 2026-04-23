@@ -112,7 +112,7 @@ type A2AConfig struct {
 func Defaults() Config {
 	return Config{
 		Roles: map[string]RoleConfig{
-			"default": {Model: "gpt-5.4"},
+			"default": {Model: "gpt-5.5"},
 		},
 		DefaultProvider: "openai",
 		ThinkingLevel:   "medium",

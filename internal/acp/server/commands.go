@@ -1,8 +1,6 @@
 package server
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -18,7 +16,7 @@ import (
 func DiscoverAvailableCommands(cwd string) []acp.AvailableCommand {
 	cwd = normalizeDiscoveryCWD(cwd)
 
-	skills, _ := extension.LoadSkills(discoverSkillDirs(cwd)...)
+	skills, _ := extension.LoadSkills(extension.DefaultSkillDirsIn(cwd)...)
 
 	var subagents []subagent.AgentConfig
 	if discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth); err == nil && discovery != nil {
@@ -33,56 +31,5 @@ func normalizeDiscoveryCWD(cwd string) string {
 	if cwd != "" {
 		return cwd
 	}
-	if wd, err := os.Getwd(); err == nil {
-		return wd
-	}
 	return "."
-}
-
-func discoverSkillDirs(cwd string) []string {
-	dirs := make([]string, 0, 4)
-	seen := make(map[string]struct{}, 4)
-
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		userDir := filepath.Join(homeDir, ".pi-go", "skills")
-		dirs = appendUniqueDir(dirs, seen, userDir)
-	}
-
-	for _, rel := range []string{
-		filepath.Join(".pi-go", "skills"),
-		filepath.Join(".claude", "skills"),
-		filepath.Join(".cursor", "skills"),
-	} {
-		if dir := findNearestDir(cwd, rel); dir != "" {
-			dirs = appendUniqueDir(dirs, seen, dir)
-		}
-	}
-
-	return dirs
-}
-
-func appendUniqueDir(dirs []string, seen map[string]struct{}, dir string) []string {
-	if dir == "" {
-		return dirs
-	}
-	if _, ok := seen[dir]; ok {
-		return dirs
-	}
-	seen[dir] = struct{}{}
-	return append(dirs, dir)
-}
-
-func findNearestDir(start, rel string) string {
-	dir := start
-	for {
-		candidate := filepath.Join(dir, rel)
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
 }
