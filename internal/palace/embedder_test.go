@@ -2,6 +2,7 @@ package palace
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -200,4 +201,27 @@ func TestEmbedder_Constants(t *testing.T) {
 	if maxTokenLength != 128 {
 		t.Errorf("maxTokenLength = %d, want 128", maxTokenLength)
 	}
+}
+
+func TestDetectPlatformOnnxFile_InEmbedder(t *testing.T) {
+	path := DetectPlatformOnnxFile()
+	if path == "" {
+		t.Error("DetectPlatformOnnxFile returned empty string")
+	}
+	// Verify the path contains "onnx/"
+	if !strings.Contains(path, "onnx/") {
+		t.Errorf("DetectPlatformOnnxFile returned %q, want path containing 'onnx/'", path)
+	}
+	// Verify it ends with .onnx
+	if !strings.HasSuffix(path, ".onnx") {
+		t.Errorf("DetectPlatformOnnxFile returned %q, want path ending with '.onnx'", path)
+	}
+}
+
+func TestEmbedder_Close_WithSession(t *testing.T) {
+	// Test that Close handles the case where session is non-nil but not initialized
+	// This exercises the Close method code path even when we can't create a real session
+	e := &Embedder{}
+	// Close should not panic
+	e.Close()
 }

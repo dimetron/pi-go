@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,5 +328,92 @@ Use session-specific behavior.
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("runACPServer did not return within 5 seconds")
+	}
+}
+
+// -----------------------------------------------------------------------
+// logHandler tests
+// -----------------------------------------------------------------------
+
+func TestLogHandler_Handle(t *testing.T) {
+	f, err := os.CreateTemp("", "logtest-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	h := &logHandler{f: f}
+	rec := slog.Record{
+		Message: "test message",
+		Level:   slog.LevelInfo,
+	}
+	if err := h.Handle(context.Background(), rec); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	// Verify the log file was written to.
+	content, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(content), "test message") {
+		t.Errorf("log output = %q, want contains 'test message'", string(content))
+	}
+}
+
+func TestLogHandler_WithAttrs(t *testing.T) {
+	f, err := os.CreateTemp("", "logtest-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	h := &logHandler{f: f}
+	h2 := h.WithAttrs(nil)
+	if h2 == nil {
+		t.Fatal("WithAttrs returned nil")
+	}
+	if h2 != h {
+		t.Error("WithAttrs should return the same handler")
+	}
+}
+
+func TestLogHandler_WithGroup(t *testing.T) {
+	f, err := os.CreateTemp("", "logtest-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	h := &logHandler{f: f}
+	h2 := h.WithGroup("group")
+	if h2 == nil {
+		t.Fatal("WithGroup returned nil")
+	}
+	if h2 != h {
+		t.Error("WithGroup should return the same handler")
+	}
+}
+
+func TestLogHandler_Enabled(t *testing.T) {
+	f, err := os.CreateTemp("", "logtest-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	h := &logHandler{f: f}
+	if !h.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("Enabled should always return true")
+	}
+	if !h.Enabled(context.Background(), slog.LevelInfo) {
+		t.Error("Enabled should always return true")
+	}
+	if !h.Enabled(context.Background(), slog.LevelError) {
+		t.Error("Enabled should always return true")
 	}
 }

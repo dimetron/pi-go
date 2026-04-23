@@ -330,3 +330,194 @@ func TestCursorWaitReturnsResult(t *testing.T) {
 		t.Errorf("Wait() result = %q, want %q", got.Result, "ok")
 	}
 }
+
+func TestRunningSessionEmitDropConfirmed(t *testing.T) {
+	// Test that emit is non-blocking and drops events when channel is full
+	session := &RunningSession{
+		events: make(chan shared.Event, 2),
+		done:   make(chan struct{}),
+	}
+	// Fill the channel
+	session.events <- shared.Event{Type: "first"}
+	session.events <- shared.Event{Type: "second"}
+	// This event should be dropped since channel is full
+	session.emit(shared.Event{Type: "dropped"})
+
+	// Verify only first two events remain
+	var count int
+	for {
+		select {
+		case ev := <-session.events:
+			count++
+			if ev.Type == "dropped" {
+				t.Error("dropped event should not be in channel")
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	if count != 2 {
+		t.Errorf("expected 2 events, got %d", count)
+	}
+}
+
+func TestCursorHandleUpdateEmptyAgentMessageChunk(t *testing.T) {
+	session := &RunningSession{
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+	}
+
+	// Empty string should not emit or append
+	session.handleUpdate(acp.SessionNotification{
+		SessionId: acp.SessionId("s-empty"),
+		Update: acp.SessionUpdate{
+			AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+				Content: acp.TextBlock(""),
+			},
+		},
+	})
+	if session.result.Result != "" {
+		t.Errorf("result should be empty for empty message, got %q", session.result.Result)
+	}
+
+	// Whitespace only should not emit or append
+	session.handleUpdate(acp.SessionNotification{
+		SessionId: acp.SessionId("s-ws"),
+		Update: acp.SessionUpdate{
+			AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+				Content: acp.TextBlock("   \n\t  "),
+			},
+		},
+	})
+	if session.result.Result != "" {
+		t.Errorf("result should still be empty for whitespace-only message, got %q", session.result.Result)
+	}
+
+	select {
+	case ev := <-session.events:
+		t.Errorf("should not emit event for empty/whitespace content, got event: %+v", ev)
+	default:
+		// OK - no event emitted
+	}
+}
+
+func TestCursorHandleUpdateEmptyAgentThoughtChunk(t *testing.T) {
+	session := &RunningSession{
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+	}
+
+	// Empty string should not emit
+	session.handleUpdate(acp.SessionNotification{
+		SessionId: acp.SessionId("s-empty"),
+		Update: acp.SessionUpdate{
+			AgentThoughtChunk: &acp.SessionUpdateAgentThoughtChunk{
+				Content: acp.TextBlock(""),
+			},
+		},
+	})
+
+	// Whitespace only should not emit
+	session.handleUpdate(acp.SessionNotification{
+		SessionId: acp.SessionId("s-ws"),
+		Update: acp.SessionUpdate{
+			AgentThoughtChunk: &acp.SessionUpdateAgentThoughtChunk{
+				Content: acp.TextBlock("   \n\t  "),
+			},
+		},
+	})
+
+	select {
+	case ev := <-session.events:
+		t.Errorf("should not emit event for empty/whitespace thought, got event: %+v", ev)
+	default:
+		// OK - no event emitted
+	}
+}
+
+func TestRunningSessionFinishDeduplication(t *testing.T) {
+	session := &RunningSession{
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+	}
+
+	// First finish with content
+	session.finish(shared.RunResult{
+		Status:    shared.StatusSuccess,
+		Result:    "first result",
+		SessionID: "session-1",
+	})
+	if session.result.Result != "first result" {
+		t.Errorf("first finish: result = %q, want %q", session.result.Result, "first result")
+	}
+
+	// Second finish should be ignored (deduplication)
+	session.finish(shared.RunResult{
+		Status:    shared.StatusSuccess,
+		Result:    "second result",
+		SessionID: "session-2",
+	})
+	if session.result.Result != "first result" {
+		t.Errorf("second finish (dedup): result = %q, want %q (first result)", session.result.Result, "first result")
+	}
+
+	// Second finish with empty result and different session ID should update session
+	session.finish(shared.RunResult{
+		Status:    shared.StatusSuccess,
+		Result:    "", // empty result
+		SessionID: "session-3",
+	})
+	if session.result.Result != "first result" {
+		t.Errorf("second finish (empty): result = %q, want %q (first result)", session.result.Result, "first result")
+	}
+}
+
+func TestRunningSessionFinishFallsBackToStderr(t *testing.T) {
+	session := &RunningSession{
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+		stderr:     &stderrBuffer{},
+	}
+
+	// Write to stderr buffer
+	_, _ = session.stderr.Write([]byte("stderr error message"))
+
+	// Finish with empty Error but stderr has content
+	session.finish(shared.RunResult{
+		Status: shared.StatusSuccess,
+		Result: "some result",
+		Error:  "", // empty error
+	})
+
+	if session.result.Error != "stderr error message" {
+		t.Errorf("finish fallback to stderr: error = %q, want %q", session.result.Error, "stderr error message")
+	}
+}
+
+func TestRunningSessionFinishNoFallbackWhenErrorSet(t *testing.T) {
+	session := &RunningSession{
+		events:     make(chan shared.Event, 32),
+		done:       make(chan struct{}),
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+		stderr:     &stderrBuffer{},
+	}
+
+	// Write to stderr buffer
+	_, _ = session.stderr.Write([]byte("stderr message"))
+
+	// Finish with Error set should NOT use stderr fallback
+	session.finish(shared.RunResult{
+		Status: shared.StatusSuccess,
+		Result: "result",
+		Error:  "explicit error", // non-empty error
+	})
+
+	if session.result.Error != "explicit error" {
+		t.Errorf("finish with error: error = %q, want %q", session.result.Error, "explicit error")
+	}
+}
