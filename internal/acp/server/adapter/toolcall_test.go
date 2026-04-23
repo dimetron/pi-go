@@ -387,6 +387,168 @@ func TestOnToolEnd_UpdaterErrorNonParent(t *testing.T) {
 	}
 }
 
+func TestOnToolStart_NestedWithNoArgsUsesBareName(t *testing.T) {
+	// When a nested tool starts with nil args, formatArgsForDisplay returns ""
+	// and the line is built as "▶ <name>" (no parentheses). Verify the line
+	// appears in the parent's accumulated content.
+	up := &fakeUpdater{}
+	s := New(up)
+	ctx := context.Background()
+
+	parentID, err := s.OnToolStart(ctx, "subagent", nil)
+	if err != nil {
+		t.Fatalf("OnToolStart parent: %v", err)
+	}
+
+	_, err = s.OnToolStart(ctx, "bash", nil) // nil args → "▶ bash"
+	if err != nil {
+		t.Fatalf("OnToolStart nested nil args: %v", err)
+	}
+
+	// The parent card should have received a nested content update with "▶ bash".
+	var found bool
+	for _, u := range up.updates {
+		if u.ToolCallUpdate == nil || string(u.ToolCallUpdate.ToolCallId) != parentID {
+			continue
+		}
+		for _, c := range u.ToolCallUpdate.Content {
+			if c.Content != nil && c.Content.Content.Text != nil &&
+				c.Content.Content.Text.Text == "▶ bash" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected '▶ bash' in parent content, got updates: %+v", up.updates)
+	}
+}
+
+func TestAppendToParentLocked_MissingParent(t *testing.T) {
+	// If the parent entry is deleted from toolCalls before a child fires
+	// (possible under parallel tool execution), appendToParentLocked must
+	// silently no-op rather than panic or error.
+	up := &fakeUpdater{}
+	s := New(up)
+	ctx := context.Background()
+
+	parentID, err := s.OnToolStart(ctx, "subagent", nil)
+	if err != nil {
+		t.Fatalf("OnToolStart parent: %v", err)
+	}
+
+	// Simulate the parent being evicted while subagentID is still set.
+	s.mu.Lock()
+	delete(s.toolCalls, parentID)
+	s.mu.Unlock()
+
+	// Child start: state.parent == parentID but the entry is missing.
+	childID, err := s.OnToolStart(ctx, "read", map[string]any{"path": "a.go"})
+	if err != nil {
+		t.Fatalf("OnToolStart child with missing parent: %v", err)
+	}
+	if childID == "" {
+		t.Fatal("expected non-empty child ID")
+	}
+
+	// OnToolEnd for the child must also not error when parent is absent.
+	if err := s.OnToolEnd(ctx, childID, nil, "ok", nil); err != nil {
+		t.Fatalf("OnToolEnd child with missing parent: %v", err)
+	}
+}
+
+func TestFormatArgsForDisplay_TruncatesLongPriorityValue(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 60)
+	got := formatArgsForDisplay(map[string]any{"path": long})
+	if len([]rune(got)) > 50 {
+		t.Fatalf("formatArgsForDisplay did not truncate priority value: len=%d", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("formatArgsForDisplay = %q, want trailing ...", got)
+	}
+}
+
+func TestFormatArgsForDisplay_TruncatesLongFallbackValue(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("b", 40)
+	// No priority key → falls through to the map-iteration fallback.
+	got := formatArgsForDisplay(map[string]any{"zz_custom": long})
+	if !strings.Contains(got, "...") {
+		t.Fatalf("formatArgsForDisplay fallback did not truncate: %q", got)
+	}
+}
+
+func TestFormatArgsForDisplay_MoreThanThreeItemsLimited(t *testing.T) {
+	t.Parallel()
+	args := map[string]any{
+		"aa": "1", "bb": "2", "cc": "3", "dd": "4", "ee": "5",
+	}
+	got := formatArgsForDisplay(args)
+	// At most 3 key=value pairs should appear.
+	parts := strings.Split(got, ", ")
+	if len(parts) > 3 {
+		t.Fatalf("formatArgsForDisplay returned %d parts, want ≤3: %q", len(parts), got)
+	}
+}
+
+func TestFormatArgsForDisplay_NonStringValuesSkipped(t *testing.T) {
+	t.Parallel()
+	// Non-string values in the fallback path should be skipped gracefully.
+	args := map[string]any{"num": 42, "flag": true}
+	got := formatArgsForDisplay(args)
+	// Both values are non-string; result should be empty.
+	if got != "" {
+		t.Fatalf("formatArgsForDisplay with non-string values = %q, want empty", got)
+	}
+}
+
+func TestOnToolStart_ConcurrentParallelCalls(t *testing.T) {
+	// Verify that concurrent OnToolStart calls don't deadlock or corrupt state.
+	up := &fakeUpdater{}
+	s := New(up)
+	ctx := context.Background()
+
+	const n = 20
+	ids := make([]string, n)
+	errs := make([]error, n)
+	done := make(chan int, n)
+
+	for i := range n {
+		go func(i int) {
+			ids[i], errs[i] = s.OnToolStart(ctx, "bash", map[string]any{"command": "echo " + string(rune('a'+i))})
+			done <- i
+		}(i)
+	}
+	for range n {
+		<-done
+	}
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: OnToolStart error: %v", i, err)
+		}
+	}
+
+	// All IDs must be unique.
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			t.Fatalf("duplicate call ID %q", id)
+		}
+		seen[id] = true
+	}
+
+	// End all to verify no leftover state.
+	for _, id := range ids {
+		if err := s.OnToolEnd(ctx, id, nil, "ok", nil); err != nil {
+			t.Errorf("OnToolEnd(%q): %v", id, err)
+		}
+	}
+	if len(s.toolCalls) != 0 {
+		t.Fatalf("toolCalls not empty after all ends: %v", s.toolCalls)
+	}
+}
+
 func TestAppendToParent_UpdaterError(t *testing.T) {
 	sentinel := errors.New("parent append failed")
 	// Use a fresh updater for the parent so OnToolStart succeeds.

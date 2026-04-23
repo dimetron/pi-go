@@ -172,13 +172,20 @@ func normalizeEndpointURL(endpoint, protocol string) string {
 	return endpoint
 }
 
-// loadEnvFromDotEnv reads a single key from ~/.pi-go/.env.
+// loadEnvFromDotEnv reads a single key from dotEnvPath. If dotEnvPath is
+// absolute it is used as-is; otherwise it is resolved as a filename within
+// ~/.pi-go/ (e.g. ".env" → ~/.pi-go/.env).
 func loadEnvFromDotEnv(dotEnvPath, key string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	var path string
+	if strings.HasPrefix(dotEnvPath, "/") {
+		path = dotEnvPath
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		path = home + "/.pi-go/" + dotEnvPath
 	}
-	path := home + "/.pi-go/.env"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

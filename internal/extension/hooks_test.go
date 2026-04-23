@@ -3,7 +3,15 @@ package extension
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/genai"
 )
 
 func TestHookConfigMatchesTool(t *testing.T) {
@@ -182,11 +190,13 @@ func TestBuildAfterToolCallbacksMultipleHooks(t *testing.T) {
 }
 
 type mockToolCallReporter struct {
+	mu           sync.Mutex
 	startedCalls []struct {
 		name string
 		args map[string]any
 	}
 	endedCalls []struct {
+		callID string
 		args   map[string]any
 		result any
 		runErr error
@@ -202,6 +212,8 @@ func (m mockTool) Description() string { return "mock tool for testing" }
 func (m mockTool) IsLongRunning() bool { return false }
 
 func (m *mockToolCallReporter) OnToolStart(ctx context.Context, name string, args map[string]any) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.startedCalls = append(m.startedCalls, struct {
 		name string
 		args map[string]any
@@ -210,13 +222,44 @@ func (m *mockToolCallReporter) OnToolStart(ctx context.Context, name string, arg
 }
 
 func (m *mockToolCallReporter) OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.endedCalls = append(m.endedCalls, struct {
+		callID string
 		args   map[string]any
 		result any
 		runErr error
-	}{args, result, runErr})
+	}{callID, args, result, runErr})
 	return nil
 }
+
+// mockToolCtx is a minimal tool.Context implementation for testing callback
+// correlation. Only FunctionCallID() is meaningful; all other methods return
+// zero values.
+type mockToolCtx struct {
+	context.Context
+	funcCallID string
+}
+
+func (c *mockToolCtx) FunctionCallID() string         { return c.funcCallID }
+func (c *mockToolCtx) Actions() *session.EventActions { return nil }
+func (c *mockToolCtx) SearchMemory(context.Context, string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (c *mockToolCtx) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+func (c *mockToolCtx) RequestConfirmation(string, any) error                { return nil }
+func (c *mockToolCtx) AgentName() string                                    { return "" }
+func (c *mockToolCtx) ReadonlyState() session.ReadonlyState                 { return nil }
+func (c *mockToolCtx) State() session.State                                 { return nil }
+func (c *mockToolCtx) Artifacts() agent.Artifacts                           { return nil }
+func (c *mockToolCtx) InvocationID() string                                 { return "" }
+func (c *mockToolCtx) UserContent() *genai.Content                          { return nil }
+func (c *mockToolCtx) AppName() string                                      { return "" }
+func (c *mockToolCtx) Branch() string                                       { return "" }
+func (c *mockToolCtx) SessionID() string                                    { return "" }
+func (c *mockToolCtx) UserID() string                                       { return "" }
+
+var _ tool.Context = (*mockToolCtx)(nil)
 
 func TestBuildToolCallCallbacks(t *testing.T) {
 	m := &mockToolCallReporter{}
@@ -261,6 +304,123 @@ func TestBuildToolCallCallbacks(t *testing.T) {
 	if m.endedCalls[0].runErr != nil {
 		t.Errorf("runErr = %v, want nil", m.endedCalls[0].runErr)
 	}
+}
+
+// TestBuildToolCallCallbacks_CallIDPropagated is the RED test: it asserts that
+// OnToolEnd receives the call ID returned by OnToolStart so the ACP peer can
+// match the completion update to the correct StartToolCall event.
+//
+// Currently fails because BuildToolCallCallbacks discards the ID and passes ""
+// to OnToolEnd — that silently drops all tool results in the ACP stream.
+func TestBuildToolCallCallbacks_CallIDPropagated(t *testing.T) {
+	m := &mockToolCallReporter{}
+	beforeCBs, afterCBs := BuildToolCallCallbacks(m)
+
+	ctx := &mockToolCtx{Context: context.Background(), funcCallID: "adk-fc-42"}
+	tool := mockTool{nameVal: "bash"}
+	args := map[string]any{"command": "echo hello"}
+	result := map[string]any{"stdout": "hello\n", "stderr": "", "exit_code": 0}
+
+	if _, err := beforeCBs[0](ctx, tool, args); err != nil {
+		t.Fatalf("beforeCB: %v", err)
+	}
+	if _, err := afterCBs[0](ctx, tool, args, result, nil); err != nil {
+		t.Fatalf("afterCB: %v", err)
+	}
+
+	if len(m.endedCalls) != 1 {
+		t.Fatalf("OnToolEnd called %d times, want 1", len(m.endedCalls))
+	}
+	// The call ID passed to OnToolEnd must be the one returned by OnToolStart,
+	// not the empty string that would make it a no-op in the real adapter.
+	if got, want := m.endedCalls[0].callID, "call_test"; got != want {
+		t.Errorf("OnToolEnd callID = %q, want %q (got empty string means tool results are silently dropped)", got, want)
+	}
+}
+
+// TestBuildToolCallCallbacks_ConcurrentCallIDCorrelation fires N parallel
+// tool invocations and verifies each gets its own call ID in OnToolEnd.
+func TestBuildToolCallCallbacks_ConcurrentCallIDCorrelation(t *testing.T) {
+	const workers = 10
+
+	// Each OnToolStart call returns a unique ID so we can verify mapping.
+	var mu sync.Mutex
+	var callSeq int
+	reporter := &spyReporter{}
+	reporter.startFn = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		callSeq++
+		return fmt.Sprintf("call_%d", callSeq)
+	}
+
+	beforeCBs, afterCBs := BuildToolCallCallbacks(reporter)
+	tool := mockTool{nameVal: "bash"}
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			ctx := &mockToolCtx{Context: context.Background(), funcCallID: fmt.Sprintf("adk-fc-%d", i)}
+			args := map[string]any{"command": fmt.Sprintf("echo %d", i)}
+			result := map[string]any{"stdout": fmt.Sprintf("%d\n", i)}
+
+			if _, err := beforeCBs[0](ctx, tool, args); err != nil {
+				t.Errorf("worker %d beforeCB: %v", i, err)
+				return
+			}
+			if _, err := afterCBs[0](ctx, tool, args, result, nil); err != nil {
+				t.Errorf("worker %d afterCB: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+
+	if len(reporter.endedCallIDs) != workers {
+		t.Fatalf("OnToolEnd called %d times, want %d", len(reporter.endedCallIDs), workers)
+	}
+	for _, id := range reporter.endedCallIDs {
+		if id == "" {
+			t.Error("OnToolEnd received empty call ID — tool result will be silently dropped")
+		}
+	}
+	// Every started call ID must appear in ended call IDs.
+	started := make(map[string]bool, len(reporter.startedCallIDs))
+	for _, id := range reporter.startedCallIDs {
+		started[id] = true
+	}
+	for _, id := range reporter.endedCallIDs {
+		if !started[id] {
+			t.Errorf("ended call ID %q was not returned by any OnToolStart", id)
+		}
+	}
+}
+
+// spyReporter records start/end call IDs for concurrent correlation tests.
+type spyReporter struct {
+	mu             sync.Mutex
+	startFn        func() string
+	startedCallIDs []string
+	endedCallIDs   []string
+}
+
+func (s *spyReporter) OnToolStart(_ context.Context, _ string, _ map[string]any) (string, error) {
+	id := s.startFn()
+	s.mu.Lock()
+	s.startedCallIDs = append(s.startedCallIDs, id)
+	s.mu.Unlock()
+	return id, nil
+}
+
+func (s *spyReporter) OnToolEnd(_ context.Context, callID string, _ map[string]any, _ any, _ error) error {
+	s.mu.Lock()
+	s.endedCallIDs = append(s.endedCallIDs, callID)
+	s.mu.Unlock()
+	return nil
 }
 
 func TestBuildToolCallCallbacksAfterError(t *testing.T) {

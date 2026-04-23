@@ -25,9 +25,14 @@ type SessionUpdater interface {
 	Update(ctx context.Context, update acp.SessionUpdate) error
 }
 
-// Stream holds per-turn state for a single ACP prompt turn. mu serializes all
-// state mutations and Update() calls because the ADK invokes BeforeToolCallbacks
-// from concurrent goroutines (one per parallel tool call).
+// Stream holds per-turn state for a single ACP prompt turn. mu guards all
+// state mutations (toolCalls map, nextCallSeq, subagentID, finalText).
+//
+// The ADK invokes BeforeToolCallbacks from concurrent goroutines (one per
+// parallel tool call). Top-level tool start/end Updates are sent after mu is
+// released so concurrent tool calls do not serialize on the protocol write;
+// nested (sub-agent child) Updates intentionally hold mu to preserve
+// content line-ordering on the parent card.
 type Stream struct {
 	updater     SessionUpdater
 	mu          sync.Mutex
@@ -55,6 +60,9 @@ func New(u SessionUpdater) *Stream {
 //     them via Before/AfterToolCallbacks.
 //   - Plain text parts are streamed as agent_message_chunk and accumulated
 //     into finalText.
+//
+// Text accumulation happens under mu; Update() calls are made after releasing
+// mu so a concurrent tool callback does not block on event emission.
 func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 	if ev == nil || ev.Content == nil {
 		return nil
@@ -62,8 +70,14 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 	if ev.Content.Role == "user" {
 		return nil
 	}
+
+	type pending struct {
+		thought bool
+		text    string
+	}
+	var batch []pending
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, part := range ev.Content.Parts {
 		if part == nil {
 			continue
@@ -72,8 +86,8 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 			continue
 		}
 		if part.Thought {
-			if err := s.emitThought(ctx, part.Text); err != nil {
-				return err
+			if part.Text != "" {
+				batch = append(batch, pending{thought: true, text: part.Text})
 			}
 			continue
 		}
@@ -81,10 +95,22 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 			continue
 		}
 		s.finalText.WriteString(part.Text)
-		if s.updater == nil {
+		batch = append(batch, pending{text: part.Text})
+	}
+	updater := s.updater
+	s.mu.Unlock()
+
+	for _, p := range batch {
+		if p.thought {
+			if err := s.emitThought(ctx, p.text); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := s.updater.Update(ctx, acp.UpdateAgentMessageText(part.Text)); err != nil {
+		if updater == nil {
+			continue
+		}
+		if err := updater.Update(ctx, acp.UpdateAgentMessageText(p.text)); err != nil {
 			return fmt.Errorf("stream: agent message update: %w", err)
 		}
 	}
