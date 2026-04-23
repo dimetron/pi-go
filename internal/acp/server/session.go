@@ -8,6 +8,9 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 // ServeConfig configures a server.Serve run.
@@ -46,8 +49,16 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	logger.Log(ctx, slog.LevelInfo, "acp-server: starting")
 	start := time.Now()
 
+	ctx, span := otel.Tracer("acp-server").Start(ctx, "acp.Serve")
+	defer span.End()
+
 	conn := acp.NewAgentSideConnection(cfg.Agent, cfg.Out, cfg.In)
-	conn.SetLogger(logger)
+	// SetLogger cannot be called safely after NewAgentSideConnection because
+	// the SDK starts receive goroutines immediately; defer to default logger.
+
+	span.SetAttributes(
+		attribute.String("service.version", "dev"),
+	)
 
 	logger.Log(ctx, slog.LevelDebug, "acp-server: connection created")
 
@@ -55,9 +66,11 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 
 	select {
 	case <-conn.Done():
+		span.SetAttributes(attribute.String("exit.reason", "peer_disconnected"))
 		logger.Log(ctx, slog.LevelInfo, "acp-server: peer disconnected", "uptime", time.Since(start))
 		return nil
 	case <-ctx.Done():
+		span.SetAttributes(attribute.String("exit.reason", "context_canceled"))
 		logger.Log(ctx, slog.LevelInfo, "acp-server: context canceled", "uptime", time.Since(start))
 		return ctx.Err()
 	}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"sync"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -32,15 +31,10 @@ type Config struct {
 	GenerateCommitMsg func(ctx context.Context, diffs string) (string, error)
 	// Logger is the session logger. If nil, logging is disabled.
 	Logger *logger.Logger
-	// Screen receives screen content updates for the screen tool.
-	// If nil, the screen tool won't have access to TUI content.
-	Screen *Screen
 	// Skills is loaded from skill directories for command completion.
 	Skills []extension.Skill
 	// SkillDirs are the directories to re-scan for skills on each completion.
 	SkillDirs []string
-	// RestartCh receives a signal when the agent calls the restart tool.
-	RestartCh chan struct{}
 	// AgentEventCh receives subagent events from the agent tool for live display.
 	AgentEventCh <-chan AgentSubEvent
 	// TokenTracker tracks daily token usage and enforces limits. May be nil.
@@ -83,8 +77,6 @@ type InitResult struct {
 	AgentEventCh      <-chan AgentSubEvent
 	TokenTracker      TokenTracker
 	CompactMetrics    CompactStatsProvider
-	RestartCh         chan struct{}
-	Screen            *Screen
 	GitBranch         string
 	DiffAdded         int
 	DiffRemoved       int
@@ -121,24 +113,4 @@ type AgentSubEvent struct {
 	Mode       string // "single", "parallel", "chain"
 	Step       int    // 1-based position in pipeline
 	Total      int    // total agents in pipeline
-}
-
-// Screen provides thread-safe access to the current TUI screen content.
-// It implements tools.ScreenProvider so the LLM can read what the user sees.
-type Screen struct {
-	mu      sync.Mutex
-	content string
-}
-
-// ScreenContent returns the current screen content.
-func (s *Screen) ScreenContent() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.content
-}
-
-func (s *Screen) update(content string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.content = content
 }

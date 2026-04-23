@@ -16,6 +16,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/otel"
 )
 
 // model is the Bubble Tea model for the interactive TUI.
@@ -231,21 +232,10 @@ func (m *model) Init() tea.Cmd {
 	// Synchronous init (non-deferred path, used by tests and non-interactive modes).
 	m.refreshDiffStats()
 	var cmds []tea.Cmd
-	if m.cfg.RestartCh != nil {
-		cmds = append(cmds, waitForRestart(m.cfg.RestartCh))
-	}
 	if m.cfg.AgentEventCh != nil {
 		cmds = append(cmds, waitForSubEvent(m.cfg.AgentEventCh))
 	}
 	return tea.Batch(cmds...)
-}
-
-// waitForRestart returns a Cmd that listens for a restart signal from the agent.
-func waitForRestart(ch chan struct{}) tea.Cmd {
-	return func() tea.Msg {
-		<-ch
-		return restartMsg{}
-	}
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -680,11 +670,6 @@ func (m *model) View() tea.View {
 
 	leftPanel := b.String()
 
-	// Update screen provider so the screen tool can read current content.
-	if m.cfg.Screen != nil {
-		m.cfg.Screen.update(visibleMessages)
-	}
-
 	var final string
 	if showSidebar {
 		sidebarInput := SidebarRenderInput{
@@ -706,6 +691,7 @@ func (m *model) View() tea.View {
 			StatusLine:   "",
 			Orchestrator: m.cfg.Orchestrator,
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+			OTELEnabled:  otel.IsEnabled(),
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -1000,8 +986,6 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.AgentEventCh = r.AgentEventCh
 		m.cfg.TokenTracker = r.TokenTracker
 		m.cfg.CompactMetrics = r.CompactMetrics
-		m.cfg.RestartCh = r.RestartCh
-		m.cfg.Screen = r.Screen
 		m.statusModel.GitBranch = r.GitBranch
 		m.diffAdded = r.DiffAdded
 		m.diffRemoved = r.DiffRemoved
@@ -1013,9 +997,6 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.inputModel.SkillDirs = r.SkillDirs
 
 		var cmds []tea.Cmd
-		if r.RestartCh != nil {
-			cmds = append(cmds, waitForRestart(r.RestartCh))
-		}
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
 		}

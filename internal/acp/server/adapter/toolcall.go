@@ -73,6 +73,9 @@ func locationFromArgs(args map[string]any) string {
 // single-level — a sub-agent spawned inside another sub-agent is treated
 // as a plain nested call.
 func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]any) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.nextCallSeq++
 	id := acp.ToolCallId("call_" + strconv.Itoa(s.nextCallSeq))
 	state := &callState{id: id, name: name, kind: toolKind(name)}
@@ -90,12 +93,11 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	}
 
 	if state.parent != "" {
-		// Include args in the content line for better visibility
 		argsLine := formatArgsForDisplay(args)
 		if argsLine != "" {
-			return string(id), s.appendToParent(ctx, state.parent, fmt.Sprintf("▶ %s(%s)", name, argsLine))
+			return string(id), s.appendToParentLocked(ctx, state.parent, fmt.Sprintf("▶ %s(%s)", name, argsLine))
 		}
-		return string(id), s.appendToParent(ctx, state.parent, "▶ "+name)
+		return string(id), s.appendToParentLocked(ctx, state.parent, "▶ "+name)
 	}
 
 	opts := []acp.ToolCallStartOpt{
@@ -116,6 +118,9 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 // a no-op so the adapter tolerates a dropped/filtered start without
 // surfacing a protocol error; the call simply never materializes in Zed.
 func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]any, result any, runErr error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	state, ok := s.toolCalls[callID]
 	if !ok {
 		return nil
@@ -134,12 +139,11 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]a
 		if runErr != nil {
 			marker = "✗"
 		}
-		// Include args in the content line for better visibility
 		argsLine := formatArgsForDisplay(args)
 		if argsLine != "" {
-			return s.appendToParent(ctx, state.parent, fmt.Sprintf("%s %s(%s)", marker, state.name, argsLine))
+			return s.appendToParentLocked(ctx, state.parent, fmt.Sprintf("%s %s(%s)", marker, state.name, argsLine))
 		}
-		return s.appendToParent(ctx, state.parent, marker+" "+state.name)
+		return s.appendToParentLocked(ctx, state.parent, marker+" "+state.name)
 	}
 
 	status := acp.ToolCallStatusCompleted
@@ -153,8 +157,6 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]a
 	case result != nil:
 		opts = append(opts, acp.WithUpdateRawOutput(result))
 	}
-	// Re-send accumulated nested content if any was recorded during the
-	// sub-agent's lifetime, so the final UpdateToolCall carries it too.
 	if len(state.content) > 0 {
 		opts = append(opts, acp.WithUpdateContent(state.content))
 	}
@@ -265,10 +267,10 @@ func formatArgsForDisplay(args map[string]any) string {
 	return strings.Join(parts, ", ")
 }
 
-// appendToParent records line as nested content on the sub-agent parent
+// appendToParentLocked records line as nested content on the sub-agent parent
 // and re-sends the full accumulated collection via WithUpdateContent
-// (which replaces, not appends, server-side).
-func (s *Stream) appendToParent(ctx context.Context, parentID acp.ToolCallId, line string) error {
+// (which replaces, not appends, server-side). Caller must hold mu.
+func (s *Stream) appendToParentLocked(ctx context.Context, parentID acp.ToolCallId, line string) error {
 	parent, ok := s.toolCalls[string(parentID)]
 	if !ok {
 		return nil
