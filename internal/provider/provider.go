@@ -127,8 +127,8 @@ var KnownModels = map[string][]string{
 		"claude-opus-4-7",
 	},
 	"openai": {
-		// Latest OpenAI frontier tiers: GPT-5.4 pro/max, GPT-5.4
-		// large, GPT-5.4 mini, and GPT-5.4 nano.
+		// Latest OpenAI frontier model plus retained GPT-5.4 compatibility tiers.
+		"gpt-5.5",
 		"gpt-5.4-pro",
 		"gpt-5.4",
 		"gpt-5.4-mini",
@@ -195,6 +195,7 @@ var contextWindowSizes = map[string]int64{
 	"claude-3-sonnet": 200_000,
 	"claude-3-haiku":  200_000,
 	// OpenAI
+	"gpt-5.5":       1_050_000,
 	"gpt-5.4-pro":   1_050_000,
 	"gpt-5.4-mini":  400_000,
 	"gpt-5.4-nano":  400_000,
