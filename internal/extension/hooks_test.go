@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/toolconfirmation"
@@ -480,3 +481,102 @@ func TestParseFrontmatterLine(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildTracingCallbacks(t *testing.T) {
+	// BuildTracingCallbacks creates before/after tool callbacks that emit OTEL spans.
+	// We test that the callbacks are created and can be called without panicking.
+	// The actual span emission depends on OTEL configuration at runtime.
+	before, after := BuildTracingCallbacks()
+	if len(before) != 1 {
+		t.Fatalf("expected 1 before callback, got %d", len(before))
+	}
+	if len(after) != 1 {
+		t.Fatalf("expected 1 after callback, got %d", len(after))
+	}
+
+	// Create a mock tool and context
+	mockT := mockTool{nameVal: "read"}
+	ctx := &mockToolCtx{Context: context.Background(), funcCallID: "test-call-1"}
+	args := map[string]any{"path": "/test"}
+
+	// Call before callback - should not panic
+	_, err := before[0](ctx, mockT, args)
+	if err != nil {
+		t.Fatalf("before callback failed: %v", err)
+	}
+
+	// Call after callback with success - should not panic
+	result := map[string]any{"content": "test"}
+	_, err = after[0](ctx, mockT, args, result, nil)
+	if err != nil {
+		t.Fatalf("after callback failed: %v", err)
+	}
+
+	// Call after callback with error - should not panic
+	testErr := fmt.Errorf("tool execution failed")
+	_, err = after[0](ctx, mockT, args, result, testErr)
+	if err != nil {
+		t.Fatalf("after callback with error failed: %v", err)
+	}
+}
+
+func TestBuildLLMTracingCallbacks(t *testing.T) {
+	// BuildLLMTracingCallbacks creates before/after model callbacks that emit OTEL spans.
+	// We test that the callbacks are created and can be called without panicking.
+	// The actual span emission depends on OTEL configuration at runtime.
+	before, after := BuildLLMTracingCallbacks()
+	if len(before) != 1 {
+		t.Fatalf("expected 1 before callback, got %d", len(before))
+	}
+	if len(after) != 1 {
+		t.Fatalf("expected 1 after callback, got %d", len(after))
+	}
+
+	// Create a mock LLM request
+	req := &model.LLMRequest{
+		Model: "claude-3-5-sonnet",
+	}
+
+	// Create a minimal mock context
+	callbackCtx := &mockReadonlyContext{Context: context.Background()}
+
+	// Call before callback - should not panic
+	_, err := before[0](callbackCtx, req)
+	if err != nil {
+		t.Fatalf("before callback failed: %v", err)
+	}
+
+	// Call after callback with response - should not panic
+	resp := &model.LLMResponse{
+		ModelVersion: req.Model,
+	}
+	_, err = after[0](callbackCtx, resp, nil)
+	if err != nil {
+		t.Fatalf("after callback failed: %v", err)
+	}
+
+	// Call after callback with error - should not panic
+	testErr := fmt.Errorf("model request failed")
+	_, err = after[0](callbackCtx, resp, testErr)
+	if err != nil {
+		t.Fatalf("after callback with error failed: %v", err)
+	}
+}
+
+// mockReadonlyContext is a minimal implementation of agent.CallbackContext for testing
+type mockReadonlyContext struct {
+	context.Context
+}
+
+func (c *mockReadonlyContext) UserContent() *genai.Content          { return nil }
+func (c *mockReadonlyContext) InvocationID() string                 { return "" }
+func (c *mockReadonlyContext) AgentName() string                    { return "" }
+func (c *mockReadonlyContext) ReadonlyState() session.ReadonlyState { return nil }
+func (c *mockReadonlyContext) UserID() string                       { return "" }
+func (c *mockReadonlyContext) AppName() string                      { return "" }
+func (c *mockReadonlyContext) SessionID() string                    { return "" }
+func (c *mockReadonlyContext) Branch() string                       { return "" }
+func (c *mockReadonlyContext) Artifacts() agent.Artifacts           { return nil }
+func (c *mockReadonlyContext) State() session.State                 { return nil }
+
+var _ agent.CallbackContext = (*mockReadonlyContext)(nil)
