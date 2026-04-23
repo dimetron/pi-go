@@ -213,7 +213,11 @@ func maskKey(key string) string {
 	return key[:4] + "..." + key[len(key)-4:]
 }
 
-func openBrowser(url string) error {
+// openBrowser opens a URL in the default browser.
+// It is a var so tests can replace it with a mock.
+var openBrowser = openBrowserDefault
+
+func openBrowserDefault(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", url).Run()

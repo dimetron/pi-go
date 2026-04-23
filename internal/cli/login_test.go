@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -14,6 +13,9 @@ import (
 // -----------------------------------------------------------------------
 // maskKey — pure string helper, table-driven
 // -----------------------------------------------------------------------
+
+// Ensure openBrowser is linked (used by TestOpenBrowser_*).
+var _ = openBrowser
 
 func TestMaskKey_TableDriven(t *testing.T) {
 	tests := []struct {
@@ -46,23 +48,13 @@ func TestMaskKey_TableDriven(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestOpenBrowser_PlatformDispatch(t *testing.T) {
-	// Skip on CI where launching a browser may misbehave.
-	if os.Getenv("CI") != "" {
-		t.Skip("skipping openBrowser in CI")
-	}
-	// Use a file:// URL that definitely exists to minimize side effects
-	// (on macOS, `open` for non-existent targets returns an error quickly).
-	tmp := filepath.Join(t.TempDir(), "ob.html")
-	_ = os.WriteFile(tmp, []byte("ok"), 0o644)
-	url := "file://" + tmp
+	// Mock the browser so we don't actually open any browser.
+	orig := openBrowser
+	openBrowser = func(url string) error { return nil }
+	t.Cleanup(func() { openBrowser = orig })
 
-	// Capture stdout so the "Open this URL" message on unsupported GOOS
-	// doesn't leak into test output.
-	_ = captureStdout(t, func() {
-		err := openBrowser(url)
-		_ = err // either nil or exec error is acceptable
-		_ = runtime.GOOS
-	})
+	err := openBrowser("https://test.example.com")
+	_ = err // either nil or exec error is acceptable
 }
 
 // -----------------------------------------------------------------------

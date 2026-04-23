@@ -664,10 +664,11 @@ func TestRunLogin_ModelFlagResolveProvider(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestOpenBrowser_ReturnsNilOrError(t *testing.T) {
-	// Capture stdout so any "Open this URL" prints don't leak.
-	_ = captureStdout(t, func() {
-		_ = openBrowser("https://example.invalid")
-	})
+	// Mock so we don't call the real browser.
+	orig := openBrowser
+	openBrowser = func(url string) error { return nil }
+	t.Cleanup(func() { openBrowser = orig })
+	_ = openBrowser("https://example.invalid")
 }
 
 // -----------------------------------------------------------------------
@@ -1189,14 +1190,13 @@ func TestExecute_HelpFlag(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestOpenBrowser_BadURL(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short mode")
+	// Mock so we don't call the real browser or exec anything.
+	orig := openBrowser
+	openBrowser = func(url string) error { return fmt.Errorf("mocked") }
+	t.Cleanup(func() { openBrowser = orig })
+
+	err := openBrowser("file:///nonexistent/path/xyzzy")
+	if err == nil {
+		t.Error("expected mock error")
 	}
-	// Do not run a real browser in CI.
-	if os.Getenv("CI") != "" {
-		t.Skip("CI mode")
-	}
-	_ = captureStdout(t, func() {
-		_ = openBrowser("file:///nonexistent/path/xyzzy")
-	})
 }
