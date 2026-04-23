@@ -16,25 +16,34 @@ func TestDefaultSkillDirs(t *testing.T) {
 }
 
 func TestDefaultSkillDirsIn(t *testing.T) {
-	// Test with a known project path.
-	dirs := DefaultSkillDirsIn("/Users/dimetron/p6s/pi-dev/pi-go")
+	root := t.TempDir()
+	piGoSkills := filepath.Join(root, ".pi-go", "skills")
+	claudeSkills := filepath.Join(root, ".claude", "skills")
+	if err := os.MkdirAll(piGoSkills, 0o755); err != nil {
+		t.Fatalf("create .pi-go skills dir: %v", err)
+	}
+	if err := os.MkdirAll(claudeSkills, 0o755); err != nil {
+		t.Fatalf("create .claude skills dir: %v", err)
+	}
+
+	dirs := DefaultSkillDirsIn(root)
 	if len(dirs) == 0 {
 		t.Error("DefaultSkillDirsIn returned empty")
 	}
 	t.Logf("DefaultSkillDirsIn: %v", dirs)
 
 	// Verify it finds .claude/skills and .pi-go/skills.
-	foundClaraude := false
+	foundClaude := false
 	foundPigo := false
 	for _, d := range dirs {
-		if d == "/Users/dimetron/p6s/pi-dev/pi-go/.claude/skills" {
-			foundClaraude = true
+		if d == claudeSkills {
+			foundClaude = true
 		}
-		if d == "/Users/dimetron/p6s/pi-dev/pi-go/.pi-go/skills" {
+		if d == piGoSkills {
 			foundPigo = true
 		}
 	}
-	if !foundClaraude {
+	if !foundClaude {
 		t.Error("did not find .claude/skills")
 	}
 	if !foundPigo {
