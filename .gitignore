@@ -49,3 +49,4 @@ sandbox.log
 /internal/cli/.cache/
 /.playwright-mcp/
 /.code-review-graph/
+/coverage*
