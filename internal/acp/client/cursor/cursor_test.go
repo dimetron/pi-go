@@ -6,9 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	shared "github.com/dimetron/pi-go/internal/acp"
 )
 
 func TestRunnerStartRejectsEmptyPrompt(t *testing.T) {
@@ -218,5 +222,109 @@ func TestStopReasonText(t *testing.T) {
 		if got := stopReasonText(tt.reason); got != tt.expect {
 			t.Errorf("stopReasonText(%v) = %q, want %q", tt.reason, got, tt.expect)
 		}
+	}
+}
+
+func TestContentBlockTextResourceLink(t *testing.T) {
+	// Test ResourceLink block returns the URI
+	linkBlock := acp.ContentBlock{ResourceLink: &acp.ContentBlockResourceLink{Uri: "https://example.com/file.txt"}}
+	if got := contentBlockText(linkBlock); got != "https://example.com/file.txt" {
+		t.Errorf("contentBlockText(ResourceLink) = %q, want %q", got, "https://example.com/file.txt")
+	}
+
+	// Test empty ResourceLink
+	emptyLinkBlock := acp.ContentBlock{ResourceLink: &acp.ContentBlockResourceLink{Uri: ""}}
+	if got := contentBlockText(emptyLinkBlock); got != "" {
+		t.Errorf("contentBlockText(empty ResourceLink) = %q, want empty", got)
+	}
+}
+
+func TestAppendResultEmptyString(t *testing.T) {
+	session := &RunningSession{
+		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
+	}
+	// Append with existing content
+	session.appendResult("Hello ")
+	// Appending empty string should be a no-op
+	session.appendResult("")
+	if session.result.Result != "Hello " {
+		t.Errorf("result = %q, want %q after empty append", session.result.Result, "Hello ")
+	}
+}
+
+func TestRunningSessionCancelAlreadyFinished(t *testing.T) {
+	session := &RunningSession{
+		finished: true,
+		cmd:      &exec.Cmd{},
+	}
+	// When finished=true, Cancel() should return nil immediately
+	if err := session.Cancel(); err != nil {
+		t.Errorf("Cancel() on finished session error = %v, want nil", err)
+	}
+}
+
+func TestRunningSessionCancelNilProcess(t *testing.T) {
+	cmd := &exec.Cmd{}
+	session := &RunningSession{
+		cmd: cmd, // cmd.Process is nil by default
+	}
+	// When cmd.Process is nil, Cancel() should return nil
+	if err := session.Cancel(); err != nil {
+		t.Errorf("Cancel() with nil cmd.Process error = %v, want nil", err)
+	}
+}
+
+func TestRunnerStartUsesCommandField(t *testing.T) {
+	scriptDir := t.TempDir()
+	scriptPath := filepath.Join(scriptDir, "echo_args.sh")
+	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
+printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"test","version":"1.0"}}}\n'
+printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"test-session"}}\n'
+printf '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}\n'
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	runner := Runner{}
+	req := RunRequest{
+		Prompt:  "test",
+		Command: []string{"/bin/bash", scriptPath},
+	}
+	session, err := runner.Start(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer session.Cancel()
+
+	select {
+	case <-session.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not complete in time")
+	}
+}
+
+func TestRunnerStartBinaryNotFound(t *testing.T) {
+	runner := Runner{Binary: "/nonexistent/path/to/cursor-agent-xyz123"}
+	_, err := runner.Start(context.Background(), RunRequest{Prompt: "test"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent binary")
+	}
+	if !strings.Contains(err.Error(), "finding cursor-agent") {
+		t.Errorf("error should wrap 'finding cursor-agent', got: %v", err)
+	}
+}
+
+func TestRunnerStartSubprocessFails(t *testing.T) {
+	runner := Runner{Binary: "sh"}
+	_, err := runner.Start(context.Background(), RunRequest{
+		Prompt:  "test",
+		Command: []string{"sh", "-c", "exit 1"}, // Exit immediately
+	})
+	if err == nil {
+		t.Fatal("expected error when subprocess fails to start")
+	}
+	if !strings.Contains(err.Error(), "start cursor-agent subprocess") {
+		t.Errorf("error should wrap 'start cursor-agent subprocess', got: %v", err)
 	}
 }

@@ -296,6 +296,30 @@ Or in standalone `~/.pi-go/mcp.json` (Claude Desktop compatible format):
 
 **Environment variable substitution:** Pi automatically expands `${ENV_VAR}` patterns in server URLs using `.pi-go/.env`
 
+## Editor Integration
+
+Pi can run as an ACP server, allowing it to be used from IDEs that support the Agent CP protocol.
+
+### Zed
+
+Add pi to Zed's `agent_servers` in your settings:
+
+```json
+{
+  "agent_servers": {
+    "pi": {
+      "type": "custom",
+      "command": "pi",
+      "args": ["acp-server", "--model", "minimax-m2.7:cloud"],
+      "env": {}
+    }
+  }
+}
+```
+
+Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
+directory with full access to pi's tools and memory.
+
 ## License
 
 See [LICENSE](LICENSE) for details.
