@@ -4,10 +4,11 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/dimetron/pi-go)](https://goreportcard.com/report/github.com/dimetron/pi-go)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/dimetron/pi-go)](go.mod)
 [![License](https://img.shields.io/github/license/dimetron/pi-go)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/dimetron/pi-go?include_prereleases)](https://github.com/dimetron/pi-go/releases)
+[![Release](https://img.shields.io/github/v/release/dimetron/pi-go?logo=github&label=latest)](https://github.com/dimetron/pi-go/releases)
 [![codecov](https://codecov.io/gh/dimetron/pi-go/graph/badge.svg)](https://codecov.io/gh/dimetron/pi-go)
 
-A terminal-based coding agent built on [Google ADK Go](https://google.github.io/adk-go/) with multi-provider LLM support, sandboxed tool execution, LSP integration, and a subagent system.
+A terminal-based coding agent built on [Google ADK Go](https://adk.dev/) with multi-provider LLM support, sandboxed tool
+execution, LSP integration, and a subagent system.
 
 ![pi-go TUI](docs/screen/pi-go.gif)
 
