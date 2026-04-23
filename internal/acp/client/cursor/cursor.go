@@ -152,6 +152,11 @@ func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, err
 	envCmd := os.Getenv(envACPCursorCmd)
 	switch {
 	case binary != "":
+		found, err := findBinary([]string{binary})
+		if err != nil {
+			return nil, fmt.Errorf("finding %s: %w", BinaryName, err)
+		}
+		binary = found
 		cmdArgs = buildArgs(req, true)
 	case len(req.Command) > 0:
 		binary = req.Command[0]
@@ -402,7 +407,7 @@ func (s *RunningSession) finish(result shared.RunResult) {
 		}
 		return
 	}
-	if strings.TrimSpace(result.Error) == "" {
+	if strings.TrimSpace(result.Error) == "" && s.stderr != nil {
 		result.Error = strings.TrimSpace(s.stderr.String())
 	}
 	s.result = result

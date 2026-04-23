@@ -317,14 +317,25 @@ func TestRunnerStartBinaryNotFound(t *testing.T) {
 
 func TestRunnerStartSubprocessFails(t *testing.T) {
 	runner := Runner{Binary: "sh"}
-	_, err := runner.Start(context.Background(), RunRequest{
+	session, err := runner.Start(context.Background(), RunRequest{
 		Prompt:  "test",
-		Command: []string{"sh", "-c", "exit 1"}, // Exit immediately
+		Command: []string{"sh", "-c", "exit 1"}, // Exit immediately after start
 	})
-	if err == nil {
-		t.Fatal("expected error when subprocess fails to start")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "start cursor-agent subprocess") {
-		t.Errorf("error should wrap 'start cursor-agent subprocess', got: %v", err)
+
+	select {
+	case <-session.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not complete in time")
+	}
+
+	result := session.Wait()
+	if result.Status != shared.StatusError {
+		t.Fatalf("result.Status = %s, want %s (error=%q)", result.Status, shared.StatusError, result.Error)
+	}
+	if strings.TrimSpace(result.Error) == "" {
+		t.Fatal("expected non-empty error when subprocess exits immediately")
 	}
 }
