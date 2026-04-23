@@ -114,6 +114,9 @@ func TestNewACPServerCmd_Structure(t *testing.T) {
 	if cmd.Flags().Lookup("model") == nil {
 		t.Error("missing --model flag")
 	}
+	if cmd.Flags().Lookup("url") == nil {
+		t.Error("missing --url flag")
+	}
 	if cmd.Flags().Lookup("header") == nil {
 		t.Error("missing --header flag")
 	} else if got := cmd.Flags().Lookup("header").NoOptDefVal; got != "" {

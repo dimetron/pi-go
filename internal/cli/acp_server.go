@@ -27,6 +27,7 @@ process receives SIGINT.`,
 		RunE: runACPServer,
 	}
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use for ACP prompt handling")
+	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the LLM API endpoint")
 	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
 	if f := cmd.Flags().Lookup("header"); f != nil {
 		f.NoOptDefVal = ""
