@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "everything": {
+      "command": "go",
+      "args": [
+        "run",
+        "hack/test/mcp/main.go"
+      ]
+    },
+    "chrome-devtools": {
+      "command": "bunx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ]
+    },
+    "tavily": {
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
+    },
+    "exa": {
+      "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
+    },
+    "docs-acp": {
+      "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
+    },
+    "docs-adk": {
+      "url": "https://gitmcp.io/google/adk-go"
+    }
+  }
+}

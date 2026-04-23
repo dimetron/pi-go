@@ -27,6 +27,10 @@ process receives SIGINT.`,
 		RunE: runACPServer,
 	}
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use for ACP prompt handling")
+	cmd.Flags().StringArrayVar(&flagHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
+	if f := cmd.Flags().Lookup("header"); f != nil {
+		f.NoOptDefVal = ""
+	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	return cmd
 }
