@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	acpserver "github.com/dimetron/pi-go/internal/acp/server"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 func newACPServerCmd() *cobra.Command {
@@ -60,6 +61,11 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 		logger = slog.New(&logHandler{f: f})
 	}
 
+	sessionSvc, err := pisession.NewFileService(logDir)
+	if err != nil && f != nil {
+		_, _ = io.WriteString(f, fmt.Sprintf("session service: %v\n", err))
+	}
+
 	model := flagModel
 	if model == "" {
 		model = "minimax-m2.7:cloud"
@@ -69,13 +75,15 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 		AgentInfo:                 acp.Implementation{Name: "pi-go", Version: Version},
 		AvailableCommandsResolver: acpserver.DiscoverAvailableCommands,
 		Handler: acpserver.NewPromptHandler(acpserver.RuntimeConfig{
-			Model:    model,
-			BaseURL:  flagURL,
-			Headers:  flagHeaders,
-			Insecure: flagInsecure,
-			System:   flagSystem,
+			Model:          model,
+			BaseURL:        flagURL,
+			Headers:        flagHeaders,
+			Insecure:       flagInsecure,
+			System:         flagSystem,
+			SessionService: sessionSvc,
 		}),
-		Logger: logger,
+		Logger:         logger,
+		SessionService: sessionSvc,
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
 		Agent: agent,

@@ -203,6 +203,9 @@ func TestAgentInitializeAdvertisesPi(t *testing.T) {
 	if !resp.AgentCapabilities.LoadSession {
 		t.Fatalf("LoadSession = false, want true")
 	}
+	if resp.AgentCapabilities.SessionCapabilities.List == nil {
+		t.Fatalf("SessionCapabilities.List = nil, want session/list advertised")
+	}
 	if !resp.AgentCapabilities.PromptCapabilities.EmbeddedContext {
 		t.Fatalf("PromptCapabilities.EmbeddedContext = false, want true so Zed can inline file context")
 	}
@@ -526,9 +529,6 @@ func TestAgentCustomHandlerRuns(t *testing.T) {
 func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 	a := &Agent{}
 
-	if _, err := a.ListSessions(context.Background(), acp.ListSessionsRequest{}); !isMethodNotFound(err) {
-		t.Fatalf("ListSessions err = %v, want method-not-found", err)
-	}
 	if _, err := a.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{}); !isMethodNotFound(err) {
 		t.Fatalf("SetSessionConfigOption err = %v, want method-not-found", err)
 	}

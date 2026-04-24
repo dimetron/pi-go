@@ -16,8 +16,10 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"go.opentelemetry.io/otel/attribute"
+	adksession "google.golang.org/adk/session"
 
 	"github.com/dimetron/pi-go/internal/acp/server/adapter"
+	piagent "github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -65,6 +67,8 @@ type Agent struct {
 	Subagents []subagent.AgentConfig
 	// Logger is used for diagnostic output. If nil, a discard logger is used.
 	Logger *slog.Logger
+	// SessionService lists persisted pi sessions for ACP session/list. Optional.
+	SessionService adksession.Service
 
 	mu       sync.Mutex
 	conn     *acp.AgentSideConnection
@@ -129,8 +133,9 @@ func (a *Agent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.Init
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		AgentInfo:       &info,
 		AgentCapabilities: acp.AgentCapabilities{
-			LoadSession:        true,
-			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: true},
+			LoadSession:         true,
+			PromptCapabilities:  acp.PromptCapabilities{EmbeddedContext: true},
+			SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}},
 		},
 	}, nil
 }
@@ -265,10 +270,53 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	return resp, nil
 }
 
-// ListSessions is not yet supported; advertise method-not-found so clients
-// can detect capability absence.
-func (a *Agent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+// ListSessions returns persisted pi sessions visible to the ACP client.
+func (a *Agent) ListSessions(ctx context.Context, params acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+	if a.SessionService == nil {
+		return acp.ListSessionsResponse{Sessions: []acp.SessionInfo{}}, nil
+	}
+	resp, err := a.SessionService.List(ctx, &adksession.ListRequest{
+		AppName: piagent.AppName,
+		UserID:  piagent.DefaultUserID,
+	})
+	if err != nil {
+		return acp.ListSessionsResponse{}, fmt.Errorf("listing sessions: %w", err)
+	}
+
+	sessions := make([]acp.SessionInfo, 0, len(resp.Sessions))
+	for _, sess := range resp.Sessions {
+		cwd := sessionCWD(sess)
+		if params.Cwd != nil && cwd != *params.Cwd {
+			continue
+		}
+		updated := ""
+		if !sess.LastUpdateTime().IsZero() {
+			updated = sess.LastUpdateTime().Format(time.RFC3339Nano)
+		}
+		info := acp.SessionInfo{
+			SessionId: acp.SessionId(sess.ID()),
+			Cwd:       cwd,
+		}
+		if updated != "" {
+			info.UpdatedAt = &updated
+		}
+		title := sess.ID()
+		info.Title = &title
+		sessions = append(sessions, info)
+	}
+	return acp.ListSessionsResponse{Sessions: sessions}, nil
+}
+
+func sessionCWD(sess adksession.Session) string {
+	if val, err := sess.State().Get("cwd"); err == nil {
+		if cwd, ok := val.(string); ok && strings.TrimSpace(cwd) != "" {
+			return cwd
+		}
+	}
+	if wd, err := getwd(); err == nil {
+		return wd
+	}
+	return "/"
 }
 
 // SetSessionConfigOption is not yet supported.

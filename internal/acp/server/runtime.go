@@ -39,6 +39,7 @@ type RuntimeConfig struct {
 	System          string
 	LoadConfig      func() (config.Config, error)
 	SandboxRootFunc func(turn PromptTurn) string
+	SessionService  adksession.Service
 }
 
 // piSessionState caches the per-ACP-session pi runtime so all turns within one
@@ -277,6 +278,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		Tools:               coreTools,
 		Toolsets:            mcpToolsets,
 		Instruction:         instruction,
+		SessionService:      rt.SessionService,
 		BeforeToolCallbacks: beforeCBs,
 		AfterToolCallbacks:  afterCBs,
 	})
@@ -287,12 +289,20 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating agent: %w", err)
 	}
 
-	sessionID, err := ag.CreateSession(ctx)
+	var sessionID string
+	if rt.SessionService == nil {
+		sessionID, err = ag.CreateSession(ctx)
+		if err != nil {
+			err = fmt.Errorf("creating session: %w", err)
+		}
+	} else {
+		sessionID, err = resolvePiSessionID(ctx, rt.SessionService, turn.SessionID)
+	}
 	if err != nil {
 		lspMgr.Shutdown()
 		orch.Shutdown()
 		_ = sandbox.Close()
-		return nil, fmt.Errorf("creating session: %w", err)
+		return nil, err
 	}
 
 	cleanup := func() {
@@ -307,6 +317,43 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		streamProxy: proxy,
 		cleanup:     cleanup,
 	}, nil
+}
+
+func resolvePiSessionID(ctx context.Context, svc adksession.Service, acpSessionID string) (string, error) {
+	if strings.TrimSpace(acpSessionID) != "" {
+		if svc != nil {
+			_, err := svc.Get(ctx, &adksession.GetRequest{
+				AppName:   piagent.AppName,
+				UserID:    piagent.DefaultUserID,
+				SessionID: acpSessionID,
+			})
+			if err == nil {
+				return acpSessionID, nil
+			}
+			if !strings.Contains(err.Error(), "not found") {
+				return "", fmt.Errorf("loading session %s: %w", acpSessionID, err)
+			}
+			if _, err := svc.Create(ctx, &adksession.CreateRequest{
+				AppName:   piagent.AppName,
+				UserID:    piagent.DefaultUserID,
+				SessionID: acpSessionID,
+			}); err != nil {
+				return "", fmt.Errorf("creating session %s: %w", acpSessionID, err)
+			}
+		}
+		return acpSessionID, nil
+	}
+	if svc == nil {
+		return "", nil
+	}
+	resp, err := svc.Create(ctx, &adksession.CreateRequest{
+		AppName: piagent.AppName,
+		UserID:  piagent.DefaultUserID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("creating session: %w", err)
+	}
+	return resp.Session.ID(), nil
 }
 
 // runPromptTurn runs one prompt turn against the cached pi session.
