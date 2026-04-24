@@ -141,7 +141,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	for {
 		var req Request
 		if err := dec.Decode(&req); err != nil {
-			// Connection closed or invalid JSON — just return.
+			// Connection closed, invalid JSON, or peer shut down — stop reading.
 			return
 		}
 

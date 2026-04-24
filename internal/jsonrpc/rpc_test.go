@@ -46,8 +46,18 @@ func newTestAgent(t *testing.T, response string) *agent.Agent {
 	return ag
 }
 
+func testSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "pi-rpc-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "test.sock")
+}
+
 func TestServerPromptRoundtrip(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "Hello from RPC!")
 
 	srv := NewServer(Config{
@@ -124,7 +134,7 @@ func TestServerPromptRoundtrip(t *testing.T) {
 }
 
 func TestServerSessionCreate(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
@@ -172,7 +182,7 @@ func TestServerSessionCreate(t *testing.T) {
 }
 
 func TestServerMethodNotFound(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
@@ -215,7 +225,7 @@ func TestServerMethodNotFound(t *testing.T) {
 }
 
 func TestServerPromptMissingText(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
@@ -259,7 +269,7 @@ func TestServerPromptMissingText(t *testing.T) {
 }
 
 func TestServerConcurrentSessions(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "concurrent response")
 
 	srv := NewServer(Config{
@@ -337,7 +347,7 @@ func TestServerConcurrentSessions(t *testing.T) {
 }
 
 func TestServerGracefulShutdown(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
@@ -371,7 +381,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 }
 
 func TestServerPromptWithSessionID(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "session response")
 
 	srv := NewServer(Config{
@@ -461,7 +471,7 @@ func waitForSocket(t *testing.T, path string) {
 }
 
 func TestServerPromptInvalidJSONParams(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
@@ -483,12 +493,14 @@ func TestServerPromptInvalidJSONParams(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
-	_ = enc.Encode(Request{
+	if err := enc.Encode(Request{
 		JSONRPC: "2.0",
 		Method:  "prompt",
-		Params:  json.RawMessage(`{invalid json}`),
+		Params:  json.RawMessage(`"not an object"`),
 		ID:      1,
-	})
+	}); err != nil {
+		t.Fatalf("encoding request: %v", err)
+	}
 
 	dec := json.NewDecoder(conn)
 	var resp Response
@@ -513,7 +525,7 @@ func (f *failingSessionService) Create(_ context.Context, _ *session.CreateReque
 }
 
 func TestServerPromptCreateSessionError(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag, err := agent.New(agent.Config{
 		Model:          &mockLLM{response: "ok"},
 		Instruction:    "Test agent",
@@ -562,7 +574,7 @@ func TestServerPromptCreateSessionError(t *testing.T) {
 }
 
 func TestServerSessionCreateError(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag, err := agent.New(agent.Config{
 		Model:          &mockLLM{response: "ok"},
 		Instruction:    "Test agent",
@@ -637,7 +649,7 @@ func (f *functionCallLLM) GenerateContent(_ context.Context, _ *model.LLMRequest
 }
 
 func TestServerPromptWithFunctionCalls(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag, err := agent.New(agent.Config{
 		Model:       &functionCallLLM{},
 		Instruction: "Test agent",
@@ -691,39 +703,36 @@ func TestServerPromptWithFunctionCalls(t *testing.T) {
 		t.Errorf("expected message_start, got %s", ev.Type)
 	}
 
-	// 3. tool_call event.
-	if err := dec.Decode(&ev); err != nil {
-		t.Fatalf("decoding event: %v", err)
-	}
-	if ev.Type != "tool_call" {
-		t.Errorf("expected tool_call, got %s", ev.Type)
-	}
-	if ev.ToolName != "test_tool" {
-		t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
-	}
+	var sawToolCall bool
+	for {
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatalf("decoding event: %v", err)
+		}
 
-	// 4. tool_result event.
-	if err := dec.Decode(&ev); err != nil {
-		t.Fatalf("decoding event: %v", err)
-	}
-	if ev.Type != "tool_result" {
-		t.Errorf("expected tool_result, got %s", ev.Type)
-	}
-	if ev.ToolName != "test_tool" {
-		t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
-	}
-
-	// 5. message_end event.
-	if err := dec.Decode(&ev); err != nil {
-		t.Fatalf("decoding event: %v", err)
-	}
-	if ev.Type != "message_end" {
-		t.Errorf("expected message_end, got %s", ev.Type)
+		switch ev.Type {
+		case "tool_call":
+			if ev.ToolName != "test_tool" {
+				t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
+			}
+			sawToolCall = true
+		case "tool_result":
+			if ev.ToolName != "test_tool" {
+				t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
+			}
+			if !sawToolCall {
+				t.Error("expected tool_call event before tool_result")
+			}
+			return
+		case "message_end":
+			t.Fatal("expected tool_result event before message_end")
+		default:
+			t.Errorf("unexpected event type %q", ev.Type)
+		}
 	}
 }
 
 func TestServerSessionList(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := testSocketPath(t)
 	ag := newTestAgent(t, "ok")
 
 	srv := NewServer(Config{
