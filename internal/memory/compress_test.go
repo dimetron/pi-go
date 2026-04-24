@@ -1,8 +1,13 @@
 package memory
 
 import (
+	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 func TestBuildCompressionPrompt(t *testing.T) {
@@ -283,6 +288,249 @@ func TestParseSummaryResponse_Empty(t *testing.T) {
 	_, err := parseSummaryResponse("", "sess-1", "/proj")
 	if err == nil {
 		t.Fatal("expected error for empty response")
+	}
+}
+
+// mockOrchestrator implements the minimal subagentOrchestrator interface for testing.
+type mockOrchestrator struct {
+	mu      sync.Mutex
+	lookups []string
+	spawns  []subagent.SpawnInput
+	events  []subagent.Event
+	failAt  string // "LookupAgent" or "Spawn"
+	failErr error
+}
+
+func newMockOrchestrator(events []subagent.Event) *mockOrchestrator {
+	return &mockOrchestrator{events: events}
+}
+
+func (m *mockOrchestrator) LookupAgent(name string) (subagent.AgentConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lookups = append(m.lookups, name)
+	if m.failAt == "LookupAgent" {
+		return subagent.AgentConfig{}, m.failErr
+	}
+	return subagent.AgentConfig{Name: name, Role: "smol"}, nil
+}
+
+func (m *mockOrchestrator) Spawn(_ context.Context, input subagent.SpawnInput) (
+	<-chan subagent.Event, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.spawns = append(m.spawns, input)
+	if m.failAt == "Spawn" {
+		return nil, "", m.failErr
+	}
+
+	ch := make(chan subagent.Event, len(m.events))
+	for _, ev := range m.events {
+		ch <- ev
+	}
+	close(ch)
+	return ch, "agent-123", nil
+}
+
+func (m *mockOrchestrator) getLookups() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.lookups))
+	copy(out, m.lookups)
+	return out
+}
+
+func (m *mockOrchestrator) getSpawns() []subagent.SpawnInput {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]subagent.SpawnInput, len(m.spawns))
+	copy(out, m.spawns)
+	return out
+}
+
+func TestNewSubagentCompressor(t *testing.T) {
+	orch := newMockOrchestrator(nil)
+	c := NewSubagentCompressor(orch)
+	if c == nil {
+		t.Fatal("expected non-nil compressor")
+	}
+}
+
+func TestSubagentCompressor_CompressObservation_Success(t *testing.T) {
+	events := []subagent.Event{
+		{Type: "text_delta", Content: `{"title": "Read main.go", "type": "discovery", "text": "Explored main entry.", "source_files": ["/proj/main.go"]}`},
+	}
+	orch := newMockOrchestrator(events)
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	raw := RawObservation{
+		SessionID: "sess-1",
+		Project:   "/proj",
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": "/proj/main.go"},
+		Timestamp: time.Now(),
+	}
+
+	obs, err := c.CompressObservation(ctx, raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if obs.Title != "Read main.go" {
+		t.Errorf("title = %q, want %q", obs.Title, "Read main.go")
+	}
+	if obs.Type != TypeDiscovery {
+		t.Errorf("type = %q, want %q", obs.Type, TypeDiscovery)
+	}
+
+	lookups := orch.getLookups()
+	if len(lookups) != 1 || lookups[0] != "memory-compressor" {
+		t.Errorf("lookups = %v, want [memory-compressor]", lookups)
+	}
+
+	spawns := orch.getSpawns()
+	if len(spawns) != 1 {
+		t.Fatalf("spawns = %d, want 1", len(spawns))
+	}
+	if spawns[0].Agent.Name != "memory-compressor" {
+		t.Errorf("spawn agent name = %q, want %q", spawns[0].Agent.Name, "memory-compressor")
+	}
+}
+
+func TestSubagentCompressor_CompressObservation_LookupAgentError(t *testing.T) {
+	orch := newMockOrchestrator(nil)
+	orch.failAt = "LookupAgent"
+	orch.failErr = fmt.Errorf("agent not found")
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	raw := RawObservation{ToolName: "Read", Timestamp: time.Now()}
+
+	_, err := c.CompressObservation(ctx, raw)
+	if err == nil {
+		t.Fatal("expected error when LookupAgent fails")
+	}
+	if !contains(err.Error(), "finding memory-compressor agent") {
+		t.Errorf("error = %v, want finding memory-compressor agent", err)
+	}
+}
+
+func TestSubagentCompressor_CompressObservation_SpawnError(t *testing.T) {
+	orch := newMockOrchestrator(nil)
+	orch.failAt = "Spawn"
+	orch.failErr = fmt.Errorf("spawn refused")
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	raw := RawObservation{ToolName: "Read", Timestamp: time.Now()}
+
+	_, err := c.CompressObservation(ctx, raw)
+	if err == nil {
+		t.Fatal("expected error when Spawn fails")
+	}
+	if !contains(err.Error(), "spawning memory-compressor") {
+		t.Errorf("error = %v, want spawning memory-compressor", err)
+	}
+}
+
+func TestSubagentCompressor_CompressObservation_ErrorEvent(t *testing.T) {
+	events := []subagent.Event{
+		{Type: "text_delta", Content: `some partial`},
+		{Type: "error", Error: "model overloaded"},
+	}
+	orch := newMockOrchestrator(events)
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	raw := RawObservation{ToolName: "Read", Timestamp: time.Now()}
+
+	_, err := c.CompressObservation(ctx, raw)
+	if err == nil {
+		t.Fatal("expected error when error event received")
+	}
+	if !contains(err.Error(), "memory-compressor error") {
+		t.Errorf("error = %v, want memory-compressor error", err)
+	}
+}
+
+func TestSubagentCompressor_SummarizeSession_Success(t *testing.T) {
+	events := []subagent.Event{
+		{Type: "text_delta", Content: `{"request": "Fix handler", "investigated": "handler.go", "learned": "nil missing", "completed": "Added guard", "next_steps": "Add tests"}`},
+	}
+	orch := newMockOrchestrator(events)
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	observations := []*Observation{
+		{Title: "Read handler", Type: TypeDiscovery, Text: "Found bug", SourceFiles: []string{"/proj/handler.go"}},
+	}
+
+	summary, err := c.SummarizeSession(ctx, "sess-1", "/proj", observations)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.SessionID != "sess-1" {
+		t.Errorf("sessionID = %q, want %q", summary.SessionID, "sess-1")
+	}
+	if summary.Request != "Fix handler" {
+		t.Errorf("request = %q, want %q", summary.Request, "Fix handler")
+	}
+	if summary.NextSteps != "Add tests" {
+		t.Errorf("next_steps = %q, want %q", summary.NextSteps, "Add tests")
+	}
+
+	lookups := orch.getLookups()
+	if len(lookups) != 1 || lookups[0] != "memory-compressor" {
+		t.Errorf("lookups = %v, want [memory-compressor]", lookups)
+	}
+}
+
+func TestSubagentCompressor_SummarizeSession_LookupAgentError(t *testing.T) {
+	orch := newMockOrchestrator(nil)
+	orch.failAt = "LookupAgent"
+	orch.failErr = fmt.Errorf("agent missing")
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	_, err := c.SummarizeSession(ctx, "sess-1", "/proj", nil)
+	if err == nil {
+		t.Fatal("expected error when LookupAgent fails")
+	}
+	if !contains(err.Error(), "finding memory-compressor agent") {
+		t.Errorf("error = %v, want finding memory-compressor agent", err)
+	}
+}
+
+func TestSubagentCompressor_SummarizeSession_SpawnError(t *testing.T) {
+	orch := newMockOrchestrator(nil)
+	orch.failAt = "Spawn"
+	orch.failErr = fmt.Errorf("spawn failed")
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	_, err := c.SummarizeSession(ctx, "sess-1", "/proj", nil)
+	if err == nil {
+		t.Fatal("expected error when Spawn fails")
+	}
+	if !contains(err.Error(), "spawning memory-compressor for summary") {
+		t.Errorf("error = %v, want spawning memory-compressor for summary", err)
+	}
+}
+
+func TestSubagentCompressor_SummarizeSession_ErrorEvent(t *testing.T) {
+	events := []subagent.Event{
+		{Type: "error", Error: "model crashed"},
+	}
+	orch := newMockOrchestrator(events)
+	c := NewSubagentCompressor(orch)
+
+	ctx := context.Background()
+	_, err := c.SummarizeSession(ctx, "sess-1", "/proj", nil)
+	if err == nil {
+		t.Fatal("expected error when error event received")
+	}
+	if !contains(err.Error(), "memory-compressor summary error") {
+		t.Errorf("error = %v, want memory-compressor summary error", err)
 	}
 }
 

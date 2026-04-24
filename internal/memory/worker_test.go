@@ -448,6 +448,48 @@ func TestBuildAfterToolCallback(t *testing.T) {
 	}
 }
 
+func TestWorkerOnAfterStore(t *testing.T) {
+	store := newMockStore()
+	comp := newMockCompressor()
+	w := NewWorker(store, comp, 10)
+
+	var mu sync.Mutex
+	var hookCalls []*Observation
+
+	w.OnAfterStore(func(_ context.Context, obs *Observation) {
+		mu.Lock()
+		defer mu.Unlock()
+		hookCalls = append(hookCalls, obs)
+	})
+	w.OnAfterStore(func(_ context.Context, obs *Observation) {
+		mu.Lock()
+		defer mu.Unlock()
+		hookCalls = append(hookCalls, obs)
+	})
+
+	ctx := context.Background()
+	w.Start(ctx)
+
+	w.Enqueue(makeRaw("tool-1"))
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hookCalls) != 2 {
+		t.Errorf("hook calls = %d, want 2", len(hookCalls))
+	}
+	for i, obs := range hookCalls {
+		if obs.Title != "Compressed: tool-1" {
+			t.Errorf("hook[%d].Title = %q, want %q", i, obs.Title, "Compressed: tool-1")
+		}
+	}
+}
+
 func TestTruncateFallbackText(t *testing.T) {
 	raw := RawObservation{
 		ToolName:   "test",

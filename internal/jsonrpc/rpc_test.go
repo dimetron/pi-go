@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -457,6 +458,268 @@ func waitForSocket(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("socket %s did not appear", path)
+}
+
+func TestServerPromptInvalidJSONParams(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag := newTestAgent(t, "ok")
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "prompt",
+		Params:  json.RawMessage(`{invalid json}`),
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error for invalid JSON params")
+	}
+	if resp.Error.Code != -32602 {
+		t.Errorf("expected code -32602, got %d", resp.Error.Code)
+	}
+}
+
+// failingSessionService always returns an error on Create.
+type failingSessionService struct {
+	session.Service
+}
+
+func (f *failingSessionService) Create(_ context.Context, _ *session.CreateRequest) (*session.CreateResponse, error) {
+	return nil, fmt.Errorf("session service is down")
+}
+
+func TestServerPromptCreateSessionError(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag, err := agent.New(agent.Config{
+		Model:          &mockLLM{response: "ok"},
+		Instruction:    "Test agent",
+		SessionService: &failingSessionService{},
+	})
+	if err != nil {
+		t.Fatalf("creating agent: %v", err)
+	}
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "prompt",
+		Params:  json.RawMessage(`{"text":"hello"}`),
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error when CreateSession fails")
+	}
+	if resp.Error.Code != -32000 {
+		t.Errorf("expected code -32000, got %d", resp.Error.Code)
+	}
+}
+
+func TestServerSessionCreateError(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag, err := agent.New(agent.Config{
+		Model:          &mockLLM{response: "ok"},
+		Instruction:    "Test agent",
+		SessionService: &failingSessionService{},
+	})
+	if err != nil {
+		t.Fatalf("creating agent: %v", err)
+	}
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "session.create",
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error when CreateSession fails")
+	}
+	if resp.Error.Code != -32000 {
+		t.Errorf("expected code -32000, got %d", resp.Error.Code)
+	}
+}
+
+// functionCallLLM returns LLM responses that include function calls and function responses.
+type functionCallLLM struct{}
+
+func (f *functionCallLLM) Name() string { return "mock-function-model" }
+
+func (f *functionCallLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		resp := &model.LLMResponse{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						Name: "test_tool",
+						Args: map[string]any{"arg1": "value1"},
+					},
+				},
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						Name:     "test_tool",
+						Response: map[string]any{"result": "done"},
+					},
+				},
+			}, genai.RoleModel),
+		}
+		yield(resp, nil)
+	}
+}
+
+func TestServerPromptWithFunctionCalls(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag, err := agent.New(agent.Config{
+		Model:       &functionCallLLM{},
+		Instruction: "Test agent",
+	})
+	if err != nil {
+		t.Fatalf("creating agent: %v", err)
+	}
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "prompt",
+		Params:  json.RawMessage(`{"text":"call a function"}`),
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+
+	// 1. JSON-RPC response with session ID.
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	// 2. message_start event.
+	var ev Event
+	if err := dec.Decode(&ev); err != nil {
+		t.Fatalf("decoding event: %v", err)
+	}
+	if ev.Type != "message_start" {
+		t.Errorf("expected message_start, got %s", ev.Type)
+	}
+
+	// 3. tool_call event.
+	if err := dec.Decode(&ev); err != nil {
+		t.Fatalf("decoding event: %v", err)
+	}
+	if ev.Type != "tool_call" {
+		t.Errorf("expected tool_call, got %s", ev.Type)
+	}
+	if ev.ToolName != "test_tool" {
+		t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
+	}
+
+	// 4. tool_result event.
+	if err := dec.Decode(&ev); err != nil {
+		t.Fatalf("decoding event: %v", err)
+	}
+	if ev.Type != "tool_result" {
+		t.Errorf("expected tool_result, got %s", ev.Type)
+	}
+	if ev.ToolName != "test_tool" {
+		t.Errorf("expected tool_name 'test_tool', got %q", ev.ToolName)
+	}
+
+	// 5. message_end event.
+	if err := dec.Decode(&ev); err != nil {
+		t.Fatalf("decoding event: %v", err)
+	}
+	if ev.Type != "message_end" {
+		t.Errorf("expected message_end, got %s", ev.Type)
+	}
 }
 
 func TestServerSessionList(t *testing.T) {

@@ -13,13 +13,19 @@ import (
 // maxPromptOutput is the maximum size of tool output included in the compression prompt.
 const maxPromptOutput = 4096
 
+// subagentOrchestrator is the minimal interface needed by SubagentCompressor.
+type subagentOrchestrator interface {
+	LookupAgent(name string) (subagent.AgentConfig, error)
+	Spawn(ctx context.Context, input subagent.SpawnInput) (<-chan subagent.Event, string, error)
+}
+
 // SubagentCompressor uses a bundled subagent to compress raw observations.
 type SubagentCompressor struct {
-	orchestrator *subagent.Orchestrator
+	orchestrator subagentOrchestrator
 }
 
 // NewSubagentCompressor creates a compressor that uses the memory-compressor subagent.
-func NewSubagentCompressor(orch *subagent.Orchestrator) *SubagentCompressor {
+func NewSubagentCompressor(orch subagentOrchestrator) *SubagentCompressor {
 	return &SubagentCompressor{orchestrator: orch}
 }
 
