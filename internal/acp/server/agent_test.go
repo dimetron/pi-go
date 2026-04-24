@@ -209,6 +209,10 @@ func TestAgentInitializeAdvertisesPi(t *testing.T) {
 }
 
 func TestAgentNewSessionAndPromptFlow(t *testing.T) {
+	if raceEnabled {
+		t.Skip("acp-go-sdk ClientSideConnection has a constructor/read loop race under -race in pipe-based tests")
+	}
+
 	clientRW, agentRW := pipePair()
 	defer clientRW.Close()
 
