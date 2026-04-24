@@ -1,6 +1,7 @@
 package sop
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,22 +43,53 @@ func TestLoadPDD_ProjectOverride(t *testing.T) {
 }
 
 func TestLoadPDD_GlobalOverride(t *testing.T) {
-	// We can't easily test the global override without mocking os.UserHomeDir.
-	// Instead, verify that when project override doesn't exist, the function
-	// falls through (to global, then embedded). With no global override set up,
-	// it should return the embedded default.
+	// Create a fake home directory with a global SOP
 	dir := t.TempDir()
-	content, err := LoadPDD(dir)
+	globalSOP := "# Global PDD SOP\nThis is a global override."
+	globalPath := filepath.Join(dir, ".pi-go", "sops")
+	if err := os.MkdirAll(globalPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalPath, "pdd.md"), []byte(globalSOP), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := LoadPDDWithHome(t.TempDir(), dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != globalSOP {
+		t.Errorf("expected global override SOP, got: %s", content)
+	}
+}
+
+func TestLoadPDD_UserHomeDirError(t *testing.T) {
+	// Temporarily swap userHomeDir to return an error
+	orig := userHomeDir
+	userHomeDir = func() (string, error) { return "", fmt.Errorf("no home") }
+	defer func() { userHomeDir = orig }()
+
+	content, err := LoadPDD(t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if content != DefaultPDDSOP {
-		t.Error("expected embedded default when no overrides exist")
+		t.Error("expected embedded default when userHomeDir fails")
+	}
+}
+
+func TestLoadPDDWithHome_EmptyHomeDir(t *testing.T) {
+	content, err := LoadPDDWithHome(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != DefaultPDDSOP {
+		t.Error("expected embedded default when homeDir is empty")
 	}
 }
 
 func TestLoadPDD_ProjectOverGlobal(t *testing.T) {
-	// If project override exists, it should take precedence
+	// If project override exists, it should take precedence even when global exists
 	dir := t.TempDir()
 	sopDir := filepath.Join(dir, ".pi-go", "sops")
 	if err := os.MkdirAll(sopDir, 0o755); err != nil {
@@ -68,7 +100,17 @@ func TestLoadPDD_ProjectOverGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	content, err := LoadPDD(dir)
+	// Create a global SOP too
+	homeDir := t.TempDir()
+	globalPath := filepath.Join(homeDir, ".pi-go", "sops")
+	if err := os.MkdirAll(globalPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalPath, "pdd.md"), []byte("# Global SOP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := LoadPDDWithHome(dir, homeDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
