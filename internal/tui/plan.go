@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -292,7 +293,9 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	m.running = true
 
 	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(roughIdea)
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.agentCancel = cancel
+	go m.runAgentLoop(turnCtx, roughIdea)
 
 	return m, waitForAgent(m.agentCh)
 }

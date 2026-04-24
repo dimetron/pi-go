@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,7 +41,9 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(prompt)
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.agentCancel = cancel
+	go m.runAgentLoop(turnCtx, prompt)
 
 	return m, waitForAgent(m.agentCh)
 }
@@ -195,7 +198,9 @@ After the user answers, update %s with:
 	m.chatModel.Scroll = 0
 
 	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(prompt)
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.agentCancel = cancel
+	go m.runAgentLoop(turnCtx, prompt)
 
 	return m, waitForAgent(m.agentCh)
 }

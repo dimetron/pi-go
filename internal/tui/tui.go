@@ -42,9 +42,10 @@ type model struct {
 	themeManager *ThemeManager
 
 	// Agent state.
-	running bool
-	mode    string        // "chat" or "plan" — shown in status bar
-	agentCh chan agentMsg // channel for receiving agent events
+	running     bool
+	mode        string             // "chat" or "plan" — shown in status bar
+	agentCh     chan agentMsg      // channel for receiving agent events
+	agentCancel context.CancelFunc // cancels only the current agent turn (not the whole app)
 
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
