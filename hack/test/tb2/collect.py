@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coding agent analytics collector - runs Maki, Claude Code, or OpenCode headless, appends to CSV."""
+"""Coding agent analytics collector - runs pi-go, Maki, Claude Code, or OpenCode headless, appends to CSV."""
 
 import argparse
 import csv
@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-AGENTS = ("maki", "claude-code", "opencode")
+AGENTS = ("pi", "maki", "claude-code", "opencode")
 
 PER_MILLION = 1_000_000
 
@@ -59,6 +59,7 @@ AGENT_COLORS = {
     "claude-code": "\033[38;5;172m",
     "maki": "\033[35m",
     "opencode": "\033[34m",
+    "pi": "\033[33m",  # yellow
 }
 
 
@@ -102,6 +103,17 @@ def build_cmd_maki(args):
         cmd += ["-m", args.model]
     if args.max_turns is not None:
         cmd += ["--max-turns", str(args.max_turns)]
+    return cmd
+
+
+def build_cmd_pi(args):
+    cmd = [
+        "pi", "--mode", "json",
+        args.prompt,
+    ]
+    if args.model:
+        cmd += ["--model", args.model]
+    # Note: pi does not support --max-turns, --agent, or --max-budget-usd flags
     return cmd
 
 
@@ -225,6 +237,106 @@ def opencode_usage(tokens):
         "cache_read_input_tokens": tokens.get("cache", {}).get("read", 0),
         "cache_creation_input_tokens": tokens.get("cache", {}).get("write", 0),
     }
+
+
+def process_pi_stream(proc, meta):
+    """Parse pi-go --mode json output from a subprocess.
+
+    pi-go outputs JSONL with events:
+      - message_start: session info
+      - text_delta: text chunks (continues same turn)
+      - tool_call: tool invocation
+      - tool_result: tool response
+      - thinking_delta: thinking chunks (hidden, used for turn tracking)
+      - message_end: final message with session_id
+
+    Returns (summary, per_turn_usage, tool_calls, result_text).
+    """
+    turn_usage: dict[int, dict] = {}
+    all_tool_calls: list[dict] = []
+    turn_index = 0
+    model = ""
+    session_id = ""
+    result_text = ""
+    started = False
+
+    for raw_line in proc.stdout:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        msg_type = msg.get("type")
+
+        if msg_type == "message_start":
+            session_id = msg.get("session_id", session_id)
+            model = msg.get("agent", "") or meta.get("model", "")
+            started = True
+
+        elif msg_type == "text_delta":
+            result_text += msg.get("delta", "")
+
+        elif msg_type == "tool_call":
+            all_tool_calls.append({
+                "turn": turn_index,
+                "name": msg.get("tool_name"),
+                "input": msg.get("tool_input", {}),
+            })
+
+        elif msg_type == "tool_result":
+            # Tool result continues same turn
+            pass
+
+        elif msg_type == "thinking_delta":
+            # New thinking_delta after tool_result marks new turn
+            # (but we track turns by tool calls, not thinking)
+            pass
+
+        elif msg_type == "message_end":
+            session_id = msg.get("session_id", session_id) or session_id
+
+            # Estimate token usage from tool calls
+            total_input_tokens = 0
+            total_output_tokens = 0
+            for tc in all_tool_calls:
+                input_tokens = len(json.dumps(tc.get("input", {})).split()) * 2
+                total_input_tokens += input_tokens
+                total_output_tokens += 50  # rough estimate per tool
+
+            # Add estimated output for text
+            total_output_tokens += len(result_text.split()) * 2
+
+            turn_usage[turn_index] = {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+
+    if not session_id:
+        session_id = meta.get("session_id", "")
+
+    summary = {
+        "total_cost_usd": 0,
+        "duration_ms": 0,
+        "num_turns": max(turn_index + 1, 1),
+        "usage": turn_usage.get(0, {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }),
+    }
+
+    # Compute cost from tokens + pricing when available
+    pricing = lookup_pricing(model or meta.get("model", ""))
+    if pricing:
+        summary["total_cost_usd"] = compute_cost(summary["usage"], pricing)
+
+    return summary, turn_usage, all_tool_calls, result_text
 
 
 def process_opencode_stream(proc, meta):
@@ -396,6 +508,7 @@ def process_claude_stream(proc, meta):
 
 
 STREAM_PROCESSORS = {
+    "pi": (build_cmd_pi, process_pi_stream),
     "maki": (build_cmd_maki, process_claude_stream),
     "claude-code": (build_cmd_claude, process_claude_stream),
     "opencode": (build_cmd_opencode, process_opencode_stream),

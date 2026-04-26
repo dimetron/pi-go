@@ -16,7 +16,7 @@ def _ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
-DEFAULT_AGENTS = ["claude-code", "maki", "opencode"]
+DEFAULT_AGENTS = ["claude-code", "maki", "pi", "opencode"]
 DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 COLLECT_SCRIPT = Path(__file__).parent / "collect.py"
 ANALYZE_SCRIPT = Path(__file__).parent / "analyze.py"
@@ -27,6 +27,7 @@ AGENT_COLORS = {
     "claude-code": "\033[38;5;172m",  # orange / light brown
     "maki": "\033[35m",  # magenta
     "opencode": "\033[34m",  # blue
+    "pi": "\033[33m",  # yellow
 }
 DEFAULT_COLOR = "\033[37m"
 
@@ -83,6 +84,8 @@ def resolve_model(agent, model):
         if model.startswith("zai/"):
             return model.replace("zai/", "zai-coding-plan/", 1)
         return f"anthropic/{bare}"
+    if agent == "pi":
+        return model  # pi takes full model spec (e.g. "anthropic/claude-sonnet-4-6")
     return model
 
 
