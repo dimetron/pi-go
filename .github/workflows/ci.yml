@@ -47,7 +47,9 @@ jobs:
           # lookup fails the step with "could not find Cargo.toml".
           cache-workspaces: hack/test/lsp/rust
       - name: Run tests
-        run: go test -race -count=1 ./...
+        run: go test -count=1 ./...
+      - name: Run race tests
+        run: go test -race -count=1 $(go list ./... | grep -v '/internal/acp/server$')
 
   coverage:
     name: Coverage

@@ -21,6 +21,15 @@ import (
 	"github.com/dimetron/pi-go/internal/provider"
 )
 
+// ANSI color codes for ping output.
+const (
+	colorGray   = "\033[90m" // dim gray for secondary info
+	colorYellow = "\033[33m" // yellow for warnings
+	colorBlue   = "\033[34m" // blue for phase headers
+	colorGreen  = "\033[32m" // green for success
+	colorReset  = "\033[0m"
+)
+
 // codexPingBaseURL is the ChatGPT backend used when OPENAI_API_KEY holds a
 // codex OAuth token; the platform /v1/* endpoints reject those tokens.
 const codexPingBaseURL = "https://chatgpt.com/backend-api/codex"
@@ -162,19 +171,19 @@ func runPing(cmd *cobra.Command, args []string) error {
 	w := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
 
 	w("* pi-go ping\n")
-	w("* Provider:  %s\n", info.Provider)
-	w("* Model:     %s\n", info.Model)
-	w("* Ollama:    %v\n", info.Ollama)
+	w("* %sProvider:%s  %s\n", colorBlue, colorReset, info.Provider)
+	w("* %sModel:%s     %s\n", colorBlue, colorReset, info.Model)
+	w("* %sOllama:%s    %v\n", colorBlue, colorReset, info.Ollama)
 	if apiKey != "" {
 		masked := apiKey
 		if len(masked) > 8 {
 			masked = masked[:4] + "..." + masked[len(masked)-4:]
 		}
-		w("* API Key:   %s\n", masked)
+		w("* %sAPI Key:%s   %s\n", colorBlue, colorReset, masked)
 	} else {
-		w("* API Key:   (not set)\n")
+		w("* %sAPI Key:%s   %s(not set)%s\n", colorBlue, colorReset, colorGray, colorReset)
 	}
-	w("* Base URL:  %s\n", baseURL)
+	w("* %sBase URL:%s  %s\n", colorBlue, colorReset, baseURL)
 	w("*\n")
 
 	// Parse the target URL.
@@ -203,34 +212,34 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 
 	// Phase 1: DNS resolution.
-	w("* ─── DNS Resolution ───\n")
+	w("* %s─── DNS Resolution ───%s\n", colorBlue, colorReset)
 	dnsStart := time.Now()
 	addrs, dnsErr := net.LookupHost(host)
 	dnsDur := time.Since(dnsStart)
 	if dnsErr != nil {
-		w("* DNS FAILED: %v  (%s)\n", dnsErr, dnsDur.Round(time.Millisecond))
+		w("* DNS FAILED: %v  %s(%s)%s\n", dnsErr, colorGray, dnsDur.Round(time.Millisecond), colorReset)
 		w("*\n* RESULT: connection issue — DNS resolution failed\n")
 		return fmt.Errorf("DNS resolution failed: %w", dnsErr)
 	}
-	w("*   Resolved %s → %s  (%s)\n", host, strings.Join(addrs, ", "), dnsDur.Round(time.Millisecond))
+	w("*   Resolved %s → %s  %s(%s)%s\n", host, strings.Join(addrs, ", "), colorGray, dnsDur.Round(time.Millisecond), colorReset)
 
 	// Phase 2: TCP connection.
-	w("* ─── TCP Connection ───\n")
+	w("* %s─── TCP Connection ───%s\n", colorBlue, colorReset)
 	tcpAddr := net.JoinHostPort(addrs[0], port)
 	tcpStart := time.Now()
 	conn, tcpErr := net.DialTimeout("tcp", tcpAddr, 10*time.Second)
 	tcpDur := time.Since(tcpStart)
 	if tcpErr != nil {
-		w("* TCP FAILED: %v  (%s)\n", tcpErr, tcpDur.Round(time.Millisecond))
+		w("* TCP FAILED: %v  %s(%s)%s\n", tcpErr, colorGray, tcpDur.Round(time.Millisecond), colorReset)
 		w("*\n* RESULT: connection issue — TCP connect failed to %s\n", tcpAddr)
 		return fmt.Errorf("TCP connect failed: %w", tcpErr)
 	}
 	_ = conn.Close()
-	w("*   Connected to %s  (%s)\n", tcpAddr, tcpDur.Round(time.Millisecond))
+	w("*   Connected to %s  %s(%s)%s\n", tcpAddr, colorGray, tcpDur.Round(time.Millisecond), colorReset)
 
 	// Phase 3: TLS handshake (if https).
 	if u.Scheme == "https" {
-		w("* ─── TLS Handshake ───\n")
+		w("* %s─── TLS Handshake ───%s\n", colorBlue, colorReset)
 		tlsStart := time.Now()
 		tlsConn, tlsErr := tls.DialWithDialer(
 			&net.Dialer{Timeout: 10 * time.Second},
@@ -242,25 +251,25 @@ func runPing(cmd *cobra.Command, args []string) error {
 		)
 		tlsDur := time.Since(tlsStart)
 		if tlsErr != nil {
-			w("* TLS FAILED: %v  (%s)\n", tlsErr, tlsDur.Round(time.Millisecond))
+			w("* TLS FAILED: %v  %s(%s)%s\n", tlsErr, colorGray, tlsDur.Round(time.Millisecond), colorReset)
 			w("*\n* RESULT: connection issue — TLS handshake failed\n")
 			return fmt.Errorf("TLS handshake failed: %w", tlsErr)
 		}
 		state := tlsConn.ConnectionState()
 		_ = tlsConn.Close()
-		w("*   TLS %s, cipher %s  (%s)\n",
+		w("*   TLS %s, cipher %s  %s(%s)%s\n",
 			tlsVersionString(state.Version),
 			tls.CipherSuiteName(state.CipherSuite),
-			tlsDur.Round(time.Millisecond))
+			colorGray, tlsDur.Round(time.Millisecond), colorReset)
 		if len(state.PeerCertificates) > 0 {
 			cert := state.PeerCertificates[0]
-			w("*   Server cert: CN=%s, issuer=%s\n", cert.Subject.CommonName, cert.Issuer.CommonName)
-			w("*   Valid: %s → %s\n", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"))
+			w("*   Server cert: %sCN=%s%s, issuer=%s\n", colorGray, cert.Subject.CommonName, colorReset, cert.Issuer.CommonName)
+			w("*   %sValid:%s %s → %s\n", colorGray, colorReset, cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"))
 		}
 	}
 
 	// Phase 4: HTTP request with trace.
-	w("* ─── HTTP Request ───\n")
+	w("* %s─── HTTP Request ───%s\n", colorBlue, colorReset)
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 	defer cancel()
@@ -274,17 +283,17 @@ func runPing(cmd *cobra.Command, args []string) error {
 		ConnectStart: func(_, _ string) { traceConnStart = time.Now() },
 		ConnectDone: func(_, _ string, err error) {
 			if err == nil {
-				w("*   [trace] TCP connected (%s)\n", time.Since(traceConnStart).Round(time.Millisecond))
+				w("*   %s[trace]%s TCP connected %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceConnStart).Round(time.Millisecond), colorReset)
 			}
 		},
 		TLSHandshakeStart: func() { traceTLSStart = time.Now() },
 		TLSHandshakeDone: func(_ tls.ConnectionState, _ error) {
-			w("*   [trace] TLS done (%s)\n", time.Since(traceTLSStart).Round(time.Millisecond))
+			w("*   %s[trace]%s TLS done %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceTLSStart).Round(time.Millisecond), colorReset)
 		},
 		GotConn: func(_ httptrace.GotConnInfo) { traceGotConn = time.Now() },
 		GotFirstResponseByte: func() {
 			if !traceGotConn.IsZero() {
-				w("*   [trace] TTFB (%s)\n", time.Since(traceGotConn).Round(time.Millisecond))
+				w("*   %s[trace]%s TTFB %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceGotConn).Round(time.Millisecond), colorReset)
 			}
 		},
 	}
@@ -322,90 +331,90 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 	req.Header.Set("User-Agent", "pi-go/"+Version)
 
-	w("> %s %s HTTP/1.1\n", req.Method, req.URL.RequestURI())
-	w("> Host: %s\n", req.URL.Host)
+	w("%s> %s %s HTTP/1.1%s\n", colorBlue, req.Method, req.URL.RequestURI(), colorReset)
+	w("%s> Host: %s%s\n", colorBlue, req.URL.Host, colorReset)
 	for k, vs := range req.Header {
 		for _, v := range vs {
 			if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "X-Api-Key") {
 				v = v[:min(10, len(v))] + "..."
 			}
-			w("> %s: %s\n", k, v)
+			w("%s> %s: %s%s\n", colorBlue, k, v, colorReset)
 		}
 	}
-	w(">\n")
+	w("\n")
 
 	httpStart := time.Now()
 	resp, httpErr := provider.BuildHTTPClient(llmOpts, 30*time.Second).Do(req)
 	httpDur := time.Since(httpStart)
 
 	if httpErr != nil {
-		w("* HTTP FAILED: %v  (%s)\n", httpErr, httpDur.Round(time.Millisecond))
+		w("* HTTP FAILED: %v  %s(%s)%s\n", httpErr, colorGray, httpDur.Round(time.Millisecond), colorReset)
 		w("*\n* RESULT: connection issue — HTTP request failed\n")
 		return fmt.Errorf("HTTP request failed: %w", httpErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	w("< HTTP/%d.%d %s\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
+	w("%s< HTTP/%d.%d %s%s\n", colorBlue, resp.ProtoMajor, resp.ProtoMinor, resp.Status, colorReset)
 	for k, vs := range resp.Header {
 		for _, v := range vs {
-			w("< %s: %s\n", k, v)
+			w("%s< %s: %s%s\n", colorBlue, k, v, colorReset)
 		}
 	}
-	w("<\n")
-	w("* Total HTTP time: %s\n", httpDur.Round(time.Millisecond))
+	w("\n")
+	w("* Total HTTP time: %s%s%s\n", colorGray, httpDur.Round(time.Millisecond), colorReset)
 	w("*\n")
 
 	// Phase 5: HTTP Verdict.
-	w("* ─── HTTP Result ───\n")
+	w("* %s─── HTTP Result ───%s\n", colorBlue, colorReset)
 	httpAlive := false
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		w("* ✓ Endpoint reachable via %s\n", info.Provider)
+		w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, info.Provider, colorReset)
 		w("* Status: %s\n", resp.Status)
 		httpAlive = true
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
-			w("* ⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)\n", resp.StatusCode)
+			w("* %s⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)%s\n", colorYellow, resp.StatusCode, colorReset)
 			httpAlive = true
 		} else {
-			w("* ✗ Authentication failed (HTTP %d)\n", resp.StatusCode)
+			w("* %s✗ Authentication failed (HTTP %d)%s\n", colorYellow, resp.StatusCode, colorReset)
 			w("* The API endpoint is reachable but the API key is invalid or missing.\n")
 			w("* Check %s\n", providerEnvVar(info.Provider))
 		}
 	case resp.StatusCode == 404:
 		if info.Provider == "azure" {
-			w("* ⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)\n")
+			w("* %s⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)%s\n", colorYellow, colorReset)
 			httpAlive = true
 		} else {
-			w("* ✗ Endpoint not found (HTTP %d)\n", resp.StatusCode)
+			w("* %s✗ Endpoint not found (HTTP %d)%s\n", colorYellow, resp.StatusCode, colorReset)
 			w("* The server is reachable but the model endpoint was not found.\n")
 			w("* Base URL: %s\n", baseURL)
 		}
 	case resp.StatusCode == 405:
 		// Method Not Allowed is fine for POST-only endpoints — server is alive.
-		w("* ✓ Endpoint reachable via %s (endpoint requires POST)\n", info.Provider)
+		w("* %s✓ Endpoint reachable via %s (endpoint requires POST)%s\n", colorGreen, info.Provider, colorReset)
 		w("* Status: %s\n", resp.Status)
 		httpAlive = true
 	case resp.StatusCode == 422:
 		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
-			w("* ⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)\n")
+			w("* %s⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)%s\n", colorYellow, colorReset)
 			httpAlive = true
 		} else {
-			w("* ? Unexpected status: %s\n", resp.Status)
+			w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
 		}
 	case resp.StatusCode == 429:
-		w("* ⚠ Rate limited (HTTP %d) — endpoint reachable but throttled\n", resp.StatusCode)
+		w("* %s⚠ Rate limited (HTTP %d) — endpoint reachable but throttled%s\n", colorYellow, resp.StatusCode, colorReset)
 		httpAlive = true
 	case resp.StatusCode >= 500:
-		w("* ✗ Server error (HTTP %d) — provider may be experiencing issues\n", resp.StatusCode)
+		w("* %s✗ Server error (HTTP %d) — provider may be experiencing issues%s\n", colorYellow, resp.StatusCode, colorReset)
 	default:
-		w("* ? Unexpected status: %s\n", resp.Status)
+		w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
 	}
 	w("*\n")
 
 	// Phase 6: Model ping — send "ping" to the model and expect "pong".
 	if !httpAlive {
-		w("* ─── Model Ping ───\n")
+		w("* %s─── Model Ping ───%s\n", colorBlue, colorReset)
 		w("* Skipped — endpoint not reachable\n")
 		return nil
 	}
@@ -417,12 +426,12 @@ func runPing(cmd *cobra.Command, args []string) error {
 		prompt = "prompt-prompt"
 	}
 
-	w("* ─── Model Ping ───\n")
-	w("* Prompt:    %q\n", prompt)
+	w("* %s─── Model Ping ───%s\n", colorBlue, colorReset)
+	w("* %sPrompt:%s    %q\n", colorBlue, colorReset, prompt)
 	if isPingPong {
-		w("* Mode:      Prompt:Prompt connectivity test\n")
+		w("* %sMode:%s      Prompt:Prompt connectivity test\n", colorBlue, colorReset)
 	} else {
-		w("* Mode:      custom prompt (full trace)\n")
+		w("* %sMode:%s      custom prompt (full trace)\n", colorBlue, colorReset)
 	}
 	w("* Sending to %s ...\n", info.Model)
 
@@ -430,22 +439,22 @@ func runPing(cmd *cobra.Command, args []string) error {
 	// Ollama processes requests sequentially — running both a raw test and an
 	// SDK test double-queues and causes the second request to timeout.
 	if info.Ollama {
-		w("* ─── Ollama Ping ───\n")
+		w("* %s─── Ollama Ping ───%s\n", colorBlue, colorReset)
 		ollamaReply, ollamaErr := ollamaPingFull(cmd.Context(), baseURL, info.Model, prompt, isPingPong, w)
 		if ollamaErr != nil {
-			w("* ✗ Ollama ping FAILED: %v\n", ollamaErr)
+			w("* %s✗ Ollama ping FAILED: %v%s\n", colorYellow, ollamaErr, colorReset)
 			return fmt.Errorf("model ping failed: %w", ollamaErr)
 		}
-		w("* Model replied: %q\n", ollamaReply)
+		w("* Model replied: %s%q%s\n", colorGray, ollamaReply, colorReset)
 		if isPingPong {
 			if strings.Contains(strings.ToLower(ollamaReply), "prompt") {
-				w("* ✓ Prompt:Prompt OK — model %s is ALIVE\n", info.Model)
+				w("* %s✓ Prompt:Prompt OK — model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
 			} else {
-				w("* ⚠ Model responded but did not say \"Prompt\" (got %q)\n", ollamaReply)
-				w("* ✓ Model %s is ALIVE (response unexpected)\n", info.Model)
+				w("* %s⚠ Model responded but did not say \"Prompt\" (got %q)%s\n", colorYellow, ollamaReply, colorReset)
+				w("* %s✓ Model %s is ALIVE (response unexpected)%s\n", colorGreen, info.Model, colorReset)
 			}
 		} else {
-			w("* ✓ Model %s is ALIVE\n", info.Model)
+			w("* %s✓ Model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
 		}
 		return nil
 	}
@@ -460,7 +469,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, llmBaseURL, "none", llmOpts)
 	if llmErr != nil {
-		w("* ✗ Failed to create LLM client: %v\n", llmErr)
+		w("* %s✗ Failed to create LLM client: %v%s\n", colorYellow, llmErr, colorReset)
 		return fmt.Errorf("creating LLM for ping: %w", llmErr)
 	}
 
@@ -470,20 +479,20 @@ func runPing(cmd *cobra.Command, args []string) error {
 
 	reply, pingErr := modelPing(pingCtx, llm, prompt, isPingPong)
 	if pingErr != nil {
-		w("* ✗ Model ping FAILED: %v\n", pingErr)
+		w("* %s✗ Model ping FAILED: %v%s\n", colorYellow, pingErr, colorReset)
 		return fmt.Errorf("model ping failed: %w", pingErr)
 	}
 
-	w("* Model replied: %q\n", reply)
+	w("* Model replied: %s%q%s\n", colorGray, reply, colorReset)
 	if isPingPong {
 		if strings.Contains(strings.ToLower(reply), "prompt") {
-			w("* ✓ Prompt:Prompt OK — model %s is ALIVE\n", info.Model)
+			w("* %s✓ Prompt:Prompt OK — model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
 		} else {
-			w("* ⚠ Model responded but did not say \"Prompt\" (got %q)\n", reply)
-			w("* ✓ Model %s is ALIVE (response unexpected)\n", info.Model)
+			w("* %s⚠ Model responded but did not say \"Prompt\" (got %q)%s\n", colorYellow, reply, colorReset)
+			w("* %s✓ Model %s is ALIVE (response unexpected)%s\n", colorGreen, info.Model, colorReset)
 		}
 	} else {
-		w("* ✓ Model %s is ALIVE\n", info.Model)
+		w("* %s✓ Model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
 	}
 
 	return nil
@@ -510,18 +519,18 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 	}
 
 	// --- Non-streaming test ---
-	w("*   [non-stream] Calling GenerateContent(stream=false)...\n")
+	w("*   %s[non-stream]%s Calling GenerateContent(stream=false)...\n", colorGray, colorReset)
 	nsStart := time.Now()
 	var nsResult strings.Builder
 	nsEvents := 0
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		nsEvents++
 		if err != nil {
-			w("*   [non-stream] ERROR at event %d: %v\n", nsEvents, err)
+			w("*   %s[non-stream]%s ERROR at event %d: %v\n", colorGray, colorReset, nsEvents, err)
 			return "", fmt.Errorf("non-streaming LLM error: %w", err)
 		}
-		w("*   [non-stream] event %d: partial=%v turnComplete=%v finish=%v",
-			nsEvents, resp.Partial, resp.TurnComplete, resp.FinishReason)
+		w("*   %s[non-stream]%s event %d: partial=%v turnComplete=%v finish=%v",
+			colorGray, colorReset, nsEvents, resp.Partial, resp.TurnComplete, resp.FinishReason)
 		if resp.ErrorCode != "" {
 			w(" errorCode=%s errorMsg=%s", resp.ErrorCode, resp.ErrorMessage)
 		}
@@ -530,30 +539,30 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 		}
 		w("\n")
 		if resp.Content != nil {
-			w("*   [non-stream]   role=%s parts=%d\n", resp.Content.Role, len(resp.Content.Parts))
+			w("*   %s[non-stream]%s   role=%s parts=%d\n", colorGray, colorReset, resp.Content.Role, len(resp.Content.Parts))
 			for i, part := range resp.Content.Parts {
 				if part.Text != "" {
 					preview := part.Text
 					if len(preview) > 120 {
 						preview = preview[:120] + "..."
 					}
-					w("*   [non-stream]   part[%d] text(%d chars): %s\n", i, len(part.Text), preview)
+					w("*   %s[non-stream]%s   part[%d] text(%d chars): %s\n", colorGray, colorReset, i, len(part.Text), preview)
 					nsResult.WriteString(part.Text)
 				}
 				if part.FunctionCall != nil {
-					w("*   [non-stream]   part[%d] tool_call: %s\n", i, part.FunctionCall.Name)
+					w("*   %s[non-stream]%s   part[%d] tool_call: %s\n", colorGray, colorReset, i, part.FunctionCall.Name)
 				}
 				if part.Thought {
-					w("*   [non-stream]   part[%d] thought=true\n", i)
+					w("*   %s[non-stream]%s   part[%d] thought=true\n", colorGray, colorReset, i)
 				}
 			}
 		}
 	}
 	nsDur := time.Since(nsStart)
-	w("*   [non-stream] Done: %d events, %s\n", nsEvents, nsDur.Round(time.Millisecond))
+	w("*   %s[non-stream]%s Done: %d events, %s%s%s\n", colorGray, colorReset, nsEvents, colorGray, nsDur.Round(time.Millisecond), colorReset)
 
 	// --- Streaming test ---
-	w("*   [stream] Calling GenerateContent(stream=true)...\n")
+	w("*   %s[stream]%s Calling GenerateContent(stream=true)...\n", colorGray, colorReset)
 	sStart := time.Now()
 	var sResult strings.Builder
 	sEvents := 0
@@ -562,11 +571,11 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 	for resp, err := range llm.GenerateContent(ctx, req, true) {
 		sEvents++
 		if err != nil {
-			w("*   [stream] ERROR at event %d: %v\n", sEvents, err)
+			w("*   %s[stream]%s ERROR at event %d: %v\n", colorGray, colorReset, sEvents, err)
 			return nsResult.String(), fmt.Errorf("streaming LLM error: %w", err)
 		}
 		if resp.ErrorCode != "" {
-			w("*   [stream] event %d: errorCode=%s errorMsg=%s\n", sEvents, resp.ErrorCode, resp.ErrorMessage)
+			w("*   %s[stream]%s event %d: errorCode=%s errorMsg=%s\n", colorGray, colorReset, sEvents, resp.ErrorCode, resp.ErrorMessage)
 			continue
 		}
 		if resp.Content != nil {
@@ -584,7 +593,7 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 		}
 		// Print summary for non-partial final event.
 		if !resp.Partial {
-			w("*   [stream] final event %d: turnComplete=%v finish=%v", sEvents, resp.TurnComplete, resp.FinishReason)
+			w("*   %s[stream]%s final event %d: turnComplete=%v finish=%v", colorGray, colorReset, sEvents, resp.TurnComplete, resp.FinishReason)
 			if resp.UsageMetadata != nil {
 				w(" tokens(in=%d out=%d)", resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
 			}
@@ -592,15 +601,15 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 		}
 	}
 	sDur := time.Since(sStart)
-	w("*   [stream] Done: %d events (%d thinking, %d text chunks), %s\n",
-		sEvents, sThinkingChunks, sTextChunks, sDur.Round(time.Millisecond))
+	w("*   %s[stream]%s Done: %d events (%d thinking, %d text chunks), %s%s%s\n",
+		colorGray, colorReset, sEvents, sThinkingChunks, sTextChunks, colorGray, sDur.Round(time.Millisecond), colorReset)
 
 	if sResult.Len() > 0 {
 		preview := sResult.String()
 		if len(preview) > 200 {
 			preview = preview[:200] + "..."
 		}
-		w("*   [stream] Reply: %s\n", preview)
+		w("*   %s[stream]%s Reply: %s\n", colorGray, colorReset, preview)
 	}
 
 	// Return non-streaming result (or streaming if non-streaming was empty).
@@ -637,7 +646,7 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 	if !found {
 		return "", fmt.Errorf("model %q not found in available models", modelName)
 	}
-	w("*   Model %s: found ✓\n", modelName)
+	w("*   Model %s: %sfound ✓%s\n", modelName, colorGreen, colorReset)
 
 	// Step 2: Create native Ollama LLM.
 	llm, err := provider.NewOllama(ctx, modelName, baseURL, "none", nil)
@@ -660,12 +669,12 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 	}
 
 	// Step 3: Non-streaming test.
-	w("*   [non-stream] Calling Ollama chat (stream=false)...\n")
+	w("*   %s[non-stream]%s Calling Ollama chat (stream=false)...\n", colorGray, colorReset)
 	nsStart := time.Now()
 	var nsResult strings.Builder
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
-			w("*   [non-stream] ERROR: %v\n", err)
+			w("*   %s[non-stream]%s ERROR: %v\n", colorGray, colorReset, err)
 			return "", fmt.Errorf("non-streaming: %w", err)
 		}
 		if resp.Content != nil {
@@ -676,24 +685,24 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 			}
 		}
 		if resp.UsageMetadata != nil {
-			w("*   [non-stream] tokens(in=%d out=%d)\n",
-				resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
+			w("*   %s[non-stream]%s tokens(in=%d out=%d)\n",
+				colorGray, colorReset, resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
 		}
 	}
 	nsDur := time.Since(nsStart)
 	nsText := strings.TrimSpace(nsResult.String())
-	w("*   [non-stream] Done (%s): %s\n", nsDur.Round(time.Millisecond), truncate(nsText, 120))
+	w("*   %s[non-stream]%s Done %s(%s)%s: %s\n", colorGray, colorReset, colorGray, nsDur.Round(time.Millisecond), colorReset, truncate(nsText, 120))
 
 	// Step 4: Streaming test.
-	w("*   [stream] Calling Ollama chat (stream=true)...\n")
+	w("*   %s[stream]%s Calling Ollama chat (stream=true)...\n", colorGray, colorReset)
 	sStart := time.Now()
 	var sResult strings.Builder
 	sChunks := 0
 	for resp, err := range llm.GenerateContent(ctx, req, true) {
 		if err != nil {
-			w("*   [stream] ERROR: %v\n", err)
+			w("*   %s[stream]%s ERROR: %v\n", colorGray, colorReset, err)
 			if nsText != "" {
-				w("*   [stream] Falling back to non-streaming result\n")
+				w("*   %s[stream]%s Falling back to non-streaming result\n", colorGray, colorReset)
 				return nsText, nil
 			}
 			return "", fmt.Errorf("streaming: %w", err)
@@ -707,13 +716,13 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 			}
 		}
 		if resp.UsageMetadata != nil {
-			w("*   [stream] tokens(in=%d out=%d)\n",
-				resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
+			w("*   %s[stream]%s tokens(in=%d out=%d)\n",
+				colorGray, colorReset, resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
 		}
 	}
 	sDur := time.Since(sStart)
 	sText := strings.TrimSpace(sResult.String())
-	w("*   [stream] Done (%s, %d chunks): %s\n", sDur.Round(time.Millisecond), sChunks, truncate(sText, 120))
+	w("*   %s[stream]%s Done %s(%s)%s, %d chunks: %s\n", colorGray, colorReset, colorGray, sDur.Round(time.Millisecond), colorReset, sChunks, truncate(sText, 120))
 
 	// Return non-streaming result (preferred) or streaming fallback.
 	reply := nsText

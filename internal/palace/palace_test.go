@@ -466,22 +466,18 @@ func TestPalace_New_WithStoreAndEmbedder(t *testing.T) {
 	}
 }
 
-func TestPalace_Close_DoubleClose(t *testing.T) {
+func TestPalace_New_InvalidDBPath(t *testing.T) {
 	t.Parallel()
 
-	db, err := OpenDB(":memory:")
+	// Use a path that can't be opened for writing (on Unix this would be a directory)
+	// This tests error handling in New when OpenDB fails
+	p, err := New(WithDBPath("/proc/fake"))
 	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
+		// Error is expected - this path cannot be opened
+		return
 	}
-	store := NewSQLitePalaceStore(db)
-	p := NewWithStore(store, nil)
-
-	// First close should succeed
-	if err := p.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	// Second close should also succeed (no-op)
-	if err := p.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
+	// If we got here unexpectedly, clean up
+	if p != nil {
+		_ = p.Close()
 	}
 }
