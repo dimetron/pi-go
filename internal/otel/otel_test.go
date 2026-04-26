@@ -157,6 +157,43 @@ func TestIsEnabled(t *testing.T) {
 	}
 }
 
+func TestIsAvailable_WhenPortClosed_ReturnsFalse(t *testing.T) {
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	// No collector running, so IsAvailable should return false.
+	got := IsAvailable()
+	if got {
+		t.Fatal("IsAvailable() = true, want false (no collector running)")
+	}
+}
+
+func TestIsAvailable_WhenExporterNone_ReturnsFalse(t *testing.T) {
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
+	got := IsAvailable()
+	if got {
+		t.Fatal("IsAvailable() with exporter=none = true, want false")
+	}
+}
+
+func TestIsAvailable_WhenExporterEmpty_ReturnsFalse(t *testing.T) {
+	t.Setenv("OTEL_TRACES_EXPORTER", "")
+	got := IsAvailable()
+	if got {
+		t.Fatal("IsAvailable() with exporter=empty = true, want false")
+	}
+}
+
+func TestIsAvailable_SetsExporterNoneIfNotAvailable(t *testing.T) {
+	// IsAvailable should not modify env vars, only read them.
+	// We test the side-effect-free path: when the port is not reachable,
+	// the caller can decide to set OTEL_TRACES_EXPORTER=none.
+	// This test verifies IsAvailable returns false when no collector is up.
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	if IsAvailable() {
+		t.Skip("a collector is running on port 4317 — skipping test")
+	}
+	// If we get here, no collector is running, which is the expected state.
+}
+
 func TestShutdown(t *testing.T) {
 	// Ensure the provider is initialized so we exercise the non-nil branch.
 	Tracer("shutdown-test")

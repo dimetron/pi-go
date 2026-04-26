@@ -1,5 +1,5 @@
 """
-Harbor agent wrapper for running pi-go on Terminal-Bench with analytics collection.
+Pi-go agent wrapper for running pi-go on Terminal-Bench with analytics collection.
 
 Requires: uv tool install harbor
 

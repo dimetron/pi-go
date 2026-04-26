@@ -51,3 +51,4 @@ sandbox.log
 /.code-review-graph/
 /coverage*
 /wiki/
+/hack/test/tb2/jobs/

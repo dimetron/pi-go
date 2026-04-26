@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-OpenAI OAuth dynamic provider for maki (device code flow).
+OpenAI OAuth dynamic provider for pi-go (device code flow).
 
-Install: cp scripts/providers/openai-oauth ~/.maki/providers/openai-oauth && chmod +x ~/.maki/providers/openai-oauth
-Usage:   maki auth login openai-oauth
-         maki -m openai-oauth/gpt-4.1
+Install: cp scripts/providers/openai-oauth ~/.pi-go/providers/openai-oauth && chmod +x ~/.pi-go/providers/openai-oauth
+Usage:   pi auth login openai-oauth
+         pi -m openai-oauth/gpt-4.1
 
 Requires Python 3.8+ with no external dependencies.
-Stores tokens at ~/.maki/auth/openai.json
+Stores tokens at ~/.pi-go/auth/openai.json
 """
 
 import json
@@ -26,7 +26,7 @@ REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 REFRESH_BUFFER_SECS = 60
 POLL_TIMEOUT = 300
 
-TOKEN_FILE = os.path.expanduser("~/.maki/auth/openai.json")
+TOKEN_FILE = os.path.expanduser("~/.pi-go/auth/openai.json")
 
 
 def load_tokens():
@@ -112,7 +112,7 @@ def cmd_info():
 def cmd_resolve():
     tokens = load_tokens()
     if not tokens:
-        print("not authenticated, run: maki auth login openai-oauth", file=sys.stderr)
+        print("not authenticated, run: pi auth login openai-oauth", file=sys.stderr)
         sys.exit(1)
     if is_expired(tokens):
         try:

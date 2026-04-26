@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze tool token usage from ~/.maki/sessions to identify optimization targets."""
+"""Analyze tool token usage from ~/.pi-go/sessions to identify optimization targets."""
 
 import json
 import sys
@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-SESSION_DIR = Path.home() / ".maki" / "sessions"
+SESSION_DIR = Path.home() / ".pi-go" / "sessions"
 CHARS_PER_TOKEN = 4  # rough estimate for token counting from char length
 
 
@@ -19,88 +19,95 @@ def estimate_tokens(text):
     return 0
 
 
+def load_sessions():
+    """Load sessions from ~/.pi-go/sessions as JSONL files.
+
+    pi-go session files contain JSONL entries with fields:
+      type: "session_start", "user", "llm_text", "tool_call", "tool_result", "error", "info"
+      content: JSON string for tool_call/tool_result
+    """
+    sessions = []
+    for f in SESSION_DIR.glob("*.json"):
+        try:
+            with open(f) as fh:
+                messages = []
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        messages.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+                if messages:
+                    sessions.append({"messages": messages})
+        except (json.JSONDecodeError, OSError):
+            continue
+    return sessions
+
+
 def extract_tool_calls(session):
-    """Extract tool calls with their input/output sizes from a session."""
+    """Extract tool calls with their input/output sizes from a pi-go JSONL session.
+
+    pi-go session entries have type: tool_call/tool_result with JSON content.
+    """
     messages = session.get("messages", [])
     calls = []
 
     pending_tools = {}
 
     for msg in messages:
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
+        msg_type = msg.get("type", "")
+        content_raw = msg.get("content", "")
 
-        for block in content:
-            if not isinstance(block, dict):
-                continue
+        if msg_type == "tool_call":
+            try:
+                inp = json.loads(content_raw) if isinstance(content_raw, str) else (content_raw or {})
+            except (json.JSONDecodeError, TypeError):
+                inp = {}
 
-            if block.get("type") == "tool_use":
-                tool_id = block.get("id", "")
-                name = block.get("name", "unknown")
-                inp = block.get("input", {})
-                input_str = json.dumps(inp)
-                pending_tools[tool_id] = {
-                    "name": name,
-                    "input": inp,
-                    "input_chars": len(input_str),
-                    "input_tokens_est": len(input_str) // CHARS_PER_TOKEN,
-                }
+            tool_id = inp.get("id", "") or content_raw[:20] if isinstance(content_raw, str) else ""
+            name = inp.get("name", inp.get("tool_name", "unknown"))
+            input_str = json.dumps(inp)
+            pending_tools[tool_id] = {
+                "name": name,
+                "input": inp,
+                "input_chars": len(input_str),
+                "input_tokens_est": len(input_str) // CHARS_PER_TOKEN,
+            }
 
-            elif block.get("type") == "tool_result":
-                tool_id = block.get("tool_use_id", "")
-                result_content = block.get("content", "")
-                output_chars = len(result_content) if isinstance(result_content, str) else len(
-                    json.dumps(result_content))
+        elif msg_type == "tool_result":
+            try:
+                result = json.loads(content_raw) if isinstance(content_raw, str) else (content_raw or {})
+            except (json.JSONDecodeError, TypeError):
+                result = content_raw if isinstance(content_raw, str) else ""
 
-                tool_info = pending_tools.pop(tool_id,
-                                              {"name": "unknown", "input": {}, "input_chars": 0, "input_tokens_est": 0})
-                calls.append({
-                    "name": tool_info["name"],
-                    "input": tool_info["input"],
-                    "input_chars": tool_info["input_chars"],
-                    "input_tokens_est": tool_info["input_tokens_est"],
-                    "output_chars": output_chars,
-                    "output_tokens_est": output_chars // CHARS_PER_TOKEN,
-                })
+            if isinstance(result, dict):
+                result_content = json.dumps(result)
+            else:
+                result_content = str(result)
 
-    return calls
-
-
-def extract_batch_subtool_calls(session):
-    """Break batch tool calls into individual sub-tool calls using tool_outputs."""
-    tool_outputs = session.get("tool_outputs", {})
-    sub_calls = []
-
-    for tid, val in tool_outputs.items():
-        if not isinstance(val, dict) or "Batch" not in val:
-            continue
-        batch = val["Batch"]
-        for entry in batch.get("entries", []):
-            tool_name = entry.get("tool", "unknown")
-            output = entry.get("output", {})
-            output_str = json.dumps(output)
-            sub_calls.append({
-                "name": tool_name,
-                "output_chars": len(output_str),
-                "output_tokens_est": len(output_str) // CHARS_PER_TOKEN,
-                "from_batch": True,
+            output_chars = len(result_content)
+            # Find matching tool call by scanning pending_tools
+            tool_id = ""
+            tool_info = {"name": "unknown", "input": {}, "input_chars": 0, "input_tokens_est": 0}
+            for tid, info in pending_tools.items():
+                tool_info = info
+                tool_id = tid
+                break
+            if tool_id:
+                del pending_tools[tool_id]
+            calls.append({
+                "name": tool_info["name"],
+                "input": tool_info["input"],
+                "input_chars": tool_info["input_chars"],
+                "input_tokens_est": tool_info["input_tokens_est"],
+                "output_chars": output_chars,
+                "output_tokens_est": output_chars // CHARS_PER_TOKEN,
             })
 
-    return sub_calls
-
-
-def load_sessions():
-    sessions = []
-    for f in SESSION_DIR.glob("*.json"):
-        try:
-            with open(f) as fh:
-                data = json.load(fh)
-                if data.get("messages"):
-                    sessions.append(data)
-        except (json.JSONDecodeError, OSError):
-            continue
-    return sessions
+    return calls
 
 
 def fmt_num(n):
@@ -376,9 +383,13 @@ def print_session_summary(sessions, all_calls):
         u = s.get("token_usage", {})
         for k, v in u.items():
             agg_usage[k] += v
+    # pi-go JSONL sessions don't have token_usage field; compute from tool calls
+    if agg_usage.get("input_tokens", 0) == 0 and total_input_tok > 0:
+        agg_usage["input_tokens"] = total_input_tok
+        agg_usage["output_tokens"] = total_output_tok
 
     print("\n" + "═" * 70)
-    print("  MAKI SESSION TOOL TOKEN ANALYSIS")
+    print("  PI-GO SESSION TOOL TOKEN ANALYSIS")
     print("═" * 70)
     print(f"  Sessions analyzed:     {total_sessions}")
     print(f"  Sessions with tools:   {sessions_with_tools}")
@@ -401,12 +412,9 @@ def main():
         sys.exit(1)
 
     all_calls = []
-    all_batch_sub_calls = []
     for session in sessions:
         calls = extract_tool_calls(session)
         all_calls.extend(calls)
-        batch_subs = extract_batch_subtool_calls(session)
-        all_batch_sub_calls.extend(batch_subs)
 
     print_session_summary(sessions, all_calls)
 
@@ -416,9 +424,6 @@ def main():
     print_input_cost_table(stats)
 
     print_top_expensive_calls(all_calls)
-
-    if all_batch_sub_calls:
-        print_batch_subtool_analysis(all_batch_sub_calls)
 
     top_tools = sorted(stats.items(), key=lambda x: -x[1]["output_tokens"])[:3]
     for name, s in top_tools:

@@ -14,9 +14,13 @@ package otel
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
@@ -117,6 +121,29 @@ func IsEnabled() bool {
 	exporter := envOr(".env", "OTEL_TRACES_EXPORTER", "")
 	// If exporter is explicitly set to something other than "none" or empty, tracing is active.
 	return exporter != "" && exporter != "none"
+}
+
+// IsAvailable checks whether the configured OTLP endpoint is reachable.
+// Returns true if the port is open, false otherwise. Returns false if
+// exporter is set to "none" or empty (tracing is inactive anyway).
+func IsAvailable() bool {
+	exporter := envOr(".env", "OTEL_TRACES_EXPORTER", "")
+	if exporter == "" || exporter == "none" {
+		return false
+	}
+	endpoint := envOr(".env", "OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	port := 4317
+	if strings.Contains(endpoint, ":") {
+		if p, err := strconv.Atoi(strings.Split(endpoint, ":")[1]); err == nil {
+			port = p
+		}
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // Shutdown flushes and shuts down the global TracerProvider.
