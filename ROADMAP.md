@@ -10,6 +10,7 @@
 
 #### Short term
 - [x] OAuth with Codex, ~~Claude~~
+- [x] A2A Agent as a tool to work with other agents like KAgent
 - [x] ACP Coding Agent protocol https://agentclientprotocol.com/protocol/overview
 - [x] OTEL tracing https://opentelemetry.io/docs/
 - [x] Go LSP server
@@ -19,7 +20,6 @@
 - [ ] Switch between models for plan/run tasks
 - [ ] Kanban board for agent tasks
 - [ ] OAuth with Google/Microsoft for web UI
-- [ ] A2A Agent as a tool to work with other agents like KAgent
 
 #### Long term
 

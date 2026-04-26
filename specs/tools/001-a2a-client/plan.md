@@ -95,6 +95,8 @@
 
 **Dependencies:** Slice 2
 
+- [x] Step 5: Unit Tests
+
 ---
 
 ## Build/Test Commands (from research)

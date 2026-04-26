@@ -244,16 +244,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeAt = time.Now()
 		m.width = msg.Width
 		m.height = msg.Height
-		mainWidth := m.width
-		if m.width > 80 {
-			mainWidth = m.width - SidebarWidth
-		}
-		m.statusModel.Width = mainWidth
-		m.chatModel.UpdateRenderer(mainWidth)
-		// Pre-render matrix bar on first size so it's visible immediately.
-		if !m.matrix.active {
-			m.matrix.feed("pi-go", mainWidth)
-		}
+		m.applyResize()
 
 	case tea.PasteMsg:
 		if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
@@ -551,12 +542,11 @@ func (m *model) View() tea.View {
 	}
 
 	if m.width == 0 {
-		// Show loading items if available, otherwise just animated dots.
+		// Show matrix-style startup text before the first terminal size arrives.
+		matrixLine := renderStartupMatrixLine(m.loadingDots)
 		if m.loadingItems != nil {
-			dots := strings.Repeat(".", m.loadingDots+1)
 			var lines []string
-			lines = append(lines, "Initializing")
-			lines = append(lines, "  "+dots)
+			lines = append(lines, matrixLine)
 			for item, done := range m.loadingItems {
 				mark := " "
 				if done {
@@ -566,16 +556,17 @@ func (m *model) View() tea.View {
 			}
 			return tea.NewView(strings.Join(lines, "\n") + "\n")
 		}
-		dots := strings.Repeat(".", m.loadingDots+1)
-		return tea.NewView("Loading" + dots + "\n")
+		return tea.NewView(matrixLine + "\n")
 	}
 
 	// Layout: sidebar on the right, chat+status+input on the left.
-	sidebarWidth := SidebarWidth
-	showSidebar := m.width > 80 // only show sidebar if terminal is wide enough
-	if !showSidebar {
-		sidebarWidth = 0
+	mainWidth := m.mainWidth()
+	if m.statusModel.Width != mainWidth || m.chatModel.Width != mainWidth {
+		m.applyResize()
+		mainWidth = m.mainWidth()
 	}
+	sidebarWidth := m.width - mainWidth
+	showSidebar := sidebarWidth > 0
 
 	// Render components.
 	messagesView := m.chatModel.RenderMessages(m.running)
@@ -583,24 +574,7 @@ func (m *model) View() tea.View {
 	inputArea := m.inputModel.View(m.running || m.loading)
 
 	// Calculate available height for messages.
-	statusLines := strings.Count(statusBar, "\n") + 1
-	inputLines := strings.Count(inputArea, "\n") + 1
-
-	// -4: top blank/matrix line, hr above status, hr below status, hr below input
-	availableHeight := m.height - statusLines - inputLines - 4
-	// Reserve extra lines for matrix hr separators when active.
-	if m.matrix.render() != "" {
-		availableHeight -= 2 // hr above + hr below matrix bar
-	}
-	// Reserve space for the branch popup overlay when open.
-	if m.branchPopup != nil {
-		// popup lines: 1 header + visible branches + 2 border + 1 footer + 2 newlines
-		popupLines := m.branchPopup.height + 6
-		availableHeight -= popupLines
-	}
-	if availableHeight < 1 {
-		availableHeight = 1
-	}
+	availableHeight := m.messageViewportHeight()
 
 	// Truncate messages to fit viewport.
 	msgLines := strings.Split(messagesView, "\n")
@@ -631,10 +605,6 @@ func (m *model) View() tea.View {
 	matrixBar := m.matrix.render()
 
 	// Horizontal rule for separating sections.
-	mainWidth := m.width - sidebarWidth
-	if mainWidth < 1 {
-		mainWidth = m.width
-	}
 	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
 	hr := hrStyle.Render(strings.Repeat("─", mainWidth))
 
@@ -734,6 +704,90 @@ func drainTerminalResponses() {
 	}
 }
 
+func renderStartupMatrixLine(phase int) string {
+	width := 48
+	if width < 1 || len(matrixRunes) == 0 {
+		return "Loading .."
+	}
+	bright := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")).Bold(true)
+	mid := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa"))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#45475a"))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true)
+
+	dotCount := 2 + phase%3
+	wave := phase % (2 * (width - 1))
+	if wave >= width {
+		wave = 2*(width-1) - wave
+	}
+
+	var b strings.Builder
+	b.WriteString(accent.Render("Loading" + strings.Repeat(".", dotCount)))
+	b.WriteString(" ")
+	for i := 0; i < width; i++ {
+		r := matrixRunes[(i+phase*7)%len(matrixRunes)]
+		delta := i - wave
+		if delta < 0 {
+			delta = -delta
+		}
+		switch {
+		case delta == 0:
+			b.WriteString(bright.Render(string(r)))
+		case delta <= 2:
+			b.WriteString(mid.Render(string(r)))
+		default:
+			b.WriteString(dim.Render(string(r)))
+		}
+	}
+	return b.String()
+}
+
+func (m *model) applyResize() {
+	mainWidth := m.mainWidth()
+	m.statusModel.Width = mainWidth
+	if m.chatModel.Width != mainWidth {
+		m.chatModel.UpdateRenderer(mainWidth)
+	}
+	m.clampScroll()
+	// Pre-render or reflow matrix bar so width changes are visible immediately.
+	if !m.matrix.active {
+		m.matrix.feed("pi-go", mainWidth)
+	} else {
+		m.matrix.tick(mainWidth)
+	}
+}
+
+func (m *model) clampScroll() {
+	maxScroll := m.chatModel.MaxScroll(m.messageViewportHeight())
+	if m.chatModel.Scroll > maxScroll {
+		m.chatModel.Scroll = maxScroll
+	}
+	if m.chatModel.Scroll < 0 {
+		m.chatModel.Scroll = 0
+	}
+}
+
+func (m *model) messageViewportHeight() int {
+	mainWidth := m.mainWidth()
+	if m.statusModel.Width != mainWidth {
+		m.statusModel.Width = mainWidth
+	}
+	statusBar := m.statusModel.Render(m.statusRenderInput())
+	inputArea := m.inputModel.View(m.running || m.loading)
+	statusLines := strings.Count(statusBar, "\n") + 1
+	inputLines := strings.Count(inputArea, "\n") + 1
+	availableHeight := m.height - statusLines - inputLines - 4
+	if m.matrix.render() != "" {
+		availableHeight -= 2
+	}
+	if m.branchPopup != nil {
+		availableHeight -= m.branchPopup.height + 6
+	}
+	if availableHeight < 1 {
+		return 1
+	}
+	return availableHeight
+}
+
 // resizeDraining returns true for a short window after a terminal resize,
 // during which key and paste input is suppressed to let terminal response
 // sequences (OSC color replies, DECRPM, cursor position reports) drain.
@@ -743,8 +797,14 @@ func (m *model) resizeDraining() bool {
 
 // mainWidth returns the width of the main panel (excluding sidebar).
 func (m *model) mainWidth() int {
+	if m.width <= 0 {
+		return 1
+	}
 	if m.width > 80 {
-		return m.width - SidebarWidth
+		w := m.width - SidebarWidth
+		if w > 0 {
+			return w
+		}
 	}
 	return m.width
 }
