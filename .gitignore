@@ -50,3 +50,4 @@ sandbox.log
 /.playwright-mcp/
 /.code-review-graph/
 /coverage*
+/wiki/

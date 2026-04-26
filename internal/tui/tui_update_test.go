@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -30,6 +31,42 @@ func TestUpdateWindowSizeWide(t *testing.T) {
 	expectedStatusWidth := 120 - SidebarWidth
 	if mm.statusModel.Width != expectedStatusWidth {
 		t.Errorf("expected statusModel.Width %d, got %d", expectedStatusWidth, mm.statusModel.Width)
+	}
+}
+
+func TestUpdateWindowSizeClampsScrollAndInvalidatesWidth(t *testing.T) {
+	m := &model{
+		width:       120,
+		height:      40,
+		inputModel:  NewInputModel(nil, nil, nil, ""),
+		statusModel: StatusModel{},
+		chatModel: ChatModel{Messages: []message{{
+			role:             "assistant",
+			content:          strings.Repeat("long message ", 200),
+			renderCache:      "stale",
+			renderCacheWidth: 90,
+		}}},
+	}
+	m.chatModel.UpdateRenderer(90)
+	m.chatModel.Scroll = 999
+
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	mm := newM.(*model)
+
+	if mm.chatModel.Width != 60 {
+		t.Fatalf("expected chat width 60 after resize, got %d", mm.chatModel.Width)
+	}
+	if mm.statusModel.Width != 60 {
+		t.Fatalf("expected status width 60 after resize, got %d", mm.statusModel.Width)
+	}
+	if mm.chatModel.Messages[0].renderCache == "stale" {
+		t.Fatalf("expected stale render cache invalidated on resize")
+	}
+	if mm.chatModel.Messages[0].renderCacheWidth != 60 {
+		t.Fatalf("expected render cache width 60 after resize, got %d", mm.chatModel.Messages[0].renderCacheWidth)
+	}
+	if max := mm.chatModel.MaxScroll(mm.messageViewportHeight()); mm.chatModel.Scroll > max {
+		t.Fatalf("scroll not clamped: got %d max %d", mm.chatModel.Scroll, max)
 	}
 }
 

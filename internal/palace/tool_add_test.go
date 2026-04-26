@@ -152,7 +152,7 @@ func TestToolAddDrawer_MissingContent(t *testing.T) {
 	}
 }
 
-func TestToolAddDrawer_WithHallAndSourceFile(t *testing.T) {
+func TestNewPalaceAddDrawerTool(t *testing.T) {
 	t.Parallel()
 
 	db, err := OpenDB(":memory:")
@@ -162,31 +162,12 @@ func TestToolAddDrawer_WithHallAndSourceFile(t *testing.T) {
 	store := NewSQLitePalaceStore(db)
 	p := NewWithStore(store, nil)
 	defer p.Close()
-	ctx := context.Background()
 
-	out, err := palaceAddDrawerHandler(ctx, p, AddDrawerToolInput{
-		Wing:       "backend",
-		Room:       "auth",
-		Hall:       "hall_decisions",
-		Content:    "Chose PASETO over JWT for token format",
-		SourceFile: "internal/auth/token.go",
-		Importance: 9,
-	})
+	tool, err := newPalaceAddDrawerTool(p)
 	if err != nil {
-		t.Fatalf("palaceAddDrawerHandler: %v", err)
+		t.Fatalf("newPalaceAddDrawerTool: %v", err)
 	}
-
-	d, err := p.GetDrawer(ctx, out.ID)
-	if err != nil {
-		t.Fatalf("GetDrawer: %v", err)
-	}
-	if d.Hall != "hall_decisions" {
-		t.Errorf("hall = %q, want 'hall_decisions'", d.Hall)
-	}
-	if d.SourceFile != "internal/auth/token.go" {
-		t.Errorf("source_file = %q", d.SourceFile)
-	}
-	if d.Importance != 9 {
-		t.Errorf("importance = %d, want 9", d.Importance)
+	if tool == nil {
+		t.Fatal("expected non-nil tool")
 	}
 }

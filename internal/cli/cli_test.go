@@ -385,7 +385,7 @@ func TestRunPrintToolStatusToStderr(t *testing.T) {
 		functionCall: &genai.FunctionCall{
 			ID:   "call-1",
 			Name: "read",
-			Args: map[string]any{"file_path": testFile},
+			Args: map[string]any{"file_path": testFile, "extra": strings.Repeat("x", 100)},
 		},
 		finalText: "Done reading.",
 	}
@@ -418,8 +418,34 @@ func TestRunPrintToolStatusToStderr(t *testing.T) {
 	if !strings.Contains(stderr, "⚙ tool: read") {
 		t.Errorf("stderr should contain tool start status, got: %q", stderr)
 	}
-	if !strings.Contains(stderr, "✓ tool: read done") {
+	startLine := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "⚙ tool: read") {
+			startLine = line
+			break
+		}
+	}
+	if !strings.Contains(startLine, "{") {
+		t.Errorf("tool start status should include args preview, got: %q", startLine)
+	}
+	if !strings.Contains(startLine, "🛠️") {
+		t.Errorf("tool start status should include emoji, got: %q", startLine)
+	}
+	if !strings.Contains(startLine, printToolCallColor) {
+		t.Errorf("tool start status should include color, got: %q", startLine)
+	}
+	argsPreview := strings.TrimSuffix(startLine, printToolReset)
+	if idx := strings.LastIndex(argsPreview, printToolDimColor); idx >= 0 {
+		argsPreview = argsPreview[idx+len(printToolDimColor):]
+	}
+	if len([]rune(argsPreview)) > 100 {
+		t.Errorf("args preview should be at most 100 chars, got %d: %q", len([]rune(argsPreview)), argsPreview)
+	}
+	if !strings.Contains(stderr, "✅ ✓ tool: read done") {
 		t.Errorf("stderr should contain tool done status, got: %q", stderr)
+	}
+	if !strings.Contains(stderr, printToolDoneColor) {
+		t.Errorf("tool done status should include color, got: %q", stderr)
 	}
 }
 

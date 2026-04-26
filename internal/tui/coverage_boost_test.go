@@ -360,8 +360,8 @@ func TestView_ZeroWidthLoading(t *testing.T) {
 	m := newTestModelFull(t)
 	m.width = 0
 	v := m.View()
-	if !strings.Contains(v.Content, "Loading") {
-		t.Errorf("expected Loading, got %q", v.Content)
+	if !strings.Contains(v.Content, "Loading..") || !strings.ContainsAny(v.Content, matrixChars) {
+		t.Errorf("expected loading matrix startup line, got %q", v.Content)
 	}
 }
 

@@ -835,6 +835,41 @@ func lastLoggedError() (path, msg string, err error) {
 	return "", "", nil
 }
 
+func toolArgsPreview(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		data = []byte(fmt.Sprintf("%v", args))
+	}
+	preview := string(data)
+	const maxToolArgsPreviewLen = 100
+	runes := []rune(preview)
+	if len(runes) <= maxToolArgsPreviewLen {
+		return preview
+	}
+	return string(runes[:maxToolArgsPreviewLen])
+}
+
+const (
+	printToolCallColor = "\033[36m"
+	printToolDoneColor = "\033[32m"
+	printToolDimColor  = "\033[2m"
+	printToolReset     = "\033[0m"
+)
+
+func formatPrintToolCall(name string, args map[string]any) string {
+	if preview := toolArgsPreview(args); preview != "" {
+		return fmt.Sprintf("%s🛠️  ⚙ tool: %s %s%s%s\n", printToolCallColor, name, printToolDimColor, preview, printToolReset)
+	}
+	return fmt.Sprintf("%s🛠️  ⚙ tool: %s%s\n", printToolCallColor, name, printToolReset)
+}
+
+func formatPrintToolDone(name string) string {
+	return fmt.Sprintf("%s✅ ✓ tool: %s done%s\n", printToolDoneColor, name, printToolReset)
+}
+
 // runPrint runs the agent and prints text responses to stdout.
 // Tool calls are shown as status lines on stderr.
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
@@ -864,11 +899,11 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 				log.LLMText(ev.Author, part.Text)
 			}
 			if part.FunctionCall != nil {
-				fmt.Fprintf(os.Stderr, "⚙ tool: %s\n", part.FunctionCall.Name)
+				fmt.Fprint(os.Stderr, formatPrintToolCall(part.FunctionCall.Name, part.FunctionCall.Args))
 				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if part.FunctionResponse != nil {
-				fmt.Fprintf(os.Stderr, "✓ tool: %s done\n", part.FunctionResponse.Name)
+				fmt.Fprint(os.Stderr, formatPrintToolDone(part.FunctionResponse.Name))
 				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
 			}
 		}
