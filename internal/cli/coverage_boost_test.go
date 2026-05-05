@@ -964,6 +964,7 @@ type provInfoT = struct {
 	Provider string
 	Model    string
 	Ollama   bool
+	Custom   bool
 }
 
 // -----------------------------------------------------------------------

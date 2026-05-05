@@ -168,12 +168,25 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	mode := resolveMode()
-	info, err := provider.Resolve(modelName)
+	baseURL := flagURL
+	if baseURL == "" && providerName != "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[providerName]
+	}
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
+		info.Custom = baseURL != ""
+	}
+	if baseURL == "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[info.Provider]
+		if baseURL != "" {
+			info.Custom = true
+		}
 	}
 	if err := provider.ValidateModel(info); err != nil {
 		return rootRuntime{}, fmt.Errorf("model validation: %w", err)
@@ -181,16 +194,11 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return rootRuntime{}, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}
 
-	baseURL := flagURL
-	if baseURL == "" {
-		baseURLs := config.BaseURLs()
-		baseURL = baseURLs[info.Provider]
-	}
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}

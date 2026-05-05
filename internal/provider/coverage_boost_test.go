@@ -30,6 +30,7 @@ func TestContextWindowSize(t *testing.T) {
 		{"gpt-5.5 latest frontier", "gpt-5.5", 1_050_000},
 		{"gpt-5.4-mini has longer prefix", "gpt-5.4-mini", 400_000},
 		{"mistral-large tag variant", "mistral-large-2512", 256_000},
+		{"qwen custom model defaults to 4k", "qwen-3.6-27b-q4", 4_096},
 		{"unknown returns 0", "nonexistent-model-xyz", 0},
 	}
 	for _, tt := range tests {
