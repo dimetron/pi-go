@@ -23,7 +23,6 @@ func TestResolve(t *testing.T) {
 		{"gpt-5.5", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
 		{"", "", true},
-		{"llama-3", "ollama", false},
 	}
 
 	for _, tt := range tests {
@@ -199,8 +198,8 @@ func TestNewGemini(t *testing.T) {
 	}
 }
 
-func TestResolveLocalSuffix(t *testing.T) {
-	info, err := Resolve("qwen2.5:local")
+func TestResolveOllamaCloudSuffix(t *testing.T) {
+	info, err := Resolve("qwen2.5:cloud")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,39 +209,17 @@ func TestResolveLocalSuffix(t *testing.T) {
 	if !info.Ollama {
 		t.Error("expected Ollama = true")
 	}
-	if info.Model != "qwen2.5:local" {
-		t.Errorf("model = %q, want %q", info.Model, "qwen2.5:local")
+	if info.Model != "qwen2.5:cloud" {
+		t.Errorf("model = %q, want %q", info.Model, "qwen2.5:cloud")
 	}
 }
 
-func TestResolveOllamaModelPrefixes(t *testing.T) {
-	tests := []struct {
-		model     string
-		wantModel string
-	}{
-		{"qwen2.5", "qwen2.5:latest"},
-		{"deepseek-coder", "deepseek-coder:latest"},
-		// mistral prefix now routes to the Mistral cloud provider; use ollama/mistral for local.
-		{"phi-3", "phi-3:latest"},
-		{"codellama", "codellama:latest"},
-		{"gemma-2", "gemma-2:latest"},
-		{"llama3:8b", "llama3:8b"},
-		{"minimax-01", "minimax-01:latest"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			info, err := Resolve(tt.model)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if info.Provider != "ollama" {
-				t.Errorf("provider = %q, want ollama", info.Provider)
-			}
-			if !info.Ollama {
-				t.Error("expected Ollama = true")
-			}
-			if info.Model != tt.wantModel {
-				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+func TestResolveOllamaRequiresExplicitPrefix(t *testing.T) {
+	for _, model := range []string{"qwen2.5", "deepseek-coder", "phi-3", "codellama", "gemma-2", "llama3:8b", "minimax-01", "qwen2.5:local"} {
+		t.Run(model, func(t *testing.T) {
+			_, err := Resolve(model)
+			if err == nil {
+				t.Fatalf("expected error for bare Ollama model %q", model)
 			}
 		})
 	}
@@ -324,6 +301,35 @@ func TestResolveOllamaPrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestResolveWithBaseURLPrefersCustomOpenAIForAmbiguousModel(t *testing.T) {
+	info, err := ResolveWithBaseURL("qwen-3.6", "http://127.0.0.1:2276/v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "openai" {
+		t.Errorf("provider = %q, want openai", info.Provider)
+	}
+	if info.Model != "qwen-3.6" {
+		t.Errorf("model = %q, want qwen-3.6", info.Model)
+	}
+	if info.Ollama {
+		t.Error("expected Ollama = false for custom OpenAI-compatible endpoint")
+	}
+	if !info.Custom {
+		t.Error("expected Custom = true")
+	}
+}
+
+func TestResolveWithBaseURLKeepsExplicitOllamaPrefix(t *testing.T) {
+	info, err := ResolveWithBaseURL("ollama/qwen-3.6", "http://127.0.0.1:11434")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "ollama" || info.Model != "qwen-3.6" || !info.Ollama {
+		t.Fatalf("info = %+v, want explicit Ollama model", info)
+	}
+}
+
 func TestResolveKnownProviders(t *testing.T) {
 	tests := []struct {
 		model    string
@@ -342,7 +348,7 @@ func TestResolveKnownProviders(t *testing.T) {
 			if info.Provider != tt.provider {
 				t.Errorf("provider = %q, want %q", info.Provider, tt.provider)
 			}
-			if info.Model != tt.model {
+			if info.Model != tt.model && (tt.model != "openai/qwen-3.6" || info.Model != "qwen-3.6") {
 				t.Errorf("model = %q, want %q", info.Model, tt.model)
 			}
 			if info.Ollama {

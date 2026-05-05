@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -97,6 +98,16 @@ func pingEndpoint(providerName string) string {
 	}
 }
 
+// pingEndpointForBaseURL returns the provider health-check path adjusted for a
+// custom base URL that may already include the provider API version prefix.
+func pingEndpointForBaseURL(providerName, baseURL string) string {
+	endpoint := pingEndpoint(providerName)
+	if providerName == "openai" && strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
+		return "/models"
+	}
+	return endpoint
+}
+
 func runPing(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
 
@@ -124,12 +135,23 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving model role: %w", err)
 	}
 
-	info, err := provider.Resolve(modelName)
+	baseURL := flagURL
+	explicitBaseURL := baseURL != ""
+	if baseURL == "" && providerName != "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[providerName]
+		if baseURL != "" {
+			explicitBaseURL = true
+		}
+	}
+
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
 		return fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
+		info.Custom = baseURL != ""
 	}
 	if err := provider.ValidateModel(info); err != nil {
 		return fmt.Errorf("model validation: %w", err)
@@ -142,15 +164,6 @@ func runPing(cmd *cobra.Command, args []string) error {
 		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
 	}
 
-	baseURL := flagURL
-	explicitBaseURL := baseURL != ""
-	if baseURL == "" {
-		baseURLs := config.BaseURLs()
-		baseURL = baseURLs[info.Provider]
-		if baseURL != "" {
-			explicitBaseURL = true
-		}
-	}
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
@@ -187,7 +200,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	w("*\n")
 
 	// Parse the target URL.
-	endpoint := pingEndpoint(info.Provider)
+	endpoint := pingEndpointForBaseURL(info.Provider, baseURL)
 	if codexBackend {
 		// The codex backend only exposes POST /responses — use it as a
 		// reachability target (it will 405 for GET, which we treat as
@@ -371,6 +384,11 @@ func runPing(cmd *cobra.Command, args []string) error {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, info.Provider, colorReset)
 		w("* Status: %s\n", resp.Status)
+		if info.Provider == "openai" {
+			if resolvedModel, ok := resolveOpenAIModelFromList(resp, info.Model, w); ok {
+				info.Model = resolvedModel
+			}
+		}
 		httpAlive = true
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
@@ -496,6 +514,42 @@ func runPing(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func resolveOpenAIModelFromList(resp *http.Response, requested string, w func(string, ...any)) (string, bool) {
+	if resp == nil || resp.Body == nil || requested == "" {
+		return "", false
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		w("* %s⚠ Could not parse model list: %v%s\n", colorYellow, err, colorReset)
+		return "", false
+	}
+	for _, item := range payload.Data {
+		if item.ID == requested {
+			return requested, false
+		}
+	}
+	var matches []string
+	for _, item := range payload.Data {
+		if strings.HasPrefix(item.ID, requested) {
+			matches = append(matches, item.ID)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		w("* %sModel alias:%s %s → %s\n", colorBlue, colorReset, requested, matches[0])
+		return matches[0], true
+	case 0:
+		return "", false
+	default:
+		w("* %s⚠ Model %q matched multiple available models: %s%s\n", colorYellow, requested, strings.Join(matches, ", "), colorReset)
+		return "", false
+	}
 }
 
 // modelPing sends a prompt to the model and traces the full response.

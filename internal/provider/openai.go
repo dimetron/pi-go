@@ -53,7 +53,10 @@ type responsesState struct {
 // codex tokens with 401 "Missing scopes: api.responses.write".
 func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API key is required")
+		if baseURL == "" {
+			return nil, fmt.Errorf("OpenAI API key is required")
+		}
+		apiKey = "dummy"
 	}
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 
@@ -76,6 +79,7 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 			option.WithHeader("OpenAI-Beta", "responses=experimental"),
 		)
 	} else if baseURL != "" {
+		baseURL = normalizeOpenAIBaseURL(baseURL)
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 	// Install a transport that captures 4xx/5xx response bodies from the
@@ -88,15 +92,11 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 		}
 		baseTransport = BuildTransport(llmOpts)
 	}
-	if useCodexBackend {
-		if baseTransport == nil {
-			baseTransport = http.DefaultTransport
-		}
-		baseTransport = &errorBodyLoggingTransport{base: baseTransport}
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
 	}
-	if baseTransport != nil {
-		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: baseTransport}))
-	}
+	baseTransport = &errorBodyLoggingTransport{base: baseTransport}
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: baseTransport}))
 	client := openai.NewClient(opts...)
 	return &openaiModel{
 		modelName:     modelName,
@@ -107,6 +107,18 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 }
 
 func (m *openaiModel) Name() string { return m.modelName }
+
+func normalizeOpenAIBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(normalizeBaseURL(strings.TrimSpace(baseURL)), "/")
+	if baseURL == "" {
+		return ""
+	}
+	lower := strings.ToLower(baseURL)
+	if strings.HasSuffix(lower, "/v1") || strings.Contains(lower, "/v1/") {
+		return baseURL
+	}
+	return baseURL + "/v1"
+}
 
 // endpointMode returns whether to use Responses or Chat Completions for this model.
 // Responses is used for: Codex models (Responses-only), any model with an active

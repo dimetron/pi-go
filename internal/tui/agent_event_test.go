@@ -368,6 +368,18 @@ func TestFormatToolResult_Bash(t *testing.T) {
 	}
 }
 
+func TestFormatToolResult_BashShowsFirstTwoAndLastTwoLines(t *testing.T) {
+	data := map[string]any{
+		"exit_code": float64(0),
+		"stdout":    "one\ntwo\nthree\nfour\nfive\nsix\n",
+	}
+	result := formatToolResult(data)
+	want := "one\ntwo\nfive\nsix"
+	if result != want {
+		t.Errorf("expected %q, got %q", want, result)
+	}
+}
+
 func TestFormatToolResult_BashError(t *testing.T) {
 	data := map[string]any{
 		"exit_code": float64(1),
