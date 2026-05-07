@@ -233,6 +233,27 @@ func TestOaiFunctionResponseContentEdgeCases(t *testing.T) {
 	}
 }
 
+func TestNormalizeOpenAIBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "bare host", in: "http://127.0.0.1:2276", want: "http://127.0.0.1:2276/v1"},
+		{name: "missing scheme", in: "127.0.0.1:2276", want: "http://127.0.0.1:2276/v1"},
+		{name: "already v1", in: "http://127.0.0.1:2276/v1", want: "http://127.0.0.1:2276/v1"},
+		{name: "proxy path", in: "https://example.com/api/v1/proxy", want: "https://example.com/api/v1/proxy"},
+		{name: "trailing slash", in: "http://127.0.0.1:2276/", want: "http://127.0.0.1:2276/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeOpenAIBaseURL(tt.in); got != tt.want {
+				t.Errorf("normalizeOpenAIBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewOpenAIWithBaseURL(t *testing.T) {
 	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", "https://custom-api.example.com/v1", nil)
 	if err != nil {

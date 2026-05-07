@@ -297,6 +297,28 @@ func TestPingEndpoint(t *testing.T) {
 	}
 }
 
+func TestPingEndpointForBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		baseURL  string
+		want     string
+	}{
+		{"openai default base", "openai", "https://api.openai.com", "/v1/models"},
+		{"openai versioned custom base", "openai", "http://127.0.0.1:2276/v1", "/models"},
+		{"openai versioned custom base with slash", "openai", "http://127.0.0.1:2276/v1/", "/models"},
+		{"anthropic unchanged", "anthropic", "https://api.anthropic.com/v1", "/v1/messages"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pingEndpointForBaseURL(tt.provider, tt.baseURL)
+			if got != tt.want {
+				t.Errorf("pingEndpointForBaseURL(%q, %q) = %q, want %q", tt.provider, tt.baseURL, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name string

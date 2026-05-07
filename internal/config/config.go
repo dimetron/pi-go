@@ -164,26 +164,19 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(strings.ToLower(modelName), "azure/") {
 		return "azure"
 	}
-	// Ollama suffixes → native Ollama provider.
-	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, ":local") {
+	lower := strings.ToLower(modelName)
+	// ollama/ prefix → native Ollama provider.
+	if strings.HasPrefix(lower, "ollama/") {
 		return "ollama"
 	}
-	lower := strings.ToLower(modelName)
+	// :cloud suffix → native Ollama provider.
+	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
+		return "ollama"
+	}
 	for prefix, provider := range modelPrefixes {
 		if strings.HasPrefix(lower, prefix) {
 			return provider
 		}
-	}
-	// Common Ollama model prefixes → native Ollama provider.
-	ollamaPrefixes := []string{"qwen", "minimax", "deepseek", "llama", "mistral", "phi", "codellama", "gemma"}
-	for _, prefix := range ollamaPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return "ollama"
-		}
-	}
-	// ollama/ prefix → native Ollama provider.
-	if strings.HasPrefix(lower, "ollama/") {
-		return "ollama"
 	}
 	return ""
 }

@@ -531,20 +531,42 @@ func formatToolResult(data map[string]any) string {
 	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
 		return diag
 	}
-	// bash tool: show exit code + truncated stdout
+	// bash tool: show exit code + first 2 and last 2 output lines (preserve newlines for better visibility)
 	if code, ok := data["exit_code"].(float64); ok {
 		stdout, _ := data["stdout"].(string)
-		stdout = strings.ReplaceAll(stdout, "\n", " ")
-		if len(stdout) > 80 {
-			stdout = stdout[:77] + "..."
+		stderr, _ := data["stderr"].(string)
+
+		// For bash streaming display, show first 2 and last 2 lines of stdout (or stderr if stdout is empty).
+		var preview string
+		output := stdout
+		if output == "" {
+			output = stderr
 		}
+		if output != "" {
+			lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+			if len(lines) > 4 {
+				preview = strings.Join([]string{lines[0], lines[1], lines[len(lines)-2], lines[len(lines)-1]}, "\n")
+			} else {
+				preview = strings.Join(lines, "\n")
+			}
+		} else {
+			preview = "(No output)"
+		}
+
+		// Truncate each line to 80 chars for display
+		var truncated []string
+		for _, line := range strings.Split(preview, "\n") {
+			if len(line) > 80 {
+				line = line[:77] + "..."
+			}
+			truncated = append(truncated, line)
+		}
+		result := strings.Join(truncated, "\n")
+
 		if int(code) != 0 {
-			return fmt.Sprintf("exit %d: %s", int(code), stdout)
+			return fmt.Sprintf("exit %d: %s", int(code), result)
 		}
-		if stdout == "" {
-			return "(No output)"
-		}
-		return stdout
+		return result
 	}
 	// Fallback: compact JSON
 	b, _ := json.Marshal(data)
