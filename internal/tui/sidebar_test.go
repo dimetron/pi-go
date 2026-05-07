@@ -27,6 +27,21 @@ func TestRenderSidebar_Minimal(t *testing.T) {
 	}
 }
 
+func TestRenderSidebar_WithHostAndFolder(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:      30,
+		Height:     20,
+		HostName:   "dev-host",
+		FolderName: "pi-go",
+	})
+	if !strings.Contains(result, "host: dev-host") {
+		t.Error("expected hostname in Context section")
+	}
+	if !strings.Contains(result, "dir: pi-go") {
+		t.Error("expected folder name in Context section")
+	}
+}
+
 func TestRenderSidebar_WithAllSections(t *testing.T) {
 	result := RenderSidebar(SidebarRenderInput{
 		Width:        30,

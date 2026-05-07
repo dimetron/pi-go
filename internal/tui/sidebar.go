@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -29,6 +30,8 @@ type SidebarRenderInput struct {
 	DiffRemoved  int
 	Running      bool
 	TokenTracker TokenTracker
+	HostName     string
+	FolderName   string
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
@@ -77,7 +80,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 
 	// --- Context section (session context window usage) ---
-	sidebarBg := lipgloss.Color("#181825") // Catppuccin Mocha mantle (subtle dark)
+	sidebarBg := lipgloss.Color("#11111bcc") // Catppuccin Mocha crust with alpha for dark transparency
 	lines = append(lines, heading.Render("  Context"))
 	if tt := in.TokenTracker; tt != nil && tt.ContextWindowSize() > 0 {
 		// Known context window: show prompt tokens / window size with bar.
@@ -103,6 +106,15 @@ func RenderSidebar(in SidebarRenderInput) string {
 		} else {
 			lines = append(lines, dim.Render(fmt.Sprintf("  ~%d tokens", ctxTokens)))
 		}
+	}
+
+	hostName := truncateSidebarValue(in.HostName, innerW)
+	folderName := truncateSidebarValue(in.FolderName, innerW)
+	if hostName != "" {
+		lines = append(lines, dim.Render("  host: "+hostName))
+	}
+	if folderName != "" {
+		lines = append(lines, dim.Render("  dir: "+folderName))
 	}
 	lines = append(lines, "")
 
@@ -388,7 +400,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with subtle dark background (Mocha mantle),
+	// Wrap in a styled box with dark transparent background and
 	// left border to separate from main panel.
 	box := lipgloss.NewStyle().
 		Width(w).
@@ -398,6 +410,23 @@ func RenderSidebar(in SidebarRenderInput) string {
 		BorderForeground(borderFg)
 
 	return box.Render(content)
+}
+
+func sidebarFolderName(workDir string) string {
+	if workDir == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(workDir))
+}
+
+func truncateSidebarValue(value string, width int) string {
+	if value == "" || width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(value) <= width {
+		return value
+	}
+	return runewidth.Truncate(value, width, "…")
 }
 
 // agentStatusPriority returns a sort key for agent status.

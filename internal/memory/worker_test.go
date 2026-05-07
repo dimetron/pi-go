@@ -57,8 +57,9 @@ func (m *mockCompressor) getCalls() []RawObservation {
 
 // mockStore implements Store for worker tests.
 type mockStore struct {
-	mu           sync.Mutex
-	observations []*Observation
+	mu             sync.Mutex
+	observations   []*Observation
+	insertObsError error
 }
 
 func newMockStore() *mockStore {
@@ -68,6 +69,9 @@ func newMockStore() *mockStore {
 func (s *mockStore) InsertObservation(_ context.Context, obs *Observation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.insertObsError != nil {
+		return s.insertObsError
+	}
 	obs.ID = int64(len(s.observations) + 1)
 	s.observations = append(s.observations, obs)
 	return nil
@@ -448,6 +452,52 @@ func TestBuildAfterToolCallback(t *testing.T) {
 	}
 }
 
+func TestWorkerAfterStoreHook(t *testing.T) {
+	store := newMockStore()
+	comp := newMockCompressor()
+	w := NewWorker(store, comp, 10)
+	var hooked []*Observation
+	w.OnAfterStore(func(_ context.Context, obs *Observation) {
+		hooked = append(hooked, obs)
+	})
+
+	ctx := context.Background()
+	w.Start(ctx)
+	w.Enqueue(makeRaw("hook-tool"))
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if len(hooked) != 1 || hooked[0].ToolName != "hook-tool" {
+		t.Fatalf("hooked = %#v", hooked)
+	}
+}
+
+func TestWorkerStoreFailureSkipsHook(t *testing.T) {
+	store := newMockStore()
+	store.insertObsError = fmt.Errorf("store down")
+	comp := newMockCompressor()
+	w := NewWorker(store, comp, 10)
+	hookCalled := false
+	w.OnAfterStore(func(context.Context, *Observation) { hookCalled = true })
+
+	ctx := context.Background()
+	w.Start(ctx)
+	w.Enqueue(makeRaw("store-fail"))
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if len(store.getObservations()) != 0 {
+		t.Fatal("expected no stored observations")
+	}
+	if hookCalled {
+		t.Fatal("hook should not run when storing fails")
+	}
+}
+
 func TestTruncateFallbackText(t *testing.T) {
 	raw := RawObservation{
 		ToolName:   "test",
@@ -468,5 +518,17 @@ func TestTruncateFallbackText(t *testing.T) {
 	text = truncateFallbackText(raw)
 	if len(text) > 4200 { // 4096 + "...(truncated)" + some JSON overhead
 		t.Errorf("truncated text too long: %d", len(text))
+	}
+}
+
+func TestTruncateFallbackTextMarshalError(t *testing.T) {
+	raw := RawObservation{
+		ToolName:   "bad-json",
+		ToolInput:  map[string]any{"bad": func() {}},
+		ToolOutput: map[string]any{"result": "ok"},
+	}
+	text := truncateFallbackText(raw)
+	if text != "tool=bad-json (marshal error)" {
+		t.Fatalf("text = %q", text)
 	}
 }

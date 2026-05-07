@@ -150,16 +150,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.CompletionResult.CycleSelection(-1)
 			im.SelectedIndex = im.CompletionResult.Selected
 		} else if im.Text == "/" || im.CyclingIdx >= 0 {
-			allCmds := im.AllCommandNames()
-			if len(allCmds) > 0 {
-				if im.CyclingIdx <= 0 {
-					im.CyclingIdx = len(allCmds) - 1
-				} else {
-					im.CyclingIdx--
-				}
-				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = utf8.RuneCountInString(im.Text)
-			}
+			im.cycleCommand(-1)
 		}
 
 	case key.Code == tea.KeyTab:
@@ -172,32 +163,7 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.CompletionResult.CycleSelection(1)
 			im.SelectedIndex = im.CompletionResult.Selected
 		} else if im.Text == "/" || im.CyclingIdx >= 0 {
-			allCmds := im.AllCommandNames()
-			// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
-			// but NOT when input is "/" alone or a complete command (don't filter by "/subagents")
-			prefix := strings.ToLower(im.Text)
-			var filteredCmds []string
-			for _, cmd := range allCmds {
-				if strings.HasPrefix(strings.ToLower(cmd), prefix) {
-					filteredCmds = append(filteredCmds, cmd)
-				}
-			}
-			// Determine which list to cycle through:
-			// - Use filtered list if it has more than 1 match
-			// - Use all commands if filtered list has 0 or 1 match (cycling should go through all)
-			cycleCmds := filteredCmds
-			if len(filteredCmds) <= 1 {
-				cycleCmds = allCmds
-			}
-			if len(cycleCmds) > 0 {
-				if im.CyclingIdx < 0 || im.CyclingIdx >= len(cycleCmds) {
-					im.CyclingIdx = 0
-				} else {
-					im.CyclingIdx = (im.CyclingIdx + 1) % len(cycleCmds)
-				}
-				im.Text = cycleCmds[im.CyclingIdx]
-				im.CursorPos = utf8.RuneCountInString(im.Text)
-			}
+			im.cycleCommand(1)
 		} else {
 			im.CompletionResult = Complete(im.Text, im.Skills, im.WorkDir)
 			if len(im.CompletionResult.Candidates) == 1 {
@@ -312,15 +278,6 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if key.Text != "" && isUserInput(key.Text) {
 			if key.Text == "/" && im.Text == "" {
 				im.ReloadSkills()
-				im.Text = "/"
-				im.CursorPos = 1
-				im.CyclingIdx = 0
-				allCmds := im.AllCommandNames()
-				if len(allCmds) > 0 {
-					im.Text = allCmds[0]
-					im.CursorPos = utf8.RuneCountInString(im.Text)
-				}
-				return nil
 			}
 			// Insert text at cursor position (properly handling UTF-8)
 			beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
@@ -432,21 +389,7 @@ func (im *InputModel) View(running bool) string {
 		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
-		allCmds := im.AllCommandNames()
-		// Filter commands by prefix when there's a partial input (e.g., "/r" → only /run, /restart)
-		// but NOT when input is "/" alone or a complete command (don't filter by "/subagents")
-		cmdPrefix := strings.ToLower(im.Text)
-		var filteredCmds []string
-		for _, cmd := range allCmds {
-			if strings.HasPrefix(strings.ToLower(cmd), cmdPrefix) {
-				filteredCmds = append(filteredCmds, cmd)
-			}
-		}
-		// Use filtered list if it has more than 1 match, otherwise show all
-		cycleCmds := filteredCmds
-		if len(filteredCmds) <= 1 {
-			cycleCmds = allCmds
-		}
+		cycleCmds := im.commandCycleList()
 		var menu strings.Builder
 		for i, cmd := range cycleCmds {
 			desc := slashCommandDesc(cmd)
@@ -501,6 +444,45 @@ func (im *InputModel) View(running bool) string {
 	}
 
 	return prefix + before + cursor + after + ghost
+}
+
+func (im *InputModel) commandCycleList() []string {
+	allCmds := im.AllCommandNames()
+	if len(allCmds) == 0 {
+		return nil
+	}
+	if im.Text == "/" {
+		return allCmds
+	}
+	prefix := strings.ToLower(im.Text)
+	var filtered []string
+	for _, cmd := range allCmds {
+		if strings.HasPrefix(strings.ToLower(cmd), prefix) {
+			filtered = append(filtered, cmd)
+		}
+	}
+	if len(filtered) <= 1 {
+		return allCmds
+	}
+	return filtered
+}
+
+func (im *InputModel) cycleCommand(delta int) {
+	cmds := im.commandCycleList()
+	if len(cmds) == 0 {
+		return
+	}
+	if im.CyclingIdx < 0 || im.CyclingIdx >= len(cmds) {
+		if delta < 0 {
+			im.CyclingIdx = len(cmds) - 1
+		} else {
+			im.CyclingIdx = 0
+		}
+	} else {
+		im.CyclingIdx = (im.CyclingIdx + delta + len(cmds)) % len(cmds)
+	}
+	im.Text = cmds[im.CyclingIdx]
+	im.CursorPos = utf8.RuneCountInString(im.Text)
 }
 
 // InsertText inserts pasted or programmatic text at cursor position.
