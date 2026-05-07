@@ -1,7 +1,7 @@
 .PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
 
 build:
-	go build ./cmd/pi
+	go build -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
 	go build ./cmd/pi-sandbox
 
 install: build

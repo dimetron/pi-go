@@ -1,6 +1,7 @@
 package palace
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"runtime"
@@ -33,7 +34,7 @@ type Embedder struct {
 
 // NewEmbedder creates an Embedder backed by hugot's pure-Go (GoMLX) runtime.
 func NewEmbedder(modelPath string) (*Embedder, error) {
-	session, err := hugot.NewGoSession()
+	session, err := hugot.NewGoSession(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("create hugot session: %w", err)
 	}
@@ -65,7 +66,7 @@ func (e *Embedder) Embed(texts []string) ([][]float32, error) {
 		}
 	}
 
-	result, err := e.pipeline.RunPipeline(texts)
+	result, err := e.pipeline.RunPipeline(context.Background(), texts)
 	if err != nil {
 		return nil, fmt.Errorf("run embedding pipeline: %w", err)
 	}
@@ -86,6 +87,7 @@ func DownloadModel(dest string, onnxFilePath string) (string, error) {
 		opts.OnnxFilePath = onnxFilePath
 	}
 	return hugot.DownloadModel(
+		context.Background(),
 		"sentence-transformers/all-MiniLM-L6-v2",
 		dest,
 		opts,

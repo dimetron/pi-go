@@ -87,6 +87,7 @@ func runInteractive(
 
 	tuiErr := tui.Run(ctx, tui.Config{
 		LLM:          llm,
+		AppVersion:   versionString(),
 		ModelName:    llm.Name(),
 		ProviderName: info.Provider,
 		ActiveRole:   activeRole,

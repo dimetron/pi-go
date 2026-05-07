@@ -326,13 +326,17 @@ func TestCancelAgent_NoChannel(t *testing.T) {
 			ActiveTool:  "bash",
 			ActiveTools: map[string]time.Time{"bash": time.Now()},
 		},
-		running: true,
+		running:     true,
+		agentCancel: func() {},
 	}
 
 	m.cancelAgent()
 
 	if m.running {
 		t.Error("expected running to be false")
+	}
+	if m.agentCancel != nil {
+		t.Error("expected agentCancel to be cleared")
 	}
 	if m.statusModel.ActiveTool != "" {
 		t.Error("expected ActiveTool to be cleared")
@@ -351,17 +355,22 @@ func TestCancelAgent_NoChannel(t *testing.T) {
 func TestCancelAgent_WithChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan agentMsg, 1)
+	canceled := false
 	m := &model{
-		ctx:       ctx,
-		cancel:    cancel,
-		agentCh:   ch,
-		chatModel: ChatModel{},
-		running:   true,
+		ctx:         ctx,
+		cancel:      cancel,
+		agentCh:     ch,
+		agentCancel: func() { canceled = true },
+		chatModel:   ChatModel{},
+		running:     true,
 	}
 
 	close(ch)
 	m.cancelAgent()
 
+	if !canceled {
+		t.Error("expected agent cancel to be called")
+	}
 	if m.agentCh != nil {
 		t.Error("expected agentCh to be nil after cancel")
 	}

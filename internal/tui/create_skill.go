@@ -39,10 +39,7 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	m.running = true
 	m.chatModel.Scroll = 0
 
-	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(prompt)
-
-	return m, waitForAgent(m.agentCh)
+	return m, m.startAgentLoop(prompt)
 }
 
 // pendingSkillCreate holds state for skill-create overwrite confirmation.
@@ -194,10 +191,7 @@ After the user answers, update %s with:
 	m.running = true
 	m.chatModel.Scroll = 0
 
-	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(prompt)
-
-	return m, waitForAgent(m.agentCh)
+	return m, m.startAgentLoop(prompt)
 }
 
 // handleSkillListCommand lists all currently loaded skills.

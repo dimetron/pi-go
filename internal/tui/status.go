@@ -36,6 +36,8 @@ type StatusRenderInput struct {
 	DiffAdded    int
 	DiffRemoved  int
 	RunCycle     *runCycleInfo   // may be nil
+	FolderName   string          // current working directory basename
+	HostName     string          // local hostname
 	LoadingItems map[string]bool // item -> done; nil means not loading
 }
 
@@ -177,6 +179,21 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		} else if total > 0 {
 			parts = append(parts, dim.Render(fmt.Sprintf("tokens: %s", formatTokenCount(total))))
 		}
+	}
+
+	// Directory | host.
+	if in.FolderName != "" || in.HostName != "" {
+		dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7"))  // Mocha mauve
+		hostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89dceb")) // Mocha sky
+
+		var locationParts []string
+		if in.FolderName != "" {
+			locationParts = append(locationParts, dirStyle.Render(in.FolderName))
+		}
+		if in.HostName != "" {
+			locationParts = append(locationParts, hostStyle.Render(in.HostName))
+		}
+		parts = append(parts, strings.Join(locationParts, dim.Render(" | ")))
 	}
 
 	// Git branch.
