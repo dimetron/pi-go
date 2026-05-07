@@ -158,26 +158,34 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("resolving model role: %w", err)
 	}
 
-	info, err := provider.Resolve(modelName)
+	baseURL := rt.BaseURL
+	if baseURL == "" && providerName != "" {
+		baseURL = config.BaseURLs()[providerName]
+	}
+
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
+		info.Custom = baseURL != ""
+	}
+	if baseURL == "" {
+		baseURL = config.BaseURLs()[info.Provider]
+		if baseURL != "" {
+			info.Custom = true
+		}
 	}
 	if err := provider.ValidateModel(info); err != nil {
 		return nil, fmt.Errorf("model validation: %w", err)
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
-	if apiKey == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
 		return nil, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, providerEnvVar(info.Provider))
 	}
 
-	baseURL := rt.BaseURL
-	if baseURL == "" {
-		baseURL = config.BaseURLs()[info.Provider]
-	}
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}

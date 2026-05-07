@@ -94,7 +94,7 @@ func (t *errorBodyLoggingTransport) RoundTrip(req *http.Request) (*http.Response
 	if readErr != nil {
 		return resp, err
 	}
-	auth.Debug(fmt.Sprintf("codex backend %d on %s %s: %s",
+	auth.Debug(fmt.Sprintf("OpenAI-compatible backend %d on %s %s: %s",
 		resp.StatusCode, req.Method, req.URL.Path, truncate(string(body), 1024)))
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, err

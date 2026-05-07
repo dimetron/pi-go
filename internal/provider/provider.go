@@ -64,6 +64,7 @@ type Info struct {
 	Provider string
 	Model    string
 	Ollama   bool // true when model is served by Ollama
+	Custom   bool // true when using an explicit custom OpenAI-compatible endpoint
 }
 
 // Known model prefixes mapped to providers.
@@ -75,8 +76,10 @@ var modelPrefixes = map[string]string{
 	"mistral": "mistral",
 }
 
-// OllamaModelPrefixes are common Ollama model name prefixes.
-var OllamaModelPrefixes = []string{"qwen", "minimax", "deepseek", "llama", "phi", "codellama", "gemma"}
+// OllamaModelPrefixes are model prefixes that previously auto-routed to Ollama.
+// Bare Ollama model names are intentionally not auto-detected; use the explicit
+// ollama/ prefix, or the :cloud tag for Ollama cloud models.
+var OllamaModelPrefixes = []string{}
 
 // KnownModels lists recognized model names per provider.
 // The check is prefix-based: a model is valid if it starts with any entry.
@@ -217,6 +220,8 @@ var contextWindowSizes = map[string]int64{
 	"mistral-small-2603":    256_000,
 	"mistral-small-latest":  256_000,
 	"codestral":             256_000,
+	// Custom/local models
+	"qwen": 4_096,
 }
 
 // ContextWindowSize returns the context window size for a model (in tokens).
@@ -237,9 +242,9 @@ func ContextWindowSize(modelName string) int64 {
 
 // ValidateModel checks whether the model name is recognized for its provider.
 // Returns an error with suggestions if the model is unknown.
-// Ollama models are always considered valid (they are pulled dynamically).
+// Ollama and custom endpoint models are always considered valid (they are dynamic).
 func ValidateModel(info Info) error {
-	if info.Ollama {
+	if info.Ollama || info.Custom {
 		return nil
 	}
 	known, ok := KnownModels[info.Provider]
@@ -254,6 +259,31 @@ func ValidateModel(info Info) error {
 	}
 	return fmt.Errorf("unknown %s model %q; known models: %s",
 		info.Provider, info.Model, strings.Join(known, ", "))
+}
+
+// ResolveWithBaseURL determines the provider from a model name.
+// When baseURL is provided and the model is not otherwise recognized, it routes
+// the model to an OpenAI-compatible custom endpoint. The optional openai/ prefix
+// is stripped so `--model openai/foo` sends `foo` to the custom endpoint.
+func ResolveWithBaseURL(modelName, baseURL string) (Info, error) {
+	if baseURL != "" {
+		lower := strings.ToLower(modelName)
+		if strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "azure/") {
+			return Resolve(modelName)
+		}
+		if strings.HasPrefix(lower, "openai/") {
+			modelName = modelName[len("openai/"):]
+			return Info{Provider: "openai", Model: modelName, Custom: true}, nil
+		}
+		info, err := Resolve(modelName)
+		if err == nil && !info.Ollama {
+			info.Custom = true
+			return info, nil
+		}
+		return Info{Provider: "openai", Model: modelName, Custom: true}, nil
+	}
+
+	return Resolve(modelName)
 }
 
 // Resolve determines the provider from a model name.
@@ -275,9 +305,9 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "azure", Model: modelName[len("azure/"):]}, nil
 	}
 
-	// Detect :cloud or :local suffix → native Ollama provider.
-	// Keep the full model name — :cloud/:local are valid Ollama model tags.
-	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, ":local") {
+	// Detect :cloud or -cloud suffix → native Ollama provider.
+	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
+	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return Info{Provider: "ollama", Model: modelName, Ollama: true}, nil
 	}
 
@@ -299,7 +329,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, qwen, minimax, deepseek, llama, phi, codellama, gemma, or use ollama/ prefix for Ollama)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
