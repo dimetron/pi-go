@@ -12,6 +12,7 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/dimetron/pi-go/internal/cli.Version={{.Version}}
+      - -X github.com/dimetron/pi-go/internal/cli.BuildTag={{.ShortCommit}}
     goos:
       - linux
       - darwin

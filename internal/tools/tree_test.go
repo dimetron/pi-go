@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -216,6 +218,82 @@ func TestBuildTree_DepthZero(t *testing.T) {
 	output := b.String()
 	if strings.Contains(output, "file2.go") {
 		t.Error("file2.go should not appear with depth 0")
+	}
+}
+
+func TestTreeHandler(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/src/deep", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(dir+"/node_modules/pkg", 0o755); err != nil {
+		t.Fatalf("mkdir node_modules: %v", err)
+	}
+	if err := os.WriteFile(dir+"/main.go", []byte("package main"), 0o644); err != nil {
+		t.Fatalf("write main: %v", err)
+	}
+	if err := os.WriteFile(dir+"/src/lib.go", []byte("package src"), 0o644); err != nil {
+		t.Fatalf("write lib: %v", err)
+	}
+	if err := os.WriteFile(dir+"/src/deep/hidden.go", []byte("package deep"), 0o644); err != nil {
+		t.Fatalf("write hidden: %v", err)
+	}
+	if err := os.WriteFile(dir+"/node_modules/pkg/index.js", []byte("ignored"), 0o644); err != nil {
+		t.Fatalf("write ignored: %v", err)
+	}
+
+	sb := testSandbox(t, dir)
+	out, err := treeHandler(sb, TreeInput{Depth: 1})
+	if err != nil {
+		t.Fatalf("treeHandler: %v", err)
+	}
+	if out.Dirs != 1 || out.Files != 1 {
+		t.Fatalf("counts dirs/files = %d/%d, want 1/1", out.Dirs, out.Files)
+	}
+	if !strings.Contains(out.Tree, "main.go") || !strings.Contains(out.Tree, "src/") {
+		t.Fatalf("tree missing expected entries:\n%s", out.Tree)
+	}
+	if strings.Contains(out.Tree, "node_modules") || strings.Contains(out.Tree, "hidden.go") {
+		t.Fatalf("tree included skipped/deep entries:\n%s", out.Tree)
+	}
+}
+
+func TestTreeHandlerDefaultsClampsAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/a/b/c", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(dir+"/a/b/c/file.txt", []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	sb := testSandbox(t, dir)
+	out, err := treeHandler(sb, TreeInput{Path: ".", Depth: maxTreeDepth + 99})
+	if err != nil {
+		t.Fatalf("treeHandler: %v", err)
+	}
+	if !strings.Contains(out.Tree, "file.txt") {
+		t.Fatalf("clamped deep tree missing file:\n%s", out.Tree)
+	}
+	if _, err := treeHandler(sb, TreeInput{Path: "../outside"}); err == nil {
+		t.Fatal("expected path outside sandbox error")
+	}
+}
+
+func TestTreeHandlerTruncatedSummary(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < maxTreeEntries+5; i++ {
+		path := fmt.Sprintf("%s/file-%03d.txt", dir, i)
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	sb := testSandbox(t, dir)
+	out, err := treeHandler(sb, TreeInput{Depth: 1})
+	if err != nil {
+		t.Fatalf("treeHandler: %v", err)
+	}
+	if !strings.Contains(out.Tree, "(truncated)") {
+		t.Fatalf("expected truncated summary:\n%s", out.Tree)
 	}
 }
 

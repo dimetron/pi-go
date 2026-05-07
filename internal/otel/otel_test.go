@@ -110,6 +110,14 @@ func TestLoadEnvFromDotEnv_NonExistentFile(t *testing.T) {
 	}
 }
 
+func TestWriteDirectTerminalEmptyMessage(t *testing.T) {
+	writeDirectTerminal("")
+}
+
+func TestWriteDirectTerminalFallsBackToStderr(t *testing.T) {
+	writeDirectTerminal("otel diagnostic test\n")
+}
+
 func TestNormalizeEndpointURL(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

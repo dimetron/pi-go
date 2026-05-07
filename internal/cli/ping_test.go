@@ -76,6 +76,35 @@ func (m *cliThinkingLLM) GenerateContent(_ context.Context, _ *model.LLMRequest,
 	}
 }
 
+func TestResolveOpenAIModelFromList(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		requested string
+		wantModel string
+		wantOK    bool
+	}{
+		{name: "nil response", requested: "gpt-5", wantOK: false},
+		{name: "invalid json", body: `{`, requested: "gpt-5", wantOK: false},
+		{name: "exact match", body: `{"data":[{"id":"gpt-5"}]}`, requested: "gpt-5", wantModel: "gpt-5", wantOK: false},
+		{name: "single alias match", body: `{"data":[{"id":"gpt-5.1"}]}`, requested: "gpt-5", wantModel: "gpt-5.1", wantOK: true},
+		{name: "no match", body: `{"data":[{"id":"claude"}]}`, requested: "gpt-5", wantOK: false},
+		{name: "multiple matches", body: `{"data":[{"id":"gpt-5.1"},{"id":"gpt-5.2"}]}`, requested: "gpt-5", wantOK: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp *http.Response
+			if tc.body != "" {
+				resp = &http.Response{Body: io.NopCloser(strings.NewReader(tc.body))}
+			}
+			got, ok := resolveOpenAIModelFromList(resp, tc.requested, func(string, ...any) {})
+			if got != tc.wantModel || ok != tc.wantOK {
+				t.Fatalf("resolveOpenAIModelFromList() = (%q, %v), want (%q, %v)", got, ok, tc.wantModel, tc.wantOK)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // modelPing unit tests
 // ---------------------------------------------------------------------------

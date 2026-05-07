@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -29,6 +30,9 @@ type SidebarRenderInput struct {
 	DiffRemoved  int
 	Running      bool
 	TokenTracker TokenTracker
+	AppVersion   string
+	HostName     string
+	FolderName   string
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
@@ -76,8 +80,9 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, "", moodLine, "")
 	}
 
+	sidebarBg := lipgloss.Color("#11111bcc") // Catppuccin Mocha crust with alpha for dark transparency
+
 	// --- Context section (session context window usage) ---
-	sidebarBg := lipgloss.Color("#181825") // Catppuccin Mocha mantle (subtle dark)
 	lines = append(lines, heading.Render("  Context"))
 	if tt := in.TokenTracker; tt != nil && tt.ContextWindowSize() > 0 {
 		// Known context window: show prompt tokens / window size with bar.
@@ -388,7 +393,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with subtle dark background (Mocha mantle),
+	// Wrap in a styled box with dark transparent background and
 	// left border to separate from main panel.
 	box := lipgloss.NewStyle().
 		Width(w).
@@ -398,6 +403,13 @@ func RenderSidebar(in SidebarRenderInput) string {
 		BorderForeground(borderFg)
 
 	return box.Render(content)
+}
+
+func sidebarFolderName(workDir string) string {
+	if workDir == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(workDir))
 }
 
 // agentStatusPriority returns a sort key for agent status.

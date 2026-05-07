@@ -172,6 +172,36 @@ func wireAgent(t *testing.T, a *Agent, rw *pipeRW) func() {
 	return func() { _ = rw.Close() }
 }
 
+func TestAgentCloseAndResumeSession(t *testing.T) {
+	a := &Agent{}
+	sess, err := a.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/tmp"})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	a.mu.Lock()
+	_, existsBefore := a.sessions[string(sess.SessionId)]
+	a.mu.Unlock()
+	if !existsBefore {
+		t.Fatalf("session %q was not recorded", sess.SessionId)
+	}
+
+	if _, err := a.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sess.SessionId}); err != nil {
+		t.Fatalf("CloseSession() error = %v", err)
+	}
+
+	a.mu.Lock()
+	_, existsAfter := a.sessions[string(sess.SessionId)]
+	a.mu.Unlock()
+	if existsAfter {
+		t.Fatalf("session %q still exists after CloseSession", sess.SessionId)
+	}
+
+	if _, err := a.ResumeSession(context.Background(), acp.ResumeSessionRequest{SessionId: sess.SessionId}); err == nil {
+		t.Fatal("ResumeSession() error = nil, want method-not-found")
+	}
+}
+
 func TestAgentInitializeAdvertisesPi(t *testing.T) {
 	clientRW, agentRW := pipePair()
 	defer clientRW.Close()

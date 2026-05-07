@@ -42,9 +42,10 @@ type model struct {
 	themeManager *ThemeManager
 
 	// Agent state.
-	running bool
-	mode    string        // "chat" or "plan" — shown in status bar
-	agentCh chan agentMsg // channel for receiving agent events
+	running     bool
+	mode        string             // "chat" or "plan" — shown in status bar
+	agentCh     chan agentMsg      // channel for receiving agent events
+	agentCancel context.CancelFunc // cancels the active agent response without quitting the TUI
 
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
@@ -245,15 +246,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.applyResize()
+		cmd := resizeDrainDoneCmd(m.resizeAt)
+		if m.running {
+			return m, tea.Batch(cmd, waitForAgent(m.agentCh))
+		}
+		return m, cmd
 
 	case tea.PasteMsg:
 		if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
 			m.inputModel.InsertText(msg.Content)
 		}
+		if m.resizeDraining() {
+			return m, resizeDrainDoneCmd(m.resizeAt)
+		}
 
 	case tea.KeyPressMsg:
-		if m.resizeDraining() {
-			return m, nil
+		if m.resizeDraining() && isResizeTextFragment(msg) {
+			return m, resizeDrainDoneCmd(m.resizeAt)
 		}
 		return m.handleKey(msg)
 
@@ -284,6 +293,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resetCtrlCCountMsg:
 		return m.handleResetCtrlCCount()
+
+	case resizeDrainDoneMsg:
+		if msg.resizeAt.Equal(m.resizeAt) {
+			m.resizeAt = time.Time{}
+		}
+		return m, nil
 
 	case loadingTickMsg:
 		m.loadingDots = (m.loadingDots + 1) % 4
@@ -642,6 +657,7 @@ func (m *model) View() tea.View {
 
 	var final string
 	if showSidebar {
+		hostName, _ := os.Hostname()
 		sidebarInput := SidebarRenderInput{
 			Width:        sidebarWidth,
 			Height:       m.height,
@@ -654,6 +670,9 @@ func (m *model) View() tea.View {
 			DiffRemoved:  m.diffRemoved,
 			Running:      m.running,
 			TokenTracker: m.cfg.TokenTracker,
+			AppVersion:   m.cfg.AppVersion,
+			HostName:     hostName,
+			FolderName:   sidebarFolderName(m.cwd()),
 			Messages:     m.chatModel.Messages,
 			ActiveTool:   m.statusModel.ActiveTool,
 			LoadingItems: m.loadingItems,
@@ -795,6 +814,23 @@ func (m *model) resizeDraining() bool {
 	return !m.resizeAt.IsZero() && time.Since(m.resizeAt) < 150*time.Millisecond
 }
 
+type resizeDrainDoneMsg struct {
+	resizeAt time.Time
+}
+
+func resizeDrainDoneCmd(resizeAt time.Time) tea.Cmd {
+	if resizeAt.IsZero() {
+		return nil
+	}
+	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return resizeDrainDoneMsg{resizeAt: resizeAt}
+	})
+}
+
+func isResizeTextFragment(msg tea.KeyPressMsg) bool {
+	return msg.Key().Text != ""
+}
+
 // mainWidth returns the width of the main panel (excluding sidebar).
 func (m *model) mainWidth() int {
 	if m.width <= 0 {
@@ -892,6 +928,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 	if mode == "" {
 		mode = "chat"
 	}
+	hostName, _ := os.Hostname()
 	return StatusRenderInput{
 		ProviderName: m.providerDisplayName(),
 		ModelName:    m.cfg.ModelName,
@@ -903,6 +940,8 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		DiffAdded:    m.diffAdded,
 		DiffRemoved:  m.diffRemoved,
 		RunCycle:     rc,
+		FolderName:   sidebarFolderName(m.cwd()),
+		HostName:     hostName,
 		LoadingItems: m.loadingItems,
 	}
 }

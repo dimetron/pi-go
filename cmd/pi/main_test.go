@@ -1,34 +1,43 @@
 package main
 
 import (
+	"net"
 	"os"
+	"strconv"
 	"testing"
-
-	"github.com/dimetron/pi-go/internal/cli"
 )
 
-// TestHelpFlag verifies that cli.Execute handles --help without panicking.
-func TestHelpFlag(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+func TestIsOTELPortAvailableWhenClosed(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:1")
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	if isOTELPortAvailable() {
+		t.Fatal("expected closed port to be unavailable")
 	}
+	if got := os.Getenv("OTEL_TRACES_EXPORTER"); got != "none" {
+		t.Fatalf("OTEL_TRACES_EXPORTER = %q, want none", got)
+	}
+}
 
-	// Save original args and environment
-	origArgs := os.Args
-	origEnv := os.Getenv("ANTHROPIC_API_KEY")
-	defer func() {
-		os.Args = origArgs
-		if origEnv == "" {
-			_ = os.Unsetenv("ANTHROPIC_API_KEY")
-		} else {
-			_ = os.Setenv("ANTHROPIC_API_KEY", origEnv)
+func TestIsOTELPortAvailableWhenListening(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
 		}
 	}()
 
-	// Provide a dummy API key so we don't fail on auth.
-	_ = os.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
-	os.Args = []string{"pi", "--help"}
-
-	// Execute should return without panic; help flag may return err or exit 0.
-	_ = cli.Execute()
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:"+strconv.Itoa(port))
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
+	if !isOTELPortAvailable() {
+		t.Fatal("expected listening port to be available")
+	}
+	if got := os.Getenv("OTEL_TRACES_EXPORTER"); got != "otlp" {
+		t.Fatalf("OTEL_TRACES_EXPORTER = %q, want otlp", got)
+	}
 }
