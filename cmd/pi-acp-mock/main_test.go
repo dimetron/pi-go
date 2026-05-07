@@ -84,6 +84,12 @@ func TestMockAgentBasics(t *testing.T) {
 	if err := agent.Cancel(context.Background(), acp.CancelNotification{}); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
+	if _, err := agent.ResumeSession(context.Background(), acp.ResumeSessionRequest{SessionId: sess.SessionId}); err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+	if _, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sess.SessionId}); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
 	if _, err := agent.ListSessions(context.Background(), acp.ListSessionsRequest{}); err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
