@@ -4,7 +4,7 @@
 //
 // The following env vars are consumed:
 //
-//	EL_SERVICE_NAME        defaults to "pi-go"
+//	OTEL_SERVICE_NAME        defaults to "pi-go"
 //	OTEL_EXPORTER_OTLP_ENDPOINT  collector endpoint (e.g. https://collector:4317)
 //	OTEL_EXPORTER_OTLP_PROTOCOL  "grpc" or "http" (default)
 //	OTEL_TRACES_EXPORTER    "otlp" (default), "console", or "none"
@@ -15,6 +15,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -100,6 +101,7 @@ func initProvider() {
 					sdktrace.WithResource(res),
 				)
 			} else {
+				writeDirectTerminal(fmt.Sprintf("pi-go: OTEL exporter disabled: %v\n", err))
 				// Fallback: no-op provider.
 				tp = sdktrace.NewTracerProvider(sdktrace.WithResource(res))
 			}
@@ -180,6 +182,20 @@ func AttributeBool(key string, value bool) attribute.KeyValue {
 // AttributeInt returns an int attribute key-value pair.
 func AttributeInt(key string, value int) attribute.KeyValue {
 	return attribute.Int(key, value)
+}
+
+// writeDirectTerminal writes startup diagnostics to the controlling terminal
+// when one is available, falling back to stderr for non-interactive modes.
+func writeDirectTerminal(message string) {
+	if message == "" {
+		return
+	}
+	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		defer tty.Close()
+		_, _ = io.WriteString(tty, message)
+		return
+	}
+	_, _ = io.WriteString(os.Stderr, message)
 }
 
 // normalizeEndpointURL ensures the endpoint has an http:// scheme so the OTel

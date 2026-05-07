@@ -1586,9 +1586,9 @@ func TestUpdate_InputSubmitMsg_SlashCommand(t *testing.T) {
 func TestUpdate_KeyPressMsg_DuringResize(t *testing.T) {
 	m := newTestModelFull(t)
 	m.resizeAt = time.Now() // trigger draining
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if cmd != nil {
-		t.Error("expected nil cmd while draining")
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+	if cmd == nil {
+		t.Error("expected resize drain wake command while draining")
 	}
 }
 

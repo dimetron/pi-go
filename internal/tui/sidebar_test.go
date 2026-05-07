@@ -27,6 +27,28 @@ func TestRenderSidebar_Minimal(t *testing.T) {
 	}
 }
 
+func TestRenderSidebar_WithoutPiSection(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:      30,
+		Height:     20,
+		AppVersion: "1.2.3",
+		HostName:   "dev-host",
+		FolderName: "pi-go",
+	})
+	if strings.Contains(result, "Pi") {
+		t.Error("expected Pi section to be hidden")
+	}
+	if strings.Contains(result, "pi #1.2.3") {
+		t.Error("expected pi version to be hidden")
+	}
+	if strings.Contains(result, "host: dev-host") {
+		t.Error("expected hostname to be hidden")
+	}
+	if strings.Contains(result, "dir: pi-go") {
+		t.Error("expected folder name to be hidden")
+	}
+}
+
 func TestRenderSidebar_WithAllSections(t *testing.T) {
 	result := RenderSidebar(SidebarRenderInput{
 		Width:        30,

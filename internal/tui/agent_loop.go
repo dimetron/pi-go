@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -215,7 +216,10 @@ func waitForSubEvent(ch <-chan AgentSubEvent) tea.Cmd {
 
 // cancelAgent stops a running agent and drains its channel.
 func (m *model) cancelAgent() {
-	m.cancel()
+	if m.agentCancel != nil {
+		m.agentCancel()
+		m.agentCancel = nil
+	}
 	m.running = false
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
@@ -231,6 +235,14 @@ func (m *model) cancelAgent() {
 		}(m.agentCh)
 		m.agentCh = nil
 	}
+}
+
+func (m *model) startAgentLoop(prompt string) tea.Cmd {
+	m.agentCh = make(chan agentMsg, 64)
+	agentCtx, agentCancel := context.WithCancel(m.ctx)
+	m.agentCancel = agentCancel
+	go m.runAgentLoop(agentCtx, prompt)
+	return waitForAgent(m.agentCh)
 }
 
 // submitPrompt sends a user prompt to the agent.
@@ -263,15 +275,13 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 		m.face.SetMood(MoodThinking)
 	}
 
-	m.agentCh = make(chan agentMsg, 64)
 	m.matrix.feed("init", m.mainWidth())
-	go m.runAgentLoop(promptText)
 
-	return m, tea.Batch(waitForAgent(m.agentCh), matrixTickCmd())
+	return m, tea.Batch(m.startAgentLoop(promptText), matrixTickCmd())
 }
 
 // runAgentLoop runs the agent and sends events to the channel.
-func (m *model) runAgentLoop(prompt string) {
+func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	defer close(m.agentCh)
 	defer func() {
 		if r := recover(); r != nil {
@@ -299,9 +309,9 @@ func (m *model) runAgentLoop(prompt string) {
 	streamedText := false
 
 	// Start a top-level OTEL span for the entire agent run, inheriting the
-	// model context so child tool spans are linked to this trace.
+	// per-response context so Esc/Ctrl+C can interrupt it without quitting the TUI.
 	tracer := otel.Tracer("pi-go")
-	ctx, span := tracer.Start(m.ctx, "agent.prompt")
+	ctx, span := tracer.Start(ctx, "agent.prompt")
 	defer span.End()
 	span.SetAttributes(
 		otel.AttributeInt("prompt.length", len(prompt)),
@@ -639,6 +649,7 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 // handleAgentDone processes an agentDoneMsg.
 func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.running = false
+	m.agentCancel = nil
 	m.matrix.clear()
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
