@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -67,6 +68,68 @@ func TestUpdateWindowSizeClampsScrollAndInvalidatesWidth(t *testing.T) {
 	}
 	if max := mm.chatModel.MaxScroll(mm.messageViewportHeight()); mm.chatModel.Scroll > max {
 		t.Fatalf("scroll not clamped: got %d max %d", mm.chatModel.Scroll, max)
+	}
+}
+
+func TestUpdateKeyPressTextDuringResizeSuppressed(t *testing.T) {
+	m := &model{
+		resizeAt:   time.Now(),
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+	}
+
+	newM, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+	mm := newM.(*model)
+
+	if mm.inputModel.Text != "" {
+		t.Fatalf("text key during resize drain should be suppressed, got %q", mm.inputModel.Text)
+	}
+	if cmd == nil {
+		t.Fatal("expected resize drain command to wake the TUI")
+	}
+}
+
+func TestUpdateKeyPressEnterDuringResizeAllowed(t *testing.T) {
+	m := &model{
+		resizeAt:   time.Now(),
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+	}
+	m.inputModel.Text = "hello"
+	m.inputModel.CursorPos = len("hello")
+
+	newM, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	mm := newM.(*model)
+
+	if mm.inputModel.Text != "" {
+		t.Fatalf("enter during resize drain should submit input, got remaining text %q", mm.inputModel.Text)
+	}
+	if cmd == nil {
+		t.Fatal("expected input submit command")
+	}
+	if got, ok := cmd().(InputSubmitMsg); !ok || got.Text != "hello" {
+		t.Fatalf("expected InputSubmitMsg hello, got %#v", got)
+	}
+}
+
+func TestUpdateResizeDrainDoneClearsOnlyLatestResize(t *testing.T) {
+	latest := time.Now()
+	m := &model{
+		resizeAt:  latest,
+		chatModel: ChatModel{Messages: make([]message, 0)},
+	}
+
+	stale := latest.Add(-time.Second)
+	newM, _ := m.Update(resizeDrainDoneMsg{resizeAt: stale})
+	mm := newM.(*model)
+	if mm.resizeAt.IsZero() {
+		t.Fatal("stale resize drain message should not clear latest resize")
+	}
+
+	newM, _ = mm.Update(resizeDrainDoneMsg{resizeAt: latest})
+	mm = newM.(*model)
+	if !mm.resizeAt.IsZero() {
+		t.Fatal("matching resize drain message should clear resize state")
 	}
 }
 

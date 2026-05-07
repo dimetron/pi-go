@@ -30,6 +30,7 @@ type SidebarRenderInput struct {
 	DiffRemoved  int
 	Running      bool
 	TokenTracker TokenTracker
+	AppVersion   string
 	HostName     string
 	FolderName   string
 	Messages     []message
@@ -79,8 +80,9 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, "", moodLine, "")
 	}
 
-	// --- Context section (session context window usage) ---
 	sidebarBg := lipgloss.Color("#11111bcc") // Catppuccin Mocha crust with alpha for dark transparency
+
+	// --- Context section (session context window usage) ---
 	lines = append(lines, heading.Render("  Context"))
 	if tt := in.TokenTracker; tt != nil && tt.ContextWindowSize() > 0 {
 		// Known context window: show prompt tokens / window size with bar.
@@ -106,15 +108,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 		} else {
 			lines = append(lines, dim.Render(fmt.Sprintf("  ~%d tokens", ctxTokens)))
 		}
-	}
-
-	hostName := truncateSidebarValue(in.HostName, innerW)
-	folderName := truncateSidebarValue(in.FolderName, innerW)
-	if hostName != "" {
-		lines = append(lines, dim.Render("  host: "+hostName))
-	}
-	if folderName != "" {
-		lines = append(lines, dim.Render("  dir: "+folderName))
 	}
 	lines = append(lines, "")
 
@@ -417,16 +410,6 @@ func sidebarFolderName(workDir string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Clean(workDir))
-}
-
-func truncateSidebarValue(value string, width int) string {
-	if value == "" || width <= 0 {
-		return ""
-	}
-	if runewidth.StringWidth(value) <= width {
-		return value
-	}
-	return runewidth.Truncate(value, width, "…")
 }
 
 // agentStatusPriority returns a sort key for agent status.

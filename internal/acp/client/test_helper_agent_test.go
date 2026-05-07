@@ -24,6 +24,10 @@ func (helperAgent) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSe
 	return acp.NewSessionResponse{SessionId: acp.SessionId("session-1")}, nil
 }
 
+func (helperAgent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, nil
+}
+
 func (helperAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	prompt := ""
 	if len(params.Prompt) > 0 && params.Prompt[0].Text != nil {
@@ -38,6 +42,10 @@ func (helperAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Pr
 
 func (helperAgent) Cancel(context.Context, acp.CancelNotification) error {
 	return nil
+}
+
+func (helperAgent) CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	return acp.CloseSessionResponse{}, nil
 }
 
 func (helperAgent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {

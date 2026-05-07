@@ -50,6 +50,10 @@ func (m *mockAgent) NewSession(_ context.Context, _ acp.NewSessionRequest) (acp.
 	}, nil
 }
 
+func (m *mockAgent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, nil
+}
+
 func (m *mockAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	promptText := extractText(params.Prompt)
 
@@ -77,6 +81,10 @@ func (m *mockAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 
 func (m *mockAgent) Cancel(context.Context, acp.CancelNotification) error {
 	return nil
+}
+
+func (m *mockAgent) CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	return acp.CloseSessionResponse{}, nil
 }
 
 func (m *mockAgent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {

@@ -271,6 +271,22 @@ func (a *Agent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.List
 	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
 }
 
+// CloseSession closes a session and cancels any in-flight prompt work.
+func (a *Agent) CloseSession(ctx context.Context, params acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	if err := a.Cancel(ctx, acp.CancelNotification{SessionId: params.SessionId}); err != nil {
+		return acp.CloseSessionResponse{}, err
+	}
+	a.mu.Lock()
+	delete(a.sessions, string(params.SessionId))
+	a.mu.Unlock()
+	return acp.CloseSessionResponse{}, nil
+}
+
+// ResumeSession is not yet supported.
+func (a *Agent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
+}
+
 // SetSessionConfigOption is not yet supported.
 func (a *Agent) SetSessionConfigOption(context.Context, acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
 	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)

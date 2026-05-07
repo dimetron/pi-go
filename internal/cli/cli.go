@@ -67,15 +67,25 @@ type lastSessionData struct {
 	Model     string    `json:"model"`
 }
 
-// Version is set at build time via -ldflags.
-var Version = "dev"
+// Version and BuildTag are set at build time via -ldflags.
+var (
+	Version  = "dev"
+	BuildTag = ""
+)
+
+func versionString() string {
+	if BuildTag == "" {
+		return Version
+	}
+	return Version + "+" + BuildTag
+}
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "pi [prompt]",
 		Short:   "pi-go coding agent",
 		Long:    "A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.",
-		Version: Version,
+		Version: versionString(),
 		Args:    cobra.ArbitraryArgs,
 		RunE:    runRoot,
 	}
@@ -288,6 +298,8 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			}
 		}()
 	}
+
+	go checkForUpdate(cmd.Context(), Version)
 
 	runtime, err := buildRootRuntime(cmd.Context(), args)
 	if err != nil {

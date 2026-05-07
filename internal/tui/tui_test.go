@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
 	"google.golang.org/adk/session"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -813,6 +814,40 @@ func TestRenderStatusBar_WithProvider(t *testing.T) {
 	}
 	if !strings.Contains(bar, "qwen3.5:latest") {
 		t.Errorf("status bar should contain model, got %q", bar)
+	}
+}
+
+func TestRenderStatusBar_WithDirectoryAndHost(t *testing.T) {
+	bar := (&StatusModel{Width: 120}).Render(StatusRenderInput{
+		ModelName:  "test-model",
+		FolderName: "pi-go",
+		HostName:   "dev-host",
+	})
+	if !strings.Contains(ansi.Strip(bar), "pi-go | dev-host") {
+		t.Errorf("status bar should contain directory and host, got %q", bar)
+	}
+}
+
+func TestRenderStatusBar_WithDirectoryOnly(t *testing.T) {
+	bar := (&StatusModel{Width: 120}).Render(StatusRenderInput{
+		ModelName:  "test-model",
+		FolderName: "pi-go",
+	})
+	if !strings.Contains(bar, "pi-go") {
+		t.Errorf("status bar should contain directory, got %q", bar)
+	}
+	if strings.Contains(bar, " | ") {
+		t.Errorf("status bar should not contain separator without host, got %q", bar)
+	}
+}
+
+func TestRenderStatusBar_WithHostOnly(t *testing.T) {
+	bar := (&StatusModel{Width: 120}).Render(StatusRenderInput{
+		ModelName: "test-model",
+		HostName:  "dev-host",
+	})
+	if !strings.Contains(bar, "dev-host") {
+		t.Errorf("status bar should contain host, got %q", bar)
 	}
 }
 

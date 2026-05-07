@@ -291,8 +291,5 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	m.mode = "plan"
 	m.running = true
 
-	m.agentCh = make(chan agentMsg, 64)
-	go m.runAgentLoop(roughIdea)
-
-	return m, waitForAgent(m.agentCh)
+	return m, m.startAgentLoop(roughIdea)
 }

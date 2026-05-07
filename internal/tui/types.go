@@ -19,6 +19,7 @@ type Config struct {
 	Agent          *agent.Agent
 	LLM            llmmodel.LLM // The active LLM, used by /ping.
 	SessionID      string
+	AppVersion     string
 	ModelName      string
 	ProviderName   string
 	ActiveRole     string

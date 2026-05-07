@@ -217,6 +217,10 @@ func (TestHelperAgent) NewSession(context.Context, acp.NewSessionRequest) (acp.N
 	return acp.NewSessionResponse{SessionId: acp.SessionId("test-session")}, nil
 }
 
+func (TestHelperAgent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, nil
+}
+
 func (TestHelperAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	// Echo back the prompt content for testing purposes.
 	_ = ctx
@@ -225,6 +229,10 @@ func (TestHelperAgent) Prompt(ctx context.Context, params acp.PromptRequest) (ac
 
 func (TestHelperAgent) Cancel(context.Context, acp.CancelNotification) error {
 	return nil
+}
+
+func (TestHelperAgent) CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	return acp.CloseSessionResponse{}, nil
 }
 
 func (TestHelperAgent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
