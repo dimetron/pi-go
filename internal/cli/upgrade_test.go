@@ -51,6 +51,45 @@ func TestFetchLatestVersionHTTPError(t *testing.T) {
 	}
 }
 
+func TestCheckForUpdateSkipsDisabledAndDevVersions(t *testing.T) {
+	t.Setenv("PI_GO_UPDATE_CHECK", "0")
+	checkForUpdate(context.Background(), "v1.0.0")
+	checkForUpdate(context.Background(), "")
+	checkForUpdate(context.Background(), "dev")
+}
+
+func TestFetchLatestVersionInvalidURLAndBadJSON(t *testing.T) {
+	if _, err := fetchLatestVersion(context.Background(), http.DefaultClient, "://bad-url"); err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{`)
+	}))
+	defer srv.Close()
+	if _, err := fetchLatestVersion(context.Background(), srv.Client(), srv.URL); err == nil {
+		t.Fatal("expected decode error")
+	}
+}
+
+func TestFetchLatestVersionMissingTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	if _, err := fetchLatestVersion(context.Background(), srv.Client(), srv.URL); err == nil {
+		t.Fatal("expected missing tag_name error")
+	}
+}
+
+func TestParseVersionPartsInvalidInputs(t *testing.T) {
+	for _, version := range []string{"", "1..2", "1.x.2"} {
+		if got := parseVersionParts(version); got != nil {
+			t.Fatalf("parseVersionParts(%q) = %v, want nil", version, got)
+		}
+	}
+}
+
 func TestIsNewerVersion(t *testing.T) {
 	tests := []struct {
 		current string
