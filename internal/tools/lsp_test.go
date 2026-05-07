@@ -147,6 +147,9 @@ func TestSymbolKindName(t *testing.T) {
 		want string
 	}{
 		{lsp.SymbolKindFile, "file"},
+		{lsp.SymbolKindModule, "module"},
+		{lsp.SymbolKindNamespace, "namespace"},
+		{lsp.SymbolKindPackage, "package"},
 		{lsp.SymbolKindFunction, "function"},
 		{lsp.SymbolKindMethod, "method"},
 		{lsp.SymbolKindStruct, "struct"},
@@ -154,7 +157,10 @@ func TestSymbolKindName(t *testing.T) {
 		{lsp.SymbolKindVariable, "variable"},
 		{lsp.SymbolKindConstant, "constant"},
 		{lsp.SymbolKindClass, "class"},
+		{lsp.SymbolKindProperty, "property"},
 		{lsp.SymbolKindField, "field"},
+		{lsp.SymbolKindConstructor, "constructor"},
+		{lsp.SymbolKindEnum, "enum"},
 		{999, "kind(999)"},
 	}
 	for _, tt := range tests {
@@ -470,6 +476,44 @@ func TestLSPCodeAction_NoServer(t *testing.T) {
 	}
 	if output.File != "/tmp/test.go" {
 		t.Errorf("File = %q, want '/tmp/test.go'", output.File)
+	}
+}
+
+func TestGetServerOrSkipForLanguage_StartError(t *testing.T) {
+	mgr := lsp.NewManager(&lsp.ManagerConfig{
+		Languages: map[string]*lsp.LanguageConfig{
+			"fake": {
+				Command:        "go",
+				FileExtensions: []string{".fake"},
+				LanguageID:     "fake",
+			},
+		},
+	})
+	defer mgr.Shutdown()
+
+	srv, errMsg := getServerOrSkipForLanguage(mgr, "fake")
+	if srv != nil {
+		t.Fatal("expected nil server")
+	}
+	if !strings.Contains(errMsg, "language server error") {
+		t.Fatalf("expected language server error, got %q", errMsg)
+	}
+}
+
+func TestGetServerOrSkipForLanguage_NoExtensionsConfigured(t *testing.T) {
+	mgr := lsp.NewManager(&lsp.ManagerConfig{
+		Languages: map[string]*lsp.LanguageConfig{
+			"fake": {Command: "go", LanguageID: "fake"},
+		},
+	})
+	defer mgr.Shutdown()
+
+	srv, errMsg := getServerOrSkipForLanguage(mgr, "fake")
+	if srv != nil {
+		t.Fatal("expected nil server")
+	}
+	if errMsg != "no file extension for fake" {
+		t.Fatalf("errMsg = %q", errMsg)
 	}
 }
 

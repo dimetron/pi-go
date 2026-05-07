@@ -642,6 +642,7 @@ func (m *model) View() tea.View {
 
 	var final string
 	if showSidebar {
+		hostName, _ := os.Hostname()
 		sidebarInput := SidebarRenderInput{
 			Width:        sidebarWidth,
 			Height:       m.height,
@@ -654,6 +655,8 @@ func (m *model) View() tea.View {
 			DiffRemoved:  m.diffRemoved,
 			Running:      m.running,
 			TokenTracker: m.cfg.TokenTracker,
+			HostName:     hostName,
+			FolderName:   sidebarFolderName(m.cwd()),
 			Messages:     m.chatModel.Messages,
 			ActiveTool:   m.statusModel.ActiveTool,
 			LoadingItems: m.loadingItems,
