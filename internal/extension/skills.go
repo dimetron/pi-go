@@ -93,6 +93,13 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 			}
 			return nil, fmt.Errorf("reading skills dir %s: %w", dir, err)
 		}
+
+		skillFiles := []struct {
+			path        string
+			defaultName string
+		}{
+			{path: filepath.Join(dir, "SKILL.md"), defaultName: filepath.Base(dir)},
+		}
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
@@ -101,30 +108,40 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 			if _, err := os.Stat(skillFile); err != nil {
 				continue
 			}
+			skillFiles = append(skillFiles, struct {
+				path        string
+				defaultName string
+			}{path: skillFile, defaultName: entry.Name()})
+		}
+
+		for _, skillInfo := range skillFiles {
+			if _, err := os.Stat(skillInfo.path); err != nil {
+				continue
+			}
 
 			// Audit the skill file before loading.
 			if opts.AuditMode != AuditSkip {
-				scanResult, scanErr := audit.ScanFile(skillFile)
+				scanResult, scanErr := audit.ScanFile(skillInfo.path)
 				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", skillFile, scanErr)
+					fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", skillInfo.path, scanErr)
 				} else if scanResult.HasCritical() {
 					if opts.AuditMode == AuditBlock {
-						blocked = append(blocked, skillFile)
-						fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", entry.Name())
+						blocked = append(blocked, skillInfo.path)
+						fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", skillInfo.defaultName)
 						continue
 					}
 					// AuditWarn: log but continue loading.
-					fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", entry.Name())
+					fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", skillInfo.defaultName)
 				}
 			}
 
-			skill, err := parseSkillFile(skillFile)
+			skill, err := parseSkillFile(skillInfo.path)
 			if err != nil {
-				return nil, fmt.Errorf("parsing %s: %w", skillFile, err)
+				return nil, fmt.Errorf("parsing %s: %w", skillInfo.path, err)
 			}
 			// Default name from directory if not set in frontmatter
 			if skill.Name == "" {
-				skill.Name = entry.Name()
+				skill.Name = skillInfo.defaultName
 			}
 			// Determine source based on whether the path is absolute.
 			source := "user"

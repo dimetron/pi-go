@@ -107,12 +107,14 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	}
 	if mode == "plan" {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
-		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", mode)))
-	} else if in.Running && s.ActiveTool == "" {
-		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
-		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
+		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
 	} else {
-		parts = append(parts, dim.Render(fmt.Sprintf(" [%s]", mode)))
+		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
+		if in.Running && s.ActiveTool == "" {
+			parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
+		} else {
+			parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
+		}
 	}
 
 	// Provider | Model.
@@ -135,7 +137,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 				items = append(items, loadStyle.Render(name+"..."))
 			}
 		}
-		parts = append(parts, dim.Render("loading: ")+strings.Join(items, dim.Render(" ")))
+		parts = append(parts, dim.Render("load: ")+strings.Join(items, dim.Render(" ")))
 		return bar.Render(strings.Join(parts, sep))
 	}
 
@@ -174,10 +176,10 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			default:
 				tokenStyle = dim
 			}
-			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tokens: %s/%s",
+			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tkn: %s/%s",
 				formatTokenCount(total), formatTokenCount(limit))))
 		} else if total > 0 {
-			parts = append(parts, dim.Render(fmt.Sprintf("tokens: %s", formatTokenCount(total))))
+			parts = append(parts, dim.Render(fmt.Sprintf("tkn: %s", formatTokenCount(total))))
 		}
 	}
 

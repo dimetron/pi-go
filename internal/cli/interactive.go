@@ -121,8 +121,9 @@ func deferredInit(
 	ch chan<- tui.InitEvent,
 	res *initResources,
 ) {
+	initTotal := deferredInitTotal(cfg)
 	send := func(item string, done bool) {
-		ch <- tui.InitEvent{Item: item, Done: done}
+		ch <- tui.InitEvent{Item: item, Done: done, Total: initTotal}
 	}
 	fail := func(err error) {
 		ch <- tui.InitEvent{Err: err}
@@ -166,12 +167,6 @@ func deferredInit(
 		lspMgr   *lsp.Manager
 		lspTools []adktool.Tool
 
-		// Memory (DB + tools opened in parallel; worker created in sequential phase)
-		memStore      memory.Store
-		memTools      []adktool.Tool
-		memContext    string
-		memMaxPending int
-
 		// MCP
 		mcpToolsets []adktool.Toolset
 
@@ -209,61 +204,6 @@ func deferredInit(
 		ps.lspTools = lt
 		ps.mu.Unlock()
 		send("lsp", true)
-	}()
-
-	// Memory (DB open + tools + context gen; worker created after orchestrator)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		memEnabled := !flagMemoryOff && (cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled)
-		if !memEnabled {
-			return
-		}
-		send("memory", false)
-		memCfg := config.MemoryDefaults()
-		if cfg.Memory != nil {
-			if cfg.Memory.DBPath != "" {
-				memCfg.DBPath = cfg.Memory.DBPath
-			}
-			if cfg.Memory.TokenBudget > 0 {
-				memCfg.TokenBudget = cfg.Memory.TokenBudget
-			}
-			if cfg.Memory.MaxPending > 0 {
-				memCfg.MaxPending = cfg.Memory.MaxPending
-			}
-			if cfg.Memory.LookbackHours > 0 {
-				memCfg.LookbackHours = cfg.Memory.LookbackHours //nolint:govet // reserved for future use
-			}
-		}
-		dbPath := memCfg.DBPath
-		if dbPath == "" {
-			if home, hErr := os.UserHomeDir(); hErr == nil {
-				dbPath = filepath.Join(home, ".pi-go", "memory", "claude-mem.db")
-			}
-		}
-		memDB, memErr := memory.OpenDB(dbPath)
-		if memErr != nil {
-			send("memory", true) // non-fatal
-			return
-		}
-		store := memory.NewSQLiteStore(memDB)
-		mt, _ := tools.MemoryTools(store)
-
-		var memCtx string
-		tokenBudget := memCfg.TokenBudget
-		if cfg.Memory != nil && cfg.Memory.TokenBudget > 0 {
-			tokenBudget = cfg.Memory.TokenBudget
-		}
-		ctxGen := memory.NewContextGenerator(store, tokenBudget)
-		memCtx, _ = ctxGen.Generate(ctx, cwd)
-
-		ps.mu.Lock()
-		ps.memStore = store
-		ps.memTools = mt
-		ps.memContext = memCtx
-		ps.memMaxPending = memCfg.MaxPending
-		ps.mu.Unlock()
-		send("memory", true)
 	}()
 
 	// MCP
@@ -311,21 +251,11 @@ func deferredInit(
 
 	// Store cleanup resources.
 	res.lspMgr = ps.lspMgr
-	res.memStore = ps.memStore
 
 	// Build orchestrator (needs git results).
 	orch := subagent.NewOrchestrator(&cfg, ps.repoRoot, ps.agentConfigs)
 	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
 	res.orch = orch
-
-	// Create memory worker now that orchestrator is available.
-	var memWorker *memory.Worker
-	if ps.memStore != nil {
-		compressor := memory.NewSubagentCompressor(orch)
-		memWorker = memory.NewWorker(ps.memStore, compressor, ps.memMaxPending)
-		memWorker.Start(ctx)
-		res.memWorker = memWorker
-	}
 
 	// Build agent event channel and tools.
 	agentEventCh := make(chan tui.AgentSubEvent, 128)
@@ -343,9 +273,15 @@ func deferredInit(
 		coreTools = append(coreTools, ps.lspTools...)
 	}
 
-	// Append memory tools.
-	if ps.memTools != nil {
-		coreTools = append(coreTools, ps.memTools...)
+	memEnabled := deferredMemoryEnabled(cfg)
+	var memStore *lazyMemoryStore
+	var memRecorder *deferredMemoryRecorder
+	if memEnabled {
+		memStore = newLazyMemoryStore()
+		if memTools, memErr := tools.MemoryTools(memStore); memErr == nil {
+			coreTools = append(coreTools, memTools...)
+		}
+		memRecorder = newDeferredMemoryRecorder(cfg, cwd)
 	}
 
 	// Build system instruction.
@@ -354,15 +290,6 @@ func deferredInit(
 		instruction = flagSystem
 	} else {
 		instruction = agent.LoadInstruction(agent.SystemInstruction)
-	}
-	if len(ps.skills) > 0 {
-		instruction += "\n\n# Available Skills\n\n"
-		for _, s := range ps.skills {
-			instruction += fmt.Sprintf("- /%s: %s\n", s.Name, s.Description)
-		}
-	}
-	if ps.memContext != "" {
-		instruction += "\n\n" + ps.memContext
 	}
 
 	// Build callbacks.
@@ -400,34 +327,8 @@ func deferredInit(
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
 
-	// Memory after-tool callback.
-	var memSessionID string
-	if memWorker != nil {
-		var excludedTools map[string]bool
-		if cfg.Memory != nil && len(cfg.Memory.ExcludedTools) > 0 {
-			excludedTools = make(map[string]bool, len(cfg.Memory.ExcludedTools))
-			for _, t := range cfg.Memory.ExcludedTools {
-				excludedTools[t] = true
-			}
-		}
-		afterCBs = append(afterCBs, func(_ adktool.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
-			if toolErr != nil || memSessionID == "" {
-				return result, nil
-			}
-			name := t.Name()
-			if excludedTools[name] {
-				return result, nil
-			}
-			memWorker.Enqueue(memory.RawObservation{
-				SessionID:  memSessionID,
-				Project:    cwd,
-				ToolName:   name,
-				ToolInput:  args,
-				ToolOutput: result,
-				Timestamp:  time.Now(),
-			})
-			return result, nil
-		})
+	if memRecorder != nil {
+		afterCBs = append(afterCBs, memRecorder.afterTool)
 	}
 
 	// Session service.
@@ -476,17 +377,6 @@ func deferredInit(
 	// Capture ACP subagent events (claude, gemini) under the session dir.
 	res.orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
 
-	// Activate memory capture.
-	if ps.memStore != nil {
-		memSessionID = sessionID
-		_ = ps.memStore.CreateSession(ctx, &memory.Session{
-			SessionID: sessionID,
-			Project:   cwd,
-			StartedAt: time.Now(),
-			Status:    "active",
-		})
-	}
-
 	// Session logger.
 	sessionLog, logErr := logger.New()
 	if logErr == nil {
@@ -521,6 +411,269 @@ func deferredInit(
 			MCPServers:        buildMCPServerConfigs(cfg),
 		},
 	}
+
+	if memEnabled {
+		initMemoryAfterUI(ctx, cfg, cwd, sessionID, orch, memStore, memRecorder, res)
+	}
+}
+
+type lazyMemoryStore struct {
+	mu    sync.RWMutex
+	ready chan struct{}
+	store memory.Store
+	err   error
+}
+
+func newLazyMemoryStore() *lazyMemoryStore {
+	return &lazyMemoryStore{ready: make(chan struct{})}
+}
+
+func (s *lazyMemoryStore) setReady(store memory.Store, err error) {
+	s.mu.Lock()
+	s.store = store
+	s.err = err
+	s.mu.Unlock()
+	close(s.ready)
+}
+
+func (s *lazyMemoryStore) wait(ctx context.Context) (memory.Store, error) {
+	select {
+	case <-s.ready:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		if s.err != nil {
+			return nil, s.err
+		}
+		if s.store == nil {
+			return nil, fmt.Errorf("memory store unavailable")
+		}
+		return s.store, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *lazyMemoryStore) CreateSession(ctx context.Context, sess *memory.Session) error {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return store.CreateSession(ctx, sess)
+}
+
+func (s *lazyMemoryStore) CompleteSession(ctx context.Context, sessionID string) error {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return store.CompleteSession(ctx, sessionID)
+}
+
+func (s *lazyMemoryStore) InsertObservation(ctx context.Context, obs *memory.Observation) error {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return store.InsertObservation(ctx, obs)
+}
+
+func (s *lazyMemoryStore) GetObservations(ctx context.Context, ids []int64) ([]*memory.Observation, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.GetObservations(ctx, ids)
+}
+
+func (s *lazyMemoryStore) RecentObservations(ctx context.Context, project string, limit int) ([]*memory.Observation, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.RecentObservations(ctx, project, limit)
+}
+
+func (s *lazyMemoryStore) UpsertSummary(ctx context.Context, sum *memory.SessionSummary) error {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return err
+	}
+	return store.UpsertSummary(ctx, sum)
+}
+
+func (s *lazyMemoryStore) RecentSummaries(ctx context.Context, project string, limit int) ([]*memory.SessionSummary, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.RecentSummaries(ctx, project, limit)
+}
+
+func (s *lazyMemoryStore) Search(ctx context.Context, q memory.SearchQuery) (*memory.SearchResult, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.Search(ctx, q)
+}
+
+func (s *lazyMemoryStore) Timeline(ctx context.Context, anchorID int64, before, after int) ([]*memory.Observation, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.Timeline(ctx, anchorID, before, after)
+}
+
+func (s *lazyMemoryStore) Close() error {
+	return nil
+}
+
+type deferredMemoryRecorder struct {
+	mu            sync.RWMutex
+	project       string
+	excludedTools map[string]bool
+	sessionID     string
+	worker        *memory.Worker
+}
+
+func newDeferredMemoryRecorder(cfg config.Config, project string) *deferredMemoryRecorder {
+	excluded := make(map[string]bool)
+	if cfg.Memory != nil {
+		for _, name := range cfg.Memory.ExcludedTools {
+			excluded[name] = true
+		}
+	}
+	return &deferredMemoryRecorder{
+		project:       project,
+		excludedTools: excluded,
+	}
+}
+
+func (r *deferredMemoryRecorder) setReady(sessionID string, worker *memory.Worker) {
+	r.mu.Lock()
+	r.sessionID = sessionID
+	r.worker = worker
+	r.mu.Unlock()
+}
+
+func (r *deferredMemoryRecorder) afterTool(_ adktool.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+	if toolErr != nil {
+		return result, nil
+	}
+
+	name := t.Name()
+	r.mu.RLock()
+	worker := r.worker
+	sessionID := r.sessionID
+	excluded := r.excludedTools[name]
+	project := r.project
+	r.mu.RUnlock()
+
+	if worker == nil || sessionID == "" || excluded {
+		return result, nil
+	}
+
+	worker.Enqueue(memory.RawObservation{
+		SessionID:  sessionID,
+		Project:    project,
+		ToolName:   name,
+		ToolInput:  args,
+		ToolOutput: result,
+		Timestamp:  time.Now(),
+	})
+	return result, nil
+}
+
+func initMemoryAfterUI(
+	ctx context.Context,
+	cfg config.Config,
+	cwd string,
+	sessionID string,
+	orch *subagent.Orchestrator,
+	store *lazyMemoryStore,
+	recorder *deferredMemoryRecorder,
+	res *initResources,
+) {
+	memCfg := deferredMemoryConfig(cfg)
+	dbPath := deferredMemoryDBPath(memCfg)
+	if dbPath == "" {
+		store.setReady(nil, fmt.Errorf("memory init: home directory unavailable"))
+		return
+	}
+
+	memDB, err := memory.OpenDB(dbPath)
+	if err != nil {
+		store.setReady(nil, fmt.Errorf("memory init: %w", err))
+		return
+	}
+
+	memStore := memory.NewSQLiteStore(memDB)
+	_ = memStore.CreateSession(ctx, &memory.Session{
+		SessionID: sessionID,
+		Project:   cwd,
+		StartedAt: time.Now(),
+		Status:    "active",
+	})
+
+	worker := memory.NewWorker(memStore, memory.NewSubagentCompressor(orch), memCfg.MaxPending)
+	worker.Start(ctx)
+
+	res.memStore = memStore
+	res.memWorker = worker
+	if recorder != nil {
+		recorder.setReady(sessionID, worker)
+	}
+	store.setReady(memStore, nil)
+}
+
+func deferredMemoryConfig(cfg config.Config) config.MemoryConfig {
+	memCfg := config.MemoryDefaults()
+	if cfg.Memory == nil {
+		return memCfg
+	}
+	if cfg.Memory.DBPath != "" {
+		memCfg.DBPath = cfg.Memory.DBPath
+	}
+	if cfg.Memory.TokenBudget > 0 {
+		memCfg.TokenBudget = cfg.Memory.TokenBudget
+	}
+	if cfg.Memory.MaxPending > 0 {
+		memCfg.MaxPending = cfg.Memory.MaxPending
+	}
+	if cfg.Memory.LookbackHours > 0 {
+		memCfg.LookbackHours = cfg.Memory.LookbackHours //nolint:govet // reserved for future use
+	}
+	return memCfg
+}
+
+func deferredMemoryDBPath(memCfg config.MemoryConfig) string {
+	if memCfg.DBPath != "" {
+		return memCfg.DBPath
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".pi-go", "memory", "claude-mem.db")
+}
+
+func deferredInitTotal(cfg config.Config) int {
+	total := 5 // tools, git, lsp, skills, agent
+	if cfg.MCP != nil && len(cfg.MCP.Servers) > 0 {
+		total++
+	}
+	if deferredMemoryEnabled(cfg) {
+		total++
+	}
+	return total
+}
+
+func deferredMemoryEnabled(cfg config.Config) bool {
+	if flagMemoryOff {
+		return false
+	}
+	return cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled
 }
 
 // detectBranch returns the current git branch name.

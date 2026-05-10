@@ -494,8 +494,12 @@ func TestHandleKey_TabMultipleSlashMatchesUsesPopupOnly(t *testing.T) {
 	if mm.inputModel.Text != "/c" {
 		t.Errorf("text should remain /c, got %q", mm.inputModel.Text)
 	}
-	if mm.slashCommandSelected != 1 {
-		t.Fatalf("Tab should advance highlighted slash command to 1, got %d", mm.slashCommandSelected)
+	// Tab should create search popup and advance selection to 1.
+	if mm.searchPopup == nil {
+		t.Fatal("expected search popup to be created on Tab")
+	}
+	if mm.searchPopup.selected != 1 {
+		t.Fatalf("Tab should advance highlighted slash command to 1, got %d", mm.searchPopup.selected)
 	}
 	if len(mm.chatModel.Messages) != 0 {
 		t.Fatalf("ambiguous slash completion should stay in popup, got chat messages: %+v", mm.chatModel.Messages)
@@ -513,13 +517,34 @@ func TestHandleKey_TabCyclesSlashCommandSelection(t *testing.T) {
 		t.Fatalf("expected multiple /c candidates, got %+v", candidates)
 	}
 
-	for range candidates {
+	// Tab through all candidates.
+	// Tab cycles through items: 0 → 1 → 2 → ... → (len-1) → (stays at last)
+	for i := 0; i < len(candidates); i++ {
 		newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 		m = newM.(*model)
+		if m.searchPopup == nil {
+			t.Fatal("expected search popup")
+		}
 	}
 
-	if m.slashCommandSelected != 0 {
-		t.Fatalf("Tab should wrap highlighted slash command to 0, got %d", m.slashCommandSelected)
+	// After Tab+len(candidates), selection should be at the last index.
+	lastIndex := len(candidates) - 1
+	if m.searchPopup.selected != lastIndex {
+		t.Errorf("after %d tabs, selection should be at last index %d, got %d", len(candidates), lastIndex, m.searchPopup.selected)
+	}
+
+	// Tab on the last item stays at the last index (no wrap).
+	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = newM.(*model)
+	if m.searchPopup.selected != lastIndex {
+		t.Errorf("Tab at last item should stay at %d, got %d", lastIndex, m.searchPopup.selected)
+	}
+
+	// Arrow down from last item should wrap to first.
+	newM, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = newM.(*model)
+	if m.searchPopup.selected != 0 {
+		t.Errorf("ArrowDown from last should wrap to 0, got %d", m.searchPopup.selected)
 	}
 }
 

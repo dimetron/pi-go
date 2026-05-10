@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dimetron/pi-go/internal/extension"
 )
@@ -400,6 +401,26 @@ func TestRenderInput_CursorInMiddle(t *testing.T) {
 	}
 }
 
+func TestRenderInput_ArrowLeftKeepsLineWidth(t *testing.T) {
+	m := newTestModel(t)
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
+	m.inputModel.SetWidth(10)
+	before := m.inputModel.View(m.running)
+
+	m.handleKey(makeKey(tea.KeyLeft))
+	m.inputModel.SetWidth(10)
+	after := m.inputModel.View(m.running)
+
+	if lipgloss.Width(after) != lipgloss.Width(before) {
+		t.Fatalf("expected stable rendered width after left arrow, before=%d after=%d view=%q", lipgloss.Width(before), lipgloss.Width(after), after)
+	}
+	plainAfter := ansi.Strip(after)
+	if !strings.Contains(plainAfter, "abc") {
+		t.Fatalf("expected rendered input to keep full text after left arrow, got %q", after)
+	}
+}
+
 // --- handleRTKCommand ---
 
 func TestHandleRTKCommand_WithMetrics(t *testing.T) {
@@ -686,21 +707,40 @@ func TestHandleKey_CtrlBInTextMovesBackward(t *testing.T) {
 func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
+
+	// Arrow up on empty input opens the history search popup.
 	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "third" {
-		t.Errorf("expected 'third', got %q", m.inputModel.Text)
+	if m.searchPopup == nil {
+		t.Fatal("expected search popup to be shown on arrow up with empty input")
 	}
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "second" {
-		t.Errorf("expected 'second', got %q", m.inputModel.Text)
+	if m.searchPopup.mode != searchModeHistory {
+		t.Errorf("expected searchModeHistory, got %v", m.searchPopup.mode)
 	}
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.inputModel.Text != "third" {
-		t.Errorf("expected 'third', got %q", m.inputModel.Text)
-	}
-	m.handleKey(makeKey(tea.KeyDown))
+	// Newest is first in popup (index 0 = "third").
+	// Input should still be empty until Enter is pressed.
 	if m.inputModel.Text != "" {
-		t.Errorf("expected empty after scrolling past end, got %q", m.inputModel.Text)
+		t.Errorf("expected empty input before Enter, got %q", m.inputModel.Text)
+	}
+
+	// Navigate down to second item (index 1 = "second").
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.searchPopup.selected != 1 {
+		t.Errorf("expected selected=1, got %d", m.searchPopup.selected)
+	}
+
+	// Navigate down to third item (index 2 = "first").
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.searchPopup.selected != 2 {
+		t.Errorf("expected selected=2, got %d", m.searchPopup.selected)
+	}
+
+	// Enter accepts the selected entry (index 2 = "first").
+	m.handleKey(makeKey(tea.KeyEnter))
+	if m.inputModel.Text != "first" {
+		t.Errorf("expected 'first', got %q", m.inputModel.Text)
+	}
+	if m.searchPopup != nil {
+		t.Error("expected popup to be closed after Enter")
 	}
 }
 
@@ -1187,16 +1227,23 @@ func TestHistoryEntry_WithMentions(t *testing.T) {
 		{Text: "plain prompt"},
 	}
 
-	// Navigate up to most recent entry.
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "plain prompt" {
-		t.Errorf("expected 'plain prompt', got %q", m.inputModel.Text)
+	// Arrow up on empty input opens the history search popup.
+	// History entries are reversed for display (newest first).
+	// So popup has: [0]="plain prompt" (newest), [1]="fix..." (older)
+	newM, _ := m.handleKey(makeKey(tea.KeyUp))
+	m = newM.(*model)
+	if m.searchPopup == nil {
+		t.Fatal("expected search popup to open")
+	}
+	if len(m.searchPopup.filtered) != 2 {
+		t.Errorf("expected 2 filtered entries, got %d", len(m.searchPopup.filtered))
 	}
 
-	// Navigate up to entry with mentions.
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "fix @main.go and @utils.go" {
-		t.Errorf("expected mention text, got %q", m.inputModel.Text)
+	// Without navigating, Enter should select the first item (newest = "plain prompt").
+	newM, _ = m.handleKey(makeKey(tea.KeyEnter))
+	m = newM.(*model)
+	if m.inputModel.Text != "plain prompt" {
+		t.Errorf("expected 'plain prompt' (newest), got %q", m.inputModel.Text)
 	}
 }
 
