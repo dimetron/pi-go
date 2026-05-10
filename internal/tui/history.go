@@ -105,12 +105,22 @@ func truncateHistory(entries []HistoryEntry, maxSize int) []HistoryEntry {
 }
 
 // formatHistoryOutput formats history entries for display, with optional query filter.
+// Entries are reversed (most recent first) and deduplicated by text.
 func formatHistoryOutput(entries []HistoryEntry, query string) string {
+	seen := make(map[string]bool)
 	var filtered []HistoryEntry
-	for _, h := range entries {
-		if query == "" || strings.Contains(strings.ToLower(h.Text), query) {
-			filtered = append(filtered, h)
+
+	// Reverse iteration for most-recent-first order.
+	for i := len(entries) - 1; i >= 0; i-- {
+		h := entries[i]
+		if query != "" && !strings.Contains(strings.ToLower(h.Text), query) {
+			continue
 		}
+		if seen[h.Text] {
+			continue
+		}
+		seen[h.Text] = true
+		filtered = append(filtered, h)
 	}
 
 	if len(filtered) == 0 {
@@ -120,18 +130,17 @@ func formatHistoryOutput(entries []HistoryEntry, query string) string {
 		return "No command history."
 	}
 
-	start := 0
-	if len(filtered) > 20 {
-		start = len(filtered) - 20
+	display := filtered
+	if len(display) > 20 {
+		display = display[:20]
 	}
 	var sb strings.Builder
 	if query != "" {
 		fmt.Fprintf(&sb, "**History matching `%s`** (%d total):\n", query, len(filtered))
 	} else {
-		fmt.Fprintf(&sb, "**Command history** (%d total, showing last %d):\n", len(filtered), len(filtered)-start)
+		fmt.Fprintf(&sb, "**Command history** (%d total, showing last %d):\n", len(filtered), len(display))
 	}
-	for i := start; i < len(filtered); i++ {
-		entry := filtered[i]
+	for _, entry := range display {
 		if len(entry.Mentions) > 0 {
 			fmt.Fprintf(&sb, "- `%s` (refs: %s)\n", entry.Text, strings.Join(entry.Mentions, ", "))
 		} else {

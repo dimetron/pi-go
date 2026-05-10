@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1343,12 +1344,16 @@ func TestFormatHistoryOutput_WithMentions(t *testing.T) {
 func TestFormatHistoryOutput_MoreThan20(t *testing.T) {
 	var entries []HistoryEntry
 	for i := 0; i < 30; i++ {
-		entries = append(entries, HistoryEntry{Text: "entry"})
+		entries = append(entries, HistoryEntry{Text: fmt.Sprintf("entry%d", i)})
 	}
 	got := formatHistoryOutput(entries, "")
-	// Should only show last 20.
+	// Should show "30 total" and only last 20.
 	if !strings.Contains(got, "30 total") {
 		t.Errorf("expected '30 total', got %q", got)
+	}
+	// Should not contain "entry0" (first entry, not in last 20).
+	if strings.Contains(got, "entry0") {
+		t.Errorf("expected entry0 not to be in last 20, got %q", got)
 	}
 }
 

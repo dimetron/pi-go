@@ -79,6 +79,7 @@ var (
 	}
 
 	spinnerVerbWidth = maxStringWidth(spinnerVerbs)
+	spinnerTextWidth = spinnerVerbWidth + len("* ") + len("...")
 )
 
 // spinnerSymbols are the rotating symbols shown before the verb.
@@ -150,6 +151,14 @@ func maxStringWidth(values []string) int {
 		}
 	}
 	return maxWidth
+}
+
+// paddedStatusMode returns an idle mode label padded to the same width as spinnerVerb().
+func paddedStatusMode(mode string) string {
+	if len(mode) >= spinnerTextWidth {
+		return mode
+	}
+	return mode + strings.Repeat(" ", spinnerTextWidth-len(mode))
 }
 
 // spinnerVerb returns the current spinner verb with a rotating symbol prefix.
