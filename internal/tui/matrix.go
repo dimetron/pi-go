@@ -10,9 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// matrixChars is a curated set of light, flowing characters for a smooth
-// single-line scrolling effect: dots, sparkles, stars, braille, waves.
-const matrixChars = "·∙•◦◌○◎●∘⋅⁘⁙‧∶∷⊹✦✧⋆˖˗~≈∿⌇⏑⏒⏓⏔░▪▫⣿⡇⣾⣷⣶⣤⣀⡀⠀⠁⠂⠄⡀⠈⠐⠠⢀⣠⣴⣶⣿"
+// matrixChars is a curated snake-like tape for a smooth single-line scrolling
+// effect: soft dot ramps, wave dips, sparkles, braille, and block peaks.
+const matrixChars = "⠀⠀⠁⠂⠄⠠⡀⢀⣀⣠⣤⣶⣷⣿⣿⣿⣷⣶⣤⣠⣀⢀⡀⠠⠄⠂⠁⌣·∙⋅∘◦○◌◎●◎◌○◦∘⋅∙·⠐⠈⠈⠐⠠⢀⣠⣴⣶⣷⣾⣿⣿⣾⣷⣶⣴⣠⢀⠠⠐⠈⠀⌣⌒⌁∿≈~˖⋆✧✦⊹●⊹✦✧⋆˖~≈∿⌁⌒⌣⠀⠁⠂⠄⡀⢀⣀⣠⣤⣶⣿⣶⣤⣠⣀⢀⡀⠄⠂⠁⌣"
 
 // matrixRunes is the precomputed rune slice from matrixChars.
 var matrixRunes = []rune(matrixChars)

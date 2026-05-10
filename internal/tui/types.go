@@ -50,6 +50,10 @@ type Config struct {
 	// initialization progress updates. The final event carries the fully
 	// initialized subsystems in its Result field.
 	DeferredInit <-chan InitEvent
+	// InitialLoadingItem is shown before the first deferred init event arrives.
+	InitialLoadingItem string
+	// InitialLoadingTotal is the planned deferred init item count when known.
+	InitialLoadingTotal int
 
 	// MCPToolsets holds the live MCP toolsets, used by /mcp to show status.
 	MCPToolsets []adktool.Toolset
@@ -61,6 +65,7 @@ type Config struct {
 type InitEvent struct {
 	Item   string      // subsystem name (e.g. "lsp", "memory", "mcp")
 	Done   bool        // true when this item finished loading
+	Total  int         // planned subsystem count when known; 0 means derive from seen items
 	Result *InitResult // set on the final event when all init is complete
 	Err    error       // fatal initialization error
 }

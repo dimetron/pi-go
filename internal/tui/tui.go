@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
@@ -78,8 +80,12 @@ type model struct {
 	// Branch popup state (shown on status bar click).
 	branchPopup *branchPopupState
 
-	// Slash command popup state.
-	slashCommandDismissed bool // true when ESC dismissed the popup, blocks re-show until reset
+	// Slash command popup selection.
+	slashCommandSelected    int
+	slashCommandScrollOff   int  // scroll offset when more candidates than visible
+	slashCommandDismissed   bool // true when user pressed ESC to hide popup
+	slashCommandPopupWidth  int  // width of the popup overlay
+	slashCommandPopupHeight int  // height of the popup overlay
 
 	// Quit.
 	quitting bool
@@ -481,10 +487,53 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Reset slash command dismissed flag when input becomes empty or starts with /.
-	// This allows the popup to re-appear on subsequent slash command uses.
-	if m.inputModel.Text == "" || strings.HasPrefix(m.inputModel.Text, "/") {
-		m.slashCommandDismissed = false
+	// Handle slash command popup navigation (when visible).
+	if m.shouldShowSlashCommandPopup() {
+		candidates := m.slashCommandCandidates(m.inputModel.Text)
+		popupHeight := 10
+		switch key.Code {
+		case tea.KeyUp:
+			if len(candidates) > 0 {
+				m.slashCommandSelected--
+				if m.slashCommandSelected < 0 {
+					m.slashCommandSelected = len(candidates) - 1
+				}
+				// Scroll to keep selected item visible.
+				if m.slashCommandSelected < m.slashCommandScrollOff {
+					m.slashCommandScrollOff = m.slashCommandSelected
+				}
+				return m, nil
+			}
+		case tea.KeyDown:
+			if len(candidates) > 0 {
+				m.slashCommandSelected++
+				if m.slashCommandSelected >= len(candidates) {
+					m.slashCommandSelected = 0
+					m.slashCommandScrollOff = 0
+				}
+				// Scroll to keep selected item visible.
+				if m.slashCommandSelected >= m.slashCommandScrollOff+popupHeight {
+					m.slashCommandScrollOff = m.slashCommandSelected - popupHeight + 1
+				}
+				return m, nil
+			}
+		case tea.KeyEnter:
+			// Apply selected slash command.
+			if len(candidates) > 0 && m.slashCommandSelected >= 0 && m.slashCommandSelected < len(candidates) {
+				candidate := candidates[m.slashCommandSelected]
+				m.inputModel.Text = candidate.Text + " "
+				m.inputModel.CursorPos = utf8.RuneCountInString(m.inputModel.Text)
+				m.slashCommandSelected = 0
+				m.slashCommandScrollOff = 0
+				m.slashCommandDismissed = true
+				return m, nil
+			}
+		case tea.KeyEsc:
+			// Dismiss popup but keep typed text.
+			m.slashCommandSelected = 0
+			m.slashCommandScrollOff = 0
+			return m, nil
+		}
 	}
 
 	// Esc / Ctrl+C: dismiss completion, cancel agent, or quit.
@@ -650,6 +699,17 @@ func (m *model) View() tea.View {
 		popupView := m.renderBranchPopup()
 		b.WriteString(popupView)
 		b.WriteString("\n")
+	}
+
+	// Render slash command popup as overlay at top-left corner.
+	// ESC closes, Enter selects. Popup displays from top corner.
+	if slashCommandPopup := m.renderSlashCommandPopup(max(0, mainWidth-2)); slashCommandPopup != "" {
+		// Save cursor position, move to top-left, render popup, restore cursor.
+		b.WriteString("\x1b[s")    // Save cursor position (ANSI)
+		b.WriteString("\x1b[1;1H") // Move to top-left (row 1, col 1)
+		b.WriteString("\x1b[J")    // Clear from cursor to end of screen
+		b.WriteString(slashCommandPopup)
+		b.WriteString("\x1b[u") // Restore cursor position
 	}
 
 	b.WriteString(hr)
@@ -1198,4 +1258,210 @@ func (m *model) renderBranchPopup() string {
 	}
 
 	return style.Render(b.String())
+}
+
+// shouldShowSlashCommandPopup returns true when the slash command popup should be shown.
+func (m *model) shouldShowSlashCommandPopup() bool {
+	if m.running || m.loading {
+		return false
+	}
+	text := m.inputModel.Text
+	// Show popup when typing a slash command prefix, unless dismissed by ESC
+	show := strings.HasPrefix(text, "/") && !strings.ContainsAny(text, " \t\n\r")
+	return show && !m.slashCommandDismissed
+}
+
+// renderSlashCommandPopup renders the slash command completion popup.
+func (m *model) renderSlashCommandPopup(width int) string {
+	if !m.shouldShowSlashCommandPopup() {
+		return ""
+	}
+	if width < 24 {
+		width = 24
+	}
+
+	candidates := m.slashCommandCandidates(m.inputModel.Text)
+	// Limit popup height to leave room above the input.
+	const maxPopupHeight = 10
+	// Validate scroll offset.
+	if m.slashCommandScrollOff < 0 {
+		m.slashCommandScrollOff = 0
+	}
+	if m.slashCommandSelected < 0 {
+		m.slashCommandSelected = 0
+	}
+	if m.slashCommandSelected >= len(candidates) && len(candidates) > 0 {
+		m.slashCommandSelected = len(candidates) - 1
+	}
+
+	visibleCandidates := candidates
+	if len(candidates) > maxPopupHeight {
+		// Slice to visible window.
+		end := m.slashCommandScrollOff + maxPopupHeight
+		if end > len(candidates) {
+			end = len(candidates)
+		}
+		if m.slashCommandScrollOff < len(candidates) {
+			visibleCandidates = candidates[m.slashCommandScrollOff:end]
+		} else {
+			visibleCandidates = candidates[:maxPopupHeight]
+			m.slashCommandScrollOff = 0
+		}
+	}
+	bg := lipgloss.Color("236")
+	border := lipgloss.Color("33")
+	dimFg := lipgloss.Color("243")
+	titleFg := lipgloss.Color("252")
+	commandFg := lipgloss.Color("81")
+	selectedBg := lipgloss.Color("33")
+
+	popupStyle := lipgloss.NewStyle().
+		Background(bg).
+		Foreground(titleFg).
+		Border(lipgloss.RoundedBorder(), true, true, true, true).
+		BorderForeground(border).
+		Width(width)
+	headerStyle := lipgloss.NewStyle().
+		Background(bg).
+		Foreground(titleFg).
+		Bold(true).
+		Width(width)
+	commandStyle := lipgloss.NewStyle().
+		Background(bg).
+		Foreground(commandFg)
+	selectedStyle := lipgloss.NewStyle().
+		Background(selectedBg).
+		Foreground(lipgloss.Color("15"))
+	descStyle := lipgloss.NewStyle().
+		Background(bg).
+		Foreground(dimFg)
+
+	var b strings.Builder
+	header := "Commands"
+	if len(candidates) > 0 {
+		header = fmt.Sprintf("Commands (%d)", len(candidates))
+	}
+	b.WriteString(headerStyle.Render(header))
+
+	if len(candidates) == 0 {
+		b.WriteString("\n")
+		b.WriteString(descStyle.Width(width).Render("  No matching commands"))
+		// Store popup dimensions for overlay positioning
+		m.slashCommandPopupWidth = width
+		m.slashCommandPopupHeight = 2 // header + 1 line
+		return popupStyle.Render(b.String())
+	}
+
+	for i, candidate := range visibleCandidates {
+		prefix := "  "
+		lineStyle := commandStyle
+		// Use absolute index for highlight matching.
+		absIdx := m.slashCommandScrollOff + i
+		if absIdx == m.slashCommandSelected {
+			prefix = "> "
+			lineStyle = selectedStyle
+		}
+		line := prefix + candidate.Text
+		if candidate.Description != "" {
+			descWidth := width*70/100 - 2 // extra space for prefix
+			if descWidth > 0 && descWidth < width {
+				desc := clipRunes(candidate.Description, descWidth)
+				if desc != "" {
+					line += "  " + desc
+				}
+			}
+		}
+		b.WriteString("\n")
+		b.WriteString(lineStyle.Width(width).Render(clipRunes(line, width)))
+	}
+
+	// Show scroll indicator if needed.
+	if len(candidates) > maxPopupHeight {
+		scrollStyle := lipgloss.NewStyle().Background(bg).Foreground(dimFg)
+		if m.slashCommandScrollOff > 0 {
+			b.WriteString(scrollStyle.Render("  ↑ more"))
+		}
+		if m.slashCommandSelected < len(candidates)-1 {
+			b.WriteString(scrollStyle.Render("  more ↓"))
+		}
+	}
+
+	// Store popup dimensions for overlay positioning
+	popupContent := b.String()
+	m.slashCommandPopupWidth = width
+	m.slashCommandPopupHeight = strings.Count(popupContent, "\n") + 1
+
+	return popupStyle.Render(popupContent)
+}
+
+// slashCommandCandidates returns completion candidates for slash commands.
+func (m *model) slashCommandCandidates(prefix string) []CompletionCandidate {
+	if prefix == "/" {
+		return allSlashCommandCandidates(m.inputModel.Skills)
+	}
+
+	workDir := m.inputModel.WorkDir
+	if workDir == "" {
+		workDir = m.cfg.WorkDir
+	}
+	result := Complete(prefix, m.inputModel.Skills, workDir)
+	if result == nil || len(result.Candidates) == 0 {
+		return nil
+	}
+
+	candidates := make([]CompletionCandidate, 0, len(result.Candidates))
+	for _, candidate := range result.Candidates {
+		if candidate.Type == CompletionTypeCommand || candidate.Type == CompletionTypeSkill {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+// allSlashCommandCandidates returns all slash command candidates.
+func allSlashCommandCandidates(skills []extension.Skill) []CompletionCandidate {
+	seen := make(map[string]bool)
+	candidates := make([]CompletionCandidate, 0, len(slashCommands)+len(skills))
+	for _, cmd := range slashCommands {
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		candidates = append(candidates, CompletionCandidate{
+			Text:        cmd,
+			Description: slashCommandDesc(cmd),
+			Type:        CompletionTypeCommand,
+		})
+	}
+	for _, skill := range skills {
+		cmd := "/" + skill.Name
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		candidates = append(candidates, CompletionCandidate{
+			Text:        cmd,
+			Description: skill.Description,
+			Type:        CompletionTypeSkill,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return strings.ToLower(candidates[i].Text) < strings.ToLower(candidates[j].Text)
+	})
+	return candidates
+}
+
+// clipRunes truncates a string to at most width runes, adding "..." if truncated.
+func clipRunes(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= width {
+		return s
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-3]) + "..."
 }
