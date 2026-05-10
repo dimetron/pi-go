@@ -252,6 +252,30 @@ func TestLoadSkillsDefaultUsesBlock(t *testing.T) {
 	}
 }
 
+func TestLoadSkillsDirectSkillFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(`---
+name: direct-skill
+description: Direct skill file.
+---
+# Direct Skill
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error: %v", err)
+	}
+
+	skills, err := LoadSkillsWithOptions(LoadOptions{AuditMode: AuditSkip}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, ok := FindSkill(skills, "direct-skill")
+	if !ok {
+		t.Fatalf("expected direct-skill to be loaded from %s/SKILL.md", dir)
+	}
+	if skill.Description != "Direct skill file." {
+		t.Errorf("description = %q", skill.Description)
+	}
+}
+
 func TestLoadSkillsNonExistentDir(t *testing.T) {
 	skills, err := LoadSkillsWithOptions(LoadOptions{AuditMode: AuditBlock}, "/nonexistent/dir")
 	if err != nil {
