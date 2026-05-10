@@ -243,13 +243,18 @@ func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var names []string
+	var b strings.Builder
+	fmt.Fprintf(&b, "Reloaded %d skill(s):\n", len(m.cfg.Skills))
 	for _, s := range m.cfg.Skills {
-		names = append(names, "/"+s.Name)
+		fmt.Fprintf(&b, "  `/%s`", s.Name)
+		if s.Description != "" {
+			b.WriteString(" — " + s.Description)
+		}
+		b.WriteString("\n")
 	}
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: fmt.Sprintf("Reloaded %d skill(s): %s", len(m.cfg.Skills), strings.Join(names, ", ")),
+		content: b.String(),
 	})
 	return m, nil
 }

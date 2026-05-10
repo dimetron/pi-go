@@ -51,8 +51,10 @@ type InputSubmitMsg struct {
 
 // InputModel manages the text input area: cursor, history, and completion.
 type InputModel struct {
-	Text       string
-	CursorPos  int // character position (not byte offset)
+	Text      string
+	CursorPos int // character position (not byte offset)
+	Width     int // terminal width for rendering, 0 = unlimited
+
 	History    []HistoryEntry
 	HistoryIdx int
 
@@ -89,6 +91,15 @@ func NewInputModel(history []HistoryEntry, skills []extension.Skill, skillDirs [
 		SkillDirs:  skillDirs,
 		WorkDir:    workDir,
 	}
+}
+
+// SetWidth sets the terminal width for rendering and invalidates the
+// cached ghost autocomplete suggestion when width changes.
+func (im *InputModel) SetWidth(width int) {
+	if im.Width != width {
+		im.Completion = ""
+	}
+	im.Width = width
 }
 
 // HandleKey processes a key press for the input area.
