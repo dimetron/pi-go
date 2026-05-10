@@ -78,6 +78,9 @@ type model struct {
 	// Branch popup state (shown on status bar click).
 	branchPopup *branchPopupState
 
+	// Slash command popup state.
+	slashCommandDismissed bool // true when ESC dismissed the popup, blocks re-show until reset
+
 	// Quit.
 	quitting bool
 	initErr  error // fatal init error → propagated from Run()
@@ -476,6 +479,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.branchPopup = nil
 			return m, nil
 		}
+	}
+
+	// Reset slash command dismissed flag when input becomes empty or starts with /.
+	// This allows the popup to re-appear on subsequent slash command uses.
+	if m.inputModel.Text == "" || strings.HasPrefix(m.inputModel.Text, "/") {
+		m.slashCommandDismissed = false
 	}
 
 	// Esc / Ctrl+C: dismiss completion, cancel agent, or quit.
