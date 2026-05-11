@@ -181,3 +181,31 @@ func TestDeferredInit_WithMemoryEnabled(t *testing.T) {
 		t.Log("memory path did not produce a result (may be environment-specific)")
 	}
 }
+
+func TestDeferredInitTotal(t *testing.T) {
+	origMemOff := flagMemoryOff
+	defer func() { flagMemoryOff = origMemOff }()
+
+	flagMemoryOff = true
+	if got, want := deferredInitTotal(config.Config{}), 5; got != want {
+		t.Fatalf("deferredInitTotal() with memory off = %d, want %d", got, want)
+	}
+
+	flagMemoryOff = false
+	memoryDisabled := false
+	cfg := config.Config{
+		Memory: &config.MemoryConfig{Enabled: &memoryDisabled},
+		MCP: &config.MCPConfig{
+			Servers: []config.MCPServer{{Name: "local", Command: "pi-mcp"}},
+		},
+	}
+	if got, want := deferredInitTotal(cfg), 6; got != want {
+		t.Fatalf("deferredInitTotal() with MCP only = %d, want %d", got, want)
+	}
+
+	memoryEnabled := true
+	cfg.Memory = &config.MemoryConfig{Enabled: &memoryEnabled}
+	if got, want := deferredInitTotal(cfg), 7; got != want {
+		t.Fatalf("deferredInitTotal() with memory and MCP = %d, want %d", got, want)
+	}
+}

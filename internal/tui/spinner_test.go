@@ -19,8 +19,8 @@ func newTestSpinner(verb string) *spinnerState {
 func TestSpinnerInitialSymbol(t *testing.T) {
 	s := newTestSpinner("Thinking")
 	got := s.tick()
-	if got != "* Thinking..." {
-		t.Fatalf("expected '* Thinking...' got %q", got)
+	if got != "* Thinking...          " {
+		t.Fatalf("expected padded '* Thinking...          ' got %q", got)
 	}
 }
 
@@ -94,8 +94,23 @@ func TestSpinnerFormat(t *testing.T) {
 	if len(parts) != 2 {
 		t.Fatalf("expected 'sym word...' format, got %q", got)
 	}
-	if !strings.HasSuffix(parts[1], "...") {
-		t.Fatalf("expected trailing '...', got %q", got)
+	if !strings.Contains(parts[1], "...") {
+		t.Fatalf("expected ellipsis before padding, got %q", got)
+	}
+	trimmed := strings.TrimRight(parts[1], " ")
+	if !strings.HasSuffix(trimmed, "...") {
+		t.Fatalf("expected only spaces after ellipsis, got %q", got)
+	}
+}
+
+func TestSpinnerVerbFixedWidth(t *testing.T) {
+	short := newTestSpinner("Thinking").tick()
+	long := newTestSpinner("Whatchamacalliting").tick()
+	if len(short) != len(long) {
+		t.Fatalf("spinner lengths differ: short=%d %q long=%d %q", len(short), short, len(long), long)
+	}
+	if !strings.Contains(short, "Thinking...          ") {
+		t.Fatalf("expected short verb to be padded after ellipsis, got %q", short)
 	}
 }
 
@@ -109,7 +124,8 @@ func TestSpinnerVerbNotEmpty(t *testing.T) {
 	if got == "" {
 		t.Fatal("spinnerVerb() returned empty string")
 	}
-	if !strings.HasSuffix(got, "...") {
-		t.Fatalf("expected trailing '...', got %q", got)
+	trimmed := strings.TrimRight(got, " ")
+	if !strings.HasSuffix(trimmed, "...") {
+		t.Fatalf("expected ellipsis before padding, got %q", got)
 	}
 }

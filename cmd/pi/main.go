@@ -14,6 +14,10 @@ import (
 )
 
 func main() {
+	// Load ~/.pi-go/.env and project .pi-go/.env before any CLI/provider setup
+	// reads API keys or OTEL settings from the process environment.
+	cli.LoadDotEnv()
+
 	// Test if OTEL collector port is available at startup.
 	// If not reachable, disable tracing to prevent connection errors.
 	if !isOTELPortAvailable() {

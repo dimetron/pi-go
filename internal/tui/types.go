@@ -61,6 +61,7 @@ type Config struct {
 type InitEvent struct {
 	Item   string      // subsystem name (e.g. "lsp", "memory", "mcp")
 	Done   bool        // true when this item finished loading
+	Total  int         // planned subsystem count when known; 0 means derive from seen items
 	Result *InitResult // set on the final event when all init is complete
 	Err    error       // fatal initialization error
 }

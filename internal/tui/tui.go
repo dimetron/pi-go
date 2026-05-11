@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ type model struct {
 	// Deferred initialization state.
 	loading      bool
 	loadingItems map[string]bool // item name -> done?
+	loadingTotal int             // planned init item count when known
 	initCh       <-chan InitEvent
 	loadingDots  int // animation dots (0-3): ., .., ..., ....
 
@@ -77,6 +79,12 @@ type model struct {
 
 	// Branch popup state (shown on status bar click).
 	branchPopup *branchPopupState
+
+	// Unified search popup for slash commands and history.
+	searchPopup *searchPopupState
+
+	// Legacy selection index for slash commands (used in tests).
+	slashCommandSelected int
 
 	// Quit.
 	quitting bool
@@ -163,6 +171,128 @@ func listGitBranches(workDir string) []string {
 		return result
 	}
 	return branches
+}
+
+// searchPopupState is a unified search window for slash commands and history.
+// The mode determines what items are shown and how they are selected.
+type searchPopupState struct {
+	mode      searchMode   // "commands" or "history"
+	entries   []SearchItem // all items (commands or history entries)
+	filtered  []SearchItem // filtered by search query
+	selected  int          // currently selected index in filtered list
+	search    string       // current search query
+	height    int          // popup height (number of visible items)
+	scrollOff int          // scroll offset when more entries than height
+}
+
+// searchMode determines what the popup displays.
+type searchMode string
+
+const (
+	searchModeCommands searchMode = "commands"
+	searchModeHistory  searchMode = "history"
+)
+
+// SearchItem represents an item in the search popup (command or history entry).
+type SearchItem struct {
+	Text        string // the command or history text
+	Description string // for commands: the description
+}
+
+// newSearchPopup creates a unified search popup with the given mode.
+func (m *model) newSearchPopup(mode searchMode) {
+	var items []SearchItem
+	var popupHeight int
+
+	switch mode {
+	case searchModeCommands:
+		// Get all slash command candidates.
+		allCandidates := m.allSearchCandidates()
+		// Filter by current input text if it starts with /.
+		inputText := m.inputModel.Text
+		filter := ""
+		showAll := inputText == "/" // Show all commands when just "/" is typed
+		if strings.HasPrefix(inputText, "/") && !showAll {
+			filter = strings.ToLower(inputText)
+		}
+		for _, c := range allCandidates {
+			if filter == "" || strings.HasPrefix(strings.ToLower(c.Text), filter) {
+				items = append(items, SearchItem{Text: c.Text, Description: c.Description})
+			}
+		}
+		if showAll {
+			// Show all items when "/" is typed alone.
+			popupHeight = len(items)
+		} else {
+			popupHeight = 35
+			if popupHeight > len(items) {
+				popupHeight = len(items)
+			}
+			if popupHeight < 3 {
+				popupHeight = 3
+			}
+		}
+
+	case searchModeHistory:
+		entries := m.inputModel.History
+		if len(entries) == 0 {
+			return
+		}
+		// Show oldest first (last item in entries at top).
+		items = make([]SearchItem, len(entries))
+		for i, e := range entries {
+			items[len(entries)-1-i] = SearchItem{Text: e.Text}
+		}
+		popupHeight = len(items)
+		if popupHeight > 10 {
+			popupHeight = 10
+		}
+		if popupHeight < 3 {
+			popupHeight = 3
+		}
+	}
+
+	m.searchPopup = &searchPopupState{
+		mode:      mode,
+		entries:   items,
+		filtered:  items,
+		selected:  0,
+		search:    "",
+		height:    popupHeight,
+		scrollOff: 0,
+	}
+}
+
+// allSearchCandidates returns all slash command candidates for the search popup.
+func (m *model) allSearchCandidates() []CompletionCandidate {
+	skills := m.inputModel.Skills
+	if len(skills) == 0 {
+		skills = m.cfg.Skills
+	}
+	return allSlashCommandCandidates(skills)
+}
+
+// filterSearch filters items by search query (case-insensitive substring on Text).
+func (sp *searchPopupState) filterSearch() {
+	if sp.search == "" {
+		sp.filtered = sp.entries
+		sp.selected = 0
+		sp.scrollOff = 0
+		return
+	}
+	q := strings.ToLower(sp.search)
+	var filtered []SearchItem
+	for _, e := range sp.entries {
+		if strings.Contains(strings.ToLower(e.Text), q) || strings.Contains(strings.ToLower(e.Description), q) {
+			filtered = append(filtered, e)
+		}
+	}
+	if filtered == nil {
+		filtered = sp.entries // show all if no matches
+	}
+	sp.filtered = filtered
+	sp.selected = 0
+	sp.scrollOff = 0
 }
 
 // Run starts the interactive TUI.
@@ -481,8 +611,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Esc / Ctrl+C: dismiss completion, cancel agent, or quit.
 	switch {
 	case key.Code == tea.KeyEsc:
-		if m.inputModel.InCompletionMode() {
-			m.inputModel.DismissCompletion()
+		if m.searchPopup != nil {
+			m.searchPopup = nil
 			return m, nil
 		}
 		if m.running {
@@ -492,10 +622,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
-		if m.inputModel.InCompletionMode() {
-			m.inputModel.DismissCompletion()
-			return m, nil
-		}
 		if m.running {
 			m.cancelAgent()
 			return m, nil
@@ -523,8 +649,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Ctrl+B: toggle branch popup.
-	if key.Code == 'b' && key.Mod == tea.ModCtrl {
+	// Ctrl+B toggles the branch popup only when the prompt is empty. The
+	// standard text input uses Ctrl+B as backward cursor movement, and some
+	// terminals emit it for left/back navigation.
+	if key.Code == 'b' && key.Mod == tea.ModCtrl && m.inputModel.Text == "" {
 		if m.statusModel.GitBranch != "" {
 			if m.branchPopup == nil {
 				m.newBranchPopup()
@@ -532,6 +660,25 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.branchPopup = nil
 			}
 		}
+		return m, nil
+	}
+
+	// Handle unified search popup keys (slash commands or history).
+	if m.handleSearchPopupKey(key) {
+		return m, nil
+	}
+
+	// Arrow up on empty input: show history search popup.
+	if key.Code == tea.KeyUp && m.inputModel.Text == "" && m.searchPopup == nil {
+		if len(m.inputModel.History) > 0 {
+			m.newSearchPopup(searchModeHistory)
+			return m, nil
+		}
+		// If no history, fall through to input model for inline history nav.
+	}
+
+	// Handle unified search popup keys (slash commands or history).
+	if m.handleSearchPopupKey(key) {
 		return m, nil
 	}
 
@@ -546,9 +693,115 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Slash command: show commands popup when input starts with /.
+	if m.shouldShowSlashCommandPopup() {
+		if m.searchPopup == nil || m.searchPopup.mode != searchModeCommands {
+			m.newSearchPopup(searchModeCommands)
+		}
+		// Immediately handle Tab/Up/Down to navigate the popup.
+		if key.Code == tea.KeyTab || key.Code == tea.KeyUp || key.Code == tea.KeyDown {
+			if m.handleSearchPopupKey(key) {
+				return m, nil
+			}
+		}
+	}
+
 	// Delegate all other keys to InputModel.
+	prevText := m.inputModel.Text
 	cmd := m.inputModel.HandleKey(msg)
+	// Reset search popup when input text changes (slash commands mode).
+	if m.inputModel.Text != prevText {
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeCommands {
+			if !m.shouldShowSlashCommandPopup() {
+				m.searchPopup = nil
+			}
+		}
+	}
 	return m, cmd
+}
+
+func (m *model) handleSearchPopupKey(key tea.Key) bool {
+	if m.searchPopup == nil {
+		return false
+	}
+
+	sp := m.searchPopup
+
+	switch key.Code {
+	case tea.KeyUp:
+		if sp.selected > 0 {
+			sp.selected--
+		} else if len(sp.filtered) > 1 {
+			// Wrap to last item on Up from first.
+			sp.selected = len(sp.filtered) - 1
+		}
+		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		return true
+	case tea.KeyDown:
+		if sp.selected < len(sp.filtered)-1 {
+			sp.selected++
+		} else if len(sp.filtered) > 1 {
+			// Wrap to first item on Down from last.
+			sp.selected = 0
+		}
+		if sp.selected >= sp.scrollOff+sp.height {
+			sp.scrollOff = sp.selected - sp.height + 1
+		}
+		return true
+	case tea.KeyTab:
+		if len(sp.filtered) == 0 {
+			return true
+		}
+		if key.Mod == tea.ModShift {
+			if sp.selected > 0 {
+				sp.selected--
+			} else {
+				// Wrap to last item on Shift+Tab from first.
+				sp.selected = len(sp.filtered) - 1
+			}
+		} else {
+			// Tab advances; stays at last item (no wrap).
+			if sp.selected < len(sp.filtered)-1 {
+				sp.selected++
+			}
+		}
+		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		return true
+	case tea.KeyEnter:
+		if len(sp.filtered) > 0 && sp.selected < len(sp.filtered) {
+			item := sp.filtered[sp.selected]
+			switch sp.mode {
+			case searchModeCommands:
+				m.inputModel.SetText(item.Text + " ")
+				m.searchPopup = nil
+			case searchModeHistory:
+				m.inputModel.SetText(item.Text)
+				m.inputModel.HistoryIdx = -1
+				m.searchPopup = nil
+			}
+		}
+		return true
+	case tea.KeyEsc:
+		m.searchPopup = nil
+		return true
+	case tea.KeyBackspace:
+		if len(sp.search) > 0 {
+			sp.search = sp.search[:len(sp.search)-1]
+			sp.filterSearch()
+		} else {
+			// If search is empty, close popup on backspace
+			m.searchPopup = nil
+		}
+		return true
+	default:
+		// Type to search (only for printable single characters).
+		if key.Text != "" && len(key.Text) == 1 && key.Mod == 0 {
+			sp.search += key.Text
+			sp.filterSearch()
+			return true
+		}
+		return false
+	}
 }
 
 func (m *model) View() tea.View {
@@ -558,11 +811,12 @@ func (m *model) View() tea.View {
 
 	if m.width == 0 {
 		// Show matrix-style startup text before the first terminal size arrives.
-		matrixLine := renderStartupMatrixLine(m.loadingDots)
+		matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal)
 		if m.loadingItems != nil {
 			var lines []string
 			lines = append(lines, matrixLine)
-			for item, done := range m.loadingItems {
+			for _, item := range sortedKeys(m.loadingItems) {
+				done := m.loadingItems[item]
 				mark := " "
 				if done {
 					mark = "✓"
@@ -584,9 +838,15 @@ func (m *model) View() tea.View {
 	showSidebar := sidebarWidth > 0
 
 	// Render components.
+	m.inputModel.SetWidth(max(0, mainWidth-2))
 	messagesView := m.chatModel.RenderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
+	searchPopup := m.renderSearchPopup(max(0, mainWidth-2))
+	var inputCursor *tea.Cursor
+	if !m.running && !m.loading {
+		inputCursor = m.inputModel.Cursor()
+	}
 
 	// Calculate available height for messages.
 	availableHeight := m.messageViewportHeight()
@@ -649,6 +909,11 @@ func (m *model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(hr)
 	b.WriteString("\n")
+	if searchPopup != "" {
+		b.WriteString(searchPopup)
+		b.WriteString("\n")
+	}
+	inputCursorY := strings.Count(b.String(), "\n")
 	b.WriteString(inputArea)
 	b.WriteString("\n")
 	b.WriteString(hr)
@@ -696,6 +961,10 @@ func (m *model) View() tea.View {
 	}
 
 	v := tea.NewView(final)
+	if inputCursor != nil {
+		inputCursor.Y += inputCursorY
+		v.Cursor = inputCursor
+	}
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
@@ -723,10 +992,18 @@ func drainTerminalResponses() {
 	}
 }
 
-func renderStartupMatrixLine(phase int) string {
+const startupProgressBarWidth = 8
+
+func renderStartupMatrixLine(phase int, appVersion string, loadingItems map[string]bool, loadingTotal int) string {
+	versionSuffix := ""
+	if appVersion != "" {
+		versionSuffix = " " + appVersion
+	}
+	progress := renderStartupProgress(loadingItems, loadingTotal)
+	detail := renderStartupDetail(loadingItems)
 	width := 48
 	if width < 1 || len(matrixRunes) == 0 {
-		return "Loading .."
+		return "Loading Pi" + versionSuffix + progress + detail + " .."
 	}
 	bright := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")).Bold(true)
 	mid := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa"))
@@ -740,7 +1017,7 @@ func renderStartupMatrixLine(phase int) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(accent.Render("Loading" + strings.Repeat(".", dotCount)))
+	b.WriteString(accent.Render("Loading Pi" + versionSuffix + progress + detail + strings.Repeat(".", dotCount)))
 	b.WriteString(" ")
 	for i := 0; i < width; i++ {
 		r := matrixRunes[(i+phase*7)%len(matrixRunes)]
@@ -760,6 +1037,63 @@ func renderStartupMatrixLine(phase int) string {
 	return b.String()
 }
 
+func renderStartupProgress(loadingItems map[string]bool, loadingTotal int) string {
+	if loadingItems == nil {
+		return ""
+	}
+
+	done := 0
+	for _, itemDone := range loadingItems {
+		if itemDone {
+			done++
+		}
+	}
+
+	total := loadingTotal
+	if total < len(loadingItems) {
+		total = len(loadingItems)
+	}
+	if total < 1 {
+		return fmt.Sprintf(" [%s 0%%]", strings.Repeat("░", startupProgressBarWidth))
+	}
+
+	pct := done * 100 / total
+	if pct > 100 {
+		pct = 100
+	}
+
+	filled := done * startupProgressBarWidth / total
+	if done > 0 && filled == 0 {
+		filled = 1
+	}
+	if filled > startupProgressBarWidth {
+		filled = startupProgressBarWidth
+	}
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", startupProgressBarWidth-filled)
+	return fmt.Sprintf(" [%s %d%% %d/%d]", bar, pct, done, total)
+}
+
+func renderStartupDetail(loadingItems map[string]bool) string {
+	if loadingItems == nil {
+		return ""
+	}
+	if len(loadingItems) == 0 {
+		return " starting init pipeline"
+	}
+
+	var pending []string
+	for _, item := range sortedKeys(loadingItems) {
+		if !loadingItems[item] {
+			pending = append(pending, item)
+		}
+	}
+	if len(pending) == 0 {
+		return " finalizing init"
+	}
+	return " working: " + strings.Join(pending, ", ")
+}
+
 func (m *model) applyResize() {
 	mainWidth := m.mainWidth()
 	m.statusModel.Width = mainWidth
@@ -773,6 +1107,8 @@ func (m *model) applyResize() {
 	} else {
 		m.matrix.tick(mainWidth)
 	}
+	// Matrix height can affect the message viewport, so clamp again after it updates.
+	m.clampScroll()
 }
 
 func (m *model) clampScroll() {
@@ -800,6 +1136,10 @@ func (m *model) messageViewportHeight() int {
 	}
 	if m.branchPopup != nil {
 		availableHeight -= m.branchPopup.height + 6
+	}
+	searchPopup := m.renderSearchPopup(max(0, mainWidth-2))
+	if searchPopup != "" {
+		availableHeight -= strings.Count(searchPopup, "\n") + 2
 	}
 	if availableHeight < 1 {
 		return 1
@@ -1052,13 +1392,21 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 	if ev.Err != nil {
 		m.loading = false
 		m.loadingItems = nil
+		m.loadingTotal = 0
 		m.loadingDots = 0
 		m.initErr = ev.Err
 		return m, tea.Quit
 	}
 
+	if ev.Total > 0 {
+		m.loadingTotal = ev.Total
+	}
+
 	// Track item progress.
 	if ev.Item != "" {
+		if m.loadingItems == nil {
+			m.loadingItems = make(map[string]bool)
+		}
 		m.loadingItems[ev.Item] = ev.Done
 	}
 
@@ -1066,6 +1414,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 	if ev.Result != nil {
 		m.loading = false
 		m.loadingItems = nil
+		m.loadingTotal = 0
 		m.loadingDots = 0
 
 		r := ev.Result
@@ -1104,6 +1453,191 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 
 	// Keep reading init events.
 	return m, waitForInitEvent(msg.ch)
+}
+
+func (m *model) shouldShowSlashCommandPopup() bool {
+	if m.running || m.loading || m.login != nil || m.commit != nil || m.pendingSkillCreate != nil {
+		return false
+	}
+	text := m.inputModel.Text
+	return strings.HasPrefix(text, "/") && !strings.ContainsAny(text, " \t\n\r")
+}
+
+func (m *model) renderSearchPopup(width int) string {
+	if m.searchPopup == nil {
+		return ""
+	}
+	if width < 24 {
+		width = 24
+	}
+
+	sp := m.searchPopup
+	bg := lipgloss.Color("236")
+
+	// Get colors based on mode.
+	popupStyle := lipgloss.NewStyle().Background(bg)
+	headerStyle := lipgloss.NewStyle().Background(bg).Bold(true)
+	searchStyle := lipgloss.NewStyle().Background(bg)
+	itemStyle := lipgloss.NewStyle().Background(bg)
+	selectedItemStyle := lipgloss.NewStyle().Background(lipgloss.Color("15"))
+
+	var header string
+
+	switch sp.mode {
+	case searchModeCommands:
+		border := lipgloss.Color("33") // cyan for commands
+		popupStyle = popupStyle.
+			Foreground(lipgloss.Color("252")).
+			Border(lipgloss.RoundedBorder(), true, true, true, true).
+			BorderForeground(border).
+			Width(width)
+		headerStyle = headerStyle.Foreground(lipgloss.Color("252")).Width(width)
+		searchStyle = searchStyle.Foreground(lipgloss.Color("245"))
+		itemStyle = itemStyle.Foreground(lipgloss.Color("81")) // teal
+		selectedItemStyle = selectedItemStyle.Background(lipgloss.Color("33"))
+		header = "Commands"
+	case searchModeHistory:
+		border := lipgloss.Color("208") // orange for history
+		popupStyle = popupStyle.
+			Foreground(lipgloss.Color("252")).
+			Border(lipgloss.RoundedBorder(), true, true, true, true).
+			BorderForeground(border).
+			Width(width)
+		headerStyle = headerStyle.Foreground(lipgloss.Color("252")).Width(width)
+		searchStyle = searchStyle.Foreground(lipgloss.Color("245"))
+		itemStyle = itemStyle.Foreground(lipgloss.Color("208")) // orange
+		selectedItemStyle = selectedItemStyle.Background(lipgloss.Color("208"))
+		header = "History"
+	}
+
+	var b strings.Builder
+
+	// Header with count.
+	if len(sp.filtered) > 0 {
+		header = fmt.Sprintf("%s (%d)", header, len(sp.filtered))
+	}
+	b.WriteString(headerStyle.Render(header))
+
+	// Search prompt line.
+	if sp.search != "" {
+		b.WriteString("\n")
+		searchLine := fmt.Sprintf("  Search: %s", sp.search)
+		b.WriteString(searchStyle.Width(width).Render(clipRunes(searchLine, width)))
+	} else {
+		b.WriteString("\n")
+		b.WriteString(searchStyle.Width(width).Render("  Search... (type to filter)"))
+	}
+
+	if len(sp.filtered) == 0 {
+		b.WriteString("\n")
+		if sp.mode == searchModeCommands {
+			b.WriteString(searchStyle.Width(width).Render("  No matching commands"))
+		} else {
+			b.WriteString(searchStyle.Width(width).Render("  No matching history"))
+		}
+		return popupStyle.Render(b.String())
+	}
+
+	// Item list.
+	for i := 0; i < sp.height && i < len(sp.filtered); i++ {
+		idx := sp.scrollOff + i
+		item := sp.filtered[idx]
+		prefix := "  "
+		currentItemStyle := itemStyle
+		if idx == sp.selected {
+			// Always highlight the selected item.
+			prefix = "> "
+			currentItemStyle = selectedItemStyle
+		}
+
+		line := prefix + item.Text
+		// Add description for commands.
+		if item.Description != "" && sp.mode == searchModeCommands {
+			desc := clipRunes(item.Description, width*50/100)
+			if desc != "" {
+				line += "  " + desc
+			}
+		}
+
+		b.WriteString("\n")
+		b.WriteString(currentItemStyle.Width(width).Render(clipRunes(line, width)))
+	}
+
+	return popupStyle.Render(b.String())
+}
+
+func (m *model) slashCommandCandidates(prefix string) []CompletionCandidate {
+	skills := m.inputModel.Skills
+	if len(skills) == 0 {
+		skills = m.cfg.Skills
+	}
+
+	if prefix == "/" {
+		return allSlashCommandCandidates(skills)
+	}
+
+	workDir := m.inputModel.WorkDir
+	if workDir == "" {
+		workDir = m.cfg.WorkDir
+	}
+	result := Complete(prefix, skills, workDir)
+	if result == nil || len(result.Candidates) == 0 {
+		return nil
+	}
+
+	candidates := make([]CompletionCandidate, 0, len(result.Candidates))
+	for _, candidate := range result.Candidates {
+		if candidate.Type == CompletionTypeCommand || candidate.Type == CompletionTypeSkill {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func allSlashCommandCandidates(skills []extension.Skill) []CompletionCandidate {
+	seen := make(map[string]bool)
+	candidates := make([]CompletionCandidate, 0, len(slashCommands)+len(skills))
+	for _, cmd := range slashCommands {
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		candidates = append(candidates, CompletionCandidate{
+			Text:        cmd,
+			Description: slashCommandDesc(cmd),
+			Type:        CompletionTypeCommand,
+		})
+	}
+	for _, skill := range skills {
+		cmd := "/" + skill.Name
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		candidates = append(candidates, CompletionCandidate{
+			Text:        cmd,
+			Description: skill.Description,
+			Type:        CompletionTypeSkill,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return strings.ToLower(candidates[i].Text) < strings.ToLower(candidates[j].Text)
+	})
+	return candidates
+}
+
+func clipRunes(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= width {
+		return s
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-3]) + "..."
 }
 
 // renderBranchPopup renders the branch list popup.

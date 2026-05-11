@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,8 +360,9 @@ func TestView_Quitting(t *testing.T) {
 func TestView_ZeroWidthLoading(t *testing.T) {
 	m := newTestModelFull(t)
 	m.width = 0
+	m.cfg.AppVersion = "1.2.3"
 	v := m.View()
-	if !strings.Contains(v.Content, "Loading..") || !strings.ContainsAny(v.Content, matrixChars) {
+	if !strings.Contains(v.Content, "Loading Pi 1.2.3..") || !strings.ContainsAny(v.Content, matrixChars) {
 		t.Errorf("expected loading matrix startup line, got %q", v.Content)
 	}
 }
@@ -1342,12 +1344,16 @@ func TestFormatHistoryOutput_WithMentions(t *testing.T) {
 func TestFormatHistoryOutput_MoreThan20(t *testing.T) {
 	var entries []HistoryEntry
 	for i := 0; i < 30; i++ {
-		entries = append(entries, HistoryEntry{Text: "entry"})
+		entries = append(entries, HistoryEntry{Text: fmt.Sprintf("entry%d", i)})
 	}
 	got := formatHistoryOutput(entries, "")
-	// Should only show last 20.
+	// Should show "30 total" and only last 20.
 	if !strings.Contains(got, "30 total") {
 		t.Errorf("expected '30 total', got %q", got)
+	}
+	// Should not contain "entry0" (first entry, not in last 20).
+	if strings.Contains(got, "entry0") {
+		t.Errorf("expected entry0 not to be in last 20, got %q", got)
 	}
 }
 
@@ -1790,15 +1796,13 @@ func TestChecklistHasCheckboxes_AssumeCheckbox(t *testing.T) {
 // InputModel.HandleKey — mention mode branches.
 // -----------------------------------------------------------------------------
 
-func TestInputHandleKey_AtSymbol_EntersMentionMode(t *testing.T) {
+func TestInputHandleKey_AtSymbol_InsertsText(t *testing.T) {
 	im := &InputModel{}
 	_ = im.HandleKey(tea.KeyPressMsg(tea.Key{Text: "@", Code: '@'}))
-	if !im.MentionMode {
-		t.Error("expected MentionMode=true after @")
+	if im.Text != "@" {
+		t.Errorf("expected @ inserted, got %q", im.Text)
 	}
-	if im.MentionStart != 0 {
-		t.Errorf("expected MentionStart=0, got %d", im.MentionStart)
-	}
+	// MentionMode removed — typing @ just inserts text
 }
 
 func TestInputHandleKey_SlashAtStart_CyclesCommands(t *testing.T) {
@@ -1810,93 +1814,47 @@ func TestInputHandleKey_SlashAtStart_CyclesCommands(t *testing.T) {
 	}
 }
 
-func TestInputHandleKey_MentionSelection_Enter(t *testing.T) {
-	im := &InputModel{
-		Text:                 "@fo",
-		CursorPos:            3,
-		MentionMode:          true,
-		MentionStart:         0,
-		MentionSelectedIndex: 0,
-		MentionResult: &CompleteResult{
-			Candidates: []CompletionCandidate{{Text: "foo.go"}},
-		},
+func TestInputHandleKey_EnterSubmitsPlainMentionText(t *testing.T) {
+	im := &InputModel{Text: "@fo", CursorPos: 3}
+	cmd := im.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil {
+		t.Fatal("expected submit command")
 	}
-	_ = im.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if im.MentionMode {
-		t.Error("expected MentionMode=false after Enter selection")
+	msg, ok := cmd().(InputSubmitMsg)
+	if !ok {
+		t.Fatalf("expected InputSubmitMsg, got %T", cmd())
 	}
-	if !strings.HasPrefix(im.Text, "@foo.go") {
-		t.Errorf("expected @foo.go prefix, got %q", im.Text)
+	if msg.Text != "@fo" {
+		t.Errorf("expected submitted text @fo, got %q", msg.Text)
+	}
+	if im.Text != "" {
+		t.Errorf("expected input cleared, got %q", im.Text)
 	}
 }
 
-func TestInputHandleKey_CyclingEnter_Dismisses(t *testing.T) {
-	im := &InputModel{
-		Text:       "/plan",
-		CursorPos:  5,
-		CyclingIdx: 0,
+func TestInputHandleKey_EnterSubmitsSlashText(t *testing.T) {
+	im := &InputModel{Text: "/plan", CursorPos: 5}
+	cmd := im.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil {
+		t.Fatal("expected submit command")
 	}
-	_ = im.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if im.CyclingIdx != -1 {
-		t.Errorf("expected CyclingIdx=-1, got %d", im.CyclingIdx)
+	msg := cmd().(InputSubmitMsg)
+	if msg.Text != "/plan" {
+		t.Errorf("expected /plan submitted, got %q", msg.Text)
 	}
 }
 
-func TestInputHandleKey_ShiftTab_CyclesBack(t *testing.T) {
-	im := &InputModel{
-		Text:       "/",
-		CursorPos:  1,
-		CyclingIdx: 0,
-	}
+func TestInputHandleKey_ShiftTab_NoOp(t *testing.T) {
+	im := &InputModel{Text: "/", CursorPos: 1}
 	_ = im.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	// CyclingIdx should have moved back (wrapped to last command).
-	if im.CyclingIdx == 0 {
-		t.Logf("CyclingIdx stayed at 0 (may be valid if no commands)")
+	if im.Text != "/" {
+		t.Errorf("expected input preserved, got %q", im.Text)
 	}
 }
 
 // -----------------------------------------------------------------------------
 // InputModel.View — cover mention and ghost completion rendering.
 // -----------------------------------------------------------------------------
-
-func TestInputView_WithMentionMenu(t *testing.T) {
-	im := &InputModel{
-		Text:        "@fo",
-		CursorPos:   3,
-		MentionMode: true,
-		MentionResult: &CompleteResult{
-			Candidates: []CompletionCandidate{
-				{Text: "foo.go"},
-				{Text: "foo/bar.go", Description: "dir"},
-			},
-			Selected: 0,
-		},
-		MentionSelectedIndex: 0,
-	}
-	out := im.View(false)
-	if out == "" {
-		t.Error("expected non-empty view")
-	}
-}
-
-func TestInputView_WithCompletionMenu(t *testing.T) {
-	im := &InputModel{
-		Text:           "/hel",
-		CursorPos:      4,
-		CompletionMode: true,
-		CompletionResult: &CompleteResult{
-			Candidates: []CompletionCandidate{
-				{Text: "/help", Description: "help"},
-			},
-			Selected: 0,
-		},
-		SelectedIndex: 0,
-	}
-	out := im.View(false)
-	if !strings.Contains(out, "/help") {
-		t.Errorf("expected completion menu, got %q", out)
-	}
-}
 
 func TestInputView_Disabled(t *testing.T) {
 	im := &InputModel{Text: "hello"}
@@ -2411,7 +2369,7 @@ func TestHandlePlanCommand_AutoResume(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// InputModel.Clear / InCompletionMode / DismissCompletion.
+// InputModel.Clear
 // -----------------------------------------------------------------------------
 
 func TestInputModel_Clear(t *testing.T) {
@@ -2419,39 +2377,6 @@ func TestInputModel_Clear(t *testing.T) {
 	im.Clear()
 	if im.Text != "" || im.CursorPos != 0 {
 		t.Errorf("expected clear, got text=%q pos=%d", im.Text, im.CursorPos)
-	}
-}
-
-func TestInputModel_InCompletionMode_Variants(t *testing.T) {
-	if (&InputModel{CompletionMode: true}).InCompletionMode() == false {
-		t.Error("expected true for CompletionMode")
-	}
-	if (&InputModel{CyclingIdx: 0}).InCompletionMode() == false {
-		t.Error("expected true for CyclingIdx>=0")
-	}
-	if (&InputModel{MentionMode: true}).InCompletionMode() == false {
-		t.Error("expected true for MentionMode")
-	}
-	if (&InputModel{CyclingIdx: -1}).InCompletionMode() {
-		t.Error("expected false for default")
-	}
-}
-
-func TestInputModel_DismissCompletion(t *testing.T) {
-	im := &InputModel{
-		Text:             "/hel",
-		CursorPos:        4,
-		CompletionMode:   true,
-		CompletionResult: &CompleteResult{},
-		CyclingIdx:       2,
-		MentionMode:      true,
-	}
-	im.DismissCompletion()
-	if im.CompletionMode || im.CyclingIdx != -1 || im.MentionMode {
-		t.Error("expected all flags reset")
-	}
-	if im.Text != "" {
-		t.Errorf("expected empty text, got %q", im.Text)
 	}
 }
 

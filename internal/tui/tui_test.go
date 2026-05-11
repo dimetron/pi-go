@@ -264,43 +264,47 @@ func TestHistoryNavigation(t *testing.T) {
 		inputModel: InputModel{
 			History:    []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}},
 			HistoryIdx: -1,
-			CyclingIdx: -1,
 		},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
-	// Press Up → should get "third" (last entry)
+	// Arrow up on empty input opens the history search popup.
+	// Newest is first: [0]="third", [1]="second", [2]="first"
 	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm := newM.(*model)
-	if mm.inputModel.Text != "third" {
-		t.Errorf("expected %q, got %q", "third", mm.inputModel.Text)
+	if mm.searchPopup == nil {
+		t.Fatal("expected search popup to open on arrow up")
 	}
-
-	// Press Up again → should get "second"
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
-	mm = newM.(*model)
-	if mm.inputModel.Text != "second" {
-		t.Errorf("expected %q, got %q", "second", mm.inputModel.Text)
+	if mm.searchPopup.mode != searchModeHistory {
+		t.Errorf("expected searchModeHistory, got %v", mm.searchPopup.mode)
 	}
-
-	// Press Down → should get "third"
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
-	if mm.inputModel.Text != "third" {
-		t.Errorf("expected %q, got %q", "third", mm.inputModel.Text)
-	}
-
-	// Press Down again → should clear input
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
 	if mm.inputModel.Text != "" {
-		t.Errorf("expected empty input, got %q", mm.inputModel.Text)
+		t.Errorf("expected empty input before Enter, got %q", mm.inputModel.Text)
+	}
+
+	// Navigate down twice to get to index 2 ("first").
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	mm = newM.(*model)
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	mm = newM.(*model)
+	if mm.searchPopup.selected != 2 {
+		t.Errorf("expected selected=2, got %d", mm.searchPopup.selected)
+	}
+
+	// Enter accepts the entry (index 2 = "first").
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	mm = newM.(*model)
+	if mm.inputModel.Text != "first" {
+		t.Errorf("expected 'first', got %q", mm.inputModel.Text)
+	}
+	if mm.searchPopup != nil {
+		t.Error("expected popup to close after Enter")
 	}
 }
 
 func TestTextInput(t *testing.T) {
 	m := &model{
-		inputModel: InputModel{CyclingIdx: -1},
+		inputModel: InputModel{},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 	}
 
@@ -355,8 +359,52 @@ func TestViewLoading(t *testing.T) {
 		height: 0,
 	}
 	v := m.View()
-	if !strings.Contains(v.Content, "Loading..") || !strings.ContainsAny(v.Content, matrixChars) {
+	if !strings.Contains(v.Content, "Loading Pi..") || !strings.ContainsAny(v.Content, matrixChars) {
 		t.Errorf("expected loading matrix startup line, got %q", v.Content)
+	}
+}
+
+func TestViewLoadingShowsProgress(t *testing.T) {
+	m := &model{
+		width:        0,
+		height:       0,
+		loading:      true,
+		loadingItems: map[string]bool{"tools": true, "agent": false},
+		loadingTotal: 4,
+	}
+
+	out := ansi.Strip(m.View().Content)
+	if !strings.Contains(out, "Loading Pi [██░░░░░░ 25% 1/4] working: agent..") {
+		t.Fatalf("expected loading progress in startup line, got %q", out)
+	}
+}
+
+func TestViewLoadingShowsInitPipelineStart(t *testing.T) {
+	m := &model{
+		width:        0,
+		height:       0,
+		loading:      true,
+		loadingItems: map[string]bool{},
+	}
+
+	out := ansi.Strip(m.View().Content)
+	if !strings.Contains(out, "Loading Pi [░░░░░░░░ 0%] starting init pipeline..") {
+		t.Fatalf("expected startup line to show init pipeline start, got %q", out)
+	}
+}
+
+func TestViewLoadingShowsFinalizingInit(t *testing.T) {
+	m := &model{
+		width:        0,
+		height:       0,
+		loading:      true,
+		loadingItems: map[string]bool{"tools": true, "agent": true},
+		loadingTotal: 2,
+	}
+
+	out := ansi.Strip(m.View().Content)
+	if !strings.Contains(out, "Loading Pi [████████ 100% 2/2] finalizing init..") {
+		t.Fatalf("expected startup line to explain finalization wait, got %q", out)
 	}
 }
 
@@ -681,6 +729,241 @@ func TestTabOnSlash_ShowsCommandList(t *testing.T) {
 	}
 	if !strings.Contains(content, "/run") {
 		t.Error("command list should include /run")
+	}
+}
+
+func TestRenderSlashCommandPopup_AllCommands(t *testing.T) {
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.inputModel.SetText("/")
+
+	// The unified search popup renders when searchPopup is active.
+	m.newSearchPopup(searchModeCommands)
+
+	out := ansi.Strip(m.renderSearchPopup(70))
+
+	if !strings.Contains(out, "Commands") {
+		t.Fatalf("expected popup header, got %q", out)
+	}
+	// Verify some commands are listed (first alphabetical commands).
+	for _, cmd := range []string{"/clear", "/commit", "/help"} {
+		found := false
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, cmd) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected popup to include %q, got %q", cmd, out)
+		}
+	}
+}
+
+func TestSlashCommandCandidates_AllCommandsAlphabetical(t *testing.T) {
+	candidates := allSlashCommandCandidates([]extension.Skill{
+		{Name: "zeta", Description: "Zeta skill"},
+		{Name: "alpha", Description: "Alpha skill"},
+	})
+
+	for i := 1; i < len(candidates); i++ {
+		prev := strings.ToLower(candidates[i-1].Text)
+		curr := strings.ToLower(candidates[i].Text)
+		if prev > curr {
+			t.Fatalf("slash commands should be alphabetical: %q before %q in %+v", candidates[i-1].Text, candidates[i].Text, candidates)
+		}
+	}
+}
+
+func TestRenderSlashCommandPopup_UsesWiderWindow(t *testing.T) {
+	const longDesc = "Search, synthesize, verify, and summarize project notes across local workspaces"
+	m := &model{
+		cfg: Config{Skills: []extension.Skill{
+			{Name: "agent", Description: longDesc},
+		}},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      140,
+		height:     40,
+	}
+	m.inputModel.SetText("/")
+	m.newSearchPopup(searchModeCommands)
+
+	out := ansi.Strip(m.renderSearchPopup(120))
+	lines := strings.Split(out, "\n")
+	firstLine := lines[0]
+
+	if len([]rune(firstLine)) < 110 {
+		t.Fatalf("expected popup to use wider window, first line was only %d columns: %q", len([]rune(firstLine)), firstLine)
+	}
+	// Verify /agent line contains the description.
+	line := findLineContaining(out, "/agent")
+	if line == "" {
+		t.Fatalf("expected agent line, got %q", out)
+	}
+	if !strings.Contains(line, longDesc[:20]) {
+		t.Fatalf("expected long description to fit in wider popup, got line %q", line)
+	}
+}
+
+func TestRenderSlashCommandPopup_CutsDescriptionToSeventyPercentWidth(t *testing.T) {
+	const width = 100
+	longDesc := strings.Repeat("abcdefghij", 12)
+	m := &model{
+		cfg: Config{Skills: []extension.Skill{
+			{Name: "agent", Description: longDesc},
+		}},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      width,
+		height:     40,
+	}
+	m.inputModel.SetText("/")
+	m.newSearchPopup(searchModeCommands)
+
+	out := ansi.Strip(m.renderSearchPopup(width))
+	line := findLineContaining(out, "/agent")
+	if line == "" {
+		t.Fatalf("expected agent line, got %q", out)
+	}
+	desc := renderedSlashDescription(line, "/agent")
+	if got, want := len([]rune(desc)), width*50/100; got != want {
+		t.Fatalf("rendered description length = %d, want %d: %q from line %q in output %q", got, want, desc, line, out)
+	}
+}
+
+func findLineContaining(s string, needle string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
+func renderedSlashDescription(line string, command string) string {
+	idx := strings.Index(line, command)
+	if idx < 0 {
+		return ""
+	}
+	rest := line[idx+len(command):]
+	rest = strings.TrimLeft(rest, " ")
+	return strings.Trim(rest, " │")
+}
+
+func TestRenderSlashCommandPopup_FiltersAsUserTypes(t *testing.T) {
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.inputModel.SetText("/sk")
+
+	// Create search popup and filter.
+	m.newSearchPopup(searchModeCommands)
+	m.searchPopup.search = "sk"
+	m.searchPopup.filterSearch()
+
+	out := ansi.Strip(m.renderSearchPopup(70))
+
+	// Should show /skills command (filtered by "sk").
+	if !strings.Contains(out, "/skills") && !strings.Contains(out, "/skill") {
+		t.Fatalf("expected skill commands in filtered popup, got %q", out)
+	}
+	// /help should not be visible when filtering for "sk".
+	if strings.Contains(out, "/help") {
+		t.Fatalf("expected filtered popup to omit /help, got %q", out)
+	}
+}
+
+func TestRenderSlashCommandPopup_HighlightsSelectedCommand(t *testing.T) {
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.inputModel.SetText("/c")
+	m.newSearchPopup(searchModeCommands)
+
+	// Move selection to 1 (second item).
+	m.searchPopup.selected = 1
+
+	out := ansi.Strip(m.renderSearchPopup(70))
+	// The second item (index 1) should be highlighted with "> ".
+	// Check that at least one line contains "> /clear" or similar.
+	highlighted := false
+	for _, line := range strings.Split(out, "\n") {
+		// Use Contains since the line may have extra spaces/pipes.
+		if strings.Contains(line, "> /clear") || strings.Contains(line, "> /commit") {
+			highlighted = true
+			break
+		}
+	}
+	if !highlighted {
+		t.Fatalf("expected a highlighted selection in popup, got %q", out)
+	}
+}
+
+func TestSlashCommandPopup_NavigationKeys(t *testing.T) {
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.inputModel.SetText("/c")
+	m.newSearchPopup(searchModeCommands)
+
+	// Start with selection at 0.
+	if m.searchPopup.selected != 0 {
+		t.Fatalf("expected initial selected=0, got %d", m.searchPopup.selected)
+	}
+
+	// Down moves selection.
+	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.searchPopup.selected != 1 {
+		t.Fatalf("Down should move selected command to 1, got %d", m.searchPopup.selected)
+	}
+
+	// Up moves selection back.
+	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if m.searchPopup.selected != 0 {
+		t.Fatalf("Up should move selected command back to 0, got %d", m.searchPopup.selected)
+	}
+
+	// Tab moves forward.
+	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	if m.searchPopup.selected != 1 {
+		t.Fatalf("Tab should move selected command to 1, got %d", m.searchPopup.selected)
+	}
+
+	// Shift+Tab moves back.
+	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	if m.searchPopup.selected != 0 {
+		t.Fatalf("Shift+Tab should move selected command back to 0, got %d", m.searchPopup.selected)
+	}
+}
+
+func TestSlashCommandPopup_EnterCopiesSelectedCommandToInput(t *testing.T) {
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.inputModel.SetText("/c")
+	m.newSearchPopup(searchModeCommands)
+	m.searchPopup.selected = 1
+
+	_, cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd != nil {
+		t.Fatal("Enter should copy the selected slash command without submitting")
+	}
+	// The input should be set to the selected command with a trailing space.
+	if !strings.HasSuffix(m.inputModel.Text, " ") {
+		t.Fatalf("input text should end with space, got %q", m.inputModel.Text)
+	}
+}
+
+func TestView_RendersSlashPopupNearInput(t *testing.T) {
+	m := newTestModelFull(t)
+	m.inputModel.SetText("/co")
+	m.newSearchPopup(searchModeCommands)
+
+	out := ansi.Strip(m.View().Content)
+
+	if !strings.Contains(out, "Commands") {
+		t.Fatalf("expected slash popup in view, got %q", out)
+	}
+	if !strings.Contains(out, "/context") || !strings.Contains(out, "/compact") {
+		t.Fatalf("expected /co commands in popup, got %q", out)
+	}
+	popupIndex := strings.LastIndex(out, "Commands")
+	inputIndex := strings.LastIndex(out, "> /co")
+	if popupIndex < 0 || inputIndex < 0 {
+		t.Fatalf("expected popup and input prompt in view, got %q", out)
+	}
+	if popupIndex > inputIndex {
+		t.Fatalf("expected slash popup above input prompt, got %q", out)
 	}
 }
 

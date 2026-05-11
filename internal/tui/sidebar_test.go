@@ -390,20 +390,47 @@ func TestRenderSidebar_MCPTools(t *testing.T) {
 	if !strings.Contains(result, "filesystem") {
 		t.Error("expected server name 'filesystem' in sidebar")
 	}
-	if !strings.Contains(result, "read_file") {
-		t.Error("expected tool 'read_file' in sidebar")
+	if strings.Contains(result, "read_file") {
+		t.Error("expected tool 'read_file' to be hidden from sidebar")
 	}
-	if !strings.Contains(result, "write_file") {
-		t.Error("expected tool 'write_file' in sidebar")
+	if strings.Contains(result, "write_file") {
+		t.Error("expected tool 'write_file' to be hidden from sidebar")
 	}
 	if !strings.Contains(result, "search") {
 		t.Error("expected server name 'search' in sidebar")
 	}
-	if !strings.Contains(result, "web_search") {
-		t.Error("expected tool 'web_search' in sidebar")
+	if strings.Contains(result, "web_search") {
+		t.Error("expected tool 'web_search' to be hidden from sidebar")
 	}
 	if !strings.Contains(result, "[3]") {
 		t.Error("expected '[3]' tool count in MCP Tools heading")
+	}
+	if !strings.Contains(result, "[2]") {
+		t.Error("expected '[2]' tool count for filesystem server")
+	}
+	if !strings.Contains(result, "[1]") {
+		t.Error("expected '[1]' tool count for search server")
+	}
+}
+
+func TestRenderSidebar_Skills(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		Skills: []extension.Skill{
+			{Name: "go-code-review"},
+			{Name: "go-testing"},
+		},
+		MCPTools: []extension.MCPToolEntry{{Server: "filesystem", Tool: "read_file"}},
+	})
+	if !strings.Contains(result, "Skills [2]") {
+		t.Error("expected 'Skills [2]' heading in sidebar")
+	}
+	if !strings.Contains(result, "MCP Tools [1]") {
+		t.Error("expected 'MCP Tools [1]' heading in sidebar")
+	}
+	if strings.Index(result, "Skills [2]") > strings.Index(result, "MCP Tools [1]") {
+		t.Error("expected Skills section above MCP Tools section")
 	}
 }
 

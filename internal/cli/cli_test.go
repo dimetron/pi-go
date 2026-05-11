@@ -1057,6 +1057,49 @@ func TestLoadDotEnvMultipleKeys(t *testing.T) {
 	}
 }
 
+func TestLoadDotEnvProjectOverridesGlobal(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	projectDir := filepath.Join(tmpDir, "project")
+	subDir := filepath.Join(projectDir, "sub")
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi-go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectDir, ".pi-go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi-go", ".env"), []byte("TEST_PROJECT_ENV=global\nTEST_GLOBAL_ONLY=global-only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".pi-go", ".env"), []byte("TEST_PROJECT_ENV=project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("TEST_PROJECT_ENV", "shell")
+	t.Cleanup(func() { _ = os.Unsetenv("TEST_GLOBAL_ONLY") })
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(subDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	LoadDotEnv()
+
+	if got := os.Getenv("TEST_PROJECT_ENV"); got != "project" {
+		t.Errorf("TEST_PROJECT_ENV = %q, want project", got)
+	}
+	if got := os.Getenv("TEST_GLOBAL_ONLY"); got != "global-only" {
+		t.Errorf("TEST_GLOBAL_ONLY = %q, want global-only", got)
+	}
+}
+
 func TestLoadDotEnvFileWinsOverShellEnv(t *testing.T) {
 	// ~/.pi-go/.env is the authoritative source for credentials managed
 	// by /login, so a value there must beat anything the shell exported

@@ -44,6 +44,7 @@ type SidebarRenderInput struct {
 	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
 	StatusLine   string                   // status text shown above matrix
 	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
+	Skills       []extension.Skill        // skills section; nil = hidden
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
 	OTELEnabled  bool                     // OTEL tracing is active
 }
@@ -298,43 +299,42 @@ func RenderSidebar(in SidebarRenderInput) string {
 		}
 	}
 
+	// --- Skills section ---
+	if len(in.Skills) > 0 {
+		skillsHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af")).Bold(true) // Mocha yellow
+		lines = append(lines, skillsHeading.Render(fmt.Sprintf("  Skills [%d]", len(in.Skills))))
+		lines = append(lines, "")
+	}
+
 	// --- MCP Tools section ---
 	if len(in.MCPTools) > 0 {
 		mcpHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true) // Mocha mauve
-		toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))             // dim
+		countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))            // dim
 
-		// Group tools by server name.
-		type serverGroup struct {
-			name  string
-			tools []string
-		}
+		// Count tools by server name without listing each tool.
 		seenOrder := []string{}
-		grouped := map[string]*serverGroup{}
+		toolCounts := map[string]int{}
 		for _, e := range in.MCPTools {
-			if _, ok := grouped[e.Server]; !ok {
+			if _, ok := toolCounts[e.Server]; !ok {
 				seenOrder = append(seenOrder, e.Server)
-				grouped[e.Server] = &serverGroup{name: e.Server}
 			}
-			grouped[e.Server].tools = append(grouped[e.Server].tools, e.Tool)
+			toolCounts[e.Server]++
 		}
 
 		totalTools := len(in.MCPTools)
 		lines = append(lines, mcpHeading.Render(fmt.Sprintf("  MCP Tools [%d]", totalTools)))
 
 		for _, srv := range seenOrder {
-			g := grouped[srv]
-			srvLabel := g.name
-			if len(srvLabel) > innerW-4 {
-				srvLabel = srvLabel[:innerW-5] + "…"
+			srvLabel := srv
+			countLabel := fmt.Sprintf(" [%d]", toolCounts[srv])
+			maxServerW := innerW - 4 - len(countLabel)
+			if maxServerW < 1 {
+				maxServerW = 1
 			}
-			lines = append(lines, dim.Render("  ⬡ "+srvLabel))
-			for _, t := range g.tools {
-				tName := t
-				if len(tName) > innerW-6 {
-					tName = tName[:innerW-7] + "…"
-				}
-				lines = append(lines, toolStyle.Render("    · "+tName))
+			if len(srvLabel) > maxServerW {
+				srvLabel = srvLabel[:maxServerW-1] + "…"
 			}
+			lines = append(lines, countStyle.Render("  ⬡ "+srvLabel+countLabel))
 		}
 		lines = append(lines, "")
 	}
