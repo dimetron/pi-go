@@ -224,7 +224,7 @@ func (m *model) newSearchPopup(mode searchMode) {
 			// Show all items when "/" is typed alone.
 			popupHeight = len(items)
 		} else {
-			popupHeight = 35
+			popupHeight = 25
 			if popupHeight > len(items) {
 				popupHeight = len(items)
 			}
@@ -244,8 +244,8 @@ func (m *model) newSearchPopup(mode searchMode) {
 			items[len(entries)-1-i] = SearchItem{Text: e.Text}
 		}
 		popupHeight = len(items)
-		if popupHeight > 10 {
-			popupHeight = 10
+		if popupHeight > 25 {
+			popupHeight = 25
 		}
 		if popupHeight < 3 {
 			popupHeight = 3
