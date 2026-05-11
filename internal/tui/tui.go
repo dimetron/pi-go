@@ -760,11 +760,9 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 				sp.selected = len(sp.filtered) - 1
 			}
 		} else {
+			// Tab advances; stays at last item (no wrap).
 			if sp.selected < len(sp.filtered)-1 {
 				sp.selected++
-			} else {
-				// Wrap to first item on Tab from last.
-				sp.selected = 0
 			}
 		}
 		sp.scrollOff = max(0, sp.selected-sp.height+1)
