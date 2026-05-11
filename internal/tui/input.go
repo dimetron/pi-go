@@ -9,6 +9,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -49,83 +50,56 @@ type InputSubmitMsg struct {
 	Mentions []string // file paths referenced via @path
 }
 
-// InputModel manages the text input area: cursor, history, and completion.
+// InputModel wraps Bubble Tea's standard textinput component with history
+// and slash-command support. All completion/mention state has been removed;
+// the textinput library handles cursor movement and editing directly.
 type InputModel struct {
 	Text       string
 	CursorPos  int // character position (not byte offset)
 	History    []HistoryEntry
 	HistoryIdx int
 
-	// Ghost autocomplete suggestion.
-	Completion string
-
-	// Enhanced completion state.
-	CompletionResult *CompleteResult
-	CompletionMode   bool
-	SelectedIndex    int
-
-	// Command cycling state.
-	CyclingIdx int
-
-	// File @mention completion state.
-	MentionMode          bool
-	MentionStart         int // cursor position of the '@' character
-	MentionResult        *CompleteResult
-	MentionSelectedIndex int
-
 	// Dependencies (set by root model).
 	Skills    []extension.Skill
 	SkillDirs []string
 	WorkDir   string
+
+	input textinput.Model
 }
 
 // NewInputModel creates an InputModel with initial state.
 func NewInputModel(history []HistoryEntry, skills []extension.Skill, skillDirs []string, workDir string) InputModel {
-	return InputModel{
+	im := InputModel{
 		History:    history,
 		HistoryIdx: -1,
-		CyclingIdx: -1,
 		Skills:     skills,
 		SkillDirs:  skillDirs,
 		WorkDir:    workDir,
 	}
+	im.ensureInput()
+	return im
 }
 
 // HandleKey processes a key press for the input area.
 // Returns a tea.Cmd (InputSubmitMsg on submit, nil otherwise).
 func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
+	im.ensureInput()
 	key := msg.Key()
 
 	switch {
-	case key.Code == tea.KeyEnter:
-		// Mention mode: apply file selection, don't submit.
-		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
-			selected := im.MentionResult.Candidates[im.MentionSelectedIndex].Text
-			// Replace @prefix with @selected-path
-			beforeByte := charOffsetToByteOffset(im.Text, im.MentionStart)
-			afterByte := charOffsetToByteOffset(im.Text, im.CursorPos)
-			im.Text = im.Text[:beforeByte] + "@" + selected + im.Text[afterByte:]
-			im.CursorPos = im.MentionStart + 1 + utf8.RuneCountInString(selected)
-			im.dismissMention()
-			return nil
-		}
-		// Cycling: place command, dismiss menu.
-		if im.CyclingIdx >= 0 {
-			im.CyclingIdx = -1
-			im.CursorPos = utf8.RuneCountInString(im.Text)
-			return nil
-		}
-		// Completion: apply selection.
-		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
-			im.Text = im.CompletionResult.ApplySelection(im.SelectedIndex)
-			im.CursorPos = utf8.RuneCountInString(im.Text)
-			im.CompletionMode = false
-			im.CompletionResult = nil
-			im.SelectedIndex = 0
-			return nil
-		}
-		// Submit.
-		text := strings.TrimSpace(im.Text)
+	case isLineStartKey(key):
+		im.input.CursorStart()
+		im.syncFromInput()
+		return nil
+	case isLineEndKey(key):
+		im.input.CursorEnd()
+		im.syncFromInput()
+		return nil
+	}
+
+	switch key.Code {
+	case tea.KeyEnter:
+		text := strings.TrimSpace(im.input.Value())
 		if text == "" {
 			return nil
 		}
@@ -136,397 +110,84 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			appendHistory(entry)
 		}
 		im.HistoryIdx = -1
-		im.Text = ""
-		im.CursorPos = 0
+		im.setValue("")
 		return func() tea.Msg { return InputSubmitMsg{Text: text, Mentions: mentions} }
-
-	case key.Code == tea.KeyTab && key.Mod == tea.ModShift:
-		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
-			im.MentionResult.CycleSelection(-1)
-			im.MentionSelectedIndex = im.MentionResult.Selected
-			return nil
-		}
-		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
-			im.CompletionResult.CycleSelection(-1)
-			im.SelectedIndex = im.CompletionResult.Selected
-		} else if im.Text == "/" || im.CyclingIdx >= 0 {
-			im.cycleCommand(-1)
-		}
-
-	case key.Code == tea.KeyTab:
-		if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
-			im.MentionResult.CycleSelection(1)
-			im.MentionSelectedIndex = im.MentionResult.Selected
-			return nil
-		}
-		if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
-			im.CompletionResult.CycleSelection(1)
-			im.SelectedIndex = im.CompletionResult.Selected
-		} else if im.Text == "/" || im.CyclingIdx >= 0 {
-			im.cycleCommand(1)
-		} else {
-			im.CompletionResult = Complete(im.Text, im.Skills, im.WorkDir)
-			if len(im.CompletionResult.Candidates) == 1 {
-				im.Text = im.CompletionResult.Candidates[0].Text
-				im.CursorPos = utf8.RuneCountInString(im.Text)
-				im.CompletionResult = nil
-			} else if len(im.CompletionResult.Candidates) > 1 {
-				im.CompletionMode = true
-				im.SelectedIndex = 0
-				im.CompletionResult.Selected = 0
-			}
-		}
-
-	case key.Code == tea.KeyBackspace:
-		if im.CursorPos > 0 {
-			bytePos := charOffsetToByteOffset(im.Text, im.CursorPos)
-			_, prevRuneSize := utf8.DecodeLastRuneInString(im.Text[:bytePos])
-			im.Text = im.Text[:bytePos-prevRuneSize] + im.Text[bytePos:]
-			im.CursorPos--
-			if im.Text == "" {
-				im.CyclingIdx = -1
-			}
-			// Update mention mode after backspace.
-			if im.MentionMode {
-				start, prefix := findMentionAtCursor(im.Text, im.CursorPos)
-				if start >= 0 {
-					im.MentionStart = start
-					im.MentionResult = CompleteMention(prefix, im.WorkDir)
-					im.MentionSelectedIndex = 0
-				} else {
-					im.dismissMention()
-				}
-			}
-		}
-
-	case key.Code == tea.KeyDelete:
-		if im.CursorPos < utf8.RuneCountInString(im.Text) {
-			bytePos := charOffsetToByteOffset(im.Text, im.CursorPos)
-			_, nextRuneSize := utf8.DecodeRuneInString(im.Text[bytePos:])
-			im.Text = im.Text[:bytePos] + im.Text[bytePos+nextRuneSize:]
-		}
-
-	case key.Code == tea.KeyLeft:
-		if im.CyclingIdx >= 0 {
-			im.CyclingIdx = -1
-			im.CursorPos = 0
-		} else if im.CursorPos > 0 {
-			im.CursorPos--
-		}
-
-	case key.Code == tea.KeyRight:
-		if im.CyclingIdx >= 0 {
-			im.CyclingIdx = -1
-			im.CursorPos = utf8.RuneCountInString(im.Text)
-		} else if im.CursorPos < utf8.RuneCountInString(im.Text) {
-			im.CursorPos++
-		}
-	case key.Code == tea.KeyHome || (key.Code == 'a' && key.Mod == tea.ModCtrl):
-		im.CursorPos = 0
-
-	case key.Code == tea.KeyEnd || (key.Code == 'e' && key.Mod == tea.ModCtrl):
-		im.CursorPos = utf8.RuneCountInString(im.Text)
-
-	case key.Code == tea.KeyUp:
-		if im.CyclingIdx >= 0 {
-			allCmds := im.AllCommandNames()
-			if len(allCmds) > 0 {
-				if im.CyclingIdx <= 0 {
-					im.CyclingIdx = len(allCmds) - 1
-				} else {
-					im.CyclingIdx--
-				}
-				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = utf8.RuneCountInString(im.Text)
-			}
-		} else if len(im.History) > 0 {
-			if im.HistoryIdx < 0 {
-				im.HistoryIdx = len(im.History) - 1
-			} else if im.HistoryIdx > 0 {
-				im.HistoryIdx--
-			}
-			im.restoreHistoryEntry(im.HistoryIdx)
-		}
-
-	case key.Code == tea.KeyDown:
-		if im.CyclingIdx >= 0 {
-			allCmds := im.AllCommandNames()
-			if len(allCmds) > 0 {
-				im.CyclingIdx = (im.CyclingIdx + 1) % len(allCmds)
-				im.Text = allCmds[im.CyclingIdx]
-				im.CursorPos = utf8.RuneCountInString(im.Text)
-			}
-		} else if im.HistoryIdx >= 0 {
-			im.HistoryIdx++
-			if im.HistoryIdx >= len(im.History) {
-				im.HistoryIdx = -1
-				im.Text = ""
-				im.CursorPos = 0
-				im.dismissMention()
-			} else {
-				im.restoreHistoryEntry(im.HistoryIdx)
-			}
-		}
-
-	case key.Code == tea.KeyEscape:
-		if im.MentionMode {
-			im.dismissMention()
-			return nil
-		}
-
-	default:
-		if key.Text != "" && isUserInput(key.Text) {
-			if key.Text == "/" && im.Text == "" {
-				im.ReloadSkills()
-			}
-			// Insert text at cursor position (properly handling UTF-8)
-			beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
-			im.Text = im.Text[:beforeByte] + key.Text + im.Text[beforeByte:]
-			im.CursorPos++
-			im.CyclingIdx = -1
-
-			// Enter mention mode when @ is typed.
-			if key.Text == "@" {
-				im.MentionMode = true
-				im.MentionStart = im.CursorPos - 1
-				im.MentionResult = CompleteMention("", im.WorkDir)
-				im.MentionSelectedIndex = 0
-				return nil
-			}
-
-			// Update mention completions while typing after @.
-			if im.MentionMode {
-				start, prefix := findMentionAtCursor(im.Text, im.CursorPos)
-				if start >= 0 {
-					im.MentionStart = start
-					im.MentionResult = CompleteMention(prefix, im.WorkDir)
-					im.MentionSelectedIndex = 0
-				} else {
-					im.dismissMention()
-				}
-			}
-		}
+	case tea.KeyUp:
+		im.historyUp()
+		return nil
+	case tea.KeyDown:
+		im.historyDown()
+		return nil
 	}
 
-	// Update ghost autocomplete.
-	if im.CursorPos == utf8.RuneCountInString(im.Text) {
-		result := Complete(im.Text, im.Skills, im.WorkDir)
-		if result != nil && len(result.Candidates) > 0 && len(result.Candidates) == 1 {
-			im.Completion = result.Candidates[0].Text
-		} else {
-			im.Completion = ""
+	if key.Text != "" && !isUserInput(key.Text) {
+		if isUserPaste(key.Text) {
+			im.InsertText(key.Text)
 		}
-	} else {
-		im.Completion = ""
+		return nil
 	}
 
-	// Clear completion mode on non-Tab keys.
-	if key.Code != tea.KeyTab {
-		im.CompletionMode = false
-		im.CompletionResult = nil
-		im.SelectedIndex = 0
-	}
+	var cmd tea.Cmd
+	im.input, cmd = im.input.Update(msg)
+	im.syncFromInput()
+	return cmd
+}
 
-	return nil
+// SetWidth sets the visible width of the editable input text, excluding the prompt.
+func (im *InputModel) SetWidth(width int) {
+	im.ensureInput()
+	if width < 0 {
+		width = 0
+	}
+	pos := im.CursorPos
+	im.input.SetWidth(width)
+	// The textinput viewport only recalculates when the cursor moves outside
+	// the current bounds. After a width change (especially from the initial
+	// width=0 to a real value), the old viewport covers the full text and the
+	// cursor stays within it, so the viewport never narrows. CursorEnd forces
+	// a right-edge recalculation with the new width; SetCursor restores the
+	// actual position.
+	im.input.CursorEnd()
+	im.input.SetCursor(pos)
+	im.syncFromInput()
 }
 
 // View renders the input area.
 func (im *InputModel) View(running bool) string {
-	prefix := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
-		Bold(true).
-		Render("> ")
-
+	im.ensureInput()
 	if running {
+		prefix := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true).
+			Render("> ")
 		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 		return prefix + dim.Render("(waiting for response...)")
 	}
-
-	// Convert character positions to byte offsets for proper UTF-8 handling
-	beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
-	before := im.Text[:beforeByte]
-	after := im.Text[beforeByte:]
-
-	cursor := lipgloss.NewStyle().
-		Background(lipgloss.Color("252")).
-		Foreground(lipgloss.Color("0")).
-		Render(" ")
-	if im.CursorPos < utf8.RuneCountInString(im.Text) {
-		_, runeSize := utf8.DecodeRuneInString(im.Text[beforeByte:])
-		cursor = lipgloss.NewStyle().
-			Background(lipgloss.Color("252")).
-			Foreground(lipgloss.Color("0")).
-			Render(im.Text[beforeByte : beforeByte+runeSize])
-		afterByte := beforeByte + runeSize
-		after = im.Text[afterByte:]
-	}
-
-	// Completion menu.
-	if im.CompletionMode && im.CompletionResult != nil && len(im.CompletionResult.Candidates) > 0 {
-		inputLine := prefix + before + cursor + after
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-
-		var menu strings.Builder
-		for i, c := range im.CompletionResult.Candidates {
-			if i == im.SelectedIndex {
-				menu.WriteString(sel.Render("  > " + c.Text))
-			} else {
-				menu.WriteString(dim.Render("    " + c.Text))
-			}
-			if c.Description != "" {
-				menu.WriteString(dim.Render(" — " + c.Description))
-			}
-			menu.WriteString("\n")
-		}
-		return inputLine + "\n" + menu.String()
-	}
-
-	// Command cycling menu.
-	if im.CyclingIdx >= 0 {
-		inputLine := prefix + before + cursor + after
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-
-		cycleCmds := im.commandCycleList()
-		var menu strings.Builder
-		for i, cmd := range cycleCmds {
-			desc := slashCommandDesc(cmd)
-			if desc == "" {
-				for _, skill := range im.Skills {
-					if "/"+skill.Name == cmd {
-						desc = skill.Description
-						break
-					}
-				}
-			}
-			if i == im.CyclingIdx {
-				menu.WriteString(sel.Render("  > " + cmd))
-			} else {
-				menu.WriteString(dim.Render("    " + cmd))
-			}
-			if desc != "" {
-				menu.WriteString(descStyle.Render(" — " + desc))
-			}
-			menu.WriteString("\n")
-		}
-		return inputLine + "\n" + menu.String()
-	}
-
-	// File @mention completion menu.
-	if im.MentionMode && im.MentionResult != nil && len(im.MentionResult.Candidates) > 0 {
-		inputLine := prefix + before + cursor + after
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sel := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-
-		var menu strings.Builder
-		for i, c := range im.MentionResult.Candidates {
-			if i == im.MentionSelectedIndex {
-				menu.WriteString(sel.Render("  > @" + c.Text))
-			} else {
-				menu.WriteString(dim.Render("    @" + c.Text))
-			}
-			if c.Description != "" {
-				menu.WriteString(fileStyle.Render(" — " + c.Description))
-			}
-			menu.WriteString("\n")
-		}
-		return inputLine + "\n" + menu.String()
-	}
-
-	// Ghost autocomplete.
-	ghost := ""
-	if im.Completion != "" && im.CursorPos == utf8.RuneCountInString(im.Text) {
-		suffix := im.Completion[beforeByte:]
-		ghost = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(suffix + " [tab]")
-	}
-
-	return prefix + before + cursor + after + ghost
-}
-
-func (im *InputModel) commandCycleList() []string {
-	allCmds := im.AllCommandNames()
-	if len(allCmds) == 0 {
-		return nil
-	}
-	if im.Text == "/" {
-		return allCmds
-	}
-	prefix := strings.ToLower(im.Text)
-	var filtered []string
-	for _, cmd := range allCmds {
-		if strings.HasPrefix(strings.ToLower(cmd), prefix) {
-			filtered = append(filtered, cmd)
-		}
-	}
-	if len(filtered) <= 1 {
-		return allCmds
-	}
-	return filtered
-}
-
-func (im *InputModel) cycleCommand(delta int) {
-	cmds := im.commandCycleList()
-	if len(cmds) == 0 {
-		return
-	}
-	if im.CyclingIdx < 0 || im.CyclingIdx >= len(cmds) {
-		if delta < 0 {
-			im.CyclingIdx = len(cmds) - 1
-		} else {
-			im.CyclingIdx = 0
-		}
-	} else {
-		im.CyclingIdx = (im.CyclingIdx + delta + len(cmds)) % len(cmds)
-	}
-	im.Text = cmds[im.CyclingIdx]
-	im.CursorPos = utf8.RuneCountInString(im.Text)
+	return im.input.View()
 }
 
 // InsertText inserts pasted or programmatic text at cursor position.
 func (im *InputModel) InsertText(text string) {
+	im.ensureInput()
+	pos := im.CursorPos
 	beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
-	im.Text = im.Text[:beforeByte] + text + im.Text[beforeByte:]
-	im.CursorPos += utf8.RuneCountInString(text)
+	im.setValue(im.Text[:beforeByte] + text + im.Text[beforeByte:])
+	im.input.SetCursor(pos + utf8.RuneCountInString(text))
+	im.syncFromInput()
 }
 
 // Clear resets the input text and cursor.
 func (im *InputModel) Clear() {
-	im.Text = ""
-	im.CursorPos = 0
+	im.ensureInput()
+	im.setValue("")
 }
 
-// InCompletionMode returns true if the input is showing a completion, cycling, or mention menu.
-func (im *InputModel) InCompletionMode() bool {
-	return im.CompletionMode || im.CyclingIdx >= 0 || im.MentionMode
-}
-
-// DismissCompletion clears completion/cycling/mention state and input.
-func (im *InputModel) DismissCompletion() {
-	im.CompletionMode = false
-	im.CompletionResult = nil
-	im.SelectedIndex = 0
-	im.CyclingIdx = -1
-	im.dismissMention()
-	im.Text = ""
-	im.CursorPos = 0
-}
-
-// restoreHistoryEntry restores full input state from a history entry.
-func (im *InputModel) restoreHistoryEntry(idx int) {
-	entry := im.History[idx]
-	im.Text = entry.Text
-	im.CursorPos = utf8.RuneCountInString(im.Text)
-}
-
-// dismissMention exits mention completion mode.
-func (im *InputModel) dismissMention() {
-	im.MentionMode = false
-	im.MentionResult = nil
-	im.MentionSelectedIndex = 0
-	im.MentionStart = 0
+// SetText replaces the input text and moves the cursor to the end.
+func (im *InputModel) SetText(text string) {
+	im.ensureInput()
+	im.setValue(text)
+	im.input.CursorEnd()
+	im.syncFromInput()
 }
 
 // ReloadSkills re-scans skill directories from disk and updates the cached list.
@@ -559,7 +220,95 @@ func (im *InputModel) AllCommandNames() []string {
 	return cmds
 }
 
+// Cursor returns the real Bubble Tea cursor for the input's current position.
+func (im *InputModel) Cursor() *tea.Cursor {
+	im.ensureInput()
+	return im.input.Cursor()
+}
+
+func (im *InputModel) ensureInput() {
+	if im.input.KeyMap.CharacterForward.Keys() == nil {
+		im.input = textinput.New()
+		promptStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true)
+		styles := im.input.Styles()
+		styles.Focused.Prompt = promptStyle
+		styles.Blurred.Prompt = promptStyle
+		styles.Cursor.Color = lipgloss.Color("39")
+		styles.Cursor.Shape = tea.CursorBar
+		im.input.SetStyles(styles)
+		im.input.Prompt = "> "
+		im.input.SetVirtualCursor(false)
+		im.input.SetWidth(0)
+		_ = im.input.Focus()
+	}
+	if im.input.Value() != im.Text {
+		im.input.SetValue(im.Text)
+	}
+	im.input.SetCursor(im.CursorPos)
+	im.syncFromInput()
+}
+
+func (im *InputModel) setValue(text string) {
+	im.input.SetValue(text)
+	im.syncFromInput()
+}
+
+func (im *InputModel) syncFromInput() {
+	im.Text = im.input.Value()
+	im.CursorPos = im.input.Position()
+}
+
+func (im *InputModel) historyUp() {
+	if len(im.History) == 0 {
+		return
+	}
+	if im.HistoryIdx < 0 {
+		im.HistoryIdx = len(im.History) - 1
+	} else if im.HistoryIdx > 0 {
+		im.HistoryIdx--
+	}
+	im.restoreHistoryEntry(im.HistoryIdx)
+}
+
+func (im *InputModel) historyDown() {
+	if im.HistoryIdx < 0 {
+		return
+	}
+	im.HistoryIdx++
+	if im.HistoryIdx >= len(im.History) {
+		im.HistoryIdx = -1
+		im.setValue("")
+		return
+	}
+	im.restoreHistoryEntry(im.HistoryIdx)
+}
+
+func (im *InputModel) restoreHistoryEntry(idx int) {
+	if idx < 0 || idx >= len(im.History) {
+		return
+	}
+	im.setValue(im.History[idx].Text)
+	im.input.CursorEnd()
+	im.syncFromInput()
+}
+
+func isLineStartKey(key tea.Key) bool {
+	return key.Code == tea.KeyHome ||
+		(key.Code == 'a' && key.Mod == tea.ModCtrl) ||
+		key.Code == 0x01
+}
+
+func isLineEndKey(key tea.Key) bool {
+	return key.Code == tea.KeyEnd ||
+		(key.Code == 'e' && key.Mod == tea.ModCtrl) ||
+		key.Code == 0x05
+}
+
 // slashCommands is the list of available slash commands for autocomplete.
+// Skill subcommands (/skill-list, /skill-load, /skill-create) are handled
+// as args to /skills and omitted from the top-level list to keep it concise.
 var slashCommands = []string{
 	"/help",
 	"/clear",
@@ -575,9 +324,6 @@ var slashCommands = []string{
 	"/plan",
 	"/run",
 	"/skills",
-	"/skill-list",
-	"/skill-load",
-	"/skill-create",
 	"/theme",
 	"/ping",
 	"/rtk",
@@ -644,7 +390,6 @@ func slashCommandDesc(cmd string) string {
 // completeSlashCommand returns the best matching slash command for the current input.
 // Only suggests completions when at least 2 characters have been typed after '/'.
 func completeSlashCommand(input string) string {
-	// Require at least 2 chars after '/' before suggesting completions
 	if !strings.HasPrefix(input, "/") || len(input) < 3 {
 		return ""
 	}

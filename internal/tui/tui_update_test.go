@@ -406,7 +406,7 @@ func TestHandleKey_RunningAgentCtrlC(t *testing.T) {
 		ctrlCCount: 0,
 		cancel:     func() {},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "", CyclingIdx: -1},
+		inputModel: InputModel{Text: ""},
 	}
 
 	// First Ctrl+C while running cancels the agent
@@ -427,7 +427,7 @@ func TestHandleKey_RunningAgentDoubleCtrlC(t *testing.T) {
 		running:    false,
 		ctrlCCount: 1,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "", CyclingIdx: -1},
+		inputModel: InputModel{Text: ""},
 	}
 
 	// Second Ctrl+C - should quit
@@ -446,7 +446,7 @@ func TestHandleKey_TabWhileRunning(t *testing.T) {
 	m := &model{
 		running:    true,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "", CyclingIdx: -1},
+		inputModel: InputModel{Text: ""},
 	}
 
 	// Tab while running - should not trigger autocomplete
@@ -459,56 +459,105 @@ func TestHandleKey_TabWhileRunning(t *testing.T) {
 	_ = mm
 }
 
-func TestHandleKey_TabAutocomplete(t *testing.T) {
+func TestHandleKey_TabKeepsSingleSlashMatchInPopup(t *testing.T) {
 	m := &model{
 		running:    false,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "/he", CyclingIdx: -1},
+		inputModel: InputModel{Text: "/he"},
 	}
 
-	// Tab should complete to /help
 	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	mm := newM.(*model)
 
-	if mm.inputModel.Text != "/help" {
-		t.Errorf("expected /help, got %q", mm.inputModel.Text)
+	if mm.inputModel.Text != "/he" {
+		t.Errorf("expected input to stay in picker mode, got %q", mm.inputModel.Text)
+	}
+	if mm.slashCommandSelected != 0 {
+		t.Errorf("expected single match selection to stay at 0, got %d", mm.slashCommandSelected)
 	}
 }
 
-func TestHandleKey_TabMultipleMatches(t *testing.T) {
+func TestHandleKey_TabMultipleSlashMatchesUsesPopupOnly(t *testing.T) {
 	m := &model{
 		running:    false,
 		chatModel:  ChatModel{Messages: make([]message, 0)},
-		inputModel: InputModel{Text: "/c", CyclingIdx: -1},
+		inputModel: InputModel{Text: "/c"},
+	}
+	candidates := m.slashCommandCandidates("/c")
+	if len(candidates) < 2 {
+		t.Fatalf("expected multiple /c candidates, got %+v", candidates)
 	}
 
-	// Tab with multiple matches - should enter completion mode
 	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	mm := newM.(*model)
 
 	if mm.inputModel.Text != "/c" {
-		t.Errorf("text should remain /c with multiple matches, got %q", mm.inputModel.Text)
+		t.Errorf("text should remain /c, got %q", mm.inputModel.Text)
 	}
-	// Should enter completion mode on InputModel
-	if !mm.inputModel.CompletionMode {
-		t.Error("should enter completion mode for multiple matches")
+	// Tab should create search popup and advance selection to 1.
+	if mm.searchPopup == nil {
+		t.Fatal("expected search popup to be created on Tab")
+	}
+	if mm.searchPopup.selected != 1 {
+		t.Fatalf("Tab should advance highlighted slash command to 1, got %d", mm.searchPopup.selected)
+	}
+	if len(mm.chatModel.Messages) != 0 {
+		t.Fatalf("ambiguous slash completion should stay in popup, got chat messages: %+v", mm.chatModel.Messages)
 	}
 }
 
-func TestHandleKey_EscapeDismissesCompletion(t *testing.T) {
+func TestHandleKey_TabCyclesSlashCommandSelection(t *testing.T) {
+	m := &model{
+		running:    false,
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		inputModel: InputModel{Text: "/c"},
+	}
+	candidates := m.slashCommandCandidates("/c")
+	if len(candidates) < 2 {
+		t.Fatalf("expected multiple /c candidates, got %+v", candidates)
+	}
+
+	// Tab through all candidates.
+	// Tab cycles through items: 0 → 1 → 2 → ... → (len-1) → (stays at last)
+	for i := 0; i < len(candidates); i++ {
+		newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+		m = newM.(*model)
+		if m.searchPopup == nil {
+			t.Fatal("expected search popup")
+		}
+	}
+
+	// After Tab+len(candidates), selection should be at the last index.
+	lastIndex := len(candidates) - 1
+	if m.searchPopup.selected != lastIndex {
+		t.Errorf("after %d tabs, selection should be at last index %d, got %d", len(candidates), lastIndex, m.searchPopup.selected)
+	}
+
+	// Tab on the last item stays at the last index (no wrap).
+	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = newM.(*model)
+	if m.searchPopup.selected != lastIndex {
+		t.Errorf("Tab at last item should stay at %d, got %d", lastIndex, m.searchPopup.selected)
+	}
+
+	// Arrow down from last item should wrap to first.
+	newM, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = newM.(*model)
+	if m.searchPopup.selected != 0 {
+		t.Errorf("ArrowDown from last should wrap to 0, got %d", m.searchPopup.selected)
+	}
+}
+
+func TestHandleKey_EscapeNoOp(t *testing.T) {
 	m := &model{
 		running:    false,
 		chatModel:  ChatModel{Messages: []message{{role: "assistant", content: "Commands:"}}},
 		inputModel: InputModel{Text: "/c"},
 	}
-
-	// Escape should dismiss completion mode
 	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	mm := newM.(*model)
-
-	// Completion should be dismissed
-	if mm.inputModel.InCompletionMode() {
-		t.Error("completion mode should be dismissed after Escape")
+	if mm.inputModel.Text != "/c" {
+		t.Errorf("expected input unchanged after Esc, got %q", mm.inputModel.Text)
 	}
 }
 

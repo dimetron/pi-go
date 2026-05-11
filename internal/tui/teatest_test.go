@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dimetron/pi-go/internal/extension"
 )
@@ -400,6 +401,26 @@ func TestRenderInput_CursorInMiddle(t *testing.T) {
 	}
 }
 
+func TestRenderInput_ArrowLeftKeepsLineWidth(t *testing.T) {
+	m := newTestModel(t)
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
+	m.inputModel.SetWidth(10)
+	before := m.inputModel.View(m.running)
+
+	m.handleKey(makeKey(tea.KeyLeft))
+	m.inputModel.SetWidth(10)
+	after := m.inputModel.View(m.running)
+
+	if lipgloss.Width(after) != lipgloss.Width(before) {
+		t.Fatalf("expected stable rendered width after left arrow, before=%d after=%d view=%q", lipgloss.Width(before), lipgloss.Width(after), after)
+	}
+	plainAfter := ansi.Strip(after)
+	if !strings.Contains(plainAfter, "abc") {
+		t.Fatalf("expected rendered input to keep full text after left arrow, got %q", after)
+	}
+}
+
 // --- handleRTKCommand ---
 
 func TestHandleRTKCommand_WithMetrics(t *testing.T) {
@@ -560,29 +581,6 @@ func TestHandleKey_Esc_CancelRunning(t *testing.T) {
 	}
 }
 
-func TestHandleKey_Esc_DismissCompletion(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.CompletionMode = true
-	m.inputModel.CompletionResult = &CompleteResult{}
-	m.handleKey(makeKey(tea.KeyEsc))
-	if m.inputModel.CompletionMode {
-		t.Error("expected completion mode dismissed")
-	}
-}
-
-func TestHandleKey_Esc_DismissCycling(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.CyclingIdx = 3
-	m.inputModel.Text = "/help"
-	m.handleKey(makeKey(tea.KeyEsc))
-	if m.inputModel.CyclingIdx != -1 {
-		t.Error("expected cycling dismissed")
-	}
-	if m.inputModel.Text != "" {
-		t.Error("expected input cleared")
-	}
-}
-
 func TestHandleKey_IgnoresWhenRunning(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
@@ -602,6 +600,17 @@ func TestHandleKey_TypeCharacter(t *testing.T) {
 	}
 	if m.inputModel.CursorPos != 2 {
 		t.Errorf("expected cursorPos 2, got %d", m.inputModel.CursorPos)
+	}
+}
+
+func TestHandleKey_MultiCharURLInput(t *testing.T) {
+	m := newTestModel(t)
+	m.handleKey(tea.KeyPressMsg(tea.Key{Text: "http://ur", Code: 'h'}))
+	if m.inputModel.Text != "http://ur" {
+		t.Errorf("expected URL chunk inserted, got %q", m.inputModel.Text)
+	}
+	if m.inputModel.CursorPos != len("http://ur") {
+		t.Errorf("expected cursorPos %d, got %d", len("http://ur"), m.inputModel.CursorPos)
 	}
 }
 
@@ -667,24 +676,71 @@ func TestHandleKey_CtrlA_CtrlE(t *testing.T) {
 	}
 }
 
+func TestHandleKey_RawCtrlAERunes(t *testing.T) {
+	m := newTestModel(t)
+	m.inputModel.Text = "hello"
+	m.inputModel.CursorPos = 3
+	m.handleKey(makeKey(0x01))
+	if m.inputModel.CursorPos != 0 {
+		t.Errorf("expected cursorPos 0 after raw Ctrl+A, got %d", m.inputModel.CursorPos)
+	}
+	m.handleKey(makeKey(0x05))
+	if m.inputModel.CursorPos != 5 {
+		t.Errorf("expected cursorPos 5 after raw Ctrl+E, got %d", m.inputModel.CursorPos)
+	}
+}
+
+func TestHandleKey_CtrlBInTextMovesBackward(t *testing.T) {
+	m := newTestModel(t)
+	m.statusModel.GitBranch = "main"
+	m.inputModel.Text = "abc"
+	m.inputModel.CursorPos = 3
+	m.handleKey(makeKeyMod('b', tea.ModCtrl))
+	if m.branchPopup != nil {
+		t.Fatal("expected Ctrl+B in non-empty input to stay in text input")
+	}
+	if m.inputModel.CursorPos != 2 {
+		t.Errorf("expected cursorPos 2 after Ctrl+B, got %d", m.inputModel.CursorPos)
+	}
+}
+
 func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
+
+	// Arrow up on empty input opens the history search popup.
 	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "third" {
-		t.Errorf("expected 'third', got %q", m.inputModel.Text)
+	if m.searchPopup == nil {
+		t.Fatal("expected search popup to be shown on arrow up with empty input")
 	}
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "second" {
-		t.Errorf("expected 'second', got %q", m.inputModel.Text)
+	if m.searchPopup.mode != searchModeHistory {
+		t.Errorf("expected searchModeHistory, got %v", m.searchPopup.mode)
 	}
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.inputModel.Text != "third" {
-		t.Errorf("expected 'third', got %q", m.inputModel.Text)
-	}
-	m.handleKey(makeKey(tea.KeyDown))
+	// Newest is first in popup (index 0 = "third").
+	// Input should still be empty until Enter is pressed.
 	if m.inputModel.Text != "" {
-		t.Errorf("expected empty after scrolling past end, got %q", m.inputModel.Text)
+		t.Errorf("expected empty input before Enter, got %q", m.inputModel.Text)
+	}
+
+	// Navigate down to second item (index 1 = "second").
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.searchPopup.selected != 1 {
+		t.Errorf("expected selected=1, got %d", m.searchPopup.selected)
+	}
+
+	// Navigate down to third item (index 2 = "first").
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.searchPopup.selected != 2 {
+		t.Errorf("expected selected=2, got %d", m.searchPopup.selected)
+	}
+
+	// Enter accepts the selected entry (index 2 = "first").
+	m.handleKey(makeKey(tea.KeyEnter))
+	if m.inputModel.Text != "first" {
+		t.Errorf("expected 'first', got %q", m.inputModel.Text)
+	}
+	if m.searchPopup != nil {
+		t.Error("expected popup to be closed after Enter")
 	}
 }
 
@@ -704,21 +760,19 @@ func TestHandleKey_PgUpPgDown(t *testing.T) {
 	}
 }
 
-func TestHandleKey_Tab_CycleCommands(t *testing.T) {
+func TestHandleKey_TabOnSlashShowsCommands(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/"
 	m.inputModel.CursorPos = 1
-	m.inputModel.CyclingIdx = -1
-	// First Tab starts cycling
 	m.handleKey(makeKey(tea.KeyTab))
-	if m.inputModel.CyclingIdx < 0 {
-		t.Error("expected cycling to start")
+	if m.inputModel.Text != "/" {
+		t.Errorf("expected input preserved, got %q", m.inputModel.Text)
 	}
-	first := m.inputModel.Text
-	// Second Tab cycles to next
-	m.handleKey(makeKey(tea.KeyTab))
-	if m.inputModel.Text == first && len(m.inputModel.AllCommandNames()) > 1 {
-		t.Error("expected cycling to advance")
+	if len(m.chatModel.Messages) == 0 {
+		return
+	}
+	if strings.Contains(m.chatModel.Messages[len(m.chatModel.Messages)-1].content, "Commands:") {
+		t.Fatalf("slash Tab should use the popup, not append chat content: %q", m.chatModel.Messages[len(m.chatModel.Messages)-1].content)
 	}
 }
 
@@ -739,16 +793,15 @@ func TestHandleKey_Enter_SubmitSlashCommand(t *testing.T) {
 	}
 }
 
-func TestHandleKey_Enter_CyclingDismiss(t *testing.T) {
+func TestHandleKey_Enter_SubmitsAndClearsInput(t *testing.T) {
 	m := newTestModel(t)
-	m.inputModel.CyclingIdx = 2
-	m.inputModel.Text = "/model"
-	m.handleKey(makeKey(tea.KeyEnter))
-	if m.inputModel.CyclingIdx != -1 {
-		t.Error("expected cycling dismissed on Enter")
+	m.inputModel.Text = "hello"
+	_, cmd := m.handleKey(makeKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("expected submit command")
 	}
-	if m.inputModel.Text != "/model" {
-		t.Error("expected input preserved")
+	if m.inputModel.Text != "" {
+		t.Errorf("expected input cleared, got %q", m.inputModel.Text)
 	}
 }
 
@@ -847,7 +900,7 @@ func TestRenderStatusBar_ModeIndicatorChat(t *testing.T) {
 	m := newTestModel(t)
 	out := m.statusModel.Render(m.statusRenderInput())
 	// Default mode is "chat".
-	if !strings.Contains(out, "[chat]") {
+	if !strings.Contains(out, "[chat ") {
 		t.Error("expected [chat] mode indicator in status bar")
 	}
 }
@@ -856,7 +909,7 @@ func TestRenderStatusBar_ModeIndicatorPlan(t *testing.T) {
 	m := newTestModel(t)
 	m.mode = "plan"
 	out := m.statusModel.Render(m.statusRenderInput())
-	if !strings.Contains(out, "[plan]") {
+	if !strings.Contains(out, "[plan ") {
 		t.Error("expected [plan] mode indicator in status bar")
 	}
 }
@@ -948,17 +1001,6 @@ func TestRenderInput_EmptyInput(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = ""
 	m.inputModel.CursorPos = 0
-	out := m.inputModel.View(m.running)
-	if out == "" {
-		t.Error("expected non-empty rendered input")
-	}
-}
-
-func TestRenderInput_WithCompletion(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.Text = "/hel"
-	m.inputModel.CursorPos = 4
-	m.inputModel.Completion = "/help"
 	out := m.inputModel.View(m.running)
 	if out == "" {
 		t.Error("expected non-empty rendered input")
@@ -1096,52 +1138,6 @@ func TestMaxScroll(t *testing.T) {
 	}
 }
 
-// --- renderInput: completion menu ---
-
-func TestRenderInput_CompletionMenu(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.Text = "/he"
-	m.inputModel.CursorPos = 3
-	m.inputModel.CompletionMode = true
-	m.inputModel.SelectedIndex = 0
-	m.inputModel.CompletionResult = &CompleteResult{
-		Candidates: []CompletionCandidate{
-			{Text: "/help", Description: "Show help"},
-			{Text: "/history", Description: "Command history"},
-		},
-		Selected: 0,
-	}
-	out := m.inputModel.View(m.running)
-	if !strings.Contains(out, "/help") {
-		t.Error("expected /help in completion menu")
-	}
-	if !strings.Contains(out, "/history") {
-		t.Error("expected /history in completion menu")
-	}
-}
-
-func TestRenderInput_CyclingMenu(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.Text = "/help"
-	m.inputModel.CursorPos = 5
-	m.inputModel.CyclingIdx = 0
-	out := m.inputModel.View(m.running)
-	if out == "" {
-		t.Error("expected non-empty cycling menu")
-	}
-}
-
-func TestRenderInput_GhostCompletion(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.Text = "/hel"
-	m.inputModel.CursorPos = 4
-	m.inputModel.Completion = "/help"
-	out := m.inputModel.View(m.running)
-	if !strings.Contains(out, "tab") {
-		t.Error("expected [tab] hint in ghost completion")
-	}
-}
-
 // --- more handleSlashCommand branches ---
 
 func TestSlashCommand_Session(t *testing.T) {
@@ -1231,16 +1227,23 @@ func TestHistoryEntry_WithMentions(t *testing.T) {
 		{Text: "plain prompt"},
 	}
 
-	// Navigate up to most recent entry.
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "plain prompt" {
-		t.Errorf("expected 'plain prompt', got %q", m.inputModel.Text)
+	// Arrow up on empty input opens the history search popup.
+	// History entries are reversed for display (newest first).
+	// So popup has: [0]="plain prompt" (newest), [1]="fix..." (older)
+	newM, _ := m.handleKey(makeKey(tea.KeyUp))
+	m = newM.(*model)
+	if m.searchPopup == nil {
+		t.Fatal("expected search popup to open")
+	}
+	if len(m.searchPopup.filtered) != 2 {
+		t.Errorf("expected 2 filtered entries, got %d", len(m.searchPopup.filtered))
 	}
 
-	// Navigate up to entry with mentions.
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "fix @main.go and @utils.go" {
-		t.Errorf("expected mention text, got %q", m.inputModel.Text)
+	// Without navigating, Enter should select the first item (newest = "plain prompt").
+	newM, _ = m.handleKey(makeKey(tea.KeyEnter))
+	m = newM.(*model)
+	if m.inputModel.Text != "plain prompt" {
+		t.Errorf("expected 'plain prompt' (newest), got %q", m.inputModel.Text)
 	}
 }
 
@@ -1313,30 +1316,13 @@ func TestHistoryDisplay_WithMentions(t *testing.T) {
 
 // --- handleKey: ShiftTab ---
 
-func TestHandleKey_ShiftTab_CycleBackwards(t *testing.T) {
+func TestHandleKey_ShiftTab_NoOp(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/"
 	m.inputModel.CursorPos = 1
-	m.inputModel.CyclingIdx = 1
-	m.handleKey(makeKey(tea.KeyTab))
-	second := m.inputModel.Text
 	m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	if m.inputModel.Text == second && len(m.inputModel.AllCommandNames()) > 1 {
-		t.Error("expected shift-tab to cycle backwards")
-	}
-}
-
-func TestHandleKey_ShiftTab_CompletionCycle(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.CompletionMode = true
-	m.inputModel.SelectedIndex = 1
-	m.inputModel.CompletionResult = &CompleteResult{
-		Candidates: []CompletionCandidate{{Text: "/a"}, {Text: "/b"}, {Text: "/c"}},
-		Selected:   1,
-	}
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	if m.inputModel.SelectedIndex == 1 {
-		t.Error("expected shift-tab to change selection")
+	if m.inputModel.Text != "/" {
+		t.Errorf("expected input preserved, got %q", m.inputModel.Text)
 	}
 }
 
@@ -1455,48 +1441,16 @@ func TestRenderStatusBar_WithOrchestrator(t *testing.T) {
 
 // --- handleKey: Tab with single completion match ---
 
-func TestHandleKey_Tab_SingleMatch(t *testing.T) {
+func TestHandleKey_Tab_DoesNotAutocomplete(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.Text = "/hel"
 	m.inputModel.CursorPos = 4
 	m.handleKey(makeKey(tea.KeyTab))
-	if m.inputModel.Text != "/help" {
-		t.Errorf("expected single match '/help', got %q", m.inputModel.Text)
+	if m.inputModel.Text != "/hel" {
+		t.Errorf("expected input to stay in picker mode, got %q", m.inputModel.Text)
 	}
-}
-
-// --- handleKey: Tab with multiple completion matches ---
-
-func TestHandleKey_Tab_MultipleMatches(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.Text = "/h"
-	m.inputModel.CursorPos = 2
-	m.handleKey(makeKey(tea.KeyTab))
-	if !m.inputModel.CompletionMode {
-		// May or may not enter completion mode depending on matches
-		t.Logf("completionMode=%v, input=%q", m.inputModel.CompletionMode, m.inputModel.Text)
-	}
-}
-
-// --- handleKey: Enter with completion mode ---
-
-func TestHandleKey_Enter_ApplyCompletion(t *testing.T) {
-	m := newTestModel(t)
-	m.inputModel.CompletionMode = true
-	m.inputModel.SelectedIndex = 1
-	m.inputModel.CompletionResult = &CompleteResult{
-		Candidates: []CompletionCandidate{
-			{Text: "/help"},
-			{Text: "/history"},
-		},
-		Selected: 1,
-	}
-	m.handleKey(makeKey(tea.KeyEnter))
-	if m.inputModel.Text != "/history" {
-		t.Errorf("expected '/history' applied, got %q", m.inputModel.Text)
-	}
-	if m.inputModel.CompletionMode {
-		t.Error("expected completion mode dismissed")
+	if m.slashCommandSelected != 0 {
+		t.Errorf("expected single match selection to stay at 0, got %d", m.slashCommandSelected)
 	}
 }
 

@@ -611,12 +611,12 @@ func runNonInteractive(
 	allToolsets := append(mcpToolsets, a2aToolsets...)
 
 	skillDirs := extension.DefaultSkillDirs()
-	skills, _ := extension.LoadSkills(skillDirs...)
-	if len(skills) > 0 {
-		instruction += "\n\n# Available Skills\n\n"
-		for _, s := range skills {
-			instruction += fmt.Sprintf("- /%s: %s\n", s.Name, s.Description)
-		}
+	skills, skillErr := extension.LoadSkills(skillDirs...)
+	if mode == "print" {
+		fmt.Fprint(os.Stderr, formatPrintSkillLoad(len(skills), skillErr))
+	}
+	if skillErr != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: skills disabled: %v\n", skillErr)
 	}
 
 	if memStore != nil {
@@ -890,6 +890,13 @@ func formatPrintToolDone(name string) string {
 	return fmt.Sprintf("%s✅ ✓ tool: %s done%s\n", printToolDoneColor, name, printToolReset)
 }
 
+func formatPrintSkillLoad(count int, err error) string {
+	if err != nil {
+		return fmt.Sprintf("%s⚠ skills: failed%s\n", printToolDimColor, printToolReset)
+	}
+	return fmt.Sprintf("%s✅ ✓ skills: loaded %d%s\n", printToolDoneColor, count, printToolReset)
+}
+
 // runPrint runs the agent and prints text responses to stdout.
 // Tool calls are shown as status lines on stderr.
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
@@ -1125,18 +1132,32 @@ func detectGitRoot(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// loadDotEnv loads environment variables from ~/.pi-go/.env.
-// This file is written by the /login command and takes precedence over
-// the inherited shell environment — a user who ran `/login codex` expects
-// the saved credential to be used even if their shell still exports a
-// different OPENAI_API_KEY from earlier. Lines in the file override the
-// process env; missing keys fall through to whatever the shell set.
+// LoadDotEnv loads environment variables from ~/.pi-go/.env and the nearest
+// project .pi-go/.env. Project values override global values and both override
+// the inherited shell environment.
+func LoadDotEnv() {
+	loadDotEnv()
+}
+
+// loadDotEnv loads environment variables from ~/.pi-go/.env and project
+// .pi-go/.env. These files are written by login/config flows and take
+// precedence over the inherited shell environment — a user who ran `/login`
+// expects the saved credential to be used even if their shell still exports a
+// different API key from earlier. Lines in the files override the process env;
+// missing keys fall through to whatever the shell set.
 func loadDotEnv() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
+	if home, err := os.UserHomeDir(); err == nil {
+		loadDotEnvFile(filepath.Join(home, ".pi-go", ".env"))
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".pi-go", ".env"))
+	if cwd, err := os.Getwd(); err == nil {
+		if projectEnv := findNearestDotEnv(cwd); projectEnv != "" {
+			loadDotEnvFile(projectEnv)
+		}
+	}
+}
+
+func loadDotEnvFile(path string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
@@ -1155,6 +1176,24 @@ func loadDotEnv() {
 			continue
 		}
 		_ = os.Setenv(key, val)
+	}
+}
+
+func findNearestDotEnv(start string) string {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return ""
+	}
+	for {
+		candidate := filepath.Join(dir, ".pi-go", ".env")
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
 	}
 }
 
