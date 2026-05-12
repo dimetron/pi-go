@@ -759,6 +759,28 @@ func TestRenderSlashCommandPopup_AllCommands(t *testing.T) {
 	}
 }
 
+func TestSlashCommandPopup_UsesHistoryWindowHeight(t *testing.T) {
+	skills := make([]extension.Skill, 30)
+	for i := range skills {
+		skills[i] = extension.Skill{Name: fmt.Sprintf("skill-%02d", i)}
+	}
+	m := &model{
+		cfg:        Config{Skills: skills},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      80,
+		height:     40,
+	}
+	m.inputModel.SetText("/")
+	m.newSearchPopup(searchModeCommands)
+
+	if m.searchPopup == nil {
+		t.Fatal("expected search popup")
+	}
+	if m.searchPopup.height != 25 {
+		t.Fatalf("slash command popup height = %d, want history popup max height 25", m.searchPopup.height)
+	}
+}
+
 func TestSlashCommandCandidates_AllCommandsAlphabetical(t *testing.T) {
 	candidates := allSlashCommandCandidates([]extension.Skill{
 		{Name: "zeta", Description: "Zeta skill"},
@@ -944,6 +966,24 @@ func TestSlashCommandPopup_EnterCopiesSelectedCommandToInput(t *testing.T) {
 	}
 }
 
+func TestSlashCommandPopup_OpensWhenSlashTyped(t *testing.T) {
+	m := &model{
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		width:      80,
+		height:     24,
+	}
+
+	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+
+	if m.searchPopup == nil {
+		t.Fatal("expected slash command popup to open after typing /")
+	}
+	if m.searchPopup.mode != searchModeCommands {
+		t.Fatalf("expected commands popup, got %v", m.searchPopup.mode)
+	}
+}
+
 func TestView_RendersSlashPopupNearInput(t *testing.T) {
 	m := newTestModelFull(t)
 	m.inputModel.SetText("/co")
@@ -964,6 +1004,19 @@ func TestView_RendersSlashPopupNearInput(t *testing.T) {
 	}
 	if popupIndex > inputIndex {
 		t.Fatalf("expected slash popup above input prompt, got %q", out)
+	}
+}
+
+func TestSearchPopup_DoesNotReduceMessageViewportHeight(t *testing.T) {
+	m := newTestModelFull(t)
+	before := m.messageViewportHeight()
+
+	m.inputModel.SetText("/co")
+	m.newSearchPopup(searchModeCommands)
+	after := m.messageViewportHeight()
+
+	if after != before {
+		t.Fatalf("search popup should overlay chat without changing message viewport height: before=%d after=%d", before, after)
 	}
 }
 
