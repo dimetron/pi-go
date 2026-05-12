@@ -220,18 +220,7 @@ func (m *model) newSearchPopup(mode searchMode) {
 				items = append(items, SearchItem{Text: c.Text, Description: c.Description})
 			}
 		}
-		if showAll {
-			// Show all items when "/" is typed alone.
-			popupHeight = len(items)
-		} else {
-			popupHeight = 35
-			if popupHeight > len(items) {
-				popupHeight = len(items)
-			}
-			if popupHeight < 3 {
-				popupHeight = 3
-			}
-		}
+		popupHeight = searchPopupListHeight(len(items))
 
 	case searchModeHistory:
 		entries := m.inputModel.History
@@ -243,13 +232,7 @@ func (m *model) newSearchPopup(mode searchMode) {
 		for i, e := range entries {
 			items[len(entries)-1-i] = SearchItem{Text: e.Text}
 		}
-		popupHeight = len(items)
-		if popupHeight > 10 {
-			popupHeight = 10
-		}
-		if popupHeight < 3 {
-			popupHeight = 3
-		}
+		popupHeight = searchPopupListHeight(len(items))
 	}
 
 	m.searchPopup = &searchPopupState{
@@ -261,6 +244,20 @@ func (m *model) newSearchPopup(mode searchMode) {
 		height:    popupHeight,
 		scrollOff: 0,
 	}
+}
+
+func searchPopupListHeight(itemCount int) int {
+	if itemCount <= 0 {
+		return 0
+	}
+	height := itemCount
+	if height > 25 {
+		height = 25
+	}
+	if height < 3 {
+		height = 3
+	}
+	return height
 }
 
 // allSearchCandidates returns all slash command candidates for the search popup.
@@ -716,6 +713,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.searchPopup = nil
 			}
 		}
+		if m.searchPopup == nil && m.shouldShowSlashCommandPopup() {
+			m.newSearchPopup(searchModeCommands)
+		}
 	}
 	return m, cmd
 }
@@ -842,7 +842,6 @@ func (m *model) View() tea.View {
 	messagesView := m.chatModel.RenderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
-	searchPopup := m.renderSearchPopup(max(0, mainWidth-2))
 	var inputCursor *tea.Cursor
 	if !m.running && !m.loading {
 		inputCursor = m.inputModel.Cursor()
@@ -872,6 +871,7 @@ func (m *model) View() tea.View {
 		visibleMessages += "\n"
 		visibleLineCount++
 	}
+	visibleMessages = m.overlaySearchPopup(visibleMessages, mainWidth)
 
 	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
 	// lipgloss.Width() counts raw bytes including invisible ANSI codes, causing wrapping issues.
@@ -909,10 +909,6 @@ func (m *model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(hr)
 	b.WriteString("\n")
-	if searchPopup != "" {
-		b.WriteString(searchPopup)
-		b.WriteString("\n")
-	}
 	inputCursorY := strings.Count(b.String(), "\n")
 	b.WriteString(inputArea)
 	b.WriteString("\n")
@@ -1136,10 +1132,6 @@ func (m *model) messageViewportHeight() int {
 	}
 	if m.branchPopup != nil {
 		availableHeight -= m.branchPopup.height + 6
-	}
-	searchPopup := m.renderSearchPopup(max(0, mainWidth-2))
-	if searchPopup != "" {
-		availableHeight -= strings.Count(searchPopup, "\n") + 2
 	}
 	if availableHeight < 1 {
 		return 1
@@ -1461,6 +1453,69 @@ func (m *model) shouldShowSlashCommandPopup() bool {
 	}
 	text := m.inputModel.Text
 	return strings.HasPrefix(text, "/") && !strings.ContainsAny(text, " \t\n\r")
+}
+
+func (m *model) overlaySearchPopup(messages string, mainWidth int) string {
+	popup := m.renderSearchPopup(max(0, mainWidth-4))
+	if popup == "" {
+		return messages
+	}
+
+	lines := strings.Split(messages, "\n")
+	viewportHeight := len(lines)
+
+	popupLines := strings.Split(popup, "\n")
+	if viewportHeight > 0 && len(popupLines) > viewportHeight {
+		popupLines = popupLines[:viewportHeight]
+	}
+	if len(popupLines) == 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	popupWidth := maxLineWidth(popupLines)
+	left := 0
+	if mainWidth > popupWidth {
+		left = (mainWidth - popupWidth) / 2
+	}
+	start := 0
+	if viewportHeight > len(popupLines) {
+		start = viewportHeight - len(popupLines) - 1
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	for i, line := range popupLines {
+		idx := start + i
+		if idx >= len(lines) {
+			break
+		}
+		lines[idx] = overlayPopupLine(line, left, mainWidth)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func maxLineWidth(lines []string) int {
+	width := 0
+	for _, line := range lines {
+		width = max(width, lipgloss.Width(line))
+	}
+	return width
+}
+
+func overlayPopupLine(line string, left int, totalWidth int) string {
+	if totalWidth <= 0 {
+		return line
+	}
+	if left < 0 {
+		left = 0
+	}
+	prefix := strings.Repeat(" ", left)
+	rendered := prefix + line
+	if width := lipgloss.Width(rendered); width < totalWidth {
+		rendered += strings.Repeat(" ", totalWidth-width)
+	}
+	return rendered
 }
 
 func (m *model) renderSearchPopup(width int) string {
