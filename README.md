@@ -242,6 +242,42 @@ Pi looks for configuration in `~/.pi-go/config.json` (global) and `.pi-go/config
 - **MCP servers** — External tool servers via Model Context Protocol
 - **Themes** — Terminal color schemes via `theme` config field
 
+### Custom OpenAI-compatible provider
+
+For OpenAI-compatible APIs with model names that Pi cannot infer from a prefix, explicitly set the role provider to
+`openai` and point `OPENAI_BASE_URL` at the custom endpoint:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.example.com/v1"
+```
+
+```json
+{
+  "roles": {
+    "default": {
+      "model": "Qwen3.5-397B-A17B-FP8",
+      "provider": "openai"
+    }
+  }
+}
+```
+
+Then run Pi normally:
+
+```bash
+pi
+```
+
+You can also pass the endpoint per invocation:
+
+```bash
+OPENAI_API_KEY="your-api-key" pi --model Qwen3.5-397B-A17B-FP8 --url https://api.example.com/v1
+```
+
+When `--url` or `OPENAI_BASE_URL` is set, unknown model names are treated as custom OpenAI-compatible models. Setting
+`provider: "openai"` in config avoids relying on model-prefix detection.
+
 ### MCP Server Integration
 
 Pi supports the [Model Context Protocol](https://modelcontextprotocol.io/) for extending the agent with external tools.
