@@ -221,7 +221,6 @@ var contextWindowSizes = map[string]int64{
 	"mistral-small-latest":  256_000,
 	"codestral":             256_000,
 	// Custom/local models
-	"qwen": 4_096,
 }
 
 // ContextWindowSize returns the context window size for a model (in tokens).
