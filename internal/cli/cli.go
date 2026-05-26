@@ -231,7 +231,13 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
+	ctxWindowSize := provider.ContextWindowSize(info.Model)
+	if info.Ollama {
+		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
+	tokenTracker.SetContextWindowSize(ctxWindowSize)
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	cwd, err := os.Getwd()
