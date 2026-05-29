@@ -621,7 +621,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
 		if m.running {
 			m.cancelAgent()
-			return m, nil
+			m.ctrlCCount++
+			m.chatModel.AppendWarning("\nCtrl+C again to quit (or wait 2s)...")
+			return m, resetCtrlCCount(m)
 		}
 		m.ctrlCCount++
 		if m.ctrlCCount >= 2 {

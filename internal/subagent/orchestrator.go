@@ -612,6 +612,7 @@ func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 	o.pruneRecentTasks()
 
 	// First: graceful cancellation of running agents
+	var hadRunning bool
 	o.mu.Lock()
 	o.closed = true
 	for _, state := range o.agents {
@@ -619,12 +620,15 @@ func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 			state.Process.Cancel()
 			state.Status = "canceled"
 			state.FinishedAt = time.Now()
+			hadRunning = true
 		}
 	}
 	o.mu.Unlock()
 
-	// Wait for graceful timeout or immediate cleanup
-	<-ctx.Done()
+	// Only wait for the graceful timeout if we actually cancelled something.
+	if hadRunning {
+		<-ctx.Done()
+	}
 
 	// Force cleanup of worktrees
 	if o.worktree != nil {
