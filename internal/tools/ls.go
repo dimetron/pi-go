@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -33,7 +34,7 @@ type LsEntry struct {
 }
 
 func newLsTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("ls", "List the contents of a directory. Returns file names, types (file/directory), and sizes.", func(_ tool.Context, input LsInput) (LsOutput, error) {
+	return newTool("ls", "List the contents of a directory. Returns file names, types (file/directory), and sizes.", func(_ agent.ToolContext, input LsInput) (LsOutput, error) {
 		return lsHandler(sb, input)
 	})
 }

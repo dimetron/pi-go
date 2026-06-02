@@ -7,10 +7,10 @@
 - Base URL can be overridden via `--url` flag or `ANTHROPIC_BASE_URL` env var
 - API key is optional when baseURL is set (Ollama compatibility)
 
-## Model: minimax-m2.5:cloud
+## Model: minimax-m3:cloud
 
 - The `:cloud` suffix causes pi-go to route through Ollama
-- Model name `minimax-m2.5` must be available in the local Ollama instance
+- Model name `minimax-m3` must be available in the local Ollama instance
 - Ollama exposes an Anthropic-compatible API endpoint
 
 ## Known Issues

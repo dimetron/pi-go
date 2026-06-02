@@ -3,9 +3,9 @@ set -euo pipefail
 
 # E2E test: run pi with Ollama to explore codebase and generate PI.md
 # Usage: ./scripts/test-ollama-e2e.sh [model]
-# Default model: minimax-m2.5:cloud
+# Default model: minimax-m3:cloud
 
-MODEL="${1:-minimax-m2.5:cloud}"
+MODEL="${1:-minimax-m3:cloud}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PI_BIN="${PROJECT_DIR}/pi"
 PI_MD="${PROJECT_DIR}/PI.md"

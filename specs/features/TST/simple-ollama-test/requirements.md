@@ -3,7 +3,8 @@
 ## Questions & Answers
 
 **Q1: What is the test scope?**
-A1: End-to-end test that runs `pi --model minimax-m2.5:cloud` against a real Ollama backend. The agent should explore the pi-go codebase and generate a `PI.md` file with a project overview.
+A1: End-to-end test that runs `pi --model minimax-m3:cloud` against a real Ollama backend. The agent should explore the
+pi-go codebase and generate a `PI.md` file with a project overview.
 
 **Q2: What are the success criteria?**
 A2:
@@ -15,7 +16,7 @@ A2:
 - All Go dependencies are updated to latest versions before running
 
 **Q3: What model is used?**
-A3: `minimax-m2.5:cloud` — routed through Ollama via the `:cloud` suffix pattern in pi-go's provider system.
+A3: `minimax-m3:cloud` — routed through Ollama via the `:cloud` suffix pattern in pi-go's provider system.
 
 **Q4: How should logs be validated?**
 A4: Parse the session JSONL log file and assert:
