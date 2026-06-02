@@ -115,7 +115,7 @@ pi --model claude:sonnet
 pi --model openai:gpt-4o
 pi --model gemini:gemini-2.5-pro
 pi --model ollama/qwen3.5:latest
-pi --model minimax-m2.5:cloud # automatically detect ollama if :cloud
+pi --model minimax-m3:cloud # automatically detect ollama if :cloud
 
 # Use model roles
 pi --smol          # fast, cheap model
@@ -346,7 +346,7 @@ Add pi to Zed's `agent_servers` in your settings:
     "pi": {
       "type": "custom",
       "command": "pi",
-      "args": ["acp-server", "--model", "minimax-m2.7:cloud"],
+      "args": ["acp-server", "--model", "minimax-m3:cloud"],
       "env": {}
     }
   }

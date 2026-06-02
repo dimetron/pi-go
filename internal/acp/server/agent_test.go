@@ -565,7 +565,7 @@ func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 
 func TestNewPromptHandlerModelOverrideUsesRealConfig(t *testing.T) {
 	h := NewPromptHandler(RuntimeConfig{
-		Model: "minimax-m2.7:cloud",
+		Model: "minimax-m3:cloud",
 		LoadConfig: func() (config.Config, error) {
 			return config.Config{Roles: map[string]config.RoleConfig{
 				"default": {Model: "gpt-5.4"},

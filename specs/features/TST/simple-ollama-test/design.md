@@ -2,12 +2,14 @@
 
 ## Overview
 
-An end-to-end test that validates the pi CLI tool works correctly with a real Ollama backend. The test runs `pi --model minimax-m2.5:cloud`, instructs the agent to explore the codebase and generate a `PI.md` project overview, then verifies success via log analysis and output validation.
+An end-to-end test that validates the pi CLI tool works correctly with a real Ollama backend. The test runs
+`pi --model minimax-m3:cloud`, instructs the agent to explore the codebase and generate a `PI.md` project overview, then
+verifies success via log analysis and output validation.
 
 ## Detailed Requirements
 
 1. **Real Ollama integration**: Test connects to a live Ollama instance (not mocked)
-2. **Model**: `minimax-m2.5:cloud` — routes through Ollama via `:cloud` suffix
+2. **Model**: `minimax-m3:cloud` — routes through Ollama via `:cloud` suffix
 3. **Task**: Agent explores the pi-go codebase and generates `PI.md` with project overview
 4. **Log validation**: Session JSONL logs must contain zero tool errors
 5. **Command completeness**: Every tool_call must have a corresponding tool_result (no skipped commands)
@@ -19,7 +21,7 @@ An end-to-end test that validates the pi CLI tool works correctly with a real Ol
 ```mermaid
 flowchart LR
     Test[E2E Test Script] --> Pi[pi CLI binary]
-    Pi -->|--model minimax-m2.5:cloud| Ollama[Ollama Server]
+    Pi -->|--model minimax-m3:cloud| Ollama[Ollama Server]
     Pi -->|tools| Codebase[pi-go codebase]
     Pi -->|writes| PIMD[PI.md]
     Pi -->|writes| Logs[~/.pi-go/log/session.log]
@@ -78,8 +80,8 @@ Checks the generated PI.md:
 
 ## Acceptance Criteria
 
-**Given** Ollama is running with `minimax-m2.5:cloud` available
-**When** `pi --model minimax-m2.5:cloud --mode print` is run with a prompt to explore and generate PI.md
+**Given** Ollama is running with `minimax-m3:cloud` available
+**When** `pi --model minimax-m3:cloud --mode print` is run with a prompt to explore and generate PI.md
 **Then** PI.md is created with meaningful project overview content (> 500 chars)
 
 **Given** the test completes successfully

@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 // WorktreeManager manages git worktrees for isolated subagent execution.
@@ -20,8 +22,9 @@ type WorktreeManager struct {
 }
 
 type worktreeInfo struct {
-	Path   string // Filesystem path to the worktree
-	Branch string // Branch name created for the worktree
+	Path     string // Filesystem path to the worktree
+	Branch   string // Branch name created for the worktree
+	StashMsg string // Stash message created on Create, "" if nothing stashed
 }
 
 // NewWorktreeManager creates a new WorktreeManager rooted at the given git repo.
@@ -70,7 +73,46 @@ func worktreeNames(agentID, requested string) (pathID, branch string) {
 	return sid, "pi-agent-" + sid
 }
 
+// stashMessage returns a unique stash message so we can find and pop
+// only the entry this Create call created.
+func stashMessage(agentID string) string {
+	return fmt.Sprintf("pi-go-worktree-%s-%d", agentID, time.Now().UnixNano())
+}
+
+// stashIndexAfter returns the number of stash entries present *before*
+// we ran the stash push, so we can tell whether push actually created one.
+func (m *WorktreeManager) stashIndexAfter() (int, error) {
+	out, err := m.git("stash", "list")
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return 0, nil
+	}
+	return len(strings.Split(out, "\n")), nil
+}
+
+// popStashByMessage pops the most recent stash entry whose message matches.
+// Falls back to a plain `stash pop` if the by-message approach fails.
+func (m *WorktreeManager) popStashByMessage(msg string) error {
+	// `git stash pop` is destructive and may collide with new edits.
+	// Try `git stash apply` first so the entry survives if anything goes
+	// wrong; then drop it explicitly.
+	if out, err := m.git("stash", "apply", "--quiet", "stash@{0}"); err != nil {
+		// If apply failed, the entry is still in the stash list — return the
+		// error but don't drop, so the user can recover manually.
+		return fmt.Errorf("git stash apply: %w: %s", err, out)
+	}
+	// Best-effort drop. If drop fails (rare), the entry stays in the list
+	// and the user can clean up with `git stash drop`.
+	_, _ = m.git("stash", "drop", "--quiet", "stash@{0}")
+	return nil
+}
+
 // Create creates a new git worktree for the given agent ID.
+// If the current branch has uncommitted changes, they are stashed before
+// creating the worktree and tracked in `pendingStash` so that MergeBack
+// or Cleanup can pop them later (with a unique message).
 // Returns the filesystem path to the worktree.
 func (m *WorktreeManager) Create(agentID string, requestedName ...string) (string, error) {
 	m.mu.Lock()
@@ -89,20 +131,94 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 		name = requestedName[0]
 	}
 	pathID, branch := worktreeNames(agentID, name)
-	wtPath := filepath.Join(m.repoRoot, ".pi-go", "worktrees", pathID)
+	wtPath := filepath.Join(m.repoRoot, ".pi-go", "tasks", pathID)
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 		return "", fmt.Errorf("creating worktree parent dir: %w", err)
 	}
 
-	// Create worktree with a new branch from HEAD.
-	out, err := m.git("worktree", "add", "-b", branch, wtPath, "HEAD")
+	// Verify whether the branch and/or worktree already exist before issuing
+	// `git worktree add -b`. Re-running /run on the same spec produces a
+	// deterministic branch name, so a prior run that left the branch behind
+	// (e.g. after a failed merge) would otherwise cause `worktree add -b`
+	// to fail with "a branch named X already exists".
+	branchExists := m.branchExists(branch)
+	attachedAt := m.worktreeForBranch(branch)
+
+	// If the branch is already attached to a worktree, reuse it when the
+	// path matches what we would have chosen; otherwise refuse rather than
+	// silently overwriting a live worktree.
+	if branchExists && attachedAt != "" {
+		if !samePath(attachedAt, wtPath) {
+			return "", fmt.Errorf("branch %q is already checked out at %s; cannot reuse for agent %s", branch, attachedAt, agentID)
+		}
+		m.active[agentID] = worktreeInfo{Path: wtPath, Branch: branch}
+		return wtPath, nil
+	}
+
+	// If a stale worktree directory exists without a linked branch, prune
+	// the metadata and remove the leftover directory so `worktree add`
+	// can recreate cleanly.
+	if _, statErr := os.Stat(wtPath); statErr == nil && attachedAt == "" {
+		_, _ = m.git("worktree", "prune")
+		_ = os.RemoveAll(wtPath)
+	}
+
+	// Stash any uncommitted changes before creating the worktree.
+	// git worktree add HEAD fails if the working tree is dirty.
+	// Use -u to also stash untracked files.
+	//
+	// Exit code semantics (stable across git versions and locales):
+	//   0   — changes stashed
+	//   1   — nothing to stash (clean tree)
+	//   128 — fatal (e.g. not a git repo, corrupt repo)
+	//
+	// We detect "did stash happen" by counting stash entries before/after
+	// rather than by string-matching the (locale-dependent) output.
+	stashMsg := stashMessage(agentID)
+	beforeCount, _ := m.stashIndexAfter()
+	stashOut, stashErr := m.git("stash", "push", "-u", "-m", stashMsg)
+	if stashErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(stashErr, &exitErr) && exitErr.ExitCode() == 1 {
+			// Nothing to stash — proceed without tracking a stash entry.
+			stashErr = nil
+		} else {
+			return "", fmt.Errorf("git stash before worktree: %w (output: %s)", stashErr, stashOut)
+		}
+	}
+	afterCount, _ := m.stashIndexAfter()
+	stashedSomething := stashErr == nil && afterCount > beforeCount
+
+	// If the branch already exists but is not checked out anywhere, attach
+	// it without `-b`. Otherwise create a fresh branch from HEAD.
+	var out string
+	var err error
+	if branchExists {
+		out, err = m.git("worktree", "add", wtPath, branch)
+	} else {
+		out, err = m.git("worktree", "add", "-b", branch, wtPath, "HEAD")
+	}
 	if err != nil {
+		// Restore stashed changes on failure. We do this regardless of
+		// whether `beforeCount` showed entries — if anything landed in
+		// the stash list, drop it so the user isn't left with orphaned
+		// entries after a failed Create.
+		if stashedSomething {
+			_, _ = m.git("stash", "drop", "--quiet", "stash@{0}")
+		}
 		return "", fmt.Errorf("git worktree add: %w: %s", err, out)
 	}
 
-	m.active[agentID] = worktreeInfo{Path: wtPath, Branch: branch}
+	// Stash survives on success — MergeBack/Cleanup will pop it via
+	// pendingStash. Storing the message here makes the pop deterministic
+	// even if other stash entries appear between Create and pop.
+	info := worktreeInfo{Path: wtPath, Branch: branch}
+	if stashedSomething {
+		info.StashMsg = stashMsg
+	}
+	m.active[agentID] = info
 	return wtPath, nil
 }
 
@@ -135,6 +251,9 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 
 // cleanupWorktree performs the git operations to remove a worktree and its branch.
 // If cleanup fails, the entry is re-added to the active map so callers can retry.
+// If a stash was created during Create and not yet popped (e.g. MergeBack was
+// never called), the stash entry is best-effort dropped here so it doesn't
+// accumulate in the stash list.
 func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) error {
 	var errs []string
 
@@ -161,6 +280,15 @@ func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) err
 		}
 	}
 
+	// Best-effort: drop any stash entry this worktree created. We do this
+	// after the worktree/branch are removed because applying a stash to a
+	// dirty working tree would just re-introduce the conflict.
+	if info.StashMsg != "" {
+		if entry, found := m.findStashByMessage(info.StashMsg); found {
+			_, _ = m.git("stash", "drop", "--quiet", entry)
+		}
+	}
+
 	if len(errs) > 0 {
 		// Re-add entry so a retry pass can attempt again.
 		m.mu.Lock()
@@ -171,8 +299,15 @@ func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) err
 	return nil
 }
 
-// MergeBack merges the worktree branch back into the current branch of the main worktree.
-// Returns the merge output.
+// MergeBack merges the worktree branch back into the current branch of the
+// main worktree. Returns the merge output.
+//
+// On a successful merge, any stash created during Create is applied back
+// to the main repo and dropped from the stash list.
+//
+// On a merge conflict, the merge is aborted (so the main repo is left in a
+// clean state) and the worktree is preserved so the user can inspect and
+// resolve conflicts manually.
 func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 	m.mu.Lock()
 	info, exists := m.active[agentID]
@@ -188,28 +323,92 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 
 	out, err := m.git("merge", "--no-ff", info.Branch, "-m", fmt.Sprintf("Merge subagent %s", shortID(agentID)))
 	if err != nil {
+		// Check for merge conflicts — abort the merge so the main repo is
+		// left clean, then preserve the worktree for manual resolution.
+		if strings.Contains(out, "merge failed") || strings.Contains(out, "CONFLICT") {
+			if abortOut, abortErr := m.git("merge", "--abort"); abortErr != nil {
+				return out, fmt.Errorf("merge conflict and abort failed: %w (merge output: %s, abort output: %s)", err, out, abortOut)
+			}
+			return out, fmt.Errorf("merge conflict: changes not merged. Worktree preserved at %s for manual resolution: %w", info.Path, err)
+		}
 		return out, fmt.Errorf("merge failed: %w: %s", err, out)
 	}
+
+	// Merge succeeded — restore the stash entry created during Create.
+	// We do this only if a stash was recorded; otherwise the main repo
+	// is already clean.
+	if info.StashMsg != "" {
+		if entry, found := m.findStashByMessage(info.StashMsg); found {
+			if applyErr := m.popStashByMessage(info.StashMsg); applyErr != nil {
+				// Stash apply failed (likely conflicts with the merge).
+				// Drop the entry anyway so the stash list stays bounded —
+				// the user can recover via `git stash show` + cherry-pick
+				// or by checking the worktree branch.
+				_, _ = m.git("stash", "drop", "--quiet", entry)
+				return out, fmt.Errorf("merge succeeded but stash apply failed: %w (merge output: %s)", applyErr, out)
+			}
+		}
+	}
+
+	// Merge succeeded — worktree is kept for post-merge inspection.
+	// Caller should call Cleanup separately when ready.
 	return out, nil
+}
+
+// findStashByMessage returns the stash ref (e.g. "stash@{0}") whose message
+// matches msg, or "" + false if no match is found.
+//
+// Note: `git stash list --format=%s` renders the subject as
+// "On <branch>: <original-message>", so we strip that prefix before comparing.
+func (m *WorktreeManager) findStashByMessage(msg string) (string, bool) {
+	if msg == "" {
+		return "", false
+	}
+	out, err := m.git("stash", "list", "--format=%gd|%s")
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		// Format: "stash@{N}|On <branch>: <message>"
+		sep := strings.Index(line, "|")
+		if sep < 0 {
+			continue
+		}
+		ref := line[:sep]
+		subject := line[sep+1:]
+		// Strip "On <branch>: " prefix.
+		if colon := strings.Index(subject, ": "); colon >= 0 {
+			subject = subject[colon+2:]
+		}
+		if subject == msg {
+			return ref, true
+		}
+	}
+	return "", false
 }
 
 func (m *WorktreeManager) recoverWorktreeInfo(agentID string) (worktreeInfo, error) {
 	sid := shortID(agentID)
 	info := worktreeInfo{
-		Path:   filepath.Join(m.repoRoot, ".pi-go", "worktrees", sid),
+		Path:   filepath.Join(m.repoRoot, ".pi-go", "tasks", sid),
 		Branch: "pi-agent-" + sid,
 	}
 
-	if _, err := os.Stat(info.Path); err == nil {
-		return info, nil
+	// Verify the branch is actually attached to the expected worktree
+	// (or any worktree). An orphaned branch (one whose worktree was
+	// removed manually) should NOT be silently re-attached — that would
+	// resurrect a "deleted" worktree without the user's intent.
+	attachedAt := m.worktreeForBranch(info.Branch)
+	if attachedAt != "" {
+		if samePath(attachedAt, info.Path) {
+			return info, nil
+		}
+		return worktreeInfo{}, fmt.Errorf("branch %q is checked out at %s, not the expected %s; refusing to recover", info.Branch, attachedAt, info.Path)
 	}
 
-	out, err := m.git("branch", "--list", info.Branch)
-	if err == nil && strings.TrimSpace(out) != "" {
-		return info, nil
-	}
-
-	return worktreeInfo{}, fmt.Errorf("worktree metadata not found for agent %s", agentID)
+	// No worktree is attached to this branch. Refuse recovery so we don't
+	// silently re-create a worktree the user already cleaned up.
+	return worktreeInfo{}, fmt.Errorf("worktree metadata not found for agent %s (branch %q is orphaned)", agentID, info.Branch)
 }
 
 // CleanupAll removes all active worktrees. Used during shutdown.
@@ -286,4 +485,56 @@ func (m *WorktreeManager) git(args ...string) (string, error) {
 	cmd.Dir = m.repoRoot
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// branchExists reports whether a local branch with the given name exists.
+func (m *WorktreeManager) branchExists(branch string) bool {
+	if branch == "" {
+		return false
+	}
+	out, err := m.git("branch", "--list", branch)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
+// worktreeForBranch returns the worktree path that currently has the given
+// branch checked out, or "" if the branch is not attached to any worktree.
+func (m *WorktreeManager) worktreeForBranch(branch string) string {
+	if branch == "" {
+		return ""
+	}
+	out, err := m.git("worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	want := "refs/heads/" + branch
+	var currentPath string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			currentPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.HasPrefix(line, "branch "):
+			if strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == want {
+				return currentPath
+			}
+		}
+	}
+	return ""
+}
+
+// samePath reports whether two filesystem paths refer to the same location,
+// resolving symlinks (e.g. macOS reports /var/folders as /private/var/folders).
+// Falls back to a literal string compare when paths cannot be resolved.
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	return ra == rb
 }

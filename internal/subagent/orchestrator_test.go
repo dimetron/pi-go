@@ -276,7 +276,7 @@ func TestOrchestrator_SpawnTaskWithNamedWorktree(t *testing.T) {
 		t.Fatal("expected error for missing binary")
 	}
 
-	if _, statErr := os.Stat(filepath.Join(repo, ".pi-go", "worktrees", "my-feature")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(repo, ".pi-go", "tasks", "my-feature")); !os.IsNotExist(statErr) {
 		t.Fatalf("expected named worktree path to be cleaned up, stat err=%v", statErr)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -73,7 +74,7 @@ func newReadTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("read", `Read a file's contents. Returns the content with line numbers.
 
 Required: file_path (absolute path to the file).
-Optional: offset (start line, 1-based), limit (max lines to read).`, func(_ tool.Context, input ReadInput) (ReadOutput, error) {
+Optional: offset (start line, 1-based), limit (max lines to read).`, func(_ agent.ToolContext, input ReadInput) (ReadOutput, error) {
 		return readHandler(sb, input)
 	}, map[string]string{"path": "file_path"})
 }

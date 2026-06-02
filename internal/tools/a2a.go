@@ -307,7 +307,7 @@ func NewA2ATool(cache *ClientCache) (tool.Tool, error) {
 	desc := buildA2ADescription(cache)
 
 	return newTool("a2a", desc,
-		func(ctx tool.Context, input A2AInput) (A2AOutput, error) {
+		func(ctx agent.ToolContext, input A2AInput) (A2AOutput, error) {
 			// Send the message
 			result := cache.SendMessage(ctx, input.AgentName, input.Prompt, input.Stream)
 			return result, nil

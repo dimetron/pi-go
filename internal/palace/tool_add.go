@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -35,7 +36,7 @@ func newPalaceAddDrawerTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-add-drawer",
 		Description: "Add a new knowledge drawer to the memory palace. Requires wing (project/domain), room (topic), and content. Automatically embeds the content for semantic search and checks for duplicates.",
-	}, func(ctx tool.Context, input AddDrawerToolInput) (AddDrawerToolOutput, error) {
+	}, func(ctx agent.ToolContext, input AddDrawerToolInput) (AddDrawerToolOutput, error) {
 		return palaceAddDrawerHandler(ctx, p, input)
 	})
 }

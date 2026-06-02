@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -25,7 +26,7 @@ type WriteOutput struct {
 func newWriteTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("write", `Write content to a file. Creates parent directories if needed. Overwrites existing files.
 
-Required: file_path (absolute path), content (file content to write).`, func(_ tool.Context, input WriteInput) (WriteOutput, error) {
+Required: file_path (absolute path), content (file content to write).`, func(_ agent.ToolContext, input WriteInput) (WriteOutput, error) {
 		return writeHandler(sb, input)
 	})
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	adkagent "google.golang.org/adk/agent"
 	adkmodel "google.golang.org/adk/model"
 	adktool "google.golang.org/adk/tool"
 
@@ -557,7 +558,7 @@ func (r *deferredMemoryRecorder) setReady(sessionID string, worker *memory.Worke
 	r.mu.Unlock()
 }
 
-func (r *deferredMemoryRecorder) afterTool(_ adktool.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+func (r *deferredMemoryRecorder) afterTool(_ adkagent.ToolContext, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 	if toolErr != nil {
 		return result, nil
 	}

@@ -768,6 +768,9 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 					preservedWTPath: wm.PathFor(aid),
 				}
 			}
+			// Auto-cleanup on success: worktrees accumulate otherwise
+			// and there's no UI to inspect them. Conflicts are handled
+			// by the err branch above, which preserves the worktree.
 			_ = wm.Cleanup(aid)
 			if out != "" {
 				fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
