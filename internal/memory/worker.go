@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/adk/agent"
 	toolpkg "google.golang.org/adk/tool"
 )
 
@@ -184,8 +185,8 @@ func BuildMemoryCallback(w *Worker, sessionID, project string) func(toolName str
 
 // BuildAfterToolCallback creates an ADK AfterToolCallback that enqueues observations.
 // It wraps the worker's Enqueue in the ADK callback signature for direct use with agent callbacks.
-func BuildAfterToolCallback(w *Worker, sessionID, project string, excludedTools map[string]bool) func(ctx toolpkg.Context, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
-	return func(_ toolpkg.Context, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+func BuildAfterToolCallback(w *Worker, sessionID, project string, excludedTools map[string]bool) func(ctx agent.ToolContext, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+	return func(_ agent.ToolContext, t toolpkg.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 		if toolErr != nil {
 			return result, nil // don't record failed tool calls
 		}

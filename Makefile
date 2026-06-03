@@ -9,7 +9,7 @@ install: build
 	go install ./cmd/pi-sandbox
 
 run: install
-	pi --model minimax-m2.7:cloud
+	pi --model minimax-m3:cloud
 
 test: test-unit
 
@@ -52,9 +52,9 @@ clean:
 ## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
 sandbox-run: install
 ifeq ($(shell uname),Darwin)
-	pi-sandbox --model minimax-m2.7:cloud
+	pi-sandbox --model minimax-m3:cloud
 else
-	pi --model minimax-m2.7:cloud
+	pi --model minimax-m3:cloud
 endif
 
 sandbox-log:

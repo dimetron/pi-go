@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
 )
 
 func TestCollectCoerceProps(t *testing.T) {
@@ -217,7 +217,7 @@ type requiredDeclarationOutput struct {
 func makeCoercingTool(t *testing.T) *coercingTool {
 	t.Helper()
 	inner, err := newTool("coerce-test", "test tool with coercion",
-		func(_ tool.Context, input coercingTestInput) (coercingTestOutput, error) {
+		func(_ agent.ToolContext, input coercingTestInput) (coercingTestOutput, error) {
 			return coercingTestOutput{Result: "ok"}, nil
 		},
 	)
@@ -233,7 +233,7 @@ func makeCoercingTool(t *testing.T) *coercingTool {
 
 func TestNewTool_DeclarationPreservesRequiredFields(t *testing.T) {
 	inner, err := newTool("required-test", "test required schema",
-		func(_ tool.Context, input requiredDeclarationInput) (requiredDeclarationOutput, error) {
+		func(_ agent.ToolContext, input requiredDeclarationInput) (requiredDeclarationOutput, error) {
 			return requiredDeclarationOutput{Result: input.Pattern}, nil
 		},
 	)
@@ -350,7 +350,7 @@ func TestCoercingTool_ProcessRequest_AddsDeclaration(t *testing.T) {
 func TestCoercingTool_ProcessRequest_AppendsToExistingFuncTool(t *testing.T) {
 	// Create two different coercingTools and register both into the same request
 	ct1, err := newTool("tool-one", "first",
-		func(_ tool.Context, input coercingTestInput) (coercingTestOutput, error) {
+		func(_ agent.ToolContext, input coercingTestInput) (coercingTestOutput, error) {
 			return coercingTestOutput{Result: "one"}, nil
 		},
 	)
@@ -358,7 +358,7 @@ func TestCoercingTool_ProcessRequest_AppendsToExistingFuncTool(t *testing.T) {
 		t.Fatalf("newTool tool-one: %v", err)
 	}
 	ct2, err := newTool("tool-two", "second",
-		func(_ tool.Context, input coercingTestInput) (coercingTestOutput, error) {
+		func(_ agent.ToolContext, input coercingTestInput) (coercingTestOutput, error) {
 			return coercingTestOutput{Result: "two"}, nil
 		},
 	)
@@ -411,7 +411,7 @@ func TestCoercingTool_Run_CoercesBeforeDelegate(t *testing.T) {
 func TestCoercingTool_Run_AliasesBeforeDelegate(t *testing.T) {
 	// Create a tool with aliases (path → file_path)
 	inner, err := newTool("alias-test", "test tool with aliases",
-		func(_ tool.Context, input coercingTestInput) (coercingTestOutput, error) {
+		func(_ agent.ToolContext, input coercingTestInput) (coercingTestOutput, error) {
 			return coercingTestOutput{Result: "ok"}, nil
 		},
 		map[string]string{"path": "file_path", "glob": "pattern"},

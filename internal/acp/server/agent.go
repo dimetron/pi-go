@@ -120,6 +120,12 @@ func (a *Agent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.Auth
 	return acp.AuthenticateResponse{}, nil
 }
 
+// Logout terminates the current authenticated session. Pi has no auth state, so
+// this is a no-op required by the acp.Agent interface.
+func (a *Agent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
+	return acp.LogoutResponse{}, nil
+}
+
 // Initialize advertises pi's baseline capabilities. EmbeddedContext is on so
 // Zed can inline file context; Image defaults to false until zed-09 wires the
 // provider gate.

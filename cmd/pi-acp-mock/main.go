@@ -36,6 +36,10 @@ func (m *mockAgent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.
 	return acp.AuthenticateResponse{}, nil
 }
 
+func (m *mockAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
+	return acp.LogoutResponse{}, nil
+}
+
 func (m *mockAgent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion:   acp.ProtocolVersion(acp.ProtocolVersionNumber),

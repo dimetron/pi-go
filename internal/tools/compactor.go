@@ -3,6 +3,7 @@ package tools
 import (
 	"log"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/tool"
 )
@@ -76,7 +77,7 @@ type CompactResult struct {
 
 // BuildCompactorCallback creates an AfterToolCallback that compacts tool output.
 func BuildCompactorCallback(cfg CompactorConfig, metrics *CompactMetrics) llmagent.AfterToolCallback {
-	return func(ctx tool.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
+	return func(ctx agent.ToolContext, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		if !cfg.Enabled || err != nil {
 			return result, nil
 		}

@@ -13,6 +13,10 @@ func (helperAgent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.A
 	return acp.AuthenticateResponse{}, nil
 }
 
+func (helperAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
+	return acp.LogoutResponse{}, nil
+}
+
 func (helperAgent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),

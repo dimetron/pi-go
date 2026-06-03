@@ -10,7 +10,6 @@ import (
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
@@ -234,7 +233,7 @@ func (m *mockToolCallReporter) OnToolEnd(ctx context.Context, callID string, arg
 	return nil
 }
 
-// mockToolCtx is a minimal tool.Context implementation for testing callback
+// mockToolCtx is a minimal agent.ToolContext implementation for testing callback
 // correlation. Only FunctionCallID() is meaningful; all other methods return
 // zero values.
 type mockToolCtx struct {
@@ -260,7 +259,7 @@ func (c *mockToolCtx) Branch() string                                       { re
 func (c *mockToolCtx) SessionID() string                                    { return "" }
 func (c *mockToolCtx) UserID() string                                       { return "" }
 
-var _ tool.Context = (*mockToolCtx)(nil)
+var _ agent.ToolContext = (*mockToolCtx)(nil)
 
 func TestBuildToolCallCallbacks(t *testing.T) {
 	m := &mockToolCallReporter{}

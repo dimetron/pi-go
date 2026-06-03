@@ -21,7 +21,7 @@ First off, thank you for considering contributing to pi-go! It's a complex proje
    ```
 3. Run the agent:
    ```bash
-   pi --model minimax-m2.7:cloud
+   pi --model minimax-m3:cloud
    ```
 
 ## Development Workflow
@@ -76,7 +76,7 @@ pi-go includes built-in pprof profiling support via the `--pprof` flag.
 
 ```bash
 # Start with memory (heap) profiling
-pi --pprof mem --model minimax-m2.7:cloud 
+pi --pprof mem --model minimax-m3:cloud
 
 #PROMPT: explore repository but do not run tests and then check memory usage at go tool pprof http://localhost:6060/debug/pprof/heap
 
@@ -100,7 +100,7 @@ go tool pprof http://localhost:6060/debug/pprof/heap
 ```bash
 pi --pprof mem --pprof-port 9090 "your prompt"
 
-pi --pprof mem --pprof-port 9090 --model minimax-m2.7:cloud
+pi --pprof mem --pprof-port 9090 --model minimax-m3:cloud
 
 ```
 
@@ -142,3 +142,4 @@ go tool trace http://localhost:6060/debug/pprof/trace
 ## License
 
 By contributing to pi-go, you agree that your contributions will be licensed under the project's [LICENSE](LICENSE).
+
