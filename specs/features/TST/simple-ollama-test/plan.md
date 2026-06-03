@@ -36,11 +36,11 @@ scripts/test-ollama-e2e.sh:
 1. Check prerequisites:
    - ollama binary exists
    - ollama is running (curl localhost:11434)
-   - model minimax-m2.5:cloud is available (ollama list)
+   - model minimax-m3:cloud is available (ollama list)
 2. Build pi binary (go build -o ./pi ./cmd/pi)
 3. Clean up any existing PI.md
 4. Run pi with test prompt:
-   ./pi --model minimax-m2.5:cloud --mode print \
+   ./pi --model minimax-m3:cloud --mode print \
      "Explore this codebase using tree, read, and grep tools.
       Then create a PI.md file with a project overview including:
       project name, purpose, architecture, key components, and tech stack."
@@ -102,7 +102,8 @@ test-ollama: build
 **Objective:** Execute the full E2E test and verify all acceptance criteria.
 
 **Implementation:**
-1. Ensure Ollama is running with minimax-m2.5:cloud
+
+1. Ensure Ollama is running with minimax-m3:cloud
 2. Run `make test-ollama`
 3. Verify:
    - PI.md was generated with meaningful content

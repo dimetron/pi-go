@@ -206,6 +206,10 @@ func (TestHelperAgent) Authenticate(context.Context, acp.AuthenticateRequest) (a
 	return acp.AuthenticateResponse{}, nil
 }
 
+func (TestHelperAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
+	return acp.LogoutResponse{}, nil
+}
+
 func (TestHelperAgent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),

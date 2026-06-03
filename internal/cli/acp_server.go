@@ -62,7 +62,7 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 
 	model := flagModel
 	if model == "" {
-		model = "minimax-m2.7:cloud"
+		model = "minimax-m3:cloud"
 	}
 
 	agent := &acpserver.Agent{

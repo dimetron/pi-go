@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -223,7 +224,7 @@ func (c *coercingTool) Declaration() *genai.FunctionDeclaration {
 // ProcessRequest registers the coercingTool (not the inner tool) in the request
 // so that the ADK runner calls our Run method (with coercion) instead of the
 // inner tool's Run directly.
-func (c *coercingTool) ProcessRequest(_ tool.Context, req *model.LLMRequest) error {
+func (c *coercingTool) ProcessRequest(_ agent.ToolContext, req *model.LLMRequest) error {
 	if req.Tools == nil {
 		req.Tools = make(map[string]any)
 	}
@@ -260,13 +261,13 @@ func (c *coercingTool) ProcessRequest(_ tool.Context, req *model.LLMRequest) err
 
 // Run resolves parameter aliases and coerces string values to expected types,
 // then delegates to the inner tool.
-func (c *coercingTool) Run(ctx tool.Context, args any) (map[string]any, error) {
+func (c *coercingTool) Run(ctx agent.ToolContext, args any) (map[string]any, error) {
 	if m, ok := args.(map[string]any); ok {
 		c.aliasArgs(m)
 		c.coerceArgs(m)
 	}
 	type runner interface {
-		Run(tool.Context, any) (map[string]any, error)
+		Run(agent.ToolContext, any) (map[string]any, error)
 	}
 	if r, ok := c.Tool.(runner); ok {
 		return r.Run(ctx, args)

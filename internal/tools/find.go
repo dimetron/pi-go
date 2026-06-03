@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -30,7 +31,7 @@ type FindOutput struct {
 }
 
 func newFindTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("find", "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*.ts', 'src/**/*.test.js'.", func(_ tool.Context, input FindInput) (FindOutput, error) {
+	return newTool("find", "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*.ts', 'src/**/*.test.js'.", func(_ agent.ToolContext, input FindInput) (FindOutput, error) {
 		return findHandler(sb, input)
 	}, map[string]string{"glob": "pattern"})
 }

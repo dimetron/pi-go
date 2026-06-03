@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -38,12 +39,12 @@ type GitHunkOutput struct {
 }
 
 func newGitHunkTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("git-hunk", "Get parsed diff hunks for a specific file. Each hunk includes its header, content, and line count statistics.", func(ctx tool.Context, input GitHunkInput) (GitHunkOutput, error) {
+	return newTool("git-hunk", "Get parsed diff hunks for a specific file. Each hunk includes its header, content, and line count statistics.", func(ctx agent.ToolContext, input GitHunkInput) (GitHunkOutput, error) {
 		return gitHunkHandler(sb, ctx, input)
 	})
 }
 
-func gitHunkHandler(sb *Sandbox, ctx tool.Context, input GitHunkInput) (GitHunkOutput, error) {
+func gitHunkHandler(sb *Sandbox, ctx agent.ToolContext, input GitHunkInput) (GitHunkOutput, error) {
 	if input.File == "" {
 		return GitHunkOutput{}, fmt.Errorf("file is required")
 	}

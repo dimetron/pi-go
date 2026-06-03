@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -128,7 +129,7 @@ func newGrepTool(sb *Sandbox) (tool.Tool, error) {
 	if rgAvailable {
 		grepToolName = "ripgrep"
 	}
-	return newTool(grepToolName, "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ tool.Context, input GrepInput) (GrepOutput, error) {
+	return newTool(grepToolName, "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ agent.ToolContext, input GrepInput) (GrepOutput, error) {
 		return grepHandler(sb, input)
 	})
 }
