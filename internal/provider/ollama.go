@@ -6,6 +6,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -440,4 +441,49 @@ func OllamaListModels(ctx context.Context, baseURL string) ([]string, error) {
 		names = append(names, m.Name)
 	}
 	return names, nil
+}
+
+// OllamaContextWindowSize queries the Ollama server for the context window size
+// of the given model. Returns 0 if the size cannot be determined.
+func OllamaContextWindowSize(ctx context.Context, baseURL, modelName string) int64 {
+	baseURL = normalizeBaseURL(baseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return 0
+	}
+	client := ollamaapi.NewClient(u, &http.Client{Timeout: 10 * time.Second})
+	resp, err := client.Show(ctx, &ollamaapi.ShowRequest{Model: modelName})
+	if err != nil {
+		return 0
+	}
+
+	// Parameters is a newline-separated list of "key value" pairs.
+	// num_ctx takes precedence as it reflects the configured context window.
+	for _, line := range strings.Split(resp.Parameters, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "num_ctx" {
+			if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+				return n
+			}
+		}
+	}
+
+	// Fall back to the model's native context length from ModelInfo.
+	for key, val := range resp.ModelInfo {
+		if strings.HasSuffix(key, ".context_length") {
+			switch v := val.(type) {
+			case float64:
+				return int64(v)
+			case int64:
+				return v
+			case int:
+				return int64(v)
+			}
+		}
+	}
+
+	return 0
 }

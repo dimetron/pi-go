@@ -206,7 +206,13 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating LLM provider: %w", err)
 	}
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	tokenTracker.SetContextWindowSize(provider.ContextWindowSize(info.Model))
+	ctxWindowSize := provider.ContextWindowSize(info.Model)
+	if info.Ollama {
+		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
+	tokenTracker.SetContextWindowSize(ctxWindowSize)
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	sandboxRoot := cwd
