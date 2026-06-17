@@ -72,9 +72,10 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			chatReq.Options = map[string]any{"num_ctx": 262144} // 256K
 		}
 
-		// Configure thinking.
-		thinkCfg := ollamaThinkingConfig(m.thinkingLevel)
-		if thinkCfg != nil {
+		// Configure thinking. nothink models must not have thinking forced on.
+		if strings.Contains(strings.ToLower(modelName), "nothink") {
+			chatReq.Think = &ollamaapi.ThinkValue{Value: false}
+		} else if thinkCfg := ollamaThinkingConfig(m.thinkingLevel); thinkCfg != nil {
 			chatReq.Think = thinkCfg
 		}
 
@@ -350,6 +351,10 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 	finalParts := make([]*genai.Part, 0, 1+len(toolCalls))
 	if aggregatedText != "" {
 		finalParts = append(finalParts, &genai.Part{Text: aggregatedText})
+	} else if aggregatedThinking != "" {
+		// Fallback: model responded entirely via thinking tokens (e.g. thinking forced
+		// on a nothink model). Surface the thinking content rather than returning nothing.
+		finalParts = append(finalParts, &genai.Part{Text: aggregatedThinking})
 	}
 	for _, tc := range toolCalls {
 		args := tc.Function.Arguments.ToMap()
