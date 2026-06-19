@@ -36,12 +36,21 @@ type RunningSession struct {
 	curSession string
 }
 
+// eventBufferSize bounds the buffered event channel. It is sized to absorb a
+// startup burst of stderr diagnostics (missing API key, "interactive auth
+// required", etc.) without dropping the real-time events that surface them in
+// the UI. A small buffer (the previous value was 32) overflowed during such
+// bursts and silently discarded diagnostics. Note that full stderr is always
+// durably captured in s.stderr and surfaced on the final RunResult regardless,
+// so a drop here only affects real-time visibility, never the final error.
+const eventBufferSize = 256
+
 func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *RunningSession {
 	rs := &RunningSession{
 		cmd:        cmd,
 		stdin:      stdin,
 		stderr:     &stderrBuffer{},
-		events:     make(chan shared.Event, 32),
+		events:     make(chan shared.Event, eventBufferSize),
 		done:       make(chan struct{}),
 		stderrDone: make(chan struct{}),
 	}
@@ -272,6 +281,12 @@ func (s *RunningSession) appendResult(text string) {
 	s.result.Result += text
 }
 
+// emit delivers a translated event to consumers without ever blocking the ACP
+// dispatch or stderr-drain goroutines. Delivery is best-effort: if the buffer
+// (eventBufferSize) is saturated the event is dropped rather than applying
+// backpressure to the subprocess connection. Final results are unaffected —
+// message text is accumulated in s.result and full stderr in s.stderr — so a
+// drop only costs real-time UI visibility of an intermediate event.
 func (s *RunningSession) emit(event shared.Event) {
 	select {
 	case s.events <- event:

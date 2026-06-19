@@ -1,18 +1,18 @@
-// Package gemini provides an ACP client for Google Gemini CLI via the
-// Gemini CLI subprocess adapter.
+// Package gemini provides an ACP client for Google Gemini CLI via the Gemini
+// CLI subprocess adapter. The ACP session lifecycle — connection wiring, stderr
+// streaming, event translation and result capture — is provided by the shared
+// client package; this package only resolves the Gemini binary and builds its
+// ACP-mode argument list.
 package gemini
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -68,72 +68,40 @@ type RunRequest struct {
 	Debug   bool   // Enable debug output
 }
 
-// RunningSession represents one in-flight Gemini CLI prompt turn.
-type RunningSession struct {
-	cmd    *exec.Cmd
-	stdin  io.Closer
-	stderr *stderrBuffer
-	conn   *acp.ClientSideConnection
-
-	events chan shared.Event
-	done   chan struct{}
-	// stderrDone closes once streamStderr returns, so waitProcess can
-	// synchronize with the drain goroutine before reading stderr. Without
-	// this, slow-scheduled goroutines (observed on CI) may leave the buffer
-	// empty when the test checks it, even though the subprocess has
-	// already written and exited.
-	stderrDone chan struct{}
-
-	closeStdin sync.Once
-
-	mu         sync.Mutex
-	result     shared.RunResult
-	finished   bool
-	toolFilter *shared.ToolCallTitleFilter
-	curSession string
-}
-
-// Events returns the translated local ACP event stream.
-func (s *RunningSession) Events() <-chan shared.Event { return s.events }
-
-// Done is closed when the prompt turn finishes.
-func (s *RunningSession) Done() <-chan struct{} { return s.done }
-
-// Cancel terminates the running subprocess.
-func (s *RunningSession) Cancel() error {
-	s.mu.Lock()
-	finished := s.finished
-	cmd := s.cmd
-	s.mu.Unlock()
-	if finished || cmd == nil || cmd.Process == nil {
-		return nil
-	}
-	if err := cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("kill gemini subprocess: %w", err)
-	}
-	return nil
-}
-
-// Wait blocks until the turn completes and returns the final result.
-func (s *RunningSession) Wait() shared.RunResult {
-	<-s.done
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.result
-}
-
 // envACPGeminiCmd is the environment variable that overrides the Gemini ACP command.
 // Format: "binary arg1 arg2 ..." or just "binary" (args default to "--acp").
 const envACPGeminiCmd = "PI_ACP_GEMINI_CMD"
 
-// Start launches the Gemini CLI subprocess and begins the ACP flow.
-func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, error) {
+// Start launches the Gemini CLI subprocess and begins the ACP flow, delegating
+// the session lifecycle to the shared client runner.
+func (r Runner) Start(ctx context.Context, req RunRequest) (*client.RunningSession, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
 
+	binary, cmdArgs, err := r.resolveCommand(req)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, binary, cmdArgs...)
+	runner := client.Runner{ClientInfo: r.ClientInfo, Logger: r.Logger, ExtraEnv: r.ExtraEnv}
+	return runner.StartCommand(ctx, cmd, shared.RunRequest{
+		Prompt:     req.Prompt,
+		SessionID:  req.SessionID,
+		CWD:        req.CWD,
+		Env:        req.Env,
+		RPCTimeout: rpcTimeout,
+	})
+}
+
+// resolveCommand determines the binary and argument list for the Gemini ACP
+// subprocess, honoring (in order) an explicit Binary, a test Command override,
+// the PI_ACP_GEMINI_CMD env override, and finally DefaultBinaryPaths.
+func (r Runner) resolveCommand(req RunRequest) (string, []string, error) {
 	binary := r.Binary
 	var cmdArgs []string
+
 	// When req.Command is supplied (test override) honor it verbatim — no
 	// --acp injection and no optional flag appending, so helper processes
 	// can be exercised without the real gemini CLI argument shape. This
@@ -141,315 +109,46 @@ func (r Runner) Start(ctx context.Context, req RunRequest) (*RunningSession, err
 	if binary == "" && len(req.Command) > 0 {
 		binary = req.Command[0]
 		cmdArgs = append([]string(nil), req.Command[1:]...)
-	} else {
-		if binary == "" {
-			if envCmd := os.Getenv(envACPGeminiCmd); envCmd != "" {
-				// PI_ACP_GEMINI_CMD overrides the default binary. Parse
-				// "binary arg1 arg2 ..." from the env var; a bare binary
-				// falls back to the default --acp subcommand.
-				parts := strings.Fields(envCmd)
-				if len(parts) > 0 {
-					binary = parts[0]
-					if len(parts) > 1 {
-						cmdArgs = parts[1:]
-					}
-				}
-			} else {
-				var err error
-				binary, err = findBinary(DefaultBinaryPaths)
-				if err != nil {
-					return nil, fmt.Errorf("finding %s: %w", BinaryName, err)
+		return binary, cmdArgs, nil
+	}
+
+	if binary == "" {
+		if envCmd := os.Getenv(envACPGeminiCmd); envCmd != "" {
+			// PI_ACP_GEMINI_CMD overrides the default binary. Parse
+			// "binary arg1 arg2 ..." from the env var; a bare binary
+			// falls back to the default --acp subcommand.
+			parts := strings.Fields(envCmd)
+			if len(parts) > 0 {
+				binary = parts[0]
+				if len(parts) > 1 {
+					cmdArgs = parts[1:]
 				}
 			}
-		}
-		if len(cmdArgs) == 0 {
-			cmdArgs = []string{"--acp"}
-		}
-		if req.Model != "" {
-			cmdArgs = append(cmdArgs, "--model", req.Model)
-		}
-		if req.Sandbox != "" {
-			cmdArgs = append(cmdArgs, "--sandbox", req.Sandbox)
-		}
-		if req.Debug {
-			cmdArgs = append(cmdArgs, "--debug")
+		} else {
+			found, err := findBinary(DefaultBinaryPaths)
+			if err != nil {
+				return "", nil, fmt.Errorf("finding %s: %w", BinaryName, err)
+			}
+			binary = found
 		}
 	}
-
-	cmd := exec.CommandContext(ctx, binary, cmdArgs...)
-	cmd.Env = os.Environ()
-	if req.CWD != "" {
-		cmd.Dir = req.CWD
+	if len(cmdArgs) == 0 {
+		cmdArgs = []string{"--acp"}
 	}
-	if len(r.ExtraEnv) > 0 {
-		cmd.Env = append(cmd.Env, r.ExtraEnv...)
+	if req.Model != "" {
+		cmdArgs = append(cmdArgs, "--model", req.Model)
 	}
-	if len(req.Env) > 0 {
-		cmd.Env = append(cmd.Env, req.Env...)
+	if req.Sandbox != "" {
+		cmdArgs = append(cmdArgs, "--sandbox", req.Sandbox)
 	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdin pipe: %w", err)
+	if req.Debug {
+		cmdArgs = append(cmdArgs, "--debug")
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s subprocess: %w", BinaryName, err)
-	}
-
-	session := newRunningSession(cmd, stdin, stderr)
-	client := &callbackClient{session: session}
-	conn := acp.NewClientSideConnection(client, stdin, stdout)
-	if r.Logger != nil {
-		conn.SetLogger(r.Logger)
-	}
-	session.conn = conn
-
-	go session.run(req, r.clientInfo())
-
-	return session, nil
+	return binary, cmdArgs, nil
 }
 
-func (r Runner) clientInfo() acp.Implementation {
-	if strings.TrimSpace(r.ClientInfo.Name) != "" {
-		return r.ClientInfo
-	}
-	return acp.Implementation{Name: "pi-go", Version: "dev"}
-}
-
-func newRunningSession(cmd *exec.Cmd, stdin io.Closer, stderr io.Reader) *RunningSession {
-	rs := &RunningSession{
-		cmd:        cmd,
-		stdin:      stdin,
-		stderr:     &stderrBuffer{},
-		events:     make(chan shared.Event, 32),
-		done:       make(chan struct{}),
-		stderrDone: make(chan struct{}),
-	}
-	rs.toolFilter = shared.NewToolCallTitleFilter(func(title string) {
-		rs.mu.Lock()
-		sid := rs.curSession
-		rs.mu.Unlock()
-		rs.emit(shared.Event{Type: shared.EventTypeTool, Content: title, SessionID: sid})
-	})
-	go rs.streamStderr(stderr)
-	return rs
-}
-
-// streamStderr scans stderr line-by-line, buffering for error reports and
-// surfacing each line as a progress event so the parent UI sees diagnostics
-// (missing API key, "interactive auth required", etc.) in real time.
-func (s *RunningSession) streamStderr(r io.Reader) {
-	defer func() {
-		if s.stderrDone != nil {
-			close(s.stderrDone)
-		}
-	}()
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		_, _ = s.stderr.Write([]byte(line + "\n"))
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		s.mu.Lock()
-		sid := s.curSession
-		s.mu.Unlock()
-		s.emit(shared.Event{Type: shared.EventTypeStderr, Content: line, SessionID: sid})
-	}
-}
-
-func (s *RunningSession) closeStdinOnce() {
-	s.closeStdin.Do(func() {
-		if s.stdin != nil {
-			_ = s.stdin.Close()
-		}
-	})
-}
-
-func (s *RunningSession) run(req RunRequest, clientInfo acp.Implementation) {
-	defer close(s.done)
-	defer close(s.events)
-	defer s.toolFilter.Flush()
-	defer s.closeStdinOnce()
-
-	client.RunACPFlow(
-		context.Background(),
-		s.conn,
-		shared.RunRequest{
-			Command:    req.Command,
-			Prompt:     req.Prompt,
-			SessionID:  req.SessionID,
-			CWD:        req.CWD,
-			RPCTimeout: rpcTimeout,
-		},
-		clientInfo,
-		func(sessionID string) {
-			s.mu.Lock()
-			s.curSession = sessionID
-			s.mu.Unlock()
-		},
-		s.handleUpdate,
-		s.finish,
-		s.waitProcess,
-		s.closeStdinOnce,
-		func() shared.RunResult {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			return s.result
-		},
-	)
-}
-
-func (s *RunningSession) handleUpdate(notification acp.SessionNotification) {
-	sessionID := string(notification.SessionId)
-	update := notification.Update
-
-	s.mu.Lock()
-	if s.result.SessionID == "" {
-		s.result.SessionID = sessionID
-	}
-	s.curSession = sessionID
-	s.mu.Unlock()
-
-	if chunk := update.AgentMessageChunk; chunk != nil {
-		text := contentBlockText(chunk.Content)
-		if strings.TrimSpace(text) != "" {
-			s.emit(shared.Event{Type: shared.EventTypeMessage, Content: text, SessionID: sessionID})
-			s.appendResult(text)
-		}
-	}
-	if thought := update.AgentThoughtChunk; thought != nil {
-		text := contentBlockText(thought.Content)
-		if strings.TrimSpace(text) != "" {
-			s.emit(shared.Event{Type: shared.EventTypeProgress, Content: text, SessionID: sessionID})
-		}
-	}
-	if toolCall := update.ToolCall; toolCall != nil {
-		s.toolFilter.OnToolCall(
-			string(toolCall.ToolCallId),
-			shared.EnrichToolCallTitle(toolCall.Title, toolCall.RawInput),
-		)
-	}
-	if toolUpdate := update.ToolCallUpdate; toolUpdate != nil {
-		title := ""
-		if toolUpdate.Title != nil {
-			title = *toolUpdate.Title
-		}
-		s.toolFilter.OnToolCallUpdate(
-			string(toolUpdate.ToolCallId),
-			shared.EnrichToolCallTitle(title, toolUpdate.RawInput),
-		)
-	}
-}
-
-func (s *RunningSession) appendResult(text string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.result.Result += text
-}
-
-func (s *RunningSession) emit(event shared.Event) {
-	select {
-	case s.events <- event:
-	default:
-	}
-}
-
-func (s *RunningSession) finish(result shared.RunResult) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.finished {
-		if result.Status == shared.StatusSuccess && strings.TrimSpace(s.result.Result) == "" {
-			s.result.Result = result.Result
-		}
-		if s.result.SessionID == "" {
-			s.result.SessionID = result.SessionID
-		}
-		return
-	}
-	if strings.TrimSpace(result.Error) == "" {
-		result.Error = strings.TrimSpace(s.stderr.String())
-	}
-	s.result = result
-	s.finished = true
-}
-
-func (s *RunningSession) waitProcess() error {
-	// See claudecode.waitProcess — draining stderr before cmd.Wait avoids
-	// the race where Wait closes our pipe read-end before the scanner has
-	// read the subprocess's last lines.
-	if s.stderrDone != nil {
-		<-s.stderrDone
-	}
-	err := s.cmd.Wait()
-	if err == nil {
-		return nil
-	}
-	stderr := strings.TrimSpace(s.stderr.String())
-	if stderr == "" {
-		return fmt.Errorf("%s subprocess: %w", BinaryName, err)
-	}
-	return fmt.Errorf("%s subprocess: %w: %s", BinaryName, err, stderr)
-}
-
-// callbackClient implements the acp.Agent interface for Gemini CLI callbacks.
-type callbackClient struct {
-	session *RunningSession
-}
-
-func (c *callbackClient) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
-	// Gemini CLI can read files directly; delegate to the subprocess.
-	// For now, return a redirect response.
-	return acp.ReadTextFileResponse{}, fmt.Errorf("readTextFile not implemented: use terminal for file operations")
-}
-
-func (c *callbackClient) WriteTextFile(ctx context.Context, req acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
-	return acp.WriteTextFileResponse{}, fmt.Errorf("writeTextFile not implemented: use terminal for file operations")
-}
-
-func (c *callbackClient) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	// pi-go runs ACP subagents under an already-authorized user session, so
-	// auto-approve every tool call. See shared.AutoApproveOutcome.
-	return acp.RequestPermissionResponse{Outcome: shared.AutoApproveOutcome(req)}, nil
-}
-
-func (c *callbackClient) SessionUpdate(ctx context.Context, params acp.SessionNotification) error {
-	c.session.handleUpdate(params)
-	return nil
-}
-
-func (c *callbackClient) CreateTerminal(ctx context.Context, req acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	// Terminal management is handled by Gemini CLI directly.
-	return acp.CreateTerminalResponse{}, fmt.Errorf("createTerminal not implemented: Gemini CLI manages terminals")
-}
-
-func (c *callbackClient) KillTerminal(ctx context.Context, req acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
-	return acp.KillTerminalResponse{}, fmt.Errorf("killTerminal not implemented")
-}
-
-func (c *callbackClient) TerminalOutput(ctx context.Context, req acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
-	return acp.TerminalOutputResponse{}, fmt.Errorf("terminalOutput not implemented")
-}
-
-func (c *callbackClient) ReleaseTerminal(ctx context.Context, req acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
-	return acp.ReleaseTerminalResponse{}, fmt.Errorf("releaseTerminal not implemented")
-}
-
-func (c *callbackClient) WaitForTerminalExit(ctx context.Context, req acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
-	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("waitForTerminalExit not implemented")
-}
-
-// findBinary searches for the gemini binary in the given paths.
+// findBinary returns the first existing entry in paths, resolving bare names
+// via PATH and absolute/relative paths via stat.
 func findBinary(paths []string) (string, error) {
 	for _, path := range paths {
 		if path == "" {
@@ -468,53 +167,4 @@ func findBinary(paths []string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s not found in PATH or default locations", BinaryName)
-}
-
-func absDir(path string) string {
-	if strings.TrimSpace(path) == "" {
-		cwd, err := filepath.Abs(".")
-		if err != nil {
-			return "."
-		}
-		return cwd
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	return abs
-}
-
-func contentBlockText(block acp.ContentBlock) string {
-	if block.Text != nil {
-		return block.Text.Text
-	}
-	if block.ResourceLink != nil {
-		return block.ResourceLink.Uri
-	}
-	return ""
-}
-
-func stopReasonText(reason acp.StopReason) string {
-	if strings.TrimSpace(string(reason)) == "" {
-		return ""
-	}
-	return string(reason)
-}
-
-type stderrBuffer struct {
-	mu  sync.Mutex
-	buf strings.Builder
-}
-
-func (b *stderrBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *stderrBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }

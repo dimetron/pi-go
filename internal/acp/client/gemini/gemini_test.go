@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -40,37 +38,7 @@ func TestRunnerFindsBinary(t *testing.T) {
 	}
 }
 
-// TestRunningSessionCancel verifies that session cancellation works.
-func TestRunningSessionCancel(t *testing.T) {
-	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "sleep.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", scriptPath)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start command: %v", err)
-	}
-
-	session := newRunningSession(cmd, stdin, stderr)
-	if err := session.Cancel(); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	if err := session.waitProcess(); err == nil {
-		t.Fatal("expected process wait error after cancel")
-	}
-}
-
-// TestRunRequestValidation verifies RunRequest validation.
+// TestRunRequestValidation verifies prompt validation through Start.
 func TestRunRequestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -109,90 +77,38 @@ func TestRunRequestValidation(t *testing.T) {
 	}
 }
 
-// TestClientInfoDefaults verifies that client info defaults correctly.
-func TestClientInfoDefaults(t *testing.T) {
-	runner := Runner{}
-	info := runner.clientInfo()
-	if info.Name != "pi-go" {
-		t.Errorf("expected name 'pi-go', got %q", info.Name)
+// TestResolveCommandAppendsGeminiFlags verifies the Gemini-specific argument
+// list is assembled from RunRequest options.
+func TestResolveCommandAppendsGeminiFlags(t *testing.T) {
+	r := Runner{Binary: "gemini"}
+	_, args, err := r.resolveCommand(RunRequest{
+		Prompt:  "hi",
+		Model:   "gemini-2.5-flash",
+		Sandbox: "docker",
+		Debug:   true,
+	})
+	if err != nil {
+		t.Fatalf("resolveCommand error: %v", err)
 	}
-	if info.Version != "dev" {
-		t.Errorf("expected version 'dev', got %q", info.Version)
-	}
-}
-
-// TestClientInfoCustom verifies that custom client info is preserved.
-func TestClientInfoCustom(t *testing.T) {
-	runner := Runner{
-		ClientInfo: acp.Implementation{Name: "test-client", Version: "1.0.0"},
-	}
-	info := runner.clientInfo()
-	if info.Name != "test-client" {
-		t.Errorf("expected name 'test-client', got %q", info.Name)
-	}
-	if info.Version != "1.0.0" {
-		t.Errorf("expected version '1.0.0', got %q", info.Version)
+	want := []string{"--acp", "--model", "gemini-2.5-flash", "--sandbox", "docker", "--debug"}
+	if fmt.Sprint(args) != fmt.Sprint(want) {
+		t.Fatalf("args = %v, want %v", args, want)
 	}
 }
 
-// TestAbsDir verifies the working directory resolution.
-func TestAbsDir(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-	}{
-		{"empty path", ""},
-		{"current dir", "."},
-		{"temp dir", t.TempDir()},
+// TestResolveCommandHonorsCommandOverride verifies a test Command override is
+// passed verbatim without --acp injection.
+func TestResolveCommandHonorsCommandOverride(t *testing.T) {
+	r := Runner{}
+	binary, args, err := r.resolveCommand(RunRequest{
+		Prompt:  "hi",
+		Command: []string{"/bin/echo", "x"},
+	})
+	if err != nil {
+		t.Fatalf("resolveCommand error: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := absDir(tt.path)
-			if result == "" {
-				t.Error("absDir returned empty string")
-			}
-			// Verify it's absolute (starts with / or drive letter on Windows)
-			if !filepath.IsAbs(result) {
-				t.Errorf("absDir(%q) returned non-absolute path: %q", tt.path, result)
-			}
-		})
-	}
-}
-
-// TestContentBlockText verifies content block text extraction.
-func TestContentBlockText(t *testing.T) {
-	textBlock := acp.ContentBlock{
-		Text: &acp.ContentBlockText{Text: "hello world"},
-	}
-	result := contentBlockText(textBlock)
-	if result != "hello world" {
-		t.Errorf("contentBlockText() = %q, want %q", result, "hello world")
-	}
-
-	emptyBlock := acp.ContentBlock{}
-	result = contentBlockText(emptyBlock)
-	if result != "" {
-		t.Errorf("contentBlockText(empty) = %q, want empty", result)
-	}
-}
-
-// TestStopReasonText verifies stop reason text conversion.
-func TestStopReasonText(t *testing.T) {
-	tests := []struct {
-		reason acp.StopReason
-		expect string
-	}{
-		{acp.StopReasonEndTurn, "end_turn"},
-		{acp.StopReasonMaxTokens, "max_tokens"},
-		{acp.StopReason(""), ""},
-	}
-
-	for _, tt := range tests {
-		result := stopReasonText(tt.reason)
-		if result != tt.expect {
-			t.Errorf("stopReasonText(%v) = %q, want %q", tt.reason, result, tt.expect)
-		}
+	if binary != "/bin/echo" || fmt.Sprint(args) != fmt.Sprint([]string{"x"}) {
+		t.Fatalf("binary=%q args=%v, want /bin/echo [x]", binary, args)
 	}
 }
 

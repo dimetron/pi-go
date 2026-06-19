@@ -625,7 +625,7 @@ func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 	}
 	o.mu.Unlock()
 
-	// Only wait for the graceful timeout if we actually cancelled something.
+	// Only wait for the graceful timeout if we actually canceled something.
 	if hadRunning {
 		<-ctx.Done()
 	}
