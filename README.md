@@ -114,7 +114,7 @@ pi
 pi --model claude:sonnet
 pi --model openai:gpt-4o
 pi --model gemini:gemini-2.5-pro
-pi --model ollama/qwen3.5:latest
+pi --model ollama/gemma4:12b-mlx
 pi --model minimax-m3:cloud # automatically detect ollama if :cloud
 
 # Use model roles
@@ -346,7 +346,7 @@ Add pi to Zed's `agent_servers` in your settings:
     "pi": {
       "type": "custom",
       "command": "pi",
-      "args": ["acp-server", "--model", "minimax-m3:cloud"],
+      "args": ["acp-server", "--model", "glm-5.2:cloud"],
       "env": {}
     }
   }
@@ -355,6 +355,11 @@ Add pi to Zed's `agent_servers` in your settings:
 
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
+
+## License
+
+See [LICENSE](LICENSE) for details.
+tools and memory.
 
 ## License
 

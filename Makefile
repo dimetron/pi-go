@@ -52,9 +52,9 @@ clean:
 ## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
 sandbox-run: install
 ifeq ($(shell uname),Darwin)
-	pi-sandbox --model minimax-m3:cloud
+	pi-sandbox --model glm-5.2:cloud
 else
-	pi --model minimax-m3:cloud
+	pi --model glm-5.2:cloud
 endif
 
 sandbox-log:
@@ -63,3 +63,4 @@ ifeq ($(shell uname),Darwin)
 else
 	@echo "sandbox-log is only available on macOS"
 endif
+if

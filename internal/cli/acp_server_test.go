@@ -176,7 +176,7 @@ func TestRunACPServer_ContextCanceled(t *testing.T) {
 	// Save and restore flags.
 	origModel := flagModel
 	defer func() { flagModel = origModel }()
-	flagModel = "" // exercise the fallback "minimax-m3:cloud" branch.
+	flagModel = "" // exercise the fallback "glm-5.2:cloud" branch.
 
 	done := make(chan error, 1)
 	go func() {
