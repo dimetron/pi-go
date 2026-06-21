@@ -2,7 +2,7 @@
 // subprocess (https://cursor.com/docs/cli/acp). The ACP session lifecycle —
 // connection wiring, stderr streaming, event translation and result capture —
 // is provided by the shared client package; this package only resolves the
-// cursor-agent binary and builds its ACP-mode argument list.
+// agent binary and builds its ACP-mode argument list.
 package cursor
 
 import (
@@ -26,26 +26,27 @@ import (
 // enough to surface a missing API key or missing binary quickly.
 const rpcTimeout = 60 * time.Second
 
-// BinaryName is the preferred name of the Cursor CLI binary.
-// Cursor's documentation calls the binary `agent`; we prefer the
-// disambiguated `cursor-agent` name and fall back to `agent`.
-const BinaryName = "cursor-agent"
+// BinaryName is the canonical name of the Cursor CLI binary. The official
+// installer creates both `agent` (preferred) and `cursor-agent` (legacy alias)
+// as symlinks to ~/.local/share/cursor-agent/versions/<v>/cursor-agent.
+const BinaryName = "agent"
 
 // ACPSubcommand is the subcommand that puts Cursor CLI into ACP mode.
 const ACPSubcommand = "acp"
 
 // DefaultBinaryPaths lists common installation locations for the Cursor
-// CLI binary. The Cursor installer places the binary at ~/.local/bin/agent;
-// we also look for a disambiguated `cursor-agent` in the same locations.
+// CLI binary, in priority order. The Cursor installer places the canonical
+// `agent` binary at $HOME/.local/bin/agent; `cursor-agent` is kept as a
+// legacy fallback for older installs.
 var DefaultBinaryPaths = []string{
-	"cursor-agent",
 	"agent",
-	".local/bin/cursor-agent",
+	"cursor-agent",
 	".local/bin/agent",
-	"/usr/local/bin/cursor-agent",
+	".local/bin/cursor-agent",
 	"/usr/local/bin/agent",
-	"/usr/bin/cursor-agent",
+	"/usr/local/bin/cursor-agent",
 	"/usr/bin/agent",
+	"/usr/bin/cursor-agent",
 }
 
 // Runner launches Cursor CLI in ACP mode and manages the client-side
@@ -55,7 +56,7 @@ type Runner struct {
 	// ClientInfo identifies this client to the agent.
 	ClientInfo acp.Implementation
 
-	// Binary is the path to the cursor-agent (or `agent`) binary.
+	// Binary is the path to the agent (or legacy `cursor-agent`) binary.
 	// If empty, uses the first found in DefaultBinaryPaths.
 	Binary string
 
@@ -72,7 +73,7 @@ type RunRequest struct {
 	SessionID string   // Optional session ID to resume
 	CWD       string   // Working directory
 	Env       []string // Additional environment variables
-	Command   []string // Optional command override for testing (defaults to cursor-agent acp)
+	Command   []string // Optional command override for testing (defaults to agent acp)
 
 	// Cursor-specific options
 	APIKey    string // Optional; if set, passed as --api-key. Prefer CURSOR_API_KEY env var.

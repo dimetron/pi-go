@@ -110,16 +110,22 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
-func TestDefaultBinaryPathsPrefersCursorAgent(t *testing.T) {
+func TestDefaultBinaryPathsPrefersAgent(t *testing.T) {
 	if len(DefaultBinaryPaths) == 0 {
 		t.Fatal("DefaultBinaryPaths is empty")
 	}
-	if DefaultBinaryPaths[0] != "cursor-agent" {
-		t.Errorf("first path should be 'cursor-agent', got %q", DefaultBinaryPaths[0])
+	// Cursor's official installer creates `agent` at ~/.local/bin/agent and
+	// `cursor-agent` as a legacy alias; `agent` is the canonical name.
+	if DefaultBinaryPaths[0] != "agent" {
+		t.Errorf("first path should be 'agent', got %q", DefaultBinaryPaths[0])
 	}
-	// `agent` must appear as a fallback — per Cursor docs the binary is named `agent`.
-	if !slices.Contains(DefaultBinaryPaths, "agent") {
-		t.Errorf("DefaultBinaryPaths should include 'agent' fallback; got %v", DefaultBinaryPaths)
+	if !slices.Contains(DefaultBinaryPaths, "cursor-agent") {
+		t.Errorf("DefaultBinaryPaths should keep 'cursor-agent' as legacy fallback; got %v", DefaultBinaryPaths)
+	}
+	// The Cursor installer's canonical path is $HOME/.local/bin/agent.
+	homeAgent := filepath.Join(".local", "bin", "agent")
+	if !slices.Contains(DefaultBinaryPaths, homeAgent) {
+		t.Errorf("DefaultBinaryPaths should include %q (Cursor install location); got %v", homeAgent, DefaultBinaryPaths)
 	}
 }
 
