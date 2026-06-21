@@ -28,7 +28,7 @@ type AgentInput struct {
 	WorktreeName string `json:"worktree_name,omitempty"` // Optional worktree/branch name prefix
 	WorkDir      string `json:"work_dir,omitempty"`      // Override working directory (e.g. existing worktree path)
 	Background   bool   `json:"background,omitempty"`    // Run in background
-	SkipCleanup  bool   `json:"skip_cleanup,omitempty"`  // Don't auto-cleanup worktree on completion
+	SkipCleanup  bool   `json:"skip_cleanup,omitempty"`  // Deprecated: worktree cleanup is always deferred to the caller or shutdown
 }
 
 // ToSpawnInput converts a legacy AgentInput to the new SpawnInput format.
