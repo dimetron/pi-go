@@ -315,6 +315,36 @@ func TestHandleSlashCommandModelSwitchError(t *testing.T) {
 	}
 }
 
+func TestHandleSlashCommandModelSwitchEmptyRoleModel(t *testing.T) {
+	m := &model{
+		inputModel: InputModel{Text: "/model empty-role"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default":    {Model: "gpt-5.5"},
+				"empty-role": {Model: ""},
+			},
+			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
+				t.Error("ModelSwitcher should not be called for empty model")
+				return nil, "", "", nil
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model empty-role")
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	}
+	if !strings.Contains(mm.chatModel.Messages[0].content, "no model configured") {
+		t.Errorf("expected 'no model configured' message, got %q", mm.chatModel.Messages[0].content)
+	}
+}
+
 func TestHandleSlashCommandExit(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/exit"},

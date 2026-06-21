@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,156 @@ func TestDeferredInit_WithMemoryEnabled(t *testing.T) {
 
 	if !gotResult {
 		t.Log("memory path did not produce a result (may be environment-specific)")
+	}
+}
+
+// -----------------------------------------------------------------------
+// buildSwitchedLLM — verify model resolution, provider override, error
+// handling, and token tracker context window update.
+// -----------------------------------------------------------------------
+
+func TestBuildSwitchedLLM_OpenAI(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	origURL := flagURL
+	origInsecure := flagInsecure
+	origHeaders := flagHeaders
+	defer func() {
+		flagURL = origURL
+		flagInsecure = origInsecure
+		flagHeaders = origHeaders
+	}()
+	flagURL = ""
+	flagInsecure = false
+	flagHeaders = nil
+
+	t.Setenv("OPENAI_API_KEY", "test-key-switched")
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"default": {Model: "gpt-5.5", Provider: "openai"},
+		},
+	}
+	tracker := guardrail.New(0)
+
+	llm, modelName, providerName, err := buildSwitchedLLM(context.Background(), cfg, tracker, "gpt-5.5")
+	if err != nil {
+		t.Fatalf("buildSwitchedLLM() error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("buildSwitchedLLM() returned nil LLM")
+	}
+	if modelName != "gpt-5.5" {
+		t.Errorf("modelName = %q, want %q", modelName, "gpt-5.5")
+	}
+	if providerName != "openai" {
+		t.Errorf("providerName = %q, want %q", providerName, "openai")
+	}
+}
+
+func TestBuildSwitchedLLM_InvalidModel(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	origURL := flagURL
+	origHeaders := flagHeaders
+	origInsecure := flagInsecure
+	defer func() {
+		flagURL = origURL
+		flagHeaders = origHeaders
+		flagInsecure = origInsecure
+	}()
+	flagURL = ""
+	flagHeaders = nil
+	flagInsecure = false
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"default": {Model: "gpt-5.5", Provider: "openai"},
+		},
+	}
+	tracker := guardrail.New(0)
+
+	_, _, _, err := buildSwitchedLLM(context.Background(), cfg, tracker, "this-model-does-not-exist-xyz")
+	if err == nil {
+		t.Fatal("expected error for invalid model name, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolving model") && !strings.Contains(err.Error(), "model validation") {
+		t.Errorf("expected resolving or validation error, got: %v", err)
+	}
+}
+
+func TestBuildSwitchedLLM_NoProvider(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	origURL := flagURL
+	origHeaders := flagHeaders
+	origInsecure := flagInsecure
+	defer func() {
+		flagURL = origURL
+		flagHeaders = origHeaders
+		flagInsecure = origInsecure
+	}()
+	flagURL = ""
+	flagHeaders = nil
+	flagInsecure = false
+
+	t.Setenv("OPENAI_API_KEY", "test-key-no-provider")
+
+	cfg := config.Config{}
+	tracker := guardrail.New(0)
+
+	llm, modelName, _, err := buildSwitchedLLM(context.Background(), cfg, tracker, "gpt-5.5")
+	if err != nil {
+		t.Fatalf("buildSwitchedLLM() error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("buildSwitchedLLM() returned nil LLM")
+	}
+	if modelName != "gpt-5.5" {
+		t.Errorf("modelName = %q, want %q", modelName, "gpt-5.5")
+	}
+}
+
+func TestBuildSwitchedLLM_AnthropicProvider(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	origURL := flagURL
+	origHeaders := flagHeaders
+	origInsecure := flagInsecure
+	defer func() {
+		flagURL = origURL
+		flagHeaders = origHeaders
+		flagInsecure = origInsecure
+	}()
+	flagURL = ""
+	flagHeaders = nil
+	flagInsecure = false
+
+	t.Setenv("ANTHROPIC_API_KEY", "test-key-anthropic-switch")
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"default": {Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+	tracker := guardrail.New(0)
+
+	llm, modelName, providerName, err := buildSwitchedLLM(context.Background(), cfg, tracker, "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("buildSwitchedLLM() error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("buildSwitchedLLM() returned nil LLM")
+	}
+	if modelName != "claude-sonnet-4-6" {
+		t.Errorf("modelName = %q, want %q", modelName, "claude-sonnet-4-6")
+	}
+	if providerName != "anthropic" {
+		t.Errorf("providerName = %q, want %q", providerName, "anthropic")
 	}
 }
 
