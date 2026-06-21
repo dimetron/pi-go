@@ -160,13 +160,13 @@ exit 0
 }
 
 func TestRunnerStartBinaryNotFound(t *testing.T) {
-	runner := Runner{Binary: "/nonexistent/path/to/cursor-agent-xyz123"}
+	runner := Runner{Binary: "/nonexistent/path/to/agent-xyz123"}
 	_, err := runner.Start(context.Background(), RunRequest{Prompt: "test"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent binary")
 	}
-	if !strings.Contains(err.Error(), "finding cursor-agent") {
-		t.Errorf("error should wrap 'finding cursor-agent', got: %v", err)
+	if !strings.Contains(err.Error(), "finding agent") {
+		t.Errorf("error should wrap 'finding agent', got: %v", err)
 	}
 }
 
@@ -233,7 +233,7 @@ func TestResolveCommand(t *testing.T) {
 			runner:    Runner{Binary: "/nonexistent/path/to/binary-xyz"},
 			req:       RunRequest{Prompt: "hi"},
 			wantErr:   true,
-			errSubstr: "finding cursor-agent",
+			errSubstr: "finding agent",
 		},
 		{
 			name:       "command single element defaults to acp subcommand (no extra args)",
@@ -308,7 +308,7 @@ func TestResolveCommand(t *testing.T) {
 		},
 		// The "default fallback uses DefaultBinaryPaths" branch is exercised
 		// separately in TestResolveCommandUsesDefaultBinaryPaths because it
-		// depends on the host having cursor-agent (or `agent`) installed.
+		// depends on the host having agent (or legacy `cursor-agent`) installed.
 		// The error counterpart — no binary in DefaultBinaryPaths — is
 		// covered here by overriding DefaultBinaryPaths to a guaranteed-
 		// missing value, so the test is deterministic on any machine.
@@ -317,7 +317,7 @@ func TestResolveCommand(t *testing.T) {
 			runner:               Runner{},
 			req:                  RunRequest{Prompt: "hi"},
 			wantErr:              true,
-			errSubstr:            "finding cursor-agent",
+			errSubstr:            "finding agent",
 			overrideDefaultPaths: true,
 		},
 	}
@@ -368,7 +368,7 @@ func TestResolveCommand(t *testing.T) {
 // TestResolveCommandUsesDefaultBinaryPaths verifies the DefaultBinaryPaths
 // branch in resolveCommand: when no Binary, no Command, and no env override is
 // set, the resolver falls back to DefaultBinaryPaths and appends the `acp`
-// subcommand. The test is best-effort: if cursor-agent (or the `agent`
+// subcommand. The test is best-effort: if agent (or the legacy `cursor-agent`
 // fallback) is not installed on the host, resolution will fail and we skip
 // the assertions — this matches the convention used by the claudecode and
 // gemini resolveCommand tests, since CI runners do not have these CLIs.
@@ -378,8 +378,8 @@ func TestResolveCommandUsesDefaultBinaryPaths(t *testing.T) {
 	r := Runner{}
 	binary, args, err := r.resolveCommand(RunRequest{Prompt: "hi"})
 	if err != nil {
-		// cursor-agent / agent not installed on this host — skip.
-		t.Skipf("DefaultBinaryPaths lookup failed (cursor-agent likely not installed): %v", err)
+		// agent / cursor-agent not installed on this host — skip.
+		t.Skipf("DefaultBinaryPaths lookup failed (agent likely not installed): %v", err)
 	}
 	if binary == "" {
 		t.Fatal("resolveCommand() binary is empty, want non-empty")
