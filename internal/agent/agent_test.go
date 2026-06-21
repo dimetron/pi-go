@@ -961,6 +961,47 @@ func TestRebuildWithInstructionEmptyError(t *testing.T) {
 	}
 }
 
+func TestRebuildWithModel(t *testing.T) {
+	originalLLM := &mockLLM{name: "original-model", response: "Hello!"}
+	newLLM := &mockLLM{name: "new-model", response: "Hi!"}
+
+	a, err := New(Config{Model: originalLLM, Instruction: "Test instruction."})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with a new LLM.
+	if err := a.RebuildWithModel(newLLM); err != nil {
+		t.Fatalf("RebuildWithModel() error: %v", err)
+	}
+
+	// Verify the model was swapped.
+	if a.config.Model != newLLM {
+		t.Errorf("config.Model was not updated to the new LLM")
+	}
+	// Verify instruction is preserved.
+	if a.config.Instruction != "Test instruction." {
+		t.Errorf("config.Instruction = %q, want %q", a.config.Instruction, "Test instruction.")
+	}
+}
+
+func TestRebuildWithModelNilLLM(t *testing.T) {
+	llm := &mockLLM{name: "test-model", response: "Hello!"}
+
+	a, err := New(Config{Model: llm})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with nil LLM should not panic (the runner will use nil model).
+	// We don't call Run here, so it won't actually try to generate.
+	_ = a.RebuildWithModel(nil)
+	// Verify the model was set (even if nil).
+	if a.config.Model != nil {
+		t.Errorf("config.Model should be nil, got %T", a.config.Model)
+	}
+}
+
 func TestDefaultRetryConfig(t *testing.T) {
 	cfg := DefaultRetryConfig()
 

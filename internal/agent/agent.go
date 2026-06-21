@@ -315,6 +315,32 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	return nil
 }
 
+// RebuildWithModel recreates the agent's internal runner with a new LLM while
+// preserving all other configuration (tools, callbacks, instruction, session).
+// The session service is reused so existing sessions remain accessible.
+func (a *Agent) RebuildWithModel(llm model.LLM) error {
+	cfg := a.config
+	cfg.Model = llm
+
+	// Reconstruct the instruction the same way New() does.
+	instruction := cfg.Instruction
+	if instruction == "" {
+		instruction = SystemInstruction
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
+	}
+
+	r, err := buildRunner(cfg, instruction, a.sessionService)
+	if err != nil {
+		return fmt.Errorf("rebuilding runner: %w", err)
+	}
+
+	a.runner = r
+	a.config = cfg
+	return nil
+}
+
 // modelNamer is satisfied by session services that can record the model name
 // for an existing session (notably *session.FileService). Sessions backed by
 // services without this capability still get the default "unknown" placeholder
