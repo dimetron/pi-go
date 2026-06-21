@@ -5,11 +5,11 @@
 | Field    | Value                                                     |
 |----------|-----------------------------------------------------------|
 | Spec     | `tools/002-specs-tools-001-headroom-update-existingf-rtk` |
-| Agent    | `task-1782079480136132000`                                |
-| Outcome  | **merge_failed**                                          |
+| Agent    | `task-1782080394671989000`                                |
+| Outcome  | **completed**                                             |
 | Retries  | 0 / 10                                                    |
-| Started  | 2026-06-22T00:04:40+02:00                                 |
-| Duration | 10m27s                                                    |
+| Started  | 2026-06-22T00:19:55+02:00                                 |
+| Duration | 10m29s                                                    |
 
 ## Gates
 
@@ -23,4 +23,4 @@ All gates **passed**.
 
 ## Result
 
-Gates passed but merge into the main branch failed. Worktree preserved for manual resolution.
+All gates passed and changes were merged successfully.

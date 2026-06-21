@@ -63,4 +63,3 @@ ifeq ($(shell uname),Darwin)
 else
 	@echo "sandbox-log is only available on macOS"
 endif
-if
