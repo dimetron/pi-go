@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"net/http"
@@ -240,19 +241,17 @@ func ollamaGenaiToolsToOllama(tools []*genai.Tool) ollamaapi.Tools {
 				Properties: ollamaapi.NewToolPropertiesMap(),
 			}
 
-			if fd.ParametersJsonSchema != nil {
-				if m, ok := fd.ParametersJsonSchema.(map[string]any); ok {
-					if props, ok := m["properties"].(map[string]any); ok {
-						for name, propRaw := range props {
-							prop := convertToToolProperty(propRaw)
-							params.Properties.Set(name, prop)
-						}
+			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
+				if props, ok := m["properties"].(map[string]any); ok {
+					for name, propRaw := range props {
+						prop := convertToToolProperty(propRaw)
+						params.Properties.Set(name, prop)
 					}
-					if required, ok := m["required"].([]any); ok {
-						for _, r := range required {
-							if s, ok := r.(string); ok {
-								params.Required = append(params.Required, s)
-							}
+				}
+				if required, ok := m["required"].([]any); ok {
+					for _, r := range required {
+						if s, ok := r.(string); ok {
+							params.Required = append(params.Required, s)
 						}
 					}
 				}
@@ -269,6 +268,32 @@ func ollamaGenaiToolsToOllama(tools []*genai.Tool) ollamaapi.Tools {
 		}
 	}
 	return out
+}
+
+// schemaToMap normalizes a genai FunctionDeclaration.ParametersJsonSchema (typed
+// as `any`) into a plain map[string]any. The pi-go tools registry sets this field
+// to a typed *jsonschema.Schema, so a direct map assertion fails and the tool would
+// be advertised to the model with no properties — leaving weaker models (e.g.
+// minimax-m3) unable to tell which arguments to send, so every parameterized call
+// arrives empty. Marshaling through JSON (jsonschema.Schema has a custom
+// MarshalJSON) yields a faithful schema map regardless of the concrete type, while
+// still accepting a raw map for callers/tests that pass one directly.
+func schemaToMap(raw any) map[string]any {
+	if raw == nil {
+		return nil
+	}
+	if m, ok := raw.(map[string]any); ok {
+		return m
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 // convertToToolProperty converts a raw JSON schema property to Ollama ToolProperty.

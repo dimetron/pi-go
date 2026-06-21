@@ -246,20 +246,18 @@ func antGenaiToolsToBetaAnthropic(tools []*genai.Tool) []anthropic.BetaToolUnion
 			inputSchema := anthropic.BetaToolInputSchemaParam{
 				Properties: make(map[string]any),
 			}
-			if fd.ParametersJsonSchema != nil {
-				if m, ok := fd.ParametersJsonSchema.(map[string]any); ok {
-					if props, ok := m["properties"].(map[string]any); ok {
-						inputSchema.Properties = props
-					}
-					if required, ok := m["required"].([]any); ok {
-						reqStrings := make([]string, 0, len(required))
-						for _, r := range required {
-							if s, ok := r.(string); ok {
-								reqStrings = append(reqStrings, s)
-							}
+			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
+				if props, ok := m["properties"].(map[string]any); ok {
+					inputSchema.Properties = props
+				}
+				if required, ok := m["required"].([]any); ok {
+					reqStrings := make([]string, 0, len(required))
+					for _, r := range required {
+						if s, ok := r.(string); ok {
+							reqStrings = append(reqStrings, s)
 						}
-						inputSchema.Required = reqStrings
 					}
+					inputSchema.Required = reqStrings
 				}
 			}
 			tool := anthropic.BetaToolParam{
@@ -407,20 +405,18 @@ func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
 			inputSchema := anthropic.ToolInputSchemaParam{
 				Properties: make(map[string]any),
 			}
-			if fd.ParametersJsonSchema != nil {
-				if m, ok := fd.ParametersJsonSchema.(map[string]any); ok {
-					if props, ok := m["properties"].(map[string]any); ok {
-						inputSchema.Properties = props
-					}
-					if required, ok := m["required"].([]any); ok {
-						reqStrings := make([]string, 0, len(required))
-						for _, r := range required {
-							if s, ok := r.(string); ok {
-								reqStrings = append(reqStrings, s)
-							}
+			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
+				if props, ok := m["properties"].(map[string]any); ok {
+					inputSchema.Properties = props
+				}
+				if required, ok := m["required"].([]any); ok {
+					reqStrings := make([]string, 0, len(required))
+					for _, r := range required {
+						if s, ok := r.(string); ok {
+							reqStrings = append(reqStrings, s)
 						}
-						inputSchema.Required = reqStrings
 					}
+					inputSchema.Required = reqStrings
 				}
 			}
 			tool := anthropic.ToolParam{

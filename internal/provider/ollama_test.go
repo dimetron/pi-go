@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -275,6 +276,45 @@ func TestOllamaGenaiToolsToOllama(t *testing.T) {
 		}
 		if len(result[0].Function.Parameters.Required) != 1 {
 			t.Errorf("required len = %d, want 1", len(result[0].Function.Parameters.Required))
+		}
+	})
+
+	t.Run("typed jsonschema.Schema populates properties and required", func(t *testing.T) {
+		// The tools registry sets ParametersJsonSchema to a typed *jsonschema.Schema,
+		// not a map[string]any. This guards the regression where the map-only
+		// assertion dropped all properties/required, leaving models unable to tell
+		// which arguments to send.
+		schema := &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"command": {Type: "string", Description: "The shell command to execute."},
+				"timeout": {Type: "integer", Description: "Optional timeout in ms."},
+			},
+			Required: []string{"command"},
+		}
+		tools := []*genai.Tool{
+			{FunctionDeclarations: []*genai.FunctionDeclaration{
+				{Name: "bash", Description: "Run a shell command", ParametersJsonSchema: schema},
+			}},
+		}
+
+		result := ollamaGenaiToolsToOllama(tools)
+		if len(result) != 1 {
+			t.Fatalf("expected 1 tool, got %d", len(result))
+		}
+		params := result[0].Function.Parameters
+		if _, ok := params.Properties.Get("command"); !ok {
+			t.Error("property 'command' missing from converted schema")
+		}
+		if _, ok := params.Properties.Get("timeout"); !ok {
+			t.Error("property 'timeout' missing from converted schema")
+		}
+		if len(params.Required) != 1 || params.Required[0] != "command" {
+			t.Errorf("required = %v, want [command]", params.Required)
+		}
+		cmd, _ := params.Properties.Get("command")
+		if cmd.Type.String() != "string" {
+			t.Errorf("command type = %q, want string", cmd.Type.String())
 		}
 	})
 
