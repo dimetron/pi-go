@@ -61,11 +61,11 @@ var specCategories = []struct {
 	{"skills", []string{"skill", "audit skill", "skill-", "SKILL.md"}},
 	{"memory", []string{"memory", "palace", "mem-", "memoir", "remember", "recall", "embedding"}},
 	{"sessions", []string{"session", "log optim", "conversation", "recovery", "replay", "trajectory", "atif"}},
-	{"tools", []string{"tool", "lsp", "completion", "command", "tui", "sidebar", "provider", "ollama", "oauth", "login", "web-serve", "webserver", "subagent", "agent", "test", "bench", "eval"}},
+	{"features/TOO", []string{"tool", "lsp", "completion", "command", "tui", "sidebar", "provider", "ollama", "oauth", "login", "web-serve", "webserver", "subagent", "agent", "test", "bench", "eval"}},
 }
 
 // detectCategory inspects the rough idea text and returns the matching
-// spec category. Returns "tools" as the default if no keywords match.
+// spec category. Returns "features/TOO" as the default if no keywords match.
 func detectCategory(roughIdea string) string {
 	lower := strings.ToLower(roughIdea)
 	for _, cat := range specCategories {
@@ -75,7 +75,7 @@ func detectCategory(roughIdea string) string {
 			}
 		}
 	}
-	return "tools" // default category
+	return "features/TOO" // default category
 }
 
 // nextSpecNumber scans a category directory under specs/ and returns the

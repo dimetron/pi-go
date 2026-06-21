@@ -1390,8 +1390,8 @@ func TestHandleRunCommand_ParallelFlag(t *testing.T) {
 }
 
 func TestRunWorktreeName(t *testing.T) {
-	if got := runWorktreeName("tools/004-acp-subagent", ""); got != "tools-004-acp-subagent" {
-		t.Fatalf("runWorktreeName() = %q, want %q", got, "tools-004-acp-subagent")
+	if got := runWorktreeName("features/TOO/004-acp-subagent", ""); got != "features-TOO-004-acp-subagent" {
+		t.Fatalf("runWorktreeName() = %q, want %q", got, "features-TOO-004-acp-subagent")
 	}
 	if got := runWorktreeName("features/SUB/skills-subagents", "part-2"); got != "features-SUB-skills-subagents-part-2" {
 		t.Fatalf("runWorktreeName() with suffix = %q", got)

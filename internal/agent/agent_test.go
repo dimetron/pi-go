@@ -118,6 +118,34 @@ func TestSystemInstruction_SubagentWorktreeGuidance(t *testing.T) {
 	}
 }
 
+func TestSystemInstruction_PresentingChoices(t *testing.T) {
+	for _, phrase := range []string{
+		"# Presenting choices",
+		"(recommended)",
+		"put it first in the list",
+		"Never present a flat list with no guidance",
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
+func TestSystemInstruction_GitSafetyGuidance(t *testing.T) {
+	for _, phrase := range []string{
+		"# Git safety",
+		"backup branch",
+		"Never work directly on main/master",
+		"small, self-contained batches",
+		"git add -p",
+		"--force-with-lease",
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
 func TestNewWithCustomInstruction(t *testing.T) {
 	llm := &mockLLM{name: "test-model", response: "Hello!"}
 

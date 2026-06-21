@@ -75,11 +75,11 @@ ACP-capable coding agents, and also act as an ACP server/agent so external ACP c
 
 ## Reference
 
-- Design: `specs/tools/004-acp-subagent/design.md`
-- Outline: `specs/tools/004-acp-subagent/outline.md`
-- Plan: `specs/tools/004-acp-subagent/plan.md`
-- Requirements: `specs/tools/004-acp-subagent/requirements.md`
-- Research: `specs/tools/004-acp-subagent/research/`
+- Design: `specs/features/TOO/004-acp-subagent/design.md`
+- Outline: `specs/features/TOO/004-acp-subagent/outline.md`
+- Plan: `specs/features/TOO/004-acp-subagent/plan.md`
+- Requirements: `specs/features/TOO/004-acp-subagent/requirements.md`
+- Research: `specs/features/TOO/004-acp-subagent/research/`
 
 ## Constraints
 

@@ -107,23 +107,23 @@ func TestWorktree_CreateWithRequestedName(t *testing.T) {
 	repo := initTestRepo(t)
 	mgr := NewWorktreeManager(repo)
 
-	path, err := mgr.Create("agent-abc12345", "tools/004-acp-subagent")
+	path, err := mgr.Create("agent-abc12345", "features/TOO/004-acp-subagent")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	defer func() { _ = mgr.Cleanup("agent-abc12345") }()
 
 	relPath, _ := filepath.Rel(repo, path)
-	expectedPath := filepath.Join(".pi-go", "tasks", "tools-004-acp-subagent")
+	expectedPath := filepath.Join(".pi-go", "tasks", "features-too-004-acp-subagent")
 	if relPath != expectedPath {
 		t.Fatalf("worktree path = %q, want %q", relPath, expectedPath)
 	}
 
-	cmd := exec.Command("git", "branch", "--list", "tools-004-acp-subagent")
+	cmd := exec.Command("git", "branch", "--list", "features-too-004-acp-subagent")
 	cmd.Dir = repo
 	out, _ := cmd.CombinedOutput()
 	if strings.TrimSpace(string(out)) == "" {
-		t.Fatalf("expected branch %q to exist; got %q", "tools-004-acp-subagent", string(out))
+		t.Fatalf("expected branch %q to exist; got %q", "features-too-004-acp-subagent", string(out))
 	}
 }
 

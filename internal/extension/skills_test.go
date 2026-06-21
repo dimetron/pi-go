@@ -116,8 +116,8 @@ Deploy steps.
 		t.Fatal(err)
 	}
 
-	if len(skills) != 3 {
-		t.Fatalf("expected 3 skills (including bundled), got %d", len(skills))
+	if want := 2 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills (lint + deploy + bundled), got %d", want, len(skills))
 	}
 
 	// lint should be overridden by project version.
@@ -140,8 +140,8 @@ func TestLoadSkillsEmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skills) != 1 {
-		t.Errorf("expected 1 skill (bundled only), got %d", len(skills))
+	if want := bundledSkillCount(t); len(skills) != want {
+		t.Errorf("expected %d skills (bundled only), got %d", want, len(skills))
 	}
 }
 
@@ -153,6 +153,17 @@ func TestFindSkillNotFound(t *testing.T) {
 }
 
 // --- Audit mode integration tests ---
+
+// bundledSkillCount returns the number of embedded bundled skills so count
+// assertions stay correct as bundled skills are added or removed.
+func bundledSkillCount(t *testing.T) int {
+	t.Helper()
+	b, err := LoadBundledSkills()
+	if err != nil {
+		t.Fatalf("LoadBundledSkills: %v", err)
+	}
+	return len(b)
+}
 
 func setupSkillWithContent(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -176,8 +187,8 @@ func TestLoadSkillsWithOptionsBlockCritical(t *testing.T) {
 	}
 
 	// dirty should be blocked.
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills (clean + bundled; dirty blocked), got %d", len(skills))
+	if want := 1 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills (clean + bundled; dirty blocked), got %d", want, len(skills))
 	}
 	if _, ok := FindSkill(skills, "clean"); !ok {
 		t.Error("expected clean skill to be loaded")
@@ -195,8 +206,8 @@ func TestLoadSkillsWithOptionsWarnCritical(t *testing.T) {
 	}
 
 	// In warn mode, skill should still load.
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills in warn mode (tagged + bundled), got %d", len(skills))
+	if want := 1 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills in warn mode (tagged + bundled), got %d", want, len(skills))
 	}
 	if _, ok := FindSkill(skills, "tagged"); !ok {
 		t.Error("expected tagged skill to be loaded")
@@ -213,8 +224,8 @@ func TestLoadSkillsWithOptionsSkipMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills in skip mode (critical + bundled), got %d", len(skills))
+	if want := 1 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills in skip mode (critical + bundled), got %d", want, len(skills))
 	}
 }
 
@@ -228,8 +239,8 @@ func TestLoadSkillsWithOptionsWarningOnlyLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills (warning-only + bundled), got %d", len(skills))
+	if want := 1 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills (warning-only + bundled), got %d", want, len(skills))
 	}
 }
 
@@ -244,8 +255,8 @@ func TestLoadSkillsDefaultUsesBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 skills (ok + bundled; blocked excluded), got %d", len(skills))
+	if want := 1 + bundledSkillCount(t); len(skills) != want {
+		t.Fatalf("expected %d skills (ok + bundled; blocked excluded), got %d", want, len(skills))
 	}
 	if _, ok := FindSkill(skills, "ok"); !ok {
 		t.Error("expected ok skill to be loaded")
@@ -281,8 +292,8 @@ func TestLoadSkillsNonExistentDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skills) != 1 {
-		t.Errorf("expected 1 skill for nonexistent dir (bundled only), got %d", len(skills))
+	if want := bundledSkillCount(t); len(skills) != want {
+		t.Errorf("expected %d skills for nonexistent dir (bundled only), got %d", want, len(skills))
 	}
 }
 

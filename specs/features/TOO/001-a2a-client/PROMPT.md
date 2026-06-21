@@ -55,11 +55,11 @@ Implement an A2A (Agent-to-Agent) client tool that allows pi-go to call remote A
 
 ## Reference
 
-- Design: `specs/tools/001-a2a-client/design.md`
-- Outline: `specs/tools/001-a2a-client/outline.md`
-- Plan: `specs/tools/001-a2a-client/plan.md`
-- Requirements: `specs/tools/001-a2a-client/requirements.md`
-- Research: `specs/tools/001-a2a-client/research/`
+- Design: `specs/features/TOO/001-a2a-client/design.md`
+- Outline: `specs/features/TOO/001-a2a-client/outline.md`
+- Plan: `specs/features/TOO/001-a2a-client/plan.md`
+- Requirements: `specs/features/TOO/001-a2a-client/requirements.md`
+- Research: `specs/features/TOO/001-a2a-client/research/`
 
 ## Constraints
 

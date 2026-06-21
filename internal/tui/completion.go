@@ -230,7 +230,7 @@ func matchingSpecs(input string, workDir string) []CompletionCandidate {
 
 // listSpecs scans the specs/ directory (including nested subdirectories) for
 // subdirectories containing PROMPT.md. Returns a sorted list of spec names.
-// Nested specs use relative paths (e.g. "tools/001-a2a-client").
+// Nested specs use relative paths (e.g. "features/TOO/001-a2a-client").
 func listSpecs(workDir string) ([]string, error) {
 	if workDir == "" {
 		return nil, nil

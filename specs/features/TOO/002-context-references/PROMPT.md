@@ -73,11 +73,11 @@ messages using `@ref` syntax in TUI mode. Expanded content is shown inline with 
 
 ## Reference
 
-- Design: `specs/tools/002-context-references/design.md`
-- Outline: `specs/tools/002-context-references/outline.md`
-- Plan: `specs/tools/002-context-references/plan.md`
-- Requirements: `specs/tools/002-context-references/requirements.md`
-- Research: `specs/tools/002-context-references/research/`
+- Design: `specs/features/TOO/002-context-references/design.md`
+- Outline: `specs/features/TOO/002-context-references/outline.md`
+- Plan: `specs/features/TOO/002-context-references/plan.md`
+- Requirements: `specs/features/TOO/002-context-references/requirements.md`
+- Research: `specs/features/TOO/002-context-references/research/`
 
 ## Constraints
 
