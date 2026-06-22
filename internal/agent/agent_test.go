@@ -118,6 +118,34 @@ func TestSystemInstruction_SubagentWorktreeGuidance(t *testing.T) {
 	}
 }
 
+func TestSystemInstruction_PresentingChoices(t *testing.T) {
+	for _, phrase := range []string{
+		"# Presenting choices",
+		"(recommended)",
+		"put it first in the list",
+		"Never present a flat list with no guidance",
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
+func TestSystemInstruction_GitSafetyGuidance(t *testing.T) {
+	for _, phrase := range []string{
+		"# Git safety",
+		"backup branch",
+		"Never work directly on main/master",
+		"small, self-contained batches",
+		"git add -p",
+		"--force-with-lease",
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
 func TestNewWithCustomInstruction(t *testing.T) {
 	llm := &mockLLM{name: "test-model", response: "Hello!"}
 
@@ -930,6 +958,47 @@ func TestRebuildWithInstructionEmptyError(t *testing.T) {
 	err = a.RebuildWithInstruction("")
 	if err == nil {
 		t.Error("RebuildWithInstruction() should return error for empty instruction")
+	}
+}
+
+func TestRebuildWithModel(t *testing.T) {
+	originalLLM := &mockLLM{name: "original-model", response: "Hello!"}
+	newLLM := &mockLLM{name: "new-model", response: "Hi!"}
+
+	a, err := New(Config{Model: originalLLM, Instruction: "Test instruction."})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with a new LLM.
+	if err := a.RebuildWithModel(newLLM); err != nil {
+		t.Fatalf("RebuildWithModel() error: %v", err)
+	}
+
+	// Verify the model was swapped.
+	if a.config.Model != newLLM {
+		t.Errorf("config.Model was not updated to the new LLM")
+	}
+	// Verify instruction is preserved.
+	if a.config.Instruction != "Test instruction." {
+		t.Errorf("config.Instruction = %q, want %q", a.config.Instruction, "Test instruction.")
+	}
+}
+
+func TestRebuildWithModelNilLLM(t *testing.T) {
+	llm := &mockLLM{name: "test-model", response: "Hello!"}
+
+	a, err := New(Config{Model: llm})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Rebuild with nil LLM should not panic (the runner will use nil model).
+	// We don't call Run here, so it won't actually try to generate.
+	_ = a.RebuildWithModel(nil)
+	// Verify the model was set (even if nil).
+	if a.config.Model != nil {
+		t.Errorf("config.Model should be nil, got %T", a.config.Model)
 	}
 }
 

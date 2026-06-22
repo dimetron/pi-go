@@ -44,7 +44,7 @@ When a `/plan` session is interrupted (Ctrl+C, network error, context limit), th
 ```go
 // PlanContext holds the /plan session context for resume.
 type PlanContext struct {
-    TaskName  string `json:"taskName,omitempty"`  // e.g. "tools/001-add-logging"
+    TaskName  string `json:"taskName,omitempty"`  // e.g. "features/TOO/001-add-logging"
     RoughIdea string `json:"roughIdea,omitempty"`  // original rough idea
     SpecDir   string `json:"specDir,omitempty"`   // absolute path to spec directory
     Phase     string `json:"phase,omitempty"`     // "plan" (same mode for now)

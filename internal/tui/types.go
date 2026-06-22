@@ -55,6 +55,12 @@ type Config struct {
 	MCPToolsets []adktool.Toolset
 	// MCPServers holds the configured MCP server definitions.
 	MCPServers []extension.MCPServerConfig
+
+	// ModelSwitcher creates a new LLM instance for the given model name,
+	// updates the token tracker's context window size, and returns the
+	// wrapped LLM, resolved model name, and provider. Used by /model <name>.
+	// If nil, model switching via /model is disabled.
+	ModelSwitcher func(ctx context.Context, modelName string) (llmmodel.LLM, string, string, error)
 }
 
 // InitEvent reports progress from deferred initialization.

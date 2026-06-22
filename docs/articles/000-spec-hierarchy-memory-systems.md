@@ -73,6 +73,7 @@ rooms:
   - name: MEM          # patterns: "specs/features/MEM/**"
   - name: SOP          # patterns: "specs/features/SOP/**"
   - name: SUB          # patterns: "specs/features/SUB/**"
+  - name: TOO          # patterns: "specs/features/TOO/**"
   - name: TST          # patterns: "specs/features/TST/**"
   - name: TUI          # patterns: "specs/features/TUI/**"
   - name: WEB          # patterns: "specs/features/WEB/**"
@@ -135,3 +136,4 @@ The ancient memory athletes didn't have embeddings. They had architecture. Turns
 ---
 
 *References: [pi-go](https://github.com/dimetron/pi-go) | [MemPalace](https://github.com/milla-jovovich/mempalace) | [Caveman](https://github.com/JuliusBrussee/caveman) | [Art of Memory Forum](https://forum.artofmemory.com/t/memory-palaces-using-the-alphabet-letters/43870) | [Aristotle's Nuclear Alphabet](https://youtu.be/_3N2i73LKt0)*
+[Aristotle's Nuclear Alphabet](https://youtu.be/_3N2i73LKt0)*

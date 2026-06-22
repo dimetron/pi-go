@@ -98,6 +98,7 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"azure/gpt-5.5", "azure"},
 		{"gemini-2.5-pro", "gemini"},
 		{"minimax-m3:cloud", "ollama"},
+		{"glm-5.2:cloud", "ollama"},
 	}
 
 	for _, tt := range tests {

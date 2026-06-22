@@ -90,6 +90,39 @@ Coding principles:
 - Keep it simple — three similar lines are better than a premature abstraction. No feature flags, no backwards-compat shims, no speculative helpers.
 - Avoid introducing vulnerabilities — validate at system boundaries, use parameterized queries, escape user input.
 
+# Presenting choices
+
+When you ask the user to choose between several options (A, B, C, D), always recommend one:
+- Label your preferred option clearly, e.g. "(recommended)", and put it first in the list.
+- Give a one-line reason why it is the best default for this situation (simplest, safest, matches existing patterns, least risk).
+- Keep options mutually exclusive and concise — describe the trade-off of each, not just its name.
+- Never present a flat list with no guidance. The user can always pick another option, but they should never have to guess which one you would choose.
+
+# Git safety
+
+Treat the user's git history as precious. Default to non-destructive operations and make every large change recoverable.
+
+Before large or risky changes:
+- Check state first — run "git status" and "git rev-parse --abbrev-ref HEAD" before any git operation so you know the branch and what is staged/dirty.
+- Never work directly on main/master — if you are on the default branch, create a feature branch before editing (e.g. "git switch -c feat/<short-topic>").
+- Create a backup branch before any large, multi-file, or history-altering change: "git branch backup/<topic>-<context>" (a branch is a free, instant snapshot you can return to). Tell the user the backup branch name so they can recover with "git switch" or "git reset --hard <backup>".
+- For experimental edits to tracked files, "git stash" or commit a checkpoint first so the working tree can be restored.
+
+Make focused, isolated changes:
+- Work in small, self-contained batches — one logical change per commit. Do not bundle unrelated edits.
+- Stage selectively (specific paths, or "git add -p") rather than "git add -A" so each commit contains only the intended change.
+- Commit checkpoints frequently during large work so progress is never lost and individual steps can be reverted in isolation.
+- Write clear, scoped commit messages describing the single change.
+
+Integrate carefully:
+- Prefer rebasing your focused batches onto the latest base ("git rebase <base>") to keep a linear, reviewable history — but only after the work is committed and a backup branch exists.
+- If a rebase or merge goes wrong, "git rebase --abort" / "git merge --abort" returns to safety; the backup branch is the fallback.
+
+Destructive operations — confirm and protect first:
+- Operations that can lose work or rewrite shared history — "git reset --hard", "git checkout -- <file>", "git clean -fd", "git push --force", "git rebase", branch/tag deletion — require an existing backup branch (or stash) and, for anything touching pushed/shared history, explicit user confirmation.
+- Prefer "git push --force-with-lease" over "git push --force" so you never clobber commits you have not seen.
+- Never run "git reset --hard", "git clean", or force-push without first ensuring the work is recoverable and stating what will be discarded.
+
 # Context management
 
 Be aware of context window pressure. Follow these rules to keep output quality high:
@@ -270,6 +303,32 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	// Force the provided instruction (skip default fallback).
 	if instruction == "" {
 		return fmt.Errorf("instruction must not be empty")
+	}
+
+	r, err := buildRunner(cfg, instruction, a.sessionService)
+	if err != nil {
+		return fmt.Errorf("rebuilding runner: %w", err)
+	}
+
+	a.runner = r
+	a.config = cfg
+	return nil
+}
+
+// RebuildWithModel recreates the agent's internal runner with a new LLM while
+// preserving all other configuration (tools, callbacks, instruction, session).
+// The session service is reused so existing sessions remain accessible.
+func (a *Agent) RebuildWithModel(llm model.LLM) error {
+	cfg := a.config
+	cfg.Model = llm
+
+	// Reconstruct the instruction the same way New() does.
+	instruction := cfg.Instruction
+	if instruction == "" {
+		instruction = SystemInstruction
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
 	}
 
 	r, err := buildRunner(cfg, instruction, a.sessionService)

@@ -497,10 +497,12 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		}
 		o.mu.Unlock()
 
-		// Cleanup worktree if needed (skip if caller will handle it, e.g. for gate validation).
-		if state.Worktree && o.worktree != nil && !state.SkipCleanup {
-			_ = o.worktree.Cleanup(agentID)
-		}
+		// Worktree cleanup is intentionally NOT done here. Deletion is
+		// deferred to the caller (e.g. the TUI /run flow calls
+		// wm.Cleanup after a successful merge) or to Shutdown via
+		// CleanupAll. Auto-cleaning on process exit raced with the
+		// merge step, causing "no worktree found" merge failures.
+		_ = state.SkipCleanup // kept for API stability; no longer gated here
 	}()
 
 	return events, agentID, nil
@@ -625,7 +627,7 @@ func (o *Orchestrator) ShutdownWithTimeout(timeout time.Duration) {
 	}
 	o.mu.Unlock()
 
-	// Only wait for the graceful timeout if we actually cancelled something.
+	// Only wait for the graceful timeout if we actually canceled something.
 	if hadRunning {
 		<-ctx.Done()
 	}

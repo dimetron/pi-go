@@ -1911,9 +1911,9 @@ func TestUpdatePlanContext_Set(t *testing.T) {
 	sessionID := createTestSession(t, svc)
 
 	ctx := &PlanContext{
-		TaskName:  "tools/001-test",
+		TaskName:  "features/TOO/001-test",
 		RoughIdea: "add rate limiting",
-		SpecDir:   "/tmp/specs/tools/001-test",
+		SpecDir:   "/tmp/specs/features/TOO/001-test",
 		Phase:     "plan",
 	}
 

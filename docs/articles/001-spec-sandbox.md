@@ -16,7 +16,7 @@ IPC, syscalls, and more.
 sandbox-exec -n no-internet /usr/bin/curl https://example.com
 
 # Custom profile file
-sandbox-exec -D HOME="$HOME" -D CWD="$PWD" -f pi-profile.sb pi --model minimax-m3:cloud
+sandbox-exec -D HOME="$HOME" -D CWD="$PWD" -f pi-profile.sb pi --model glm-5.2:cloud
 
 # Inline profile
 sandbox-exec -p '(version 1)(allow default)(deny network*)' /usr/bin/curl https://example.com

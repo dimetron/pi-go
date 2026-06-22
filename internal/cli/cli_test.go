@@ -219,7 +219,22 @@ func TestCLI_ModelFlagOverridesDefault(t *testing.T) {
 func TestCLI_RoleFlagsMutuallyExclusive(t *testing.T) {
 	// When multiple role flags are set, the switch statement picks one (smol wins due to order).
 	// This just verifies no crash occurs.
+	// Isolate HOME so loadDotEnv and config.Load don't pick up real machine credentials.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test-key")
+	// Set all provider keys so whichever role resolves has a key available.
+	t.Setenv("ANTHROPIC_API_KEY", "test-key-anthropic")
+	t.Setenv("GEMINI_API_KEY", "test-key-gemini")
+
+	// Reset global flags that may leak from other tests.
+	flagContinue = false
+	flagSession = ""
+	flagURL = ""
+	flagHeaders = nil
+	flagInsecure = false
+	flagMemoryOff = false
+	flagPprof = ""
+	flagPprofPort = "6060"
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--smol", "--mode", "print"})

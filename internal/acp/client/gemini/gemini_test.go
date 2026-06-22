@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -40,37 +40,7 @@ func TestRunnerFindsBinary(t *testing.T) {
 	}
 }
 
-// TestRunningSessionCancel verifies that session cancellation works.
-func TestRunningSessionCancel(t *testing.T) {
-	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "sleep.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", scriptPath)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start command: %v", err)
-	}
-
-	session := newRunningSession(cmd, stdin, stderr)
-	if err := session.Cancel(); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	if err := session.waitProcess(); err == nil {
-		t.Fatal("expected process wait error after cancel")
-	}
-}
-
-// TestRunRequestValidation verifies RunRequest validation.
+// TestRunRequestValidation verifies prompt validation through Start.
 func TestRunRequestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -109,90 +79,38 @@ func TestRunRequestValidation(t *testing.T) {
 	}
 }
 
-// TestClientInfoDefaults verifies that client info defaults correctly.
-func TestClientInfoDefaults(t *testing.T) {
-	runner := Runner{}
-	info := runner.clientInfo()
-	if info.Name != "pi-go" {
-		t.Errorf("expected name 'pi-go', got %q", info.Name)
+// TestResolveCommandAppendsGeminiFlags verifies the Gemini-specific argument
+// list is assembled from RunRequest options.
+func TestResolveCommandAppendsGeminiFlags(t *testing.T) {
+	r := Runner{Binary: "gemini"}
+	_, args, err := r.resolveCommand(RunRequest{
+		Prompt:  "hi",
+		Model:   "gemini-2.5-flash",
+		Sandbox: "docker",
+		Debug:   true,
+	})
+	if err != nil {
+		t.Fatalf("resolveCommand error: %v", err)
 	}
-	if info.Version != "dev" {
-		t.Errorf("expected version 'dev', got %q", info.Version)
-	}
-}
-
-// TestClientInfoCustom verifies that custom client info is preserved.
-func TestClientInfoCustom(t *testing.T) {
-	runner := Runner{
-		ClientInfo: acp.Implementation{Name: "test-client", Version: "1.0.0"},
-	}
-	info := runner.clientInfo()
-	if info.Name != "test-client" {
-		t.Errorf("expected name 'test-client', got %q", info.Name)
-	}
-	if info.Version != "1.0.0" {
-		t.Errorf("expected version '1.0.0', got %q", info.Version)
+	want := []string{"--acp", "--model", "gemini-2.5-flash", "--sandbox", "docker", "--debug"}
+	if fmt.Sprint(args) != fmt.Sprint(want) {
+		t.Fatalf("args = %v, want %v", args, want)
 	}
 }
 
-// TestAbsDir verifies the working directory resolution.
-func TestAbsDir(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-	}{
-		{"empty path", ""},
-		{"current dir", "."},
-		{"temp dir", t.TempDir()},
+// TestResolveCommandHonorsCommandOverride verifies a test Command override is
+// passed verbatim without --acp injection.
+func TestResolveCommandHonorsCommandOverride(t *testing.T) {
+	r := Runner{}
+	binary, args, err := r.resolveCommand(RunRequest{
+		Prompt:  "hi",
+		Command: []string{"/bin/echo", "x"},
+	})
+	if err != nil {
+		t.Fatalf("resolveCommand error: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := absDir(tt.path)
-			if result == "" {
-				t.Error("absDir returned empty string")
-			}
-			// Verify it's absolute (starts with / or drive letter on Windows)
-			if !filepath.IsAbs(result) {
-				t.Errorf("absDir(%q) returned non-absolute path: %q", tt.path, result)
-			}
-		})
-	}
-}
-
-// TestContentBlockText verifies content block text extraction.
-func TestContentBlockText(t *testing.T) {
-	textBlock := acp.ContentBlock{
-		Text: &acp.ContentBlockText{Text: "hello world"},
-	}
-	result := contentBlockText(textBlock)
-	if result != "hello world" {
-		t.Errorf("contentBlockText() = %q, want %q", result, "hello world")
-	}
-
-	emptyBlock := acp.ContentBlock{}
-	result = contentBlockText(emptyBlock)
-	if result != "" {
-		t.Errorf("contentBlockText(empty) = %q, want empty", result)
-	}
-}
-
-// TestStopReasonText verifies stop reason text conversion.
-func TestStopReasonText(t *testing.T) {
-	tests := []struct {
-		reason acp.StopReason
-		expect string
-	}{
-		{acp.StopReasonEndTurn, "end_turn"},
-		{acp.StopReasonMaxTokens, "max_tokens"},
-		{acp.StopReason(""), ""},
-	}
-
-	for _, tt := range tests {
-		result := stopReasonText(tt.reason)
-		if result != tt.expect {
-			t.Errorf("stopReasonText(%v) = %q, want %q", tt.reason, result, tt.expect)
-		}
+	if binary != "/bin/echo" || fmt.Sprint(args) != fmt.Sprint([]string{"x"}) {
+		t.Fatalf("binary=%q args=%v, want /bin/echo [x]", binary, args)
 	}
 }
 
@@ -312,5 +230,267 @@ func TestBinaryPaths(t *testing.T) {
 		if path == "" {
 			t.Error("DefaultBinaryPaths contains empty string")
 		}
+	}
+}
+
+// TestResolveCommandBranches exercises all resolveCommand resolution paths
+// using table-driven tests.
+func TestResolveCommandBranches(t *testing.T) {
+	// Precompute a nonexistent absolute path so we can use it across subtests.
+	nonexistentAbs := filepath.Join(t.TempDir(), "no-such-gemini")
+
+	tests := []struct {
+		name      string
+		runner    Runner
+		req       RunRequest
+		envCmd    string // value for PI_ACP_GEMINI_CMD; "" means unset
+		setEnv    bool
+		wantBin   string
+		wantArgs  []string
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name:     "binary set defaults to --acp",
+			runner:   Runner{Binary: "/bin/true"},
+			req:      RunRequest{Prompt: "hi"},
+			setEnv:   true,
+			envCmd:   "",
+			wantBin:  "/bin/true",
+			wantArgs: []string{"--acp"},
+		},
+		{
+			name:     "binary set with model and sandbox and debug",
+			runner:   Runner{Binary: "gemini"},
+			req:      RunRequest{Prompt: "hi", Model: "gemini-2.5-flash", Sandbox: "docker", Debug: true},
+			setEnv:   true,
+			envCmd:   "",
+			wantBin:  "gemini",
+			wantArgs: []string{"--acp", "--model", "gemini-2.5-flash", "--sandbox", "docker", "--debug"},
+		},
+		{
+			name:     "binary set takes precedence over command",
+			runner:   Runner{Binary: "gemini"},
+			req:      RunRequest{Prompt: "hi", Command: []string{"/bin/echo", "x"}},
+			setEnv:   true,
+			envCmd:   "",
+			wantBin:  "gemini",
+			wantArgs: []string{"--acp"},
+		},
+		{
+			name:     "command single element uses default --acp",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi", Command: []string{"/bin/true"}},
+			setEnv:   true,
+			envCmd:   "",
+			wantBin:  "/bin/true",
+			wantArgs: []string{}, // Command had 1 element, so Command[1:] is empty
+		},
+		{
+			name:     "command multiple elements used verbatim",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi", Command: []string{"/bin/echo", "x", "y"}},
+			setEnv:   true,
+			envCmd:   "",
+			wantBin:  "/bin/echo",
+			wantArgs: []string{"x", "y"},
+		},
+		{
+			name:     "env var bare binary falls back to --acp",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi"},
+			setEnv:   true,
+			envCmd:   "/bin/true",
+			wantBin:  "/bin/true",
+			wantArgs: []string{"--acp"},
+		},
+		{
+			name:     "env var binary with args uses them verbatim",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi"},
+			setEnv:   true,
+			envCmd:   "/bin/echo --acp --foo bar",
+			wantBin:  "/bin/echo",
+			wantArgs: []string{"--acp", "--foo", "bar"},
+		},
+		{
+			name:     "env var binary with args plus model flag appended",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi", Model: "gemini-2.5-flash"},
+			setEnv:   true,
+			envCmd:   "/bin/echo --acp",
+			wantBin:  "/bin/echo",
+			wantArgs: []string{"--acp", "--model", "gemini-2.5-flash"},
+		},
+		{
+			name:      "findBinary fallback error when env unset and no binary found",
+			runner:    Runner{},
+			req:       RunRequest{Prompt: "hi"},
+			setEnv:    true,
+			envCmd:    "",
+			wantErr:   true,
+			errSubstr: "not found",
+		},
+		{
+			name:     "env var pointing to nonexistent binary still resolves (env is trusted)",
+			runner:   Runner{},
+			req:      RunRequest{Prompt: "hi"},
+			setEnv:   true,
+			envCmd:   nonexistentAbs,
+			wantBin:  nonexistentAbs,
+			wantArgs: []string{"--acp"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setEnv {
+				if tt.envCmd == "" {
+					t.Setenv(envACPGeminiCmd, "")
+				} else {
+					t.Setenv(envACPGeminiCmd, tt.envCmd)
+				}
+			}
+
+			// For the "findBinary fallback error" case, override DefaultBinaryPaths
+			// so the test doesn't accidentally find a real gemini on the system.
+			if tt.wantErr && tt.errSubstr == "not found" {
+				orig := DefaultBinaryPaths
+				DefaultBinaryPaths = []string{"definitely-not-a-real-binary-xyz123"}
+				defer func() { DefaultBinaryPaths = orig }()
+			}
+
+			bin, args, err := tt.runner.resolveCommand(tt.req)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveCommand() error = nil, want error containing %q", tt.errSubstr)
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("resolveCommand() error = %q, want error containing %q", err.Error(), tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCommand() unexpected error: %v", err)
+			}
+			if bin != tt.wantBin {
+				t.Errorf("resolveCommand() binary = %q, want %q", bin, tt.wantBin)
+			}
+			if fmt.Sprint(args) != fmt.Sprint(tt.wantArgs) {
+				t.Errorf("resolveCommand() args = %v, want %v", args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// TestFindBinaryBranches exercises all findBinary branches with table-driven tests.
+func TestFindBinaryBranches(t *testing.T) {
+	// Create a temp dir with an executable file for stat-based lookups.
+	tmpDir := t.TempDir()
+	absBin := filepath.Join(tmpDir, "gemini-fake")
+	if err := os.WriteFile(absBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("setup: write file: %v", err)
+	}
+	// Compute a relative path from the test's CWD to the temp file so os.Stat
+	// succeeds for the relative-path branch.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("setup: getwd: %v", err)
+	}
+	relBin, err := filepath.Rel(cwd, absBin)
+	if err != nil {
+		t.Fatalf("setup: rel path: %v", err)
+	}
+	// Ensure it starts with "." so findBinary treats it as a relative path.
+	if !strings.HasPrefix(relBin, ".") {
+		relBin = "./" + relBin
+	}
+	nonexistentRel := "./nonexistent-relative-binary"
+	nonexistentAbs := filepath.Join(tmpDir, "no-such-file")
+
+	tests := []struct {
+		name    string
+		paths   []string
+		wantErr bool
+		// wantPath is checked only if wantErr is false; if empty we just check non-empty.
+		wantPath  string
+		errSubstr string
+	}{
+		{
+			name:     "absolute path stat success",
+			paths:    []string{absBin},
+			wantPath: absBin,
+		},
+		{
+			name:     "relative path stat success",
+			paths:    []string{relBin},
+			wantPath: relBin,
+		},
+		{
+			name:     "absolute path stat fail then LookPath success for ls",
+			paths:    []string{nonexistentAbs, "ls"},
+			wantPath: "", // will be resolved path of ls
+		},
+		{
+			name:      "relative path stat fail continues to next entry",
+			paths:     []string{nonexistentRel, "ls"},
+			wantPath:  "",
+			errSubstr: "",
+		},
+		{
+			name:     "empty string skipped then LookPath success",
+			paths:    []string{"", "ls"},
+			wantPath: "",
+		},
+		{
+			name:      "all entries fail returns error",
+			paths:     []string{"", "definitely-not-a-real-binary-xyz123"},
+			wantErr:   true,
+			errSubstr: "not found",
+		},
+		{
+			name:      "empty paths slice returns error",
+			paths:     []string{},
+			wantErr:   true,
+			errSubstr: "not found",
+		},
+		{
+			name:      "only empty strings returns error",
+			paths:     []string{"", "", ""},
+			wantErr:   true,
+			errSubstr: "not found",
+		},
+		{
+			name:      "nonexistent absolute then nonexistent relative returns error",
+			paths:     []string{nonexistentAbs, nonexistentRel},
+			wantErr:   true,
+			errSubstr: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := findBinary(tt.paths)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("findBinary() error = nil, want error containing %q", tt.errSubstr)
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("findBinary() error = %q, want error containing %q", err.Error(), tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("findBinary() unexpected error: %v", err)
+			}
+			if tt.wantPath != "" {
+				if got != tt.wantPath {
+					t.Errorf("findBinary() = %q, want %q", got, tt.wantPath)
+				}
+			} else if got == "" {
+				t.Error("findBinary() returned empty path, want non-empty")
+			}
+		})
 	}
 }

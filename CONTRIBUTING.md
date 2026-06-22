@@ -76,7 +76,7 @@ pi-go includes built-in pprof profiling support via the `--pprof` flag.
 
 ```bash
 # Start with memory (heap) profiling
-pi --pprof mem --model minimax-m3:cloud
+pi --pprof mem --model glm-5.2:cloud
 
 #PROMPT: explore repository but do not run tests and then check memory usage at go tool pprof http://localhost:6060/debug/pprof/heap
 

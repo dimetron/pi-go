@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"os/exec"
 	"strings"
 	"testing"
@@ -9,7 +11,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
+	adkmodel "google.golang.org/adk/model"
 	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -17,6 +21,18 @@ import (
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
+
+// stubLLM is a minimal adkmodel.LLM implementation for TUI tests.
+type stubLLM struct {
+	name string
+}
+
+func (s *stubLLM) Name() string { return s.name }
+func (s *stubLLM) GenerateContent(_ context.Context, _ *adkmodel.LLMRequest, _ bool) iter.Seq2[*adkmodel.LLMResponse, error] {
+	return func(yield func(*adkmodel.LLMResponse, error) bool) {
+		yield(&adkmodel.LLMResponse{Content: genai.NewContentFromText("ok", genai.RoleModel)}, nil)
+	}
+}
 
 func TestHandleSlashCommandHelp(t *testing.T) {
 	m := &model{
@@ -130,6 +146,202 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	content := mm.chatModel.Messages[0].content
 	if !strings.Contains(content, "(role: smol)") {
 		t.Errorf("expected active role indicator, got %q", content)
+	}
+}
+
+func TestHandleSlashCommandModelSwitch(t *testing.T) {
+	newLLM := &stubLLM{name: "claude-sonnet-4-6"}
+	m := &model{
+		inputModel: InputModel{Text: "/model claude-sonnet-4-6"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.5"},
+			},
+			ModelSwitcher: func(_ context.Context, modelName string) (adkmodel.LLM, string, string, error) {
+				if modelName != "claude-sonnet-4-6" {
+					t.Errorf("ModelSwitcher received %q, want %q", modelName, "claude-sonnet-4-6")
+				}
+				return newLLM, modelName, "anthropic", nil
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model claude-sonnet-4-6")
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	}
+	content := mm.chatModel.Messages[0].content
+	if !strings.Contains(content, "Switched model to **claude-sonnet-4-6**") {
+		t.Errorf("expected switch message, got %q", content)
+	}
+	if !strings.Contains(content, "anthropic") {
+		t.Errorf("expected provider in message, got %q", content)
+	}
+	if mm.cfg.ModelName != "claude-sonnet-4-6" {
+		t.Errorf("cfg.ModelName = %q, want %q", mm.cfg.ModelName, "claude-sonnet-4-6")
+	}
+	if mm.cfg.ProviderName != "anthropic" {
+		t.Errorf("cfg.ProviderName = %q, want %q", mm.cfg.ProviderName, "anthropic")
+	}
+	if mm.cfg.LLM != newLLM {
+		t.Errorf("cfg.LLM was not updated")
+	}
+}
+
+func TestHandleSlashCommandModelSwitchByRole(t *testing.T) {
+	newLLM := &stubLLM{name: "gemini-2.5-flash"}
+	m := &model{
+		inputModel: InputModel{Text: "/model smol"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.5"},
+				"smol":    {Model: "gemini-2.5-flash"},
+			},
+			ModelSwitcher: func(_ context.Context, modelName string) (adkmodel.LLM, string, string, error) {
+				if modelName != "gemini-2.5-flash" {
+					t.Errorf("ModelSwitcher received %q, want %q", modelName, "gemini-2.5-flash")
+				}
+				return newLLM, modelName, "gemini", nil
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model smol")
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	}
+	content := mm.chatModel.Messages[0].content
+	if !strings.Contains(content, "Switched model to **gemini-2.5-flash**") {
+		t.Errorf("expected switch message, got %q", content)
+	}
+	if !strings.Contains(content, "Role: `smol`") {
+		t.Errorf("expected role annotation, got %q", content)
+	}
+	if mm.cfg.ActiveRole != "smol" {
+		t.Errorf("cfg.ActiveRole = %q, want %q", mm.cfg.ActiveRole, "smol")
+	}
+}
+
+func TestHandleSlashCommandModelSwitchNoSwitcher(t *testing.T) {
+	m := &model{
+		inputModel: InputModel{Text: "/model claude-sonnet-4-6"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.5"},
+			},
+			ModelSwitcher: nil,
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model claude-sonnet-4-6")
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	}
+	if !strings.Contains(mm.chatModel.Messages[0].content, "not available") {
+		t.Errorf("expected 'not available' message, got %q", mm.chatModel.Messages[0].content)
+	}
+}
+
+func TestHandleSlashCommandModelSwitchWhileRunning(t *testing.T) {
+	m := &model{
+		inputModel: InputModel{Text: "/model claude-sonnet-4-6"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		running:    true,
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.5"},
+			},
+			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
+				t.Error("ModelSwitcher should not be called while running")
+				return nil, "", "", nil
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model claude-sonnet-4-6")
+	mm := newM.(*model)
+
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Cannot switch") {
+		t.Errorf("expected 'Cannot switch' message, got %q", mm.chatModel.Messages[0].content)
+	}
+}
+
+func TestHandleSlashCommandModelSwitchError(t *testing.T) {
+	m := &model{
+		inputModel: InputModel{Text: "/model bad-model"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default": {Model: "gpt-5.5"},
+			},
+			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
+				return nil, "", "", fmt.Errorf("no API key for provider")
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model bad-model")
+	mm := newM.(*model)
+
+	if !strings.Contains(mm.chatModel.Messages[0].content, "Failed to switch model") {
+		t.Errorf("expected error message, got %q", mm.chatModel.Messages[0].content)
+	}
+	if mm.cfg.ModelName != "gpt-5.5" {
+		t.Errorf("ModelName should be unchanged on error, got %q", mm.cfg.ModelName)
+	}
+}
+
+func TestHandleSlashCommandModelSwitchEmptyRoleModel(t *testing.T) {
+	m := &model{
+		inputModel: InputModel{Text: "/model empty-role"},
+		chatModel:  ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName:    "gpt-5.5",
+			ProviderName: "openai",
+			ActiveRole:   "default",
+			Roles: map[string]config.RoleConfig{
+				"default":    {Model: "gpt-5.5"},
+				"empty-role": {Model: ""},
+			},
+			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
+				t.Error("ModelSwitcher should not be called for empty model")
+				return nil, "", "", nil
+			},
+		},
+	}
+
+	newM, _ := m.handleSlashCommand("/model empty-role")
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	}
+	if !strings.Contains(mm.chatModel.Messages[0].content, "no model configured") {
+		t.Errorf("expected 'no model configured' message, got %q", mm.chatModel.Messages[0].content)
 	}
 }
 

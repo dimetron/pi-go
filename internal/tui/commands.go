@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -43,10 +44,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.matrix.clear()
 		m.matrix.feed("pi-go", m.mainWidth())
 	case "/model":
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: m.formatModelInfo(),
-		})
+		return m.handleModelCommand(parts[1:])
 	case "/session":
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
@@ -342,6 +340,103 @@ func (m *model) formatModelInfo() string {
 	return b.String()
 }
 
+// handleModelCommand handles /model: show current model, switch model, or switch role.
+//   - /model           — show current model and configured roles
+//   - /model <name>    — switch to the named model (or role if name matches a role)
+func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: m.formatModelInfo(),
+		})
+		return m, nil
+	}
+
+	target := strings.TrimSpace(args[0])
+
+	// Resolve: if target is a configured role name, use that role's model.
+	var modelName, roleName string
+	if rc, ok := m.cfg.Roles[target]; ok {
+		modelName = rc.Model
+		roleName = target
+	} else {
+		modelName = target
+	}
+
+	if modelName == "" {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Role `%s` has no model configured.", target),
+		})
+		return m, nil
+	}
+
+	if m.cfg.ModelSwitcher == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Model switching is not available in this context.",
+		})
+		return m, nil
+	}
+
+	if m.running {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Cannot switch model while a response is running. Wait for it to finish or cancel it first.",
+		})
+		return m, nil
+	}
+
+	newLLM, newName, newProvider, err := m.cfg.ModelSwitcher(m.ctx, modelName)
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Failed to switch model: %s", err),
+		})
+		return m, nil
+	}
+
+	// Rebuild the agent with the new LLM.
+	if m.cfg.Agent != nil {
+		if err := m.cfg.Agent.RebuildWithModel(newLLM); err != nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Failed to rebuild agent: %s", err),
+			})
+			return m, nil
+		}
+	}
+
+	// Update TUI state.
+	m.cfg.LLM = newLLM
+	m.cfg.ModelName = newName
+	m.cfg.ProviderName = newProvider
+	if roleName != "" {
+		m.cfg.ActiveRole = roleName
+	} else {
+		m.cfg.ActiveRole = "default"
+		// Persist the new model as the default role so it survives restart.
+		saveModelToConfig(newName, newProvider)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Switched model to **%s** (provider: %s).", newName, newProvider)
+	if roleName != "" && roleName != "default" {
+		fmt.Fprintf(&sb, " Role: `%s`.", roleName)
+	}
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: sb.String(),
+	})
+	return m, nil
+}
+
+// saveModelToConfig persists the model and provider as the default role in
+// ~/.pi-go/config.json. Silently ignores errors (best-effort persistence).
+func saveModelToConfig(modelName, provider string) {
+	_ = config.SaveDefaultRole(modelName, provider)
+}
+
 // formatContextUsage builds a context usage display similar to Claude Code's /context.
 func (m *model) formatContextUsage() string {
 	var b strings.Builder
@@ -536,7 +631,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("|---------|-------------|\n")
 	b.WriteString("| `/help` | Show this help |\n")
 	b.WriteString("| `/clear` | Clear conversation |\n")
-	b.WriteString("| `/model` | Show current model and roles |\n")
+	b.WriteString("| `/model [name]` | Show or switch current model |\n")
 	b.WriteString("| `/session` | Show session info |\n")
 	b.WriteString("| `/context` | Show context usage |\n")
 	b.WriteString("| `/compact` | Compact session context |\n")

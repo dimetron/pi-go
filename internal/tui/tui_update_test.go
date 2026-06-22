@@ -409,15 +409,19 @@ func TestHandleKey_RunningAgentCtrlC(t *testing.T) {
 		inputModel: InputModel{Text: ""},
 	}
 
-	// First Ctrl+C while running cancels the agent
+	// First Ctrl+C while running cancels the agent, arms the quit counter and
+	// schedules the 2s reset, surfacing the "Ctrl+C again to quit" warning.
 	newM, cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
 	mm := newM.(*model)
 
 	if mm.running {
 		t.Error("agent should be canceled (running=false)")
 	}
-	if cmd != nil {
-		t.Error("cancelAgent should not return a command")
+	if mm.ctrlCCount != 1 {
+		t.Errorf("ctrlCCount = %d, want 1 after first Ctrl+C while running", mm.ctrlCCount)
+	}
+	if cmd == nil {
+		t.Error("expected resetCtrlCCount command to schedule the 2s counter reset")
 	}
 }
 

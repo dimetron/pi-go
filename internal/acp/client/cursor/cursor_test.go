@@ -3,14 +3,11 @@ package cursor
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	acp "github.com/coder/acp-go-sdk"
 
 	shared "github.com/dimetron/pi-go/internal/acp"
 )
@@ -35,35 +32,6 @@ func TestRunnerFindsBinary(t *testing.T) {
 	}
 }
 
-func TestRunningSessionCancel(t *testing.T) {
-	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "sleep.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", scriptPath)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start command: %v", err)
-	}
-
-	session := newRunningSession(cmd, stdin, stderr)
-	if err := session.Cancel(); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	if err := session.waitProcess(); err == nil {
-		t.Fatal("expected process wait error after cancel")
-	}
-}
-
 func TestRunRequestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -85,28 +53,6 @@ func TestRunRequestValidation(t *testing.T) {
 				t.Errorf("Start() error = nil, wantErr true")
 			}
 		})
-	}
-}
-
-func TestClientInfoDefaults(t *testing.T) {
-	runner := Runner{}
-	info := runner.clientInfo()
-	if info.Name != "pi-go" {
-		t.Errorf("expected name 'pi-go', got %q", info.Name)
-	}
-	if info.Version != "dev" {
-		t.Errorf("expected version 'dev', got %q", info.Version)
-	}
-}
-
-func TestClientInfoCustom(t *testing.T) {
-	runner := Runner{ClientInfo: acp.Implementation{Name: "test-client", Version: "1.0.0"}}
-	info := runner.clientInfo()
-	if info.Name != "test-client" {
-		t.Errorf("expected name 'test-client', got %q", info.Name)
-	}
-	if info.Version != "1.0.0" {
-		t.Errorf("expected version '1.0.0', got %q", info.Version)
 	}
 }
 
@@ -164,113 +110,22 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
-func TestDefaultBinaryPathsPrefersCursorAgent(t *testing.T) {
+func TestDefaultBinaryPathsPrefersAgent(t *testing.T) {
 	if len(DefaultBinaryPaths) == 0 {
 		t.Fatal("DefaultBinaryPaths is empty")
 	}
-	if DefaultBinaryPaths[0] != "cursor-agent" {
-		t.Errorf("first path should be 'cursor-agent', got %q", DefaultBinaryPaths[0])
+	// Cursor's official installer creates `agent` at ~/.local/bin/agent and
+	// `cursor-agent` as a legacy alias; `agent` is the canonical name.
+	if DefaultBinaryPaths[0] != "agent" {
+		t.Errorf("first path should be 'agent', got %q", DefaultBinaryPaths[0])
 	}
-	// `agent` must appear as a fallback — per Cursor docs the binary is named `agent`.
-	if !slices.Contains(DefaultBinaryPaths, "agent") {
-		t.Errorf("DefaultBinaryPaths should include 'agent' fallback; got %v", DefaultBinaryPaths)
+	if !slices.Contains(DefaultBinaryPaths, "cursor-agent") {
+		t.Errorf("DefaultBinaryPaths should keep 'cursor-agent' as legacy fallback; got %v", DefaultBinaryPaths)
 	}
-}
-
-func TestAbsDir(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-	}{
-		{"empty path", ""},
-		{"current dir", "."},
-		{"temp dir", t.TempDir()},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := absDir(tt.path)
-			if result == "" {
-				t.Error("absDir returned empty string")
-			}
-			if !filepath.IsAbs(result) {
-				t.Errorf("absDir(%q) returned non-absolute path: %q", tt.path, result)
-			}
-		})
-	}
-}
-
-func TestContentBlockText(t *testing.T) {
-	textBlock := acp.ContentBlock{Text: &acp.ContentBlockText{Text: "hello"}}
-	if got := contentBlockText(textBlock); got != "hello" {
-		t.Errorf("contentBlockText() = %q, want %q", got, "hello")
-	}
-	if got := contentBlockText(acp.ContentBlock{}); got != "" {
-		t.Errorf("contentBlockText(empty) = %q, want empty", got)
-	}
-}
-
-func TestStopReasonText(t *testing.T) {
-	tests := []struct {
-		reason acp.StopReason
-		expect string
-	}{
-		{acp.StopReasonEndTurn, "end_turn"},
-		{acp.StopReasonMaxTokens, "max_tokens"},
-		{acp.StopReason(""), ""},
-	}
-	for _, tt := range tests {
-		if got := stopReasonText(tt.reason); got != tt.expect {
-			t.Errorf("stopReasonText(%v) = %q, want %q", tt.reason, got, tt.expect)
-		}
-	}
-}
-
-func TestContentBlockTextResourceLink(t *testing.T) {
-	// Test ResourceLink block returns the URI
-	linkBlock := acp.ContentBlock{ResourceLink: &acp.ContentBlockResourceLink{Uri: "https://example.com/file.txt"}}
-	if got := contentBlockText(linkBlock); got != "https://example.com/file.txt" {
-		t.Errorf("contentBlockText(ResourceLink) = %q, want %q", got, "https://example.com/file.txt")
-	}
-
-	// Test empty ResourceLink
-	emptyLinkBlock := acp.ContentBlock{ResourceLink: &acp.ContentBlockResourceLink{Uri: ""}}
-	if got := contentBlockText(emptyLinkBlock); got != "" {
-		t.Errorf("contentBlockText(empty ResourceLink) = %q, want empty", got)
-	}
-}
-
-func TestAppendResultEmptyString(t *testing.T) {
-	session := &RunningSession{
-		toolFilter: shared.NewToolCallTitleFilter(func(string) {}),
-	}
-	// Append with existing content
-	session.appendResult("Hello ")
-	// Appending empty string should be a no-op
-	session.appendResult("")
-	if session.result.Result != "Hello " {
-		t.Errorf("result = %q, want %q after empty append", session.result.Result, "Hello ")
-	}
-}
-
-func TestRunningSessionCancelAlreadyFinished(t *testing.T) {
-	session := &RunningSession{
-		finished: true,
-		cmd:      &exec.Cmd{},
-	}
-	// When finished=true, Cancel() should return nil immediately
-	if err := session.Cancel(); err != nil {
-		t.Errorf("Cancel() on finished session error = %v, want nil", err)
-	}
-}
-
-func TestRunningSessionCancelNilProcess(t *testing.T) {
-	cmd := &exec.Cmd{}
-	session := &RunningSession{
-		cmd: cmd, // cmd.Process is nil by default
-	}
-	// When cmd.Process is nil, Cancel() should return nil
-	if err := session.Cancel(); err != nil {
-		t.Errorf("Cancel() with nil cmd.Process error = %v, want nil", err)
+	// The Cursor installer's canonical path is $HOME/.local/bin/agent.
+	homeAgent := filepath.Join(".local", "bin", "agent")
+	if !slices.Contains(DefaultBinaryPaths, homeAgent) {
+		t.Errorf("DefaultBinaryPaths should include %q (Cursor install location); got %v", homeAgent, DefaultBinaryPaths)
 	}
 }
 
@@ -298,20 +153,20 @@ exit 0
 	defer session.Cancel()
 
 	select {
-	case <-session.done:
+	case <-session.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("session did not complete in time")
 	}
 }
 
 func TestRunnerStartBinaryNotFound(t *testing.T) {
-	runner := Runner{Binary: "/nonexistent/path/to/cursor-agent-xyz123"}
+	runner := Runner{Binary: "/nonexistent/path/to/agent-xyz123"}
 	_, err := runner.Start(context.Background(), RunRequest{Prompt: "test"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent binary")
 	}
-	if !strings.Contains(err.Error(), "finding cursor-agent") {
-		t.Errorf("error should wrap 'finding cursor-agent', got: %v", err)
+	if !strings.Contains(err.Error(), "finding agent") {
+		t.Errorf("error should wrap 'finding agent', got: %v", err)
 	}
 }
 
@@ -326,7 +181,7 @@ func TestRunnerStartSubprocessFails(t *testing.T) {
 	}
 
 	select {
-	case <-session.done:
+	case <-session.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("session did not complete in time")
 	}
@@ -338,4 +193,278 @@ func TestRunnerStartSubprocessFails(t *testing.T) {
 	if strings.TrimSpace(result.Error) == "" {
 		t.Fatal("expected non-empty error when subprocess exits immediately")
 	}
+}
+
+func TestResolveCommand(t *testing.T) {
+	// Create a real binary on disk so findBinary succeeds for Binary and default branches.
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "mybin")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	tests := []struct {
+		name                 string
+		runner               Runner
+		req                  RunRequest
+		envSet               func(t *testing.T)
+		wantBinary           string
+		wantArgs             []string
+		wantErr              bool
+		errSubstr            string
+		overrideDefaultPaths bool // force DefaultBinaryPaths to a guaranteed-missing value
+	}{
+		{
+			name:       "binary set uses findBinary and appends acp subcommand",
+			runner:     Runner{Binary: binPath},
+			req:        RunRequest{Prompt: "hi"},
+			wantBinary: binPath,
+			wantArgs:   []string{"acp"},
+		},
+		{
+			name:       "binary set with endpoint and apikey",
+			runner:     Runner{Binary: binPath},
+			req:        RunRequest{Prompt: "hi", Endpoint: "https://ep", APIKey: "k"},
+			wantBinary: binPath,
+			wantArgs:   []string{"-e", "https://ep", "--api-key", "k", "acp"},
+		},
+		{
+			name:      "binary set but not found returns error",
+			runner:    Runner{Binary: "/nonexistent/path/to/binary-xyz"},
+			req:       RunRequest{Prompt: "hi"},
+			wantErr:   true,
+			errSubstr: "finding agent",
+		},
+		{
+			name:       "command single element defaults to acp subcommand (no extra args)",
+			runner:     Runner{},
+			req:        RunRequest{Prompt: "hi", Command: []string{"/bin/true"}},
+			wantBinary: "/bin/true",
+			wantArgs:   []string{},
+		},
+		{
+			name:       "command multiple elements used verbatim",
+			runner:     Runner{},
+			req:        RunRequest{Prompt: "hi", Command: []string{"/bin/echo", "hello", "world"}},
+			wantBinary: "/bin/echo",
+			wantArgs:   []string{"hello", "world"},
+		},
+		{
+			name: "env var bare binary defaults to acp subcommand",
+			envSet: func(t *testing.T) {
+				t.Setenv("PI_ACP_CURSOR_CMD", "/bin/true")
+			},
+			runner:     Runner{},
+			req:        RunRequest{Prompt: "hi"},
+			wantBinary: "/bin/true",
+			wantArgs:   []string{"acp"},
+		},
+		{
+			name: "env var binary with args used as-is",
+			envSet: func(t *testing.T) {
+				t.Setenv("PI_ACP_CURSOR_CMD", "/bin/echo hello world")
+			},
+			runner:     Runner{},
+			req:        RunRequest{Prompt: "hi"},
+			wantBinary: "/bin/echo",
+			wantArgs:   []string{"hello", "world"},
+		},
+		{
+			name: "env var binary with args and buildArgs options ignored",
+			envSet: func(t *testing.T) {
+				t.Setenv("PI_ACP_CURSOR_CMD", "/bin/echo foo")
+			},
+			runner:     Runner{},
+			req:        RunRequest{Prompt: "hi", Endpoint: "https://ignored", APIKey: "k"},
+			wantBinary: "/bin/echo",
+			wantArgs:   []string{"foo"},
+		},
+		{
+			name:       "binary field takes precedence over command field",
+			runner:     Runner{Binary: binPath},
+			req:        RunRequest{Prompt: "hi", Command: []string{"/bin/echo", "ignored"}},
+			wantBinary: binPath,
+			wantArgs:   []string{"acp"},
+		},
+		{
+			name:   "binary field takes precedence over env var",
+			runner: Runner{Binary: binPath},
+			req:    RunRequest{Prompt: "hi"},
+			envSet: func(t *testing.T) {
+				t.Setenv("PI_ACP_CURSOR_CMD", "/bin/echo ignored")
+			},
+			wantBinary: binPath,
+			wantArgs:   []string{"acp"},
+		},
+		{
+			name:   "command field takes precedence over env var",
+			runner: Runner{},
+			req:    RunRequest{Prompt: "hi", Command: []string{"/bin/echo", "fromcmd"}},
+			envSet: func(t *testing.T) {
+				t.Setenv("PI_ACP_CURSOR_CMD", "/bin/echo fromenv")
+			},
+			wantBinary: "/bin/echo",
+			wantArgs:   []string{"fromcmd"},
+		},
+		// The "default fallback uses DefaultBinaryPaths" branch is exercised
+		// separately in TestResolveCommandUsesDefaultBinaryPaths because it
+		// depends on the host having agent (or legacy `cursor-agent`) installed.
+		// The error counterpart — no binary in DefaultBinaryPaths — is
+		// covered here by overriding DefaultBinaryPaths to a guaranteed-
+		// missing value, so the test is deterministic on any machine.
+		{
+			name:                 "default fallback returns error when DefaultBinaryPaths has no match",
+			runner:               Runner{},
+			req:                  RunRequest{Prompt: "hi"},
+			wantErr:              true,
+			errSubstr:            "finding agent",
+			overrideDefaultPaths: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Ensure env var is unset by default unless the test sets it.
+			t.Setenv("PI_ACP_CURSOR_CMD", "")
+			if tt.envSet != nil {
+				tt.envSet(t)
+			}
+
+			// For the "no match" branch, redirect DefaultBinaryPaths to a
+			// value that is guaranteed to be missing so the test does not
+			// depend on the host environment.
+			if tt.overrideDefaultPaths {
+				origPaths := DefaultBinaryPaths
+				DefaultBinaryPaths = []string{"definitely-not-a-real-binary-xyz123"}
+				t.Cleanup(func() { DefaultBinaryPaths = origPaths })
+			}
+
+			binary, args, err := tt.runner.resolveCommand(tt.req)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveCommand() error = nil, want error")
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("resolveCommand() error = %v, want substring %q", err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCommand() unexpected error: %v", err)
+			}
+			if tt.wantBinary != "" && binary != tt.wantBinary {
+				t.Errorf("resolveCommand() binary = %q, want %q", binary, tt.wantBinary)
+			}
+			if tt.wantBinary == "" && binary == "" {
+				t.Error("resolveCommand() binary is empty, want non-empty")
+			}
+			if !slices.Equal(args, tt.wantArgs) {
+				t.Errorf("resolveCommand() args = %v, want %v", args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// TestResolveCommandUsesDefaultBinaryPaths verifies the DefaultBinaryPaths
+// branch in resolveCommand: when no Binary, no Command, and no env override is
+// set, the resolver falls back to DefaultBinaryPaths and appends the `acp`
+// subcommand. The test is best-effort: if agent (or the legacy `cursor-agent`
+// fallback) is not installed on the host, resolution will fail and we skip
+// the assertions — this matches the convention used by the claudecode and
+// gemini resolveCommand tests, since CI runners do not have these CLIs.
+func TestResolveCommandUsesDefaultBinaryPaths(t *testing.T) {
+	t.Setenv("PI_ACP_CURSOR_CMD", "")
+
+	r := Runner{}
+	binary, args, err := r.resolveCommand(RunRequest{Prompt: "hi"})
+	if err != nil {
+		// agent / cursor-agent not installed on this host — skip.
+		t.Skipf("DefaultBinaryPaths lookup failed (agent likely not installed): %v", err)
+	}
+	if binary == "" {
+		t.Fatal("resolveCommand() binary is empty, want non-empty")
+	}
+	if !slices.Contains(args, ACPSubcommand) {
+		t.Errorf("resolveCommand() args = %v, want to contain %q", args, ACPSubcommand)
+	}
+}
+
+func TestFindBinaryEdgeCases(t *testing.T) {
+	t.Run("empty string is skipped", func(t *testing.T) {
+		_, err := findBinary([]string{"", "nonexistent-binary-xyz-abc"})
+		if err == nil {
+			t.Fatal("expected error when all entries are empty or not found")
+		}
+	})
+
+	t.Run("empty string followed by valid PATH binary", func(t *testing.T) {
+		got, err := findBinary([]string{"", "ls"})
+		if err != nil {
+			t.Fatalf("findBinary() error: %v", err)
+		}
+		if got == "" {
+			t.Fatal("expected non-empty path")
+		}
+	})
+
+	t.Run("absolute path exists", func(t *testing.T) {
+		got, err := findBinary([]string{"/bin/ls"})
+		if err != nil {
+			t.Fatalf("findBinary(/bin/ls) error: %v", err)
+		}
+		if got != "/bin/ls" {
+			t.Errorf("findBinary(/bin/ls) = %q, want /bin/ls", got)
+		}
+	})
+
+	t.Run("absolute path does not exist skips to next", func(t *testing.T) {
+		got, err := findBinary([]string{"/nonexistent/abs/path", "ls"})
+		if err != nil {
+			t.Fatalf("findBinary() error: %v", err)
+		}
+		if got == "" {
+			t.Fatal("expected non-empty path")
+		}
+	})
+
+	t.Run("relative path exists", func(t *testing.T) {
+		dir := t.TempDir()
+		rel := filepath.Join(dir, "relbin")
+		if err := os.WriteFile(rel, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		// Use a relative path by cd-ing into the dir
+		oldDir, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		defer os.Chdir(oldDir)
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		got, err := findBinary([]string{"./relbin"})
+		if err != nil {
+			t.Fatalf("findBinary(./relbin) error: %v", err)
+		}
+		if got != "./relbin" {
+			t.Errorf("findBinary(./relbin) = %q, want ./relbin", got)
+		}
+	})
+
+	t.Run("relative path not found skips to next", func(t *testing.T) {
+		got, err := findBinary([]string{"./nonexistent-rel-xyz", "ls"})
+		if err != nil {
+			t.Fatalf("findBinary() error: %v", err)
+		}
+		if got == "" {
+			t.Fatal("expected non-empty path")
+		}
+	})
+
+	t.Run("all entries empty returns error", func(t *testing.T) {
+		_, err := findBinary([]string{"", "", ""})
+		if err == nil {
+			t.Fatal("expected error when all entries are empty")
+		}
+	})
 }

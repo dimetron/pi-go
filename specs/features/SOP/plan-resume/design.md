@@ -62,7 +62,7 @@ Add `PlanContext` to `session.Meta`. When `startPlanSession` is called, it saves
 // PlanContext holds the /plan session context for resume.
 // Persisted in session meta.json.
 type PlanContext struct {
-    TaskName  string `json:"taskName,omitempty"`  // e.g. "tools/001-add-logging"
+    TaskName  string `json:"taskName,omitempty"`  // e.g. "features/TOO/001-add-logging"
     RoughIdea string `json:"roughIdea,omitempty"` // original rough idea text
     SpecDir   string `json:"specDir,omitempty"`   // absolute path to spec dir
     Phase     string `json:"phase,omitempty"`     // "plan" (mode identifier)

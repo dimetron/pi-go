@@ -141,14 +141,14 @@ func TestDetectCategory_Sessions(t *testing.T) {
 }
 
 func TestDetectCategory_ToolsDefault(t *testing.T) {
-	if got := detectCategory("xyz abc 123"); got != "tools" {
-		t.Errorf("expected tools default, got %q", got)
+	if got := detectCategory("xyz abc 123"); got != "features/TOO" {
+		t.Errorf("expected features/TOO default, got %q", got)
 	}
 }
 
 func TestDetectCategory_ToolsKeyword(t *testing.T) {
-	if got := detectCategory("add new tool handler"); got != "tools" {
-		t.Errorf("expected tools, got %q", got)
+	if got := detectCategory("add new tool handler"); got != "features/TOO" {
+		t.Errorf("expected features/TOO, got %q", got)
 	}
 }
 
@@ -2357,8 +2357,8 @@ func TestHandlePlanCommand_AutoResume(t *testing.T) {
 		cfg: Config{WorkDir: tmp},
 	}
 	// "test idea" → kebab = "test-idea"
-	// detectCategory("test idea") → "tools" (matches "test")
-	// findExistingSpec(tmp, "tools", "test-idea") → "tools/001-test-idea"
+	// detectCategory("test idea") → "features/TOO" (matches "test")
+	// findExistingSpec(tmp, "features/TOO", "test-idea") → "features/TOO/001-test-idea"
 	_, cmd := m.handlePlanCommand([]string{"test", "idea"})
 	// With no agent, startPlanSession returns error; cmd may be nil.
 	_ = cmd

@@ -21,6 +21,17 @@ const (
 	// before the loop is considered stuck and aborted.
 	maxRepeatToolCalls = 10
 
+	// maxRepeatErrorCalls aliases maxRepeatToolCalls for callers that frame
+	// the threshold as an error-streak rather than a call-streak. The
+	// underlying detector is identical — identical fingerprint = stuck.
+	maxRepeatErrorCalls = maxRepeatToolCalls
+
+	// maxToolErrorStreak is the number of consecutive failures of the same
+	// tool name (regardless of args) before the loop is aborted. Catches the
+	// "flailing" pattern where the model tries a different argument each
+	// turn but the call still fails.
+	maxToolErrorStreak = 10
+
 	// recentWindowSize is the sliding window of tool-call fingerprints kept
 	// for repetition detection.
 	recentWindowSize = 12
@@ -73,9 +84,11 @@ func extractAgentType(args map[string]any) string {
 
 // stuckDetector tracks recent tool calls and detects repetition loops.
 type stuckDetector struct {
-	recent    []string // ring of fingerprints (len <= recentWindowSize)
-	lastPrint string   // fingerprint of last tool call
-	streak    int      // consecutive identical tool calls
+	recent      []string // ring of fingerprints (len <= recentWindowSize)
+	lastPrint   string   // fingerprint of last tool call
+	streak      int      // consecutive identical tool calls
+	lastErrTool string   // name of last tool that errored
+	errStreak   int      // consecutive errors for that tool
 }
 
 // toolFingerprint produces a short hash of a tool call for comparison.
@@ -117,8 +130,29 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 	return false, ""
 }
 
+// observeError records the outcome of a tool call by name. Consecutive errors
+// of the same tool name — regardless of args — trip the detector once the
+// streak reaches maxToolErrorStreak. A success (isError == false) or a switch
+// to a different tool name resets the streak.
+func (s *stuckDetector) observeError(name string, isError bool) (stuck bool, detail string) {
+	if isError && name == s.lastErrTool {
+		s.errStreak++
+	} else {
+		s.errStreak = 1
+		s.lastErrTool = name
+	}
+	if s.errStreak >= maxToolErrorStreak {
+		return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
+	}
+	return false, ""
+}
+
 // detectCycle checks the recent window for repeating subsequences.
 // Returns a description if found, empty string otherwise.
+//
+// A "cycle" requires that consecutive elements differ — a uniform window
+// like [a,a,a,a,a,a] is a streak, not a cycle, and the identical-call
+// detector above already handles that case at maxRepeatToolCalls.
 func (s *stuckDetector) detectCycle() string {
 	n := len(s.recent)
 	if n < 6 {
@@ -132,6 +166,18 @@ func (s *stuckDetector) detectCycle() string {
 		}
 		tail := s.recent[n-need:]
 		cycle := tail[:cycleLen]
+		// Require adjacent elements in the candidate cycle to differ —
+		// otherwise it's a uniform streak, not an alternating cycle.
+		cycleValid := true
+		for i := 1; i < cycleLen; i++ {
+			if cycle[i] == cycle[i-1] {
+				cycleValid = false
+				break
+			}
+		}
+		if !cycleValid {
+			continue
+		}
 		match := true
 		for i := cycleLen; i < need; i++ {
 			if tail[i] != cycle[i%cycleLen] {
@@ -354,7 +400,18 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 				m.agentCh <- agentTextMsg{text: part.Text}
 			}
 			if part.FunctionCall != nil {
-				// Check for stuck/repeating tool calls.
+				// Emit the tool call first so the user sees the offending call
+				// before the loop aborts. The stuck-detector threshold still
+				// fires after `maxRepeatToolCalls` observations, so the abort
+				// semantics are unchanged — only the message ordering moves.
+				if log != nil {
+					log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
+				}
+				m.agentCh <- agentToolCallMsg{
+					name: part.FunctionCall.Name,
+					args: part.FunctionCall.Args,
+				}
+
 				if stuck, detail := detector.observe(part.FunctionCall.Name, part.FunctionCall.Args); stuck {
 					if log != nil {
 						log.Error("agent loop stuck: " + detail)
@@ -363,14 +420,6 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 						err: fmt.Errorf("agent loop aborted: %s", detail),
 					}
 					return
-				}
-
-				if log != nil {
-					log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
-				}
-				m.agentCh <- agentToolCallMsg{
-					name: part.FunctionCall.Name,
-					args: part.FunctionCall.Args,
 				}
 			}
 			if part.FunctionResponse != nil {
@@ -381,6 +430,19 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 				m.agentCh <- agentToolResultMsg{
 					name:    part.FunctionResponse.Name,
 					content: string(respJSON),
+				}
+				// Track per-tool error streaks: ADK wraps tool errors as
+				// map[string]any{"error": ...}. Anything else (including a
+				// missing key) is treated as success and resets the streak.
+				_, isErr := part.FunctionResponse.Response["error"]
+				if stuck, detail := detector.observeError(part.FunctionResponse.Name, isErr); stuck {
+					if log != nil {
+						log.Error("agent loop stuck: " + detail)
+					}
+					m.agentCh <- agentDoneMsg{
+						err: fmt.Errorf("agent loop aborted: %s", detail),
+					}
+					return
 				}
 			}
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -40,64 +39,19 @@ func TestRunnerFindsBinary(t *testing.T) {
 	}
 }
 
-// TestRunningSessionCancel verifies that session cancellation works.
-func TestRunningSessionCancel(t *testing.T) {
-	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "sleep.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", scriptPath)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start command: %v", err)
-	}
-
-	session := newRunningSession(cmd, stdin, stderr)
-	if err := session.Cancel(); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-	if err := session.waitProcess(); err == nil {
-		t.Fatal("expected process wait error after cancel")
-	}
-}
-
-// TestRunRequestValidation verifies RunRequest validation.
+// TestRunRequestValidation verifies prompt validation through Start.
 func TestRunRequestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
 		req     RunRequest
 		wantErr bool
 	}{
-		{
-			name:    "empty prompt",
-			req:     RunRequest{Prompt: ""},
-			wantErr: true,
-		},
-		{
-			name:    "whitespace only prompt",
-			req:     RunRequest{Prompt: "   "},
-			wantErr: true,
-		},
-		{
-			name: "valid prompt with binary",
-			req: RunRequest{
-				Prompt: "Hello",
-				// Use /bin/true — a fast-exit process that won't speak ACP.
-				// Start() succeeds (subprocess launches); the session then
-				// fails quickly, but this case only checks start-path errors.
-				Command: []string{"/bin/true"},
-			},
-			wantErr: false,
-		},
+		{"empty prompt", RunRequest{Prompt: ""}, true},
+		{"whitespace only prompt", RunRequest{Prompt: "   "}, true},
+		{"valid prompt with binary", RunRequest{
+			Prompt:  "Hello",
+			Command: []string{"/bin/true"},
+		}, false},
 	}
 
 	for _, tt := range tests {
@@ -112,90 +66,19 @@ func TestRunRequestValidation(t *testing.T) {
 	}
 }
 
-// TestClientInfoDefaults verifies that client info defaults correctly.
-func TestClientInfoDefaults(t *testing.T) {
-	runner := Runner{}
-	info := runner.clientInfo()
-	if info.Name != "pi-go" {
-		t.Errorf("expected name 'pi-go', got %q", info.Name)
+// TestResolveCommandUsesDefaultCommandArgs verifies the bunx launcher args are
+// appended when resolving via DefaultBinaryPaths.
+func TestResolveCommandUsesDefaultCommandArgs(t *testing.T) {
+	// Force the DefaultBinaryPaths branch by leaving Binary/Command/env unset.
+	t.Setenv(envACPClaudeCmd, "")
+	r := Runner{}
+	_, args, err := r.resolveCommand(RunRequest{Prompt: "hi"})
+	if err != nil {
+		// bunx may be absent on CI; only assert when resolution succeeds.
+		return
 	}
-	if info.Version != "dev" {
-		t.Errorf("expected version 'dev', got %q", info.Version)
-	}
-}
-
-// TestClientInfoCustom verifies that custom client info is preserved.
-func TestClientInfoCustom(t *testing.T) {
-	runner := Runner{
-		ClientInfo: acp.Implementation{Name: "test-client", Version: "1.0.0"},
-	}
-	info := runner.clientInfo()
-	if info.Name != "test-client" {
-		t.Errorf("expected name 'test-client', got %q", info.Name)
-	}
-	if info.Version != "1.0.0" {
-		t.Errorf("expected version '1.0.0', got %q", info.Version)
-	}
-}
-
-// TestAbsDir verifies the working directory resolution.
-func TestAbsDir(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-	}{
-		{"empty path", ""},
-		{"current dir", "."},
-		{"temp dir", t.TempDir()},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := absDir(tt.path)
-			if result == "" {
-				t.Error("absDir returned empty string")
-			}
-			// Verify it's absolute (starts with / or drive letter on Windows)
-			if !filepath.IsAbs(result) {
-				t.Errorf("absDir(%q) returned non-absolute path: %q", tt.path, result)
-			}
-		})
-	}
-}
-
-// TestContentBlockText verifies content block text extraction.
-func TestContentBlockText(t *testing.T) {
-	textBlock := acp.ContentBlock{
-		Text: &acp.ContentBlockText{Text: "hello world"},
-	}
-	result := contentBlockText(textBlock)
-	if result != "hello world" {
-		t.Errorf("contentBlockText() = %q, want %q", result, "hello world")
-	}
-
-	emptyBlock := acp.ContentBlock{}
-	result = contentBlockText(emptyBlock)
-	if result != "" {
-		t.Errorf("contentBlockText(empty) = %q, want empty", result)
-	}
-}
-
-// TestStopReasonText verifies stop reason text conversion.
-func TestStopReasonText(t *testing.T) {
-	tests := []struct {
-		reason acp.StopReason
-		expect string
-	}{
-		{acp.StopReasonEndTurn, "end_turn"},
-		{acp.StopReasonMaxTokens, "max_tokens"},
-		{acp.StopReason(""), ""},
-	}
-
-	for _, tt := range tests {
-		result := stopReasonText(tt.reason)
-		if result != tt.expect {
-			t.Errorf("stopReasonText(%v) = %q, want %q", tt.reason, result, tt.expect)
-		}
+	if fmt.Sprint(args) != fmt.Sprint(DefaultCommand[1:]) {
+		t.Fatalf("args = %v, want %v", args, DefaultCommand[1:])
 	}
 }
 
@@ -313,5 +196,252 @@ func TestBinaryPaths(t *testing.T) {
 		if path == "" {
 			t.Error("DefaultBinaryPaths contains empty string")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveCommand table-driven tests
+// ---------------------------------------------------------------------------
+
+func TestResolveCommand(t *testing.T) {
+	// Create a temporary binary that exists on disk for stat-based branches.
+	tmpDir := t.TempDir()
+	absBin := filepath.Join(tmpDir, "fake-bin")
+	if err := os.WriteFile(absBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("setup: write %s: %v", absBin, err)
+	}
+	relBin := filepath.Join(".", "fake-bin-test-rel")
+	if err := os.WriteFile(relBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("setup: write %s: %v", relBin, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(relBin) })
+
+	tests := []struct {
+		name     string
+		binary   string   // Runner.Binary
+		cmd      []string // RunRequest.Command
+		envVal   string   // PI_ACP_CLAUDE_CMD value ("" means unset)
+		wantBin  string   // expected binary (exact match)
+		wantArgs []string // expected args
+		wantErr  bool
+	}{
+		// --- Branch 1: Runner.Binary is set ---
+		{
+			name:     "binary set overrides everything",
+			binary:   absBin,
+			cmd:      []string{"should-not-be-used"},
+			envVal:   "should-not-be-used",
+			wantBin:  absBin,
+			wantArgs: []string{},
+		},
+		{
+			name:     "binary set with custom args empty",
+			binary:   "/usr/local/bin/custom-claude",
+			wantBin:  "/usr/local/bin/custom-claude",
+			wantArgs: []string{},
+		},
+
+		// --- Branch 2: RunRequest.Command set ---
+		{
+			name:     "command single element",
+			cmd:      []string{"/bin/echo"},
+			envVal:   "should-not-be-used",
+			wantBin:  "/bin/echo",
+			wantArgs: []string{},
+		},
+		{
+			name:     "command multiple elements",
+			cmd:      []string{"/bin/echo", "hello", "world"},
+			envVal:   "should-not-be-used",
+			wantBin:  "/bin/echo",
+			wantArgs: []string{"hello", "world"},
+		},
+
+		// --- Branch 3: PI_ACP_CLAUDE_CMD env override ---
+		{
+			name:     "env override binary only",
+			envVal:   "/usr/bin/my-claude",
+			wantBin:  "/usr/bin/my-claude",
+			wantArgs: []string{},
+		},
+		{
+			name:     "env override with args",
+			envVal:   "/usr/bin/my-claude --flag value",
+			wantBin:  "/usr/bin/my-claude",
+			wantArgs: []string{"--flag", "value"},
+		},
+
+		// --- Branch 4: findBinary fallback ---
+		// This uses DefaultBinaryPaths — only assert when bunx is available.
+		// (Handled separately in TestResolveCommandUsesDefaultCommandArgs.)
+
+		// --- findBinary fallback with no match ---
+		{
+			name:    "no binary no command no env not found",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envVal != "" {
+				t.Setenv(envACPClaudeCmd, tt.envVal)
+			} else {
+				t.Setenv(envACPClaudeCmd, "")
+			}
+
+			// For the "no match" case, redirect DefaultBinaryPaths to something
+			// that won't exist so we can deterministically get an error.
+			if tt.wantErr {
+				origPaths := DefaultBinaryPaths
+				DefaultBinaryPaths = []string{"definitely-nonexistent-binary-xyz123"}
+				t.Cleanup(func() { DefaultBinaryPaths = origPaths })
+			}
+
+			r := Runner{Binary: tt.binary}
+			gotBin, gotArgs, err := r.resolveCommand(RunRequest{Command: tt.cmd})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveCommand() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCommand() unexpected error: %v", err)
+			}
+			if gotBin != tt.wantBin {
+				t.Errorf("resolveCommand() binary = %q, want %q", gotBin, tt.wantBin)
+			}
+			if fmt.Sprint(gotArgs) != fmt.Sprint(tt.wantArgs) {
+				t.Errorf("resolveCommand() args = %v, want %v", gotArgs, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// TestResolveCommandBinarySetWithArgs verifies that when Binary is set, the
+// command args list is empty (binary takes priority over Command and env).
+func TestResolveCommandBinarySetWithArgs(t *testing.T) {
+	r := Runner{Binary: "/usr/local/bin/bunx"}
+	bin, args, err := r.resolveCommand(RunRequest{
+		Command: []string{"ignored", "also-ignored"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bin != "/usr/local/bin/bunx" {
+		t.Fatalf("binary = %q, want /usr/local/bin/bunx", bin)
+	}
+	if len(args) != 0 {
+		t.Fatalf("args = %v, want empty", args)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// findBinary table-driven tests
+// ---------------------------------------------------------------------------
+
+func TestFindBinary(t *testing.T) {
+	// Create a temp dir with a binary that exists on disk.
+	tmpDir := t.TempDir()
+	absPath := filepath.Join(tmpDir, "fake-binary")
+	if err := os.WriteFile(absPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Create a relative path binary.
+	relPath := "./fake-rel-binary-test"
+	if err := os.WriteFile(relPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("setup: write %s: %v", relPath, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(relPath) })
+
+	tests := []struct {
+		name    string
+		paths   []string
+		want    string
+		wantErr bool
+	}{
+		// empty string skip
+		{
+			name:  "empty string skipped falls through to PATH lookup",
+			paths: []string{"", "ls"},
+			want:  "", // resolved via LookPath — just check no error
+		},
+		{
+			name:    "all empty strings returns error",
+			paths:   []string{"", "", ""},
+			wantErr: true,
+		},
+		// absolute path via os.Stat success
+		{
+			name:  "absolute path exists",
+			paths: []string{absPath},
+			want:  absPath,
+		},
+		// absolute path via os.Stat failure → continues → error
+		{
+			name:    "absolute path does not exist",
+			paths:   []string{filepath.Join(tmpDir, "nonexistent")},
+			wantErr: true,
+		},
+		// relative path via os.Stat success
+		{
+			name:  "relative path exists",
+			paths: []string{relPath},
+			want:  relPath,
+		},
+		// relative path via os.Stat failure → continues → error
+		{
+			name:    "relative path does not exist",
+			paths:   []string{"./nonexistent-rel-binary-xyz"},
+			wantErr: true,
+		},
+		// exec.LookPath success (bare name)
+		{
+			name:  "bare name found in PATH",
+			paths: []string{"ls"},
+			want:  "", // resolved path — just check no error and non-empty
+		},
+		// exec.LookPath failure
+		{
+			name:    "bare name not in PATH",
+			paths:   []string{"nonexistent-binary-xyz-123"},
+			wantErr: true,
+		},
+		// multiple entries — first match wins (skip empty + missing abs)
+		{
+			name:  "skip empty and missing then find in PATH",
+			paths: []string{"", "/nonexistent/abs/path", "ls"},
+			want:  "",
+		},
+		// absolute path found before PATH lookup
+		{
+			name:  "absolute found before PATH fallback",
+			paths: []string{absPath, "ls"},
+			want:  absPath,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := findBinary(tt.paths)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("findBinary() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("findBinary() unexpected error: %v", err)
+			}
+			if tt.want != "" {
+				if got != tt.want {
+					t.Errorf("findBinary() = %q, want %q", got, tt.want)
+				}
+			}
+			if got == "" {
+				t.Error("findBinary() returned empty path without error")
+			}
+		})
 	}
 }

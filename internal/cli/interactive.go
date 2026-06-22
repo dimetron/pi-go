@@ -97,6 +97,9 @@ func runInteractive(
 		ThemeName:    cfg.Theme,
 		TokenTracker: tokenTracker,
 		DeferredInit: initCh,
+		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
+			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
+		},
 	})
 
 	initCancel() // signal deferred init to stop
@@ -754,4 +757,69 @@ func buildMCPServerConfigs(cfg config.Config) []extension.MCPServerConfig {
 		}
 	}
 	return out
+}
+
+// buildSwitchedLLM creates a new LLM instance for the given model name using
+// the current config and token tracker. It resolves the provider, validates
+// the model, creates the LLM, updates the token tracker's context window size,
+// and wraps it with the guardrail. Used by the TUI /model <name> command.
+func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guardrail.Tracker, modelName string) (adkmodel.LLM, string, string, error) {
+	// Try to auto-detect provider from config's default role.
+	providerName := ""
+	if rc, ok := cfg.Roles["default"]; ok && rc.Provider != "" {
+		providerName = rc.Provider
+	}
+
+	baseURL := flagURL
+	if baseURL == "" && providerName != "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[providerName]
+	}
+
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("resolving model: %w", err)
+	}
+	if providerName != "" {
+		info.Provider = providerName
+		info.Custom = baseURL != ""
+	}
+	if baseURL == "" {
+		baseURLs := config.BaseURLs()
+		baseURL = baseURLs[info.Provider]
+		if baseURL != "" {
+			info.Custom = true
+		}
+	}
+	if err := provider.ValidateModel(info); err != nil {
+		return nil, "", "", fmt.Errorf("model validation: %w", err)
+	}
+
+	keys := config.APIKeys()
+	apiKey := keys[info.Provider]
+
+	if baseURL == "" && info.Ollama {
+		baseURL = "http://localhost:11434"
+	}
+
+	llmOpts := &provider.LLMOptions{
+		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+	}
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("creating LLM: %w", err)
+	}
+
+	// Update context window size on the existing token tracker.
+	ctxWindowSize := provider.ContextWindowSize(info.Model)
+	if info.Ollama {
+		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
+	tokenTracker.SetContextWindowSize(ctxWindowSize)
+	llm = guardrail.WrapModel(llm, tokenTracker)
+
+	return llm, info.Model, info.Provider, nil
 }
