@@ -888,6 +888,74 @@ func TestParseMCPServers_URLOnly(t *testing.T) {
 	}
 }
 
+// TestParseMCPServers_Headers_ObjectFormat verifies that custom HTTP headers
+// are parsed for the Claude Desktop object format.
+func TestParseMCPServers_Headers_ObjectFormat(t *testing.T) {
+	objJSON := `{"mcpServers": {"jira": {
+		"url": "https://atlassian.example/api/v1/mcp/jira/mcp/",
+		"headers": {"X-Username": "dmitriyr", "X-Api-Key": "abc-123"}
+	}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if got := servers[0].Headers["X-Username"]; got != "dmitriyr" {
+		t.Errorf("expected X-Username=dmitriyr, got %q", got)
+	}
+	if got := servers[0].Headers["X-Api-Key"]; got != "abc-123" {
+		t.Errorf("expected X-Api-Key=abc-123, got %q", got)
+	}
+}
+
+// TestParseMCPServers_Headers_ArrayFormat verifies that custom HTTP headers
+// are parsed for the legacy array format.
+func TestParseMCPServers_Headers_ArrayFormat(t *testing.T) {
+	arrJSON := `{"mcpServers": [
+		{"name": "jira", "url": "https://atlassian.example/mcp", "headers": {"X-Api-Key": "abc-123"}}
+	]}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(arrJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if got := servers[0].Headers["X-Api-Key"]; got != "abc-123" {
+		t.Errorf("expected X-Api-Key=abc-123, got %q", got)
+	}
+}
+
+// TestSubstituteEnvVars_Headers verifies that ${VAR} placeholders in header
+// values are expanded from the environment.
+func TestSubstituteEnvVars_Headers(t *testing.T) {
+	t.Setenv("JIRA_API_KEY", "secret-key-123")
+	servers := []MCPServer{
+		{
+			Name:    "jira",
+			URL:     "https://atlassian.example/mcp",
+			Headers: map[string]string{"X-Api-Key": "${JIRA_API_KEY}", "X-Username": "dmitriyr"},
+		},
+	}
+
+	result := substituteEnvVars(servers)
+
+	if got := result[0].Headers["X-Api-Key"]; got != "secret-key-123" {
+		t.Errorf("expected expanded X-Api-Key, got %q", got)
+	}
+	if got := result[0].Headers["X-Username"]; got != "dmitriyr" {
+		t.Errorf("expected unchanged X-Username, got %q", got)
+	}
+}
+
 func TestSubstituteEnvVars(t *testing.T) {
 	// substituteEnvVars loads from .env file, so we test it indirectly
 	// by ensuring it handles servers with no variables correctly.

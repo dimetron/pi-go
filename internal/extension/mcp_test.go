@@ -3,6 +3,8 @@ package extension
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -219,12 +221,16 @@ func TestMCPServerConfigFromConfigStruct(t *testing.T) {
 		Name:    "test-server",
 		Command: "echo",
 		Args:    []string{"test"},
+		URL:     "https://example.com/mcp",
+		Headers: map[string]string{"X-Api-Key": "abc-123"},
 	}
 
 	extCfg := MCPServerConfig{
 		Name:    cfg.Name,
 		Command: cfg.Command,
 		Args:    cfg.Args,
+		URL:     cfg.URL,
+		Headers: cfg.Headers,
 	}
 
 	if extCfg.Name != "test-server" {
@@ -235,6 +241,9 @@ func TestMCPServerConfigFromConfigStruct(t *testing.T) {
 	}
 	if len(extCfg.Args) != 1 || extCfg.Args[0] != "test" {
 		t.Errorf("expected args ['test'], got %v", extCfg.Args)
+	}
+	if extCfg.Headers["X-Api-Key"] != "abc-123" {
+		t.Errorf("expected header X-Api-Key=abc-123, got %q", extCfg.Headers["X-Api-Key"])
 	}
 }
 
@@ -333,6 +342,59 @@ func TestToolsetStatuses_Failed(t *testing.T) {
 	}
 	if result[0].Status != "failed" {
 		t.Errorf("expected status 'failed', got %q", result[0].Status)
+	}
+}
+
+// --- headerRoundTripper tests ---
+
+func TestHeaderRoundTripper_InjectsHeaders(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{
+		Transport: &headerRoundTripper{
+			headers: map[string]string{"X-Username": "dmitriyr", "X-Api-Key": "abc-123"},
+		},
+	}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if v := got.Get("X-Username"); v != "dmitriyr" {
+		t.Errorf("expected X-Username=dmitriyr, got %q", v)
+	}
+	if v := got.Get("X-Api-Key"); v != "abc-123" {
+		t.Errorf("expected X-Api-Key=abc-123, got %q", v)
+	}
+}
+
+// TestHeaderRoundTripper_DoesNotMutateOriginalRequest verifies the round
+// tripper clones the request before adding headers.
+func TestHeaderRoundTripper_DoesNotMutateOriginalRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	rt := &headerRoundTripper{headers: map[string]string{"X-Api-Key": "abc-123"}}
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if req.Header.Get("X-Api-Key") != "" {
+		t.Errorf("original request was mutated: %q", req.Header.Get("X-Api-Key"))
 	}
 }
 

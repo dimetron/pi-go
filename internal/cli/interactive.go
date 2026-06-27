@@ -225,6 +225,7 @@ func deferredInit(
 				Command: s.Command,
 				Args:    s.Args,
 				URL:     s.URL,
+				Headers: s.Headers,
 			}
 		}
 		ts, _ := extension.BuildMCPToolsets(mcpServers)
@@ -754,6 +755,8 @@ func buildMCPServerConfigs(cfg config.Config) []extension.MCPServerConfig {
 			Name:    s.Name,
 			Command: s.Command,
 			Args:    s.Args,
+			URL:     s.URL,
+			Headers: s.Headers,
 		}
 	}
 	return out

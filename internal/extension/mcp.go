@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"sync"
@@ -18,10 +19,11 @@ var mcpConnectTimeout = 15 * time.Second
 
 // MCPServerConfig matches the config.MCPServer structure.
 type MCPServerConfig struct {
-	Name    string   `json:"name"`
-	Command string   `json:"command,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	URL     string   `json:"url,omitempty"` // HTTP transport (Streamable HTTP)
+	Name    string            `json:"name"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	URL     string            `json:"url,omitempty"`     // HTTP transport (Streamable HTTP)
+	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL transport
 }
 
 // BuildMCPToolsets creates ADK Toolsets from MCP server configurations.
@@ -191,7 +193,13 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	var transport mcp.Transport
 	switch {
 	case srv.URL != "":
-		transport = &mcp.StreamableClientTransport{Endpoint: srv.URL}
+		t := &mcp.StreamableClientTransport{Endpoint: srv.URL}
+		if len(srv.Headers) > 0 {
+			t.HTTPClient = &http.Client{
+				Transport: &headerRoundTripper{headers: srv.Headers},
+			}
+		}
+		transport = t
 	case srv.Command != "":
 		transport = &respawnTransport{
 			command: srv.Command,
@@ -208,4 +216,26 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		return nil, fmt.Errorf("creating MCP toolset: %w", err)
 	}
 	return &resilientToolset{inner: ts, name: srv.Name}, nil
+}
+
+// headerRoundTripper injects static HTTP headers (e.g., API keys, usernames)
+// into every request sent by the Streamable HTTP MCP transport. The base
+// RoundTripper defaults to http.DefaultTransport when nil.
+type headerRoundTripper struct {
+	headers map[string]string
+	base    http.RoundTripper
+}
+
+func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone the request so we never mutate the caller's headers, which the
+	// transport may reuse across retries.
+	r := req.Clone(req.Context())
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(r)
 }

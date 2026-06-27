@@ -407,6 +407,7 @@ func buildMCPToolsetsFromCfg(cfg config.Config) []adktool.Toolset {
 			Command: s.Command,
 			Args:    s.Args,
 			URL:     s.URL,
+			Headers: s.Headers,
 		}
 	}
 	ts, _ := extension.BuildMCPToolsets(servers)
