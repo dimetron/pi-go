@@ -91,10 +91,11 @@ type MCPConfig struct {
 }
 
 type MCPServer struct {
-	Name    string   `json:"name"`
-	Command string   `json:"command,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	URL     string   `json:"url,omitempty"` // HTTP transport (e.g., cloudflare-api)
+	Name    string            `json:"name"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
+	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -318,6 +319,9 @@ func substituteEnvVarsFrom(cwd string, servers []MCPServer) []MCPServer {
 		if servers[i].URL != "" {
 			servers[i].URL = substituteEnv(env, servers[i].URL)
 		}
+		for k, v := range servers[i].Headers {
+			servers[i].Headers[k] = substituteEnv(env, v)
+		}
 	}
 	return servers
 }
@@ -385,6 +389,9 @@ func parseMCPServers(v any) []MCPServer {
 				if url, ok := m["url"].(string); ok {
 					srv.URL = url
 				}
+				if headers, ok := m["headers"].(map[string]any); ok {
+					srv.Headers = toStringMap(headers)
+				}
 			}
 			// Skip servers that have neither command nor URL (e.g., disabled servers).
 			if srv.Command == "" && srv.URL == "" {
@@ -411,6 +418,9 @@ func parseMCPServers(v any) []MCPServer {
 				if url, ok := m["url"].(string); ok {
 					srv.URL = url
 				}
+				if headers, ok := m["headers"].(map[string]any); ok {
+					srv.Headers = toStringMap(headers)
+				}
 				// Skip servers that have neither command nor URL.
 				if srv.Command == "" && srv.URL == "" {
 					continue
@@ -436,6 +446,24 @@ func toStringSlice(v []any) []string {
 		}
 	}
 	return s
+}
+
+// toStringMap converts map[string]any to map[string]string, keeping only
+// string values. Non-string header values are skipped.
+func toStringMap(v map[string]any) map[string]string {
+	if len(v) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(v))
+	for k, x := range v {
+		if str, ok := x.(string); ok {
+			m[k] = str
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 func loadFile(path string, cfg *Config) error {
