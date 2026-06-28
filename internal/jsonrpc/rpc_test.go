@@ -33,6 +33,19 @@ func (m *mockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool
 	}
 }
 
+// errLLM always yields an error, exercising the streaming error path.
+type errLLM struct {
+	err error
+}
+
+func (m *errLLM) Name() string { return "err-model" }
+
+func (m *errLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(nil, m.err)
+	}
+}
+
 func newTestAgent(t *testing.T, response string) *agent.Agent {
 	t.Helper()
 	ag, err := agent.New(agent.Config{
@@ -208,6 +221,119 @@ func TestServerMethodNotFound(t *testing.T) {
 	}
 	if resp.Error.Code != -32601 {
 		t.Errorf("expected code -32601, got %d", resp.Error.Code)
+	}
+
+	cancel()
+}
+
+func TestServerPromptInvalidParams(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag := newTestAgent(t, "ok")
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	// Params is valid JSON for the request envelope but cannot unmarshal into
+	// PromptParams (a number where an object is expected).
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "prompt",
+		Params:  json.RawMessage(`123`),
+		ID:      7,
+	})
+
+	dec := json.NewDecoder(conn)
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error for invalid params")
+	}
+	if resp.Error.Code != -32602 {
+		t.Errorf("expected code -32602, got %d", resp.Error.Code)
+	}
+
+	cancel()
+}
+
+func TestServerPromptStreamError(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	ag, err := agent.New(agent.Config{
+		Model:       &errLLM{err: fmt.Errorf("model boom")},
+		Instruction: "Test agent",
+	})
+	if err != nil {
+		t.Fatalf("creating agent: %v", err)
+	}
+
+	srv := NewServer(Config{
+		Agent:      ag,
+		SocketPath: socketPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = srv.Run(ctx) }()
+	waitForSocket(t, socketPath)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(Request{
+		JSONRPC: "2.0",
+		Method:  "prompt",
+		Params:  json.RawMessage(`{"text":"hello"}`),
+		ID:      1,
+	})
+
+	dec := json.NewDecoder(conn)
+
+	// 1. JSON-RPC ack with session ID.
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected ack error: %+v", resp.Error)
+	}
+
+	// The stream should surface an error event before message_end.
+	sawError := false
+	for {
+		var ev Event
+		if err := dec.Decode(&ev); err != nil {
+			break
+		}
+		if ev.Type == "error" {
+			sawError = true
+		}
+		if ev.Type == "message_end" {
+			break
+		}
+	}
+	if !sawError {
+		t.Error("expected an error event from the stream")
 	}
 
 	cancel()

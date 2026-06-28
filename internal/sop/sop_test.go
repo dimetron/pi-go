@@ -56,6 +56,32 @@ func TestLoadPDD_GlobalOverride(t *testing.T) {
 	}
 }
 
+func TestLoadPDD_GlobalOverrideFromHome(t *testing.T) {
+	// Point HOME at a temp dir so os.UserHomeDir resolves there, then place a
+	// global override and confirm it is loaded when no project override exists.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	globalSOPDir := filepath.Join(home, ".pi-go", "sops")
+	if err := os.MkdirAll(globalSOPDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	globalSOP := "# Global PDD SOP\nThis is a global override."
+	if err := os.WriteFile(filepath.Join(globalSOPDir, "pdd.md"), []byte(globalSOP), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// workDir has no project override, so resolution should fall to the global file.
+	workDir := t.TempDir()
+	content, err := LoadPDD(workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != globalSOP {
+		t.Errorf("expected global override SOP, got: %s", content)
+	}
+}
+
 func TestLoadPDD_ProjectOverGlobal(t *testing.T) {
 	// If project override exists, it should take precedence
 	dir := t.TempDir()

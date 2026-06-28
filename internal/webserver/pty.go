@@ -101,10 +101,9 @@ func (pb *PtyBridge) Alive() bool {
 // Blocks until the WebSocket disconnects or the PTY process exits.
 // After return the PTY is still alive; call Close() to kill it.
 func (pb *PtyBridge) AttachWebSocket(conn *websocket.Conn, sessionID string) {
-	pb.sessionID = sessionID
-
-	// Register connection.
+	// Register connection and session id atomically.
 	pb.mu.Lock()
+	pb.sessionID = sessionID
 	pb.conn = conn
 	pb.mu.Unlock()
 
@@ -228,11 +227,17 @@ func (pb *PtyBridge) startProcess() error {
 
 	go func() {
 		err := pb.cmd.Wait()
-		pb.log.Info("pty process exited", "session", pb.sessionID, "err", err)
+		pb.mu.Lock()
+		sid := pb.sessionID
+		pb.mu.Unlock()
+		pb.log.Info("pty process exited", "session", sid, "err", err)
 		pb.closeOnce.Do(func() { close(pb.done) })
 	}()
 
-	pb.log.Info("pty started", "session", pb.sessionID, "pid", cmd.Process.Pid, "mode", "pty")
+	pb.mu.Lock()
+	sid := pb.sessionID
+	pb.mu.Unlock()
+	pb.log.Info("pty started", "session", sid, "pid", cmd.Process.Pid, "mode", "pty")
 	return nil
 }
 

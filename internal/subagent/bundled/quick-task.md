@@ -17,3 +17,7 @@ Rules:
 - Absolute minimum changes — touch only what is necessary.
 - No exploration beyond what the task requires.
 - If the task is ambiguous, do the simplest reasonable interpretation.
+- **Verify before reporting completion**: run the build command and paste output. Never claim success without running
+  it.
+- Before reporting done, run `git diff --name-only`. If the list is empty, you delivered nothing — say so.
+- Do not fabricate tool output or claim files exist without verifying.
