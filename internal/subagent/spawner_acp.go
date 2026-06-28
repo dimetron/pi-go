@@ -43,8 +43,21 @@ const acpCompletionMatcher = "<Task Completed>"
 // header. ACP agents (claude/gemini/cursor) run untethered from pi's tool
 // loop, so they need an explicit "<Task Completed>" sentinel the caller can
 // look for to know the turn is finished — otherwise agents may keep talking.
+//
+// The preamble also enforces anti-hallucination rules: the agent must not
+// claim completion without verifying that actual deliverables exist. This
+// prevents false "completed" reports where the agent says it finished but
+// no files were created or no build was run.
 func acpPromptPreamble(agentName, task string) string {
-	return fmt.Sprintf("You are subagent[%s], %s when done reply %s", agentName, task, acpCompletionSentinel)
+	return fmt.Sprintf("You are subagent[%s], %s when done reply %s\n\n"+
+		"ANTI-HALLUCINATION RULES (critical):\n"+
+		"- Before claiming completion, run `git diff --name-only` and list the actual changed files.\n"+
+		"- If the changed file list is empty, you have not delivered anything. Say so honestly.\n"+
+		"- Never claim a build or test passes without running the actual command and pasting the output.\n"+
+		"- Never claim a file exists that you did not create. Verify with `ls` or `git status`.\n"+
+		"- Do not fabricate tool output. If a command failed, report the failure.\n"+
+		"- Only reply %s after you have verified your deliverables exist.",
+		agentName, task, acpCompletionSentinel, acpCompletionSentinel)
 }
 
 // dispatchACP starts an ACP-based subagent (claude, gemini, cursor) and

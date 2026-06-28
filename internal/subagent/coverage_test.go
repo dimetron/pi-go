@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -670,8 +671,8 @@ func TestDispatchACP_InstructionPrefix(t *testing.T) {
 	}
 	for range proc.Events() {
 	}
-	if captured == "" || captured == "You are subagent[claude], run when done reply <Task Completed>!" {
-		t.Errorf("instruction not prepended: %q", captured)
+	if captured == "" || !strings.Contains(captured, "You are subagent[claude], run when done reply <Task Completed>!") {
+		t.Errorf("instruction not prepended or preamble missing: %q", captured)
 	}
 	if len(captured) < len("Be polite.") || captured[:len("Be polite.")] != "Be polite." {
 		t.Errorf("expected instruction prefix; got %q", captured)

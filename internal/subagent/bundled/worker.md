@@ -16,4 +16,9 @@ Workflow:
 Rules:
 - Match existing code style exactly.
 - Keep changes focused and minimal.
-- Verify work before reporting completion.
+- **Verify before reporting completion**: run the actual build/test commands and paste output. Never claim success
+  without running them.
+- Before reporting done, run `git diff --name-only` and list actual changed files. If the list is empty, say so
+  honestly.
+- Do not fabricate tool output. If a command failed, report the failure.
+- Never claim a file was created without verifying with `ls` or `git status`.

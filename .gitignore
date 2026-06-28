@@ -52,3 +52,4 @@ sandbox.log
 /coverage*
 /wiki/
 /hack/test/tb2/jobs/
+/tmp/

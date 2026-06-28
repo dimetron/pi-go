@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,9 +50,18 @@ func withFakeACPRunner(t *testing.T, sess acpSession) {
 
 func TestACPPromptPreamble(t *testing.T) {
 	got := acpPromptPreamble("claude", "echo name")
-	want := "You are subagent[claude], echo name when done reply <Task Completed>!"
-	if got != want {
-		t.Errorf("acpPromptPreamble() = %q, want %q", got, want)
+	// The preamble must contain the role header and anti-hallucination rules.
+	if !strings.Contains(got, "You are subagent[claude], echo name when done reply <Task Completed>!") {
+		t.Errorf("preamble missing role header: %q", got)
+	}
+	if !strings.Contains(got, "ANTI-HALLUCINATION RULES") {
+		t.Errorf("preamble missing anti-hallucination rules: %q", got)
+	}
+	if !strings.Contains(got, "git diff --name-only") {
+		t.Errorf("preamble missing git diff verification requirement: %q", got)
+	}
+	if !strings.Contains(got, "Only reply <Task Completed>! after you have verified") {
+		t.Errorf("preamble missing verification-before-completion requirement: %q", got)
 	}
 }
 
@@ -215,8 +225,11 @@ func TestDispatchACP_WrapsPromptWithPreamble(t *testing.T) {
 	})
 
 	wantPrompt := "You are subagent[cursor], review changes when done reply <Task Completed>!"
-	if capturedPrompt != wantPrompt {
-		t.Errorf("prompt = %q, want %q", capturedPrompt, wantPrompt)
+	if !strings.Contains(capturedPrompt, wantPrompt) {
+		t.Errorf("prompt = %q, want it to contain %q", capturedPrompt, wantPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "ANTI-HALLUCINATION RULES") {
+		t.Errorf("prompt missing anti-hallucination rules: %q", capturedPrompt)
 	}
 	if capturedAgent != "cursor" {
 		t.Errorf("agent name = %q, want cursor", capturedAgent)

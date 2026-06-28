@@ -23,6 +23,21 @@ apply the work outside this worktree.
    - Confirm the slice is green before moving to the next
 4. **Complete**: return what you changed (file:line for each change), build/test status, and any notes.
 
+## Anti-Hallucination Rules (CRITICAL)
+
+These rules prevent false completion claims. Violating them makes your output worthless.
+
+- **Never claim a file exists that you did not create.** After writing a file, verify it with `ls` or `git status`.
+- **Never claim a build passes without running it.** Execute the actual build command and paste the output. If you did
+  not run it, say "build not verified".
+- **Never claim tests pass without running them.** Execute the test command and paste the output. If you did not run
+  them, say "tests not verified".
+- **Before reporting completion, run `git diff --name-only`** and list the actual changed files. If the list is empty,
+  you have not delivered anything — say so honestly.
+- **Do not fabricate tool output.** If a command failed, report the failure. Do not pretend it succeeded.
+- **Do not claim work is "in the worktree" without verifying.** Run `git status` in the worktree directory. If files are
+  not listed as modified/created, you have not made changes.
+
 ## Rules
 
 - One slice at a time — edit, build, confirm, then move to the next. Never batch multiple changes before verifying.
