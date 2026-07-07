@@ -41,6 +41,7 @@ Thumbs.db
 /hack/test/rust/target/
 /.ralph/
 /.agents/
+/.scratch/
 .worktrees/
 /pi-test
 sandbox-trace.log

@@ -90,6 +90,31 @@ func TestHandleSlashCommandModel(t *testing.T) {
 	}
 }
 
+func TestHandleSlashCommandCopy(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: []message{
+			{role: "user", content: "hello"},
+			{role: "assistant", content: "hi"},
+		}},
+	}
+
+	newM, cmd := m.handleSlashCommand("/copy")
+	mm := newM.(*model)
+
+	if cmd == nil {
+		t.Fatal("expected clipboard command")
+	}
+	if got := fmt.Sprint(cmd()); got != "User:\nhello\n\nAssistant:\nhi" {
+		t.Errorf("unexpected copied transcript: %q", got)
+	}
+	if len(mm.chatModel.Messages) != 3 {
+		t.Fatalf("expected confirmation message, got %d messages", len(mm.chatModel.Messages))
+	}
+	if !strings.Contains(mm.chatModel.Messages[2].content, "Copied") {
+		t.Errorf("expected copy confirmation, got %q", mm.chatModel.Messages[2].content)
+	}
+}
+
 func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	m := &model{
 		inputModel: InputModel{Text: "/model"},
@@ -868,9 +893,9 @@ func TestMatchingSlashCommands_All(t *testing.T) {
 
 func TestMatchingSlashCommands_Partial(t *testing.T) {
 	matches := matchingSlashCommands("/c")
-	// Should match: /clear, /context, /compact, /commit
-	if len(matches) != 4 {
-		t.Errorf("expected 4 matches for '/c', got %d: %v", len(matches), matches)
+	// Should match: /clear, /context, /compact, /commit, /copy
+	if len(matches) != 5 {
+		t.Errorf("expected 5 matches for '/c', got %d: %v", len(matches), matches)
 	}
 	for _, m := range matches {
 		if !strings.HasPrefix(m, "/c") {

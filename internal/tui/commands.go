@@ -43,6 +43,8 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.loadingItems = nil
 		m.matrix.clear()
 		m.matrix.feed("pi-go", m.mainWidth())
+	case "/copy":
+		return m.handleCopyCommand()
 	case "/model":
 		return m.handleModelCommand(parts[1:])
 	case "/session":
@@ -105,6 +107,23 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *model) handleCopyCommand() (tea.Model, tea.Cmd) {
+	transcript := m.chatModel.PlainTranscript()
+	if transcript == "" {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: "Nothing to copy yet.",
+		})
+		return m, nil
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: "Copied conversation to clipboard.",
+	})
+	return m, tea.SetClipboard(transcript)
 }
 
 // handleBranchCommand handles /branch subcommands: create, switch, list.
@@ -631,6 +650,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("|---------|-------------|\n")
 	b.WriteString("| `/help` | Show this help |\n")
 	b.WriteString("| `/clear` | Clear conversation |\n")
+	b.WriteString("| `/copy` | Copy conversation to clipboard |\n")
 	b.WriteString("| `/model [name]` | Show or switch current model |\n")
 	b.WriteString("| `/session` | Show session info |\n")
 	b.WriteString("| `/context` | Show context usage |\n")

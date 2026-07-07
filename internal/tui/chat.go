@@ -272,6 +272,50 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 	return strings.TrimRight(rendered, "\n")
 }
 
+// PlainTranscript returns the conversation as copy-friendly plain text.
+func (c *ChatModel) PlainTranscript() string {
+	if len(c.Messages) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, msg := range c.Messages {
+		content := strings.TrimSpace(msg.content)
+		if content == "" {
+			continue
+		}
+
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(transcriptLabel(msg))
+		b.WriteString("\n")
+		b.WriteString(content)
+	}
+	return b.String()
+}
+
+func transcriptLabel(msg message) string {
+	switch msg.role {
+	case "user":
+		return "User:"
+	case "assistant":
+		return "Assistant:"
+	case "thinking":
+		return "Thinking:"
+	case "tool":
+		if msg.tool != "" {
+			return "Tool " + msg.tool + ":"
+		}
+		return "Tool:"
+	default:
+		if msg.role == "" {
+			return "Message:"
+		}
+		return msg.role + ":"
+	}
+}
+
 // RenderMessages renders all messages into a string for display.
 func (c *ChatModel) RenderMessages(running bool) string {
 	if len(c.Messages) == 0 {

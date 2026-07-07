@@ -267,7 +267,7 @@ func TestRunStreaming(t *testing.T) {
 
 func TestLoadInstruction(t *testing.T) {
 	base := "Base instruction."
-	result := LoadInstruction(base)
+	result := loadInstructionFrom(base, t.TempDir(), "")
 
 	if !strings.Contains(result, base) {
 		t.Errorf("LoadInstruction() should contain base instruction, got %q", result)
@@ -353,6 +353,97 @@ func TestLoadInstructionPrefersAgentFileInCurrentDirectory(t *testing.T) {
 	}
 	if strings.Contains(result, "- Project") {
 		t.Errorf("LoadInstruction() should not append .pi-go/AGENTS.md when AGENT.md exists, got %q", result)
+	}
+}
+
+func TestLoadInstructionDiscoversRootAgentsFile(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "internal", "agent")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Repo Rules\n- Root"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	result := loadInstructionFrom("Base instruction.", child, "")
+
+	if !strings.Contains(result, "Repo Rules") {
+		t.Fatalf("LoadInstruction() should discover parent AGENTS.md, got %q", result)
+	}
+}
+
+func TestLoadInstructionDiscoversClaudeFile(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "cmd", "pi")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Claude Rules\n- Parent"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	result := loadInstructionFrom("Base instruction.", child, "")
+
+	if !strings.Contains(result, "Claude Rules") {
+		t.Fatalf("LoadInstruction() should discover parent CLAUDE.md, got %q", result)
+	}
+}
+
+func TestLoadInstructionMergesGlobalAndParentContext(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	child := filepath.Join(dir, "internal", "agent")
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".pi-go", "AGENTS.md"), []byte("# Global Rules\n- Global"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Repo Rules\n- Repo"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "AGENTS.md"), []byte("# Local Rules\n- Local"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	result := loadInstructionFrom("Base instruction.", child, home)
+
+	globalIndex := strings.Index(result, "Global Rules")
+	repoIndex := strings.Index(result, "Repo Rules")
+	localIndex := strings.Index(result, "Local Rules")
+	if globalIndex == -1 || repoIndex == -1 || localIndex == -1 {
+		t.Fatalf("LoadInstruction() should merge global, parent, and local context, got %q", result)
+	}
+	if globalIndex >= repoIndex || repoIndex >= localIndex {
+		t.Fatalf("LoadInstruction() should order context from global to local, got %q", result)
+	}
+}
+
+func TestLoadInstructionSkipsOversizedParentContext(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "pkg")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	oversized := strings.Repeat("A", maxInstructionFileSize+1)
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(oversized), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "CLAUDE.md"), []byte("# Local Claude\n- Local"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	result := loadInstructionFrom("Base instruction.", child, "")
+
+	if strings.Contains(result, oversized) {
+		t.Fatalf("LoadInstruction() should skip oversized parent context")
+	}
+	if !strings.Contains(result, "Local Claude") {
+		t.Fatalf("LoadInstruction() should keep later valid context files, got %q", result)
 	}
 }
 
