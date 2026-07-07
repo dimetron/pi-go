@@ -312,6 +312,7 @@ func isLineEndKey(key tea.Key) bool {
 var slashCommands = []string{
 	"/help",
 	"/clear",
+	"/copy",
 	"/model",
 	"/session",
 	"/context",
@@ -340,6 +341,8 @@ func slashCommandDesc(cmd string) string {
 		return "Show help"
 	case "/clear":
 		return "Clear conversation"
+	case "/copy":
+		return "Copy conversation to clipboard"
 	case "/model":
 		return "Show or switch model"
 	case "/session":

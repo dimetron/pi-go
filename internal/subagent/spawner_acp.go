@@ -8,6 +8,7 @@ import (
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
 	"github.com/dimetron/pi-go/internal/acp/client/claudecode"
+	"github.com/dimetron/pi-go/internal/acp/client/copilot"
 	"github.com/dimetron/pi-go/internal/acp/client/cursor"
 	"github.com/dimetron/pi-go/internal/acp/client/gemini"
 )
@@ -127,6 +128,13 @@ func startACPSession(ctx context.Context, agentName, prompt string, opts SpawnOp
 	case "cursor":
 		r := cursor.Runner{ExtraEnv: opts.Env}
 		return r.Start(ctx, cursor.RunRequest{
+			Prompt: prompt,
+			CWD:    opts.WorkDir,
+			Env:    opts.Env,
+		})
+	case "copilot":
+		r := copilot.Runner{ExtraEnv: opts.Env}
+		return r.Start(ctx, copilot.RunRequest{
 			Prompt: prompt,
 			CWD:    opts.WorkDir,
 			Env:    opts.Env,

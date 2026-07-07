@@ -8,6 +8,8 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -391,30 +393,36 @@ func (a *Agent) RunStreaming(ctx context.Context, sessionID string, userMessage 
 	})
 }
 
-// LoadInstruction attempts to load an AGENT.md file from the working directory
-// or an AGENTS.md file from .pi-go and appends its content to the base
-// instruction. It also appends a summary of discovered skills from the standard
-// skill directories.
-func LoadInstruction(baseInstruction string) string {
-	instruction := baseInstruction
+// contextFileNames lists the context-file names checked in each directory
+// during discovery, in priority order. The first match per directory wins.
+var contextFileNames = []string{
+	"AGENT.md",
+	"AGENTS.md",
+	"CLAUDE.md",
+	filepath.Join(".pi-go", "AGENTS.md"),
+}
 
+// LoadInstruction appends discovered project context files and a summary of
+// discovered skills to the base instruction. Context files (AGENT.md,
+// AGENTS.md, CLAUDE.md, or .pi-go/AGENTS.md; first match per directory) are
+// discovered by walking from the working directory up to the filesystem
+// root; a global ~/.pi-go/AGENTS.md is included first when present.
+func LoadInstruction(baseInstruction string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return instruction
+		return baseInstruction
 	}
+	home, _ := os.UserHomeDir()
+	return loadInstructionFrom(baseInstruction, cwd, home)
+}
 
-	for _, agentsFile := range []string{
-		filepath.Join(cwd, "AGENT.md"),
-		filepath.Join(cwd, ".pi-go", "AGENTS.md"),
-	} {
-		data, err := os.ReadFile(agentsFile)
-		if err == nil {
-			if len(data) > maxInstructionFileSize {
-				continue
-			}
-			instruction += "\n\n# Project Rules\n\n" + string(data)
-			break
-		}
+// loadInstructionFrom is the testable core of LoadInstruction, resolving
+// context files and skills relative to explicit cwd and home directories.
+func loadInstructionFrom(baseInstruction, cwd, home string) string {
+	instruction := baseInstruction
+
+	if contents := discoverContextFiles(cwd, home); len(contents) > 0 {
+		instruction += "\n\n# Project Rules\n\n" + strings.Join(contents, "\n\n")
 	}
 
 	// Get skills.
@@ -428,4 +436,68 @@ func LoadInstruction(baseInstruction string) string {
 	}
 
 	return instruction
+}
+
+type contextFile struct {
+	path    string
+	content string
+}
+
+// discoverContextFiles returns context-file contents ordered from most
+// general to most specific: the global ~/.pi-go/AGENTS.md first, then one
+// file per directory from the filesystem root down to cwd.
+func discoverContextFiles(cwd, home string) []string {
+	// Walk from cwd up to the filesystem root, nearest directory first.
+	var found []contextFile
+	dir := filepath.Clean(cwd)
+	for {
+		if f, ok := readContextFileIn(dir); ok {
+			found = append(found, f)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	slices.Reverse(found) // most general (root) first
+
+	// Global file comes first, unless the walk already picked it up.
+	if home != "" {
+		globalPath := filepath.Join(home, ".pi-go", "AGENTS.md")
+		alreadyFound := slices.ContainsFunc(found, func(f contextFile) bool {
+			return f.path == globalPath
+		})
+		if !alreadyFound {
+			if content, ok := readInstructionFile(globalPath); ok {
+				found = append([]contextFile{{path: globalPath, content: content}}, found...)
+			}
+		}
+	}
+
+	contents := make([]string, 0, len(found))
+	for _, f := range found {
+		contents = append(contents, f.content)
+	}
+	return contents
+}
+
+// readContextFileIn returns the first context file found in dir.
+func readContextFileIn(dir string) (contextFile, bool) {
+	for _, name := range contextFileNames {
+		path := filepath.Join(dir, name)
+		if content, ok := readInstructionFile(path); ok {
+			return contextFile{path: path, content: content}, true
+		}
+	}
+	return contextFile{}, false
+}
+
+// readInstructionFile reads path, rejecting missing or oversized files.
+func readInstructionFile(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > maxInstructionFileSize {
+		return "", false
+	}
+	return string(data), true
 }

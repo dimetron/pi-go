@@ -256,9 +256,9 @@ func TestLoadBundledAgents(t *testing.T) {
 		t.Fatalf("LoadBundledAgents failed: %v", err)
 	}
 
-	// Expected 13 agents: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer, memory-compressor, discovery, claude, gemini, cursor
-	if len(agents) != 13 {
-		t.Errorf("expected 13 bundled agents, got %d: %v", len(agents), agentNames(agents))
+	// Expected 14 agents: explore, plan, designer, task, quick-task, worker, code-reviewer, spec-reviewer, memory-compressor, discovery, claude, gemini, cursor, copilot
+	if len(agents) != 14 {
+		t.Errorf("expected 14 bundled agents, got %d: %v", len(agents), agentNames(agents))
 	}
 
 	// Verify all agents have required fields
@@ -276,6 +276,7 @@ func TestLoadBundledAgents(t *testing.T) {
 		"claude":            false,
 		"gemini":            false,
 		"cursor":            false,
+		"copilot":           false,
 	}
 
 	for _, agent := range agents {
@@ -301,9 +302,9 @@ func TestDiscoverAgents_Bundled(t *testing.T) {
 		t.Fatalf("DiscoverAgents failed: %v", err)
 	}
 
-	// Should have 13 bundled agents
-	if len(result.Bundled) != 13 {
-		t.Errorf("expected 13 bundled agents, got %d", len(result.Bundled))
+	// Should have 14 bundled agents
+	if len(result.Bundled) != 14 {
+		t.Errorf("expected 14 bundled agents, got %d", len(result.Bundled))
 	}
 
 	// All should have bundled source
@@ -321,13 +322,13 @@ func TestDiscoverAgents_Both(t *testing.T) {
 	}
 
 	// Should have bundled agents
-	if len(result.Bundled) != 13 {
-		t.Errorf("expected 13 bundled agents, got %d", len(result.Bundled))
+	if len(result.Bundled) != 14 {
+		t.Errorf("expected 14 bundled agents, got %d", len(result.Bundled))
 	}
 
 	// All should be in merged All slice
-	if len(result.All) < 13 {
-		t.Errorf("expected at least 13 agents in All, got %d", len(result.All))
+	if len(result.All) < 14 {
+		t.Errorf("expected at least 14 agents in All, got %d", len(result.All))
 	}
 }
 

@@ -366,7 +366,7 @@ func TestToSpawnInput_KnownBundled(t *testing.T) {
 // a specific runner (i.e. the error comes from the runner, not from "unknown
 // ACP agent").
 func TestStartACPSession_KnownAgents_RoutesToRunner(t *testing.T) {
-	for _, name := range []string{"claude", "gemini", "cursor"} {
+	for _, name := range []string{"claude", "gemini", "cursor", "copilot"} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancel()
