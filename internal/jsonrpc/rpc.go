@@ -247,11 +247,15 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 				})
 			}
 			if part.FunctionResponse != nil {
+				respJSON, err := json.Marshal(part.FunctionResponse.Response)
+				if err != nil {
+					respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
+				}
 				_ = enc.Encode(Event{
 					Type:     "tool_result",
 					Agent:    ev.Author,
 					ToolName: part.FunctionResponse.Name,
-					Content:  fmt.Sprintf("%v", part.FunctionResponse.Response),
+					Content:  string(respJSON),
 				})
 			}
 		}

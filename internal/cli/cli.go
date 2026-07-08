@@ -1021,13 +1021,17 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if part.FunctionResponse != nil {
+				respJSON, err := json.Marshal(part.FunctionResponse.Response)
+				if err != nil {
+					respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
+				}
 				_ = enc.Encode(jsonEvent{
 					Type:     "tool_result",
 					Agent:    ev.Author,
 					ToolName: part.FunctionResponse.Name,
-					Content:  fmt.Sprintf("%v", part.FunctionResponse.Response),
+					Content:  string(respJSON),
 				})
-				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
+				log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
 			}
 		}
 	}
