@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // SessionMeta holds metadata needed to initialize the ATIF trajectory header.

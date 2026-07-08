@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/config"
 )

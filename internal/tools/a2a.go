@@ -8,8 +8,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2aclient "github.com/a2aproject/a2a-go/v2/a2aclient"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/config"
 )
@@ -307,7 +307,7 @@ func NewA2ATool(cache *ClientCache) (tool.Tool, error) {
 	desc := buildA2ADescription(cache)
 
 	return newTool("a2a", desc,
-		func(ctx agent.ToolContext, input A2AInput) (A2AOutput, error) {
+		func(ctx agent.Context, input A2AInput) (A2AOutput, error) {
 			// Send the message
 			result := cache.SendMessage(ctx, input.AgentName, input.Prompt, input.Stream)
 			return result, nil

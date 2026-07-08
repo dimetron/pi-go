@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // ConvertEvent converts a session.Event into zero or more ATIF Steps.

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 )
 
 const maxLsEntries = 1000
@@ -34,7 +34,7 @@ type LsEntry struct {
 }
 
 func newLsTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("ls", "List the contents of a directory. Returns file names, types (file/directory), and sizes.", func(_ agent.ToolContext, input LsInput) (LsOutput, error) {
+	return newTool("ls", "List the contents of a directory. Returns file names, types (file/directory), and sizes.", func(_ agent.Context, input LsInput) (LsOutput, error) {
 		return lsHandler(sb, input)
 	})
 }

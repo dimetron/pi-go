@@ -5,19 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"google.golang.org/adk/agent"
-	adkmemory "google.golang.org/adk/memory"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/agent"
+	adkmemory "google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/lsp"
 )
 
-// mockToolCtx is a minimal agent.ToolContext backed by a real context.Context.
+// mockToolCtx is a minimal agent.Context backed by a real context.Context.
 // It lets tests invoke tools through the tool.Tool Run interface, exercising the
-// functiontool factory closures that direct handler tests never reach.
+// functiontool factory closures that direct handler tests never reach. The full
+// v2 method set is implemented so the mock stays forward-compatible with future
+// agent.Context surface growth.
 type mockToolCtx struct {
 	context.Context
 }
@@ -40,11 +43,47 @@ func (mockToolCtx) Branch() string                                       { retur
 func (mockToolCtx) SessionID() string                                    { return "" }
 func (mockToolCtx) UserID() string                                       { return "" }
 
-var _ agent.ToolContext = mockToolCtx{}
+// InvocationContext surface.
+func (mockToolCtx) Agent() agent.Agent          { return nil }
+func (mockToolCtx) Memory() agent.Memory        { return nil }
+func (mockToolCtx) Session() session.Session    { return nil }
+func (mockToolCtx) RunConfig() *agent.RunConfig { return nil }
+func (mockToolCtx) EndInvocation()              {}
+func (mockToolCtx) Ended() bool                 { return false }
+func (mockToolCtx) WithContext(ctx context.Context) agent.InvocationContext {
+	return mockToolCtx{Context: ctx}
+}
+func (mockToolCtx) IsolationScope() string { return "" }
+func (mockToolCtx) ResumedInput(string) (any, bool) {
+	return nil, false
+}
+func (mockToolCtx) WithICDelta(*agent.InvocationContextDelta) agent.InvocationContext {
+	return mockToolCtx{}
+}
+
+// agent.Context-only surface (v2 additions).
+func (mockToolCtx) Path() string                            { return "" }
+func (mockToolCtx) RunID() string                           { return "" }
+func (mockToolCtx) SubScheduler() agent.DynamicSubScheduler { return nil }
+func (mockToolCtx) WithAgentContext(ctx context.Context) agent.Context {
+	return mockToolCtx{Context: ctx}
+}
+func (mockToolCtx) WithAgentTimeout(time.Duration) (agent.Context, context.CancelFunc) {
+	return mockToolCtx{}, func() {}
+}
+func (mockToolCtx) WithAgentCancel() (agent.Context, context.CancelFunc) {
+	return mockToolCtx{}, func() {}
+}
+func (mockToolCtx) OutputForAncestors() []string { return nil }
+func (mockToolCtx) WithDelta(*agent.CommonContextDelta) agent.Context {
+	return mockToolCtx{}
+}
+
+var _ agent.Context = mockToolCtx{}
 
 // runnableTool mirrors the (unexported) adk interface implemented by tools.
 type runnableTool interface {
-	Run(ctx agent.ToolContext, args any) (map[string]any, error)
+	Run(ctx agent.Context, args any) (map[string]any, error)
 }
 
 func runTool(t *testing.T, tl any, args map[string]any) map[string]any {

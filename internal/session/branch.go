@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // BranchInfo describes a named branch within a session.

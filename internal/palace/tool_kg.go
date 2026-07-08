@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // --- palace-kg-add ---
@@ -34,7 +34,7 @@ func newPalaceKGAddTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-kg-add",
 		Description: "Add a fact (triple) to the knowledge graph. A triple consists of subject-predicate-object, e.g. 'Alice works_on auth-service'. Entities are auto-created. Duplicate active triples are detected.",
-	}, func(ctx agent.ToolContext, input KGAddToolInput) (KGAddToolOutput, error) {
+	}, func(ctx agent.Context, input KGAddToolInput) (KGAddToolOutput, error) {
 		return palaceKGAddHandler(ctx, p, input)
 	})
 }
@@ -95,7 +95,7 @@ func newPalaceKGQueryTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-kg-query",
 		Description: "Query the knowledge graph for facts involving an entity. Returns triples where the entity appears as subject and/or object. Supports point-in-time queries with as_of parameter.",
-	}, func(ctx agent.ToolContext, input KGQueryToolInput) (KGQueryToolOutput, error) {
+	}, func(ctx agent.Context, input KGQueryToolInput) (KGQueryToolOutput, error) {
 		return palaceKGQueryHandler(ctx, p, input)
 	})
 }
@@ -155,7 +155,7 @@ func newPalaceKGInvalidateTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-kg-invalidate",
 		Description: "Invalidate (end) an active fact in the knowledge graph. Sets the valid_to timestamp to now, marking the triple as no longer current. The fact remains in the timeline for historical queries.",
-	}, func(ctx agent.ToolContext, input KGInvalidateToolInput) (KGInvalidateToolOutput, error) {
+	}, func(ctx agent.Context, input KGInvalidateToolInput) (KGInvalidateToolOutput, error) {
 		return palaceKGInvalidateHandler(ctx, p, input)
 	})
 }
@@ -192,7 +192,7 @@ func newPalaceKGTimelineTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-kg-timeline",
 		Description: "View the chronological timeline of all facts (including invalidated ones) for an entity. Useful for understanding how relationships evolved over time.",
-	}, func(ctx agent.ToolContext, input KGTimelineToolInput) (KGTimelineToolOutput, error) {
+	}, func(ctx agent.Context, input KGTimelineToolInput) (KGTimelineToolOutput, error) {
 		return palaceKGTimelineHandler(ctx, p, input)
 	})
 }

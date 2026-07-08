@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // StatusInput is intentionally empty — palace-status takes no parameters.
@@ -22,7 +22,7 @@ func newPalaceStatusTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-status",
 		Description: "Show the current state of the memory palace: drawer count, wings, rooms, knowledge graph stats, and model status.",
-	}, func(ctx agent.ToolContext, _ StatusInput) (StatusOutput, error) {
+	}, func(ctx agent.Context, _ StatusInput) (StatusOutput, error) {
 		return palaceStatusHandler(ctx, p)
 	})
 }

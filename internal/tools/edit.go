@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 )
 
 // EditInput defines the parameters for the edit tool.
@@ -34,7 +34,7 @@ func newEditTool(sb *Sandbox) (tool.Tool, error) {
 
 Required: file_path (absolute path), old_string (text to find).
 Optional: new_string (replacement, default "" = delete old_string), replace_all (bool, default false).
-old_string must be unique unless replace_all is true.`, func(_ agent.ToolContext, input EditInput) (EditOutput, error) {
+old_string must be unique unless replace_all is true.`, func(_ agent.Context, input EditInput) (EditOutput, error) {
 		return editHandler(sb, input)
 	})
 }

@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	adkagent "google.golang.org/adk/agent"
-	adkmodel "google.golang.org/adk/model"
-	"google.golang.org/adk/session"
-	adktool "google.golang.org/adk/tool"
+	adkagent "google.golang.org/adk/v2/agent"
+	adkmodel "google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -569,7 +569,7 @@ func runNonInteractive(
 				excludedTools[t] = true
 			}
 		}
-		afterCBs = append(afterCBs, func(_ adkagent.ToolContext, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+		afterCBs = append(afterCBs, func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 			if toolErr != nil || memSessionID == "" {
 				return result, nil
 			}

@@ -12,8 +12,8 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"go.opentelemetry.io/otel/attribute"
-	adksession "google.golang.org/adk/session"
-	adktool "google.golang.org/adk/tool"
+	adksession "google.golang.org/adk/v2/session"
+	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 	piagent "github.com/dimetron/pi-go/internal/agent"

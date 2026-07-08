@@ -13,7 +13,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 // NewAzureOpenAI creates an Azure OpenAI model.LLM.

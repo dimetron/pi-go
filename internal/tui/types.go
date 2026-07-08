@@ -10,8 +10,8 @@ import (
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 
-	llmmodel "google.golang.org/adk/model"
-	adktool "google.golang.org/adk/tool"
+	llmmodel "google.golang.org/adk/v2/model"
+	adktool "google.golang.org/adk/v2/tool"
 )
 
 // Config holds configuration for the TUI.

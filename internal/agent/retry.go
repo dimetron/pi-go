@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // RetryConfig controls retry behavior for transient LLM errors.

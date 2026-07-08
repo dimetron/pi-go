@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 )
 
 // GitFileDiffInput defines the parameters for the git-file-diff tool.
@@ -36,12 +36,12 @@ func newGitFileDiffTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("git-file-diff", `Get the unified diff for a specific file.
 
 Required: file (path relative to repo root).
-Optional: staged (bool, default false — set true for cached/staged changes).`, func(ctx agent.ToolContext, input GitFileDiffInput) (GitFileDiffOutput, error) {
+Optional: staged (bool, default false — set true for cached/staged changes).`, func(ctx agent.Context, input GitFileDiffInput) (GitFileDiffOutput, error) {
 		return gitFileDiffHandler(sb, ctx, input)
 	})
 }
 
-func gitFileDiffHandler(sb *Sandbox, ctx agent.ToolContext, input GitFileDiffInput) (GitFileDiffOutput, error) {
+func gitFileDiffHandler(sb *Sandbox, ctx agent.Context, input GitFileDiffInput) (GitFileDiffOutput, error) {
 	if input.File == "" {
 		return GitFileDiffOutput{}, fmt.Errorf("file is required")
 	}

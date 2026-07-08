@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/subagent"
 )

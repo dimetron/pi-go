@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 // BuildTransport creates an http.Transport with optional TLS skip and extra headers.

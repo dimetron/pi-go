@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/otel"
 )
@@ -49,12 +49,12 @@ type GitOverviewOutput struct {
 }
 
 func newGitOverviewTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("git-overview", "Get an overview of the current git repository: branch, recent commits, staged/unstaged/untracked files, and upstream status.", func(ctx agent.ToolContext, input GitOverviewInput) (GitOverviewOutput, error) {
+	return newTool("git-overview", "Get an overview of the current git repository: branch, recent commits, staged/unstaged/untracked files, and upstream status.", func(ctx agent.Context, input GitOverviewInput) (GitOverviewOutput, error) {
 		return gitOverviewHandler(sb, ctx, input)
 	})
 }
 
-func gitOverviewHandler(sb *Sandbox, ctx agent.ToolContext, input GitOverviewInput) (GitOverviewOutput, error) {
+func gitOverviewHandler(sb *Sandbox, ctx agent.Context, input GitOverviewInput) (GitOverviewOutput, error) {
 	dir := sb.Dir()
 
 	var parentCtx = context.Background()
@@ -161,7 +161,7 @@ func parsePorcelain(output string) (staged, unstaged, untracked []string) {
 }
 
 // runGit executes a git command in the given directory and returns stdout.
-func runGit(ctx agent.ToolContext, dir string, args ...string) (string, error) {
+func runGit(ctx agent.Context, dir string, args ...string) (string, error) {
 	var parentCtx = context.Background()
 	if ctx != nil {
 		parentCtx = ctx

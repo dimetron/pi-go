@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // TraverseToolInput defines parameters for the palace-traverse tool.
@@ -27,7 +27,7 @@ func newPalaceTraverseTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-traverse",
 		Description: "Traverse the memory palace graph via BFS from a starting room. Discovers connected rooms across wings through shared topics. Useful for finding related knowledge areas you might not have searched for directly.",
-	}, func(ctx agent.ToolContext, input TraverseToolInput) (TraverseToolOutput, error) {
+	}, func(ctx agent.Context, input TraverseToolInput) (TraverseToolOutput, error) {
 		return palaceTraverseHandler(ctx, p, input)
 	})
 }

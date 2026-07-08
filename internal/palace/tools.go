@@ -1,7 +1,7 @@
 package palace
 
 import (
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/tool"
 )
 
 // PalaceTools returns ADK tools for interacting with the palace during agent sessions.

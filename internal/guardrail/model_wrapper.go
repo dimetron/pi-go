@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 // WrapModel wraps an LLM model to track token usage via the guardrail tracker.
