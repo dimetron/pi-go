@@ -144,7 +144,13 @@ var KnownModels = map[string][]string{
 		"gpt-5.1-codex-max",
 	},
 	"gemini": {
-		// Latest Gemini tiers: 3.1 Pro, 3 Flash, and 3.1 Flash-Lite.
+		// Latest stable Gemini tier: 3.5 Flash.
+		"gemini-3.5-flash",
+
+		// Stable Gemini 3.1 Flash-Lite (no -preview suffix).
+		"gemini-3.1-flash-lite",
+
+		// Gemini 3.x preview tiers: 3.1 Pro, 3 Flash, and 3.1 Flash-Lite.
 		"gemini-3.1-pro-preview",
 		"gemini-3.1-pro-preview-customtools",
 		"gemini-3-flash-preview",
@@ -208,6 +214,8 @@ var contextWindowSizes = map[string]int64{
 	"gpt-5.1-codex": 1_050_000,
 	"gpt-5":         400_000,
 	// Gemini
+	"gemini-3.5-flash":              1_048_576,
+	"gemini-3.1-flash-lite":         1_048_576,
 	"gemini-3.1-pro-preview":        1_048_576,
 	"gemini-3-flash-preview":        1_048_576,
 	"gemini-3.1-flash-lite-preview": 1_048_576,

@@ -27,6 +27,8 @@ func TestContextWindowSize(t *testing.T) {
 		{"exact claude-opus-4-7", "claude-opus-4-7", 1_000_000},
 		{"claude-3-5-sonnet prefix", "claude-3-5-sonnet-20241022", 200_000},
 		{"case-insensitive GEMINI-2.5", "GEMINI-2.5-PRO", 1_048_576},
+		{"gemini-3.5-flash stable", "gemini-3.5-flash", 1_048_576},
+		{"gemini-3.1-flash-lite stable beats -preview prefix", "gemini-3.1-flash-lite", 1_048_576},
 		{"gpt-5.5 latest frontier", "gpt-5.5", 1_050_000},
 		{"gpt-5.4-mini has longer prefix", "gpt-5.4-mini", 400_000},
 		{"mistral-large tag variant", "mistral-large-2512", 256_000},
