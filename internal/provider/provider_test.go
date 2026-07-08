@@ -22,6 +22,8 @@ func TestResolve(t *testing.T) {
 		{"gpt-4o", "openai", false},
 		{"gpt-5.5", "openai", false},
 		{"gemini-2.5-pro", "gemini", false},
+		{"gemini-3.5-flash", "gemini", false},
+		{"gemini-3.1-flash-lite", "gemini", false},
 		{"", "", true},
 	}
 
@@ -238,6 +240,8 @@ func TestValidateModel(t *testing.T) {
 		{Info{Provider: "openai", Model: "gpt-5.4"}, false},
 		{Info{Provider: "gemini", Model: "gemini-2.5-pro"}, false},
 		{Info{Provider: "gemini", Model: "gemini-2.5-flash"}, false},
+		{Info{Provider: "gemini", Model: "gemini-3.5-flash"}, false},
+		{Info{Provider: "gemini", Model: "gemini-3.1-flash-lite"}, false},
 		{Info{Provider: "mistral", Model: "mistral-large-latest"}, false},
 		{Info{Provider: "mistral", Model: "codestral"}, false},
 		{Info{Provider: "mistral", Model: "pixtral"}, false},
@@ -338,6 +342,8 @@ func TestResolveKnownProviders(t *testing.T) {
 		{"claude-opus-4-7", "anthropic"},
 		{"gpt-5.5", "openai"},
 		{"gemini-2.5-flash", "gemini"},
+		{"gemini-3.5-flash", "gemini"},
+		{"gemini-3.1-flash-lite", "gemini"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
