@@ -14,12 +14,12 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9
         with:
           version: v2.11
 
@@ -27,19 +27,19 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8
         with:
           # Cache must stay off: pyproject.toml only lives under the LSP
           # Python fixture, so the action's post-job cache-save step would
           # error with "Cache path ... does not exist" and fail the job.
           enable-cache: false
       - name: Install rustup
-        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           toolchain: stable
           # Cargo.toml lives under the LSP rust fixture, not the repo root,
@@ -55,19 +55,19 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8
         with:
           # Cache must stay off: pyproject.toml only lives under the LSP
           # Python fixture, so the action's post-job cache-save step would
           # error with "Cache path ... does not exist" and fail the job.
           enable-cache: false
       - name: Install rustup
-        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           toolchain: stable
           cache-workspaces: hack/test/lsp/rust
@@ -76,7 +76,7 @@ jobs:
       - name: Coverage report
         run: go tool cover -func=coverage.out
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7
         with:
           files: coverage.out
           fail_ci_if_error: false
@@ -93,8 +93,8 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - name: Build
