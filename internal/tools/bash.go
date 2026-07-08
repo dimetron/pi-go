@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/otel"
 )
@@ -36,12 +36,12 @@ type BashOutput struct {
 }
 
 func newBashTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("bash", "Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.", func(ctx agent.ToolContext, input BashInput) (BashOutput, error) {
+	return newTool("bash", "Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.", func(ctx agent.Context, input BashInput) (BashOutput, error) {
 		return bashHandler(sb, ctx, input)
 	})
 }
 
-func bashHandler(sb *Sandbox, ctx agent.ToolContext, input BashInput) (BashOutput, error) {
+func bashHandler(sb *Sandbox, ctx agent.Context, input BashInput) (BashOutput, error) {
 	if input.Command == "" {
 		return BashOutput{}, fmt.Errorf("command is required")
 	}
@@ -54,7 +54,7 @@ func bashHandler(sb *Sandbox, ctx agent.ToolContext, input BashInput) (BashOutpu
 		}
 	}
 
-	// Use background context if agent.ToolContext is nil (e.g. in unit tests)
+	// Use background context if agent.Context is nil (e.g. in unit tests)
 	var parentCtx = context.Background()
 	if ctx != nil {
 		parentCtx = ctx

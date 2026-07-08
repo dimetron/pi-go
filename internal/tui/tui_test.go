@@ -11,8 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
-	adkmodel "google.golang.org/adk/model"
-	"google.golang.org/adk/session"
+	adkmodel "google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	llmmodel "google.golang.org/adk/model"
+	llmmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 

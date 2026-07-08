@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	adkagent "google.golang.org/adk/agent"
-	adkmodel "google.golang.org/adk/model"
-	adktool "google.golang.org/adk/tool"
+	adkagent "google.golang.org/adk/v2/agent"
+	adkmodel "google.golang.org/adk/v2/model"
+	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -186,13 +186,13 @@ func deferredInit(
 	go func() {
 		defer wg.Done()
 		send("git", false)
-		ps.repoRoot = detectGitRoot(cwd)
+		ps.repoRoot = detectGitRoot(ctx, cwd)
 		discovery, _ := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
 		if discovery != nil {
 			ps.agentConfigs = discovery.All
 		}
-		ps.gitBranch = detectBranch(cwd)
-		ps.diffAdded, ps.diffRemoved = computeDiffStats(cwd)
+		ps.gitBranch = detectBranch(ctx, cwd)
+		ps.diffAdded, ps.diffRemoved = computeDiffStats(ctx, cwd)
 		send("git", true)
 	}()
 
@@ -562,7 +562,7 @@ func (r *deferredMemoryRecorder) setReady(sessionID string, worker *memory.Worke
 	r.mu.Unlock()
 }
 
-func (r *deferredMemoryRecorder) afterTool(_ adkagent.ToolContext, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+func (r *deferredMemoryRecorder) afterTool(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 	if toolErr != nil {
 		return result, nil
 	}
@@ -682,8 +682,10 @@ func deferredMemoryEnabled(cfg config.Config) bool {
 }
 
 // detectBranch returns the current git branch name.
-func detectBranch(workDir string) string {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+func detectBranch(ctx context.Context, workDir string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
@@ -696,8 +698,10 @@ func detectBranch(workDir string) string {
 
 // computeDiffStats returns added and removed line counts from git diff,
 // including lines from untracked files.
-func computeDiffStats(cwd string) (added, removed int) {
-	cmd := exec.Command("git", "diff", "--numstat", "HEAD")
+func computeDiffStats(ctx context.Context, cwd string) (added, removed int) {
+	diffCtx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(diffCtx, "git", "diff", "--numstat", "HEAD")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -713,13 +717,17 @@ func computeDiffStats(cwd string) (added, removed int) {
 			removed += r
 		}
 	}
-	added += countUntrackedLines(cwd)
+	added += countUntrackedLines(ctx, cwd)
 	return added, removed
 }
 
-// countUntrackedLines counts total lines across untracked files.
-func countUntrackedLines(cwd string) int {
-	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+// countUntrackedLines counts total lines across untracked files. The whole
+// operation (ls-files plus one wc per file) shares a single bounded timeout
+// so a large or stalled untracked-file set can't hang the init pipeline.
+func countUntrackedLines(ctx context.Context, cwd string) int {
+	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--others", "--exclude-standard")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -730,7 +738,7 @@ func countUntrackedLines(cwd string) int {
 		if file == "" {
 			continue
 		}
-		wc := exec.Command("wc", "-l", file)
+		wc := exec.CommandContext(ctx, "wc", "-l", file)
 		wc.Dir = cwd
 		wcOut, err := wc.Output()
 		if err != nil {

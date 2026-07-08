@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
-// resolveContext extracts a context.Context from agent.ToolContext, defaulting to context.Background().
-func resolveContext(ctx agent.ToolContext) context.Context {
+// resolveContext extracts a context.Context from agent.Context, defaulting to context.Background().
+func resolveContext(ctx agent.Context) context.Context {
 	if ctx != nil {
 		return ctx
 	}
@@ -90,7 +90,7 @@ func NewSubagentTool(orch *subagent.Orchestrator, onEvent SubagentEventCallback)
 	desc := buildSubagentDescription(orch)
 
 	return newTool("subagent", desc,
-		func(ctx agent.ToolContext, input SubagentInput) (SubagentOutput, error) {
+		func(ctx agent.Context, input SubagentInput) (SubagentOutput, error) {
 			return subagentHandler(ctx, orch, input, onEvent)
 		},
 		// Common LLM parameter name mistakes
@@ -147,7 +147,7 @@ Worktree agents:
 }
 
 // subagentHandler dispatches to the appropriate mode handler.
-func subagentHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
+func subagentHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
 	mode := detectMode(input)
 
 	switch mode {
@@ -188,7 +188,7 @@ func detectMode(input SubagentInput) string {
 }
 
 // singleModeHandler spawns a single agent and collects its result.
-func singleModeHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
+func singleModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
 	start := time.Now()
 	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
 
@@ -290,7 +290,7 @@ func singleModeHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, input
 }
 
 // parallelModeHandler spawns multiple agents concurrently and collects all results.
-func parallelModeHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
+func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
 	start := time.Now()
 	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
 	total := len(input.Tasks)
@@ -431,7 +431,7 @@ func parallelModeHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, inp
 
 // chainModeHandler runs agents sequentially, passing each result to the next step.
 // Task prompts support {previous} (text result) and {previous_json} (JSON-escaped) placeholders.
-func chainModeHandler(ctx agent.ToolContext, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
+func chainModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
 	start := time.Now()
 	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
 	total := len(input.Chain)

@@ -15,7 +15,7 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
-	adksession "google.golang.org/adk/session"
+	adksession "google.golang.org/adk/v2/session"
 )
 
 // SessionUpdater streams session updates back to the ACP peer. A nil Updater

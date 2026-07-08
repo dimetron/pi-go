@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	adktool "google.golang.org/adk/tool"
+	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/memory"

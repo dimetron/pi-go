@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	adkagent "google.golang.org/adk/agent"
-	adkmodel "google.golang.org/adk/model"
-	"google.golang.org/adk/session"
-	adktool "google.golang.org/adk/tool"
+	adkagent "google.golang.org/adk/v2/agent"
+	adkmodel "google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
@@ -349,7 +349,7 @@ type nonInteractiveRuntime struct {
 	agentEventCh chan tui.AgentSubEvent
 }
 
-func initNonInteractiveRuntime(cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
+func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
 	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox: %w", err)
@@ -367,7 +367,7 @@ func initNonInteractiveRuntime(cfg *config.Config, cwd, sandboxRoot, worktreeDir
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
 
-	repoRoot := detectGitRoot(cwd)
+	repoRoot := detectGitRoot(ctx, cwd)
 	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
@@ -424,7 +424,7 @@ func runNonInteractive(
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir, mode, prompt string,
 ) error {
-	runtime, err := initNonInteractiveRuntime(&cfg, cwd, sandboxRoot, worktreeDir)
+	runtime, err := initNonInteractiveRuntime(parentCtx, &cfg, cwd, sandboxRoot, worktreeDir)
 	if err != nil {
 		return err
 	}
@@ -569,7 +569,7 @@ func runNonInteractive(
 				excludedTools[t] = true
 			}
 		}
-		afterCBs = append(afterCBs, func(_ adkagent.ToolContext, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+		afterCBs = append(afterCBs, func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 			if toolErr != nil || memSessionID == "" {
 				return result, nil
 			}
@@ -1021,13 +1021,17 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if part.FunctionResponse != nil {
+				respJSON, err := json.Marshal(part.FunctionResponse.Response)
+				if err != nil {
+					respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
+				}
 				_ = enc.Encode(jsonEvent{
 					Type:     "tool_result",
 					Agent:    ev.Author,
 					ToolName: part.FunctionResponse.Name,
-					Content:  fmt.Sprintf("%v", part.FunctionResponse.Response),
+					Content:  string(respJSON),
 				})
-				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
+				log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
 			}
 		}
 	}
@@ -1128,10 +1132,17 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 	return hooks
 }
 
+// gitCmdTimeout bounds every git subprocess call spawned during init so a
+// stalled repo (blocked hook, lock contention, unreachable network mount)
+// can never hang the init pipeline indefinitely.
+const gitCmdTimeout = 5 * time.Second
+
 // detectGitRoot returns the git repository root for the given directory,
 // or empty string if not inside a git repo.
-func detectGitRoot(dir string) string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+func detectGitRoot(ctx context.Context, dir string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

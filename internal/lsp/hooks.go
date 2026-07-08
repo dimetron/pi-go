@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/tool"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 // If no LSP server is available for a file type, the callback is a no-op.
 // All errors are logged but never fail the tool call.
 func BuildLSPAfterToolCallback(mgr *Manager) llmagent.AfterToolCallback {
-	return func(ctx agent.ToolContext, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
+	return func(ctx agent.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		name := t.Name()
 		if name != "write" && name != "edit" {
 			return result, nil

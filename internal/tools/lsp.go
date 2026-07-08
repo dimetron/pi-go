@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/lsp"
 )
@@ -135,7 +135,7 @@ func newLSPDiagnosticsTool(mgr *lsp.Manager) (tool.Tool, error) {
 Returns compiler errors, type errors, and warnings from the language server.
 Use this to check a file for errors without editing it, or to get more detail
 than the automatic diagnostics provided after write/edit.`,
-		func(ctx agent.ToolContext, input LSPFileInput) (LSPDiagnosticsOutput, error) {
+		func(ctx agent.Context, input LSPFileInput) (LSPDiagnosticsOutput, error) {
 			return lspDiagnosticsHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -146,7 +146,7 @@ func newLSPDefinitionTool(mgr *lsp.Manager) (tool.Tool, error) {
 
 Returns the file and line where a function, type, variable, or other symbol
 is defined. Line and column are 0-based.`,
-		func(ctx agent.ToolContext, input LSPPositionInput) (LSPLocationsOutput, error) {
+		func(ctx agent.Context, input LSPPositionInput) (LSPLocationsOutput, error) {
 			return lspDefinitionHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -157,7 +157,7 @@ func newLSPReferencesTool(mgr *lsp.Manager) (tool.Tool, error) {
 
 Returns all locations where the symbol at the given position is referenced,
 including the declaration. Line and column are 0-based.`,
-		func(ctx agent.ToolContext, input LSPPositionInput) (LSPLocationsOutput, error) {
+		func(ctx agent.Context, input LSPPositionInput) (LSPLocationsOutput, error) {
 			return lspReferencesHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -168,7 +168,7 @@ func newLSPHoverTool(mgr *lsp.Manager) (tool.Tool, error) {
 
 Returns the type signature and documentation for the symbol under the cursor.
 Line and column are 0-based.`,
-		func(ctx agent.ToolContext, input LSPPositionInput) (LSPHoverOutput, error) {
+		func(ctx agent.Context, input LSPPositionInput) (LSPHoverOutput, error) {
 			return lspHoverHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -179,7 +179,7 @@ func newLSPSymbolsTool(mgr *lsp.Manager) (tool.Tool, error) {
 
 Returns an overview of the file's structure including function definitions,
 type declarations, constants, and variables with their line ranges.`,
-		func(ctx agent.ToolContext, input LSPFileInput) (LSPSymbolsOutput, error) {
+		func(ctx agent.Context, input LSPFileInput) (LSPSymbolsOutput, error) {
 			return lspSymbolsHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -191,7 +191,7 @@ func newLSPWorkspaceSymbolTool(mgr *lsp.Manager) (tool.Tool, error) {
 Returns symbols matching a query string from all source files,
 including functions, types, constants, and variables across modules.
 Useful for finding where a symbol is defined without knowing the file.`,
-		func(ctx agent.ToolContext, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
+		func(ctx agent.Context, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
 			return lspWorkspaceSymbolHandler(ctx, mgr, input)
 		}, nil)
 }
@@ -203,7 +203,7 @@ func newLSPCodeActionTool(mgr *lsp.Manager) (tool.Tool, error) {
 Returns available code actions such as error fixes, imports, refactorings,
 and other quick fixes. The selection is specified by start and end positions.
 Line and column are 0-based.`,
-		func(ctx agent.ToolContext, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
+		func(ctx agent.Context, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
 			return lspCodeActionHandler(ctx, mgr, input)
 		}, lspFileAliases)
 }
@@ -263,7 +263,7 @@ func getServerOrSkipForLanguage(mgr *lsp.Manager, lang string) (*lsp.Server, str
 	return srv, ""
 }
 
-func lspDiagnosticsHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPFileInput) (LSPDiagnosticsOutput, error) {
+func lspDiagnosticsHandler(_ agent.Context, mgr *lsp.Manager, input LSPFileInput) (LSPDiagnosticsOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPDiagnosticsOutput{File: input.File, Error: errMsg}, nil
@@ -307,7 +307,7 @@ func formatDiagnosticsForDisplay(file string, diags []lsp.Diagnostic) string {
 	return "⚠ " + strings.Join(lines, "\n⚠ ")
 }
 
-func lspDefinitionHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositionInput) (LSPLocationsOutput, error) {
+func lspDefinitionHandler(_ agent.Context, mgr *lsp.Manager, input LSPPositionInput) (LSPLocationsOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPLocationsOutput{Error: errMsg}, nil
@@ -321,7 +321,7 @@ func lspDefinitionHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositi
 	return LSPLocationsOutput{Locations: convertLocations(locs)}, nil
 }
 
-func lspReferencesHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositionInput) (LSPLocationsOutput, error) {
+func lspReferencesHandler(_ agent.Context, mgr *lsp.Manager, input LSPPositionInput) (LSPLocationsOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPLocationsOutput{Error: errMsg}, nil
@@ -335,7 +335,7 @@ func lspReferencesHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositi
 	return LSPLocationsOutput{Locations: convertLocations(locs)}, nil
 }
 
-func lspHoverHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositionInput) (LSPHoverOutput, error) {
+func lspHoverHandler(_ agent.Context, mgr *lsp.Manager, input LSPPositionInput) (LSPHoverOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPHoverOutput{Error: errMsg}, nil
@@ -349,7 +349,7 @@ func lspHoverHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPPositionInp
 	return LSPHoverOutput{Content: extractHoverContent(result)}, nil
 }
 
-func lspSymbolsHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPFileInput) (LSPSymbolsOutput, error) {
+func lspSymbolsHandler(_ agent.Context, mgr *lsp.Manager, input LSPFileInput) (LSPSymbolsOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPSymbolsOutput{File: input.File, Error: errMsg}, nil
@@ -368,7 +368,7 @@ func lspSymbolsHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPFileInput
 	}, nil
 }
 
-func lspWorkspaceSymbolHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
+func lspWorkspaceSymbolHandler(_ agent.Context, mgr *lsp.Manager, input LSPWorkspaceSymbolInput) (LSPWorkspaceSymbolOutput, error) {
 	// Get the first available server (workspace symbols don't require a specific file).
 	var srv *lsp.Server
 	var errMsg string
@@ -403,7 +403,7 @@ func lspWorkspaceSymbolHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPW
 	return LSPWorkspaceSymbolOutput{Symbols: entries}, nil
 }
 
-func lspCodeActionHandler(_ agent.ToolContext, mgr *lsp.Manager, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
+func lspCodeActionHandler(_ agent.Context, mgr *lsp.Manager, input LSPCodeActionInput) (LSPCodeActionOutput, error) {
 	srv, errMsg := getServerOrSkip(mgr, input.File)
 	if errMsg != "" {
 		return LSPCodeActionOutput{File: input.File, Error: errMsg}, nil

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // --- palace-diary-write ---
@@ -31,7 +31,7 @@ func newPalaceDiaryWriteTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-diary-write",
 		Description: "Write a diary entry to the memory palace. Each agent maintains its own diary. Diary entries are stored for later retrieval and also filed as searchable drawers in hall_diary.",
-	}, func(ctx agent.ToolContext, input DiaryWriteToolInput) (DiaryWriteToolOutput, error) {
+	}, func(ctx agent.Context, input DiaryWriteToolInput) (DiaryWriteToolOutput, error) {
 		return palaceDiaryWriteHandler(ctx, p, input)
 	})
 }
@@ -97,7 +97,7 @@ func newPalaceDiaryReadTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-diary-read",
 		Description: "Read recent diary entries for an agent. Returns entries in reverse chronological order. Use to review past reflections, session notes, and ongoing thoughts.",
-	}, func(ctx agent.ToolContext, input DiaryReadToolInput) (DiaryReadToolOutput, error) {
+	}, func(ctx agent.Context, input DiaryReadToolInput) (DiaryReadToolOutput, error) {
 		return palaceDiaryReadHandler(ctx, p, input)
 	})
 }

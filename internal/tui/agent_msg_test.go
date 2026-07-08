@@ -9,7 +9,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	pisession "github.com/dimetron/pi-go/internal/session"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // --- agentMsg interface methods ---

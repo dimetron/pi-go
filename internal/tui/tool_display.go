@@ -207,7 +207,7 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 				// rows into the card gutter.
 				evLine = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
 			case "tool_result":
-				summary := collapseToSingleLine(ev.content)
+				summary := toolResultSummary(ev.content)
 				if len(summary) > 80 {
 					summary = summary[:77] + "..."
 				}

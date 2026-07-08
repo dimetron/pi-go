@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"google.golang.org/genai"

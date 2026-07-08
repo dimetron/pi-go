@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 )
 
 const maxGrepMatches = 200
@@ -129,7 +129,7 @@ func newGrepTool(sb *Sandbox) (tool.Tool, error) {
 	if rgAvailable {
 		grepToolName = "ripgrep"
 	}
-	return newTool(grepToolName, "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ agent.ToolContext, input GrepInput) (GrepOutput, error) {
+	return newTool(grepToolName, "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.", func(_ agent.Context, input GrepInput) (GrepOutput, error) {
 		return grepHandler(sb, input)
 	})
 }

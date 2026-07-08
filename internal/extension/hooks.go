@@ -15,10 +15,10 @@ import (
 
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/otel"
 )
@@ -73,7 +73,7 @@ func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, 
 	var mu sync.Mutex
 	pending := map[string]string{} // ADK FunctionCallID → ACP call ID
 
-	beforeCB := func(ctx agent.ToolContext, t tool.Tool, args map[string]any) (map[string]any, error) {
+	beforeCB := func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 		acpID, err := s.OnToolStart(ctx, t.Name(), args)
 		if ctx != nil && acpID != "" {
 			if fid := ctx.FunctionCallID(); fid != "" {
@@ -84,7 +84,7 @@ func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, 
 		}
 		return nil, err
 	}
-	afterCB := func(ctx agent.ToolContext, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
+	afterCB := func(ctx agent.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
 		var acpID string
 		if ctx != nil {
 			if fid := ctx.FunctionCallID(); fid != "" {
@@ -109,7 +109,7 @@ func BuildBeforeToolCallbacks(hooks []HookConfig) []llmagent.BeforeToolCallback 
 			continue
 		}
 		hook := h // capture
-		cbs = append(cbs, func(ctx agent.ToolContext, t tool.Tool, args map[string]any) (map[string]any, error) {
+		cbs = append(cbs, func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			if !hook.matchesTool(t.Name()) {
 				return nil, nil
 			}
@@ -132,7 +132,7 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 			continue
 		}
 		hook := h // capture
-		cbs = append(cbs, func(ctx agent.ToolContext, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
+		cbs = append(cbs, func(ctx agent.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 			if !hook.matchesTool(t.Name()) {
 				return result, nil
 			}
@@ -151,7 +151,7 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToolCallback) {
 	tracer := otel.Tracer("pi-go")
 
-	beforeCB := func(ctx agent.ToolContext, t tool.Tool, args map[string]any) (map[string]any, error) {
+	beforeCB := func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 		_, span := tracer.Start(ctx, "tool."+t.Name())
 		span.SetAttributes(
 			otel.AttributeString("tool.name", t.Name()),
@@ -161,7 +161,7 @@ func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToo
 		return nil, nil
 	}
 
-	afterCB := func(ctx agent.ToolContext, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
+	afterCB := func(ctx agent.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
 		span := trace.SpanFromContext(ctx)
 		if span.IsRecording() {
 			if runErr != nil {
@@ -187,7 +187,7 @@ func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToo
 func BuildLLMTracingCallbacks() ([]llmagent.BeforeModelCallback, []llmagent.AfterModelCallback) {
 	tracer := otel.Tracer("pi-go")
 
-	beforeCB := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+	beforeCB := func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 		_, span := tracer.Start(ctx, "llm."+req.Model)
 		span.SetAttributes(
 			otel.AttributeString("llm.model", req.Model),
@@ -195,7 +195,7 @@ func BuildLLMTracingCallbacks() ([]llmagent.BeforeModelCallback, []llmagent.Afte
 		return nil, nil
 	}
 
-	afterCB := func(ctx agent.CallbackContext, resp *model.LLMResponse, respErr error) (*model.LLMResponse, error) {
+	afterCB := func(ctx agent.Context, resp *model.LLMResponse, respErr error) (*model.LLMResponse, error) {
 		span := trace.SpanFromContext(ctx)
 		if span.IsRecording() {
 			if respErr != nil {

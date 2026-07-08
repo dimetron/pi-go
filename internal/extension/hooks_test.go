@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/memory"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -233,9 +234,10 @@ func (m *mockToolCallReporter) OnToolEnd(ctx context.Context, callID string, arg
 	return nil
 }
 
-// mockToolCtx is a minimal agent.ToolContext implementation for testing callback
+// mockToolCtx is a minimal agent.Context implementation for testing callback
 // correlation. Only FunctionCallID() is meaningful; all other methods return
-// zero values.
+// zero values. The full v2 method set is implemented so the mock stays
+// forward-compatible with future agent.Context surface growth.
 type mockToolCtx struct {
 	context.Context
 	funcCallID string
@@ -259,7 +261,45 @@ func (c *mockToolCtx) Branch() string                                       { re
 func (c *mockToolCtx) SessionID() string                                    { return "" }
 func (c *mockToolCtx) UserID() string                                       { return "" }
 
-var _ agent.ToolContext = (*mockToolCtx)(nil)
+// InvocationContext surface (v1) and v2 additions.
+func (c *mockToolCtx) Agent() agent.Agent          { return nil }
+func (c *mockToolCtx) Memory() agent.Memory        { return nil }
+func (c *mockToolCtx) Session() session.Session    { return nil }
+func (c *mockToolCtx) RunConfig() *agent.RunConfig { return nil }
+func (c *mockToolCtx) EndInvocation()              {}
+func (c *mockToolCtx) Ended() bool                 { return false }
+func (c *mockToolCtx) WithContext(ctx context.Context) agent.InvocationContext {
+	c.Context = ctx
+	return c
+}
+func (c *mockToolCtx) IsolationScope() string { return "" }
+func (c *mockToolCtx) ResumedInput(string) (any, bool) {
+	return nil, false
+}
+func (c *mockToolCtx) WithICDelta(*agent.InvocationContextDelta) agent.InvocationContext {
+	return c
+}
+
+// agent.Context-only surface (v2 additions).
+func (c *mockToolCtx) Path() string                            { return "" }
+func (c *mockToolCtx) RunID() string                           { return "" }
+func (c *mockToolCtx) SubScheduler() agent.DynamicSubScheduler { return nil }
+func (c *mockToolCtx) WithAgentContext(ctx context.Context) agent.Context {
+	c.Context = ctx
+	return c
+}
+func (c *mockToolCtx) WithAgentTimeout(time.Duration) (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *mockToolCtx) WithAgentCancel() (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *mockToolCtx) OutputForAncestors() []string { return nil }
+func (c *mockToolCtx) WithDelta(*agent.CommonContextDelta) agent.Context {
+	return c
+}
+
+var _ agent.Context = (*mockToolCtx)(nil)
 
 func TestBuildToolCallCallbacks(t *testing.T) {
 	m := &mockToolCallReporter{}
@@ -562,7 +602,9 @@ func TestBuildLLMTracingCallbacks(t *testing.T) {
 	}
 }
 
-// mockReadonlyContext is a minimal implementation of agent.CallbackContext for testing
+// mockReadonlyContext is a minimal implementation of agent.Context for testing.
+// The full v2 method set is implemented so the mock stays forward-compatible
+// with future agent.Context surface growth.
 type mockReadonlyContext struct {
 	context.Context
 }
@@ -578,4 +620,53 @@ func (c *mockReadonlyContext) Branch() string                       { return "" 
 func (c *mockReadonlyContext) Artifacts() agent.Artifacts           { return nil }
 func (c *mockReadonlyContext) State() session.State                 { return nil }
 
-var _ agent.CallbackContext = (*mockReadonlyContext)(nil)
+// Tool-context surface (was ToolContext in v1.4.0) and shared callback helpers.
+func (c *mockReadonlyContext) FunctionCallID() string         { return "" }
+func (c *mockReadonlyContext) Actions() *session.EventActions { return nil }
+func (c *mockReadonlyContext) SearchMemory(context.Context, string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (c *mockReadonlyContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
+	return nil
+}
+func (c *mockReadonlyContext) RequestConfirmation(string, any) error { return nil }
+
+// InvocationContext surface.
+func (c *mockReadonlyContext) Agent() agent.Agent          { return nil }
+func (c *mockReadonlyContext) Memory() agent.Memory        { return nil }
+func (c *mockReadonlyContext) Session() session.Session    { return nil }
+func (c *mockReadonlyContext) RunConfig() *agent.RunConfig { return nil }
+func (c *mockReadonlyContext) EndInvocation()              {}
+func (c *mockReadonlyContext) Ended() bool                 { return false }
+func (c *mockReadonlyContext) WithContext(ctx context.Context) agent.InvocationContext {
+	c.Context = ctx
+	return c
+}
+func (c *mockReadonlyContext) IsolationScope() string { return "" }
+func (c *mockReadonlyContext) ResumedInput(string) (any, bool) {
+	return nil, false
+}
+func (c *mockReadonlyContext) WithICDelta(*agent.InvocationContextDelta) agent.InvocationContext {
+	return c
+}
+
+// agent.Context-only surface (v2 additions).
+func (c *mockReadonlyContext) Path() string                            { return "" }
+func (c *mockReadonlyContext) RunID() string                           { return "" }
+func (c *mockReadonlyContext) SubScheduler() agent.DynamicSubScheduler { return nil }
+func (c *mockReadonlyContext) WithAgentContext(ctx context.Context) agent.Context {
+	c.Context = ctx
+	return c
+}
+func (c *mockReadonlyContext) WithAgentTimeout(time.Duration) (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *mockReadonlyContext) WithAgentCancel() (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *mockReadonlyContext) OutputForAncestors() []string { return nil }
+func (c *mockReadonlyContext) WithDelta(*agent.CommonContextDelta) agent.Context {
+	return c
+}
+
+var _ agent.Context = (*mockReadonlyContext)(nil)

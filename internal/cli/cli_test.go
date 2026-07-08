@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -764,7 +764,7 @@ func TestDetectGitRoot(t *testing.T) {
 			startDir, cleanup := tt.setup(t)
 			defer cleanup()
 
-			got := detectGitRoot(startDir)
+			got := detectGitRoot(context.Background(), startDir)
 			if tt.wantRoot && got == "" {
 				t.Error("detectGitRoot() = empty, want non-empty")
 			}
@@ -1013,7 +1013,7 @@ func TestDetectGitRootSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := detectGitRoot(subDir)
+	root := detectGitRoot(context.Background(), subDir)
 	if root == "" {
 		t.Fatal("detectGitRoot() from subdirectory returned empty")
 	}

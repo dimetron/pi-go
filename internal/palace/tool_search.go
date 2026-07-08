@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // SearchToolInput defines parameters for the palace-search tool.
@@ -32,7 +32,7 @@ func newPalaceSearchTool(p *Palace) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "palace-search",
 		Description: "Search the memory palace for relevant knowledge. Uses semantic similarity when the embedding model is loaded, falls back to keyword search otherwise. Returns matching drawers with similarity scores.",
-	}, func(ctx agent.ToolContext, input SearchToolInput) (SearchToolOutput, error) {
+	}, func(ctx agent.Context, input SearchToolInput) (SearchToolOutput, error) {
 		return palaceSearchHandler(ctx, p, input)
 	})
 }
