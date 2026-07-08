@@ -73,6 +73,12 @@ type Server struct {
 	socketPath string
 	listener   net.Listener
 	wg         sync.WaitGroup
+	// runMu serializes calls to agent.Run. The ADK Runner mutates
+	// shared LlmAgent state during Run, so concurrent prompts on the
+	// same Server race (see runner.go in google.golang.org/adk/v2).
+	// One prompt runs at a time; concurrent sessions are still allowed
+	// but their Run() calls queue behind this mutex.
+	runMu sync.Mutex
 }
 
 // NewServer creates a new RPC server.
@@ -212,6 +218,13 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 	// Stream JSONL events (same schema as JSON mode).
 	started := false
 
+	// Serialize concurrent Run() calls. The ADK Runner is not safe for
+	// concurrent use (it mutates LlmAgent state during Run), so we hold
+	// runMu for the entire lifetime of the iteration. The lock is released
+	// only after the for-range fully drains — releasing it mid-stream would
+	// re-introduce the data race.
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	for ev, err := range s.agent.Run(ctx, sessionID, params.Text) {
 		if err != nil {
 			_ = enc.Encode(Event{Type: "error", Content: err.Error()})
