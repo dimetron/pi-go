@@ -263,7 +263,7 @@ func TestInitNonInteractiveRuntime_Basic(t *testing.T) {
 	cwd := tmpHome
 	sandboxRoot := tmpHome
 
-	rt, err := initNonInteractiveRuntime(cfg, cwd, sandboxRoot, "")
+	rt, err := initNonInteractiveRuntime(context.Background(), cfg, cwd, sandboxRoot, "")
 	if err != nil {
 		t.Fatalf("initNonInteractiveRuntime: %v", err)
 	}
@@ -1151,10 +1151,10 @@ func TestGitHelpersSkippableWithoutGit(t *testing.T) {
 		t.Skip("git not available; skipping")
 	}
 	tmp := t.TempDir()
-	_ = detectGitRoot(tmp)
-	_ = detectBranch(tmp)
-	_, _ = computeDiffStats(tmp)
-	_ = countUntrackedLines(tmp)
+	_ = detectGitRoot(context.Background(), tmp)
+	_ = detectBranch(context.Background(), tmp)
+	_, _ = computeDiffStats(context.Background(), tmp)
+	_ = countUntrackedLines(context.Background(), tmp)
 }
 
 // -----------------------------------------------------------------------

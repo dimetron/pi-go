@@ -764,7 +764,7 @@ func TestDetectGitRoot(t *testing.T) {
 			startDir, cleanup := tt.setup(t)
 			defer cleanup()
 
-			got := detectGitRoot(startDir)
+			got := detectGitRoot(context.Background(), startDir)
 			if tt.wantRoot && got == "" {
 				t.Error("detectGitRoot() = empty, want non-empty")
 			}
@@ -1013,7 +1013,7 @@ func TestDetectGitRootSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := detectGitRoot(subDir)
+	root := detectGitRoot(context.Background(), subDir)
 	if root == "" {
 		t.Fatal("detectGitRoot() from subdirectory returned empty")
 	}

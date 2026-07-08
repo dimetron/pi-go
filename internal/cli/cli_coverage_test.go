@@ -282,7 +282,7 @@ func TestCliHeaderFlagRepeatable(t *testing.T) {
 
 func TestCliDetectGitRootAtRoot(t *testing.T) {
 	// "/" is unlikely to be a git repo.
-	root := detectGitRoot("/")
+	root := detectGitRoot(context.Background(), "/")
 	if root != "" {
 		t.Logf("detectGitRoot('/') = %q (unexpected git repo at root)", root)
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,7 @@ func TestDetectBranch(t *testing.T) {
 	runGit(tmpDir, "commit", "-m", "init")
 	runGit(tmpDir, "checkout", "-b", "test-branch")
 
-	branch := detectBranch(tmpDir)
+	branch := detectBranch(context.Background(), tmpDir)
 	if branch != "test-branch" {
 		t.Errorf("detectBranch = %q, want %q", branch, "test-branch")
 	}
@@ -42,7 +43,7 @@ func TestDetectBranch(t *testing.T) {
 func TestDetectBranchEmptyDir(t *testing.T) {
 	// Non-git directory should return empty string.
 	tmpDir := t.TempDir()
-	branch := detectBranch(tmpDir)
+	branch := detectBranch(context.Background(), tmpDir)
 	if branch != "" {
 		t.Errorf("detectBranch on non-git dir = %q, want empty", branch)
 	}
@@ -55,7 +56,7 @@ func TestDetectBranchNoCommits(t *testing.T) {
 
 	runGit(tmpDir, "init")
 
-	branch := detectBranch(tmpDir)
+	branch := detectBranch(context.Background(), tmpDir)
 	// With no commits, git returns "HEAD" — we just verify no panic.
 	_ = branch
 }
@@ -71,7 +72,7 @@ func TestDetectBranchMainBranch(t *testing.T) {
 	runGit(tmpDir, "add", ".")
 	runGit(tmpDir, "commit", "-m", "init")
 
-	branch := detectBranch(tmpDir)
+	branch := detectBranch(context.Background(), tmpDir)
 	if branch == "" {
 		t.Error("detectBranch on fresh repo returned empty")
 	}
@@ -92,7 +93,7 @@ func TestComputeDiffStatsClean(t *testing.T) {
 	runGit(tmpDir, "add", ".")
 	runGit(tmpDir, "commit", "-m", "init")
 
-	added, removed := computeDiffStats(tmpDir)
+	added, removed := computeDiffStats(context.Background(), tmpDir)
 	if added != 0 || removed != 0 {
 		t.Errorf("computeDiffStats on clean tree = (%d, %d), want (0, 0)", added, removed)
 	}
@@ -112,7 +113,7 @@ func TestComputeDiffStatsWithChanges(t *testing.T) {
 	// Add a line.
 	os.WriteFile(filepath.Join(tmpDir, "f"), []byte("line1\nnew line\nline2\n"), 0644)
 
-	added, removed := computeDiffStats(tmpDir)
+	added, removed := computeDiffStats(context.Background(), tmpDir)
 	// We added 1 line and removed 0 (since we inserted without removing).
 	if added == 0 && removed == 0 {
 		t.Log("computeDiffStats returned (0, 0) — git diff --numstat may need unstaged changes")
@@ -121,7 +122,7 @@ func TestComputeDiffStatsWithChanges(t *testing.T) {
 
 func TestComputeDiffStatsNonGitDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	added, removed := computeDiffStats(tmpDir)
+	added, removed := computeDiffStats(context.Background(), tmpDir)
 	if added != 0 || removed != 0 {
 		t.Errorf("computeDiffStats on non-git dir = (%d, %d), want (0, 0)", added, removed)
 	}

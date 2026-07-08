@@ -349,7 +349,7 @@ type nonInteractiveRuntime struct {
 	agentEventCh chan tui.AgentSubEvent
 }
 
-func initNonInteractiveRuntime(cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
+func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
 	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox: %w", err)
@@ -367,7 +367,7 @@ func initNonInteractiveRuntime(cfg *config.Config, cwd, sandboxRoot, worktreeDir
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
 
-	repoRoot := detectGitRoot(cwd)
+	repoRoot := detectGitRoot(ctx, cwd)
 	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
@@ -424,7 +424,7 @@ func runNonInteractive(
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir, mode, prompt string,
 ) error {
-	runtime, err := initNonInteractiveRuntime(&cfg, cwd, sandboxRoot, worktreeDir)
+	runtime, err := initNonInteractiveRuntime(parentCtx, &cfg, cwd, sandboxRoot, worktreeDir)
 	if err != nil {
 		return err
 	}
@@ -1132,10 +1132,17 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 	return hooks
 }
 
+// gitCmdTimeout bounds every git subprocess call spawned during init so a
+// stalled repo (blocked hook, lock contention, unreachable network mount)
+// can never hang the init pipeline indefinitely.
+const gitCmdTimeout = 5 * time.Second
+
 // detectGitRoot returns the git repository root for the given directory,
 // or empty string if not inside a git repo.
-func detectGitRoot(dir string) string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+func detectGitRoot(ctx context.Context, dir string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
