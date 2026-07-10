@@ -69,11 +69,12 @@ type Info struct {
 
 // Known model prefixes mapped to providers.
 var modelPrefixes = map[string]string{
-	"claude":  "anthropic",
-	"gpt":     "openai",
-	"gpt-5":   "openai",
-	"gemini":  "gemini",
-	"mistral": "mistral",
+	"claude":    "anthropic",
+	"gpt":       "openai",
+	"gpt-5":     "openai",
+	"gemini":    "gemini",
+	"mistral":   "mistral",
+	"magistral": "mistral",
 }
 
 // OllamaModelPrefixes are model prefixes that previously auto-routed to Ollama.
@@ -128,15 +129,23 @@ var KnownModels = map[string][]string{
 		"claude-sonnet-4-6",
 		// Claude 4.7 series (current flagship)
 		"claude-opus-4-7",
+		"claude-sonnet-4-7",
+		"claude-haiku-4-7",
 	},
 	"openai": {
 		// Latest OpenAI frontier model plus retained GPT-5.4 compatibility tiers.
+		"gpt-5.6",
+		"gpt-5.5-pro",
 		"gpt-5.5",
+		"gpt-5.5-mini",
+		"gpt-5.5-nano",
 		"gpt-5.4-pro",
 		"gpt-5.4",
 		"gpt-5.4-mini",
 		"gpt-5.4-nano",
 		// Responses-only codex models.
+		"gpt-5.5-codex",
+		"gpt-5.4-codex",
 		"gpt-5.3-codex",
 		"gpt-5.2-codex",
 		"gpt-5.1-codex",
@@ -146,6 +155,8 @@ var KnownModels = map[string][]string{
 	"gemini": {
 		// Latest stable Gemini tier: 3.5 Flash.
 		"gemini-3.5-flash",
+		"gemini-3.5-flash-lite",
+		"gemini-3.5-pro",
 
 		// Stable Gemini 3.1 Flash-Lite (no -preview suffix).
 		"gemini-3.1-flash-lite",
@@ -162,14 +173,18 @@ var KnownModels = map[string][]string{
 		"gemini-2.5-flash-lite",
 	},
 	"mistral": {
-		// Latest Mistral generalist tiers: Large 3, Medium 3.1,
+		// Latest Mistral generalist tiers: Large 3, Medium 3.2,
 		// Small 4, plus documented "latest" aliases.
 		"mistral-large-2512",
 		"mistral-large-latest",
-		"mistral-medium-2508",
+		"mistral-medium-2603",
 		"mistral-medium-latest",
 		"mistral-small-2603",
 		"mistral-small-latest",
+
+		// Magistral reasoning models.
+		"magistral-medium-latest",
+		"magistral-small-latest",
 
 		// Compatibility with older/specialized Mistral config names.
 		"codestral",
@@ -181,7 +196,9 @@ var KnownModels = map[string][]string{
 // contextWindowSizes maps model name prefixes to context window sizes (in tokens).
 var contextWindowSizes = map[string]int64{
 	// Anthropic Claude 4.7 series (flagship, 128K output)
-	"claude-opus-4-7": 1_000_000,
+	"claude-opus-4-7":   1_000_000,
+	"claude-sonnet-4-7": 1_000_000,
+	"claude-haiku-4-7":  200_000,
 	// Anthropic Claude 4.6 series (current best, 64K output)
 	"claude-sonnet-4-6": 1_000_000,
 	"claude-opus-4-6":   1_000_000,
@@ -204,30 +221,40 @@ var contextWindowSizes = map[string]int64{
 	"claude-3-sonnet": 200_000,
 	"claude-3-haiku":  200_000,
 	// OpenAI
+	"gpt-5.6":       1_050_000,
+	"gpt-5.5-pro":   1_050_000,
 	"gpt-5.5":       1_050_000,
+	"gpt-5.5-mini":  400_000,
+	"gpt-5.5-nano":  400_000,
+	"gpt-5.5-codex": 1_050_000,
 	"gpt-5.4-pro":   1_050_000,
 	"gpt-5.4-mini":  400_000,
 	"gpt-5.4-nano":  400_000,
 	"gpt-5.4":       1_050_000,
+	"gpt-5.4-codex": 1_050_000,
 	"gpt-5.3-codex": 1_050_000,
 	"gpt-5.2-codex": 1_050_000,
 	"gpt-5.1-codex": 1_050_000,
 	"gpt-5":         400_000,
 	// Gemini
 	"gemini-3.5-flash":              1_048_576,
+	"gemini-3.5-flash-lite":         1_048_576,
+	"gemini-3.5-pro":                1_048_576,
 	"gemini-3.1-flash-lite":         1_048_576,
 	"gemini-3.1-pro-preview":        1_048_576,
 	"gemini-3-flash-preview":        1_048_576,
 	"gemini-3.1-flash-lite-preview": 1_048_576,
 	"gemini-2.5":                    1_048_576,
 	// Mistral
-	"mistral-large-2512":    256_000,
-	"mistral-large-latest":  256_000,
-	"mistral-medium-2508":   128_000,
-	"mistral-medium-latest": 128_000,
-	"mistral-small-2603":    256_000,
-	"mistral-small-latest":  256_000,
-	"codestral":             256_000,
+	"mistral-large-2512":      256_000,
+	"mistral-large-latest":    256_000,
+	"mistral-medium-2603":     128_000,
+	"mistral-medium-latest":   128_000,
+	"mistral-small-2603":      256_000,
+	"mistral-small-latest":    256_000,
+	"magistral-medium-latest": 128_000,
+	"magistral-small-latest":  128_000,
+	"codestral":               256_000,
 	// Custom/local models
 	"qwen": 4_096,
 }

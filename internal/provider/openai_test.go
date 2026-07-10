@@ -342,7 +342,7 @@ func TestNewOpenAI_CodexBackendRejectsUnsupportedModel(t *testing.T) {
 	// using Codex with a ChatGPT account." for models outside its allowed
 	// list. We pre-flight and fail with an actionable error.
 	jwt := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC00MiJ9fQ.sig"
-	_, err := NewOpenAI(context.Background(), "gpt-5.4-codex", jwt, "", nil)
+	_, err := NewOpenAI(context.Background(), "gpt-4o", jwt, "", nil)
 	if err == nil {
 		t.Fatal("expected NewOpenAI to reject unsupported codex model")
 	}
@@ -1320,6 +1320,8 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"gpt-5.1-codex-max", true},
 		{"gpt-5.2-codex", true},
 		{"gpt-5.3-codex", true},
+		{"gpt-5.4-codex", true},
+		{"gpt-5.5-codex", true},
 		{"gpt-5.1-codex", true},
 		// Case insensitive
 		{"GPT-5-CODEX", true},
