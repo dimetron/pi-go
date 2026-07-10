@@ -964,12 +964,13 @@ func (m *model) View() tea.View {
 		v.Cursor = inputCursor
 	}
 	v.AltScreen = true
-	// Enable MouseModeCellMotion so mouse wheel events arrive as
-	// MouseWheelMsg (handled by handleMouseWheel to scroll the chat
-	// viewport) instead of being translated to Up/Down arrow keys by
-	// the terminal, which would trigger the input history popup.
-	// Text selection still works in most terminals via Option/Cmd-drag.
-	v.MouseMode = tea.MouseModeCellMotion
+	// Disable mouse tracking so the terminal handles text selection
+	// (click-drag to select, Cmd+C to copy) natively. Mouse wheel events
+	// are left to the terminal, which translates them to Up/Down arrow
+	// keys; those are handled by handleKey (PgUp/PgDn and arrow keys scroll
+	// the chat viewport). See handleMouseWheel for the legacy wheel path
+	// that is no longer reached.
+	v.MouseMode = tea.MouseModeNone
 	return v
 }
 
