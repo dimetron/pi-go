@@ -102,6 +102,7 @@ This command:
 
 ```bash
 pi memory mine .                    # mine source files (default)
+pi memory mine                      # same as above — defaults to current directory
 pi memory mine . --wing myapp       # override wing name
 pi memory mine . --convos            # mine conversation files (.jsonl, .txt, .md) instead of source
 ```
@@ -113,15 +114,22 @@ pi memory mine . --convos            # mine conversation files (.jsonl, .txt, .m
 
 **File size limit:** 512 KB per file. Larger files are skipped silently.
 
-**Progress:** The command shows a live spinner with per-file progress, an embedding
-phase, and a final summary:
+**Progress:** The command shows a live spinner with phase-aware progress (scan → embed → insert),
+per-file counts, chunk counts, elapsed time, and a final summary with palace status:
 
 ```
+ ✓  done     [████████████████████████████████]  142/142 files, 138 chunks  3m12s
+
 Mining complete:
   Processed: 142
   Added:     138
   Skipped:   4 (duplicates)
   Errors:    0
+
+Palace status:
+  Drawers: 138
+  Wings:   1
+  Rooms:   5
 ```
 
 ### 4. Verify with search

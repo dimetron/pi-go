@@ -505,9 +505,9 @@ func TestHistoryNavigation(t *testing.T) {
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
-	// Arrow up on empty input opens the history search popup.
+	// Ctrl+R on empty input opens the history search popup.
 	// Newest is first: [0]="third", [1]="second", [2]="first"
-	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	mm := newM.(*model)
 	if mm.searchPopup == nil {
 		t.Fatal("expected search popup to open on arrow up")

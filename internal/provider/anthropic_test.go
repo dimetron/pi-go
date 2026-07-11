@@ -460,7 +460,7 @@ func TestAnthropicGenerateContentWithThinking(t *testing.T) {
 }
 
 func TestAnthropicGenerateContentModelNameFallback(t *testing.T) {
-	// When the model is named "anthropic" it should fall back to claude-sonnet-4-6.
+	// When the model is named "anthropic" it should fall back to claude-sonnet-5.
 	// We create the model with name "anthropic" so modelName == "anthropic" after no override.
 	llm, err := NewAnthropic(context.Background(), "anthropic", "test-key-invalid", "", "", nil)
 	if err != nil {
@@ -484,7 +484,7 @@ func TestAnthropicGenerateContentModelNameFallback(t *testing.T) {
 }
 
 func TestAnthropicGenerateContentModelOverrideToAnthropic(t *testing.T) {
-	// req.Model == "anthropic" should also trigger the fallback to "claude-sonnet-4-6".
+	// req.Model == "anthropic" should also trigger the fallback to "claude-sonnet-5".
 	llm, err := NewAnthropic(context.Background(), "some-model", "test-key-invalid", "", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create model: %v", err)

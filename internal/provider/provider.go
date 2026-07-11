@@ -127,10 +127,15 @@ var KnownModels = map[string][]string{
 		// Claude 4.6 series (current best)
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",
-		// Claude 4.7 series (current flagship)
+		// Claude 4.7 series
 		"claude-opus-4-7",
 		"claude-sonnet-4-7",
 		"claude-haiku-4-7",
+		// Claude 4.8 series
+		"claude-opus-4-8",
+		// Claude 5 series (current flagship)
+		"claude-sonnet-5",
+		"claude-fable-5",
 	},
 	"openai": {
 		// Latest OpenAI frontier model plus retained GPT-5.4 compatibility tiers.
@@ -195,7 +200,12 @@ var KnownModels = map[string][]string{
 
 // contextWindowSizes maps model name prefixes to context window sizes (in tokens).
 var contextWindowSizes = map[string]int64{
-	// Anthropic Claude 4.7 series (flagship, 128K output)
+	// Anthropic Claude 5 series (flagship)
+	"claude-sonnet-5": 1_000_000,
+	"claude-fable-5":  1_000_000,
+	// Anthropic Claude 4.8 series
+	"claude-opus-4-8": 1_000_000,
+	// Anthropic Claude 4.7 series (128K output)
 	"claude-opus-4-7":   1_000_000,
 	"claude-sonnet-4-7": 1_000_000,
 	"claude-haiku-4-7":  200_000,
@@ -256,7 +266,8 @@ var contextWindowSizes = map[string]int64{
 	"magistral-small-latest":  128_000,
 	"codestral":               256_000,
 	// Custom/local models
-	"qwen": 4_096,
+	"qwen":    4_096,
+	"glm-5.2": 976_000,
 }
 
 // ContextWindowSize returns the context window size for a model (in tokens).

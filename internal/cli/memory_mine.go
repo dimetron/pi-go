@@ -166,14 +166,18 @@ func newMemoryMineCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "mine <dir>",
+		Use:   "mine [dir]",
 		Short: "Mine project files or conversations into the palace",
 		Long: `Walks a directory and ingests source files (or conversation files with --convos)
 as palace drawers. Room assignment uses mempalace.yaml if present, or falls back
-to directory structure. Respects .gitignore.`,
-		Args: cobra.ExactArgs(1),
+to directory structure. Respects .gitignore. Defaults to the current directory.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMemoryMine(args[0], flagWing, flagConvos)
+			dir := "."
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			return runMemoryMine(dir, flagWing, flagConvos)
 		},
 	}
 
@@ -196,22 +200,31 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return fmt.Errorf("scanning files: %w", err)
 	}
 
+	if len(files) == 0 {
+		fmt.Println("No files to mine.")
+		return nil
+	}
+
 	// Print file list.
 	fmt.Printf("\nFiles (%d total):\n", len(files))
 	for i, f := range files {
 		fmt.Printf("  [%2d] %s\n", i+1, f)
 	}
+	fmt.Println()
 
-	// Phase 2: Mine files with live per-file progress.
+	// Phase 2: Mine files with live visual progress.
 	totalFiles := len(files)
-	barWidth := 30
+	barWidth := 32
 	fileCount := 0
 	chunkCount := 0
+	dupCount := 0
+	errCount := 0
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	spinnerIdx := 0
 	startTime := time.Now()
+	currentPhase := "scan"
 
-	// Helper to generate progress bar string.
+	// progressBar generates a Unicode block progress bar.
 	progressBar := func(filled, width int) string {
 		var b strings.Builder
 		b.WriteString("[")
@@ -226,12 +239,23 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return b.String()
 	}
 
-	// Create progress callback that shows per-file live progress.
+	// formatDuration formats elapsed time as MmSSs or SSs.
+	formatDuration := func(d time.Duration) string {
+		d = d.Round(time.Second)
+		if d >= time.Minute {
+			return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+		}
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+
+	// Create progress callback that shows live progress with phase awareness.
 	progress := func(file string, added, skipped, errors int) {
 		if file != "" {
-			// File completion callback - show file being processed.
+			// File completion callback — show file being processed.
 			fileCount++
 			chunkCount += added
+			dupCount += skipped
+			errCount += errors
 			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
 
 			// Calculate overall progress (0-100%).
@@ -245,12 +269,13 @@ func runMemoryMine(dir, wing string, convos bool) error {
 			}
 
 			// Erase line and redraw with spinner.
-			fmt.Printf("\r[%s] [%s] %s (%d/%d files, %d chunks) %s\x1b[K\r",
-				spinnerFrames[spinnerIdx], displayFile,
-				progressBar(filled, barWidth), fileCount, totalFiles, chunkCount,
-				time.Since(startTime).Round(time.Second))
+			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
+				spinnerFrames[spinnerIdx], currentPhase,
+				progressBar(filled, barWidth), displayFile,
+				fileCount, totalFiles, chunkCount,
+				formatDuration(time.Since(startTime)))
 		} else {
-			// Embedding/insert phase: file="" with percentage in 'added'.
+			// Phase progress callback: file="" with percentage in 'added'.
 			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
 			progressPct := float64(added)
 			if progressPct > 100.0 {
@@ -258,16 +283,19 @@ func runMemoryMine(dir, wing string, convos bool) error {
 			}
 			filled := int(progressPct / 100.0 * float64(barWidth))
 
-			// Determine stage label.
+			// Determine stage label from percentage.
 			stage := "embed"
 			if progressPct >= 70 {
 				stage = "insert"
 			}
+			currentPhase = stage
 
 			// Erase line and redraw.
-			fmt.Printf("\r[%s] [%s] %s %d%% %s\x1b[K\r",
+			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
 				spinnerFrames[spinnerIdx], stage,
-				progressBar(filled, barWidth), int(progressPct), time.Since(startTime).Round(time.Second))
+				progressBar(filled, barWidth), "",
+				fileCount, totalFiles, chunkCount,
+				formatDuration(time.Since(startTime)))
 		}
 	}
 
@@ -296,14 +324,28 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	}
 
 	// Ensure progress bar shows 100%.
-	fmt.Printf("\r[%s] [done] %s 100%%\n", "✓", progressBar(barWidth, barWidth))
+	fmt.Printf("\r ✓  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K\n",
+		"done", progressBar(barWidth, barWidth), "",
+		totalFiles, totalFiles, result.Added,
+		formatDuration(time.Since(startTime)))
 
-	// Show final stats.
-	fmt.Printf("\nMining complete:\n")
+	// Show final mining stats.
+	fmt.Println()
+	fmt.Println("Mining complete:")
 	fmt.Printf("  Processed: %d\n", result.Processed)
 	fmt.Printf("  Added:     %d\n", result.Added)
 	fmt.Printf("  Skipped:   %d (duplicates)\n", result.Skipped)
 	fmt.Printf("  Errors:    %d\n", result.Errors)
+
+	// Show palace status after mining.
+	status, err := p.Status(ctx)
+	if err == nil {
+		fmt.Println()
+		fmt.Println("Palace status:")
+		fmt.Printf("  Drawers: %d\n", status.DrawerCount)
+		fmt.Printf("  Wings:   %d\n", status.WingCount)
+		fmt.Printf("  Rooms:   %d\n", status.RoomCount)
+	}
 
 	return nil
 }

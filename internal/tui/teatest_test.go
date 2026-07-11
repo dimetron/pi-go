@@ -708,10 +708,10 @@ func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
 
-	// Arrow up on empty input opens the history search popup.
-	m.handleKey(makeKey(tea.KeyUp))
+	// Ctrl+R on empty input opens the history search popup.
+	m.handleKey(makeKeyMod('r', tea.ModCtrl))
 	if m.searchPopup == nil {
-		t.Fatal("expected search popup to be shown on arrow up with empty input")
+		t.Fatal("expected search popup to be shown on Ctrl+R with empty input")
 	}
 	if m.searchPopup.mode != searchModeHistory {
 		t.Errorf("expected searchModeHistory, got %v", m.searchPopup.mode)
@@ -1227,10 +1227,10 @@ func TestHistoryEntry_WithMentions(t *testing.T) {
 		{Text: "plain prompt"},
 	}
 
-	// Arrow up on empty input opens the history search popup.
+	// Ctrl+R on empty input opens the history search popup.
 	// History entries are reversed for display (newest first).
 	// So popup has: [0]="plain prompt" (newest), [1]="fix..." (older)
-	newM, _ := m.handleKey(makeKey(tea.KeyUp))
+	newM, _ := m.handleKey(makeKeyMod('r', tea.ModCtrl))
 	m = newM.(*model)
 	if m.searchPopup == nil {
 		t.Fatal("expected search popup to open")

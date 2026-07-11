@@ -10,6 +10,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -46,6 +47,7 @@ type SidebarRenderInput struct {
 	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
 	Skills       []extension.Skill        // skills section; nil = hidden
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
+	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
 	OTELEnabled  bool                     // OTEL tracing is active
 }
 
@@ -303,6 +305,21 @@ func RenderSidebar(in SidebarRenderInput) string {
 	if len(in.Skills) > 0 {
 		skillsHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af")).Bold(true) // Mocha yellow
 		lines = append(lines, skillsHeading.Render(fmt.Sprintf("  Skills [%d]", len(in.Skills))))
+		lines = append(lines, "")
+	}
+
+	// --- Memory section ---
+	if in.MemoryStatus != nil {
+		memHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#f5c2e7")).Bold(true) // Mocha pink
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))              // Mocha subtext0
+		lines = append(lines, memHeading.Render(fmt.Sprintf("  Memory [%d]", in.MemoryStatus.DrawerCount)))
+		if in.MemoryStatus.ModelLoaded {
+			lines = append(lines, dimStyle.Render("  ⬡ model ready"))
+		}
+		if in.MemoryStatus.KG != nil {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ⬡ %d entities", in.MemoryStatus.KG.EntityCount)))
+		}
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ⬡ %d rooms", in.MemoryStatus.RoomCount)))
 		lines = append(lines, "")
 	}
 

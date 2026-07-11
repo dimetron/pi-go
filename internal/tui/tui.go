@@ -18,6 +18,7 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/otel"
+	"github.com/dimetron/pi-go/internal/palace"
 )
 
 // model is the Bubble Tea model for the interactive TUI.
@@ -92,6 +93,9 @@ type model struct {
 
 	// Ctrl+C handling: show warning on first press, quit on second.
 	ctrlCCount int
+
+	// Memory palace status for sidebar (nil if no palace DB).
+	memoryStatus *palace.PalaceStatus
 
 	// resizeAt records when the last WindowSizeMsg arrived. Key/paste input
 	// is suppressed briefly after resize to let terminal response sequences
@@ -363,6 +367,7 @@ func (m *model) Init() tea.Cmd {
 	if m.cfg.AgentEventCh != nil {
 		cmds = append(cmds, waitForSubEvent(m.cfg.AgentEventCh))
 	}
+	cmds = append(cmds, memoryTickCmd(m.cwd()))
 	return tea.Batch(cmds...)
 }
 
@@ -473,6 +478,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commitDoneMsg:
 		return m.handleCommitDone(msg)
+
+	case memoryTickMsg:
+		m.memoryStatus = msg.status
+		return m, tea.Tick(memoryTickInterval, func(t time.Time) tea.Msg {
+			return memoryTickCmd(m.cwd())()
+		})
 
 	case pingDoneMsg:
 		content := msg.output
@@ -667,18 +678,26 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Arrow up on empty input: show history search popup.
-	if key.Code == tea.KeyUp && m.inputModel.Text == "" && m.searchPopup == nil {
+	// Ctrl+R: open history search popup (reverse-i-search style).
+	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.searchPopup == nil {
 		if len(m.inputModel.History) > 0 {
 			m.newSearchPopup(searchModeHistory)
 			return m, nil
 		}
-		// If no history, fall through to input model for inline history nav.
 	}
 
-	// Handle unified search popup keys (slash commands or history).
-	if m.handleSearchPopupKey(key) {
-		return m, nil
+	// Arrow Up/Down on empty input: scroll chat viewport. This also handles
+	// mouse wheel events (terminals translate them to Up/Down when mouse
+	// tracking is off, which is required for native text selection).
+	if m.searchPopup == nil && m.inputModel.Text == "" {
+		switch key.Code {
+		case tea.KeyUp:
+			m.chatModel.ScrollUp(3, m.height)
+			return m, nil
+		case tea.KeyDown:
+			m.chatModel.ScrollDown(3)
+			return m, nil
+		}
 	}
 
 	// Scroll keys stay in root model.
@@ -943,6 +962,7 @@ func (m *model) View() tea.View {
 			StatusLine:   "",
 			Orchestrator: m.cfg.Orchestrator,
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+			MemoryStatus: m.memoryStatus,
 			OTELEnabled:  otel.IsEnabled(),
 		}
 		if m.run != nil && m.run.phase != "" {
@@ -1448,6 +1468,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
 		}
+		cmds = append(cmds, memoryTickCmd(m.cwd()))
 		return m, tea.Batch(cmds...)
 	}
 
