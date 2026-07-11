@@ -44,6 +44,7 @@ func isolateRunModelListEnv(t *testing.T) {
 		"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY",
 		"ANTHROPIC_BASE_URL", "GEMINI_BASE_URL", "MISTRAL_BASE_URL",
 		"OLLAMA_HOST",
+		"OPENAI_API_KEY", "OPENAI_BASE_URL",
 	} {
 		t.Setenv(k, "")
 	}
@@ -57,6 +58,7 @@ func isolateRunModelListEnv(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevDir) })
 	flagURL = ""
+	flagInsecure = false
 }
 func TestRunModelList_OpenAI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +245,9 @@ func TestRunModelList_NoArgs_EnvBaseURL(t *testing.T) {
 	isolateRunModelListEnv(t)
 	t.Setenv("OPENAI_BASE_URL", srv.URL)
 	t.Setenv("OPENAI_API_KEY", "testkey")
+	// Point ollama at the mock too so the no-args branch (which always
+	// queries ollama) does not depend on a real ollama server.
+	t.Setenv("OLLAMA_HOST", srv.URL)
 
 	out, err := runModelListCapture(t)
 	if err != nil {

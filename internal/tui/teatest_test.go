@@ -708,39 +708,32 @@ func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
 
-	// Ctrl+R on empty input opens the history search popup.
-	m.handleKey(makeKeyMod('r', tea.ModCtrl))
-	if m.searchPopup == nil {
-		t.Fatal("expected search popup to be shown on Ctrl+R with empty input")
-	}
-	if m.searchPopup.mode != searchModeHistory {
-		t.Errorf("expected searchModeHistory, got %v", m.searchPopup.mode)
-	}
-	// Newest is first in popup (index 0 = "third").
-	// Input should still be empty until Enter is pressed.
-	if m.inputModel.Text != "" {
-		t.Errorf("expected empty input before Enter, got %q", m.inputModel.Text)
-	}
-
-	// Navigate down to second item (index 1 = "second").
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.searchPopup.selected != 1 {
-		t.Errorf("expected selected=1, got %d", m.searchPopup.selected)
-	}
-
-	// Navigate down to third item (index 2 = "first").
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.searchPopup.selected != 2 {
-		t.Errorf("expected selected=2, got %d", m.searchPopup.selected)
-	}
-
-	// Enter accepts the selected entry (index 2 = "first").
-	m.handleKey(makeKey(tea.KeyEnter))
-	if m.inputModel.Text != "first" {
-		t.Errorf("expected 'first', got %q", m.inputModel.Text)
-	}
+	// Arrow Up restores newest history directly.
+	m.handleKey(makeKey(tea.KeyUp))
 	if m.searchPopup != nil {
-		t.Error("expected popup to be closed after Enter")
+		t.Fatal("expected arrow up to use direct history, not search popup")
+	}
+	if m.inputModel.Text != "third" {
+		t.Errorf("expected newest history entry, got %q", m.inputModel.Text)
+	}
+
+	m.handleKey(makeKey(tea.KeyUp))
+	if m.inputModel.Text != "second" {
+		t.Errorf("expected second history entry, got %q", m.inputModel.Text)
+	}
+	m.handleKey(makeKey(tea.KeyUp))
+	if m.inputModel.Text != "first" {
+		t.Errorf("expected oldest history entry, got %q", m.inputModel.Text)
+	}
+
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.inputModel.Text != "second" {
+		t.Errorf("expected second history entry after down, got %q", m.inputModel.Text)
+	}
+	m.handleKey(makeKey(tea.KeyDown))
+	m.handleKey(makeKey(tea.KeyDown))
+	if m.inputModel.Text != "" {
+		t.Errorf("expected input cleared past newest history, got %q", m.inputModel.Text)
 	}
 }
 

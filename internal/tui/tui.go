@@ -686,17 +686,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Arrow Up/Down on empty input: scroll chat viewport. This also handles
-	// mouse wheel events (terminals translate them to Up/Down when mouse
-	// tracking is off, which is required for native text selection).
-	if m.searchPopup == nil && m.inputModel.Text == "" {
+	// Arrow Up/Down belong to the prompt history when no popup is open.
+	// Mouse tracking stays disabled in View so drag-select/copy remains native;
+	// terminals that translate wheel events to arrow keys still scroll when the
+	// input has no history to navigate.
+	if m.searchPopup == nil {
 		switch key.Code {
 		case tea.KeyUp:
-			m.chatModel.ScrollUp(3, m.height)
-			return m, nil
+			if len(m.inputModel.History) == 0 {
+				m.chatModel.ScrollUp(3, m.height)
+				return m, nil
+			}
 		case tea.KeyDown:
-			m.chatModel.ScrollDown(3)
-			return m, nil
+			if m.inputModel.HistoryIdx < 0 {
+				m.chatModel.ScrollDown(3)
+				return m, nil
+			}
 		}
 	}
 
@@ -983,13 +988,9 @@ func (m *model) View() tea.View {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor
 	}
-	v.AltScreen = true
-	// Disable mouse tracking so the terminal handles text selection
-	// (click-drag to select, Cmd+C to copy) natively. Mouse wheel events
-	// are left to the terminal, which translates them to Up/Down arrow
-	// keys; those are handled by handleKey (PgUp/PgDn and arrow keys scroll
-	// the chat viewport). See handleMouseWheel for the legacy wheel path
-	// that is no longer reached.
+	// Keep the UI on the normal terminal screen with mouse tracking disabled so
+	// the terminal owns mouse wheel scrolling, text selection, and copy.
+	v.AltScreen = false
 	v.MouseMode = tea.MouseModeNone
 	return v
 }

@@ -93,7 +93,8 @@ func runModelList(cmd *cobra.Command, args []string) error {
 	exitCode := 0
 	for _, p := range providers {
 		opts := provider.ListModelsOptions{
-			APIKey: keys[p],
+			APIKey:   keys[p],
+			Insecure: flagInsecure,
 		}
 		// Resolve base URL: --url flag > env var > default.
 		baseURL := flagURL

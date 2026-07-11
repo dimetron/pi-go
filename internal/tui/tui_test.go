@@ -505,37 +505,36 @@ func TestHistoryNavigation(t *testing.T) {
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
-	// Ctrl+R on empty input opens the history search popup.
-	// Newest is first: [0]="third", [1]="second", [2]="first"
-	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	// Arrow Up restores newest history directly.
+	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm := newM.(*model)
-	if mm.searchPopup == nil {
-		t.Fatal("expected search popup to open on arrow up")
+	if mm.searchPopup != nil {
+		t.Fatal("expected arrow up to use direct history, not search popup")
 	}
-	if mm.searchPopup.mode != searchModeHistory {
-		t.Errorf("expected searchModeHistory, got %v", mm.searchPopup.mode)
-	}
-	if mm.inputModel.Text != "" {
-		t.Errorf("expected empty input before Enter, got %q", mm.inputModel.Text)
+	if mm.inputModel.Text != "third" {
+		t.Errorf("expected newest history entry, got %q", mm.inputModel.Text)
 	}
 
-	// Navigate down twice to get to index 2 ("first").
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	// Continue through history with Up, then back down with Down.
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm = newM.(*model)
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
-	if mm.searchPopup.selected != 2 {
-		t.Errorf("expected selected=2, got %d", mm.searchPopup.selected)
-	}
-
-	// Enter accepts the entry (index 2 = "first").
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	mm = newM.(*model)
 	if mm.inputModel.Text != "first" {
-		t.Errorf("expected 'first', got %q", mm.inputModel.Text)
+		t.Errorf("expected oldest history entry, got %q", mm.inputModel.Text)
 	}
-	if mm.searchPopup != nil {
-		t.Error("expected popup to close after Enter")
+
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	mm = newM.(*model)
+	if mm.inputModel.Text != "second" {
+		t.Errorf("expected second history entry, got %q", mm.inputModel.Text)
+	}
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	mm = newM.(*model)
+	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	mm = newM.(*model)
+	if mm.inputModel.Text != "" {
+		t.Errorf("expected input cleared past newest history, got %q", mm.inputModel.Text)
 	}
 }
 

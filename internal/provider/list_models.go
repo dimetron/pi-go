@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,12 +20,26 @@ type ModelInfo struct {
 
 // ListModelsOptions controls how models are fetched from a provider.
 type ListModelsOptions struct {
-	APIKey  string
-	BaseURL string // override the default API endpoint
+	APIKey   string
+	BaseURL  string // override the default API endpoint
+	Insecure bool   // skip TLS certificate verification
 }
 
 // defaultListTimeout is the per-request timeout for model listing.
 const defaultListTimeout = 30 * time.Second
+
+// httpClient returns an HTTP client for model listing. When Insecure is true,
+// TLS certificate verification is skipped.
+func (o ListModelsOptions) httpClient() *http.Client {
+	if !o.Insecure {
+		return http.DefaultClient
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
 
 // providerDefaultBaseURL returns the default API base URL for each provider.
 func providerDefaultBaseURL(p string) string {
@@ -88,7 +103,7 @@ func listOpenAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo,
 			OwnedBy string `json:"owned_by"`
 		} `json:"data"`
 	}
-	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts.APIKey, "openai", &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "openai", &payload); err != nil {
 		return nil, fmt.Errorf("listing OpenAI models: %w", err)
 	}
 	models := make([]ModelInfo, len(payload.Data))
@@ -112,7 +127,7 @@ func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo
 			OwnedBy string `json:"owned_by"`
 		} `json:"data"`
 	}
-	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts.APIKey, "mistral", &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "mistral", &payload); err != nil {
 		return nil, fmt.Errorf("listing Mistral models: %w", err)
 	}
 	models := make([]ModelInfo, len(payload.Data))
@@ -136,7 +151,7 @@ func listAnthropicModels(ctx context.Context, opts ListModelsOptions) ([]ModelIn
 			Type string `json:"type"`
 		} `json:"data"`
 	}
-	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts.APIKey, "anthropic", &payload); err != nil {
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "anthropic", &payload); err != nil {
 		return nil, fmt.Errorf("listing Anthropic models: %w", err)
 	}
 	models := make([]ModelInfo, len(payload.Data))
@@ -168,7 +183,7 @@ func listGeminiModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo,
 		req.URL.RawQuery = q.Encode()
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := opts.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request: %w", err)
 	}
@@ -199,7 +214,7 @@ func listGeminiModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo,
 
 // fetchJSON performs an HTTP request with the appropriate auth headers for the
 // given provider and decodes the JSON response into dst.
-func fetchJSON(ctx context.Context, method, url, apiKey, providerName string, dst any) error {
+func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, providerName string, dst any) error {
 	reqCtx, cancel := context.WithTimeout(ctx, defaultListTimeout)
 	defer cancel()
 
@@ -210,17 +225,17 @@ func fetchJSON(ctx context.Context, method, url, apiKey, providerName string, ds
 
 	switch providerName {
 	case "anthropic":
-		if apiKey != "" {
-			req.Header.Set("x-api-key", apiKey)
+		if opts.APIKey != "" {
+			req.Header.Set("x-api-key", opts.APIKey)
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 	case "openai", "mistral":
-		if apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
+		if opts.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 		}
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := opts.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP request: %w", err)
 	}

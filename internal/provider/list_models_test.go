@@ -213,7 +213,7 @@ func TestFetchJSON_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	var dst map[string]any
-	err := fetchJSON(context.Background(), http.MethodGet, srv.URL, "", "openai", &dst)
+	err := fetchJSON(context.Background(), http.MethodGet, srv.URL, ListModelsOptions{}, "openai", &dst)
 	if err == nil {
 		t.Fatal("expected error for HTTP 403")
 	}
@@ -226,7 +226,7 @@ func TestFetchJSON_DecodeError(t *testing.T) {
 	defer srv.Close()
 
 	var dst map[string]any
-	err := fetchJSON(context.Background(), http.MethodGet, srv.URL, "key", "openai", &dst)
+	err := fetchJSON(context.Background(), http.MethodGet, srv.URL, ListModelsOptions{APIKey: "key"}, "openai", &dst)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -234,7 +234,12 @@ func TestFetchJSON_DecodeError(t *testing.T) {
 
 func TestListOpenAIModels_DefaultBaseURL(t *testing.T) {
 	// With no BaseURL and no server, should fail with a network error (not panic).
-	_, err := listOpenAIModels(context.Background(), ListModelsOptions{})
+	// Use a short-deadline context so the test fails fast instead of waiting
+	// the full 30s request timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := listOpenAIModels(ctx, ListModelsOptions{})
 	if err == nil {
 		t.Fatal("expected error with no base URL")
 	}
@@ -244,7 +249,10 @@ func TestListGeminiModels_DefaultBaseURL(t *testing.T) {
 	// With no BaseURL, the default https URL is used and the request will
 	// fail with a network error. The important property is that we don't
 	// panic and the error is wrapped with "listing" context.
-	_, err := listGeminiModels(context.Background(), ListModelsOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := listGeminiModels(ctx, ListModelsOptions{})
 	if err == nil {
 		t.Fatal("expected error with no base URL")
 	}
@@ -368,7 +376,10 @@ func TestListMistralModels_APIError(t *testing.T) {
 }
 
 func TestListAnthropicModels_DefaultBaseURL(t *testing.T) {
-	_, err := listAnthropicModels(context.Background(), ListModelsOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := listAnthropicModels(ctx, ListModelsOptions{})
 	if err == nil {
 		t.Fatal("expected error with no base URL")
 	}

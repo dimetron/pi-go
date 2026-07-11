@@ -497,7 +497,8 @@ func APIKeys() map[string]string {
 }
 
 // BaseURLs returns provider base URLs from environment variables.
-// Supports ANTHROPIC_BASE_URL (Ollama compatibility), OPENAI_BASE_URL, and GEMINI_BASE_URL.
+// Supports ANTHROPIC_BASE_URL (Ollama compatibility), OPENAI_BASE_URL,
+// GEMINI_BASE_URL, and OLLAMA_HOST (Ollama server address override).
 func BaseURLs() map[string]string {
 	urls := make(map[string]string)
 	envVars := map[string]string{
@@ -505,6 +506,7 @@ func BaseURLs() map[string]string {
 		"openai":    "OPENAI_BASE_URL",
 		"gemini":    "GEMINI_BASE_URL",
 		"mistral":   "MISTRAL_BASE_URL",
+		"ollama":    "OLLAMA_HOST",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {
