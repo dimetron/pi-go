@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/palace"
 )
 
 func TestRenderSidebar_Minimal(t *testing.T) {
@@ -457,4 +458,70 @@ func TestRenderSidebar_MCPTools_LongNames(t *testing.T) {
 		t.Error("expected 'MCP Tools' heading")
 	}
 	_ = result
+}
+
+func TestRenderSidebar_MemoryStatus_Full(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  40,
+		Height: 40,
+		MemoryStatus: &palace.PalaceStatus{
+			DrawerCount: 42,
+			WingCount:   3,
+			RoomCount:   7,
+			KG: &palace.KGStats{
+				EntityCount:   12,
+				TripleCount:   30,
+				ActiveTriples: 25,
+			},
+			ModelLoaded: true,
+		},
+	})
+	if !strings.Contains(result, "Memory [42]") {
+		t.Error("expected 'Memory [42]' heading with drawer count")
+	}
+	if !strings.Contains(result, "model ready") {
+		t.Error("expected 'model ready' line when ModelLoaded is true")
+	}
+	if !strings.Contains(result, "12 entities") {
+		t.Error("expected '12 entities' line when KG is non-nil")
+	}
+	if !strings.Contains(result, "7 rooms") {
+		t.Error("expected '7 rooms' line for RoomCount")
+	}
+}
+
+func TestRenderSidebar_MemoryStatus_NoKG(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  40,
+		Height: 40,
+		MemoryStatus: &palace.PalaceStatus{
+			DrawerCount: 5,
+			RoomCount:   2,
+			KG:          nil,
+			ModelLoaded: false,
+		},
+	})
+	if !strings.Contains(result, "Memory [5]") {
+		t.Error("expected 'Memory [5]' heading")
+	}
+	if strings.Contains(result, "model ready") {
+		t.Error("did not expect 'model ready' when ModelLoaded is false")
+	}
+	if strings.Contains(result, "entities") {
+		t.Error("did not expect 'entities' line when KG is nil")
+	}
+	if !strings.Contains(result, "2 rooms") {
+		t.Error("expected '2 rooms' line for RoomCount")
+	}
+}
+
+func TestRenderSidebar_MemoryStatus_Nil(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:        40,
+		Height:       20,
+		MemoryStatus: nil,
+	})
+	if strings.Contains(result, "Memory [") {
+		t.Error("did not expect Memory section when MemoryStatus is nil")
+	}
 }

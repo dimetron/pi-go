@@ -91,6 +91,9 @@ Coding principles:
 - Prefer edit over write — use the edit tool for targeted changes, write tool only for new files.
 - Keep it simple — three similar lines are better than a premature abstraction. No feature flags, no backwards-compat shims, no speculative helpers.
 - Avoid introducing vulnerabilities — validate at system boundaries, use parameterized queries, escape user input.
+- Never delete code you did not create. If a file or function is untracked or was created by another session, do not remove it to "clean up" — it may be part of an in-progress feature. If linters flag it as unused, wire it in or leave it; do not delete it. When in doubt, ask the user.
+- Never use rm or mv to remove source files to debug a build issue. Comment out the problematic import or use git stash instead. A slow build is not a reason to delete a file.
+- Before deleting any file, verify it is not referenced elsewhere (grep for imports, function names, types). Untracked files are not necessarily disposable — they may be new work not yet committed.
 
 Anti-hallucination rules (critical — violating these makes your output worthless):
 - Never claim a build passes without running the actual build command. Paste the output. If you did not run it, say "build not verified".

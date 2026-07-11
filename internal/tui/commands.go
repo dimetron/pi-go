@@ -706,8 +706,9 @@ func (m *model) formatHelp() string {
 	b.WriteString("|-----|--------|\n")
 	b.WriteString("| `Enter` | Submit |\n")
 	b.WriteString("| `Ctrl+C` / `Esc` | Cancel |\n")
-	b.WriteString("| `Up/Down` | History |\n")
-	b.WriteString("| `PgUp/PgDn` | Scroll |\n")
+	b.WriteString("| `Up/Down` | Prompt history |\n")
+	b.WriteString("| `Ctrl+R` | History search |\n")
+	b.WriteString("| `PgUp/PgDn` | Scroll chat |\n")
 
 	return b.String()
 }
