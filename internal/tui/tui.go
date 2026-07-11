@@ -964,7 +964,13 @@ func (m *model) View() tea.View {
 		v.Cursor = inputCursor
 	}
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	// Disable mouse tracking so the terminal handles text selection
+	// (click-drag to select, Cmd+C to copy) natively. Mouse wheel events
+	// are left to the terminal, which translates them to Up/Down arrow
+	// keys; those are handled by handleKey (PgUp/PgDn and arrow keys scroll
+	// the chat viewport). See handleMouseWheel for the legacy wheel path
+	// that is no longer reached.
+	v.MouseMode = tea.MouseModeNone
 	return v
 }
 
