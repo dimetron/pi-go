@@ -476,6 +476,71 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	}
 }
 
+// TestHandleRunAgentEvent_ToolCall_PopulatesToolIn verifies that the tool_call
+// handler in run mode extracts toolIn from ev.ToolArgs (the subagent args
+// plumbed from the JSONL stream). Before the fix, run.go:454 only set
+// `tool: ev.Content`, so the chat card showed a bare "bash" with no command
+// — the parent path (agent_loop.go) already filled toolIn; this pins the
+// run path to the same behavior.
+func TestHandleRunAgentEvent_ToolCall_PopulatesToolIn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx:       ctx,
+		cancel:    cancel,
+		chatModel: ChatModel{Messages: []message{{role: "assistant", content: ""}}},
+		run: &runState{
+			specName: "test-spec",
+			agentID:  "task-123",
+			phase:    "running",
+		},
+		running: true,
+	}
+
+	// read with a file_path arg.
+	m.handleRunAgentEvent(runAgentEventMsg{
+		event: subagent.Event{
+			Type:     "tool_call",
+			Content:  "read",
+			ToolArgs: map[string]any{"file_path": "internal/tui/run.go"},
+		},
+	})
+	if got := m.chatModel.Messages[len(m.chatModel.Messages)-1]; got.tool != "read" || got.toolIn != "internal/tui/run.go" {
+		t.Errorf("read tool message: tool=%q toolIn=%q, want tool=read toolIn=internal/tui/run.go", got.tool, got.toolIn)
+	}
+
+	// bash with a command arg (long enough to be truncated by toolCallSummary).
+	longCmd := "go test ./internal/tui/... -run TestHandleRunAgentEvent -v -count=1"
+	m.handleRunAgentEvent(runAgentEventMsg{
+		event: subagent.Event{
+			Type:     "tool_call",
+			Content:  "bash",
+			ToolArgs: map[string]any{"command": longCmd},
+		},
+	})
+	got := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	if got.tool != "bash" {
+		t.Errorf("bash tool message: tool=%q, want bash", got.tool)
+	}
+	// toolCallSummary truncates to 80 chars.
+	if len(got.toolIn) > 80 {
+		t.Errorf("bash toolIn should be truncated to 80, got %d chars: %q", len(got.toolIn), got.toolIn)
+	}
+	if got.toolIn == "" {
+		t.Error("bash toolIn should be populated from args.command")
+	}
+
+	// tool_call with no args should still create a message with empty toolIn.
+	m.handleRunAgentEvent(runAgentEventMsg{
+		event: subagent.Event{Type: "tool_call", Content: "bash"},
+	})
+	got = m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	if got.tool != "bash" || got.toolIn != "" {
+		t.Errorf("bash tool message (no args): tool=%q toolIn=%q, want tool=bash toolIn=empty", got.tool, got.toolIn)
+	}
+}
+
 func TestHandleRunCommand_NoArgsShowsAvailableSpecs(t *testing.T) {
 	tmpDir := t.TempDir()
 	specDir := filepath.Join(tmpDir, "specs", "my-feature")

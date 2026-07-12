@@ -1128,7 +1128,7 @@ func (m *model) View() tea.View {
 
 	var topSection string
 	if showSidebar {
-		hostName, _ := os.Hostname()
+		hostName := cachedHostname()
 		sidebarInput := SidebarRenderInput{
 			Width: sidebarWidth,
 			// Exactly as tall as the panel beside it. Sized to the terminal
@@ -1544,7 +1544,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 	if mode == "" {
 		mode = "chat"
 	}
-	hostName, _ := os.Hostname()
+	hostName := cachedHostname()
 	return StatusRenderInput{
 		ProviderName: m.providerDisplayName(),
 		ModelName:    m.cfg.ModelName,

@@ -213,11 +213,12 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		parts = append(parts, toolStyle.Render(fmt.Sprintf("tool: %s (%s)", s.ActiveTool, elapsed)))
 	}
 
-	// /run cycle indicator.
+	// /run cycle indicator. The spec name is omitted: it is long enough to wrap
+	// the status bar onto a second line, and it is already shown in the sidebar.
 	if in.RunCycle != nil {
 		runStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
-		parts = append(parts, runStyle.Render(fmt.Sprintf("run[%s]: cycle %d/%d",
-			in.RunCycle.SpecName, in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
+		parts = append(parts, runStyle.Render(fmt.Sprintf("cycle %d/%d",
+			in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
 	}
 
 	return bar.Render(strings.Join(parts, sep))

@@ -42,7 +42,8 @@ func isOTELPortAvailable() bool {
 
 	port := 4317 // default gRPC port
 	if endpoint != "" && strings.Contains(endpoint, ":") {
-		if p, err := strconv.Atoi(strings.Split(endpoint, ":")[1]); err == nil {
+		parts := strings.Split(endpoint, ":")
+		if p, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
 			port = p
 		}
 	}

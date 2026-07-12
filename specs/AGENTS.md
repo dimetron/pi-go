@@ -114,13 +114,14 @@ specs/
 
 ### issues/
 
-| Spec                   | Phases | Description                |
-|------------------------|--------|----------------------------|
-| 000-issues-fix/        | plan   | General issue fixes        |
-| 001-session-errors/    | prompt | Session error analysis     |
-| 002-code-review-codex/ | prompt | Code review with Codex     |
-| 003-code-review-pi/    | prompt | Code review for pi-go      |
-| 004-memory-dimentions/ | readme | Memory dimensions research |
+| Spec                      | Phases | Description                                                                |
+|---------------------------|--------|----------------------------------------------------------------------------|
+| 000-issues-fix/           | plan   | General issue fixes                                                        |
+| 001-session-errors/       | prompt | Session error analysis                                                     |
+| 002-code-review-codex/    | prompt | Code review with Codex                                                     |
+| 003-code-review-pi/       | prompt | Code review for pi-go                                                      |
+| 004-memory-dimentions/    | readme | Memory dimensions research                                                 |
+| 007-write-tool-data-loss/ | readme | `write`/`edit` truncate before writing and never fsync — data loss on quit |
 
 ### research/
 

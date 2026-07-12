@@ -369,6 +369,11 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	// the aggregate when deltas already covered the turn.
 	streamedText := false
 
+	// GroundingMetadata is repeated on every streamed chunk of the response it
+	// grounds, so the same search would otherwise print once per chunk. Key on
+	// the query set and emit each search exactly once per turn.
+	groundedSeen := map[string]bool{}
+
 	// Start a top-level OTEL span for the entire agent run, inheriting the
 	// per-response context so Esc/Ctrl+C can interrupt it without quitting the TUI.
 	tracer := otel.Tracer("pi-go")
@@ -386,7 +391,18 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 			m.agentCh <- agentDoneMsg{err: err}
 			return
 		}
-		if ev == nil || ev.Content == nil {
+		if ev == nil {
+			continue
+		}
+		// Gemini search grounding runs server-side: it never produces a
+		// FunctionCall part, so without this the search is invisible — the
+		// model just answers with fresh facts and no sign it searched. The only
+		// evidence is GroundingMetadata riding on the response, so surface it as
+		// a synthetic tool call/result pair. Checked before the Content
+		// nil-guard, since the metadata hangs off the event, not the content.
+		m.emitGroundingEvents(ev.GroundingMetadata, groundedSeen, log)
+
+		if ev.Content == nil {
 			continue
 		}
 		// A new turn begins when we see a user/tool-result event; reset the
@@ -670,9 +686,18 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 		summary: fmt.Sprintf("<<< %s", msg.name),
 		detail:  msg.content,
 	})
+	// toolResultSummary exists to condense raw tool JSON into one line. The
+	// grounding result is not raw output — it is already a formatted, one-source-
+	// per-line list — so summarizing it would flatten the newlines into spaces
+	// and truncate at 120 chars, which ran every source together and cut the last
+	// one mid-word.
+	content := msg.content
+	if msg.name != groundingToolName {
+		content = toolResultSummary(msg.content)
+	}
 	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
 		if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].tool == msg.name && m.chatModel.Messages[i].content == "" {
-			m.chatModel.Messages[i].content = toolResultSummary(msg.content)
+			m.chatModel.Messages[i].content = content
 			break
 		}
 	}

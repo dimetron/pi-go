@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -60,7 +61,19 @@ type Sandbox struct {
 	worktreeDir string // absolute path of worktree (if subagent context)
 	extraRoots  []*os.Root
 	extraDirs   []string // absolute paths of extra allowed directories
+
+	// Parsed .gitignore patterns, memoized across tool calls. A Sandbox lives
+	// for the whole session, and collecting these costs a full tree walk, so
+	// re-deriving them on every grep/find was the dominant cost of both tools.
+	gitignoreMu   sync.Mutex
+	gitignorePats []GitignorePattern
+	gitignoreAt   time.Time
 }
+
+// gitignoreTTL bounds how stale the memoized patterns may be. Long enough that
+// a burst of tool calls within one agent turn walks the tree once; short enough
+// that editing a .gitignore is picked up promptly.
+const gitignoreTTL = 5 * time.Second
 
 // NewSandbox opens an os.Root anchored at dir.
 // Optionally pass worktreeDir if this is a subagent sandbox that needs to
@@ -130,11 +143,26 @@ func (s *Sandbox) Close() error {
 
 // LoadGitignorePatterns loads .gitignore patterns from the sandbox root.
 // Returns nil if no patterns found (non-fatal).
+//
+// The result is memoized for gitignoreTTL: collecting it costs a walk of the
+// whole tree, and grep/find call this on every invocation.
 func (s *Sandbox) LoadGitignorePatterns() ([]GitignorePattern, error) {
+	s.gitignoreMu.Lock()
+	defer s.gitignoreMu.Unlock()
+
+	if !s.gitignoreAt.IsZero() && time.Since(s.gitignoreAt) < gitignoreTTL {
+		return s.gitignorePats, nil
+	}
+
 	patterns, err := s.loadGitignore()
-	if err != nil || len(patterns) == 0 {
+	if err != nil {
 		return nil, err
 	}
+	if len(patterns) == 0 {
+		patterns = nil
+	}
+	s.gitignorePats = patterns
+	s.gitignoreAt = time.Now()
 	return patterns, nil
 }
 
@@ -408,12 +436,17 @@ func (s *Sandbox) loadGitignore() ([]GitignorePattern, error) {
 
 	fsys := s.root.FS()
 
-	// Walk the directory tree collecting .gitignore files
+	// Walk the directory tree collecting .gitignore files.
+	//
+	// Prune with the same shouldSkipDir the search walks use (grep.go, find.go).
+	// Skipping only .git here meant descending into node_modules, vendor and
+	// every dotdir — directories the search then skips anyway — so collecting
+	// the patterns cost more than applying them.
 	err := fs.WalkDir(fsys, ".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && d.Name() == ".git" {
+		if d.IsDir() && path != "." && shouldSkipDir(d.Name()) {
 			return filepath.SkipDir
 		}
 		if d.Name() == ".gitignore" {

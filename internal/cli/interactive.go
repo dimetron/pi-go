@@ -83,7 +83,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -121,6 +121,7 @@ func deferredInit(
 	ctx context.Context,
 	cfg config.Config,
 	llm adkmodel.LLM,
+	providerName string,
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
@@ -350,11 +351,18 @@ func deferredInit(
 		return
 	}
 
+	mcpToolsets := ps.mcpToolsets
+	// Gemini search grounding (see agent.GeminiGroundingTool doc).
+	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
+		coreTools = []adktool.Tool{gTool}
+		mcpToolsets = nil
+	}
+
 	// Create agent.
 	ag, err := agent.New(agent.Config{
 		Model:                llm,
 		Tools:                coreTools,
-		Toolsets:             ps.mcpToolsets,
+		Toolsets:             mcpToolsets,
 		Instruction:          instruction,
 		SessionService:       sessionSvc,
 		BeforeToolCallbacks:  beforeCBs,

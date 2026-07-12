@@ -652,6 +652,14 @@ func runNonInteractive(
 		return fmt.Errorf("creating session service: %w", err)
 	}
 
+	// Gemini search grounding. Always on for the Gemini provider; kill
+	// switch via PI_NO_GROUNDING=1 (propagates to subagent pi processes via
+	// FilterEnv's PI_ prefix allowlist).
+	if gTool, ok := agent.GeminiGroundingTool(info.Provider); ok {
+		coreTools = []adktool.Tool{gTool}
+		allToolsets = nil
+	}
+
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
 		Tools:               coreTools,
@@ -911,6 +919,9 @@ func formatPrintSkillLoad(count int, err error) string {
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
 	retryCfg := agent.DefaultRetryConfig()
+	// GroundingMetadata repeats on every chunk of the response it grounds;
+	// report each search once.
+	groundedSeen := map[string]bool{}
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
@@ -922,7 +933,26 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
-		if ev == nil || ev.Content == nil {
+		if ev == nil {
+			continue
+		}
+		// Gemini grounding runs server-side and emits no FunctionCall, so it
+		// would otherwise be invisible. Report it like any other tool call.
+		if gm := ev.GroundingMetadata; gm != nil && len(gm.WebSearchQueries) > 0 {
+			key := agent.GroundingQueryKey(gm.WebSearchQueries)
+			if !groundedSeen[key] {
+				groundedSeen[key] = true
+				args := map[string]any{"query": agent.GroundingQuery(gm)}
+				fmt.Fprint(os.Stderr, formatPrintToolCall(agent.GroundingToolName, args))
+				log.ToolCall("grounding", agent.GroundingToolName, args)
+				for _, src := range strings.Split(agent.GroundingSummary(gm), "\n") {
+					fmt.Fprintf(os.Stderr, "%s   %s%s\n", printToolDimColor, src, printToolReset)
+				}
+				fmt.Fprint(os.Stderr, formatPrintToolDone(agent.GroundingToolName))
+				log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
+			}
+		}
+		if ev.Content == nil {
 			continue
 		}
 		for _, part := range ev.Content.Parts {

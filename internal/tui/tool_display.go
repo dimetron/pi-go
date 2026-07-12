@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -368,7 +369,20 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
 			styled = highlightReadOutput(lines, msg.toolIn)
-		case msg.tool == "grep":
+		case msg.tool == "bash":
+			// Bash output is plain text most of the time but frequently contains
+			// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
+			// through chroma's content-sniffing lexer so it gets at least some
+			// coloring; if chroma cannot place it the fallback lexer still gives
+			// a non-gray foreground. Without this branch the output is dim (240)
+			// and reads as an afterthought next to the brightly-highlighted
+			// read/grep/find blocks above it.
+			styled = highlightBashOutput(lines)
+		// The grep tool registers itself as "ripgrep" whenever rg is installed
+		// (internal/tools/grep.go), which is the common case — so matching only
+		// "grep" here meant grep output was never highlighted in practice and
+		// fell through to the dim default.
+		case msg.tool == "grep" || msg.tool == "ripgrep":
 			styled = highlightGrepOutput(lines)
 		case msg.tool == "find":
 			styled = highlightFindOutput(lines)
@@ -419,9 +433,16 @@ func toolCallSummary(name string, args map[string]any) string {
 			}
 			return cmd
 		}
-	case "grep":
+	// "ripgrep" is the name the grep tool registers under when rg is installed.
+	case "grep", "ripgrep":
 		if p, ok := args["pattern"].(string); ok {
 			return p
+		}
+	// Gemini's server-side search, surfaced as a synthetic tool call so a
+	// grounded answer shows the query it searched for.
+	case groundingToolName:
+		if q, ok := args["query"].(string); ok {
+			return q
 		}
 	case "find":
 		if p, ok := args["pattern"].(string); ok {
@@ -689,6 +710,15 @@ func matchLexer(filename string) chroma.Lexer {
 	return lexer
 }
 
+// cachedHostname resolves the hostname once. os.Hostname is a sysctl on Darwin,
+// and both the status bar and the sidebar called it on every frame — at the
+// TUI's re-render cadence that was 18.7% of process CPU, spent re-asking the
+// kernel for a string that cannot change while the process is alive.
+var cachedHostname = sync.OnceValue(func() string {
+	name, _ := os.Hostname()
+	return name
+})
+
 // highlightStyle and highlightFormatter are resolved once; both are registry
 // lookups whose result never changes.
 var highlightStyle = sync.OnceValue(func() *chroma.Style {
@@ -731,6 +761,28 @@ func highlightCode(code, filename string) string {
 		return code
 	}
 	return strings.TrimRight(buf.String(), "\n")
+}
+
+// highlightBashOutput applies chroma content-sniffing to bash output lines.
+// Bash output is heterogeneous (program output, file dumps, error traces) so
+// the filename-based lexer always misses; the content-sniffing fallback picks
+// something close to the actual language, and chroma's fallback lexer gives
+// the rest a non-gray foreground either way.
+func highlightBashOutput(lines []string) []string {
+	code := strings.Join(lines, "\n")
+	highlighted := highlightCode(code, "")
+	if highlighted == code {
+		// Lexer did not tokenize — every line came back unchanged. Fall back
+		// to a non-gray foreground so the block stands out from the gutter
+		// instead of looking like unread dim text.
+		styled := make([]string, len(lines))
+		nonDim := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		for i, line := range lines {
+			styled[i] = nonDim.Render(line)
+		}
+		return styled
+	}
+	return strings.Split(highlighted, "\n")
 }
 
 // highlightGrepOutput styles grep result lines of the form "file:line: content".
