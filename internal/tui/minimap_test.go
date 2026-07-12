@@ -264,11 +264,13 @@ func TestRailDoesNotJump(t *testing.T) {
 			}
 		}
 
-		// And the rail is in the same column on every row.
+		// And the rail is in the same column on every top-section row. The
+		// full-width status bar and input rows below have no rail.
 		cols := railColumns(t, frame)
+		topRows := m.topSectionRows()
 		want := -1
-		for _, c := range cols {
-			if c < 0 {
+		for i, c := range cols {
+			if i >= topRows || c < 0 {
 				continue
 			}
 			if want < 0 {

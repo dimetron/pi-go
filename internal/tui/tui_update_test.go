@@ -29,8 +29,9 @@ func TestUpdateWindowSizeWide(t *testing.T) {
 		t.Errorf("expected height 24, got %d", mm.height)
 	}
 	// When width > 80 the panel is width - SidebarWidth, and everything inside it
-	// is sized to that minus the rail, which owns the last column.
-	expectedStatusWidth := 120 - SidebarWidth - railWidth
+	// is sized to that minus the rail, which owns the last column. The status bar
+	// spans the full terminal width (it sits below the sidebar, not beside it).
+	expectedStatusWidth := 120
 	if mm.statusModel.Width != expectedStatusWidth {
 		t.Errorf("expected statusModel.Width %d, got %d", expectedStatusWidth, mm.statusModel.Width)
 	}
@@ -57,13 +58,14 @@ func TestUpdateWindowSizeClampsScrollAndInvalidatesWidth(t *testing.T) {
 	mm := newM.(*model)
 
 	// The panel's content is one column narrower than the panel; the rail (the
-	// minimap, doubling as the divider) owns that column.
+	// minimap, doubling as the divider) owns that column. The status bar spans
+	// the full terminal width (it sits below the sidebar, not beside it).
 	wantChat := 60 - railWidth
 	if mm.chatModel.Width != wantChat {
 		t.Fatalf("expected chat width %d after resize, got %d", wantChat, mm.chatModel.Width)
 	}
-	if mm.statusModel.Width != wantChat {
-		t.Fatalf("expected status width %d after resize, got %d", wantChat, mm.statusModel.Width)
+	if mm.statusModel.Width != 60 {
+		t.Fatalf("expected status width 60 after resize, got %d", mm.statusModel.Width)
 	}
 	if mm.chatModel.Messages[0].renderCache == "stale" {
 		t.Fatalf("expected stale render cache invalidated on resize")

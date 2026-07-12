@@ -62,6 +62,9 @@ type model struct {
 	sel       selection
 	lastFrame string
 	frameRows int
+	// topSectionRows is the number of rows in the top section (messages + sidebar)
+	// before the full-width status bar. The rail and sidebar only cover these rows.
+	topSectionRowsVal int
 	// The selectable rows: the message viewport, half-open. Everything else in
 	// the panel is chrome — the matrix rain, the rules, the status bar, the
 	// prompt — and selecting it yields nothing anyone wants on their clipboard.
@@ -1009,11 +1012,11 @@ func (m *model) View() tea.View {
 		return tea.NewView(matrixLine + "\n")
 	}
 
-	// Layout: sidebar on the right, chat+status+input on the left. The chat is
-	// panel body is one column narrower than mainWidth; the rail on its right
-	// edge is both the minimap and the divider from the sidebar.
+	// Layout: messages + sidebar on top, status bar + input spanning the full
+	// width below. The sidebar sits beside the messages only; the status bar
+	// extends to the right edge, giving it more room for tools and clock info.
 	mainWidth := m.mainWidth()
-	if m.statusModel.Width != m.chatWidth() || m.chatModel.Width != m.chatWidth() {
+	if m.statusModel.Width != m.width || m.chatModel.Width != m.chatWidth() {
 		m.applyResize()
 		mainWidth = m.mainWidth()
 	}
@@ -1022,7 +1025,7 @@ func (m *model) View() tea.View {
 	showSidebar := sidebarWidth > 0
 
 	// Render components.
-	m.inputModel.SetWidth(max(0, bodyWidth-2))
+	m.inputModel.SetWidth(max(0, m.width-3))
 	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
@@ -1064,9 +1067,11 @@ func (m *model) View() tea.View {
 	// Render matrix rain as full-width top bar (when active).
 	matrixBar := m.matrix.render()
 
-	// Horizontal rule for separating sections.
+	// Horizontal rule for separating sections. The panel hr is bodyWidth; the
+	// full-width hr spans the entire terminal (used below the sidebar).
 	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
 	hr := hrStyle.Render(strings.Repeat("─", bodyWidth))
+	fullHr := hrStyle.Render(strings.Repeat("─", m.width))
 
 	var b strings.Builder
 	if matrixBar != "" {
@@ -1109,29 +1114,16 @@ func (m *model) View() tea.View {
 
 	b.WriteString(hr)
 	b.WriteString("\n")
-	b.WriteString(statusBar)
-	b.WriteString("\n")
-	b.WriteString(hr)
-	b.WriteString("\n")
-	inputCursorY := strings.Count(b.String(), "\n")
-	b.WriteString(inputArea)
-	b.WriteString("\n")
-	b.WriteString(hr)
 
-	// Three columns, composed like columns: body | rail | sidebar.
-	//
-	// The body is pinned to exactly bodyWidth. Without that, JoinHorizontal sizes
-	// it to its widest *visible* line, so the rail and the sidebar behind it slid
-	// left and right as scrolling changed which lines were on screen.
-	//
-	// The rail carries the minimap across the message rows and a plain divider
-	// elsewhere, so it doubles as the border the sidebar used to draw itself.
+	// The top section: body | rail | sidebar. The sidebar only covers the
+	// messages area, not the status bar below — the status bar extends the
+	// full terminal width underneath.
 	body := padLinesTo(b.String(), bodyWidth)
 	panelRows := strings.Count(body, "\n") + 1
 	rail := railColumn(panelRows, msgStart, renderMinimap(lineKinds, startLine, endLine, msgRows))
 	leftPanel := lipgloss.JoinHorizontal(lipgloss.Top, body, rail)
 
-	var final string
+	var topSection string
 	if showSidebar {
 		hostName, _ := os.Hostname()
 		sidebarInput := SidebarRenderInput{
@@ -1171,10 +1163,30 @@ func (m *model) View() tea.View {
 			sidebarInput.RunMaxCycle = m.run.maxRetries
 		}
 		sidebar := RenderSidebar(sidebarInput)
-		final = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sidebar)
+		topSection = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sidebar)
 	} else {
-		final = leftPanel
+		topSection = leftPanel
 	}
+
+	// Bottom section: full-width status bar + input. These span the entire
+	// terminal width — the sidebar ends at the hr above, so the status bar
+	// has room for all its segments (tools, clock, context) without competing
+	// with the sidebar for columns.
+	var bottom strings.Builder
+	bottom.WriteString(statusBar)
+	bottom.WriteString("\n")
+	bottom.WriteString(fullHr)
+	bottom.WriteString("\n")
+	inputCursorY := strings.Count(topSection, "\n") + 1 + strings.Count(bottom.String(), "\n")
+	bottom.WriteString(inputArea)
+	bottom.WriteString("\n")
+	bottom.WriteString(fullHr)
+
+	// Pad the bottom section to the full terminal width so no row is wider or
+	// narrower than m.width. The status bar's Width style handles it for that
+	// line, but the input area and rules need explicit padding.
+	bottomStr := padLinesTo(bottom.String(), m.width)
+	final := topSection + "\n" + bottomStr
 
 	// Remember the frame the mouse is pointing at, then draw the selection over
 	// it. The selection is in screen coordinates, so it has to be applied to the
@@ -1182,6 +1194,7 @@ func (m *model) View() tea.View {
 	// which is why it is kept rather than re-derived.
 	m.lastFrame = final
 	m.frameRows = strings.Count(final, "\n") + 1
+	m.topSectionRowsVal = panelRows
 	m.msgTop, m.msgBottom = msgStart, msgStart+msgRows
 	final = highlight(final, m.sel, m.chatWidth(), m.width)
 
@@ -1334,10 +1347,11 @@ func renderStartupDetail(loadingItems map[string]bool) string {
 }
 
 func (m *model) applyResize() {
-	// Everything in the left panel — messages and status bar alike — is sized to
-	// the panel minus the rail, which owns the last column.
+	// The chat viewport is sized to the panel minus the rail, which owns the
+	// last column. The status bar spans the full terminal width — it sits below
+	// the sidebar, not beside it — so it gets m.width, not chatWidth.
 	chatWidth := m.chatWidth()
-	m.statusModel.Width = chatWidth
+	m.statusModel.Width = m.width
 	if m.chatModel.Width != chatWidth {
 		m.chatModel.UpdateRenderer(chatWidth)
 	}
@@ -1364,8 +1378,8 @@ func (m *model) clampScroll() {
 }
 
 func (m *model) messageViewportHeight() int {
-	if chatWidth := m.chatWidth(); m.statusModel.Width != chatWidth {
-		m.statusModel.Width = chatWidth
+	if m.statusModel.Width != m.width {
+		m.statusModel.Width = m.width
 	}
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
@@ -1432,6 +1446,14 @@ func (m *model) mainWidth() int {
 // always add up to mainWidth.
 func (m *model) chatWidth() int {
 	return max(1, m.mainWidth()-railWidth)
+}
+
+// topSectionRows returns the number of rows occupied by the top section — the
+// messages area plus the sidebar beside it, ending at the horizontal rule above
+// the status bar. The status bar and input below span the full width without a
+// rail or sidebar. The value is set during View(); call it after a render.
+func (m *model) topSectionRows() int {
+	return m.topSectionRowsVal
 }
 
 func (m *model) eyes() string {
