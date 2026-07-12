@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
@@ -166,9 +167,9 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 
 	cw := t.contentWidth()
 
-	// Show event stream. Structural events (message_start/end/done/spawn)
-	// are filtered out first so they never crowd the visible window; from the
-	// renderable remainder, keep the newest maxVisibleAgentEvents so the user
+	// Show event stream. Structural events (message_start/end/done/spawn) are
+	// filtered out first so they never crowd the visible window; from the
+	// renderable remainder, keep the newest maxAgentOutputLines so the user
 	// always sees the latest activity — not a stream truncated into silence.
 	if len(msg.agentEvents) > 0 {
 		evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -187,61 +188,45 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 			renderable = append(renderable, ev)
 		}
 
-		const maxVisibleAgentEvents = 5
-		events := renderable
-		if len(events) > maxVisibleAgentEvents {
-			skipped := len(events) - maxVisibleAgentEvents
-			events = events[len(events)-maxVisibleAgentEvents:]
+		// Budget in rendered lines, not events. A single event carries an
+		// unbounded amount of text — a subagent's final analysis is one "text"
+		// event — so an event count caps nothing: five of them still soft-wrap
+		// into a screenful. Walk newest-first and stop once the window is full.
+		var lines []string
+		used := 0
+		for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
+			lines = append(agentEventLines(renderable[i], evStyle, evToolStyle, cw), lines...)
+			used++
+		}
+		skipped := len(renderable) - used
+		clipped := len(lines) > maxAgentOutputLines
+		if clipped {
+			// The oldest event still in the window overflows it; show its tail,
+			// which is the part nearest the newer output below it.
+			lines = lines[len(lines)-maxAgentOutputLines:]
+		}
+
+		// Say so whenever output was withheld. A single huge event is clipped
+		// without any whole event being dropped, and hiding 60-odd lines with no
+		// mark would read as if that were all the agent said.
+		note := ""
+		switch {
+		case skipped > 0:
+			note = fmt.Sprintf("... %d earlier events", skipped)
+		case clipped:
+			note = "... earlier output"
+		}
+		if note != "" {
 			b.WriteString("  ")
 			b.WriteString(dim.Render("│ "))
-			b.WriteString(dim.Render(fmt.Sprintf("... %d earlier events", skipped)))
+			b.WriteString(dim.Render(note))
 			b.WriteString("\n")
 		}
-		for _, ev := range events {
-			var evLine string
-			switch ev.kind {
-			case "tool_call":
-				// Collapse embedded newlines so tool-call headers occupy one
-				// visual row — otherwise markdown prose inside a tool title
-				// (e.g. Gemini's "**Identifying...**\n\n\n...") drops blank
-				// rows into the card gutter.
-				evLine = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
-			case "tool_result":
-				summary := toolResultSummary(ev.content)
-				if len(summary) > 80 {
-					summary = summary[:77] + "..."
-				}
-				evLine = evStyle.Render("  ✓ " + summary)
-			case "stderr":
-				// Subprocess stderr — diagnostic chatter. Color it with the
-				// per-agent hue (orange/gray/blue) so users can tell at a
-				// glance which subagent is writing what when several run in
-				// parallel. The thin "▎" marker still distinguishes stderr
-				// from real tool calls, which use the "⚙" prefix.
-				summary := collapseToSingleLine(ev.content)
-				if len(summary) > 120 {
-					summary = summary[:117] + "..."
-				}
-				evLine = evToolStyle.Render("▎ " + summary)
-			case "text", "text_delta":
-				// Subagent message text — what the agent actually said.
-				// Collapse internal blank-line runs so paragraph spacing
-				// from streamed chunks doesn't produce wide gaps in the card.
-				evLine = evStyle.Render("» " + collapseToSingleLine(ev.content))
-			default:
-				content := collapseToSingleLine(ev.content)
-				if content == "" {
-					evLine = evStyle.Render(ev.kind)
-				} else {
-					evLine = evStyle.Render(ev.kind + ": " + content)
-				}
-			}
-			for _, sl := range softWrap(evLine, cw) {
-				b.WriteString("  ")
-				b.WriteString(dim.Render("│ "))
-				b.WriteString(sl)
-				b.WriteString("\n")
-			}
+		for _, sl := range lines {
+			b.WriteString("  ")
+			b.WriteString(dim.Render("│ "))
+			b.WriteString(sl)
+			b.WriteString("\n")
 		}
 	}
 
@@ -260,6 +245,56 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 		}
 	}
 	return b.String()
+}
+
+// maxAgentOutputLines bounds a subagent card's live output window. The card is
+// a progress indicator, not a transcript: the agent's full answer arrives in the
+// result summary and in the parent's own reply, so the stream only has to show
+// enough to see what the agent is doing right now.
+const maxAgentOutputLines = 7
+
+// agentEventLines renders one subagent event into the lines it occupies in the
+// card, already styled and soft-wrapped to width.
+func agentEventLines(ev agentEv, evStyle, evToolStyle lipgloss.Style, width int) []string {
+	var line string
+	switch ev.kind {
+	case "tool_call":
+		// Collapse embedded newlines so tool-call headers occupy one visual
+		// row — otherwise markdown prose inside a tool title (e.g. Gemini's
+		// "**Identifying...**\n\n\n...") drops blank rows into the card gutter.
+		line = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
+	case "tool_result":
+		line = evStyle.Render("  ✓ " + truncateRunes(toolResultSummary(ev.content), 80))
+	case "stderr":
+		// Subprocess stderr — diagnostic chatter. Color it with the per-agent
+		// hue (orange/gray/blue) so users can tell at a glance which subagent
+		// is writing what when several run in parallel. The thin "▎" marker
+		// still distinguishes stderr from real tool calls, which use "⚙".
+		line = evToolStyle.Render("▎ " + truncateRunes(collapseToSingleLine(ev.content), 120))
+	case "text", "text_delta":
+		// Subagent message text — what the agent actually said. Collapse
+		// internal blank-line runs so paragraph spacing from streamed chunks
+		// doesn't produce wide gaps in the card.
+		line = evStyle.Render("» " + collapseToSingleLine(ev.content))
+	default:
+		content := collapseToSingleLine(ev.content)
+		if content == "" {
+			line = evStyle.Render(ev.kind)
+		} else {
+			line = evStyle.Render(ev.kind + ": " + content)
+		}
+	}
+	return softWrap(line, width)
+}
+
+// truncateRunes clips s to at most n runes, marking the cut. Slicing by byte
+// would split a multi-byte rune and emit a replacement character.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
 }
 
 // contentWidth returns the available width for tool/subagent output content.
@@ -306,23 +341,29 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 	b.WriteString(toolBullet)
 	b.WriteString(toolStyle.Render(msg.tool))
 	if msg.toolIn != "" {
-		args := msg.toolIn
-		if len(args) > 80 {
-			args = args[:77] + "..."
-		}
+		args := truncateRunes(msg.toolIn, 80)
 		b.WriteString(dim.Render("("))
 		b.WriteString(argStyle.Render(args))
 		b.WriteString(dim.Render(")"))
 	}
 	b.WriteString("\n")
 	if msg.content != "" {
-		content := msg.content
-		lines := strings.Split(content, "\n")
-		maxLines := 15
+		lines := strings.Split(msg.content, "\n")
+
+		// Clip first, and keep the "N more lines" marker OUT of the clipped set.
+		// It used to be styled and appended to lines before they were handed to
+		// the syntax highlighter, so chroma re-tokenized a string that already
+		// held ANSI escapes and shredded them — that is what printed a literal
+		// "[38;5;240m... (81 more lines)[m" into the chat. A half-eaten escape
+		// also makes the terminal swallow columns, which knocked the rail out of
+		// its column.
+		const maxLines = 15
+		hidden := 0
 		if len(lines) > maxLines {
-			lines = append(lines[:maxLines], dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
+			hidden = len(lines) - maxLines
+			lines = lines[:maxLines]
 		}
-		cw := t.contentWidth()
+
 		var styled []string
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
@@ -331,24 +372,25 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 			styled = highlightGrepOutput(lines)
 		case msg.tool == "find":
 			styled = highlightFindOutput(lines)
-		}
-		if styled != nil {
-			for _, line := range styled {
-				for _, sl := range softWrap(line, cw) {
-					b.WriteString("  ")
-					b.WriteString(dim.Render("│ "))
-					b.WriteString(sl)
-					b.WriteString("\n")
-				}
+		default:
+			styled = make([]string, len(lines))
+			for i, line := range lines {
+				styled[i] = dim.Render(line)
 			}
-		} else {
-			for _, line := range lines {
-				for _, sl := range softWrap(line, cw) {
-					b.WriteString("  ")
-					b.WriteString(dim.Render("│ "))
-					b.WriteString(dim.Render(sl))
-					b.WriteString("\n")
-				}
+		}
+
+		// Style the marker only now that highlighting is done.
+		if hidden > 0 {
+			styled = append(styled, dim.Render(fmt.Sprintf("... (%d more lines)", hidden)))
+		}
+
+		cw := t.contentWidth()
+		for _, line := range styled {
+			for _, sl := range softWrap(line, cw) {
+				b.WriteString("  ")
+				b.WriteString(dim.Render("│ "))
+				b.WriteString(sl)
+				b.WriteString("\n")
 			}
 		}
 	}
@@ -614,25 +656,70 @@ func highlightReadOutput(lines []string, filename string) []string {
 	return result
 }
 
+// lexerCache memoizes lexers.Match by filename.
+//
+// lexers.Match glob-matches the filename against the patterns of every lexer
+// chroma has registered — hundreds of filepath.Match calls per lookup. It is a
+// pure function of the filename, so it only ever needs to run once per file.
+// Negative results are cached too: a filename chroma cannot place is exactly
+// the case that scans the whole registry and finds nothing.
+var (
+	lexerCacheMu sync.RWMutex
+	lexerCache   = map[string]chroma.Lexer{}
+)
+
+// matchLexer returns the coalesced lexer for filename, or nil if chroma has
+// none. The result is cached; the map is bounded by the number of distinct
+// files displayed in a session.
+func matchLexer(filename string) chroma.Lexer {
+	lexerCacheMu.RLock()
+	lexer, ok := lexerCache[filename]
+	lexerCacheMu.RUnlock()
+	if ok {
+		return lexer
+	}
+
+	if lexer = lexers.Match(filename); lexer != nil {
+		lexer = chroma.Coalesce(lexer)
+	}
+
+	lexerCacheMu.Lock()
+	lexerCache[filename] = lexer
+	lexerCacheMu.Unlock()
+	return lexer
+}
+
+// highlightStyle and highlightFormatter are resolved once; both are registry
+// lookups whose result never changes.
+var highlightStyle = sync.OnceValue(func() *chroma.Style {
+	if style := styles.Get("monokai"); style != nil {
+		return style
+	}
+	return styles.Fallback
+})
+
+var highlightFormatter = sync.OnceValue(func() chroma.Formatter {
+	if formatter := formatters.Get("terminal256"); formatter != nil {
+		return formatter
+	}
+	return formatters.Fallback
+})
+
 // highlightCode applies chroma syntax highlighting based on filename extension.
 func highlightCode(code, filename string) string {
-	lexer := lexers.Match(filename)
+	lexer := matchLexer(filename)
 	if lexer == nil {
+		// Content sniffing depends on the code, not the filename, so it cannot
+		// be cached by name.
 		lexer = lexers.Analyse(code) //nolint:misspell // chroma API uses British spelling
+		if lexer == nil {
+			lexer = lexers.Fallback
+		}
+		lexer = chroma.Coalesce(lexer)
 	}
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-	lexer = chroma.Coalesce(lexer)
 
-	style := styles.Get("monokai")
-	if style == nil {
-		style = styles.Fallback
-	}
-	formatter := formatters.Get("terminal256")
-	if formatter == nil {
-		formatter = formatters.Fallback
-	}
+	style := highlightStyle()
+	formatter := highlightFormatter()
 
 	iterator, err := lexer.Tokenise(nil, code)
 	if err != nil {

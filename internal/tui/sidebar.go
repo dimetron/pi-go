@@ -60,7 +60,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	fg := lipgloss.Color("#cdd6f4")        // Mocha text
 	dimFg := lipgloss.Color("#a6adc8")     // Mocha subtext0
-	borderFg := lipgloss.Color("#45475a")  // Mocha surface1
 	headingFg := lipgloss.Color("#89b4fa") // Mocha blue
 
 	dim := lipgloss.NewStyle().Foreground(dimFg)
@@ -410,14 +409,12 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with dark transparent background and
-	// left border to separate from main panel.
+	// Wrap in a styled box with a dark transparent background. No left border:
+	// the main panel's rail already divides the two, and drawing a border here
+	// as well put two vertical rules side by side.
 	box := lipgloss.NewStyle().
 		Width(w).
-		Background(sidebarBg).
-		BorderStyle(lipgloss.Border{Left: "│"}).
-		BorderLeft(true).
-		BorderForeground(borderFg)
+		Background(sidebarBg)
 
 	return box.Render(content)
 }

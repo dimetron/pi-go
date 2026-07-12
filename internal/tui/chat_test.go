@@ -455,7 +455,7 @@ func TestCollapseBlankLines(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := collapseBlankLines(tt.in); got != tt.want {
+			if got, _ := collapseBlankLines(tt.in, nil); got != tt.want {
 				t.Errorf("collapseBlankLines(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})

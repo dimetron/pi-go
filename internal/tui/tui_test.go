@@ -496,47 +496,8 @@ func TestAgentToolResultMsg(t *testing.T) {
 	}
 }
 
-func TestHistoryNavigation(t *testing.T) {
-	m := &model{
-		inputModel: InputModel{
-			History:    []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}},
-			HistoryIdx: -1,
-		},
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	// Arrow Up restores newest history directly.
-	newM, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
-	mm := newM.(*model)
-	if mm.searchPopup != nil {
-		t.Fatal("expected arrow up to use direct history, not search popup")
-	}
-	if mm.inputModel.Text != "third" {
-		t.Errorf("expected newest history entry, got %q", mm.inputModel.Text)
-	}
-
-	// Continue through history with Up, then back down with Down.
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
-	mm = newM.(*model)
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
-	mm = newM.(*model)
-	if mm.inputModel.Text != "first" {
-		t.Errorf("expected oldest history entry, got %q", mm.inputModel.Text)
-	}
-
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
-	if mm.inputModel.Text != "second" {
-		t.Errorf("expected second history entry, got %q", mm.inputModel.Text)
-	}
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
-	newM, _ = mm.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	mm = newM.(*model)
-	if mm.inputModel.Text != "" {
-		t.Errorf("expected input cleared past newest history, got %q", mm.inputModel.Text)
-	}
-}
+// Arrow-key history behavior now lives in history_key_test.go: Up opens the
+// history window instead of cycling entries into the prompt.
 
 func TestTextInput(t *testing.T) {
 	m := &model{

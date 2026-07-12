@@ -686,22 +686,31 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Arrow Up/Down belong to the prompt history when no popup is open.
-	// Mouse tracking stays disabled in View so drag-select/copy remains native;
-	// terminals that translate wheel events to arrow keys still scroll when the
-	// input has no history to navigate.
-	if m.searchPopup == nil {
+	// Up opens the prompt-history window; Down scrolls the chat.
+	//
+	// Up used to cycle history inline, replacing whatever was typed. The window
+	// shows the whole history at once and leaves the prompt untouched until an
+	// entry is chosen, so a stray Up costs one Esc rather than your draft.
+	//
+	// The mouse wheel cannot land here: View enables mouse reporting, so a wheel
+	// tick is a MouseWheelMsg handled by handleMouseWheel, never a KeyUp. Up
+	// still scrolls the chat before any history exists, so the keyboard can
+	// scroll on a fresh session.
+	//
+	// A prompt starting with "/" is excluded: those arrows drive the slash-command
+	// popup handled further down.
+	if m.searchPopup == nil && !m.shouldShowSlashCommandPopup() {
 		switch key.Code {
 		case tea.KeyUp:
 			if len(m.inputModel.History) == 0 {
 				m.chatModel.ScrollUp(3, m.height)
 				return m, nil
 			}
+			m.newSearchPopup(searchModeHistory)
+			return m, nil
 		case tea.KeyDown:
-			if m.inputModel.HistoryIdx < 0 {
-				m.chatModel.ScrollDown(3)
-				return m, nil
-			}
+			m.chatModel.ScrollDown(3)
+			return m, nil
 		}
 	}
 
@@ -802,7 +811,6 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 				m.searchPopup = nil
 			case searchModeHistory:
 				m.inputModel.SetText(item.Text)
-				m.inputModel.HistoryIdx = -1
 				m.searchPopup = nil
 			}
 		}
@@ -854,18 +862,21 @@ func (m *model) View() tea.View {
 		return tea.NewView(matrixLine + "\n")
 	}
 
-	// Layout: sidebar on the right, chat+status+input on the left.
+	// Layout: sidebar on the right, chat+status+input on the left. The chat is
+	// panel body is one column narrower than mainWidth; the rail on its right
+	// edge is both the minimap and the divider from the sidebar.
 	mainWidth := m.mainWidth()
-	if m.statusModel.Width != mainWidth || m.chatModel.Width != mainWidth {
+	if m.statusModel.Width != m.chatWidth() || m.chatModel.Width != m.chatWidth() {
 		m.applyResize()
 		mainWidth = m.mainWidth()
 	}
+	bodyWidth := m.chatWidth()
 	sidebarWidth := m.width - mainWidth
 	showSidebar := sidebarWidth > 0
 
 	// Render components.
-	m.inputModel.SetWidth(max(0, mainWidth-2))
-	messagesView := m.chatModel.RenderMessages(m.running)
+	m.inputModel.SetWidth(max(0, bodyWidth-2))
+	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
 	var inputCursor *tea.Cursor
@@ -891,13 +902,14 @@ func (m *model) View() tea.View {
 
 	visibleMessages := strings.Join(msgLines[startLine:endLine], "\n")
 
-	// Pad to fill available space, leaving 1 blank line between messages and status bar.
+	// Pad to fill the viewport. availableHeight is message rows only — the blank
+	// rows that inset the block from the rules are budgeted separately.
 	visibleLineCount := strings.Count(visibleMessages, "\n") + 1
-	for visibleLineCount < availableHeight-1 {
+	for visibleLineCount < availableHeight {
 		visibleMessages += "\n"
 		visibleLineCount++
 	}
-	visibleMessages = m.overlaySearchPopup(visibleMessages, mainWidth)
+	visibleMessages = m.overlaySearchPopup(visibleMessages, bodyWidth)
 
 	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
 	// lipgloss.Width() counts raw bytes including invisible ANSI codes, causing wrapping issues.
@@ -907,7 +919,7 @@ func (m *model) View() tea.View {
 
 	// Horizontal rule for separating sections.
 	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
-	hr := hrStyle.Render(strings.Repeat("─", mainWidth))
+	hr := hrStyle.Render(strings.Repeat("─", bodyWidth))
 
 	var b strings.Builder
 	if matrixBar != "" {
@@ -917,10 +929,29 @@ func (m *model) View() tea.View {
 		b.WriteString("\n")
 		b.WriteString(hr)
 		b.WriteString("\n")
-	} else {
-		b.WriteString("\n") // blank line at top when no matrix
 	}
+	// One blank row above the messages, matched by one below, so the block is
+	// inset evenly between the rules whether or not the matrix bar is showing.
+	b.WriteString("\n")
+
+	// The rows the message viewport occupies: where the rail switches from a
+	// plain divider to the minimap, and how many cells it needs. A block that
+	// ends in a newline is already terminated, so its trailing "" is not a row —
+	// counting it as one pushed a minimap bar onto the rule below.
+	msgStart := strings.Count(b.String(), "\n")
+	msgRows := strings.Count(visibleMessages, "\n") + 1
+	if strings.HasSuffix(visibleMessages, "\n") {
+		msgRows--
+	}
+
 	b.WriteString(visibleMessages)
+	// Terminate the message block. When the viewport is exactly full nothing
+	// pads it, and the blank row below would otherwise be appended to the last
+	// message line.
+	if !strings.HasSuffix(visibleMessages, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n") // the matching blank row below
 
 	// Render branch popup if open.
 	if m.branchPopup != nil {
@@ -940,14 +971,29 @@ func (m *model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(hr)
 
-	leftPanel := b.String()
+	// Three columns, composed like columns: body | rail | sidebar.
+	//
+	// The body is pinned to exactly bodyWidth. Without that, JoinHorizontal sizes
+	// it to its widest *visible* line, so the rail and the sidebar behind it slid
+	// left and right as scrolling changed which lines were on screen.
+	//
+	// The rail carries the minimap across the message rows and a plain divider
+	// elsewhere, so it doubles as the border the sidebar used to draw itself.
+	body := padLinesTo(b.String(), bodyWidth)
+	panelRows := strings.Count(body, "\n") + 1
+	rail := railColumn(panelRows, msgStart, renderMinimap(lineKinds, startLine, endLine, msgRows))
+	leftPanel := lipgloss.JoinHorizontal(lipgloss.Top, body, rail)
 
 	var final string
 	if showSidebar {
 		hostName, _ := os.Hostname()
 		sidebarInput := SidebarRenderInput{
-			Width:        sidebarWidth,
-			Height:       m.height,
+			Width: sidebarWidth,
+			// Exactly as tall as the panel beside it. Sized to the terminal
+			// instead, the sidebar outran the panel — JoinHorizontal padded the
+			// panel with blank rows, leaving a gap below the prompt while the
+			// sidebar's filler dots carried on past it.
+			Height:       panelRows,
 			Mascot:       m.mascot(),
 			Mode:         m.mode,
 			ProviderName: m.providerDisplayName(),
@@ -988,10 +1034,21 @@ func (m *model) View() tea.View {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor
 	}
-	// Keep the UI on the normal terminal screen with mouse tracking disabled so
-	// the terminal owns mouse wheel scrolling, text selection, and copy.
+	// Stay on the normal terminal screen, but report mouse events so the wheel
+	// scrolls the chat viewport (handleMouseWheel) instead of the terminal's
+	// scrollback, which only ever showed stale frames of a redrawing UI.
+	//
+	// This is also what keeps the wheel off the history window: with reporting
+	// on, a wheel tick arrives as a MouseWheelMsg and can never be delivered as
+	// an Up key, so scrolling and Up stay structurally separate rather than
+	// racing over the same event.
+	//
+	// The cost is that the terminal no longer owns click-drag, so selecting text
+	// needs its bypass modifier — Option on macOS Terminal and iTerm2, Shift on
+	// most others. CellMotion is the narrowest mode that carries wheel events;
+	// Bubble Tea has no wheel-only mode.
 	v.AltScreen = false
-	v.MouseMode = tea.MouseModeNone
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -1120,17 +1177,20 @@ func renderStartupDetail(loadingItems map[string]bool) string {
 }
 
 func (m *model) applyResize() {
-	mainWidth := m.mainWidth()
-	m.statusModel.Width = mainWidth
-	if m.chatModel.Width != mainWidth {
-		m.chatModel.UpdateRenderer(mainWidth)
+	// Everything in the left panel — messages and status bar alike — is sized to
+	// the panel minus the rail, which owns the last column.
+	chatWidth := m.chatWidth()
+	m.statusModel.Width = chatWidth
+	if m.chatModel.Width != chatWidth {
+		m.chatModel.UpdateRenderer(chatWidth)
 	}
 	m.clampScroll()
 	// Pre-render or reflow matrix bar so width changes are visible immediately.
+	// It sits inside the panel body, so it is sized like everything else there.
 	if !m.matrix.active {
-		m.matrix.feed("pi-go", mainWidth)
+		m.matrix.feed("pi-go", chatWidth)
 	} else {
-		m.matrix.tick(mainWidth)
+		m.matrix.tick(chatWidth)
 	}
 	// Matrix height can affect the message viewport, so clamp again after it updates.
 	m.clampScroll()
@@ -1147,17 +1207,21 @@ func (m *model) clampScroll() {
 }
 
 func (m *model) messageViewportHeight() int {
-	mainWidth := m.mainWidth()
-	if m.statusModel.Width != mainWidth {
-		m.statusModel.Width = mainWidth
+	if chatWidth := m.chatWidth(); m.statusModel.Width != chatWidth {
+		m.statusModel.Width = chatWidth
 	}
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
-	availableHeight := m.height - statusLines - inputLines - 4
+	// The two blank rows that inset the messages from the rules above and below
+	// are not message rows. Counting them as such made the panel one row taller
+	// than the terminal, so the terminal scrolled the frame and tore the panel
+	// away from the sidebar.
+	availableHeight := m.height - statusLines - inputLines - 4 - 2
 	if m.matrix.render() != "" {
-		availableHeight -= 2
+		// The matrix bar adds three rows above the messages (rule, bar, rule).
+		availableHeight -= 3
 	}
 	if m.branchPopup != nil {
 		availableHeight -= m.branchPopup.height + 6
@@ -1204,6 +1268,13 @@ func (m *model) mainWidth() int {
 		}
 	}
 	return m.width
+}
+
+// chatWidth is the width of the left panel's content — everything in it, not
+// just messages: the panel minus the rail on its right edge. Content plus rail
+// always add up to mainWidth.
+func (m *model) chatWidth() int {
+	return max(1, m.mainWidth()-railWidth)
 }
 
 func (m *model) eyes() string {
