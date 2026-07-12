@@ -59,6 +59,38 @@ func (t *respawnTransport) Connect(ctx context.Context) (mcp.Connection, error) 
 	return ct.Connect(ctx)
 }
 
+// connTrackingTransport wraps an mcp.Transport to capture the Connection
+// returned by Connect, so it can be closed later to kill a hung subprocess.
+type connTrackingTransport struct {
+	inner mcp.Transport
+
+	mu   sync.Mutex
+	conn mcp.Connection
+}
+
+func (t *connTrackingTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	c, err := t.inner.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	t.conn = c
+	t.mu.Unlock()
+	return c, nil
+}
+
+// closeConn closes the tracked connection if one exists, killing any
+// subprocess backing it. Safe to call multiple times.
+func (t *connTrackingTransport) closeConn() {
+	t.mu.Lock()
+	c := t.conn
+	t.conn = nil
+	t.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
 // resilientToolset wraps an MCP Toolset so that connection failures at
 // tool-listing time are logged instead of killing the agent. The ADK
 // mcptoolset connects lazily — errors surface only when Tools() is first
@@ -73,8 +105,9 @@ func (t *respawnTransport) Connect(ctx context.Context) (mcp.Connection, error) 
 // occurrence (from the server that loads first) is kept to prevent the
 // "duplicate tool" error from the ADK runner.
 type resilientToolset struct {
-	inner tool.Toolset
-	name  string
+	inner     tool.Toolset
+	name      string
+	transport *connTrackingTransport
 
 	once   sync.Once
 	tools  []tool.Tool
@@ -90,6 +123,12 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			err   error
 		}
 		ch := make(chan result, 1)
+		// Use a separate cancel channel so we can time out the inner
+		// Tools() call without wrapping ctx (which would lose the
+		// ReadonlyContext interface). The inner goroutine respects the
+		// original ctx; we simply abandon it on timeout and mark the
+		// toolset as failed.
+		timeoutCh := time.After(mcpConnectTimeout)
 		go func() {
 			tools, err := r.inner.Tools(ctx)
 			ch <- result{tools, err}
@@ -103,9 +142,22 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 				return
 			}
 			r.tools = r.deduplicateTools(res.tools)
-		case <-time.After(mcpConnectTimeout):
+		case <-timeoutCh:
 			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, mcpConnectTimeout)
 			r.failed = true
+			// Close the underlying MCP connection to kill any hung
+			// subprocess and free the blocked goroutine.
+			if r.transport != nil {
+				r.transport.closeConn()
+			}
+			// Drain the result in the background so the inner goroutine
+			// can exit after the connection is closed.
+			go func() {
+				select {
+				case <-ch:
+				case <-time.After(2 * time.Second):
+				}
+			}()
 		}
 	})
 	if r.failed {
@@ -209,13 +261,16 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		return nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
 	}
 
+	// Wrap with connection tracking so we can close the connection on timeout.
+	tracked := &connTrackingTransport{inner: transport}
+
 	ts, err := mcptoolset.New(mcptoolset.Config{
-		Transport: transport,
+		Transport: tracked,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating MCP toolset: %w", err)
 	}
-	return &resilientToolset{inner: ts, name: srv.Name}, nil
+	return &resilientToolset{inner: ts, name: srv.Name, transport: tracked}, nil
 }
 
 // headerRoundTripper injects static HTTP headers (e.g., API keys, usernames)

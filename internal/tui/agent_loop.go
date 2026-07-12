@@ -276,7 +276,22 @@ func (m *model) cancelAgent() {
 	}
 	if m.agentCh != nil {
 		go func(ch chan agentMsg) {
-			for range ch {
+			// Drain remaining messages. The agent loop closes the channel
+			// via defer close(m.agentCh) when it exits. If the agent loop
+			// is stuck (e.g. blocked on an LLM call that ignores context
+			// cancellation), the close may never happen — guard with a
+			// timeout so this goroutine doesn't leak forever.
+			timer := time.NewTimer(10 * time.Second)
+			defer timer.Stop()
+			for {
+				select {
+				case _, ok := <-ch:
+					if !ok {
+						return
+					}
+				case <-timer.C:
+					return
+				}
 			}
 		}(m.agentCh)
 		m.agentCh = nil

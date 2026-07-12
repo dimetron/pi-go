@@ -50,6 +50,11 @@ type Meta struct {
 	PlanContext *PlanContext `json:"planContext,omitempty"`
 }
 
+// maxCachedSessions is the maximum number of sessions kept in the in-memory
+// cache. When exceeded, the least recently updated sessions are evicted; they
+// can be reloaded from disk on demand via loadSession.
+const maxCachedSessions = 20
+
 // FileService implements session.Service with file-based JSONL persistence.
 // Sessions are stored in baseDir/<session-id>/ with meta.json and events.jsonl.
 type FileService struct {
@@ -162,6 +167,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 		),
 	}
 	s.sessions[sessionID] = sess
+	s.evictCachedSessionsLocked()
 
 	return &session.CreateResponse{
 		Session: sess.live(),
@@ -387,6 +393,30 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 	return nil
 }
 
+// evictCachedSessionsLocked removes the least recently updated sessions from
+// the in-memory cache when it exceeds maxCachedSessions. Caller must hold s.mu.
+func (s *FileService) evictCachedSessionsLocked() {
+	if len(s.sessions) <= maxCachedSessions {
+		return
+	}
+	// Build a list of (id, updatedAt) and sort ascending (oldest first).
+	type entry struct {
+		id string
+		ts time.Time
+	}
+	entries := make([]entry, 0, len(s.sessions))
+	for id, sess := range s.sessions {
+		entries = append(entries, entry{id, sess.updatedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].ts.Before(entries[j].ts)
+	})
+	toRemove := len(s.sessions) - maxCachedSessions
+	for i := 0; i < toRemove && i < len(entries); i++ {
+		delete(s.sessions, entries[i].id)
+	}
+}
+
 // loadSession loads a session from disk or cache.
 func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSession, error) {
 	if sess, ok := s.sessions[sessionID]; ok {
@@ -436,6 +466,7 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 	}
 
 	s.sessions[sessionID] = sess
+	s.evictCachedSessionsLocked()
 	return sess, nil
 }
 

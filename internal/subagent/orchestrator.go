@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,11 @@ const DefaultPoolSize = 5
 
 // recentTaskTTL is how long a completed subagent result is kept before being evicted.
 const recentTaskTTL = 30 * time.Minute
+
+// maxCompletedAgents is the maximum number of completed/failed agent states
+// retained in the in-memory agents map. Once this limit is exceeded, the
+// oldest completed entries are evicted.
+const maxCompletedAgents = 50
 
 // recentTask tracks a recently completed subagent result for deduplication.
 type recentTask struct {
@@ -496,6 +502,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 			}
 			state.FinishedAt = time.Now()
 		}
+		o.evictCompletedAgentsLocked()
 		o.mu.Unlock()
 
 		// Worktree cleanup is intentionally NOT done here. Deletion is
@@ -524,6 +531,40 @@ func isKilledBySignal(err error) bool {
 	// For other error types, check if the message indicates a signal.
 	errStr := err.Error()
 	return len(errStr) >= 6 && errStr[len(errStr)-6:] == "killed"
+}
+
+// evictCompletedAgentsLocked removes the oldest completed/failed/killed/canceled
+// agent states from the in-memory map when the number of non-running entries
+// exceeds maxCompletedAgents. Caller must hold o.mu.
+func (o *Orchestrator) evictCompletedAgentsLocked() {
+	completed := 0
+	for _, s := range o.agents {
+		if s.Status != "running" {
+			completed++
+		}
+	}
+	if completed <= maxCompletedAgents {
+		return
+	}
+	// Evict the oldest finished entries by FinishedAt.
+	type entry struct {
+		id   string
+		time time.Time
+	}
+	finished := make([]entry, 0, completed)
+	for id, s := range o.agents {
+		if s.Status != "running" && !s.FinishedAt.IsZero() {
+			finished = append(finished, entry{id, s.FinishedAt})
+		}
+	}
+	// Sort by FinishedAt ascending (oldest first).
+	sort.Slice(finished, func(i, j int) bool {
+		return finished[i].time.Before(finished[j].time)
+	})
+	toRemove := completed - maxCompletedAgents
+	for i := 0; i < toRemove && i < len(finished); i++ {
+		delete(o.agents, finished[i].id)
+	}
 }
 
 // List returns the status of all tracked agents.
