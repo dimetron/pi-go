@@ -33,23 +33,58 @@ func main() {
 	flag.Parse()
 
 	if *pprofAddr != "" {
-		// For debugging memory leaks, add an endpoint to trigger a few garbage
-		// collection cycles and ensure the /debug/pprof/heap endpoint only reports
-		// reachable memory.
-		http.DefaultServeMux.Handle("/gc", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			for range 3 {
-				runtime.GC()
-			}
-			fmt.Fprintln(w, "GC'ed")
-		}))
 		go func() {
 			// DefaultServeMux was mutated by the /debug/pprof import.
-			if err := http.ListenAndServe(*pprofAddr, http.DefaultServeMux); err != nil {
+			if err := http.ListenAndServe(*pprofAddr, pprofMux()); err != nil {
 				log.Printf("pprof server failed: %v", err)
 			}
 		}()
 	}
 
+	if err := serve(context.Background(), newServer(), *httpAddr, *pprofAddr); err != nil {
+		log.Printf("Server failed: %v", err)
+	}
+}
+
+// pprofMux returns the pprof mux with a /gc endpoint added. Triggering a few GC
+// cycles before scraping /debug/pprof/heap means the heap profile reports only
+// reachable memory, which is the point when hunting a leak.
+func pprofMux() *http.ServeMux {
+	http.DefaultServeMux.Handle("/gc", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		for range 3 {
+			runtime.GC()
+		}
+		fmt.Fprintln(w, "GC'ed")
+	}))
+	return http.DefaultServeMux
+}
+
+// httpHandler wraps the MCP server in a streamable HTTP handler.
+func httpHandler(server *mcp.Server) http.Handler {
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return server
+	}, nil)
+}
+
+// serve runs the MCP server over stdio, or over streamable HTTP when httpAddr
+// is set. Split out of main so both transports can be driven from a test.
+func serve(ctx context.Context, server *mcp.Server, httpAddr, pprofAddr string) error {
+	if httpAddr != "" {
+		log.Printf("MCP handler listening at %s", httpAddr)
+		if pprofAddr != "" {
+			log.Printf("pprof listening at http://%s/debug/pprof", pprofAddr)
+		}
+		return http.ListenAndServe(httpAddr, httpHandler(server))
+	}
+
+	t := &mcp.LoggingTransport{Transport: &mcp.StdioTransport{}, Writer: os.Stderr}
+	return server.Run(ctx, t)
+}
+
+// newServer builds the "everything" server with every tool, prompt and resource
+// registered. Split out of main so tests can drive the real server over an
+// in-memory transport instead of stdio.
+func newServer() *mcp.Server {
 	opts := &mcp.ServerOptions{
 		Instructions:      "Use this server!",
 		CompletionHandler: complete, // support completions by setting this handler
@@ -96,22 +131,7 @@ func main() {
 		Icons:       icons,
 	}, embeddedResource)
 
-	// Serve over stdio, or streamable HTTP if -http is set.
-	if *httpAddr != "" {
-		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
-			return server
-		}, nil)
-		log.Printf("MCP handler listening at %s", *httpAddr)
-		if *pprofAddr != "" {
-			log.Printf("pprof listening at http://%s/debug/pprof", *pprofAddr)
-		}
-		log.Fatal(http.ListenAndServe(*httpAddr, handler))
-	}
-
-	t := &mcp.LoggingTransport{Transport: &mcp.StdioTransport{}, Writer: os.Stderr}
-	if err := server.Run(context.Background(), t); err != nil {
-		log.Printf("Server failed: %v", err)
-	}
+	return server
 }
 
 func prompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
