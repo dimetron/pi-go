@@ -1199,9 +1199,10 @@ func (m *model) View() tea.View {
 	// an Up key, so scrolling and Up stay structurally separate rather than
 	// racing over the same event.
 	//
-	// The cost is that the terminal no longer owns click-drag, so selecting text
-	// needs its bypass modifier — Option on macOS Terminal and iTerm2, Shift on
-	// most others. CellMotion is the narrowest mode that carries wheel events;
+	// Reporting takes click-drag away from the terminal, so the terminal can no
+	// longer select text for us. Rather than make the user hold a bypass modifier,
+	// pi does the selection itself — drag to select, release to copy. See
+	// selection.go. CellMotion is the narrowest mode that carries wheel events;
 	// Bubble Tea has no wheel-only mode.
 	v.AltScreen = false
 	v.MouseMode = tea.MouseModeCellMotion
