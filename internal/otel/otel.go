@@ -15,7 +15,6 @@ package otel
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
@@ -101,8 +100,11 @@ func initProvider() {
 					sdktrace.WithResource(res),
 				)
 			} else {
-				writeDirectTerminal(fmt.Sprintf("pi-go: OTEL exporter disabled: %v\n", err))
-				// Fallback: no-op provider.
+				// Fall back to a no-op provider, silently. Nothing here may write to
+				// the terminal: pi owns the screen, and a stray line painted straight
+				// onto it (this used to go to /dev/tty, which no redirection can
+				// catch) lands in the middle of whatever the TUI had drawn there. It
+				// is the same reason the SDK's own logger is discarded above.
 				tp = sdktrace.NewTracerProvider(sdktrace.WithResource(res))
 			}
 		}
@@ -182,20 +184,6 @@ func AttributeBool(key string, value bool) attribute.KeyValue {
 // AttributeInt returns an int attribute key-value pair.
 func AttributeInt(key string, value int) attribute.KeyValue {
 	return attribute.Int(key, value)
-}
-
-// writeDirectTerminal writes startup diagnostics to the controlling terminal
-// when one is available, falling back to stderr for non-interactive modes.
-func writeDirectTerminal(message string) {
-	if message == "" {
-		return
-	}
-	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY|os.O_APPEND, 0); err == nil {
-		defer tty.Close()
-		_, _ = io.WriteString(tty, message)
-		return
-	}
-	_, _ = io.WriteString(os.Stderr, message)
 }
 
 // normalizeEndpointURL ensures the endpoint has an http:// scheme so the OTel

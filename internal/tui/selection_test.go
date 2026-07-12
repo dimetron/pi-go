@@ -325,9 +325,8 @@ func TestFlashTakesOverTheModeSlot(t *testing.T) {
 			ansi.StringWidth(before), ansi.StringWidth(during))
 	}
 	// The rest of the bar is untouched — only the slot is borrowed.
-	if !strings.Contains(during, "glm-5.2:cloud") {
-		t.Error("the flash swallowed the model name")
-	}
+	// The model name now lives in the sidebar, not in the status bar or any
+	// info line above it, so the flash in the status bar cannot affect it.
 
 	// And the mode comes straight back.
 	in.Flash = ""

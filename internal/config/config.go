@@ -116,7 +116,7 @@ func Defaults() Config {
 			"default": {Model: "gpt-5.5"},
 		},
 		DefaultProvider: "openai",
-		ThinkingLevel:   "medium",
+		ThinkingLevel:   "high",
 		Theme:           "default",
 	}
 }

@@ -197,7 +197,7 @@ func TestRailIsContinuousAndSingleColumn(t *testing.T) {
 			t.Errorf("rail row %d width = %d, want %d", i, got, railWidth)
 		}
 		plain := ansi.Strip(line)
-		if plain != railGlyph && plain != railThumb {
+		if plain != railGlyph && plain != railThumb && (i != len(lines)-1 || plain != railFoot) {
 			t.Errorf("rail row %d is %q, want a rail glyph", i, plain)
 		}
 	}
@@ -264,11 +264,13 @@ func TestRailDoesNotJump(t *testing.T) {
 			}
 		}
 
-		// And the rail is in the same column on every row.
+		// And the rail is in the same column on every top-section row. The
+		// full-width status bar and input rows below have no rail.
 		cols := railColumns(t, frame)
+		topRows := m.topSectionRows()
 		want := -1
-		for _, c := range cols {
-			if c < 0 {
+		for i, c := range cols {
+			if i >= topRows || c < 0 {
 				continue
 			}
 			if want < 0 {
@@ -305,6 +307,9 @@ func TestReadOutputDoesNotLeakEscapeCodes(t *testing.T) {
 // isRule reports whether a row is one of the panel's horizontal rules.
 func isRule(plain string) bool {
 	trimmed := strings.TrimRight(plain, " "+railGlyph+railThumb)
+	// The panel's closing rule carries the rail's joint where it meets the
+	// sidebar's rule, and the row reads as one line across the terminal.
+	trimmed = strings.ReplaceAll(trimmed, railFoot, "─")
 	return trimmed != "" && strings.Trim(trimmed, "─") == ""
 }
 

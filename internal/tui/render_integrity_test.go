@@ -51,6 +51,12 @@ func realisticChat() []message {
 	}
 }
 
+// isRailCell reports whether g is one of the glyphs the rail column is made of:
+// the track, the scroll thumb, or the joint on the panel's closing rule.
+func isRailCell(g string) bool {
+	return g == railGlyph || g == railThumb || g == railFoot
+}
+
 // runeAtCol returns the rune occupying display column col, measuring in terminal
 // cells rather than rune indices — a wide rune (emoji, box drawing) advances the
 // column by two, so indexing by rune would report the wrong place.
@@ -90,14 +96,16 @@ func TestFrameHeightFitsTerminal(t *testing.T) {
 					width, height, m.chatModel.Scroll, len(rows))
 			}
 
-			// Every row carries the rail, so no row is panel-less padding that
-			// JoinHorizontal invented to square the columns up.
+			// The top section (messages + sidebar) carries the rail on every row.
+			// The bottom section (status bar + input) spans the full width without
+			// a rail, so the check only applies to the top section.
 			railCol := m.mainWidth() - railWidth
-			for row, line := range rows {
-				g := runeAtCol(ansi.Strip(line), railCol)
-				if g != railGlyph && g != railThumb {
+			topRows := m.topSectionRows()
+			for row := 0; row < topRows && row < len(rows); row++ {
+				g := runeAtCol(ansi.Strip(rows[row]), railCol)
+				if !isRailCell(g) {
 					t.Fatalf("%dx%d scroll=%d: row %d has no rail — the panel and the sidebar are different heights\n%q",
-						width, height, m.chatModel.Scroll, row, ansi.Strip(line))
+						width, height, m.chatModel.Scroll, row, ansi.Strip(rows[row]))
 				}
 			}
 		}
@@ -105,9 +113,10 @@ func TestFrameHeightFitsTerminal(t *testing.T) {
 }
 
 // The sidebar is a fixed-size block flush to the right edge: exactly
-// SidebarWidth columns wide and exactly as tall as the panel. A line wider than
-// that would push the frame past the screen; a taller block would leave a gap
-// under the prompt.
+// SidebarWidth columns wide and exactly as tall as the top section (messages +
+// sidebar). The status bar and input rows below span the full width without a
+// sidebar. A line wider than the sidebar would push the frame past the screen;
+// a taller block would leave a gap under the prompt.
 func TestSidebarIsFixedSizeAndRightAligned(t *testing.T) {
 	for _, dim := range [][2]int{{172, 48}, {120, 40}, {100, 30}} {
 		width, height := dim[0], dim[1]
@@ -118,20 +127,71 @@ func TestSidebarIsFixedSizeAndRightAligned(t *testing.T) {
 
 		rows := strings.Split(m.View().Content, "\n")
 		sidebarStart := m.mainWidth() // the column the sidebar begins at
+		topRows := m.topSectionRows()
 
 		for row, line := range rows {
-			plain := ansi.Strip(line)
-			// The frame ends exactly at the terminal's right edge: the sidebar
-			// occupies the last SidebarWidth columns and not one more.
+			// Every row is exactly the terminal width.
 			if got := ansi.StringWidth(line); got != width {
-				t.Fatalf("%dx%d row %d: width %d, want %d — the sidebar is not flush right",
+				t.Fatalf("%dx%d row %d: width %d, want %d — the frame is not flush right",
 					width, height, row, got, width)
 			}
-			if got := width - sidebarStart; got != SidebarWidth {
-				t.Fatalf("%dx%d: sidebar is %d columns, want the fixed %d",
-					width, height, got, SidebarWidth)
+			// In the top section, the sidebar occupies the last SidebarWidth columns.
+			if row < topRows {
+				if got := width - sidebarStart; got != SidebarWidth {
+					t.Fatalf("%dx%d: sidebar is %d columns, want the fixed %d",
+						width, height, got, SidebarWidth)
+				}
 			}
-			_ = plain
+		}
+	}
+}
+
+// Tool output is whatever a command printed, and commands print characters that
+// lie about their width: a tab measures zero cells but jumps the cursor to the
+// next multiple-of-8 column, and a carriage return or backspace drags it
+// backwards. Padding a row on those measurements makes the terminal draw it
+// wider than the columns it was given, and the overflow pushes the sidebar past
+// the right edge — the sidebar looks like it shrank, when really the chat took
+// its columns. The frame must be free of them, and the rail must hold its column
+// on every row regardless.
+func TestChatOutputCannotTakeTheSidebarsColumns(t *testing.T) {
+	hostile := []message{
+		{role: "tool", tool: "bash", toolIn: `{"command":"go test ./..."}`,
+			content: "--- FAIL: TestRenderSidebar_OTELAboveModel (0.00s)\n" +
+				"FAIL\tgithub.com/dimetron/pi-go/internal/tui\t0.653s\n" +
+				"ok  \tgithub.com/dimetron/pi-go/internal/agent\t1.2s\n"},
+		{role: "tool", tool: "bash", toolIn: `{"command":"docker pull alpine"}`,
+			content: "Pulling\r  50%\rPulling  100%\ndone\x08\x08\n"},
+		{role: "assistant", content: "A tabbed table:\n\ncol\tvalue\tnotes\na\tb\tc\n"},
+	}
+
+	for _, dim := range [][2]int{{176, 48}, {120, 40}, {100, 30}} {
+		width, height := dim[0], dim[1]
+		m := historyModel(t, "first")
+		m.width, m.height = width, height
+		m.applyResize()
+		m.chatModel.Messages = append(m.chatModel.Messages, hostile...)
+
+		frame := m.View().Content
+		if i := strings.IndexAny(frame, "\t\r\v\f\b"); i >= 0 {
+			t.Fatalf("%dx%d: frame carries %q, which the terminal draws at a column the width math never counted",
+				width, height, frame[i])
+		}
+
+		rows := strings.Split(frame, "\n")
+		railCol := m.mainWidth() - railWidth
+		topRows := m.topSectionRows()
+		for row, line := range rows {
+			if got := ansi.StringWidth(line); got != width {
+				t.Fatalf("%dx%d row %d: width %d, want %d", width, height, row, got, width)
+			}
+			if row >= topRows {
+				continue
+			}
+			if g := runeAtCol(ansi.Strip(line), railCol); !isRailCell(g) {
+				t.Fatalf("%dx%d row %d: rail is not in column %d — the sidebar has been pushed off its columns\n%q",
+					width, height, row, railCol, ansi.Strip(line))
+			}
 		}
 	}
 }
@@ -154,8 +214,9 @@ func TestFrameIntegrityOnRealContent(t *testing.T) {
 				frame := m.View().Content
 				label := fmt.Sprintf("width=%d matrix=%v scroll=%d", width, matrix, scroll)
 
-				// The rail owns the panel's last column, on every row.
+				// The rail owns the panel's last column, on every top-section row.
 				railCol := m.mainWidth() - railWidth
+				topRows := m.topSectionRows()
 
 				for row, line := range strings.Split(frame, "\n") {
 					// Every row is exactly the terminal width. A short row lets the
@@ -165,8 +226,13 @@ func TestFrameIntegrityOnRealContent(t *testing.T) {
 							label, row, got, width, ansi.Strip(line))
 					}
 
+					// Only the top section (messages + sidebar) carries the rail.
+					// The full-width status bar and input rows below have no rail.
+					if row >= topRows {
+						continue
+					}
 					plain := ansi.Strip(line)
-					if got := runeAtCol(plain, railCol); got != railGlyph && got != railThumb {
+					if got := runeAtCol(plain, railCol); !isRailCell(got) {
 						t.Fatalf("%s: row %d has %q at the rail column %d, want the rail\n%q",
 							label, row, got, railCol, plain)
 					}

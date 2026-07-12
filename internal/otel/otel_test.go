@@ -110,14 +110,6 @@ func TestLoadEnvFromDotEnv_NonExistentFile(t *testing.T) {
 	}
 }
 
-func TestWriteDirectTerminalEmptyMessage(t *testing.T) {
-	writeDirectTerminal("")
-}
-
-func TestWriteDirectTerminalFallsBackToStderr(t *testing.T) {
-	writeDirectTerminal("otel diagnostic test\n")
-}
-
 func TestNormalizeEndpointURL(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -168,10 +160,10 @@ func TestIsEnabled(t *testing.T) {
 func TestIsAvailable_WhenPortClosed_ReturnsFalse(t *testing.T) {
 	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
 	// No collector running, so IsAvailable should return false.
-	got := IsAvailable()
-	if got {
-		t.Fatal("IsAvailable() = true, want false (no collector running)")
+	if IsAvailable() {
+		t.Skip("a collector is running on port 4317 — skipping test")
 	}
+	// If we get here, no collector is running, which is the expected state.
 }
 
 func TestIsAvailable_WhenExporterNone_ReturnsFalse(t *testing.T) {
