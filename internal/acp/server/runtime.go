@@ -326,7 +326,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 // runPromptTurn runs one prompt turn against the cached pi session.
 func runPromptTurn(ctx context.Context, turn PromptTurn, ps *piSessionState, stream *adapter.Stream) (PromptResult, error) {
 	retryCfg := piagent.DefaultRetryConfig()
-	for ev, err := range piagent.WithRetry(retryCfg, func() iter.Seq2[*adksession.Event, error] {
+	for ev, err := range piagent.WithRetry(ctx, retryCfg, func() iter.Seq2[*adksession.Event, error] {
 		return ps.agent.RunStreaming(ctx, ps.sessionID, turn.Prompt)
 	}) {
 		if err != nil {

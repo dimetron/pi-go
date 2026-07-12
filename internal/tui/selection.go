@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -143,7 +144,9 @@ func copySelection(text string) tea.Cmd {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	writeSystemClipboard(text)
+	// Run the platform clipboard command asynchronously so a hung xclip/pbcopy
+	// cannot block the Bubble Tea command goroutine.
+	go writeSystemClipboard(text)
 	return tea.SetClipboard(text)
 }
 
@@ -167,6 +170,8 @@ func clipboardCommand() *exec.Cmd {
 }
 
 // writeSystemClipboard is best-effort: a failure here still leaves OSC 52.
+// A timeout is applied to cmd.Wait() so a hung clipboard command (e.g. xclip
+// waiting for X11) cannot block indefinitely.
 func writeSystemClipboard(text string) {
 	cmd := clipboardCommand()
 	if cmd == nil {
@@ -181,5 +186,16 @@ func writeSystemClipboard(text string) {
 	}
 	_, _ = stdin.Write([]byte(text))
 	_ = stdin.Close()
-	_ = cmd.Wait()
+
+	// Wait with a timeout so a hung clipboard command does not block forever.
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+	}
 }

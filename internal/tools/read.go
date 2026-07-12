@@ -158,6 +158,8 @@ func readHandlerWithCache(sb *Sandbox, input ReadInput, cache *FileContentCache)
 	content := sb2.String()
 	// Strip base64 images from markdown files to reduce output size
 	content = stripBase64Images(content)
+	// Redact secrets (API keys, tokens) from tool output (OWASP LLM02)
+	content = redactSecrets(content)
 	if truncated {
 		content += fmt.Sprintf("\n... (truncated: showing %d of %d lines, use offset/limit to read more)", endIdx-startIdx, totalLines)
 	}

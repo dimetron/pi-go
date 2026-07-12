@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -96,7 +97,7 @@ func TestWithRetrySuccess(t *testing.T) {
 	cfg := RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond}
 
 	var collected []*session.Event
-	for ev, err := range WithRetry(cfg, makeEventSeq([]*session.Event{ev}, nil)) {
+	for ev, err := range WithRetry(context.Background(), cfg, makeEventSeq([]*session.Event{ev}, nil)) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -124,7 +125,7 @@ func TestWithRetryTransientThenSuccess(t *testing.T) {
 	}
 
 	var collected []*session.Event
-	for ev, err := range WithRetry(cfg, runFn) {
+	for ev, err := range WithRetry(context.Background(), cfg, runFn) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -148,7 +149,7 @@ func TestWithRetryExhausted(t *testing.T) {
 	}
 
 	var lastErr error
-	for _, err := range WithRetry(cfg, runFn) {
+	for _, err := range WithRetry(context.Background(), cfg, runFn) {
 		if err != nil {
 			lastErr = err
 		}
@@ -173,7 +174,7 @@ func TestWithRetryNonTransientNotRetried(t *testing.T) {
 	}
 
 	var lastErr error
-	for _, err := range WithRetry(cfg, runFn) {
+	for _, err := range WithRetry(context.Background(), cfg, runFn) {
 		if err != nil {
 			lastErr = err
 		}
@@ -203,7 +204,7 @@ func TestWithRetryPartialResponseNotRetried(t *testing.T) {
 
 	var lastErr error
 	var collected []*session.Event
-	for ev, err := range WithRetry(cfg, runFn) {
+	for ev, err := range WithRetry(context.Background(), cfg, runFn) {
 		if err != nil {
 			lastErr = err
 			continue

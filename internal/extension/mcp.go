@@ -11,8 +11,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/mcptoolset"
+	"google.golang.org/genai"
 )
 
 var mcpConnectTimeout = 15 * time.Second
@@ -123,26 +125,33 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			err   error
 		}
 		ch := make(chan result, 1)
-		// Use a separate cancel channel so we can time out the inner
-		// Tools() call without wrapping ctx (which would lose the
-		// ReadonlyContext interface). The inner goroutine respects the
-		// original ctx; we simply abandon it on timeout and mark the
-		// toolset as failed.
-		timeoutCh := time.After(mcpConnectTimeout)
+		// Wrap ctx with a cancellable child so we can unblock the inner
+		// Tools() call on timeout. closeConn() alone may not unblock remote
+		// HTTP MCP servers where Close() only closes the local side.
+		parentCtx := context.Context(ctx)
+		if parentCtx == nil {
+			parentCtx = context.Background()
+		}
+		cancelCtx, cancel := context.WithCancel(parentCtx)
+		wrapped := &cancellableReadonlyContext{inner: ctx, ctx: cancelCtx}
+		timer := time.NewTimer(mcpConnectTimeout)
 		go func() {
-			tools, err := r.inner.Tools(ctx)
+			tools, err := r.inner.Tools(wrapped)
 			ch <- result{tools, err}
 		}()
 
 		select {
 		case res := <-ch:
+			timer.Stop()
+			cancel()
 			if res.err != nil {
 				fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q unavailable: %v\n", r.name, res.err)
 				r.failed = true
 				return
 			}
 			r.tools = r.deduplicateTools(res.tools)
-		case <-timeoutCh:
+		case <-timer.C:
+			cancel()
 			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, mcpConnectTimeout)
 			r.failed = true
 			// Close the underlying MCP connection to kill any hung
@@ -166,12 +175,21 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 	return r.tools, nil
 }
 
-// deduplicateTools returns tools with their original names. When multiple
-// MCP servers expose tools with the same name, the LLM will see them all
-// as-is. The ADK runner handles tool call routing by matching the tool name
-// in the function call response against available tools.
+// deduplicateTools returns tools with duplicate names removed. When multiple
+// MCP servers expose tools with the same name, only the first occurrence is
+// kept to prevent ADK "duplicate tool" errors.
 func (r *resilientToolset) deduplicateTools(tools []tool.Tool) []tool.Tool {
-	return tools
+	seen := make(map[string]bool, len(tools))
+	deduped := make([]tool.Tool, 0, len(tools))
+	for _, t := range tools {
+		name := t.Name()
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		deduped = append(deduped, t)
+	}
+	return deduped
 }
 
 // MCPToolEntry is a single resolved tool from a named MCP server.
@@ -294,3 +312,29 @@ func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}
 	return base.RoundTrip(r)
 }
+
+// cancellableReadonlyContext wraps an agent.ReadonlyContext so that the
+// context.Context portion (Deadline, Done, Err, Value) is backed by a
+// cancellable child context, while the ADK-specific methods delegate to the
+// original. This allows us to cancel the inner Tools() call on timeout without
+// losing the ReadonlyContext interface.
+type cancellableReadonlyContext struct {
+	inner agent.ReadonlyContext
+	ctx   context.Context
+}
+
+func (c *cancellableReadonlyContext) Deadline() (time.Time, bool) { return c.ctx.Deadline() }
+func (c *cancellableReadonlyContext) Done() <-chan struct{}       { return c.ctx.Done() }
+func (c *cancellableReadonlyContext) Err() error                  { return c.ctx.Err() }
+func (c *cancellableReadonlyContext) Value(key any) any           { return c.ctx.Value(key) }
+
+func (c *cancellableReadonlyContext) UserContent() *genai.Content { return c.inner.UserContent() }
+func (c *cancellableReadonlyContext) InvocationID() string        { return c.inner.InvocationID() }
+func (c *cancellableReadonlyContext) AgentName() string           { return c.inner.AgentName() }
+func (c *cancellableReadonlyContext) ReadonlyState() session.ReadonlyState {
+	return c.inner.ReadonlyState()
+}
+func (c *cancellableReadonlyContext) UserID() string    { return c.inner.UserID() }
+func (c *cancellableReadonlyContext) AppName() string   { return c.inner.AppName() }
+func (c *cancellableReadonlyContext) SessionID() string { return c.inner.SessionID() }
+func (c *cancellableReadonlyContext) Branch() string    { return c.inner.Branch() }

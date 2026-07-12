@@ -332,12 +332,20 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 
 	sessionID := curSession.ID()
 
+	// Phase 1: in-memory update under the global lock (fast).
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	sess, ok := s.sessions[sessionID]
 	if !ok {
-		return fmt.Errorf("session %s not found in cache", sessionID)
+		// Session was evicted from cache (e.g., by evictCachedSessionsLocked
+		// during a Create/loadSession for a different session). Reload it from
+		// disk so AppendEvent still works for an actively running agent.
+		var err error
+		sess, err = s.loadSession(sessionID, curSession.AppName(), curSession.UserID())
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("session %s not found in cache: %w", sessionID, err)
+		}
 	}
 
 	// Strip temp state keys from delta.
@@ -360,23 +368,29 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 	sess.updatedAt = event.Timestamp
 	sess.meta.UpdatedAt = event.Timestamp
 
-	// Persist: append event to JSONL file.
+	// Capture data needed for disk persistence so we can release the lock.
 	sessionDir := filepath.Join(s.baseDir, sessionID)
+	metaCopy := sess.meta
+	eventCount := len(sess.events)
+	atifWriter := sess.atifWriter
+	s.mu.Unlock()
+
+	// Phase 2: disk persistence outside the global lock (slow I/O).
 	if err := appendEventToFile(sessionDir, event); err != nil {
 		return fmt.Errorf("persisting event: %w", err)
 	}
 
 	// Write ATIF trajectory (non-fatal).
-	if sess.atifWriter != nil {
-		if atifErr := sess.atifWriter.AppendEvent(event); atifErr != nil {
+	if atifWriter != nil {
+		if atifErr := atifWriter.AppendEvent(event); atifErr != nil {
 			slog.Warn("atif: failed to append event", "session", sessionID, "error", atifErr)
 		}
 		// Link subagent trajectories if this event contains subagent tool responses.
-		sess.atifWriter.LinkSubagentTrajectories(event, sessionDir, s.baseDir)
+		atifWriter.LinkSubagentTrajectories(event, sessionDir, s.baseDir)
 	}
 
 	// Update meta.json with new timestamp.
-	if err := writeMeta(sessionDir, &sess.meta); err != nil {
+	if err := writeMeta(sessionDir, &metaCopy); err != nil {
 		return fmt.Errorf("updating meta: %w", err)
 	}
 
@@ -384,7 +398,7 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 	bs, err := loadBranches(sessionDir)
 	if err == nil {
 		if branch, ok := bs.Branches[bs.Active]; ok {
-			branch.Head = len(sess.events) - 1
+			branch.Head = eventCount - 1
 			bs.Branches[bs.Active] = branch
 			_ = saveBranches(sessionDir, bs) // best-effort
 		}

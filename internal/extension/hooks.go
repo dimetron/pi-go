@@ -94,7 +94,7 @@ func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, 
 				mu.Unlock()
 			}
 		}
-		_ = s.OnToolEnd(context.Background(), acpID, args, result, runErr)
+		_ = s.OnToolEnd(ctx, acpID, args, result, runErr)
 		return result, nil
 	}
 	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}

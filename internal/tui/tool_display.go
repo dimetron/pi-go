@@ -290,6 +290,9 @@ func agentEventLines(ev agentEv, evStyle, evToolStyle lipgloss.Style, width int)
 // truncateRunes clips s to at most n runes, marking the cut. Slicing by byte
 // would split a multi-byte rune and emit a replacement character.
 func truncateRunes(s string, n int) string {
+	if n <= 3 {
+		return s
+	}
 	r := []rune(s)
 	if len(r) <= n {
 		return s

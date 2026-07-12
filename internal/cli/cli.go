@@ -911,7 +911,7 @@ func formatPrintSkillLoad(count int, err error) string {
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
 	retryCfg := agent.DefaultRetryConfig()
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetry(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
@@ -969,7 +969,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	started := false
 
 	retryCfg := agent.DefaultRetryConfig()
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetry(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {

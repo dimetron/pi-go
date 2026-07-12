@@ -194,7 +194,7 @@ func ollamaContentsToMessages(contents []*genai.Content, config *genai.GenerateC
 			for _, fc := range functionCalls {
 				contentStr := ""
 				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
+					contentStr = serializeFunctionResponse(fr.Response) // reuse helper
 				}
 				messages = append(messages, ollamaapi.Message{
 					Role:       "tool",

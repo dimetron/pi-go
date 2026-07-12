@@ -112,7 +112,7 @@ func oaiContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 				})
 				contentStr := "No response available for this function call."
 				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response)
+					contentStr = serializeFunctionResponse(fr.Response)
 				}
 				toolResponseMessages = append(toolResponseMessages, openai.ToolMessage(contentStr, fc.ID))
 			}

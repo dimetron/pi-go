@@ -707,13 +707,13 @@ func TestAntContentsToMessagesAssistantFunctionCallWithText(t *testing.T) {
 }
 
 // TestAntContentsToMessagesFunctionResponseContentPaths exercises the
-// oaiFunctionResponseContent helper via antContentsToMessages to ensure the
+// serializeFunctionResponse helper via antContentsToMessages to ensure the
 // content string extraction works for the map-with-result path.
 func TestAntContentsToMessagesFunctionResponseContentPaths(t *testing.T) {
 	fc := genai.NewPartFromFunctionCall("bash", map[string]any{"cmd": "ls"})
 	fc.FunctionCall.ID = "call_resp_path"
 
-	// Response using the "result" key path in oaiFunctionResponseContent.
+	// Response using the "result" key path in serializeFunctionResponse.
 	fr := &genai.Part{
 		FunctionResponse: &genai.FunctionResponse{
 			ID:       "call_resp_path",

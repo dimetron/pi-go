@@ -190,7 +190,7 @@ func TestOaiFunctionResponseContent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := oaiFunctionResponseContent(tt.resp)
+			got := serializeFunctionResponse(tt.resp)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -225,9 +225,9 @@ func TestOaiFunctionResponseContentEdgeCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := oaiFunctionResponseContent(tt.resp)
+			got := serializeFunctionResponse(tt.resp)
 			if got != tt.want {
-				t.Errorf("oaiFunctionResponseContent() = %q, want %q", got, tt.want)
+				t.Errorf("serializeFunctionResponse() = %q, want %q", got, tt.want)
 			}
 		})
 	}

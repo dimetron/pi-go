@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -93,7 +94,9 @@ func retryDelay(cfg RetryConfig, attempt int) time.Duration {
 // WithRetry wraps an agent run function with retry logic for transient errors.
 // If the iterator yields a transient error, it sleeps and retries the entire run.
 // Non-transient errors are yielded immediately without retry.
-func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
+// The context is consulted during retry backoff: if ctx is canceled while
+// waiting, the retry is aborted and the context error is yielded.
+func WithRetry(ctx context.Context, cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
 		for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 			var transientErr error
@@ -124,7 +127,12 @@ func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) i
 
 			if attempt < cfg.MaxRetries {
 				delay := retryDelay(cfg, attempt)
-				time.Sleep(delay)
+				select {
+				case <-ctx.Done():
+					_ = yield(nil, fmt.Errorf("retry canceled: %w", ctx.Err()))
+					return
+				case <-time.After(delay):
+				}
 				continue
 			}
 

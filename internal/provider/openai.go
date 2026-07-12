@@ -165,9 +165,9 @@ func oaiFinishReasonToGenai(reason string) genai.FinishReason {
 	}
 }
 
-// oaiFunctionResponseContent extracts the string payload of a genai.FunctionResponse.
-// Used by both Chat Completions and Responses paths to serialize tool outputs.
-func oaiFunctionResponseContent(resp any) string {
+// serializeFunctionResponse extracts the string payload of a genai.FunctionResponse.
+// Used by both OpenAI and Anthropic paths to serialize tool outputs.
+func serializeFunctionResponse(resp any) string {
 	if resp == nil {
 		return ""
 	}

@@ -115,7 +115,7 @@ func TestWriteDirectTerminalEmptyMessage(t *testing.T) {
 }
 
 func TestWriteDirectTerminalFallsBackToStderr(t *testing.T) {
-	writeDirectTerminal("otel diagnostic test\n")
+	writeDirectTerminal("\n")
 }
 
 func TestNormalizeEndpointURL(t *testing.T) {

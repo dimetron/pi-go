@@ -154,7 +154,7 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 				if strings.TrimSpace(fr.ID) == "" {
 					continue
 				}
-				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
+				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, serializeFunctionResponse(fr.Response)))
 			}
 		}
 		flushText()

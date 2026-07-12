@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -239,6 +240,7 @@ type Config struct {
 
 // Agent wraps an ADK Runner and session management for the coding agent.
 type Agent struct {
+	runnerMu       sync.RWMutex
 	runner         *runner.Runner
 	sessionService session.Service
 	config         Config // stored for RebuildWithInstruction
@@ -322,8 +324,10 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 		return fmt.Errorf("rebuilding runner: %w", err)
 	}
 
+	a.runnerMu.Lock()
 	a.runner = r
 	a.config = cfg
+	a.runnerMu.Unlock()
 	return nil
 }
 
@@ -348,8 +352,10 @@ func (a *Agent) RebuildWithModel(llm model.LLM) error {
 		return fmt.Errorf("rebuilding runner: %w", err)
 	}
 
+	a.runnerMu.Lock()
 	a.runner = r
 	a.config = cfg
+	a.runnerMu.Unlock()
 	return nil
 }
 
@@ -385,13 +391,19 @@ func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 // The caller should iterate over the returned sequence to process events.
 func (a *Agent) Run(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error] {
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)
-	return a.runner.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{})
+	a.runnerMu.RLock()
+	r := a.runner
+	a.runnerMu.RUnlock()
+	return r.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{})
 }
 
 // RunStreaming sends a user message with SSE streaming enabled.
 func (a *Agent) RunStreaming(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error] {
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)
-	return a.runner.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{
+	a.runnerMu.RLock()
+	r := a.runner
+	a.runnerMu.RUnlock()
+	return r.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	})
 }

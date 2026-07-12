@@ -357,7 +357,7 @@ func antContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 			for _, fc := range functionCalls {
 				contentStr := "No response available for this function call."
 				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
+					contentStr = serializeFunctionResponse(fr.Response) // reuse helper
 				}
 				toolResultBlocks = append(toolResultBlocks, anthropic.NewToolResultBlock(fc.ID, contentStr, false))
 			}
