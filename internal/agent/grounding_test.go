@@ -40,8 +40,14 @@ func TestGroundingEnabledForShippedGeminiModels(t *testing.T) {
 			if !ok {
 				t.Fatalf("grounding disabled for %q (provider %q), want enabled", model, info.Provider)
 			}
-			if _, isSearch := tool.(geminitool.GoogleSearch); !isSearch {
-				t.Fatalf("grounding tool for %q = %T, want geminitool.GoogleSearch", model, tool)
+			// Must be our wrapper, not the bare geminitool.GoogleSearch: the
+			// wrapper is what sets include_server_side_tool_invocations, without
+			// which Gemini 400s as soon as pi's function tools are also present.
+			if _, isGrounding := tool.(groundingTool); !isGrounding {
+				t.Fatalf("grounding tool for %q = %T, want agent.groundingTool", model, tool)
+			}
+			if tool.Name() != GroundingToolName {
+				t.Errorf("grounding tool name = %q, want %q", tool.Name(), GroundingToolName)
 			}
 		})
 	}
