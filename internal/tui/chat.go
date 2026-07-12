@@ -106,9 +106,87 @@ type message struct {
 	pipelineMode  string    // "single", "parallel", "chain"
 	pipelineStep  int       // 1-based step in pipeline
 	pipelineTotal int       // total steps in pipeline
-	// Render cache: stores pre-rendered output to avoid repeated glamour calls.
-	renderCache      string // cached rendered output
-	renderCacheWidth int    // terminal width when cached
+	// Render cache: stores pre-rendered output to avoid repeated glamour and
+	// chroma work. renderCacheKey fingerprints every input the render depends
+	// on, so a message that changes re-renders itself — no caller has to
+	// remember to invalidate. See renderKey.
+	renderCache    string // cached rendered output
+	renderCacheKey uint64 // fingerprint of the inputs that produced renderCache
+	renderCached   bool   // whether renderCache holds a valid render
+}
+
+// FNV-1a, inlined so fingerprinting a message allocates nothing. hash/fnv would
+// return an interface and heap-allocate on every message every frame, which is
+// exactly the garbage this cache exists to avoid.
+const (
+	fnvOffset64 uint64 = 14695981039346656037
+	fnvPrime64  uint64 = 1099511628211
+)
+
+func fnvByte(h uint64, b byte) uint64 {
+	h ^= uint64(b)
+	return h * fnvPrime64
+}
+
+// fnvStr folds s into h, terminated so that ("ab","c") and ("a","bc") differ.
+func fnvStr(h uint64, s string) uint64 {
+	for i := range len(s) {
+		h = fnvByte(h, s[i])
+	}
+	return fnvByte(h, 0)
+}
+
+func fnvInt(h uint64, v int) uint64 {
+	u := uint64(v)
+	for i := range 8 {
+		h = fnvByte(h, byte(u>>(8*i)))
+	}
+	return h
+}
+
+// renderKey fingerprints every input RenderMessages reads to produce this
+// message's output: the message's own fields, the terminal width, the tool
+// display mode, and the two positional flags that change what is drawn.
+//
+// This is what makes the cache safe to use mid-turn. The cache used to be
+// disabled whenever the agent was running, on the grounds that an earlier
+// message could still be mutated — with the result that every frame re-rendered
+// (and re-syntax-highlighted) the entire scrollback, several times a second.
+// Keying on the inputs gets the same safety without the cost: a mutated message
+// simply gets a different key and re-renders.
+func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool) uint64 {
+	h := fnvOffset64
+	h = fnvStr(h, m.role)
+	h = fnvStr(h, m.content)
+	h = fnvStr(h, m.tool)
+	h = fnvStr(h, m.toolIn)
+	h = fnvStr(h, m.agentID)
+	h = fnvStr(h, m.agentType)
+	h = fnvStr(h, m.agentTitle)
+	h = fnvStr(h, m.pipelineID)
+	h = fnvStr(h, m.pipelineMode)
+	for _, ev := range m.agentEvents {
+		h = fnvStr(h, ev.kind)
+		h = fnvStr(h, ev.content)
+	}
+	h = fnvInt(h, width)
+	h = fnvInt(h, m.pipelineStep)
+	h = fnvInt(h, m.pipelineTotal)
+
+	var flags byte
+	if m.isWarning {
+		flags |= 1 << 0
+	}
+	if compactTools {
+		flags |= 1 << 1
+	}
+	if hasSeparator {
+		flags |= 1 << 2
+	}
+	if streamingPlaceholder {
+		flags |= 1 << 3
+	}
+	return fnvByte(h, flags)
 }
 
 // agentEv is a single event from a subagent's event stream.
@@ -219,10 +297,15 @@ func (c *ChatModel) UpdateRenderer(width int) {
 }
 
 // invalidateRenderCaches clears cached rendered output for all messages.
+//
+// Width and tool-display changes are already covered by renderKey, so this is
+// belt-and-braces for anything that changes rendering without touching a keyed
+// input — notably the glamour renderer being rebuilt.
 func (c *ChatModel) invalidateRenderCaches() {
 	for i := range c.Messages {
 		c.Messages[i].renderCache = ""
-		c.Messages[i].renderCacheWidth = 0
+		c.Messages[i].renderCacheKey = 0
+		c.Messages[i].renderCached = false
 	}
 }
 
@@ -318,8 +401,20 @@ func transcriptLabel(msg message) string {
 
 // RenderMessages renders all messages into a string for display.
 func (c *ChatModel) RenderMessages(running bool) string {
+	text, _ := c.renderMessages(running)
+	return text
+}
+
+// renderMessages renders the chat and classifies every line it produces, which
+// is what the minimap colors its bars from.
+//
+// The kinds slice is built in lockstep with the text: each message claims the
+// lines it opened, and collapseBlankLines then drops entries from both together,
+// so kinds[i] always describes the i-th line of the returned string.
+func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 	if len(c.Messages) == 0 {
-		return c.renderWelcome()
+		welcome := c.renderWelcome()
+		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1)
 	}
 
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -331,15 +426,16 @@ func (c *ChatModel) RenderMessages(running bool) string {
 	separator := dim.Render(strings.Repeat("─", sepWidth))
 
 	var b strings.Builder
+	var kinds []blockKind
 	lastIdx := len(c.Messages) - 1
 	for i := range c.Messages {
 		msg := &c.Messages[i]
 
-		// Avoid cache reads/writes while running because earlier messages can still
-		// be updated (e.g. assistant text continues after tool events).
 		isLastAndStreaming := running && i == lastIdx
-		if !running && msg.renderCache != "" && msg.renderCacheWidth == c.Width {
+		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming)
+		if msg.renderCached && msg.renderCacheKey == key {
 			b.WriteString(msg.renderCache)
+			kinds = appendKind(kinds, kindOf(msg), strings.Count(msg.renderCache, "\n"))
 			continue
 		}
 
@@ -431,45 +527,70 @@ func (c *ChatModel) RenderMessages(running bool) string {
 
 		rendered := msgBuf.String()
 		b.WriteString(rendered)
+		kinds = appendKind(kinds, kindOf(msg), strings.Count(rendered, "\n"))
 
-		// Cache only when idle to prevent stale render reuse during streaming.
-		if !running && !isLastAndStreaming {
-			msg.renderCache = rendered
-			msg.renderCacheWidth = c.Width
-		}
+		// Cache unconditionally: correctness comes from the key, not from
+		// guessing which messages are still in flux. The streaming message
+		// re-keys on every new token and so re-renders anyway.
+		msg.renderCache = rendered
+		msg.renderCacheKey = key
+		msg.renderCached = true
 	}
 
 	// Subagent blocks, assistant markdown, and tool transitions each emit
 	// their own surrounding "\n", and they compound to runs of 2-3 blank
 	// lines between blocks — visually noisy when several subagents run in
 	// parallel. Collapse to at most one blank line between content.
-	return collapseBlankLines(b.String())
+	return collapseBlankLines(b.String(), kinds)
+}
+
+// appendKind records that a message opened n lines of output.
+func appendKind(kinds []blockKind, kind blockKind, n int) []blockKind {
+	for range n {
+		kinds = append(kinds, kind)
+	}
+	return kinds
 }
 
 // collapseBlankLines replaces every run of two or more blank/whitespace-only
 // lines with a single empty line, preserving all non-blank content verbatim
 // (including its leading whitespace, gutter prefixes, and ANSI styling). The
 // final trailing newline state is also preserved.
-func collapseBlankLines(s string) string {
+//
+// kinds is filtered alongside the lines so the two stay index-aligned: a line
+// that survives keeps its kind, and a dropped blank line drops its kind too.
+// A nil or short kinds is padded, so callers that only want the text can pass
+// nil and ignore the second result.
+func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
 	if s == "" {
-		return s
+		return s, nil
 	}
 	lines := strings.Split(s, "\n")
+
+	// Each message contributes as many kinds as it opened lines; the final line
+	// after the last newline belongs to no message, hence the padding.
+	for len(kinds) < len(lines) {
+		kinds = append(kinds, blockNone)
+	}
+
 	out := make([]string, 0, len(lines))
+	outKinds := make([]blockKind, 0, len(lines))
 	prevBlank := false
-	for _, line := range lines {
+	for i, line := range lines {
 		if strings.TrimSpace(ansi.Strip(line)) == "" {
 			if prevBlank {
 				continue
 			}
 			prevBlank = true
 			out = append(out, "")
+			outKinds = append(outKinds, blockNone)
 			continue
 		}
 		prevBlank = false
 		out = append(out, line)
+		outKinds = append(outKinds, kinds[i])
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n"), outKinds
 }
 
 // countByRole counts messages with the given role.

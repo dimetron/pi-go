@@ -60,7 +60,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	fg := lipgloss.Color("#cdd6f4")        // Mocha text
 	dimFg := lipgloss.Color("#a6adc8")     // Mocha subtext0
-	borderFg := lipgloss.Color("#45475a")  // Mocha surface1
 	headingFg := lipgloss.Color("#89b4fa") // Mocha blue
 
 	dim := lipgloss.NewStyle().Foreground(dimFg)
@@ -410,14 +409,21 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with dark transparent background and
-	// left border to separate from main panel.
+	// A fixed-size box, flush to the right edge of the terminal. Width alone only
+	// pads — a line longer than w would still push the box wider and drag the
+	// whole frame past the screen, so MaxWidth clamps it. Height/MaxHeight pin
+	// it to the panel beside it: a taller sidebar makes JoinHorizontal pad the
+	// panel with blank rows, which is what left a gap under the prompt.
+	//
+	// No left border: the main panel's rail already divides the two, and drawing
+	// a border here as well put two vertical rules side by side.
 	box := lipgloss.NewStyle().
 		Width(w).
-		Background(sidebarBg).
-		BorderStyle(lipgloss.Border{Left: "│"}).
-		BorderLeft(true).
-		BorderForeground(borderFg)
+		MaxWidth(w).
+		Background(sidebarBg)
+	if in.Height > 0 {
+		box = box.Height(in.Height).MaxHeight(in.Height)
+	}
 
 	return box.Render(content)
 }

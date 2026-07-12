@@ -34,6 +34,37 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md) for full architecture documentation in
 - **Extensions**: Hooks use ADK's `BeforeToolCallbacks`/`AfterToolCallbacks`. MCP uses `mcptoolset.New()`. Skills parse `*.SKILL.md` files.
 - **Session persistence**: JSONL append-only format in `~/.pi-go/sessions/`. Implements ADK `session.Service`.
 
+## Subagents
+
+Bundled definitions live in `internal/subagent/bundled/*.md` and are embedded into
+the binary. Discovery merges them with `~/.pi-go/agents/` (user) and
+`.pi-go/agents/` (project), **project > user > bundled** — so a project agent with
+the same name silently shadows the bundled one. Do not copy a bundled agent into
+`.pi-go/agents/` to tweak it; edit the bundled file.
+
+**Architecture review is `internal/subagent/bundled/architect.md`.** Route any
+question about *where code belongs* — package boundaries, dependency direction,
+service/tool contracts, whether a change fits at all — to the `architect` agent
+rather than answering it inline or spinning up a generic worker. It is the only
+agent that owns those decisions.
+
+The rest, in the order you usually reach for them:
+
+| Agent                  | Use it for                                                                  |
+|------------------------|-----------------------------------------------------------------------------|
+| `architect`            | **Architecture review**: boundaries, dependency direction, trade-offs, ADRs |
+| `plan`                 | *How* to implement a change, once the architecture is settled               |
+| `explore`              | Codebase research: find code, trace dependencies, map structure             |
+| `code-reviewer`        | Correctness, error handling, edge cases on a diff                           |
+| `spec-reviewer`        | Specs and design docs under `specs/`                                        |
+| `task`, `designer`     | Implement in an isolated worktree                                           |
+| `quick-task`, `worker` | Small or general jobs                                                       |
+
+`architect` and `plan` are not the same job. `architect` answers *should this exist
+and where does it live*; `plan` answers *what are the steps*. Asking `plan` an
+architecture question gets you a confident implementation sequence for the wrong
+design.
+
 ## Output Modes
 
 - **print**: Text to stdout, tool status to stderr. Default when stdin is piped.

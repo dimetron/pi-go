@@ -704,36 +704,27 @@ func TestHandleKey_CtrlBInTextMovesBackward(t *testing.T) {
 	}
 }
 
+// Up opens the history window and picks from it, rather than cycling entries
+// straight into the prompt. See history_key_test.go for the full contract.
 func TestHandleKey_UpDown_History(t *testing.T) {
 	m := newTestModel(t)
 	m.inputModel.History = []HistoryEntry{{Text: "first"}, {Text: "second"}, {Text: "third"}}
 
-	// Arrow Up restores newest history directly.
 	m.handleKey(makeKey(tea.KeyUp))
+	if m.searchPopup == nil || m.searchPopup.mode != searchModeHistory {
+		t.Fatal("expected arrow up to open the history window")
+	}
+	if m.inputModel.Text != "" {
+		t.Errorf("opening the history window changed the prompt to %q", m.inputModel.Text)
+	}
+
+	// Newest is preselected: Up then Enter recalls the last prompt.
+	m.handleKey(makeKey(tea.KeyEnter))
 	if m.searchPopup != nil {
-		t.Fatal("expected arrow up to use direct history, not search popup")
+		t.Fatal("expected Enter to close the history window")
 	}
 	if m.inputModel.Text != "third" {
 		t.Errorf("expected newest history entry, got %q", m.inputModel.Text)
-	}
-
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "second" {
-		t.Errorf("expected second history entry, got %q", m.inputModel.Text)
-	}
-	m.handleKey(makeKey(tea.KeyUp))
-	if m.inputModel.Text != "first" {
-		t.Errorf("expected oldest history entry, got %q", m.inputModel.Text)
-	}
-
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.inputModel.Text != "second" {
-		t.Errorf("expected second history entry after down, got %q", m.inputModel.Text)
-	}
-	m.handleKey(makeKey(tea.KeyDown))
-	m.handleKey(makeKey(tea.KeyDown))
-	if m.inputModel.Text != "" {
-		t.Errorf("expected input cleared past newest history, got %q", m.inputModel.Text)
 	}
 }
 

@@ -55,6 +55,24 @@ type model struct {
 	// Matrix rain animation state for sidebar.
 	matrix matrixState
 
+	// Mouse text selection. lastFrame is the frame the selection's coordinates
+	// refer to — pi selects text itself (see selection.go), so it needs the
+	// pixels it drew in order to know what is under the cursor. frameRows is its
+	// height, which is what converts a mouse row into a frame row.
+	sel       selection
+	lastFrame string
+	frameRows int
+	// The selectable rows: the message viewport, half-open. Everything else in
+	// the panel is chrome — the matrix rain, the rules, the status bar, the
+	// prompt — and selecting it yields nothing anyone wants on their clipboard.
+	msgTop, msgBottom int
+
+	// Transient status-bar notice. flashSeq invalidates the timer of a flash
+	// that has already been superseded, so an old expiry cannot clear a newer
+	// message.
+	flash    string
+	flashSeq int
+
 	// Deferred initialization state.
 	loading      bool
 	loadingItems map[string]bool // item name -> done?
@@ -398,10 +416,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleKey(msg)
 
+	case flashExpiredMsg:
+		// Ignore a timer whose flash has already been replaced.
+		if msg.seq == m.flashSeq {
+			m.flash = ""
+		}
+		return m, nil
+
 	case tea.MouseMsg:
 		switch msg := msg.(type) {
 		case tea.MouseClickMsg:
 			return m.handleMouseClick(msg)
+		case tea.MouseMotionMsg:
+			return m.handleMouseMotion(msg)
+		case tea.MouseReleaseMsg:
+			return m.handleMouseRelease(msg)
 		case tea.MouseWheelMsg:
 			return m.handleMouseWheel(msg)
 		}
@@ -510,9 +539,127 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleMouseClick processes mouse click events.
+// handleMouseClick starts a text selection and clears any previous one.
+//
+// pi selects text itself: mouse reporting is on so the wheel can scroll the
+// chat, and that takes click-drag away from the terminal. See selection.go.
 func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	mouse := msg.Mouse()
+	if mouse.Button != tea.MouseLeft {
+		return m, nil
+	}
+	// Only the chat panel is selectable. A press on the rail or in the sidebar
+	// starts nothing — and clears any highlight, the same as a click anywhere
+	// else would.
+	if mouse.X >= m.chatWidth() {
+		m.sel = selection{}
+		return m, nil
+	}
+	x, y := m.clampToChat(mouse.X, mouse.Y)
+
+	// Clicking inside a highlight copies it again, rather than throwing it away.
+	// The highlight is the affordance: what is lit up is what a click takes.
+	if m.sel.contains(x, y, m.chatWidth()) {
+		return m, m.copyAndFlash(selectedText(m.lastFrame, m.sel, m.chatWidth()))
+	}
+
+	m.sel = selection{dragging: true, anchorX: x, anchorY: y, cursorX: x, cursorY: y}
 	return m, nil
+}
+
+// copyAndFlash puts text on the clipboard and says so in the status bar.
+func (m *model) copyAndFlash(text string) tea.Cmd {
+	cmd := copySelection(text)
+	if cmd == nil {
+		return nil
+	}
+	return tea.Batch(cmd, m.setFlash("Copied!"))
+}
+
+// flashDuration is how long a transient status notice stays up.
+const flashDuration = 3 * time.Second
+
+// flashExpiredMsg clears a flash. It carries the sequence number of the flash it
+// belongs to, so a stale timer cannot wipe a message raised after it.
+type flashExpiredMsg struct{ seq int }
+
+func (m *model) setFlash(text string) tea.Cmd {
+	m.flashSeq++
+	m.flash = text
+	seq := m.flashSeq
+	return tea.Tick(flashDuration, func(time.Time) tea.Msg {
+		return flashExpiredMsg{seq: seq}
+	})
+}
+
+// handleMouseMotion extends an in-progress selection. Motion only arrives while
+// a button is held, which is exactly a drag.
+func (m *model) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if !m.sel.dragging {
+		return m, nil
+	}
+	mouse := msg.Mouse()
+	m.sel.cursorX, m.sel.cursorY = m.clampToChat(mouse.X, mouse.Y)
+	m.sel.present = true
+	return m, nil
+}
+
+// handleMouseRelease ends the drag and copies the selection.
+//
+// Copy on release, with no extra keystroke: that is what the terminal used to do
+// for us, and reproducing it is the whole point. The highlight stays up so it is
+// obvious what landed on the clipboard.
+func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
+	if !m.sel.dragging {
+		return m, nil
+	}
+	m.sel.dragging = false
+
+	if m.sel.empty() {
+		m.sel = selection{} // a plain click, not a drag: just clear
+		return m, nil
+	}
+	return m, m.copyAndFlash(selectedText(m.lastFrame, m.sel, m.chatWidth()))
+}
+
+// clampToChat converts a mouse position into a chat-panel cell.
+//
+// The Y translation matters: the UI runs on the normal screen, not the alternate
+// one, so the frame is drawn *below* whatever the terminal already had on it —
+// a shell prompt, a "pprof listening" line — and Bubble Tea reports the mouse in
+// absolute terminal rows, not frame rows. Indexing the frame with a raw mouse Y
+// therefore lands N rows too low, N being the height of that prior output.
+//
+// The frame is bottom-anchored (its last row is the screen's last row), so the
+// offset is whatever is left over: height - frameRows. Deriving it beats
+// hardcoding it, because it is right for any amount of prior output.
+//
+// X needs no such translation — the frame starts at column 0 — but it is clamped
+// to the panel so a drag into the sidebar, or off the window entirely, pins to
+// the edge instead of sweeping the rail and sidebar into the selection.
+func (m *model) clampToChat(x, y int) (int, int) {
+	x = min(max(x, 0), max(0, m.chatWidth()-1))
+
+	// Rows are clamped to the message viewport, so a drag that strays into the
+	// matrix rain above or the status bar and prompt below pins to the nearest
+	// message row instead of copying chrome. Clamping rather than refusing keeps
+	// a drag that overshoots by a row from doing nothing at all.
+	top, bottom := m.msgTop, m.msgBottom
+	if bottom <= top { // no viewport yet (first frame)
+		return x, 0
+	}
+	y = min(max(m.frameRow(y), top), bottom-1)
+	return x, y
+}
+
+// frameRow maps an absolute terminal row to a row of the rendered frame.
+func (m *model) frameRow(y int) int {
+	return y - m.frameTop()
+}
+
+// frameTop is the terminal row the frame's first line occupies.
+func (m *model) frameTop() int {
+	return max(0, m.height-m.frameRows)
 }
 
 // handleMouseWheel processes mouse wheel events for scrolling the chat viewport.
@@ -686,22 +833,31 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Arrow Up/Down belong to the prompt history when no popup is open.
-	// Mouse tracking stays disabled in View so drag-select/copy remains native;
-	// terminals that translate wheel events to arrow keys still scroll when the
-	// input has no history to navigate.
-	if m.searchPopup == nil {
+	// Up opens the prompt-history window; Down scrolls the chat.
+	//
+	// Up used to cycle history inline, replacing whatever was typed. The window
+	// shows the whole history at once and leaves the prompt untouched until an
+	// entry is chosen, so a stray Up costs one Esc rather than your draft.
+	//
+	// The mouse wheel cannot land here: View enables mouse reporting, so a wheel
+	// tick is a MouseWheelMsg handled by handleMouseWheel, never a KeyUp. Up
+	// still scrolls the chat before any history exists, so the keyboard can
+	// scroll on a fresh session.
+	//
+	// A prompt starting with "/" is excluded: those arrows drive the slash-command
+	// popup handled further down.
+	if m.searchPopup == nil && !m.shouldShowSlashCommandPopup() {
 		switch key.Code {
 		case tea.KeyUp:
 			if len(m.inputModel.History) == 0 {
 				m.chatModel.ScrollUp(3, m.height)
 				return m, nil
 			}
+			m.newSearchPopup(searchModeHistory)
+			return m, nil
 		case tea.KeyDown:
-			if m.inputModel.HistoryIdx < 0 {
-				m.chatModel.ScrollDown(3)
-				return m, nil
-			}
+			m.chatModel.ScrollDown(3)
+			return m, nil
 		}
 	}
 
@@ -802,7 +958,6 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 				m.searchPopup = nil
 			case searchModeHistory:
 				m.inputModel.SetText(item.Text)
-				m.inputModel.HistoryIdx = -1
 				m.searchPopup = nil
 			}
 		}
@@ -854,18 +1009,21 @@ func (m *model) View() tea.View {
 		return tea.NewView(matrixLine + "\n")
 	}
 
-	// Layout: sidebar on the right, chat+status+input on the left.
+	// Layout: sidebar on the right, chat+status+input on the left. The chat is
+	// panel body is one column narrower than mainWidth; the rail on its right
+	// edge is both the minimap and the divider from the sidebar.
 	mainWidth := m.mainWidth()
-	if m.statusModel.Width != mainWidth || m.chatModel.Width != mainWidth {
+	if m.statusModel.Width != m.chatWidth() || m.chatModel.Width != m.chatWidth() {
 		m.applyResize()
 		mainWidth = m.mainWidth()
 	}
+	bodyWidth := m.chatWidth()
 	sidebarWidth := m.width - mainWidth
 	showSidebar := sidebarWidth > 0
 
 	// Render components.
-	m.inputModel.SetWidth(max(0, mainWidth-2))
-	messagesView := m.chatModel.RenderMessages(m.running)
+	m.inputModel.SetWidth(max(0, bodyWidth-2))
+	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
 	var inputCursor *tea.Cursor
@@ -891,13 +1049,14 @@ func (m *model) View() tea.View {
 
 	visibleMessages := strings.Join(msgLines[startLine:endLine], "\n")
 
-	// Pad to fill available space, leaving 1 blank line between messages and status bar.
+	// Pad to fill the viewport. availableHeight is message rows only — the blank
+	// rows that inset the block from the rules are budgeted separately.
 	visibleLineCount := strings.Count(visibleMessages, "\n") + 1
-	for visibleLineCount < availableHeight-1 {
+	for visibleLineCount < availableHeight {
 		visibleMessages += "\n"
 		visibleLineCount++
 	}
-	visibleMessages = m.overlaySearchPopup(visibleMessages, mainWidth)
+	visibleMessages = m.overlaySearchPopup(visibleMessages, bodyWidth)
 
 	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
 	// lipgloss.Width() counts raw bytes including invisible ANSI codes, causing wrapping issues.
@@ -907,7 +1066,7 @@ func (m *model) View() tea.View {
 
 	// Horizontal rule for separating sections.
 	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
-	hr := hrStyle.Render(strings.Repeat("─", mainWidth))
+	hr := hrStyle.Render(strings.Repeat("─", bodyWidth))
 
 	var b strings.Builder
 	if matrixBar != "" {
@@ -917,10 +1076,29 @@ func (m *model) View() tea.View {
 		b.WriteString("\n")
 		b.WriteString(hr)
 		b.WriteString("\n")
-	} else {
-		b.WriteString("\n") // blank line at top when no matrix
 	}
+	// One blank row above the messages, matched by one below, so the block is
+	// inset evenly between the rules whether or not the matrix bar is showing.
+	b.WriteString("\n")
+
+	// The rows the message viewport occupies: where the rail switches from a
+	// plain divider to the minimap, and how many cells it needs. A block that
+	// ends in a newline is already terminated, so its trailing "" is not a row —
+	// counting it as one pushed a minimap bar onto the rule below.
+	msgStart := strings.Count(b.String(), "\n")
+	msgRows := strings.Count(visibleMessages, "\n") + 1
+	if strings.HasSuffix(visibleMessages, "\n") {
+		msgRows--
+	}
+
 	b.WriteString(visibleMessages)
+	// Terminate the message block. When the viewport is exactly full nothing
+	// pads it, and the blank row below would otherwise be appended to the last
+	// message line.
+	if !strings.HasSuffix(visibleMessages, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n") // the matching blank row below
 
 	// Render branch popup if open.
 	if m.branchPopup != nil {
@@ -940,14 +1118,29 @@ func (m *model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(hr)
 
-	leftPanel := b.String()
+	// Three columns, composed like columns: body | rail | sidebar.
+	//
+	// The body is pinned to exactly bodyWidth. Without that, JoinHorizontal sizes
+	// it to its widest *visible* line, so the rail and the sidebar behind it slid
+	// left and right as scrolling changed which lines were on screen.
+	//
+	// The rail carries the minimap across the message rows and a plain divider
+	// elsewhere, so it doubles as the border the sidebar used to draw itself.
+	body := padLinesTo(b.String(), bodyWidth)
+	panelRows := strings.Count(body, "\n") + 1
+	rail := railColumn(panelRows, msgStart, renderMinimap(lineKinds, startLine, endLine, msgRows))
+	leftPanel := lipgloss.JoinHorizontal(lipgloss.Top, body, rail)
 
 	var final string
 	if showSidebar {
 		hostName, _ := os.Hostname()
 		sidebarInput := SidebarRenderInput{
-			Width:        sidebarWidth,
-			Height:       m.height,
+			Width: sidebarWidth,
+			// Exactly as tall as the panel beside it. Sized to the terminal
+			// instead, the sidebar outran the panel — JoinHorizontal padded the
+			// panel with blank rows, leaving a gap below the prompt while the
+			// sidebar's filler dots carried on past it.
+			Height:       panelRows,
 			Mascot:       m.mascot(),
 			Mode:         m.mode,
 			ProviderName: m.providerDisplayName(),
@@ -983,15 +1176,36 @@ func (m *model) View() tea.View {
 		final = leftPanel
 	}
 
+	// Remember the frame the mouse is pointing at, then draw the selection over
+	// it. The selection is in screen coordinates, so it has to be applied to the
+	// composed frame — and the copy on release reads back from this same string,
+	// which is why it is kept rather than re-derived.
+	m.lastFrame = final
+	m.frameRows = strings.Count(final, "\n") + 1
+	m.msgTop, m.msgBottom = msgStart, msgStart+msgRows
+	final = highlight(final, m.sel, m.chatWidth(), m.width)
+
 	v := tea.NewView(final)
 	if inputCursor != nil {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor
 	}
-	// Keep the UI on the normal terminal screen with mouse tracking disabled so
-	// the terminal owns mouse wheel scrolling, text selection, and copy.
+	// Stay on the normal terminal screen, but report mouse events so the wheel
+	// scrolls the chat viewport (handleMouseWheel) instead of the terminal's
+	// scrollback, which only ever showed stale frames of a redrawing UI.
+	//
+	// This is also what keeps the wheel off the history window: with reporting
+	// on, a wheel tick arrives as a MouseWheelMsg and can never be delivered as
+	// an Up key, so scrolling and Up stay structurally separate rather than
+	// racing over the same event.
+	//
+	// Reporting takes click-drag away from the terminal, so the terminal can no
+	// longer select text for us. Rather than make the user hold a bypass modifier,
+	// pi does the selection itself — drag to select, release to copy. See
+	// selection.go. CellMotion is the narrowest mode that carries wheel events;
+	// Bubble Tea has no wheel-only mode.
 	v.AltScreen = false
-	v.MouseMode = tea.MouseModeNone
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -1120,17 +1334,20 @@ func renderStartupDetail(loadingItems map[string]bool) string {
 }
 
 func (m *model) applyResize() {
-	mainWidth := m.mainWidth()
-	m.statusModel.Width = mainWidth
-	if m.chatModel.Width != mainWidth {
-		m.chatModel.UpdateRenderer(mainWidth)
+	// Everything in the left panel — messages and status bar alike — is sized to
+	// the panel minus the rail, which owns the last column.
+	chatWidth := m.chatWidth()
+	m.statusModel.Width = chatWidth
+	if m.chatModel.Width != chatWidth {
+		m.chatModel.UpdateRenderer(chatWidth)
 	}
 	m.clampScroll()
 	// Pre-render or reflow matrix bar so width changes are visible immediately.
+	// It sits inside the panel body, so it is sized like everything else there.
 	if !m.matrix.active {
-		m.matrix.feed("pi-go", mainWidth)
+		m.matrix.feed("pi-go", chatWidth)
 	} else {
-		m.matrix.tick(mainWidth)
+		m.matrix.tick(chatWidth)
 	}
 	// Matrix height can affect the message viewport, so clamp again after it updates.
 	m.clampScroll()
@@ -1147,17 +1364,21 @@ func (m *model) clampScroll() {
 }
 
 func (m *model) messageViewportHeight() int {
-	mainWidth := m.mainWidth()
-	if m.statusModel.Width != mainWidth {
-		m.statusModel.Width = mainWidth
+	if chatWidth := m.chatWidth(); m.statusModel.Width != chatWidth {
+		m.statusModel.Width = chatWidth
 	}
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.running || m.loading)
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
-	availableHeight := m.height - statusLines - inputLines - 4
+	// The two blank rows that inset the messages from the rules above and below
+	// are not message rows. Counting them as such made the panel one row taller
+	// than the terminal, so the terminal scrolled the frame and tore the panel
+	// away from the sidebar.
+	availableHeight := m.height - statusLines - inputLines - 4 - 2
 	if m.matrix.render() != "" {
-		availableHeight -= 2
+		// The matrix bar adds three rows above the messages (rule, bar, rule).
+		availableHeight -= 3
 	}
 	if m.branchPopup != nil {
 		availableHeight -= m.branchPopup.height + 6
@@ -1204,6 +1425,13 @@ func (m *model) mainWidth() int {
 		}
 	}
 	return m.width
+}
+
+// chatWidth is the width of the left panel's content — everything in it, not
+// just messages: the panel minus the rail on its right edge. Content plus rail
+// always add up to mainWidth.
+func (m *model) chatWidth() int {
+	return max(1, m.mainWidth()-railWidth)
 }
 
 func (m *model) eyes() string {
@@ -1304,6 +1532,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		FolderName:   sidebarFolderName(m.cwd()),
 		HostName:     hostName,
 		LoadingItems: m.loadingItems,
+		Flash:        m.flash,
 	}
 }
 

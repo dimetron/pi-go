@@ -39,6 +39,7 @@ type StatusRenderInput struct {
 	FolderName   string          // current working directory basename
 	HostName     string          // local hostname
 	LoadingItems map[string]bool // item -> done; nil means not loading
+	Flash        string          // transient notice ("Copied!"); empty when none
 }
 
 // runCycleInfo carries /run state for the status bar.
@@ -100,21 +101,31 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 
 	var parts []string
 
-	// Mode indicator: [chat] or [plan], with spinner verb when running.
+	// The bracketed field: [chat], [plan], the spinner verb while running — and a
+	// flash when there is one.
+	//
+	// A flash takes this slot over rather than adding a segment of its own. It is
+	// already the fixed-width, bracketed field the eye returns to, so a notice
+	// lands where the user is looking and the bar's geometry does not shift. The
+	// mode is not lost by borrowing it for three seconds: it has not changed, and
+	// it comes straight back.
 	mode := in.Mode
 	if mode == "" {
 		mode = "chat"
 	}
-	if mode == "plan" {
+	switch {
+	case in.Flash != "":
+		flashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")).Bold(true) // Mocha green
+		parts = append(parts, flashStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(in.Flash))))
+	case mode == "plan":
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
 		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
-	} else {
+	case in.Running && s.ActiveTool == "":
 		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
-		if in.Running && s.ActiveTool == "" {
-			parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
-		} else {
-			parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
-		}
+		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
+	default:
+		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
+		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
 	}
 
 	// Provider | Model.

@@ -6,56 +6,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// --- input history navigation ----------------------------------------------
-
-func TestInputModel_HistoryNavigation(t *testing.T) {
-	im := NewInputModel([]HistoryEntry{
-		{Text: "first"}, {Text: "second"}, {Text: "third"},
-	}, nil, nil, "")
-	im.HistoryIdx = -1
-
-	// Up from fresh state goes to most recent.
-	im.historyUp()
-	if im.Text != "third" {
-		t.Fatalf("first up = %q, want third", im.Text)
-	}
-	im.historyUp()
-	if im.Text != "second" {
-		t.Fatalf("second up = %q, want second", im.Text)
-	}
-	im.historyUp()
-	if im.Text != "first" {
-		t.Fatalf("third up = %q, want first", im.Text)
-	}
-	// Up at the oldest entry stays put.
-	im.historyUp()
-	if im.Text != "first" {
-		t.Fatalf("clamped up = %q, want first", im.Text)
-	}
-	// Down walks back toward newest, then clears past the end.
-	im.historyDown()
-	if im.Text != "second" {
-		t.Fatalf("down = %q, want second", im.Text)
-	}
-	im.historyDown() // third
-	im.historyDown() // past end -> cleared
-	if im.Text != "" {
-		t.Fatalf("down past end = %q, want empty", im.Text)
-	}
-	// Down with no active history index is a no-op.
-	im.historyDown()
-}
-
-func TestInputModel_HistoryEmpty(t *testing.T) {
-	im := NewInputModel(nil, nil, nil, "")
-	im.HistoryIdx = -1
-	im.historyUp() // must not panic on empty history
-	if im.Text != "" {
-		t.Fatalf("empty history up = %q, want empty", im.Text)
-	}
-	im.restoreHistoryEntry(5) // out of range -> no-op
-}
-
 // --- View() across many model states ---------------------------------------
 
 func TestView_AcrossStates(t *testing.T) {

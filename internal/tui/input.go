@@ -53,11 +53,13 @@ type InputSubmitMsg struct {
 // InputModel wraps Bubble Tea's standard textinput component with history
 // and slash-command support. All completion/mention state has been removed;
 // the textinput library handles cursor movement and editing directly.
+//
+// History is recorded here but not navigated here: the root model binds Up to
+// the history window (see handleKey), so the input never sees arrow keys.
 type InputModel struct {
-	Text       string
-	CursorPos  int // character position (not byte offset)
-	History    []HistoryEntry
-	HistoryIdx int
+	Text      string
+	CursorPos int // character position (not byte offset)
+	History   []HistoryEntry
 
 	// Dependencies (set by root model).
 	Skills    []extension.Skill
@@ -70,11 +72,10 @@ type InputModel struct {
 // NewInputModel creates an InputModel with initial state.
 func NewInputModel(history []HistoryEntry, skills []extension.Skill, skillDirs []string, workDir string) InputModel {
 	im := InputModel{
-		History:    history,
-		HistoryIdx: -1,
-		Skills:     skills,
-		SkillDirs:  skillDirs,
-		WorkDir:    workDir,
+		History:   history,
+		Skills:    skills,
+		SkillDirs: skillDirs,
+		WorkDir:   workDir,
 	}
 	im.ensureInput()
 	return im
@@ -109,15 +110,8 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 			im.History = append(im.History, entry)
 			appendHistory(entry)
 		}
-		im.HistoryIdx = -1
 		im.setValue("")
 		return func() tea.Msg { return InputSubmitMsg{Text: text, Mentions: mentions} }
-	case tea.KeyUp:
-		im.historyUp()
-		return nil
-	case tea.KeyDown:
-		im.historyDown()
-		return nil
 	}
 
 	if key.Text != "" && !isUserInput(key.Text) {
@@ -258,40 +252,6 @@ func (im *InputModel) setValue(text string) {
 func (im *InputModel) syncFromInput() {
 	im.Text = im.input.Value()
 	im.CursorPos = im.input.Position()
-}
-
-func (im *InputModel) historyUp() {
-	if len(im.History) == 0 {
-		return
-	}
-	if im.HistoryIdx < 0 {
-		im.HistoryIdx = len(im.History) - 1
-	} else if im.HistoryIdx > 0 {
-		im.HistoryIdx--
-	}
-	im.restoreHistoryEntry(im.HistoryIdx)
-}
-
-func (im *InputModel) historyDown() {
-	if im.HistoryIdx < 0 {
-		return
-	}
-	im.HistoryIdx++
-	if im.HistoryIdx >= len(im.History) {
-		im.HistoryIdx = -1
-		im.setValue("")
-		return
-	}
-	im.restoreHistoryEntry(im.HistoryIdx)
-}
-
-func (im *InputModel) restoreHistoryEntry(idx int) {
-	if idx < 0 || idx >= len(im.History) {
-		return
-	}
-	im.setValue(im.History[idx].Text)
-	im.input.CursorEnd()
-	im.syncFromInput()
 }
 
 func isLineStartKey(key tea.Key) bool {
