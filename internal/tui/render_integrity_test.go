@@ -104,6 +104,38 @@ func TestFrameHeightFitsTerminal(t *testing.T) {
 	}
 }
 
+// The sidebar is a fixed-size block flush to the right edge: exactly
+// SidebarWidth columns wide and exactly as tall as the panel. A line wider than
+// that would push the frame past the screen; a taller block would leave a gap
+// under the prompt.
+func TestSidebarIsFixedSizeAndRightAligned(t *testing.T) {
+	for _, dim := range [][2]int{{172, 48}, {120, 40}, {100, 30}} {
+		width, height := dim[0], dim[1]
+		m := historyModel(t, "first")
+		m.width, m.height = width, height
+		m.applyResize()
+		m.chatModel.Messages = append(m.chatModel.Messages, realisticChat()...)
+
+		rows := strings.Split(m.View().Content, "\n")
+		sidebarStart := m.mainWidth() // the column the sidebar begins at
+
+		for row, line := range rows {
+			plain := ansi.Strip(line)
+			// The frame ends exactly at the terminal's right edge: the sidebar
+			// occupies the last SidebarWidth columns and not one more.
+			if got := ansi.StringWidth(line); got != width {
+				t.Fatalf("%dx%d row %d: width %d, want %d — the sidebar is not flush right",
+					width, height, row, got, width)
+			}
+			if got := width - sidebarStart; got != SidebarWidth {
+				t.Fatalf("%dx%d: sidebar is %d columns, want the fixed %d",
+					width, height, got, SidebarWidth)
+			}
+			_ = plain
+		}
+	}
+}
+
 func TestFrameIntegrityOnRealContent(t *testing.T) {
 	// Narrow and wide, with and without the sidebar and the matrix bar.
 	for _, width := range []int{60, 80, 120, 200} {

@@ -55,6 +55,24 @@ type model struct {
 	// Matrix rain animation state for sidebar.
 	matrix matrixState
 
+	// Mouse text selection. lastFrame is the frame the selection's coordinates
+	// refer to — pi selects text itself (see selection.go), so it needs the
+	// pixels it drew in order to know what is under the cursor. frameRows is its
+	// height, which is what converts a mouse row into a frame row.
+	sel       selection
+	lastFrame string
+	frameRows int
+	// The selectable rows: the message viewport, half-open. Everything else in
+	// the panel is chrome — the matrix rain, the rules, the status bar, the
+	// prompt — and selecting it yields nothing anyone wants on their clipboard.
+	msgTop, msgBottom int
+
+	// Transient status-bar notice. flashSeq invalidates the timer of a flash
+	// that has already been superseded, so an old expiry cannot clear a newer
+	// message.
+	flash    string
+	flashSeq int
+
 	// Deferred initialization state.
 	loading      bool
 	loadingItems map[string]bool // item name -> done?
@@ -398,10 +416,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleKey(msg)
 
+	case flashExpiredMsg:
+		// Ignore a timer whose flash has already been replaced.
+		if msg.seq == m.flashSeq {
+			m.flash = ""
+		}
+		return m, nil
+
 	case tea.MouseMsg:
 		switch msg := msg.(type) {
 		case tea.MouseClickMsg:
 			return m.handleMouseClick(msg)
+		case tea.MouseMotionMsg:
+			return m.handleMouseMotion(msg)
+		case tea.MouseReleaseMsg:
+			return m.handleMouseRelease(msg)
 		case tea.MouseWheelMsg:
 			return m.handleMouseWheel(msg)
 		}
@@ -510,9 +539,127 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleMouseClick processes mouse click events.
+// handleMouseClick starts a text selection and clears any previous one.
+//
+// pi selects text itself: mouse reporting is on so the wheel can scroll the
+// chat, and that takes click-drag away from the terminal. See selection.go.
 func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	mouse := msg.Mouse()
+	if mouse.Button != tea.MouseLeft {
+		return m, nil
+	}
+	// Only the chat panel is selectable. A press on the rail or in the sidebar
+	// starts nothing — and clears any highlight, the same as a click anywhere
+	// else would.
+	if mouse.X >= m.chatWidth() {
+		m.sel = selection{}
+		return m, nil
+	}
+	x, y := m.clampToChat(mouse.X, mouse.Y)
+
+	// Clicking inside a highlight copies it again, rather than throwing it away.
+	// The highlight is the affordance: what is lit up is what a click takes.
+	if m.sel.contains(x, y, m.chatWidth()) {
+		return m, m.copyAndFlash(selectedText(m.lastFrame, m.sel, m.chatWidth()))
+	}
+
+	m.sel = selection{dragging: true, anchorX: x, anchorY: y, cursorX: x, cursorY: y}
 	return m, nil
+}
+
+// copyAndFlash puts text on the clipboard and says so in the status bar.
+func (m *model) copyAndFlash(text string) tea.Cmd {
+	cmd := copySelection(text)
+	if cmd == nil {
+		return nil
+	}
+	return tea.Batch(cmd, m.setFlash("Copied!"))
+}
+
+// flashDuration is how long a transient status notice stays up.
+const flashDuration = 3 * time.Second
+
+// flashExpiredMsg clears a flash. It carries the sequence number of the flash it
+// belongs to, so a stale timer cannot wipe a message raised after it.
+type flashExpiredMsg struct{ seq int }
+
+func (m *model) setFlash(text string) tea.Cmd {
+	m.flashSeq++
+	m.flash = text
+	seq := m.flashSeq
+	return tea.Tick(flashDuration, func(time.Time) tea.Msg {
+		return flashExpiredMsg{seq: seq}
+	})
+}
+
+// handleMouseMotion extends an in-progress selection. Motion only arrives while
+// a button is held, which is exactly a drag.
+func (m *model) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if !m.sel.dragging {
+		return m, nil
+	}
+	mouse := msg.Mouse()
+	m.sel.cursorX, m.sel.cursorY = m.clampToChat(mouse.X, mouse.Y)
+	m.sel.present = true
+	return m, nil
+}
+
+// handleMouseRelease ends the drag and copies the selection.
+//
+// Copy on release, with no extra keystroke: that is what the terminal used to do
+// for us, and reproducing it is the whole point. The highlight stays up so it is
+// obvious what landed on the clipboard.
+func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
+	if !m.sel.dragging {
+		return m, nil
+	}
+	m.sel.dragging = false
+
+	if m.sel.empty() {
+		m.sel = selection{} // a plain click, not a drag: just clear
+		return m, nil
+	}
+	return m, m.copyAndFlash(selectedText(m.lastFrame, m.sel, m.chatWidth()))
+}
+
+// clampToChat converts a mouse position into a chat-panel cell.
+//
+// The Y translation matters: the UI runs on the normal screen, not the alternate
+// one, so the frame is drawn *below* whatever the terminal already had on it —
+// a shell prompt, a "pprof listening" line — and Bubble Tea reports the mouse in
+// absolute terminal rows, not frame rows. Indexing the frame with a raw mouse Y
+// therefore lands N rows too low, N being the height of that prior output.
+//
+// The frame is bottom-anchored (its last row is the screen's last row), so the
+// offset is whatever is left over: height - frameRows. Deriving it beats
+// hardcoding it, because it is right for any amount of prior output.
+//
+// X needs no such translation — the frame starts at column 0 — but it is clamped
+// to the panel so a drag into the sidebar, or off the window entirely, pins to
+// the edge instead of sweeping the rail and sidebar into the selection.
+func (m *model) clampToChat(x, y int) (int, int) {
+	x = min(max(x, 0), max(0, m.chatWidth()-1))
+
+	// Rows are clamped to the message viewport, so a drag that strays into the
+	// matrix rain above or the status bar and prompt below pins to the nearest
+	// message row instead of copying chrome. Clamping rather than refusing keeps
+	// a drag that overshoots by a row from doing nothing at all.
+	top, bottom := m.msgTop, m.msgBottom
+	if bottom <= top { // no viewport yet (first frame)
+		return x, 0
+	}
+	y = min(max(m.frameRow(y), top), bottom-1)
+	return x, y
+}
+
+// frameRow maps an absolute terminal row to a row of the rendered frame.
+func (m *model) frameRow(y int) int {
+	return y - m.frameTop()
+}
+
+// frameTop is the terminal row the frame's first line occupies.
+func (m *model) frameTop() int {
+	return max(0, m.height-m.frameRows)
 }
 
 // handleMouseWheel processes mouse wheel events for scrolling the chat viewport.
@@ -1029,6 +1176,15 @@ func (m *model) View() tea.View {
 		final = leftPanel
 	}
 
+	// Remember the frame the mouse is pointing at, then draw the selection over
+	// it. The selection is in screen coordinates, so it has to be applied to the
+	// composed frame — and the copy on release reads back from this same string,
+	// which is why it is kept rather than re-derived.
+	m.lastFrame = final
+	m.frameRows = strings.Count(final, "\n") + 1
+	m.msgTop, m.msgBottom = msgStart, msgStart+msgRows
+	final = highlight(final, m.sel, m.chatWidth(), m.width)
+
 	v := tea.NewView(final)
 	if inputCursor != nil {
 		inputCursor.Y += inputCursorY
@@ -1375,6 +1531,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		FolderName:   sidebarFolderName(m.cwd()),
 		HostName:     hostName,
 		LoadingItems: m.loadingItems,
+		Flash:        m.flash,
 	}
 }
 

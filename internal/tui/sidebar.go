@@ -409,12 +409,21 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	content = strings.Join(contentLines, "\n")
 
-	// Wrap in a styled box with a dark transparent background. No left border:
-	// the main panel's rail already divides the two, and drawing a border here
-	// as well put two vertical rules side by side.
+	// A fixed-size box, flush to the right edge of the terminal. Width alone only
+	// pads — a line longer than w would still push the box wider and drag the
+	// whole frame past the screen, so MaxWidth clamps it. Height/MaxHeight pin
+	// it to the panel beside it: a taller sidebar makes JoinHorizontal pad the
+	// panel with blank rows, which is what left a gap under the prompt.
+	//
+	// No left border: the main panel's rail already divides the two, and drawing
+	// a border here as well put two vertical rules side by side.
 	box := lipgloss.NewStyle().
 		Width(w).
+		MaxWidth(w).
 		Background(sidebarBg)
+	if in.Height > 0 {
+		box = box.Height(in.Height).MaxHeight(in.Height)
+	}
 
 	return box.Render(content)
 }
