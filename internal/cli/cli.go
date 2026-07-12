@@ -655,9 +655,13 @@ func runNonInteractive(
 	// Gemini search grounding. Always on for the Gemini provider; kill
 	// switch via PI_NO_GROUNDING=1 (propagates to subagent pi processes via
 	// FilterEnv's PI_ prefix allowlist).
+	//
+	// APPEND — never replace. See the matching note in interactive.go: replacing
+	// coreTools here strips every real tool and every MCP toolset, leaving the
+	// model with nothing to call. The built-in search and function declarations
+	// coexist fine.
 	if gTool, ok := agent.GeminiGroundingTool(info.Provider); ok {
-		coreTools = []adktool.Tool{gTool}
-		allToolsets = nil
+		coreTools = append(coreTools, gTool)
 	}
 
 	ag, err := agent.New(agent.Config{

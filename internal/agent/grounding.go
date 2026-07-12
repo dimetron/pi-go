@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/geminitool"
 	"google.golang.org/genai"
@@ -138,6 +140,45 @@ func GroundingSources(gm *genai.GroundingMetadata) string {
 // Compile-time interface assertion to ensure geminitool.GoogleSearch satisfies tool.Tool.
 var _ tool.Tool = geminitool.GoogleSearch{}
 
+// groundingTool is geminitool.GoogleSearch plus the one request setting Gemini
+// requires to run a built-in tool alongside function declarations.
+//
+// Without it the API rejects the whole request:
+//
+//	400 INVALID_ARGUMENT — Please enable
+//	tool_config.include_server_side_tool_invocations to use Built-in tools
+//	with Function calling.
+//
+// This is the trap that makes grounding look incompatible with pi's tools. The
+// tempting "fix" is to drop every tool whenever grounding is on — which is what
+// the first cut of this feature did, leaving Gemini with no bash/read/write/grep
+// at all, so the model hallucinated tool names and every call came back with
+// "tool not found. Available tools: " (empty). Setting this flag is what
+// actually lets the two coexist.
+//
+// Not supported on Vertex AI, per the genai docs; pi targets the Gemini API.
+type groundingTool struct {
+	geminitool.GoogleSearch
+}
+
+var _ tool.Tool = groundingTool{}
+
+// ProcessRequest adds the built-in search, then permits it to run next to the
+// function declarations the rest of pi's tools contribute.
+func (g groundingTool) ProcessRequest(ctx adkagent.Context, req *model.LLMRequest) error {
+	if err := g.GoogleSearch.ProcessRequest(ctx, req); err != nil {
+		return err
+	}
+	if req.Config == nil {
+		req.Config = &genai.GenerateContentConfig{}
+	}
+	if req.Config.ToolConfig == nil {
+		req.Config.ToolConfig = &genai.ToolConfig{}
+	}
+	req.Config.ToolConfig.IncludeServerSideToolInvocations = genai.Ptr(true)
+	return nil
+}
+
 // groundingEnvVar is the env var that disables Gemini search grounding
 // process-wide. Empty / unset / any value other than a recognized truthy
 // token means "grounding is enabled (subject to provider check)".
@@ -168,5 +209,5 @@ func GeminiGroundingTool(providerName string) (tool.Tool, bool) {
 	if groundingDisabled() {
 		return nil, false
 	}
-	return geminitool.GoogleSearch{}, true
+	return groundingTool{}, true
 }
