@@ -186,7 +186,6 @@ func writeSystemClipboard(text string) {
 	}
 	_, _ = stdin.Write([]byte(text))
 	_ = stdin.Close()
-
 	// Wait with a timeout so a hung clipboard command does not block forever.
 	done := make(chan struct{})
 	go func() {
