@@ -1112,8 +1112,11 @@ func (m *model) View() tea.View {
 		b.WriteString("\n")
 	}
 
+	// The rule closes the panel — no newline after it. A trailing newline made
+	// the panel one row taller than its content: an empty row below the rule,
+	// which the sidebar filled with its own last row, so its filler dots ran on
+	// beside the status bar and the two rules never met.
 	b.WriteString(hr)
-	b.WriteString("\n")
 
 	// The top section: body | rail | sidebar. The sidebar only covers the
 	// messages area, not the status bar below — the status bar extends the
@@ -1132,28 +1135,29 @@ func (m *model) View() tea.View {
 			// instead, the sidebar outran the panel — JoinHorizontal padded the
 			// panel with blank rows, leaving a gap below the prompt while the
 			// sidebar's filler dots carried on past it.
-			Height:       panelRows,
-			Mascot:       m.mascot(),
-			Mode:         m.mode,
-			ProviderName: m.providerDisplayName(),
-			ModelName:    m.cfg.ModelName,
-			GitBranch:    m.statusModel.GitBranch,
-			DiffAdded:    m.diffAdded,
-			DiffRemoved:  m.diffRemoved,
-			Running:      m.running,
-			TokenTracker: m.cfg.TokenTracker,
-			AppVersion:   m.cfg.AppVersion,
-			HostName:     hostName,
-			FolderName:   sidebarFolderName(m.cwd()),
-			Messages:     m.chatModel.Messages,
-			ActiveTool:   m.statusModel.ActiveTool,
-			LoadingItems: m.loadingItems,
-			MatrixLines:  "",
-			StatusLine:   "",
-			Orchestrator: m.cfg.Orchestrator,
-			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
-			MemoryStatus: m.memoryStatus,
-			OTELEnabled:  otel.IsEnabled(),
+			Height:        panelRows,
+			Mascot:        m.mascot(),
+			Mode:          m.mode,
+			ProviderName:  m.providerDisplayName(),
+			ModelName:     m.cfg.ModelName,
+			ThinkingLevel: m.cfg.ThinkingLevel,
+			GitBranch:     m.statusModel.GitBranch,
+			DiffAdded:     m.diffAdded,
+			DiffRemoved:   m.diffRemoved,
+			Running:       m.running,
+			TokenTracker:  m.cfg.TokenTracker,
+			AppVersion:    m.cfg.AppVersion,
+			HostName:      hostName,
+			FolderName:    sidebarFolderName(m.cwd()),
+			Messages:      m.chatModel.Messages,
+			ActiveTool:    m.statusModel.ActiveTool,
+			LoadingItems:  m.loadingItems,
+			MatrixLines:   "",
+			StatusLine:    "",
+			Orchestrator:  m.cfg.Orchestrator,
+			MCPTools:      extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+			MemoryStatus:  m.memoryStatus,
+			OTELEnabled:   otel.IsEnabled(),
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -1163,15 +1167,15 @@ func (m *model) View() tea.View {
 			sidebarInput.RunMaxCycle = m.run.maxRetries
 		}
 		sidebar := RenderSidebar(sidebarInput)
-		topSection = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sidebar)
+		topSection = joinPanelSidebar(leftPanel, sidebar, mainWidth, sidebarWidth)
 	} else {
-		topSection = leftPanel
+		topSection = padLinesTo(leftPanel, m.width)
 	}
 
 	// Bottom section: full-width status bar + input. These span the entire
-	// terminal width — the sidebar ends at the hr above, so the status bar
-	// has room for all its segments (tools, clock, context) without competing
-	// with the sidebar for columns.
+	// terminal width — the sidebar ends at the hr above, so the status bar has
+	// room for all its segments (tools, clock, context) without competing with
+	// the sidebar for columns.
 	var bottom strings.Builder
 	bottom.WriteString(statusBar)
 	bottom.WriteString("\n")
@@ -1385,11 +1389,12 @@ func (m *model) messageViewportHeight() int {
 	inputArea := m.inputModel.View(m.running || m.loading)
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
-	// The two blank rows that inset the messages from the rules above and below
-	// are not message rows. Counting them as such made the panel one row taller
-	// than the terminal, so the terminal scrolled the frame and tore the panel
-	// away from the sidebar.
-	availableHeight := m.height - statusLines - inputLines - 4 - 2
+	// The chrome around the messages: the panel's closing rule plus the two rules
+	// that frame the input below it. The two blank rows that inset the messages
+	// from those rules are not message rows either. Counting them as such made
+	// the panel one row taller than the terminal, so the terminal scrolled the
+	// frame and tore the panel away from the sidebar.
+	availableHeight := m.height - statusLines - inputLines - 3 - 2
 	if m.matrix.render() != "" {
 		// The matrix bar adds three rows above the messages (rule, bar, rule).
 		availableHeight -= 3

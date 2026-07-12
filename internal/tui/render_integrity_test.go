@@ -51,6 +51,12 @@ func realisticChat() []message {
 	}
 }
 
+// isRailCell reports whether g is one of the glyphs the rail column is made of:
+// the track, the scroll thumb, or the joint on the panel's closing rule.
+func isRailCell(g string) bool {
+	return g == railGlyph || g == railThumb || g == railFoot
+}
+
 // runeAtCol returns the rune occupying display column col, measuring in terminal
 // cells rather than rune indices — a wide rune (emoji, box drawing) advances the
 // column by two, so indexing by rune would report the wrong place.
@@ -97,7 +103,7 @@ func TestFrameHeightFitsTerminal(t *testing.T) {
 			topRows := m.topSectionRows()
 			for row := 0; row < topRows && row < len(rows); row++ {
 				g := runeAtCol(ansi.Strip(rows[row]), railCol)
-				if g != railGlyph && g != railThumb {
+				if !isRailCell(g) {
 					t.Fatalf("%dx%d scroll=%d: row %d has no rail — the panel and the sidebar are different heights\n%q",
 						width, height, m.chatModel.Scroll, row, ansi.Strip(rows[row]))
 				}
@@ -140,6 +146,56 @@ func TestSidebarIsFixedSizeAndRightAligned(t *testing.T) {
 	}
 }
 
+// Tool output is whatever a command printed, and commands print characters that
+// lie about their width: a tab measures zero cells but jumps the cursor to the
+// next multiple-of-8 column, and a carriage return or backspace drags it
+// backwards. Padding a row on those measurements makes the terminal draw it
+// wider than the columns it was given, and the overflow pushes the sidebar past
+// the right edge — the sidebar looks like it shrank, when really the chat took
+// its columns. The frame must be free of them, and the rail must hold its column
+// on every row regardless.
+func TestChatOutputCannotTakeTheSidebarsColumns(t *testing.T) {
+	hostile := []message{
+		{role: "tool", tool: "bash", toolIn: `{"command":"go test ./..."}`,
+			content: "--- FAIL: TestRenderSidebar_OTELAboveModel (0.00s)\n" +
+				"FAIL\tgithub.com/dimetron/pi-go/internal/tui\t0.653s\n" +
+				"ok  \tgithub.com/dimetron/pi-go/internal/agent\t1.2s\n"},
+		{role: "tool", tool: "bash", toolIn: `{"command":"docker pull alpine"}`,
+			content: "Pulling\r  50%\rPulling  100%\ndone\x08\x08\n"},
+		{role: "assistant", content: "A tabbed table:\n\ncol\tvalue\tnotes\na\tb\tc\n"},
+	}
+
+	for _, dim := range [][2]int{{176, 48}, {120, 40}, {100, 30}} {
+		width, height := dim[0], dim[1]
+		m := historyModel(t, "first")
+		m.width, m.height = width, height
+		m.applyResize()
+		m.chatModel.Messages = append(m.chatModel.Messages, hostile...)
+
+		frame := m.View().Content
+		if i := strings.IndexAny(frame, "\t\r\v\f\b"); i >= 0 {
+			t.Fatalf("%dx%d: frame carries %q, which the terminal draws at a column the width math never counted",
+				width, height, frame[i])
+		}
+
+		rows := strings.Split(frame, "\n")
+		railCol := m.mainWidth() - railWidth
+		topRows := m.topSectionRows()
+		for row, line := range rows {
+			if got := ansi.StringWidth(line); got != width {
+				t.Fatalf("%dx%d row %d: width %d, want %d", width, height, row, got, width)
+			}
+			if row >= topRows {
+				continue
+			}
+			if g := runeAtCol(ansi.Strip(line), railCol); !isRailCell(g) {
+				t.Fatalf("%dx%d row %d: rail is not in column %d — the sidebar has been pushed off its columns\n%q",
+					width, height, row, railCol, ansi.Strip(line))
+			}
+		}
+	}
+}
+
 func TestFrameIntegrityOnRealContent(t *testing.T) {
 	// Narrow and wide, with and without the sidebar and the matrix bar.
 	for _, width := range []int{60, 80, 120, 200} {
@@ -176,7 +232,7 @@ func TestFrameIntegrityOnRealContent(t *testing.T) {
 						continue
 					}
 					plain := ansi.Strip(line)
-					if got := runeAtCol(plain, railCol); got != railGlyph && got != railThumb {
+					if got := runeAtCol(plain, railCol); !isRailCell(got) {
 						t.Fatalf("%s: row %d has %q at the rail column %d, want the rail\n%q",
 							label, row, got, railCol, plain)
 					}

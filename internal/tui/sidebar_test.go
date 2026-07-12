@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
 )
@@ -87,6 +89,104 @@ func TestRenderSidebar_WithAllSections(t *testing.T) {
 	}
 	if !strings.Contains(result, "Loading") {
 		t.Error("expected Loading section")
+	}
+}
+
+func TestRenderSidebar_OTELAboveModel(t *testing.T) {
+	plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:        30,
+		Height:       20,
+		OTELEnabled:  true,
+		ProviderName: "anthropic",
+		ModelName:    "claude-sonnet",
+	}))
+
+	otelIdx := strings.Index(plain, "◉ OTEL")
+	modelIdx := strings.Index(plain, "Model")
+	if otelIdx == -1 {
+		t.Fatal("expected OTEL indicator")
+	}
+	if modelIdx == -1 {
+		t.Fatal("expected Model section")
+	}
+	if otelIdx > modelIdx {
+		t.Fatalf("expected OTEL above Model, got:\n%s", plain)
+	}
+	plainLines := strings.Split(plain, "\n")
+	for i, line := range plainLines {
+		plainLines[i] = strings.TrimSpace(line)
+	}
+	plain = strings.Join(plainLines, "\n")
+	if !strings.Contains(plain, "◉ OTEL\n\nModel") {
+		t.Fatalf("expected blank line between OTEL and Model, got:\n%s", plain)
+	}
+}
+
+func TestRenderSidebar_ThinkingIndicator_VisibleForKnownLevels(t *testing.T) {
+	cases := []struct {
+		level string
+		want  string
+	}{
+		{"low", "low"},
+		{"medium", "med"},
+		{"high", "high"},
+		{"max", "max"}, // forward-compatible: accepted, not remapped
+	}
+	for _, tc := range cases {
+		t.Run(tc.level, func(t *testing.T) {
+			plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
+				Width:         30,
+				Height:        20,
+				ModelName:     "claude-sonnet",
+				ThinkingLevel: tc.level,
+			}))
+			if !strings.Contains(plain, tc.want) {
+				t.Fatalf("expected %q in sidebar, got:\n%s", tc.want, plain)
+			}
+		})
+	}
+}
+
+func TestRenderSidebar_ThinkingIndicator_HiddenWhenEmpty(t *testing.T) {
+	plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:     30,
+		Height:    20,
+		ModelName: "claude-sonnet",
+		// ThinkingLevel unset.
+	}))
+	for _, label := range []string{"  low\n", "  med\n", "  high\n", "  max\n"} {
+		if strings.Contains(plain, label) {
+			t.Fatalf("expected no thinking indicator when level is empty, got:\n%s", plain)
+		}
+	}
+}
+
+func TestRenderSidebar_ThinkingIndicator_HiddenWhenNone(t *testing.T) {
+	plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:         30,
+		Height:        20,
+		ModelName:     "claude-sonnet",
+		ThinkingLevel: "none",
+	}))
+	if strings.Contains(plain, "  low\n") || strings.Contains(plain, "  med\n") || strings.Contains(plain, "  high\n") || strings.Contains(plain, "  max\n") {
+		t.Fatalf("expected no thinking indicator when level is 'none', got:\n%s", plain)
+	}
+}
+
+func TestRenderSidebar_ThinkingIndicator_BelowModelName(t *testing.T) {
+	plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:         30,
+		Height:        20,
+		ModelName:     "claude-sonnet",
+		ThinkingLevel: "high",
+	}))
+	modelIdx := strings.Index(plain, "claude-sonnet")
+	thinkIdx := strings.Index(plain, "  high")
+	if modelIdx == -1 || thinkIdx == -1 {
+		t.Fatalf("expected both model name and indicator, got:\n%s", plain)
+	}
+	if thinkIdx <= modelIdx {
+		t.Fatalf("expected 'high' indicator below model name, got:\n%s", plain)
 	}
 }
 

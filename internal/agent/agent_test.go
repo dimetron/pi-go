@@ -131,6 +131,23 @@ func TestSystemInstruction_PresentingChoices(t *testing.T) {
 	}
 }
 
+func TestSystemInstruction_ClarifyingQuestions(t *testing.T) {
+	for _, phrase := range []string{
+		"# Clarifying questions",
+		"Default: act",
+		"ask before acting",
+		"multiple valid interpretations",
+		"Ask BEFORE exploring deeply",
+		"multiple-choice",
+		"Do NOT ask when",
+		"The request is clear",
+	} {
+		if !strings.Contains(SystemInstruction, phrase) {
+			t.Errorf("SystemInstruction should contain %q", phrase)
+		}
+	}
+}
+
 func TestSystemInstruction_GitSafetyGuidance(t *testing.T) {
 	for _, phrase := range []string{
 		"# Git safety",

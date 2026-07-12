@@ -19,36 +19,37 @@ const SidebarWidth = 30
 
 // SidebarRenderInput provides data needed by the sidebar.
 type SidebarRenderInput struct {
-	Width        int
-	Height       int
-	Eyes         string
-	Mascot       string // full 3-line mascot face (mutually exclusive with Eyes)
-	Mode         string
-	ProviderName string
-	ModelName    string
-	GitBranch    string
-	DiffAdded    int
-	DiffRemoved  int
-	Running      bool
-	TokenTracker TokenTracker
-	AppVersion   string
-	HostName     string
-	FolderName   string
-	Messages     []message
-	ActiveTool   string
-	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep          // steps from plan.md during /run
-	RunPhase     string                   // current /run phase (empty if not running)
-	RunSpec      string                   // spec name during /run
-	RunCycle     int                      // current retry cycle
-	RunMaxCycle  int                      // max retries
-	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
-	StatusLine   string                   // status text shown above matrix
-	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
-	Skills       []extension.Skill        // skills section; nil = hidden
-	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
-	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
-	OTELEnabled  bool                     // OTEL tracing is active
+	Width         int
+	Height        int
+	Eyes          string
+	Mascot        string // full 3-line mascot face (mutually exclusive with Eyes)
+	Mode          string
+	ProviderName  string
+	ModelName     string
+	ThinkingLevel string // "none", "low", "medium", "high", "max"; empty = hide indicator
+	GitBranch     string
+	DiffAdded     int
+	DiffRemoved   int
+	Running       bool
+	TokenTracker  TokenTracker
+	AppVersion    string
+	HostName      string
+	FolderName    string
+	Messages      []message
+	ActiveTool    string
+	LoadingItems  map[string]bool
+	RunChecklist  []ChecklistStep          // steps from plan.md during /run
+	RunPhase      string                   // current /run phase (empty if not running)
+	RunSpec       string                   // spec name during /run
+	RunCycle      int                      // current retry cycle
+	RunMaxCycle   int                      // max retries
+	MatrixLines   string                   // pre-rendered matrix rain (2 lines)
+	StatusLine    string                   // status text shown above matrix
+	Orchestrator  *subagent.Orchestrator   // may be nil — for agents section
+	Skills        []extension.Skill        // skills section; nil = hidden
+	MCPTools      []extension.MCPToolEntry // MCP tools section; nil = hidden
+	MemoryStatus  *palace.PalaceStatus     // memory palace status; nil = hidden
+	OTELEnabled   bool                     // OTEL tracing is active
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -113,36 +114,59 @@ func RenderSidebar(in SidebarRenderInput) string {
 	}
 	lines = append(lines, "")
 
+	// --- OTEL section ---
+	if in.OTELEnabled {
+		otelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")).Bold(true) // Mocha blue
+		lines = append(lines, otelStyle.Render("  ◉ OTEL"))
+		lines = append(lines, "")
+	}
+
 	// --- Model section ---
 	lines = append(lines, heading.Render("  Model"))
+	providerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cdd6f4")) // Mocha text
+	modelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af"))    // Mocha yellow
 	if in.ProviderName != "" {
-		lines = append(lines, dim.Render("  "+in.ProviderName))
+		lines = append(lines, providerStyle.Render("  "+in.ProviderName))
 	}
 	if in.ModelName != "" {
 		name := in.ModelName
 		if len(name) > innerW {
 			name = name[:innerW-1] + "…"
 		}
-		lines = append(lines, dim.Render("  "+name))
+		lines = append(lines, modelStyle.Render("  "+name))
 	}
-	if in.OTELEnabled {
-		otelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")).Bold(true)
-		lines = append(lines, otelStyle.Render("  ◉ OTEL"))
+	if label := thinkingIndicator(in.ThinkingLevel); label != "" {
+		thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(thinkingColor(in.ThinkingLevel)))
+		lines = append(lines, thinkStyle.Render("  "+label))
 	}
 	lines = append(lines, "")
 
 	// --- Git section ---
 	if in.GitBranch != "" {
-		lines = append(lines, heading.Render("  Git"))
-		lines = append(lines, dim.Render(fmt.Sprintf("  ⎇ %s", in.GitBranch)))
+		branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")) // Mocha teal
+		// Line 1: "Git" heading + "+N -M" counts.
+		gitLine := heading.Render("  Git")
 		if in.DiffAdded > 0 || in.DiffRemoved > 0 {
 			addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
 			delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
-			lines = append(lines, "  "+
-				addStyle.Render(fmt.Sprintf("+%d", in.DiffAdded))+
-				dim.Render(" ")+
-				delStyle.Render(fmt.Sprintf("-%d", in.DiffRemoved)))
+			gitLine += " " +
+				addStyle.Render(fmt.Sprintf("+%d", in.DiffAdded)) +
+				dim.Render(" ") +
+				delStyle.Render(fmt.Sprintf("-%d", in.DiffRemoved))
 		}
+		lines = append(lines, gitLine)
+
+		// Line 2: branch with ⎇ prefix, truncated to fit inner width.
+		// Prefix "  ⎇ " is 5 visible chars; leave 1 char for the ellipsis when truncated.
+		branch := in.GitBranch
+		maxBranchW := innerW - 5
+		if maxBranchW < 4 {
+			maxBranchW = 4
+		}
+		if runewidth.StringWidth(branch) > maxBranchW {
+			branch = runewidth.Truncate(branch, maxBranchW-1, "…")
+		}
+		lines = append(lines, "  "+branchStyle.Render("⎇ "+branch))
 		lines = append(lines, "")
 	}
 
@@ -378,9 +402,18 @@ func RenderSidebar(in SidebarRenderInput) string {
 		matrixH = matrixLines
 		statusH = 1 // 1 line for status separator
 	}
+	// The closing rule owns the last row. It carries the panel's rule across the
+	// sidebar so the two read as one line spanning the terminal, the way the
+	// status bar's does, and it is the one row that is always exactly w cells
+	// wide — the block can never measure narrower than the width it was given,
+	// however short its content runs.
+	ruleH := 0
+	if in.Height > 0 {
+		ruleH = 1
+	}
 	content := strings.Join(lines, "\n")
 	contentLines := strings.Split(content, "\n")
-	targetH := in.Height - matrixH - statusH
+	targetH := max(0, in.Height-matrixH-statusH-ruleH)
 	if len(contentLines) < targetH {
 		// Fill remaining space with subtle dim separators or spacer text.
 		fillerStyle := lipgloss.NewStyle().Foreground(dimFg)
@@ -406,6 +439,10 @@ func RenderSidebar(in SidebarRenderInput) string {
 		}
 		contentLines = append(contentLines, statusStyle.Render(statusText))
 		contentLines = append(contentLines, strings.Split(in.MatrixLines, "\n")...)
+	}
+	if ruleH > 0 {
+		ruleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2, same as the panel rule
+		contentLines = append(contentLines, ruleStyle.Render(strings.Repeat("─", w)))
 	}
 	content = strings.Join(contentLines, "\n")
 
@@ -433,6 +470,38 @@ func sidebarFolderName(workDir string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Clean(workDir))
+}
+
+// thinkingIndicator normalizes a config-level thinking value to the short label
+// shown in the sidebar. Returns "" for empty or "none" so the indicator is hidden
+// when reasoning is disabled. "medium" is shortened to "med" to match the
+// common [low, med, high, max] vocabulary. Unknown values pass through verbatim
+// so a future level surfaces without needing a code change here.
+func thinkingIndicator(level string) string {
+	switch level {
+	case "", "none":
+		return ""
+	case "medium":
+		return "med"
+	default:
+		return level
+	}
+}
+
+// thinkingColor picks a Mocha accent for the thinking indicator so the level
+// is readable at a glance: warmer colors for lower reasoning effort, cooler
+// violet for the heaviest levels. Unknown levels fall back to subtext0.
+func thinkingColor(level string) string {
+	switch level {
+	case "low":
+		return "#fab387" // Mocha peach (orange)
+	case "medium":
+		return "#f9e2af" // Mocha yellow
+	case "high", "max":
+		return "#cba6f7" // Mocha mauve (violet)
+	default:
+		return "#a6adc8" // Mocha subtext0
+	}
 }
 
 // agentStatusPriority returns a sort key for agent status.

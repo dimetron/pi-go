@@ -89,10 +89,8 @@ func renderContextBar(pct float64, bg color.Color) string {
 
 // Render renders the status bar string.
 func (s *StatusModel) Render(in StatusRenderInput) string {
-	fg := lipgloss.Color("#cdd6f4")    // Mocha text
 	dimFg := lipgloss.Color("#bac2de") // Mocha subtext1
 
-	bright := lipgloss.NewStyle().Foreground(fg)
 	dim := lipgloss.NewStyle().Foreground(dimFg)
 	bar := lipgloss.NewStyle().Width(s.Width)
 
@@ -126,14 +124,6 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	default:
 		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
 		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
-	}
-
-	// Provider | Model.
-	modelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af")) // Mocha yellow
-	if in.ProviderName != "" {
-		parts = append(parts, bright.Render(in.ProviderName+" │ ")+modelStyle.Render(in.ModelName))
-	} else {
-		parts = append(parts, modelStyle.Render(in.ModelName))
 	}
 
 	// Loading progress (replaces normal status content during init).
@@ -207,12 +197,6 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			locationParts = append(locationParts, hostStyle.Render(in.HostName))
 		}
 		parts = append(parts, strings.Join(locationParts, dim.Render(" | ")))
-	}
-
-	// Git branch.
-	if s.GitBranch != "" {
-		branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")) // Mocha teal
-		parts = append(parts, branchStyle.Render(fmt.Sprintf("\u2387 %s", s.GitBranch)))
 	}
 
 	// Active tools or thinking status.

@@ -24,6 +24,7 @@ const railWidth = 1
 const (
 	railGlyph = "│" // track
 	railThumb = "●" // the thumb, i.e. where you are
+	railFoot  = "┴" // the joint where the rail meets the panel's closing rule
 )
 
 // thumbRows is the thumb's fixed height. A thumb sized to the visible fraction
@@ -65,6 +66,18 @@ func railCell(glyph, color string) string {
 // chat, where there is nothing to map.
 func separatorCell() string {
 	return railCell(railGlyph, separatorColor)
+}
+
+// ruleColor is the color of the horizontal rules that close the panel and frame
+// the input (Mocha surface2).
+const ruleColor = "#585b70"
+
+// railFootCell is the rail's last cell, the one that sits on the panel's closing
+// rule. A vertical glyph there cuts the rule in half where the panel meets the
+// sidebar; the joint carries the line through instead, so the panel's rule, this
+// cell and the sidebar's rule read as one line across the terminal.
+func railFootCell() string {
+	return railCell(railFoot, ruleColor)
 }
 
 // blockKind classifies a rendered line by the kind of message it came from.
@@ -218,6 +231,9 @@ func dominantKind(kinds []blockKind) blockKind {
 // composes with lipgloss.JoinHorizontal like every other column, instead of
 // depending on the panel's own line lengths being right.
 //
+// The panel's last row is its closing rule, so the rail's last cell is the joint
+// that carries that rule across into the sidebar's.
+//
 // rows is the panel's height; msgStart is the row the message viewport begins
 // on; cells are the minimap cells for it, one per row.
 func railColumn(rows, msgStart int, cells []string) string {
@@ -230,12 +246,62 @@ func railColumn(rows, msgStart int, cells []string) string {
 			out[i] = cells[row]
 		}
 	}
+	if rows > 0 {
+		out[rows-1] = railFootCell()
+	}
 	return strings.Join(out, "\n")
+}
+
+// tabStop is the column interval a terminal advances a tab to.
+const tabStop = 8
+
+// sanitizeCells rewrites a line so the columns it is measured at are the columns
+// the terminal actually draws it at.
+//
+// Two characters lie about their width. A tab measures zero cells but moves the
+// cursor to the next multiple-of-8 column — a single `go test` FAIL line carries
+// two of them and lands up to 14 cells right of where the width math put it. A
+// carriage return or backspace measures zero as well and moves the cursor
+// backwards. Either one makes the row the terminal paints wider than the row we
+// padded, and the overflow shoves the sidebar off the right edge — which is what
+// made it look like the chat had eaten the sidebar's columns.
+//
+// ESC is left alone: it opens the SGR sequences that carry the colors, and those
+// are already measured as zero width because they really are.
+func sanitizeCells(line string) string {
+	if !strings.ContainsFunc(line, isMiscountedControl) {
+		return line
+	}
+	var b strings.Builder
+	b.Grow(len(line))
+	col := 0
+	for _, r := range line {
+		switch {
+		case r == '\t':
+			pad := tabStop - col%tabStop
+			b.WriteString(strings.Repeat(" ", pad))
+			col += pad
+		case isMiscountedControl(r):
+			// Drop it: there is no column it can be drawn in honestly.
+		default:
+			b.WriteRune(r)
+			col += ansi.StringWidth(string(r))
+		}
+	}
+	return b.String()
+}
+
+// isMiscountedControl reports whether r is a control character that measures
+// zero cells but still moves the cursor. ESC (0x1b) is excluded — the SGR
+// sequences it opens genuinely occupy no columns.
+func isMiscountedControl(r rune) bool {
+	return r == '\t' || (r < 0x20 && r != 0x1b) || r == 0x7f
 }
 
 // padLine makes a single line exactly width cells wide, measuring in terminal
 // cells rather than bytes so ANSI styling and wide runes do not skew it.
 func padLine(line string, width int) string {
+	line = sanitizeCells(line)
 	if width <= 0 {
 		return line
 	}
@@ -264,4 +330,33 @@ func padLinesTo(s string, width int) string {
 		lines[i] = padLine(line, width)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// joinPanelSidebar lays the sidebar beside the panel, one row at a time, with
+// each side clamped to the columns it owns.
+//
+// lipgloss.JoinHorizontal sizes the left block to its widest row and starts the
+// sidebar after it, so a single row that renders wider than the panel — one
+// stray control character is enough — moves the sidebar right on *every* row and
+// pushes its tail off the screen. The sidebar then reads as narrower than it is:
+// the columns are still there, they are just past the right edge. Clamping each
+// row to leftWidth here means the sidebar always begins at the same column and
+// always keeps all sidebarWidth of them, whatever the chat put on the row.
+func joinPanelSidebar(left, sidebar string, leftWidth, sidebarWidth int) string {
+	leftRows := strings.Split(left, "\n")
+	sideRows := strings.Split(sidebar, "\n")
+	rows := max(len(leftRows), len(sideRows))
+
+	out := make([]string, rows)
+	for i := range out {
+		var l, s string
+		if i < len(leftRows) {
+			l = leftRows[i]
+		}
+		if i < len(sideRows) {
+			s = sideRows[i]
+		}
+		out[i] = padLine(l, leftWidth) + padLine(s, sidebarWidth)
+	}
+	return strings.Join(out, "\n")
 }

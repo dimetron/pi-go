@@ -87,16 +87,17 @@ func runInteractive(
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
-		LLM:          llm,
-		AppVersion:   versionString(),
-		ModelName:    llm.Name(),
-		ProviderName: info.Provider,
-		ActiveRole:   activeRole,
-		Roles:        cfg.Roles,
-		WorkDir:      cwd,
-		ThemeName:    cfg.Theme,
-		TokenTracker: tokenTracker,
-		DeferredInit: initCh,
+		LLM:           llm,
+		AppVersion:    versionString(),
+		ModelName:     llm.Name(),
+		ProviderName:  info.Provider,
+		ThinkingLevel: cfg.ThinkingLevel,
+		ActiveRole:    activeRole,
+		Roles:         cfg.Roles,
+		WorkDir:       cwd,
+		ThemeName:     cfg.Theme,
+		TokenTracker:  tokenTracker,
+		DeferredInit:  initCh,
 		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
 			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
 		},

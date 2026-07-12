@@ -1341,12 +1341,26 @@ func TestRenderStatusBar_WithProvider(t *testing.T) {
 		width:       120,
 		statusModel: StatusModel{Width: 120},
 	}
-	bar := m.statusModel.Render(m.statusRenderInput())
-	if !strings.Contains(bar, "ollama") {
-		t.Errorf("status bar should contain provider, got %q", bar)
+	// Provider and model now live in the sidebar, not the status bar.
+	sidebar := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:        SidebarWidth,
+		Height:       40,
+		ProviderName: m.cfg.ProviderName,
+		ModelName:    m.cfg.ModelName,
+	}))
+	if !strings.Contains(sidebar, "ollama") {
+		t.Errorf("sidebar should contain provider, got %q", sidebar)
 	}
-	if !strings.Contains(bar, "qwen3.5:latest") {
-		t.Errorf("status bar should contain model, got %q", bar)
+	if !strings.Contains(sidebar, "qwen3.5:latest") {
+		t.Errorf("sidebar should contain model, got %q", sidebar)
+	}
+	// And they are not in the status bar anymore.
+	bar := ansi.Strip(m.statusModel.Render(m.statusRenderInput()))
+	if strings.Contains(bar, "ollama") {
+		t.Errorf("status bar should not contain provider, got %q", bar)
+	}
+	if strings.Contains(bar, "qwen3.5:latest") {
+		t.Errorf("status bar should not contain model, got %q", bar)
 	}
 }
 
@@ -1423,9 +1437,18 @@ func TestRenderStatusBar_WithoutProvider(t *testing.T) {
 		width:       120,
 		statusModel: StatusModel{Width: 120},
 	}
-	bar := m.statusModel.Render(m.statusRenderInput())
-	if !strings.Contains(bar, "gpt-4o") {
-		t.Errorf("status bar should contain model, got %q", bar)
+	// Model now lives in the sidebar, not the status bar or info line.
+	sidebar := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:     SidebarWidth,
+		Height:    40,
+		ModelName: m.cfg.ModelName,
+	}))
+	if !strings.Contains(sidebar, "gpt-4o") {
+		t.Errorf("sidebar should contain model, got %q", sidebar)
+	}
+	bar := ansi.Strip(m.statusModel.Render(m.statusRenderInput()))
+	if strings.Contains(bar, "gpt-4o") {
+		t.Errorf("status bar should not contain model, got %q", bar)
 	}
 }
 

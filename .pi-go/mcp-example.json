@@ -30,8 +30,17 @@
     "docs-acp": {
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
-    "docs-adk": {
-      "url": "https://gitmcp.io/google/adk-go"
+    "adk-docs-mcp": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mcpdoc",
+        "mcpdoc",
+        "--urls",
+        "AgentDevelopmentKit:https://adk.dev/llms.txt",
+        "--transport",
+        "stdio"
+      ]
     }
   }
 }

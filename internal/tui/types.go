@@ -22,6 +22,7 @@ type Config struct {
 	AppVersion     string
 	ModelName      string
 	ProviderName   string
+	ThinkingLevel  string // "none", "low", "medium", "high", "max" — drives sidebar indicator
 	ActiveRole     string
 	Roles          map[string]config.RoleConfig
 	SessionService *pisession.FileService

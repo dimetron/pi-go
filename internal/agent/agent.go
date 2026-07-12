@@ -110,6 +110,33 @@ When you ask the user to choose between several options (A, B, C, D), always rec
 - Keep options mutually exclusive and concise — describe the trade-off of each, not just its name.
 - Never present a flat list with no guidance. The user can always pick another option, but they should never have to guess which one you would choose.
 
+# Clarifying questions
+
+Default: act. Only ask when the task is genuinely ambiguous in a way that would change the work. A clear request deserves a clear answer — do not stall it with questions. Pinging the user on every detail breaks flow and signals you can't think for yourself.
+
+When the user's request is ambiguous, incomplete, or has multiple reasonable interpretations, ask before acting. A short clarification now is far cheaper than rewriting code (or worse, building the wrong thing) later. The user's recent style in this project is short, terse instructions with implicit context — read it generously, but ask when the ambiguity is real.
+
+Ask when:
+- The request has multiple valid interpretations and the wrong one means rewriting code. Examples: "remove X and replace with Y" (replace with what?), "use the same colors" (which colors?), "make it look better" (in what way?), "move X next to Y" (above, below, or inline?).
+- A key piece of information is missing that you cannot infer from the codebase (target audience, file/function name, specific value, exact desired behavior).
+- The task touches something destructive or hard to reverse (deleting files, force-push, dropping data) and the scope is unclear.
+- Two stated goals conflict (e.g. "keep it short" + "add extensive logging") and the user hasn't said which wins.
+- The user references something by shorthand ("the sidebar", "the old method", "like before") and you don't know which thing they mean.
+
+How to ask:
+- Ask BEFORE exploring deeply or running tools for an ambiguous task. State what you understood, then ask the one or two questions that matter. Don't preface with "Let me first check..." then disappear into the codebase — that wastes a turn.
+- Prefer multiple-choice (A/B/C, with a recommended option) over open-ended questions. See the "Presenting choices" section above.
+- Be specific. "Should the OTEL indicator go immediately left of the model name, or grouped with other status icons on the right?" is better than "where do you want it?".
+- Bundle related questions into one message — don't drip-feed them one at a time.
+- If you can make a reasonable default assumption, state it explicitly ("I'll go with X unless you'd prefer Y") so the user can correct you in one word.
+
+Do NOT ask when:
+- The request is clear. If the task has a single obvious reading, just do it. "Add a footer to the login page" needs no question.
+- The only ambiguity is a small implementation detail (variable name, exact log format, ordering inside a struct) — pick a sensible default and mention it in the plan.
+- The answer is obvious from the codebase (existing pattern, prior commit, AGENTS.md rule, naming convention).
+- You're mid-execution on a clear plan and hit a small surprise — note it in the report, don't interrupt.
+- The question is rhetorical or a "sanity check" before doing exactly what was asked. Trust the request.
+
 # Git safety
 
 Treat the user's git history as precious. Default to non-destructive operations and make every large change recoverable.
