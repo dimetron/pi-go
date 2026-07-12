@@ -432,12 +432,17 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		Headers:     o.Headers,
 	}
 
-	// ACP-bundled agents (claude/gemini/cursor) launch their own CLI binary
-	// via the ACP adapter; everyone else runs as a child pi --mode json.
+	// ACP-bundled agents (claude/gemini/cursor/copilot) launch their own CLI
+	// binary via the ACP adapter; codex agents launch `codex app-server` and
+	// speak its JSON-RPC protocol directly; everyone else runs as a child
+	// pi --mode json.
 	var proc *Process
-	if isACPAgent(agent.Name) {
+	switch {
+	case isACPAgent(agent.Name):
 		proc, err = dispatchACP(ctx, spawnOpts, agent.Name)
-	} else {
+	case isCodexAgent(agent.Name):
+		proc, err = dispatchCodex(ctx, spawnOpts, agent.Name)
+	default:
 		proc, err = o.spawner.Spawn(ctx, spawnOpts)
 	}
 	if err != nil {
@@ -475,7 +480,10 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 
 	// Create a forwarding channel that handles cleanup on completion.
 	events := make(chan Event, 64)
-	logACP := isACPAgent(agent.Name)
+	// Codex subagents are logged to acp.jsonl alongside the ACP ones: the log
+	// records external-CLI subagent event streams, and the Event shape is the
+	// same regardless of which protocol produced it.
+	logACP := isACPAgent(agent.Name) || isCodexAgent(agent.Name)
 	go func() {
 		defer close(events)
 		defer o.pool.Release()

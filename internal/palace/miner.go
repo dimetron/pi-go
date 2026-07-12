@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -230,4 +231,84 @@ func isGitignored(relPath string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// GitIgnoredSet returns the set of files that git considers ignored in the
+// given directory. It uses `git ls-files --others --ignored --exclude-standard`
+// which respects all .gitignore files (nested, parent, and global), negation
+// rules, and ** globs. Returns nil if git is not available or the directory is
+// not a git repository.
+func GitIgnoredSet(dir string) map[string]bool {
+	return gitIgnoredSet(dir)
+}
+
+// IsGitIgnoredSet checks whether a relative path is in the ignored set.
+func IsGitIgnoredSet(relPath string, ignored map[string]bool) bool {
+	return isGitIgnoredSet(relPath, ignored)
+}
+
+// gitIgnoredSet returns the set of files that git considers ignored in the
+// given directory. It uses `git ls-files --others --ignored --exclude-standard`
+// which respects all .gitignore files (nested, parent, and global), negation
+// rules, and ** globs. Returns nil if git is not available or the directory is
+// not a git repository.
+func gitIgnoredSet(dir string) map[string]bool {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return nil
+	}
+
+	// Resolve symlinks so that dir matches git's reported repo root.
+	// On macOS, /var is a symlink to /private/var, and t.TempDir() returns
+	// the symlink path while git reports the resolved path.
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		realDir = dir
+	}
+
+	// Verify dir is inside a git repo.
+	repoRoot, err := exec.Command(gitPath, "-C", realDir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return nil
+	}
+	root := strings.TrimSpace(string(repoRoot))
+
+	// Get all ignored files relative to the repo root. --full-name is
+	// required here: without it, `git -C realDir` reports paths relative to
+	// realDir itself, and joining those against root below would produce
+	// bogus paths (e.g. "../ignored.go") whenever realDir is a subdirectory
+	// of the repo.
+	cmd := exec.Command(gitPath, "-C", realDir, "ls-files", "--others", "--ignored", "--exclude-standard", "--full-name")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	ignored := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Convert to path relative to the mining directory.
+		absPath := filepath.Join(root, line)
+		rel, err := filepath.Rel(realDir, absPath)
+		if err != nil {
+			continue
+		}
+		ignored[filepath.ToSlash(rel)] = true
+	}
+
+	if len(ignored) == 0 {
+		return nil
+	}
+	return ignored
+}
+
+// isGitIgnoredSet checks whether a relative path is in the ignored set.
+func isGitIgnoredSet(relPath string, ignored map[string]bool) bool {
+	if ignored == nil {
+		return false
+	}
+	return ignored[filepath.ToSlash(relPath)]
 }

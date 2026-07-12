@@ -3,6 +3,7 @@ package palace
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -252,12 +253,131 @@ func TestMineProject_UnsupportedExtSkipped(t *testing.T) {
 	}
 }
 
+// TestMineProject_GitNestedGitignore tests that nested .gitignore files are
+// respected via the git-based check.
+func TestMineProject_GitNestedGitignore(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmpDir := t.TempDir()
+
+	// Create directory structure.
+	os.MkdirAll(filepath.Join(tmpDir, "src", "gen"), 0o755)
+	os.MkdirAll(filepath.Join(tmpDir, "src", "core"), 0o755)
+
+	// Root .gitignore ignores all generated files.
+	writeTestFile(t, filepath.Join(tmpDir, ".gitignore"), "*.gen.go\n")
+	// Nested .gitignore un-ignores a specific file (negation).
+	writeTestFile(t, filepath.Join(tmpDir, "src", "gen", ".gitignore"), "!keep.gen.go\n")
+
+	writeTestFile(t, filepath.Join(tmpDir, "src", "core", "main.go"),
+		"package core\n\n// Main function with enough content to pass the minimum chunk size threshold for the miner test.\\nfunc main() {}")
+	writeTestFile(t, filepath.Join(tmpDir, "src", "gen", "auto.gen.go"),
+		"package gen\n\n// Auto-generated file with enough content to pass the minimum chunk size threshold for the miner test.")
+	writeTestFile(t, filepath.Join(tmpDir, "src", "gen", "keep.gen.go"),
+		"package gen\n\n// This file is un-ignored by negation with enough content to pass the minimum chunk size threshold.")
+
+	gitInitRepo(t, tmpDir)
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	result, err := MineProject(ctx, p, tmpDir, &MineConfig{Wing: "test"})
+	if err != nil {
+		t.Fatalf("MineProject: %v", err)
+	}
+	if result.Added == 0 {
+		t.Error("expected at least 1 added drawer")
+	}
+
+	drawers, _ := p.ListDrawers(ctx, DrawerFilter{Wing: "test"})
+
+	// auto.gen.go should be ignored by root .gitignore pattern *.gen.go.
+	for _, d := range drawers {
+		if filepath.Base(d.SourceFile) == "auto.gen.go" {
+			t.Error("should not have mined auto.gen.go (gitignored by *.gen.go)")
+		}
+	}
+
+	// keep.gen.go should be included (negation in nested .gitignore).
+	foundKeep := false
+	for _, d := range drawers {
+		if filepath.Base(d.SourceFile) == "keep.gen.go" {
+			foundKeep = true
+		}
+	}
+	if !foundKeep {
+		t.Error("should have mined keep.gen.go (un-ignored by nested !keep.gen.go)")
+	}
+}
+
+// TestMineConversations_GitignoreRespected tests that conversation mining
+// respects .gitignore when the directory is a git repo.
+func TestMineConversations_GitignoreRespected(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	tmpDir := t.TempDir()
+
+	os.MkdirAll(filepath.Join(tmpDir, "sessions"), 0o755)
+	os.MkdirAll(filepath.Join(tmpDir, "archived"), 0o755)
+
+	writeTestFile(t, filepath.Join(tmpDir, ".gitignore"), "archived/\n")
+	writeTestFile(t, filepath.Join(tmpDir, "sessions", "chat.jsonl"),
+		`{"role":"user","content":"What is authentication?"}`+"\n"+
+			`{"role":"assistant","content":"Authentication verifies user identity."}`+"\n")
+	writeTestFile(t, filepath.Join(tmpDir, "archived", "old.jsonl"),
+		`{"role":"user","content":"Old conversation should be ignored by gitignore for testing."}`+"\n"+
+			`{"role":"assistant","content":"Yes this is archived and should not be mined."}`+"\n")
+
+	gitInitRepo(t, tmpDir)
+
+	p := newTestPalace(t)
+	ctx := context.Background()
+
+	result, err := MineConversations(ctx, p, tmpDir, &MineConfig{Wing: "testconv"})
+	if err != nil {
+		t.Fatalf("MineConversations: %v", err)
+	}
+	if result.Added == 0 {
+		t.Error("expected at least 1 added exchange")
+	}
+
+	drawers, _ := p.ListDrawers(ctx, DrawerFilter{Wing: "testconv"})
+	for _, d := range drawers {
+		if filepath.Dir(d.SourceFile) == "archived" {
+			t.Error("should not have mined files in archived/ (gitignored)")
+		}
+	}
+}
+
 // --- helpers ---
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// gitInitRepo initializes a git repo in the given directory and commits all
+// files. This is needed so `git ls-files --ignored` works correctly.
+func gitInitRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+		{"add", "-A"},
+		{"commit", "-m", "init", "--allow-empty"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 }
 

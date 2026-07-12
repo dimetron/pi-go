@@ -11,8 +11,8 @@ func TestBundledAgents_AllDefined(t *testing.T) {
 		t.Fatalf("LoadBundledAgents failed: %v", err)
 	}
 
-	// Should have exactly 15 bundled agents
-	expected := []string{"explore", "plan", "designer", "task", "quick-task", "worker", "code-reviewer", "spec-reviewer", "memory-compressor", "discovery", "claude", "gemini", "cursor", "copilot", "architect"}
+	// Should have exactly 17 bundled agents
+	expected := []string{"explore", "plan", "designer", "task", "quick-task", "worker", "code-reviewer", "spec-reviewer", "memory-compressor", "discovery", "claude", "gemini", "cursor", "copilot", "architect", "codex", "codex-review"}
 	if len(agents) != len(expected) {
 		t.Errorf("expected %d bundled agents, got %d: %v", len(expected), len(agents), agentNames(agents))
 	}

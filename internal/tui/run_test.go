@@ -324,6 +324,13 @@ func TestBuildRunPrompt_NoInjectionForCheckboxPlans(t *testing.T) {
 
 func TestHandleRunCommand_NoArgs(t *testing.T) {
 	tmpDir := t.TempDir()
+	specDir := filepath.Join(tmpDir, "specs", "features", "alpha-feature")
+	if err := os.MkdirAll(specDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(specDir, "PROMPT.md"), []byte("# Alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	m := &model{
 		cfg: Config{
 			WorkDir: tmpDir,
@@ -339,6 +346,12 @@ func TestHandleRunCommand_NoArgs(t *testing.T) {
 	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if !strings.Contains(last.content, "Usage:") {
 		t.Errorf("expected usage message, got: %s", last.content)
+	}
+	if !strings.Contains(last.content, "| Feature | Run command |") {
+		t.Errorf("expected available features table, got: %s", last.content)
+	}
+	if !strings.Contains(last.content, "| `alpha-feature` | `/run features/alpha-feature` |") {
+		t.Errorf("expected feature run row, got: %s", last.content)
 	}
 }
 
@@ -391,8 +404,11 @@ func TestHandleRunCommand_MissingSpec(t *testing.T) {
 	if !strings.Contains(last.content, "PROMPT.md not found") {
 		t.Errorf("expected 'not found' error, got: %s", last.content)
 	}
-	if !strings.Contains(last.content, "existing-spec") {
-		t.Errorf("expected available specs listed, got: %s", last.content)
+	if !strings.Contains(last.content, "| Feature | Run command |") {
+		t.Errorf("expected available features table, got: %s", last.content)
+	}
+	if !strings.Contains(last.content, "| `existing-spec` | `/run existing-spec` |") {
+		t.Errorf("expected existing spec table row, got: %s", last.content)
 	}
 }
 

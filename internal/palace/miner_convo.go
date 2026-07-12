@@ -34,6 +34,14 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 		cfg.Wing = filepath.Base(absDir)
 	}
 
+	// Try git first for accurate .gitignore handling (nested files, ** globs,
+	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
+	ignoredSet := gitIgnoredSet(absDir)
+	var gitignorePatterns []string
+	if ignoredSet == nil {
+		gitignorePatterns = loadGitignore(absDir)
+	}
+
 	result := &MineResult{}
 
 	err = filepath.WalkDir(absDir, func(path string, d os.DirEntry, walkErr error) error {
@@ -51,6 +59,10 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 
 		ext := strings.ToLower(filepath.Ext(path))
 		relPath, _ := filepath.Rel(absDir, path)
+
+		if isGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
+			return nil
+		}
 
 		var exchanges []exchange
 

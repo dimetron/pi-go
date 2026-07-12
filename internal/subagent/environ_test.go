@@ -110,4 +110,12 @@ func TestDefaultEnvAllowlist(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("contains CODEX_HOME for codex subagents", func(t *testing.T) {
+		// codex app-server reads its config and login state from CODEX_HOME;
+		// without it a codex subagent starts up unauthenticated.
+		if !slices.Contains(DefaultEnvAllowlist, "CODEX_HOME") {
+			t.Error("DefaultEnvAllowlist missing CODEX_HOME")
+		}
+	})
 }

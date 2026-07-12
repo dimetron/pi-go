@@ -156,13 +156,29 @@ func runWorktreeName(specName string, suffix string) string {
 	return name
 }
 
+func formatAvailableRunSpecsTable(specs []string) string {
+	var b strings.Builder
+	b.WriteString("**Available features:**\n\n")
+	b.WriteString("| Feature | Run command |\n")
+	b.WriteString("|---------|-------------|\n")
+	for _, spec := range specs {
+		feature := filepath.Base(spec)
+		fmt.Fprintf(&b, "| `%s` | `/run %s` |\n", escapeMarkdownTableCell(feature), escapeMarkdownTableCell(spec))
+	}
+	return b.String()
+}
+
+func escapeMarkdownTableCell(s string) string {
+	return strings.ReplaceAll(s, "|", `\|`)
+}
+
 // handleRunCommand handles the /run <spec-name> [--parallel] slash command.
 func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
 		specs, _ := listAvailableSpecs(m.cfg.WorkDir)
 		msg := "Usage: `/run <spec-name> [--parallel]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents."
 		if len(specs) > 0 {
-			msg += "\n\n**Available specs:** " + strings.Join(specs, ", ")
+			msg += "\n\n" + formatAvailableRunSpecsTable(specs)
 		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
 		return m, nil
@@ -200,7 +216,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		specs, _ := listAvailableSpecs(m.cfg.WorkDir)
 		errMsg := fmt.Sprintf("Error: %v", err)
 		if len(specs) > 0 {
-			errMsg += "\n\n**Available specs:** " + strings.Join(specs, ", ")
+			errMsg += "\n\n" + formatAvailableRunSpecsTable(specs)
 		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: errMsg})
 		return m, nil

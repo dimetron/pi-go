@@ -41,7 +41,13 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		cfg.Wing = filepath.Base(absDir)
 	}
 
-	gitignorePatterns := loadGitignore(absDir)
+	// Try git first for accurate .gitignore handling (nested files, ** globs,
+	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
+	ignoredSet := gitIgnoredSet(absDir)
+	var gitignorePatterns []string
+	if ignoredSet == nil {
+		gitignorePatterns = loadGitignore(absDir)
+	}
 
 	// Phase 1: Collect all files to process.
 	type fileTask struct {
@@ -78,7 +84,7 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		if err != nil {
 			return nil
 		}
-		if isGitignored(relPath, gitignorePatterns) {
+		if isGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
 			return nil
 		}
 

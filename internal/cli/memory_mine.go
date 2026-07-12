@@ -21,7 +21,13 @@ func scanFiles(dir string, convos bool) ([]string, error) {
 		return nil, fmt.Errorf("resolving directory: %w", err)
 	}
 
-	gitignorePatterns := loadGitignore(absDir)
+	// Try git first for accurate .gitignore handling (nested files, ** globs,
+	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
+	ignoredSet := palace.GitIgnoredSet(absDir)
+	var gitignorePatterns map[string]bool
+	if ignoredSet == nil {
+		gitignorePatterns = loadGitignore(absDir)
+	}
 
 	var files []string
 	err = filepath.WalkDir(absDir, func(path string, d os.DirEntry, walkErr error) error {
@@ -42,7 +48,7 @@ func scanFiles(dir string, convos bool) ([]string, error) {
 			return nil
 		}
 
-		if isGitignored(relPath, gitignorePatterns) {
+		if palace.IsGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
 			return nil
 		}
 
