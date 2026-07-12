@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -14,6 +15,14 @@ import (
 )
 
 func main() {
+	os.Exit(run(os.Stderr, cli.Execute))
+}
+
+// run is main's body with the process-exiting and CLI-dispatching parts pulled
+// out, so the startup sequence (dotenv → OTEL probe → execute → trace flush) is
+// testable without spawning a process or running the real cobra command tree.
+// It returns the exit code.
+func run(stderr io.Writer, execute func() error) int {
 	// Load ~/.pi-go/.env and project .pi-go/.env before any CLI/provider setup
 	// reads API keys or OTEL settings from the process environment.
 	cli.LoadDotEnv()
@@ -24,12 +33,13 @@ func main() {
 		os.Setenv("OTEL_TRACES_EXPORTER", "none")
 	}
 
-	if err := cli.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if err := execute(); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
 	}
 	// Flush any pending OTEL traces before exiting.
 	_ = otel.Shutdown(context.Background())
+	return 0
 }
 
 // isOTELPortAvailable checks if the configured OTEL collector port is reachable.
