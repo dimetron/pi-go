@@ -669,6 +669,11 @@ func TestFindMemoryDB_EmptyProject(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestRunMemoryMine_ProjectFiles(t *testing.T) {
+	// Skip race detection due to race in third-party go-huggingface library
+	// (hugot.DownloadModel → gomlx/go-huggingface hub.(*Repo).DownloadFiles).
+	if raceEnabled {
+		t.Skip("skipping: go-huggingface has race condition")
+	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.go"),
 		[]byte("package main\n\nfunc main() { println(\"hello world test content for chunk threshold minimum\") }"), 0o644)
@@ -685,6 +690,11 @@ func TestRunMemoryMine_ProjectFiles(t *testing.T) {
 }
 
 func TestRunMemoryMine_Conversations(t *testing.T) {
+	// Skip race detection due to race in third-party go-huggingface library
+	// (hugot.DownloadModel → gomlx/go-huggingface hub.(*Repo).DownloadFiles).
+	if raceEnabled {
+		t.Skip("skipping: go-huggingface has race condition")
+	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "chat.jsonl"),
 		[]byte(`{"role":"user","content":"question"}
