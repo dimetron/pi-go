@@ -194,6 +194,58 @@ func TestNewWithCustomSessionService(t *testing.T) {
 	}
 }
 
+// titleRecordingService is a session.Service that captures SetSessionTitle
+// calls. It satisfies the titleNamer interface so the *Agent wrapper forwards.
+type titleRecordingService struct {
+	session.Service
+	mu     sync.Mutex
+	titles []string
+}
+
+func (s *titleRecordingService) SetSessionTitle(_ string, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.titles = append(s.titles, title)
+	return nil
+}
+
+func (s *titleRecordingService) lastTitle() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.titles) == 0 {
+		return ""
+	}
+	return s.titles[len(s.titles)-1]
+}
+
+func TestSetSessionTitle_ForwardsToService(t *testing.T) {
+	llm := &mockLLM{name: "test", response: "ok"}
+	svc := &titleRecordingService{Service: session.InMemoryService()}
+	a, err := New(Config{Model: llm, SessionService: svc})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := a.SetSessionTitle("sid", "fix the bug"); err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+	if got := svc.lastTitle(); got != "fix the bug" {
+		t.Errorf("service recorded %q, want %q", got, "fix the bug")
+	}
+}
+
+func TestSetSessionTitle_NoOpForInMemoryService(t *testing.T) {
+	llm := &mockLLM{name: "test", response: "ok"}
+	// session.InMemoryService does not implement SetSessionTitle.
+	a, err := New(Config{Model: llm, SessionService: session.InMemoryService()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Must not error even though the service has no SetSessionTitle.
+	if err := a.SetSessionTitle("sid", "anything"); err != nil {
+		t.Errorf("SetSessionTitle on in-memory service: %v", err)
+	}
+}
+
 func TestCreateSession(t *testing.T) {
 	llm := &mockLLM{name: "test-model", response: "Hello!"}
 

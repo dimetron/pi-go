@@ -920,6 +920,24 @@ const (
 	printToolReset     = "\033[0m"
 )
 
+// derivePrintTitle extracts a short, single-line session title from a user
+// prompt. Mirrors the TUI's deriveSessionTitle so /sessions lists look
+// consistent regardless of which mode created the session.
+func derivePrintTitle(prompt string) string {
+	title := strings.TrimSpace(prompt)
+	if title == "" {
+		return ""
+	}
+	if i := strings.IndexByte(title, '\n'); i >= 0 {
+		title = title[:i]
+	}
+	const max = 200
+	if len(title) > max {
+		title = title[:max-1] + "…"
+	}
+	return title
+}
+
 func formatPrintToolCall(name string, args map[string]any) string {
 	if preview := toolArgsPreview(args); preview != "" {
 		return fmt.Sprintf("%s🛠️  ⚙ tool: %s %s%s%s\n", printToolCallColor, name, printToolDimColor, preview, printToolReset)
@@ -942,6 +960,13 @@ func formatPrintSkillLoad(count int, err error) string {
 // Tool calls are shown as status lines on stderr.
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
+	// Auto-set the session title from the user prompt. Print mode is
+	// non-interactive, so we don't emit OSC 0 — there may be no terminal, or
+	// the terminal may be a script's stdout. The title is metadata for
+	// /sessions listing and the meta.json file, both of which still benefit.
+	if title := derivePrintTitle(prompt); title != "" {
+		_ = ag.SetSessionTitle(sessionID, title)
+	}
 	retryCfg := agent.DefaultRetryConfig()
 	// GroundingMetadata repeats on every chunk of the response it grounds;
 	// report each search once.
@@ -1019,6 +1044,12 @@ type jsonEvent struct {
 // Events: message_start (once), text_delta (per text chunk), tool_call, tool_result, message_end (once).
 func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
+	// Auto-set the session title for JSON mode too. The first jsonEvent
+	// carries session_id, so the title is just metadata to keep meta.json
+	// in sync with the user prompt — consumers can use it to label sessions.
+	if title := derivePrintTitle(prompt); title != "" {
+		_ = ag.SetSessionTitle(sessionID, title)
+	}
 	enc := json.NewEncoder(os.Stdout)
 	started := false
 

@@ -326,6 +326,12 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 		m.cfg.Logger.UserMessage(promptText)
 	}
 
+	// Auto-set the session title from the first line of the user prompt and
+	// emit OSC 0 to update the terminal window/tab title. Best-effort: a
+	// session service that doesn't support titles (or a non-TTY stdout) is
+	// a no-op, never a turn blocker.
+	m.applySessionTitle(text)
+
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: text})
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.chatModel.Streaming = ""
@@ -339,6 +345,23 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	m.matrix.feed("init", m.mainWidth())
 
 	return m, tea.Batch(m.startAgentLoop(promptText), matrixTickCmd())
+}
+
+// applySessionTitle derives a short title from the user prompt, records it on
+// the session via the agent, and stores it on the model so the next View()
+// carries it to the terminal as the window/tab title. It is safe to call with
+// empty text (no-op) or when the agent is nil (the TUI's unit tests don't wire
+// one).
+func (m *model) applySessionTitle(prompt string) {
+	title := deriveSessionTitle(prompt)
+	if title == "" {
+		return
+	}
+	if m.cfg.Agent != nil && m.cfg.SessionID != "" {
+		// Errors here are metadata-only and should never block the turn.
+		_ = m.cfg.Agent.SetSessionTitle(m.cfg.SessionID, title)
+	}
+	m.sessionTitle = title
 }
 
 // runAgentLoop runs the agent and sends events to the channel.

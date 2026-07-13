@@ -131,6 +131,112 @@ func TestSetSessionModelUnknownSession(t *testing.T) {
 	}
 }
 
+func TestSetSessionTitle_RoundTrip(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	if err := svc.SetSessionTitle(sid, "Fix the linter"); err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+
+	// In-memory: GetSessionTitle reflects the update.
+	got, err := svc.GetSessionTitle(sid)
+	if err != nil {
+		t.Fatalf("GetSessionTitle: %v", err)
+	}
+	if got != "Fix the linter" {
+		t.Errorf("GetSessionTitle = %q, want %q", got, "Fix the linter")
+	}
+
+	// On-disk: meta.json carries the same value.
+	metaPath := filepath.Join(svc.baseDir, sid, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	if raw["title"] != "Fix the linter" {
+		t.Errorf("meta.json title = %v, want %q", raw["title"], "Fix the linter")
+	}
+
+	// Reload from disk to confirm the title survives a cache eviction.
+	svc2, err := NewFileService(svc.baseDir)
+	if err != nil {
+		t.Fatalf("reopening service: %v", err)
+	}
+	got2, err := svc2.GetSessionTitle(sid)
+	if err != nil {
+		t.Fatalf("GetSessionTitle after reload: %v", err)
+	}
+	if got2 != "Fix the linter" {
+		t.Errorf("title after reload = %q, want %q", got2, "Fix the linter")
+	}
+}
+
+func TestSetSessionTitle_StripsControlCharacters(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	// A maliciously crafted title with ESC + OSC injection must be neutralized
+	// before reaching meta.json. ESC is dropped, BEL is the OSC terminator and
+	// must not appear inside the payload.
+	title := "ok title\x1b]0;injected\x07still ok"
+	if err := svc.SetSessionTitle(sid, title); err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+	got, err := svc.GetSessionTitle(sid)
+	if err != nil {
+		t.Fatalf("GetSessionTitle: %v", err)
+	}
+	if strings.ContainsAny(got, "\x1b\x07\n\r\t") {
+		t.Errorf("title still contains control chars: %q", got)
+	}
+	if !strings.HasPrefix(got, "ok title") {
+		t.Errorf("title = %q, want prefix %q", got, "ok title")
+	}
+}
+
+func TestSetSessionTitle_TruncatesLong(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	long := strings.Repeat("a", MaxSessionTitle+500)
+	if err := svc.SetSessionTitle(sid, long); err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+	got, err := svc.GetSessionTitle(sid)
+	if err != nil {
+		t.Fatalf("GetSessionTitle: %v", err)
+	}
+	if len(got) != MaxSessionTitle {
+		t.Errorf("title length = %d, want %d", len(got), MaxSessionTitle)
+	}
+}
+
+func TestSetSessionTitle_EmptyClears(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	_ = svc.SetSessionTitle(sid, "first")
+	if err := svc.SetSessionTitle(sid, "   "); err != nil {
+		t.Fatalf("SetSessionTitle(empty): %v", err)
+	}
+	got, _ := svc.GetSessionTitle(sid)
+	if got != "" {
+		t.Errorf("title after blank = %q, want empty", got)
+	}
+}
+
+func TestSetSessionTitle_UnknownSession(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.SetSessionTitle("ghost", "x"); err == nil {
+		t.Error("expected error for unknown session")
+	}
+}
+
 func TestCreateSessionWithCustomID(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

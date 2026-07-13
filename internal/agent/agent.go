@@ -388,6 +388,14 @@ type modelNamer interface {
 	SetSessionModel(sessionID, modelName string) error
 }
 
+// titleNamer is satisfied by session services that can record a human-readable
+// title for an existing session. *session.FileService implements it; in-memory
+// services without the capability silently no-op so callers don't have to
+// branch on the service type.
+type titleNamer interface {
+	SetSessionTitle(sessionID, title string) error
+}
+
 // CreateSession creates a new session and returns its ID.
 func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 	resp, err := a.sessionService.Create(ctx, &session.CreateRequest{
@@ -406,6 +414,18 @@ func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 		_ = mn.SetSessionModel(sid, modelName) // best-effort; meta defaults to "unknown"
 	}
 	return sid, nil
+}
+
+// SetSessionTitle records a title for the given session via the session
+// service when it supports it. Services without the title capability (e.g.
+// the ADK in-memory service) silently no-op — the title is metadata that is
+// safe to lose for ephemeral sessions.
+func (a *Agent) SetSessionTitle(sessionID, title string) error {
+	tn, ok := a.sessionService.(titleNamer)
+	if !ok {
+		return nil
+	}
+	return tn.SetSessionTitle(sessionID, title)
 }
 
 // Run sends a user message and returns an iterator over agent events.
