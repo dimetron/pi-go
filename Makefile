@@ -5,6 +5,32 @@ build:
 	go build ./cmd/pi-sandbox
 
 install: build
+
+# Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
+#
+# OPT-IN ONLY. The default `make build` stays pure Go: no cgo, no native
+# libraries, `go install` works with nothing but a Go toolchain. This target
+# trades that away for roughly 3x faster embedding in `pi memory mine`.
+#
+# One-time setup:
+#   brew install onnxruntime
+#   make deps-accel        # fetches the prebuilt Rust tokenizers static lib
+build-accel: deps-accel
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="-I$$(brew --prefix onnxruntime)/include" \
+	CGO_LDFLAGS="-L$$(brew --prefix onnxruntime)/lib -lonnxruntime -L$$HOME/.pi-go/lib" \
+	go build -tags ORT -o pi ./cmd/pi
+
+# hugot's ORT/XLA paths statically link the Rust HF tokenizers; only the pure-Go
+# path uses the Go tokenizer. Prebuilt for darwin-arm64.
+deps-accel:
+	@mkdir -p $$HOME/.pi-go/lib
+	@test -f $$HOME/.pi-go/lib/libtokenizers.a || ( \
+	  echo "fetching libtokenizers..." && \
+	  curl -sL -o /tmp/tok.tar.gz https://github.com/daulet/tokenizers/releases/download/v1.27.0/libtokenizers.darwin-arm64.tar.gz && \
+	  tar xzf /tmp/tok.tar.gz -C $$HOME/.pi-go/lib && rm -f /tmp/tok.tar.gz )
+	@echo "accel deps ready (onnxruntime via brew + libtokenizers)"
+
 	go install ./cmd/pi/
 	go install ./cmd/pi-sandbox
 

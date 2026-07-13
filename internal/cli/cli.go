@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
@@ -88,7 +89,12 @@ func newRootCmd() *cobra.Command {
 		Long:    "A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.",
 		Version: versionString(),
 		Args:    cobra.ArbitraryArgs,
-		RunE:    runRoot,
+		// Start pprof here rather than in runRoot: subcommands (`pi memory mine`,
+		// `pi audit`, ...) have their own RunE and never reach runRoot, so
+		// profiling them was impossible. PersistentPreRun runs for the root and
+		// every subcommand alike.
+		PersistentPreRun: func(*cobra.Command, []string) { startPprofServer() },
+		RunE:             runRoot,
 	}
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
@@ -108,8 +114,11 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
-	cmd.Flags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (cpu, mem, goroutine, mutex, block, trace)")
-	cmd.Flags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for pprof HTTP server (default 6060)")
+	// Persistent, not local: `pi memory mine . --pprof true` and every other
+	// subcommand must accept these too. As local flags they were rejected with
+	// "unknown flag: --pprof" the moment a subcommand was used.
+	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
+	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
 
 	cmd.AddCommand(newPingCmd())
 	cmd.AddCommand(newAuditCmd())
@@ -286,26 +295,37 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}, nil
 }
 
-func runRoot(cmd *cobra.Command, args []string) error {
-	// Load API keys from ~/.pi-go/.env (set by /login command).
-	loadDotEnv()
+// pprofOnce guards the pprof listener. PersistentPreRun fires once per command,
+// but runRoot may also be reached directly in tests; starting twice would fail
+// with "address already in use".
+var pprofOnce sync.Once
 
-	// Optionally start pprof server.
-	if flagPprof != "" {
+// startPprofServer serves net/http/pprof on --pprof-port when --pprof is set to
+// any non-empty value. Profiles are then collected over HTTP
+// (http://localhost:<port>/debug/pprof), so no profile-specific setup is needed
+// here — the value is only echoed back so the user can see what they asked for.
+func startPprofServer() {
+	if flagPprof == "" {
+		return
+	}
+	pprofOnce.Do(func() {
 		addr := ":" + flagPprofPort
 		go func() {
 			fmt.Printf("pprof server listening on %s (profile: %s)\n", addr, flagPprof)
-			switch flagPprof {
-			case "cpu":
-				fmt.Println("note: cpu profiling started via runtime/pprof; run: go tool pprof http://localhost:" + flagPprofPort + "/profile")
-			case "trace":
-				fmt.Println("note: trace profiling started via runtime/trace; run: go tool trace http://localhost:" + flagPprofPort + "/trace")
-			}
+			fmt.Println("collect with: go tool pprof http://localhost:" + flagPprofPort + "/debug/pprof/heap")
 			if err := http.ListenAndServe(addr, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
 			}
 		}()
-	}
+	})
+}
+
+func runRoot(cmd *cobra.Command, args []string) error {
+	// Load API keys from ~/.pi-go/.env (set by /login command).
+	loadDotEnv()
+
+	// Normally started by the root's PersistentPreRun; harmless if already up.
+	startPprofServer()
 
 	go checkForUpdate(cmd.Context(), Version)
 
@@ -652,6 +672,18 @@ func runNonInteractive(
 		return fmt.Errorf("creating session service: %w", err)
 	}
 
+	// Gemini search grounding. Always on for the Gemini provider; kill
+	// switch via PI_NO_GROUNDING=1 (propagates to subagent pi processes via
+	// FilterEnv's PI_ prefix allowlist).
+	//
+	// APPEND — never replace. See the matching note in interactive.go: replacing
+	// coreTools here strips every real tool and every MCP toolset, leaving the
+	// model with nothing to call. The built-in search and function declarations
+	// coexist fine.
+	if gTool, ok := agent.GeminiGroundingTool(info.Provider); ok {
+		coreTools = append(coreTools, gTool)
+	}
+
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
 		Tools:               coreTools,
@@ -911,6 +943,9 @@ func formatPrintSkillLoad(count int, err error) string {
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
 	retryCfg := agent.DefaultRetryConfig()
+	// GroundingMetadata repeats on every chunk of the response it grounds;
+	// report each search once.
+	groundedSeen := map[string]bool{}
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
@@ -922,7 +957,26 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
-		if ev == nil || ev.Content == nil {
+		if ev == nil {
+			continue
+		}
+		// Gemini grounding runs server-side and emits no FunctionCall, so it
+		// would otherwise be invisible. Report it like any other tool call.
+		if gm := ev.GroundingMetadata; gm != nil && len(gm.WebSearchQueries) > 0 {
+			key := agent.GroundingQueryKey(gm.WebSearchQueries)
+			if !groundedSeen[key] {
+				groundedSeen[key] = true
+				args := map[string]any{"query": agent.GroundingQuery(gm)}
+				fmt.Fprint(os.Stderr, formatPrintToolCall(agent.GroundingToolName, args))
+				log.ToolCall("grounding", agent.GroundingToolName, args)
+				for _, src := range strings.Split(agent.GroundingSummary(gm), "\n") {
+					fmt.Fprintf(os.Stderr, "%s   %s%s\n", printToolDimColor, src, printToolReset)
+				}
+				fmt.Fprint(os.Stderr, formatPrintToolDone(agent.GroundingToolName))
+				log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
+			}
+		}
+		if ev.Content == nil {
 			continue
 		}
 		for _, part := range ev.Content.Parts {

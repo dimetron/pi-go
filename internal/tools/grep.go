@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os/exec"
@@ -299,7 +300,15 @@ func grepWithRG(sb *Sandbox, input GrepInput, searchPath string) (GrepOutput, er
 
 	output, err := cmd.Output()
 	if err != nil {
-		return GrepOutput{}, fmt.Errorf("rg failed: %w", err)
+		// rg exits 1 to mean "no matches" — a valid empty result, not a failure.
+		// Reporting it as an error sends grepHandler down the Go fallback path,
+		// which re-derives the same empty answer via a full tree walk. Only a
+		// real failure (exit >= 2, or a missing binary) should fall back.
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return GrepOutput{}, fmt.Errorf("rg failed: %w", err)
+		}
+		return GrepOutput{}, nil
 	}
 
 	// Parse rg output: "file:line:content" format

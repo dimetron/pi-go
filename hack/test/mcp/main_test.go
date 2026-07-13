@@ -109,3 +109,10 @@ func TestSessionBackedToolsPanicWithNilSession(t *testing.T) {
 		})
 	}
 }
+
+func TestNewServer(t *testing.T) {
+	srv := newServer()
+	if srv == nil {
+		t.Fatal("expected non-nil server")
+	}
+}

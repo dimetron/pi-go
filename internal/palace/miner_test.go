@@ -1,6 +1,7 @@
 package palace
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -136,6 +137,41 @@ func TestDetectRoomFromContent(t *testing.T) {
 		got := detectRoomFromContent(tt.content, rooms)
 		if got != tt.expected {
 			t.Errorf("detectRoomFromContent(%q) = %s, want %s", tt.content[:20], got, tt.expected)
+		}
+	}
+}
+
+// The chunker must never emit a chunk larger than the embedder will accept.
+//
+// Embed() truncates every input to maxCharLength, so any chunk above that limit
+// is silently cut down before embedding: the drawer keeps the full text but its
+// vector only describes the head of it, leaving the tail stored yet unfindable
+// by semantic search. When these two constants drifted apart (chunk 1500 vs
+// limit 512), 98% of chunks were truncated and ~60% of all mined text never
+// reached the model.
+func TestChunkSizeFitsEmbedderLimit(t *testing.T) {
+	if defaultChunkSize > maxCharLength {
+		t.Fatalf("defaultChunkSize (%d) exceeds maxCharLength (%d): every chunk would be "+
+			"truncated before embedding, and the tail would be unsearchable",
+			defaultChunkSize, maxCharLength)
+	}
+}
+
+// No chunk the chunker produces may exceed the embedder's limit, for any input.
+func TestChunkTextNeverExceedsEmbedderLimit(t *testing.T) {
+	inputs := []string{
+		strings.Repeat("package main\nfunc main() { println(\"x\") }\n", 200), // dense code
+		strings.Repeat("word ", 5000),                                         // prose
+		strings.Repeat("a", 10000),                                            // no break points at all
+		strings.Repeat("para\n\n", 1000),                                      // paragraph breaks
+	}
+
+	for i, in := range inputs {
+		for j, chunk := range chunkText(in, defaultChunkSize, defaultChunkOverlap) {
+			if len(chunk) > maxCharLength {
+				t.Errorf("input %d chunk %d is %d chars, over the embedder's %d-char limit — "+
+					"it would be truncated and its tail lost", i, j, len(chunk), maxCharLength)
+			}
 		}
 	}
 }

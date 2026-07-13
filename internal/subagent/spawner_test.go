@@ -93,6 +93,11 @@ echo '{"type":"message_end"}'
 	if events[2].Content != "read" {
 		t.Errorf("event 2 content: expected 'read', got %q", events[2].Content)
 	}
+	// Verify tool_call args are forwarded (they used to be dropped at the
+	// spawner, leaving the TUI to display a bare tool name with no path).
+	if events[2].ToolArgs == nil {
+		t.Error("event 2 ToolArgs: expected tool_input forwarded, got nil")
+	}
 
 	result, err := proc.Wait()
 	if err != nil {

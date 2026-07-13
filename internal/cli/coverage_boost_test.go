@@ -1132,7 +1132,7 @@ func TestDeferredInit_WithSkillDir(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		deferredInit(ctx, config.Config{}, llm, tracker, tmpHome, tmpHome, "", ch, &res)
+		deferredInit(ctx, config.Config{}, llm, "openai", tracker, tmpHome, tmpHome, "", ch, &res)
 		close(ch)
 	}()
 

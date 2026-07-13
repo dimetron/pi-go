@@ -174,7 +174,7 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 				resultBuilder.WriteString(ev.Delta)
 				proc.sendEvent(Event{Type: "text_delta", Content: ev.Delta})
 			case "tool_call":
-				proc.sendEvent(Event{Type: "tool_call", Content: ev.ToolName})
+				proc.sendEvent(Event{Type: "tool_call", Content: ev.ToolName, ToolArgs: ev.ToolInput})
 			case "tool_result":
 				proc.sendEvent(Event{Type: "tool_result", Content: ev.Content})
 			case "message_start":

@@ -450,8 +450,16 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "tool_call", summary: fmt.Sprintf(">>> %s", ev.Content),
 		})
+		// Compute a one-liner from the tool args so the chat card can render
+		// the file path / command alongside the tool name — without this the
+		// header would only show the bare tool name (e.g. "read") in gray,
+		// while the parent path (see agent_loop.go) already fills toolIn.
+		var toolIn string
+		if args, ok := ev.ToolArgs.(map[string]any); ok {
+			toolIn = toolCallSummary(ev.Content, args)
+		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role: "tool", tool: ev.Content,
+			role: "tool", tool: ev.Content, toolIn: toolIn,
 		})
 
 	case "tool_result":

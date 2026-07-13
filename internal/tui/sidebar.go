@@ -19,37 +19,36 @@ const SidebarWidth = 30
 
 // SidebarRenderInput provides data needed by the sidebar.
 type SidebarRenderInput struct {
-	Width         int
-	Height        int
-	Eyes          string
-	Mascot        string // full 3-line mascot face (mutually exclusive with Eyes)
-	Mode          string
-	ProviderName  string
-	ModelName     string
-	ThinkingLevel string // "none", "low", "medium", "high", "max"; empty = hide indicator
-	GitBranch     string
-	DiffAdded     int
-	DiffRemoved   int
-	Running       bool
-	TokenTracker  TokenTracker
-	AppVersion    string
-	HostName      string
-	FolderName    string
-	Messages      []message
-	ActiveTool    string
-	LoadingItems  map[string]bool
-	RunChecklist  []ChecklistStep          // steps from plan.md during /run
-	RunPhase      string                   // current /run phase (empty if not running)
-	RunSpec       string                   // spec name during /run
-	RunCycle      int                      // current retry cycle
-	RunMaxCycle   int                      // max retries
-	MatrixLines   string                   // pre-rendered matrix rain (2 lines)
-	StatusLine    string                   // status text shown above matrix
-	Orchestrator  *subagent.Orchestrator   // may be nil — for agents section
-	Skills        []extension.Skill        // skills section; nil = hidden
-	MCPTools      []extension.MCPToolEntry // MCP tools section; nil = hidden
-	MemoryStatus  *palace.PalaceStatus     // memory palace status; nil = hidden
-	OTELEnabled   bool                     // OTEL tracing is active
+	Width        int
+	Height       int
+	Eyes         string
+	Mascot       string // full 3-line mascot face (mutually exclusive with Eyes)
+	Mode         string
+	ProviderName string
+	ModelName    string
+	GitBranch    string
+	DiffAdded    int
+	DiffRemoved  int
+	Running      bool
+	TokenTracker TokenTracker
+	AppVersion   string
+	HostName     string
+	FolderName   string
+	Messages     []message
+	ActiveTool   string
+	LoadingItems map[string]bool
+	RunChecklist []ChecklistStep          // steps from plan.md during /run
+	RunPhase     string                   // current /run phase (empty if not running)
+	RunSpec      string                   // spec name during /run
+	RunCycle     int                      // current retry cycle
+	RunMaxCycle  int                      // max retries
+	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
+	StatusLine   string                   // status text shown above matrix
+	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
+	Skills       []extension.Skill        // skills section; nil = hidden
+	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
+	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
+	OTELEnabled  bool                     // OTEL tracing is active
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -134,10 +133,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 			name = name[:innerW-1] + "…"
 		}
 		lines = append(lines, modelStyle.Render("  "+name))
-	}
-	if label := thinkingIndicator(in.ThinkingLevel); label != "" {
-		thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(thinkingColor(in.ThinkingLevel)))
-		lines = append(lines, thinkStyle.Render("  "+label))
 	}
 	lines = append(lines, "")
 
@@ -470,38 +465,6 @@ func sidebarFolderName(workDir string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Clean(workDir))
-}
-
-// thinkingIndicator normalizes a config-level thinking value to the short label
-// shown in the sidebar. Returns "" for empty or "none" so the indicator is hidden
-// when reasoning is disabled. "medium" is shortened to "med" to match the
-// common [low, med, high, max] vocabulary. Unknown values pass through verbatim
-// so a future level surfaces without needing a code change here.
-func thinkingIndicator(level string) string {
-	switch level {
-	case "", "none":
-		return ""
-	case "medium":
-		return "med"
-	default:
-		return level
-	}
-}
-
-// thinkingColor picks a Mocha accent for the thinking indicator so the level
-// is readable at a glance: warmer colors for lower reasoning effort, cooler
-// violet for the heaviest levels. Unknown levels fall back to subtext0.
-func thinkingColor(level string) string {
-	switch level {
-	case "low":
-		return "#fab387" // Mocha peach (orange)
-	case "medium":
-		return "#f9e2af" // Mocha yellow
-	case "high", "max":
-		return "#cba6f7" // Mocha mauve (violet)
-	default:
-		return "#a6adc8" // Mocha subtext0
-	}
 }
 
 // agentStatusPriority returns a sort key for agent status.

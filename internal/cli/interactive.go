@@ -83,7 +83,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -121,6 +121,7 @@ func deferredInit(
 	ctx context.Context,
 	cfg config.Config,
 	llm adkmodel.LLM,
+	providerName string,
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
@@ -350,11 +351,27 @@ func deferredInit(
 		return
 	}
 
+	mcpToolsets := ps.mcpToolsets
+	// Gemini search grounding (see agent.GeminiGroundingTool doc).
+	//
+	// APPEND — never replace. Assigning coreTools = []adktool.Tool{gTool} here
+	// leaves the agent with *no* tools at all: bash, read, write, edit, grep,
+	// ls, subagent, LSP and memory all vanish, and the model, given no function
+	// declarations, invents names like "execute_command" and gets back
+	// "tool not found. Available tools: " with an empty list.
+	//
+	// The built-in search coexists with function declarations: geminitool's
+	// ProcessRequest appends to req.Config.Tools rather than overwriting it, and
+	// a single Gemini turn will happily call `read` and `google_search` both.
+	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
+		coreTools = append(coreTools, gTool)
+	}
+
 	// Create agent.
 	ag, err := agent.New(agent.Config{
 		Model:                llm,
 		Tools:                coreTools,
-		Toolsets:             ps.mcpToolsets,
+		Toolsets:             mcpToolsets,
 		Instruction:          instruction,
 		SessionService:       sessionSvc,
 		BeforeToolCallbacks:  beforeCBs,

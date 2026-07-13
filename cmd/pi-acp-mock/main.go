@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -103,17 +104,30 @@ func (m *mockAgent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (
 	return acp.SetSessionModeResponse{}, nil
 }
 
+// newAgentFromEnv builds the mock agent from its environment knobs. Split out of
+// main so the configuration can be exercised without opening a connection and
+// blocking on it forever.
+func newAgentFromEnv() *mockAgent {
+	return &mockAgent{
+		responseText: getEnv("PI_MOCK_RESPONSE", "Mock ACP response"),
+		delay:        parseDelay(os.Getenv("PI_MOCK_DELAY_MS")),
+	}
+}
+
 func main() {
 	log.SetOutput(os.Stderr)
 	log.SetPrefix("[pi-acp-mock] ")
+	serve(os.Stdout, os.Stdin)
+}
 
-	responseText := getEnv("PI_MOCK_RESPONSE", "Mock ACP response")
-	delay := parseDelay(os.Getenv("PI_MOCK_DELAY_MS"))
+// serve runs the mock agent over the given streams until the peer closes the
+// connection. Taking the streams as parameters (rather than reaching for
+// os.Stdout/os.Stdin) lets the shutdown path be exercised with a pipe.
+func serve(out io.Writer, in io.Reader) {
+	agent := newAgentFromEnv()
+	log.Printf("starting: response=%q delay=%s", truncate(agent.responseText, 50), agent.delay)
 
-	log.Printf("starting: response=%q delay=%s", truncate(responseText, 50), delay)
-
-	agent := &mockAgent{responseText: responseText, delay: delay}
-	conn := acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
+	conn := acp.NewAgentSideConnection(agent, out, in)
 	agent.conn = conn
 
 	<-conn.Done()

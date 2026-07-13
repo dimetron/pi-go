@@ -3,7 +3,9 @@ package palace
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,6 +39,42 @@ func GenerateDrawerID(wing, room, sourceFile string, chunkIndex int, content str
 	return fmt.Sprintf("drawer_%s_%s_%x", wing, room, h[:8])
 }
 
+// HashContent returns the content hash stored on a drawer and compared by the
+// miner to decide whether a chunk needs re-embedding.
+func HashContent(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
+}
+
+// DrawerHashes returns id → content_hash for every drawer in a wing.
+//
+// This is what makes mining incremental: the miner looks up each chunk's ID,
+// compares the stored hash with the hash of the chunk it just read, and only
+// embeds the ones that differ. Rows written before the content_hash migration
+// carry ” and so never match, which forces exactly one re-embed and records
+// their hash.
+func (s *SQLitePalaceStore) DrawerHashes(ctx context.Context, wing string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, content_hash FROM drawers WHERE wing = ?`, wing)
+	if err != nil {
+		return nil, fmt.Errorf("palace: drawer hashes: %w", err)
+	}
+	defer rows.Close()
+
+	hashes := make(map[string]string)
+	for rows.Next() {
+		var id, hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			return nil, fmt.Errorf("palace: scan drawer hash: %w", err)
+		}
+		hashes[id] = hash
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("palace: drawer hashes: %w", err)
+	}
+	return hashes, nil
+}
+
 // InsertDrawer inserts a new drawer record.
 func (s *SQLitePalaceStore) InsertDrawer(ctx context.Context, d *Drawer) error {
 	var embeddingBlob []byte
@@ -45,8 +83,8 @@ func (s *SQLitePalaceStore) InsertDrawer(ctx context.Context, d *Drawer) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch, content_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID,
 		d.Wing,
 		d.Room,
@@ -59,6 +97,7 @@ func (s *SQLitePalaceStore) InsertDrawer(ctx context.Context, d *Drawer) error {
 		embeddingBlob,
 		d.CreatedAt.UTC().Format(time.RFC3339),
 		d.CreatedAt.Unix(),
+		d.ContentHash,
 	)
 	if err != nil {
 		return fmt.Errorf("palace: insert drawer: %w", err)
@@ -80,8 +119,8 @@ func (s *SQLitePalaceStore) BatchInsertDrawers(ctx context.Context, drawers []*D
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT OR REPLACE INTO drawers (id, wing, room, hall, content, source_file, chunk_index, added_by, importance, embedding, created_at, created_at_epoch, content_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("palace: prepare batch statement: %w", err)
 	}
@@ -107,6 +146,7 @@ func (s *SQLitePalaceStore) BatchInsertDrawers(ctx context.Context, drawers []*D
 			embeddingBlob,
 			d.CreatedAt.UTC().Format(time.RFC3339),
 			d.CreatedAt.Unix(),
+			d.ContentHash,
 		)
 		if err != nil {
 			return count, fmt.Errorf("palace: batch insert drawer: %w", err)

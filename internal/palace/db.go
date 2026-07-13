@@ -96,6 +96,21 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_diary_agent ON diary_entries(agent);
 	CREATE INDEX IF NOT EXISTS idx_diary_created ON diary_entries(created_at_epoch DESC);
 	`,
+
+	// Version 4: Content hash, for incremental mining.
+	//
+	// A drawer's ID is md5(source_file:chunk_index) — deliberately stable across
+	// edits, so an edited chunk replaces its predecessor instead of accumulating.
+	// The consequence is that the ID says nothing about whether the content
+	// changed, so every run re-embedded every chunk from scratch. Embedding is
+	// ~80% of a mining run's CPU. Storing the content hash lets an unchanged
+	// chunk be recognized and skipped before the embedder is ever called.
+	//
+	// Existing rows get '' and are treated as "hash unknown", so the first run
+	// after this migration re-embeds once and records hashes as it goes.
+	`
+	ALTER TABLE drawers ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+	`,
 }
 
 // OpenDB opens (or creates) a palace SQLite database at the given path with

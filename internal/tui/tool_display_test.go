@@ -214,3 +214,109 @@ func TestRenderAgentTool_SoftWrapsLongResult(t *testing.T) {
 		t.Error("expected bordered result summary")
 	}
 }
+
+// TestRenderRegularTool_Bash_OutputNotDim exercises the bash highlight branch.
+// Bash output used to fall through to the dim (240) default. With the new
+// highlightBashOutput path, output should get *some* color — either chroma's
+// tokens or the non-gray fallback foreground (252) — and not stay plain dim.
+func TestRenderRegularTool_Bash_OutputNotDim(t *testing.T) {
+	td := ToolDisplayModel{Width: 100}
+	msg := message{
+		role:    "tool",
+		tool:    "bash",
+		toolIn:  "echo hello",
+		content: "hello world\nplain text line",
+	}
+	result := td.RenderToolMessage(msg)
+	// Must not be the dim (240) gray that the default branch would produce.
+	// The gutter pipe is still 240, so look at the content line, not the pipe.
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected header + content lines, got %d: %q", len(lines), result)
+	}
+	// Body lines should not be plain dim 240. We pick the second body line
+	// because chroma may or may not tokenize the first one; the second
+	// ("plain text line") is too short to be confidently identified, so the
+	// fallback foreground (252) should win.
+	var bodyLines []string
+	for _, l := range lines {
+		if strings.Contains(l, "│") && !strings.HasPrefix(l, "●") {
+			bodyLines = append(bodyLines, l)
+		}
+	}
+	if len(bodyLines) < 2 {
+		t.Fatalf("expected at least 2 body lines, got %d: %v", len(bodyLines), bodyLines)
+	}
+	// The gutter pipe is still 240; isolate the content portion (everything
+	// after the first "│ ") and check that *that* is not dim. Chroma's
+	// fallback lexer gives foreground 231 (bright white) for unrecognized
+	// content, which is what "plain text line" should produce.
+	stripped := strings.SplitN(bodyLines[1], "│ ", 2)
+	if len(stripped) < 2 {
+		t.Fatalf("body line missing gutter: %q", bodyLines[1])
+	}
+	if strings.Contains(stripped[1], "[38;5;240m") {
+		t.Errorf("bash content fell back to dim gray (240), want non-dim color: %q", stripped[1])
+	}
+}
+
+// TestRenderRegularTool_Bash_NoContent exercises the no-content path: the
+// bash branch should not crash and should still emit a header.
+func TestRenderRegularTool_Bash_NoContent(t *testing.T) {
+	td := ToolDisplayModel{Width: 80}
+	msg := message{
+		role:   "tool",
+		tool:   "bash",
+		toolIn: "ls",
+	}
+	result := td.RenderToolMessage(msg)
+	if !strings.Contains(result, "bash") {
+		t.Error("expected tool name in header")
+	}
+}
+
+// TestRenderRegularTool_Read_ToolIn_ProducesFilePathInHeader verifies the
+// pre-existing happy path: a read message with toolIn renders the path in
+// the header. The pre-fix subagent path set tool: but not toolIn, so this
+// regression test pins the contract that renderRegularTool relies on.
+func TestRenderRegularTool_Read_ToolIn_ProducesFilePathInHeader(t *testing.T) {
+	td := ToolDisplayModel{Width: 100}
+	msg := message{
+		role:    "tool",
+		tool:    "read",
+		toolIn:  "internal/tui/tool_display.go",
+		content: "     1\tpackage tui\n     2\t",
+	}
+	result := td.RenderToolMessage(msg)
+	if !strings.Contains(result, "internal/tui/tool_display.go") {
+		t.Errorf("expected file path in header, got: %s", result)
+	}
+	// Content is chroma-tokenized, so the literal "package tui" gets split by
+	// ANSI escape codes. Strip escapes and confirm the body text is present.
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "package tui") {
+		t.Errorf("expected file content in body, got: %s", plain)
+	}
+}
+
+// stripANSI removes ANSI escape sequences from s. Used by tests that need to
+// match chroma-highlighted output without writing exact escape sequences.
+func stripANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inEscape := false
+	for _, r := range s {
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		if r == 0x1b {
+			inEscape = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +112,80 @@ func TestMockAgentPromptCancelledDuringDelay(t *testing.T) {
 	}
 	if resp.StopReason != acp.StopReasonCancelled {
 		t.Fatalf("StopReason = %q", resp.StopReason)
+	}
+}
+
+// newAgentFromEnv is main's configuration step. Defaults must apply when the
+// knobs are unset, and both knobs must be honored when they are.
+func TestNewAgentFromEnv(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv("PI_MOCK_RESPONSE", "")
+		t.Setenv("PI_MOCK_DELAY_MS", "")
+
+		a := newAgentFromEnv()
+		if a.responseText != "Mock ACP response" {
+			t.Errorf("responseText = %q, want the default", a.responseText)
+		}
+		if a.delay != 0 {
+			t.Errorf("delay = %s, want 0 when unset", a.delay)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		t.Setenv("PI_MOCK_RESPONSE", "hello")
+		t.Setenv("PI_MOCK_DELAY_MS", "250")
+
+		a := newAgentFromEnv()
+		if a.responseText != "hello" {
+			t.Errorf("responseText = %q, want hello", a.responseText)
+		}
+		if a.delay != 250*time.Millisecond {
+			t.Errorf("delay = %s, want 250ms", a.delay)
+		}
+	})
+}
+
+// Logout is part of the ACP agent surface; a client calling it must get a clean
+// response rather than an unimplemented error.
+func TestMockAgent_Logout(t *testing.T) {
+	a := &mockAgent{}
+	if _, err := a.Logout(context.Background(), acp.LogoutRequest{}); err != nil {
+		t.Errorf("Logout: %v", err)
+	}
+	if _, err := a.Authenticate(context.Background(), acp.AuthenticateRequest{}); err != nil {
+		t.Errorf("Authenticate: %v", err)
+	}
+}
+
+// A prompt canceled while the mock is sleeping must report StopReasonCancelled
+// and surface the context error, not deliver its canned response anyway.
+func TestMockAgent_PromptCancelledDuringDelay(t *testing.T) {
+	a := &mockAgent{responseText: "should not be delivered", delay: 10 * time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled
+
+	resp, err := a.Prompt(ctx, acp.PromptRequest{})
+	if err == nil {
+		t.Fatal("expected the context error to surface")
+	}
+	if resp.StopReason != acp.StopReasonCancelled {
+		t.Errorf("StopReason = %v, want %v", resp.StopReason, acp.StopReasonCancelled)
+	}
+}
+
+// serve must return when the peer closes the connection — an EOF on stdin ends
+// the session. If it did not, the mock would hang and wedge any test using it.
+func TestServe_ReturnsWhenPeerCloses(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serve(io.Discard, strings.NewReader("")) // immediate EOF
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return after the peer closed the connection")
 	}
 }

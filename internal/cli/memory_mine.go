@@ -305,13 +305,72 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		}
 	}
 
-	cfg := &palace.MineConfig{Wing: wing, Progress: progress}
+	// Phase progress: redrawn in place with \r so a long embed shows which file
+	// it is currently working through instead of a blank, apparently frozen bar.
+	phase := func(stage, item string, done, total int) {
+		spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
+		currentPhase = stage
+
+		pct := 0.0
+		if total > 0 {
+			pct = float64(done) / float64(total) * 100.0
+		}
+		filled := int(pct / 100.0 * float64(barWidth))
+
+		displayItem := item
+		if len(displayItem) > 38 {
+			displayItem = "..." + displayItem[len(displayItem)-35:]
+		}
+
+		fmt.Printf("\r %s  %-8s %s  %-38s %d/%d chunks  %s\x1b[K",
+			spinnerFrames[spinnerIdx], stage,
+			progressBar(filled, barWidth), displayItem,
+			done, total,
+			formatDuration(time.Since(startTime)))
+	}
+
+	cfg := &palace.MineConfig{Wing: wing, Progress: progress, Phase: phase}
 	ctx := context.Background()
 
 	dbPath := filepath.Join(absDir, ".pi-go", "palace.db")
+	modelPath := defaultPalaceModelPath()
+
+	// Name the database and model up front. Mining writes to a per-project DB and
+	// loads a model from a shared cache, and neither location is obvious from the
+	// command line — so a run that appeared to do nothing (or that re-embedded
+	// everything) gave no clue which store it had actually touched.
+	fmt.Printf("Palace DB: %s\n", dbPath)
+	fmt.Printf("Model:     %s\n", modelPath)
+	fmt.Printf("Wing:      %s\n\n", wing)
+
+	// Auto-init: create the palace directory and fetch the model if needed, so
+	// `pi memory mine` works on a fresh checkout without a separate `memory init`
+	// / `memory model download` step.
+	//
+	// ModelReady checks for the fp32 weights specifically, not just for the
+	// directory. That matters for repair as much as for first use: installs made
+	// before the fp32 switch hold only model_qint8_arm64.onnx, which loads fine
+	// but runs ~3x slower on the pure-Go backend, so a directory-exists check
+	// would leave them on the slow model indefinitely.
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return fmt.Errorf("creating palace directory: %w", err)
+	}
+	if !palace.ModelReady(modelPath) {
+		fmt.Printf("Embedding model not found (or is the older quantized build) — downloading %s ...\n",
+			palace.DetectPlatformOnnxFile())
+		dest := filepath.Dir(modelPath)
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return fmt.Errorf("creating model directory: %w", err)
+		}
+		if _, err := palace.DownloadModel(dest, palace.DetectPlatformOnnxFile()); err != nil {
+			return fmt.Errorf("downloading embedding model: %w", err)
+		}
+		fmt.Printf("Model ready: %s\n\n", modelPath)
+	}
+
 	p, err := palace.New(
 		palace.WithDBPath(dbPath),
-		palace.WithModelPath(defaultPalaceModelPath()),
+		palace.WithModelPath(modelPath),
 	)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
