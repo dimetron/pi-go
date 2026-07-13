@@ -169,10 +169,14 @@ func run(ctx context.Context, cfg config) int {
 
 	exitCode := exitCodeFor(piCmd.Run(), cfg.stderr)
 
-	// Stop the log tailer and let it drain.
+	// Stop the log tailer, then drain it before reaping. Canceling kills the
+	// tailer, which closes the write end of the pipe and lets the scanner read
+	// what was already emitted and see EOF. logCmd.Wait must come last: it
+	// closes the read end of the pipe, so calling it before the scanner has
+	// finished would truncate denials that were logged but not yet read.
 	cancel()
-	_ = logCmd.Wait()
 	logWg.Wait()
+	_ = logCmd.Wait()
 
 	return exitCode
 }

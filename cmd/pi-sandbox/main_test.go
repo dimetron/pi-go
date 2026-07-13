@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -110,6 +112,51 @@ func TestExitCodeFor(t *testing.T) {
 	}
 }
 
+// safeBuffer is a bytes.Buffer that tolerates concurrent writes. run shares one
+// stderr between the denial tailer, the log stream's stderr and the child's
+// stderr, all of which write from separate goroutines. In production that writer
+// is os.Stderr, an *os.File, which is safe for concurrent use; a bare
+// bytes.Buffer is not.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// stubChildAwaitingDenial writes a script that stands in for sandbox-exec. It
+// ignores the profile and binary it is handed and exits once the tailer has
+// recorded a denial, so the child cannot outrace the log stream. Without it the
+// child would exit before the stub tailer had written a line, run would cancel
+// the tailer, and the denial would never be recorded — a race the real
+// `log stream` does not have, since it outlives the sandboxed process.
+func stubChildAwaitingDenial(t *testing.T, logPath string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "stub-sandbox-exec")
+	script := fmt.Sprintf(`#!/bin/sh
+for _ in $(seq 1 500); do
+	if grep -q deny %q 2>/dev/null; then exit 0; fi
+	sleep 0.01
+done
+exit 0
+`, logPath)
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("write stub child: %v", err)
+	}
+	return path
+}
+
 // run drives the whole launcher with stub commands standing in for sandbox-exec
 // and the macOS log stream, so the orchestration is exercised without spawning
 // a real sandbox.
@@ -145,7 +192,7 @@ func TestRun(t *testing.T) {
 	t.Run("missing pi binary fails", func(t *testing.T) {
 		cfg := newCfg(t, "true")
 		cfg.piName = "pi-does-not-exist-xyz"
-		var stderr bytes.Buffer
+		var stderr safeBuffer
 		cfg.stderr = &stderr
 		if code := run(t.Context(), cfg); code != 1 {
 			t.Errorf("exit code = %d, want 1", code)
@@ -158,7 +205,7 @@ func TestRun(t *testing.T) {
 	t.Run("unopenable log file fails", func(t *testing.T) {
 		cfg := newCfg(t, "true")
 		cfg.logPath = filepath.Join(t.TempDir(), "no-such-dir", "sandbox.log")
-		var stderr bytes.Buffer
+		var stderr safeBuffer
 		cfg.stderr = &stderr
 		if code := run(t.Context(), cfg); code != 1 {
 			t.Errorf("exit code = %d, want 1", code)
@@ -169,7 +216,11 @@ func TestRun(t *testing.T) {
 		cfg := newCfg(t, "true")
 		// Stub log stream: one header line (dropped) and one denial (kept).
 		cfg.logCmd = []string{"printf", "Filtering the log data\ndeny file-write /etc/passwd\n"}
-		var stderr bytes.Buffer
+		// A child that exits instantly would let run cancel the tailer before it
+		// ever wrote anything. The real `log stream` outlives the child, so stand
+		// in a child that waits for the denial to be tailed.
+		cfg.sandboxCmd = stubChildAwaitingDenial(t, cfg.logPath)
+		var stderr safeBuffer
 		cfg.stderr = &stderr
 
 		if code := run(t.Context(), cfg); code != 0 {
