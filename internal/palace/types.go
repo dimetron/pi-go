@@ -15,6 +15,10 @@ type Drawer struct {
 	Importance int       `json:"importance"` // 0-10
 	Embedding  []float32 `json:"-"`          // not serialized
 	CreatedAt  time.Time `json:"created_at"`
+	// ContentHash identifies the chunk's content. The miner compares it with the
+	// stored hash to skip re-embedding chunks that have not changed; the ID alone
+	// cannot tell, as it is derived from the source path and chunk index only.
+	ContentHash string `json:"content_hash,omitempty"`
 }
 
 // DrawerInput is the input for creating a new drawer.

@@ -6,14 +6,58 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	// Batch size for embedding multiple chunks at once.
-	embedBatchSize = 32
+	// embedBatchSize is how many chunks are embedded per call.
+	//
+	// Counter-intuitively a *smaller* batch is both faster and far cheaper in
+	// memory here. A bigger batch means bigger intermediate tensors, and gomlx's
+	// simplego backend recycles those through a sync.Pool that Go drains on every
+	// GC — so under churn the large buffers get re-allocated rather than reused,
+	// and peak RSS balloons. Nothing about the work is more efficient in bulk:
+	// the backend is compute-bound on per-token matmuls either way.
+	//
+	// Measured on an M2 Max mining this repo (17,731 chunks, fp32 model):
+	//
+	//	batch  chunks/sec   peak RSS   full run
+	//	  32       4.3       4748 MB    69 min
+	//	  16       4.8       1665 MB    62 min
+	//	   8       6.9       1808 MB    43 min   <- chosen
+	//	   4       5.3       1686 MB    55 min
+	//
+	// 32 was the original value: the slowest of the four *and* 2.6x the memory.
+	embedBatchSize = 8
 )
+
+// embedWorkers decides how many chunks are embedded in parallel.
+//
+// gomlx's intra-op parallelism does not scale: with a single embedder the miner
+// used only ~25% of the CPU, with roughly a quarter of all samples burnt in the
+// Go scheduler (usleep, futex wait/signal, work-stealing) rather than in matmuls.
+// Running several embedders concurrently reclaims the idle cores.
+//
+// Measured on an M2 Max (12 cores), fp32 model, batch of 8:
+//
+//	workers  chunks/sec
+//	   1        7.1
+//	   2       11.4
+//	   4       14.1   <- chosen
+//	   6       10.5   (contention; slower again)
+//
+// Each worker holds its own model instance, so this trades memory for speed;
+// four is where the curve turns over.
+func embedWorkers(modelPath string) int {
+	if modelPath == "" {
+		return 1
+	}
+	return min(maxEmbedSessions, max(1, runtime.NumCPU()/3))
+}
 
 // MineProject walks a directory, chunks source files, and inserts them as
 // drawers into the palace. It respects .gitignore and mempalace.yaml room
@@ -70,12 +114,28 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 			if name[0] == '.' && name != "." || skipDirNames[name] {
 				return filepath.SkipDir
 			}
+			// Prune whole ignored trees rather than rediscovering them file by
+			// file: git reports a fully-ignored directory as one entry, and
+			// descending into it means embedding everything inside.
+			if rel, relErr := filepath.Rel(absDir, path); relErr == nil && rel != "." {
+				if isGitIgnoredSet(rel, ignoredSet) {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 
-		// Check file extension.
+		// Check file extension. An empty ext means the file has no "." suffix at
+		// all (LICENSE, Makefile, a stray binary) — never mine those.
 		ext := strings.ToLower(filepath.Ext(path))
-		if !supportedExtensions[ext] {
+		if ext == "" || !supportedExtensions[ext] {
+			return nil
+		}
+
+		// A permitted extension is not proof of text: minified blobs and embedded
+		// payloads turn up under .json/.txt, and embedding them costs exactly as
+		// much as real source while producing a meaningless vector.
+		if isBinaryFile(path) {
 			return nil
 		}
 
@@ -165,34 +225,117 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		return result, nil
 	}
 
-	// Phase 3: Batch embed all chunks.
+	// Phase 2b: Drop chunks whose content is unchanged since the last run.
+	//
+	// This must happen *before* embedding: embedding is ~80% of a mining run's
+	// CPU, so re-embedding a chunk only to discover it is identical is the single
+	// most expensive thing the miner can do. A drawer's ID is derived from
+	// (source_file, chunk_index) and says nothing about content, so the stored
+	// content hash is the only way to tell.
+	//
+	// A store lookup failure is not fatal — fall back to embedding everything,
+	// which is merely the old behavior.
+	if existing, hashErr := palace.store.DrawerHashes(ctx, cfg.Wing); hashErr != nil {
+		slog.Warn("mine: could not load content hashes; re-embedding everything", "error", hashErr)
+	} else if len(existing) > 0 {
+		kept := allChunks[:0]
+		for _, c := range allChunks {
+			id := GenerateDrawerID(c.wing, c.room, c.relPath, c.chunkIdx, c.content)
+			if prev, ok := existing[id]; ok && prev != "" && prev == HashContent(c.content) {
+				result.Skipped++
+				continue
+			}
+			kept = append(kept, c)
+		}
+		if skipped := len(allChunks) - len(kept); skipped > 0 {
+			slog.Info("mine: skipping unchanged chunks", "skipped", skipped, "to_embed", len(kept))
+		}
+		allChunks = kept
+	}
+
+	if len(allChunks) == 0 {
+		return result, nil
+	}
+
+	// Phase 3: Embed all chunks, several batches at a time.
+	//
+	// embeddings is indexed in lockstep with allChunks. It used to be built with
+	// append() and only on success, so a single failed batch shifted every later
+	// chunk onto someone else's vector — silently, since Phase 4 just reads
+	// embeddings[i]. Writing results at their own index cannot drift: a failed
+	// batch leaves nils, and those chunks are stored without an embedding rather
+	// than with the wrong one.
 	var embeddings [][]float32
 	if palace.embedder != nil {
-		// Embed in batches.
 		texts := make([]string, len(allChunks))
 		for i, c := range allChunks {
 			texts[i] = c.content
 		}
+		embeddings = make([][]float32, len(texts))
 
-		slog.Info("mine: embedding chunks", "count", len(texts))
-		totalBatches := (len(texts) + embedBatchSize - 1) / embedBatchSize
-		for i := 0; i < len(texts); i += embedBatchSize {
-			end := i + embedBatchSize
-			if end > len(texts) {
-				end = len(texts)
-			}
-			batch, err := palace.embedder.Embed(texts[i:end])
+		workers := embedWorkers(palace.config.ModelPath)
+		slog.Info("mine: embedding chunks", "count", len(texts), "workers", workers, "batch", embedBatchSize)
+
+		// Each worker owns an embedder: hugot pipelines are not safe to call
+		// concurrently, and one shared embedder is what limited the run to ~25%
+		// CPU. Worker 0 reuses the palace's own embedder so the common
+		// single-worker case allocates nothing extra.
+		embs := make([]*Embedder, 0, workers)
+		embs = append(embs, palace.embedder)
+		for len(embs) < workers {
+			e, err := NewEmbedder(palace.config.ModelPath)
 			if err != nil {
-				slog.Warn("mine: embedding batch failed", "error", err)
-			} else {
-				embeddings = append(embeddings, batch...)
+				slog.Warn("mine: extra embedder failed; continuing with fewer workers",
+					"have", len(embs), "want", workers, "error", err)
+				break
 			}
-			// Report embedding progress (30-70% of total).
-			if cfg.Progress != nil {
-				batchIdx := i / embedBatchSize
-				pct := 30 + (70-30)*batchIdx/totalBatches
-				cfg.Progress("", pct, 0, 0)
-			}
+			embs = append(embs, e)
+			defer e.Close()
+		}
+
+		type batchJob struct{ start, end int }
+		jobs := make(chan batchJob)
+
+		var done atomic.Int64
+		var wg sync.WaitGroup
+		for _, e := range embs {
+			wg.Add(1)
+			go func(e *Embedder) {
+				defer wg.Done()
+				for j := range jobs {
+					out, err := e.Embed(texts[j.start:j.end])
+					if err != nil {
+						slog.Warn("mine: embedding batch failed", "error", err)
+						// Leave nils: better no vector than a misaligned one.
+						continue
+					}
+					copy(embeddings[j.start:j.end], out)
+
+					n := done.Add(int64(j.end - j.start))
+					// Announce progress as batches land. Embedding is by far the
+					// slowest phase and works on chunks rather than files, so
+					// without this the UI sat blank for minutes and looked hung.
+					//
+					// Only Phase reports here. The old Progress("") call also drew a
+					// line, and because both redraw with \r the blank one landed last
+					// and overwrote this one — leaving a frozen "829/832 files" on
+					// screen for the entire embed, which is what made a working run
+					// look wedged.
+					if cfg.Phase != nil {
+						cfg.Phase("embed", allChunks[j.start].relPath, int(n), len(texts))
+					}
+				}
+			}(e)
+		}
+
+		for i := 0; i < len(texts); i += embedBatchSize {
+			jobs <- batchJob{start: i, end: min(i+embedBatchSize, len(texts))}
+		}
+		close(jobs)
+		wg.Wait()
+
+		if cfg.Phase != nil {
+			cfg.Phase("embed", "", len(texts), len(texts))
 		}
 	}
 
@@ -227,6 +370,9 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 			Importance: 3,
 			Embedding:  embedding,
 			CreatedAt:  now,
+			// Recorded so the next run can recognize this chunk as unchanged and
+			// skip re-embedding it.
+			ContentHash: HashContent(chunk.content),
 		})
 	}
 

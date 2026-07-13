@@ -11,6 +11,9 @@ type PalaceStore interface {
 	GetDrawer(ctx context.Context, id string) (*Drawer, error)
 	ListDrawers(ctx context.Context, filter DrawerFilter) ([]*Drawer, error)
 	CountDrawers(ctx context.Context) (int, error)
+	// DrawerHashes returns id → content_hash for a wing, so the miner can skip
+	// re-embedding chunks whose content has not changed since the last run.
+	DrawerHashes(ctx context.Context, wing string) (map[string]string, error)
 
 	// Embedding operations
 	GetEmbedding(ctx context.Context, id string) (*EmbeddingRow, error)

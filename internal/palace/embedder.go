@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/knights-analytics/hugot"
@@ -32,16 +33,26 @@ type Embedder struct {
 	pipeline *pipelines.FeatureExtractionPipeline
 }
 
-// NewEmbedder creates an Embedder backed by hugot's pure-Go (GoMLX) runtime.
+// NewEmbedder creates an Embedder on the compiled-in inference backend.
+//
+// The default build is pure Go (no cgo, no native libraries). Building with
+// -tags ORT swaps in ONNX Runtime with CoreML, which runs on the Apple GPU and
+// Neural Engine. Which backend is compiled in also decides which weights file to
+// use — see platformOnnxFile — so the two must be chosen together.
 func NewEmbedder(modelPath string) (*Embedder, error) {
-	session, err := hugot.NewGoSession(context.Background())
+	session, err := newSession(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("create hugot session: %w", err)
+		return nil, fmt.Errorf("create hugot session (%s): %w", backendName, err)
 	}
 
 	config := hugot.FeatureExtractionConfig{
 		ModelPath: modelPath,
 		Name:      "palace-embedder",
+		// Pin the weights file. hugot otherwise requires the model directory to
+		// hold exactly one .onnx and errors on ambiguity — so a cache holding both
+		// the quantized and the fp32 model would fail to load. Naming it also
+		// guarantees we get the variant this backend actually wants.
+		OnnxFilename: OnnxModelFile(),
 	}
 	pipeline, err := hugot.NewPipeline(session, config)
 	if err != nil {
@@ -94,18 +105,45 @@ func DownloadModel(dest string, onnxFilePath string) (string, error) {
 	)
 }
 
-// DetectPlatformOnnxFile returns the recommended ONNX file for the current platform.
+// DetectPlatformOnnxFile returns the ONNX weights file to download for the
+// compiled-in backend.
+//
+// The right answer depends on the backend, not just the platform, which is why
+// this delegates to platformOnnxFile in the build-tagged file:
+//
+//   - pure Go (default): fp32. simplego has no int8 kernels and runs the
+//     quantized model ~3x slower than fp32 (1.8 vs 5.6 chunks/sec, M2 Max).
+//   - ORT + CoreML: int8 on arm64. ONNX Runtime has optimized ARM int8 kernels
+//     and the Neural Engine is an int8 engine, so quantization is a real win.
+//
+// Picking the wrong pair silently costs a large multiple of runtime.
 func DetectPlatformOnnxFile() string {
-	// Detect ARM64 (Apple Silicon)
-	if runtime.GOARCH == "arm64" {
-		return "onnx/model_qint8_arm64.onnx"
+	return platformOnnxFile()
+}
+
+// OnnxModelFile is the bare weights filename the embedder loads.
+func OnnxModelFile() string {
+	return filepath.Base(platformOnnxFile())
+}
+
+// EmbedderBackend names the compiled-in inference backend.
+func EmbedderBackend() string { return backendName }
+
+// ModelReady reports whether modelDir already holds the weights this backend
+// needs.
+//
+// A directory can exist and still be unusable: installs made before the fp32
+// switch hold only model_qint8_arm64.onnx, which the pure-Go backend will load
+// and then run ~3x slower. Checking for the *specific* file, rather than merely
+// for the directory, is what lets callers repair such a cache instead of quietly
+// using the wrong model forever. It also means switching backends re-downloads
+// the variant that backend wants.
+func ModelReady(modelDir string) bool {
+	if modelDir == "" {
+		return false
 	}
-	// For x86_64, use the base model (AVX512 variants need CPU feature probing)
-	if runtime.GOARCH == "amd64" {
-		return "onnx/model.onnx"
-	}
-	// Fallback to base model
-	return "onnx/model.onnx"
+	info, err := os.Stat(filepath.Join(modelDir, OnnxModelFile()))
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.

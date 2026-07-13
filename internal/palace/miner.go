@@ -2,6 +2,7 @@ package palace
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,21 +12,48 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Default chunk size for project mining.
-const defaultChunkSize = 1500
+// defaultChunkSize is the chunk size for project mining, in characters.
+//
+// It must not exceed what the embedder can actually consume. Embed() truncates
+// every input to maxCharLength (512 chars ≈ the model's 128-token cap), so the
+// previous 1500-char chunks were silently cut down before embedding: measured
+// across this repo, 98% of chunks were truncated and 59.7% of all mined text
+// never reached the model at all. The drawer kept the full 1500 chars, but its
+// vector only described the first third — so most indexed content was invisible
+// to semantic search while appearing to be indexed.
+//
+// 512 is the largest value that still fits: probing the real tokenizer, a
+// 512-char chunk of dense Go source still influences its own embedding (cosine
+// of the full chunk against its first half is 0.80, not ~1.0), which it would
+// not if the tail had been dropped.
+//
+// This produces roughly 3x more chunks than before. That cost is real but it is
+// the price of the index actually covering the corpus; it is offset by the fp32
+// model switch (3.1x faster embedding) and by hash-based incremental mining,
+// which skips unchanged chunks entirely on re-runs.
+const defaultChunkSize = 512
 
-// Default overlap between chunks.
-const defaultChunkOverlap = 200
+// defaultChunkOverlap keeps the same ~13% overlap ratio the 1500/200 pair had.
+const defaultChunkOverlap = 64
 
 // ProgressFunc is called after each file is processed during mining.
 // file is the relative path, added/skipped/errors are counts for that file.
 type ProgressFunc func(file string, added, skipped, errors int)
+
+// PhaseFunc reports progress *inside* a long phase, before the work is done.
+//
+// Embedding dominates a mining run and operates on chunks rather than files, so
+// the old per-file callback went silent for minutes at a time and the run looked
+// hung. PhaseFunc is called with the item about to be processed — the file the
+// next chunk came from — so a slow phase shows where it actually is.
+type PhaseFunc func(stage, item string, done, total int)
 
 // MineConfig is the per-project configuration loaded from mempalace.yaml.
 type MineConfig struct {
 	Wing     string       `yaml:"wing"`
 	Rooms    []RoomDef    `yaml:"rooms"`
 	Progress ProgressFunc `yaml:"-"`
+	Phase    PhaseFunc    `yaml:"-"`
 }
 
 // RoomDef defines a room with glob patterns and optional keywords for
@@ -42,6 +70,32 @@ type MineResult struct {
 	Skipped   int // duplicates
 	Processed int
 	Errors    int
+}
+
+// binarySniffBytes is how much of a file is inspected to decide if it is binary.
+const binarySniffBytes = 8192
+
+// isBinaryFile reports whether path looks like binary content.
+//
+// A NUL byte cannot occur in valid UTF-8 text, so its presence in the first few
+// KB is the same heuristic git uses. Extension alone is not enough: a .json or
+// .txt can hold a minified blob or an embedded payload, and embedding that is
+// pure waste — it produces a meaningless vector at the same CPU cost as real
+// source. Unreadable files are treated as binary so they are skipped rather than
+// failing later.
+func isBinaryFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+
+	buf := make([]byte, binarySniffBytes)
+	n, err := f.Read(buf)
+	if err != nil && n == 0 {
+		return true
+	}
+	return bytes.IndexByte(buf[:n], 0) >= 0
 }
 
 // supportedExtensions lists file extensions eligible for project mining.
@@ -305,10 +359,28 @@ func gitIgnoredSet(dir string) map[string]bool {
 	return ignored
 }
 
-// isGitIgnoredSet checks whether a relative path is in the ignored set.
+// isGitIgnoredSet reports whether relPath — or any directory above it — is in
+// the ignored set.
+//
+// Walking the ancestors is essential, not defensive. `git ls-files --others
+// --ignored` collapses a fully-ignored directory into a *single* entry for the
+// directory itself ("tmp/pi/") instead of listing the files inside it. An exact
+// per-file lookup therefore matches nothing under such a directory, so every
+// file in it was mined and embedded — and embedding is where a mining run spends
+// ~80% of its CPU.
 func isGitIgnoredSet(relPath string, ignored map[string]bool) bool {
 	if ignored == nil {
 		return false
 	}
-	return ignored[filepath.ToSlash(relPath)]
+	p := filepath.ToSlash(relPath)
+	for {
+		if ignored[p] {
+			return true
+		}
+		i := strings.LastIndexByte(p, '/')
+		if i <= 0 {
+			return false
+		}
+		p = p[:i]
+	}
 }
