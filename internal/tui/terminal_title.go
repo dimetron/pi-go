@@ -1,20 +1,18 @@
 package tui
 
 import (
-	"fmt"
-	"io"
-	"os"
 	"strings"
 )
 
 // terminalTitleApp is the constant prefix used when constructing the terminal
-// window/tab title for the TUI. pi-mono uses the same prefix so users get a
-// consistent label across both implementations.
-const terminalTitleApp = "pi-go"
+// window/tab title for the TUI. The π matches the mascot on the sidebar (see
+// internal/tui/face.go); keeping the prefix short leaves room for the
+// prompt-derived title in a typical tab.
+const terminalTitleApp = "π -"
 
-// terminalTitleMax caps the OSC 0 payload so it fits on a single terminal
-// line. The terminal itself will truncate anything longer, but doing it here
-// keeps the title predictable.
+// terminalTitleMax caps the title so it fits on a single terminal line. The
+// terminal itself will truncate anything longer, but doing it here keeps the
+// title predictable.
 const terminalTitleMax = 200
 
 // deriveSessionTitle produces a short, single-line session title from a user
@@ -23,7 +21,7 @@ const terminalTitleMax = 200
 // be tuned separately. The title is intended to be:
 //   - short enough to fit in a terminal tab/window title
 //   - stable across a turn (derived once, not re-derived on every redraw)
-//   - safe to embed inside an OSC 0 sequence
+//   - safe to embed in a terminal escape sequence
 func deriveSessionTitle(prompt string) string {
 	title := strings.TrimSpace(prompt)
 	if title == "" {
@@ -38,14 +36,18 @@ func deriveSessionTitle(prompt string) string {
 	return title
 }
 
-// formatTerminalTitle builds the OSC 0 payload "pi-go: <title>" (or just
-// "pi-go" when title is empty). Any control characters in title have already
-// been stripped by session.sanitizeSessionTitle — this is a defensive net for
+// formatTerminalTitle builds the window title "π - <title>" (or just "π -"
+// when title is empty). Any control characters in title have already been
+// stripped by session.sanitizeSessionTitle — this is a defensive net for
 // callers that don't go through the session service.
+//
+// The result is handed to Bubble Tea as View.WindowTitle; the renderer wraps it
+// in the escape sequence and writes it in order with the frame. Scrubbing
+// controls here is what keeps that envelope well-formed.
 func formatTerminalTitle(title string) string {
 	title = strings.TrimSpace(title)
-	// Strip anything that could break the OSC 0 envelope: ESC, BEL, CR, LF,
-	// TAB, and other C0 controls. Keep printable runes only.
+	// Strip anything that could break the escape-sequence envelope: ESC, BEL,
+	// CR, LF, TAB, and other C0 controls. Keep printable runes only.
 	var b strings.Builder
 	for _, r := range title {
 		if r < 0x20 || r == 0x7F {
@@ -58,35 +60,5 @@ func formatTerminalTitle(title string) string {
 	if clean == "" {
 		return terminalTitleApp
 	}
-	return terminalTitleApp + ": " + clean
+	return terminalTitleApp + " " + clean
 }
-
-// setTerminalTitle writes the OSC 0 sequence for the given title to w. The
-// sequence is "ESC ] 0 ; <title> BEL" — the canonical "set window title" form
-// supported by every major terminal. Pass io.Discard to skip the write
-// entirely (used in tests).
-func setTerminalTitle(w io.Writer, title string) {
-	if w == nil {
-		return
-	}
-	// OSC 0;title BEL — ESC ] 0 ; <title> \x07
-	_, _ = fmt.Fprintf(w, "\x1b]0;%s\x07", formatTerminalTitle(title))
-}
-
-// resetTerminalTitle clears the terminal window/tab title. Some shells (tmux,
-// screen) cache the title across invocations; explicitly resetting on quit
-// prevents pi from leaving "pi-go: my task" stuck on the tab after exit.
-func resetTerminalTitle(w io.Writer) {
-	if w == nil {
-		return
-	}
-	_, _ = fmt.Fprint(w, "\x1b]0;\x07")
-}
-
-// defaultTitleWriter is the destination for OSC 0 writes in production. It
-// points at os.Stdout so the terminal title updates immediately. Bubble Tea
-// also writes to os.Stdout, so the OSC 0 bytes can interleave with rendered
-// frames in theory — but OSC 0 is non-displaying and the terminal processes it
-// atomically, so the interleaving is harmless in practice. Tests override this
-// via a buffer.
-var defaultTitleWriter io.Writer = os.Stdout

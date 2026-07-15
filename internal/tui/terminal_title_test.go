@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"sync"
@@ -127,14 +126,14 @@ func TestFormatTerminalTitle(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"", "pi-go"},
-		{"fix bug", "pi-go: fix bug"},
-		{"  spaced  ", "pi-go: spaced"},
+		{"", "π -"},
+		{"fix bug", "π - fix bug"},
+		{"  spaced  ", "π - spaced"},
 		// Control characters are replaced with spaces — this keeps the
 		// OSC 0 payload printable and safe.
-		{"with\nnewline", "pi-go: with newline"},
-		{"with\x1bESC", "pi-go: with ESC"},
-		{"with\x07BEL", "pi-go: with BEL"},
+		{"with\nnewline", "π - with newline"},
+		{"with\x1bESC", "π - with ESC"},
+		{"with\x07BEL", "π - with BEL"},
 	}
 	for _, c := range cases {
 		got := formatTerminalTitle(c.in)
@@ -144,100 +143,234 @@ func TestFormatTerminalTitle(t *testing.T) {
 	}
 }
 
-func TestSetTerminalTitle_WritesOSC0(t *testing.T) {
-	var buf bytes.Buffer
-	setTerminalTitle(&buf, "hello")
-	got := buf.String()
-	want := "\x1b]0;pi-go: hello\x07"
-	if got != want {
-		t.Errorf("setTerminalTitle wrote %q, want %q", got, want)
-	}
-}
-
-func TestSetTerminalTitle_NilWriter(t *testing.T) {
-	// Must not panic when writer is nil (used to skip work in tests).
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("setTerminalTitle(nil) panicked: %v", r)
-		}
-	}()
-	setTerminalTitle(nil, "anything")
-}
-
-func TestResetTerminalTitle_WritesEmptyOSC0(t *testing.T) {
-	var buf bytes.Buffer
-	resetTerminalTitle(&buf)
-	got := buf.String()
-	want := "\x1b]0;\x07"
-	if got != want {
-		t.Errorf("resetTerminalTitle wrote %q, want %q", got, want)
-	}
-}
-
 func TestApplySessionTitle_EmptyPrompt_NoOp(t *testing.T) {
 	m, svc := newTitleTestModel(t)
-	// Capture the OSC 0 write so the test doesn't pollute test output.
-	var buf bytes.Buffer
-	saved := defaultTitleWriter
-	defaultTitleWriter = &buf
-	t.Cleanup(func() { defaultTitleWriter = saved })
 
 	m.applySessionTitle("   ")
 	if svc.lastTitle() != "" {
 		t.Errorf("SetSessionTitle should not be called for empty prompt, got %q", svc.lastTitle())
 	}
-	if buf.Len() != 0 {
-		t.Errorf("OSC 0 should not be emitted for empty prompt, got %q", buf.String())
+	if m.sessionTitle != "" {
+		t.Errorf("sessionTitle should stay empty for empty prompt, got %q", m.sessionTitle)
 	}
 }
 
-func TestApplySessionTitle_RecordsAndEmits(t *testing.T) {
+func TestApplySessionTitle_RecordsOnSessionAndModel(t *testing.T) {
 	m, svc := newTitleTestModel(t)
-	var buf bytes.Buffer
-	saved := defaultTitleWriter
-	defaultTitleWriter = &buf
-	t.Cleanup(func() { defaultTitleWriter = saved })
 
 	m.applySessionTitle("fix the linter issue in agent.go")
 
 	if got := svc.lastTitle(); got != "fix the linter issue in agent.go" {
 		t.Errorf("SetSessionTitle recorded %q, want %q", got, "fix the linter issue in agent.go")
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("\x1b]0;pi-go: fix the linter issue in agent.go\x07")) {
-		t.Errorf("OSC 0 not emitted as expected, got %q", buf.String())
+	if got := m.sessionTitle; got != "fix the linter issue in agent.go" {
+		t.Errorf("sessionTitle = %q, want %q", got, "fix the linter issue in agent.go")
 	}
 }
 
-func TestApplySessionTitle_NilAgent_StillEmitsOSC(t *testing.T) {
+func TestApplySessionTitle_NilAgent_StillSetsModelTitle(t *testing.T) {
 	// Even with no agent, the terminal title should still update — the
 	// tab/window title is independent of session-metadata storage.
 	m := &model{cfg: Config{}}
-	var buf bytes.Buffer
-	saved := defaultTitleWriter
-	defaultTitleWriter = &buf
-	t.Cleanup(func() { defaultTitleWriter = saved })
 
 	m.applySessionTitle("orphan turn")
-	if !bytes.Contains(buf.Bytes(), []byte("pi-go: orphan turn")) {
-		t.Errorf("OSC 0 must still be emitted without an agent, got %q", buf.String())
+	if got := m.sessionTitle; got != "orphan turn" {
+		t.Errorf("sessionTitle = %q, want %q", got, "orphan turn")
 	}
 }
 
 func TestApplySessionTitle_MultilinePrompt_TruncatesToFirstLine(t *testing.T) {
 	m, svc := newTitleTestModel(t)
-	var buf bytes.Buffer
-	saved := defaultTitleWriter
-	defaultTitleWriter = &buf
-	t.Cleanup(func() { defaultTitleWriter = saved })
 
 	m.applySessionTitle("first line\nsecond line\nthird")
 	if got := svc.lastTitle(); got != "first line" {
 		t.Errorf("SetSessionTitle recorded %q, want %q", got, "first line")
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("pi-go: first line")) {
-		t.Errorf("OSC 0 should contain first line only, got %q", buf.String())
+	if got := m.sessionTitle; got != "first line" {
+		t.Errorf("sessionTitle = %q, want %q", got, "first line")
 	}
-	if bytes.Contains(buf.Bytes(), []byte("second line")) {
-		t.Errorf("OSC 0 should not contain later lines, got %q", buf.String())
+}
+
+// The title must reach the terminal through Bubble Tea's View, never through a
+// direct write to os.Stdout: the renderer owns stdout, and an out-of-band write
+// lands in the middle of a frame and corrupts it.
+func TestView_CarriesWindowTitle(t *testing.T) {
+	m, _ := newTitleTestModel(t)
+
+	if got := m.View().WindowTitle; got != "π -" {
+		t.Errorf("WindowTitle before any prompt = %q, want %q", got, "π -")
+	}
+
+	m.applySessionTitle("fix the top-level render")
+	if got := m.View().WindowTitle; got != "π - fix the top-level render" {
+		t.Errorf("WindowTitle = %q, want %q", got, "π - fix the top-level render")
+	}
+}
+
+// The rendered frame itself must never contain an OSC title sequence — that
+// would mean the title is being written into the frame body rather than being
+// carried as View metadata.
+func TestView_FrameHasNoOSCTitleSequence(t *testing.T) {
+	m, _ := newTitleTestModel(t)
+	m.applySessionTitle("some task")
+
+	if strings.Contains(m.View().Content, "\x1b]0;") {
+		t.Error("frame body contains an OSC 0 sequence; the title must travel via View.WindowTitle")
+	}
+}
+
+// When the deferred-init goroutine hands the TUI a freshly created session,
+// the default title (git repo / CWD basename) the agent applied should seed
+// m.sessionTitle — so the very first View() already emits "π - <default>"
+// as the OSC 0 payload, before any user prompt arrives.
+func TestHandleInitEvent_SeedsDefaultTitle(t *testing.T) {
+	// width must be set: View() takes a fast path before the first
+	// WindowSizeMsg and skips WindowTitle entirely, but by the time
+	// deferred-init completes the program has delivered the size.
+	m := &model{
+		width:        80,
+		height:       24,
+		loading:      true,
+		loadingItems: map[string]bool{},
+		initCh:       make(chan InitEvent),
+		inputModel:   NewInputModel(nil, nil, nil, ""),
+	}
+
+	msg := initEventMsg{
+		event: InitEvent{
+			Done: true,
+			Result: &InitResult{
+				SessionTitle: "piname",
+			},
+		},
+		ch: m.initCh,
+	}
+	newM, _ := m.handleInitEvent(msg)
+	mm := newM.(*model)
+
+	if got := mm.sessionTitle; got != "piname" {
+		t.Errorf("sessionTitle after init = %q, want %q", got, "piname")
+	}
+	// View() must carry the title so Bubble Tea's renderer emits the OSC 0
+	// envelope in-band with the next frame. formatTerminalTitle is what
+	// applies the "π - " prefix and strips control characters.
+	if got := mm.View().WindowTitle; got != "π - piname" {
+		t.Errorf("WindowTitle after init = %q, want %q", got, "π - piname")
+	}
+}
+
+// A prompt-driven title (set via applySessionTitle) should win over the
+// default seeded at init time, so a /plan session that creates its own
+// title-bearing fresh session still has the expected behavior — the more
+// recent user signal takes precedence.
+func TestHandleInitEvent_DoesNotOverwriteExistingTitle(t *testing.T) {
+	m := &model{
+		loading:      true,
+		loadingItems: map[string]bool{},
+		initCh:       make(chan InitEvent),
+		sessionTitle: "kept from a previous turn",
+	}
+
+	msg := initEventMsg{
+		event: InitEvent{
+			Done: true,
+			Result: &InitResult{
+				SessionTitle: "should-not-overwrite",
+			},
+		},
+		ch: m.initCh,
+	}
+	newM, _ := m.handleInitEvent(msg)
+	mm := newM.(*model)
+
+	if got := mm.sessionTitle; got != "kept from a previous turn" {
+		t.Errorf("sessionTitle = %q, want pre-existing value preserved", got)
+	}
+}
+
+// /clear must reset the terminal window/tab title to the app default so the
+// next View() emits the OSC 0 sequence with the default payload ("π -")
+// instead of the title derived from the previous turn's prompt.
+func TestHandleSlashCommand_Clear_ResetsWindowTitleToDefault(t *testing.T) {
+	m, svc := newTitleTestModel(t)
+
+	// Seed a prompt-derived title the way a real turn would.
+	m.applySessionTitle("fix the linter issue in agent.go")
+	if got := m.sessionTitle; got != "fix the linter issue in agent.go" {
+		t.Fatalf("setup: sessionTitle = %q, want prompt-derived value", got)
+	}
+	if got := m.View().WindowTitle; got != "π - fix the linter issue in agent.go" {
+		t.Fatalf("setup: WindowTitle = %q, want prompt-derived title", got)
+	}
+
+	// Run /clear and check both that the model field is reset and that the
+	// session metadata was cleared so meta.json stays in sync with the tab.
+	newM, _ := m.handleSlashCommand("/clear")
+	mm := newM.(*model)
+
+	if got := mm.sessionTitle; got != "" {
+		t.Errorf("after /clear: sessionTitle = %q, want empty (default)", got)
+	}
+	if got := mm.View().WindowTitle; got != "π -" {
+		t.Errorf("after /clear: WindowTitle = %q, want %q (default)", got, "π -")
+	}
+	if got := svc.lastTitle(); got != "" {
+		t.Errorf("after /clear: SetSessionTitle recorded %q, want empty (default)", got)
+	}
+}
+
+// Slash commands (other than /clear, /exit, /quit) should make the typed
+// command the session title so the terminal tab/window reflects what the user
+// just invoked. The same routing also persists the title via the agent's
+// SetSessionTitle, keeping meta.json in sync with the next View()'s OSC 0
+// envelope.
+func TestHandleSlashCommand_UpdatesWindowTitleToCommand(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"single token", "/help"},
+		{"with args", "/model gpt-5.4"},
+		{"unknown command still titles", "/foobar"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, svc := newTitleTestModel(t)
+
+			newM, _ := m.handleSlashCommand(tc.input)
+			mm := newM.(*model)
+
+			if got := mm.sessionTitle; got != tc.input {
+				t.Errorf("sessionTitle = %q, want %q", got, tc.input)
+			}
+			if got := mm.View().WindowTitle; got != "π - "+tc.input {
+				t.Errorf("WindowTitle = %q, want %q", got, "π - "+tc.input)
+			}
+			if got := svc.lastTitle(); got != tc.input {
+				t.Errorf("SetSessionTitle recorded %q, want %q", got, tc.input)
+			}
+		})
+	}
+}
+
+// /exit and /quit must NOT mutate the session title: the program is about to
+// tear down, so any OSC 0 emitted for the new title would be a useless frame.
+// The existing prompt-derived title (or the seed default) should be preserved.
+func TestHandleSlashCommand_ExitAndQuit_DoNotChangeTitle(t *testing.T) {
+	for _, cmd := range []string{"/exit", "/quit"} {
+		t.Run(cmd, func(t *testing.T) {
+			m, _ := newTitleTestModel(t)
+			// Seed a known title the way a previous turn would have.
+			m.applySessionTitle("fix bug in foo.go")
+
+			// /exit returns (model, tea.Quit); we don't care about the cmd here,
+			// only that the title was preserved.
+			newM, _ := m.handleSlashCommand(cmd)
+			mm := newM.(*model)
+
+			if got := mm.sessionTitle; got != "fix bug in foo.go" {
+				t.Errorf("%s: sessionTitle = %q, want preserved %q", cmd, got, "fix bug in foo.go")
+			}
+		})
 	}
 }

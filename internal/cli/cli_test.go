@@ -142,7 +142,7 @@ func newTestAgent(t *testing.T, llm model.LLM) (*agent.Agent, string) {
 		t.Fatalf("agent.New: %v", err)
 	}
 	ctx := context.Background()
-	sessionID, err := ag.CreateSession(ctx)
+	sessionID, _, err := ag.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestRunPrintToolStatusToStderr(t *testing.T) {
 		t.Fatalf("agent.New: %v", err)
 	}
 	ctx := context.Background()
-	sessionID, _ := ag.CreateSession(ctx)
+	sessionID, _, _ := ag.CreateSession(ctx)
 
 	stderr := captureStderr(t, func() {
 		_ = runPrint(ctx, ag, sessionID, "Read the file", nil)
@@ -555,7 +555,7 @@ func TestRunJSONToolCallEvents(t *testing.T) {
 		t.Fatalf("agent.New: %v", err)
 	}
 	ctx := context.Background()
-	sessionID, _ := ag.CreateSession(ctx)
+	sessionID, _, _ := ag.CreateSession(ctx)
 
 	stdout := captureStdout(t, func() {
 		err := runJSON(ctx, ag, sessionID, "Read the file", nil)

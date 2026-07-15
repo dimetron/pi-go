@@ -135,7 +135,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestE2ESessionPersistenceRoundTrip(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a1.CreateSession(ctx)
+	sessionID, _, err := a1.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestE2EMultiTurnConversation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestE2EMultiTurnConversation(t *testing.T) {
 		t.Fatalf("New() turn 2 error: %v", err)
 	}
 
-	sessionID2, err := a2.CreateSession(ctx)
+	sessionID2, _, err := a2.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() turn 2 error: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestE2EBashAndGrepWorkflow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestE2ESessionBranchingWorkflow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}

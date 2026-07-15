@@ -226,7 +226,16 @@ func TestServerV2WebSocketEndToEnd(t *testing.T) {
 		_ = s.Shutdown(ctx)
 	}()
 
-	wsURL := "ws://" + s.Addr() + "/ws/sess-e2e"
+	// Authenticate so the WS handler doesn't reject the upgrade.
+	code, token, _, err := s.PairingManager().CreatePair(dir)
+	if err != nil {
+		t.Fatalf("CreatePair: %v", err)
+	}
+	if _, err := s.PairingManager().Approve(code); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	wsURL := "ws://" + s.Addr() + "/ws/sess-e2e?token=" + token
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial %s: %v", wsURL, err)

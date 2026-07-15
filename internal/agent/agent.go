@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -396,14 +398,18 @@ type titleNamer interface {
 	SetSessionTitle(sessionID, title string) error
 }
 
-// CreateSession creates a new session and returns its ID.
-func (a *Agent) CreateSession(ctx context.Context) (string, error) {
+// CreateSession creates a new session and returns its ID together with the
+// default title that was applied (git repo name, or CWD basename) — or "" if
+// no title was set. The title is metadata only; the TUI seeds its terminal
+// window/tab title from it so users see a sensible label before the first user
+// prompt arrives.
+func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle string, err error) {
 	resp, err := a.sessionService.Create(ctx, &session.CreateRequest{
 		AppName: AppName,
 		UserID:  DefaultUserID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("creating session: %w", err)
+		return "", "", fmt.Errorf("creating session: %w", err)
 	}
 	sid := resp.Session.ID()
 	if mn, ok := a.sessionService.(modelNamer); ok {
@@ -413,7 +419,89 @@ func (a *Agent) CreateSession(ctx context.Context) (string, error) {
 		}
 		_ = mn.SetSessionModel(sid, modelName) // best-effort; meta defaults to "unknown"
 	}
-	return sid, nil
+	// Default title: the git repo name (or CWD basename) so brand-new sessions
+	// in /sessions listings have a sensible label before the first user prompt
+	// overwrites it via the TUI's applySessionTitle / runPrint's derivePrintTitle.
+	if tn, ok := a.sessionService.(titleNamer); ok {
+		cwd, _ := os.Getwd()
+		if title := defaultSessionTitle(cwd); title != "" {
+			_ = tn.SetSessionTitle(sid, title) // best-effort metadata
+			return sid, title, nil
+		}
+	}
+	return sid, "", nil
+}
+
+// gitToplevelTimeout caps the `git rev-parse --show-toplevel` subprocess so a
+// stuck git invocation never delays session creation.
+const gitToplevelTimeout = 2 * time.Second
+
+// gitToplevelFn returns the absolute path of the git toplevel for dir, or "" if
+// dir is not inside a git repository (or git is unavailable). It's a var so
+// tests can stub the subprocess call without touching the real binary.
+var gitToplevelFn = func(dir string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), gitToplevelTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitCurrentBranch returns the current git branch name for dir, or "" if dir
+// is not inside a git repository, git is unavailable, or the repo has no
+// commits yet (in which case `git rev-parse --abbrev-ref HEAD` prints "HEAD"
+// — meaningless as a label, so we treat it as no branch). It's a var so
+// tests can stub the subprocess call without touching the real binary.
+var gitCurrentBranch = func(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitToplevelTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" || branch == "HEAD" {
+		return ""
+	}
+	return branch
+}
+
+// defaultSessionTitle returns a short, human-readable label for a brand-new
+// session, composed from the cwd's git context when available:
+//   - inside a git repo:        "<repo> <branch> <folder>"
+//   - detached / no branch:    "<repo> <folder>"
+//   - not a git repo:          "<folder>"      (no separator; nothing to anchor)
+//   - empty cwd:               ""              (caller treats as "no title")
+//
+// Components are joined with a single space so the title stays clean inside
+// the terminal tab title (used as the OSC 0 payload) and doesn't collide
+// with the prompt-derived title that /title and the first-line derive path
+// will later replace. The branch is omitted (not rendered as "(no branch)")
+// when it can't be determined, to keep the title clean.
+func defaultSessionTitle(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	folder := filepath.Base(cwd)
+	root := gitToplevelFn(cwd)
+	if root == "" {
+		return folder
+	}
+	repo := filepath.Base(root)
+	branch := gitCurrentBranch(cwd)
+	if branch == "" {
+		return repo + " " + folder
+	}
+	return repo + " " + branch + " " + folder
 }
 
 // SetSessionTitle records a title for the given session via the session

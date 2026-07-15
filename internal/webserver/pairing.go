@@ -70,12 +70,29 @@ func (pm *PairingManager) CreatePair(project string) (code, token string, qrData
 
 // CreatePairWithContext generates a pair and embeds server context in the QR payload.
 func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL string) (code, token string, qrData []byte, err error) {
-	// Generate 6-digit code
-	codeNum, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		return "", "", nil, fmt.Errorf("generating code: %w", err)
+	// Generate a 6-digit code that doesn't collide with one already in flight.
+	// With 1M possible codes the per-call collision chance is tiny, but it is
+	// observable in tight test loops; retrying up to a small cap absorbs it
+	// without changing the visible behavior.
+	const maxAttempts = 8
+	pm.mu.Lock()
+	var codeNum *big.Int
+	for i := 0; i < maxAttempts; i++ {
+		codeNum, err = rand.Int(rand.Reader, big.NewInt(1000000))
+		if err != nil {
+			pm.mu.Unlock()
+			return "", "", nil, fmt.Errorf("generating code: %w", err)
+		}
+		code = fmt.Sprintf("%06d", codeNum.Int64())
+		if _, exists := pm.pending[code]; !exists {
+			break
+		}
+		code = ""
 	}
-	code = fmt.Sprintf("%06d", codeNum.Int64())
+	pm.mu.Unlock()
+	if code == "" {
+		return "", "", nil, fmt.Errorf("generating code: exhausted %d retries", maxAttempts)
+	}
 
 	// Generate token
 	token = uuid.New().String()

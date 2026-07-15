@@ -75,8 +75,13 @@ type InitEvent struct {
 
 // InitResult holds the fully initialized subsystems delivered by deferred init.
 type InitResult struct {
-	Agent             *agent.Agent
-	SessionID         string
+	Agent     *agent.Agent
+	SessionID string
+	// SessionTitle is the default title the agent applied to the new session
+	// (git repo name, or CWD basename). The TUI seeds its terminal window/tab
+	// title with it so the user sees a label before the first user prompt
+	// arrives. Empty if the agent has no title namer or no CWD to derive from.
+	SessionTitle      string
 	SessionService    *pisession.FileService
 	Orchestrator      *subagent.Orchestrator
 	Logger            *logger.Logger

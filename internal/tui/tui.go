@@ -1706,6 +1706,14 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		r := ev.Result
 		m.cfg.Agent = r.Agent
 		m.cfg.SessionID = r.SessionID
+		// Seed the terminal window/tab title with the default (git repo / CWD
+		// basename) so the OSC 0 sequence on the next frame already carries a
+		// sensible label — before the user types the first prompt. The prompt
+		// later overwrites it via applySessionTitle, so this only matters for
+		// the pre-prompt frames.
+		if m.sessionTitle == "" && r.SessionTitle != "" {
+			m.sessionTitle = r.SessionTitle
+		}
 		m.cfg.SessionService = r.SessionService
 		m.cfg.Orchestrator = r.Orchestrator
 		m.cfg.Logger = r.Logger

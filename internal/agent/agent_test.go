@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -246,6 +247,128 @@ func TestSetSessionTitle_NoOpForInMemoryService(t *testing.T) {
 	}
 }
 
+func TestDefaultSessionTitle_GitRepo(t *testing.T) {
+	// Stub both git lookups so the test is hermetic — no real `git` invocation.
+	origToplevel := gitToplevelFn
+	origBranch := gitCurrentBranch
+	gitToplevelFn = func(dir string) string { return "/home/dev/myrepo" }
+	gitCurrentBranch = func(dir string) string { return "main" }
+	t.Cleanup(func() {
+		gitToplevelFn = origToplevel
+		gitCurrentBranch = origBranch
+	})
+
+	if got, want := defaultSessionTitle("/home/dev/myrepo/src"), "myrepo main src"; got != want {
+		t.Errorf("defaultSessionTitle = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultSessionTitle_NotGitRepo(t *testing.T) {
+	origToplevel := gitToplevelFn
+	origBranch := gitCurrentBranch
+	gitToplevelFn = func(dir string) string { return "" } // not a repo
+	gitCurrentBranch = func(dir string) string { return "" }
+	t.Cleanup(func() {
+		gitToplevelFn = origToplevel
+		gitCurrentBranch = origBranch
+	})
+
+	if got, want := defaultSessionTitle("/tmp/some/dir"), "dir"; got != want {
+		t.Errorf("defaultSessionTitle = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultSessionTitle_EmptyCwd(t *testing.T) {
+	if got := defaultSessionTitle(""); got != "" {
+		t.Errorf("defaultSessionTitle(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestDefaultSessionTitle_GitRepoNoBranch(t *testing.T) {
+	// Detached HEAD / unborn branch: gitCurrentBranch returns "". The title
+	// should drop the branch token but keep the "<repo> <folder>" frame so
+	// the structure still parses as "this is the repo, in this folder".
+	origToplevel := gitToplevelFn
+	origBranch := gitCurrentBranch
+	gitToplevelFn = func(dir string) string { return "/home/dev/myrepo" }
+	gitCurrentBranch = func(dir string) string { return "" } // detached / no commits
+	t.Cleanup(func() {
+		gitToplevelFn = origToplevel
+		gitCurrentBranch = origBranch
+	})
+
+	if got, want := defaultSessionTitle("/home/dev/myrepo/src"), "myrepo src"; got != want {
+		t.Errorf("defaultSessionTitle = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultSessionTitle_RealGitRepo(t *testing.T) {
+	// Use a real temp git repo to exercise the actual subprocess path.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "t@t")
+	runGit("config", "user.name", "t")
+	runGit("commit", "--allow-empty", "-q", "-m", "init")
+
+	// A fresh repo on the default branch should produce
+	// "<basename(dir)> <branch> <basename(dir)>" — same value on both
+	// sides because the test creates the repo at t.TempDir() and the default
+	// branch (whatever it is) is real.
+	got := defaultSessionTitle(dir)
+	branch := gitCurrentBranch(dir)
+	if branch == "" {
+		t.Fatalf("gitCurrentBranch returned empty for fresh repo; expected a real branch name")
+	}
+	want := filepath.Base(dir) + " " + branch + " " + filepath.Base(dir)
+	if got != want {
+		t.Errorf("defaultSessionTitle = %q, want %q", got, want)
+	}
+}
+
+func TestCreateSession_DefaultTitleFromGitRepo(t *testing.T) {
+	// Drive the real default-title path through CreateSession by recording
+	// the title the agent sets. Stub both git lookups so the test does not
+	// depend on the test binary's CWD being inside a git repo or on its
+	// current branch.
+	origToplevel := gitToplevelFn
+	origBranch := gitCurrentBranch
+	gitToplevelFn = func(dir string) string { return "/home/dev/piname" }
+	gitCurrentBranch = func(dir string) string { return "main" }
+	t.Cleanup(func() {
+		gitToplevelFn = origToplevel
+		gitCurrentBranch = origBranch
+	})
+
+	svc := &titleRecordingService{Service: session.InMemoryService()}
+	a, err := New(Config{Model: &mockLLM{name: "t", response: "ok"}, SessionService: svc})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cwd, _ := os.Getwd()
+	want := "piname main " + filepath.Base(cwd)
+	sid, _, err := a.CreateSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sid == "" {
+		t.Fatal("CreateSession returned empty id")
+	}
+	if got := svc.lastTitle(); got != want {
+		t.Errorf("default title recorded = %q, want %q", got, want)
+	}
+}
+
 func TestCreateSession(t *testing.T) {
 	llm := &mockLLM{name: "test-model", response: "Hello!"}
 
@@ -255,7 +378,7 @@ func TestCreateSession(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -273,7 +396,7 @@ func TestRun(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -314,7 +437,7 @@ func TestRunStreaming(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -616,7 +739,7 @@ func TestIntegrationToolExecution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -699,7 +822,7 @@ func TestIntegrationBashToolExecution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -768,7 +891,7 @@ func TestIntegrationWriteAndReadRoundtrip(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -820,7 +943,7 @@ func TestIntegrationEditToolExecution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, _ := a.CreateSession(ctx)
+	sessionID, _, _ := a.CreateSession(ctx)
 
 	for _, err := range a.Run(ctx, sessionID, "Edit the file") {
 		if err != nil {
@@ -857,7 +980,7 @@ func TestIntegrationGrepToolExecution(t *testing.T) {
 	coreTools, _ := tools.CoreTools(testSandbox(t, dir))
 	a, _ := New(Config{Model: llm, Tools: coreTools, Instruction: "Test agent."})
 	ctx := context.Background()
-	sessionID, _ := a.CreateSession(ctx)
+	sessionID, _, _ := a.CreateSession(ctx)
 
 	var hasFunctionResponse bool
 	for event, err := range a.Run(ctx, sessionID, "Search for func") {
@@ -898,7 +1021,7 @@ func TestIntegrationFindToolExecution(t *testing.T) {
 	coreTools, _ := tools.CoreTools(testSandbox(t, dir))
 	a, _ := New(Config{Model: llm, Tools: coreTools, Instruction: "Test agent."})
 	ctx := context.Background()
-	sessionID, _ := a.CreateSession(ctx)
+	sessionID, _, _ := a.CreateSession(ctx)
 
 	var hasFunctionResponse bool
 	for event, err := range a.Run(ctx, sessionID, "Find go files") {
@@ -938,7 +1061,7 @@ func TestIntegrationLsToolExecution(t *testing.T) {
 	coreTools, _ := tools.CoreTools(testSandbox(t, dir))
 	a, _ := New(Config{Model: llm, Tools: coreTools, Instruction: "Test agent."})
 	ctx := context.Background()
-	sessionID, _ := a.CreateSession(ctx)
+	sessionID, _, _ := a.CreateSession(ctx)
 
 	var hasFunctionResponse bool
 	for event, err := range a.Run(ctx, sessionID, "List directory") {
@@ -1025,7 +1148,7 @@ func TestIntegrationMultiToolChain(t *testing.T) {
 	coreTools, _ := tools.CoreTools(testSandbox(t, dir))
 	a, _ := New(Config{Model: llm, Tools: coreTools, Instruction: "Test agent."})
 	ctx := context.Background()
-	sessionID, _ := a.CreateSession(ctx)
+	sessionID, _, _ := a.CreateSession(ctx)
 
 	toolNames := map[string]bool{}
 	for event, err := range a.Run(ctx, sessionID, "Write then read a file") {

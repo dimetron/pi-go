@@ -301,7 +301,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating agent: %w", err)
 	}
 
-	sessionID, err := ag.CreateSession(ctx)
+	sessionID, _, err := ag.CreateSession(ctx)
 	if err != nil {
 		lspMgr.Shutdown()
 		orch.Shutdown()

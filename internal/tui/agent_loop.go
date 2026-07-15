@@ -353,15 +353,35 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 // empty text (no-op) or when the agent is nil (the TUI's unit tests don't wire
 // one).
 func (m *model) applySessionTitle(prompt string) {
-	title := deriveSessionTitle(prompt)
-	if title == "" {
-		return
+	// Skip the persist+OSC step if the derived title is empty, but always run
+	// deriveSessionTitle so the first-line / trim rules are shared with the
+	// /title command.
+	_ = m.setSessionTitle(deriveSessionTitle(prompt))
+}
+
+// setSessionTitle is the shared primitive for "make this string the session
+// title now". It folds to a single line, updates the in-memory title, and
+// forwards to the agent (when wired) so the title is persisted to the session
+// metadata. Pass "" to clear the title back to the app default; an all-whitespace
+// or all-control input also resolves to "". Returns the effective title that
+// was applied (empty when cleared), which the caller can echo to the user.
+//
+// Errors from the agent's SetSessionTitle are deliberately swallowed: titles
+// are metadata, and a service that doesn't support them (e.g. ADK in-memory)
+// must not block a turn or a slash command.
+func (m *model) setSessionTitle(text string) string {
+	title := strings.TrimSpace(text)
+	if i := strings.IndexByte(title, '\n'); i >= 0 {
+		title = strings.TrimSpace(title[:i])
 	}
+	// Update the model field unconditionally so /clear, the auto-derive path,
+	// and /title all funnel through the same View() → formatTerminalTitle
+	// pipeline (which sanitizes C0 controls for the OSC 0 envelope).
+	m.sessionTitle = title
 	if m.cfg.Agent != nil && m.cfg.SessionID != "" {
-		// Errors here are metadata-only and should never block the turn.
 		_ = m.cfg.Agent.SetSessionTitle(m.cfg.SessionID, title)
 	}
-	m.sessionTitle = title
+	return title
 }
 
 // runAgentLoop runs the agent and sends events to the channel.

@@ -710,7 +710,7 @@ func runNonInteractive(
 		fmt.Fprintf(os.Stderr, "pi-go: continuing session %s\n", sessionID)
 	}
 	if sessionID == "" {
-		sessionID, err = ag.CreateSession(ctx)
+		sessionID, _, err = ag.CreateSession(ctx)
 		if err != nil {
 			return fmt.Errorf("creating session: %w", err)
 		}
