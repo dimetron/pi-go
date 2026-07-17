@@ -367,6 +367,15 @@ func deferredInit(
 		coreTools = append(coreTools, gTool)
 	}
 
+	// Session logger. Created before the agent so it can capture the agent's
+	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
+	// session log instead of leaking them to stderr and corrupting the TUI.
+	// SessionStart is deferred until the session ID is resolved below.
+	sessionLog, logErr := logger.New()
+	if logErr == nil {
+		res.sessionLog = sessionLog
+	}
+
 	// Create agent.
 	ag, err := agent.New(agent.Config{
 		Model:                llm,
@@ -378,6 +387,7 @@ func deferredInit(
 		AfterToolCallbacks:   afterCBs,
 		BeforeModelCallbacks: llmBefore,
 		AfterModelCallbacks:  llmAfter,
+		Logger:               sessionLog,
 	})
 	if err != nil {
 		fail(fmt.Errorf("creating agent: %w", err))
@@ -401,10 +411,9 @@ func deferredInit(
 	// Capture ACP subagent events (claude, gemini) under the session dir.
 	res.orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
 
-	// Session logger.
-	sessionLog, logErr := logger.New()
+	// Session logger was created above; record the session start now that the
+	// session ID is known.
 	if logErr == nil {
-		res.sessionLog = sessionLog
 		sessionLog.SessionStart(sessionID, llm.Name(), "interactive")
 	}
 

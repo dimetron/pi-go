@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,9 +20,11 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/util/instructionutil"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/logger"
 )
 
 // re-export callback types for use by CLI without importing llmagent directly.
@@ -264,6 +267,12 @@ type Config struct {
 
 	// AfterModelCallbacks run after each LLM invocation.
 	AfterModelCallbacks []AfterModelCallback
+
+	// Logger, if non-nil, receives non-fatal diagnostics such as unresolved
+	// instruction placeholders. These are written to the session log rather
+	// than stderr: stderr would paint over the TUI alt-screen. Its methods
+	// are nil-safe, so a nil Logger silently discards.
+	Logger *logger.Logger
 }
 
 // Agent wraps an ADK Runner and session management for the coding agent.
@@ -275,12 +284,69 @@ type Agent struct {
 
 const maxInstructionFileSize = 128 * 1024
 
+// placeholderRegex matches `{...}` runs in the instruction template. Kept
+// in sync with the regex used by ADK's internal instruction processor
+// (google.golang.org/adk/v2/internal/llminternal/instruction_processor.go)
+// so that we slice the template on the same boundaries.
+var placeholderRegex = regexp.MustCompile(`\{+[^{}]*\}+`)
+
+// safeInstructionProvider returns an ADK InstructionProvider that
+// substitutes {state_var} placeholders in template via the session state,
+// but fails open per placeholder: if a particular placeholder cannot be
+// resolved (missing key, artifact not found, etc.) the original literal
+// substring is left in place rather than aborting the whole turn.
+//
+// Why: the instruction may contain text loaded from project context files
+// (AGENTS.md / CLAUDE.md / AGENT.md / .pi-go/AGENTS.md) and skill
+// descriptions. Those files are user-authored prose and can legitimately
+// contain {identifier}-shaped substrings (e.g. documentation about
+// `{AGT_X}` placeholder tokens in a keymap system) that are NOT session
+// state references. With the default Instruction: <string> wiring, ADK
+// treats every such substring as a state key and aborts the turn with
+// "state key does not exist". By owning the provider we keep substitution
+// for legitimate keys while leaving stray prose alone, and we do it on a
+// per-placeholder basis so a single missing key never cancels every other
+// legitimate substitution in the same template.
+func safeInstructionProvider(template string, log *logger.Logger) llmagent.InstructionProvider {
+	return func(ctx adkagent.ReadonlyContext) (string, error) {
+		return injectWithFailOpen(ctx, template, log), nil
+	}
+}
+
+// injectWithFailOpen walks template, resolving each {placeholder} via
+// instructionutil.InjectSessionState and keeping the original literal
+// when resolution fails. Literal segments (between matches) are copied
+// unchanged.
+func injectWithFailOpen(ctx adkagent.ReadonlyContext, template string, log *logger.Logger) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range placeholderRegex.FindAllStringIndex(template, -1) {
+		b.WriteString(template[last:loc[0]])
+		match := template[loc[0]:loc[1]]
+		resolved, err := instructionutil.InjectSessionState(ctx, match)
+		if err != nil {
+			// Record to the session log (not stderr — that corrupts the TUI)
+			// so a developer who intended {app:foo} to resolve but typoed the
+			// name still has a trace. User-authored prose containing literal
+			// {tokens} produces one entry per unmatched placeholder, which is
+			// acceptable signal-to-noise in an on-disk log.
+			log.Info(fmt.Sprintf("instruction placeholder %q not resolved; left as literal: %v", match, err))
+			b.WriteString(match)
+		} else {
+			b.WriteString(resolved)
+		}
+		last = loc[1]
+	}
+	b.WriteString(template[last:])
+	return b.String()
+}
+
 func buildRunner(cfg Config, instruction string, sessionSvc session.Service) (*runner.Runner, error) {
 	llmAgent, err := llmagent.New(llmagent.Config{
 		Name:                 "pi",
 		Description:          "A coding agent that helps with software engineering tasks.",
 		Model:                cfg.Model,
-		Instruction:          instruction,
+		InstructionProvider:  safeInstructionProvider(instruction, cfg.Logger),
 		Tools:                cfg.Tools,
 		Toolsets:             cfg.Toolsets,
 		BeforeToolCallbacks:  cfg.BeforeToolCallbacks,
