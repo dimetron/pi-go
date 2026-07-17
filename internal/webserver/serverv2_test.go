@@ -523,6 +523,36 @@ func TestServerV2_HandleWebSocket_MissingSessionID(t *testing.T) {
 	}
 }
 
+// TestServerV2_HandleWebSocket_Unauthorized covers the pairing-token auth
+// gate added in the PR: a /ws/<id> request without a valid pi_token cookie
+// must be rejected with 401, not silently attached. Without this, the
+// pairingToken() helper sits unused at runtime.
+func TestServerV2_HandleWebSocket_Unauthorized(t *testing.T) {
+	s := newTestServerV2(t)
+	defer s.Shutdown(t.Context())
+	r := httptest.NewRequest("GET", "/ws/some-session-id", nil)
+	w := httptest.NewRecorder()
+	s.handleWebSocket(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d (body=%q)", w.Code, w.Body.String())
+	}
+}
+
+// TestServerV2_HandleWebSocket_BadToken covers pairingToken() returning
+// false when the cookie is set but the token is not in the approved set —
+// exercises the IsApproved short-circuit.
+func TestServerV2_HandleWebSocket_BadToken(t *testing.T) {
+	s := newTestServerV2(t)
+	defer s.Shutdown(t.Context())
+	r := httptest.NewRequest("GET", "/ws/some-session-id", nil)
+	r.AddCookie(&http.Cookie{Name: "pi_token", Value: "never-approved"})
+	w := httptest.NewRecorder()
+	s.handleWebSocket(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d (body=%q)", w.Code, w.Body.String())
+	}
+}
+
 func TestServerV2_Addr_Default(t *testing.T) {
 	s := NewServerV2(Config{Addr: ":9999"})
 	// Before Start, Addr should return cfg.Addr

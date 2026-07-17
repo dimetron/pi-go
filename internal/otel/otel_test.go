@@ -217,3 +217,30 @@ func TestAttributeHelpers(t *testing.T) {
 		t.Fatalf("AttributeInt = %v, want attribute.Int", n)
 	}
 }
+
+// TestResetForTest exercises the test-only ResetForTest entry point that
+// tears down the lazy tracer provider so a fresh init can re-read OTEL env
+// vars. The function is called from acp/server/otel_integration_test.go, but
+// tests in a different package's binary don't count toward this package's
+// coverage profile under -coverpkg=./internal/..., so we cover it here
+// directly to keep patch coverage honest.
+func TestResetForTest(t *testing.T) {
+	// Drive a Tracer() call so initProvider() runs and tracerProvider is set.
+	_ = Tracer("reset-test")
+
+	ResetForTest()
+
+	// After reset, initOnce must allow a fresh init. The next Tracer() call
+	// reinitialises — it must not deadlock or panic.
+	_ = Tracer("reset-test-after")
+}
+
+// TestResetForTest_NotYetInitialized covers the ResetForTest code path when
+// the provider was never constructed. tracerProvider is nil, so the function
+// must skip the Shutdown call and only zero the state.
+func TestResetForTest_NotYetInitialized(t *testing.T) {
+	// This is safe to call any number of times; the reset is idempotent and
+	// must not panic even when the provider has never been initialized.
+	ResetForTest()
+	ResetForTest()
+}
