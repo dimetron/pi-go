@@ -22,9 +22,11 @@ import (
 //  6. WebSocket endpoint rejects unauthenticated requests
 //  7. Graceful shutdown works
 func TestServePairE2E_FullLifecycle(t *testing.T) {
-	// Start server on random port.
+	// Listen on a random free port. Earlier revisions hardcoded :8080, which
+	// clashes with anything already bound there (e.g. an IDE on a developer
+	// machine); using :0 lets the kernel pick a free port.
 	srv := NewServerV2(Config{
-		Addr:           "127.0.0.1:8080",
+		Addr:           "127.0.0.1:0",
 		PairingTimeout: 30 * time.Second,
 		StaticDir:      t.TempDir(), // empty dir — static files not needed for API tests
 	})
@@ -198,8 +200,15 @@ func TestServePairE2E_MultiplePairs(t *testing.T) {
 
 	baseURL := "http://" + srv.Addr()
 
-	// Create two independent pairs.
+	// Create the first pair and approve it. The server caches the "active
+	// pair" while it's pending, so a second POST /api/pair would otherwise
+	// return the same code/token instead of a fresh pair.
 	pr1 := createPair(t, baseURL, "/tmp/project-a")
+	if _, err := srv.PairingManager().Approve(pr1.Code); err != nil {
+		t.Fatalf("Approve pr1: %v", err)
+	}
+
+	// Now create a second, independent pair.
 	pr2 := createPair(t, baseURL, "/tmp/project-b")
 
 	if pr1.Code == pr2.Code {
@@ -208,9 +217,6 @@ func TestServePairE2E_MultiplePairs(t *testing.T) {
 	if pr1.Token == pr2.Token {
 		t.Error("tokens should be unique")
 	}
-
-	// Approve only the first.
-	srv.PairingManager().Approve(pr1.Code)
 
 	assertStatus(t, baseURL, pr1.Token, PairStatusApproved)
 	assertStatus(t, baseURL, pr2.Token, PairStatusPending)

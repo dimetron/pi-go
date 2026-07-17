@@ -263,14 +263,19 @@ func respondPairSubmitError(w http.ResponseWriter, r *http.Request, message stri
 	http.Redirect(w, r, "/pair?error="+url.QueryEscape(message), http.StatusSeeOther)
 }
 
-// handleIndex serves the main terminal page.
+// handleIndex serves the main terminal page. Unauthenticated requests are
+// redirected to /pair, matching the legacy Server's behavior.
 func (s *ServerV2) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Pairing disabled - serve index directly
+	if !s.pairingToken(r) {
+		http.Redirect(w, r, "/pair", http.StatusSeeOther)
+		return
+	}
+
 	serveStaticPage(w, r, s.cfg.StaticDir, "index.html")
 }
 
@@ -279,6 +284,11 @@ func (s *ServerV2) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/ws/")
 	if sessionID == "" {
 		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	if !s.pairingToken(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -311,6 +321,20 @@ func (s *ServerV2) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("ws attached", "session", sessionID, "reconnect", bridge.Alive())
 	bridge.AttachWebSocket(conn, sessionID)
 	s.log.Info("ws detached", "session", sessionID, "pty_alive", bridge.Alive())
+}
+
+// pairingToken returns true when r carries an approved pi_token cookie or
+// ?token=… query parameter. It mirrors the legacy Server's auth check so
+// unauthenticated requests to / and /ws/ are redirected / rejected.
+func (s *ServerV2) pairingToken(r *http.Request) bool {
+	token := ""
+	if cookie, err := r.Cookie("pi_token"); err == nil {
+		token = cookie.Value
+	}
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+	return token != "" && s.pairingMgr.IsApproved(token)
 }
 
 // decodeJSON decodes JSON from request body.

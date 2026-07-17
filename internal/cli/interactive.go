@@ -386,8 +386,9 @@ func deferredInit(
 
 	// Resolve session (--continue is resolved in fast path, flagSession is set).
 	sessionID := flagSession
+	var defaultTitle string
 	if sessionID == "" {
-		sessionID, err = ag.CreateSession(ctx)
+		sessionID, defaultTitle, err = ag.CreateSession(ctx)
 		if err != nil {
 			fail(fmt.Errorf("creating session: %w", err))
 			return
@@ -418,6 +419,7 @@ func deferredInit(
 		Result: &tui.InitResult{
 			Agent:             ag,
 			SessionID:         sessionID,
+			SessionTitle:      defaultTitle,
 			SessionService:    sessionSvc,
 			Orchestrator:      orch,
 			Logger:            sessionLog,

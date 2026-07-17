@@ -156,7 +156,7 @@ func TestE2EMockLLMAnthropic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}

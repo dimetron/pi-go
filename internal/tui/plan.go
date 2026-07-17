@@ -252,7 +252,7 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 	}
 
 	// Create a fresh session so the LLM starts with a clean conversation.
-	newSessionID, err := m.cfg.Agent.CreateSession(m.ctx)
+	newSessionID, defaultTitle, err := m.cfg.Agent.CreateSession(m.ctx)
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
@@ -262,6 +262,12 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 		return m, nil
 	}
 	m.cfg.SessionID = newSessionID
+	// Surface the default title in the terminal window/tab title the same way
+	// the initial session does — /plan starts a new conversation whose
+	// prompt-driven title won't arrive until the first turn completes.
+	if defaultTitle != "" {
+		m.sessionTitle = defaultTitle
+	}
 
 	// Persist plan context for resume (non-fatal).
 	if m.cfg.SessionService != nil {

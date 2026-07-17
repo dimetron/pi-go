@@ -40,6 +40,19 @@ var (
 	initOnce       sync.Once
 )
 
+// ResetForTest resets the lazy-initialized tracer provider. It is intended
+// for tests that need to re-read the OTEL configuration from the current
+// ~/.pi-go/.env or process environment, e.g. when the test process has
+// already triggered init once with a different configuration. Production
+// code should never call this.
+func ResetForTest() {
+	if tracerProvider != nil {
+		_ = tracerProvider.Shutdown(context.Background())
+	}
+	tracerProvider = nil
+	initOnce = sync.Once{}
+}
+
 // Tracer returns a named tracer for the acp-server package.
 // The underlying TracerProvider is initialized once from the .env source.
 func Tracer(name string) trace.Tracer {

@@ -69,7 +69,7 @@ func newRunTestAgent(t *testing.T, llm llmmodel.LLM) (*agent.Agent, string) {
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
 	}
-	sid, err := a.CreateSession(context.Background())
+	sid, _, err := a.CreateSession(context.Background())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

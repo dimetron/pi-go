@@ -4,7 +4,6 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +16,8 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dimetron/pi-go/internal/acp/server"
 	"github.com/dimetron/pi-go/internal/otel"
@@ -26,8 +27,11 @@ import (
 // In-process OTLP collector (replaces Docker Jaeger for unit tests)
 // ---------------------------------------------------------------------------
 
-// inMemoryOTLPCollector is a minimal OTLP/HTTP receiver that captures span data
-// in-memory so tests can inspect traces without Docker or a real collector backend.
+// inMemoryOTLPCollector is a minimal OTLP/HTTP receiver that captures span
+// data in-memory so tests can inspect traces without Docker or a real
+// collector backend. The OTel HTTP trace exporter always sends
+// ExportTraceServiceRequest as protobuf (application/x-protobuf) on
+// /v1/traces, so the collector decodes protobuf.
 type inMemoryOTLPCollector struct {
 	mu  sync.Mutex
 	in  []spanInfo
@@ -49,25 +53,28 @@ func newOTLPCollector(t *testing.T) *inMemoryOTLPCollector {
 			return
 		}
 		defer r.Body.Close()
-		var batch struct {
-			ResourceSpans []struct {
-				ScopeSpans struct {
-					Spans []struct {
-						TraceID string `json:"traceId"`
-						SpanID  string `json:"spanId"`
-						Name    string `json:"name"`
-					} `json:"spans"`
-				} `json:"scopeSpans"`
-			} `json:"resourceSpans"`
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Logf("otlp collector read: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
-			t.Logf("otlp collector decode: %v", err)
+		var req coltracepb.ExportTraceServiceRequest
+		if err := unmarshalExportTraceRequest(body, &req); err != nil {
+			t.Logf("otlp collector decode: %v (body len=%d)", err, len(body))
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		c.mu.Lock()
-		for _, rs := range batch.ResourceSpans {
-			for _, ss := range rs.ScopeSpans.Spans {
-				c.in = append(c.in, spanInfo{TraceID: ss.TraceID, SpanID: ss.SpanID, Name: ss.Name})
+		for _, rs := range req.GetResourceSpans() {
+			for _, ss := range rs.GetScopeSpans() {
+				for _, s := range ss.GetSpans() {
+					c.in = append(c.in, spanInfo{
+						TraceID: hexBytes(s.GetTraceId()),
+						SpanID:  hexBytes(s.GetSpanId()),
+						Name:    s.GetName(),
+					})
+				}
 			}
 		}
 		c.mu.Unlock()
@@ -220,11 +227,21 @@ func TestACPWithOTELAllSpansShareTraceID(t *testing.T) {
 		t.Skip("skipping OTEL integration test in -short mode")
 	}
 
+	// Another test in this binary may have already triggered otel.initOnce
+	// with a different configuration (e.g. the user's real gRPC endpoint).
+	// Reset so this test re-reads the configuration it just wrote.
+	otel.ResetForTest()
+	t.Cleanup(otel.ResetForTest)
+
 	// 1. Start in-process OTLP collector (replaces Docker Jaeger).
 	collector := newOTLPCollector(t)
 	defer collector.srv.Close()
 
 	// 2. Override ~/.pi-go/.env so otel.Tracer() exports to our collector.
+	//    OTEL_BSP_SCHEDULE_DELAY shrinks the default 5s batch interval so the
+	//    in-process collector sees spans within the test's sleep window without
+	//    needing to call otel.Shutdown (which would also kill the global
+	//    TracerProvider for any subsequent tests in the same process).
 	cleanupEnv := withEnvDot(t, map[string]string{
 		"OTEL_TRACES_EXPORTER":        "otlp",
 		"OTEL_EXPORTER_OTLP_ENDPOINT": collector.URL(),
@@ -232,6 +249,10 @@ func TestACPWithOTELAllSpansShareTraceID(t *testing.T) {
 		"OTEL_SERVICE_NAME":           "acp-server-test",
 	})
 	defer cleanupEnv()
+	// The OTel SDK reads OTEL_BSP_* from process env, not from the custom
+	// ~/.pi-go/.env file. Mirror the delay there so the batch processor
+	// flushes spans within the test's sleep window.
+	t.Setenv("OTEL_BSP_SCHEDULE_DELAY", "100")
 
 	// otel.Tracer() lazy-init on first call. We check IsEnabled to confirm
 	// the exporter is active; if false the .env wasn't picked up.
@@ -282,8 +303,9 @@ func TestACPWithOTELAllSpansShareTraceID(t *testing.T) {
 		t.Fatalf("StopReason = %q, want end_turn", promptResp.StopReason)
 	}
 
-	// 6. Give the OTLP batch processor time to flush.
-	time.Sleep(1 * time.Second)
+	// 6. Give the OTLP batch processor time to flush (schedule delay is 100ms;
+	//    sleep a bit longer to absorb jitter).
+	time.Sleep(1500 * time.Millisecond)
 
 	// 7. Verify trace cohesion: every span must share the same trace ID.
 	spans := collector.Spans()
@@ -312,4 +334,21 @@ func TestACPWithOTELAllSpansShareTraceID(t *testing.T) {
 		names = append(names, s.Name)
 	}
 	t.Logf("captured %d spans in %d trace(s): %v", len(spans), len(traceIDs), names)
+}
+
+// unmarshalExportTraceRequest decodes an OTLP/ExportTraceServiceRequest body
+// sent by the OTel HTTP trace exporter (which always uses protobuf).
+func unmarshalExportTraceRequest(body []byte, req *coltracepb.ExportTraceServiceRequest) error {
+	return proto.Unmarshal(body, req)
+}
+
+// hexBytes returns the lowercase hex encoding of b, used to make trace/span
+// IDs easy to read in test output.
+func hexBytes(b []byte) string {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 0, len(b)*2)
+	for _, c := range b {
+		out = append(out, hexdigits[c>>4], hexdigits[c&0x0f])
+	}
+	return string(out)
 }

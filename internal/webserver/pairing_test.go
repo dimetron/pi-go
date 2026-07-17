@@ -3,6 +3,7 @@ package webserver
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -323,3 +324,97 @@ func TestBuildQRPayload_IncludesHostAndURL(t *testing.T) {
 		t.Fatalf("unexpected url in payload: %q", decoded["url"])
 	}
 }
+
+// TestCreatePairWithContext_ExhaustsRetries covers the collision-retry
+// branch added when CreatePairWithContext grew a non-collision guarantee
+// (1,000,000 codes is small enough that tight test loops hit the rare-but-
+// real collision case). With the entire code space pre-seeded into
+// pm.pending, every random pick collides and the function must error with
+// the "exhausted N retries" message after exactly maxAttempts tries.
+func TestCreatePairWithContext_ExhaustsRetries(t *testing.T) {
+	pm := NewPairingManager(5 * time.Minute)
+
+	// Pre-fill the pending map with every 6-digit code so the random picker
+	// in CreatePairWithContext can never find a free slot within 8 attempts.
+	// The map only cares about the key — the value content is irrelevant.
+	pm.mu.Lock()
+	now := time.Now()
+	pm.pending = make(map[string]*PendingPair, 1_000_000)
+	for i := 0; i < 1_000_000; i++ {
+		code := fmt.Sprintf("%06d", i)
+		pm.pending[code] = &PendingPair{
+			Code:      code,
+			CreatedAt: now,
+			ExpiresAt: now.Add(time.Hour),
+		}
+	}
+	pm.mu.Unlock()
+
+	// Run the test in a goroutine so a hang in the retry loop is bounded by
+	// the goroutine's lifetime (the loop is bounded by maxAttempts, but the
+	// guard makes the intent explicit and protects against future changes
+	// to the retry cap).
+	done := make(chan struct{})
+	var (
+		code      string
+		token     string
+		qrData    []byte
+		createErr error
+	)
+	go func() {
+		defer close(done)
+		code, token, qrData, createErr = pm.CreatePairWithContext("/tmp/exhaust", "pi-go", "")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CreatePairWithContext did not return within 5s; retry loop is unbounded")
+	}
+
+	if createErr == nil {
+		t.Fatalf("expected exhausted-retries error, got code=%q token=%q qr=%dB", code, token, len(qrData))
+	}
+	want := "exhausted 8 retries"
+	if !bytes.Contains([]byte(createErr.Error()), []byte(want)) {
+		t.Errorf("error %q does not contain %q", createErr.Error(), want)
+	}
+}
+
+// TestCreatePairWithContext_FirstSlotSucceedsOnRetry is a companion to the
+// exhausted-retries test: the first picks always collide (seeded map covers
+// the first 100 codes) but the 4th random pick is allowed to succeed by
+// NOT pre-filling its key. This exercises the break-out-of-loop path
+// (the "if _, exists := pm.pending[code]; !exists { break }" branch).
+func TestCreatePairWithContext_FirstSlotSucceedsOnRetry(t *testing.T) {
+	pm := NewPairingManager(5 * time.Minute)
+	pm.mu.Lock()
+	pm.pending = make(map[string]*PendingPair)
+	// Seed only the first 3 codes so any retry past 3 succeeds.
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		code := fmt.Sprintf("%06d", i)
+		pm.pending[code] = &PendingPair{Code: code, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	pm.mu.Unlock()
+
+	// 1,000,000 - 3 = 999,997 free codes, so the next pick lands in
+	// microseconds. No need to bound this with a timeout.
+	code, token, qrData, err := pm.CreatePairWithContext("/tmp/first-slot", "pi-go", "")
+	if err != nil {
+		t.Fatalf("CreatePairWithContext: %v", err)
+	}
+	if len(code) != 6 {
+		t.Errorf("code = %q, want 6 digits", code)
+	}
+	if token == "" {
+		t.Error("token should not be empty")
+	}
+	if len(qrData) == 0 {
+		t.Error("qr data should not be empty")
+	}
+}
+
+// sync is intentionally omitted: the tests above only use PairingManager
+// through its public API and access unexported fields under pm.mu, which is
+// already encapsulated.

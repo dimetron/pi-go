@@ -63,7 +63,7 @@ func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 		t.Fatalf("agent.New: %v", err)
 	}
 	ctx := context.Background()
-	sid, err := a.CreateSession(ctx)
+	sid, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

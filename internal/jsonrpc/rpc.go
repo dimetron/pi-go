@@ -197,7 +197,7 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 	sessionID := params.SessionID
 	if sessionID == "" {
 		var err error
-		sessionID, err = s.agent.CreateSession(ctx)
+		sessionID, _, err = s.agent.CreateSession(ctx)
 		if err != nil {
 			_ = enc.Encode(Response{
 				JSONRPC: "2.0",
@@ -279,7 +279,7 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 
 // handleSessionCreate creates a new session and returns the ID.
 func (s *Server) handleSessionCreate(ctx context.Context, enc *json.Encoder, req Request) {
-	sessionID, err := s.agent.CreateSession(ctx)
+	sessionID, _, err := s.agent.CreateSession(ctx)
 	if err != nil {
 		_ = enc.Encode(Response{
 			JSONRPC: "2.0",

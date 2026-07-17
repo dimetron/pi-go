@@ -105,7 +105,7 @@ func TestE2EGitOverviewWorkflow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestE2EGitStagedDiffWorkflow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -230,17 +230,19 @@ func TestE2ERoleResolution(t *testing.T) {
 		"commit":  {Model: "claude-haiku-4-5-20251001"},
 	}
 
+	// Each known role resolves to the model configured for that role.
+	// An unknown role falls back to the "default" role's model.
 	tests := []struct {
 		role      string
 		wantModel string
 		wantProv  string
 	}{
-		{"default", "claude-sonnet-4-6", "anthropic"},
+		{"default", "claude-opus-4-7", "anthropic"},
 		{"smol", "claude-haiku-4-5-20251001", "anthropic"},
 		{"slow", "claude-opus-4-7", "anthropic"},
 		{"plan", "claude-opus-4-7", "anthropic"},
 		{"commit", "claude-haiku-4-5-20251001", "anthropic"},
-		{"unknown", "claude-sonnet-4-6", "anthropic"}, // falls back to default
+		{"unknown", "claude-opus-4-7", "anthropic"}, // falls back to default
 	}
 
 	for _, tt := range tests {
@@ -314,7 +316,7 @@ func TestE2EEditAndReadInGitRepo(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -369,11 +371,21 @@ func TestE2EAllNewToolsRegistered(t *testing.T) {
 		t.Fatalf("CoreTools() error: %v", err)
 	}
 
-	// Verify all 11 core tools exist
+	// Verify all 11 core tools exist. The search tool is named "grep" when
+	// ripgrep is not installed and "ripgrep" when it is, so accept either.
 	expected := map[string]bool{
-		"read": true, "write": true, "edit": true, "bash": true,
-		"grep": true, "find": true, "ls": true, "tree": true,
-		"git-overview": true, "git-file-diff": true, "git-hunk": true,
+		"read":          true,
+		"write":         true,
+		"edit":          true,
+		"bash":          true,
+		"grep":          true,
+		"ripgrep":       true,
+		"find":          true,
+		"ls":            true,
+		"tree":          true,
+		"git-overview":  true,
+		"git-file-diff": true,
+		"git-hunk":      true,
 	}
 
 	toolNames := make(map[string]bool)
@@ -381,14 +393,22 @@ func TestE2EAllNewToolsRegistered(t *testing.T) {
 		toolNames[t.Name()] = true
 	}
 
+	// The grep / ripgrep tools are aliases — having either is sufficient.
+	hasGrep := toolNames["grep"] || toolNames["ripgrep"]
+	if !hasGrep {
+		t.Errorf("missing expected core tool: grep (or ripgrep)")
+	}
 	for name := range expected {
+		if name == "grep" || name == "ripgrep" {
+			continue // handled above
+		}
 		if !toolNames[name] {
 			t.Errorf("missing expected core tool: %s", name)
 		}
 	}
 
-	if len(coreTools) < len(expected) {
-		t.Errorf("expected at least %d core tools, got %d", len(expected), len(coreTools))
+	if len(coreTools) < 11 {
+		t.Errorf("expected at least 11 core tools, got %d", len(coreTools))
 	}
 }
 
@@ -482,7 +502,7 @@ func TestE2ECommitWorkflow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sessionID, err := a.CreateSession(ctx)
+	sessionID, _, err := a.CreateSession(ctx)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -669,7 +689,7 @@ func TestE2EWorktreeLifecycle(t *testing.T) {
 	}
 }
 
-// TestE2ELSPToolRegistration verifies LSPTools() returns 5 tools with the correct names.
+// TestE2ELSPToolRegistration verifies LSPTools() returns the expected set of tools.
 func TestE2ELSPToolRegistration(t *testing.T) {
 	mgr := lsp.NewManager(nil)
 	defer mgr.Shutdown()
@@ -679,16 +699,18 @@ func TestE2ELSPToolRegistration(t *testing.T) {
 		t.Fatalf("LSPTools() error: %v", err)
 	}
 
-	if len(lspTools) != 5 {
-		t.Fatalf("expected 5 LSP tools, got %d", len(lspTools))
+	if len(lspTools) != 7 {
+		t.Fatalf("expected 7 LSP tools, got %d", len(lspTools))
 	}
 
 	expected := map[string]bool{
-		"lsp-diagnostics": false,
-		"lsp-definition":  false,
-		"lsp-references":  false,
-		"lsp-hover":       false,
-		"lsp-symbols":     false,
+		"lsp-diagnostics":      false,
+		"lsp-definition":       false,
+		"lsp-references":       false,
+		"lsp-hover":            false,
+		"lsp-symbols":          false,
+		"lsp-workspace-symbol": false,
+		"lsp-code-action":      false,
 	}
 
 	for _, tool := range lspTools {

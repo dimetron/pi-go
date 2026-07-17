@@ -24,6 +24,19 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.cfg.Logger.UserMessage(input)
 	}
 
+	// Sync the terminal window/tab title and the persisted session metadata
+	// with the slash command the user just typed. The next View() will emit
+	// OSC 0 carrying the new title (formatTerminalTitle scrubs C0 controls,
+	// so the envelope stays well-formed). Skipped for the three commands
+	// whose semantics aren't "make this the title":
+	//   - /clear  resets the title to the app default
+	//   - /exit, /quit  tear the program down before any frame can render
+	switch cmd {
+	case "/clear", "/exit", "/quit":
+	default:
+		m.setSessionTitle(input)
+	}
+
 	switch cmd {
 	case "/help":
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -43,6 +56,11 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.loadingItems = nil
 		m.matrix.clear()
 		m.matrix.feed("pi-go", m.mainWidth())
+		// Reset the terminal window/tab title and the persisted session
+		// metadata title. Funnel through setSessionTitle("") so the
+		// agent's SetSessionTitle is also called and meta.json stays in
+		// sync with the OSC 0 frame that the next View() will emit.
+		m.setSessionTitle("")
 	case "/copy":
 		return m.handleCopyCommand()
 	case "/model":

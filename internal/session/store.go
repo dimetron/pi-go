@@ -38,6 +38,11 @@ type PlanContext struct {
 // branch on absence.
 const UnknownModel = "unknown"
 
+// MaxSessionTitle caps the persisted session title. Anything longer is
+// truncated so meta.json stays small and terminal titles (which use this value
+// via OSC 0) fit on a single line.
+const MaxSessionTitle = 200
+
 // Meta holds session metadata persisted in meta.json.
 type Meta struct {
 	ID          string       `json:"id"`
@@ -45,6 +50,7 @@ type Meta struct {
 	UserID      string       `json:"userID"`
 	WorkDir     string       `json:"workDir,omitempty"`
 	Model       string       `json:"model"`
+	Title       string       `json:"title,omitempty"`
 	CreatedAt   time.Time    `json:"createdAt"`
 	UpdatedAt   time.Time    `json:"updatedAt"`
 	PlanContext *PlanContext `json:"planContext,omitempty"`
@@ -432,11 +438,36 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 		return nil, fmt.Errorf("session %s not found for app=%s user=%s", sessionID, appName, userID)
 	}
 
+	return s.loadSessionFromDisk(sessionID, meta)
+}
+
+// loadSessionUnchecked is like loadSession but skips the app/user identity
+// check. Use this for metadata-only operations (SetSessionTitle, GetSessionTitle)
+// where the caller doesn't know which app/user created the session. Caller
+// must hold s.mu.
+func (s *FileService) loadSessionUnchecked(sessionID string) (*fileSession, error) {
+	if sess, ok := s.sessions[sessionID]; ok {
+		return sess, nil
+	}
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	meta, err := readMeta(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	// Skip app/user verification — for SetSessionTitle/GetSessionTitle the
+	// session ID is the only key we need.
+	return s.loadSessionFromDisk(sessionID, meta)
+}
+
+// loadSessionFromDisk builds a fileSession in the cache from already-read
+// meta. Used by loadSession and loadSessionUnchecked so they share the event
+// replay + ATIF writer setup. Caller must hold s.mu.
+func (s *FileService) loadSessionFromDisk(sessionID string, meta *Meta) (*fileSession, error) {
+	sessionDir := filepath.Join(s.baseDir, sessionID)
 	events, err := readEvents(sessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading events: %w", err)
 	}
-
 	sess := &fileSession{
 		meta:      *meta,
 		events:    events,
@@ -452,8 +483,6 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 			},
 		),
 	}
-
-	// Rebuild state from event deltas and ATIF trajectory from existing events.
 	for _, e := range events {
 		if e.Actions.StateDelta != nil {
 			maps.Copy(sess.state, e.Actions.StateDelta)
@@ -464,7 +493,6 @@ func (s *FileService) loadSession(sessionID, appName, userID string) (*fileSessi
 			}
 		}
 	}
-
 	s.sessions[sessionID] = sess
 	s.evictCachedSessionsLocked()
 	return sess, nil
@@ -499,6 +527,89 @@ func (s *FileService) SetSessionModel(sessionID, modelName string) error {
 	defer sess.mu.Unlock()
 	sess.meta.Model = modelName
 	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// SetSessionTitle records a human-readable title for the given session and
+// persists it to meta.json. The title is trimmed, truncated to MaxSessionTitle,
+// and stripped of control characters so it can be embedded in terminal escape
+// sequences (OSC 0) without breaking the surrounding output stream. An empty
+// title clears the field.
+func (s *FileService) SetSessionTitle(sessionID, title string) error {
+	title = sanitizeSessionTitle(title)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		// Lazy-load from disk so a freshly reopened service can still update
+		// titles for sessions it hasn't seen yet. Skip the app/user check
+		// because SetSessionTitle is keyed by ID alone.
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Title = title
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// sanitizeSessionTitle trims surrounding whitespace, replaces ASCII control
+// characters (including CR, LF, TAB) with spaces, and drops ESC (0x1B) and
+// DEL (0x7F) entirely. This neutralizes OSC injection attempts — a stray
+// "title" can't break out of the OSC 0 envelope because the envelope-opener
+// (ESC) and the terminator (BEL) are removed before the title reaches
+// stdout. The result is capped at MaxSessionTitle. Empty input returns "".
+func sanitizeSessionTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(title))
+	for _, r := range title {
+		if r == '\n' || r == '\r' || r == '\t' {
+			b.WriteByte(' ')
+			continue
+		}
+		// Strip C0 control characters (0x00–0x1F) and DEL (0x7F). Bell (0x07)
+		// is the OSC terminator — it must not appear inside the title payload.
+		if r < 0x20 || r == 0x7F {
+			continue
+		}
+		// ESC (0x1B) opens a new escape sequence, which would let a stray
+		// "title" inject arbitrary ANSI/OSC into the terminal. Drop it.
+		b.WriteRune(r)
+	}
+	title = b.String()
+	if len(title) > MaxSessionTitle {
+		title = title[:MaxSessionTitle]
+	}
+	return title
+}
+
+// GetSessionTitle returns the current title for the given session, or "" if
+// the session has no title set. Returns an error for unknown sessions.
+func (s *FileService) GetSessionTitle(sessionID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		// Lazy-load so a freshly reopened service can still report titles
+		// for sessions persisted by a previous run. Skip the app/user check
+		// because GetSessionTitle is keyed by ID alone.
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return "", err
+		}
+		sess = loaded
+	}
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	return sess.meta.Title, nil
 }
 
 // UpdatePlanContext updates the plan session context in the session metadata.

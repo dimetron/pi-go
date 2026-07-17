@@ -62,6 +62,10 @@ type model struct {
 	sel       selection
 	lastFrame string
 	frameRows int
+	// sessionTitle is the title derived from the user's most recent prompt. It
+	// is surfaced to the terminal via View().WindowTitle so Bubble Tea's
+	// renderer emits the escape sequence in-band with the frame it draws.
+	sessionTitle string
 	// topSectionRows is the number of rows in the top section (messages + sidebar)
 	// before the full-width status bar. The rail and sidebar only cover these rows.
 	topSectionRowsVal int
@@ -1202,6 +1206,12 @@ func (m *model) View() tea.View {
 	final = highlight(final, m.sel, m.chatWidth(), m.width)
 
 	v := tea.NewView(final)
+	// The renderer diffs WindowTitle against the last frame and only emits the
+	// escape sequence when it changes, then clears it again on teardown. Going
+	// through the View is what keeps the sequence ordered against the frame
+	// writes — writing it to os.Stdout directly races the renderer and lands
+	// mid-frame, which corrupts the drawn output.
+	v.WindowTitle = formatTerminalTitle(m.sessionTitle)
 	if inputCursor != nil {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor
@@ -1696,6 +1706,14 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		r := ev.Result
 		m.cfg.Agent = r.Agent
 		m.cfg.SessionID = r.SessionID
+		// Seed the terminal window/tab title with the default (git repo / CWD
+		// basename) so the OSC 0 sequence on the next frame already carries a
+		// sensible label — before the user types the first prompt. The prompt
+		// later overwrites it via applySessionTitle, so this only matters for
+		// the pre-prompt frames.
+		if m.sessionTitle == "" && r.SessionTitle != "" {
+			m.sessionTitle = r.SessionTitle
+		}
 		m.cfg.SessionService = r.SessionService
 		m.cfg.Orchestrator = r.Orchestrator
 		m.cfg.Logger = r.Logger
