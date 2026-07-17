@@ -1,11 +1,27 @@
 package tui
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/creack/pty"
+	"github.com/muesli/termenv"
 )
+
+type scriptedTerminal struct {
+	input  *bytes.Reader
+	output bytes.Buffer
+}
+
+func (t *scriptedTerminal) Read(p []byte) (int, error) { return t.input.Read(p) }
+func (t *scriptedTerminal) Write(p []byte) (int, error) {
+	return t.output.Write(p)
+}
+func (t *scriptedTerminal) Fd() uintptr { return 0 }
 
 func newTestRenderer(t *testing.T) *glamour.TermRenderer {
 	t.Helper()
@@ -14,6 +30,34 @@ func newTestRenderer(t *testing.T) *glamour.TermRenderer {
 		t.Fatalf("failed to create test renderer: %v", err)
 	}
 	return r
+}
+
+func TestUpdateRendererDoesNotQueryTerminalBackground(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	ptyMaster, ptySlave, err := pty.Open()
+	if err != nil {
+		t.Fatalf("open pty: %v", err)
+	}
+	defer ptyMaster.Close()
+	defer ptySlave.Close()
+
+	previousStdout := os.Stdout
+	os.Stdout = ptySlave
+	defer func() { os.Stdout = previousStdout }()
+
+	terminal := &scriptedTerminal{
+		input: bytes.NewReader([]byte("\x1b]11;rgb:0a0a/0e0e/1414\a\x1b[1;1R")),
+	}
+	previousOutput := termenv.DefaultOutput()
+	termenv.SetDefaultOutput(termenv.NewOutput(terminal, termenv.WithUnsafe()))
+	defer termenv.SetDefaultOutput(previousOutput)
+
+	chat := NewChatModel(nil)
+	chat.UpdateRenderer(80)
+
+	if got := terminal.output.String(); strings.Contains(got, "\x1b]11;?") {
+		t.Fatalf("renderer update queried terminal background: %q", got)
+	}
 }
 
 // --- wordWrap ---
@@ -515,8 +559,8 @@ func TestChatModel_UpdateRenderer_MinWidth(t *testing.T) {
 
 	// Renderer should still work after narrow width.
 	result := cm.RenderMarkdown("test content")
-	if !strings.Contains(result, "test content") {
-		t.Error("expected rendered content even with narrow width")
+	if !strings.Contains(ansi.Strip(result), "test content") {
+		t.Errorf("expected rendered content even with narrow width, got %q", result)
 	}
 }
 

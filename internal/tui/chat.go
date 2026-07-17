@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
@@ -280,6 +281,14 @@ func (c *ChatModel) MaxScroll(height int) int {
 	return max
 }
 
+func newMarkdownRenderer(width int) (*glamour.TermRenderer, error) {
+	return glamour.NewTermRenderer(
+		glamour.WithStandardStyle(styles.DarkStyle),
+		glamour.WithWordWrap(width),
+		glamour.WithEmoji(),
+	)
+}
+
 // UpdateRenderer recreates the glamour renderer for the given terminal width.
 func (c *ChatModel) UpdateRenderer(width int) {
 	c.Width = width
@@ -287,11 +296,7 @@ func (c *ChatModel) UpdateRenderer(width int) {
 	if width < 40 {
 		width = 40
 	}
-	c.Renderer, _ = glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width),
-		glamour.WithEmoji(),
-	)
+	c.Renderer, _ = newMarkdownRenderer(width)
 	// Invalidate render caches — width changed so all cached output is stale.
 	c.invalidateRenderCaches()
 }

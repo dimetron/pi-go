@@ -206,36 +206,32 @@ func TestSelectionStaysInsideTheChatPanel(t *testing.T) {
 	}
 }
 
-// The reported bug: the selection landed several rows below the mouse.
-//
-// The UI is on the normal screen, so the frame is drawn under whatever the
-// terminal already had on it (a shell prompt, a "pprof listening" line), and
-// Bubble Tea reports the mouse in absolute terminal rows. Indexing the frame
-// with a raw mouse Y therefore lands exactly that many rows too low.
-func TestSelectionFollowsTheMouseWhenFrameIsOffset(t *testing.T) {
+// A full-height frame has a stable screen origin: terminal row Y is frame row Y.
+// Leaving even one unused row makes an inline renderer's origin depend on prior
+// output and terminal reflow, which intermittently shifts selection by one row.
+func TestSelectionFollowsMouseInFullHeightFrame(t *testing.T) {
 	m := selectionModel(t)
 	m.View()
 
-	top := m.frameTop()
-	if top == 0 {
-		t.Skip("frame is flush with the top of the screen; nothing to translate")
+	if m.frameRows != m.height {
+		t.Fatalf("frame has %d rows for terminal height %d; origin is not stable", m.frameRows, m.height)
+	}
+	if top := m.frameTop(); top != 0 {
+		t.Fatalf("full-height frame starts at terminal row %d, want 0", top)
 	}
 
 	row, col := findRow(t, m, "SELECT-ME-ONE")
 
-	// Press where the text actually is on screen: frame row + the frame's origin.
-	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: row + top, Button: tea.MouseLeft}))
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: row, Button: tea.MouseLeft}))
 	m = next.(*model)
 
 	if m.sel.anchorY != row {
-		t.Fatalf("clicking terminal row %d selected frame row %d, want %d — the selection is %d rows off",
-			row+top, m.sel.anchorY, row, m.sel.anchorY-row)
+		t.Fatalf("clicking terminal row %d selected frame row %d", row, m.sel.anchorY)
 	}
 
-	// And the text under the mouse is what gets copied.
-	next, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col + len("SELECT-ME-ONE") - 1, Y: row + top, Button: tea.MouseLeft}))
+	next, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col + len("SELECT-ME-ONE") - 1, Y: row, Button: tea.MouseLeft}))
 	m = next.(*model)
-	next, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col + len("SELECT-ME-ONE") - 1, Y: row + top, Button: tea.MouseLeft}))
+	next, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col + len("SELECT-ME-ONE") - 1, Y: row, Button: tea.MouseLeft}))
 	m = next.(*model)
 
 	if got := selectedText(m.lastFrame, m.sel, m.chatWidth()); got != "SELECT-ME-ONE" {
