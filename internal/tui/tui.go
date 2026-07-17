@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/glamour"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -326,11 +325,7 @@ func Run(ctx context.Context, cfg Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(100),
-		glamour.WithEmoji(),
-	)
+	renderer, _ := newMarkdownRenderer(100)
 
 	// Load persistent command history from ~/.pi-go/history.jsonl.
 	history := loadHistory()
@@ -1060,7 +1055,10 @@ func (m *model) View() tea.View {
 	// rows that inset the block from the rules are budgeted separately.
 	visibleLineCount := strings.Count(visibleMessages, "\n") + 1
 	for visibleLineCount < availableHeight {
-		visibleMessages += "\n"
+		// Keep the final padding row materialized. A trailing newline only
+		// terminates the preceding row; treating its trailing empty string as a
+		// row made the composed frame one line shorter than the terminal.
+		visibleMessages += "\n "
 		visibleLineCount++
 	}
 	visibleMessages = m.overlaySearchPopup(visibleMessages, bodyWidth)
