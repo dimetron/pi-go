@@ -1298,3 +1298,264 @@ func TestDefaultRetryConfig(t *testing.T) {
 		t.Errorf("MaxDelay = %v, want 30s", cfg.MaxDelay)
 	}
 }
+
+// capturingLLM records the LLMRequest it receives, then returns a fixed
+// response. Used to assert what the runner actually sent to the model —
+// in particular, what the instruction looked like after our
+// InstructionProvider ran.
+type capturingLLM struct {
+	name     string
+	response string
+
+	mu          sync.Mutex
+	lastRequest *model.LLMRequest
+}
+
+func (m *capturingLLM) Name() string { return m.name }
+
+func (m *capturingLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	m.mu.Lock()
+	m.lastRequest = req
+	m.mu.Unlock()
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{
+			Content: genai.NewContentFromText(m.response, genai.RoleModel),
+		}, nil)
+	}
+}
+
+func (m *capturingLLM) capturedSystemInstruction() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastRequest == nil || m.lastRequest.Config == nil {
+		return ""
+	}
+	sc := m.lastRequest.Config.SystemInstruction
+	if sc == nil {
+		return ""
+	}
+	// Flatten all text parts into a single string for substring checks.
+	var sb strings.Builder
+	for _, p := range sc.Parts {
+		if p != nil && p.Text != "" {
+			sb.WriteString(p.Text)
+		}
+	}
+	return sb.String()
+}
+
+// TestSafeInstructionProvider_UnknownStateKeyDoesNotFail is the regression
+// test for the {AGT_X}-in-CLAUDE.md bug. Before the fix, an instruction
+// containing a {state_var} placeholder whose key is not in session state
+// caused the whole turn to abort with "failed to append instructions:
+// failed to inject session state into instruction: state key does not
+// exist". The safe provider must fail open: the literal {state_var}
+// substring passes through, the LLM is called, and the turn completes.
+func TestSafeInstructionProvider_UnknownStateKeyDoesNotFail(t *testing.T) {
+	llm := &capturingLLM{name: "test-model", response: "ok"}
+
+	a, err := New(Config{
+		Model:       llm,
+		Instruction: "before {unknown_xyz_placeholder} after",
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	ctx := context.Background()
+	sessionID, _, err := a.CreateSession(ctx)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	var runErr error
+	for _, err := range a.Run(ctx, sessionID, "hi") {
+		if err != nil {
+			runErr = err
+			break
+		}
+	}
+	if runErr != nil {
+		t.Fatalf("Run() yielded error (regression: {state_var} should not abort): %v", runErr)
+	}
+
+	// Sanity check: the literal {unknown_xyz_placeholder} was passed through.
+	if got := llm.capturedSystemInstruction(); !strings.Contains(got, "{unknown_xyz_placeholder}") {
+		t.Errorf("system instruction should contain the literal placeholder, got %q", got)
+	}
+}
+
+// TestSafeInstructionProvider_KnownStateKeyIsSubstituted asserts the
+// positive case still works: a {app:foo} placeholder whose key IS set in
+// session state must be substituted into the instruction.
+func TestSafeInstructionProvider_KnownStateKeyIsSubstituted(t *testing.T) {
+	llm := &capturingLLM{name: "test-model", response: "ok"}
+
+	svc := session.InMemoryService()
+	a, err := New(Config{
+		Model:          llm,
+		SessionService: svc,
+		Instruction:    "hello {app:user_name}",
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	ctx := context.Background()
+	sessionID, _, err := a.CreateSession(ctx)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	// Set the state key the placeholder references. ADK's in-memory
+	// service persists state via AppendEvent(StateDelta), not by
+	// mutating the session returned from Get (which is a copy).
+	seedResp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   AppName,
+		UserID:    DefaultUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get() session: %v", err)
+	}
+	if err := svc.AppendEvent(ctx, seedResp.Session, &session.Event{
+		Author: "test",
+		Actions: session.EventActions{
+			StateDelta: map[string]any{"app:user_name": "world"},
+		},
+	}); err != nil {
+		t.Fatalf("AppendEvent(StateDelta): %v", err)
+	}
+
+	var runErr error
+	for _, err := range a.Run(ctx, sessionID, "hi") {
+		if err != nil {
+			runErr = err
+			break
+		}
+	}
+	if runErr != nil {
+		t.Fatalf("Run() yielded error: %v", runErr)
+	}
+
+	got := llm.capturedSystemInstruction()
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("system instruction should contain substituted value, got %q", got)
+	}
+	if strings.Contains(got, "{app:user_name}") {
+		t.Errorf("placeholder should have been substituted, got %q", got)
+	}
+}
+
+// TestSafeInstructionProvider_DirectCallMissingKey covers the fail-open
+// path of the provider in isolation: calling the closure with a context
+// that triggers an injection error must return the original template
+// without surfacing the error.
+func TestSafeInstructionProvider_DirectCallMissingKey(t *testing.T) {
+	// A nil ReadonlyContext is not a *icontext.ReadonlyContext, so
+	// instructionutil.InjectSessionState returns an "unexpected context
+	// type" error. The provider must swallow it and return the template.
+	got, err := safeInstructionProvider("before {foo} after", nil)(nil)
+	if err != nil {
+		t.Fatalf("safeInstructionProvider returned error: %v", err)
+	}
+	if got != "before {foo} after" {
+		t.Errorf("safeInstructionProvider returned %q, want original template", got)
+	}
+}
+
+// TestSafeInstructionProvider_MixedPlaceholders is the regression test for
+// the all-or-nothing fallback: when a single template contains both a
+// real state placeholder and a stray prose token, the real one must still
+// be substituted. A naive "if any error then return the original template"
+// implementation would drop the legitimate substitution; the per-placeholder
+// walk in injectWithFailOpen must keep both behaviors independently.
+func TestSafeInstructionProvider_MixedPlaceholders(t *testing.T) {
+	llm := &capturingLLM{name: "test-model", response: "ok"}
+
+	svc := session.InMemoryService()
+	a, err := New(Config{
+		Model:          llm,
+		SessionService: svc,
+		// One real key (app:user_name) and one stray token ({AGT_X})
+		// that looks like a state key but isn't.
+		Instruction: "real={app:user_name}, stray={AGT_X}",
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	ctx := context.Background()
+	sessionID, _, err := a.CreateSession(ctx)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	// Set only the real key.
+	seedResp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   AppName,
+		UserID:    DefaultUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get() session: %v", err)
+	}
+	if err := svc.AppendEvent(ctx, seedResp.Session, &session.Event{
+		Author: "test",
+		Actions: session.EventActions{
+			StateDelta: map[string]any{"app:user_name": "world"},
+		},
+	}); err != nil {
+		t.Fatalf("AppendEvent(StateDelta): %v", err)
+	}
+
+	var runErr error
+	for _, err := range a.Run(ctx, sessionID, "hi") {
+		if err != nil {
+			runErr = err
+			break
+		}
+	}
+	if runErr != nil {
+		t.Fatalf("Run() yielded error: %v", runErr)
+	}
+
+	got := llm.capturedSystemInstruction()
+	if !strings.Contains(got, "real=world") {
+		t.Errorf("real placeholder should have been substituted, got %q", got)
+	}
+	if !strings.Contains(got, "stray={AGT_X}") {
+		t.Errorf("stray placeholder should have been left as literal, got %q", got)
+	}
+	if strings.Contains(got, "{app:user_name}") {
+		t.Errorf("real placeholder should not appear unsubstituted, got %q", got)
+	}
+}
+
+// TestInjectWithFailOpen_PerPlaceholder exercises the slicing logic
+// directly. It is the unit-level complement to the e2e mixed-placeholder
+// test: here we don't need a real session because every per-placeholder
+// call returns an error (nil ctx triggers the type-assertion failure in
+// instructionutil.InjectSessionState), so every match falls back to its
+// literal form.
+func TestInjectWithFailOpen_PerPlaceholder(t *testing.T) {
+	cases := []struct {
+		name     string
+		template string
+		want     string
+	}{
+		{"no placeholders", "plain text", "plain text"},
+		{"one stray placeholder", "x {foo} y", "x {foo} y"},
+		{"two stray placeholders", "{a} and {b}", "{a} and {b}"},
+		{"literal-looking but invalid name", "{a-b} and {a b}", "{a-b} and {a b}"},
+		{"braces in non-placeholder context", "shell {echo $1} style", "shell {echo $1} style"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := injectWithFailOpen(nil, tc.template, nil)
+			if got != tc.want {
+				t.Errorf("injectWithFailOpen(%q) = %q, want %q", tc.template, got, tc.want)
+			}
+		})
+	}
+}

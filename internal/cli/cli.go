@@ -684,6 +684,16 @@ func runNonInteractive(
 		coreTools = append(coreTools, gTool)
 	}
 
+	// Session logger. Created before the agent so it can capture the agent's
+	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
+	// session log instead of leaking them to stderr. SessionStart is recorded
+	// below once the session ID is resolved.
+	sessionLog, err := logger.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
+	}
+	defer func() { _ = sessionLog.Close() }()
+
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
 		Tools:               coreTools,
@@ -692,6 +702,7 @@ func runNonInteractive(
 		SessionService:      sessionSvc,
 		BeforeToolCallbacks: beforeCBs,
 		AfterToolCallbacks:  afterCBs,
+		Logger:              sessionLog,
 	})
 	if err != nil {
 		return fmt.Errorf("creating agent: %w", err)
@@ -729,11 +740,6 @@ func runNonInteractive(
 		})
 	}
 
-	sessionLog, err := logger.New()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
-	}
-	defer func() { _ = sessionLog.Close() }()
 	sessionLog.SessionStart(sessionID, llm.Name(), mode)
 
 	switch mode {
