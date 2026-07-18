@@ -227,10 +227,49 @@ type SearchItem struct {
 	Description string // for commands: the description
 }
 
+// searchPopupChrome is the number of rows the search popup reserves for chrome
+// — two border rows (top, bottom), a header row, and a search-prompt row.
+// height = items.  The item list fills the remaining space, so the popup's
+// total height is item count + searchPopupChrome.  The render loop and the
+// Up/Down scroll math both treat height as the visible item count, so it has
+// to reflect what actually fits, not the total number of items — otherwise
+// scrolling never fires and the selected row renders off-screen.
+const searchPopupChrome = 4
+
+// searchPopupMaxItems caps the popup so a huge command list does not eat the
+// whole message area.  25 mirrors the previous cap and is enough to scan at a
+// glance.
+const searchPopupMaxItems = 25
+
+// searchPopupListHeight returns how many item rows the popup should expose.
+// availableRows is the number of rows the message viewport can spare for the
+// popup; the popup uses that many minus its own chrome.  The result is
+// clamped to [1, max] when there are items so the popup is always usable,
+// even on terminals too small for the chrome plus a margin.  An empty list
+// returns 0 — the "no matches" path renders the chrome only.
+func searchPopupListHeight(itemCount, availableRows int) int {
+	if itemCount <= 0 {
+		return 0
+	}
+	if availableRows <= searchPopupChrome {
+		// Not enough room for the chrome plus any item; show one anyway
+		// and let the overlay clip the bottom.  Picking something is more
+		// useful than seeing an empty list.
+		return 1
+	}
+	height := itemCount
+	if max := availableRows - searchPopupChrome; height > max {
+		height = max
+	}
+	if height > searchPopupMaxItems {
+		height = searchPopupMaxItems
+	}
+	return height
+}
+
 // newSearchPopup creates a unified search popup with the given mode.
 func (m *model) newSearchPopup(mode searchMode) {
 	var items []SearchItem
-	var popupHeight int
 
 	switch mode {
 	case searchModeCommands:
@@ -248,7 +287,6 @@ func (m *model) newSearchPopup(mode searchMode) {
 				items = append(items, SearchItem{Text: c.Text, Description: c.Description})
 			}
 		}
-		popupHeight = searchPopupListHeight(len(items))
 
 	case searchModeHistory:
 		entries := m.inputModel.History
@@ -260,8 +298,16 @@ func (m *model) newSearchPopup(mode searchMode) {
 		for i, e := range entries {
 			items[len(entries)-1-i] = SearchItem{Text: e.Text}
 		}
-		popupHeight = searchPopupListHeight(len(items))
 	}
+
+	availableRows := m.messageViewportHeight()
+	// The overlay leaves a 1-row margin between the popup and the bottom of
+	// the viewport when the popup fits.  Reserve that row too so the chrome
+	// does not push the last item into that margin.
+	if availableRows > 0 {
+		availableRows--
+	}
+	popupHeight := searchPopupListHeight(len(items), availableRows)
 
 	m.searchPopup = &searchPopupState{
 		mode:      mode,
@@ -274,18 +320,50 @@ func (m *model) newSearchPopup(mode searchMode) {
 	}
 }
 
-func searchPopupListHeight(itemCount int) int {
-	if itemCount <= 0 {
-		return 0
+// refreshSearchPopupHeight recomputes the popup's visible item count after
+// the terminal has been resized.  The popup keeps its selection; height, and
+// scrollOff are reconciled so the selection stays visible and the rendered
+// window never overshoots len(filtered) — otherwise renderSearchPopup would
+// index past the end and panic on a tall→short→tall resize cycle.
+func (m *model) refreshSearchPopupHeight() {
+	if m.searchPopup == nil {
+		return
 	}
-	height := itemCount
-	if height > 25 {
-		height = 25
+	availableRows := m.messageViewportHeight()
+	if availableRows > 0 {
+		availableRows--
 	}
-	if height < 3 {
-		height = 3
+	m.searchPopup.height = searchPopupListHeight(len(m.searchPopup.filtered), availableRows)
+	n := len(m.searchPopup.filtered)
+	if n == 0 {
+		m.searchPopup.selected = 0
+		m.searchPopup.scrollOff = 0
+		return
 	}
-	return height
+	if m.searchPopup.selected >= n {
+		m.searchPopup.selected = n - 1
+	}
+	// Bring scrollOff in sync with the new height. A previous resize could
+	// have left it pointing past the new bottom of the window (short→tall
+	// means more items visible, so a stale scrollOff overshoots), or past the
+	// end of the list entirely (tall→short can shrink the visible window
+	// below the old scrollOff). The previous value is not safe to keep.
+	if m.searchPopup.selected < m.searchPopup.scrollOff {
+		m.searchPopup.scrollOff = m.searchPopup.selected
+	} else if m.searchPopup.selected >= m.searchPopup.scrollOff+m.searchPopup.height {
+		m.searchPopup.scrollOff = m.searchPopup.selected - m.searchPopup.height + 1
+	}
+	// Defense in depth: never overshoot the end of filtered, so the
+	// i-based loop in renderSearchPopup cannot read past the slice. The
+	// in-view clamps above keep scrollOff within selected±height; this is
+	// the final tie-breaker for the case where a previous scrollOff is
+	// still larger than the new visible window (e.g. n shrunk or height
+	// grew). max() guards against a negative maxScroll, which can only
+	// happen if some external code wrote a height larger than n between
+	// when this function read it and when it ran this clamp.
+	if maxScroll := n - m.searchPopup.height; m.searchPopup.scrollOff > maxScroll {
+		m.searchPopup.scrollOff = max(0, maxScroll)
+	}
 }
 
 // allSearchCandidates returns all slash command candidates for the search popup.
@@ -1210,7 +1288,7 @@ func (m *model) View() tea.View {
 	// through the View is what keeps the sequence ordered against the frame
 	// writes — writing it to os.Stdout directly races the renderer and lands
 	// mid-frame, which corrupts the drawn output.
-	v.WindowTitle = formatTerminalTitle(m.sessionTitle)
+	v.WindowTitle = formatTerminalTitleWithCWD(m.sessionTitle, m.cfg.WorkDir)
 	if inputCursor != nil {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor
@@ -1377,6 +1455,11 @@ func (m *model) applyResize() {
 	}
 	// Matrix height can affect the message viewport, so clamp again after it updates.
 	m.clampScroll()
+	// The search popup exposes a fixed number of item rows.  Recompute that
+	// here so a resize keeps the highlighted row inside the new window —
+	// otherwise the Up/Down math still trusts the old budget and the
+	// selection can land off-screen.
+	m.refreshSearchPopupHeight()
 }
 
 func (m *model) clampScroll() {
@@ -1907,9 +1990,15 @@ func (m *model) renderSearchPopup(width int) string {
 		return popupStyle.Render(b.String())
 	}
 
-	// Item list.
-	for i := 0; i < sp.height && i < len(sp.filtered); i++ {
+	// Item list. Both i and scrollOff+i are bounded by len(filtered) so a
+	// stale scrollOff from before a resize cannot index past the end and
+	// panic — refreshSearchPopupHeight is the primary guard, this is the
+	// belt to its braces.
+	for i := 0; i < sp.height; i++ {
 		idx := sp.scrollOff + i
+		if idx < 0 || idx >= len(sp.filtered) {
+			break
+		}
 		item := sp.filtered[idx]
 		prefix := "  "
 		currentItemStyle := itemStyle
