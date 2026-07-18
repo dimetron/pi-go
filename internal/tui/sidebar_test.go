@@ -557,3 +557,76 @@ func TestRenderSidebar_MemoryStatus_Nil(t *testing.T) {
 		t.Error("did not expect Memory section when MemoryStatus is nil")
 	}
 }
+
+func TestRenderSidebar_Artifacts_EmptyHidden(t *testing.T) {
+	baseline := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+	})
+	nilList := RenderSidebar(SidebarRenderInput{
+		Width:     30,
+		Height:    30,
+		Artifacts: nil,
+	})
+	emptyList := RenderSidebar(SidebarRenderInput{
+		Width:     30,
+		Height:    30,
+		Artifacts: []ArtifactEntry{},
+	})
+	for name, got := range map[string]string{
+		"baseline": baseline,
+		"nil":      nilList,
+		"empty":    emptyList,
+	} {
+		if strings.Contains(got, "Artifacts [") {
+			t.Errorf("case %s: did not expect Artifacts section when list is empty", name)
+		}
+	}
+}
+
+func TestRenderSidebar_Artifacts_Populated(t *testing.T) {
+	// Sizes picked so each tier renders distinctly:
+	// 124_000 bytes → "124 KB" (just under the 128 KB boundary? no — 124_000/1024 = 121 → "121 KB")
+	// Actually 124*1024 = 126976 → 126976/1024 = 124 → "124 KB". Good.
+	// 2_200_000 → 2_200_000/1024 = 2148 KB, /1024 = 2.098 → "2.1 MB"
+	// 812 → "812 B"
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		Artifacts: []ArtifactEntry{
+			{Filename: "screenshot.png", Size: 124 * 1024, Mime: "image/png"},
+			{Filename: "error.jpg", Size: 2_200_000, Mime: "image/jpeg"},
+			{Filename: "notes.txt", Size: 812, Mime: "text/plain"},
+		},
+	})
+	if !strings.Contains(result, "Artifacts [3]") {
+		t.Error("expected Artifacts [3] heading")
+	}
+	// image/* entries get the framed-picture icon, others get the paperclip.
+	if !strings.Contains(result, "🖼") {
+		t.Error("expected image icon for image/* entries")
+	}
+	if !strings.Contains(result, "📎") {
+		t.Error("expected paperclip icon for non-image entry")
+	}
+	// Sizes: 124 KB, 2.1 MB, 812 B.
+	for _, want := range []string{"124 KB", "2.1 MB", "812 B"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("expected size %q in rendered output", want)
+		}
+	}
+	// Filenames that fit. "error.jpg" (9 chars) and "notes.txt" (9 chars)
+	// fit the innerW-12 budget for a 30-wide sidebar. "screenshot.png" is
+	// 14 chars and gets truncated to "screenshot.…" — assert that behavior
+	// explicitly.
+	stripped := ansi.Strip(result)
+	for _, want := range []string{"error.jpg", "notes.txt", "screenshot.…"} {
+		if !strings.Contains(stripped, want) {
+			t.Errorf("expected %q in rendered output", want)
+		}
+	}
+	// Truncated filename should NOT appear in full.
+	if strings.Contains(stripped, "screenshot.png") {
+		t.Error("did not expect untruncated 'screenshot.png' — sidebar too narrow")
+	}
+}

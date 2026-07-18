@@ -1159,6 +1159,7 @@ func (m *model) View() tea.View {
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
 			MemoryStatus: m.memoryStatus,
 			OTELEnabled:  otel.IsEnabled(),
+			Artifacts:    m.artifactList(),
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -1480,6 +1481,18 @@ func (m *model) mascot() string {
 		return m.face.Mascot()
 	}
 	return MoodIdle.Mascot()
+}
+
+// artifactList returns the artifacts attached to the current session,
+// formatted for the sidebar. Returns nil when no artifact service is
+// wired — the sidebar treats nil/empty identically and renders nothing.
+//
+// This is a stub: the artifact service is plumbed through agent.Config
+// in the image-paste feature; once that lands, this method reads the
+// service off the runner and translates List+Load responses into
+// []ArtifactEntry.
+func (m *model) artifactList() []ArtifactEntry {
+	return nil
 }
 
 // refreshDiffStats updates the git diff line counts.
