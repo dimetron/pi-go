@@ -13,11 +13,29 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 )
 
-// TestMain globally disables real browser opens and process restart for every test in this package.
+// TestMain globally disables real browser opens and process restart for every
+// test in this package, and redirects HOME to a throwaway directory.
+//
+// The HOME isolation matters because saveThemeToConfig and SaveDefaultRole
+// resolve ~/.pi-go/config.json through os.UserHomeDir and rewrite the whole
+// file. Without it, running "go test ./..." overwrites the developer's real
+// theme and default model role.
 func TestMain(m *testing.M) {
 	openBrowser = func(string) error { return nil }
 	execRestart = func() {}
-	os.Exit(m.Run())
+
+	dir, err := os.MkdirTemp("", "pi-go-test-home-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "isolating HOME: %v\n", err)
+		os.Exit(1)
+	}
+	os.Setenv("HOME", dir)
+	os.Setenv("USERPROFILE", dir) // os.UserHomeDir on Windows
+
+	code := m.Run()
+
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // mockBrowser records all URLs passed to openBrowser.
