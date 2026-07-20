@@ -812,7 +812,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 
 	baseURL := flagURL
 	if baseURL == "" && providerName != "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[providerName]
 	}
 
@@ -825,7 +825,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 		info.Custom = baseURL != ""
 	}
 	if baseURL == "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[info.Provider]
 		if baseURL != "" {
 			info.Custom = true

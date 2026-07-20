@@ -60,7 +60,13 @@ func runModelList(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
 
 	keys := config.APIKeys()
-	baseURLs := config.BaseURLs()
+	// A broken or absent config must not stop model listing — fall back to
+	// env-only base URLs, which is what this command did before baseURLs existed.
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.Defaults()
+	}
+	baseURLs := cfg.ResolveBaseURLs()
 
 	// Determine which providers to query.
 	var providers []string

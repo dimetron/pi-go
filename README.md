@@ -241,6 +241,26 @@ Pi looks for configuration in `~/.pi-go/config.json` (global) and `.pi-go/config
 - **Hooks** — Shell commands triggered on tool events (e.g., post-write formatting)
 - **MCP servers** — External tool servers via Model Context Protocol
 - **Themes** — Terminal color schemes via `theme` config field
+- **Base URLs** — Per-provider endpoints via the `baseURLs` field
+
+### Provider base URLs
+
+Self-hosted or LAN endpoints can be declared in config instead of exported in every shell:
+
+```json
+{
+  "roles": {
+    "default": { "model": "ollama/gemma-4-e4b:latest", "provider": "ollama" }
+  },
+  "baseURLs": {
+    "ollama": "http://192.168.1.10:11434"
+  }
+}
+```
+
+Precedence is `--url` flag > environment variable > `baseURLs` config. The matching env vars are
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, and `OLLAMA_HOST`, so a
+per-shell or CI override still takes effect. An empty env var does not mask a configured value.
 
 ### Custom OpenAI-compatible provider
 

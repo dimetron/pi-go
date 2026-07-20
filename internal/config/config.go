@@ -58,6 +58,7 @@ type Config struct {
 	DefaultProvider string                `json:"defaultProvider"`
 	ThinkingLevel   string                `json:"thinkingLevel"`
 	Theme           string                `json:"theme"`
+	BaseURLs        map[string]string     `json:"baseURLs,omitempty"` // provider → base URL; overridden by env
 	ExtraHeaders    map[string]string     `json:"extraHeaders,omitempty"`
 	InsecureSkipTLS bool                  `json:"insecureSkipTLS,omitempty"`
 	Tools           map[string]any        `json:"tools,omitempty"`
@@ -512,6 +513,24 @@ func BaseURLs() map[string]string {
 		if val := os.Getenv(envVar); val != "" {
 			urls[provider] = val
 		}
+	}
+	return urls
+}
+
+// ResolveBaseURLs returns provider base URLs from the config's baseURLs map
+// merged with the environment, environment winning. This lets a self-hosted
+// endpoint (e.g. an Ollama server on the LAN) live in config.json instead of
+// requiring a shell export, while keeping the env vars usable as a per-shell
+// or CI override. An empty env var does not mask a configured value.
+func (c *Config) ResolveBaseURLs() map[string]string {
+	urls := make(map[string]string, len(c.BaseURLs))
+	for provider, url := range c.BaseURLs {
+		if url != "" {
+			urls[provider] = url
+		}
+	}
+	for provider, url := range BaseURLs() {
+		urls[provider] = url
 	}
 	return urls
 }

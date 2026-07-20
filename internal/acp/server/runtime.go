@@ -160,7 +160,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 
 	baseURL := rt.BaseURL
 	if baseURL == "" && providerName != "" {
-		baseURL = config.BaseURLs()[providerName]
+		baseURL = cfg.ResolveBaseURLs()[providerName]
 	}
 
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
@@ -172,7 +172,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		info.Custom = baseURL != ""
 	}
 	if baseURL == "" {
-		baseURL = config.BaseURLs()[info.Provider]
+		baseURL = cfg.ResolveBaseURLs()[info.Provider]
 		if baseURL != "" {
 			info.Custom = true
 		}

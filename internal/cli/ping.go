@@ -138,7 +138,7 @@ func runPing(cmd *cobra.Command, args []string) error {
 	baseURL := flagURL
 	explicitBaseURL := baseURL != ""
 	if baseURL == "" && providerName != "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[providerName]
 		if baseURL != "" {
 			explicitBaseURL = true
