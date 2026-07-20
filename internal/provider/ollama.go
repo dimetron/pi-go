@@ -95,8 +95,16 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 }
 
 // ollamaThinkingConfig maps a thinking level string to Ollama ThinkValue.
+//
+// "none" returns an explicit false rather than nil: omitting the think field
+// leaves the model's own default in force, and thinking-capable models such as
+// gemma-4 then think anyway, spending latency and tokens the user asked to
+// avoid. Unrecognized levels (including "") still return nil so the model
+// default applies.
 func ollamaThinkingConfig(level string) *ollamaapi.ThinkValue {
 	switch level {
+	case "none":
+		return &ollamaapi.ThinkValue{Value: false}
 	case "low", "medium", "high":
 		return &ollamaapi.ThinkValue{Value: level}
 	default:
