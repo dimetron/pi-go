@@ -1181,6 +1181,183 @@ func TestSlashCommandPopup_OpensWhenSlashTyped(t *testing.T) {
 	}
 }
 
+// Regression: a previously-scrolled popup whose height grew on resize used to
+// keep the old scrollOff, which then overshot the visible window. The
+// renderSearchPopup loop indexed past len(filtered) and panicked. The fix
+// reconciles scrollOff with the new height so the visible range always
+// stays within the slice and the selected item stays in view.
+func TestRefreshSearchPopupHeight_ReclampsScrollOff(t *testing.T) {
+	// 10 items, short terminal that gave a 3-row popup, user scrolled to
+	// the bottom so scrollOff = 7 (selected = 9).
+	items := make([]SearchItem, 10)
+	for i := range items {
+		items[i] = SearchItem{Text: fmt.Sprintf("item-%d", i)}
+	}
+	m := &model{
+		cfg:        Config{},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      80,
+		height:     12, // short — small availableRows, small popup height
+	}
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   items,
+		filtered:  items,
+		selected:  9,
+		search:    "",
+		height:    3,
+		scrollOff: 7,
+	}
+	// Simulate a resize to a tall terminal where the popup now fits all 10
+	// items, but the old scrollOff=7 is still set.
+	m.height = 60
+	m.refreshSearchPopupHeight()
+
+	if m.searchPopup.scrollOff+m.searchPopup.height > len(items) {
+		t.Errorf("scrollOff+height = %d, want <= %d (filtered len)", m.searchPopup.scrollOff+m.searchPopup.height, len(items))
+	}
+	if m.searchPopup.selected < m.searchPopup.scrollOff ||
+		m.searchPopup.selected >= m.searchPopup.scrollOff+m.searchPopup.height {
+		t.Errorf("selected %d not in visible window [%d, %d) after refresh",
+			m.searchPopup.selected, m.searchPopup.scrollOff, m.searchPopup.scrollOff+m.searchPopup.height)
+	}
+	// And rendering must not panic.
+	_ = m.renderSearchPopup(70)
+}
+
+// Regression: a tall-to-short resize that leaves scrollOff > maxScroll
+// must not be allowed to push the visible window past the end of the
+// filtered slice.
+func TestRefreshSearchPopupHeight_ShrinkClampsOvershoot(t *testing.T) {
+	items := make([]SearchItem, 4)
+	for i := range items {
+		items[i] = SearchItem{Text: fmt.Sprintf("item-%d", i)}
+	}
+	m := &model{
+		cfg:        Config{},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      80,
+		height:     60, // tall — popup can show everything
+	}
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   items,
+		filtered:  items,
+		selected:  3,
+		search:    "",
+		height:    4,
+		scrollOff: 0,
+	}
+	// Shrink the terminal so the popup height drops to 1. scrollOff must
+	// not be left pointing past the new visible window.
+	m.height = 8
+	m.refreshSearchPopupHeight()
+
+	if m.searchPopup.scrollOff+m.searchPopup.height > len(items) {
+		t.Errorf("scrollOff+height = %d, want <= %d (filtered len)", m.searchPopup.scrollOff+m.searchPopup.height, len(items))
+	}
+	if m.searchPopup.selected < m.searchPopup.scrollOff ||
+		m.searchPopup.selected >= m.searchPopup.scrollOff+m.searchPopup.height {
+		t.Errorf("selected %d not in visible window [%d, %d) after refresh",
+			m.searchPopup.selected, m.searchPopup.scrollOff, m.searchPopup.scrollOff+m.searchPopup.height)
+	}
+	_ = m.renderSearchPopup(70)
+}
+
+// Regression: even if a stale scrollOff somehow makes it past the resize
+// reconciliation, renderSearchPopup must not index past the end of the
+// filtered slice and panic. The defense-in-depth break is what catches
+// the bug in production even when the upstream guard regresses.
+func TestRenderSearchPopup_BoundsScrollOff(t *testing.T) {
+	items := make([]SearchItem, 4)
+	for i := range items {
+		items[i] = SearchItem{Text: fmt.Sprintf("item-%d", i)}
+	}
+	m := &model{
+		cfg:        Config{},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      80,
+		height:     24,
+	}
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   items,
+		filtered:  items,
+		selected:  0,
+		search:    "",
+		height:    10,
+		scrollOff: 100, // far past the end of filtered
+	}
+	// Should not panic.
+	_ = m.renderSearchPopup(70)
+}
+
+// Covers the remaining branches in refreshSearchPopupHeight that the two
+// resize tests don't reach: the nil-popup early return, the empty-filtered
+// early return, the selected-clamp (selected >= len(filtered)), and the
+// upper-clamp (selected < scrollOff).
+func TestRefreshSearchPopupHeight_NilAndClamps(t *testing.T) {
+	// 1. Nil popup — early-return path, no panic, no work.
+	m := &model{
+		cfg:        Config{},
+		inputModel: NewInputModel(nil, nil, nil, ""),
+		width:      80,
+		height:     24,
+	}
+	m.refreshSearchPopupHeight() // no panic with searchPopup == nil
+
+	// 2. Empty filtered list (n == 0) — exercises the inner early-return
+	//    path. The popup exists but its filtered slice is nil/empty.
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   nil,
+		filtered:  nil,
+		selected:  5, // would be out of range if not clamped
+		search:    "",
+		height:    3,
+		scrollOff: 2,
+	}
+	m.refreshSearchPopupHeight()
+	if m.searchPopup.selected != 0 || m.searchPopup.scrollOff != 0 {
+		t.Errorf("empty filtered: selected=%d scrollOff=%d, want both 0",
+			m.searchPopup.selected, m.searchPopup.scrollOff)
+	}
+
+	// 3. selected out of range (selected >= len(filtered)) — clamps to n-1.
+	items := make([]SearchItem, 3)
+	for i := range items {
+		items[i] = SearchItem{Text: fmt.Sprintf("i-%d", i)}
+	}
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   items,
+		filtered:  items, // n=3
+		selected:  7,     // > 2, must clamp
+		search:    "",
+		height:    3,
+		scrollOff: 0,
+	}
+	m.refreshSearchPopupHeight()
+	if m.searchPopup.selected != 2 {
+		t.Errorf("selected-out-of-range: selected=%d, want 2 (n-1)", m.searchPopup.selected)
+	}
+
+	// 4. selected < scrollOff — upper-clamp path (selected moves scrollOff).
+	m.searchPopup = &searchPopupState{
+		mode:      searchModeCommands,
+		entries:   items,
+		filtered:  items,
+		selected:  0, // < scrollOff
+		search:    "",
+		height:    3,
+		scrollOff: 4, // stale
+	}
+	m.refreshSearchPopupHeight()
+	if m.searchPopup.scrollOff != 0 {
+		t.Errorf("selected<scrollOff: scrollOff=%d, want 0", m.searchPopup.scrollOff)
+	}
+}
+
 func TestView_RendersSlashPopupNearInput(t *testing.T) {
 	m := newTestModelFull(t)
 	m.inputModel.SetText("/co")

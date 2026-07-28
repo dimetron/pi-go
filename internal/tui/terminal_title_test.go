@@ -143,6 +143,80 @@ func TestFormatTerminalTitle(t *testing.T) {
 	}
 }
 
+// TestFormatTerminalTitleWithCWD covers the context-aware shape that the
+// View() path now uses. The CWD is folded in as a fixed anchor so different
+// sessions in different repos are visually distinguishable in the tab bar,
+// while the slash command / prompt follows after a " | " separator.
+func TestFormatTerminalTitleWithCWD(t *testing.T) {
+	cases := []struct {
+		name  string
+		title string
+		cwd   string
+		want  string
+	}{
+		// Empty cwd keeps the legacy "π - <title>" shape so callers that
+		// never set WorkDir (the unit tests for View()) see the old output.
+		{"empty cwd, empty title", "", "", "π -"},
+		{"empty cwd, short title", "/clear", "", "π - /clear"},
+		{"empty cwd, long title is preserved by old shape", "fix the linter issue in agent.go", "", "π - fix the linter issue in agent.go"},
+
+		// Set cwd but no command — just the CWD anchor.
+		{"cwd only", "", "/home/dev/pi-go", "π - pi-go"},
+
+		// Cwd + command is the new context-aware shape.
+		{"cwd + command", "/clear", "/home/dev/pi-go", "π - pi-go | /clear"},
+		{"cwd + slash with args", "/model gpt-5.4", "/home/dev/pi-go", "π - pi-go | /model gpt-5.4"},
+		{"cwd + prompt-derived", "fix the linter issue in agent.go", "/home/dev/pi-go", "π - pi-go | fix the linter issue in agent.go"},
+
+		// Trimming of whitespace must not break the CWD basename extraction.
+		{"cwd padded", "/clear", "  /home/dev/pi-go  ", "π - pi-go | /clear"},
+
+		// Control characters are scrubbed the same way as the old path.
+		{"control in command is replaced", "with\nnewline", "/home/dev/pi-go", "π - pi-go | with newline"},
+
+		// The command is "stripped" — capped at terminalTitleCmdMax runes
+		// so a 200-char prompt does not eat the entire tab width on top
+		// of the CWD prefix.
+		{"long command is stripped", strings.Repeat("x", terminalTitleCmdMax+20), "/home/dev/pi-go",
+			"π - pi-go | " + strings.Repeat("x", terminalTitleCmdMax-1) + "…"},
+
+		// The CWD basename must go through the same control-character scrub
+		// as the command, otherwise a directory whose name contains ESC or
+		// BEL could terminate or inject into the OSC 0 envelope. After the
+		// scrub, an all-control folder resolves to "" and the title falls
+		// back to the no-context shape.
+		{"folder with control char is scrubbed", "/clear", "/tmp/evil\x1b]0;PWNED\x07",
+			"π - evil ]0;PWNED | /clear"},
+		{"folder that is all controls falls back", "/clear", "/tmp/\x1b\x07",
+			"π - /clear"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := formatTerminalTitleWithCWD(c.title, c.cwd)
+			if got != c.want {
+				t.Errorf("formatTerminalTitleWithCWD(%q, %q) = %q, want %q", c.title, c.cwd, got, c.want)
+			}
+		})
+	}
+}
+
+// TestView_CarriesWindowTitle_WithCWD exercises the new View() wiring: when
+// the model has a WorkDir, the OSC 0 payload carries the CWD anchor alongside
+// the prompt-derived title so the tab bar shows "π - <folder> | <title>".
+func TestView_CarriesWindowTitle_WithCWD(t *testing.T) {
+	m, _ := newTitleTestModel(t)
+	m.cfg.WorkDir = "/home/dev/pi-go"
+
+	if got := m.View().WindowTitle; got != "π - pi-go" {
+		t.Errorf("WindowTitle before any prompt = %q, want %q", got, "π - pi-go")
+	}
+
+	m.applySessionTitle("fix the top-level render")
+	if got := m.View().WindowTitle; got != "π - pi-go | fix the top-level render" {
+		t.Errorf("WindowTitle = %q, want %q", got, "π - pi-go | fix the top-level render")
+	}
+}
+
 func TestApplySessionTitle_EmptyPrompt_NoOp(t *testing.T) {
 	m, svc := newTitleTestModel(t)
 

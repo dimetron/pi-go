@@ -49,6 +49,18 @@ type SidebarRenderInput struct {
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
 	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
 	OTELEnabled  bool                     // OTEL tracing is active
+	Artifacts    []ArtifactEntry          // artifacts section; nil/empty = hidden
+}
+
+// ArtifactEntry is one row in the Artifacts sidebar section.
+// Filename is the ADK artifact key (e.g. "screenshot.png").
+// Size is the byte count of the stored part.
+// Mime is optional; entries with an "image/*" MIME get a frame icon,
+// everything else gets a paperclip.
+type ArtifactEntry struct {
+	Filename string
+	Size     int64
+	Mime     string
 }
 
 // RenderSidebar renders the right sidebar panel.
@@ -135,6 +147,35 @@ func RenderSidebar(in SidebarRenderInput) string {
 		lines = append(lines, modelStyle.Render("  "+name))
 	}
 	lines = append(lines, "")
+
+	// --- Artifacts section ---
+	if len(in.Artifacts) > 0 {
+		artHeading := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#fab387")).Bold(true) // Mocha peach
+		lines = append(lines,
+			artHeading.Render(fmt.Sprintf("  Artifacts [%d]", len(in.Artifacts))))
+
+		for _, a := range in.Artifacts {
+			icon := "📎"
+			if strings.HasPrefix(a.Mime, "image/") {
+				icon = "🖼"
+			}
+			size := formatBytes(a.Size)
+			// Layout: "  ICON NAME  SIZE" with a 2-space gap before size.
+			// Reserve 10 chars for the size column so 2.1 MB lines align.
+			maxName := innerW - 2 - 2 - 10
+			if maxName < 6 {
+				maxName = 6
+			}
+			name := a.Filename
+			if runewidth.StringWidth(name) > maxName {
+				name = runewidth.Truncate(name, maxName-1, "…")
+			}
+			lines = append(lines, dim.Render(
+				fmt.Sprintf("  %s %s  %s", icon, name, size)))
+		}
+		lines = append(lines, "")
+	}
 
 	// --- Git section ---
 	if in.GitBranch != "" {
@@ -465,6 +506,20 @@ func sidebarFolderName(workDir string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Clean(workDir))
+}
+
+// formatBytes renders a byte count as "812 B" / "124 KB" / "2.1 MB".
+// No GB tier — session artifacts won't hit that scale, and the
+// sidebar column is only ~10 chars wide.
+func formatBytes(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%d KB", n/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 // agentStatusPriority returns a sort key for agent status.
