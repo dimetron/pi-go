@@ -12,7 +12,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"google.golang.org/adk/v2/session"
 
+	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/otel"
 )
 
@@ -404,13 +407,10 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	log := m.cfg.Logger
 	detector := &stuckDetector{}
 
-	// streamedText tracks whether any Partial=true text delta has been
-	// forwarded for the current turn. Providers like ollama/minimax emit
-	// per-token partial events AND a final Partial=false event containing
-	// the full aggregated text — forwarding both would duplicate the text
-	// on screen (observed in the TUI as "I'll spawn...I'll spawn..."). Skip
-	// the aggregate when deltas already covered the turn.
-	streamedText := false
+	// Providers like ollama/minimax emit per-token partial events AND a final
+	// aggregate containing the whole turn; forwarding both duplicates the text
+	// on screen (observed as "I'll spawn...I'll spawn...").
+	var dedup agent.StreamDedup
 
 	// GroundingMetadata is repeated on every streamed chunk of the response it
 	// grounds, so the same search would otherwise print once per chunk. Key on
@@ -426,12 +426,17 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 		otel.AttributeInt("prompt.length", len(prompt)),
 	)
 
+	// Every exit below reports through fail, so the "tell the user, then stop"
+	// pair can't drift apart. Logger methods are nil-safe (logger.Log guards a
+	// nil receiver), so no call site needs to check.
+	fail := func(err error) {
+		log.Error(err.Error())
+		m.agentCh <- agentDoneMsg{err: err}
+	}
+
 	for ev, err := range m.cfg.Agent.RunStreaming(ctx, m.cfg.SessionID, prompt) {
 		if err != nil {
-			if log != nil {
-				log.Error(err.Error())
-			}
-			m.agentCh <- agentDoneMsg{err: err}
+			fail(err)
 			return
 		}
 		if ev == nil {
@@ -445,82 +450,83 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 		// nil-guard, since the metadata hangs off the event, not the content.
 		m.emitGroundingEvents(ev.GroundingMetadata, groundedSeen, log)
 
+		// A provider failure is a content-less event, so it has to be caught
+		// before the guard below drops it. See agent.EventError.
+		if evErr := agent.EventError(ev); evErr != nil {
+			fail(evErr)
+			return
+		}
+
 		if ev.Content == nil {
 			continue
 		}
-		// A new turn begins when we see a user/tool-result event; reset the
-		// dedup guard so the next turn's aggregate can pass through when no
-		// deltas precede it. "model" / "thinking" are the model-author roles.
-		role := ev.Content.Role
-		if role != "model" && role != "thinking" {
-			streamedText = false
+		dedup.BeginEvent(ev)
+		if abortErr := m.emitEventParts(ev, &dedup, detector, log); abortErr != nil {
+			fail(abortErr)
+			return
 		}
-		for _, part := range ev.Content.Parts {
-			if part.Text != "" && ev.Content.Role == "thinking" {
-				m.agentCh <- agentThinkingMsg{text: part.Text}
-				continue
-			}
-			if part.Text != "" {
-				if !ev.Partial && streamedText {
-					// Aggregate final event — text already forwarded via deltas.
-					continue
-				}
-				if ev.Partial {
-					streamedText = true
-				}
-				if log != nil {
-					log.LLMText(ev.Author, part.Text)
-				}
-				m.agentCh <- agentTextMsg{text: part.Text}
-			}
-			if part.FunctionCall != nil {
-				// Emit the tool call first so the user sees the offending call
-				// before the loop aborts. The stuck-detector threshold still
-				// fires after `maxRepeatToolCalls` observations, so the abort
-				// semantics are unchanged — only the message ordering moves.
-				if log != nil {
-					log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
-				}
-				m.agentCh <- agentToolCallMsg{
-					name: part.FunctionCall.Name,
-					args: part.FunctionCall.Args,
-				}
+	}
+}
 
-				if stuck, detail := detector.observe(part.FunctionCall.Name, part.FunctionCall.Args); stuck {
-					if log != nil {
-						log.Error("agent loop stuck: " + detail)
-					}
-					m.agentCh <- agentDoneMsg{
-						err: fmt.Errorf("agent loop aborted: %s", detail),
-					}
-					return
-				}
+// emitEventParts forwards one event's parts to the TUI channel. It returns a
+// non-nil error when the stuck detector has seen enough repetition to call the
+// run dead, in which case the caller must stop iterating.
+func (m *model) emitEventParts(
+	ev *session.Event,
+	dedup *agent.StreamDedup,
+	detector *stuckDetector,
+	log *logger.Logger,
+) error {
+	for _, part := range ev.Content.Parts {
+		switch {
+		case part.Text != "" && ev.Content.Role == "thinking":
+			m.agentCh <- agentThinkingMsg{text: part.Text}
+
+		case part.Text != "":
+			if dedup.SkipText(ev) {
+				continue // aggregate re-send; deltas already went out
 			}
-			if part.FunctionResponse != nil {
-				respJSON, _ := json.Marshal(part.FunctionResponse.Response)
-				if log != nil {
-					log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
-				}
-				m.agentCh <- agentToolResultMsg{
-					name:    part.FunctionResponse.Name,
-					content: string(respJSON),
-				}
-				// Track per-tool error streaks: ADK wraps tool errors as
-				// map[string]any{"error": ...}. Anything else (including a
-				// missing key) is treated as success and resets the streak.
-				_, isErr := part.FunctionResponse.Response["error"]
-				if stuck, detail := detector.observeError(part.FunctionResponse.Name, isErr); stuck {
-					if log != nil {
-						log.Error("agent loop stuck: " + detail)
-					}
-					m.agentCh <- agentDoneMsg{
-						err: fmt.Errorf("agent loop aborted: %s", detail),
-					}
-					return
-				}
+			log.LLMText(ev.Author, part.Text)
+			m.agentCh <- agentTextMsg{text: part.Text}
+		}
+
+		if fc := part.FunctionCall; fc != nil {
+			// Emit the tool call first so the user sees the offending call
+			// before the loop aborts. The stuck-detector threshold still
+			// fires after `maxRepeatToolCalls` observations, so the abort
+			// semantics are unchanged — only the message ordering moves.
+			log.ToolCall(ev.Author, fc.Name, fc.Args)
+			m.agentCh <- agentToolCallMsg{name: fc.Name, args: fc.Args}
+
+			if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
+				return err
+			}
+		}
+
+		if fr := part.FunctionResponse; fr != nil {
+			respJSON, _ := json.Marshal(fr.Response)
+			log.ToolResult(ev.Author, fr.Name, string(respJSON))
+			m.agentCh <- agentToolResultMsg{name: fr.Name, content: string(respJSON)}
+
+			// Track per-tool error streaks: ADK wraps tool errors as
+			// map[string]any{"error": ...}. Anything else (including a
+			// missing key) is treated as success and resets the streak.
+			_, isErr := fr.Response["error"]
+			if err := stuckErr(detector.observeError(fr.Name, isErr)); err != nil {
+				return err
 			}
 		}
 	}
+	return nil
+}
+
+// stuckErr adapts a stuckDetector verdict into an error, so both detector call
+// sites read as a single guard instead of a repeated five-line block.
+func stuckErr(stuck bool, detail string) error {
+	if !stuck {
+		return nil
+	}
+	return fmt.Errorf("agent loop aborted: %s", detail)
 }
 
 // handleAgentThinking processes an agentThinkingMsg.
@@ -802,10 +808,7 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 		if m.face != nil {
 			m.face.SetMood(MoodSad)
 		}
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Error: %v", msg.err),
-		})
+		m.chatModel.AppendError(fmt.Sprintf("Error: %v", msg.err))
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "error", summary: "Error", detail: msg.err.Error(),
 		})

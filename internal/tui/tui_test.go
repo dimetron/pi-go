@@ -180,11 +180,11 @@ func TestHandleSlashCommandModelSwitch(t *testing.T) {
 		inputModel: InputModel{Text: "/model claude-sonnet-4-6"},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "gpt-5.5"},
+				"default": {Model: "gpt-5.6-sol"},
 			},
 			ModelSwitcher: func(_ context.Context, modelName string) (adkmodel.LLM, string, string, error) {
 				if modelName != "claude-sonnet-4-6" {
@@ -225,11 +225,11 @@ func TestHandleSlashCommandModelSwitchByRole(t *testing.T) {
 		inputModel: InputModel{Text: "/model smol"},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "gpt-5.5"},
+				"default": {Model: "gpt-5.6-sol"},
 				"smol":    {Model: "gemini-2.5-flash"},
 			},
 			ModelSwitcher: func(_ context.Context, modelName string) (adkmodel.LLM, string, string, error) {
@@ -264,11 +264,11 @@ func TestHandleSlashCommandModelSwitchNoSwitcher(t *testing.T) {
 		inputModel: InputModel{Text: "/model claude-sonnet-4-6"},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "gpt-5.5"},
+				"default": {Model: "gpt-5.6-sol"},
 			},
 			ModelSwitcher: nil,
 		},
@@ -291,11 +291,11 @@ func TestHandleSlashCommandModelSwitchWhileRunning(t *testing.T) {
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		running:    true,
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "gpt-5.5"},
+				"default": {Model: "gpt-5.6-sol"},
 			},
 			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
 				t.Error("ModelSwitcher should not be called while running")
@@ -317,11 +317,11 @@ func TestHandleSlashCommandModelSwitchError(t *testing.T) {
 		inputModel: InputModel{Text: "/model bad-model"},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default": {Model: "gpt-5.5"},
+				"default": {Model: "gpt-5.6-sol"},
 			},
 			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {
 				return nil, "", "", fmt.Errorf("no API key for provider")
@@ -335,7 +335,7 @@ func TestHandleSlashCommandModelSwitchError(t *testing.T) {
 	if !strings.Contains(mm.chatModel.Messages[0].content, "Failed to switch model") {
 		t.Errorf("expected error message, got %q", mm.chatModel.Messages[0].content)
 	}
-	if mm.cfg.ModelName != "gpt-5.5" {
+	if mm.cfg.ModelName != "gpt-5.6-sol" {
 		t.Errorf("ModelName should be unchanged on error, got %q", mm.cfg.ModelName)
 	}
 }
@@ -345,11 +345,11 @@ func TestHandleSlashCommandModelSwitchEmptyRoleModel(t *testing.T) {
 		inputModel: InputModel{Text: "/model empty-role"},
 		chatModel:  ChatModel{Messages: make([]message, 0)},
 		cfg: Config{
-			ModelName:    "gpt-5.5",
+			ModelName:    "gpt-5.6-sol",
 			ProviderName: "openai",
 			ActiveRole:   "default",
 			Roles: map[string]config.RoleConfig{
-				"default":    {Model: "gpt-5.5"},
+				"default":    {Model: "gpt-5.6-sol"},
 				"empty-role": {Model: ""},
 			},
 			ModelSwitcher: func(_ context.Context, _ string) (adkmodel.LLM, string, string, error) {

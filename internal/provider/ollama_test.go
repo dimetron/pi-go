@@ -903,6 +903,112 @@ func TestOllamaRunStreaming_ThinkingContent(t *testing.T) {
 	}
 }
 
+// TestOllamaRunStreaming_ThinkingOnlyTurnFallsBackToThinking pins the fallback
+// that exists so a model which answers entirely in thinking tokens (thinking
+// forced on a nothink model) doesn't come back blank.
+func TestOllamaRunStreaming_ThinkingOnlyTurnFallsBackToThinking(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		thinkLine := map[string]any{
+			"model":   "test",
+			"message": map[string]any{"role": "assistant", "content": "", "thinking": "the answer is 42"},
+			"done":    false,
+		}
+		doneLine := ollamaChatLine("test", "assistant", "", "", "stop", true, 5, 3, nil)
+		writeNDJSON(w, []any{thinkLine, doneLine})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "What is 6*7?"}}}},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	last := resps[len(resps)-1]
+	if last.Content == nil {
+		t.Fatal("expected non-nil content on the aggregate")
+	}
+	var text string
+	for _, p := range last.Content.Parts {
+		text += p.Text
+	}
+	if text != "the answer is 42" {
+		t.Errorf("aggregate text = %q, want the thinking content as the answer", text)
+	}
+}
+
+// TestOllamaRunStreaming_ThinkingNotLeakedWhenToolCalled is the regression for
+// minimax-m3:cloud printing its reasoning ("The user wants me to run a bash
+// command...") as if it were the reply. A turn that thinks and then calls a
+// tool has already produced output, so the thinking-only fallback must not fire
+// and restate the reasoning as visible text.
+func TestOllamaRunStreaming_ThinkingNotLeakedWhenToolCalled(t *testing.T) {
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		thinkLine := map[string]any{
+			"model":   "test",
+			"message": map[string]any{"role": "assistant", "content": "", "thinking": "I should call the tool"},
+			"done":    false,
+		}
+		toolLine := map[string]any{
+			"model": "test",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []any{map[string]any{
+					"id":       "call_abc",
+					"function": map[string]any{"name": "get_weather", "arguments": map[string]any{"city": "Paris"}},
+				}},
+			},
+			"done":        true,
+			"done_reason": "stop",
+		}
+		writeNDJSON(w, []any{thinkLine, toolLine})
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "Weather in Paris?"}}}},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	last := resps[len(resps)-1]
+	if last.Content == nil {
+		t.Fatal("expected non-nil content on the aggregate")
+	}
+
+	var foundFC bool
+	for _, p := range last.Content.Parts {
+		if p.FunctionCall != nil {
+			foundFC = true
+		}
+		if p.Text != "" {
+			t.Errorf("aggregate leaked thinking as visible text: %q", p.Text)
+		}
+	}
+	if !foundFC {
+		t.Error("expected the FunctionCall part to survive")
+	}
+
+	// The reasoning must still reach the UI on its own "thinking"-role event,
+	// so hiding it from the answer doesn't hide it altogether.
+	var sawThinking bool
+	for _, r := range resps {
+		if r.Content != nil && r.Content.Role == "thinking" {
+			sawThinking = true
+		}
+	}
+	if !sawThinking {
+		t.Error("thinking content was dropped entirely, not just kept out of the answer")
+	}
+}
+
 func TestOllamaRunStreaming_ToolCalls(t *testing.T) {
 	toolCallLine := map[string]any{
 		"model": "test",

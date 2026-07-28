@@ -27,12 +27,14 @@ func TestContextWindowSize(t *testing.T) {
 		{"exact claude-opus-4-7", "claude-opus-4-7", 1_000_000},
 		{"claude-3-5-sonnet prefix", "claude-3-5-sonnet-20241022", 200_000},
 		{"case-insensitive GEMINI-2.5", "GEMINI-2.5-PRO", 1_048_576},
+		{"gemini-3.6-flash latest stable", "gemini-3.6-flash", 1_048_576},
 		{"gemini-3.5-flash stable", "gemini-3.5-flash", 1_048_576},
 		{"gemini-3.1-flash-lite stable beats -preview prefix", "gemini-3.1-flash-lite", 1_048_576},
-		{"gpt-5.5 latest frontier", "gpt-5.5", 1_050_000},
+		{"gpt-5.5 frontier", "gpt-5.5", 272_000},
 		{"gpt-5.4-mini has longer prefix", "gpt-5.4-mini", 400_000},
 		{"mistral-large tag variant", "mistral-large-2512", 256_000},
 		{"qwen custom model defaults to 4k", "qwen-3.6-27b-q4", 4_096},
+		{"ollama phi4 14b context", "ollama/phi4:14b", 16_384},
 		{"unknown returns 0", "nonexistent-model-xyz", 0},
 	}
 	for _, tt := range tests {

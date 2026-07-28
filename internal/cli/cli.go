@@ -977,6 +977,9 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 	// GroundingMetadata repeats on every chunk of the response it grounds;
 	// report each search once.
 	groundedSeen := map[string]bool{}
+	// SSE delivers the reply as deltas and then once more as an aggregate;
+	// without this the whole answer prints twice.
+	var dedup agent.StreamDedup
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
@@ -1007,15 +1010,25 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 				log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
 			}
 		}
+		// Without this, a provider failure exits 0 having printed nothing.
+		// See agent.EventError.
+		if evErr := agent.EventError(ev); evErr != nil {
+			log.Error(evErr.Error())
+			return fmt.Errorf("agent run: %w", evErr)
+		}
 		if ev.Content == nil {
 			continue
 		}
+		dedup.BeginEvent(ev)
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" && ev.Content.Role == "thinking" {
 				fmt.Fprintf(os.Stderr, "\033[2m%s\033[0m", part.Text)
 				continue
 			}
 			if part.Text != "" {
+				if dedup.SkipText(ev) {
+					continue
+				}
 				fmt.Print(part.Text)
 				log.LLMText(ev.Author, part.Text)
 			}
@@ -1044,6 +1057,7 @@ type jsonEvent struct {
 	ToolName  string `json:"tool_name,omitempty"`
 	ToolInput any    `json:"tool_input,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // runJSON runs the agent and emits JSONL events to stdout.
@@ -1058,6 +1072,9 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	}
 	enc := json.NewEncoder(os.Stdout)
 	started := false
+	// SSE delivers the reply as deltas and then once more as an aggregate;
+	// without this every text_delta is emitted twice.
+	var dedup agent.StreamDedup
 
 	retryCfg := agent.DefaultRetryConfig()
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
@@ -1071,7 +1088,17 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 			log.Error(err.Error())
 			return fmt.Errorf("agent run: %w", err)
 		}
-		if ev == nil || ev.Content == nil {
+		if ev == nil {
+			continue
+		}
+		// Emit provider failures as an explicit `error` event so consumers can
+		// tell a failed run from an empty one. See agent.EventError.
+		if evErr := agent.EventError(ev); evErr != nil {
+			log.Error(evErr.Error())
+			_ = enc.Encode(jsonEvent{Type: "error", Agent: ev.Author, Error: evErr.Error()})
+			return fmt.Errorf("agent run: %w", evErr)
+		}
+		if ev.Content == nil {
 			continue
 		}
 
@@ -1086,6 +1113,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 			started = true
 		}
 
+		dedup.BeginEvent(ev)
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" && ev.Content.Role == "thinking" {
 				_ = enc.Encode(jsonEvent{
@@ -1096,6 +1124,9 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 				continue
 			}
 			if part.Text != "" {
+				if dedup.SkipText(ev) {
+					continue
+				}
 				_ = enc.Encode(jsonEvent{
 					Type:  "text_delta",
 					Agent: ev.Author,

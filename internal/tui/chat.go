@@ -96,6 +96,7 @@ type message struct {
 	role      string // "user", "assistant", or "tool"
 	content   string
 	isWarning bool   // if true, render with warning style
+	isError   bool   // if true, render with error style (takes precedence)
 	tool      string // tool name (for role=="tool")
 	toolIn    string // tool input args (for role=="tool")
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
@@ -187,6 +188,9 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if streamingPlaceholder {
 		flags |= 1 << 3
 	}
+	if m.isError {
+		flags |= 1 << 4
+	}
 	return fnvByte(h, flags)
 }
 
@@ -227,6 +231,18 @@ func NewChatModel(renderer *glamour.TermRenderer) ChatModel {
 // Clear removes all messages and resets scroll.
 func (c *ChatModel) Clear() {
 	c.Messages = c.Messages[:0]
+	c.Scroll = 0
+}
+
+// AppendError adds an error message styled with red text. Errors that end a
+// run must be impossible to miss: the plain assistant bubble reads like part of
+// the model's answer, which is how provider failures used to slip past.
+func (c *ChatModel) AppendError(text string) {
+	c.Messages = append(c.Messages, message{
+		role:    "assistant",
+		content: text,
+		isError: true,
+	})
 	c.Scroll = 0
 }
 
@@ -516,7 +532,27 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 			}
 			if content != "" {
 				msgBuf.WriteString("\n")
-				if msg.isWarning {
+				if msg.isError {
+					// 203 is #ff5f5f, the default theme's error color. Kept as a
+					// literal for the same reason the warning bullet below is:
+					// ChatModel has no ThemeManager to read from.
+					errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+					msgBuf.WriteString(errStyle.Render("✖ "))
+					// Provider errors carry the raw JSON body, which is far
+					// wider than the pane. Wrap it like the user/thinking
+					// blocks do — an error truncated by the terminal is barely
+					// better than the silent failure this replaces.
+					contentWidth := c.Width - 3 // "✖ " plus the hanging indent
+					if contentWidth < 20 {
+						contentWidth = 20
+					}
+					for j, line := range wordWrap(content, contentWidth) {
+						if j > 0 {
+							msgBuf.WriteString("\n   ")
+						}
+						msgBuf.WriteString(errStyle.Render(line))
+					}
+				} else if msg.isWarning {
 					warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
 					warnBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true).Render("⚠ ")
 					msgBuf.WriteString(warnBullet)

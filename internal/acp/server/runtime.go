@@ -335,6 +335,11 @@ func runPromptTurn(ctx context.Context, turn PromptTurn, ps *piSessionState, str
 			}
 			return PromptResult{}, fmt.Errorf("agent run: %w", err)
 		}
+		// Without this a provider failure ends the turn with StopReasonEndTurn
+		// and empty text, and the ACP client shows nothing. See EventError.
+		if evErr := piagent.EventError(ev); evErr != nil {
+			return PromptResult{}, fmt.Errorf("agent run: %w", evErr)
+		}
 		if err := stream.OnEvent(ctx, ev); err != nil {
 			return PromptResult{}, fmt.Errorf("stream event: %w", err)
 		}

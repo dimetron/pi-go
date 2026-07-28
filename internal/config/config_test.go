@@ -17,7 +17,7 @@ func TestDefaults(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 'default' role")
 	}
-	if rc.Model != "gpt-5.5" {
+	if rc.Model != "gpt-5.6-sol" {
 		t.Errorf("unexpected default model: %s", rc.Model)
 	}
 	if cfg.DefaultProvider != "openai" {

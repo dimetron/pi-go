@@ -376,9 +376,15 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 	finalParts := make([]*genai.Part, 0, 1+len(toolCalls))
 	if aggregatedText != "" {
 		finalParts = append(finalParts, &genai.Part{Text: aggregatedText})
-	} else if aggregatedThinking != "" {
+	} else if aggregatedThinking != "" && len(toolCalls) == 0 {
 		// Fallback: model responded entirely via thinking tokens (e.g. thinking forced
 		// on a nothink model). Surface the thinking content rather than returning nothing.
+		//
+		// Only when the turn produced no tool call. A turn that thinks and then
+		// calls a tool has already said something, so the fallback isn't needed
+		// — and firing it there restates the reasoning as if it were the answer
+		// (seen with minimax-m3:cloud: "The user wants me to run a bash
+		// command..." printed above the real reply).
 		finalParts = append(finalParts, &genai.Part{Text: aggregatedThinking})
 	}
 	for _, tc := range toolCalls {

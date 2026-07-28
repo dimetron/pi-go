@@ -31,7 +31,7 @@ var codexBackendSupportedModels = []string{
 	"gpt-5.3-codex", "gpt-5.3-codex-spark",
 	"gpt-5.4", "gpt-5.4-codex",
 	"gpt-5.5", "gpt-5.5-codex", "gpt-5.5-pro", "gpt-5.5-mini", "gpt-5.5-nano",
-	"gpt-5.6",
+	"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
 }
 
 // isCodexBackendSupported reports whether modelName is accepted by the
