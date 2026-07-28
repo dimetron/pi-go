@@ -16,6 +16,8 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	adksession "google.golang.org/adk/v2/session"
+
+	"github.com/dimetron/pi-go/internal/agent"
 )
 
 // SessionUpdater streams session updates back to the ACP peer. A nil Updater
@@ -40,6 +42,9 @@ type Stream struct {
 	toolCalls   map[string]*callState
 	subagentID  string
 	nextCallSeq int
+	// dedup drops the aggregate re-send of text SSE already delivered as
+	// deltas; without it every reply reaches the peer — and finalText — twice.
+	dedup agent.StreamDedup
 }
 
 // New constructs a Stream that emits updates through u. A nil updater is
@@ -78,6 +83,7 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 	var batch []pending
 
 	s.mu.Lock()
+	s.dedup.BeginEvent(ev)
 	for _, part := range ev.Content.Parts {
 		if part == nil {
 			continue
@@ -92,6 +98,9 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 			continue
 		}
 		if part.Text == "" {
+			continue
+		}
+		if s.dedup.SkipText(ev) {
 			continue
 		}
 		s.finalText.WriteString(part.Text)

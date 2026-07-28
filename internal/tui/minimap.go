@@ -89,6 +89,7 @@ const (
 	blockUser
 	blockAssistant
 	blockWarning
+	blockError
 	blockThinking
 	blockRead    // read, ls, tree, grep, find — non-mutating inspection
 	blockEdit    // edit, write — file mutations
@@ -106,6 +107,7 @@ var minimapColors = map[blockKind]string{
 	blockUser:      "39",  // blue, matches the "> " prompt label
 	blockAssistant: "63",  // violet, matches the reply bullet
 	blockWarning:   "226", // yellow, matches the warning bullet
+	blockError:     "203", // red, matches the error bullet
 	blockThinking:  "243", // gray, matches the thinking style
 	blockRead:      "45",  // cyan
 	blockEdit:      "208", // orange
@@ -123,6 +125,9 @@ func kindOf(msg *message) blockKind {
 	case "thinking":
 		return blockThinking
 	case "assistant":
+		if msg.isError {
+			return blockError
+		}
 		if msg.isWarning {
 			return blockWarning
 		}
