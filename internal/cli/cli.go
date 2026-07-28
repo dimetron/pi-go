@@ -191,7 +191,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	mode := resolveMode()
 	baseURL := flagURL
 	if baseURL == "" && providerName != "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[providerName]
 	}
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
@@ -203,7 +203,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		info.Custom = baseURL != ""
 	}
 	if baseURL == "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[info.Provider]
 		if baseURL != "" {
 			info.Custom = true
@@ -1195,7 +1195,7 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 	// Resolve base URL: --url flag takes precedence over env var, then Ollama default.
 	baseURL := flagURL
 	if baseURL == "" {
-		baseURLs := config.BaseURLs()
+		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[info.Provider]
 	}
 	if baseURL == "" && info.Ollama {

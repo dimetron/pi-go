@@ -1140,3 +1140,75 @@ func TestSaveDefaultRole(t *testing.T) {
 		t.Errorf("expected default role provider=openai, got %q", loaded.Roles["default"].Provider)
 	}
 }
+
+func TestResolveBaseURLs_ConfigOnly(t *testing.T) {
+	clearBaseURLEnv(t)
+
+	cfg := Config{BaseURLs: map[string]string{"ollama": "http://192.168.3.31:11434"}}
+	urls := cfg.ResolveBaseURLs()
+	if urls["ollama"] != "http://192.168.3.31:11434" {
+		t.Errorf("expected config ollama base URL, got %q", urls["ollama"])
+	}
+}
+
+func TestResolveBaseURLs_EnvOverridesConfig(t *testing.T) {
+	clearBaseURLEnv(t)
+	t.Setenv("OLLAMA_HOST", "http://env-host:11434")
+
+	cfg := Config{BaseURLs: map[string]string{"ollama": "http://config-host:11434"}}
+	urls := cfg.ResolveBaseURLs()
+	if urls["ollama"] != "http://env-host:11434" {
+		t.Errorf("env must win over config, got %q", urls["ollama"])
+	}
+}
+
+func TestResolveBaseURLs_EmptyEnvDoesNotMaskConfig(t *testing.T) {
+	clearBaseURLEnv(t)
+	t.Setenv("OLLAMA_HOST", "")
+
+	cfg := Config{BaseURLs: map[string]string{"ollama": "http://config-host:11434"}}
+	urls := cfg.ResolveBaseURLs()
+	if urls["ollama"] != "http://config-host:11434" {
+		t.Errorf("empty env must not mask config, got %q", urls["ollama"])
+	}
+}
+
+func TestResolveBaseURLs_NilConfigMapFallsBackToEnv(t *testing.T) {
+	clearBaseURLEnv(t)
+	t.Setenv("OLLAMA_HOST", "http://env-host:11434")
+
+	cfg := Config{}
+	urls := cfg.ResolveBaseURLs()
+	if urls["ollama"] != "http://env-host:11434" {
+		t.Errorf("expected env fallback, got %q", urls["ollama"])
+	}
+}
+
+func TestLoad_BaseURLsFromJSON(t *testing.T) {
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, ".pi-go")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"baseURLs":{"ollama":"http://192.168.3.31:11434"}}`
+	if err := os.WriteFile(filepath.Join(projectDir, "config.json"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURLs["ollama"] != "http://192.168.3.31:11434" {
+		t.Errorf("baseURLs not parsed from JSON, got %q", cfg.BaseURLs["ollama"])
+	}
+}
+
+// clearBaseURLEnv unsets every base-URL env var so a developer's real
+// environment cannot leak into these tests.
+func clearBaseURLEnv(t *testing.T) {
+	t.Helper()
+	for _, v := range []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "MISTRAL_BASE_URL", "OLLAMA_HOST"} {
+		t.Setenv(v, "")
+	}
+}

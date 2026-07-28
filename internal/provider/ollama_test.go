@@ -17,13 +17,17 @@ import (
 
 func TestOllamaThinkingConfig(t *testing.T) {
 	tests := []struct {
-		level   string
+		level string
+		// wantNil means the think field is omitted entirely, leaving the
+		// model's own default in force.
 		wantNil bool
-		wantVal string
+		wantVal any
 	}{
-		{"none", true, ""},
-		{"", true, ""},
-		{"unknown", true, ""},
+		// "none" must disable thinking explicitly. Omitting the field lets
+		// thinking-capable models (e.g. gemma-4) think anyway.
+		{"none", false, false},
+		{"", true, nil},
+		{"unknown", true, nil},
 		{"low", false, "low"},
 		{"medium", false, "medium"},
 		{"high", false, "high"},
@@ -41,7 +45,7 @@ func TestOllamaThinkingConfig(t *testing.T) {
 				t.Fatalf("ollamaThinkingConfig(%q) = nil, want non-nil", tt.level)
 			}
 			if got.Value != tt.wantVal {
-				t.Errorf("ollamaThinkingConfig(%q).Value = %q, want %q", tt.level, got.Value, tt.wantVal)
+				t.Errorf("ollamaThinkingConfig(%q).Value = %v, want %v", tt.level, got.Value, tt.wantVal)
 			}
 		})
 	}
