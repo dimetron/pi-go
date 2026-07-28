@@ -34,6 +34,7 @@ var compatibilityModelAliases = map[string][]string{
 		"claude-3-7-sonnet-latest",
 		"claude-opus-4-0",
 		"claude-opus-4-1-20250805",
+		"claude-opus-5",
 		"claude-opus-4-5-20251101",
 		"claude-sonnet-4-0",
 		"claude-sonnet-4-5",

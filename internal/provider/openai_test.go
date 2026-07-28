@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -334,6 +335,35 @@ func TestNewOpenAI_CodexBackendRouting(t *testing.T) {
 	}
 	if mode := om.endpointMode(); mode != "responses" {
 		t.Errorf("endpointMode = %q, want %q (codex backend forces Responses)", mode, "responses")
+	}
+}
+
+func TestCodexBackendSupportedModels(t *testing.T) {
+	want := []string{
+		"gpt-5.1", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
+		"gpt-5.2", "gpt-5.2-codex",
+		"gpt-5.3-codex", "gpt-5.3-codex-spark",
+		"gpt-5.4", "gpt-5.4-codex",
+		"gpt-5.5", "gpt-5.5-codex", "gpt-5.5-pro", "gpt-5.5-mini", "gpt-5.5-nano",
+		"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+	}
+	if !slices.Equal(codexBackendSupportedModels, want) {
+		t.Errorf("codexBackendSupportedModels = %q, want %q", codexBackendSupportedModels, want)
+	}
+
+	for _, tt := range []struct {
+		model string
+		want  bool
+	}{
+		{"GPT-5.6-SOL", true},
+		{"gpt-5.6", false},
+		{"gpt-4o", false},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := isCodexBackendSupported(tt.model); got != tt.want {
+				t.Errorf("isCodexBackendSupported(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1323,6 +1353,9 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"gpt-5.3-codex-spark", true},
 		{"gpt-5.4-codex", true},
 		{"gpt-5.5-codex", true},
+		{"gpt-5.6-luna", true},
+		{"gpt-5.6-sol", true},
+		{"gpt-5.6-terra", true},
 		{"gpt-5.1-codex", true},
 		// Case insensitive
 		{"GPT-5-CODEX", true},

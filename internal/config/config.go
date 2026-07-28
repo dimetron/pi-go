@@ -110,10 +110,13 @@ type A2AConfig struct {
 }
 
 // Defaults returns a Config with default values.
+// The default model is the latest top-tier entry in the embedded OpenAI catalog
+// (modeldata/llm-prices-openai.json): gpt-5.6-sol is the current frontier at
+// the time of writing. Bump this in lockstep with the catalog.
 func Defaults() Config {
 	return Config{
 		Roles: map[string]RoleConfig{
-			"default": {Model: "gpt-5.5"},
+			"default": {Model: "gpt-5.6-sol"},
 		},
 		DefaultProvider: "openai",
 		ThinkingLevel:   "high",
