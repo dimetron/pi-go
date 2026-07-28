@@ -1320,6 +1320,7 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"gpt-5.1-codex-max", true},
 		{"gpt-5.2-codex", true},
 		{"gpt-5.3-codex", true},
+		{"gpt-5.3-codex-spark", true},
 		{"gpt-5.4-codex", true},
 		{"gpt-5.5-codex", true},
 		{"gpt-5.1-codex", true},

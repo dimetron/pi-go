@@ -86,194 +86,20 @@ var OllamaModelPrefixes = []string{}
 // The check is prefix-based: a model is valid if it starts with any entry.
 // Ollama models are not validated here (they are dynamic).
 //
-// April 2026 source snapshot and update path:
-//   - OpenAI: https://developers.openai.com/api/docs/models
-//   - Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
-//   - Gemini: https://ai.google.dev/gemini-api/docs/models
-//   - Mistral: https://docs.mistral.ai/getting-started/models
-//
-// To update: re-check those official model pages, keep the top current
-// max/large/medium/small or fast tier IDs per provider, and update
-// contextWindowSizes in the same change.
-var KnownModels = map[string][]string{
-	"anthropic": {
-		// April 2026 Anthropic models (from llm-anthropic reference).
-		// See https://docs.anthropic.com/claude/docs/models-overview
-		//
-		// Claude 3 series (legacy, still available)
-		"claude-3-opus-20240229",
-		"claude-3-opus-latest",
-		"claude-3-sonnet-20240229",
-		"claude-3-sonnet-latest",
-		"claude-3-haiku-20240307",
-		"claude-3-haiku-latest",
-		// Claude 3.5 series
-		"claude-3-5-sonnet-20240620",
-		"claude-3-5-sonnet-20241022",
-		"claude-3-5-sonnet-latest",
-		"claude-3-5-haiku-latest",
-		// Claude 3.7 series
-		"claude-3-7-sonnet-20250219",
-		"claude-3-7-sonnet-latest",
-		// Claude 4 series
-		"claude-opus-4-0",
-		"claude-sonnet-4-0",
-		"claude-opus-4-1-20250805",
-		// Claude 4.5 series
-		"claude-sonnet-4-5",
-		"claude-haiku-4-5-20251001",
-		"claude-haiku-4-5",
-		"claude-opus-4-5-20251101",
-		// Claude 4.6 series (current best)
-		"claude-opus-4-6",
-		"claude-sonnet-4-6",
-		// Claude 4.7 series
-		"claude-opus-4-7",
-		"claude-sonnet-4-7",
-		"claude-haiku-4-7",
-		// Claude 4.8 series
-		"claude-opus-4-8",
-		// Claude 5 series (current flagship)
-		"claude-sonnet-5",
-		"claude-fable-5",
-	},
-	"openai": {
-		// Latest OpenAI frontier model plus retained GPT-5.4 compatibility tiers.
-		"gpt-5.6",
-		"gpt-5.5-pro",
-		"gpt-5.5",
-		"gpt-5.5-mini",
-		"gpt-5.5-nano",
-		"gpt-5.4-pro",
-		"gpt-5.4",
-		"gpt-5.4-mini",
-		"gpt-5.4-nano",
-		// Responses-only codex models.
-		"gpt-5.5-codex",
-		"gpt-5.4-codex",
-		"gpt-5.3-codex",
-		"gpt-5.2-codex",
-		"gpt-5.1-codex",
-		"gpt-5.1-codex-mini",
-		"gpt-5.1-codex-max",
-	},
-	"gemini": {
-		// Latest stable Gemini tier: 3.5 Flash.
-		"gemini-3.5-flash",
-		"gemini-3.5-flash-lite",
-		"gemini-3.5-pro",
-
-		// Stable Gemini 3.1 Flash-Lite (no -preview suffix).
-		"gemini-3.1-flash-lite",
-
-		// Gemini 3.x preview tiers: 3.1 Pro, 3 Flash, and 3.1 Flash-Lite.
-		"gemini-3.1-pro-preview",
-		"gemini-3.1-pro-preview-customtools",
-		"gemini-3-flash-preview",
-		"gemini-3.1-flash-lite-preview",
-
-		// Stable Gemini 2.5 fallbacks.
-		"gemini-2.5-pro",
-		"gemini-2.5-flash",
-		"gemini-2.5-flash-lite",
-	},
-	"mistral": {
-		// Latest Mistral generalist tiers: Large 3, Medium 3.2,
-		// Small 4, plus documented "latest" aliases.
-		"mistral-large-2512",
-		"mistral-large-latest",
-		"mistral-medium-2603",
-		"mistral-medium-latest",
-		"mistral-small-2603",
-		"mistral-small-latest",
-
-		// Magistral reasoning models.
-		"magistral-medium-latest",
-		"magistral-small-latest",
-
-		// Compatibility with older/specialized Mistral config names.
-		"codestral",
-		"pixtral",
-		"ministral",
-	},
-}
+// OpenAI and Anthropic IDs are loaded from embedded llm-prices snapshots under
+// modeldata/. Gemini and Mistral IDs are maintained in model_catalog.go.
+// Update context-window metadata in modeldata/context-windows.json in the same
+// change when official limits change.
+var KnownModels = mustLoadKnownModels()
 
 // contextWindowSizes maps model name prefixes to context window sizes (in tokens).
-var contextWindowSizes = map[string]int64{
-	// Anthropic Claude 5 series (flagship)
-	"claude-sonnet-5": 1_000_000,
-	"claude-fable-5":  1_000_000,
-	// Anthropic Claude 4.8 series
-	"claude-opus-4-8": 1_000_000,
-	// Anthropic Claude 4.7 series (128K output)
-	"claude-opus-4-7":   1_000_000,
-	"claude-sonnet-4-7": 1_000_000,
-	"claude-haiku-4-7":  200_000,
-	// Anthropic Claude 4.6 series (current best, 64K output)
-	"claude-sonnet-4-6": 1_000_000,
-	"claude-opus-4-6":   1_000_000,
-	// Anthropic Claude 4.5 series
-	"claude-haiku-4-5":  200_000,
-	"claude-sonnet-4-5": 1_000_000,
-	"claude-opus-4-5":   1_000_000,
-	// Anthropic Claude 4.1 series
-	"claude-opus-4-1": 1_000_000,
-	// Anthropic Claude 4.0 series
-	"claude-opus-4-0":   1_000_000,
-	"claude-sonnet-4-0": 1_000_000,
-	// Anthropic Claude 3.7 series
-	"claude-3-7-sonnet": 200_000,
-	// Anthropic Claude 3.5 series
-	"claude-3-5-sonnet": 200_000,
-	"claude-3-5-haiku":  200_000,
-	// Anthropic Claude 3 series
-	"claude-3-opus":   200_000,
-	"claude-3-sonnet": 200_000,
-	"claude-3-haiku":  200_000,
-	// OpenAI
-	"gpt-5.6":       1_050_000,
-	"gpt-5.5-pro":   1_050_000,
-	"gpt-5.5":       1_050_000,
-	"gpt-5.5-mini":  400_000,
-	"gpt-5.5-nano":  400_000,
-	"gpt-5.5-codex": 1_050_000,
-	"gpt-5.4-pro":   1_050_000,
-	"gpt-5.4-mini":  400_000,
-	"gpt-5.4-nano":  400_000,
-	"gpt-5.4":       1_050_000,
-	"gpt-5.4-codex": 1_050_000,
-	"gpt-5.3-codex": 1_050_000,
-	"gpt-5.2-codex": 1_050_000,
-	"gpt-5.1-codex": 1_050_000,
-	"gpt-5":         400_000,
-	// Gemini
-	"gemini-3.5-flash":              1_048_576,
-	"gemini-3.5-flash-lite":         1_048_576,
-	"gemini-3.5-pro":                1_048_576,
-	"gemini-3.1-flash-lite":         1_048_576,
-	"gemini-3.1-pro-preview":        1_048_576,
-	"gemini-3-flash-preview":        1_048_576,
-	"gemini-3.1-flash-lite-preview": 1_048_576,
-	"gemini-2.5":                    1_048_576,
-	// Mistral
-	"mistral-large-2512":      256_000,
-	"mistral-large-latest":    256_000,
-	"mistral-medium-2603":     128_000,
-	"mistral-medium-latest":   128_000,
-	"mistral-small-2603":      256_000,
-	"mistral-small-latest":    256_000,
-	"magistral-medium-latest": 128_000,
-	"magistral-small-latest":  128_000,
-	"codestral":               256_000,
-	// Custom/local models
-	"qwen":    4_096,
-	"glm-5.2": 976_000,
-}
+var contextWindowSizes = mustLoadContextWindowSizes()
 
 // ContextWindowSize returns the context window size for a model (in tokens).
-// Returns 0 if the model is unknown. For Ollama models, returns 0 (unknown).
+// Returns 0 if the model is unknown.
 func ContextWindowSize(modelName string) int64 {
 	lower := strings.ToLower(modelName)
+	lower = strings.TrimPrefix(lower, "ollama/")
 	// Try longest prefix match first for accuracy.
 	bestLen := 0
 	var bestSize int64
