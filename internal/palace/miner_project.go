@@ -70,21 +70,74 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 	if err != nil {
 		return nil, fmt.Errorf("mine: resolve dir: %w", err)
 	}
+	cfg = mineConfigFor(absDir, cfg)
 
+	// Phase 1: collect the files worth mining.
+	tasks, err := collectMineTasks(absDir, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 2: flatten them into chunks.
+	result := &MineResult{}
+	allChunks := collectChunks(tasks, cfg, result)
+	if len(allChunks) == 0 {
+		return result, nil
+	}
+
+	// Phase 2b: drop chunks that have not changed since the last run.
+	allChunks = dropUnchangedChunks(ctx, palace, cfg.Wing, allChunks, result)
+	if len(allChunks) == 0 {
+		return result, nil
+	}
+
+	// Phase 3: embed what is left.
+	embeddings := embedChunks(palace, cfg, allChunks)
+
+	// Phase 4 and 5: build the drawers and persist them.
+	drawers := buildDrawers(allChunks, embeddings, result)
+	insertDrawers(ctx, palace, cfg, drawers, result)
+
+	return result, nil
+}
+
+// mineConfigFor resolves the effective mine config: the caller's, else
+// mempalace.yaml, else defaults — with the wing defaulting to the directory
+// basename.
+func mineConfigFor(absDir string, cfg *MineConfig) *MineConfig {
 	if cfg == nil {
-		// Try to load from mempalace.yaml, fall back to defaults.
-		loaded, loadErr := readMempalaceYAML(absDir)
-		if loadErr != nil {
+		loaded, err := readMempalaceYAML(absDir)
+		if err != nil {
 			cfg = &MineConfig{Wing: filepath.Base(absDir)}
 		} else {
 			cfg = loaded
 		}
 	}
-
 	if cfg.Wing == "" {
 		cfg.Wing = filepath.Base(absDir)
 	}
+	return cfg
+}
 
+// fileTask is one source file that survived filtering, already chunked.
+type fileTask struct {
+	relPath string
+	room    string
+	chunks  []string
+}
+
+// chunkJob is a single chunk of a file, addressed by its position in the wing.
+type chunkJob struct {
+	wing     string
+	room     string
+	relPath  string
+	chunkIdx int
+	content  string
+}
+
+// collectMineTasks walks absDir and returns the chunked files worth mining,
+// skipping ignored trees, unsupported extensions, binaries and oversized files.
+func collectMineTasks(absDir string, cfg *MineConfig) ([]fileTask, error) {
 	// Try git first for accurate .gitignore handling (nested files, ** globs,
 	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
 	ignoredSet := gitIgnoredSet(absDir)
@@ -93,112 +146,97 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		gitignorePatterns = loadGitignore(absDir)
 	}
 
-	// Phase 1: Collect all files to process.
-	type fileTask struct {
-		path    string
-		relPath string
-		room    string
-		chunks  []string
-	}
-
 	var tasks []fileTask
-
-	err = filepath.WalkDir(absDir, func(path string, d os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(absDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // continue walking
 		}
-
-		// Skip directories.
 		if d.IsDir() {
-			name := d.Name()
-			if name[0] == '.' && name != "." || skipDirNames[name] {
-				return filepath.SkipDir
-			}
-			// Prune whole ignored trees rather than rediscovering them file by
-			// file: git reports a fully-ignored directory as one entry, and
-			// descending into it means embedding everything inside.
-			if rel, relErr := filepath.Rel(absDir, path); relErr == nil && rel != "." {
-				if isGitIgnoredSet(rel, ignoredSet) {
-					return filepath.SkipDir
-				}
-			}
-			return nil
+			return skipMinedDir(absDir, path, d, ignoredSet)
 		}
 
-		// Check file extension. An empty ext means the file has no "." suffix at
-		// all (LICENSE, Makefile, a stray binary) — never mine those.
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext == "" || !supportedExtensions[ext] {
-			return nil
-		}
-
-		// A permitted extension is not proof of text: minified blobs and embedded
-		// payloads turn up under .json/.txt, and embedding them costs exactly as
-		// much as real source while producing a meaningless vector.
-		if isBinaryFile(path) {
-			return nil
-		}
-
-		// Check gitignore.
 		relPath, err := filepath.Rel(absDir, path)
 		if err != nil {
 			return nil
 		}
-		if isGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
+		if !isMineableFile(path, relPath, d, ignoredSet, gitignorePatterns) {
 			return nil
 		}
 
-		// Skip large files (> 512KB).
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if info.Size() > 512*1024 {
-			return nil
-		}
-
-		// Read and chunk the file.
 		data, err := os.ReadFile(path)
 		if err != nil {
 			slog.Warn("mine: read file", "path", relPath, "error", err)
 			return nil
 		}
-
 		content := string(data)
 		if strings.TrimSpace(content) == "" {
 			return nil
 		}
 
-		room := detectRoom(relPath, cfg.Rooms)
 		chunks := chunkText(content, defaultChunkSize, defaultChunkOverlap)
 		if len(chunks) == 0 {
 			return nil
 		}
-
 		tasks = append(tasks, fileTask{
-			path:    path,
 			relPath: relPath,
-			room:    room,
+			room:    detectRoom(relPath, cfg.Rooms),
 			chunks:  chunks,
 		})
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("mine: walk: %w", err)
 	}
+	return tasks, nil
+}
 
-	result := &MineResult{}
+// skipMinedDir prunes dot-directories, known build directories, and trees git
+// reports as fully ignored. Pruning beats filtering file by file: git reports a
+// fully-ignored directory as one entry, and descending into it means embedding
+// everything inside.
+func skipMinedDir(absDir, path string, d os.DirEntry, ignoredSet map[string]bool) error {
+	name := d.Name()
+	if name[0] == '.' && name != "." || skipDirNames[name] {
+		return filepath.SkipDir
+	}
+	if rel, err := filepath.Rel(absDir, path); err == nil && rel != "." {
+		if isGitIgnoredSet(rel, ignoredSet) {
+			return filepath.SkipDir
+		}
+	}
+	return nil
+}
 
-	// Phase 2: Collect all chunks from all files.
-	type chunkJob struct {
-		wing     string
-		room     string
-		relPath  string
-		chunkIdx int
-		content  string
+// isMineableFile reports whether a file should be chunked and embedded.
+func isMineableFile(path, relPath string, d os.DirEntry, ignoredSet map[string]bool, gitignorePatterns []string) bool {
+	// An empty ext means the file has no "." suffix at all (LICENSE, Makefile,
+	// a stray binary) — never mine those.
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" || !supportedExtensions[ext] {
+		return false
 	}
 
+	// A permitted extension is not proof of text: minified blobs and embedded
+	// payloads turn up under .json/.txt, and embedding them costs exactly as
+	// much as real source while producing a meaningless vector.
+	if isBinaryFile(path) {
+		return false
+	}
+	if isGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
+		return false
+	}
+
+	// Skip large files (> 512KB).
+	info, err := d.Info()
+	if err != nil || info.Size() > 512*1024 {
+		return false
+	}
+	return true
+}
+
+// collectChunks flattens the per-file chunks into one addressable list,
+// reporting scan progress as it goes.
+func collectChunks(tasks []fileTask, cfg *MineConfig, result *MineResult) []chunkJob {
 	var allChunks []chunkJob
 	for i, task := range tasks {
 		for j, chunk := range task.chunks {
@@ -211,135 +249,155 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 			})
 		}
 		result.Processed += len(task.chunks)
-		// Report progress: file scanning phase (0-30% of total progress).
-		if cfg.Progress != nil {
-			cfg.Progress(task.relPath, len(task.chunks), 0, 0)
+		if cfg.Progress == nil {
+			continue
 		}
+		// Report progress: file scanning phase (0-30% of total progress).
+		cfg.Progress(task.relPath, len(task.chunks), 0, 0)
 		// Also report intermediate progress for large file lists.
-		if cfg.Progress != nil && i > 0 && i%50 == 0 {
+		if i > 0 && i%50 == 0 {
 			cfg.Progress("", 0, 0, 0) // empty = progress update only
 		}
 	}
+	return allChunks
+}
 
-	if len(allChunks) == 0 {
-		return result, nil
+// dropUnchangedChunks removes chunks whose stored content hash still matches.
+//
+// This must happen *before* embedding: embedding is ~80% of a mining run's CPU,
+// so re-embedding a chunk only to discover it is identical is the single most
+// expensive thing the miner can do. A drawer's ID is derived from (source_file,
+// chunk_index) and says nothing about content, so the stored content hash is the
+// only way to tell.
+//
+// A store lookup failure is not fatal — fall back to embedding everything,
+// which is merely the old behavior.
+func dropUnchangedChunks(ctx context.Context, palace *Palace, wing string, allChunks []chunkJob, result *MineResult) []chunkJob {
+	existing, err := palace.store.DrawerHashes(ctx, wing)
+	if err != nil {
+		slog.Warn("mine: could not load content hashes; re-embedding everything", "error", err)
+		return allChunks
+	}
+	if len(existing) == 0 {
+		return allChunks
 	}
 
-	// Phase 2b: Drop chunks whose content is unchanged since the last run.
-	//
-	// This must happen *before* embedding: embedding is ~80% of a mining run's
-	// CPU, so re-embedding a chunk only to discover it is identical is the single
-	// most expensive thing the miner can do. A drawer's ID is derived from
-	// (source_file, chunk_index) and says nothing about content, so the stored
-	// content hash is the only way to tell.
-	//
-	// A store lookup failure is not fatal — fall back to embedding everything,
-	// which is merely the old behavior.
-	if existing, hashErr := palace.store.DrawerHashes(ctx, cfg.Wing); hashErr != nil {
-		slog.Warn("mine: could not load content hashes; re-embedding everything", "error", hashErr)
-	} else if len(existing) > 0 {
-		kept := allChunks[:0]
-		for _, c := range allChunks {
-			id := GenerateDrawerID(c.wing, c.room, c.relPath, c.chunkIdx, c.content)
-			if prev, ok := existing[id]; ok && prev != "" && prev == HashContent(c.content) {
-				result.Skipped++
-				continue
-			}
-			kept = append(kept, c)
+	kept := allChunks[:0]
+	for _, c := range allChunks {
+		id := GenerateDrawerID(c.wing, c.room, c.relPath, c.chunkIdx, c.content)
+		if prev, ok := existing[id]; ok && prev != "" && prev == HashContent(c.content) {
+			result.Skipped++
+			continue
 		}
-		if skipped := len(allChunks) - len(kept); skipped > 0 {
-			slog.Info("mine: skipping unchanged chunks", "skipped", skipped, "to_embed", len(kept))
-		}
-		allChunks = kept
+		kept = append(kept, c)
+	}
+	if skipped := len(allChunks) - len(kept); skipped > 0 {
+		slog.Info("mine: skipping unchanged chunks", "skipped", skipped, "to_embed", len(kept))
+	}
+	return kept
+}
+
+// embedChunks embeds every chunk, several batches at a time, and returns the
+// vectors indexed in lockstep with allChunks. It returns nil when the palace
+// has no embedder.
+//
+// The result is indexed rather than appended: building it with append() and
+// only on success meant a single failed batch shifted every later chunk onto
+// someone else's vector — silently, since the caller just reads embeddings[i].
+// Writing results at their own index cannot drift, so a failed batch leaves
+// nils and those chunks are stored without an embedding rather than a wrong one.
+func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]float32 {
+	if palace.embedder == nil {
+		return nil
 	}
 
-	if len(allChunks) == 0 {
-		return result, nil
+	texts := make([]string, len(allChunks))
+	for i, c := range allChunks {
+		texts[i] = c.content
 	}
+	embeddings := make([][]float32, len(texts))
 
-	// Phase 3: Embed all chunks, several batches at a time.
-	//
-	// embeddings is indexed in lockstep with allChunks. It used to be built with
-	// append() and only on success, so a single failed batch shifted every later
-	// chunk onto someone else's vector — silently, since Phase 4 just reads
-	// embeddings[i]. Writing results at their own index cannot drift: a failed
-	// batch leaves nils, and those chunks are stored without an embedding rather
-	// than with the wrong one.
-	var embeddings [][]float32
-	if palace.embedder != nil {
-		texts := make([]string, len(allChunks))
-		for i, c := range allChunks {
-			texts[i] = c.content
-		}
-		embeddings = make([][]float32, len(texts))
+	workers := embedWorkers(palace.config.ModelPath)
+	slog.Info("mine: embedding chunks", "count", len(texts), "workers", workers, "batch", embedBatchSize)
 
-		workers := embedWorkers(palace.config.ModelPath)
-		slog.Info("mine: embedding chunks", "count", len(texts), "workers", workers, "batch", embedBatchSize)
+	embs, closeExtra := embedderPool(palace, workers)
+	defer closeExtra()
 
-		// Each worker owns an embedder: hugot pipelines are not safe to call
-		// concurrently, and one shared embedder is what limited the run to ~25%
-		// CPU. Worker 0 reuses the palace's own embedder so the common
-		// single-worker case allocates nothing extra.
-		embs := make([]*Embedder, 0, workers)
-		embs = append(embs, palace.embedder)
-		for len(embs) < workers {
-			e, err := NewEmbedder(palace.config.ModelPath)
-			if err != nil {
-				slog.Warn("mine: extra embedder failed; continuing with fewer workers",
-					"have", len(embs), "want", workers, "error", err)
-				break
-			}
-			embs = append(embs, e)
-			defer e.Close()
-		}
+	type batchJob struct{ start, end int }
+	jobs := make(chan batchJob)
 
-		type batchJob struct{ start, end int }
-		jobs := make(chan batchJob)
-
-		var done atomic.Int64
-		var wg sync.WaitGroup
-		for _, e := range embs {
-			wg.Add(1)
-			go func(e *Embedder) {
-				defer wg.Done()
-				for j := range jobs {
-					out, err := e.Embed(texts[j.start:j.end])
-					if err != nil {
-						slog.Warn("mine: embedding batch failed", "error", err)
-						// Leave nils: better no vector than a misaligned one.
-						continue
-					}
-					copy(embeddings[j.start:j.end], out)
-
-					n := done.Add(int64(j.end - j.start))
-					// Announce progress as batches land. Embedding is by far the
-					// slowest phase and works on chunks rather than files, so
-					// without this the UI sat blank for minutes and looked hung.
-					//
-					// Only Phase reports here. The old Progress("") call also drew a
-					// line, and because both redraw with \r the blank one landed last
-					// and overwrote this one — leaving a frozen "829/832 files" on
-					// screen for the entire embed, which is what made a working run
-					// look wedged.
-					if cfg.Phase != nil {
-						cfg.Phase("embed", allChunks[j.start].relPath, int(n), len(texts))
-					}
+	var done atomic.Int64
+	var wg sync.WaitGroup
+	for _, e := range embs {
+		wg.Go(func() {
+			for j := range jobs {
+				out, err := e.Embed(texts[j.start:j.end])
+				if err != nil {
+					slog.Warn("mine: embedding batch failed", "error", err)
+					// Leave nils: better no vector than a misaligned one.
+					continue
 				}
-			}(e)
-		}
+				copy(embeddings[j.start:j.end], out)
 
-		for i := 0; i < len(texts); i += embedBatchSize {
-			jobs <- batchJob{start: i, end: min(i+embedBatchSize, len(texts))}
-		}
-		close(jobs)
-		wg.Wait()
-
-		if cfg.Phase != nil {
-			cfg.Phase("embed", "", len(texts), len(texts))
-		}
+				n := done.Add(int64(j.end - j.start))
+				// Announce progress as batches land. Embedding is by far the
+				// slowest phase and works on chunks rather than files, so
+				// without this the UI sat blank for minutes and looked hung.
+				//
+				// Only Phase reports here. The old Progress("") call also drew a
+				// line, and because both redraw with \r the blank one landed last
+				// and overwrote this one — leaving a frozen "829/832 files" on
+				// screen for the entire embed, which is what made a working run
+				// look wedged.
+				if cfg.Phase != nil {
+					cfg.Phase("embed", allChunks[j.start].relPath, int(n), len(texts))
+				}
+			}
+		})
 	}
 
-	// Phase 4: Build drawer slice.
+	for i := 0; i < len(texts); i += embedBatchSize {
+		jobs <- batchJob{start: i, end: min(i+embedBatchSize, len(texts))}
+	}
+	close(jobs)
+	wg.Wait()
+
+	if cfg.Phase != nil {
+		cfg.Phase("embed", "", len(texts), len(texts))
+	}
+	return embeddings
+}
+
+// embedderPool returns one embedder per worker plus a closer for the extras.
+//
+// Each worker owns an embedder: hugot pipelines are not safe to call
+// concurrently, and one shared embedder is what limited the run to ~25% CPU.
+// Worker 0 reuses the palace's own embedder so the common single-worker case
+// allocates nothing extra, and is therefore not closed here.
+func embedderPool(palace *Palace, workers int) ([]*Embedder, func()) {
+	embs := make([]*Embedder, 0, workers)
+	embs = append(embs, palace.embedder)
+	for len(embs) < workers {
+		e, err := NewEmbedder(palace.config.ModelPath)
+		if err != nil {
+			slog.Warn("mine: extra embedder failed; continuing with fewer workers",
+				"have", len(embs), "want", workers, "error", err)
+			break
+		}
+		embs = append(embs, e)
+	}
+
+	extras := embs[1:]
+	return embs, func() {
+		for _, e := range extras {
+			e.Close()
+		}
+	}
+}
+
+// buildDrawers turns chunks and their vectors into drawers, dropping any
+// duplicate ID produced within the same run.
+func buildDrawers(allChunks []chunkJob, embeddings [][]float32, result *MineResult) []*Drawer {
 	now := time.Now().UTC()
 	drawers := make([]*Drawer, 0, len(allChunks))
 	seenIDs := make(map[string]bool)
@@ -351,8 +409,6 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 		}
 
 		id := GenerateDrawerID(chunk.wing, chunk.room, chunk.relPath, chunk.chunkIdx, chunk.content)
-
-		// Skip if we already have this ID (from same file).
 		if seenIDs[id] {
 			result.Skipped++
 			continue
@@ -375,33 +431,35 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 			ContentHash: HashContent(chunk.content),
 		})
 	}
+	return drawers
+}
 
-	// Phase 5: Batch insert with transaction.
-	if len(drawers) > 0 {
-		inserted, err := palace.store.BatchInsertDrawers(ctx, drawers)
-		if err != nil {
-			slog.Warn("mine: batch insert failed, falling back to individual inserts", "error", err)
-			// Fall back to individual inserts.
-			for i, drawer := range drawers {
-				if err := palace.store.InsertDrawer(ctx, drawer); err != nil {
-					result.Errors++
-				} else {
-					result.Added++
-				}
-				// Report insert progress (70-100% of total).
-				if cfg.Progress != nil {
-					pct := 70 + (100-70)*i/len(drawers)
-					cfg.Progress("", pct, 0, 0)
-				}
-			}
-		} else {
-			result.Added = inserted
-			// Report completion.
-			if cfg.Progress != nil {
-				cfg.Progress("", 100, 0, 0)
-			}
-		}
+// insertDrawers persists the drawers in one transaction, falling back to
+// individual inserts so one bad row cannot lose the whole batch.
+func insertDrawers(ctx context.Context, palace *Palace, cfg *MineConfig, drawers []*Drawer, result *MineResult) {
+	if len(drawers) == 0 {
+		return
 	}
 
-	return result, nil
+	inserted, err := palace.store.BatchInsertDrawers(ctx, drawers)
+	if err == nil {
+		result.Added = inserted
+		if cfg.Progress != nil {
+			cfg.Progress("", 100, 0, 0)
+		}
+		return
+	}
+
+	slog.Warn("mine: batch insert failed, falling back to individual inserts", "error", err)
+	for i, drawer := range drawers {
+		if insErr := palace.store.InsertDrawer(ctx, drawer); insErr != nil {
+			result.Errors++
+		} else {
+			result.Added++
+		}
+		// Report insert progress (70-100% of total).
+		if cfg.Progress != nil {
+			cfg.Progress("", 70+(100-70)*i/len(drawers), 0, 0)
+		}
+	}
 }
