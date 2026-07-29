@@ -12,6 +12,9 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/adk/v2/agent/llmagent"
+	adkmodel "google.golang.org/adk/v2/model"
 	adksession "google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 
@@ -136,15 +139,63 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	)
 	defer span.End()
 
+	cfg, err := loadSessionConfig(rt, cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	llm, err := buildSessionLLM(ctx, rt, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := buildSessionResources(rt, cfg, turn, cwd, span)
+	if err != nil {
+		return nil, err
+	}
+
+	instruction := rt.System
+	if instruction == "" {
+		instruction = piagent.LoadInstruction(piagent.SystemInstruction)
+	}
+
+	ag, err := piagent.New(piagent.Config{
+		Model:               llm,
+		Tools:               res.coreTools,
+		Toolsets:            buildMCPToolsetsFromCfg(cfg),
+		Instruction:         instruction,
+		BeforeToolCallbacks: res.beforeCBs,
+		AfterToolCallbacks:  res.afterCBs,
+	})
+	if err != nil {
+		res.cleanup()
+		return nil, fmt.Errorf("creating agent: %w", err)
+	}
+
+	sessionID, _, err := ag.CreateSession(ctx)
+	if err != nil {
+		res.cleanup()
+		return nil, fmt.Errorf("creating session: %w", err)
+	}
+
+	return &piSessionState{
+		agent:       ag,
+		sessionID:   sessionID,
+		streamProxy: res.proxy,
+		cleanup:     res.cleanup,
+	}, nil
+}
+
+// loadSessionConfig loads the pi config for the session's working directory and
+// applies the runtime's model override.
+func loadSessionConfig(rt RuntimeConfig, cwd string) (config.Config, error) {
 	loadConfig := rt.LoadConfig
 	if loadConfig == nil {
-		loadConfig = func() (config.Config, error) {
-			return config.LoadFrom(cwd)
-		}
+		loadConfig = func() (config.Config, error) { return config.LoadFrom(cwd) }
 	}
 	cfg, err := loadConfig()
 	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
+		return config.Config{}, fmt.Errorf("loading config: %w", err)
 	}
 	if rt.Model != "" {
 		if cfg.Roles == nil {
@@ -152,37 +203,27 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		}
 		cfg.Roles["default"] = config.RoleConfig{Model: rt.Model}
 	}
+	return cfg, nil
+}
 
+// buildSessionLLM resolves the default role to a provider and returns a
+// token-guarded LLM for it.
+func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (adkmodel.LLM, error) {
 	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole("default")
 	if err != nil {
 		return nil, fmt.Errorf("resolving model role: %w", err)
 	}
 
-	baseURL := rt.BaseURL
-	if baseURL == "" && providerName != "" {
-		baseURL = cfg.ResolveBaseURLs()[providerName]
-	}
-
-	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
+	info, baseURL, err := resolveSessionProvider(cfg, rt.BaseURL, modelName, providerName)
 	if err != nil {
-		return nil, fmt.Errorf("resolving model: %w", err)
-	}
-	if providerName != "" {
-		info.Provider = providerName
-		info.Custom = baseURL != ""
-	}
-	if baseURL == "" {
-		baseURL = cfg.ResolveBaseURLs()[info.Provider]
-		if baseURL != "" {
-			info.Custom = true
-		}
-	}
-	if err := provider.ValidateModel(info); err != nil {
-		return nil, fmt.Errorf("model validation: %w", err)
+		return nil, err
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
-	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+	// Providers that authenticate some other way — a local Ollama, an Azure
+	// deployment URL, gemini's ADC — are allowed through without a key.
+	if apiKey == "" && baseURL == "" && !info.Ollama &&
+		info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" {
 		return nil, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, providerEnvVar(info.Provider))
 	}
 
@@ -205,23 +246,73 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	if err != nil {
 		return nil, fmt.Errorf("creating LLM provider: %w", err)
 	}
+
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	ctxWindowSize := provider.ContextWindowSize(info.Model)
-	if info.Ollama {
-		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			ctxWindowSize = n
+	tokenTracker.SetContextWindowSize(sessionContextWindow(ctx, info, baseURL))
+	return guardrail.WrapModel(llm, tokenTracker), nil
+}
+
+// resolveSessionProvider resolves the model to a provider, and settles on the
+// base URL to reach it at — the runtime flag first, then the configured one.
+func resolveSessionProvider(cfg config.Config, flagBaseURL, modelName, providerName string) (provider.Info, string, error) {
+	baseURL := flagBaseURL
+	if baseURL == "" && providerName != "" {
+		baseURL = cfg.ResolveBaseURLs()[providerName]
+	}
+
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
+	if err != nil {
+		return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+	}
+	if providerName != "" {
+		info.Provider = providerName
+		info.Custom = baseURL != ""
+	}
+	// The role named no provider, so the configured URL could only be found
+	// once the model itself resolved one.
+	if baseURL == "" {
+		baseURL = cfg.ResolveBaseURLs()[info.Provider]
+		if baseURL != "" {
+			info.Custom = true
 		}
 	}
-	tokenTracker.SetContextWindowSize(ctxWindowSize)
-	llm = guardrail.WrapModel(llm, tokenTracker)
+	if err := provider.ValidateModel(info); err != nil {
+		return provider.Info{}, "", fmt.Errorf("model validation: %w", err)
+	}
+	return info, baseURL, nil
+}
 
+// sessionContextWindow returns the model's context window, preferring the size
+// a running Ollama reports over the static table.
+func sessionContextWindow(ctx context.Context, info provider.Info, baseURL string) int64 {
+	if info.Ollama {
+		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			return n
+		}
+	}
+	return provider.ContextWindowSize(info.Model)
+}
+
+// sessionResources holds the tools and callbacks a session runs with, plus the
+// cleanup that releases the sandbox, orchestrator and LSP manager behind them.
+type sessionResources struct {
+	coreTools []adktool.Tool
+	beforeCBs []llmagent.BeforeToolCallback
+	afterCBs  []llmagent.AfterToolCallback
+	proxy     *streamProxy
+	cleanup   func()
+}
+
+// buildSessionResources opens the sandbox and starts the subagent orchestrator
+// and LSP manager, assembling the tool set and callbacks around them. On
+// failure it releases whatever it had already opened.
+func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn, cwd string, span trace.Span) (*sessionResources, error) {
 	sandboxRoot := cwd
 	if rt.SandboxRootFunc != nil {
 		sandboxRoot = rt.SandboxRootFunc(turn)
 	}
-	worktreeDir := os.Getenv("PI_WORKTREE_ROOT")
 
-	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
+	sandbox, err := tools.NewSandbox(sandboxRoot, os.Getenv("PI_WORKTREE_ROOT"))
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox: %w", err)
 	}
@@ -236,25 +327,27 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
 
-	repoRoot := detectGitRoot(cwd)
-	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
+	orch := newSessionOrchestrator(rt, cfg, cwd)
+	lspMgr := lsp.NewManager(nil)
+	cleanup := func() {
+		lspMgr.Shutdown()
+		orch.Shutdown()
+		_ = sandbox.Close()
 	}
-	var agentConfigs []subagent.AgentConfig
-	if discovery != nil {
-		agentConfigs = discovery.All
-	}
-	orch := subagent.NewOrchestrator(&cfg, repoRoot, agentConfigs)
-	orch.SetProviderOptions(rt.BaseURL, rt.Insecure, rt.Headers)
 
 	agentTools, err := tools.AgentTools(orch, func(agentID, eventType, content string) {})
 	if err != nil {
-		orch.Shutdown()
-		_ = sandbox.Close()
+		cleanup()
 		return nil, fmt.Errorf("creating agent tools: %w", err)
 	}
 	coreTools = append(coreTools, agentTools...)
+
+	lspTools, err := tools.LSPTools(lspMgr)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("creating LSP tools: %w", err)
+	}
+	coreTools = append(coreTools, lspTools...)
 
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
@@ -267,60 +360,32 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	toolBefore, toolAfter := extension.BuildToolCallCallbacks(proxy)
 	beforeCBs = append(beforeCBs, toolBefore...)
 	afterCBs = append(afterCBs, toolAfter...)
-
-	lspMgr := lsp.NewManager(nil)
-	lspTools, err := tools.LSPTools(lspMgr)
-	if err != nil {
-		lspMgr.Shutdown()
-		orch.Shutdown()
-		_ = sandbox.Close()
-		return nil, fmt.Errorf("creating LSP tools: %w", err)
-	}
 	afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
-	coreTools = append(coreTools, lspTools...)
 
-	mcpToolsets := buildMCPToolsetsFromCfg(cfg)
-
-	instruction := rt.System
-	if instruction == "" {
-		instruction = piagent.LoadInstruction(piagent.SystemInstruction)
-	}
-
-	ag, err := piagent.New(piagent.Config{
-		Model:               llm,
-		Tools:               coreTools,
-		Toolsets:            mcpToolsets,
-		Instruction:         instruction,
-		BeforeToolCallbacks: beforeCBs,
-		AfterToolCallbacks:  afterCBs,
-	})
-	if err != nil {
-		lspMgr.Shutdown()
-		orch.Shutdown()
-		_ = sandbox.Close()
-		return nil, fmt.Errorf("creating agent: %w", err)
-	}
-
-	sessionID, _, err := ag.CreateSession(ctx)
-	if err != nil {
-		lspMgr.Shutdown()
-		orch.Shutdown()
-		_ = sandbox.Close()
-		return nil, fmt.Errorf("creating session: %w", err)
-	}
-
-	cleanup := func() {
-		lspMgr.Shutdown()
-		orch.Shutdown()
-		_ = sandbox.Close()
-	}
-
-	return &piSessionState{
-		agent:       ag,
-		sessionID:   sessionID,
-		streamProxy: proxy,
-		cleanup:     cleanup,
+	return &sessionResources{
+		coreTools: coreTools,
+		beforeCBs: beforeCBs,
+		afterCBs:  afterCBs,
+		proxy:     proxy,
+		cleanup:   cleanup,
 	}, nil
+}
+
+// newSessionOrchestrator starts the subagent orchestrator for cwd. Agent
+// discovery is best-effort: a failure just means no custom agents.
+func newSessionOrchestrator(rt RuntimeConfig, cfg config.Config, cwd string) *subagent.Orchestrator {
+	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: agent discovery failed: %v\n", err)
+	}
+	var agentConfigs []subagent.AgentConfig
+	if discovery != nil {
+		agentConfigs = discovery.All
+	}
+
+	orch := subagent.NewOrchestrator(&cfg, detectGitRoot(cwd), agentConfigs)
+	orch.SetProviderOptions(rt.BaseURL, rt.Insecure, rt.Headers)
+	return orch
 }
 
 // runPromptTurn runs one prompt turn against the cached pi session.
