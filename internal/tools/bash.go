@@ -91,7 +91,7 @@ func bashHandler(sb *Sandbox, ctx agent.Context, input BashInput) (BashOutput, e
 			)
 			return BashOutput{
 				Stdout:   redactSecrets(truncateOutput(stdout.String())),
-				Stderr:   redactSecrets(truncateOutput("command timed out\n" + stderr.String())),
+				Stderr:   redactSecrets(truncateOutput("command timed out\n" + stripRuntimeNoise(stderr.String()))),
 				ExitCode: -1,
 			}, nil
 		} else {
@@ -113,7 +113,7 @@ func bashHandler(sb *Sandbox, ctx agent.Context, input BashInput) (BashOutput, e
 	)
 	return BashOutput{
 		Stdout:   redactSecrets(truncateOutput(stdout.String())),
-		Stderr:   redactSecrets(truncateOutput(stderr.String())),
+		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(stderr.String()))),
 		ExitCode: exitCode,
 	}, nil
 }

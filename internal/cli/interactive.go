@@ -220,17 +220,7 @@ func deferredInit(
 			return
 		}
 		send("mcp", false)
-		mcpServers := make([]extension.MCPServerConfig, len(cfg.MCP.Servers))
-		for i, s := range cfg.MCP.Servers {
-			mcpServers[i] = extension.MCPServerConfig{
-				Name:    s.Name,
-				Command: s.Command,
-				Args:    s.Args,
-				URL:     s.URL,
-				Headers: s.Headers,
-			}
-		}
-		ts, _ := extension.BuildMCPToolsets(mcpServers)
+		ts, _ := extension.BuildMCPToolsets(buildMCPServerConfigs(cfg))
 		ps.mu.Lock()
 		ps.mcpToolsets = ts
 		ps.mu.Unlock()
@@ -300,21 +290,7 @@ func deferredInit(
 	}
 
 	// Build callbacks.
-	compactorCfg := tools.DefaultCompactorConfig()
-	if cfg.Compactor != nil {
-		if cfg.Compactor.Enabled != nil {
-			compactorCfg.Enabled = *cfg.Compactor.Enabled
-		}
-		if cfg.Compactor.SourceCodeFiltering != "" {
-			compactorCfg.SourceCodeFiltering = cfg.Compactor.SourceCodeFiltering
-		}
-		if cfg.Compactor.MaxChars > 0 {
-			compactorCfg.MaxChars = cfg.Compactor.MaxChars
-		}
-		if cfg.Compactor.MaxLines > 0 {
-			compactorCfg.MaxLines = cfg.Compactor.MaxLines
-		}
-	}
+	compactorCfg := compactorConfigFrom(cfg)
 	compactMetrics := tools.NewCompactMetrics()
 	compactorCB := tools.BuildCompactorCallback(compactorCfg, compactMetrics)
 

@@ -108,6 +108,24 @@ func pingEndpointForBaseURL(providerName, baseURL string) string {
 	return endpoint
 }
 
+// pingWriter emits one line of ping trace output.
+type pingWriter func(format string, a ...any)
+
+// pingTarget is the resolved endpoint a ping run exercises, along with the
+// credentials and transport options needed to reach it.
+type pingTarget struct {
+	info      provider.Info
+	apiKey    string
+	baseURL   string
+	targetURL string
+	opts      *provider.LLMOptions
+	// codexBackend routes through the ChatGPT codex backend because the key is
+	// an OAuth token the platform API would reject.
+	codexBackend bool
+}
+
+// runPing walks the six diagnostic phases in order — resolve, DNS, TCP, TLS,
+// HTTP, model — stopping at the first one that fails.
 func runPing(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
 
@@ -116,6 +134,56 @@ func runPing(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	target, err := resolvePingTarget(cfg)
+	if err != nil {
+		return err
+	}
+
+	w := pingWriter(func(format string, a ...any) { _, _ = fmt.Fprintf(os.Stderr, format, a...) })
+	target.printHeader(w)
+
+	u, err := url.Parse(target.targetURL)
+	if err != nil {
+		w("* ERROR: invalid URL %q: %v\n", target.targetURL, err)
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	host, port := u.Hostname(), pingPort(u)
+
+	addrs, err := pingDNS(w, host)
+	if err != nil {
+		return err
+	}
+	if err := pingTCP(w, addrs[0], port); err != nil {
+		return err
+	}
+	if u.Scheme == "https" {
+		if err := pingTLS(w, host, port, target.opts.InsecureSkipTLS); err != nil {
+			return err
+		}
+	}
+
+	// The response body is read again during the verdict, so the request
+	// context has to outlive doHTTP — keep it scoped to runPing.
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	defer cancel()
+
+	resp, err := target.doHTTP(ctx, w)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !target.reportHTTPVerdict(w, resp) {
+		w("* %s─── Model Ping ───%s\n", colorBlue, colorReset)
+		w("* Skipped — endpoint not reachable\n")
+		return nil
+	}
+	return target.pingModel(cmd.Context(), w, args)
+}
+
+// resolvePingTarget resolves the role, model, credentials and endpoint the ping
+// runs against, applying the --model/--url/--header/--insecure flags.
+func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	if flagModel != "" {
 		cfg.Roles["default"] = config.RoleConfig{Model: flagModel}
 	}
@@ -132,44 +200,36 @@ func runPing(cmd *cobra.Command, args []string) error {
 
 	modelName, providerName, _, _, _, err := cfg.ResolveRole(activeRole)
 	if err != nil {
-		return fmt.Errorf("resolving model role: %w", err)
+		return nil, fmt.Errorf("resolving model role: %w", err)
 	}
 
 	baseURL := flagURL
 	explicitBaseURL := baseURL != ""
 	if baseURL == "" && providerName != "" {
-		baseURLs := cfg.ResolveBaseURLs()
-		baseURL = baseURLs[providerName]
-		if baseURL != "" {
-			explicitBaseURL = true
-		}
+		baseURL = cfg.ResolveBaseURLs()[providerName]
+		explicitBaseURL = baseURL != ""
 	}
 
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return fmt.Errorf("resolving model: %w", err)
+		return nil, fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
 		info.Custom = baseURL != ""
 	}
 	if err := provider.ValidateModel(info); err != nil {
-		return fmt.Errorf("model validation: %w", err)
+		return nil, fmt.Errorf("model validation: %w", err)
 	}
 
-	keys := config.APIKeys()
-	apiKey := keys[info.Provider]
-	llmOpts := &provider.LLMOptions{
-		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
-	}
-
+	apiKey := config.APIKeys()[info.Provider]
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
 	if baseURL == "" {
 		baseURL = defaultAPIBaseURL(info.Provider)
 	}
+
 	// A codex ChatGPT OAuth token (JWT with the OpenAI auth claim) cannot
 	// talk to api.openai.com — the platform API requires an sk- key with
 	// api.responses.write scope. Redirect the health check and the model
@@ -180,26 +240,6 @@ func runPing(cmd *cobra.Command, args []string) error {
 		baseURL = codexPingBaseURL
 	}
 
-	out := os.Stderr
-	w := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
-
-	w("* pi-go ping\n")
-	w("* %sProvider:%s  %s\n", colorBlue, colorReset, info.Provider)
-	w("* %sModel:%s     %s\n", colorBlue, colorReset, info.Model)
-	w("* %sOllama:%s    %v\n", colorBlue, colorReset, info.Ollama)
-	if apiKey != "" {
-		masked := apiKey
-		if len(masked) > 8 {
-			masked = masked[:4] + "..." + masked[len(masked)-4:]
-		}
-		w("* %sAPI Key:%s   %s\n", colorBlue, colorReset, masked)
-	} else {
-		w("* %sAPI Key:%s   %s(not set)%s\n", colorBlue, colorReset, colorGray, colorReset)
-	}
-	w("* %sBase URL:%s  %s\n", colorBlue, colorReset, baseURL)
-	w("*\n")
-
-	// Parse the target URL.
 	endpoint := pingEndpointForBaseURL(info.Provider, baseURL)
 	if codexBackend {
 		// The codex backend only exposes POST /responses — use it as a
@@ -207,143 +247,174 @@ func runPing(cmd *cobra.Command, args []string) error {
 		// "server alive, endpoint requires POST").
 		endpoint = "/responses"
 	}
-	targetURL := strings.TrimRight(baseURL, "/") + endpoint
-	u, err := url.Parse(targetURL)
-	if err != nil {
-		w("* ERROR: invalid URL %q: %v\n", targetURL, err)
-		return fmt.Errorf("invalid URL: %w", err)
-	}
 
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		if u.Scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
+	return &pingTarget{
+		info:         info,
+		apiKey:       apiKey,
+		baseURL:      baseURL,
+		targetURL:    strings.TrimRight(baseURL, "/") + endpoint,
+		codexBackend: codexBackend,
+		opts: &provider.LLMOptions{
+			ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+			InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+		},
+	}, nil
+}
 
-	// Phase 1: DNS resolution.
+// printHeader summarizes the resolved target before the phases begin.
+func (t *pingTarget) printHeader(w pingWriter) {
+	w("* pi-go ping\n")
+	w("* %sProvider:%s  %s\n", colorBlue, colorReset, t.info.Provider)
+	w("* %sModel:%s     %s\n", colorBlue, colorReset, t.info.Model)
+	w("* %sOllama:%s    %v\n", colorBlue, colorReset, t.info.Ollama)
+	if t.apiKey == "" {
+		w("* %sAPI Key:%s   %s(not set)%s\n", colorBlue, colorReset, colorGray, colorReset)
+	} else {
+		w("* %sAPI Key:%s   %s\n", colorBlue, colorReset, maskAPIKey(t.apiKey))
+	}
+	w("* %sBase URL:%s  %s\n", colorBlue, colorReset, t.baseURL)
+	w("*\n")
+}
+
+// maskAPIKey keeps the leading and trailing four characters of a key so it can
+// be identified, and hides the rest. Keys too short to mask are left alone.
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return key
+	}
+	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// pingPort returns the explicit port of u, or the default for its scheme.
+func pingPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+// pingDNS resolves host and reports the addresses it maps to.
+func pingDNS(w pingWriter, host string) ([]string, error) {
 	w("* %s─── DNS Resolution ───%s\n", colorBlue, colorReset)
-	dnsStart := time.Now()
-	addrs, dnsErr := net.LookupHost(host)
-	dnsDur := time.Since(dnsStart)
-	if dnsErr != nil {
-		w("* DNS FAILED: %v  %s(%s)%s\n", dnsErr, colorGray, dnsDur.Round(time.Millisecond), colorReset)
+	start := time.Now()
+	addrs, err := net.LookupHost(host)
+	dur := time.Since(start)
+	if err != nil {
+		w("* DNS FAILED: %v  %s(%s)%s\n", err, colorGray, dur.Round(time.Millisecond), colorReset)
 		w("*\n* RESULT: connection issue — DNS resolution failed\n")
-		return fmt.Errorf("DNS resolution failed: %w", dnsErr)
+		return nil, fmt.Errorf("DNS resolution failed: %w", err)
 	}
-	w("*   Resolved %s → %s  %s(%s)%s\n", host, strings.Join(addrs, ", "), colorGray, dnsDur.Round(time.Millisecond), colorReset)
+	w("*   Resolved %s → %s  %s(%s)%s\n",
+		host, strings.Join(addrs, ", "), colorGray, dur.Round(time.Millisecond), colorReset)
+	return addrs, nil
+}
 
-	// Phase 2: TCP connection.
+// pingTCP opens and immediately closes a TCP connection, timing the handshake.
+func pingTCP(w pingWriter, addr, port string) error {
 	w("* %s─── TCP Connection ───%s\n", colorBlue, colorReset)
-	tcpAddr := net.JoinHostPort(addrs[0], port)
-	tcpStart := time.Now()
-	conn, tcpErr := net.DialTimeout("tcp", tcpAddr, 10*time.Second)
-	tcpDur := time.Since(tcpStart)
-	if tcpErr != nil {
-		w("* TCP FAILED: %v  %s(%s)%s\n", tcpErr, colorGray, tcpDur.Round(time.Millisecond), colorReset)
+	tcpAddr := net.JoinHostPort(addr, port)
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", tcpAddr, 10*time.Second)
+	dur := time.Since(start)
+	if err != nil {
+		w("* TCP FAILED: %v  %s(%s)%s\n", err, colorGray, dur.Round(time.Millisecond), colorReset)
 		w("*\n* RESULT: connection issue — TCP connect failed to %s\n", tcpAddr)
-		return fmt.Errorf("TCP connect failed: %w", tcpErr)
+		return fmt.Errorf("TCP connect failed: %w", err)
 	}
 	_ = conn.Close()
-	w("*   Connected to %s  %s(%s)%s\n", tcpAddr, colorGray, tcpDur.Round(time.Millisecond), colorReset)
+	w("*   Connected to %s  %s(%s)%s\n", tcpAddr, colorGray, dur.Round(time.Millisecond), colorReset)
+	return nil
+}
 
-	// Phase 3: TLS handshake (if https).
-	if u.Scheme == "https" {
-		w("* %s─── TLS Handshake ───%s\n", colorBlue, colorReset)
-		tlsStart := time.Now()
-		tlsConn, tlsErr := tls.DialWithDialer(
-			&net.Dialer{Timeout: 10 * time.Second},
-			"tcp", net.JoinHostPort(host, port),
-			&tls.Config{
-				ServerName:         host,
-				InsecureSkipVerify: llmOpts.InsecureSkipTLS, //nolint:gosec // user-requested
-			},
-		)
-		tlsDur := time.Since(tlsStart)
-		if tlsErr != nil {
-			w("* TLS FAILED: %v  %s(%s)%s\n", tlsErr, colorGray, tlsDur.Round(time.Millisecond), colorReset)
-			w("*\n* RESULT: connection issue — TLS handshake failed\n")
-			return fmt.Errorf("TLS handshake failed: %w", tlsErr)
-		}
-		state := tlsConn.ConnectionState()
-		_ = tlsConn.Close()
-		w("*   TLS %s, cipher %s  %s(%s)%s\n",
-			tlsVersionString(state.Version),
-			tls.CipherSuiteName(state.CipherSuite),
-			colorGray, tlsDur.Round(time.Millisecond), colorReset)
-		if len(state.PeerCertificates) > 0 {
-			cert := state.PeerCertificates[0]
-			w("*   Server cert: %sCN=%s%s, issuer=%s\n", colorGray, cert.Subject.CommonName, colorReset, cert.Issuer.CommonName)
-			w("*   %sValid:%s %s → %s\n", colorGray, colorReset, cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"))
-		}
-	}
-
-	// Phase 4: HTTP request with trace.
-	w("* %s─── HTTP Request ───%s\n", colorBlue, colorReset)
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-	defer cancel()
-
-	var (
-		traceConnStart time.Time
-		traceTLSStart  time.Time
-		traceGotConn   time.Time
+// pingTLS performs a TLS handshake and reports the negotiated parameters and
+// the server certificate.
+func pingTLS(w pingWriter, host, port string, insecure bool) error {
+	w("* %s─── TLS Handshake ───%s\n", colorBlue, colorReset)
+	start := time.Now()
+	conn, err := tls.DialWithDialer(
+		&net.Dialer{Timeout: 10 * time.Second},
+		"tcp", net.JoinHostPort(host, port),
+		&tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: insecure, //nolint:gosec // user-requested
+		},
 	)
-	trace := &httptrace.ClientTrace{
-		ConnectStart: func(_, _ string) { traceConnStart = time.Now() },
+	dur := time.Since(start)
+	if err != nil {
+		w("* TLS FAILED: %v  %s(%s)%s\n", err, colorGray, dur.Round(time.Millisecond), colorReset)
+		w("*\n* RESULT: connection issue — TLS handshake failed\n")
+		return fmt.Errorf("TLS handshake failed: %w", err)
+	}
+	state := conn.ConnectionState()
+	_ = conn.Close()
+
+	w("*   TLS %s, cipher %s  %s(%s)%s\n",
+		tlsVersionString(state.Version),
+		tls.CipherSuiteName(state.CipherSuite),
+		colorGray, dur.Round(time.Millisecond), colorReset)
+	if len(state.PeerCertificates) > 0 {
+		cert := state.PeerCertificates[0]
+		w("*   Server cert: %sCN=%s%s, issuer=%s\n",
+			colorGray, cert.Subject.CommonName, colorReset, cert.Issuer.CommonName)
+		w("*   %sValid:%s %s → %s\n", colorGray, colorReset,
+			cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"))
+	}
+	return nil
+}
+
+// pingClientTrace reports connection milestones as the request progresses.
+func pingClientTrace(w pingWriter) *httptrace.ClientTrace {
+	var connStart, tlsStart, gotConn time.Time
+	since := func(t time.Time) time.Duration { return time.Since(t).Round(time.Millisecond) }
+	return &httptrace.ClientTrace{
+		ConnectStart: func(_, _ string) { connStart = time.Now() },
 		ConnectDone: func(_, _ string, err error) {
 			if err == nil {
-				w("*   %s[trace]%s TCP connected %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceConnStart).Round(time.Millisecond), colorReset)
+				w("*   %s[trace]%s TCP connected %s(%s)%s\n",
+					colorGray, colorReset, colorGray, since(connStart), colorReset)
 			}
 		},
-		TLSHandshakeStart: func() { traceTLSStart = time.Now() },
+		TLSHandshakeStart: func() { tlsStart = time.Now() },
 		TLSHandshakeDone: func(_ tls.ConnectionState, _ error) {
-			w("*   %s[trace]%s TLS done %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceTLSStart).Round(time.Millisecond), colorReset)
+			w("*   %s[trace]%s TLS done %s(%s)%s\n",
+				colorGray, colorReset, colorGray, since(tlsStart), colorReset)
 		},
-		GotConn: func(_ httptrace.GotConnInfo) { traceGotConn = time.Now() },
+		GotConn: func(_ httptrace.GotConnInfo) { gotConn = time.Now() },
 		GotFirstResponseByte: func() {
-			if !traceGotConn.IsZero() {
-				w("*   %s[trace]%s TTFB %s(%s)%s\n", colorGray, colorReset, colorGray, time.Since(traceGotConn).Round(time.Millisecond), colorReset)
+			if !gotConn.IsZero() {
+				w("*   %s[trace]%s TTFB %s(%s)%s\n",
+					colorGray, colorReset, colorGray, since(gotConn), colorReset)
 			}
 		},
 	}
-	ctx = httptrace.WithClientTrace(ctx, trace)
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
+// setPingAuthHeaders applies the provider's authentication scheme to req.
+// Providers that carry the key in the query string rewrite req.URL instead.
+func setPingAuthHeaders(req *http.Request, providerName, apiKey string) {
+	if apiKey == "" {
+		return
 	}
-
-	// Set auth headers.
-	switch info.Provider {
+	switch providerName {
 	case "anthropic":
-		if apiKey != "" {
-			req.Header.Set("x-api-key", apiKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
-		}
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
 	case "openai":
-		if apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	case "azure":
-		if apiKey != "" {
-			req.Header.Set("Api-Key", apiKey)
-		}
+		req.Header.Set("Api-Key", apiKey)
 	case "gemini":
-		if apiKey != "" {
-			q := req.URL.Query()
-			q.Set("key", apiKey)
-			req.URL.RawQuery = q.Encode()
-		}
+		q := req.URL.Query()
+		q.Set("key", apiKey)
+		req.URL.RawQuery = q.Encode()
 	}
-	for k, v := range llmOpts.ExtraHeaders {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("User-Agent", "pi-go/"+Version)
+}
 
+// dumpPingRequest echoes the outgoing request curl -v style, masking credentials.
+func dumpPingRequest(w pingWriter, req *http.Request) {
 	w("%s> %s %s HTTP/1.1%s\n", colorBlue, req.Method, req.URL.RequestURI(), colorReset)
 	w("%s> Host: %s%s\n", colorBlue, req.URL.Host, colorReset)
 	for k, vs := range req.Header {
@@ -355,18 +426,10 @@ func runPing(cmd *cobra.Command, args []string) error {
 		}
 	}
 	w("\n")
+}
 
-	httpStart := time.Now()
-	resp, httpErr := provider.BuildHTTPClient(llmOpts, 30*time.Second).Do(req)
-	httpDur := time.Since(httpStart)
-
-	if httpErr != nil {
-		w("* HTTP FAILED: %v  %s(%s)%s\n", httpErr, colorGray, httpDur.Round(time.Millisecond), colorReset)
-		w("*\n* RESULT: connection issue — HTTP request failed\n")
-		return fmt.Errorf("HTTP request failed: %w", httpErr)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
+// dumpPingResponse echoes the response status line, headers and total time.
+func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 	w("%s< HTTP/%d.%d %s%s\n", colorBlue, resp.ProtoMajor, resp.ProtoMinor, resp.Status, colorReset)
 	for k, vs := range resp.Header {
 		for _, v := range vs {
@@ -374,70 +437,113 @@ func runPing(cmd *cobra.Command, args []string) error {
 		}
 	}
 	w("\n")
-	w("* Total HTTP time: %s%s%s\n", colorGray, httpDur.Round(time.Millisecond), colorReset)
+	w("* Total HTTP time: %s%s%s\n", colorGray, dur.Round(time.Millisecond), colorReset)
 	w("*\n")
+}
 
-	// Phase 5: HTTP Verdict.
+// doHTTP issues the traced health-check request. The caller owns ctx and the
+// returned response body.
+func (t *pingTarget) doHTTP(ctx context.Context, w pingWriter) (*http.Response, error) {
+	w("* %s─── HTTP Request ───%s\n", colorBlue, colorReset)
+
+	req, err := http.NewRequestWithContext(
+		httptrace.WithClientTrace(ctx, pingClientTrace(w)),
+		http.MethodGet, t.targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	setPingAuthHeaders(req, t.info.Provider, t.apiKey)
+	for k, v := range t.opts.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("User-Agent", "pi-go/"+Version)
+	dumpPingRequest(w, req)
+
+	start := time.Now()
+	resp, err := provider.BuildHTTPClient(t.opts, 30*time.Second).Do(req)
+	dur := time.Since(start)
+	if err != nil {
+		w("* HTTP FAILED: %v  %s(%s)%s\n", err, colorGray, dur.Round(time.Millisecond), colorReset)
+		w("*\n* RESULT: connection issue — HTTP request failed\n")
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	dumpPingResponse(w, resp, dur)
+	return resp, nil
+}
+
+// reportHTTPVerdict classifies the health-check status and reports whether the
+// endpoint is alive enough to continue on to the model ping. A 2xx from OpenAI
+// also resolves the model alias against the returned model list.
+func (t *pingTarget) reportHTTPVerdict(w pingWriter, resp *http.Response) bool {
 	w("* %s─── HTTP Result ───%s\n", colorBlue, colorReset)
-	httpAlive := false
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, info.Provider, colorReset)
+	defer w("*\n")
+
+	// Custom Azure and proxy deployments routinely reject the plain GET probe;
+	// when the user pointed us at one explicitly, keep going anyway.
+	customAzure := t.info.Provider == "azure" && (flagURL != "" || len(t.opts.ExtraHeaders) > 0)
+
+	switch code := resp.StatusCode; {
+	case code >= 200 && code < 300:
+		w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, t.info.Provider, colorReset)
 		w("* Status: %s\n", resp.Status)
-		if info.Provider == "openai" {
-			if resolvedModel, ok := resolveOpenAIModelFromList(resp, info.Model, w); ok {
-				info.Model = resolvedModel
+		if t.info.Provider == "openai" {
+			if resolved, ok := resolveOpenAIModelFromList(resp, t.info.Model, w); ok {
+				t.info.Model = resolved
 			}
 		}
-		httpAlive = true
-	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
-			w("* %s⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)%s\n", colorYellow, resp.StatusCode, colorReset)
-			httpAlive = true
-		} else {
-			w("* %s✗ Authentication failed (HTTP %d)%s\n", colorYellow, resp.StatusCode, colorReset)
-			w("* The API endpoint is reachable but the API key is invalid or missing.\n")
-			w("* Check %s\n", providerEnvVar(info.Provider))
+		return true
+
+	case code == 401 || code == 403:
+		if customAzure {
+			w("* %s⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)%s\n", colorYellow, code, colorReset)
+			return true
 		}
-	case resp.StatusCode == 404:
-		if info.Provider == "azure" {
+		w("* %s✗ Authentication failed (HTTP %d)%s\n", colorYellow, code, colorReset)
+		w("* The API endpoint is reachable but the API key is invalid or missing.\n")
+		w("* Check %s\n", providerEnvVar(t.info.Provider))
+		return false
+
+	case code == 404:
+		if t.info.Provider == "azure" {
 			w("* %s⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)%s\n", colorYellow, colorReset)
-			httpAlive = true
-		} else {
-			w("* %s✗ Endpoint not found (HTTP %d)%s\n", colorYellow, resp.StatusCode, colorReset)
-			w("* The server is reachable but the model endpoint was not found.\n")
-			w("* Base URL: %s\n", baseURL)
+			return true
 		}
-	case resp.StatusCode == 405:
+		w("* %s✗ Endpoint not found (HTTP %d)%s\n", colorYellow, code, colorReset)
+		w("* The server is reachable but the model endpoint was not found.\n")
+		w("* Base URL: %s\n", t.baseURL)
+		return false
+
+	case code == 405:
 		// Method Not Allowed is fine for POST-only endpoints — server is alive.
-		w("* %s✓ Endpoint reachable via %s (endpoint requires POST)%s\n", colorGreen, info.Provider, colorReset)
+		w("* %s✓ Endpoint reachable via %s (endpoint requires POST)%s\n", colorGreen, t.info.Provider, colorReset)
 		w("* Status: %s\n", resp.Status)
-		httpAlive = true
-	case resp.StatusCode == 422:
-		if info.Provider == "azure" && (flagURL != "" || len(llmOpts.ExtraHeaders) > 0) {
+		return true
+
+	case code == 422:
+		if customAzure {
 			w("* %s⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)%s\n", colorYellow, colorReset)
-			httpAlive = true
-		} else {
-			w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
+			return true
 		}
-	case resp.StatusCode == 429:
-		w("* %s⚠ Rate limited (HTTP %d) — endpoint reachable but throttled%s\n", colorYellow, resp.StatusCode, colorReset)
-		httpAlive = true
-	case resp.StatusCode >= 500:
-		w("* %s✗ Server error (HTTP %d) — provider may be experiencing issues%s\n", colorYellow, resp.StatusCode, colorReset)
+		w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
+		return false
+
+	case code == 429:
+		w("* %s⚠ Rate limited (HTTP %d) — endpoint reachable but throttled%s\n", colorYellow, code, colorReset)
+		return true
+
+	case code >= 500:
+		w("* %s✗ Server error (HTTP %d) — provider may be experiencing issues%s\n", colorYellow, code, colorReset)
+		return false
+
 	default:
 		w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
+		return false
 	}
-	w("*\n")
+}
 
-	// Phase 6: Model ping — send "ping" to the model and expect "pong".
-	if !httpAlive {
-		w("* %s─── Model Ping ───%s\n", colorBlue, colorReset)
-		w("* Skipped — endpoint not reachable\n")
-		return nil
-	}
-
-	// Resolve prompt: positional args or default Ping:Pong test.
+// pingModel sends the prompt to the model and reports the reply. With no
+// positional args this is the default Prompt:Prompt connectivity test.
+func (t *pingTarget) pingModel(ctx context.Context, w pingWriter, args []string) error {
 	prompt := strings.Join(args, " ")
 	isPingPong := prompt == ""
 	if isPingPong {
@@ -451,69 +557,71 @@ func runPing(cmd *cobra.Command, args []string) error {
 	} else {
 		w("* %sMode:%s      custom prompt (full trace)\n", colorBlue, colorReset)
 	}
-	w("* Sending to %s ...\n", info.Model)
+	w("* Sending to %s ...\n", t.info.Model)
 
-	// For Ollama, use native provider directly with no artificial timeout.
+	reply, err := t.sendPrompt(ctx, w, prompt, isPingPong)
+	if err != nil {
+		return err
+	}
+	t.reportReply(w, reply, isPingPong)
+	return nil
+}
+
+// sendPrompt dispatches the prompt through the client that suits the provider.
+func (t *pingTarget) sendPrompt(ctx context.Context, w pingWriter, prompt string, isPingPong bool) (string, error) {
 	// Ollama processes requests sequentially — running both a raw test and an
-	// SDK test double-queues and causes the second request to timeout.
-	if info.Ollama {
+	// SDK test double-queues and makes the second request time out. Use the
+	// native provider directly, with no artificial timeout.
+	if t.info.Ollama {
 		w("* %s─── Ollama Ping ───%s\n", colorBlue, colorReset)
-		ollamaReply, ollamaErr := ollamaPingFull(cmd.Context(), baseURL, info.Model, prompt, isPingPong, w)
-		if ollamaErr != nil {
-			w("* %s✗ Ollama ping FAILED: %v%s\n", colorYellow, ollamaErr, colorReset)
-			return fmt.Errorf("model ping failed: %w", ollamaErr)
+		reply, err := ollamaPingFull(ctx, t.baseURL, t.info.Model, prompt, isPingPong, w)
+		if err != nil {
+			w("* %s✗ Ollama ping FAILED: %v%s\n", colorYellow, err, colorReset)
+			return "", fmt.Errorf("model ping failed: %w", err)
 		}
-		w("* Model replied: %s%q%s\n", colorGray, ollamaReply, colorReset)
-		if isPingPong {
-			if strings.Contains(strings.ToLower(ollamaReply), "prompt") {
-				w("* %s✓ Prompt:Prompt OK — model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
-			} else {
-				w("* %s⚠ Model responded but did not say \"Prompt\" (got %q)%s\n", colorYellow, ollamaReply, colorReset)
-				w("* %s✓ Model %s is ALIVE (response unexpected)%s\n", colorGreen, info.Model, colorReset)
-			}
-		} else {
-			w("* %s✓ Model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
-		}
-		return nil
+		return reply, nil
 	}
 
 	// For codex OAuth tokens, hand an empty baseURL to the provider so its
 	// own auto-routing (chatgpt.com/codex/responses + required headers)
 	// applies. Passing the rewritten ping baseURL would defeat that because
 	// NewOpenAI treats any non-empty baseURL as caller-controlled.
-	llmBaseURL := baseURL
-	if codexBackend {
+	llmBaseURL := t.baseURL
+	if t.codexBackend {
 		llmBaseURL = ""
 	}
-	llm, llmErr := provider.NewLLM(cmd.Context(), info, apiKey, llmBaseURL, "none", llmOpts)
-	if llmErr != nil {
-		w("* %s✗ Failed to create LLM client: %v%s\n", colorYellow, llmErr, colorReset)
-		return fmt.Errorf("creating LLM for ping: %w", llmErr)
+	llm, err := provider.NewLLM(ctx, t.info, t.apiKey, llmBaseURL, "none", t.opts)
+	if err != nil {
+		w("* %s✗ Failed to create LLM client: %v%s\n", colorYellow, err, colorReset)
+		return "", fmt.Errorf("creating LLM for ping: %w", err)
 	}
 
-	// Cloud providers get 60s timeout.
-	pingCtx, pingCancel := context.WithTimeout(cmd.Context(), 60*time.Second)
-	defer pingCancel()
+	// Cloud providers get a 60s timeout.
+	pingCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 
-	reply, pingErr := modelPing(pingCtx, llm, prompt, isPingPong)
-	if pingErr != nil {
-		w("* %s✗ Model ping FAILED: %v%s\n", colorYellow, pingErr, colorReset)
-		return fmt.Errorf("model ping failed: %w", pingErr)
+	reply, err := modelPing(pingCtx, llm, prompt, isPingPong)
+	if err != nil {
+		w("* %s✗ Model ping FAILED: %v%s\n", colorYellow, err, colorReset)
+		return "", fmt.Errorf("model ping failed: %w", err)
 	}
+	return reply, nil
+}
 
+// reportReply prints the model's answer and whether the round trip counts as a
+// successful liveness check. A Prompt:Prompt run that comes back without the
+// expected word still proves the model is alive, so it only warns.
+func (t *pingTarget) reportReply(w pingWriter, reply string, isPingPong bool) {
 	w("* Model replied: %s%q%s\n", colorGray, reply, colorReset)
-	if isPingPong {
-		if strings.Contains(strings.ToLower(reply), "prompt") {
-			w("* %s✓ Prompt:Prompt OK — model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
-		} else {
-			w("* %s⚠ Model responded but did not say \"Prompt\" (got %q)%s\n", colorYellow, reply, colorReset)
-			w("* %s✓ Model %s is ALIVE (response unexpected)%s\n", colorGreen, info.Model, colorReset)
-		}
-	} else {
-		w("* %s✓ Model %s is ALIVE%s\n", colorGreen, info.Model, colorReset)
+	switch {
+	case !isPingPong:
+		w("* %s✓ Model %s is ALIVE%s\n", colorGreen, t.info.Model, colorReset)
+	case strings.Contains(strings.ToLower(reply), "prompt"):
+		w("* %s✓ Prompt:Prompt OK — model %s is ALIVE%s\n", colorGreen, t.info.Model, colorReset)
+	default:
+		w("* %s⚠ Model responded but did not say \"Prompt\" (got %q)%s\n", colorYellow, reply, colorReset)
+		w("* %s✓ Model %s is ALIVE (response unexpected)%s\n", colorGreen, t.info.Model, colorReset)
 	}
-
-	return nil
 }
 
 func resolveOpenAIModelFromList(resp *http.Response, requested string, w func(string, ...any)) (string, bool) {

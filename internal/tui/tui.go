@@ -136,6 +136,30 @@ type branchPopupState struct {
 	scrollOff int      // scroll offset when more branches than height
 }
 
+// moveUp selects the previous branch, scrolling the window when the selection
+// would leave the top of it. It stops at the first branch.
+func (p *branchPopupState) moveUp() {
+	if p.selected <= 0 {
+		return
+	}
+	p.selected--
+	if p.selected < p.scrollOff {
+		p.scrollOff--
+	}
+}
+
+// moveDown selects the next branch, scrolling the window when the selection
+// would leave the bottom of it. It stops at the last branch.
+func (p *branchPopupState) moveDown() {
+	if p.selected >= len(p.branches)-1 {
+		return
+	}
+	p.selected++
+	if p.selected >= p.scrollOff+p.height {
+		p.scrollOff++
+	}
+}
+
 // newBranchPopup creates a new branch popup with the list of git branches.
 func (m *model) newBranchPopup() {
 	branches := listGitBranches(m.cfg.WorkDir)
@@ -469,152 +493,234 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// msgHandler consumes a message, reporting whether it handled it. When handled
+// is false the model and command returned are ignored.
+type msgHandler func(tea.Msg) (_ tea.Model, _ tea.Cmd, handled bool)
+
+// Update routes a message to the group that owns it — terminal input, the
+// agent event stream, the /run workflow, or the session side-channels.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	for _, update := range []msgHandler{
+		m.updateTerminal,
+		m.updateAgentStream,
+		m.updateRunWorkflow,
+		m.updateSession,
+	} {
+		if model, cmd, handled := update(msg); handled {
+			return model, cmd
+		}
+	}
+
+	// Keep the agent listener alive for any unhandled message types.
+	if m.running {
+		return m, waitForAgent(m.agentCh)
+	}
+	return m, nil
+}
+
+// updateTerminal handles messages that originate at the terminal — resize,
+// keys, mouse, paste — plus the UI's own animation ticks.
+func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.resizeAt = time.Now()
-		m.width = msg.Width
-		m.height = msg.Height
-		m.applyResize()
-		cmd := resizeDrainDoneCmd(m.resizeAt)
-		if m.running {
-			return m, tea.Batch(cmd, waitForAgent(m.agentCh))
-		}
-		return m, cmd
+		return m.handleWindowSize(msg)
 
 	case tea.PasteMsg:
-		if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
-			m.inputModel.InsertText(msg.Content)
-		}
-		if m.resizeDraining() {
-			return m, resizeDrainDoneCmd(m.resizeAt)
-		}
+		return m.handlePaste(msg)
 
 	case tea.KeyPressMsg:
+		// A resize can leave stray text fragments in the input queue.
 		if m.resizeDraining() && isResizeTextFragment(msg) {
-			return m, resizeDrainDoneCmd(m.resizeAt)
+			return m, resizeDrainDoneCmd(m.resizeAt), true
 		}
-		return m.handleKey(msg)
+		model, cmd := m.handleKey(msg)
+		return model, cmd, true
+
+	case tea.MouseMsg:
+		model, cmd := m.handleMouse(msg)
+		return model, cmd, true
+
+	case InputSubmitMsg:
+		if strings.HasPrefix(msg.Text, "/") {
+			model, cmd := m.handleSlashCommand(msg.Text)
+			return model, cmd, true
+		}
+		model, cmd := m.submitPrompt(msg.Text, msg.Mentions)
+		return model, cmd, true
+
+	case resetCtrlCCountMsg:
+		model, cmd := m.handleResetCtrlCCount()
+		return model, cmd, true
+
+	case resizeDrainDoneMsg:
+		if msg.resizeAt.Equal(m.resizeAt) {
+			m.resizeAt = time.Time{}
+		}
+		return m, nil, true
 
 	case flashExpiredMsg:
 		// Ignore a timer whose flash has already been replaced.
 		if msg.seq == m.flashSeq {
 			m.flash = ""
 		}
-		return m, nil
-
-	case tea.MouseMsg:
-		switch msg := msg.(type) {
-		case tea.MouseClickMsg:
-			return m.handleMouseClick(msg)
-		case tea.MouseMotionMsg:
-			return m.handleMouseMotion(msg)
-		case tea.MouseReleaseMsg:
-			return m.handleMouseRelease(msg)
-		case tea.MouseWheelMsg:
-			return m.handleMouseWheel(msg)
-		}
-		return m, nil
-
-	case InputSubmitMsg:
-		if strings.HasPrefix(msg.Text, "/") {
-			return m.handleSlashCommand(msg.Text)
-		}
-		return m.submitPrompt(msg.Text, msg.Mentions)
-
-	case initEventMsg:
-		return m.handleInitEvent(msg)
-
-	case restartMsg:
-		execRestart()
-		return m, tea.Quit
-
-	case agentThinkingMsg:
-		return m.handleAgentThinking(msg)
-
-	case resetCtrlCCountMsg:
-		return m.handleResetCtrlCCount()
-
-	case resizeDrainDoneMsg:
-		if msg.resizeAt.Equal(m.resizeAt) {
-			m.resizeAt = time.Time{}
-		}
-		return m, nil
+		return m, nil, true
 
 	case loadingTickMsg:
 		m.loadingDots = (m.loadingDots + 1) % 4
-		return m, tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} })
-
-	case agentTextMsg:
-		return m.handleAgentText(msg)
-
-	case agentToolCallMsg:
-		return m.handleAgentToolCall(msg)
-
-	case agentToolResultMsg:
-		return m.handleAgentToolResult(msg)
-
-	case agentSubEventMsg:
-		return m.handleAgentSubEvent(msg)
-
-	case agentDoneMsg:
-		return m.handleAgentDone(msg)
-
-	case runAgentEventMsg:
-		return m.handleRunAgentEvent(msg)
-
-	case runAgentDoneMsg:
-		return m.handleRunAgentDone(msg)
-
-	case runGateResultMsg:
-		return m.handleRunGateResult(msg)
-
-	case runMergeResultMsg:
-		return m.handleRunMergeResult(msg)
-
-	case loginSSOResultMsg:
-		return m.handleLoginSSOResult(msg)
-
-	case commitGeneratedMsg:
-		return m.handleCommitGenerated(msg)
+		return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
 
 	case matrixTickMsg:
 		if m.running {
 			m.matrix.tick(m.mainWidth())
-			return m, matrixTickCmd()
+			return m, matrixTickCmd(), true
 		}
-		return m, nil
+		return m, nil, true
+	}
+	return nil, nil, false
+}
 
+// handleWindowSize re-lays out the frame, and keeps the agent listener alive
+// so a resize mid-turn does not drop the stream.
+func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
+	m.resizeAt = time.Now()
+	m.width, m.height = msg.Width, msg.Height
+	m.applyResize()
+
+	cmd := resizeDrainDoneCmd(m.resizeAt)
+	if m.running {
+		return m, tea.Batch(cmd, waitForAgent(m.agentCh)), true
+	}
+	return m, cmd, true
+}
+
+// handlePaste inserts pasted text into the prompt, ignoring pastes that arrive
+// while the agent runs or that are really resize noise. Outside a resize drain
+// the message is left unhandled so the agent listener stays alive.
+func (m *model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd, bool) {
+	if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
+		m.inputModel.InsertText(msg.Content)
+	}
+	if m.resizeDraining() {
+		return m, resizeDrainDoneCmd(m.resizeAt), true
+	}
+	return nil, nil, false
+}
+
+// handleMouse dispatches to the click, drag, release and wheel handlers.
+func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg)
+	case tea.MouseReleaseMsg:
+		return m.handleMouseRelease(msg)
+	case tea.MouseWheelMsg:
+		return m.handleMouseWheel(msg)
+	}
+	return m, nil
+}
+
+// updateAgentStream handles the events streamed by a running agent turn.
+func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case agentThinkingMsg:
+		model, cmd := m.handleAgentThinking(msg)
+		return model, cmd, true
+	case agentTextMsg:
+		model, cmd := m.handleAgentText(msg)
+		return model, cmd, true
+	case agentToolCallMsg:
+		model, cmd := m.handleAgentToolCall(msg)
+		return model, cmd, true
+	case agentToolResultMsg:
+		model, cmd := m.handleAgentToolResult(msg)
+		return model, cmd, true
+	case agentSubEventMsg:
+		model, cmd := m.handleAgentSubEvent(msg)
+		return model, cmd, true
+	case agentDoneMsg:
+		model, cmd := m.handleAgentDone(msg)
+		return model, cmd, true
+	}
+	return nil, nil, false
+}
+
+// updateRunWorkflow handles the /run spec workflow: agent progress, the
+// quality gate, and the merge back.
+func (m *model) updateRunWorkflow(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case runAgentEventMsg:
+		model, cmd := m.handleRunAgentEvent(msg)
+		return model, cmd, true
+	case runAgentDoneMsg:
+		model, cmd := m.handleRunAgentDone(msg)
+		return model, cmd, true
+	case runGateResultMsg:
+		model, cmd := m.handleRunGateResult(msg)
+		return model, cmd, true
+	case runMergeResultMsg:
+		model, cmd := m.handleRunMergeResult(msg)
+		return model, cmd, true
+	}
+	return nil, nil, false
+}
+
+// updateSession handles the side-channels that outlive a single turn: startup,
+// restart, login, commit, memory polling and ping.
+func (m *model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case initEventMsg:
+		model, cmd := m.handleInitEvent(msg)
+		return model, cmd, true
+	case restartMsg:
+		execRestart()
+		return m, tea.Quit, true
+	case loginSSOResultMsg:
+		model, cmd := m.handleLoginSSOResult(msg)
+		return model, cmd, true
+	case commitGeneratedMsg:
+		model, cmd := m.handleCommitGenerated(msg)
+		return model, cmd, true
 	case commitDoneMsg:
-		return m.handleCommitDone(msg)
-
+		model, cmd := m.handleCommitDone(msg)
+		return model, cmd, true
 	case memoryTickMsg:
-		m.memoryStatus = msg.status
-		return m, tea.Tick(memoryTickInterval, func(t time.Time) tea.Msg {
-			return memoryTickCmd(m.cwd())()
-		})
-
+		model, cmd := m.handleMemoryTick(msg)
+		return model, cmd, true
 	case pingDoneMsg:
-		content := msg.output
-		if msg.err != nil {
-			content += fmt.Sprintf("\n\n✗ Ping failed: %v", msg.err)
-		}
-		// Replace the "Pinging model..." thinking placeholder with assistant response.
-		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
-			m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: content}
-		} else {
-			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: content})
-		}
-		// Update matrix rain with the model's reply.
-		if msg.reply != "" {
-			m.matrix.feed(msg.reply, m.mainWidth())
-		}
-		return m, nil
+		model, cmd := m.handlePingDone(msg)
+		return model, cmd, true
+	}
+	return nil, nil, false
+}
+
+// handleMemoryTick stores the latest memory palace status and reschedules the
+// next poll.
+func (m *model) handleMemoryTick(msg memoryTickMsg) (tea.Model, tea.Cmd) {
+	m.memoryStatus = msg.status
+	return m, tea.Tick(memoryTickInterval, func(time.Time) tea.Msg {
+		return memoryTickCmd(m.cwd())()
+	})
+}
+
+// handlePingDone replaces the "Pinging model..." placeholder with the ping
+// result, and feeds the model's reply to the matrix rain.
+func (m *model) handlePingDone(msg pingDoneMsg) (tea.Model, tea.Cmd) {
+	content := msg.output
+	if msg.err != nil {
+		content += fmt.Sprintf("\n\n✗ Ping failed: %v", msg.err)
 	}
 
-	// Keep the agent listener alive for any unhandled message types.
-	if m.running {
-		return m, waitForAgent(m.agentCh)
+	reply := message{role: "assistant", content: content}
+	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "thinking" {
+		m.chatModel.Messages[n-1] = reply
+	} else {
+		m.chatModel.Messages = append(m.chatModel.Messages, reply)
+	}
+
+	if msg.reply != "" {
+		m.matrix.feed(msg.reply, m.mainWidth())
 	}
 	return m, nil
 }
@@ -754,136 +860,185 @@ func (m *model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// keyHandler consumes a key press, reporting whether it handled the key. When
+// handled is false the model and command returned are ignored and the key
+// falls through to the next handler.
+type keyHandler func(tea.Key) (_ tea.Model, _ tea.Cmd, handled bool)
+
+// handleKey routes a key press through the modal overlays in priority order,
+// then the editing keys, and finally the prompt input. Each layer decides for
+// itself whether it owns the key.
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 
-	// Handle commit confirmation mode first.
-	if !m.running && m.commit != nil && m.commit.phase == "confirming" {
-		switch {
-		case key.Code == tea.KeyEnter:
-			return m.handleCommitConfirm()
-		case key.Code == tea.KeyEsc:
-			return m.handleCommitCancel()
-		case key.Code == 'c' && key.Mod == tea.ModCtrl:
-			return m.handleCommitCancel()
-		default:
-			return m, nil
+	// Overlays get first refusal, even while the agent runs.
+	for _, handle := range []keyHandler{
+		m.handleCommitKey,
+		m.handleLoginKey,
+		m.handleSkillCreateKey,
+		m.handleBranchPopupKey,
+		m.handleInterruptKey,
+	} {
+		if model, cmd, handled := handle(key); handled {
+			return model, cmd
 		}
 	}
 
-	// Handle login flow.
-	if !m.running && m.login != nil {
-		switch {
-		case key.Code == tea.KeyEsc:
-			return m.handleLoginCancel()
-		case key.Code == 'c' && key.Mod == tea.ModCtrl:
-			return m.handleLoginCancel()
-		case key.Code == tea.KeyEnter && m.login.phase == "waiting":
-			apiKey := strings.TrimSpace(m.inputModel.Text)
-			if apiKey == "" {
-				return m, nil
-			}
-			m.inputModel.Clear()
-			return m.handleLoginSave(apiKey)
-		case key.Code == tea.KeyEnter && m.login.phase == "manual-code":
-			code := strings.TrimSpace(m.inputModel.Text)
-			if code == "" {
-				return m, nil
-			}
-			m.inputModel.Clear()
-			return m.handleLoginCodeSubmit(code)
-		}
-		if m.login.phase != "waiting" && m.login.phase != "manual-code" {
-			return m, nil
+	// Everything below edits the prompt, which is read-only while busy.
+	if m.running || m.loading {
+		return m, nil
+	}
+
+	for _, handle := range []keyHandler{
+		m.handleToggleKey,
+		m.handleHistoryKey,
+		m.handleScrollKey,
+	} {
+		if model, cmd, handled := handle(key); handled {
+			return model, cmd
 		}
 	}
 
-	// Handle skill-create overwrite confirmation.
-	if !m.running && m.pendingSkillCreate != nil {
-		switch {
-		case key.Code == tea.KeyEnter:
-			return m.handleSkillCreateConfirm()
-		case key.Code == tea.KeyEsc:
-			return m.handleSkillCreateCancel()
-		case key.Code == 'c' && key.Mod == tea.ModCtrl:
-			return m.handleSkillCreateCancel()
-		default:
-			return m, nil
-		}
+	return m.handleInputKey(msg)
+}
+
+// isCancelKey reports whether key is one of the two ways to back out of a
+// modal prompt: Esc or Ctrl+C.
+func isCancelKey(key tea.Key) bool {
+	return key.Code == tea.KeyEsc || (key.Code == 'c' && key.Mod == tea.ModCtrl)
+}
+
+// handleCommitKey resolves the commit confirmation prompt, swallowing every
+// other key so a stray press cannot commit.
+func (m *model) handleCommitKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	if m.running || m.commit == nil || m.commit.phase != "confirming" {
+		return nil, nil, false
+	}
+	switch {
+	case key.Code == tea.KeyEnter:
+		model, cmd := m.handleCommitConfirm()
+		return model, cmd, true
+	case isCancelKey(key):
+		model, cmd := m.handleCommitCancel()
+		return model, cmd, true
+	default:
+		return m, nil, true
+	}
+}
+
+// handleLoginKey drives the login overlay. In the phases that collect text the
+// unhandled keys fall through to the prompt input; in every other phase the
+// overlay swallows them.
+func (m *model) handleLoginKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	if m.running || m.login == nil {
+		return nil, nil, false
+	}
+	if isCancelKey(key) {
+		model, cmd := m.handleLoginCancel()
+		return model, cmd, true
 	}
 
-	// Handle branch popup.
-	if m.branchPopup != nil {
-		switch key.Code {
-		case tea.KeyEsc:
-			m.branchPopup = nil
-			return m, nil
-		case tea.KeyEnter:
-			return m.handleBranchSelect()
-		case tea.KeyUp:
-			if m.branchPopup.selected > 0 {
-				m.branchPopup.selected--
-				if m.branchPopup.selected < m.branchPopup.scrollOff {
-					m.branchPopup.scrollOff--
-				}
-			}
-			return m, nil
-		case tea.KeyDown:
-			if m.branchPopup.selected < len(m.branchPopup.branches)-1 {
-				m.branchPopup.selected++
-				if m.branchPopup.selected >= m.branchPopup.scrollOff+m.branchPopup.height {
-					m.branchPopup.scrollOff++
-				}
-			}
-			return m, nil
-		default:
-			// Any other key dismisses the popup
-			m.branchPopup = nil
-			return m, nil
+	collecting := m.login.phase == "waiting" || m.login.phase == "manual-code"
+	if key.Code == tea.KeyEnter && collecting {
+		if m.login.phase == "waiting" {
+			return m.submitLoginInput(m.handleLoginSave)
 		}
+		return m.submitLoginInput(m.handleLoginCodeSubmit)
 	}
+	return m, nil, !collecting
+}
 
-	// Esc / Ctrl+C: dismiss completion, cancel agent, or quit.
+// submitLoginInput hands the trimmed prompt text to submit. Enter on a blank
+// prompt does nothing rather than submitting an empty credential.
+func (m *model) submitLoginInput(submit func(string) (tea.Model, tea.Cmd)) (tea.Model, tea.Cmd, bool) {
+	text := strings.TrimSpace(m.inputModel.Text)
+	if text == "" {
+		return m, nil, true
+	}
+	m.inputModel.Clear()
+	model, cmd := submit(text)
+	return model, cmd, true
+}
+
+// handleSkillCreateKey resolves the skill-create overwrite confirmation.
+func (m *model) handleSkillCreateKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	if m.running || m.pendingSkillCreate == nil {
+		return nil, nil, false
+	}
+	switch {
+	case key.Code == tea.KeyEnter:
+		model, cmd := m.handleSkillCreateConfirm()
+		return model, cmd, true
+	case isCancelKey(key):
+		model, cmd := m.handleSkillCreateCancel()
+		return model, cmd, true
+	default:
+		return m, nil, true
+	}
+}
+
+// handleBranchPopupKey navigates the branch picker. Anything other than the
+// arrows and Enter dismisses it.
+func (m *model) handleBranchPopupKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	if m.branchPopup == nil {
+		return nil, nil, false
+	}
+	switch key.Code {
+	case tea.KeyEnter:
+		model, cmd := m.handleBranchSelect()
+		return model, cmd, true
+	case tea.KeyUp:
+		m.branchPopup.moveUp()
+	case tea.KeyDown:
+		m.branchPopup.moveDown()
+	default:
+		m.branchPopup = nil
+	}
+	return m, nil, true
+}
+
+// handleInterruptKey handles the keys that stay live while the agent runs:
+// Esc to dismiss or cancel, Ctrl+C to cancel then quit, and F12 as a no-op.
+func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case key.Code == tea.KeyEsc:
 		if m.searchPopup != nil {
 			m.searchPopup = nil
-			return m, nil
+			return m, nil, true
 		}
 		if m.running {
 			m.cancelAgent()
-			return m, nil
 		}
-		return m, nil
+		return m, nil, true
 
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
 		if m.running {
 			m.cancelAgent()
 			m.ctrlCCount++
 			m.chatModel.AppendWarning("\nCtrl+C again to quit (or wait 2s)...")
-			return m, resetCtrlCCount(m)
+			return m, resetCtrlCCount(m), true
 		}
 		m.ctrlCCount++
 		if m.ctrlCCount >= 2 {
 			m.quitting = true
-			return m, tea.Quit
+			return m, tea.Quit, true
 		}
-		// First press: show warning and reset count after 2 seconds
+		// First press: warn, and reset the count after 2 seconds.
 		m.chatModel.AppendWarning("\nCtrl+C again to quit (or wait 2s)...")
-		return m, resetCtrlCCount(m)
+		return m, resetCtrlCCount(m), true
 
 	case key.Code == tea.KeyF12:
-		return m, nil
+		return m, nil, true
 	}
+	return nil, nil, false
+}
 
-	if m.running || m.loading {
-		return m, nil
-	}
-
+// handleToggleKey handles the Ctrl-chord toggles and the search popup.
+func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	// Ctrl+O: toggle compact/expanded tool output.
 	if key.Code == 'o' && key.Mod == tea.ModCtrl {
 		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
-		return m, nil
+		return m, nil, true
 	}
 
 	// Ctrl+B toggles the branch popup only when the prompt is empty. The
@@ -897,87 +1052,99 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.branchPopup = nil
 			}
 		}
-		return m, nil
+		return m, nil, true
 	}
 
-	// Handle unified search popup keys (slash commands or history).
+	// Unified search popup keys (slash commands or history).
 	if m.handleSearchPopupKey(key) {
-		return m, nil
+		return m, nil, true
 	}
 
-	// Ctrl+R: open history search popup (reverse-i-search style).
-	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.searchPopup == nil {
-		if len(m.inputModel.History) > 0 {
-			m.newSearchPopup(searchModeHistory)
-			return m, nil
+	// Ctrl+R: open history search popup (reverse-i-search style). With no
+	// history to search the key falls through to the input.
+	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.searchPopup == nil && len(m.inputModel.History) > 0 {
+		m.newSearchPopup(searchModeHistory)
+		return m, nil, true
+	}
+	return nil, nil, false
+}
+
+// handleHistoryKey maps Up to the prompt-history window and Down to the chat.
+//
+// Up used to cycle history inline, replacing whatever was typed. The window
+// shows the whole history at once and leaves the prompt untouched until an
+// entry is chosen, so a stray Up costs one Esc rather than your draft.
+//
+// The mouse wheel cannot land here: View enables mouse reporting, so a wheel
+// tick is a MouseWheelMsg handled by handleMouseWheel, never a KeyUp. Up still
+// scrolls the chat before any history exists, so the keyboard can scroll on a
+// fresh session.
+//
+// A prompt starting with "/" is excluded: those arrows drive the slash-command
+// popup instead.
+func (m *model) handleHistoryKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	if m.searchPopup != nil || m.shouldShowSlashCommandPopup() {
+		return nil, nil, false
+	}
+	switch key.Code {
+	case tea.KeyUp:
+		if len(m.inputModel.History) == 0 {
+			m.chatModel.ScrollUp(3, m.height)
+			return m, nil, true
 		}
+		m.newSearchPopup(searchModeHistory)
+		return m, nil, true
+	case tea.KeyDown:
+		m.chatModel.ScrollDown(3)
+		return m, nil, true
 	}
+	return nil, nil, false
+}
 
-	// Up opens the prompt-history window; Down scrolls the chat.
-	//
-	// Up used to cycle history inline, replacing whatever was typed. The window
-	// shows the whole history at once and leaves the prompt untouched until an
-	// entry is chosen, so a stray Up costs one Esc rather than your draft.
-	//
-	// The mouse wheel cannot land here: View enables mouse reporting, so a wheel
-	// tick is a MouseWheelMsg handled by handleMouseWheel, never a KeyUp. Up
-	// still scrolls the chat before any history exists, so the keyboard can
-	// scroll on a fresh session.
-	//
-	// A prompt starting with "/" is excluded: those arrows drive the slash-command
-	// popup handled further down.
-	if m.searchPopup == nil && !m.shouldShowSlashCommandPopup() {
-		switch key.Code {
-		case tea.KeyUp:
-			if len(m.inputModel.History) == 0 {
-				m.chatModel.ScrollUp(3, m.height)
-				return m, nil
-			}
-			m.newSearchPopup(searchModeHistory)
-			return m, nil
-		case tea.KeyDown:
-			m.chatModel.ScrollDown(3)
-			return m, nil
-		}
-	}
-
-	// Scroll keys stay in root model.
+// handleScrollKey pages the chat viewport.
+func (m *model) handleScrollKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	switch key.Code {
 	case tea.KeyPgUp:
 		m.chatModel.ScrollUp(5, m.height)
-		return m, nil
-
+		return m, nil, true
 	case tea.KeyPgDown:
 		m.chatModel.ScrollDown(5)
-		return m, nil
+		return m, nil, true
 	}
+	return nil, nil, false
+}
 
-	// Slash command: show commands popup when input starts with /.
+// handleInputKey delegates to the prompt input, keeping the slash-command
+// popup in sync with the text as it changes.
+func (m *model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
+
+	// Show the commands popup when the input starts with "/".
 	if m.shouldShowSlashCommandPopup() {
 		if m.searchPopup == nil || m.searchPopup.mode != searchModeCommands {
 			m.newSearchPopup(searchModeCommands)
 		}
 		// Immediately handle Tab/Up/Down to navigate the popup.
-		if key.Code == tea.KeyTab || key.Code == tea.KeyUp || key.Code == tea.KeyDown {
+		switch key.Code {
+		case tea.KeyTab, tea.KeyUp, tea.KeyDown:
 			if m.handleSearchPopupKey(key) {
 				return m, nil
 			}
 		}
 	}
 
-	// Delegate all other keys to InputModel.
 	prevText := m.inputModel.Text
 	cmd := m.inputModel.HandleKey(msg)
-	// Reset search popup when input text changes (slash commands mode).
-	if m.inputModel.Text != prevText {
-		if m.searchPopup != nil && m.searchPopup.mode == searchModeCommands {
-			if !m.shouldShowSlashCommandPopup() {
-				m.searchPopup = nil
-			}
-		}
-		if m.searchPopup == nil && m.shouldShowSlashCommandPopup() {
-			m.newSearchPopup(searchModeCommands)
-		}
+	if m.inputModel.Text == prevText {
+		return m, cmd
+	}
+
+	// The text changed: open or close the popup to match the new prompt.
+	if m.searchPopup != nil && m.searchPopup.mode == searchModeCommands && !m.shouldShowSlashCommandPopup() {
+		m.searchPopup = nil
+	}
+	if m.searchPopup == nil && m.shouldShowSlashCommandPopup() {
+		m.newSearchPopup(searchModeCommands)
 	}
 	return m, cmd
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
 	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
@@ -454,52 +455,8 @@ func runNonInteractive(
 	coreTools := runtime.coreTools
 	orch := runtime.orch
 
-	// Initialize memory system.
-	var memStore memory.Store
-	var memWorker *memory.Worker
-	memEnabled := !flagMemoryOff && (cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled)
-	if memEnabled {
-		memCfg := config.MemoryDefaults()
-		if cfg.Memory != nil {
-			if cfg.Memory.DBPath != "" {
-				memCfg.DBPath = cfg.Memory.DBPath
-			}
-			if cfg.Memory.TokenBudget > 0 {
-				memCfg.TokenBudget = cfg.Memory.TokenBudget //nolint:govet // used by context generator
-			}
-			if cfg.Memory.MaxPending > 0 {
-				memCfg.MaxPending = cfg.Memory.MaxPending
-			}
-			if cfg.Memory.LookbackHours > 0 {
-				memCfg.LookbackHours = cfg.Memory.LookbackHours //nolint:govet // reserved for future use
-			}
-		}
-		dbPath := memCfg.DBPath
-		if dbPath == "" {
-			if home, hErr := os.UserHomeDir(); hErr == nil {
-				dbPath = filepath.Join(home, ".pi-go", "memory", "claude-mem.db")
-			}
-		}
-		memDB, memErr := memory.OpenDB(dbPath)
-		if memErr != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: memory system disabled: %v\n", memErr)
-		} else {
-			memStore = memory.NewSQLiteStore(memDB)
-			compressor := memory.NewSubagentCompressor(orch)
-			memWorker = memory.NewWorker(memStore, compressor, memCfg.MaxPending)
-			memWorker.Start(parentCtx)
-		}
-	}
-	defer func() {
-		if memWorker != nil {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = memWorker.Shutdown(shutdownCtx)
-		}
-		if memStore != nil {
-			_ = memStore.Close()
-		}
-	}()
+	memStore, memWorker, closeMemory := setupMemory(parentCtx, cfg, orch)
+	defer closeMemory()
 
 	if memStore != nil {
 		memTools, memErr := tools.MemoryTools(memStore)
@@ -510,67 +467,17 @@ func runNonInteractive(
 		}
 	}
 
-	// Initialize palace tools if enabled.
-	var palaceContext string
-	palaceEnabled := !flagMemoryOff && (cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled)
-	if palaceEnabled {
-		palaceCfg := palaceConfigFromCLI(&cfg)
-		if palaceCfg.DBPath != "" {
-			if _, statErr := os.Stat(palaceCfg.DBPath); statErr == nil {
-				p, pErr := palace.New(
-					palace.WithDBPath(palaceCfg.DBPath),
-					palace.WithModelPath(palaceCfg.ModelPath),
-				)
-				if pErr != nil {
-					fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", pErr)
-				} else {
-					defer p.Close()
-					pTools, ptErr := palace.PalaceTools(p)
-					if ptErr != nil {
-						fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", ptErr)
-					} else if pTools != nil {
-						coreTools = append(coreTools, pTools...)
-					}
-					// Wire observation bridge: auto-file observations as palace drawers.
-					if memWorker != nil {
-						bridge := palace.NewObservationBridge(p)
-						memWorker.OnAfterStore(bridge.ConvertAndStore)
-					}
-					// Load palace wake-up context for system prompt injection.
-					if wakeUp, wErr := p.WakeUp(context.Background(), ""); wErr == nil && wakeUp != "" {
-						palaceContext = wakeUp
-					}
-				}
-			}
-		}
-	}
+	palaceTools, palaceContext, closePalace := setupPalace(cfg, memWorker)
+	defer closePalace()
+	coreTools = append(coreTools, palaceTools...)
 
-	var instruction string
+	instruction := agent.LoadInstruction(agent.SystemInstruction)
 	if flagSystem != "" {
 		instruction = flagSystem
-	} else {
-		instruction = agent.LoadInstruction(agent.SystemInstruction)
 	}
 	if palaceContext != "" {
 		instruction += "\n\n## Palace Memory Context\n\n" + palaceContext
 	}
-
-	compactorCfg := tools.DefaultCompactorConfig()
-	if cfg.Compactor != nil {
-		if cfg.Compactor.Enabled != nil {
-			compactorCfg.Enabled = *cfg.Compactor.Enabled
-		}
-		if cfg.Compactor.SourceCodeFiltering != "" {
-			compactorCfg.SourceCodeFiltering = cfg.Compactor.SourceCodeFiltering
-		}
-		if cfg.Compactor.MaxChars > 0 {
-			compactorCfg.MaxChars = cfg.Compactor.MaxChars
-		}
-		if cfg.Compactor.MaxLines > 0 {
-			compactorCfg.MaxLines = cfg.Compactor.MaxLines
-		}
-	}
-	compactorCB := tools.BuildCompactorCallback(compactorCfg, tools.NewCompactMetrics())
 
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
@@ -578,36 +485,15 @@ func runNonInteractive(
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
-	afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
-	afterCBs = append(afterCBs, compactorCB)
+	afterCBs = append(afterCBs,
+		lsp.BuildLSPAfterToolCallback(lspMgr),
+		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()))
 
+	// memSessionID is only known once the session is created below; the
+	// callback reads it at call time, so recording starts from that point.
 	var memSessionID string
 	if memWorker != nil {
-		var excludedTools map[string]bool
-		if cfg.Memory != nil && len(cfg.Memory.ExcludedTools) > 0 {
-			excludedTools = make(map[string]bool, len(cfg.Memory.ExcludedTools))
-			for _, t := range cfg.Memory.ExcludedTools {
-				excludedTools[t] = true
-			}
-		}
-		afterCBs = append(afterCBs, func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
-			if toolErr != nil || memSessionID == "" {
-				return result, nil
-			}
-			name := t.Name()
-			if excludedTools[name] {
-				return result, nil
-			}
-			memWorker.Enqueue(memory.RawObservation{
-				SessionID:  memSessionID,
-				Project:    cwd,
-				ToolName:   name,
-				ToolInput:  args,
-				ToolOutput: result,
-				Timestamp:  time.Now(),
-			})
-			return result, nil
-		})
+		afterCBs = append(afterCBs, memoryObservationCallback(memWorker, cfg, cwd, &memSessionID))
 	}
 
 	lspTools, err := tools.LSPTools(lspMgr)
@@ -616,51 +502,10 @@ func runNonInteractive(
 	}
 	coreTools = append(coreTools, lspTools...)
 
-	var mcpToolsets []adktool.Toolset
-	if cfg.MCP != nil && len(cfg.MCP.Servers) > 0 {
-		mcpServers := make([]extension.MCPServerConfig, len(cfg.MCP.Servers))
-		for i, s := range cfg.MCP.Servers {
-			mcpServers[i] = extension.MCPServerConfig{
-				Name:    s.Name,
-				Command: s.Command,
-				Args:    s.Args,
-				URL:     s.URL,
-				Headers: s.Headers,
-			}
-		}
-		mcpToolsets, _ = extension.BuildMCPToolsets(mcpServers)
-	}
+	allToolsets := buildToolsets(cfg)
 
-	// Add A2A toolsets if configured
-	var a2aToolsets []adktool.Toolset
-	if cfg.A2A != nil && len(cfg.A2A.Agents) > 0 {
-		a2aToolsets = append(a2aToolsets, tools.NewA2AToolset(cfg.A2A))
-	}
-	// Merge MCP and A2A toolsets
-	allToolsets := append(mcpToolsets, a2aToolsets...)
-
-	skillDirs := extension.DefaultSkillDirs()
-	skills, skillErr := extension.LoadSkills(skillDirs...)
-	if mode == "print" {
-		fmt.Fprint(os.Stderr, formatPrintSkillLoad(len(skills), skillErr))
-	}
-	if skillErr != nil {
-		fmt.Fprintf(os.Stderr, "pi-go: warning: skills disabled: %v\n", skillErr)
-	}
-
-	if memStore != nil {
-		memCfg := config.MemoryDefaults()
-		if cfg.Memory != nil && cfg.Memory.TokenBudget > 0 {
-			memCfg.TokenBudget = cfg.Memory.TokenBudget
-		}
-		ctxGen := memory.NewContextGenerator(memStore, memCfg.TokenBudget)
-		memContext, ctxErr := ctxGen.Generate(parentCtx, cwd)
-		if ctxErr != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: memory context generation failed: %v\n", ctxErr)
-		} else if memContext != "" {
-			instruction += "\n\n" + memContext
-		}
-	}
+	loadNonInteractiveSkills(mode)
+	instruction += memoryInstructionContext(parentCtx, memStore, cfg, cwd)
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -711,26 +556,16 @@ func runNonInteractive(
 	ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt)
 	defer stop()
 
-	sessionID := flagSession
-	if flagContinue {
-		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
-		if lastID == "" {
-			return fmt.Errorf("no previous session found to continue")
-		}
-		sessionID = lastID
-		fmt.Fprintf(os.Stderr, "pi-go: continuing session %s\n", sessionID)
-	}
-	if sessionID == "" {
-		sessionID, _, err = ag.CreateSession(ctx)
-		if err != nil {
-			return fmt.Errorf("creating session: %w", err)
-		}
+	sessionID, err := resolveSessionID(ctx, ag, sessionSvc)
+	if err != nil {
+		return err
 	}
 
 	// Capture ACP subagent events (claude, gemini) under the session dir.
 	orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
 
 	if memStore != nil {
+		// Arms the observation callback wired above.
 		memSessionID = sessionID
 		_ = memStore.CreateSession(ctx, &memory.Session{
 			SessionID: sessionID,
@@ -741,27 +576,244 @@ func runNonInteractive(
 	}
 
 	sessionLog.SessionStart(sessionID, llm.Name(), mode)
+	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name())
+}
 
-	switch mode {
-	case "rpc":
-		srv := jsonrpc.NewServer(jsonrpc.Config{
+// loadNonInteractiveSkills loads the skill set and reports what it found.
+// Skills are optional: a load failure is a warning, not a fatal error.
+func loadNonInteractiveSkills(mode string) {
+	skills, err := extension.LoadSkills(extension.DefaultSkillDirs()...)
+	if mode == "print" {
+		fmt.Fprint(os.Stderr, formatPrintSkillLoad(len(skills), err))
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: skills disabled: %v\n", err)
+	}
+}
+
+// memoryInstructionContext generates the recalled-memory block to append to the
+// system instruction, or an empty string when there is no memory to add.
+func memoryInstructionContext(ctx context.Context, store memory.Store, cfg config.Config, project string) string {
+	if store == nil {
+		return ""
+	}
+	budget := config.MemoryDefaults().TokenBudget
+	if cfg.Memory != nil && cfg.Memory.TokenBudget > 0 {
+		budget = cfg.Memory.TokenBudget
+	}
+
+	memContext, err := memory.NewContextGenerator(store, budget).Generate(ctx, project)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: memory context generation failed: %v\n", err)
+		return ""
+	}
+	if memContext == "" {
+		return ""
+	}
+	return "\n\n" + memContext
+}
+
+// resolveSessionID picks the session to run in: an explicit --session, the most
+// recent one under --continue, or a freshly created session.
+func resolveSessionID(ctx context.Context, ag *agent.Agent, sessionSvc *pisession.FileService) (string, error) {
+	if flagContinue {
+		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
+		if lastID == "" {
+			return "", fmt.Errorf("no previous session found to continue")
+		}
+		fmt.Fprintf(os.Stderr, "pi-go: continuing session %s\n", lastID)
+		return lastID, nil
+	}
+	if flagSession != "" {
+		return flagSession, nil
+	}
+
+	sessionID, _, err := ag.CreateSession(ctx)
+	if err != nil {
+		return "", fmt.Errorf("creating session: %w", err)
+	}
+	return sessionID, nil
+}
+
+// dispatchMode runs the agent in the requested non-interactive mode. The rpc
+// server serves requests instead of a prompt; the others need one.
+func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, sessionID string, sessionLog *logger.Logger, modelName string) error {
+	if mode == "rpc" {
+		return jsonrpc.NewServer(jsonrpc.Config{
 			Agent:      ag,
 			SocketPath: flagSocket,
-		})
-		return srv.Run(ctx)
-	case "json":
-		if prompt == "" {
-			fmt.Fprintf(os.Stderr, "pi-go: no prompt provided (model: %s, mode: %s)\n", llm.Name(), mode)
-			return nil
-		}
-		return runJSON(ctx, ag, sessionID, prompt, sessionLog)
-	default:
-		if prompt == "" {
-			fmt.Fprintf(os.Stderr, "pi-go: no prompt provided (model: %s, mode: %s)\n", llm.Name(), mode)
-			return nil
-		}
-		return runPrint(ctx, ag, sessionID, prompt, sessionLog)
+		}).Run(ctx)
 	}
+	if prompt == "" {
+		fmt.Fprintf(os.Stderr, "pi-go: no prompt provided (model: %s, mode: %s)\n", modelName, mode)
+		return nil
+	}
+	if mode == "json" {
+		return runJSON(ctx, ag, sessionID, prompt, sessionLog)
+	}
+	return runPrint(ctx, ag, sessionID, prompt, sessionLog)
+}
+
+// memoryEnabled reports whether the observation memory subsystem is on.
+// It defaults to on: only an explicit false in config, or --memory-off,
+// disables it.
+func memoryEnabled(cfg config.Config) bool {
+	return !flagMemoryOff && (cfg.Memory == nil || cfg.Memory.Enabled == nil || *cfg.Memory.Enabled)
+}
+
+// palaceIsEnabled reports whether the memory palace is on, with the same
+// default-on semantics as memoryEnabled.
+func palaceIsEnabled(cfg config.Config) bool {
+	return !flagMemoryOff && (cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled)
+}
+
+// setupMemory opens the observation store and starts its background worker.
+// Memory is best-effort: every failure downgrades to "no memory" with a
+// warning, and the returned closer is always safe to defer.
+func setupMemory(ctx context.Context, cfg config.Config, orch *subagent.Orchestrator) (memory.Store, *memory.Worker, func()) {
+	noop := func() {}
+	if !memoryEnabled(cfg) {
+		return nil, nil, noop
+	}
+
+	memCfg := deferredMemoryConfig(cfg)
+	dbPath := memCfg.DBPath
+	if dbPath == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dbPath = filepath.Join(home, ".pi-go", "memory", "claude-mem.db")
+		}
+	}
+
+	memDB, err := memory.OpenDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: memory system disabled: %v\n", err)
+		return nil, nil, noop
+	}
+
+	store := memory.NewSQLiteStore(memDB)
+	worker := memory.NewWorker(store, memory.NewSubagentCompressor(orch), memCfg.MaxPending)
+	worker.Start(ctx)
+
+	return store, worker, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = worker.Shutdown(shutdownCtx)
+		_ = store.Close()
+	}
+}
+
+// setupPalace opens the memory palace when one already exists on disk, and
+// returns its tools plus the wake-up context to inject into the system prompt.
+// A missing palace is not an error — it simply contributes nothing.
+func setupPalace(cfg config.Config, memWorker *memory.Worker) ([]adktool.Tool, string, func()) {
+	noop := func() {}
+	if !palaceIsEnabled(cfg) {
+		return nil, "", noop
+	}
+	palaceCfg := palaceConfigFromCLI(&cfg)
+	if palaceCfg.DBPath == "" {
+		return nil, "", noop
+	}
+	if _, err := os.Stat(palaceCfg.DBPath); err != nil {
+		return nil, "", noop
+	}
+
+	p, err := palace.New(
+		palace.WithDBPath(palaceCfg.DBPath),
+		palace.WithModelPath(palaceCfg.ModelPath),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", err)
+		return nil, "", noop
+	}
+	closePalace := func() { _ = p.Close() }
+
+	// A tool-building failure still leaves a usable palace for the bridge and
+	// the wake-up context below, so it only costs the tools.
+	palaceTools, err := palace.PalaceTools(p)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: palace tools disabled: %v\n", err)
+		palaceTools = nil
+	}
+
+	// Wire the observation bridge: auto-file observations as palace drawers.
+	if memWorker != nil {
+		memWorker.OnAfterStore(palace.NewObservationBridge(p).ConvertAndStore)
+	}
+
+	var wakeUpContext string
+	if wakeUp, wErr := p.WakeUp(context.Background(), ""); wErr == nil {
+		wakeUpContext = wakeUp
+	}
+	return palaceTools, wakeUpContext, closePalace
+}
+
+// compactorConfigFrom overlays the configured compactor settings on the
+// defaults, ignoring zero values so an unset field keeps its default.
+func compactorConfigFrom(cfg config.Config) tools.CompactorConfig {
+	compactorCfg := tools.DefaultCompactorConfig()
+	if cfg.Compactor == nil {
+		return compactorCfg
+	}
+	if cfg.Compactor.Enabled != nil {
+		compactorCfg.Enabled = *cfg.Compactor.Enabled
+	}
+	if cfg.Compactor.SourceCodeFiltering != "" {
+		compactorCfg.SourceCodeFiltering = cfg.Compactor.SourceCodeFiltering
+	}
+	if cfg.Compactor.MaxChars > 0 {
+		compactorCfg.MaxChars = cfg.Compactor.MaxChars
+	}
+	if cfg.Compactor.MaxLines > 0 {
+		compactorCfg.MaxLines = cfg.Compactor.MaxLines
+	}
+	return compactorCfg
+}
+
+// memoryObservationCallback records each successful tool call as a raw
+// observation. sessionID is read through the pointer because the session is
+// only created after the callbacks are wired.
+func memoryObservationCallback(worker *memory.Worker, cfg config.Config, project string, sessionID *string) llmagent.AfterToolCallback {
+	var excluded map[string]bool
+	if cfg.Memory != nil && len(cfg.Memory.ExcludedTools) > 0 {
+		excluded = make(map[string]bool, len(cfg.Memory.ExcludedTools))
+		for _, name := range cfg.Memory.ExcludedTools {
+			excluded[name] = true
+		}
+	}
+
+	return func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+		if toolErr != nil || *sessionID == "" {
+			return result, nil
+		}
+		name := t.Name()
+		if excluded[name] {
+			return result, nil
+		}
+		worker.Enqueue(memory.RawObservation{
+			SessionID:  *sessionID,
+			Project:    project,
+			ToolName:   name,
+			ToolInput:  args,
+			ToolOutput: result,
+			Timestamp:  time.Now(),
+		})
+		return result, nil
+	}
+}
+
+// buildToolsets assembles the external toolsets — MCP servers and A2A agents —
+// configured for this run.
+func buildToolsets(cfg config.Config) []adktool.Toolset {
+	var toolsets []adktool.Toolset
+	if servers := buildMCPServerConfigs(cfg); len(servers) > 0 {
+		mcpToolsets, _ := extension.BuildMCPToolsets(servers)
+		toolsets = append(toolsets, mcpToolsets...)
+	}
+	if cfg.A2A != nil && len(cfg.A2A.Agents) > 0 {
+		toolsets = append(toolsets, tools.NewA2AToolset(cfg.A2A))
+	}
+	return toolsets
 }
 
 func providerEnvVar(p string) string {
