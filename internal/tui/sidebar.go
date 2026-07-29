@@ -1,9 +1,10 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -63,380 +64,403 @@ type ArtifactEntry struct {
 	Mime     string
 }
 
+// Catppuccin Mocha slice used across the sidebar sections.
+const (
+	sidebarTextHex     = "#cdd6f4" // text
+	sidebarSubtextHex  = "#a6adc8" // subtext0
+	sidebarBlueHex     = "#89b4fa" // blue
+	sidebarSapphireHex = "#74c7ec" // sapphire
+	sidebarYellowHex   = "#f9e2af" // yellow
+	sidebarPeachHex    = "#fab387" // peach
+	sidebarGreenHex    = "#a6e3a1" // green
+	sidebarRedHex      = "#f38ba8" // red
+	sidebarTealHex     = "#94e2d5" // teal
+	sidebarPinkHex     = "#f5c2e7" // pink
+	sidebarMauveHex    = "#cba6f7" // mauve
+	sidebarOverlayHex  = "#6c7086" // overlay0
+	sidebarSurfaceHex  = "#585b70" // surface2, same as the panel rule
+	// crust with alpha, for dark transparency
+	sidebarBgHex = "#11111bcc"
+)
+
+var (
+	sidebarBg      = lipgloss.Color(sidebarBgHex)
+	sidebarDim     = lipgloss.NewStyle().Foreground(lipgloss.Color(sidebarSubtextHex))
+	sidebarHeading = lipgloss.NewStyle().Foreground(lipgloss.Color(sidebarBlueHex)).Bold(true)
+)
+
+// sidebarStyle is shorthand for a plain foreground style in the Mocha palette.
+func sidebarStyle(hex string) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(hex))
+}
+
 // RenderSidebar renders the right sidebar panel.
+//
+// The body is a sequence of independent sections, each contributing its own
+// lines (nil when hidden); sidebarFrame then pads, clamps and boxes the result
+// to the requested width and height.
 func RenderSidebar(in SidebarRenderInput) string {
-	w := in.Width
-	if w < 10 {
-		w = 10
-	}
-
-	fg := lipgloss.Color("#cdd6f4")        // Mocha text
-	dimFg := lipgloss.Color("#a6adc8")     // Mocha subtext0
-	headingFg := lipgloss.Color("#89b4fa") // Mocha blue
-
-	dim := lipgloss.NewStyle().Foreground(dimFg)
-	heading := lipgloss.NewStyle().Foreground(headingFg).Bold(true)
-	bright := lipgloss.NewStyle().Foreground(fg)
-	_ = bright
-
+	w := max(in.Width, 10)
 	innerW := w - 3 // padding + border
 
 	var lines []string
-
-	// --- Eyes / mood ---
-	if in.Mascot != "" {
-		mascotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
-		moodLine := mascotStyle.Render(fmt.Sprintf("  %s", in.Mascot))
-		lines = append(lines, "", moodLine, "")
-	} else if in.Eyes != "" {
-		eyeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
-		moodLine := eyeStyle.Render(fmt.Sprintf("  %s", in.Eyes))
-		lines = append(lines, "", moodLine, "")
+	for _, section := range [][]string{
+		sidebarMoodLines(in),
+		sidebarContextLines(in),
+		sidebarOTELLines(in),
+		sidebarModelLines(in, innerW),
+		sidebarArtifactLines(in, innerW),
+		sidebarGitLines(in, innerW),
+		sidebarModeLines(in, innerW),
+		sidebarAgentLines(in, innerW),
+		sidebarSkillLines(in),
+		sidebarMemoryLines(in),
+		sidebarMCPLines(in, innerW),
+		sidebarLoadingLines(in),
+	} {
+		lines = append(lines, section...)
 	}
 
-	sidebarBg := lipgloss.Color("#11111bcc") // Catppuccin Mocha crust with alpha for dark transparency
+	return sidebarFrame(in, lines, w)
+}
 
-	// --- Context section (session context window usage) ---
-	lines = append(lines, heading.Render("  Context"))
-	if tt := in.TokenTracker; tt != nil && tt.ContextWindowSize() > 0 {
-		// Known context window: show prompt tokens / window size with bar.
-		promptTokens := tt.LastPromptTokens()
-		ctxWindow := tt.ContextWindowSize()
-		pct := tt.ContextPercentUsed()
-		lines = append(lines, dim.Render(fmt.Sprintf("  %s / %s",
-			formatTokenCount(promptTokens), formatTokenCount(ctxWindow))))
-		lines = append(lines, "  "+renderContextBar(pct, sidebarBg))
-	} else if tt := in.TokenTracker; tt != nil && tt.LastPromptTokens() > 0 {
-		// Unknown window but have actual prompt tokens from LLM.
-		lines = append(lines, dim.Render(fmt.Sprintf("  %s tokens",
+// sidebarMoodLines renders the mascot face or the eyes at the top of the
+// sidebar. The two are mutually exclusive; the mascot wins if both are set.
+func sidebarMoodLines(in SidebarRenderInput) []string {
+	face := cmp.Or(in.Mascot, in.Eyes)
+	if face == "" {
+		return nil
+	}
+	return []string{"", sidebarStyle(sidebarSapphireHex).Render(fmt.Sprintf("  %s", face)), ""}
+}
+
+// sidebarContextLines shows session context-window usage: a token count with a
+// fill bar when the window size is known, the raw prompt tokens when it isn't,
+// and a character-based estimate before the first LLM response.
+func sidebarContextLines(in SidebarRenderInput) []string {
+	lines := []string{sidebarHeading.Render("  Context")}
+	switch tt := in.TokenTracker; {
+	case tt != nil && tt.ContextWindowSize() > 0:
+		lines = append(lines,
+			sidebarDim.Render(fmt.Sprintf("  %s / %s",
+				formatTokenCount(tt.LastPromptTokens()), formatTokenCount(tt.ContextWindowSize()))),
+			"  "+renderContextBar(tt.ContextPercentUsed(), sidebarBg))
+	case tt != nil && tt.LastPromptTokens() > 0:
+		lines = append(lines, sidebarDim.Render(fmt.Sprintf("  %s tokens",
 			formatTokenCount(tt.LastPromptTokens()))))
-	} else {
-		// No LLM response yet: estimate from message chars.
-		ctxChars := 0
-		for _, msg := range in.Messages {
-			ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-		}
-		ctxTokens := ctxChars / 4
-		if ctxTokens >= 1000 {
-			lines = append(lines, dim.Render(fmt.Sprintf("  ~%.1fk tokens", float64(ctxTokens)/1000)))
-		} else {
-			lines = append(lines, dim.Render(fmt.Sprintf("  ~%d tokens", ctxTokens)))
-		}
+	default:
+		lines = append(lines, sidebarDim.Render(estimateContextTokens(in.Messages)))
 	}
-	lines = append(lines, "")
+	return append(lines, "")
+}
 
-	// --- OTEL section ---
-	if in.OTELEnabled {
-		otelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")).Bold(true) // Mocha blue
-		lines = append(lines, otelStyle.Render("  ◉ OTEL"))
-		lines = append(lines, "")
+// estimateContextTokens approximates the context size from message text at the
+// usual ~4 characters per token, for use before the provider reports real counts.
+func estimateContextTokens(msgs []message) string {
+	chars := 0
+	for _, msg := range msgs {
+		chars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
 	}
+	tokens := chars / 4
+	if tokens >= 1000 {
+		return fmt.Sprintf("  ~%.1fk tokens", float64(tokens)/1000)
+	}
+	return fmt.Sprintf("  ~%d tokens", tokens)
+}
 
-	// --- Model section ---
-	lines = append(lines, heading.Render("  Model"))
-	providerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cdd6f4")) // Mocha text
-	modelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af"))    // Mocha yellow
+// sidebarOTELLines marks that OTEL tracing is active.
+func sidebarOTELLines(in SidebarRenderInput) []string {
+	if !in.OTELEnabled {
+		return nil
+	}
+	return []string{sidebarHeading.Render("  ◉ OTEL"), ""}
+}
+
+// sidebarModelLines shows the active provider and model name.
+func sidebarModelLines(in SidebarRenderInput, innerW int) []string {
+	lines := []string{sidebarHeading.Render("  Model")}
 	if in.ProviderName != "" {
-		lines = append(lines, providerStyle.Render("  "+in.ProviderName))
+		lines = append(lines, sidebarStyle(sidebarTextHex).Render("  "+in.ProviderName))
 	}
 	if in.ModelName != "" {
-		name := in.ModelName
-		if len(name) > innerW {
-			name = name[:innerW-1] + "…"
-		}
-		lines = append(lines, modelStyle.Render("  "+name))
+		lines = append(lines, sidebarStyle(sidebarYellowHex).
+			Render("  "+truncateLabel(in.ModelName, innerW)))
 	}
-	lines = append(lines, "")
+	return append(lines, "")
+}
 
-	// --- Artifacts section ---
-	if len(in.Artifacts) > 0 {
-		artHeading := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#fab387")).Bold(true) // Mocha peach
-		lines = append(lines,
-			artHeading.Render(fmt.Sprintf("  Artifacts [%d]", len(in.Artifacts))))
-
-		for _, a := range in.Artifacts {
-			icon := "📎"
-			if strings.HasPrefix(a.Mime, "image/") {
-				icon = "🖼"
-			}
-			size := formatBytes(a.Size)
-			// Layout: "  ICON NAME  SIZE" with a 2-space gap before size.
-			// Reserve 10 chars for the size column so 2.1 MB lines align.
-			maxName := innerW - 2 - 2 - 10
-			if maxName < 6 {
-				maxName = 6
-			}
-			name := a.Filename
-			if runewidth.StringWidth(name) > maxName {
-				name = runewidth.Truncate(name, maxName-1, "…")
-			}
-			lines = append(lines, dim.Render(
-				fmt.Sprintf("  %s %s  %s", icon, name, size)))
-		}
-		lines = append(lines, "")
+// sidebarArtifactLines lists stored session artifacts with an icon and size.
+func sidebarArtifactLines(in SidebarRenderInput, innerW int) []string {
+	if len(in.Artifacts) == 0 {
+		return nil
 	}
+	lines := []string{sidebarStyle(sidebarPeachHex).Bold(true).
+		Render(fmt.Sprintf("  Artifacts [%d]", len(in.Artifacts)))}
 
-	// --- Git section ---
-	if in.GitBranch != "" {
-		branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")) // Mocha teal
-		// Line 1: "Git" heading + "+N -M" counts.
-		gitLine := heading.Render("  Git")
-		if in.DiffAdded > 0 || in.DiffRemoved > 0 {
-			addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
-			delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
-			gitLine += " " +
-				addStyle.Render(fmt.Sprintf("+%d", in.DiffAdded)) +
-				dim.Render(" ") +
-				delStyle.Render(fmt.Sprintf("-%d", in.DiffRemoved))
+	for _, a := range in.Artifacts {
+		icon := "📎"
+		if strings.HasPrefix(a.Mime, "image/") {
+			icon = "🖼"
 		}
-		lines = append(lines, gitLine)
+		// Layout: "  ICON NAME  SIZE" with a 2-space gap before size.
+		// Reserve 10 chars for the size column so 2.1 MB lines align, and one
+		// spare cell so a truncated name never butts against the size column.
+		name := truncateLabel(a.Filename, max(innerW-2-2-10, 6)-1)
+		lines = append(lines, sidebarDim.Render(
+			fmt.Sprintf("  %s %s  %s", icon, name, formatBytes(a.Size))))
+	}
+	return append(lines, "")
+}
 
-		// Line 2: branch with ⎇ prefix, truncated to fit inner width.
-		// Prefix "  ⎇ " is 5 visible chars; leave 1 char for the ellipsis when truncated.
-		branch := in.GitBranch
-		maxBranchW := innerW - 5
-		if maxBranchW < 4 {
-			maxBranchW = 4
-		}
-		if runewidth.StringWidth(branch) > maxBranchW {
-			branch = runewidth.Truncate(branch, maxBranchW-1, "…")
-		}
-		lines = append(lines, "  "+branchStyle.Render("⎇ "+branch))
-		lines = append(lines, "")
+// sidebarGitLines shows the current branch and the working-tree diff counts.
+func sidebarGitLines(in SidebarRenderInput, innerW int) []string {
+	if in.GitBranch == "" {
+		return nil
+	}
+	// Line 1: "Git" heading + "+N -M" counts.
+	gitLine := sidebarHeading.Render("  Git")
+	if in.DiffAdded > 0 || in.DiffRemoved > 0 {
+		gitLine += " " +
+			sidebarStyle(sidebarGreenHex).Render(fmt.Sprintf("+%d", in.DiffAdded)) +
+			sidebarDim.Render(" ") +
+			sidebarStyle(sidebarRedHex).Render(fmt.Sprintf("-%d", in.DiffRemoved))
 	}
 
-	// --- Mode / Run section ---
+	// Line 2: branch with ⎇ prefix, truncated to fit inner width.
+	// Prefix "  ⎇ " is 5 visible cells, plus one spare cell at the right edge.
+	branch := truncateLabel(in.GitBranch, max(innerW-5, 4)-1)
+	return []string{gitLine, "  " + sidebarStyle(sidebarTealHex).Render("⎇ "+branch), ""}
+}
+
+// sidebarModeLines renders the /run checklist while a run is active, and the
+// plain mode indicator otherwise.
+func sidebarModeLines(in SidebarRenderInput, innerW int) []string {
 	if len(in.RunChecklist) > 0 && in.RunPhase != "" {
-		// Show run checklist instead of plain mode when /run is active.
-		runHeading := fmt.Sprintf("  Run: %s", in.RunSpec)
-		if len(runHeading) > innerW+2 {
-			runHeading = runHeading[:innerW+1] + "…"
-		}
-		lines = append(lines, heading.Render(runHeading))
+		return append(sidebarRunLines(in, innerW), "")
+	}
 
-		// Phase and cycle info.
-		phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
-		lines = append(lines, phaseStyle.Render(fmt.Sprintf("  cycle %d/%d · %s",
-			in.RunCycle, in.RunMaxCycle, in.RunPhase)))
-		lines = append(lines, "")
-
-		// Checklist items.
-		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")) // green
-		todoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086")) // gray
-
-		for _, step := range in.RunChecklist {
-			title := step.Title
-			maxTitle := innerW - 5 // room for "  [x] " prefix
-			if maxTitle < 10 {
-				maxTitle = 10
-			}
-			if len(title) > maxTitle {
-				title = title[:maxTitle-1] + "…"
-			}
-			if step.Done {
-				lines = append(lines, doneStyle.Render("  [x] "+title))
-			} else {
-				lines = append(lines, todoStyle.Render("  [ ] "+title))
-			}
-		}
-
-		// Status
-		if in.Running {
-			lines = append(lines, "")
-			if in.ActiveTool != "" {
-				lines = append(lines, dim.Render("  ⚡ "+in.ActiveTool))
-			} else {
-				lines = append(lines, dim.Render("  thinking..."))
-			}
-		}
+	lines := []string{sidebarHeading.Render("  Mode")}
+	mode := cmp.Or(in.Mode, "chat")
+	if mode == "plan" {
+		lines = append(lines, sidebarStyle(sidebarPeachHex).Render("  [plan]"))
 	} else {
-		lines = append(lines, heading.Render("  Mode"))
-		mode := in.Mode
-		if mode == "" {
-			mode = "chat"
-		}
-		if mode == "plan" {
-			modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
-			lines = append(lines, modeStyle.Render("  [plan]"))
-		} else {
-			lines = append(lines, dim.Render("  ["+mode+"]"))
-		}
-
-		// Status
-		if in.Running {
-			if in.ActiveTool != "" {
-				lines = append(lines, dim.Render("  ⚡ "+in.ActiveTool))
-			} else {
-				lines = append(lines, dim.Render("  thinking..."))
-			}
-		}
+		lines = append(lines, sidebarDim.Render("  ["+mode+"]"))
 	}
-	lines = append(lines, "")
+	lines = append(lines, sidebarActivityLines(in)...)
+	return append(lines, "")
+}
 
-	// --- Agents section ---
-	if in.Orchestrator != nil {
-		agents := in.Orchestrator.List()
-		if len(agents) > 0 {
-			// Sort agents for stable rendering: running first, then by start time.
-			sort.Slice(agents, func(i, j int) bool {
-				pi, pj := agentStatusPriority(agents[i].Status), agentStatusPriority(agents[j].Status)
-				if pi != pj {
-					return pi < pj
-				}
-				if !agents[i].StartedAt.Equal(agents[j].StartedAt) {
-					return agents[i].StartedAt.Before(agents[j].StartedAt)
-				}
-				return agents[i].AgentID < agents[j].AgentID
-			})
-
-			var running, failed int
-			for _, a := range agents {
-				switch a.Status {
-				case "running":
-					running++
-				case "failed":
-					failed++
-				}
-			}
-
-			agentHeadingFg := lipgloss.Color("#a6e3a1") // green
-			if running > 0 {
-				agentHeadingFg = lipgloss.Color("#fab387") // orange when active
-			}
-			if failed > 0 {
-				agentHeadingFg = lipgloss.Color("#f38ba8") // red if any failed
-			}
-			agentHeading := lipgloss.NewStyle().Foreground(agentHeadingFg).Bold(true)
-			lines = append(lines, agentHeading.Render(fmt.Sprintf("  Agents [%d]", len(agents))))
-
-			// Show individual agents with name and status.
-			// Add incrementing suffix when multiple agents share the same type.
-			runStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
-			doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
-			failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
-			killStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086"))
-
-			typeCounts := make(map[string]int) // count occurrences of each type
-			for _, a := range agents {
-				t := a.Type
-				if t == "" {
-					t = "agent"
-				}
-				typeCounts[t]++
-			}
-			typeSeq := make(map[string]int) // running sequence per type
-
-			for _, a := range agents {
-				name := a.Type
-				if name == "" {
-					name = "agent"
-				}
-				if typeCounts[name] > 1 {
-					typeSeq[name]++
-					name = fmt.Sprintf("%s-%d", name, typeSeq[name])
-				}
-				maxName := innerW - 6 // room for "  ⚡ " prefix + status icon
-				if maxName < 6 {
-					maxName = 6
-				}
-				if len(name) > maxName {
-					name = name[:maxName-1] + "…"
-				}
-				switch a.Status {
-				case "running":
-					lines = append(lines, runStyle.Render("  ⚡ "+name))
-				case "done":
-					lines = append(lines, doneStyle.Render("  ✓ "+name))
-				case "failed":
-					lines = append(lines, failStyle.Render("  ✗ "+name))
-				case "killed":
-					lines = append(lines, killStyle.Render("  ⊘ "+name))
-				default:
-					lines = append(lines, dim.Render("  · "+name))
-				}
-			}
-			lines = append(lines, "")
-		}
+// sidebarRunLines renders the spec name, cycle/phase and step checklist of an
+// in-progress /run.
+func sidebarRunLines(in SidebarRenderInput, innerW int) []string {
+	lines := []string{
+		sidebarHeading.Render(truncateLabel(fmt.Sprintf("  Run: %s", in.RunSpec), innerW+2)),
+		sidebarStyle(sidebarPeachHex).Render(fmt.Sprintf("  cycle %d/%d · %s",
+			in.RunCycle, in.RunMaxCycle, in.RunPhase)),
+		"",
 	}
 
-	// --- Skills section ---
-	if len(in.Skills) > 0 {
-		skillsHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#f9e2af")).Bold(true) // Mocha yellow
-		lines = append(lines, skillsHeading.Render(fmt.Sprintf("  Skills [%d]", len(in.Skills))))
+	doneStyle := sidebarStyle(sidebarGreenHex)
+	todoStyle := sidebarStyle(sidebarOverlayHex)
+	for _, step := range in.RunChecklist {
+		title := truncateLabel(step.Title, max(innerW-5, 10)) // room for "  [x] " prefix
+		if step.Done {
+			lines = append(lines, doneStyle.Render("  [x] "+title))
+			continue
+		}
+		lines = append(lines, todoStyle.Render("  [ ] "+title))
+	}
+
+	if in.Running {
 		lines = append(lines, "")
+		lines = append(lines, sidebarActivityLines(in)...)
+	}
+	return lines
+}
+
+// sidebarActivityLines shows the running tool, or a thinking indicator when the
+// agent is busy without a named tool. Empty when idle.
+func sidebarActivityLines(in SidebarRenderInput) []string {
+	if !in.Running {
+		return nil
+	}
+	if in.ActiveTool != "" {
+		return []string{sidebarDim.Render("  ⚡ " + in.ActiveTool)}
+	}
+	return []string{sidebarDim.Render("  thinking...")}
+}
+
+// sidebarAgentLines lists spawned subagents, running ones first.
+func sidebarAgentLines(in SidebarRenderInput, innerW int) []string {
+	if in.Orchestrator == nil {
+		return nil
+	}
+	agents := in.Orchestrator.List()
+	if len(agents) == 0 {
+		return nil
+	}
+	sortAgentsForDisplay(agents)
+
+	lines := []string{agentHeadingStyle(agents).Render(fmt.Sprintf("  Agents [%d]", len(agents)))}
+	names := agentDisplayNames(agents, innerW)
+	for i, a := range agents {
+		lines = append(lines, agentRow(a.Status, names[i]))
+	}
+	return append(lines, "")
+}
+
+// sortAgentsForDisplay orders agents by status (running first), then by start
+// time, then by ID so rendering stays stable across frames.
+func sortAgentsForDisplay(agents []subagent.AgentStatus) {
+	slices.SortFunc(agents, func(a, b subagent.AgentStatus) int {
+		if c := cmp.Compare(agentStatusPriority(a.Status), agentStatusPriority(b.Status)); c != 0 {
+			return c
+		}
+		if c := a.StartedAt.Compare(b.StartedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.AgentID, b.AgentID)
+	})
+}
+
+// agentHeadingStyle colors the Agents heading by the worst status present:
+// red if anything failed, orange while any agent runs, green otherwise.
+func agentHeadingStyle(agents []subagent.AgentStatus) lipgloss.Style {
+	var running, failed int
+	for _, a := range agents {
+		switch a.Status {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		}
+	}
+	hex := sidebarGreenHex
+	if running > 0 {
+		hex = sidebarPeachHex
+	}
+	if failed > 0 {
+		hex = sidebarRedHex
+	}
+	return sidebarStyle(hex).Bold(true)
+}
+
+// agentDisplayNames labels each agent by type, appending an incrementing
+// suffix when several agents share a type, truncated to fit the sidebar.
+func agentDisplayNames(agents []subagent.AgentStatus, innerW int) []string {
+	typeCounts := make(map[string]int)
+	for _, a := range agents {
+		typeCounts[cmp.Or(a.Type, "agent")]++
 	}
 
-	// --- Memory section ---
-	if in.MemoryStatus != nil {
-		memHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#f5c2e7")).Bold(true) // Mocha pink
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))              // Mocha subtext0
-		lines = append(lines, memHeading.Render(fmt.Sprintf("  Memory [%d]", in.MemoryStatus.DrawerCount)))
-		if in.MemoryStatus.ModelLoaded {
-			lines = append(lines, dimStyle.Render("  ⬡ model ready"))
+	typeSeq := make(map[string]int) // running sequence per type
+	names := make([]string, len(agents))
+	for i, a := range agents {
+		name := cmp.Or(a.Type, "agent")
+		if typeCounts[name] > 1 {
+			typeSeq[name]++
+			name = fmt.Sprintf("%s-%d", name, typeSeq[name])
 		}
-		if in.MemoryStatus.KG != nil {
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ⬡ %d entities", in.MemoryStatus.KG.EntityCount)))
+		names[i] = truncateLabel(name, max(innerW-6, 6)) // room for "  ⚡ " prefix + icon
+	}
+	return names
+}
+
+// agentRow renders one agent line with a status icon and matching color.
+func agentRow(status, name string) string {
+	switch status {
+	case "running":
+		return sidebarStyle(sidebarPeachHex).Render("  ⚡ " + name)
+	case "done":
+		return sidebarStyle(sidebarGreenHex).Render("  ✓ " + name)
+	case "failed":
+		return sidebarStyle(sidebarRedHex).Render("  ✗ " + name)
+	case "killed":
+		return sidebarStyle(sidebarOverlayHex).Render("  ⊘ " + name)
+	default:
+		return sidebarDim.Render("  · " + name)
+	}
+}
+
+// sidebarSkillLines shows how many skills are loaded.
+func sidebarSkillLines(in SidebarRenderInput) []string {
+	if len(in.Skills) == 0 {
+		return nil
+	}
+	return []string{sidebarStyle(sidebarYellowHex).Bold(true).
+		Render(fmt.Sprintf("  Skills [%d]", len(in.Skills))), ""}
+}
+
+// sidebarMemoryLines summarizes memory palace state: drawers, model readiness,
+// knowledge-graph entities and rooms.
+func sidebarMemoryLines(in SidebarRenderInput) []string {
+	if in.MemoryStatus == nil {
+		return nil
+	}
+	lines := []string{sidebarStyle(sidebarPinkHex).Bold(true).
+		Render(fmt.Sprintf("  Memory [%d]", in.MemoryStatus.DrawerCount))}
+	if in.MemoryStatus.ModelLoaded {
+		lines = append(lines, sidebarDim.Render("  ⬡ model ready"))
+	}
+	if in.MemoryStatus.KG != nil {
+		lines = append(lines, sidebarDim.Render(
+			fmt.Sprintf("  ⬡ %d entities", in.MemoryStatus.KG.EntityCount)))
+	}
+	lines = append(lines, sidebarDim.Render(fmt.Sprintf("  ⬡ %d rooms", in.MemoryStatus.RoomCount)))
+	return append(lines, "")
+}
+
+// sidebarMCPLines counts MCP tools per server rather than listing every tool,
+// keeping the section a fixed handful of rows.
+func sidebarMCPLines(in SidebarRenderInput, innerW int) []string {
+	if len(in.MCPTools) == 0 {
+		return nil
+	}
+	seenOrder := []string{}
+	toolCounts := map[string]int{}
+	for _, e := range in.MCPTools {
+		if _, ok := toolCounts[e.Server]; !ok {
+			seenOrder = append(seenOrder, e.Server)
 		}
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ⬡ %d rooms", in.MemoryStatus.RoomCount)))
-		lines = append(lines, "")
+		toolCounts[e.Server]++
 	}
 
-	// --- MCP Tools section ---
-	if len(in.MCPTools) > 0 {
-		mcpHeading := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true) // Mocha mauve
-		countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6adc8"))            // dim
-
-		// Count tools by server name without listing each tool.
-		seenOrder := []string{}
-		toolCounts := map[string]int{}
-		for _, e := range in.MCPTools {
-			if _, ok := toolCounts[e.Server]; !ok {
-				seenOrder = append(seenOrder, e.Server)
-			}
-			toolCounts[e.Server]++
-		}
-
-		totalTools := len(in.MCPTools)
-		lines = append(lines, mcpHeading.Render(fmt.Sprintf("  MCP Tools [%d]", totalTools)))
-
-		for _, srv := range seenOrder {
-			srvLabel := srv
-			countLabel := fmt.Sprintf(" [%d]", toolCounts[srv])
-			maxServerW := innerW - 4 - len(countLabel)
-			if maxServerW < 1 {
-				maxServerW = 1
-			}
-			if len(srvLabel) > maxServerW {
-				srvLabel = srvLabel[:maxServerW-1] + "…"
-			}
-			lines = append(lines, countStyle.Render("  ⬡ "+srvLabel+countLabel))
-		}
-		lines = append(lines, "")
+	lines := []string{sidebarStyle(sidebarMauveHex).Bold(true).
+		Render(fmt.Sprintf("  MCP Tools [%d]", len(in.MCPTools)))}
+	for _, srv := range seenOrder {
+		countLabel := fmt.Sprintf(" [%d]", toolCounts[srv])
+		srvLabel := truncateLabel(srv, max(innerW-4-len(countLabel), 1))
+		lines = append(lines, sidebarDim.Render("  ⬡ "+srvLabel+countLabel))
 	}
+	return append(lines, "")
+}
 
-	// --- Loading section ---
-	if in.LoadingItems != nil {
-		lines = append(lines, heading.Render("  Loading"))
-		for _, name := range sortedKeys(in.LoadingItems) {
-			if in.LoadingItems[name] {
-				okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1"))
-				lines = append(lines, okStyle.Render("  ✓ "+name))
-			} else {
-				loadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387"))
-				lines = append(lines, loadStyle.Render("  ◌ "+name+"..."))
-			}
-		}
-		lines = append(lines, "")
+// sidebarLoadingLines tracks startup subsystems, ticking each off as it loads.
+func sidebarLoadingLines(in SidebarRenderInput) []string {
+	if in.LoadingItems == nil {
+		return nil
 	}
+	lines := []string{sidebarHeading.Render("  Loading")}
+	for _, name := range sortedKeys(in.LoadingItems) {
+		if in.LoadingItems[name] {
+			lines = append(lines, sidebarStyle(sidebarGreenHex).Render("  ✓ "+name))
+			continue
+		}
+		lines = append(lines, sidebarStyle(sidebarPeachHex).Render("  ◌ "+name+"..."))
+	}
+	return append(lines, "")
+}
 
-	// Join content and pad to fill height, reserving 3 lines for status + matrix.
+// sidebarFrame pads the section lines to fill the panel height, appends the
+// token status line and matrix rain when active, closes with the rule, and
+// boxes the result at a fixed width.
+func sidebarFrame(in SidebarRenderInput, lines []string, w int) string {
+	// Reserve rows for the matrix rain and its status separator.
 	hasMatrix := in.MatrixLines != ""
-	matrixH := 0
-	statusH := 0
+	matrixH, statusH := 0, 0
 	if hasMatrix {
 		matrixH = matrixLines
-		statusH = 1 // 1 line for status separator
+		statusH = 1
 	}
 	// The closing rule owns the last row. It carries the panel's rule across the
 	// sidebar so the two read as one line spanning the terminal, the way the
@@ -447,40 +471,29 @@ func RenderSidebar(in SidebarRenderInput) string {
 	if in.Height > 0 {
 		ruleH = 1
 	}
-	content := strings.Join(lines, "\n")
-	contentLines := strings.Split(content, "\n")
+
+	contentLines := strings.Split(strings.Join(lines, "\n"), "\n")
 	targetH := max(0, in.Height-matrixH-statusH-ruleH)
-	if len(contentLines) < targetH {
-		// Fill remaining space with subtle dim separators or spacer text.
-		fillerStyle := lipgloss.NewStyle().Foreground(dimFg)
-		for len(contentLines) < targetH {
-			contentLines = append(contentLines, fillerStyle.Render("  ···"))
-		}
+	// Fill remaining space with subtle dim separators.
+	for len(contentLines) < targetH {
+		contentLines = append(contentLines, sidebarDim.Render("  ···"))
 	}
 	if len(contentLines) > targetH {
 		contentLines = contentLines[:targetH]
 	}
 
-	// Add status separator line above matrix (if active).
 	if hasMatrix {
-		statusStyle := lipgloss.NewStyle().Foreground(dimFg)
-		statusText := in.StatusLine
-		if statusText == "" {
-			statusText = "──── tokens ────"
-		}
-		// Truncate status text to fit (rune-safe)
-		maxStatusW := w - 4
-		if runewidth.StringWidth(statusText) > maxStatusW {
+		statusText := cmp.Or(in.StatusLine, "──── tokens ────")
+		if maxStatusW := w - 4; runewidth.StringWidth(statusText) > maxStatusW {
 			statusText = runewidth.Truncate(statusText, maxStatusW-1, "─")
 		}
-		contentLines = append(contentLines, statusStyle.Render(statusText))
+		contentLines = append(contentLines, sidebarDim.Render(statusText))
 		contentLines = append(contentLines, strings.Split(in.MatrixLines, "\n")...)
 	}
 	if ruleH > 0 {
-		ruleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2, same as the panel rule
-		contentLines = append(contentLines, ruleStyle.Render(strings.Repeat("─", w)))
+		contentLines = append(contentLines,
+			sidebarStyle(sidebarSurfaceHex).Render(strings.Repeat("─", w)))
 	}
-	content = strings.Join(contentLines, "\n")
 
 	// A fixed-size box, flush to the right edge of the terminal. Width alone only
 	// pads — a line longer than w would still push the box wider and drag the
@@ -498,7 +511,17 @@ func RenderSidebar(in SidebarRenderInput) string {
 		box = box.Height(in.Height).MaxHeight(in.Height)
 	}
 
-	return box.Render(content)
+	return box.Render(strings.Join(contentLines, "\n"))
+}
+
+// truncateLabel shortens s to at most maxW display cells, marking the cut with
+// an ellipsis. Width is measured in cells rather than bytes so wide glyphs and
+// multi-byte names cannot overflow the column or be sliced mid-rune.
+func truncateLabel(s string, maxW int) string {
+	if runewidth.StringWidth(s) <= maxW {
+		return s
+	}
+	return runewidth.Truncate(s, maxW, "…")
 }
 
 func sidebarFolderName(workDir string) string {
