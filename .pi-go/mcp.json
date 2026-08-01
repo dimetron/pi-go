@@ -1,4 +1,10 @@
 {
   "mcpServers": {
+    "msgvault": {
+      "command": "msgvault",
+      "args": [
+        "mcp"
+      ]
+    }
   }
 }
