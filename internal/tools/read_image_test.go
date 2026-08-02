@@ -143,6 +143,39 @@ func TestReadImageHandler_RealMascot(t *testing.T) {
 	}
 }
 
+// TestNewReadImageTool covers the factory closure (newReadImageTool), which the
+// direct readImageHandler tests never reach. It builds the tool, exercises its
+// Run method with a valid PNG, and confirms the alias "path" -> "file_path" is
+// resolved so a model sending the shorter field still works.
+func TestNewReadImageTool(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+	path := filepath.Join(dir, "shot.png")
+	writeTestPNG(t, path)
+
+	tl, err := newReadImageTool(sb)
+	if err != nil {
+		t.Fatalf("newReadImageTool: %v", err)
+	}
+	if tl.Name() != "read_image" {
+		t.Errorf("Name() = %q, want read_image", tl.Name())
+	}
+
+	out := runTool(t, tl, map[string]any{"file_path": path})
+	if out["mime_type"] != "image/png" {
+		t.Errorf("mime_type = %v, want image/png", out["mime_type"])
+	}
+	if out["width"] != float64(2) {
+		t.Errorf("width = %v, want 2", out["width"])
+	}
+
+	// The "path" alias must map onto file_path (coercingTool.aliasArgs).
+	outAlias := runTool(t, tl, map[string]any{"path": path})
+	if outAlias["mime_type"] != "image/png" {
+		t.Errorf("aliased mime_type = %v, want image/png", outAlias["mime_type"])
+	}
+}
+
 // TestReadImageToolRegistered ensures the tool is exposed by CoreTools.
 func TestReadImageToolRegistered(t *testing.T) {
 	dir := t.TempDir()

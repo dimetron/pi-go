@@ -224,5 +224,69 @@ func TestBuildReadImageCallback(t *testing.T) {
 	})
 }
 
+func TestDetectImageMIMEType(t *testing.T) {
+	png := pngData(t)
+
+	t.Run("sniffs real png bytes", func(t *testing.T) {
+		if got := detectImageMIMEType(png, "shot.png"); got != "image/png" {
+			t.Errorf("detectImageMIMEType = %q, want image/png", got)
+		}
+	})
+
+	t.Run("falls back to extension when sniff is ambiguous", func(t *testing.T) {
+		garbage := []byte{0xff, 0xfe, 0x01} // sniffs as application/octet-stream
+		cases := []struct {
+			path string
+			want string
+		}{
+			{"screenshot.png", "image/png"},
+			{"shot.jpg", "image/jpeg"},
+			{"shot.jpeg", "image/jpeg"},
+			{"anim.gif", "image/gif"},
+			{"frame.webp", "image/webp"},
+			{"no_extension", "application/octet-stream"},
+			{"uppercase.PNG", "application/octet-stream"}, // case-sensitive fallback
+		}
+		for _, tc := range cases {
+			if got := detectImageMIMEType(garbage, tc.path); got != tc.want {
+				t.Errorf("detectImageMIMEType(garbage, %q) = %q, want %q", tc.path, got, tc.want)
+			}
+		}
+	})
+}
+
+func TestHasExt(t *testing.T) {
+	cases := []struct {
+		path string
+		ext  string
+		want bool
+	}{
+		{"shot.png", ".png", true},
+		{"dir/shot.png", ".png", true},
+		{"shot.jpg", ".jpg", true},
+		{"shot.png", ".jpg", false},
+		{"png", ".png", false},       // path shorter than extension
+		{"shot.PNG", ".png", false},  // case-sensitive
+		{"shot.pngx", ".png", false}, // suffix must match exactly
+	}
+	for _, tc := range cases {
+		if got := hasExt(tc.path, tc.ext); got != tc.want {
+			t.Errorf("hasExt(%q, %q) = %v, want %v", tc.path, tc.ext, got, tc.want)
+		}
+	}
+}
+
+// pngData returns the bytes of a small 2x1 PNG for sniffing tests.
+func pngData(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 // Ensure mockReadonlyContext satisfies agent.Context for the callback signature.
 var _ agent.Context = (*mockReadonlyContext)(nil)
