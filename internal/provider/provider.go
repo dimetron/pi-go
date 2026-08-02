@@ -270,7 +270,7 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	}
 	switch info.Provider {
 	case "ollama":
-		return NewOllama(ctx, info.Model, baseURL, thinkingLevel, opts)
+		return NewOllama(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "gemini":
 		return NewGemini(ctx, info.Model, baseURL, opts)
 	case "openai":

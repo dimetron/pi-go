@@ -755,12 +755,12 @@ func TestCoreTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 11 {
-		t.Errorf("expected 11 core tools, got %d", len(tools))
+	if len(tools) != 12 {
+		t.Errorf("expected 12 core tools, got %d", len(tools))
 	}
 
 	expected := map[string]bool{
-		"read": true, "write": true, "edit": true, "bash": true,
+		"read": true, "read_image": true, "write": true, "edit": true, "bash": true,
 		"find": true, "ls": true, "tree": true,
 		"git-overview": true, "git-file-diff": true, "git-hunk": true,
 	}

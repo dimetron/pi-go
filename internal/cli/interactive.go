@@ -310,6 +310,9 @@ func deferredInit(
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
 
+	// Inject image bytes (screenshots) as visible InlineData parts for the model.
+	llmBefore = append(llmBefore, extension.BuildReadImageCallback(sandbox))
+
 	if memRecorder != nil {
 		afterCBs = append(afterCBs, memRecorder.afterTool)
 	}
@@ -815,7 +818,11 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	apiKey := keys[info.Provider]
 
 	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+		if apiKey != "" {
+			baseURL = "https://api.ollama.com"
+		} else {
+			baseURL = "http://localhost:11434"
+		}
 	}
 
 	llmOpts := &provider.LLMOptions{

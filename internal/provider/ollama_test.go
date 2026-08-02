@@ -389,7 +389,7 @@ func TestOllamaListModels(t *testing.T) {
 
 func TestOllamaGenerateContent(t *testing.T) {
 	// Create a mock-like Ollama model for testing
-	llm, err := NewOllama(context.Background(), "qwen3.5:latest", "http://localhost:11434", "none", nil)
+	llm, err := NewOllama(context.Background(), "qwen3.5:latest", "", "http://localhost:11434", "none", nil)
 	if err != nil {
 		t.Skipf("skipping: could not create Ollama model: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestOllamaGenerateContent(t *testing.T) {
 	})
 
 	t.Run("with thinking level", func(t *testing.T) {
-		llmThink, err := NewOllama(context.Background(), "qwen3.5:latest", "http://localhost:11434", "medium", nil)
+		llmThink, err := NewOllama(context.Background(), "qwen3.5:latest", "", "http://localhost:11434", "medium", nil)
 		if err != nil {
 			t.Skipf("skipping: could not create Ollama model: %v", err)
 		}
@@ -667,21 +667,21 @@ func TestOllamaListModelsWithMockServer(t *testing.T) {
 
 func TestNewOllamaValidation(t *testing.T) {
 	t.Run("empty model name", func(t *testing.T) {
-		_, err := NewOllama(context.Background(), "", "", "none", nil)
+		_, err := NewOllama(context.Background(), "", "", "", "none", nil)
 		if err == nil {
 			t.Fatal("expected error for empty model name")
 		}
 	})
 
 	t.Run("invalid URL", func(t *testing.T) {
-		_, err := NewOllama(context.Background(), "test-model", "://bad", "none", nil)
+		_, err := NewOllama(context.Background(), "test-model", "", "://bad", "none", nil)
 		if err == nil {
 			t.Fatal("expected error for invalid URL")
 		}
 	})
 
 	t.Run("default base URL", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "", "none", nil)
+		llm, err := NewOllama(context.Background(), "test-model", "", "", "none", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -691,7 +691,7 @@ func TestNewOllamaValidation(t *testing.T) {
 	})
 
 	t.Run("custom base URL", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "http://custom:1234", "none", nil)
+		llm, err := NewOllama(context.Background(), "test-model", "", "http://custom:1234", "none", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -701,7 +701,7 @@ func TestNewOllamaValidation(t *testing.T) {
 	})
 
 	t.Run("with extra headers", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "", "none", &LLMOptions{
+		llm, err := NewOllama(context.Background(), "test-model", "", "", "none", &LLMOptions{
 			ExtraHeaders: map[string]string{"X-Custom": "value"},
 		})
 		if err != nil {
@@ -717,7 +717,7 @@ func TestNewOllamaValidation(t *testing.T) {
 	})
 
 	t.Run("nil extra headers no transport wrapping", func(t *testing.T) {
-		llm, err := NewOllama(context.Background(), "test-model", "", "none", nil)
+		llm, err := NewOllama(context.Background(), "test-model", "", "", "none", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -777,7 +777,7 @@ func ollamaChatLine(modelName, role, content, thinking, doneReason string, done 
 // newOllamaModelFromServer creates an ollamaModel whose HTTP client points at srv.
 func newOllamaModelFromServer(t *testing.T, srv *httptest.Server, modelName, thinkingLevel string) model.LLM {
 	t.Helper()
-	llm, err := NewOllama(context.Background(), modelName, srv.URL, thinkingLevel, nil)
+	llm, err := NewOllama(context.Background(), modelName, "", srv.URL, thinkingLevel, nil)
 	if err != nil {
 		t.Fatalf("NewOllama: %v", err)
 	}
@@ -1574,11 +1574,93 @@ func TestOllamaRunNonStreaming_SystemPrompt(t *testing.T) {
 }
 
 func TestOllamaName(t *testing.T) {
-	llm, err := NewOllama(context.Background(), "my-model", "", "none", nil)
+	llm, err := NewOllama(context.Background(), "my-model", "", "", "none", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if llm.Name() != "my-model" {
 		t.Errorf("Name() = %q, want my-model", llm.Name())
 	}
+}
+
+func TestNewOllamaCloudAPIKey(t *testing.T) {
+	t.Run("api key sets cloud base URL", func(t *testing.T) {
+		llm, err := NewOllama(context.Background(), "test-model", "ollama_abc123", "", "none", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if llm.Name() != "test-model" {
+			t.Errorf("Name() = %q, want test-model", llm.Name())
+		}
+	})
+
+	t.Run("api key with custom base URL uses custom URL", func(t *testing.T) {
+		llm, err := NewOllama(context.Background(), "test-model", "ollama_abc123", "http://myproxy:11434", "none", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if llm.Name() != "test-model" {
+			t.Errorf("Name() = %q, want test-model", llm.Name())
+		}
+	})
+}
+
+func TestBearerTransport(t *testing.T) {
+	t.Run("injects Authorization header", func(t *testing.T) {
+		var gotAuth string
+		srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			writeNDJSON(w, []any{
+				ollamaChatLine("test", "assistant", "ok", "", "stop", true, 1, 1, nil),
+			})
+		})
+
+		// Create an Ollama model with an API key pointed at the mock server.
+		llm, err := NewOllama(context.Background(), "test-model", "ollama_secret", srv.URL, "none", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Trigger a request by calling GenerateContent (non-streaming).
+		ctx := context.Background()
+		for range llm.GenerateContent(ctx, &model.LLMRequest{}, false) {
+		}
+
+		if gotAuth != "Bearer ollama_secret" {
+			t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer ollama_secret")
+		}
+	})
+
+	t.Run("no api key does not inject Authorization", func(t *testing.T) {
+		var gotAuth string
+		srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/chat" || r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			writeNDJSON(w, []any{
+				ollamaChatLine("test", "assistant", "ok", "", "stop", true, 1, 1, nil),
+			})
+		})
+
+		llm, err := NewOllama(context.Background(), "test-model", "", srv.URL, "none", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		ctx := context.Background()
+		for range llm.GenerateContent(ctx, &model.LLMRequest{}, false) {
+		}
+
+		if gotAuth != "" {
+			t.Errorf("expected no Authorization header, got %q", gotAuth)
+		}
+	})
 }

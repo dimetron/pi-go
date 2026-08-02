@@ -122,6 +122,7 @@ specs/
 | 003-code-review-pi/       | prompt | Code review for pi-go                                                      |
 | 004-memory-dimentions/    | readme | Memory dimensions research                                                 |
 | 007-write-tool-data-loss/ | readme | `write`/`edit` truncate before writing and never fsync — data loss on quit |
+| 008-adk-utils-go-review/  | research | adk-utils-go feature comparison & scored recommendations                  |
 
 ### research/
 

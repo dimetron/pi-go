@@ -19,6 +19,7 @@ import (
 func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
 	builders := []func(*Sandbox) (tool.Tool, error){
 		newReadTool,
+		newReadImageTool,
 		newWriteTool,
 		newEditTool,
 		newBashTool,
