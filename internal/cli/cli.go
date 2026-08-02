@@ -222,9 +222,13 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+		if apiKey != "" {
+			baseURL = "https://api.ollama.com"
+		} else {
+			baseURL = "http://localhost:11434"
+		}
 	}
-	if info.Ollama {
+	if info.Ollama && apiKey == "" {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return rootRuntime{}, fmt.Errorf("ollama health check: %w", err)
 		}

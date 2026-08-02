@@ -15,7 +15,7 @@ import (
 	"google.golang.org/adk/v2/tool/mcptoolset"
 )
 
-var mcpConnectTimeout = 15 * time.Second
+var mcpConnectTimeout = 30 * time.Second
 
 // MCPServerConfig matches the config.MCPServer structure.
 type MCPServerConfig struct {

@@ -24,27 +24,55 @@ type ollamaModel struct {
 }
 
 // NewOllama creates an Ollama model.LLM using the native Ollama Go client.
-// baseURL defaults to http://localhost:11434 if empty.
+// baseURL defaults to http://localhost:11434 if empty, or https://api.ollama.com
+// if an apiKey is provided (ollama.com cloud).
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
-func NewOllama(_ context.Context, modelName, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
+func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
 	baseURL = normalizeBaseURL(baseURL)
 	if baseURL == "" {
-		baseURL = "http://localhost:11434"
+		if apiKey != "" {
+			baseURL = "https://api.ollama.com"
+		} else {
+			baseURL = "http://localhost:11434"
+		}
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)
 	}
 	httpClient := BuildHTTPClient(opts, 10*time.Minute)
+	// Inject Bearer token for ollama.com cloud API when an API key is provided.
+	if apiKey != "" {
+		baseTransport := httpClient.Transport
+		if baseTransport == nil {
+			baseTransport = http.DefaultTransport
+		}
+		httpClient.Transport = &bearerTransport{
+			base:  baseTransport,
+			token: apiKey,
+		}
+	}
 	client := ollamaapi.NewClient(u, httpClient)
 	return &ollamaModel{
 		modelName:     modelName,
 		client:        client,
 		thinkingLevel: thinkingLevel,
 	}, nil
+}
+
+// bearerTransport injects an Authorization: Bearer header into every request.
+type bearerTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(req)
 }
 
 func (m *ollamaModel) Name() string { return m.modelName }

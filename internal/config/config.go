@@ -488,6 +488,7 @@ func APIKeys() map[string]string {
 		"azure":     {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
 		"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		"mistral":   {"MISTRAL_API_KEY"},
+		"ollama":    {"OLLAMA_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {

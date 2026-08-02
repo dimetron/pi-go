@@ -228,9 +228,13 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 	}
 
 	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+		if apiKey != "" {
+			baseURL = "https://api.ollama.com"
+		} else {
+			baseURL = "http://localhost:11434"
+		}
 	}
-	if info.Ollama {
+	if info.Ollama && apiKey == "" {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return nil, fmt.Errorf("ollama health check: %w", err)
 		}

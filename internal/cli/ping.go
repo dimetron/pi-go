@@ -811,7 +811,7 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 	w("*   Model %s: %sfound ✓%s\n", modelName, colorGreen, colorReset)
 
 	// Step 2: Create native Ollama LLM.
-	llm, err := provider.NewOllama(ctx, modelName, baseURL, "none", nil)
+	llm, err := provider.NewOllama(ctx, modelName, "", baseURL, "none", nil)
 	if err != nil {
 		return "", fmt.Errorf("create client: %w", err)
 	}

@@ -815,7 +815,11 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	apiKey := keys[info.Provider]
 
 	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+		if apiKey != "" {
+			baseURL = "https://api.ollama.com"
+		} else {
+			baseURL = "http://localhost:11434"
+		}
 	}
 
 	llmOpts := &provider.LLMOptions{
