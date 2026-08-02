@@ -160,12 +160,13 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	}
 
 	ag, err := piagent.New(piagent.Config{
-		Model:               llm,
-		Tools:               res.coreTools,
-		Toolsets:            buildMCPToolsetsFromCfg(cfg),
-		Instruction:         instruction,
-		BeforeToolCallbacks: res.beforeCBs,
-		AfterToolCallbacks:  res.afterCBs,
+		Model:                llm,
+		Tools:                res.coreTools,
+		Toolsets:             buildMCPToolsetsFromCfg(cfg),
+		Instruction:          instruction,
+		BeforeToolCallbacks:  res.beforeCBs,
+		AfterToolCallbacks:   res.afterCBs,
+		BeforeModelCallbacks: res.beforeModelCBs,
 	})
 	if err != nil {
 		res.cleanup()
@@ -300,11 +301,12 @@ func sessionContextWindow(ctx context.Context, info provider.Info, baseURL strin
 // sessionResources holds the tools and callbacks a session runs with, plus the
 // cleanup that releases the sandbox, orchestrator and LSP manager behind them.
 type sessionResources struct {
-	coreTools []adktool.Tool
-	beforeCBs []llmagent.BeforeToolCallback
-	afterCBs  []llmagent.AfterToolCallback
-	proxy     *streamProxy
-	cleanup   func()
+	coreTools      []adktool.Tool
+	beforeCBs      []llmagent.BeforeToolCallback
+	afterCBs       []llmagent.AfterToolCallback
+	beforeModelCBs []llmagent.BeforeModelCallback
+	proxy          *streamProxy
+	cleanup        func()
 }
 
 // buildSessionResources opens the sandbox and starts the subagent orchestrator
@@ -366,12 +368,18 @@ func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn,
 	afterCBs = append(afterCBs, toolAfter...)
 	afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 
+	// Inject image bytes (screenshots) as visible InlineData parts for the model.
+	beforeModelCBs := []llmagent.BeforeModelCallback{
+		extension.BuildReadImageCallback(sandbox),
+	}
+
 	return &sessionResources{
-		coreTools: coreTools,
-		beforeCBs: beforeCBs,
-		afterCBs:  afterCBs,
-		proxy:     proxy,
-		cleanup:   cleanup,
+		coreTools:      coreTools,
+		beforeCBs:      beforeCBs,
+		afterCBs:       afterCBs,
+		beforeModelCBs: beforeModelCBs,
+		proxy:          proxy,
+		cleanup:        cleanup,
 	}, nil
 }
 

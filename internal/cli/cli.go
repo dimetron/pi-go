@@ -551,7 +551,10 @@ func runNonInteractive(
 		SessionService:      sessionSvc,
 		BeforeToolCallbacks: beforeCBs,
 		AfterToolCallbacks:  afterCBs,
-		Logger:              sessionLog,
+		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
+			extension.BuildReadImageCallback(runtime.sandbox),
+		},
+		Logger: sessionLog,
 	})
 	if err != nil {
 		return fmt.Errorf("creating agent: %w", err)

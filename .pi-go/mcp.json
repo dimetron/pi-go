@@ -1,9 +1,15 @@
 {
   "mcpServers": {
-    "msgvault": {
-      "command": "msgvault",
+    "adk-docs-mcp": {
+      "command": "uvx",
       "args": [
-        "mcp"
+        "--from",
+        "mcpdoc",
+        "mcpdoc",
+        "--urls",
+        "AgentDevelopmentKit:https://adk.dev/llms.txt",
+        "--transport",
+        "stdio"
       ]
     }
   }
