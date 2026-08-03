@@ -177,6 +177,12 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "azure", Model: modelName[len("azure/"):]}, nil
 	}
 
+	// Detect opencode/ prefix → OpenCode Go provider.
+	// The prefix is stripped; the remainder is the bare model ID.
+	if strings.HasPrefix(strings.ToLower(modelName), "opencode/") {
+		return Info{Provider: "opencode", Model: modelName[len("opencode/"):]}, nil
+	}
+
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
@@ -283,6 +289,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "mistral":
 		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
+	case "opencode":
+		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

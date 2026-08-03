@@ -10,7 +10,7 @@ Gates (discovered during research):
 
 ### Slice 1: Catalog + constructor (`internal/provider/opencode.go`)
 
-- [ ] Create `internal/provider/opencode.go` with:
+- [x] Create `internal/provider/opencode.go` with:
   - `const opencodeDefaultBaseURL = "https://opencode.ai/zen/go/v1"`
   - `var opencodeGoModelCatalog = map[string]string{...}` mapping each OpenCode Go model ID to
     `"chat"`, `"responses"`, or `"messages"` (full catalog from design.md).
@@ -21,7 +21,7 @@ Gates (discovered during research):
     - "chat"/"responses" → `NewOpenAI(ctx, modelName, apiKey, baseURL, opts)`
     - "messages" → `NewAnthropic(ctx, modelName, apiKey, opencodeAnthropicBaseURL(baseURL), thinkingLevel, opts)`
 
-- [ ] Add `internal/provider/opencode_test.go` unit tests:
+- [x] Add `internal/provider/opencode_test.go` unit tests:
   - routing: `kimi-k3` → `*openaiModel` (chat), `gpt-5.6-luna` → `*openaiModel`, `minimax-m3` → `*anthropicModel`
   - `opencodeAnthropicBaseURL("https://opencode.ai/zen/go/v1") == "https://opencode.ai/zen/go"`
   - unknown model → error
