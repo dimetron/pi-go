@@ -99,6 +99,7 @@ specs/
 | better-completion-commands/ | idea..prompt        | Improved completion/autocomplete commands |
 | login-with-openai-codex/    | idea, req, research | OAuth login for OpenAI Codex provider     |
 | nanocoder-tui/              | idea..summary       | TUI design patterns from nanocoder        |
+| 001-make-main-chat-always-open-and-for-each-task/ | idea..prompt | Main chat always open; per-task queue drains as follow-up turns |
 
 ### features/WEB (Web Server)
 
@@ -130,6 +131,7 @@ specs/
 |--------------------------|---------------|------------------------------------|
 | 000-rtk-hooks-optimizer/ | idea..summary | RTK output compactor hooks         |
 | 003-improvements/        | research      | Architecture and gap analysis docs |
+| 007-codex-context-compaction/ | research | Expose upstream Codex app-server context compaction through `internal/codex/` |
 
 ### tools/
 

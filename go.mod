@@ -1,6 +1,6 @@
 module github.com/dimetron/pi-go
 
-go 1.26.4
+go 1.26.5
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -22,6 +22,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/muesli/reflow v0.3.0
+	github.com/muesli/termenv v0.16.0
 	github.com/ollama/ollama v0.31.2
 	github.com/openai/openai-go/v3 v3.42.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -34,7 +35,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.opentelemetry.io/proto/otlp v1.10.0
-	google.golang.org/adk/v2 v2.0.0
+	google.golang.org/adk/v2 v2.1.0
 	google.golang.org/genai v1.63.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -44,6 +45,7 @@ require (
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.21.0 // indirect
+	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
@@ -92,7 +94,6 @@ require (
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
