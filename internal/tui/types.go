@@ -128,6 +128,13 @@ type TokenTracker interface {
 	ContextWindowSize() int64    // model's context window size (0 = unknown)
 	ContextPercentUsed() float64 // context window usage 0-100+
 
+	// SetLastPromptTokens overrides the last-prompt baseline. Compaction
+	// passes call this with the post-pass token count so the context gauge
+	// reflects the new window immediately rather than waiting for the next
+	// LLM response. Implementations also reset the cached-prefix baseline
+	// (the new window has a new prefix by definition).
+	SetLastPromptTokens(n int64)
+
 	// Prompt-cache tracking. Prompt tokens are billed at a steep discount when
 	// served from cache, so LastPromptTokens alone overstates cost.
 	LastCachedTokens() int64    // cache reads on the most recent response

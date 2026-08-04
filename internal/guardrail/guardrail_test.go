@@ -387,6 +387,45 @@ func TestContextWindow_GetSet(t *testing.T) {
 	}
 }
 
+// SetLastPromptTokens is the path compaction uses to refresh the gauge
+// without waiting for the next LLM response: it must overwrite the prompt
+// count and reset the cached-prefix baseline (the new window has a new
+// prefix by definition).
+func TestSetLastPromptTokens_OverwritesBaseline(t *testing.T) {
+	tr := New(0)
+	tr.SetContextWindowSize(200_000)
+	// Prime the prefix baseline by recording one LLM response — this is what
+	// the first request of a window normally does.
+	if err := tr.Add(80_000, 1_000); err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if got := tr.CachePrefixTokens(); got != 80_000 {
+		t.Fatalf("expected prefix baseline 80000 after first Add, got %d", got)
+	}
+
+	tr.SetLastPromptTokens(30_000)
+	if got := tr.LastPromptTokens(); got != 30_000 {
+		t.Errorf("expected LastPromptTokens 30000 after SetLastPromptTokens, got %d", got)
+	}
+	if got := tr.CachePrefixTokens(); got != 0 {
+		t.Errorf("expected CachePrefixTokens reset to 0 after SetLastPromptTokens, got %d", got)
+	}
+	if got := tr.LastCachedTokens(); got != 0 {
+		t.Errorf("expected LastCachedTokens reset to 0 after SetLastPromptTokens, got %d", got)
+	}
+
+	// Zero / negative values leave the prompt count as-is but still reset
+	// the prefix — useful when a compaction produces an empty window.
+	tr.SetLastPromptTokens(15_000)
+	if got := tr.LastPromptTokens(); got != 15_000 {
+		t.Errorf("expected LastPromptTokens 15000 after second SetLastPromptTokens, got %d", got)
+	}
+	tr.SetLastPromptTokens(0)
+	if got := tr.LastPromptTokens(); got != 15_000 {
+		t.Errorf("SetLastPromptTokens(0) must not clobber a non-zero prompt count, got %d", got)
+	}
+}
+
 func TestContextPercentUsed_ZeroWindow(t *testing.T) {
 	tr := New(0)
 	// No context window set, but add some tokens.

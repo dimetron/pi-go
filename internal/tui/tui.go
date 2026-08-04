@@ -16,7 +16,6 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
-	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/palace"
 )
 
@@ -1417,7 +1416,6 @@ func (m *model) View() tea.View {
 			Orchestrator: m.cfg.Orchestrator,
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
 			MemoryStatus: m.memoryStatus,
-			OTELEnabled:  otel.IsEnabled(),
 			Artifacts:    m.artifactList(),
 		}
 		if m.run != nil && m.run.phase != "" {

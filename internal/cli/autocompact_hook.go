@@ -75,10 +75,21 @@ func buildAutoCompactHook(deps autoCompactDeps) agent.PreTurnHook {
 			return nil
 		}
 
-		// A summarizing rebuild replaces the whole window, so the cached prefix
-		// baseline and every dedup pointer into the old history are stale.
+		// Push the post-compaction token count back into the tracker so the
+		// bottom context gauge reflects the reclaimed window on the next
+		// render, rather than reading the pre-compaction number until the
+		// next LLM response arrives. A summarizing rebuild also invalidates
+		// dedup pointers into the old conversation, so the deduper must be
+		// reset alongside it.
+		//
+		// SetLastPromptTokens also resets the cached-prefix baseline: the new
+		// window has, by definition, a new stable prefix, and prior prefix
+		// lengths no longer apply. (The bare ResetContextWindow we used to
+		// call only on summarize missed the shed path entirely.)
+		if int64(outcome.TokensAfter) >= 0 {
+			deps.Tracker.SetLastPromptTokens(int64(outcome.TokensAfter))
+		}
 		if outcome.Action == pisession.CompactionSummarize {
-			deps.Tracker.ResetContextWindow()
 			deps.Deduper.Reset()
 		}
 

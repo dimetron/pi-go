@@ -1,11 +1,19 @@
 package tui
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 // --- handleCompactCommand tests ---
@@ -27,6 +35,36 @@ func TestHandleCompactCommand_NilSessionService(t *testing.T) {
 	}
 	if !strings.Contains(msg.content, "not available") {
 		t.Errorf("expected 'not available' message, got %q", msg.content)
+	}
+}
+
+// A successful /compact must push the post-compaction token count into the
+// configured TokenTracker so the bottom gauge updates on the very next
+// render. Without this push the gauge would stay stuck on the pre-compaction
+// reading until the next LLM response arrives.
+func TestHandleCompactCommand_UpdatesGaugeTracker(t *testing.T) {
+	tracker := &cmdMockTokenTracker{}
+	svc, id := newCompactTestSession(t)
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			SessionService: svc,
+			SessionID:      id,
+			TokenTracker:   tracker,
+		},
+	}
+
+	m.handleCompactCommand()
+
+	if tracker.setCount == 0 {
+		t.Fatalf("expected SetLastPromptTokens to be called at least once, got 0 calls")
+	}
+	if tracker.lastPrompt <= 0 {
+		t.Errorf("expected a positive post-compaction prompt count, got %d", tracker.lastPrompt)
+	}
+	if got := tracker.LastPromptTokens(); got <= 0 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want > 0", got)
 	}
 }
 
@@ -348,13 +386,18 @@ type cmdMockTokenTracker struct {
 	limit       int64
 	remaining   int64
 	percentUsed float64
+	lastPrompt  int64
+	setCount    int
 }
 
-func (m *cmdMockTokenTracker) TotalUsed() int64            { return m.totalUsed }
-func (m *cmdMockTokenTracker) Limit() int64                { return m.limit }
-func (m *cmdMockTokenTracker) Remaining() int64            { return m.remaining }
-func (m *cmdMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
-func (m *cmdMockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *cmdMockTokenTracker) TotalUsed() int64        { return m.totalUsed }
+func (m *cmdMockTokenTracker) Limit() int64            { return m.limit }
+func (m *cmdMockTokenTracker) Remaining() int64        { return m.remaining }
+func (m *cmdMockTokenTracker) PercentUsed() float64    { return m.percentUsed }
+func (m *cmdMockTokenTracker) LastPromptTokens() int64 { return m.lastPrompt }
+func (m *cmdMockTokenTracker) SetLastPromptTokens(n int64) {
+	m.lastPrompt, m.setCount = n, m.setCount+1
+}
 func (m *cmdMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *cmdMockTokenTracker) ContextPercentUsed() float64 { return 0 }
 func (m *cmdMockTokenTracker) LastCachedTokens() int64     { return 0 }
@@ -837,4 +880,54 @@ func TestCommandFormatContextUsage_SkillsSectionNoSkills(t *testing.T) {
 	if strings.Contains(result, "*Skills*") {
 		t.Errorf("expected no Skills section when no skills loaded, got %q", result)
 	}
+}
+
+// newCompactTestSession builds a session with enough text-shaped content for
+// Compact to actually rewrite history. The compacted file gets picked up by
+// EstimateTokens on the subsequent handleCompactCommand call, exercising the
+// post-compaction gauge-update wire-up.
+func newCompactTestSession(t *testing.T) (*pisession.FileService, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	svc, err := pisession.NewFileService(filepath.Join(tmp, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := svc.Create(context.Background(), &session.CreateRequest{
+		AppName: agent.AppName,
+		UserID:  agent.DefaultUserID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := resp.Session.ID()
+
+	// A handful of long user/assistant turns gets us comfortably over the
+	// 100k default MaxTokens threshold inside Compact, so the rewrite path
+	// runs and EstimateTokens returns a non-trivial post-compaction number.
+	body := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 2000)
+	events := []*session.Event{
+		makeTextEvent("user", "first long message "+body),
+		makeTextEvent("assistant", "first long reply "+body),
+		makeTextEvent("user", "second long message "+body),
+		makeTextEvent("assistant", "second long reply "+body),
+		makeTextEvent("user", "third long message "+body),
+		makeTextEvent("assistant", "third long reply "+body),
+	}
+	for i, ev := range events {
+		ev.ID = "ev-" + string(rune('a'+i))
+		if err := svc.AppendEvent(context.Background(), resp.Session, ev); err != nil {
+			t.Fatalf("AppendEvent: %v", err)
+		}
+	}
+	return svc, id
+}
+
+func makeTextEvent(author, text string) *session.Event {
+	ev := &session.Event{
+		Timestamp: time.Unix(0, 0),
+		Author:    author,
+	}
+	ev.Content = genai.NewContentFromText(text, genai.RoleUser)
+	return ev
 }

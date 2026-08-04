@@ -62,12 +62,15 @@ func TestContextRule_SeverityLadder(t *testing.T) {
 		pct  float64
 		want string
 	}{
-		{"green below 60", 0, "#a6e3a1"},
-		{"green just below 60", 59.9, "#a6e3a1"},
-		{"peach at 60", 60, "#fab387"},
-		{"peach just below 80", 79.9, "#fab387"},
-		{"red at 80", 80, "#f38ba8"},
-		{"red at 100", 100, "#f38ba8"},
+		// The bar's pct runs from 0 (smart) to 100 (entering the dumb zone).
+		// warm/dumb = 0.40 / 0.70 * 100 ≈ 57.14 — peach at or above this means
+		// "you have crossed out of the smart zone".
+		{"green in smart zone", 0, "#a6e3a1"},
+		{"green just below warm boundary", 56, "#a6e3a1"},
+		{"peach at warm boundary", 57.14, "#fab387"},
+		{"peach just below dumb-zone entry", 99, "#fab387"},
+		{"red at dumb-zone entry", 100, "#f38ba8"},
+		{"red past dumb-zone entry", 200, "#f38ba8"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,25 +95,46 @@ func truecolorFragment(c color.Color) string {
 	return fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
 }
 
-// The gauge and the sidebar bar must never disagree about how alarming a number
-// is. This locates the rule's chosen color inside the bar's actual escape
-// output, rather than asking contextSeverityColor whether it agrees with itself.
-func TestContextRule_MatchesSidebarBarThresholds(t *testing.T) {
-	for _, pct := range []float64{0, 30, 59, 60, 70, 79, 80, 95, 100} {
-		want := truecolorFragment(contextSeverityColor(pct))
-		bar := renderContextBar(pct, nil)
-		if !strings.Contains(bar, want) {
-			t.Errorf("pct=%.0f: bar %q does not use the rule's severity color %s",
-				pct, bar, want)
-		}
+// The gauge and the sidebar bar no longer share a threshold ladder by design:
+// the gauge is calibrated to the dumb-zone framework (red at the dumb-zone
+// boundary, peach at the warm-zone boundary) while the sidebar bar keeps its
+// own 60/80 ladder over the raw used/window ratio. This test pins the
+// invariant that still holds: at the dumb-zone entry, both render red.
+func TestContextRule_DumbZoneEntryTurnsRed(t *testing.T) {
+	tests := []struct {
+		used   int64
+		window int64
+	}{
+		{70_000, 100_000},
+		{179_200, 256_000},
+		{350_000, 500_000},
+		{700_000, 1_000_000},
+	}
+	for _, tc := range tests {
+		t.Run("", func(t *testing.T) {
+			out := renderContextRule(contextRuleInput{
+				Width: 120, UsedTokens: tc.used, WindowSize: tc.window,
+			})
+			if !hasSeverityColor(out, 100) {
+				t.Errorf("used=%d window=%d: gauge at dumb-zone entry should be red, got %q",
+					tc.used, tc.window, out)
+			}
+		})
 	}
 }
 
 func TestContextRule_FillGrowsWithUsage(t *testing.T) {
 	const width = 100
 	prev := -1
-	for _, used := range []int64{1_000, 64_000, 128_000, 192_000, 256_000} {
+	// Stay below the dumb-zone entry (70% of window = 179.2k here) so the bar
+	// is still in its readable range. Past that point, the bar pegs at 100%
+	// by design.
+	for _, used := range []int64{1_000, 32_000, 64_000, 128_000, 170_000} {
 		pct := float64(used) / float64(defaultContextWindow) * 100
+		pct /= dumbZoneFraction // bar pct: 100 = dumb-zone entry
+		if pct > 100 {
+			pct = 100
+		}
 		out := renderContextRule(contextRuleInput{
 			Width: width, UsedTokens: used, WindowSize: defaultContextWindow,
 		})
@@ -119,6 +143,32 @@ func TestContextRule_FillGrowsWithUsage(t *testing.T) {
 			t.Errorf("used=%d: filled=%d did not grow past %d", used, filled, prev)
 		}
 		prev = filled
+	}
+}
+
+// Past the dumb-zone boundary the bar pegs at full — a user who has crossed
+// 70% of the window gets the same "100%" reading the bar shows right at the
+// boundary. The bar cannot say more past that point.
+func TestContextRule_PegsAtDumbZoneEntry(t *testing.T) {
+	const width = 120
+	atBoundary := renderContextRule(contextRuleInput{
+		Width: width, UsedTokens: 179_200, WindowSize: defaultContextWindow,
+	})
+	pastBoundary := renderContextRule(contextRuleInput{
+		Width: width, UsedTokens: 200_000, WindowSize: defaultContextWindow,
+	})
+	wellPast := renderContextRule(contextRuleInput{
+		Width: width, UsedTokens: 256_000, WindowSize: defaultContextWindow,
+	})
+	atFill := filledCells(atBoundary, 100)
+	pastFill := filledCells(pastBoundary, 100)
+	wellPastFill := filledCells(wellPast, 100)
+	if atFill != pastFill || pastFill != wellPastFill {
+		t.Errorf("bar should peg at dumb-zone entry, got fills %d / %d / %d",
+			atFill, pastFill, wellPastFill)
+	}
+	if !hasSeverityColor(wellPast, 100) {
+		t.Errorf("past the dumb zone the gauge should still be red")
 	}
 }
 
@@ -149,13 +199,16 @@ func TestContextRule_AnyUsageShowsAtLeastOneCell(t *testing.T) {
 func TestContextRule_FallsBackToDefaultWindow(t *testing.T) {
 	// The opencode models have no catalog entry, so WindowSize is 0. The gauge
 	// must still read against the assumed 256k rather than divide by zero.
+	//
+	// 128k of a 256k window sits at 50% of the window, which under the dumb-zone
+	// calibration equals 50/70 ≈ 71.4% of the bar (100 = dumb-zone entry).
 	out := renderContextRule(contextRuleInput{Width: 120, UsedTokens: 128_000})
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "256.0k") {
 		t.Errorf("expected the assumed 256k denominator, got %q", plain)
 	}
-	if !strings.Contains(plain, "50%") {
-		t.Errorf("expected 50%% of the assumed window, got %q", plain)
+	if !strings.Contains(plain, "71%") {
+		t.Errorf("expected 71%% of the bar (50%% of window against the dumb-zone frame), got %q", plain)
 	}
 }
 
@@ -200,16 +253,20 @@ func TestAutoRangeWindow_Monotonic(t *testing.T) {
 // Each scale must be reachable in the readout, and must be labeled with the
 // scale actually in use — a percentage against an unstated denominator is
 // exactly the kind of number that misleads.
+//
+// The pct printed is the bar's pct, which runs 0..100 over the dumb-zone
+// entry: 100k / (256k * 0.7) ≈ 55%, 200k / (500k * 0.7) ≈ 57%, 400k / (1M * 0.7)
+// ≈ 57%. Past 70% of any window the bar pegs at 100.
 func TestContextRule_ReadoutNamesTheScaleInUse(t *testing.T) {
 	tests := []struct {
 		used      int64
 		wantScale string
 		wantPct   string
 	}{
-		{100_000, "256.0k", "39%"},
-		{midScaleThreshold, "500.0k", "40%"},
-		{maxScaleThreshold, "1.0M", "40%"},
-		{800_000, "1.0M", "80%"},
+		{100_000, "256.0k", "55%"},
+		{midScaleThreshold, "500.0k", "57%"},
+		{maxScaleThreshold, "1.0M", "57%"},
+		{800_000, "1.0M", "100%"},
 	}
 	for _, tc := range tests {
 		out := ansi.Strip(renderContextRule(contextRuleInput{Width: 120, UsedTokens: tc.used}))
@@ -225,13 +282,28 @@ func TestContextRule_ReadoutNamesTheScaleInUse(t *testing.T) {
 // Crossing a step-up boundary rescales, so the filled run shortens. This is the
 // documented trade-off; the test pins it so the behavior cannot change by
 // accident and go unnoticed.
+//
+// The fill is the bar's pct (0..100 = 0..dumb-zone entry), not the raw
+// used/window ratio, so the helper's lookup arg must match.
 func TestContextRule_StepUpRescalesDownward(t *testing.T) {
 	const width = 120
-	below := renderContextRule(contextRuleInput{Width: width, UsedTokens: midScaleThreshold - 1})
-	at := renderContextRule(contextRuleInput{Width: width, UsedTokens: midScaleThreshold})
+	var belowUsed int64 = midScaleThreshold - 1
+	atUsed := int64(midScaleThreshold)
 
-	belowFill := filledCells(below, float64(midScaleThreshold-1)/defaultContextWindow*100)
-	atFill := filledCells(at, float64(midScaleThreshold)/midContextWindow*100)
+	below := renderContextRule(contextRuleInput{Width: width, UsedTokens: belowUsed})
+	at := renderContextRule(contextRuleInput{Width: width, UsedTokens: atUsed})
+
+	belowPct := float64(belowUsed) / (float64(defaultContextWindow) * dumbZoneFraction) * 100
+	if belowPct > 100 {
+		belowPct = 100
+	}
+	atPct := float64(atUsed) / (float64(midContextWindow) * dumbZoneFraction) * 100
+	if atPct > 100 {
+		atPct = 100
+	}
+
+	belowFill := filledCells(below, belowPct)
+	atFill := filledCells(at, atPct)
 
 	if atFill >= belowFill {
 		t.Errorf("crossing the step-up should rescale downward: %d → %d cells", belowFill, atFill)

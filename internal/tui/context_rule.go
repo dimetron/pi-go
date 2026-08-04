@@ -14,9 +14,23 @@ import (
 // filling the leading run in proportion to context used turns that row into a
 // reading without costing any height.
 //
-// The gauge shares its thresholds with renderContextBar (green < 60, peach
-// 60-80, red >= 80), which also line up with the two-stage auto-compactor:
-// peach is where shedding starts, red is where a summarizing rebuild is near.
+// The gauge is calibrated to the dumb-zone framework (Dex Horthy, HumanLayer;
+// see specs/research/007-codex-context-compaction/research/dumb-zone.md):
+// 100% on the bar means "you have just entered the dumb zone" — the point past
+// which reasoning quality collapses (≥70% of the model's nominal context
+// window). The fill therefore scales against `dumbZoneFraction * window`,
+// not against the full window, so the bar visibly pegs the moment a session
+// becomes unsafe rather than continuing to crawl along the last 30% of the
+// ruler on its way to 100%.
+//
+// Color thresholds track the same zones:
+//   - green  = smart   (used/window <  warmZoneFraction)
+//   - peach  = warm    (warmZoneFraction ≤ used/window < dumbZoneFraction)
+//   - red    = dumb    (used/window ≥ dumbZoneFraction)
+//
+// renderContextBar keeps its own 60/80 ladder over the raw used/window ratio
+// — the sidebar compactness line is read alongside the daily-token number,
+// not as a danger signal, so it does not adopt the dumb-zone frames.
 
 // The gauge auto-ranges when the model's real window is unknown, the way a
 // multimeter does: start on the 256k scale, and step up once usage runs past
@@ -40,6 +54,21 @@ const (
 	// Step-up points, in tokens used.
 	midScaleThreshold = 200_000
 	maxScaleThreshold = 400_000
+)
+
+// Zone fractions from the dumb-zone framework. These are fractions of the
+// model's nominal context window:
+//
+//	0 .. warmZoneFraction       smart  (peak reasoning)
+//	warmZoneFraction .. dumbZoneFraction  warm   (degrading)
+//	dumbZoneFraction .. 1       dumb   (broken — compact now)
+//
+// The gauge fills the smart and warm zones — i.e. up to dumbZoneFraction of
+// the window — and pegs at 100% once the dumb zone is entered. Past 100%,
+// the gauge cannot say more than "you are already here".
+const (
+	warmZoneFraction = 0.40 // smart → warm boundary
+	dumbZoneFraction = 0.70 // warm → dumb boundary
 )
 
 // autoRangeWindow picks the gauge's full-scale value for the given usage.
@@ -115,7 +144,14 @@ func renderContextRule(in contextRuleInput) string {
 		return dim.Render(strings.Repeat(string(gaugeEmptyGlyph), in.Width))
 	}
 
-	pct := float64(used) / float64(window) * 100
+	// The denominator is the dumb-zone boundary, not the full window: at 70% of
+	// the window the bar already reads 100% and turns red. Anything past it is
+	// out of the gauge's vocabulary, so cap rather than overflow.
+	//
+	// Dumb-zone framework: dumbZoneFraction of the window is where reasoning
+	// breaks down, so the bar must be saturated by then. (`pct == 100` here
+	// does not mean "window full"; it means "you have entered the dumb zone.")
+	pct := float64(used) / (float64(window) * dumbZoneFraction) * 100
 	if pct > 100 {
 		pct = 100
 	}
@@ -164,16 +200,25 @@ func renderContextRule(in contextRuleInput) string {
 		labelStyle.Render(label)
 }
 
-// contextSeverityColor maps usage to the same ladder renderContextBar uses, so
-// the rule and the sidebar bar never disagree about how alarming a number is.
+// contextSeverityColor maps gauge fill (0–100, where 100 = entering the dumb
+// zone) to a color, in lockstep with the dumb-zone framework:
+//
+//	green   pct <  warm/dumb — smart zone
+//	peach   pct >= warm/dumb — warm zone
+//	red     pct == 100        — dumb zone (entered)
+//
+// Input is the bar's own pct (full-scale = dumb zone entry), not the raw
+// used/window ratio. That keeps the color picker testable by the same number
+// the bar prints, so a user who sees "100%" sees red — the bar reaches 100
+// only at the dumb-zone boundary.
 func contextSeverityColor(pct float64) color.Color {
 	switch {
-	case pct >= 80:
-		return lipgloss.Color("#f38ba8") // Mocha red
-	case pct >= 60:
-		return lipgloss.Color("#fab387") // Mocha peach
+	case pct >= 100:
+		return lipgloss.Color("#f38ba8") // Mocha red — dumb zone
+	case pct >= warmZoneFraction/dumbZoneFraction*100:
+		return lipgloss.Color("#fab387") // Mocha peach — warm zone
 	default:
-		return lipgloss.Color("#a6e3a1") // Mocha green
+		return lipgloss.Color("#a6e3a1") // Mocha green — smart zone
 	}
 }
 

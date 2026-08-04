@@ -49,7 +49,6 @@ type SidebarRenderInput struct {
 	Skills       []extension.Skill        // skills section; nil = hidden
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
 	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
-	OTELEnabled  bool                     // OTEL tracing is active
 	Artifacts    []ArtifactEntry          // artifacts section; nil/empty = hidden
 }
 
@@ -106,8 +105,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 	var lines []string
 	for _, section := range [][]string{
 		sidebarMoodLines(in),
-		sidebarContextLines(in),
-		sidebarOTELLines(in),
 		sidebarModelLines(in, innerW),
 		sidebarArtifactLines(in, innerW),
 		sidebarGitLines(in, innerW),
@@ -134,47 +131,9 @@ func sidebarMoodLines(in SidebarRenderInput) []string {
 	return []string{"", sidebarStyle(sidebarSapphireHex).Render(fmt.Sprintf("  %s", face)), ""}
 }
 
-// sidebarContextLines shows session context-window usage: a token count with a
-// fill bar when the window size is known, the raw prompt tokens when it isn't,
-// and a character-based estimate before the first LLM response.
-func sidebarContextLines(in SidebarRenderInput) []string {
-	lines := []string{sidebarHeading.Render("  Context")}
-	switch tt := in.TokenTracker; {
-	case tt != nil && tt.ContextWindowSize() > 0:
-		lines = append(lines,
-			sidebarDim.Render(fmt.Sprintf("  %s / %s",
-				formatTokenCount(tt.LastPromptTokens()), formatTokenCount(tt.ContextWindowSize()))),
-			"  "+renderContextBar(tt.ContextPercentUsed(), sidebarBg))
-	case tt != nil && tt.LastPromptTokens() > 0:
-		lines = append(lines, sidebarDim.Render(fmt.Sprintf("  %s tokens",
-			formatTokenCount(tt.LastPromptTokens()))))
-	default:
-		lines = append(lines, sidebarDim.Render(estimateContextTokens(in.Messages)))
-	}
-	return append(lines, "")
-}
-
-// estimateContextTokens approximates the context size from message text at the
-// usual ~4 characters per token, for use before the provider reports real counts.
-func estimateContextTokens(msgs []message) string {
-	chars := 0
-	for _, msg := range msgs {
-		chars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-	}
-	tokens := chars / 4
-	if tokens >= 1000 {
-		return fmt.Sprintf("  ~%.1fk tokens", float64(tokens)/1000)
-	}
-	return fmt.Sprintf("  ~%d tokens", tokens)
-}
-
-// sidebarOTELLines marks that OTEL tracing is active.
-func sidebarOTELLines(in SidebarRenderInput) []string {
-	if !in.OTELEnabled {
-		return nil
-	}
-	return []string{sidebarHeading.Render("  ◉ OTEL"), ""}
-}
+// sidebarContextLines / sidebarOTELLines were removed: the bottom context rule
+// is the canonical context gauge (calibrated to the dumb-zone framework) and the
+// OTEL indicator adds nothing the user cannot already see via the run status.
 
 // sidebarModelLines shows the active provider and model name.
 func sidebarModelLines(in SidebarRenderInput, innerW int) []string {

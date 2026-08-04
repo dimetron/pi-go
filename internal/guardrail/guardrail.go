@@ -307,6 +307,29 @@ func (t *Tracker) LastPromptTokens() int64 {
 	return t.lastPromptTokens
 }
 
+// SetLastPromptTokens overwrites the last-prompt-token baseline so the context
+// gauge can reflect a freshly-compacted window without waiting for the next
+// LLM response to overwrite it.
+//
+// A compaction pass knows the post-pass token count exactly (it just rewrote
+// the events); pushing it back here makes that knowledge visible immediately
+// instead of leaving the gauge stuck on the pre-compaction number for the
+// duration of a turn.
+//
+// The cache-prefix baseline is also reset: the new window has, by definition,
+// a new stable prefix, and any dedup pointers into the old prefix are stale.
+// Pass 0 to clear the prefix without setting a new prompt count — useful when
+// the caller knows the window is empty.
+func (t *Tracker) SetLastPromptTokens(n int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n > 0 {
+		t.lastPromptTokens = n
+	}
+	t.cachePrefixTokens = 0
+	t.lastCachedTokens = 0
+}
+
 // ContextPercentUsed returns the percentage of the context window used (0-100+).
 // Returns 0 if context window size is unknown.
 func (t *Tracker) ContextPercentUsed() float64 {

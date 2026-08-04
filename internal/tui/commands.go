@@ -236,6 +236,12 @@ func (m *model) handleBranchCommand(args []string) {
 }
 
 // handleCompactCommand triggers session compaction.
+//
+// After a successful compact, the gauge is updated immediately with the
+// post-compaction token count so the user sees the window shrink on the same
+// keystroke, rather than waiting for the next LLM response. Without this
+// push the gauge keeps reading the pre-compaction number — visually
+// indistinguishable from no compaction at all.
 func (m *model) handleCompactCommand() {
 	if m.cfg.SessionService == nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -256,6 +262,19 @@ func (m *model) handleCompactCommand() {
 		})
 		return
 	}
+
+	// Refresh the gauge. EstimateTokens is the same chars/4 heuristic the
+	// session uses internally, so it matches what the next LLM response will
+	// report up to that fuzz. The token-tracker's cache prefix is also reset
+	// by SetLastPromptTokens, since the new window starts a fresh prefix.
+	if tt := m.cfg.TokenTracker; tt != nil {
+		if est, estErr := m.cfg.SessionService.EstimateTokens(
+			m.cfg.SessionID, agent.AppName, agent.DefaultUserID,
+		); estErr == nil {
+			tt.SetLastPromptTokens(int64(est))
+		}
+	}
+
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Session context compacted.",
