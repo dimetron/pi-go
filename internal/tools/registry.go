@@ -32,7 +32,7 @@ func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
 		newGitHunkTool,
 	}
 
-	tools := make([]tool.Tool, 0, len(builders))
+	tools := make([]tool.Tool, 0, len(builders)+1)
 	for _, b := range builders {
 		t, err := b(sandbox)
 		if err != nil {
@@ -40,6 +40,14 @@ func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
 		}
 		tools = append(tools, t)
 	}
+
+	// Add session-stats (no sandbox needed).
+	sessionStatsTool, err := newSessionStatsTool()
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, sessionStatsTool)
+
 	return tools, nil
 }
 
