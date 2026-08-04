@@ -478,6 +478,27 @@ func saveModelToConfig(modelName, provider string) {
 func (m *model) formatContextUsage() string {
 	var b strings.Builder
 
+	// The breakdown answers "what is filling the window", which is the question
+	// a user asks before deciding what to trim. Lead with it.
+	if bd := m.cfg.ContextBreakdown; bd != nil {
+		used := int64(0)
+		window := int64(0)
+		if tt := m.cfg.TokenTracker; tt != nil {
+			used = tt.LastPromptTokens()
+			window = tt.ContextWindowSize()
+		}
+		if used == 0 {
+			used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
+		}
+		if window <= 0 {
+			window = autoRangeWindow(used)
+		}
+		b.WriteString("*Context usage*\n\n")
+		b.WriteString(RenderContextBreakdown(
+			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64)))
+		b.WriteString("\n\n")
+	}
+
 	// Count chars per role (rough token estimate: ~4 chars per token).
 	userChars, assistantChars, toolChars := 0, 0, 0
 	for _, msg := range m.chatModel.Messages {
@@ -595,6 +616,26 @@ func (m *model) formatContextUsage() string {
 		} else {
 			fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
 				formatTokenCount(promptTokens))
+		}
+
+		// Prompt cache. Reported explicitly even at zero hits — a silent
+		// section reads the same whether caching works or is entirely absent.
+		b.WriteString("\n*Prompt cache*\n")
+		cached := tt.LastCachedTokens()
+		if cached > 0 {
+			fmt.Fprintf(&b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
+				formatTokenCount(cached), formatTokenCount(promptTokens),
+				float64(cached)/float64(promptTokens)*100)
+		} else {
+			b.WriteString("- **Last request**: no cache hit\n")
+		}
+		if today := tt.CachedTokensToday(); today > 0 {
+			fmt.Fprintf(&b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
+				formatTokenCount(today), tt.CacheHitRateToday())
+		}
+		if prefix := tt.CachePrefixTokens(); prefix > 0 {
+			fmt.Fprintf(&b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
+				formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
 		}
 	}
 

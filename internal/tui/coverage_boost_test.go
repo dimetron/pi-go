@@ -511,6 +511,11 @@ type fakeTokenTracker struct {
 	lastPromptTok  int64
 	ctxWindowSize  int64
 	ctxPercentUsed float64
+	lastCachedTok  int64
+	cachedToday    int64
+	cacheHitRate   float64
+	bodyTokens     int64
+	cachePrefixTok int64
 }
 
 func (f fakeTokenTracker) Limit() int64             { return f.limit }
@@ -522,6 +527,11 @@ func (f fakeTokenTracker) ContextWindowSize() int64 { return f.ctxWindowSize }
 func (f fakeTokenTracker) ContextPercentUsed() float64 {
 	return f.ctxPercentUsed
 }
+func (f fakeTokenTracker) LastCachedTokens() int64    { return f.lastCachedTok }
+func (f fakeTokenTracker) CachedTokensToday() int64   { return f.cachedToday }
+func (f fakeTokenTracker) CacheHitRateToday() float64 { return f.cacheHitRate }
+func (f fakeTokenTracker) BodyTokens() int64          { return f.bodyTokens }
+func (f fakeTokenTracker) CachePrefixTokens() int64   { return f.cachePrefixTok }
 
 func TestFormatContextUsage_WithTracker_CB(t *testing.T) {
 	tt := fakeTokenTracker{

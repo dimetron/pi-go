@@ -653,8 +653,9 @@ func antRunNonStreaming(ctx context.Context, client *anthropic.Client, params an
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if message.Usage.InputTokens > 0 || message.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(message.Usage.InputTokens),
-			CandidatesTokenCount: int32(message.Usage.OutputTokens),
+			PromptTokenCount:        int32(message.Usage.InputTokens),
+			CandidatesTokenCount:    int32(message.Usage.OutputTokens),
+			CachedContentTokenCount: int32(message.Usage.CacheReadInputTokens),
 		}
 	}
 	yield(&model.LLMResponse{
@@ -796,8 +797,9 @@ func antRunNonStreamingBeta(ctx context.Context, client *anthropic.BetaService, 
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if message.Usage.InputTokens > 0 || message.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(message.Usage.InputTokens),
-			CandidatesTokenCount: int32(message.Usage.OutputTokens),
+			PromptTokenCount:        int32(message.Usage.InputTokens),
+			CandidatesTokenCount:    int32(message.Usage.OutputTokens),
+			CachedContentTokenCount: int32(message.Usage.CacheReadInputTokens),
 		}
 	}
 	yield(&model.LLMResponse{

@@ -354,7 +354,7 @@ func TestLLMTextFlushesAfterWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	log.llmFlushWindow = 5 * time.Millisecond
+	log.streamFlushWindow = 5 * time.Millisecond
 
 	log.LLMText("pi", "hel")
 	time.Sleep(10 * time.Millisecond)
@@ -373,6 +373,89 @@ func TestLLMTextFlushesAfterWindow(t *testing.T) {
 	}
 	if entries[1].Type != "llm_text" || entries[1].Content != "lo" {
 		t.Fatalf("unexpected second entry: %+v", entries[1])
+	}
+}
+
+func TestThinkingCoalescesContiguousChunks(t *testing.T) {
+	log := newTestLogger(t)
+
+	log.Thinking("pi", "Let me ")
+	log.Thinking("pi", "check the ")
+	log.Thinking("pi", "git status.")
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Type != "thinking" {
+		t.Fatalf("expected thinking entry, got %q", entries[0].Type)
+	}
+	if entries[0].Agent != "pi" {
+		t.Fatalf("expected agent pi, got %q", entries[0].Agent)
+	}
+	if entries[0].Content != "Let me check the git status." {
+		t.Fatalf("unexpected merged content: %q", entries[0].Content)
+	}
+}
+
+// Reasoning and reply text stream from the same agent back to back, so the two
+// runs must not be concatenated into whichever entry type opened first.
+func TestThinkingAndLLMTextStayDistinctEntries(t *testing.T) {
+	log := newTestLogger(t)
+
+	log.Thinking("pi", "the user wants a plan")
+	log.LLMText("pi", "Here is the plan.")
+	log.Thinking("pi", "now verify it")
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	want := []Entry{
+		{Type: "thinking", Agent: "pi", Content: "the user wants a plan"},
+		{Type: "llm_text", Agent: "pi", Content: "Here is the plan."},
+		{Type: "thinking", Agent: "pi", Content: "now verify it"},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("expected %d entries, got %d: %+v", len(want), len(entries), entries)
+	}
+	for i, w := range want {
+		got := entries[i]
+		if got.Type != w.Type || got.Agent != w.Agent || got.Content != w.Content {
+			t.Errorf("entry %d = {%q %q %q}, want {%q %q %q}",
+				i, got.Type, got.Agent, got.Content, w.Type, w.Agent, w.Content)
+		}
+	}
+}
+
+// A turn that reasons at length and then emits nothing else is exactly the
+// runaway-generation case: without this the log shows an unexplained gap.
+func TestThinkingSurvivesTurnWithNoReply(t *testing.T) {
+	log := newTestLogger(t)
+
+	log.ToolResult("pi", "read", "file contents")
+	for range 500 {
+		log.Thinking("pi", "Let me look at the design. ")
+	}
+
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, log.Path())
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[1].Type != "thinking" {
+		t.Fatalf("expected thinking entry, got %q", entries[1].Type)
+	}
+	if want := 500 * len("Let me look at the design. "); len(entries[1].Content) != want {
+		t.Errorf("reasoning content = %d bytes, want %d", len(entries[1].Content), want)
 	}
 }
 
@@ -425,6 +508,21 @@ func TestSessionStart(t *testing.T) {
 	defer func() { log.Close() }() //nolint:errcheck
 
 	log.SessionStart("session-123", "claude-3", "print")
+}
+
+// newTestLogger returns a logger writing under a temp HOME. The caller closes
+// it, since the flush of any pending streamed entry happens on Close and the
+// assertions read the file afterwards.
+func newTestLogger(t *testing.T) *Logger {
+	t.Helper()
+
+	t.Setenv("HOME", t.TempDir())
+
+	log, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return log
 }
 
 func readEntries(t *testing.T, path string) []Entry {

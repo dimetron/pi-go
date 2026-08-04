@@ -39,6 +39,15 @@ type Config struct {
 	SkillDirs []string
 	// AgentEventCh receives subagent events from the agent tool for live display.
 	AgentEventCh <-chan AgentSubEvent
+	// SystemNoticeCh receives short system messages that must be shown in the
+	// chat — auto-compaction outcomes, for instance. Compaction discards
+	// history, so it must never happen silently.
+	SystemNoticeCh <-chan string
+	// ContextBreakdown attributes fixed context overhead (system prompt, tool
+	// definitions, rules, skills, MCP tools, subagents) to its origins, so the
+	// gauge can show what is filling the window rather than only how much.
+	// Nil renders the gauge in a single severity color.
+	ContextBreakdown *ContextBreakdown
 	// TokenTracker tracks daily token usage and enforces limits. May be nil.
 	TokenTracker TokenTracker
 	// CompactMetrics tracks output compaction statistics. May be nil.
@@ -89,6 +98,8 @@ type InitResult struct {
 	SkillDirs         []string
 	GenerateCommitMsg func(context.Context, string) (string, error)
 	AgentEventCh      <-chan AgentSubEvent
+	SystemNoticeCh    <-chan string
+	ContextBreakdown  *ContextBreakdown
 	TokenTracker      TokenTracker
 	CompactMetrics    CompactStatsProvider
 	GitBranch         string
@@ -116,6 +127,14 @@ type TokenTracker interface {
 	LastPromptTokens() int64     // most recent prompt tokens from LLM response
 	ContextWindowSize() int64    // model's context window size (0 = unknown)
 	ContextPercentUsed() float64 // context window usage 0-100+
+
+	// Prompt-cache tracking. Prompt tokens are billed at a steep discount when
+	// served from cache, so LastPromptTokens alone overstates cost.
+	LastCachedTokens() int64    // cache reads on the most recent response
+	CachedTokensToday() int64   // cache reads accumulated today
+	CacheHitRateToday() float64 // share of today's prompt tokens cached, 0-100
+	BodyTokens() int64          // tokens accumulated after the cached prefix
+	CachePrefixTokens() int64   // stable cached prefix for this window
 }
 
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.

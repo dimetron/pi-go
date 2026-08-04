@@ -10,6 +10,9 @@ type flexTokenTracker struct {
 	limit, remaining, totalUsed     int64
 	percentUsed, ctxPercentUsed     float64
 	lastPromptTokens, ctxWindowSize int64
+	lastCachedTokens, cachedToday   int64
+	cacheHitRate                    float64
+	bodyTokens, cachePrefixTokens   int64
 }
 
 func (m flexTokenTracker) Limit() int64                { return m.limit }
@@ -19,6 +22,11 @@ func (m flexTokenTracker) TotalUsed() int64            { return m.totalUsed }
 func (m flexTokenTracker) LastPromptTokens() int64     { return m.lastPromptTokens }
 func (m flexTokenTracker) ContextWindowSize() int64    { return m.ctxWindowSize }
 func (m flexTokenTracker) ContextPercentUsed() float64 { return m.ctxPercentUsed }
+func (m flexTokenTracker) LastCachedTokens() int64     { return m.lastCachedTokens }
+func (m flexTokenTracker) CachedTokensToday() int64    { return m.cachedToday }
+func (m flexTokenTracker) CacheHitRateToday() float64  { return m.cacheHitRate }
+func (m flexTokenTracker) BodyTokens() int64           { return m.bodyTokens }
+func (m flexTokenTracker) CachePrefixTokens() int64    { return m.cachePrefixTokens }
 
 func TestRenderSidebar_Variations(t *testing.T) {
 	base := SidebarRenderInput{

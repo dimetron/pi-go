@@ -1310,3 +1310,55 @@ func TestAnthropicCacheControl_BetaPathWithAdvisor(t *testing.T) {
 		t.Errorf("last message block missing cache_control, got %+v", cc)
 	}
 }
+
+// TestAnthropicNonStreamingPropagatesCacheRead verifies that the
+// cache_creation_input_tokens and cache_read_input_tokens fields from
+// Anthropic's non-streaming response are surfaced on the LLMResponse.UsageMetadata
+// as CachedContentTokenCount so the sidebar's cache indicator reflects them.
+func TestAnthropicNonStreamingPropagatesCacheRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "msg_cache_test",
+			"type":        "message",
+			"role":        "assistant",
+			"model":       "claude-sonnet-4-6",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage": map[string]any{
+				"input_tokens":                100,
+				"output_tokens":               20,
+				"cache_creation_input_tokens": 50,
+				"cache_read_input_tokens":     75,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+	}
+	var final *model.LLMResponse
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+		if resp != nil {
+			final = resp
+		}
+	}
+	if final == nil {
+		t.Fatal("expected a final response")
+	}
+	if final.UsageMetadata == nil {
+		t.Fatal("expected non-nil UsageMetadata")
+	}
+	if final.UsageMetadata.CachedContentTokenCount != 75 {
+		t.Errorf("CachedContentTokenCount = %d, want 75 (cache_read_input_tokens)", final.UsageMetadata.CachedContentTokenCount)
+	}
+}

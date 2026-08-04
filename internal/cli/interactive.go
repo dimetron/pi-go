@@ -281,18 +281,25 @@ func deferredInit(
 		memRecorder = newDeferredMemoryRecorder(cfg, cwd)
 	}
 
-	// Build system instruction.
-	var instruction string
+	// Build system instruction. The parts are kept so the context gauge can
+	// attribute overhead to each section; composing them here is what keeps the
+	// breakdown honest — instruction is literally parts.String().
+	var (
+		instruction      string
+		instructionParts agent.InstructionParts
+	)
 	if flagSystem != "" {
-		instruction = flagSystem
+		instructionParts = agent.InstructionParts{Base: flagSystem}
 	} else {
-		instruction = agent.LoadInstruction(agent.SystemInstruction)
+		instructionParts = agent.LoadInstructionParts(agent.SystemInstruction)
 	}
+	instruction = instructionParts.String()
 
 	// Build callbacks.
 	compactorCfg := compactorConfigFrom(cfg)
 	compactMetrics := tools.NewCompactMetrics()
 	compactorCB := tools.BuildCompactorCallback(compactorCfg, compactMetrics)
+	resultDeduper := tools.NewResultDeduper()
 
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
@@ -305,7 +312,9 @@ func deferredInit(
 	if ps.lspMgr != nil {
 		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(ps.lspMgr))
 	}
-	afterCBs = append(afterCBs, compactorCB)
+	// Dedup runs after the compactor so both calls are compared in their final,
+	// post-compaction form.
+	afterCBs = append(afterCBs, compactorCB, tools.BuildDedupCallback(resultDeduper))
 
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
@@ -387,6 +396,27 @@ func deferredInit(
 	// Store session ID for resume hint on exit.
 	res.sessionID = sessionID
 
+	// Two-stage auto-compaction, installed as a pre-turn hook so history is
+	// only ever rewritten between turns. Buffered so a compaction notice never
+	// blocks the turn if the TUI is momentarily busy.
+	noticeCh := make(chan string, 8)
+	if hook := buildAutoCompactHook(autoCompactDeps{
+		SessionSvc:    sessionSvc,
+		Tracker:       tokenTracker,
+		Deduper:       resultDeduper,
+		Cfg:           autoCompactConfigFrom(cfg),
+		Log:           sessionLog,
+		SummarizerLLM: llm,
+		Notify: func(msg string) {
+			select {
+			case noticeCh <- msg:
+			default:
+			}
+		},
+	}); hook != nil {
+		ag.SetPreTurnHook(hook)
+	}
+
 	// Capture ACP subagent events (claude, gemini) under the session dir.
 	res.orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
 
@@ -415,13 +445,16 @@ func deferredInit(
 			SkillDirs:         ps.skillDirs,
 			GenerateCommitMsg: commitMsgFn,
 			AgentEventCh:      agentEventCh,
-			TokenTracker:      tokenTracker,
-			CompactMetrics:    compactMetrics,
-			GitBranch:         ps.gitBranch,
-			DiffAdded:         ps.diffAdded,
-			DiffRemoved:       ps.diffRemoved,
-			MCPToolsets:       ps.mcpToolsets,
-			MCPServers:        buildMCPServerConfigs(cfg),
+			SystemNoticeCh:    noticeCh,
+			ContextBreakdown: buildContextBreakdown(
+				instructionParts, coreTools, mcpToolsets, ps.skills, ps.agentConfigs),
+			TokenTracker:   tokenTracker,
+			CompactMetrics: compactMetrics,
+			GitBranch:      ps.gitBranch,
+			DiffAdded:      ps.diffAdded,
+			DiffRemoved:    ps.diffRemoved,
+			MCPToolsets:    ps.mcpToolsets,
+			MCPServers:     buildMCPServerConfigs(cfg),
 		},
 	}
 
@@ -840,6 +873,11 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
 			ctxWindowSize = n
 		}
+	}
+	// An explicit config value wins: the embedded catalog does not cover every
+	// provider's models, and auto-compaction needs a real window to work from.
+	if cfg.ContextWindow > 0 {
+		ctxWindowSize = cfg.ContextWindow
 	}
 	tokenTracker.SetContextWindowSize(ctxWindowSize)
 	llm = guardrail.WrapModel(llm, tokenTracker)

@@ -18,15 +18,15 @@ type Logger struct {
 	path string
 	enc  *json.Encoder
 
-	pendingLLM      *Entry
-	pendingLLMSince time.Time
-	llmFlushWindow  time.Duration
+	pendingStream      *Entry
+	pendingStreamSince time.Time
+	streamFlushWindow  time.Duration
 }
 
 // Entry represents a single log entry.
 type Entry struct {
 	Time    string `json:"time"`
-	Type    string `json:"type"`              // "user", "llm_text", "tool_call", "tool_result", "error", "info"
+	Type    string `json:"type"`              // "user", "llm_text", "thinking", "tool_call", "tool_result", "error", "info"
 	Agent   string `json:"agent,omitempty"`   // agent name (for subagents)
 	Tool    string `json:"tool,omitempty"`    // tool name
 	Content string `json:"content,omitempty"` // text content or error message
@@ -62,10 +62,10 @@ func New() (*Logger, error) {
 	enc.SetEscapeHTML(false)
 
 	return &Logger{
-		file:           f,
-		path:           logPath,
-		enc:            enc,
-		llmFlushWindow: 500 * time.Millisecond,
+		file:              f,
+		path:              logPath,
+		enc:               enc,
+		streamFlushWindow: 500 * time.Millisecond,
 	}, nil
 }
 
@@ -87,7 +87,7 @@ func (l *Logger) Close() error {
 		return nil
 	}
 
-	l.flushPendingLLMLocked()
+	l.flushPendingStreamLocked()
 
 	err := l.file.Close()
 	l.file = nil
@@ -108,35 +108,51 @@ func (l *Logger) Log(e Entry) {
 		e.Time = time.Now().Format(time.RFC3339Nano)
 	}
 
-	if e.Type == "llm_text" {
-		if l.pendingLLM == nil {
-			pending := e
-			l.pendingLLM = &pending
-			l.pendingLLMSince = time.Now()
-			return
-		}
-
-		if l.pendingLLM.Agent == e.Agent {
-			if l.llmFlushWindow > 0 && time.Since(l.pendingLLMSince) >= l.llmFlushWindow {
-				l.flushPendingLLMLocked()
-				pending := e
-				l.pendingLLM = &pending
-				l.pendingLLMSince = time.Now()
-				return
-			}
-			l.pendingLLM.Content += e.Content
-			return
-		}
-
-		l.flushPendingLLMLocked()
-		pending := e
-		l.pendingLLM = &pending
-		l.pendingLLMSince = time.Now()
+	if streamedTypes[e.Type] {
+		l.coalesceLocked(e)
 		return
 	}
 
-	l.flushPendingLLMLocked()
+	l.flushPendingStreamLocked()
 	l.writeEntryLocked(e)
+}
+
+// streamedTypes are the entry types that arrive as a long run of small deltas
+// rather than as one complete message. They are merged into a single entry per
+// contiguous run so a reply does not land in the log one token per line.
+//
+// Reasoning is streamed the same way ordinary text is, so it has to be listed
+// here too: a model that thinks for six minutes emits tens of thousands of
+// deltas, and writing one entry each would bury the rest of the session.
+var streamedTypes = map[string]bool{
+	"llm_text": true,
+	"thinking": true,
+}
+
+// coalesceLocked merges a streamed delta into the pending entry, or starts a
+// new pending entry when this delta belongs to a different run.
+//
+// A run is broken by any of: a different entry type, a different agent, or the
+// flush window elapsing. Type is part of that test and not merely the agent —
+// reasoning and reply text stream from the same agent, back to back, so
+// matching on agent alone would concatenate a model's thinking onto its answer
+// and emit the result under whichever type happened to arrive first.
+func (l *Logger) coalesceLocked(e Entry) {
+	sameRun := l.pendingStream != nil &&
+		l.pendingStream.Type == e.Type &&
+		l.pendingStream.Agent == e.Agent
+	withinWindow := l.streamFlushWindow <= 0 ||
+		time.Since(l.pendingStreamSince) < l.streamFlushWindow
+
+	if sameRun && withinWindow {
+		l.pendingStream.Content += e.Content
+		return
+	}
+
+	l.flushPendingStreamLocked()
+	pending := e
+	l.pendingStream = &pending
+	l.pendingStreamSince = time.Now()
 }
 
 // Info logs an informational message.
@@ -164,6 +180,18 @@ func (l *Logger) LLMText(agent, text string) {
 	l.Log(Entry{Type: "llm_text", Agent: agent, Content: text})
 }
 
+// Thinking logs streamed model reasoning.
+//
+// Reasoning is logged under its own type rather than folded into llm_text so a
+// reader can still tell what the model said from what it only thought, and so
+// tooling that reconstructs a transcript can drop it. It is logged at all
+// because a turn that reasons and then produces nothing — a degenerate
+// repetition loop, a refusal formed and discarded — otherwise leaves the
+// session log with an unexplained gap between two tool results.
+func (l *Logger) Thinking(agent, text string) {
+	l.Log(Entry{Type: "thinking", Agent: agent, Content: text})
+}
+
 // ToolCall logs a tool invocation.
 func (l *Logger) ToolCall(agent, tool string, args any) {
 	l.Log(Entry{Type: "tool_call", Agent: agent, Tool: tool, Args: args})
@@ -179,13 +207,13 @@ func (l *Logger) SessionStart(sessionID, model, mode string) {
 	l.Log(Entry{Type: "session_start", Session: sessionID, Model: model, Content: mode})
 }
 
-func (l *Logger) flushPendingLLMLocked() {
-	if l.pendingLLM == nil {
+func (l *Logger) flushPendingStreamLocked() {
+	if l.pendingStream == nil {
 		return
 	}
-	l.writeEntryLocked(*l.pendingLLM)
-	l.pendingLLM = nil
-	l.pendingLLMSince = time.Time{}
+	l.writeEntryLocked(*l.pendingStream)
+	l.pendingStream = nil
+	l.pendingStreamSince = time.Time{}
 }
 
 func (l *Logger) writeEntryLocked(e Entry) {

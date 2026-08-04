@@ -386,6 +386,11 @@ func (m *sidebarMockTokenTracker) PercentUsed() float64        { return m.percen
 func (m *sidebarMockTokenTracker) LastPromptTokens() int64     { return 0 }
 func (m *sidebarMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *sidebarMockTokenTracker) ContextPercentUsed() float64 { return 0 }
+func (m *sidebarMockTokenTracker) LastCachedTokens() int64     { return 0 }
+func (m *sidebarMockTokenTracker) CachedTokensToday() int64    { return 0 }
+func (m *sidebarMockTokenTracker) CacheHitRateToday() float64  { return 0 }
+func (m *sidebarMockTokenTracker) BodyTokens() int64           { return 0 }
+func (m *sidebarMockTokenTracker) CachePrefixTokens() int64    { return 0 }
 
 func TestAgentStatusPriority(t *testing.T) {
 	tests := []struct {

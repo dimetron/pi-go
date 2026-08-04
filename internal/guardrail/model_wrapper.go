@@ -44,7 +44,9 @@ func (g *guardedModel) GenerateContent(ctx context.Context, req *model.LLMReques
 			// Track usage from each response chunk.
 			if resp != nil && resp.UsageMetadata != nil {
 				u := resp.UsageMetadata
-				_ = g.tracker.Add(u.PromptTokenCount, u.CandidatesTokenCount)
+				// PromptTokenCount is inclusive of cache reads; pass the cached
+				// portion through so cost reporting can discount it.
+				_ = g.tracker.AddWithCache(u.PromptTokenCount, u.CandidatesTokenCount, u.CachedContentTokenCount)
 			}
 			if !yield(resp, err) {
 				return

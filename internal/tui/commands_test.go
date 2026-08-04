@@ -357,6 +357,11 @@ func (m *cmdMockTokenTracker) PercentUsed() float64        { return m.percentUse
 func (m *cmdMockTokenTracker) LastPromptTokens() int64     { return 0 }
 func (m *cmdMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *cmdMockTokenTracker) ContextPercentUsed() float64 { return 0 }
+func (m *cmdMockTokenTracker) LastCachedTokens() int64     { return 0 }
+func (m *cmdMockTokenTracker) CachedTokensToday() int64    { return 0 }
+func (m *cmdMockTokenTracker) CacheHitRateToday() float64  { return 0 }
+func (m *cmdMockTokenTracker) BodyTokens() int64           { return 0 }
+func (m *cmdMockTokenTracker) CachePrefixTokens() int64    { return 0 }
 
 func TestCommandFormatContextUsage_WithTokenTracker(t *testing.T) {
 	m := &model{

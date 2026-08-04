@@ -253,6 +253,11 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 			ctxWindowSize = n
 		}
 	}
+	// An explicit config value wins: the embedded catalog does not cover every
+	// provider's models, and auto-compaction needs a real window to work from.
+	if cfg.ContextWindow > 0 {
+		ctxWindowSize = cfg.ContextWindow
+	}
 	tokenTracker.SetContextWindowSize(ctxWindowSize)
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
@@ -489,9 +494,13 @@ func runNonInteractive(
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
+	// Dedup runs after the compactor so both calls are compared in their final,
+	// post-compaction form.
+	resultDeduper := tools.NewResultDeduper()
 	afterCBs = append(afterCBs,
 		lsp.BuildLSPAfterToolCallback(lspMgr),
-		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()))
+		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()),
+		tools.BuildDedupCallback(resultDeduper))
 
 	// memSessionID is only known once the session is created below; the
 	// callback reads it at call time, so recording starts from that point.
@@ -566,6 +575,21 @@ func runNonInteractive(
 	sessionID, err := resolveSessionID(ctx, ag, sessionSvc)
 	if err != nil {
 		return err
+	}
+
+	// Two-stage auto-compaction: shed superseded tool results at the lower
+	// threshold, summarize at the upper one. Installed as a pre-turn hook so it
+	// only ever rewrites history between turns.
+	if hook := buildAutoCompactHook(autoCompactDeps{
+		SessionSvc:    sessionSvc,
+		Tracker:       tokenTracker,
+		Deduper:       resultDeduper,
+		Cfg:           autoCompactConfigFrom(cfg),
+		Log:           sessionLog,
+		SummarizerLLM: llm,
+		Notify:        func(msg string) { fmt.Fprintf(os.Stderr, "pi-go: %s\n", msg) },
+	}); hook != nil {
+		ag.SetPreTurnHook(hook)
 	}
 
 	// Capture ACP subagent events (claude, gemini) under the session dir.
@@ -775,6 +799,31 @@ func compactorConfigFrom(cfg config.Config) tools.CompactorConfig {
 		compactorCfg.MaxLines = cfg.Compactor.MaxLines
 	}
 	return compactorCfg
+}
+
+// autoCompactConfigFrom resolves the two-stage auto-compaction settings,
+// falling back to the session package's defaults for anything unset.
+func autoCompactConfigFrom(cfg config.Config) pisession.AutoCompactConfig {
+	acCfg := pisession.DefaultAutoCompactConfig()
+	if cfg.AutoCompact == nil {
+		return acCfg
+	}
+	if cfg.AutoCompact.Enabled != nil {
+		acCfg.Enabled = *cfg.AutoCompact.Enabled
+	}
+	if cfg.AutoCompact.ShedPercent > 0 {
+		acCfg.ShedPercent = cfg.AutoCompact.ShedPercent
+	}
+	if cfg.AutoCompact.SummarizePercent > 0 {
+		acCfg.SummarizePercent = cfg.AutoCompact.SummarizePercent
+	}
+	if cfg.AutoCompact.KeepUserMessageTokens > 0 {
+		acCfg.KeepUserMessageTokens = cfg.AutoCompact.KeepUserMessageTokens
+	}
+	if cfg.AutoCompact.KeepRecentEvents > 0 {
+		acCfg.KeepRecentEvents = cfg.AutoCompact.KeepRecentEvents
+	}
+	return acCfg
 }
 
 // memoryObservationCallback records each successful tool call as a raw
@@ -1082,6 +1131,7 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 		for _, part := range ev.Content.Parts {
 			if part.Text != "" && ev.Content.Role == "thinking" {
 				fmt.Fprintf(os.Stderr, "\033[2m%s\033[0m", part.Text)
+				log.Thinking(ev.Author, part.Text)
 				continue
 			}
 			if part.Text != "" {
@@ -1180,6 +1230,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 					Agent: ev.Author,
 					Delta: part.Text,
 				})
+				log.Thinking(ev.Author, part.Text)
 				continue
 			}
 			if part.Text != "" {

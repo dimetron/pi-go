@@ -489,6 +489,9 @@ func (m *model) Init() tea.Cmd {
 	if m.cfg.AgentEventCh != nil {
 		cmds = append(cmds, waitForSubEvent(m.cfg.AgentEventCh))
 	}
+	if m.cfg.SystemNoticeCh != nil {
+		cmds = append(cmds, waitForSystemNotice(m.cfg.SystemNoticeCh))
+	}
 	cmds = append(cmds, memoryTickCmd(m.cwd()))
 	return tea.Batch(cmds...)
 }
@@ -639,6 +642,12 @@ func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case agentSubEventMsg:
 		model, cmd := m.handleAgentSubEvent(msg)
 		return model, cmd, true
+	case systemNoticeMsg:
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: msg.text,
+		})
+		return m, waitForSystemNotice(m.cfg.SystemNoticeCh), true
 	case agentDoneMsg:
 		model, cmd := m.handleAgentDone(msg)
 		return model, cmd, true
@@ -1431,7 +1440,9 @@ func (m *model) View() tea.View {
 	inputCursorY := strings.Count(topSection, "\n") + 1 + strings.Count(bottom.String(), "\n")
 	bottom.WriteString(inputArea)
 	bottom.WriteString("\n")
-	bottom.WriteString(fullHr)
+	// The closing rule doubles as the session context gauge — same row, same
+	// width, now carrying a reading instead of only closing the frame.
+	bottom.WriteString(renderContextRule(m.contextRuleFor(m.width)))
 
 	// Pad the bottom section to the full terminal width so no row is wider or
 	// narrower than m.width. The status bar's Width style handles it for that
@@ -1987,6 +1998,8 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg
 		m.cfg.AgentEventCh = r.AgentEventCh
+		m.cfg.SystemNoticeCh = r.SystemNoticeCh
+		m.cfg.ContextBreakdown = r.ContextBreakdown
 		m.cfg.TokenTracker = r.TokenTracker
 		m.cfg.CompactMetrics = r.CompactMetrics
 		m.statusModel.GitBranch = r.GitBranch
@@ -2002,6 +2015,9 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
+		}
+		if r.SystemNoticeCh != nil {
+			cmds = append(cmds, waitForSystemNotice(r.SystemNoticeCh))
 		}
 		cmds = append(cmds, memoryTickCmd(m.cwd()))
 		return m, tea.Batch(cmds...)

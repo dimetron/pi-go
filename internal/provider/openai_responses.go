@@ -212,6 +212,7 @@ type responsesStreamState struct {
 	finishReason     string
 	promptTokens     int64
 	completionTokens int64
+	cachedTokens     int64
 	responseID       string
 }
 
@@ -265,6 +266,9 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 			}
 			if evt.Response.Usage.OutputTokens > 0 {
 				state.completionTokens = evt.Response.Usage.OutputTokens
+			}
+			if c := evt.Response.Usage.InputTokensDetails.CachedTokens; c > 0 {
+				state.cachedTokens = c
 			}
 			state.finishReason = string(evt.Response.Status)
 			continue
@@ -348,8 +352,9 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if state.promptTokens > 0 || state.completionTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(state.promptTokens),
-			CandidatesTokenCount: int32(state.completionTokens),
+			PromptTokenCount:        int32(state.promptTokens),
+			CandidatesTokenCount:    int32(state.completionTokens),
+			CachedContentTokenCount: int32(state.cachedTokens),
 		}
 	}
 
@@ -420,8 +425,9 @@ func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params respo
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(resp.Usage.InputTokens),
-			CandidatesTokenCount: int32(resp.Usage.OutputTokens),
+			PromptTokenCount:        int32(resp.Usage.InputTokens),
+			CandidatesTokenCount:    int32(resp.Usage.OutputTokens),
+			CachedContentTokenCount: int32(resp.Usage.InputTokensDetails.CachedTokens),
 		}
 	}
 
