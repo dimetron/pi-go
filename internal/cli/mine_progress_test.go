@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestMineProgressDoIsSerialized is the regression test for the data race: the
@@ -114,6 +115,129 @@ func TestMineProgressFinishTerminatesLine(t *testing.T) {
 
 	if !strings.HasSuffix(buf.String(), "\n") {
 		t.Errorf("finish must terminate the live line, got %q", buf.String())
+	}
+}
+
+// newTestBar returns a printer with a fixed width and a settled ETA baseline.
+func newTestBar(t *testing.T, width int) *mineProgress {
+	t.Helper()
+	p := newMineProgress(&bytes.Buffer{})
+	p.width, p.tty = width, true
+	p.stage = "embed"
+	p.stageStart = time.Now().Add(-30 * time.Second)
+	p.stageBase = 0
+	return p
+}
+
+// TestLineFitsTerminalWidth is the regression test for the byte-vs-column bug.
+// The bar glyphs and spinner are 3 bytes each, so measuring with len() made the
+// line look ~45 columns wider than it is. Two symptoms followed: the filename
+// field computed as negative and was dropped from every frame, and clipping
+// sliced a glyph in half and emitted U+FFFD.
+//
+// It also matters that the line never exceeds the width: it is redrawn with \r,
+// which only returns to the start of the current line, so a wrapped line smears
+// down the terminal instead of updating in place.
+func TestLineFitsTerminalWidth(t *testing.T) {
+	for _, width := range []int{200, 120, 100, 80, 60, 40, 20, 10} {
+		p := newTestBar(t, width)
+		line := p.lineLocked("embed", "internal/palace/embedder_ollama.go", 3891, 6282, "chunks")
+
+		if got := dispWidth(line); got > width-1 {
+			t.Errorf("width=%d: line is %d columns, must be <= %d: %q", width, got, width-1, line)
+		}
+		if strings.ContainsRune(line, '�') {
+			t.Errorf("width=%d: line contains a broken rune: %q", width, line)
+		}
+	}
+}
+
+// TestLineShowsFilenameWhenItFits is the other half of that bug: a line that
+// fits the width is not enough if the field a user actually watches is gone.
+func TestLineShowsFilenameWhenItFits(t *testing.T) {
+	p := newTestBar(t, 100)
+	line := p.lineLocked("embed", "internal/palace/embedder_ollama.go", 3891, 6282, "chunks")
+
+	if !strings.Contains(line, "embedder_ollama.go") {
+		t.Errorf("filename missing from a 100-column line: %q", line)
+	}
+	if !strings.Contains(line, "left") {
+		t.Errorf("ETA missing from a 100-column line: %q", line)
+	}
+}
+
+// TestElideLeftKeepsBasename: paths share long prefixes and differ at the end,
+// so trimming from the right would leave every line looking identical.
+func TestElideLeftKeepsBasename(t *testing.T) {
+	const path = "internal/palace/embedder_ollama.go"
+
+	// Wide enough for "..." + the basename (21 columns): the basename survives.
+	got := elideLeft(path, 24)
+	if !strings.HasSuffix(got, "embedder_ollama.go") {
+		t.Errorf("elideLeft dropped the basename: %q", got)
+	}
+
+	// Every width must stay within budget and keep the tail, even when the
+	// field is too narrow for the whole basename.
+	for _, w := range []int{40, 24, 20, 12, 4, 3, 1} {
+		got := elideLeft(path, w)
+		if dispWidth(got) > w {
+			t.Errorf("elideLeft(%d) = %d columns, want <= %d: %q", w, dispWidth(got), w, got)
+		}
+		if !strings.HasSuffix(path, strings.TrimPrefix(got, "...")) {
+			t.Errorf("elideLeft(%d) = %q, which is not a tail of the path", w, got)
+		}
+	}
+}
+
+// TestETAWithholdsEarlyEstimate: an ETA extrapolated from the first couple of
+// batches swings wildly and reads as a broken display. Nothing is better.
+func TestETAWithholdsEarlyEstimate(t *testing.T) {
+	p := newMineProgress(&bytes.Buffer{})
+	p.stage, p.stageStart, p.stageBase = "embed", time.Now(), 0
+
+	if got := p.etaLocked(2, 6282); got != "" {
+		t.Errorf("ETA should be withheld on the first samples, got %q", got)
+	}
+
+	p.stageStart = time.Now().Add(-30 * time.Second)
+	if got := p.etaLocked(3000, 6282); got == "" {
+		t.Error("ETA should appear once the stage has a settled rate")
+	}
+	// A finished stage has nothing left to estimate.
+	if got := p.etaLocked(6282, 6282); got != "" {
+		t.Errorf("ETA should be empty at completion, got %q", got)
+	}
+}
+
+// TestETAResetsOnStageChange: scan, embed and insert run at very different
+// rates, so carrying a rate across the boundary predicts a wrong finish time.
+func TestETAResetsOnStageChange(t *testing.T) {
+	p := newTestBar(t, 120)
+	p.lineLocked("embed", "a.go", 3000, 6282, "chunks")
+
+	p.lineLocked("insert", "a.go", 3000, 6282, "chunks")
+	if p.stage != "insert" {
+		t.Fatalf("stage = %q, want insert", p.stage)
+	}
+	if p.stageBase != 3000 {
+		t.Errorf("stageBase = %d, want 3000 (baseline must rebase on stage change)", p.stageBase)
+	}
+	if time.Since(p.stageStart) > time.Second {
+		t.Error("stageStart must reset when the stage changes")
+	}
+}
+
+func TestCompactCount(t *testing.T) {
+	for _, tc := range []struct {
+		in   int
+		want string
+	}{
+		{0, "0"}, {999, "999"}, {1000, "1.0k"}, {6282, "6.3k"}, {21074, "21k"},
+	} {
+		if got := compactCount(tc.in); got != tc.want {
+			t.Errorf("compactCount(%d) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
