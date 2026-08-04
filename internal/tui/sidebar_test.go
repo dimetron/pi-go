@@ -365,6 +365,7 @@ func (m *sidebarMockTokenTracker) Remaining() int64            { return m.remain
 func (m *sidebarMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
 func (m *sidebarMockTokenTracker) LastPromptTokens() int64     { return 0 }
 func (m *sidebarMockTokenTracker) SetLastPromptTokens(int64)   {}
+func (m *sidebarMockTokenTracker) ResetContextWindow()         {}
 func (m *sidebarMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *sidebarMockTokenTracker) ContextPercentUsed() float64 { return 0 }
 func (m *sidebarMockTokenTracker) LastCachedTokens() int64     { return 0 }

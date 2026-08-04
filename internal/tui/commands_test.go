@@ -68,6 +68,113 @@ func TestHandleCompactCommand_UpdatesGaugeTracker(t *testing.T) {
 	}
 }
 
+// --- /clear context reset tests ---
+
+// /clear must reset what the model sees, not just what the user sees: the
+// session's events go away and the context gauge is zeroed. Clearing only the
+// transcript would leave the user paying for every prior turn while the screen
+// claims the conversation is gone.
+func TestSlashClear_ClearsSessionEventsAndGauge(t *testing.T) {
+	svc, id := newCompactTestSession(t)
+	tracker := &cmdMockTokenTracker{lastPrompt: 12345}
+
+	m := newTestModel(t)
+	m.cfg.SessionService = svc
+	m.cfg.SessionID = id
+	m.cfg.TokenTracker = tracker
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: "hi"})
+
+	m.handleSlashCommand("/clear")
+
+	if len(m.chatModel.Messages) != 0 {
+		t.Errorf("expected transcript cleared, got %d messages: %+v",
+			len(m.chatModel.Messages), m.chatModel.Messages)
+	}
+	if tracker.resetCount != 1 {
+		t.Errorf("ResetContextWindow calls = %d, want 1", tracker.resetCount)
+	}
+	if got := tracker.LastPromptTokens(); got != 0 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want 0 (gauge must read empty)", got)
+	}
+
+	est, err := svc.EstimateTokens(id, agent.AppName, agent.DefaultUserID)
+	if err != nil {
+		t.Fatalf("EstimateTokens: %v", err)
+	}
+	if est != 0 {
+		t.Errorf("session still holds ~%d tokens of events after /clear, want 0", est)
+	}
+}
+
+// If the events survive, the gauge must too: zeroing it would under-report a
+// still-full window, which is a worse lie than a stale reading.
+func TestClearSessionContext_KeepsGaugeWhenClearFails(t *testing.T) {
+	svc, _ := newCompactTestSession(t)
+	tracker := &cmdMockTokenTracker{lastPrompt: 999}
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			SessionService: svc,
+			SessionID:      "no-such-session",
+			TokenTracker:   tracker,
+		},
+	}
+
+	m.clearSessionContext()
+
+	if tracker.resetCount != 0 {
+		t.Errorf("ResetContextWindow called %d times on a failed clear, want 0", tracker.resetCount)
+	}
+	if got := tracker.LastPromptTokens(); got != 999 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want 999 (unchanged)", got)
+	}
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected the failure to be surfaced, got %d messages", len(m.chatModel.Messages))
+	}
+	if !strings.Contains(m.chatModel.Messages[0].content, "not cleared") {
+		t.Errorf("expected a 'not cleared' notice, got %q", m.chatModel.Messages[0].content)
+	}
+}
+
+// Both dependencies are optional; neither may panic when absent.
+func TestClearSessionContext_NilDependencies(t *testing.T) {
+	t.Run("no session service still zeroes the gauge", func(t *testing.T) {
+		tracker := &cmdMockTokenTracker{lastPrompt: 42}
+		m := &model{
+			chatModel: ChatModel{Messages: make([]message, 0)},
+			cfg:       Config{TokenTracker: tracker},
+		}
+
+		m.clearSessionContext()
+
+		if tracker.resetCount != 1 {
+			t.Errorf("ResetContextWindow calls = %d, want 1", tracker.resetCount)
+		}
+	})
+
+	t.Run("no token tracker still clears the events", func(t *testing.T) {
+		svc, id := newCompactTestSession(t)
+		m := &model{
+			chatModel: ChatModel{Messages: make([]message, 0)},
+			cfg:       Config{SessionService: svc, SessionID: id},
+		}
+
+		m.clearSessionContext()
+
+		est, err := svc.EstimateTokens(id, agent.AppName, agent.DefaultUserID)
+		if err != nil {
+			t.Fatalf("EstimateTokens: %v", err)
+		}
+		if est != 0 {
+			t.Errorf("events survived /clear: ~%d tokens", est)
+		}
+		if len(m.chatModel.Messages) != 0 {
+			t.Errorf("expected no notice on success, got %+v", m.chatModel.Messages)
+		}
+	})
+}
+
 // --- handleThemeCommand tests ---
 
 func TestHandleThemeCommand_NilThemeManager(t *testing.T) {
@@ -388,6 +495,7 @@ type cmdMockTokenTracker struct {
 	percentUsed float64
 	lastPrompt  int64
 	setCount    int
+	resetCount  int
 }
 
 func (m *cmdMockTokenTracker) TotalUsed() int64        { return m.totalUsed }
@@ -397,6 +505,9 @@ func (m *cmdMockTokenTracker) PercentUsed() float64    { return m.percentUsed }
 func (m *cmdMockTokenTracker) LastPromptTokens() int64 { return m.lastPrompt }
 func (m *cmdMockTokenTracker) SetLastPromptTokens(n int64) {
 	m.lastPrompt, m.setCount = n, m.setCount+1
+}
+func (m *cmdMockTokenTracker) ResetContextWindow() {
+	m.lastPrompt, m.resetCount = 0, m.resetCount+1
 }
 func (m *cmdMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *cmdMockTokenTracker) ContextPercentUsed() float64 { return 0 }

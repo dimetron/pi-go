@@ -56,6 +56,10 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.loadingItems = nil
 		m.matrix.clear()
 		m.matrix.feed("pi-go", m.mainWidth())
+		// Drop the session's events and zero the context gauge. Without
+		// this the transcript looks empty while the model still receives —
+		// and still pays for — every prior turn.
+		m.clearSessionContext()
 		// Reset the terminal window/tab title and the persisted session
 		// metadata title. Funnel through setSessionTitle("") so the
 		// agent's SetSessionTitle is also called and meta.json stays in
@@ -232,6 +236,36 @@ func (m *model) handleBranchCommand(args []string) {
 			role:    "assistant",
 			content: fmt.Sprintf("Created and switched to branch `%s`.", branchName),
 		})
+	}
+}
+
+// clearSessionContext empties the session's event history and zeroes the
+// context gauge, so /clear resets what the model sees rather than only what
+// the user sees.
+//
+// Order matters: the gauge is only zeroed once the events are actually gone.
+// If ClearEvents fails the history survives, and a zeroed gauge would then
+// under-report a still-full window — a worse lie than the stale reading it
+// replaced. So on error the failure is surfaced in the chat and the tracker is
+// left alone.
+//
+// Both dependencies are optional: a model can be built without a session
+// service (nothing to clear) or without a token tracker (no gauge to zero).
+func (m *model) clearSessionContext() {
+	if m.cfg.SessionService != nil {
+		if err := m.cfg.SessionService.ClearEvents(
+			m.cfg.SessionID, agent.AppName, agent.DefaultUserID,
+		); err != nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Context not cleared: %v", err),
+			})
+			return
+		}
+	}
+
+	if tt := m.cfg.TokenTracker; tt != nil {
+		tt.ResetContextWindow()
 	}
 }
 

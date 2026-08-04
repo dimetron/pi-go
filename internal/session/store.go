@@ -961,6 +961,50 @@ func (s *FileService) Compact(sessionID, appName, userID string, summarizer Summ
 	return nil
 }
 
+// ClearEvents drops every event from a session, in memory and on disk, so the
+// next LLM request starts from an empty context window.
+//
+// This is what the TUI's /clear needs and what Compact cannot provide:
+// compaction replaces history with a summary (which is still history) and
+// returns early when the session is under its token threshold, so on a short
+// session it is a no-op. Clearing is unconditional.
+//
+// Everything that is not conversation is preserved: session state, meta
+// (title, model, timestamps), plan context and branches all survive. The user
+// cleared the conversation, not the session.
+//
+// The ATIF writer is replaced with a fresh one so the trajectory numbering
+// restarts alongside the events rather than continuing over a history that no
+// longer exists.
+func (s *FileService) ClearEvents(sessionID, appName, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, err := s.loadSession(sessionID, appName, userID)
+	if err != nil {
+		return fmt.Errorf("loading session for clear: %w", err)
+	}
+
+	sess.events = nil
+
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	if err := rewriteEvents(sessionDir, nil); err != nil {
+		return fmt.Errorf("rewriting events after clear: %w", err)
+	}
+
+	sess.atifWriter = atif.NewWriter(
+		filepath.Join(sessionDir, "trajectory.atif.json"),
+		atif.SessionMeta{
+			SessionID: sessionID,
+			AgentName: sess.meta.AppName,
+			Model:     sess.meta.Model,
+			WorkDir:   sess.meta.WorkDir,
+		},
+	)
+
+	return nil
+}
+
 // EstimateTokens returns an approximate token count for a session's events.
 // Uses a simple chars/4 heuristic.
 func (s *FileService) EstimateTokens(sessionID, appName, userID string) (int, error) {

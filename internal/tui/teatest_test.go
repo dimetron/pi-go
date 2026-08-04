@@ -263,6 +263,7 @@ func (m *mockTokenTracker) PercentUsed() float64        { return m.percentUsed }
 func (m *mockTokenTracker) TotalUsed() int64            { return m.totalUsed }
 func (m *mockTokenTracker) LastPromptTokens() int64     { return 0 }
 func (m *mockTokenTracker) SetLastPromptTokens(int64)   {}
+func (m *mockTokenTracker) ResetContextWindow()         {}
 func (m *mockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *mockTokenTracker) ContextPercentUsed() float64 { return 0 }
 func (m *mockTokenTracker) LastCachedTokens() int64     { return 0 }
