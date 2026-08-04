@@ -105,14 +105,22 @@ echo "dimetron@me.com $(git config user.signingkey)" > ~/.config/git/allowed_sig
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ```
 
-### Do not reach for `--no-verify`
+### Never use `--no-verify`
 
-The pre-commit hook runs `golangci-lint` against the **primary checkout**, so it
-can fail on pre-existing issues in files a worktree branch never touched
-(currently 10 `SA1019` deprecation errors in `hack/test/mcp/`). Bypassing with
-`--no-verify` also skips signing hooks. If the hook blocks on something unrelated
-to the change, say so and confirm before bypassing, and record the reason in the
-commit message.
+**Do not pass `--no-verify` to `git commit`, ever.** Not to unblock a failing
+hook, not "just this once", not with a note in the commit message. There is no
+case in this repo where it is the right answer.
+
+`--no-verify` skips *all* hooks, including the signing path — so a bypassed
+commit lands unsigned, and because `gpg.ssh.allowedSignersFile` is unset (see
+above) nothing will tell you. That is how `0714568`, `a8b243b` and `bcb6d26`
+ended up with no signature.
+
+The hook that usually tempts this is `golangci-lint`, which runs against the
+**primary checkout** and so can fail on pre-existing issues in files a worktree
+branch never touched (currently 10 `SA1019` deprecation errors in
+`hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
+the unrelated lint failure or to have the user decide, not to bypass the hook.
 
 ## Build, test, lint
 
