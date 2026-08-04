@@ -524,6 +524,7 @@ func (f fakeTokenTracker) PercentUsed() float64      { return f.pctUsed }
 func (f fakeTokenTracker) TotalUsed() int64          { return f.totalUsed }
 func (f fakeTokenTracker) LastPromptTokens() int64   { return f.lastPromptTok }
 func (f fakeTokenTracker) SetLastPromptTokens(int64) {}
+func (f fakeTokenTracker) ResetContextWindow()       {}
 func (f fakeTokenTracker) ContextWindowSize() int64  { return f.ctxWindowSize }
 func (f fakeTokenTracker) ContextPercentUsed() float64 {
 	return f.ctxPercentUsed

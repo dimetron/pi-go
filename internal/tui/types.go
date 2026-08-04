@@ -135,6 +135,14 @@ type TokenTracker interface {
 	// (the new window has a new prefix by definition).
 	SetLastPromptTokens(n int64)
 
+	// ResetContextWindow zeroes the per-window baselines (last prompt,
+	// cached-prefix and last-cached counts) so the gauge reads empty. /clear
+	// calls this after the session's events are gone. SetLastPromptTokens(0)
+	// is deliberately not a substitute: it keeps a non-zero prompt count on
+	// purpose, so it can never empty the gauge. Daily usage totals are not
+	// affected — clearing a conversation does not un-spend tokens.
+	ResetContextWindow()
+
 	// Prompt-cache tracking. Prompt tokens are billed at a steep discount when
 	// served from cache, so LastPromptTokens alone overstates cost.
 	LastCachedTokens() int64    // cache reads on the most recent response

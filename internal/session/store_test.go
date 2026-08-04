@@ -2223,3 +2223,159 @@ func TestMetaPlanContext(t *testing.T) {
 		t.Errorf("SpecDir = %q, want %q", got.PlanContext.SpecDir, meta.PlanContext.SpecDir)
 	}
 }
+
+// --- ClearEvents ---
+
+// ClearEvents is the primitive behind the TUI's /clear: it drops the whole
+// conversation unconditionally, in memory and on disk, while leaving
+// everything that is not conversation (state, meta, plan context, branches)
+// intact.
+func TestClearEventsDropsAllEvents(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+		State:   map[string]any{"keep": "me"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	id := resp.Session.ID()
+
+	for i := range 5 {
+		event := &session.Event{
+			ID:        fmt.Sprintf("event-%d", i),
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText(fmt.Sprintf("message %d", i), genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent() error: %v", err)
+		}
+	}
+
+	if err := svc.SetSessionTitle(id, "keep this title"); err != nil {
+		t.Fatalf("SetSessionTitle() error: %v", err)
+	}
+	if err := svc.SetSessionModel(id, "test-model"); err != nil {
+		t.Fatalf("SetSessionModel() error: %v", err)
+	}
+	plan := &PlanContext{TaskName: "tools/002-foo", Phase: "plan"}
+	if err := svc.UpdatePlanContext(id, plan); err != nil {
+		t.Fatalf("UpdatePlanContext() error: %v", err)
+	}
+
+	if err := svc.ClearEvents(id, "test-app", "test-user"); err != nil {
+		t.Fatalf("ClearEvents() error: %v", err)
+	}
+
+	// Gone in memory.
+	getResp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: id,
+	})
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+	if n := getResp.Session.Events().Len(); n != 0 {
+		t.Errorf("after ClearEvents: got %d events in memory, want 0", n)
+	}
+
+	// Gone on disk.
+	events, err := readEvents(filepath.Join(svc.baseDir, id))
+	if err != nil {
+		t.Fatalf("readEvents() error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("after ClearEvents: got %d events on disk, want 0", len(events))
+	}
+
+	// State survives — the user cleared the conversation, not the session.
+	if got, err := getResp.Session.State().Get("keep"); err != nil || got != "me" {
+		t.Errorf("state[keep] = %v (err %v), want %q", got, err, "me")
+	}
+
+	// Meta survives.
+	title, err := svc.GetSessionTitle(id)
+	if err != nil {
+		t.Fatalf("GetSessionTitle() error: %v", err)
+	}
+	if title != "keep this title" {
+		t.Errorf("title = %q, want %q", title, "keep this title")
+	}
+	meta, err := readMeta(filepath.Join(svc.baseDir, id))
+	if err != nil {
+		t.Fatalf("readMeta() error: %v", err)
+	}
+	if meta.Model != "test-model" {
+		t.Errorf("meta.Model = %q, want %q", meta.Model, "test-model")
+	}
+
+	// Plan context survives.
+	gotPlan, err := svc.GetPlanContext(id)
+	if err != nil {
+		t.Fatalf("GetPlanContext() error: %v", err)
+	}
+	if gotPlan == nil || gotPlan.TaskName != plan.TaskName || gotPlan.Phase != plan.Phase {
+		t.Errorf("plan context = %+v, want %+v", gotPlan, plan)
+	}
+}
+
+// Unlike Compact, ClearEvents has no token threshold: a two-event session is
+// emptied just the same. This is the whole reason /clear cannot reuse Compact.
+func TestClearEventsIgnoresTokenThreshold(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.Create(ctx, &session.CreateRequest{
+		AppName: "test-app",
+		UserID:  "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	id := resp.Session.ID()
+
+	for i := range 2 {
+		event := &session.Event{
+			ID:        fmt.Sprintf("event-%d", i),
+			Timestamp: time.Now(),
+			Author:    "user",
+		}
+		event.Content = genai.NewContentFromText("short", genai.RoleUser)
+		if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+			t.Fatalf("AppendEvent() error: %v", err)
+		}
+	}
+
+	// Compact leaves a short session untouched...
+	if err := svc.Compact(id, "test-app", "test-user", SimpleSummarizer, CompactConfig{}); err != nil {
+		t.Fatalf("Compact() error: %v", err)
+	}
+	if est, _ := svc.EstimateTokens(id, "test-app", "test-user"); est == 0 {
+		t.Fatal("precondition: expected Compact to be a no-op leaving events in place")
+	}
+
+	// ...ClearEvents does not.
+	if err := svc.ClearEvents(id, "test-app", "test-user"); err != nil {
+		t.Fatalf("ClearEvents() error: %v", err)
+	}
+	est, err := svc.EstimateTokens(id, "test-app", "test-user")
+	if err != nil {
+		t.Fatalf("EstimateTokens() error: %v", err)
+	}
+	if est != 0 {
+		t.Errorf("EstimateTokens after ClearEvents = %d, want 0", est)
+	}
+}
+
+func TestClearEventsUnknownSession(t *testing.T) {
+	svc := newTestService(t)
+
+	if err := svc.ClearEvents("no-such-session", "test-app", "test-user"); err == nil {
+		t.Error("ClearEvents() on an unknown session: got nil error, want failure")
+	}
+}

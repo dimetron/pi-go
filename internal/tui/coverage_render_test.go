@@ -21,6 +21,7 @@ func (m flexTokenTracker) PercentUsed() float64        { return m.percentUsed }
 func (m flexTokenTracker) TotalUsed() int64            { return m.totalUsed }
 func (m flexTokenTracker) LastPromptTokens() int64     { return m.lastPromptTokens }
 func (m flexTokenTracker) SetLastPromptTokens(int64)   {}
+func (m flexTokenTracker) ResetContextWindow()         {}
 func (m flexTokenTracker) ContextWindowSize() int64    { return m.ctxWindowSize }
 func (m flexTokenTracker) ContextPercentUsed() float64 { return m.ctxPercentUsed }
 func (m flexTokenTracker) LastCachedTokens() int64     { return m.lastCachedTokens }
