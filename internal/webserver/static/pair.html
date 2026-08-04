@@ -110,7 +110,6 @@
 
         function validateCodeInput() {
             const entered = normalizeCode(codeInput.value);
-            console.log('Validating code:', entered, 'length:', entered.length);
             if (!entered) {
                 showError('Please enter the 6-digit pair code.');
                 return false;
@@ -138,9 +137,8 @@
             .then(data => {
                 currentToken = data.token;
                 codeInput.value = '';
-                codeInput.disabled = false;
-                submitCodeBtn.disabled = false;
-                
+                setSubmitting(false);
+
                 // Render server-generated QR PNG.
                 qrImage.src = 'data:image/png;base64,' + data.qr;
                 
@@ -175,26 +173,57 @@
             }
         };
 
+        function setSubmitting(busy) {
+            submitCodeBtn.disabled = busy;
+            // readOnly, not disabled: a control disabled inside the submit
+            // handler is dropped from the form entry list, so the server would
+            // receive an empty code and bounce back to /pair forever.
+            codeInput.readOnly = busy;
+        }
+
+        function submitCode(code) {
+            setSubmitting(true);
+            statusDiv.className = 'status pending';
+            statusText.textContent = 'Submitting pair code...';
+
+            fetch('/api/pair/submit', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({code: code})
+            })
+                .then(r => r.text().then(body => ({ok: r.ok, body: body})))
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error((res.body || '').trim() || 'Pair code rejected.');
+                    }
+                    hideError();
+                    updateStatus('approved');
+                })
+                .catch(err => {
+                    setSubmitting(false);
+                    codeInput.focus();
+                    codeInput.select();
+                    statusDiv.className = 'status pending';
+                    statusText.textContent = 'Enter pair code and submit to start waiting for approval.';
+                    showError(err.message);
+                });
+        }
+
         codeSubmitForm.addEventListener('submit', function(e) {
-            console.log('Form submit triggered, code value:', codeInput.value);
-            console.log('Pairing info visible:', !pairingInfo.classList.contains('hidden'));
-            
-            // Prevent submission if pairing info is not visible
+            e.preventDefault();
+
             if (pairingInfo.classList.contains('hidden')) {
-                console.log('Pairing info not visible, preventing submit');
-                e.preventDefault();
-                return false;
+                return;
             }
-            
             if (!validateCodeInput()) {
-                console.log('Validation failed, preventing submit');
-                e.preventDefault();
-                return false;
+                return;
             }
-            console.log('Validation passed, allowing submit');
-            // Let form submit naturally to server
-            submitCodeBtn.disabled = true;
-            codeInput.disabled = true;
+
+            submitCode(normalizeCode(codeInput.value));
         });
         
         // Check URL for existing token

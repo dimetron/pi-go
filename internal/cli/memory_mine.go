@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/palace"
 )
 
@@ -199,6 +201,15 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return fmt.Errorf("resolving directory: %w", err)
 	}
 
+	// Resolve the wing here rather than leaving it to MineProject, which applies
+	// the same default internally (miner_project.go). Without this the banner
+	// below printed an empty "Wing:" while the run actually indexed into the
+	// directory-basename wing — the one line whose job is to say which wing was
+	// touched was the one line that did not know.
+	if wing == "" {
+		wing = filepath.Base(absDir)
+	}
+
 	// Phase 1: Scan and list all files first.
 	fmt.Printf("Scanning %s...\n", absDir)
 	files, err := scanFiles(absDir, convos)
@@ -220,113 +231,50 @@ func runMemoryMine(dir, wing string, convos bool) error {
 
 	// Phase 2: Mine files with live visual progress.
 	totalFiles := len(files)
-	barWidth := 32
 	fileCount := 0
 	chunkCount := 0
 	dupCount := 0
 	errCount := 0
-	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	spinnerIdx := 0
 	startTime := time.Now()
-	currentPhase := "scan"
 
-	// progressBar generates a Unicode block progress bar.
-	progressBar := func(filled, width int) string {
-		var b strings.Builder
-		b.WriteString("[")
-		for i := 0; i < width; i++ {
-			if i < filled {
-				b.WriteString("█")
-			} else {
-				b.WriteString("░")
-			}
+	// All progress rendering funnels through prog, which owns the terminal line,
+	// the spinner, the ETA baseline and the width budget. Both callbacks below are
+	// invoked concurrently from the embed worker pool, and internal/palace logs
+	// warnings from those same goroutines — so the counters and the line need one
+	// lock between them. prog provides it.
+	prog := newMineProgress(os.Stdout)
+	restoreLogs := prog.captureLogs()
+	defer restoreLogs()
+
+	// The heartbeat keeps the spinner and the elapsed clock moving even while a
+	// phase blocks with nothing to report, which is what makes a slow step
+	// distinguishable from a hung one.
+	prog.startHeartbeat()
+	defer prog.stopHeartbeat()
+
+	// Progress reports file-level work. Two variants share this callback:
+	// a named file means one file finished; an empty file name is a
+	// percentage-only tick, and it is the *only* signal insertDrawers emits —
+	// dropping it left the whole insert phase silent.
+	progress := func(file string, pctOrAdded, skipped, errors int) {
+		if file == "" {
+			prog.show("insert", "", pctOrAdded, 100, "%")
+			return
 		}
-		b.WriteString("]")
-		return b.String()
-	}
-
-	// formatDuration formats elapsed time as MmSSs or SSs.
-	formatDuration := func(d time.Duration) string {
-		d = d.Round(time.Second)
-		if d >= time.Minute {
-			return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
-		}
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-
-	// Create progress callback that shows live progress with phase awareness.
-	progress := func(file string, added, skipped, errors int) {
-		if file != "" {
-			// File completion callback — show file being processed.
+		prog.do(func() string {
 			fileCount++
-			chunkCount += added
+			chunkCount += pctOrAdded
 			dupCount += skipped
 			errCount += errors
-			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-
-			// Calculate overall progress (0-100%).
-			progressPct := float64(fileCount) / float64(totalFiles) * 100.0
-			filled := int(progressPct / 100.0 * float64(barWidth))
-
-			// Show abbreviated filename if too long.
-			displayFile := file
-			if len(displayFile) > 40 {
-				displayFile = "..." + displayFile[len(displayFile)-37:]
-			}
-
-			// Erase line and redraw with spinner.
-			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
-				spinnerFrames[spinnerIdx], currentPhase,
-				progressBar(filled, barWidth), displayFile,
-				fileCount, totalFiles, chunkCount,
-				formatDuration(time.Since(startTime)))
-		} else {
-			// Phase progress callback: file="" with percentage in 'added'.
-			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-			progressPct := float64(added)
-			if progressPct > 100.0 {
-				progressPct = 100.0
-			}
-			filled := int(progressPct / 100.0 * float64(barWidth))
-
-			// Determine stage label from percentage.
-			stage := "embed"
-			if progressPct >= 70 {
-				stage = "insert"
-			}
-			currentPhase = stage
-
-			// Erase line and redraw.
-			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
-				spinnerFrames[spinnerIdx], stage,
-				progressBar(filled, barWidth), "",
-				fileCount, totalFiles, chunkCount,
-				formatDuration(time.Since(startTime)))
-		}
+			return ""
+		})
+		prog.show("scan", file, fileCount, totalFiles, "files")
 	}
 
-	// Phase progress: redrawn in place with \r so a long embed shows which file
-	// it is currently working through instead of a blank, apparently frozen bar.
+	// Phase reports chunk-level work within a stage (embed, insert), which is
+	// where the slow part of a run actually is.
 	phase := func(stage, item string, done, total int) {
-		spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-		currentPhase = stage
-
-		pct := 0.0
-		if total > 0 {
-			pct = float64(done) / float64(total) * 100.0
-		}
-		filled := int(pct / 100.0 * float64(barWidth))
-
-		displayItem := item
-		if len(displayItem) > 38 {
-			displayItem = "..." + displayItem[len(displayItem)-35:]
-		}
-
-		fmt.Printf("\r %s  %-8s %s  %-38s %d/%d chunks  %s\x1b[K",
-			spinnerFrames[spinnerIdx], stage,
-			progressBar(filled, barWidth), displayItem,
-			done, total,
-			formatDuration(time.Since(startTime)))
+		prog.show(stage, item, done, total, "chunks")
 	}
 
 	cfg := &palace.MineConfig{Wing: wing, Progress: progress, Phase: phase}
@@ -335,12 +283,38 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	dbPath := filepath.Join(absDir, ".pi-go", "palace.db")
 	modelPath := defaultPalaceModelPath()
 
+	palaceCfg := palace.DefaultConfig()
+	palaceCfg.DBPath = dbPath
+	palaceCfg.ModelPath = modelPath
+	if userCfg, err := config.Load(); err == nil && userCfg.Palace != nil {
+		if userCfg.Palace.OllamaURL != "" {
+			palaceCfg.OllamaURL = userCfg.Palace.OllamaURL
+		}
+		if userCfg.Palace.OllamaModel != "" {
+			palaceCfg.OllamaModel = userCfg.Palace.OllamaModel
+		}
+		if userCfg.Palace.LocalEmbedder {
+			palaceCfg.UseOllama = false
+		}
+	}
+
+	// Mining without an embedder produces drawers with no vectors, which look
+	// fine until every semantic search silently returns nothing. Refuse up front
+	// rather than spend minutes indexing into a broken state.
+	if err := palace.EmbedderAvailability(palaceCfg); err != nil {
+		return ollamaSetupError(palaceCfg, err)
+	}
+
 	// Name the database and model up front. Mining writes to a per-project DB and
 	// loads a model from a shared cache, and neither location is obvious from the
 	// command line — so a run that appeared to do nothing (or that re-embedded
 	// everything) gave no clue which store it had actually touched.
 	fmt.Printf("Palace DB: %s\n", dbPath)
-	fmt.Printf("Model:     %s\n", modelPath)
+	if palaceCfg.UseOllama {
+		fmt.Printf("Embedder:  ollama %s (%s)\n", palaceCfg.OllamaModel, palaceCfg.OllamaURL)
+	} else {
+		fmt.Printf("Embedder:  in-process %s\n", modelPath)
+	}
 	fmt.Printf("Wing:      %s\n\n", wing)
 
 	// Auto-init: create the palace directory and fetch the model if needed, so
@@ -368,14 +342,26 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		fmt.Printf("Model ready: %s\n\n", modelPath)
 	}
 
-	p, err := palace.New(
+	palaceOpts := []palace.Option{
 		palace.WithDBPath(dbPath),
 		palace.WithModelPath(modelPath),
-	)
+	}
+	if palaceCfg.UseOllama {
+		palaceOpts = append(palaceOpts, palace.WithOllamaEmbedder(palaceCfg.OllamaURL, palaceCfg.OllamaModel))
+	} else {
+		palaceOpts = append(palaceOpts, palace.WithLocalEmbedder())
+	}
+	// Opening the palace loads the embedding model and runs any schema
+	// migrations, which on a cold start is seconds of silence right after the
+	// banner — the exact point the run looked wedged.
+	prog.status("open", "opening palace, loading embedder")
+	p, err := palace.New(palaceOpts...)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
 	}
 	defer p.Close()
+
+	prog.status("scan", "collecting files")
 
 	var result *palace.MineResult
 	if convos {
@@ -388,11 +374,12 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return fmt.Errorf("mining: %w", err)
 	}
 
-	// Ensure progress bar shows 100%.
-	fmt.Printf("\r ✓  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K\n",
-		"done", progressBar(barWidth, barWidth), "",
+	// Ensure the bar shows 100%, and close the live region so the stats below
+	// start on their own line.
+	prog.finish(fmt.Sprintf("✓ %-6s [%s] 100%%  %d/%d files, %d chunks  %s",
+		"done", renderBar(100, barCells),
 		totalFiles, totalFiles, result.Added,
-		formatDuration(time.Since(startTime)))
+		formatETA(time.Since(startTime))))
 
 	// Show final mining stats.
 	fmt.Println()
@@ -413,4 +400,33 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	}
 
 	return nil
+}
+
+// ollamaSetupError turns an embedder-availability failure into instructions.
+//
+// Mining is the one command that cannot degrade: an unembedded drawer is
+// invisible to semantic search forever after, and the failure is silent at
+// query time. The two ways this goes wrong — daemon down, model not pulled —
+// have different fixes, so the message names both rather than dumping the
+// underlying error and leaving the user to guess.
+func ollamaSetupError(cfg palace.PalaceConfig, cause error) error {
+	if !errors.Is(cause, palace.ErrOllamaUnavailable) {
+		return fmt.Errorf("embedding backend unavailable: %w", cause)
+	}
+
+	fmt.Fprintf(os.Stderr, `
+ollama is required for "pi memory mine" but is not available.
+
+  cause: %v
+
+  Fix one of the following, then re-run:
+
+    1. Start the daemon:   ollama serve
+    2. Pull the model:     ollama pull %s
+
+  The daemon is expected at %s; set palace.ollama_url to change it.
+
+`, cause, cfg.OllamaModel, cfg.OllamaURL)
+
+	return fmt.Errorf("embedding backend unavailable: %w", cause)
 }

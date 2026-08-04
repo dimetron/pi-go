@@ -19,43 +19,50 @@ const (
 var moodEyes = map[AgentMood]string{
 	MoodIdle:       "◕ ◕",
 	MoodThinking:   "◔ ◕",
-	MoodProcessing: "◑ ◑",
+	MoodProcessing: "◔ ◔",
 	MoodToolCall:   "▸ ◂",
 	MoodSpeaking:   "◕ ◡",
 	MoodHappy:      "✧ ✧",
 	MoodSad:        "◡ ◡",
 }
 
+// mascotEars is the mascot's top row. ASCII slashes rather than ╱ ╲ (U+2571,
+// U+2572): the box-drawing diagonals are East Asian Ambiguous, so a terminal
+// resolving ambiguous width as wide draws this row two cells over budget and
+// shoves the whole sidebar — and with it every row of the top section — out of
+// alignment. In a monospace grid the ASCII pair is indistinguishable.
+const mascotEars = ` /\___/\` + "\n"
+
 // moodMascot maps each mood to a full mascot face (multi-line).
+//
+// Every glyph here is East Asian Neutral or Narrow, so the face measures the
+// same in every terminal regardless of mood. The mascot sits in the sidebar's
+// first rows, which is why a mood-dependent width shows up as "the top of the
+// frame shifts sometimes": ★ (U+2605) and ◑ (U+25D1) are ambiguous, so the happy
+// and processing faces were a cell wider than the rest. See
+// TestMascotGlyphsAreWidthSafe.
 var moodMascot = map[AgentMood]string{
-	MoodIdle: "" +
-		" ╱╲___╱╲\n" +
+	MoodIdle: mascotEars +
 		"   ( ◕ ◕ )\n" +
-		"    ╱ π ╲",
-	MoodThinking: "" +
-		" ╱╲___╱╲\n" +
+		`    / π \`,
+	MoodThinking: mascotEars +
 		"   ( ◔ ◕ )\n" +
-		"    ╱ ~ ╲",
-	MoodProcessing: "" +
-		" ╱╲___╱╲\n" +
-		"   ( ◑ ◑ )\n" +
-		"    ╱ ⚙ ╲",
-	MoodToolCall: "" +
-		" ╱╲___╱╲\n" +
+		`    / ~ \`,
+	MoodProcessing: mascotEars +
+		"   ( ◔ ◔ )\n" +
+		`    / ⚙ \`,
+	MoodToolCall: mascotEars +
 		"   ( ▸ ◂ )\n" +
-		"    ╱ ⇢ ╲",
-	MoodSpeaking: "" +
-		" ╱╲___╱╲\n" +
+		`    / ⇢ \`,
+	MoodSpeaking: mascotEars +
 		"   ( ◕ ◡ )\n" +
-		"    ╱ ~ ╲",
-	MoodHappy: "" +
-		" ╱╲___╱╲\n" +
+		`    / ~ \`,
+	MoodHappy: mascotEars +
 		"   ( ✧ ✧ )\n" +
-		"    ╱ ★ ╲",
-	MoodSad: "" +
-		" ╱╲___╱╲\n" +
+		`    / ⋆ \`,
+	MoodSad: mascotEars +
 		"   ( ◡ ◡ )\n" +
-		"    ╱ · ╲",
+		`    / ∙ \`,
 }
 
 // String returns a human-readable name for the mood.

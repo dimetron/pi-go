@@ -40,7 +40,7 @@ func TestSpinnerSymbolRotation(t *testing.T) {
 	}
 
 	// Step through remaining symbols.
-	expected := []string{"+", "·"}
+	expected := []string{"+", "∙"}
 	for i, want := range expected {
 		now = base.Add(time.Duration(i+1) * 150 * time.Millisecond)
 		got = s.tick()

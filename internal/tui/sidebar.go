@@ -16,7 +16,12 @@ import (
 )
 
 // SidebarWidth is the fixed width of the right sidebar.
-const SidebarWidth = 30
+//
+// 18 is 60% of the 30 it used to be: the sidebar's rows are short labels and
+// counts, so the columns it gave back to the chat panel were worth more than
+// the slack it kept. Every consumer reads this constant — mainWidth, the
+// render-integrity test's column check — so the whole frame follows from it.
+const SidebarWidth = 18
 
 // SidebarRenderInput provides data needed by the sidebar.
 type SidebarRenderInput struct {
@@ -49,7 +54,6 @@ type SidebarRenderInput struct {
 	Skills       []extension.Skill        // skills section; nil = hidden
 	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
 	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
-	OTELEnabled  bool                     // OTEL tracing is active
 	Artifacts    []ArtifactEntry          // artifacts section; nil/empty = hidden
 }
 
@@ -106,8 +110,6 @@ func RenderSidebar(in SidebarRenderInput) string {
 	var lines []string
 	for _, section := range [][]string{
 		sidebarMoodLines(in),
-		sidebarContextLines(in),
-		sidebarOTELLines(in),
 		sidebarModelLines(in, innerW),
 		sidebarArtifactLines(in, innerW),
 		sidebarGitLines(in, innerW),
@@ -134,47 +136,9 @@ func sidebarMoodLines(in SidebarRenderInput) []string {
 	return []string{"", sidebarStyle(sidebarSapphireHex).Render(fmt.Sprintf("  %s", face)), ""}
 }
 
-// sidebarContextLines shows session context-window usage: a token count with a
-// fill bar when the window size is known, the raw prompt tokens when it isn't,
-// and a character-based estimate before the first LLM response.
-func sidebarContextLines(in SidebarRenderInput) []string {
-	lines := []string{sidebarHeading.Render("  Context")}
-	switch tt := in.TokenTracker; {
-	case tt != nil && tt.ContextWindowSize() > 0:
-		lines = append(lines,
-			sidebarDim.Render(fmt.Sprintf("  %s / %s",
-				formatTokenCount(tt.LastPromptTokens()), formatTokenCount(tt.ContextWindowSize()))),
-			"  "+renderContextBar(tt.ContextPercentUsed(), sidebarBg))
-	case tt != nil && tt.LastPromptTokens() > 0:
-		lines = append(lines, sidebarDim.Render(fmt.Sprintf("  %s tokens",
-			formatTokenCount(tt.LastPromptTokens()))))
-	default:
-		lines = append(lines, sidebarDim.Render(estimateContextTokens(in.Messages)))
-	}
-	return append(lines, "")
-}
-
-// estimateContextTokens approximates the context size from message text at the
-// usual ~4 characters per token, for use before the provider reports real counts.
-func estimateContextTokens(msgs []message) string {
-	chars := 0
-	for _, msg := range msgs {
-		chars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-	}
-	tokens := chars / 4
-	if tokens >= 1000 {
-		return fmt.Sprintf("  ~%.1fk tokens", float64(tokens)/1000)
-	}
-	return fmt.Sprintf("  ~%d tokens", tokens)
-}
-
-// sidebarOTELLines marks that OTEL tracing is active.
-func sidebarOTELLines(in SidebarRenderInput) []string {
-	if !in.OTELEnabled {
-		return nil
-	}
-	return []string{sidebarHeading.Render("  ◉ OTEL"), ""}
-}
+// sidebarContextLines / sidebarOTELLines were removed: the bottom context rule
+// is the canonical context gauge (calibrated to the dumb-zone framework) and the
+// OTEL indicator adds nothing the user cannot already see via the run status.
 
 // sidebarModelLines shows the active provider and model name.
 func sidebarModelLines(in SidebarRenderInput, innerW int) []string {
@@ -255,7 +219,7 @@ func sidebarModeLines(in SidebarRenderInput, innerW int) []string {
 func sidebarRunLines(in SidebarRenderInput, innerW int) []string {
 	lines := []string{
 		sidebarHeading.Render(truncateLabel(fmt.Sprintf("  Run: %s", in.RunSpec), innerW+2)),
-		sidebarStyle(sidebarPeachHex).Render(fmt.Sprintf("  cycle %d/%d · %s",
+		sidebarStyle(sidebarPeachHex).Render(fmt.Sprintf("  cycle %d/%d ∙ %s",
 			in.RunCycle, in.RunMaxCycle, in.RunPhase)),
 		"",
 	}
@@ -378,7 +342,7 @@ func agentRow(status, name string) string {
 	case "killed":
 		return sidebarStyle(sidebarOverlayHex).Render("  ⊘ " + name)
 	default:
-		return sidebarDim.Render("  · " + name)
+		return sidebarDim.Render("  ∙ " + name)
 	}
 }
 
@@ -476,7 +440,7 @@ func sidebarFrame(in SidebarRenderInput, lines []string, w int) string {
 	targetH := max(0, in.Height-matrixH-statusH-ruleH)
 	// Fill remaining space with subtle dim separators.
 	for len(contentLines) < targetH {
-		contentLines = append(contentLines, sidebarDim.Render("  ···"))
+		contentLines = append(contentLines, sidebarDim.Render("  ∙∙∙"))
 	}
 	if len(contentLines) > targetH {
 		contentLines = contentLines[:targetH]

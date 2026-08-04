@@ -180,6 +180,26 @@ type MCPToolEntry struct {
 	Tool   string
 }
 
+// LoadedToolsetTools returns the tools already cached by connected MCP
+// toolsets, without triggering a fetch. Callers that need to measure what MCP
+// contributes to the prompt use this rather than Toolset.Tools, which takes an
+// invocation context and can block on a network round-trip — measuring context
+// overhead must never stall startup or a render.
+//
+// Pending and failed servers contribute nothing, so the figure is a floor: it
+// counts what is loaded, never a guess at what might load later.
+func LoadedToolsetTools(toolsets []tool.Toolset) []tool.Tool {
+	var out []tool.Tool
+	for _, ts := range toolsets {
+		rt, ok := ts.(*resilientToolset)
+		if !ok || rt.failed || len(rt.tools) == 0 {
+			continue
+		}
+		out = append(out, rt.tools...)
+	}
+	return out
+}
+
 // BuildMCPToolEntries returns a flat list of {Server, Tool} pairs for all
 // connected MCP toolsets. Only toolsets whose tools have already been loaded
 // (via a previous Tools() call) contribute entries — pending/failed servers

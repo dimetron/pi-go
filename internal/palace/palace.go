@@ -10,7 +10,7 @@ import (
 // Palace is the top-level facade that ties all palace components together.
 type Palace struct {
 	store    PalaceStore
-	embedder *Embedder
+	embedder Embedder
 	drawers  *DrawerService
 	graph    *Graph
 	kg       *KnowledgeGraph
@@ -33,17 +33,7 @@ func New(opts ...Option) (*Palace, error) {
 
 	store := NewSQLitePalaceStore(db)
 
-	var embedder *Embedder
-	if cfg.ModelPath != "" {
-		if _, err := os.Stat(cfg.ModelPath); err == nil {
-			e, err := NewEmbedder(cfg.ModelPath)
-			if err != nil {
-				slog.Warn("palace: failed to load embedder, continuing without", "error", err)
-			} else {
-				embedder = e
-			}
-		}
-	}
+	embedder := openEmbedder(cfg)
 
 	p := &Palace{
 		store:    store,
@@ -57,9 +47,60 @@ func New(opts ...Option) (*Palace, error) {
 	return p, nil
 }
 
+// openEmbedder resolves the configured embedding backend.
+//
+// Ollama is tried first when enabled, then the in-process model. Both are
+// optional: a palace with no embedder still serves FTS5 keyword search, which is
+// why every failure here is a warning rather than an error. Callers that cannot
+// work without embeddings — mining — must check availability themselves and say
+// something useful; see EmbedderAvailability.
+func openEmbedder(cfg PalaceConfig) Embedder {
+	if cfg.UseOllama {
+		e, err := NewOllamaEmbedder(cfg.OllamaURL, cfg.OllamaModel)
+		if err == nil {
+			return e
+		}
+		slog.Warn("palace: ollama embedder unavailable, falling back to in-process model",
+			"error", err, "url", cfg.OllamaURL, "model", cfg.OllamaModel)
+	}
+
+	if cfg.ModelPath == "" {
+		return nil
+	}
+	if _, err := os.Stat(cfg.ModelPath); err != nil {
+		return nil
+	}
+	e, err := NewEmbedder(cfg.ModelPath)
+	if err != nil {
+		slog.Warn("palace: failed to load embedder, continuing without", "error", err)
+		return nil
+	}
+	return e
+}
+
+// EmbedderAvailability reports whether the configured embedding backend can be
+// reached, and why not when it cannot. It performs the same checks New would,
+// without building a palace, so commands that require embeddings can fail early
+// with an actionable message.
+func EmbedderAvailability(cfg PalaceConfig) error {
+	if !cfg.UseOllama {
+		if cfg.ModelPath == "" {
+			return fmt.Errorf("no embedding model configured")
+		}
+		if _, err := os.Stat(cfg.ModelPath); err != nil {
+			return fmt.Errorf("embedding model not found at %s", cfg.ModelPath)
+		}
+		return nil
+	}
+	if _, err := NewOllamaEmbedder(cfg.OllamaURL, cfg.OllamaModel); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewWithStore creates a Palace using the provided store and optional embedder.
 // This is useful for testing with in-memory stores.
-func NewWithStore(store PalaceStore, embedder *Embedder, opts ...Option) *Palace {
+func NewWithStore(store PalaceStore, embedder Embedder, opts ...Option) *Palace {
 	cfg := DefaultConfig()
 	for _, o := range opts {
 		o(&cfg)

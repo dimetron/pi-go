@@ -19,8 +19,10 @@ func TestRenderSidebar_Minimal(t *testing.T) {
 	if result == "" {
 		t.Error("expected non-empty sidebar")
 	}
-	if !strings.Contains(result, "Context") {
-		t.Error("expected Context section")
+	// The Context section was removed: the bottom rule is the canonical gauge.
+	// Only Model and Mode must still appear.
+	if strings.Contains(result, "Context") {
+		t.Error("sidebar should no longer render a Context section — use the bottom gauge")
 	}
 	if !strings.Contains(result, "Model") {
 		t.Error("expected Model section")
@@ -92,36 +94,6 @@ func TestRenderSidebar_WithAllSections(t *testing.T) {
 	}
 }
 
-func TestRenderSidebar_OTELAboveModel(t *testing.T) {
-	plain := ansi.Strip(RenderSidebar(SidebarRenderInput{
-		Width:        30,
-		Height:       20,
-		OTELEnabled:  true,
-		ProviderName: "anthropic",
-		ModelName:    "claude-sonnet",
-	}))
-
-	otelIdx := strings.Index(plain, "◉ OTEL")
-	modelIdx := strings.Index(plain, "Model")
-	if otelIdx == -1 {
-		t.Fatal("expected OTEL indicator")
-	}
-	if modelIdx == -1 {
-		t.Fatal("expected Model section")
-	}
-	if otelIdx > modelIdx {
-		t.Fatalf("expected OTEL above Model, got:\n%s", plain)
-	}
-	plainLines := strings.Split(plain, "\n")
-	for i, line := range plainLines {
-		plainLines[i] = strings.TrimSpace(line)
-	}
-	plain = strings.Join(plainLines, "\n")
-	if !strings.Contains(plain, "◉ OTEL\n\nModel") {
-		t.Fatalf("expected blank line between OTEL and Model, got:\n%s", plain)
-	}
-}
-
 func TestRenderSidebar_NarrowWidth(t *testing.T) {
 	result := RenderSidebar(SidebarRenderInput{
 		Width:  5,
@@ -155,6 +127,9 @@ func TestRenderSidebar_RunningNoTool(t *testing.T) {
 }
 
 func TestRenderSidebar_NoTokenTracker(t *testing.T) {
+	// Without a TokenTracker and without the now-removed Context section, the
+	// sidebar has nothing to say about tokens. Assert it stays non-empty and
+	// does not surface a stale token estimate.
 	result := RenderSidebar(SidebarRenderInput{
 		Width:  30,
 		Height: 20,
@@ -162,13 +137,18 @@ func TestRenderSidebar_NoTokenTracker(t *testing.T) {
 			{role: "user", content: strings.Repeat("x", 8000)},
 		},
 	})
-	// Should show token count estimate.
-	if !strings.Contains(result, "tokens") {
-		t.Error("expected token count display")
+	if result == "" {
+		t.Error("expected non-empty sidebar")
+	}
+	if strings.Contains(result, "tokens") {
+		t.Error("the sidebar no longer renders a token estimate — only the bottom gauge does")
 	}
 }
 
 func TestRenderSidebar_SmallTokenCount(t *testing.T) {
+	// Same as TestRenderSidebar_NoTokenTracker: the sidebar does not display
+	// tokens anywhere now. Pinned so a future regression that re-adds the
+	// Context section is caught.
 	result := RenderSidebar(SidebarRenderInput{
 		Width:  30,
 		Height: 20,
@@ -176,8 +156,8 @@ func TestRenderSidebar_SmallTokenCount(t *testing.T) {
 			{role: "user", content: "hi"},
 		},
 	})
-	if !strings.Contains(result, "tokens") {
-		t.Error("expected token count display")
+	if strings.Contains(result, "tokens") {
+		t.Error("the sidebar no longer renders a token count")
 	}
 }
 
@@ -384,8 +364,15 @@ func (m *sidebarMockTokenTracker) Limit() int64                { return m.limit 
 func (m *sidebarMockTokenTracker) Remaining() int64            { return m.remaining }
 func (m *sidebarMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
 func (m *sidebarMockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *sidebarMockTokenTracker) SetLastPromptTokens(int64)   {}
+func (m *sidebarMockTokenTracker) ResetContextWindow()         {}
 func (m *sidebarMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *sidebarMockTokenTracker) ContextPercentUsed() float64 { return 0 }
+func (m *sidebarMockTokenTracker) LastCachedTokens() int64     { return 0 }
+func (m *sidebarMockTokenTracker) CachedTokensToday() int64    { return 0 }
+func (m *sidebarMockTokenTracker) CacheHitRateToday() float64  { return 0 }
+func (m *sidebarMockTokenTracker) BodyTokens() int64           { return 0 }
+func (m *sidebarMockTokenTracker) CachePrefixTokens() int64    { return 0 }
 
 func TestAgentStatusPriority(t *testing.T) {
 	tests := []struct {

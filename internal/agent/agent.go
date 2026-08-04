@@ -280,6 +280,30 @@ type Agent struct {
 	runner         *runner.Runner
 	sessionService session.Service
 	config         Config // stored for RebuildWithInstruction
+
+	// preTurn runs before each turn is dispatched. Auto-compaction uses it to
+	// reclaim context while the conversation is between turns, which is the
+	// only safe moment: rewriting history mid-turn would orphan a tool call
+	// from its result.
+	preTurn PreTurnHook
+}
+
+// PreTurnHook runs before a turn is dispatched to the runner. Returning an
+// error aborts the turn.
+type PreTurnHook func(ctx context.Context, sessionID string) error
+
+// SetPreTurnHook installs a hook that runs before every turn. Passing nil
+// removes it.
+func (a *Agent) SetPreTurnHook(h PreTurnHook) {
+	a.preTurn = h
+}
+
+// runPreTurn invokes the hook if one is installed.
+func (a *Agent) runPreTurn(ctx context.Context, sessionID string) error {
+	if a.preTurn == nil {
+		return nil
+	}
+	return a.preTurn(ctx, sessionID)
 }
 
 const maxInstructionFileSize = 128 * 1024
@@ -585,16 +609,30 @@ func (a *Agent) SetSessionTitle(sessionID, title string) error {
 // Run sends a user message and returns an iterator over agent events.
 // The caller should iterate over the returned sequence to process events.
 func (a *Agent) Run(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error] {
+	if err := a.runPreTurn(ctx, sessionID); err != nil {
+		return failedRun(err)
+	}
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)
 	return a.runner.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{})
 }
 
 // RunStreaming sends a user message with SSE streaming enabled.
 func (a *Agent) RunStreaming(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error] {
+	if err := a.runPreTurn(ctx, sessionID); err != nil {
+		return failedRun(err)
+	}
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)
 	return a.runner.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	})
+}
+
+// failedRun returns a single-error sequence, so a pre-turn failure surfaces
+// through the same channel as any other turn error.
+func failedRun(err error) iter.Seq2[*session.Event, error] {
+	return func(yield func(*session.Event, error) bool) {
+		yield(nil, err)
+	}
 }
 
 // contextFileNames lists the context-file names checked in each directory
@@ -620,26 +658,81 @@ func LoadInstruction(baseInstruction string) string {
 	return loadInstructionFrom(baseInstruction, cwd, home)
 }
 
+// InstructionParts is the system prompt broken into the sections it is
+// assembled from. Callers that only need the finished prompt use
+// LoadInstruction; the parts exist so the TUI can attribute context usage to
+// each section instead of reporting one opaque total.
+type InstructionParts struct {
+	// Base is the built-in system prompt.
+	Base string
+	// Rules is the concatenated AGENTS.md / CLAUDE.md project context.
+	Rules string
+	// Skills is the "# Available Skills" menu.
+	Skills string
+}
+
+// String reassembles the parts into the prompt the model receives. Keeping
+// composition here means the breakdown can never drift from the real prompt:
+// LoadInstruction returns exactly this.
+func (p InstructionParts) String() string {
+	return p.Base + p.Rules + p.Skills
+}
+
 // loadInstructionFrom is the testable core of LoadInstruction, resolving
 // context files and skills relative to explicit cwd and home directories.
 func loadInstructionFrom(baseInstruction, cwd, home string) string {
-	instruction := baseInstruction
+	return loadInstructionPartsFrom(baseInstruction, cwd, home).String()
+}
+
+// LoadInstructionParts resolves the system prompt and returns it broken into
+// its sections.
+func LoadInstructionParts(baseInstruction string) InstructionParts {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return InstructionParts{Base: baseInstruction}
+	}
+	home, _ := os.UserHomeDir()
+	return loadInstructionPartsFrom(baseInstruction, cwd, home)
+}
+
+func loadInstructionPartsFrom(baseInstruction, cwd, home string) InstructionParts {
+	parts := InstructionParts{Base: baseInstruction}
 
 	if contents := discoverContextFiles(cwd, home); len(contents) > 0 {
-		instruction += "\n\n# Project Rules\n\n" + strings.Join(contents, "\n\n")
+		parts.Rules = "\n\n# Project Rules\n\n" + strings.Join(contents, "\n\n")
 	}
 
 	// Get skills.
 	skillDirs := extension.DefaultSkillDirsIn(cwd)
 	skills, err := extension.LoadSkills(skillDirs...)
 	if err == nil && len(skills) > 0 {
-		instruction += "\n\n# Available Skills\n\n"
-		for _, s := range skills {
-			instruction += fmt.Sprintf("- /%s: %s\n", s.Name, s.Description)
-		}
+		parts.Skills = appendSkillsMenu(skills)
 	}
 
-	return instruction
+	return parts
+}
+
+// appendSkillsMenu formats the "# Available Skills" block for a pre-loaded
+// skill slice. Exposed so callers that already have skills in hand (e.g. the
+// TUI) don't trigger a second LoadSkills.
+func appendSkillsMenu(skills []extension.Skill) string {
+	var b strings.Builder
+	b.WriteString("\n\n# Available Skills\n\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "- /%s: %s\n", s.Name, s.Description)
+	}
+	return b.String()
+}
+
+// AppendActiveSkill returns prompt with an "# Active Skill" section appended
+// for the given skill body. Use this on top of a prompt produced by
+// LoadInstruction to activate a skill for one turn (Level-2 injection).
+//
+// The format is:
+//
+//	\n\n# Active Skill: <name>\n\n<body>\n
+func AppendActiveSkill(prompt string, skill extension.Skill, body string) string {
+	return prompt + fmt.Sprintf("\n\n# Active Skill: %s\n\n%s\n", skill.Name, body)
 }
 
 type contextFile struct {

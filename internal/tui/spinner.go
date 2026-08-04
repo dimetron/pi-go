@@ -83,7 +83,7 @@ var (
 )
 
 // spinnerSymbols are the rotating symbols shown before the verb.
-var spinnerSymbols = []rune{'*', '+', '·'}
+var spinnerSymbols = []rune{'*', '+', '∙'}
 
 // spinnerState holds the current spinner verb and rotation timing.
 type spinnerState struct {

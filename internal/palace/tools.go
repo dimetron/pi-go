@@ -18,6 +18,7 @@ func PalaceTools(p *Palace) ([]tool.Tool, error) {
 		newPalaceKGQueryTool,
 		newPalaceKGInvalidateTool,
 		newPalaceKGTimelineTool,
+		newPalaceKGExtractTool,
 		newPalaceDiaryWriteTool,
 		newPalaceDiaryReadTool,
 		newPalaceTraverseTool,

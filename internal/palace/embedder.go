@@ -27,8 +27,22 @@ const (
 	maxCharLength = maxTokenLength * 4
 )
 
-// Embedder wraps a hugot session for in-process text embedding.
-type Embedder struct {
+// Embedder produces embedding vectors for text.
+//
+// Two implementations exist: localEmbedder runs the model in-process through
+// hugot, and ollamaEmbedder delegates to a local Ollama daemon. They are not
+// interchangeable across a populated database — vectors from different models
+// live in different spaces — so switching backends means re-indexing unless the
+// underlying model is the same.
+type Embedder interface {
+	// Embed returns one vector per input text, in order.
+	Embed(texts []string) ([][]float32, error)
+	// Close releases any resources held by the embedder.
+	Close()
+}
+
+// localEmbedder wraps a hugot session for in-process text embedding.
+type localEmbedder struct {
 	session  *hugot.Session
 	pipeline *pipelines.FeatureExtractionPipeline
 }
@@ -39,7 +53,7 @@ type Embedder struct {
 // -tags ORT swaps in ONNX Runtime with CoreML, which runs on the Apple GPU and
 // Neural Engine. Which backend is compiled in also decides which weights file to
 // use — see platformOnnxFile — so the two must be chosen together.
-func NewEmbedder(modelPath string) (*Embedder, error) {
+func NewEmbedder(modelPath string) (Embedder, error) {
 	session, err := newSession(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("create hugot session (%s): %w", backendName, err)
@@ -60,14 +74,14 @@ func NewEmbedder(modelPath string) (*Embedder, error) {
 		return nil, fmt.Errorf("create embedding pipeline: %w", err)
 	}
 
-	return &Embedder{session: session, pipeline: pipeline}, nil
+	return &localEmbedder{session: session, pipeline: pipeline}, nil
 }
 
 // Embed returns embedding vectors for the given texts.
 // Inputs exceeding maxTokenLength (128) tokens are truncated to stay within
 // GoMLX sequence bucket limits and prevent bucket mismatch panics during
 // graph compilation.
-func (e *Embedder) Embed(texts []string) ([][]float32, error) {
+func (e *localEmbedder) Embed(texts []string) ([][]float32, error) {
 	// Truncate texts to prevent GoMLX graph compilation failures from
 	// bucket mismatches. BERT tokenization produces ~1 token per 3-4 chars,
 	// so 128 tokens * 4 chars/token = 512 chars is a safe limit.
@@ -85,7 +99,7 @@ func (e *Embedder) Embed(texts []string) ([][]float32, error) {
 }
 
 // Close destroys the hugot session and releases resources.
-func (e *Embedder) Close() {
+func (e *localEmbedder) Close() {
 	if e.session != nil {
 		_ = e.session.Destroy()
 	}

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1092,5 +1093,272 @@ func TestAnthropicNonStreamingErrorResponse(t *testing.T) {
 	}
 	if !gotError {
 		t.Error("expected an error or ErrorCode for 500 response")
+	}
+}
+
+// anthropicCapturingServer is a minimal httptest server that captures the
+// request body and returns a successful Anthropic message response. Used by
+// the prompt-cache E2E tests below.
+func anthropicCapturingServer(t *testing.T) (*httptest.Server, *[]byte) {
+	t.Helper()
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id":"msg_x","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+			"content":[{"type":"text","text":"ok"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":10,"output_tokens":1}
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &captured
+}
+
+// countCacheControl walks a decoded JSON request body and returns the
+// number of cache_control: {type: "ephemeral"} occurrences across every
+// nested object.
+func countCacheControl(t *testing.T, raw []byte) int {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("unmarshal request body: %v\nbody=%s", err, raw)
+	}
+	n := 0
+	var walk func(any)
+	walk = func(x any) {
+		switch vv := x.(type) {
+		case map[string]any:
+			if cc, ok := vv["cache_control"].(map[string]any); ok {
+				if cc["type"] == "ephemeral" {
+					n++
+				}
+			}
+			for _, child := range vv {
+				walk(child)
+			}
+		case []any:
+			for _, child := range vv {
+				walk(child)
+			}
+		}
+	}
+	walk(v)
+	return n
+}
+
+// TestAnthropicCacheControl_DefaultOn asserts that a vanilla NewAnthropic
+// call (no opts) sends a request body with 3 cache_control markers — one
+// each on the last tool, the system block, and the last message block.
+func TestAnthropicCacheControl_DefaultOn(t *testing.T) {
+	srv, captured := anthropicCapturingServer(t)
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Role:  "system",
+				Parts: []*genai.Part{{Text: "you are a helpful agent."}},
+			},
+			Tools: []*genai.Tool{
+				{FunctionDeclarations: []*genai.FunctionDeclaration{
+					{Name: "read", Description: "read a file"},
+				}},
+			},
+		},
+	}
+	for range llm.GenerateContent(context.Background(), req, false) {
+	}
+	if got := countCacheControl(t, *captured); got != 3 {
+		t.Errorf("default opts: cache_control markers = %d, want 3\nbody=%s", got, *captured)
+	}
+}
+
+// TestAnthropicCacheControl_DisabledByOptOut asserts that DisablePromptCaching
+// true sends a request body with ZERO cache_control markers.
+func TestAnthropicCacheControl_DisabledByOptOut(t *testing.T) {
+	srv, captured := anthropicCapturingServer(t)
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "sk-test", srv.URL, "none",
+		&LLMOptions{DisablePromptCaching: true})
+	if err != nil {
+		t.Fatalf("NewAnthropic: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "read"}}}},
+		},
+	}
+	for range llm.GenerateContent(context.Background(), req, false) {
+	}
+	if got := countCacheControl(t, *captured); got != 0 {
+		t.Errorf("DisablePromptCaching=true: cache_control markers = %d, want 0\nbody=%s", got, *captured)
+	}
+}
+
+// TestAnthropicCacheControl_OpenAIIsNoOp asserts that NewOpenAI requests
+// do not contain any cache_control markers — the cache_apply extension
+// point is opt-in for now, and the OpenAI provider doesn't implement it.
+func TestAnthropicCacheControl_OpenAIIsNoOp(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-x","object":"chat.completion","created":1,"model":"gpt-4o",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer srv.Close()
+
+	llm, err := NewOpenAI(context.Background(), "gpt-4o", "sk-test", srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+	}
+	for range llm.GenerateContent(context.Background(), req, false) {
+	}
+	if got := countCacheControl(t, captured); got != 0 {
+		t.Errorf("NewOpenAI body has cache_control markers (%d) — should be 0\nbody=%s", got, captured)
+	}
+}
+
+// TestAnthropicCacheControl_EmptyMessages asserts the standard path works
+// (single marker only) when only a user message is present (no system, no
+// tools). The 4th breakpoint slot is intentionally left empty.
+func TestAnthropicCacheControl_EmptyMessages(t *testing.T) {
+	srv, captured := anthropicCapturingServer(t)
+	llm, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+	}
+	for range llm.GenerateContent(context.Background(), req, false) {
+	}
+	// Only 1 marker expected: on the last (and only) block of the last message.
+	if got := countCacheControl(t, *captured); got != 1 {
+		t.Errorf("messages-only: cache_control markers = %d, want 1\nbody=%s", got, *captured)
+	}
+}
+
+// TestAnthropicCacheControl_BetaPathWithAdvisor verifies the beta path
+// (buildBetaParams) also stamps the three breakpoints when the advisor
+// tool is enabled. We can't easily fire a real beta request through
+// GenerateContent in this test (it requires a real beta endpoint), so we
+// exercise the helper directly.
+func TestAnthropicCacheControl_BetaPathWithAdvisor(t *testing.T) {
+	llmIface, err := NewAnthropic(context.Background(), "claude-sonnet-4-6", "sk-test",
+		"http://localhost:1", "none",
+		&LLMOptions{AdvisorModel: "claude-opus-4-7"})
+	if err != nil {
+		t.Fatalf("NewAnthropic: %v", err)
+	}
+	m, ok := llmIface.(*anthropicModel)
+	if !ok {
+		t.Fatalf("expected *anthropicModel, got %T", llmIface)
+	}
+
+	msgs := []anthropic.MessageParam{
+		{Role: anthropic.MessageParamRoleUser, Content: []anthropic.ContentBlockParamUnion{
+			anthropic.NewTextBlock("hi"),
+		}},
+	}
+	system := "you are an agent."
+	tools := []*genai.Tool{{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "read", Description: "read"}}}}
+	cfg := &genai.GenerateContentConfig{Tools: tools}
+
+	params := m.buildBetaParams("claude-sonnet-4-6", msgs, system, 1024, nil, cfg)
+
+	// Tools slice must include the advisor + the read tool (2 tools).
+	if len(params.Tools) < 2 {
+		t.Fatalf("expected at least 2 tools (advisor + read), got %d", len(params.Tools))
+	}
+	// Apply the helper and verify the 3 markers.
+	applyAnthropicCacheControlBeta(&params)
+
+	// Last tool should be the marker holder. The helper stamps Tools[len-1]
+	// unconditionally. We don't know the order (advisor first or last) but
+	// exactly one tool must carry the marker.
+	marked := 0
+	for _, tl := range params.Tools {
+		if cc := tl.GetCacheControl(); cc != nil && cc.Type != "" {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Errorf("tools: %d marked, want 1", marked)
+	}
+	if cc := params.System[0].CacheControl; cc.Type == "" {
+		t.Errorf("system block missing cache_control, got %+v", cc)
+	}
+	last := params.Messages[len(params.Messages)-1]
+	if cc := last.Content[len(last.Content)-1].GetCacheControl(); cc == nil || cc.Type == "" {
+		t.Errorf("last message block missing cache_control, got %+v", cc)
+	}
+}
+
+// TestAnthropicNonStreamingPropagatesCacheRead verifies that the
+// cache_creation_input_tokens and cache_read_input_tokens fields from
+// Anthropic's non-streaming response are surfaced on the LLMResponse.UsageMetadata
+// as CachedContentTokenCount so the sidebar's cache indicator reflects them.
+func TestAnthropicNonStreamingPropagatesCacheRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "msg_cache_test",
+			"type":        "message",
+			"role":        "assistant",
+			"model":       "claude-sonnet-4-6",
+			"stop_reason": "end_turn",
+			"content":     []map[string]any{{"type": "text", "text": "ok"}},
+			"usage": map[string]any{
+				"input_tokens":                100,
+				"output_tokens":               20,
+				"cache_creation_input_tokens": 50,
+				"cache_read_input_tokens":     75,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewAnthropic(ctx, "claude-sonnet-4-6", "sk-test", srv.URL, "none", nil)
+	if err != nil {
+		t.Fatalf("NewAnthropic() error: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+	}
+	var final *model.LLMResponse
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+		if resp != nil {
+			final = resp
+		}
+	}
+	if final == nil {
+		t.Fatal("expected a final response")
+	}
+	if final.UsageMetadata == nil {
+		t.Fatal("expected non-nil UsageMetadata")
+	}
+	if final.UsageMetadata.CachedContentTokenCount != 75 {
+		t.Errorf("CachedContentTokenCount = %d, want 75 (cache_read_input_tokens)", final.UsageMetadata.CachedContentTokenCount)
 	}
 }

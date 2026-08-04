@@ -113,7 +113,7 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) string {
 	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
 	checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("● ")
+	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("◉ ")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -150,7 +150,7 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) st
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
 func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) string {
-	agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("● ")
+	agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("◉ ")
 	typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
@@ -336,7 +336,7 @@ func softWrap(s string, width int) []string {
 func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) string {
 	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
 	argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("● ")
+	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("◉ ")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)

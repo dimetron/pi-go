@@ -60,11 +60,13 @@ func (c *ChatModel) renderWelcome() string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	cmd := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 
+	// ASCII diagonals, matching the sidebar mascot: ╱ ╲ are East Asian Ambiguous
+	// and widen the row in CJK-configured terminals. See face.go.
 	face := accent.Render(
 		"" +
-			"  ╱╲___╱╲\n" +
+			`  /\___/\` + "\n" +
 			"  ( ◕ ◕ )\n" +
-			"   ╱ π ╲")
+			`   / π \`)
 
 	lines := []string{
 		face,
@@ -439,7 +441,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 	}
 
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("● ")
+	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("◉ ")
 	sepWidth := c.Width
 	if sepWidth < 20 {
 		sepWidth = 20

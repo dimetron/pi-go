@@ -668,12 +668,35 @@ func TestFindMemoryDB_EmptyProject(t *testing.T) {
 // runMemoryMine — project files
 // -----------------------------------------------------------------------
 
+// skipWithoutEmbedder skips tests that need a real embedding backend.
+//
+// These are integration tests wearing unit-test clothing: they call the same
+// code paths `pi memory mine` does, which embed for real. With the default
+// config that means a local Ollama daemon, and without one they either fail
+// outright ("cannot reach daemon at http://localhost:11434") or — worse — fall
+// through to downloading a ~100 MB model, which blew past the 10-minute test
+// timeout and took the whole package down with a panic rather than a failure.
+//
+// Probing is cheap: EmbedderAvailability is a loopback request with a 3-second
+// deadline. So this skips in CI, where no daemon runs, and still exercises the
+// code locally where one does — which is better than a build tag that would
+// make these dead weight everywhere.
+func skipWithoutEmbedder(t *testing.T) {
+	t.Helper()
+	cfg := palace.DefaultConfig()
+	cfg.ModelPath = defaultPalaceModelPath()
+	if err := palace.EmbedderAvailability(cfg); err != nil {
+		t.Skipf("no embedding backend available: %v", err)
+	}
+}
+
 func TestRunMemoryMine_ProjectFiles(t *testing.T) {
 	// Skip race detection due to race in third-party go-huggingface library
 	// (hugot.DownloadModel → gomlx/go-huggingface hub.(*Repo).DownloadFiles).
 	if raceEnabled {
 		t.Skip("skipping: go-huggingface has race condition")
 	}
+	skipWithoutEmbedder(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.go"),
 		[]byte("package main\n\nfunc main() { println(\"hello world test content for chunk threshold minimum\") }"), 0o644)
@@ -695,6 +718,7 @@ func TestRunMemoryMine_Conversations(t *testing.T) {
 	if raceEnabled {
 		t.Skip("skipping: go-huggingface has race condition")
 	}
+	skipWithoutEmbedder(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "chat.jsonl"),
 		[]byte(`{"role":"user","content":"question"}
@@ -774,6 +798,10 @@ func TestRunMemoryStatus_NoDB(t *testing.T) {
 }
 
 func TestRunMemoryStatus_WithDB(t *testing.T) {
+	// AddDrawer embeds its content, so this needs a backend like the mine tests
+	// do. This is the test that hung for 10 minutes and panicked the package.
+	skipWithoutEmbedder(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "palace.db")
 

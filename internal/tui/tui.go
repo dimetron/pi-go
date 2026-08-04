@@ -16,7 +16,6 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
-	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/palace"
 )
 
@@ -460,6 +459,11 @@ func Run(ctx context.Context, cfg Config) error {
 		m.statusModel.GitBranch = detectBranch(cfg.WorkDir)
 	}
 
+	// Clear inherited terminal state before the first frame is drawn. pi renders
+	// on the normal screen, so whatever the previous command left set is still
+	// in effect until something resets it.
+	prepareTerminal()
+
 	p := tea.NewProgram(&m, tea.WithContext(ctx))
 	_, err := p.Run()
 	drainTerminalResponses()
@@ -488,6 +492,9 @@ func (m *model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if m.cfg.AgentEventCh != nil {
 		cmds = append(cmds, waitForSubEvent(m.cfg.AgentEventCh))
+	}
+	if m.cfg.SystemNoticeCh != nil {
+		cmds = append(cmds, waitForSystemNotice(m.cfg.SystemNoticeCh))
 	}
 	cmds = append(cmds, memoryTickCmd(m.cwd()))
 	return tea.Batch(cmds...)
@@ -566,6 +573,17 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case loadingTickMsg:
+		// The loading-dots ticker was the engine behind TODO §30/§42: every
+		// 300 ms fire it mutated m.loadingDots and re-armed unconditionally,
+		// producing a 3.3 Hz full-history re-render for the life of the
+		// process. The dots only animate the deferred-init splash
+		// (m.loading is set at tui.go:455 and cleared at :1963/:1985), so
+		// the re-arm belongs to that lifecycle, not to process uptime.
+		// Re-arming only while m.loading is true stops the chain at init
+		// completion and removes the idle 3.3 Hz floor.
+		if !m.loading {
+			return m, nil, true
+		}
 		m.loadingDots = (m.loadingDots + 1) % 4
 		return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
 
@@ -639,6 +657,12 @@ func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case agentSubEventMsg:
 		model, cmd := m.handleAgentSubEvent(msg)
 		return model, cmd, true
+	case systemNoticeMsg:
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: msg.text,
+		})
+		return m, waitForSystemNotice(m.cfg.SystemNoticeCh), true
 	case agentDoneMsg:
 		model, cmd := m.handleAgentDone(msg)
 		return model, cmd, true
@@ -733,6 +757,14 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	mouse := msg.Mouse()
 	if mouse.Button != tea.MouseLeft {
 		return m, nil
+	}
+	// The gauge's [x] is a control, not text. It sits to the right of the chat
+	// panel, so it has to be claimed before the off-panel branch below swallows
+	// the click as "deselect".
+	if m.hitContextClear(mouse.X, mouse.Y) {
+		m.sel = selection{}
+		m.clearConversation()
+		return m, m.setFlash("Context cleared")
 	}
 	// Only the chat panel is selectable. A press on the rail or in the sidebar
 	// starts nothing — and clears any highlight, the same as a click anywhere
@@ -1403,7 +1435,6 @@ func (m *model) View() tea.View {
 			Orchestrator: m.cfg.Orchestrator,
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
 			MemoryStatus: m.memoryStatus,
-			OTELEnabled:  otel.IsEnabled(),
 			Artifacts:    m.artifactList(),
 		}
 		if m.run != nil && m.run.phase != "" {
@@ -1431,7 +1462,9 @@ func (m *model) View() tea.View {
 	inputCursorY := strings.Count(topSection, "\n") + 1 + strings.Count(bottom.String(), "\n")
 	bottom.WriteString(inputArea)
 	bottom.WriteString("\n")
-	bottom.WriteString(fullHr)
+	// The closing rule doubles as the session context gauge — same row, same
+	// width, now carrying a reading instead of only closing the frame.
+	bottom.WriteString(renderContextRule(m.contextRuleFor(m.width)))
 
 	// Pad the bottom section to the full terminal width so no row is wider or
 	// narrower than m.width. The status bar's Width style handles it for that
@@ -1987,6 +2020,8 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg
 		m.cfg.AgentEventCh = r.AgentEventCh
+		m.cfg.SystemNoticeCh = r.SystemNoticeCh
+		m.cfg.ContextBreakdown = r.ContextBreakdown
 		m.cfg.TokenTracker = r.TokenTracker
 		m.cfg.CompactMetrics = r.CompactMetrics
 		m.statusModel.GitBranch = r.GitBranch
@@ -2002,6 +2037,9 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
+		}
+		if r.SystemNoticeCh != nil {
+			cmds = append(cmds, waitForSystemNotice(r.SystemNoticeCh))
 		}
 		cmds = append(cmds, memoryTickCmd(m.cwd()))
 		return m, tea.Batch(cmds...)
@@ -2318,7 +2356,7 @@ func (m *model) renderBranchPopup() string {
 
 		var line string
 		if isActive {
-			line = fmt.Sprintf("  ● %s (current)", branch)
+			line = fmt.Sprintf("  ◉ %s (current)", branch)
 		} else {
 			line = fmt.Sprintf("    %s", branch)
 		}

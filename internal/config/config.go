@@ -65,10 +65,16 @@ type Config struct {
 	MCP             *MCPConfig            `json:"mcp,omitempty"`
 	Hooks           []HookConfig          `json:"hooks,omitempty"`
 	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
-	Compactor       *CompactorConfig      `json:"compactor,omitempty"`
-	Memory          *MemoryConfig         `json:"memory,omitempty"`
-	Palace          *PalaceConfig         `json:"palace,omitempty"`
-	A2A             *A2AConfig            `json:"a2a,omitempty"`
+	// ContextWindow overrides the model's context window in tokens. Needed for
+	// models absent from the embedded catalog (notably the opencode ones):
+	// auto-compaction measures a percentage of the window, so it stays off
+	// rather than guess at an unknown budget.
+	ContextWindow int64              `json:"contextWindow,omitempty"`
+	Compactor     *CompactorConfig   `json:"compactor,omitempty"`
+	AutoCompact   *AutoCompactConfig `json:"autoCompact,omitempty"`
+	Memory        *MemoryConfig      `json:"memory,omitempty"`
+	Palace        *PalaceConfig      `json:"palace,omitempty"`
+	A2A           *A2AConfig         `json:"a2a,omitempty"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -76,6 +82,16 @@ type PalaceConfig struct {
 	Enabled   *bool  `json:"enabled,omitempty"`
 	DBPath    string `json:"db_path,omitempty"`
 	ModelPath string `json:"model_path,omitempty"`
+
+	// OllamaURL overrides the embedding daemon address. Empty uses the palace
+	// default (http://localhost:11434).
+	OllamaURL string `json:"ollama_url,omitempty"`
+	// OllamaModel overrides the embedding model. Empty uses the palace default.
+	// Changing it invalidates every stored vector — embeddings from different
+	// models are not comparable — so a change means re-running `pi memory mine`.
+	OllamaModel string `json:"ollama_model,omitempty"`
+	// LocalEmbedder forces the slower in-process model instead of Ollama.
+	LocalEmbedder bool `json:"local_embedder,omitempty"`
 }
 
 // CompactorConfig holds user-overridable compaction settings.
@@ -85,6 +101,24 @@ type CompactorConfig struct {
 	SourceCodeFiltering string `json:"source_code_filtering,omitempty"` // "none", "minimal", "aggressive"
 	MaxChars            int    `json:"max_chars,omitempty"`
 	MaxLines            int    `json:"max_lines,omitempty"`
+}
+
+// AutoCompactConfig holds user-overridable auto-compaction settings.
+// When nil in config, the session package's two-stage defaults apply:
+// shed superseded tool results at 60% of the context window, run a full
+// summarizing rebuild at 88%.
+type AutoCompactConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	// ShedPercent is the context-window share at which superseded tool results
+	// are dropped. Cheap: no LLM call, prompt cache preserved.
+	ShedPercent int `json:"shed_percent,omitempty"`
+	// SummarizePercent is the share at which a summarizing rebuild runs.
+	// Clamped to 95 — beyond that the summarization request itself may not fit.
+	SummarizePercent int `json:"summarize_percent,omitempty"`
+	// KeepUserMessageTokens caps user messages carried across a rebuild.
+	KeepUserMessageTokens int `json:"keep_user_message_tokens,omitempty"`
+	// KeepRecentEvents is the conversation tail compaction never touches.
+	KeepRecentEvents int `json:"keep_recent_events,omitempty"`
 }
 
 type MCPConfig struct {

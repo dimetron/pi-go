@@ -22,13 +22,14 @@ const anthropicOAuthUserAgent = "claude-cli/2.1.75"
 
 // anthropicModel implements model.LLM for the Anthropic API.
 type anthropicModel struct {
-	modelName      string
-	client         anthropic.Client
-	betaClient     anthropic.BetaService
-	thinkingLevel  string // "none", "low", "medium", "high"
-	advisorModel   string // Advisor model (e.g., "claude-opus-4-7")
-	advisorMaxUses int    // Max advisor calls per request (0 = unlimited)
-	advisorCaching bool   // Enable ephemeral prompt caching for advisor
+	modelName            string
+	client               anthropic.Client
+	betaClient           anthropic.BetaService
+	thinkingLevel        string // "none", "low", "medium", "high"
+	advisorModel         string // Advisor model (e.g., "claude-opus-4-7")
+	advisorMaxUses       int    // Max advisor calls per request (0 = unlimited)
+	advisorCaching       bool   // Enable ephemeral prompt caching for advisor
+	disablePromptCaching bool   // When true, skip stamping cache_control markers
 }
 
 // NewAnthropic creates an Anthropic model.LLM.
@@ -76,20 +77,23 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 	var advisorModel string
 	var advisorMaxUses int
 	var advisorCaching bool
+	var disablePromptCaching bool
 	if llmOpts != nil {
 		advisorModel = llmOpts.AdvisorModel
 		advisorMaxUses = llmOpts.AdvisorMaxUses
 		advisorCaching = llmOpts.AdvisorCaching
+		disablePromptCaching = llmOpts.DisablePromptCaching
 	}
 
 	return &anthropicModel{
-		modelName:      modelName,
-		client:         client,
-		betaClient:     betaClient,
-		thinkingLevel:  thinkingLevel,
-		advisorModel:   advisorModel,
-		advisorMaxUses: advisorMaxUses,
-		advisorCaching: advisorCaching,
+		modelName:            modelName,
+		client:               client,
+		betaClient:           betaClient,
+		thinkingLevel:        thinkingLevel,
+		advisorModel:         advisorModel,
+		advisorMaxUses:       advisorMaxUses,
+		advisorCaching:       advisorCaching,
+		disablePromptCaching: disablePromptCaching,
 	}, nil
 }
 
@@ -150,6 +154,12 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			params.Tools = antGenaiToolsToAnthropic(req.Config.Tools)
 		}
 
+		// Stamp cache_control markers on the request unless the user opted
+		// out. This is the last wire step so all sections are final.
+		if !m.disablePromptCaching {
+			applyAnthropicCacheControl(&params)
+		}
+
 		if stream {
 			antRunStreaming(ctx, &m.client, params, yield)
 		} else {
@@ -208,6 +218,13 @@ func (m *anthropicModel) buildBetaParams(modelName string, messages []anthropic.
 
 	if config != nil && len(config.Tools) > 0 {
 		params.Tools = append(params.Tools, antGenaiToolsToBetaAnthropic(config.Tools)...)
+	}
+
+	// Stamp cache_control markers on the request unless the user opted
+	// out. The advisor tool's own Caching field is set above, so the
+	// helper sees the final Tools slice including the advisor.
+	if !m.disablePromptCaching {
+		applyAnthropicCacheControlBeta(&params)
 	}
 
 	return params
@@ -468,11 +485,13 @@ type antToolUseAcc struct {
 
 // antStreamState holds accumulated state from processing Anthropic stream events.
 type antStreamState struct {
-	text         string
-	toolUse      map[int]antToolUseAcc
-	stopReason   anthropic.StopReason
-	inputTokens  int64
-	outputTokens int64
+	text                string
+	toolUse             map[int]antToolUseAcc
+	stopReason          anthropic.StopReason
+	inputTokens         int64
+	outputTokens        int64
+	cacheReadTokens     int64
+	cacheCreationTokens int64
 }
 
 // buildAntFinalResponse constructs the final LLMResponse from accumulated streaming state.
@@ -504,8 +523,9 @@ func buildAntFinalResponse(s *antStreamState) *model.LLMResponse {
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if s.inputTokens > 0 || s.outputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(s.inputTokens),
-			CandidatesTokenCount: int32(s.outputTokens),
+			PromptTokenCount:        int32(s.inputTokens + s.cacheReadTokens + s.cacheCreationTokens),
+			CandidatesTokenCount:    int32(s.outputTokens),
+			CachedContentTokenCount: int32(s.cacheReadTokens),
 		}
 	}
 	return &model.LLMResponse{
@@ -530,6 +550,8 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 		switch e := event.AsAny().(type) {
 		case anthropic.MessageStartEvent:
 			state.inputTokens = e.Message.Usage.InputTokens
+			state.cacheReadTokens = e.Message.Usage.CacheReadInputTokens
+			state.cacheCreationTokens = e.Message.Usage.CacheCreationInputTokens
 		case anthropic.ContentBlockStartEvent:
 			idx := int(e.Index)
 			if e.ContentBlock.Type == "tool_use" {
@@ -573,6 +595,15 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 		case anthropic.MessageDeltaEvent:
 			state.stopReason = e.Delta.StopReason
 			state.outputTokens = e.Usage.OutputTokens
+			// Anthropic may also surface cache deltas in message_delta;
+			// take the last reported value (it's monotonically increasing
+			// across a single response).
+			if v := e.Usage.CacheReadInputTokens; v > state.cacheReadTokens {
+				state.cacheReadTokens = v
+			}
+			if v := e.Usage.CacheCreationInputTokens; v > state.cacheCreationTokens {
+				state.cacheCreationTokens = v
+			}
 		}
 	}
 
@@ -622,8 +653,9 @@ func antRunNonStreaming(ctx context.Context, client *anthropic.Client, params an
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if message.Usage.InputTokens > 0 || message.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(message.Usage.InputTokens),
-			CandidatesTokenCount: int32(message.Usage.OutputTokens),
+			PromptTokenCount:        int32(message.Usage.InputTokens),
+			CandidatesTokenCount:    int32(message.Usage.OutputTokens),
+			CachedContentTokenCount: int32(message.Usage.CacheReadInputTokens),
 		}
 	}
 	yield(&model.LLMResponse{
@@ -765,8 +797,9 @@ func antRunNonStreamingBeta(ctx context.Context, client *anthropic.BetaService, 
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if message.Usage.InputTokens > 0 || message.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(message.Usage.InputTokens),
-			CandidatesTokenCount: int32(message.Usage.OutputTokens),
+			PromptTokenCount:        int32(message.Usage.InputTokens),
+			CandidatesTokenCount:    int32(message.Usage.OutputTokens),
+			CachedContentTokenCount: int32(message.Usage.CacheReadInputTokens),
 		}
 	}
 	yield(&model.LLMResponse{

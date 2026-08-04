@@ -1,5 +1,13 @@
 .PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
 
+# Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
+# (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
+# `//go:build amd64 && goexperiment.simd`, so this speeds up `pi memory mine` on
+# amd64 and does nothing on arm64 — upstream ships no NEON path. Measured on an
+# M2 Max: 6.4 vs 6.6 chunks/sec, i.e. noise. Exported so every recipe below
+# (build, install, test) compiles the same way.
+export GOEXPERIMENT := simd
+
 build:
 	go build -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
 	go build ./cmd/pi-sandbox

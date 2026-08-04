@@ -242,6 +242,24 @@ func waitForAgent(ch chan agentMsg) tea.Cmd {
 	}
 }
 
+// systemNoticeMsg carries a short system message into the chat transcript.
+type systemNoticeMsg struct{ text string }
+
+// waitForSystemNotice blocks on the notice channel and delivers the next
+// message. Re-armed after each delivery, like waitForSubEvent.
+func waitForSystemNotice(ch <-chan string) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		text, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return systemNoticeMsg{text: text}
+	}
+}
+
 func waitForSubEvent(ch <-chan AgentSubEvent) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -480,6 +498,7 @@ func (m *model) emitEventParts(
 	for _, part := range ev.Content.Parts {
 		switch {
 		case part.Text != "" && ev.Content.Role == "thinking":
+			log.Thinking(ev.Author, part.Text)
 			m.agentCh <- agentThinkingMsg{text: part.Text}
 
 		case part.Text != "":

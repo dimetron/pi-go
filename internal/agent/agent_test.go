@@ -705,6 +705,30 @@ description: Run lint checks before finishing.
 	}
 }
 
+func TestAppendActiveSkill(t *testing.T) {
+	// AppendActiveSkill adds an "# Active Skill" block that includes the
+	// full skill body, on top of whatever the caller already has (e.g. the
+	// output of LoadInstruction).
+	base := "Base instruction.\n\n# Available Skills\n\n- /ponytail: lazy mode\n"
+	skill := extension.Skill{Name: "ponytail", Description: "lazy mode"}
+	got := AppendActiveSkill(base, skill, "Be lazy. Prefer stdlib.")
+	if !strings.Contains(got, "Base instruction.") {
+		t.Errorf("missing base, got %q", got)
+	}
+	if !strings.Contains(got, "# Active Skill: ponytail") {
+		t.Errorf("missing active skill header, got %q", got)
+	}
+	if !strings.Contains(got, "Be lazy. Prefer stdlib.") {
+		t.Errorf("missing skill body, got %q", got)
+	}
+	// Active Skill block should come after the Available Skills menu.
+	menuIdx := strings.Index(got, "# Available Skills")
+	activeIdx := strings.Index(got, "# Active Skill")
+	if menuIdx < 0 || activeIdx < 0 || activeIdx <= menuIdx {
+		t.Errorf("Active Skill should follow Available Skills, got menu=%d active=%d", menuIdx, activeIdx)
+	}
+}
+
 func TestIntegrationToolExecution(t *testing.T) {
 	// Create a temp file that the "read" tool will read.
 	dir := t.TempDir()

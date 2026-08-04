@@ -99,7 +99,13 @@ func TestPalaceNewAndLifecycle(t *testing.T) {
 
 	// ModelPath points at a nonexistent file: os.Stat fails so the embedder is
 	// skipped, exercising that branch of New without needing a real model.
-	p, err := New(WithDBPath(dbPath), WithModelPath(filepath.Join(t.TempDir(), "missing.onnx")))
+	// WithLocalEmbedder pins the backend: without it the result would depend on
+	// whether an Ollama daemon happens to be running on the machine.
+	p, err := New(
+		WithDBPath(dbPath),
+		WithModelPath(filepath.Join(t.TempDir(), "missing.onnx")),
+		WithLocalEmbedder(),
+	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

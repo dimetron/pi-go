@@ -18,6 +18,9 @@ type PalaceStore interface {
 	// Embedding operations
 	GetEmbedding(ctx context.Context, id string) (*EmbeddingRow, error)
 	GetAllEmbeddings(ctx context.Context, filter DrawerFilter) ([]EmbeddingRow, error)
+	// FindByContentHash returns the id of an existing drawer with identical
+	// content in the same wing and room, or "" when there is none.
+	FindByContentHash(ctx context.Context, wing, room, hash string) (string, error)
 
 	// Search operations
 	KeywordSearch(ctx context.Context, query string, filter DrawerFilter, limit int) ([]SearchResult, error)

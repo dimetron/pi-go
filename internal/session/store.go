@@ -483,14 +483,19 @@ func (s *FileService) loadSessionFromDisk(sessionID string, meta *Meta) (*fileSe
 			},
 		),
 	}
+	// Restore the in-memory state by replaying each event's StateDelta, then
+	// rebuild the ATIF trajectory in one shot. Both passes used to be inside a
+	// single per-event loop; the state merge stays per-event (it mutates
+	// sess.state), but the ATIF write is now batched via AppendEvents to avoid
+	// O(n) full-file rewrites under s.mu on a cache miss.
 	for _, e := range events {
 		if e.Actions.StateDelta != nil {
 			maps.Copy(sess.state, e.Actions.StateDelta)
 		}
-		if sess.atifWriter != nil {
-			if err := sess.atifWriter.AppendEvent(e); err != nil {
-				slog.Warn("atif: failed to rebuild event on load", "session", sessionID, "error", err)
-			}
+	}
+	if sess.atifWriter != nil {
+		if err := sess.atifWriter.AppendEvents(events); err != nil {
+			slog.Warn("atif: failed to rebuild trajectory on load", "session", sessionID, "error", err)
 		}
 	}
 	s.sessions[sessionID] = sess
@@ -952,6 +957,50 @@ func (s *FileService) Compact(sessionID, appName, userID string, summarizer Summ
 	if err := rewriteEvents(sessionDir, newEvents); err != nil {
 		return fmt.Errorf("rewriting events after compaction: %w", err)
 	}
+
+	return nil
+}
+
+// ClearEvents drops every event from a session, in memory and on disk, so the
+// next LLM request starts from an empty context window.
+//
+// This is what the TUI's /clear needs and what Compact cannot provide:
+// compaction replaces history with a summary (which is still history) and
+// returns early when the session is under its token threshold, so on a short
+// session it is a no-op. Clearing is unconditional.
+//
+// Everything that is not conversation is preserved: session state, meta
+// (title, model, timestamps), plan context and branches all survive. The user
+// cleared the conversation, not the session.
+//
+// The ATIF writer is replaced with a fresh one so the trajectory numbering
+// restarts alongside the events rather than continuing over a history that no
+// longer exists.
+func (s *FileService) ClearEvents(sessionID, appName, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, err := s.loadSession(sessionID, appName, userID)
+	if err != nil {
+		return fmt.Errorf("loading session for clear: %w", err)
+	}
+
+	sess.events = nil
+
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	if err := rewriteEvents(sessionDir, nil); err != nil {
+		return fmt.Errorf("rewriting events after clear: %w", err)
+	}
+
+	sess.atifWriter = atif.NewWriter(
+		filepath.Join(sessionDir, "trajectory.atif.json"),
+		atif.SessionMeta{
+			SessionID: sessionID,
+			AgentName: sess.meta.AppName,
+			Model:     sess.meta.Model,
+			WorkDir:   sess.meta.WorkDir,
+		},
+	)
 
 	return nil
 }

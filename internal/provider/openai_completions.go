@@ -170,6 +170,7 @@ type oaiStreamState struct {
 	finishReason     string
 	promptTokens     int64
 	completionTokens int64
+	cachedTokens     int64
 }
 
 // accumulateOaiToolCall updates the tool call accumulator with a single delta chunk.
@@ -220,8 +221,9 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if s.promptTokens > 0 || s.completionTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(s.promptTokens),
-			CandidatesTokenCount: int32(s.completionTokens),
+			PromptTokenCount:        int32(s.promptTokens),
+			CandidatesTokenCount:    int32(s.completionTokens),
+			CachedContentTokenCount: int32(s.cachedTokens),
 		}
 	}
 	return &model.LLMResponse{
@@ -248,6 +250,7 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 		if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
 			state.promptTokens = chunk.Usage.PromptTokens
 			state.completionTokens = chunk.Usage.CompletionTokens
+			state.cachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -313,8 +316,9 @@ func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params opena
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if completion.Usage.PromptTokens > 0 || completion.Usage.CompletionTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(completion.Usage.PromptTokens),
-			CandidatesTokenCount: int32(completion.Usage.CompletionTokens),
+			PromptTokenCount:        int32(completion.Usage.PromptTokens),
+			CandidatesTokenCount:    int32(completion.Usage.CompletionTokens),
+			CachedContentTokenCount: int32(completion.Usage.PromptTokensDetails.CachedTokens),
 		}
 	}
 	yield(&model.LLMResponse{

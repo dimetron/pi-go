@@ -92,3 +92,14 @@ func TestMemoryWakeUp_WingFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNewMemoryWakeUpCmd_RunE(t *testing.T) {
+	resetGlobalFlags(t)
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "palace.db")
+	cmd := newMemoryWakeUpCmd()
+	cmd.SetArgs([]string{"--db", dbPath})
+	_ = captureStdout(t, func() {
+		_ = cmd.Execute()
+	})
+}

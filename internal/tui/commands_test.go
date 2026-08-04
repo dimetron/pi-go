@@ -1,11 +1,19 @@
 package tui
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 // --- handleCompactCommand tests ---
@@ -28,6 +36,143 @@ func TestHandleCompactCommand_NilSessionService(t *testing.T) {
 	if !strings.Contains(msg.content, "not available") {
 		t.Errorf("expected 'not available' message, got %q", msg.content)
 	}
+}
+
+// A successful /compact must push the post-compaction token count into the
+// configured TokenTracker so the bottom gauge updates on the very next
+// render. Without this push the gauge would stay stuck on the pre-compaction
+// reading until the next LLM response arrives.
+func TestHandleCompactCommand_UpdatesGaugeTracker(t *testing.T) {
+	tracker := &cmdMockTokenTracker{}
+	svc, id := newCompactTestSession(t)
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			SessionService: svc,
+			SessionID:      id,
+			TokenTracker:   tracker,
+		},
+	}
+
+	m.handleCompactCommand()
+
+	if tracker.setCount == 0 {
+		t.Fatalf("expected SetLastPromptTokens to be called at least once, got 0 calls")
+	}
+	if tracker.lastPrompt <= 0 {
+		t.Errorf("expected a positive post-compaction prompt count, got %d", tracker.lastPrompt)
+	}
+	if got := tracker.LastPromptTokens(); got <= 0 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want > 0", got)
+	}
+}
+
+// --- /clear context reset tests ---
+
+// /clear must reset what the model sees, not just what the user sees: the
+// session's events go away and the context gauge is zeroed. Clearing only the
+// transcript would leave the user paying for every prior turn while the screen
+// claims the conversation is gone.
+func TestSlashClear_ClearsSessionEventsAndGauge(t *testing.T) {
+	svc, id := newCompactTestSession(t)
+	tracker := &cmdMockTokenTracker{lastPrompt: 12345}
+
+	m := newTestModel(t)
+	m.cfg.SessionService = svc
+	m.cfg.SessionID = id
+	m.cfg.TokenTracker = tracker
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: "hi"})
+
+	m.handleSlashCommand("/clear")
+
+	if len(m.chatModel.Messages) != 0 {
+		t.Errorf("expected transcript cleared, got %d messages: %+v",
+			len(m.chatModel.Messages), m.chatModel.Messages)
+	}
+	if tracker.resetCount != 1 {
+		t.Errorf("ResetContextWindow calls = %d, want 1", tracker.resetCount)
+	}
+	if got := tracker.LastPromptTokens(); got != 0 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want 0 (gauge must read empty)", got)
+	}
+
+	est, err := svc.EstimateTokens(id, agent.AppName, agent.DefaultUserID)
+	if err != nil {
+		t.Fatalf("EstimateTokens: %v", err)
+	}
+	if est != 0 {
+		t.Errorf("session still holds ~%d tokens of events after /clear, want 0", est)
+	}
+}
+
+// If the events survive, the gauge must too: zeroing it would under-report a
+// still-full window, which is a worse lie than a stale reading.
+func TestClearSessionContext_KeepsGaugeWhenClearFails(t *testing.T) {
+	svc, _ := newCompactTestSession(t)
+	tracker := &cmdMockTokenTracker{lastPrompt: 999}
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			SessionService: svc,
+			SessionID:      "no-such-session",
+			TokenTracker:   tracker,
+		},
+	}
+
+	m.clearSessionContext()
+
+	if tracker.resetCount != 0 {
+		t.Errorf("ResetContextWindow called %d times on a failed clear, want 0", tracker.resetCount)
+	}
+	if got := tracker.LastPromptTokens(); got != 999 {
+		t.Errorf("tracker.LastPromptTokens() = %d, want 999 (unchanged)", got)
+	}
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected the failure to be surfaced, got %d messages", len(m.chatModel.Messages))
+	}
+	if !strings.Contains(m.chatModel.Messages[0].content, "not cleared") {
+		t.Errorf("expected a 'not cleared' notice, got %q", m.chatModel.Messages[0].content)
+	}
+}
+
+// Both dependencies are optional; neither may panic when absent.
+func TestClearSessionContext_NilDependencies(t *testing.T) {
+	t.Run("no session service still zeroes the gauge", func(t *testing.T) {
+		tracker := &cmdMockTokenTracker{lastPrompt: 42}
+		m := &model{
+			chatModel: ChatModel{Messages: make([]message, 0)},
+			cfg:       Config{TokenTracker: tracker},
+		}
+
+		m.clearSessionContext()
+
+		if tracker.resetCount != 1 {
+			t.Errorf("ResetContextWindow calls = %d, want 1", tracker.resetCount)
+		}
+	})
+
+	t.Run("no token tracker still clears the events", func(t *testing.T) {
+		svc, id := newCompactTestSession(t)
+		m := &model{
+			chatModel: ChatModel{Messages: make([]message, 0)},
+			cfg:       Config{SessionService: svc, SessionID: id},
+		}
+
+		m.clearSessionContext()
+
+		est, err := svc.EstimateTokens(id, agent.AppName, agent.DefaultUserID)
+		if err != nil {
+			t.Fatalf("EstimateTokens: %v", err)
+		}
+		if est != 0 {
+			t.Errorf("events survived /clear: ~%d tokens", est)
+		}
+		if len(m.chatModel.Messages) != 0 {
+			t.Errorf("expected no notice on success, got %+v", m.chatModel.Messages)
+		}
+	})
 }
 
 // --- handleThemeCommand tests ---
@@ -348,15 +493,29 @@ type cmdMockTokenTracker struct {
 	limit       int64
 	remaining   int64
 	percentUsed float64
+	lastPrompt  int64
+	setCount    int
+	resetCount  int
 }
 
-func (m *cmdMockTokenTracker) TotalUsed() int64            { return m.totalUsed }
-func (m *cmdMockTokenTracker) Limit() int64                { return m.limit }
-func (m *cmdMockTokenTracker) Remaining() int64            { return m.remaining }
-func (m *cmdMockTokenTracker) PercentUsed() float64        { return m.percentUsed }
-func (m *cmdMockTokenTracker) LastPromptTokens() int64     { return 0 }
+func (m *cmdMockTokenTracker) TotalUsed() int64        { return m.totalUsed }
+func (m *cmdMockTokenTracker) Limit() int64            { return m.limit }
+func (m *cmdMockTokenTracker) Remaining() int64        { return m.remaining }
+func (m *cmdMockTokenTracker) PercentUsed() float64    { return m.percentUsed }
+func (m *cmdMockTokenTracker) LastPromptTokens() int64 { return m.lastPrompt }
+func (m *cmdMockTokenTracker) SetLastPromptTokens(n int64) {
+	m.lastPrompt, m.setCount = n, m.setCount+1
+}
+func (m *cmdMockTokenTracker) ResetContextWindow() {
+	m.lastPrompt, m.resetCount = 0, m.resetCount+1
+}
 func (m *cmdMockTokenTracker) ContextWindowSize() int64    { return 0 }
 func (m *cmdMockTokenTracker) ContextPercentUsed() float64 { return 0 }
+func (m *cmdMockTokenTracker) LastCachedTokens() int64     { return 0 }
+func (m *cmdMockTokenTracker) CachedTokensToday() int64    { return 0 }
+func (m *cmdMockTokenTracker) CacheHitRateToday() float64  { return 0 }
+func (m *cmdMockTokenTracker) BodyTokens() int64           { return 0 }
+func (m *cmdMockTokenTracker) CachePrefixTokens() int64    { return 0 }
 
 func TestCommandFormatContextUsage_WithTokenTracker(t *testing.T) {
 	m := &model{
@@ -782,4 +941,104 @@ func TestMaskServerURL(t *testing.T) {
 			t.Errorf("maskServerURL(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
 	}
+}
+
+func TestCommandFormatContextUsage_SkillsSection(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName: "test-model",
+			Skills: []extension.Skill{
+				{Name: "alpha", Description: "First skill", Source: "bundled"},
+				{Name: "beta", Description: "Second skill", Source: "user"},
+			},
+		},
+	}
+
+	result := m.formatContextUsage()
+
+	if !strings.Contains(result, "*Skills*") {
+		t.Errorf("expected Skills header, got %q", result)
+	}
+	if !strings.Contains(result, "(2 loaded)") {
+		t.Errorf("expected '(2 loaded)', got %q", result)
+	}
+	// Alpha should come before beta (alphabetical).
+	alphaIdx := strings.Index(result, "/alpha")
+	betaIdx := strings.Index(result, "/beta")
+	if alphaIdx < 0 || betaIdx < 0 || alphaIdx > betaIdx {
+		t.Errorf("expected alpha before beta, got alpha=%d beta=%d", alphaIdx, betaIdx)
+	}
+	// Source tag should be present.
+	if !strings.Contains(result, "[bundled]") {
+		t.Errorf("expected [bundled] tag, got %q", result)
+	}
+	if !strings.Contains(result, "[user]") {
+		t.Errorf("expected [user] tag, got %q", result)
+	}
+	// No body loaded yet → "body: not loaded" for both.
+	if !strings.Contains(result, "body: not loaded") {
+		t.Errorf("expected 'body: not loaded' for unloaded skills, got %q", result)
+	}
+}
+
+func TestCommandFormatContextUsage_SkillsSectionNoSkills(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg:       Config{ModelName: "test-model"},
+	}
+	result := m.formatContextUsage()
+	if strings.Contains(result, "*Skills*") {
+		t.Errorf("expected no Skills section when no skills loaded, got %q", result)
+	}
+}
+
+// newCompactTestSession builds a session with enough text-shaped content for
+// Compact to actually rewrite history. The compacted file gets picked up by
+// EstimateTokens on the subsequent handleCompactCommand call, exercising the
+// post-compaction gauge-update wire-up.
+func newCompactTestSession(t *testing.T) (*pisession.FileService, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	svc, err := pisession.NewFileService(filepath.Join(tmp, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := svc.Create(context.Background(), &session.CreateRequest{
+		AppName: agent.AppName,
+		UserID:  agent.DefaultUserID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := resp.Session.ID()
+
+	// A handful of long user/assistant turns gets us comfortably over the
+	// 100k default MaxTokens threshold inside Compact, so the rewrite path
+	// runs and EstimateTokens returns a non-trivial post-compaction number.
+	body := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 2000)
+	events := []*session.Event{
+		makeTextEvent("user", "first long message "+body),
+		makeTextEvent("assistant", "first long reply "+body),
+		makeTextEvent("user", "second long message "+body),
+		makeTextEvent("assistant", "second long reply "+body),
+		makeTextEvent("user", "third long message "+body),
+		makeTextEvent("assistant", "third long reply "+body),
+	}
+	for i, ev := range events {
+		ev.ID = "ev-" + string(rune('a'+i))
+		if err := svc.AppendEvent(context.Background(), resp.Session, ev); err != nil {
+			t.Fatalf("AppendEvent: %v", err)
+		}
+	}
+	return svc, id
+}
+
+func makeTextEvent(author, text string) *session.Event {
+	ev := &session.Event{
+		Timestamp: time.Unix(0, 0),
+		Author:    author,
+	}
+	ev.Content = genai.NewContentFromText(text, genai.RoleUser)
+	return ev
 }

@@ -111,6 +111,20 @@ var migrations = []string{
 	`
 	ALTER TABLE drawers ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
 	`,
+
+	// Version 5: Index the content hash for exact-duplicate lookups.
+	//
+	// AddDrawer settles exact duplicates before embedding. Without this index
+	// that lookup falls back to idx_drawers_hall and walks every drawer in the
+	// room — 11,901 rows in this project's largest. With it, SQLite reports
+	// "SEARCH drawers USING COVERING INDEX", so the row itself is never touched.
+	//
+	// Column order matters: (wing, room) first keeps it usable for the same
+	// prefix queries idx_drawers_room serves.
+	`
+	CREATE INDEX IF NOT EXISTS idx_drawers_content_hash
+		ON drawers(wing, room, content_hash);
+	`,
 }
 
 // OpenDB opens (or creates) a palace SQLite database at the given path with

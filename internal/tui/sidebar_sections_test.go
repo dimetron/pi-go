@@ -61,41 +61,6 @@ func TestTruncateLabelNeverSplitsRunes(t *testing.T) {
 	}
 }
 
-func TestEstimateContextTokens(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		msgs []message
-		want string
-	}{
-		{"no messages", nil, "  ~0 tokens"},
-		{
-			"small message uses plain count",
-			[]message{{content: strings.Repeat("a", 40)}},
-			"  ~10 tokens",
-		},
-		{
-			"large message switches to k",
-			[]message{{content: strings.Repeat("a", 8000)}},
-			"  ~2.0k tokens",
-		},
-		{
-			"tool fields are counted too",
-			[]message{{content: "ab", tool: "cd", toolIn: "ef"}},
-			"  ~1 tokens",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := estimateContextTokens(tt.msgs); got != tt.want {
-				t.Errorf("estimateContextTokens() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSidebarMoodLines(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -132,7 +97,6 @@ func TestSidebarHiddenSections(t *testing.T) {
 		name string
 		got  []string
 	}{
-		{"otel off", sidebarOTELLines(empty)},
 		{"no artifacts", sidebarArtifactLines(empty, 27)},
 		{"no git branch", sidebarGitLines(empty, 27)},
 		{"no orchestrator", sidebarAgentLines(empty, 27)},
@@ -233,7 +197,7 @@ func TestSidebarModeLinesRunChecklist(t *testing.T) {
 	}
 
 	out := plain(sidebarModeLines(in, 27))
-	for _, want := range []string{"Run: my-spec", "cycle 2/5 · implement", "[x] write tests", "[ ] make them pass"} {
+	for _, want := range []string{"Run: my-spec", "cycle 2/5 ∙ implement", "[x] write tests", "[ ] make them pass"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in:\n%s", want, out)
 		}
@@ -296,8 +260,8 @@ func TestAgentRowIcons(t *testing.T) {
 		{"done", "✓"},
 		{"failed", "✗"},
 		{"killed", "⊘"},
-		{"queued", "·"},
-		{"", "·"},
+		{"queued", "∙"},
+		{"", "∙"},
 	}
 
 	for _, tt := range tests {

@@ -86,7 +86,7 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 	}
 
 	// Phase 2b: drop chunks that have not changed since the last run.
-	allChunks = dropUnchangedChunks(ctx, palace, cfg.Wing, allChunks, result)
+	allChunks = dropUnchangedChunks(ctx, cfg, palace, cfg.Wing, allChunks, result)
 	if len(allChunks) == 0 {
 		return result, nil
 	}
@@ -272,7 +272,13 @@ func collectChunks(tasks []fileTask, cfg *MineConfig, result *MineResult) []chun
 //
 // A store lookup failure is not fatal — fall back to embedding everything,
 // which is merely the old behavior.
-func dropUnchangedChunks(ctx context.Context, palace *Palace, wing string, allChunks []chunkJob, result *MineResult) []chunkJob {
+func dropUnchangedChunks(ctx context.Context, cfg *MineConfig, palace *Palace, wing string, allChunks []chunkJob, result *MineResult) []chunkJob {
+	// DrawerHashes reads every stored hash for the wing in one query. On a large
+	// palace that is seconds to minutes with nothing on screen, so announce it
+	// rather than letting the run look hung.
+	if cfg.Phase != nil {
+		cfg.Phase("dedupe", "loading stored content hashes", 0, 0)
+	}
 	existing, err := palace.store.DrawerHashes(ctx, wing)
 	if err != nil {
 		slog.Warn("mine: could not load content hashes; re-embedding everything", "error", err)
@@ -318,10 +324,22 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 	embeddings := make([][]float32, len(texts))
 
 	workers := embedWorkers(palace.config.ModelPath)
-	slog.Info("mine: embedding chunks", "count", len(texts), "workers", workers, "batch", embedBatchSize)
-
 	embs, closeExtra := embedderPool(palace, workers)
 	defer closeExtra()
+
+	// Batch size is a property of the backend, not a global: 8 exists only
+	// because gomlx's simplego balloons in memory above it, which is irrelevant
+	// to Ollama.
+	batch := batchSizeFor(palace.embedder)
+	slog.Info("mine: embedding chunks",
+		"count", len(texts), "workers", len(embs), "batch", batch, "backend", embedderName(palace.embedder))
+
+	// Claim the line before the first batch lands. Otherwise the previous
+	// stage's status sits on screen through model load and the first request —
+	// the slowest, most "is it stuck"-looking part of the whole run.
+	if cfg.Phase != nil {
+		cfg.Phase("embed", fmt.Sprintf("embedding %d chunks via %s", len(texts), embedderName(palace.embedder)), 0, 0)
+	}
 
 	type batchJob struct{ start, end int }
 	jobs := make(chan batchJob)
@@ -356,8 +374,8 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 		})
 	}
 
-	for i := 0; i < len(texts); i += embedBatchSize {
-		jobs <- batchJob{start: i, end: min(i+embedBatchSize, len(texts))}
+	for i := 0; i < len(texts); i += batch {
+		jobs <- batchJob{start: i, end: min(i+batch, len(texts))}
 	}
 	close(jobs)
 	wg.Wait()
@@ -374,8 +392,18 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 // concurrently, and one shared embedder is what limited the run to ~25% CPU.
 // Worker 0 reuses the palace's own embedder so the common single-worker case
 // allocates nothing extra, and is therefore not closed here.
-func embedderPool(palace *Palace, workers int) ([]*Embedder, func()) {
-	embs := make([]*Embedder, 0, workers)
+func embedderPool(palace *Palace, workers int) ([]Embedder, func()) {
+	// Ollama is a network client, safe to share across goroutines, and it batches
+	// server-side — so extra instances buy nothing. Worse, the fallback below
+	// would build *local* embedders alongside it, and the two models produce
+	// different dimensions (768 vs 384). Mixing them writes vectors of two shapes
+	// into one wing, where CosineSimilarity silently returns 0 for every
+	// mismatched pair and search quietly stops working.
+	if _, ok := palace.embedder.(*ollamaEmbedder); ok {
+		return []Embedder{palace.embedder}, func() {}
+	}
+
+	embs := make([]Embedder, 0, workers)
 	embs = append(embs, palace.embedder)
 	for len(embs) < workers {
 		e, err := NewEmbedder(palace.config.ModelPath)
@@ -441,6 +469,12 @@ func insertDrawers(ctx context.Context, palace *Palace, cfg *MineConfig, drawers
 		return
 	}
 
+	// One transaction for every drawer: no incremental progress is available
+	// from inside it, so name the step and let the caller's heartbeat show the
+	// process is still alive.
+	if cfg.Phase != nil {
+		cfg.Phase("insert", fmt.Sprintf("writing %d drawers in one transaction", len(drawers)), 0, 0)
+	}
 	inserted, err := palace.store.BatchInsertDrawers(ctx, drawers)
 	if err == nil {
 		result.Added = inserted
@@ -462,4 +496,20 @@ func insertDrawers(ctx context.Context, palace *Palace, cfg *MineConfig, drawers
 			cfg.Progress("", 70+(100-70)*i/len(drawers), 0, 0)
 		}
 	}
+}
+
+// batchSizeFor reports how many texts to submit per Embed call for e.
+func batchSizeFor(e Embedder) int {
+	if _, ok := e.(*ollamaEmbedder); ok {
+		return ollamaEmbedBatchSize
+	}
+	return embedBatchSize
+}
+
+// embedderName identifies the backend for logs.
+func embedderName(e Embedder) string {
+	if o, ok := e.(*ollamaEmbedder); ok {
+		return "ollama/" + o.model
+	}
+	return backendName
 }

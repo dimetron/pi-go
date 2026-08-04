@@ -267,6 +267,13 @@ type LLMOptions struct {
 	AdvisorModel    string // Advisor model (e.g., "claude-opus-4-7")
 	AdvisorMaxUses  int    // Max advisor calls per request (0 = unlimited)
 	AdvisorCaching  bool   // Enable ephemeral prompt caching for advisor
+	// DisablePromptCaching turns OFF the cache_control breakpoints the
+	// Anthropic provider stamps on every request. Caching is on by default
+	// because it only ever lowers the bill: requests whose prefix is below
+	// Anthropic's minimum cacheable length (1024-4096 tokens) are simply
+	// not cached, with no error and no extra cost. Other providers ignore
+	// this flag today.
+	DisablePromptCaching bool
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.

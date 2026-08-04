@@ -464,6 +464,55 @@ func TestServerV2_HandleSubmitPairCode_InvalidCode_HTML(t *testing.T) {
 	}
 }
 
+// TestServerV2_HandleSubmitPairCode_EmptyFormCode covers the server side of the
+// pairing loop: a form POST that carries no "code" field must be rejected and
+// must leave the active pair pending so the browser can retry.
+func TestServerV2_HandleSubmitPairCode_EmptyFormCode(t *testing.T) {
+	s := newTestServerV2(t)
+	defer s.Shutdown(t.Context())
+	_, token, err := s.BootstrapPair("/tmp/test")
+	if err != nil {
+		t.Fatalf("BootstrapPair: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/api/pair/submit", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleSubmitPairCode(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.Contains(loc, "/pair?error=") {
+		t.Fatalf("expected redirect to pair error, got %q", loc)
+	}
+	if status, _ := s.PairingManager().CheckStatus(token); status != PairStatusPending {
+		t.Fatalf("expected pair to stay pending, got %q", status)
+	}
+}
+
+// TestPairPageSubmitsCodeWithoutDisablingInput guards the regression that made
+// pairing loop forever: pair.html used to set codeInput.disabled inside the
+// submit handler, and a disabled control is excluded from the form entry list,
+// so the server received an empty code and redirected back to /pair.
+func TestPairPageSubmitsCodeWithoutDisablingInput(t *testing.T) {
+	page, err := embeddedStaticFiles.ReadFile("static/pair.html")
+	if err != nil {
+		t.Fatalf("reading embedded pair.html: %v", err)
+	}
+	html := string(page)
+
+	if strings.Contains(html, "codeInput.disabled") {
+		t.Error("pair.html must not disable the code input; a disabled control is dropped from the form submission")
+	}
+	if !strings.Contains(html, "codeInput.readOnly") {
+		t.Error("pair.html should use readOnly to lock the code input while submitting")
+	}
+	if !strings.Contains(html, "fetch('/api/pair/submit'") {
+		t.Error("pair.html should submit the pair code via fetch so errors render inline")
+	}
+}
+
 // --- routing / misc server behavior ---
 
 func TestServerV2_HandleIndex_Root(t *testing.T) {
@@ -748,8 +797,8 @@ func TestPtyPool_CloseAll_Empty(t *testing.T) {
 
 func TestNewServerV2_Defaults(t *testing.T) {
 	s := NewServerV2(Config{})
-	if s.Addr() != ":8080" {
-		t.Errorf("expected :8080, got %q", s.Addr())
+	if s.Addr() != DefaultAddr {
+		t.Errorf("expected %q, got %q", DefaultAddr, s.Addr())
 	}
 	if s.pairingMgr == nil || s.sessions == nil || s.ptyPool == nil {
 		t.Fatal("expected managers to be initialized")

@@ -16,14 +16,42 @@ const DefaultMaxDailyTokens = 50000000
 // Usage tracks token consumption for the current day.
 type Usage struct {
 	Date         string `json:"date"`          // YYYY-MM-DD
-	InputTokens  int64  `json:"input_tokens"`  // total prompt tokens
+	InputTokens  int64  `json:"input_tokens"`  // total prompt tokens (includes cached)
 	OutputTokens int64  `json:"output_tokens"` // total completion tokens
 	Requests     int64  `json:"requests"`      // number of LLM calls
+
+	// CachedInputTokens is the portion of InputTokens served from a provider
+	// prompt cache. Providers bill these at a steep discount (Anthropic: 0.1x),
+	// so InputTokens alone overstates cost whenever caching is active.
+	//
+	// Cache *write* tokens are not broken out separately: the genai usage
+	// metadata has no field for them, so they remain folded into the
+	// non-cached remainder. Writes bill at 1.25x, so the fresh-token figure
+	// is a slight underestimate of true cost when a cache is first populated.
+	CachedInputTokens int64 `json:"cached_input_tokens"`
 }
 
 // TotalTokens returns the combined input + output token count.
 func (u *Usage) TotalTokens() int64 {
 	return u.InputTokens + u.OutputTokens
+}
+
+// FreshInputTokens returns prompt tokens that were not served from cache.
+func (u *Usage) FreshInputTokens() int64 {
+	fresh := u.InputTokens - u.CachedInputTokens
+	if fresh < 0 {
+		return 0
+	}
+	return fresh
+}
+
+// CacheHitRate returns the share of prompt tokens served from cache (0-100).
+// Returns 0 when no prompt tokens have been recorded.
+func (u *Usage) CacheHitRate() float64 {
+	if u.InputTokens <= 0 {
+		return 0
+	}
+	return float64(u.CachedInputTokens) / float64(u.InputTokens) * 100
 }
 
 // Tracker tracks daily token usage and enforces a configurable limit.
@@ -35,7 +63,13 @@ type Tracker struct {
 
 	// Session context window tracking.
 	lastPromptTokens  int64 // most recent PromptTokenCount from LLM response
+	lastCachedTokens  int64 // most recent CachedContentTokenCount from LLM response
 	contextWindowSize int64 // model's context window size (0 = unknown)
+
+	// cachePrefixTokens is the stable, already-cached prefix of the current
+	// session — system prompt, tool declarations, and initial context. It is
+	// the baseline subtracted under the BodyAfterPrefix compaction scope.
+	cachePrefixTokens int64
 }
 
 // New creates a tracker with the given daily token limit.
@@ -67,6 +101,16 @@ func NewWithPath(maxDailyTokens int64, path string) *Tracker {
 // Add records token usage from an LLM response.
 // Returns an error if the daily limit would be exceeded.
 func (t *Tracker) Add(inputTokens, outputTokens int32) error {
+	return t.AddWithCache(inputTokens, outputTokens, 0)
+}
+
+// AddWithCache records token usage from an LLM response, separating the
+// portion of inputTokens that the provider served from its prompt cache.
+// cachedTokens must be a subset of inputTokens; providers report the prompt
+// count inclusive of cache reads.
+//
+// Returns an error if the daily limit would be exceeded.
+func (t *Tracker) AddWithCache(inputTokens, outputTokens, cachedTokens int32) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -85,10 +129,19 @@ func (t *Tracker) Add(inputTokens, outputTokens int32) error {
 
 	t.usage.InputTokens += int64(inputTokens)
 	t.usage.OutputTokens += int64(outputTokens)
+	if cachedTokens > 0 {
+		t.usage.CachedInputTokens += int64(cachedTokens)
+	}
 	t.usage.Requests++
 	// Track the latest prompt token count for context window display.
 	if inputTokens > 0 {
 		t.lastPromptTokens = int64(inputTokens)
+		t.lastCachedTokens = int64(cachedTokens)
+		// The first request of a context window establishes the stable prefix
+		// baseline — system prompt, tool declarations, initial context.
+		if t.cachePrefixTokens == 0 {
+			t.cachePrefixTokens = int64(inputTokens)
+		}
 	}
 	t.save()
 	return nil
@@ -147,6 +200,23 @@ func (t *Tracker) Remaining() int64 {
 		return 0
 	}
 	return rem
+}
+
+// CachedTokensToday returns prompt tokens served from cache today.
+func (t *Tracker) CachedTokensToday() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureToday()
+	return t.usage.CachedInputTokens
+}
+
+// CacheHitRateToday returns the share of today's prompt tokens served from
+// cache (0-100). Returns 0 when no prompt tokens have been recorded.
+func (t *Tracker) CacheHitRateToday() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureToday()
+	return t.usage.CacheHitRate()
 }
 
 // TotalUsed returns total tokens consumed today.
@@ -237,6 +307,29 @@ func (t *Tracker) LastPromptTokens() int64 {
 	return t.lastPromptTokens
 }
 
+// SetLastPromptTokens overwrites the last-prompt-token baseline so the context
+// gauge can reflect a freshly-compacted window without waiting for the next
+// LLM response to overwrite it.
+//
+// A compaction pass knows the post-pass token count exactly (it just rewrote
+// the events); pushing it back here makes that knowledge visible immediately
+// instead of leaving the gauge stuck on the pre-compaction number for the
+// duration of a turn.
+//
+// The cache-prefix baseline is also reset: the new window has, by definition,
+// a new stable prefix, and any dedup pointers into the old prefix are stale.
+// Pass 0 to clear the prefix without setting a new prompt count — useful when
+// the caller knows the window is empty.
+func (t *Tracker) SetLastPromptTokens(n int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n > 0 {
+		t.lastPromptTokens = n
+	}
+	t.cachePrefixTokens = 0
+	t.lastCachedTokens = 0
+}
+
 // ContextPercentUsed returns the percentage of the context window used (0-100+).
 // Returns 0 if context window size is unknown.
 func (t *Tracker) ContextPercentUsed() float64 {
@@ -246,6 +339,46 @@ func (t *Tracker) ContextPercentUsed() float64 {
 		return 0
 	}
 	return float64(t.lastPromptTokens) / float64(t.contextWindowSize) * 100
+}
+
+// LastCachedTokens returns the cache-read token count of the most recent
+// LLM response. Zero means the last request missed the prompt cache entirely.
+func (t *Tracker) LastCachedTokens() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastCachedTokens
+}
+
+// CachePrefixTokens returns the stable prefix baseline for the current context
+// window — the prompt size of the window's first request.
+func (t *Tracker) CachePrefixTokens() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cachePrefixTokens
+}
+
+// BodyTokens returns the tokens accumulated after the stable cached prefix.
+// This is the figure the BodyAfterPrefix compaction scope measures, so a large
+// but fully-cached system prompt never pushes a session toward compaction.
+func (t *Tracker) BodyTokens() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	body := t.lastPromptTokens - t.cachePrefixTokens
+	if body < 0 {
+		return 0
+	}
+	return body
+}
+
+// ResetContextWindow clears the per-window baselines. Call this after
+// compaction installs a fresh context window, so the next request re-establishes
+// the prefix baseline.
+func (t *Tracker) ResetContextWindow() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cachePrefixTokens = 0
+	t.lastPromptTokens = 0
+	t.lastCachedTokens = 0
 }
 
 // LimitExceededError is returned when the daily token limit is reached.
@@ -267,18 +400,37 @@ func (e *LimitExceededError) Error() string {
 func FormatUsage(u Usage, limit int64) string {
 	total := u.TotalTokens()
 	if limit <= 0 {
-		return fmt.Sprintf("Today: %s tokens (%s in, %s out) · %d requests · unlimited",
-			formatTokenCount(total), formatTokenCount(u.InputTokens), formatTokenCount(u.OutputTokens), u.Requests)
+		return fmt.Sprintf("Today: %s tokens (%s in, %s out) · %d requests · unlimited%s",
+			formatTokenCount(total), formatTokenCount(u.InputTokens), formatTokenCount(u.OutputTokens),
+			u.Requests, formatCacheSuffix(u))
 	}
 	pct := float64(total) / float64(limit) * 100
 	remaining := limit - total
 	if remaining < 0 {
 		remaining = 0
 	}
-	return fmt.Sprintf("Today: %s / %s tokens (%.0f%%) · %s in, %s out · %d requests · %s remaining",
+	return fmt.Sprintf("Today: %s / %s tokens (%.0f%%) · %s in, %s out · %d requests · %s remaining%s",
 		formatTokenCount(total), formatTokenCount(limit), pct,
 		formatTokenCount(u.InputTokens), formatTokenCount(u.OutputTokens),
-		u.Requests, formatTokenCount(remaining))
+		u.Requests, formatTokenCount(remaining), formatCacheSuffix(u))
+}
+
+// formatCacheSuffix renders the cache-hit breakdown, or an explicit
+// "no cache hits" marker once enough traffic has flowed to make the absence
+// meaningful. Silence would be indistinguishable from caching working.
+func formatCacheSuffix(u Usage) string {
+	if u.InputTokens <= 0 {
+		return ""
+	}
+	if u.CachedInputTokens <= 0 {
+		if u.Requests < 2 {
+			return ""
+		}
+		return " · cache: no hits"
+	}
+	return fmt.Sprintf(" · cache: %s read (%.0f%% of input), %s fresh",
+		formatTokenCount(u.CachedInputTokens), u.CacheHitRate(),
+		formatTokenCount(u.FreshInputTokens()))
 }
 
 func formatTokenCount(n int64) string {

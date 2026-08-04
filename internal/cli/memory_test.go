@@ -167,3 +167,14 @@ func TestScanRoomCandidates(t *testing.T) {
 		t.Error("node_modules should be excluded")
 	}
 }
+
+func TestNewMemoryStatusCmd_RunE(t *testing.T) {
+	resetGlobalFlags(t)
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "palace.db")
+	cmd := newMemoryStatusCmd()
+	cmd.SetArgs([]string{"--db", dbPath})
+	_ = captureStdout(t, func() {
+		_ = cmd.Execute()
+	})
+}

@@ -91,3 +91,14 @@ func TestMemorySearch_WingFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNewMemorySearchCmd_RunE(t *testing.T) {
+	resetGlobalFlags(t)
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "palace.db")
+	cmd := newMemorySearchCmd()
+	cmd.SetArgs([]string{"query text", "--db", dbPath})
+	_ = captureStdout(t, func() {
+		_ = cmd.Execute()
+	})
+}

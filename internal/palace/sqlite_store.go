@@ -284,6 +284,31 @@ func (s *SQLitePalaceStore) GetAllEmbeddings(ctx context.Context, filter DrawerF
 	return results, rows.Err()
 }
 
+// FindByContentHash returns the id of a drawer with identical content in the
+// same wing and room, or "" when there is none.
+//
+// This is the cheap half of deduplication: an exact match needs no embedding at
+// all, and idx_drawers_content_hash makes it a covering-index lookup rather than
+// a scan of the room.
+func (s *SQLitePalaceStore) FindByContentHash(ctx context.Context, wing, room, hash string) (string, error) {
+	if hash == "" {
+		return "", nil
+	}
+
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id FROM drawers WHERE wing = ? AND room = ? AND content_hash = ? LIMIT 1",
+		wing, room, hash,
+	).Scan(&id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("palace: find by content hash: %w", err)
+	}
+	return id, nil
+}
+
 // KeywordSearch performs an FTS5 keyword search on the drawers_fts table,
 // falling back to LIKE if FTS5 is unavailable. Results are ordered by FTS5 rank.
 func (s *SQLitePalaceStore) KeywordSearch(ctx context.Context, query string, filter DrawerFilter, limit int) ([]SearchResult, error) {

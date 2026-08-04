@@ -44,23 +44,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			content: m.formatHelp(),
 		})
 	case "/clear":
-		m.chatModel.Messages = m.chatModel.Messages[:0]
-		m.chatModel.Scroll = 0
-		m.chatModel.Streaming = ""
-		m.chatModel.Thinking = ""
-		m.chatModel.TraceLog = nil
-		m.running = false
-		m.run = nil
-		m.statusModel.ActiveTool = ""
-		m.statusModel.ToolStart = time.Time{}
-		m.loadingItems = nil
-		m.matrix.clear()
-		m.matrix.feed("pi-go", m.mainWidth())
-		// Reset the terminal window/tab title and the persisted session
-		// metadata title. Funnel through setSessionTitle("") so the
-		// agent's SetSessionTitle is also called and meta.json stays in
-		// sync with the OSC 0 frame that the next View() will emit.
-		m.setSessionTitle("")
+		m.clearConversation()
 	case "/copy":
 		return m.handleCopyCommand()
 	case "/model":
@@ -235,7 +219,73 @@ func (m *model) handleBranchCommand(args []string) {
 	}
 }
 
+// clearConversation resets the transcript and the session context behind it.
+//
+// This is the body of /clear, split out so the context gauge's [x] button runs
+// exactly this path. A second copy of these fifteen assignments would drift the
+// first time one of them changed, and the failure mode is silent: a transcript
+// that looks cleared while the model still receives every prior turn.
+func (m *model) clearConversation() {
+	m.chatModel.Messages = m.chatModel.Messages[:0]
+	m.chatModel.Scroll = 0
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
+	m.chatModel.TraceLog = nil
+	m.running = false
+	m.run = nil
+	m.statusModel.ActiveTool = ""
+	m.statusModel.ToolStart = time.Time{}
+	m.loadingItems = nil
+	m.matrix.clear()
+	m.matrix.feed("pi-go", m.mainWidth())
+	// Drop the session's events and zero the context gauge. Without this the
+	// transcript looks empty while the model still receives — and still pays
+	// for — every prior turn.
+	m.clearSessionContext()
+	// Reset the terminal window/tab title and the persisted session metadata
+	// title. Funnel through setSessionTitle("") so the agent's SetSessionTitle
+	// is also called and meta.json stays in sync with the OSC 0 frame that the
+	// next View() will emit.
+	m.setSessionTitle("")
+}
+
+// clearSessionContext empties the session's event history and zeroes the
+// context gauge, so /clear resets what the model sees rather than only what
+// the user sees.
+//
+// Order matters: the gauge is only zeroed once the events are actually gone.
+// If ClearEvents fails the history survives, and a zeroed gauge would then
+// under-report a still-full window — a worse lie than the stale reading it
+// replaced. So on error the failure is surfaced in the chat and the tracker is
+// left alone.
+//
+// Both dependencies are optional: a model can be built without a session
+// service (nothing to clear) or without a token tracker (no gauge to zero).
+func (m *model) clearSessionContext() {
+	if m.cfg.SessionService != nil {
+		if err := m.cfg.SessionService.ClearEvents(
+			m.cfg.SessionID, agent.AppName, agent.DefaultUserID,
+		); err != nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Context not cleared: %v", err),
+			})
+			return
+		}
+	}
+
+	if tt := m.cfg.TokenTracker; tt != nil {
+		tt.ResetContextWindow()
+	}
+}
+
 // handleCompactCommand triggers session compaction.
+//
+// After a successful compact, the gauge is updated immediately with the
+// post-compaction token count so the user sees the window shrink on the same
+// keystroke, rather than waiting for the next LLM response. Without this
+// push the gauge keeps reading the pre-compaction number — visually
+// indistinguishable from no compaction at all.
 func (m *model) handleCompactCommand() {
 	if m.cfg.SessionService == nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -256,6 +306,19 @@ func (m *model) handleCompactCommand() {
 		})
 		return
 	}
+
+	// Refresh the gauge. EstimateTokens is the same chars/4 heuristic the
+	// session uses internally, so it matches what the next LLM response will
+	// report up to that fuzz. The token-tracker's cache prefix is also reset
+	// by SetLastPromptTokens, since the new window starts a fresh prefix.
+	if tt := m.cfg.TokenTracker; tt != nil {
+		if est, estErr := m.cfg.SessionService.EstimateTokens(
+			m.cfg.SessionID, agent.AppName, agent.DefaultUserID,
+		); estErr == nil {
+			tt.SetLastPromptTokens(int64(est))
+		}
+	}
+
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "Session context compacted.",
@@ -478,6 +541,27 @@ func saveModelToConfig(modelName, provider string) {
 func (m *model) formatContextUsage() string {
 	var b strings.Builder
 
+	// The breakdown answers "what is filling the window", which is the question
+	// a user asks before deciding what to trim. Lead with it.
+	if bd := m.cfg.ContextBreakdown; bd != nil {
+		used := int64(0)
+		window := int64(0)
+		if tt := m.cfg.TokenTracker; tt != nil {
+			used = tt.LastPromptTokens()
+			window = tt.ContextWindowSize()
+		}
+		if used == 0 {
+			used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
+		}
+		if window <= 0 {
+			window = autoRangeWindow(used)
+		}
+		b.WriteString("*Context usage*\n\n")
+		b.WriteString(RenderContextBreakdown(
+			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64)))
+		b.WriteString("\n\n")
+	}
+
 	// Count chars per role (rough token estimate: ~4 chars per token).
 	userChars, assistantChars, toolChars := 0, 0, 0
 	for _, msg := range m.chatModel.Messages {
@@ -595,6 +679,58 @@ func (m *model) formatContextUsage() string {
 		} else {
 			fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
 				formatTokenCount(promptTokens))
+		}
+
+		// Prompt cache. Reported explicitly even at zero hits — a silent
+		// section reads the same whether caching works or is entirely absent.
+		b.WriteString("\n*Prompt cache*\n")
+		cached := tt.LastCachedTokens()
+		if cached > 0 {
+			fmt.Fprintf(&b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
+				formatTokenCount(cached), formatTokenCount(promptTokens),
+				float64(cached)/float64(promptTokens)*100)
+		} else {
+			b.WriteString("- **Last request**: no cache hit\n")
+		}
+		if today := tt.CachedTokensToday(); today > 0 {
+			fmt.Fprintf(&b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
+				formatTokenCount(today), tt.CacheHitRateToday())
+		}
+		if prefix := tt.CachePrefixTokens(); prefix > 0 {
+			fmt.Fprintf(&b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
+				formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
+		}
+	}
+
+	// Skills.
+	if len(m.cfg.Skills) > 0 {
+		b.WriteString("\n*Skills* ")
+		fmt.Fprintf(&b, "(%d loaded)\n", len(m.cfg.Skills))
+		// Stable, alphabetical listing for predictable /context output.
+		names := make([]string, 0, len(m.cfg.Skills))
+		byName := make(map[string]extension.Skill, len(m.cfg.Skills))
+		for _, s := range m.cfg.Skills {
+			names = append(names, s.Name)
+			byName[s.Name] = s
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			s := byName[name]
+			source := s.Source
+			if source == "" {
+				source = "user"
+			}
+			var bodyDesc string
+			if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
+				bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
+			} else {
+				bodyDesc = "body: not loaded"
+			}
+			desc := s.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(&b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
 		}
 	}
 
