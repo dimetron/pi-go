@@ -241,6 +241,42 @@ func TestCompactCount(t *testing.T) {
 	}
 }
 
+// TestCaptureLogsDoesNotDeadlock is the regression test for a deadlock that hung
+// `pi memory mine` on its first log line.
+//
+// captureLogs originally wrapped slog.Default()'s existing handler. But
+// slog.SetDefault also repoints the standard log package's output at
+// slog.Default(), and the stock default handler writes *through* the log
+// package — so the wrapper called itself one frame later and blocked on its own
+// non-reentrant mutex:
+//
+//	Handle -> defaultHandler.Handle -> log.output -> handlerWriter.Write -> Handle
+//
+// This exercises the real captureLogs (not a hand-built handler as the
+// interleaving test does) and fails by timing out if the cycle ever returns.
+func TestCaptureLogsDoesNotDeadlock(t *testing.T) {
+	p := newMineProgress(&bytes.Buffer{})
+	restore := p.captureLogs()
+	defer restore()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		slog.Info("mine: embedding chunks", "count", 6282, "workers", 1)
+		slog.Warn("mine: embedding batch failed", "error", "connection reset by peer")
+		// Attributes go through WithAttrs, which returns a fresh wrapper — that
+		// path must not reintroduce the cycle either.
+		slog.Default().With("stage", "embed").Info("still alive")
+		p.show("embed", "a.go", 1, 2, "chunks")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("captureLogs deadlocked: a log record re-entered the progress lock")
+	}
+}
+
 // TestProgressAwareHandlerSurvivesWithAttrs guards the easy mistake: embedding
 // slog.Handler gives a default WithAttrs that returns the *inner* handler, so
 // the first logger.With(...) call would silently drop the interleaving fix.

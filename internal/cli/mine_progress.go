@@ -30,6 +30,11 @@ const (
 	// estimate.
 	etaMinSamples = 8
 	etaMinElapsed = 2 * time.Second
+
+	// heartbeatInterval is how often the line is redrawn while a phase blocks.
+	// Fast enough that the spinner reads as motion, slow enough to be invisible
+	// in cost next to embedding.
+	heartbeatInterval = 250 * time.Millisecond
 )
 
 // spinnerFrames is the braille spinner shared by every progress line.
@@ -66,6 +71,18 @@ type mineProgress struct {
 	stage      string
 	stageStart time.Time
 	stageBase  int // units already done when this stage began
+
+	// Current render inputs, retained so the heartbeat can redraw them.
+	cur     frame
+	beat    chan struct{}
+	beatEnd sync.WaitGroup
+}
+
+// frame is everything needed to redraw the line without new input.
+type frame struct {
+	stage, item, unit string
+	done, total       int
+	active            bool
 }
 
 // newMineProgress returns a printer for out. When out is not a terminal the bar
@@ -134,7 +151,62 @@ func (p *mineProgress) do(fn func() string) {
 func (p *mineProgress) show(stage, item string, done, total int, unit string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.cur = frame{stage: stage, item: item, unit: unit, done: done, total: total, active: true}
 	p.drawLocked(p.lineLocked(stage, item, done, total, unit))
+}
+
+// status announces indeterminate work — a step with no countable units, such as
+// walking the tree, loading content hashes, or committing the insert
+// transaction.
+//
+// These steps are why `pi memory mine` looked hung. They sit between the phases
+// that do report, they can run for minutes on a large palace, and they emitted
+// nothing at all: the last thing on screen was whatever the previous phase left
+// there, with no way to tell slow from stuck. Naming the step is half the fix;
+// the heartbeat below is the other half.
+func (p *mineProgress) status(stage, item string) {
+	p.show(stage, item, 0, 0, "")
+}
+
+// startHeartbeat redraws the current line on a timer so the spinner keeps
+// moving and the elapsed time keeps climbing while a phase blocks.
+//
+// A static line cannot answer "is it stuck". A moving one can: if the spinner
+// is turning, the process is alive and the current step is named on screen.
+func (p *mineProgress) startHeartbeat() {
+	if !p.tty {
+		return // no live line to animate
+	}
+	p.beat = make(chan struct{})
+	p.beatEnd.Add(1)
+	go func() {
+		defer p.beatEnd.Done()
+		t := time.NewTicker(heartbeatInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-p.beat:
+				return
+			case <-t.C:
+				p.mu.Lock()
+				if p.cur.active {
+					p.drawLocked(p.lineLocked(p.cur.stage, p.cur.item, p.cur.done, p.cur.total, p.cur.unit))
+				}
+				p.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// stopHeartbeat halts the ticker and waits for it, so no redraw can land after
+// the final line and re-corrupt it.
+func (p *mineProgress) stopHeartbeat() {
+	if p.beat == nil {
+		return
+	}
+	close(p.beat)
+	p.beatEnd.Wait()
+	p.beat = nil
 }
 
 // lineLocked builds the progress line. Caller must hold mu.
@@ -144,10 +216,20 @@ func (p *mineProgress) lineLocked(stage, item string, done, total int, unit stri
 	}
 	p.spinner = (p.spinner + 1) % len(spinnerFrames)
 
-	pct := 0
-	if total > 0 {
-		pct = min(done*100/total, 100)
+	// Indeterminate: no countable units, so there is no honest bar or
+	// percentage to draw. Show the step and how long it has been running —
+	// elapsed is the number that answers "should I be worried yet".
+	if total <= 0 {
+		head := fmt.Sprintf("%s %-6s %s",
+			spinnerFrames[p.spinner], stage, formatETA(time.Since(p.stageStart)))
+		room := p.width - 1 - dispWidth(head) - 2
+		if item == "" || room < minItemWidth {
+			return clipRight(head, p.width-1)
+		}
+		return head + "  " + elideLeft(item, room)
 	}
+
+	pct := min(done*100/total, 100)
 
 	// Fixed-width left portion, so the bar does not jitter as counts grow.
 	head := fmt.Sprintf("%s %-6s [%s] %3d%%  %s/%s %s",
@@ -297,8 +379,11 @@ func (p *mineProgress) drawLocked(line string) {
 // finish replaces the live line with a final one and terminates it, ending the
 // region the bar owns so ordinary output can follow.
 func (p *mineProgress) finish(line string) {
+	p.stopHeartbeat()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.cur.active = false
 	p.last = ""
 	if p.tty {
 		fmt.Fprintf(p.out, "\r%s\x1b[K\n", line)
@@ -314,9 +399,25 @@ func (p *mineProgress) finish(line string) {
 // Wrapping the global default is deliberate: the writers that corrupt the bar
 // are inside internal/palace, which logs through slog.Default() and should not
 // have to know a CLI progress bar exists.
+// The inner handler must write to a concrete io.Writer. Wrapping the *previous*
+// default handler deadlocks, and the cycle is not obvious:
+//
+//	slog.Info
+//	  -> progressAwareHandler.Handle   (takes p.mu)
+//	     -> slog.defaultHandler.Handle
+//	        -> log.Logger.output        (the default handler writes via log)
+//	           -> slog.handlerWriter.Write
+//	              -> progressAwareHandler.Handle   (takes p.mu again -> hang)
+//
+// slog.SetDefault does not only set slog's handler: it also points the standard
+// log package's output back at slog.Default(). So a handler that wraps the old
+// default routes straight back into itself one frame later. A non-reentrant
+// mutex turns that into the deadlock; without the mutex it is unbounded
+// recursion instead. Writing to os.Stderr terminates the chain.
 func (p *mineProgress) captureLogs() func() {
 	prev := slog.Default()
-	slog.SetDefault(slog.New(&progressAwareHandler{Handler: prev.Handler(), p: p}))
+	sink := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	slog.SetDefault(slog.New(&progressAwareHandler{Handler: sink, p: p}))
 	return func() { slog.SetDefault(prev) }
 }
 

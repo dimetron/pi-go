@@ -86,7 +86,7 @@ func MineProject(ctx context.Context, palace *Palace, dir string, cfg *MineConfi
 	}
 
 	// Phase 2b: drop chunks that have not changed since the last run.
-	allChunks = dropUnchangedChunks(ctx, palace, cfg.Wing, allChunks, result)
+	allChunks = dropUnchangedChunks(ctx, cfg, palace, cfg.Wing, allChunks, result)
 	if len(allChunks) == 0 {
 		return result, nil
 	}
@@ -272,7 +272,13 @@ func collectChunks(tasks []fileTask, cfg *MineConfig, result *MineResult) []chun
 //
 // A store lookup failure is not fatal — fall back to embedding everything,
 // which is merely the old behavior.
-func dropUnchangedChunks(ctx context.Context, palace *Palace, wing string, allChunks []chunkJob, result *MineResult) []chunkJob {
+func dropUnchangedChunks(ctx context.Context, cfg *MineConfig, palace *Palace, wing string, allChunks []chunkJob, result *MineResult) []chunkJob {
+	// DrawerHashes reads every stored hash for the wing in one query. On a large
+	// palace that is seconds to minutes with nothing on screen, so announce it
+	// rather than letting the run look hung.
+	if cfg.Phase != nil {
+		cfg.Phase("dedupe", "loading stored content hashes", 0, 0)
+	}
 	existing, err := palace.store.DrawerHashes(ctx, wing)
 	if err != nil {
 		slog.Warn("mine: could not load content hashes; re-embedding everything", "error", err)
@@ -327,6 +333,13 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 	batch := batchSizeFor(palace.embedder)
 	slog.Info("mine: embedding chunks",
 		"count", len(texts), "workers", len(embs), "batch", batch, "backend", embedderName(palace.embedder))
+
+	// Claim the line before the first batch lands. Otherwise the previous
+	// stage's status sits on screen through model load and the first request —
+	// the slowest, most "is it stuck"-looking part of the whole run.
+	if cfg.Phase != nil {
+		cfg.Phase("embed", fmt.Sprintf("embedding %d chunks via %s", len(texts), embedderName(palace.embedder)), 0, 0)
+	}
 
 	type batchJob struct{ start, end int }
 	jobs := make(chan batchJob)
@@ -456,6 +469,12 @@ func insertDrawers(ctx context.Context, palace *Palace, cfg *MineConfig, drawers
 		return
 	}
 
+	// One transaction for every drawer: no incremental progress is available
+	// from inside it, so name the step and let the caller's heartbeat show the
+	// process is still alive.
+	if cfg.Phase != nil {
+		cfg.Phase("insert", fmt.Sprintf("writing %d drawers in one transaction", len(drawers)), 0, 0)
+	}
 	inserted, err := palace.store.BatchInsertDrawers(ctx, drawers)
 	if err == nil {
 		result.Added = inserted
