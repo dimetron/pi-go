@@ -460,6 +460,11 @@ func Run(ctx context.Context, cfg Config) error {
 		m.statusModel.GitBranch = detectBranch(cfg.WorkDir)
 	}
 
+	// Clear inherited terminal state before the first frame is drawn. pi renders
+	// on the normal screen, so whatever the previous command left set is still
+	// in effect until something resets it.
+	prepareTerminal()
+
 	p := tea.NewProgram(&m, tea.WithContext(ctx))
 	_, err := p.Run()
 	drainTerminalResponses()

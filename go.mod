@@ -11,6 +11,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/go-logr/logr v1.4.4
@@ -61,7 +62,6 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/exp/golden v0.0.0-20260330094520-2dce04b6f8a4 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260712004152-b16d026a9d2e // indirect
-	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
