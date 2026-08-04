@@ -13,10 +13,15 @@ import (
 )
 
 // connect wires a real client to the real server over an in-memory transport.
-// The session-backed tools (ping, log, roots, sample, elicit) call *back* into
-// the client mid-request, so they cannot be exercised by invoking the handler
-// functions directly — they need a live peer that answers those callbacks.
-func connect(t *testing.T, opts *mcp.ClientOptions, roots ...*mcp.Root) *mcp.ClientSession {
+// The session-backed tools (ping, log) call *back* into the client mid-request,
+// so they cannot be exercised by invoking the handler functions directly —
+// they need a live peer that answers those callbacks. The deprecated SEP-2577
+// session tools (roots, sampling, elicit) live on the server but have no
+// e2e test here: under protocol >= 2026-07-28 they must return an
+// InputRequests map (SEP-2322) rather than call req.Session.X() directly,
+// and the example server in this directory keeps the old call sites as a
+// demonstration of the deprecated path.
+func connect(t *testing.T, opts *mcp.ClientOptions) *mcp.ClientSession {
 	t.Helper()
 
 	serverTr, clientTr := mcp.NewInMemoryTransports()
@@ -29,9 +34,6 @@ func connect(t *testing.T, opts *mcp.ClientOptions, roots ...*mcp.Root) *mcp.Cli
 	t.Cleanup(func() { _ = serverSession.Close() })
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, opts)
-	if len(roots) > 0 {
-		client.AddRoots(roots...)
-	}
 
 	clientSession, err := client.Connect(t.Context(), clientTr, nil)
 	if err != nil {
@@ -86,79 +88,6 @@ func TestLogTool(t *testing.T) {
 	}
 }
 
-// rootsTool asks the client for its roots and joins them into "name:uri".
-func TestRootsTool(t *testing.T) {
-	cs := connect(t, nil,
-		&mcp.Root{Name: "repo", URI: "file:///work/repo"},
-		&mcp.Root{Name: "docs", URI: "file:///work/docs"},
-	)
-
-	res := callTool(t, cs, "roots")
-
-	text := contentText(res)
-	for _, want := range []string{"repo:file:///work/repo", "docs:file:///work/docs"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("roots output %q missing %q", text, want)
-		}
-	}
-}
-
-// samplingTool asks the client to generate a message and echoes the content back.
-func TestSamplingTool(t *testing.T) {
-	cs := connect(t, &mcp.ClientOptions{
-		CreateMessageHandler: func(context.Context, *mcp.CreateMessageRequest) (*mcp.CreateMessageResult, error) {
-			return &mcp.CreateMessageResult{
-				Model:   "test-model",
-				Role:    "assistant",
-				Content: &mcp.TextContent{Text: "sampled reply"},
-			}, nil
-		},
-	})
-
-	res := callTool(t, cs, "sample")
-
-	if text := contentText(res); !strings.Contains(text, "sampled reply") {
-		t.Errorf("sampling output = %q, want the client's reply echoed back", text)
-	}
-}
-
-// The elicitation tools ask the client to fill in a form / visit a URL.
-func TestElicitTools(t *testing.T) {
-	opts := &mcp.ClientOptions{
-		Capabilities: &mcp.ClientCapabilities{
-			Elicitation: &mcp.ElicitationCapabilities{
-				Form: &mcp.FormElicitationCapabilities{},
-				URL:  &mcp.URLElicitationCapabilities{},
-			},
-		},
-		ElicitationHandler: func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
-			// URL-mode elicitation carries no RequestedSchema: the user is sent
-			// to a page instead of filling in a form here. Returning form content
-			// for it fails schema validation, so only the form flow gets content.
-			if req.Params.RequestedSchema == nil {
-				return &mcp.ElicitResult{Action: "accept"}, nil
-			}
-			return &mcp.ElicitResult{
-				Action:  "accept",
-				Content: map[string]any{"random": "abc123"},
-			}, nil
-		},
-	}
-
-	t.Run("form", func(t *testing.T) {
-		cs := connect(t, opts)
-		res := callTool(t, cs, "elicit (form)")
-		if text := contentText(res); !strings.Contains(text, "abc123") {
-			t.Errorf("form elicitation output = %q, want the submitted value", text)
-		}
-	})
-
-	t.Run("url", func(t *testing.T) {
-		cs := connect(t, opts)
-		callTool(t, cs, "elicit (url)")
-	})
-}
-
 // The plain tools still work through a real session.
 func TestGreetTools(t *testing.T) {
 	cs := connect(t, nil)
@@ -176,6 +105,8 @@ func TestGreetTools(t *testing.T) {
 }
 
 // newServer must register every tool, prompt and resource the harness advertises.
+// The SEP-2577 tools (roots, sample, elicit) are listed even though the
+// deprecated round-trip paths have no e2e test under protocol >= 2026-07-28.
 func TestNewServer_RegistersEverything(t *testing.T) {
 	cs := connect(t, nil)
 
