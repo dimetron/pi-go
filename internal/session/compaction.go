@@ -77,12 +77,12 @@ type AutoCompactConfig struct {
 }
 
 // DefaultAutoCompactConfig returns the two-stage defaults: shed at 60% of the
-// context window, summarize at 88%.
+// context window, summarize at 90%.
 func DefaultAutoCompactConfig() AutoCompactConfig {
 	return AutoCompactConfig{
 		Enabled:               true,
 		ShedPercent:           60,
-		SummarizePercent:      88,
+		SummarizePercent:      90,
 		KeepUserMessageTokens: 20000,
 		KeepRecentEvents:      10,
 	}

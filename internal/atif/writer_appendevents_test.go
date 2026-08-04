@@ -140,13 +140,13 @@ func TestWriterAppendEvents_MixedEmpty(t *testing.T) {
 	w := NewWriter(fp, SessionMeta{SessionID: "sess-1", AgentName: "pi-go"})
 
 	events := []*session.Event{
-		nil,                              // empty
-		{Author: "user"},                 // empty (no content)
-		newTestEvent("user", "real-1"),   // step 1
-		{Author: "model"},                // empty
-		newTestEvent("model", "real-2"),  // step 2
-		nil,                              // empty
-		newTestEvent("user", "real-3"),   // step 3
+		nil,                             // empty
+		{Author: "user"},                // empty (no content)
+		newTestEvent("user", "real-1"),  // step 1
+		{Author: "model"},               // empty
+		newTestEvent("model", "real-2"), // step 2
+		nil,                             // empty
+		newTestEvent("user", "real-3"),  // step 3
 	}
 	if err := w.AppendEvents(events); err != nil {
 		t.Fatalf("AppendEvents: %v", err)
