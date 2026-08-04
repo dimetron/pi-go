@@ -1,6 +1,7 @@
 package palace
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -162,8 +163,123 @@ func TestOllamaEmbedGivesUpAfterRetries(t *testing.T) {
 	if _, err := e.Embed([]string{"a"}); err == nil {
 		t.Fatal("expected an error once retries are exhausted")
 	}
-	if n := calls.Load(); n != ollamaEmbedRetries {
-		t.Errorf("server saw %d calls, want %d", n, ollamaEmbedRetries)
+
+	// The effort is now retries × shrink steps: each batch size gets its own
+	// round of retries before halving, and halving stops at the floor. Bound it
+	// rather than pin an exact count, which is an implementation detail — the
+	// contract is that it terminates and does not retry forever.
+	steps := 1
+	for b := ollamaEmbedBatchSize; b > ollamaMinEmbedBatch; b = max(b/2, ollamaMinEmbedBatch) {
+		steps++
+	}
+	if n := int(calls.Load()); n > ollamaEmbedRetries*steps {
+		t.Errorf("server saw %d calls, want at most %d (retries × shrink steps)",
+			n, ollamaEmbedRetries*steps)
+	}
+	if e.batch != ollamaMinEmbedBatch {
+		t.Errorf("batch = %d, want the floor %d", e.batch, ollamaMinEmbedBatch)
+	}
+}
+
+// TestOllamaEmbedShrinksBatchOnRepeatedFailure covers the observed failure on a
+// real 21k-chunk run: embeddinggemma's runner reset the connection partway
+// through tokenizing a 512-text payload, every retry of that same payload hit
+// the same wall, and the batch was then dropped — storing 512 chunks with nil
+// vectors that no later search would ever match.
+//
+// The size is the cause, so the batch has to adapt. This server refuses
+// anything larger than 128 and succeeds below it.
+func TestOllamaEmbedShrinksBatchOnRepeatedFailure(t *testing.T) {
+	orig := ollamaEmbedRetryDelay
+	ollamaEmbedRetryDelay = time.Millisecond
+	defer func() { ollamaEmbedRetryDelay = orig }()
+
+	const limit = 128
+	var maxAccepted atomic.Int64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decoding request: %v", err)
+			return
+		}
+		if len(req.Input) > limit {
+			// Drop the connection the way an overloaded runner does.
+			if hj, ok := w.(http.Hijacker); ok {
+				if conn, _, err := hj.Hijack(); err == nil {
+					conn.Close()
+				}
+			}
+			return
+		}
+		if n := int64(len(req.Input)); n > maxAccepted.Load() {
+			maxAccepted.Store(n)
+		}
+		writeEmbeddings(w, len(req.Input))
+	}))
+	defer srv.Close()
+
+	e := newTestOllamaEmbedder(t, srv)
+
+	texts := make([]string, 600)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("chunk-%d", i)
+	}
+
+	got, err := e.Embed(texts)
+	if err != nil {
+		t.Fatalf("Embed should have adapted to the server's limit, got: %v", err)
+	}
+	// Every chunk must come back with a vector — the whole point is that none
+	// are silently dropped.
+	if len(got) != len(texts) {
+		t.Errorf("got %d embeddings, want %d", len(got), len(texts))
+	}
+	if n := maxAccepted.Load(); n > limit {
+		t.Errorf("server accepted a batch of %d, above its %d limit", n, limit)
+	}
+	if e.batch > limit {
+		t.Errorf("batch size settled at %d, expected it to shrink to <= %d", e.batch, limit)
+	}
+	// The reduction must stick, or the next call walks into the same wall.
+	if e.batch >= ollamaEmbedBatchSize {
+		t.Errorf("batch size %d was not retained after shrinking", e.batch)
+	}
+}
+
+// TestOllamaEmbedStopsShrinkingAtFloor: a server that refuses everything must
+// produce an error, not an infinite halving loop.
+func TestOllamaEmbedStopsShrinkingAtFloor(t *testing.T) {
+	orig := ollamaEmbedRetryDelay
+	ollamaEmbedRetryDelay = time.Millisecond
+	defer func() { ollamaEmbedRetryDelay = orig }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				conn.Close()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	e := newTestOllamaEmbedder(t, srv)
+
+	done := make(chan error, 1)
+	go func() { _, err := e.Embed(make([]string, 600)); done <- err }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error when every batch size fails")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Embed did not terminate: the shrink loop has no floor")
+	}
+	if e.batch != ollamaMinEmbedBatch {
+		t.Errorf("batch = %d, want the floor %d", e.batch, ollamaMinEmbedBatch)
 	}
 }
 
