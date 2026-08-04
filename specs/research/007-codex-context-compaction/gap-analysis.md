@@ -66,8 +66,9 @@
 
 ## Prior art in pi-go
 
-- `specs/features/TOO/006-specs-tools-002-specs-tools-001-headroom-update/research/pi-go-current-compactor.md`
-  describes the tool-output compactor — a *different* concern that
-  trims tool output to reclaim token budget without changing the
-  conversation thread. No overlap with context compaction at the
-  protocol level.
+- `internal/tools/compactor.go` (and its `compactor_*.go` siblings) is the
+  tool-output compactor — a *different* concern that trims tool output
+  to reclaim token budget without changing the conversation thread. No
+  overlap with context compaction at the protocol level. It used to be
+  described in the `TOO/006-…-headroom-update` spec, which was removed
+  when headroom was descoped; read the code instead.
