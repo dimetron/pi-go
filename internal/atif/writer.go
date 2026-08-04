@@ -68,6 +68,42 @@ func (w *Writer) AppendEvent(event *session.Event) error {
 	return w.flush()
 }
 
+// AppendEvents converts each session event into ATIF step(s) and appends them
+// to the trajectory, then flushes the accumulated trajectory to disk exactly
+// once at the end. Use this for batch loads (e.g., replaying a session from
+// disk) where per-event flushing would do O(n) full-file rewrites for n
+// events. For live appends, prefer AppendEvent, which flushes per event to
+// preserve crash-safety of committed events.
+//
+// Returns nil if every event in the slice produces no steps (no file is
+// written in that case). A per-event conversion error is logged via the
+// returned error aggregated from the first failing event; the remaining
+// events are still processed, matching the best-effort semantics of the
+// previous per-event replay loop in internal/session/store.go.
+func (w *Writer) AppendEvents(events []*session.Event) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	flushed := false
+	var firstErr error
+	for _, event := range events {
+		steps := ConvertEvent(event, w.stepCounter)
+		if len(steps) == 0 {
+			continue
+		}
+		w.trajectory.Steps = append(w.trajectory.Steps, steps...)
+		w.stepCounter += len(steps)
+		flushed = true
+	}
+	if !flushed {
+		return firstErr
+	}
+	if err := w.flush(); err != nil {
+		return fmt.Errorf("atif: batch flush: %w", err)
+	}
+	return firstErr
+}
+
 // SetSubagentRef sets the subagent_trajectory_ref on the observation result
 // whose source_call_id matches toolCallID. This is called after a subagent
 // completes to link its trajectory into the parent.

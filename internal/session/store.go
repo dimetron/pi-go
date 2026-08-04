@@ -483,14 +483,19 @@ func (s *FileService) loadSessionFromDisk(sessionID string, meta *Meta) (*fileSe
 			},
 		),
 	}
+	// Restore the in-memory state by replaying each event's StateDelta, then
+	// rebuild the ATIF trajectory in one shot. Both passes used to be inside a
+	// single per-event loop; the state merge stays per-event (it mutates
+	// sess.state), but the ATIF write is now batched via AppendEvents to avoid
+	// O(n) full-file rewrites under s.mu on a cache miss.
 	for _, e := range events {
 		if e.Actions.StateDelta != nil {
 			maps.Copy(sess.state, e.Actions.StateDelta)
 		}
-		if sess.atifWriter != nil {
-			if err := sess.atifWriter.AppendEvent(e); err != nil {
-				slog.Warn("atif: failed to rebuild event on load", "session", sessionID, "error", err)
-			}
+	}
+	if sess.atifWriter != nil {
+		if err := sess.atifWriter.AppendEvents(events); err != nil {
+			slog.Warn("atif: failed to rebuild trajectory on load", "session", sessionID, "error", err)
 		}
 	}
 	s.sessions[sessionID] = sess
