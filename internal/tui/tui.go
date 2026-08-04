@@ -573,6 +573,17 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case loadingTickMsg:
+		// The loading-dots ticker was the engine behind TODO §30/§42: every
+		// 300 ms fire it mutated m.loadingDots and re-armed unconditionally,
+		// producing a 3.3 Hz full-history re-render for the life of the
+		// process. The dots only animate the deferred-init splash
+		// (m.loading is set at tui.go:455 and cleared at :1963/:1985), so
+		// the re-arm belongs to that lifecycle, not to process uptime.
+		// Re-arming only while m.loading is true stops the chain at init
+		// completion and removes the idle 3.3 Hz floor.
+		if !m.loading {
+			return m, nil, true
+		}
 		m.loadingDots = (m.loadingDots + 1) % 4
 		return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,32 @@ import (
 	"github.com/dimetron/pi-go/internal/otel"
 )
 
+// applyGCDefaults honors GOMEMLIMIT / GOGC if the user already set them and
+// otherwise pins soft ceilings that match the measured pprof data on this
+// binary (TODO §28): heap in-use oscillates 18–85 MB across a long session, so
+// 512 MiB is well above the working set but below the point where the
+// scavenger starts sawtoothing (`madvise` was 21% of CPU on a 705 s aged
+// capture). The 200 default for GOGC keeps GC pressure off the render hot
+// path; a long history is a churn problem, not a retention problem, so trading
+// some extra RSS for fewer cycles is the right trade.
+//
+// Both values are env-overridable: set GOMEMLIMIT=0 to keep the runtime
+// default, or GOGC=off to disable the tuning entirely. SetGCPercent returns
+// the previous value; we don't act on it.
+func applyGCDefaults() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(512 << 20) // 512 MiB
+	}
+	if os.Getenv("GOGC") == "" {
+		// 200 doubles the default 100: fewer GC cycles per byte of churn.
+		// The aged pprof capture was at ~26 GC/sec at GOGC=100; 200 should
+		// halve that without inflating RSS past the GOMEMLIMIT cap above.
+		debug.SetGCPercent(200)
+	}
+}
+
 func main() {
+	applyGCDefaults()
 	os.Exit(run(os.Stderr, cli.Execute))
 }
 
