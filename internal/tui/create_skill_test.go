@@ -243,3 +243,120 @@ func TestHandleSkillCommand_UserMessageIsClean(t *testing.T) {
 		t.Errorf("user message = %q, want %q", userMsg.content, "/ponytail simplify this")
 	}
 }
+
+// TestFormatSkillsReport_ShadowedAndOrphanSkills covers the case the old flat
+// list could not express: a skill on disk that the model never sees. Both
+// causes have to be distinguishable, because they need different fixes.
+func TestFormatSkillsReport_ShadowedAndOrphanSkills(t *testing.T) {
+	userDir := t.TempDir()
+	projDir := t.TempDir()
+
+	write := func(dir, name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f := filepath.Join(p, "SKILL.md")
+		if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	// Same name in both directories: the project copy wins, the user copy is
+	// shadowed. "orphan" is on disk but never made it into the loaded set.
+	write(userDir, "dup", "shadowed body")
+	winner := write(projDir, "dup", "winning body")
+	write(projDir, "orphan", "never loaded")
+
+	skills := []extension.Skill{{
+		Name:        "dup",
+		Description: "a | pipe and a very long description that must be truncated so it cannot set the column width",
+		BodyPath:    winner,
+		Source:      "project",
+	}}
+
+	got := formatSkillsReport(skills, []string{userDir, projDir})
+
+	for _, want := range []string{
+		"Loaded skills (1)",
+		"Discovered but not active (2)",
+		"shadowed by",
+		"not loaded",
+		"orphan",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report missing %q:\n%s", want, got)
+		}
+	}
+	// A raw pipe in a description would break the row into extra columns.
+	if strings.Contains(got, "a | pipe") {
+		t.Errorf("description pipe not escaped:\n%s", got)
+	}
+	// The winning file must not also be listed as inactive.
+	if strings.Count(got, "shadowed by") != 1 {
+		t.Errorf("want exactly one shadowed row:\n%s", got)
+	}
+}
+
+func TestTableCell_TruncatesAndFlattens(t *testing.T) {
+	if got := tableCell("one\n  two\tthree", 40); got != "one two three" {
+		t.Errorf("tableCell = %q, want %q", got, "one two three")
+	}
+	long := strings.Repeat("x", 200)
+	got := tableCell(long, 20)
+	if len([]rune(got)) != 20 {
+		t.Errorf("tableCell len = %d, want 20 (%q)", len([]rune(got)), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated cell should end in an ellipsis: %q", got)
+	}
+}
+
+// TestFormatSkillsReport_FrontmatterNameOverride pins the case where a
+// SKILL.md declares `name:` differently from its directory: the file must
+// still be classified as the winner, not as "not loaded". The loader keys
+// winners by their frontmatter name; the directory walker keys its scan by
+// the directory name. The report must bridge the two by absolute path.
+func TestFormatSkillsReport_FrontmatterNameOverride(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "review")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sub, "SKILL.md")
+	body := "---\nname: reviewed-thing\ndescription: alt name\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skills := []extension.Skill{{Name: "reviewed-thing", BodyPath: path, Source: "user"}}
+	got := formatSkillsReport(skills, []string{dir})
+	if !strings.Contains(got, "Loaded skills (1)") {
+		t.Errorf("expected winner in loaded table, got:\n%s", got)
+	}
+	if strings.Contains(got, "not loaded") || strings.Contains(got, "Discovered but not active") {
+		t.Errorf("winning file wrongly classified as inactive:\n%s", got)
+	}
+}
+
+func TestShortSkillDir(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shortSkillDir(filepath.Join(cwd, ".pi-go", "skills")); got != ".pi-go/skills" {
+		t.Errorf("in-project dir = %q, want %q", got, ".pi-go/skills")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	if got := shortSkillDir(filepath.Join(home, ".pi-go", "skills")); got != "~/.pi-go/skills" {
+		t.Errorf("home dir = %q, want %q", got, "~/.pi-go/skills")
+	}
+	// Neither: left absolute rather than turned into a ../../.. crawl.
+	if got := shortSkillDir("/opt/skills"); got != "/opt/skills" {
+		t.Errorf("outside dir = %q, want %q", got, "/opt/skills")
+	}
+}

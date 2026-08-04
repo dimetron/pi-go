@@ -172,6 +172,41 @@ func TestContextRule_PegsAtDumbZoneEntry(t *testing.T) {
 	}
 }
 
+// The readout's two halves carry different weight: the percentage keeps the
+// severity color, the token counts drop to dim. Coloring both made them compete
+// at equal volume when only one of them is what the color is about.
+//
+// Asserting "different from each other" rather than "dim is #585b70" keeps this
+// from becoming self-referential — it follows the intent, not the constant.
+func TestContextRule_PercentAndCountsDifferInColor(t *testing.T) {
+	for _, used := range []int64{50_000, 128_000, 179_200} {
+		out := renderContextRule(contextRuleInput{
+			Width: 120, UsedTokens: used, WindowSize: defaultContextWindow,
+		})
+
+		var pctColor, countsColor string
+		for _, m := range sgrSegment.FindAllStringSubmatch(out, -1) {
+			switch {
+			case strings.Contains(m[2], "%"):
+				pctColor = m[1]
+			case strings.Contains(m[2], "/"):
+				countsColor = m[1]
+			}
+		}
+		if pctColor == "" || countsColor == "" {
+			t.Fatalf("used=%d: readout halves not found in %q", used, out)
+		}
+		if pctColor == countsColor {
+			t.Errorf("used=%d: percentage and counts share color %s", used, pctColor)
+		}
+		if want := truecolorFragment(contextSeverityColor(
+			float64(used) / (defaultContextWindow * dumbZoneFraction) * 100,
+		)); pctColor != want {
+			t.Errorf("used=%d: percentage color = %s, want severity %s", used, pctColor, want)
+		}
+	}
+}
+
 func TestContextRule_UnmeasuredRendersPlainRule(t *testing.T) {
 	out := renderContextRule(contextRuleInput{Width: 80})
 	if hasSeverityColor(out, 0) {

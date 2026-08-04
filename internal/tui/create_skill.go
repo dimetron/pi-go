@@ -230,38 +230,170 @@ After the user answers, update %s with:
 	return m, m.startAgentLoop(prompt)
 }
 
-// handleSkillListCommand lists all currently loaded skills.
+// handleSkillListCommand reports the skill set: what is loaded, and what else
+// was found on disk but is not in play.
 func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
 	m.inputModel.Clear()
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: formatSkillsReport(m.cfg.Skills, m.cfg.SkillDirs),
+	})
+	return m, nil
+}
 
-	if len(m.cfg.Skills) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "No skills loaded. Place `*.SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.",
-		})
-		return m, nil
+// skillDescLimit caps a description in the table. Frontmatter descriptions run
+// to several hundred characters — they are written to be matched by a model,
+// not read in a cell — and one of them would otherwise set the column width for
+// the whole table.
+const skillDescLimit = 72
+
+// formatSkillsReport renders the skill set as two tables: the skills the model
+// can actually see, and everything else discovered under the skill directories.
+//
+// The second table is the point. A skill silently losing to a same-named one in
+// a higher-priority directory, or failing to load at all, is indistinguishable
+// from "never written" in a list that only shows winners — and the usual first
+// symptom is a skill that simply never triggers.
+func formatSkillsReport(skills []extension.Skill, dirs []string) string {
+	if len(skills) == 0 {
+		return "No skills loaded. Place `SKILL.md` files in `~/.pi-go/skills/<name>/` or `.pi-go/skills/<name>/`."
 	}
 
 	var b strings.Builder
-	b.WriteString("**Loaded skills:**\n")
-	for _, s := range m.cfg.Skills {
-		fmt.Fprintf(&b, "  `/%s`", s.Name)
-		if s.Description != "" {
-			b.WriteString(" — " + s.Description)
+	fmt.Fprintf(&b, "**Loaded skills (%d)**\n\n", len(skills))
+	b.WriteString("| Skill | Source | Body | Description |\n|---|---|---:|---|\n")
+
+	var bodyTotal int
+	for _, s := range skills {
+		body := "—"
+		if txt, err := extension.LoadSkillBody(skills, s.Name); err == nil && txt != "" {
+			bodyTotal += len(txt)
+			body = fmt.Sprintf("%.1f KB", float64(len(txt))/1024)
 		}
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "| `/%s` | %s | %s | %s |\n",
+			s.Name, s.Source, body, tableCell(s.Description, skillDescLimit))
 	}
-	if len(m.cfg.SkillDirs) > 0 {
-		b.WriteString("\n**Skill directories:**\n")
-		for _, d := range m.cfg.SkillDirs {
-			fmt.Fprintf(&b, "  `%s`\n", d)
+
+	// Only the menu is resident; bodies are injected per activation. Printing
+	// both makes the difference legible instead of implying the whole corpus is
+	// in the window.
+	fmt.Fprintf(&b, "\nMenu in context: **~%d tokens**. Bodies on demand: **%.0f KB** total, injected only when a skill activates.\n",
+		skillMenuTokens(skills), float64(bodyTotal)/1024)
+
+	if rows := discoverInactiveSkills(skills, dirs); len(rows) > 0 {
+		fmt.Fprintf(&b, "\n**Discovered but not active (%d)**\n\n", len(rows))
+		b.WriteString("| Skill | Found in | Why |\n|---|---|---|\n")
+		for _, r := range rows {
+			fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", r.name, r.dir, r.why)
 		}
 	}
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role:    "assistant",
-		content: b.String(),
-	})
-	return m, nil
+
+	if len(dirs) > 0 {
+		b.WriteString("\n**Skill directories** (later overrides earlier)\n\n")
+		for _, d := range dirs {
+			fmt.Fprintf(&b, "- `%s`\n", shortSkillDir(d))
+		}
+	}
+	return b.String()
+}
+
+// inactiveSkill is a SKILL.md on disk that the model is not seeing.
+type inactiveSkill struct{ name, dir, why string }
+
+// discoverInactiveSkills walks the skill directories and reports every SKILL.md
+// that did not become the loaded skill of that name.
+//
+// Two causes, distinguished because they need different fixes: a name that
+// loaded from somewhere else is *shadowed* (rename it or edit the winner), and
+// a name that loaded from nowhere failed to load (bad frontmatter, or the audit
+// blocked it — `pi audit` says which).
+//
+// The "is this file the winner?" check keys on the absolute path, not on the
+// directory name, so a SKILL.md whose frontmatter `name:` differs from its
+// directory still classifies correctly.
+func discoverInactiveSkills(skills []extension.Skill, dirs []string) []inactiveSkill {
+	winnerByPath := make(map[string]struct{}, len(skills))
+	for _, s := range skills {
+		if s.BodyPath != "" {
+			winnerByPath[s.BodyPath] = struct{}{}
+		}
+	}
+	var out []inactiveSkill
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, e.Name(), "SKILL.md")
+			if _, err := os.Stat(path); err != nil {
+				continue
+			}
+			if _, isWinner := winnerByPath[path]; isWinner {
+				continue // already in the first table
+			}
+			inactive := inactiveSkill{name: e.Name(), dir: shortSkillDir(dir)}
+			if s, ok := extension.FindSkill(skills, e.Name()); ok {
+				if s.BodyPath != "" {
+					inactive.why = "shadowed by `" + shortSkillDir(filepath.Dir(filepath.Dir(s.BodyPath))) + "`"
+				} else {
+					inactive.why = "shadowed by `" + s.Source + "`"
+				}
+			} else {
+				inactive.why = "not loaded — bad frontmatter or blocked by audit"
+			}
+			out = append(out, inactive)
+		}
+	}
+	return out
+}
+
+// shortSkillDir renders a skill directory the way a person refers to it:
+// relative to the project when it is inside it, `~`-prefixed when it is under
+// home, absolute only when it is neither.
+//
+// Absolute paths are what broke the table. Every skill directory here shares a
+// long prefix, so the one distinguishing segment — `.pi-go` versus `.claude` —
+// arrives past the column's width and gets truncated away, leaving two rows
+// that read identically and say nothing.
+func shortSkillDir(dir string) string {
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, dir); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, err := filepath.Rel(home, dir); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.Join("~", rel)
+		}
+	}
+	return dir
+}
+
+// skillMenuTokens estimates what the skills menu costs in the system prompt, in
+// the same "- /name: description" shape appendSkillsMenu writes, at the usual
+// ~4 characters per token.
+func skillMenuTokens(skills []extension.Skill) int {
+	chars := 0
+	for _, s := range skills {
+		chars += len(s.Name) + len(s.Description) + 5
+	}
+	return chars / 4
+}
+
+// tableCell flattens text to one line and truncates it, so no cell can break
+// the table's row structure or blow out a column.
+func tableCell(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ReplaceAll(s, "|", "\\|")
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return strings.TrimSpace(string(r[:limit-1])) + "…"
 }
 
 // handleSkillLoadCommand reloads skills from disk and reports what was found.
@@ -274,7 +406,7 @@ func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
 	if len(m.cfg.Skills) == 0 {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: "Reloaded: no skills found. Place `*.SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.",
+			content: "Reloaded: no skills found. Place `SKILL.md` files in `~/.pi-go/skills/<name>/` or `.pi-go/skills/<name>/`.",
 		})
 		return m, nil
 	}

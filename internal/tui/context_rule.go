@@ -126,15 +126,20 @@ type contextRuleInput struct {
 // renderer and the mouse hit-test. Keeping it in one place is what stops the
 // drawn [x] and the clickable columns from drifting apart as the row's other
 // pieces change size.
+//
+// The readout is split into its two halves because they are styled differently
+// — see renderContextRule. Their widths still sum to the whole, so the row's
+// geometry is unaffected by the split.
 type contextRuleLayout struct {
-	Used       int64
-	Window     int64
-	Pct        float64
-	Label      string
-	GaugeWidth int // cells of rule, filled plus empty
-	ShowClear  bool
-	ClearStart int // first column of the [x], when ShowClear
-	ClearEnd   int // one past its last column
+	Used        int64
+	Window      int64
+	Pct         float64
+	LabelCounts string // " 128k/256k "
+	LabelPct    string // "71% "
+	GaugeWidth  int    // cells of rule, filled plus empty
+	ShowClear   bool
+	ClearStart  int // first column of the [x], when ShowClear
+	ClearEnd    int // one past its last column
 }
 
 // layoutContextRule resolves the gauge's geometry. ok is false when the row
@@ -179,15 +184,18 @@ func layoutContextRule(in contextRuleInput) (contextRuleLayout, bool) {
 
 	// Floor rather than round: a gauge that reads 100% at 99.6% overstates how
 	// full the window is, which is the direction that misleads.
-	label := fmt.Sprintf(" %s/%s %d%% ",
-		formatTokenCount(used), formatTokenCount(window), int(pct))
-	labelWidth := ansi.StringWidth(label)
+	counts := fmt.Sprintf(" %s/%s ", formatTokenCount(used), formatTokenCount(window))
+	pctLabel := fmt.Sprintf("%d%% ", int(pct))
+	labelWidth := ansi.StringWidth(counts) + ansi.StringWidth(pctLabel)
 	clearWidth := ansi.StringWidth(gaugeClearButton)
 
 	// The button is the first thing dropped when the row runs out of room: the
 	// reading is the point of this row, the affordance is a convenience, and
 	// /clear still works from the prompt.
-	out := contextRuleLayout{Used: used, Window: window, Pct: pct, Label: label}
+	out := contextRuleLayout{
+		Used: used, Window: window, Pct: pct,
+		LabelCounts: counts, LabelPct: pctLabel,
+	}
 	if gw := in.Width - labelWidth - clearWidth; gw >= 8 {
 		out.GaugeWidth = gw
 		out.ShowClear = true
@@ -234,7 +242,19 @@ func renderContextRule(in contextRuleInput) string {
 	}
 
 	fg := contextSeverityColor(lay.Pct)
-	labelStyle := lipgloss.NewStyle().Foreground(fg)
+
+	// The two halves of the readout are not the same kind of fact, so they do not
+	// get the same weight. The percentage is the reading the severity color is
+	// *about* — green/peach/red describe it and nothing else on the row — while
+	// the raw counts are reference detail you consult after the color has already
+	// told you where you stand. Coloring both made them compete at equal volume.
+	//
+	// Emphasis ladder (see the tui-render-design skill): counts drop to dim, the
+	// percentage keeps the severity color. That is one rung of separation, which
+	// is enough here — bolding the percentage on top of it would spend a second
+	// rung to say the same thing. No new color enters the gauge's vocabulary.
+	countsStyle := dim
+	pctStyle := lipgloss.NewStyle().Foreground(fg)
 
 	// The filled run is either one severity-colored block or, when a breakdown
 	// is available, the same run split into per-origin segments. Both paths
@@ -261,7 +281,8 @@ func renderContextRule(in contextRuleInput) string {
 	// anything that measures or slices the text.
 	return filledRun +
 		dim.Render(strings.Repeat(string(gaugeEmptyGlyph), lay.GaugeWidth-filled)) +
-		labelStyle.Render(lay.Label) +
+		countsStyle.Render(lay.LabelCounts) +
+		pctStyle.Render(lay.LabelPct) +
 		clear
 }
 
