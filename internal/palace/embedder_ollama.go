@@ -54,6 +54,11 @@ const (
 	// takes a second or two) without turning a genuinely dead daemon into a
 	// long stall — the non-transient path returns on the first attempt anyway.
 	ollamaEmbedRetries = 3
+
+	// ollamaMinEmbedBatch is the floor for the adaptive batch size. Below this
+	// the per-request overhead dominates and a failure is no longer plausibly
+	// about payload size, so there is nothing left to learn by halving again.
+	ollamaMinEmbedBatch = 16
 )
 
 // ollamaEmbedRetryDelay is the base for linear backoff between attempts. A var
@@ -84,8 +89,16 @@ type ollamaEmbedder struct {
 	client *api.Client
 	model  string
 
-	// mu serializes Embed across every caller in the process.
+	// mu serializes Embed across every caller in the process, and guards batch.
 	mu sync.Mutex
+
+	// batch is the number of texts sent per /api/embed call. It starts at
+	// ollamaEmbedBatchSize and halves, permanently, whenever a batch fails its
+	// retries — see Embed. Sticky because the limit being discovered is a
+	// property of the model and the machine, not of one request: retrying the
+	// same oversized batch just kills the runner again and drops another 512
+	// chunks on the floor.
+	batch int
 }
 
 // NewOllamaEmbedder connects to an Ollama daemon and verifies the embedding
@@ -153,20 +166,46 @@ func (o *ollamaEmbedder) Embed(texts []string) ([][]float32, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	if o.batch <= 0 {
+		o.batch = ollamaEmbedBatchSize
+	}
+
 	out := make([][]float32, 0, len(texts))
-	for start := 0; start < len(texts); start += ollamaEmbedBatchSize {
-		end := min(start+ollamaEmbedBatchSize, len(texts))
+	for start := 0; start < len(texts); {
+		end := min(start+o.batch, len(texts))
 
 		resp, err := o.embedBatchWithRetry(texts[start:end])
 		if err != nil {
+			// A batch that will not go through after retries is usually too
+			// large: embeddinggemma's runner resets the connection partway
+			// through tokenizing a big payload. Halve and retry the same span
+			// rather than giving up on it — dropping the batch would store
+			// these chunks with nil vectors, which is invisible until every
+			// search over them silently misses.
+			if o.shrinkLocked() {
+				continue
+			}
 			return nil, err
 		}
 		if got, want := len(resp.Embeddings), end-start; got != want {
 			return nil, fmt.Errorf("palace: ollama returned %d embeddings for %d inputs", got, want)
 		}
 		out = append(out, resp.Embeddings...)
+		start = end
 	}
 	return out, nil
+}
+
+// shrinkLocked halves the batch size, reporting whether there was room to do so.
+// Caller must hold mu.
+func (o *ollamaEmbedder) shrinkLocked() bool {
+	if o.batch <= ollamaMinEmbedBatch {
+		return false
+	}
+	o.batch = max(o.batch/2, ollamaMinEmbedBatch)
+	slog.Warn("palace: reducing ollama embed batch size after repeated transport errors",
+		"batch", o.batch, "model", o.model)
+	return true
 }
 
 // embedBatchWithRetry sends one batch, retrying transient transport failures.
