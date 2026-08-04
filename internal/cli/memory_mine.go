@@ -256,33 +256,42 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
 
+	// All progress rendering funnels through prog. Both callbacks below are
+	// invoked concurrently from the embed worker pool, and internal/palace logs
+	// warnings from those same goroutines — so the counters, the spinner and the
+	// terminal line all need one lock between them. prog.do provides it.
+	prog := newMineProgress(os.Stdout)
+	restoreLogs := prog.captureLogs()
+	defer restoreLogs()
+
 	// Create progress callback that shows live progress with phase awareness.
 	progress := func(file string, added, skipped, errors int) {
-		if file != "" {
-			// File completion callback — show file being processed.
-			fileCount++
-			chunkCount += added
-			dupCount += skipped
-			errCount += errors
-			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
+		prog.do(func() string {
+			if file != "" {
+				// File completion callback — show file being processed.
+				fileCount++
+				chunkCount += added
+				dupCount += skipped
+				errCount += errors
+				spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
 
-			// Calculate overall progress (0-100%).
-			progressPct := float64(fileCount) / float64(totalFiles) * 100.0
-			filled := int(progressPct / 100.0 * float64(barWidth))
+				// Calculate overall progress (0-100%).
+				progressPct := float64(fileCount) / float64(totalFiles) * 100.0
+				filled := int(progressPct / 100.0 * float64(barWidth))
 
-			// Show abbreviated filename if too long.
-			displayFile := file
-			if len(displayFile) > 40 {
-				displayFile = "..." + displayFile[len(displayFile)-37:]
+				// Show abbreviated filename if too long.
+				displayFile := file
+				if len(displayFile) > 40 {
+					displayFile = "..." + displayFile[len(displayFile)-37:]
+				}
+
+				return fmt.Sprintf(" %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s",
+					spinnerFrames[spinnerIdx], currentPhase,
+					progressBar(filled, barWidth), displayFile,
+					fileCount, totalFiles, chunkCount,
+					formatDuration(time.Since(startTime)))
 			}
 
-			// Erase line and redraw with spinner.
-			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
-				spinnerFrames[spinnerIdx], currentPhase,
-				progressBar(filled, barWidth), displayFile,
-				fileCount, totalFiles, chunkCount,
-				formatDuration(time.Since(startTime)))
-		} else {
 			// Phase progress callback: file="" with percentage in 'added'.
 			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
 			progressPct := float64(added)
@@ -298,37 +307,38 @@ func runMemoryMine(dir, wing string, convos bool) error {
 			}
 			currentPhase = stage
 
-			// Erase line and redraw.
-			fmt.Printf("\r %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K",
+			return fmt.Sprintf(" %s  %-8s %s  %-38s %3d/%d files, %d chunks  %s",
 				spinnerFrames[spinnerIdx], stage,
 				progressBar(filled, barWidth), "",
 				fileCount, totalFiles, chunkCount,
 				formatDuration(time.Since(startTime)))
-		}
+		})
 	}
 
 	// Phase progress: redrawn in place with \r so a long embed shows which file
 	// it is currently working through instead of a blank, apparently frozen bar.
 	phase := func(stage, item string, done, total int) {
-		spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
-		currentPhase = stage
+		prog.do(func() string {
+			spinnerIdx = (spinnerIdx + 1) % len(spinnerFrames)
+			currentPhase = stage
 
-		pct := 0.0
-		if total > 0 {
-			pct = float64(done) / float64(total) * 100.0
-		}
-		filled := int(pct / 100.0 * float64(barWidth))
+			pct := 0.0
+			if total > 0 {
+				pct = float64(done) / float64(total) * 100.0
+			}
+			filled := int(pct / 100.0 * float64(barWidth))
 
-		displayItem := item
-		if len(displayItem) > 38 {
-			displayItem = "..." + displayItem[len(displayItem)-35:]
-		}
+			displayItem := item
+			if len(displayItem) > 38 {
+				displayItem = "..." + displayItem[len(displayItem)-35:]
+			}
 
-		fmt.Printf("\r %s  %-8s %s  %-38s %d/%d chunks  %s\x1b[K",
-			spinnerFrames[spinnerIdx], stage,
-			progressBar(filled, barWidth), displayItem,
-			done, total,
-			formatDuration(time.Since(startTime)))
+			return fmt.Sprintf(" %s  %-8s %s  %-38s %d/%d chunks  %s",
+				spinnerFrames[spinnerIdx], stage,
+				progressBar(filled, barWidth), displayItem,
+				done, total,
+				formatDuration(time.Since(startTime)))
+		})
 	}
 
 	cfg := &palace.MineConfig{Wing: wing, Progress: progress, Phase: phase}
@@ -422,11 +432,12 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return fmt.Errorf("mining: %w", err)
 	}
 
-	// Ensure progress bar shows 100%.
-	fmt.Printf("\r ✓  %-8s %s  %-38s %3d/%d files, %d chunks  %s\x1b[K\n",
+	// Ensure progress bar shows 100%, and close the live region so the stats
+	// below start on their own line.
+	prog.finish(fmt.Sprintf(" ✓  %-8s %s  %-38s %3d/%d files, %d chunks  %s",
 		"done", progressBar(barWidth, barWidth), "",
 		totalFiles, totalFiles, result.Added,
-		formatDuration(time.Since(startTime)))
+		formatDuration(time.Since(startTime))))
 
 	// Show final mining stats.
 	fmt.Println()

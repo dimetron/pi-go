@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -43,7 +48,17 @@ const (
 	// ollamaProbeTimeout bounds the reachability check. It is a loopback request
 	// to a daemon that is either up or not; waiting longer helps nobody.
 	ollamaProbeTimeout = 3 * time.Second
+
+	// ollamaEmbedRetries is how many times one batch is attempted before the
+	// error is returned to the caller. Three covers a runner restart (which
+	// takes a second or two) without turning a genuinely dead daemon into a
+	// long stall — the non-transient path returns on the first attempt anyway.
+	ollamaEmbedRetries = 3
 )
+
+// ollamaEmbedRetryDelay is the base for linear backoff between attempts. A var
+// rather than a const so tests can shrink it; nothing in production writes it.
+var ollamaEmbedRetryDelay = 2 * time.Second
 
 // ErrOllamaUnavailable is returned when the Ollama daemon cannot be reached or
 // does not have the requested embedding model. Callers that can degrade (the
@@ -52,9 +67,25 @@ const (
 var ErrOllamaUnavailable = errors.New("ollama unavailable")
 
 // ollamaEmbedder embeds text through a local Ollama daemon.
+//
+// Embed is serialized by mu so the daemon only ever sees one in-flight embed
+// request from this process. The api.Client itself is concurrency-safe, so this
+// is not about protecting the client — it is about protecting the daemon's
+// model runner.
+//
+// Ollama fronts a runner subprocess on an ephemeral port and forwards
+// /tokenize and /embed to it. Overlapping large batches make it evict or
+// restart that runner mid-request, which surfaces here as
+// "read tcp ...: connection reset by peer" against a port nobody configured.
+// The callers are genuinely concurrent — mining embeds from its worker pool
+// while drawer_service embeds on every search and add — so the serialization
+// has to live at the one point they all funnel through, which is here.
 type ollamaEmbedder struct {
 	client *api.Client
 	model  string
+
+	// mu serializes Embed across every caller in the process.
+	mu sync.Mutex
 }
 
 // NewOllamaEmbedder connects to an Ollama daemon and verifies the embedding
@@ -109,21 +140,26 @@ func hasOllamaModel(list *api.ListResponse, name string) bool {
 }
 
 // Embed sends texts to Ollama in batches and returns their vectors in order.
+//
+// Serialized process-wide: see the note on ollamaEmbedder. A mining run holds
+// this lock for the length of one batch, so a concurrent search waits rather
+// than racing the model runner. Batches are seconds, not minutes, so the wait
+// is bounded in practice.
 func (o *ollamaEmbedder) Embed(texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
 
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
 	out := make([][]float32, 0, len(texts))
 	for start := 0; start < len(texts); start += ollamaEmbedBatchSize {
 		end := min(start+ollamaEmbedBatchSize, len(texts))
 
-		resp, err := o.client.Embed(context.Background(), &api.EmbedRequest{
-			Model: o.model,
-			Input: texts[start:end],
-		})
+		resp, err := o.embedBatchWithRetry(texts[start:end])
 		if err != nil {
-			return nil, fmt.Errorf("palace: ollama embed: %w", err)
+			return nil, err
 		}
 		if got, want := len(resp.Embeddings), end-start; got != want {
 			return nil, fmt.Errorf("palace: ollama returned %d embeddings for %d inputs", got, want)
@@ -131,6 +167,77 @@ func (o *ollamaEmbedder) Embed(texts []string) ([][]float32, error) {
 		out = append(out, resp.Embeddings...)
 	}
 	return out, nil
+}
+
+// embedBatchWithRetry sends one batch, retrying transient transport failures.
+//
+// Serializing calls stops this process from causing a runner restart, but it
+// cannot stop one: Ollama also evicts models on its own idle timer and under
+// memory pressure, and a batch in flight when that happens dies with a reset
+// connection. Without a retry the caller drops the whole batch — and in mining
+// that means up to ollamaEmbedBatchSize chunks are stored with nil vectors,
+// which is invisible until every semantic search over them silently misses.
+//
+// Embedding is a pure function of its input, so retrying is always safe. Only
+// transport-shaped failures are retried; a bad model name or a malformed
+// request fails the same way every time and should surface immediately.
+func (o *ollamaEmbedder) embedBatchWithRetry(batch []string) (*api.EmbedResponse, error) {
+	var lastErr error
+	for attempt := range ollamaEmbedRetries {
+		if attempt > 0 {
+			// Linear backoff. The runner needs time to come back up, and a
+			// tight retry would just meet the same closed socket.
+			time.Sleep(time.Duration(attempt) * ollamaEmbedRetryDelay)
+			slog.Warn("palace: retrying ollama embed batch after transport error",
+				"attempt", attempt+1, "of", ollamaEmbedRetries, "size", len(batch), "error", lastErr)
+		}
+
+		resp, err := o.client.Embed(context.Background(), &api.EmbedRequest{
+			Model: o.model,
+			Input: batch,
+		})
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isTransientOllamaErr(err) {
+			return nil, fmt.Errorf("palace: ollama embed: %w", err)
+		}
+	}
+	return nil, fmt.Errorf("palace: ollama embed failed after %d attempts: %w", ollamaEmbedRetries, lastErr)
+}
+
+// isTransientOllamaErr reports whether err looks like the daemon or its model
+// runner went away mid-request, rather than a request that will never succeed.
+func isTransientOllamaErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// A dropped runner surfaces as a reset/closed connection or a truncated
+	// body. net.Error covers timeouts; the string checks cover the syscall-level
+	// resets that the ollama api client wraps into plain errors.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	s := err.Error()
+	for _, frag := range []string{
+		"connection reset by peer",
+		"broken pipe",
+		"unexpected EOF",
+		"EOF",
+		"connection refused",
+		"server closed",
+	} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close is a no-op: the daemon owns the model's lifetime, not this process.
