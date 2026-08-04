@@ -246,17 +246,24 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	restoreLogs := prog.captureLogs()
 	defer restoreLogs()
 
-	// Progress reports file-level work: one call per file completed.
-	progress := func(file string, added, skipped, errors int) {
+	// The heartbeat keeps the spinner and the elapsed clock moving even while a
+	// phase blocks with nothing to report, which is what makes a slow step
+	// distinguishable from a hung one.
+	prog.startHeartbeat()
+	defer prog.stopHeartbeat()
+
+	// Progress reports file-level work. Two variants share this callback:
+	// a named file means one file finished; an empty file name is a
+	// percentage-only tick, and it is the *only* signal insertDrawers emits —
+	// dropping it left the whole insert phase silent.
+	progress := func(file string, pctOrAdded, skipped, errors int) {
 		if file == "" {
-			// Percentage-only variant, superseded by Phase for the stages that
-			// report real counts. Ignored rather than drawn, so the two callbacks
-			// cannot fight over the line with different denominators.
+			prog.show("insert", "", pctOrAdded, 100, "%")
 			return
 		}
 		prog.do(func() string {
 			fileCount++
-			chunkCount += added
+			chunkCount += pctOrAdded
 			dupCount += skipped
 			errCount += errors
 			return ""
@@ -344,11 +351,17 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	} else {
 		palaceOpts = append(palaceOpts, palace.WithLocalEmbedder())
 	}
+	// Opening the palace loads the embedding model and runs any schema
+	// migrations, which on a cold start is seconds of silence right after the
+	// banner — the exact point the run looked wedged.
+	prog.status("open", "opening palace, loading embedder")
 	p, err := palace.New(palaceOpts...)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
 	}
 	defer p.Close()
+
+	prog.status("scan", "collecting files")
 
 	var result *palace.MineResult
 	if convos {
