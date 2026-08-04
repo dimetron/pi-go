@@ -758,6 +758,14 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if mouse.Button != tea.MouseLeft {
 		return m, nil
 	}
+	// The gauge's [x] is a control, not text. It sits to the right of the chat
+	// panel, so it has to be claimed before the off-panel branch below swallows
+	// the click as "deselect".
+	if m.hitContextClear(mouse.X, mouse.Y) {
+		m.sel = selection{}
+		m.clearConversation()
+		return m, m.setFlash("Context cleared")
+	}
 	// Only the chat panel is selectable. A press on the rail or in the sidebar
 	// starts nothing — and clears any highlight, the same as a click anywhere
 	// else would.

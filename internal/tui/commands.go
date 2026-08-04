@@ -44,27 +44,7 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			content: m.formatHelp(),
 		})
 	case "/clear":
-		m.chatModel.Messages = m.chatModel.Messages[:0]
-		m.chatModel.Scroll = 0
-		m.chatModel.Streaming = ""
-		m.chatModel.Thinking = ""
-		m.chatModel.TraceLog = nil
-		m.running = false
-		m.run = nil
-		m.statusModel.ActiveTool = ""
-		m.statusModel.ToolStart = time.Time{}
-		m.loadingItems = nil
-		m.matrix.clear()
-		m.matrix.feed("pi-go", m.mainWidth())
-		// Drop the session's events and zero the context gauge. Without
-		// this the transcript looks empty while the model still receives —
-		// and still pays for — every prior turn.
-		m.clearSessionContext()
-		// Reset the terminal window/tab title and the persisted session
-		// metadata title. Funnel through setSessionTitle("") so the
-		// agent's SetSessionTitle is also called and meta.json stays in
-		// sync with the OSC 0 frame that the next View() will emit.
-		m.setSessionTitle("")
+		m.clearConversation()
 	case "/copy":
 		return m.handleCopyCommand()
 	case "/model":
@@ -237,6 +217,36 @@ func (m *model) handleBranchCommand(args []string) {
 			content: fmt.Sprintf("Created and switched to branch `%s`.", branchName),
 		})
 	}
+}
+
+// clearConversation resets the transcript and the session context behind it.
+//
+// This is the body of /clear, split out so the context gauge's [x] button runs
+// exactly this path. A second copy of these fifteen assignments would drift the
+// first time one of them changed, and the failure mode is silent: a transcript
+// that looks cleared while the model still receives every prior turn.
+func (m *model) clearConversation() {
+	m.chatModel.Messages = m.chatModel.Messages[:0]
+	m.chatModel.Scroll = 0
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
+	m.chatModel.TraceLog = nil
+	m.running = false
+	m.run = nil
+	m.statusModel.ActiveTool = ""
+	m.statusModel.ToolStart = time.Time{}
+	m.loadingItems = nil
+	m.matrix.clear()
+	m.matrix.feed("pi-go", m.mainWidth())
+	// Drop the session's events and zero the context gauge. Without this the
+	// transcript looks empty while the model still receives — and still pays
+	// for — every prior turn.
+	m.clearSessionContext()
+	// Reset the terminal window/tab title and the persisted session metadata
+	// title. Funnel through setSessionTitle("") so the agent's SetSessionTitle
+	// is also called and meta.json stays in sync with the OSC 0 frame that the
+	// next View() will emit.
+	m.setSessionTitle("")
 }
 
 // clearSessionContext empties the session's event history and zeroes the

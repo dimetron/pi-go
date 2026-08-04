@@ -96,6 +96,17 @@ const (
 	gaugeEmptyGlyph  = '─'
 )
 
+// The gauge carries a click target for /clear at its right edge. This is the
+// one row that always says how full the context is, so the control that empties
+// it belongs beside the reading that motivates pressing it.
+//
+// ASCII by necessity: the frame is guarded against East-Asian-ambiguous runes
+// (TestFrameChromeHasNoUndeclaredAmbiguousRunes), and the plausible glyphs —
+// ✕ U+2715, ✗ U+2717, × U+00D7 — are all ambiguous, so a CJK-configured
+// terminal would render them two cells wide and shift the row. "[x]" is three
+// cells everywhere.
+const gaugeClearButton = "[x]"
+
 // contextRuleInput is everything the gauge reads. Passing a struct keeps the
 // renderer a pure function of its inputs, so it is testable without a model.
 type contextRuleInput struct {
@@ -111,16 +122,26 @@ type contextRuleInput struct {
 	Breakdown *ContextBreakdown
 }
 
-// renderContextRule draws the full-width rule below the input, with its leading
-// run filled in proportion to context used and a right-aligned readout.
-//
-// The result is always exactly Width display cells, so it satisfies the frame's
-// width invariant on its own and needs no padding by the caller.
-func renderContextRule(in contextRuleInput) string {
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+// contextRuleLayout is the gauge's geometry, resolved once and used by both the
+// renderer and the mouse hit-test. Keeping it in one place is what stops the
+// drawn [x] and the clickable columns from drifting apart as the row's other
+// pieces change size.
+type contextRuleLayout struct {
+	Used       int64
+	Window     int64
+	Pct        float64
+	Label      string
+	GaugeWidth int // cells of rule, filled plus empty
+	ShowClear  bool
+	ClearStart int // first column of the [x], when ShowClear
+	ClearEnd   int // one past its last column
+}
 
+// layoutContextRule resolves the gauge's geometry. ok is false when the row
+// degrades to a plain rule — no reading, and so no button either.
+func layoutContextRule(in contextRuleInput) (contextRuleLayout, bool) {
 	if in.Width <= 0 {
-		return ""
+		return contextRuleLayout{}, false
 	}
 
 	used := in.UsedTokens
@@ -141,7 +162,7 @@ func renderContextRule(in contextRuleInput) string {
 	// Nothing measured yet — a plain rule, so the gauge never implies a reading
 	// it does not have.
 	if used == 0 {
-		return dim.Render(strings.Repeat(string(gaugeEmptyGlyph), in.Width))
+		return contextRuleLayout{}, false
 	}
 
 	// The denominator is the dumb-zone boundary, not the full window: at 70% of
@@ -161,17 +182,50 @@ func renderContextRule(in contextRuleInput) string {
 	label := fmt.Sprintf(" %s/%s %d%% ",
 		formatTokenCount(used), formatTokenCount(window), int(pct))
 	labelWidth := ansi.StringWidth(label)
+	clearWidth := ansi.StringWidth(gaugeClearButton)
 
-	// Too narrow to carry a readout: fall back to a bare filled rule rather than
+	// The button is the first thing dropped when the row runs out of room: the
+	// reading is the point of this row, the affordance is a convenience, and
+	// /clear still works from the prompt.
+	out := contextRuleLayout{Used: used, Window: window, Pct: pct, Label: label}
+	if gw := in.Width - labelWidth - clearWidth; gw >= 8 {
+		out.GaugeWidth = gw
+		out.ShowClear = true
+		out.ClearStart = in.Width - clearWidth
+		out.ClearEnd = in.Width
+		return out, true
+	}
+
+	// Too narrow to carry a readout at all: fall back to a bare rule rather than
 	// truncating the label into something misleading.
-	gaugeWidth := in.Width - labelWidth
-	if gaugeWidth < 8 {
+	if gw := in.Width - labelWidth; gw >= 8 {
+		out.GaugeWidth = gw
+		return out, true
+	}
+	return contextRuleLayout{}, false
+}
+
+// renderContextRule draws the full-width rule below the input, with its leading
+// run filled in proportion to context used, a right-aligned readout, and an [x]
+// that clears the context.
+//
+// The result is always exactly Width display cells, so it satisfies the frame's
+// width invariant on its own and needs no padding by the caller.
+func renderContextRule(in contextRuleInput) string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+
+	if in.Width <= 0 {
+		return ""
+	}
+
+	lay, ok := layoutContextRule(in)
+	if !ok {
 		return dim.Render(strings.Repeat(string(gaugeEmptyGlyph), in.Width))
 	}
 
-	filled := int(pct / 100 * float64(gaugeWidth))
-	if filled > gaugeWidth {
-		filled = gaugeWidth
+	filled := int(lay.Pct / 100 * float64(lay.GaugeWidth))
+	if filled > lay.GaugeWidth {
+		filled = lay.GaugeWidth
 	}
 	// Any measured usage shows at least one cell, so a nearly-empty context is
 	// still visibly a gauge and not a blank rule.
@@ -179,7 +233,7 @@ func renderContextRule(in contextRuleInput) string {
 		filled = 1
 	}
 
-	fg := contextSeverityColor(pct)
+	fg := contextSeverityColor(lay.Pct)
 	labelStyle := lipgloss.NewStyle().Foreground(fg)
 
 	// The filled run is either one severity-colored block or, when a breakdown
@@ -187,17 +241,28 @@ func renderContextRule(in contextRuleInput) string {
 	// produce exactly `filled` cells, so width is invariant to which is used.
 	var filledRun string
 	if in.Breakdown != nil && in.Breakdown.Total() > 0 {
-		filledRun = renderSegmentedGauge(in.Breakdown.withConversationFrom(used), filled)
+		filledRun = renderSegmentedGauge(in.Breakdown.withConversationFrom(lay.Used), filled)
 	} else {
 		filledRun = lipgloss.NewStyle().Foreground(fg).
 			Render(strings.Repeat(string(gaugeFilledGlyph), filled))
 	}
 
+	// White, deliberately outside the gauge's vocabulary. Everything else on
+	// this row encodes a reading — green/peach/red for severity, dim for the
+	// unfilled track — so a button in any of those colors would read as part of
+	// the measurement. White belongs to no zone and so is legible as a control.
+	clear := ""
+	if lay.ShowClear {
+		clear = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).
+			Render(gaugeClearButton)
+	}
+
 	// Build raw runs, then style each once — styling last keeps escapes out of
 	// anything that measures or slices the text.
 	return filledRun +
-		dim.Render(strings.Repeat(string(gaugeEmptyGlyph), gaugeWidth-filled)) +
-		labelStyle.Render(label)
+		dim.Render(strings.Repeat(string(gaugeEmptyGlyph), lay.GaugeWidth-filled)) +
+		labelStyle.Render(lay.Label) +
+		clear
 }
 
 // contextSeverityColor maps gauge fill (0–100, where 100 = entering the dumb
@@ -234,6 +299,22 @@ func (m *model) contextRuleFor(width int) contextRuleInput {
 	}
 	in.Breakdown = m.cfg.ContextBreakdown
 	return in
+}
+
+// hitContextClear reports whether a screen coordinate lands on the gauge's [x].
+//
+// The gauge is the frame's last row by construction — View writes it last, with
+// nothing after it — so the row test derives from frameRows rather than from a
+// stored coordinate that would need keeping in sync with the layout.
+func (m *model) hitContextClear(x, y int) bool {
+	if m.frameRows <= 0 || y != m.frameRows-1 {
+		return false
+	}
+	lay, ok := layoutContextRule(m.contextRuleFor(m.width))
+	if !ok || !lay.ShowClear {
+		return false
+	}
+	return x >= lay.ClearStart && x < lay.ClearEnd
 }
 
 // estimateContextTokenCount approximates context size from message text at the
