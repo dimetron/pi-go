@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/palace"
 )
 
@@ -335,12 +337,38 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	dbPath := filepath.Join(absDir, ".pi-go", "palace.db")
 	modelPath := defaultPalaceModelPath()
 
+	palaceCfg := palace.DefaultConfig()
+	palaceCfg.DBPath = dbPath
+	palaceCfg.ModelPath = modelPath
+	if userCfg, err := config.Load(); err == nil && userCfg.Palace != nil {
+		if userCfg.Palace.OllamaURL != "" {
+			palaceCfg.OllamaURL = userCfg.Palace.OllamaURL
+		}
+		if userCfg.Palace.OllamaModel != "" {
+			palaceCfg.OllamaModel = userCfg.Palace.OllamaModel
+		}
+		if userCfg.Palace.LocalEmbedder {
+			palaceCfg.UseOllama = false
+		}
+	}
+
+	// Mining without an embedder produces drawers with no vectors, which look
+	// fine until every semantic search silently returns nothing. Refuse up front
+	// rather than spend minutes indexing into a broken state.
+	if err := palace.EmbedderAvailability(palaceCfg); err != nil {
+		return ollamaSetupError(palaceCfg, err)
+	}
+
 	// Name the database and model up front. Mining writes to a per-project DB and
 	// loads a model from a shared cache, and neither location is obvious from the
 	// command line — so a run that appeared to do nothing (or that re-embedded
 	// everything) gave no clue which store it had actually touched.
 	fmt.Printf("Palace DB: %s\n", dbPath)
-	fmt.Printf("Model:     %s\n", modelPath)
+	if palaceCfg.UseOllama {
+		fmt.Printf("Embedder:  ollama %s (%s)\n", palaceCfg.OllamaModel, palaceCfg.OllamaURL)
+	} else {
+		fmt.Printf("Embedder:  in-process %s\n", modelPath)
+	}
 	fmt.Printf("Wing:      %s\n\n", wing)
 
 	// Auto-init: create the palace directory and fetch the model if needed, so
@@ -368,10 +396,16 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		fmt.Printf("Model ready: %s\n\n", modelPath)
 	}
 
-	p, err := palace.New(
+	palaceOpts := []palace.Option{
 		palace.WithDBPath(dbPath),
 		palace.WithModelPath(modelPath),
-	)
+	}
+	if palaceCfg.UseOllama {
+		palaceOpts = append(palaceOpts, palace.WithOllamaEmbedder(palaceCfg.OllamaURL, palaceCfg.OllamaModel))
+	} else {
+		palaceOpts = append(palaceOpts, palace.WithLocalEmbedder())
+	}
+	p, err := palace.New(palaceOpts...)
 	if err != nil {
 		return fmt.Errorf("opening palace: %w", err)
 	}
@@ -413,4 +447,33 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	}
 
 	return nil
+}
+
+// ollamaSetupError turns an embedder-availability failure into instructions.
+//
+// Mining is the one command that cannot degrade: an unembedded drawer is
+// invisible to semantic search forever after, and the failure is silent at
+// query time. The two ways this goes wrong — daemon down, model not pulled —
+// have different fixes, so the message names both rather than dumping the
+// underlying error and leaving the user to guess.
+func ollamaSetupError(cfg palace.PalaceConfig, cause error) error {
+	if !errors.Is(cause, palace.ErrOllamaUnavailable) {
+		return fmt.Errorf("embedding backend unavailable: %w", cause)
+	}
+
+	fmt.Fprintf(os.Stderr, `
+ollama is required for "pi memory mine" but is not available.
+
+  cause: %v
+
+  Fix one of the following, then re-run:
+
+    1. Start the daemon:   ollama serve
+    2. Pull the model:     ollama pull %s
+
+  The daemon is expected at %s; set palace.ollama_url to change it.
+
+`, cause, cfg.OllamaModel, cfg.OllamaURL)
+
+	return fmt.Errorf("embedding backend unavailable: %w", cause)
 }

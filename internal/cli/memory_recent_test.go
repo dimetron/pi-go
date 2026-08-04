@@ -156,3 +156,255 @@ func TestMemoryRecent_TypeFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNewMemoryRecentCmd_NoArgExecute(t *testing.T) {
+	resetGlobalFlags(t)
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	origCwd, _ := os.Getwd()
+	workDir := filepath.Join(tmp, "work")
+	_ = os.MkdirAll(workDir, 0o755)
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origCwd) }()
+
+	cmd := newMemoryRecentCmd()
+	cmd.SetArgs(nil)
+	_ = captureStdout(t, func() {
+		_ = cmd.Execute() // will fail (no DB), but exercises RunE
+	})
+}
+
+func TestNewMemoryRecentCmd_WithArgExecute(t *testing.T) {
+	resetGlobalFlags(t)
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	cmd := newMemoryRecentCmd()
+	cmd.SetArgs([]string{tmp})
+	_ = captureStdout(t, func() {
+		_ = cmd.Execute()
+	})
+}
+
+func TestNewMemoryRecentCmd_Flags(t *testing.T) {
+	cmd := newMemoryRecentCmd()
+	for _, name := range []string{"limit", "type", "json"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("flag %q not found", name)
+		}
+	}
+	// Verify default values.
+	limit, _ := cmd.Flags().GetInt("limit")
+	if limit != 20 {
+		t.Errorf("limit default = %d, want 20", limit)
+	}
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	if jsonFlag {
+		t.Error("json default should be false")
+	}
+}
+
+func TestRunMemoryRecent_CurrentDir(t *testing.T) {
+	// Use current directory with no DB.
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Create a memory DB in project-specific location.
+	memDir := filepath.Join(tmpDir, "proj", ".pi-go", "memory")
+	os.MkdirAll(memDir, 0755)
+	dbPath := filepath.Join(memDir, "claude-mem.db")
+	db, err := memory.OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	db.Close()
+
+	err = runMemoryRecent(filepath.Join(tmpDir, "proj"), 10, "", false)
+	if err != nil {
+		t.Fatalf("runMemoryRecent current dir: %v", err)
+	}
+}
+
+func TestRunMemoryRecent_WithObservations(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".pi-go", "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(memDir, "claude-mem.db")
+	db, err := memory.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := memory.NewSQLiteStore(db)
+	ctx := context.Background()
+	store.CreateSession(ctx, &memory.Session{
+		SessionID: "session-1",
+		Project:   dir,
+		StartedAt: time.Now(),
+		Status:    "active",
+	})
+	err = runMemoryRecent(dir, 10, "", false)
+	if err != nil {
+		t.Fatalf("runMemoryRecent: %v", err)
+	}
+}
+
+func TestRunMemoryRecent_AllObservationTypes(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".pi-go", "memory")
+	os.MkdirAll(memDir, 0o755)
+	dbPath := filepath.Join(memDir, "claude-mem.db")
+	db, err := memory.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := memory.NewSQLiteStore(db)
+	ctx := context.Background()
+	store.CreateSession(ctx, &memory.Session{
+		SessionID: "session-types",
+		Project:   dir,
+		StartedAt: time.Now(),
+		Status:    "completed",
+	})
+	validTypes := []memory.ObservationType{
+		memory.TypeDecision,
+		memory.TypeBugfix,
+		memory.TypeFeature,
+		memory.TypeRefactor,
+		memory.TypeDiscovery,
+		memory.TypeChange,
+	}
+	for _, typ := range validTypes {
+		store.InsertObservation(ctx, &memory.Observation{
+			SessionID: "session-types",
+			Project:   dir,
+			Title:     string(typ),
+			Type:      typ,
+			Text:      "test",
+			CreatedAt: time.Now(),
+		})
+	}
+	err = runMemoryRecent(dir, 10, "", false)
+	if err != nil {
+		t.Fatalf("runMemoryRecent: %v", err)
+	}
+}
+
+func TestRunMemoryRecent_LimitWithTypeFilter(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".pi-go", "memory")
+	os.MkdirAll(memDir, 0o755)
+	dbPath := filepath.Join(memDir, "claude-mem.db")
+	db, err := memory.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := memory.NewSQLiteStore(db)
+	ctx := context.Background()
+	store.CreateSession(ctx, &memory.Session{
+		SessionID: "limit-test",
+		Project:   dir,
+		StartedAt: time.Now(),
+		Status:    "completed",
+	})
+	for i := 0; i < 10; i++ {
+		store.InsertObservation(ctx, &memory.Observation{
+			SessionID: "limit-test",
+			Project:   dir,
+			Title:     "Bugfix",
+			Type:      memory.TypeBugfix,
+			Text:      "test",
+			CreatedAt: time.Now().Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	err = runMemoryRecent(dir, 3, "bugfix", false)
+	if err != nil {
+		t.Fatalf("runMemoryRecent: %v", err)
+	}
+}
+
+func TestRunMemoryRecent_LimitExceedsData(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".pi-go", "memory")
+	os.MkdirAll(memDir, 0o755)
+	dbPath := filepath.Join(memDir, "claude-mem.db")
+	db, err := memory.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := memory.NewSQLiteStore(db)
+	ctx := context.Background()
+	store.CreateSession(ctx, &memory.Session{
+		SessionID: "small-data",
+		Project:   dir,
+		StartedAt: time.Now(),
+		Status:    "completed",
+	})
+	store.InsertObservation(ctx, &memory.Observation{
+		SessionID: "small-data",
+		Project:   dir,
+		Title:     "Obs 1",
+		Type:      memory.TypeFeature,
+		Text:      "test",
+		CreatedAt: time.Now(),
+	})
+	store.InsertObservation(ctx, &memory.Observation{
+		SessionID: "small-data",
+		Project:   dir,
+		Title:     "Obs 2",
+		Type:      memory.TypeFeature,
+		Text:      "test",
+		CreatedAt: time.Now(),
+	})
+	err = runMemoryRecent(dir, 100, "", false)
+	if err != nil {
+		t.Fatalf("runMemoryRecent: %v", err)
+	}
+}
+
+func TestNewMemoryRecentCmd(t *testing.T) {
+	cmd := newMemoryRecentCmd()
+	if cmd.Use != "recent [project]" {
+		t.Errorf("Use = %q, want 'recent [project]'", cmd.Use)
+	}
+	for _, name := range []string{"limit", "type", "json"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("flag %q not registered", name)
+		}
+	}
+}
+
+func TestFormatAge_TableDriven(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Time
+		expected string
+	}{
+		{"just now", time.Now(), "just now"},
+		{"5 minutes ago", time.Now().Add(-5 * time.Minute), "5m ago"},
+		{"1 minute ago", time.Now().Add(-1 * time.Minute), "1m ago"},
+		{"59 minutes ago", time.Now().Add(-59 * time.Minute), "59m ago"},
+		{"1 hour ago", time.Now().Add(-1 * time.Hour), "1h ago"},
+		{"3 hours ago", time.Now().Add(-3 * time.Hour), "3h ago"},
+		{"23 hours ago", time.Now().Add(-23 * time.Hour), "23h ago"},
+		{"1 day ago", time.Now().Add(-1 * 24 * time.Hour), "1d ago"},
+		{"6 days ago", time.Now().Add(-6 * 24 * time.Hour), "6d ago"},
+		{"2 weeks ago", time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), "Jan 1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatAge(tt.input)
+			if got != tt.expected {
+				t.Errorf("formatAge() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}

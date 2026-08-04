@@ -318,10 +318,15 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 	embeddings := make([][]float32, len(texts))
 
 	workers := embedWorkers(palace.config.ModelPath)
-	slog.Info("mine: embedding chunks", "count", len(texts), "workers", workers, "batch", embedBatchSize)
-
 	embs, closeExtra := embedderPool(palace, workers)
 	defer closeExtra()
+
+	// Batch size is a property of the backend, not a global: 8 exists only
+	// because gomlx's simplego balloons in memory above it, which is irrelevant
+	// to Ollama.
+	batch := batchSizeFor(palace.embedder)
+	slog.Info("mine: embedding chunks",
+		"count", len(texts), "workers", len(embs), "batch", batch, "backend", embedderName(palace.embedder))
 
 	type batchJob struct{ start, end int }
 	jobs := make(chan batchJob)
@@ -356,8 +361,8 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 		})
 	}
 
-	for i := 0; i < len(texts); i += embedBatchSize {
-		jobs <- batchJob{start: i, end: min(i+embedBatchSize, len(texts))}
+	for i := 0; i < len(texts); i += batch {
+		jobs <- batchJob{start: i, end: min(i+batch, len(texts))}
 	}
 	close(jobs)
 	wg.Wait()
@@ -374,8 +379,18 @@ func embedChunks(palace *Palace, cfg *MineConfig, allChunks []chunkJob) [][]floa
 // concurrently, and one shared embedder is what limited the run to ~25% CPU.
 // Worker 0 reuses the palace's own embedder so the common single-worker case
 // allocates nothing extra, and is therefore not closed here.
-func embedderPool(palace *Palace, workers int) ([]*Embedder, func()) {
-	embs := make([]*Embedder, 0, workers)
+func embedderPool(palace *Palace, workers int) ([]Embedder, func()) {
+	// Ollama is a network client, safe to share across goroutines, and it batches
+	// server-side — so extra instances buy nothing. Worse, the fallback below
+	// would build *local* embedders alongside it, and the two models produce
+	// different dimensions (768 vs 384). Mixing them writes vectors of two shapes
+	// into one wing, where CosineSimilarity silently returns 0 for every
+	// mismatched pair and search quietly stops working.
+	if _, ok := palace.embedder.(*ollamaEmbedder); ok {
+		return []Embedder{palace.embedder}, func() {}
+	}
+
+	embs := make([]Embedder, 0, workers)
 	embs = append(embs, palace.embedder)
 	for len(embs) < workers {
 		e, err := NewEmbedder(palace.config.ModelPath)
@@ -462,4 +477,20 @@ func insertDrawers(ctx context.Context, palace *Palace, cfg *MineConfig, drawers
 			cfg.Progress("", 70+(100-70)*i/len(drawers), 0, 0)
 		}
 	}
+}
+
+// batchSizeFor reports how many texts to submit per Embed call for e.
+func batchSizeFor(e Embedder) int {
+	if _, ok := e.(*ollamaEmbedder); ok {
+		return ollamaEmbedBatchSize
+	}
+	return embedBatchSize
+}
+
+// embedderName identifies the backend for logs.
+func embedderName(e Embedder) string {
+	if o, ok := e.(*ollamaEmbedder); ok {
+		return "ollama/" + o.model
+	}
+	return backendName
 }

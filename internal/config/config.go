@@ -76,6 +76,16 @@ type PalaceConfig struct {
 	Enabled   *bool  `json:"enabled,omitempty"`
 	DBPath    string `json:"db_path,omitempty"`
 	ModelPath string `json:"model_path,omitempty"`
+
+	// OllamaURL overrides the embedding daemon address. Empty uses the palace
+	// default (http://localhost:11434).
+	OllamaURL string `json:"ollama_url,omitempty"`
+	// OllamaModel overrides the embedding model. Empty uses the palace default.
+	// Changing it invalidates every stored vector — embeddings from different
+	// models are not comparable — so a change means re-running `pi memory mine`.
+	OllamaModel string `json:"ollama_model,omitempty"`
+	// LocalEmbedder forces the slower in-process model instead of Ollama.
+	LocalEmbedder bool `json:"local_embedder,omitempty"`
 }
 
 // CompactorConfig holds user-overridable compaction settings.

@@ -11,18 +11,26 @@ import (
 // drawer CRUD with automatic embedding generation and duplicate detection.
 type DrawerService struct {
 	store    PalaceStore
-	embedder *Embedder
+	embedder Embedder
 	config   PalaceConfig
+	cache    *embeddingCache
 }
 
 // NewDrawerService creates a DrawerService. The embedder may be nil, in which
 // case drawers are stored without embeddings and deduplication is skipped.
-func NewDrawerService(store PalaceStore, embedder *Embedder, config PalaceConfig) *DrawerService {
+func NewDrawerService(store PalaceStore, embedder Embedder, config PalaceConfig) *DrawerService {
 	return &DrawerService{
 		store:    store,
 		embedder: embedder,
 		config:   config,
+		cache:    newEmbeddingCache(),
 	}
+}
+
+// candidates returns the embeddings matching filter, served from the in-process
+// cache when possible. See embeddingCache for why this exists.
+func (ds *DrawerService) candidates(ctx context.Context, filter DrawerFilter) ([]EmbeddingRow, error) {
+	return ds.cache.get(ctx, filter, ds.store.GetAllEmbeddings)
 }
 
 // AddDrawer embeds the content, checks for duplicates in the same wing+room,
@@ -39,6 +47,23 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 		return nil, fmt.Errorf("palace: drawer room must not be empty")
 	}
 
+	id := GenerateDrawerID(input.Wing, input.Room, input.SourceFile, input.ChunkIndex, input.Content)
+
+	// Exact duplicates are settled before embedding, not after. Embedding is the
+	// expensive half of this function, so paying for it and then discovering the
+	// content is byte-identical to something already stored is the worst possible
+	// ordering. The lookup is an indexed hit on (wing, room, content_hash).
+	//
+	// A match on the drawer's *own* id is not a duplicate: ids are derived from
+	// (source_file, chunk_index), so re-adding unchanged content to the same slot
+	// is an idempotent upsert and must keep succeeding.
+	contentHash := HashContent(input.Content)
+	if existingID, err := ds.store.FindByContentHash(ctx, input.Wing, input.Room, contentHash); err != nil {
+		slog.Warn("palace: content-hash dedup lookup failed", "error", err)
+	} else if existingID != "" && existingID != id {
+		return nil, &DuplicateError{Result: DuplicateResult{ExistingID: existingID, Similarity: 1}}
+	}
+
 	var embedding []float32
 
 	if ds.embedder != nil {
@@ -48,8 +73,8 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 		} else if len(vecs) > 0 {
 			embedding = vecs[0]
 
-			// Check for duplicates within the same wing+room.
-			candidates, err := ds.store.GetAllEmbeddings(ctx, DrawerFilter{
+			// Check for near-duplicates within the same wing+room.
+			candidates, err := ds.candidates(ctx, DrawerFilter{
 				Wing: input.Wing,
 				Room: input.Room,
 			})
@@ -64,25 +89,28 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 		}
 	}
 
-	id := GenerateDrawerID(input.Wing, input.Room, input.SourceFile, input.ChunkIndex, input.Content)
-
 	drawer := &Drawer{
-		ID:         id,
-		Wing:       input.Wing,
-		Room:       input.Room,
-		Hall:       input.Hall,
-		Content:    input.Content,
-		SourceFile: input.SourceFile,
-		ChunkIndex: input.ChunkIndex,
-		AddedBy:    input.AddedBy,
-		Importance: input.Importance,
-		Embedding:  embedding,
-		CreatedAt:  time.Now().UTC(),
+		ID:          id,
+		Wing:        input.Wing,
+		Room:        input.Room,
+		Hall:        input.Hall,
+		Content:     input.Content,
+		SourceFile:  input.SourceFile,
+		ChunkIndex:  input.ChunkIndex,
+		AddedBy:     input.AddedBy,
+		Importance:  input.Importance,
+		Embedding:   embedding,
+		ContentHash: contentHash,
+		CreatedAt:   time.Now().UTC(),
 	}
 
 	if err := ds.store.InsertDrawer(ctx, drawer); err != nil {
 		return nil, err
 	}
+
+	// Keep the cache warm rather than dropping it: the vector is already in hand,
+	// so appending avoids ever reloading the full set.
+	ds.cache.add(input.Wing, input.Room, id, embedding)
 
 	return drawer, nil
 }
@@ -144,7 +172,7 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 		return ftsResults, nil
 	}
 
-	candidates, err := ds.store.GetAllEmbeddings(ctx, filter)
+	candidates, err := ds.candidates(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("palace: search get embeddings: %w", err)
 	}
@@ -220,7 +248,13 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 
 // DeleteDrawer removes a drawer by ID.
 func (ds *DrawerService) DeleteDrawer(ctx context.Context, id string) error {
-	return ds.store.DeleteDrawer(ctx, id)
+	if err := ds.store.DeleteDrawer(ctx, id); err != nil {
+		return err
+	}
+	// Removal cannot be expressed as an append, so the cached sets are dropped
+	// and rebuilt lazily.
+	ds.cache.invalidate()
+	return nil
 }
 
 // CheckDuplicate embeds the content and checks for near-duplicates across
@@ -239,7 +273,7 @@ func (ds *DrawerService) CheckDuplicate(ctx context.Context, content string, fil
 		return nil, nil
 	}
 
-	candidates, err := ds.store.GetAllEmbeddings(ctx, filter)
+	candidates, err := ds.candidates(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("palace: fetch embeddings: %w", err)
 	}

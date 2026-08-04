@@ -78,6 +78,13 @@ linters:
           - cyclop
           - gocyclo
           - gocognit
+      # hack/ is a scratch area for ad-hoc E2E probes that vendor upstream
+      # example servers (e.g. the MCP everything server). The vendored code
+      # deliberately exercises APIs that the upstream SDK is deprecating
+      # (SA1019) so we can detect SDK breakage early. Don't lint it.
+      - path: ^hack/
+        linters:
+          - staticcheck
       # ADK tool handlers return errors inside result structs, not as Go errors.
       - path: internal/tools/
         linters:

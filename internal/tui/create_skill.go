@@ -9,26 +9,23 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
-// handleSkillCommand executes a dynamic skill by sending its instruction to the agent.
+// handleSkillCommand activates a dynamic skill by injecting its body into the
+// system prompt for the next turn (Level-2 / slash-activation). The user
+// message itself stays clean — only the user-provided args are sent.
 func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Model, tea.Cmd) {
-	// Build the prompt: skill instruction + user arguments
-	userArgs := strings.Join(args, " ")
-	prompt := skill.Instruction
-	if userArgs != "" {
-		prompt = skill.Instruction + "\n\nUser request: " + userArgs
+	body, display, ok := m.prepareSkillActivation(skill, args)
+	if !ok {
+		return m, nil
 	}
 
-	// Show as user message
-	display := "/" + skill.Name
-	if userArgs != "" {
-		display += " " + userArgs
-	}
 	if m.cfg.Logger != nil {
-		m.cfg.Logger.Info(fmt.Sprintf("skill:%s instruction=%d bytes", skill.Name, len(prompt)))
+		m.cfg.Logger.Info(fmt.Sprintf("skill:%s instruction=%d bytes", skill.Name, len(body)))
 	}
+	// Send the user's args (without the body) as the user prompt.
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: display})
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 
@@ -39,7 +36,46 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	m.running = true
 	m.chatModel.Scroll = 0
 
-	return m, m.startAgentLoop(prompt)
+	return m, m.startAgentLoop(display)
+}
+
+// prepareSkillActivation loads the skill body, rebuilds the agent's system
+// instruction with the body appended, and returns the body and the display
+// string the caller should send as the user prompt. Returns ok=false if the
+// body could not be loaded or the agent could not be rebuilt; in that case an
+// error message has been appended to chatModel.Messages.
+//
+// Split out from handleSkillCommand so tests can assert the rebuild side
+// effect without starting the agent loop goroutine.
+func (m *model) prepareSkillActivation(skill extension.Skill, args []string) (body string, display string, ok bool) {
+	body, err := extension.LoadSkillBody(m.cfg.Skills, skill.Name)
+	if err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Error loading skill `%s`: %v", skill.Name, err),
+		})
+		return "", "", false
+	}
+
+	userArgs := strings.Join(args, " ")
+	display = "/" + skill.Name
+	if userArgs != "" {
+		display += " " + userArgs
+	}
+
+	// Rebuild the agent with the skill body injected into the system prompt.
+	if m.cfg.Agent != nil {
+		base := agent.LoadInstruction(agent.SystemInstruction)
+		newInstruction := agent.AppendActiveSkill(base, skill, body)
+		if err := m.cfg.Agent.RebuildWithInstruction(newInstruction); err != nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Error configuring agent for skill `%s`: %v", skill.Name, err),
+			})
+			return "", "", false
+		}
+	}
+	return body, display, true
 }
 
 // pendingSkillCreate holds state for skill-create overwrite confirmation.

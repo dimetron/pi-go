@@ -3,6 +3,7 @@ package extension
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,8 +43,19 @@ You are a code reviewer. Analyze the code for:
 	if skill.Tools[0] != "read" || skill.Tools[1] != "grep" || skill.Tools[2] != "bash" {
 		t.Errorf("tools = %v", skill.Tools)
 	}
-	if skill.Instruction == "" {
-		t.Error("instruction should not be empty")
+	if skill.Instruction != "" {
+		t.Error("parseSkillFile should not populate Instruction (lazy load); got non-empty")
+	}
+	if skill.BodyPath != path {
+		t.Errorf("BodyPath = %q, want %q", skill.BodyPath, path)
+	}
+	// Body is loaded on demand.
+	body, err := LoadSkillBody([]Skill{skill}, skill.Name)
+	if err != nil {
+		t.Fatalf("LoadSkillBody: %v", err)
+	}
+	if !strings.Contains(body, "You are a code reviewer") {
+		t.Errorf("body missing expected content, got %q", body)
 	}
 }
 
@@ -347,8 +359,14 @@ func TestLoadBundledSkills_WithSource(t *testing.T) {
 			if s.Description == "" {
 				t.Error("expected non-empty description for agents-md")
 			}
-			if s.Instruction == "" {
-				t.Error("expected non-empty instruction for agents-md")
+			// Body is lazy-loaded for bundled skills; LoadSkillBody should
+			// still return the full markdown body.
+			body, err := LoadSkillBody(skills, "agents-md")
+			if err != nil {
+				t.Errorf("LoadSkillBody(agents-md): %v", err)
+			}
+			if body == "" {
+				t.Error("expected non-empty body for agents-md after LoadSkillBody")
 			}
 		}
 	}
@@ -380,5 +398,53 @@ Custom instruction.
 				t.Errorf("expected source=user (filesystem override), got %q", s.Source)
 			}
 		}
+	}
+}
+
+func TestSkillBodySize(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "sized-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+description: For size testing
+---
+This is a body of known length 0123456789.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := LoadSkillsWithOptions(LoadOptions{AuditMode: AuditSkip}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Skill
+	for i := range skills {
+		if skills[i].Name == "sized-skill" {
+			found = &skills[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected sized-skill in loaded skills, got %d skills", len(skills))
+	}
+	name := found.Name
+	skills = []Skill{*found}
+
+	// Before any load, size is unknown.
+	if size, ok := SkillBodySize(skills, name); ok {
+		t.Errorf("size should be unknown before load, got size=%d ok=true", size)
+	}
+	// Load the body.
+	body, err := LoadSkillBody(skills, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size, ok := SkillBodySize(skills, name); !ok || size != len(body) {
+		t.Errorf("after load: got (%d, %v), want (%d, true)", size, ok, len(body))
+	}
+	// Unknown skill returns (0, false).
+	if size, ok := SkillBodySize(skills, "no-such-skill"); ok || size != 0 {
+		t.Errorf("unknown skill: got (%d, %v), want (0, false)", size, ok)
 	}
 }

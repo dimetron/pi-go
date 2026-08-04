@@ -21,9 +21,15 @@ const railWidth = 1
 // Rail glyphs. The track is a thin rule; the scroll position is a round thumb
 // sitting on top of it, which reads as a scrollbar rather than as a heavy block
 // cut into the divider.
+//
+// The thumb is ◉ (U+25C9) rather than ● (U+25CF): they read the same at terminal
+// sizes, but ● is East Asian Ambiguous and renders two cells wide wherever the
+// terminal resolves ambiguous width as wide, which pushes the rail out of its
+// column for exactly the three thumb rows. See widthSafeGlyphs in
+// render_integrity_test.go.
 const (
 	railGlyph = "│" // track
-	railThumb = "●" // the thumb, i.e. where you are
+	railThumb = "◉" // the thumb, i.e. where you are
 	railFoot  = "┴" // the joint where the rail meets the panel's closing rule
 )
 

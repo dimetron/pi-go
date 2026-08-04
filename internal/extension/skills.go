@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/dimetron/pi-go/internal/audit"
 )
@@ -17,7 +18,12 @@ type Skill struct {
 	// Description is a one-line description from frontmatter.
 	Description string
 	// Instruction is the markdown body (the system prompt to inject).
+	// Empty after LoadSkills/parseSkillFile; use LoadSkillBody to read it.
 	Instruction string
+	// BodyPath is the on-disk path to the SKILL.md file used to read the body
+	// on demand. Empty for bundled skills (their body is read from the
+	// embedded filesystem via the bundledSkillsFS key).
+	BodyPath string
 	// Tools lists tool names this skill is allowed to use (from frontmatter).
 	Tools []string
 	// Source is where the skill came from: "bundled", "user", or "project".
@@ -74,13 +80,18 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 			if len(mainFile) == 0 {
 				continue
 			}
-			skill, err := parseSkillContent(string(mainFile), skillName)
+			skill, body, err := parseSkillContent(string(mainFile), skillName)
 			if err != nil {
 				continue
 			}
 			skill.Source = "bundled"
 			skillName := skill.Name
 			seen[skillName] = len(skills)
+			// Body is already in memory for bundled skills — cache it so
+			// LoadSkillBody doesn't need to re-read the embed fs.
+			if body != "" {
+				bundledBodyCache.Store(skillName, body)
+			}
 			skills = append(skills, skill)
 		}
 	}
@@ -166,7 +177,8 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	return skills, nil
 }
 
-// parseSkillFile reads a SKILL.md file with YAML-like frontmatter.
+// parseSkillFile reads a SKILL.md file and returns its metadata. The body is
+// not parsed at this point — use LoadSkillBody to read it on demand.
 // Format:
 //
 //	---
@@ -184,12 +196,20 @@ func parseSkillFile(path string) (Skill, error) {
 	// Derive default name from parent directory: skills/my-skill/SKILL.md → my-skill
 	name := filepath.Base(filepath.Dir(path))
 
-	return parseSkillContent(string(data), name)
+	skill, _, err := parseSkillContent(string(data), name)
+	if err != nil {
+		return Skill{}, err
+	}
+	// Record the on-disk path so LoadSkillBody can read it lazily.
+	skill.BodyPath = path
+	return skill, nil
 }
 
-// parseSkillContent parses skill content from a string with a given skill name.
-// Used by both file-based and embedded skill loading.
-func parseSkillContent(content, skillName string) (Skill, error) {
+// parseSkillContent parses skill frontmatter and returns the metadata plus
+// the raw body. The body is returned alongside so callers that already have
+// the file contents in memory (e.g. embedded/bundled skills) can cache it
+// without re-reading.
+func parseSkillContent(content, skillName string) (Skill, string, error) {
 	skill := Skill{Name: skillName}
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
@@ -236,8 +256,7 @@ func parseSkillContent(content, skillName string) (Skill, error) {
 		}
 	}
 
-	skill.Instruction = strings.TrimSpace(body.String())
-	return skill, scanner.Err()
+	return skill, strings.TrimSpace(body.String()), scanner.Err()
 }
 
 // parseFrontmatterLine parses "key: value" from a frontmatter line.
@@ -257,6 +276,97 @@ func FindSkill(skills []Skill, name string) (Skill, bool) {
 		}
 	}
 	return Skill{}, false
+}
+
+// bundledBodyCache holds the markdown body for bundled skills, populated when
+// LoadSkills parses the embed fs. Keyed by skill name; value is the body.
+var bundledBodyCache sync.Map // map[string]string
+
+// fileBodyCache holds the markdown body for file-based skills, keyed by the
+// absolute BodyPath. Populated on first LoadSkillBody call so subsequent
+// activations (and the /context display) don't re-read the same file.
+var fileBodyCache sync.Map // map[string]string
+
+// LoadSkillBody returns the markdown body of a skill on demand. For file-based
+// skills this reads Skill.BodyPath from disk; for bundled skills it looks up
+// the embed-fs cache populated at LoadSkills time. The result is suitable for
+// injection into the system prompt.
+//
+// Returns an error if the skill name is not present in skills, or if the body
+// cannot be read.
+func LoadSkillBody(skills []Skill, name string) (string, error) {
+	skill, ok := FindSkill(skills, name)
+	if !ok {
+		return "", fmt.Errorf("skill %q not found", name)
+	}
+	if skill.Instruction != "" {
+		// Already loaded (e.g. set by a caller after LoadSkills).
+		return skill.Instruction, nil
+	}
+	if skill.Source == "bundled" {
+		if v, ok := bundledBodyCache.Load(name); ok {
+			if s, ok := v.(string); ok {
+				return s, nil
+			}
+		}
+		return "", fmt.Errorf("bundled skill %q has no cached body", name)
+	}
+	if skill.BodyPath == "" {
+		return "", fmt.Errorf("skill %q has no BodyPath", name)
+	}
+	// Check the per-path cache before re-reading.
+	if v, ok := fileBodyCache.Load(skill.BodyPath); ok {
+		if s, ok := v.(string); ok {
+			return s, nil
+		}
+	}
+	data, err := os.ReadFile(skill.BodyPath)
+	if err != nil {
+		return "", fmt.Errorf("reading skill body %s: %w", skill.BodyPath, err)
+	}
+	// Re-parse to extract just the body (frontmatter and body are
+	// delimited; we re-use the same parser to stay consistent).
+	_, body, err := parseSkillContent(string(data), skill.Name)
+	if err != nil {
+		return "", fmt.Errorf("parsing skill body %s: %w", skill.BodyPath, err)
+	}
+	fileBodyCache.Store(skill.BodyPath, body)
+	return body, nil
+}
+
+// SkillBodySize returns the size in bytes of a skill's body if it is already
+// loaded (e.g. by a prior LoadSkillBody call or by a slash-activation that
+// rebuilt the agent with this skill active). The second return value is
+// false if the body has not been loaded — callers should use this to avoid
+// triggering I/O just to render a /context display.
+//
+// For bundled skills the body is always considered loaded (it was read at
+// LoadSkills time).
+func SkillBodySize(skills []Skill, name string) (int, bool) {
+	skill, ok := FindSkill(skills, name)
+	if !ok {
+		return 0, false
+	}
+	if skill.Instruction != "" {
+		return len(skill.Instruction), true
+	}
+	if skill.Source == "bundled" {
+		if v, ok := bundledBodyCache.Load(name); ok {
+			if s, ok := v.(string); ok {
+				return len(s), true
+			}
+		}
+		return 0, false
+	}
+	if skill.BodyPath == "" {
+		return 0, false
+	}
+	if v, ok := fileBodyCache.Load(skill.BodyPath); ok {
+		if s, ok := v.(string); ok {
+			return len(s), true
+		}
+	}
+	return 0, false
 }
 
 // DefaultSkillDirs returns the default skill directories to search.

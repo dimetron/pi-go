@@ -39,7 +39,7 @@ func NewServerV2(cfg Config) *ServerV2 {
 		cfg.PairingTimeout = 5 * time.Minute
 	}
 	if cfg.Addr == "" {
-		cfg.Addr = ":8080"
+		cfg.Addr = DefaultAddr
 	}
 
 	logger := cfg.Logger
@@ -211,7 +211,7 @@ func (s *ServerV2) handleSubmitPairCode(w http.ResponseWriter, r *http.Request) 
 	token, err := s.approveActivePairCode(code)
 	if err != nil {
 		s.log.Warn("pair code rejected", "code", code, "err", err)
-		respondPairSubmitError(w, r, err.Error())
+		respondPairSubmitError(w, r, "Invalid or expired pair code")
 		return
 	}
 	s.log.Info("pair code approved", "code", code)
@@ -395,6 +395,11 @@ func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (PairRes
 	s.activePairCode = code
 	s.activePairToken = token
 	s.activeProject = project
+
+	// The terminal only prints the bootstrap code once. When that pair expires
+	// or is consumed a fresh code is minted here, so surface it or the operator
+	// has no way to learn the code the browser is now waiting on.
+	s.log.Info("pair code issued", "code", code, "project", project)
 
 	return PairResponse{
 		Code:  code,

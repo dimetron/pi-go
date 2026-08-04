@@ -8,7 +8,7 @@ import (
 
 // newTestDrawerService creates an in-memory store + DrawerService with a fakeEmbedder.
 // The fakeEmbedder uses a stub Embedder wrapper so we can inject mock vectors.
-func newTestDrawerService(t *testing.T, embedder *Embedder) *DrawerService {
+func newTestDrawerService(t *testing.T, embedder Embedder) *DrawerService {
 	t.Helper()
 	store := newTestStore(t)
 	cfg := DefaultConfig()
@@ -324,3 +324,49 @@ func TestAddDrawer_DeterministicID(t *testing.T) {
 		t.Errorf("ID = %q, want %q", drawer1.ID, expectedID)
 	}
 }
+
+// Exact duplicates must be rejected before the embedder is consulted — that
+// ordering is the whole point of the content-hash check, since embedding is the
+// expensive half of AddDrawer.
+func TestAddDrawer_ExactDuplicateSkipsEmbedding(t *testing.T) {
+	ctx := t.Context()
+	counter := &countingEmbedder{dim: 8}
+	ds := newTestDrawerService(t, counter)
+
+	first := DrawerInput{Wing: "w", Room: "r", Content: "identical body", SourceFile: "a.go"}
+	if _, err := ds.AddDrawer(ctx, first); err != nil {
+		t.Fatalf("first AddDrawer: %v", err)
+	}
+	afterFirst := counter.calls
+
+	// Same content, different source file => different id => a real duplicate.
+	second := DrawerInput{Wing: "w", Room: "r", Content: "identical body", SourceFile: "b.go"}
+	_, err := ds.AddDrawer(ctx, second)
+
+	var dup *DuplicateError
+	if !errors.As(err, &dup) {
+		t.Fatalf("err = %v, want DuplicateError", err)
+	}
+	if counter.calls != afterFirst {
+		t.Errorf("embedder called %d extra times; exact duplicates must short-circuit before embedding",
+			counter.calls-afterFirst)
+	}
+}
+
+// countingEmbedder records how many times Embed was called.
+type countingEmbedder struct {
+	dim   int
+	calls int
+}
+
+func (c *countingEmbedder) Embed(texts []string) ([][]float32, error) {
+	c.calls++
+	out := make([][]float32, len(texts))
+	for i := range out {
+		out[i] = make([]float32, c.dim)
+		out[i][0] = 1
+	}
+	return out, nil
+}
+
+func (c *countingEmbedder) Close() {}

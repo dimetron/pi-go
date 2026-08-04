@@ -598,6 +598,38 @@ func (m *model) formatContextUsage() string {
 		}
 	}
 
+	// Skills.
+	if len(m.cfg.Skills) > 0 {
+		b.WriteString("\n*Skills* ")
+		fmt.Fprintf(&b, "(%d loaded)\n", len(m.cfg.Skills))
+		// Stable, alphabetical listing for predictable /context output.
+		names := make([]string, 0, len(m.cfg.Skills))
+		byName := make(map[string]extension.Skill, len(m.cfg.Skills))
+		for _, s := range m.cfg.Skills {
+			names = append(names, s.Name)
+			byName[s.Name] = s
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			s := byName[name]
+			source := s.Source
+			if source == "" {
+				source = "user"
+			}
+			var bodyDesc string
+			if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
+				bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
+			} else {
+				bodyDesc = "body: not loaded"
+			}
+			desc := s.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(&b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
+		}
+	}
+
 	// Subagents.
 	if m.cfg.Orchestrator != nil {
 		agents := m.cfg.Orchestrator.List()

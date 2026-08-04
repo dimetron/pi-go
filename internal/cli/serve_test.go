@@ -140,8 +140,8 @@ func TestNewServeCmd_FlagDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting addr flag: %v", err)
 	}
-	if addrVal != ":8080" {
-		t.Errorf("addr default = %q, want ':8080'", addrVal)
+	if addrVal != webserver.DefaultAddr {
+		t.Errorf("addr default = %q, want %q", addrVal, webserver.DefaultAddr)
 	}
 
 	// Check pairing-timeout default

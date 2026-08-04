@@ -74,14 +74,15 @@ specs/
 
 ### features/TOO (Tool Specifications)
 
-| Spec                    | Phases        | Description                                   |
-|-------------------------|---------------|-----------------------------------------------|
-| 000-mcp-support/        | prompt        | MCP (Model Context Protocol) support          |
-| 001-a2a-client/         | idea..summary | A2A client tool specification                 |
-| 002-context-references/ | idea..summary | Context reference resolution for tools        |
-| 003-large-files/        | design        | Large file handling strategy                  |
-| 004-acp-subagent/       | idea..summary | ACP-based subagent tool specification         |
-| 005-otel-fixes/         | idea..summary | OpenTelemetry instrumentation fixes for tools |
+| Spec                            | Phases        | Description                                                                                 |
+|---------------------------------|---------------|---------------------------------------------------------------------------------------------|
+| 000-mcp-support/                | prompt        | MCP (Model Context Protocol) support                                                        |
+| 001-a2a-client/                 | idea..summary | A2A client tool specification                                                               |
+| 002-context-references/         | idea..summary | Context reference resolution for tools                                                      |
+| 003-large-files/                | design        | Large file handling strategy                                                                |
+| 004-acp-subagent/               | idea..summary | ACP-based subagent tool specification                                                       |
+| 005-otel-fixes/                 | idea..summary | OpenTelemetry instrumentation fixes for tools                                               |
+| 017-canopy-embedded-code-index/ | idea..prompt  | Canopy as an embedded structural code index; replaces LSP navigation, keeps LSP diagnostics |
 
 ### features/TST (Testing & Audit)
 

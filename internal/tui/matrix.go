@@ -11,8 +11,18 @@ import (
 )
 
 // matrixChars is a curated snake-like tape for a smooth single-line scrolling
-// effect: soft dot ramps, wave dips, sparkles, braille, and block peaks.
-const matrixChars = "⠀⠀⠁⠂⠄⠠⡀⢀⣀⣠⣤⣶⣷⣿⣿⣿⣷⣶⣤⣠⣀⢀⡀⠠⠄⠂⠁⌣·∙⋅∘◦○◌◎●◎◌○◦∘⋅∙·⠐⠈⠈⠐⠠⢀⣠⣴⣶⣷⣾⣿⣿⣾⣷⣶⣴⣠⢀⠠⠐⠈⠀⌣⌒⌁∿≈~˖⋆✧✦⊹●⊹✦✧⋆˖~≈∿⌁⌒⌣⠀⠁⠂⠄⡀⢀⣀⣠⣤⣶⣿⣶⣤⣠⣀⢀⡀⠄⠂⠁⌣"
+// effect: soft dot ramps rising to solid peaks and back down.
+//
+// Braille only, and that is a hard requirement rather than a style choice. The
+// tape sits on the top row of the frame, so any glyph that renders at the wrong
+// advance width shifts every column after it and drags the rail off its column.
+// Braille (U+2800–U+28FF) is East Asian Neutral — one cell in every width table
+// — and is fully covered by the monospace fonts pi ships against, so it never
+// falls back to another font with a different advance. The earlier tape mixed in
+// ⌒ ⌣ ⌁ ∿ ⊹ ˖ and friends: some are East Asian Ambiguous (two cells wherever the
+// terminal is configured for CJK), and several are missing from JetBrains Mono
+// entirely, which is what drew the "???" clusters over the rules.
+const matrixChars = "⠀⠀⠁⠂⠄⠠⡀⢀⣀⣠⣤⣶⣷⣿⣿⣿⣷⣶⣤⣠⣀⢀⡀⠠⠄⠂⠁⠃⠇⡇⣇⣧⣷⣿⣷⣧⣇⡇⠇⠃⠐⠈⠈⠐⠠⢀⣠⣴⣶⣷⣾⣿⣿⣾⣷⣶⣴⣠⢀⠠⠐⠈⠀⠁⠉⠙⠹⢹⣹⣽⣿⣽⣹⢹⠹⠙⠉⠁⠀⠁⠂⠄⡀⢀⣀⣠⣤⣶⣿⣶⣤⣠⣀⢀⡀⠄⠂⠁⠀"
 
 // matrixRunes is the precomputed rune slice from matrixChars.
 var matrixRunes = []rune(matrixChars)

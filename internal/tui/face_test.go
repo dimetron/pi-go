@@ -18,7 +18,7 @@ func TestFaceRenderer_SetMood(t *testing.T) {
 	}{
 		{MoodIdle, "◕ ◕"},
 		{MoodThinking, "◔ ◕"},
-		{MoodProcessing, "◑ ◑"},
+		{MoodProcessing, "◔ ◔"},
 		{MoodToolCall, "▸ ◂"},
 		{MoodSpeaking, "◕ ◡"},
 		{MoodHappy, "✧ ✧"},

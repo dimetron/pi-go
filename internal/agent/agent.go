@@ -633,13 +633,33 @@ func loadInstructionFrom(baseInstruction, cwd, home string) string {
 	skillDirs := extension.DefaultSkillDirsIn(cwd)
 	skills, err := extension.LoadSkills(skillDirs...)
 	if err == nil && len(skills) > 0 {
-		instruction += "\n\n# Available Skills\n\n"
-		for _, s := range skills {
-			instruction += fmt.Sprintf("- /%s: %s\n", s.Name, s.Description)
-		}
+		instruction += appendSkillsMenu(skills)
 	}
 
 	return instruction
+}
+
+// appendSkillsMenu formats the "# Available Skills" block for a pre-loaded
+// skill slice. Exposed so callers that already have skills in hand (e.g. the
+// TUI) don't trigger a second LoadSkills.
+func appendSkillsMenu(skills []extension.Skill) string {
+	var b strings.Builder
+	b.WriteString("\n\n# Available Skills\n\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "- /%s: %s\n", s.Name, s.Description)
+	}
+	return b.String()
+}
+
+// AppendActiveSkill returns prompt with an "# Active Skill" section appended
+// for the given skill body. Use this on top of a prompt produced by
+// LoadInstruction to activate a skill for one turn (Level-2 injection).
+//
+// The format is:
+//
+//	\n\n# Active Skill: <name>\n\n<body>\n
+func AppendActiveSkill(prompt string, skill extension.Skill, body string) string {
+	return prompt + fmt.Sprintf("\n\n# Active Skill: %s\n\n%s\n", skill.Name, body)
 }
 
 type contextFile struct {

@@ -2,32 +2,49 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pi-Go Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        body {
+        html, body {
             background: #1e1e1e;
             margin: 0;
             padding: 0;
+            height: 100%;
             overflow: hidden;
         }
-        
+
+        /* Override body styles for terminal page */
+        body.terminal-page {
+            display: block;
+            align-items: unset;
+            justify-content: unset;
+        }
+
         .container {
             background: transparent;
             box-shadow: none;
             padding: 0;
             max-width: 100%;
-            height: 100vh;
+            height: 100%;
         }
-        
+
+        /* dvh follows the mobile URL bar as it slides away; the fallback keeps
+           desktop browsers without dvh support working. border-box stops the
+           padding from pushing the terminal past the viewport, which used to
+           clip the bottom row. */
         #terminal {
+            box-sizing: border-box;
+            width: 100%;
             height: 100vh;
-            padding: 10px;
+            height: 100dvh;
+            padding: 8px;
+            padding-bottom: max(8px, env(safe-area-inset-bottom));
+            overflow: hidden;
         }
-        
+
         .connection-status {
             position: fixed;
             top: 10px;
@@ -37,32 +54,31 @@
             font-size: 12px;
             font-weight: 500;
             z-index: 1000;
+            opacity: 0.85;
+            transition: opacity 0.4s ease;
+            pointer-events: none;
         }
-        
+
+        /* A steady green badge over the top-right corner of the TUI is just
+           noise; fade it out once the link is healthy. */
         .connection-status.connected {
             background: #28a745;
             color: white;
+            opacity: 0;
         }
-        
+
         .connection-status.disconnected {
             background: #dc3545;
             color: white;
         }
-        
+
         .connection-status.connecting {
             background: #ffc107;
             color: black;
         }
-        
+
         .hidden {
             display: none !important;
-        }
-        
-        /* Override body styles for terminal page */
-        body.terminal-page {
-            display: block;
-            align-items: unset;
-            justify-content: unset;
         }
     </style>
 </head>
@@ -71,10 +87,11 @@
         Connecting...
     </div>
     <div id="terminal"></div>
-    
+
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
     <script>
         // Terminal setup
         const terminal = new Terminal({
@@ -82,7 +99,14 @@
             fontSize: 14,
             lineHeight: 1.2,
             letterSpacing: 0,
-            fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
+            // Every fallback here is a fixed-pitch face with braille and
+            // box-drawing coverage. A proportional font anywhere in the chain
+            // (or a face missing a glyph, which sends the browser hunting for
+            // one that has it) renders that run at a different advance and the
+            // row stops lining up with the rest of the frame.
+            fontFamily: '"JetBrains Mono", Menlo, "DejaVu Sans Mono", "Liberation Mono", Consolas, monospace',
+            scrollback: 5000,
+            macOptionIsMeta: true,
             theme: {
                 background: '#1e1e1e',
                 foreground: '#d4d4d4',
@@ -106,24 +130,139 @@
                 brightWhite: '#ffffff'
             }
         });
-        
+
         // Addons
         const fitAddon = new FitAddon.FitAddon();
         const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-        
+
+        const termEl = document.getElementById('terminal');
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
-        terminal.open(document.getElementById('terminal'));
-        fitAddon.fit();
-        
+
+        // Pin the character-width table to Unicode 11. xterm's built-in table is
+        // Unicode 6, which disagrees with the Go side (charmbracelet/x/ansi) on
+        // a long list of runes the TUI draws — the frame is then measured one
+        // width and painted another, and rows carrying those glyphs sit a cell
+        // off. With unicode11 loaded, both ends resolve East Asian Ambiguous to
+        // a single cell and the grid lines up.
+        if (window.Unicode11Addon) {
+            terminal.loadAddon(new Unicode11Addon.Unicode11Addon());
+            terminal.unicode.activeVersion = '11';
+        }
+
+        terminal.open(termEl);
+
         // Connection status
         const statusEl = document.getElementById('status');
-        
+
         function setStatus(status, text) {
             statusEl.className = 'connection-status ' + status;
             statusEl.textContent = text;
         }
-        
+
+        // ---------------------------------------------------------------
+        // Sizing
+        //
+        // Resizing the terminal is deliberately debounced rather than run per
+        // animation frame. Every fit reflows the buffer xterm already holds to
+        // the new column count, and that buffer was drawn by a TUI that still
+        // thinks it is the old width — the frame breaks apart, long lines hard
+        // wrap and the right-hand rail lands on the wrong row. Holding the old
+        // geometry until the drag settles means the reflow happens once,
+        // immediately followed by a full repaint from the resized PTY.
+        // ---------------------------------------------------------------
+        const RESIZE_DEBOUNCE = 120;
+
+        let lastSentSize = '';
+        let resizeTimer = null;
+
+        // The PTY must never be wider than the browser terminal: if it is, every
+        // full-width line the TUI draws overflows and xterm wraps it onto the
+        // next row. terminal.cols/rows are the dimensions xterm actually applied,
+        // so they are the only safe values to report — proposeDimensions() is
+        // what xterm intends to become, not what it is.
+        function sendSize(force) {
+            const size = terminal.cols + 'x' + terminal.rows;
+            if (!force && size === lastSentSize) {
+                return;
+            }
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            lastSentSize = size;
+            sendMessage('resize', size);
+        }
+
+        function applyFit() {
+            // A hidden tab or a display:none ancestor measures as 0×0; fitting
+            // then would collapse the terminal to its 1×1 minimum and force a
+            // full reflow of the TUI once the tab comes back.
+            if (document.hidden || termEl.clientWidth === 0 || termEl.clientHeight === 0) {
+                return;
+            }
+            try {
+                fitAddon.fit();
+            } catch (e) {
+                console.warn('fit failed:', e);
+            }
+        }
+
+        function scheduleFit(force) {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                applyFit();
+                sendSize(force === true);
+            }, RESIZE_DEBOUNCE);
+        }
+
+        // Watch the container, not just the window: this also catches zoom,
+        // rotation, on-screen keyboards and the mobile URL bar collapsing —
+        // none of which reliably fire a window resize event.
+        if (window.ResizeObserver) {
+            new ResizeObserver(function () {
+                scheduleFit();
+            }).observe(termEl);
+        }
+        window.addEventListener('resize', function () {
+            scheduleFit();
+        });
+        window.addEventListener('orientationchange', function () {
+            scheduleFit();
+        });
+        window.addEventListener('pageshow', function () {
+            scheduleFit(true);
+        });
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', function () {
+                scheduleFit();
+            });
+        }
+
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) {
+                // Coming back from a background tab: re-measure and force the
+                // size through so the TUI redraws whatever we missed.
+                scheduleFit(true);
+            }
+        });
+
+        // Web fonts change the cell metrics under xterm. Fitting before the font
+        // lands measures the fallback monospace and leaves the column count off
+        // by several, which is what made long lines wrap mid-render.
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(function () {
+                terminal.clearTextureAtlas && terminal.clearTextureAtlas();
+                scheduleFit(true);
+            });
+        }
+
+        applyFit();
+
+        // ---------------------------------------------------------------
+        // Session + connection
+        // ---------------------------------------------------------------
+
         // Persist session ID across page refreshes so reconnects reattach
         // to the same PTY process.
         const sessionID = sessionStorage.getItem('pi_session') || (function() {
@@ -136,17 +275,17 @@
             sessionStorage.setItem('pi_session', id);
             return id;
         })();
-        
+
         // WebSocket connection
         let ws;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 20;
-        
+
         // Keep-alive: send app-level pings and detect dead connections.
         let heartbeatTimer = null;
         let pongReceived = true;
         const HEARTBEAT_INTERVAL = 25000; // 25s — under the server's 30s ping
-        
+
         function startHeartbeat() {
             stopHeartbeat();
             pongReceived = true;
@@ -160,37 +299,34 @@
                 sendMessage('ping', '');
             }, HEARTBEAT_INTERVAL);
         }
-        
+
         function stopHeartbeat() {
             if (heartbeatTimer) {
                 clearInterval(heartbeatTimer);
                 heartbeatTimer = null;
             }
         }
-        
+
         function connect() {
             setStatus('connecting', reconnectAttempts > 0 ? 'Reconnecting...' : 'Connecting...');
-            
+
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsURL = `${protocol}//${window.location.host}/ws/${sessionID}`;
-            
+
             ws = new WebSocket(wsURL);
-            
+
             ws.onopen = function() {
                 setStatus('connected', 'Connected');
-                if (reconnectAttempts > 0) {
-                    terminal.write('\r\n[Reconnected]\r\n');
-                }
                 reconnectAttempts = 0;
                 startHeartbeat();
-                
-                // Send terminal size so the PTY is resized to match.
-                const dims = fitAddon.proposeDimensions();
-                if (dims) {
-                    sendMessage('resize', `${dims.cols}x${dims.rows}`);
-                }
+
+                // Re-measure and always push the size, even when it is identical
+                // to the one this tab reported before the drop: the server uses
+                // the first resize of an attachment to trigger a full redraw.
+                applyFit();
+                sendSize(true);
             };
-            
+
             ws.onmessage = function(event) {
                 try {
                     const msg = JSON.parse(event.data);
@@ -202,14 +338,17 @@
                         terminal.write('\r\n\r\n[Session ended]\r\n');
                         sessionStorage.removeItem('pi_session');
                         stopHeartbeat();
+                    } else if (msg.type === 'error') {
+                        terminal.write('\r\n[Error] ' + msg.data + '\r\n');
                     }
                 } catch (e) {
                     terminal.write(event.data);
                 }
             };
-            
+
             ws.onclose = function() {
                 stopHeartbeat();
+                lastSentSize = '';
 
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectAttempts++;
@@ -220,37 +359,29 @@
                     setStatus('disconnected', 'Disconnected');
                 }
             };
-            
+
             ws.onerror = function(error) {
                 console.error('WebSocket error:', error);
             };
         }
-        
+
         function sendMessage(type, data) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type, data }));
             }
         }
-        
+
         // Handle terminal input
         terminal.onData(function(data) {
             sendMessage('input', data);
         });
-        
-        // Handle resize
-        window.addEventListener('resize', function() {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-                sendMessage('resize', `${dims.cols}x${dims.rows}`);
-            }
+
+        // xterm resizes itself for reasons beyond our fit calls (DECCOLM, addon
+        // internals) — mirror any dimension change to the PTY.
+        terminal.onResize(function () {
+            sendSize(false);
         });
-        
-        // Initial resize
-        setTimeout(function() {
-            fitAddon.fit();
-        }, 100);
-        
+
         // Connect
         connect();
     </script>

@@ -233,7 +233,7 @@ func TestSidebarModeLinesRunChecklist(t *testing.T) {
 	}
 
 	out := plain(sidebarModeLines(in, 27))
-	for _, want := range []string{"Run: my-spec", "cycle 2/5 · implement", "[x] write tests", "[ ] make them pass"} {
+	for _, want := range []string{"Run: my-spec", "cycle 2/5 ∙ implement", "[x] write tests", "[ ] make them pass"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in:\n%s", want, out)
 		}
@@ -296,8 +296,8 @@ func TestAgentRowIcons(t *testing.T) {
 		{"done", "✓"},
 		{"failed", "✗"},
 		{"killed", "⊘"},
-		{"queued", "·"},
-		{"", "·"},
+		{"queued", "∙"},
+		{"", "∙"},
 	}
 
 	for _, tt := range tests {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,7 +37,7 @@ Each browser tab gets its own isolated agent session.`,
 		RunE: runServe,
 	}
 
-	cmd.Flags().StringVar(&flagServeAddr, "addr", ":8080", "Listen address for the web server")
+	cmd.Flags().StringVar(&flagServeAddr, "addr", webserver.DefaultAddr, "Listen address for the web server")
 	cmd.Flags().StringVar(&flagServeProject, "project", "", "Default project path (default: current directory)")
 	cmd.Flags().DurationVar(&flagServePairingTimeout, "pairing-timeout", 5*time.Minute, "Pairing code expiry time")
 	cmd.Flags().StringVar(&flagServeModel, "model", "", "LLM model to use for the web terminal (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
@@ -101,7 +102,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating initial pair code: %w", err)
 	}
 
-	fmt.Printf("Pi-Go web server started at http://%s\n", flagServeAddr)
+	fmt.Printf("Pi-Go web server started at http://%s\n", browsableAddr(server.Addr()))
 	fmt.Printf("Project: %s\n", project)
 	if flagServeModel != "" {
 		fmt.Printf("Model: %s\n", flagServeModel)
@@ -133,6 +134,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Server stopped")
 	return nil
+}
+
+// browsableAddr turns a listen address into one a browser can open. Wildcard
+// binds (":8765", "0.0.0.0:8765", "[::]:8765") are printed as localhost so the
+// URL in the terminal is clickable.
+func browsableAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // GetServePairingManager returns the pairing manager from the server for mobile app approval.

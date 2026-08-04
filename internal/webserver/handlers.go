@@ -34,10 +34,16 @@ type Config struct {
 	Logger         *slog.Logger // if nil, a no-op logger is used
 }
 
+// DefaultAddr is the listen address used when Config.Addr is empty. 8765 is
+// picked to stay clear of the 8080/3000 range every other local dev server
+// squats on, so `pi serve` does not collide with whatever the project itself
+// is running.
+const DefaultAddr = ":8765"
+
 // NewServer creates a new web server with the given configuration.
 func NewServer(cfg Config) *Server {
 	if cfg.Addr == "" {
-		cfg.Addr = ":8080"
+		cfg.Addr = DefaultAddr
 	}
 	if cfg.StaticDir == "" {
 		cfg.StaticDir = "static"

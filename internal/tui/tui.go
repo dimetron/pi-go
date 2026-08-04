@@ -2318,7 +2318,7 @@ func (m *model) renderBranchPopup() string {
 
 		var line string
 		if isActive {
-			line = fmt.Sprintf("  ● %s (current)", branch)
+			line = fmt.Sprintf("  ◉ %s (current)", branch)
 		} else {
 			line = fmt.Sprintf("    %s", branch)
 		}

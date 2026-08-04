@@ -178,7 +178,7 @@ func TestNewEmbedder_InvalidPath(t *testing.T) {
 
 func TestEmbedder_Close_NilSession(t *testing.T) {
 	// Test that Close is safe with nil session
-	e := &Embedder{}
+	e := &localEmbedder{}
 	e.Close() // Should not panic with nil session
 }
 
@@ -221,7 +221,7 @@ func TestDetectPlatformOnnxFile_InEmbedder(t *testing.T) {
 func TestEmbedder_Close_WithSession(t *testing.T) {
 	// Test that Close handles the case where session is non-nil but not initialized
 	// This exercises the Close method code path even when we can't create a real session
-	e := &Embedder{}
+	e := &localEmbedder{}
 	// Close should not panic
 	e.Close()
 }

@@ -783,3 +783,53 @@ func TestMaskServerURL(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandFormatContextUsage_SkillsSection(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg: Config{
+			ModelName: "test-model",
+			Skills: []extension.Skill{
+				{Name: "alpha", Description: "First skill", Source: "bundled"},
+				{Name: "beta", Description: "Second skill", Source: "user"},
+			},
+		},
+	}
+
+	result := m.formatContextUsage()
+
+	if !strings.Contains(result, "*Skills*") {
+		t.Errorf("expected Skills header, got %q", result)
+	}
+	if !strings.Contains(result, "(2 loaded)") {
+		t.Errorf("expected '(2 loaded)', got %q", result)
+	}
+	// Alpha should come before beta (alphabetical).
+	alphaIdx := strings.Index(result, "/alpha")
+	betaIdx := strings.Index(result, "/beta")
+	if alphaIdx < 0 || betaIdx < 0 || alphaIdx > betaIdx {
+		t.Errorf("expected alpha before beta, got alpha=%d beta=%d", alphaIdx, betaIdx)
+	}
+	// Source tag should be present.
+	if !strings.Contains(result, "[bundled]") {
+		t.Errorf("expected [bundled] tag, got %q", result)
+	}
+	if !strings.Contains(result, "[user]") {
+		t.Errorf("expected [user] tag, got %q", result)
+	}
+	// No body loaded yet → "body: not loaded" for both.
+	if !strings.Contains(result, "body: not loaded") {
+		t.Errorf("expected 'body: not loaded' for unloaded skills, got %q", result)
+	}
+}
+
+func TestCommandFormatContextUsage_SkillsSectionNoSkills(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		cfg:       Config{ModelName: "test-model"},
+	}
+	result := m.formatContextUsage()
+	if strings.Contains(result, "*Skills*") {
+		t.Errorf("expected no Skills section when no skills loaded, got %q", result)
+	}
+}

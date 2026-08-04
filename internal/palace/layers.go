@@ -13,12 +13,12 @@ import (
 // L3 = search (delegated to DrawerService.Search).
 type MemoryStack struct {
 	store    PalaceStore
-	embedder *Embedder
+	embedder Embedder
 	config   PalaceConfig
 }
 
 // NewMemoryStack creates a MemoryStack from the given store, embedder, and config.
-func NewMemoryStack(store PalaceStore, embedder *Embedder, config PalaceConfig) *MemoryStack {
+func NewMemoryStack(store PalaceStore, embedder Embedder, config PalaceConfig) *MemoryStack {
 	return &MemoryStack{
 		store:    store,
 		embedder: embedder,

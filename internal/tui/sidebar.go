@@ -255,7 +255,7 @@ func sidebarModeLines(in SidebarRenderInput, innerW int) []string {
 func sidebarRunLines(in SidebarRenderInput, innerW int) []string {
 	lines := []string{
 		sidebarHeading.Render(truncateLabel(fmt.Sprintf("  Run: %s", in.RunSpec), innerW+2)),
-		sidebarStyle(sidebarPeachHex).Render(fmt.Sprintf("  cycle %d/%d · %s",
+		sidebarStyle(sidebarPeachHex).Render(fmt.Sprintf("  cycle %d/%d ∙ %s",
 			in.RunCycle, in.RunMaxCycle, in.RunPhase)),
 		"",
 	}
@@ -378,7 +378,7 @@ func agentRow(status, name string) string {
 	case "killed":
 		return sidebarStyle(sidebarOverlayHex).Render("  ⊘ " + name)
 	default:
-		return sidebarDim.Render("  · " + name)
+		return sidebarDim.Render("  ∙ " + name)
 	}
 }
 
@@ -476,7 +476,7 @@ func sidebarFrame(in SidebarRenderInput, lines []string, w int) string {
 	targetH := max(0, in.Height-matrixH-statusH-ruleH)
 	// Fill remaining space with subtle dim separators.
 	for len(contentLines) < targetH {
-		contentLines = append(contentLines, sidebarDim.Render("  ···"))
+		contentLines = append(contentLines, sidebarDim.Render("  ∙∙∙"))
 	}
 	if len(contentLines) > targetH {
 		contentLines = contentLines[:targetH]

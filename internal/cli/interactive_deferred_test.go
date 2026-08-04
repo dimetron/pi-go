@@ -360,3 +360,37 @@ func TestDeferredInitTotal(t *testing.T) {
 		t.Fatalf("deferredInitTotal() with memory and MCP = %d, want %d", got, want)
 	}
 }
+
+func TestDeferredInit_WithSkillDir(t *testing.T) {
+	resetGlobalFlags(t)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Create a skill file.
+	skillsDir := filepath.Join(tmpHome, ".pi-go", "skills", "my-skill")
+	_ = os.MkdirAll(skillsDir, 0o755)
+	_ = os.WriteFile(filepath.Join(skillsDir, "SKILL.md"),
+		[]byte("---\nname: my-skill\ndescription: test skill\n---\n\nBody"), 0o644)
+
+	flagMemoryOff = true
+	llm := &cliMockLLM{name: "test-skill", response: "ok"}
+	tracker := guardrail.New(0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ch := make(chan tui.InitEvent, 128)
+	var res initResources
+	defer res.cleanup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deferredInit(ctx, config.Config{}, llm, "openai", tracker, tmpHome, tmpHome, "", ch, &res)
+		close(ch)
+	}()
+
+	for range ch {
+	}
+	<-done
+}
