@@ -174,6 +174,10 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(lower, "ollama/") {
 		return "ollama"
 	}
+	// opencode/ prefix → OpenCode Go provider.
+	if strings.HasPrefix(lower, "opencode/") {
+		return "opencode"
+	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return "ollama"
@@ -489,6 +493,7 @@ func APIKeys() map[string]string {
 		"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		"mistral":   {"MISTRAL_API_KEY"},
 		"ollama":    {"OLLAMA_API_KEY"},
+		"opencode":  {"OPENCODE_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -512,6 +517,7 @@ func BaseURLs() map[string]string {
 		"gemini":    "GEMINI_BASE_URL",
 		"mistral":   "MISTRAL_BASE_URL",
 		"ollama":    "OLLAMA_HOST",
+		"opencode":  "OPENCODE_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {

@@ -99,6 +99,9 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"gemini-2.5-pro", "gemini"},
 		{"minimax-m3:cloud", "ollama"},
 		{"glm-5.2:cloud", "ollama"},
+		{"opencode/kimi-k3", "opencode"},
+		{"opencode/minimax-m3", "opencode"},
+		{"opencode/gpt-5.6-luna", "opencode"},
 	}
 
 	for _, tt := range tests {
@@ -213,6 +216,7 @@ func TestAPIKeys(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZUREOPENAI_API_KEY", "azure-test-key")
 	t.Setenv("AZURE_API_KEY", "")
+	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
@@ -220,6 +224,9 @@ func TestAPIKeys(t *testing.T) {
 	}
 	if keys["azure"] != "azure-test-key" {
 		t.Errorf("expected azure key, got %q", keys["azure"])
+	}
+	if keys["opencode"] != "opencode-test-key" {
+		t.Errorf("expected opencode key, got %q", keys["opencode"])
 	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")
@@ -230,6 +237,7 @@ func TestBaseURLs(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", "http://localhost:11434")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("GEMINI_BASE_URL", "http://localhost:8080")
+	t.Setenv("OPENCODE_BASE_URL", "http://localhost:9999")
 
 	urls := BaseURLs()
 	if urls["anthropic"] != "http://localhost:11434" {
@@ -237,6 +245,9 @@ func TestBaseURLs(t *testing.T) {
 	}
 	if urls["gemini"] != "http://localhost:8080" {
 		t.Errorf("expected gemini base URL, got %q", urls["gemini"])
+	}
+	if urls["opencode"] != "http://localhost:9999" {
+		t.Errorf("expected opencode base URL, got %q", urls["opencode"])
 	}
 	if _, ok := urls["openai"]; ok {
 		t.Error("expected no openai base URL for empty env var")

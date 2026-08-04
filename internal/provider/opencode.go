@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"google.golang.org/adk/v2/model"
@@ -14,8 +15,9 @@ import (
 const opencodeDefaultBaseURL = "https://opencode.ai/zen/go/v1"
 
 // opencodeGoModelCatalog maps each officially documented OpenCode Go model ID
-// to its endpoint family. Values: "chat" (OpenAI chat/completions), "responses"
-// (OpenAI responses), "messages" (Anthropic).
+// to the API family it is served through. Values: "chat"/"responses" (both go
+// through the OpenAI-compatible client; the endpoint is auto-selected by model
+// ID inside NewOpenAI via modelNeedsResponses), and "messages" (Anthropic).
 //
 // Only the 19 officially documented models are included. Undocumented runtime
 // extras (glm-5, kimi-k2.5, qwen3.5-plus, mimo-v2-pro, mimo-v2-omni,
@@ -48,12 +50,12 @@ func opencodeAnthropicBaseURL(baseURL string) string {
 	return strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
 }
 
-// NewOpenCode creates an OpenCode Go model.LLM, routing the model to its
-// endpoint family based on the hardcoded catalog.
+// NewOpenCode creates an OpenCode Go model.LLM, routing the model to the client
+// that serves its API family based on the hardcoded catalog.
 //
-//   - "chat" models → NewOpenAI (chat/completions, Authorization: Bearer)
-//   - "responses" models → NewOpenAI (responses, Authorization: Bearer)
-//   - "messages" models → NewAnthropic (messages, x-api-key)
+//   - "chat" and "responses" → NewOpenAI (OpenAI-compatible; NewOpenAI picks the
+//     chat/completions vs responses endpoint internally from the model ID)
+//   - "messages" → NewAnthropic (Anthropic messages, x-api-key)
 //
 // Unknown models return an error. The opencode/ prefix must already be stripped.
 func NewOpenCode(ctx context.Context, modelName, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
@@ -63,7 +65,8 @@ func NewOpenCode(ctx context.Context, modelName, apiKey, baseURL, thinkingLevel 
 
 	family, ok := opencodeGoModelCatalog[modelName]
 	if !ok {
-		return nil, fmt.Errorf("unknown OpenCode Go model %q", modelName)
+		return nil, fmt.Errorf("unknown OpenCode Go model %q. Available models: %s",
+			modelName, formatOpenCodeModelList())
 	}
 
 	switch family {
@@ -75,4 +78,16 @@ func NewOpenCode(ctx context.Context, modelName, apiKey, baseURL, thinkingLevel 
 	default:
 		return nil, fmt.Errorf("unknown OpenCode Go endpoint family %q for model %q", family, modelName)
 	}
+}
+
+// formatOpenCodeModelList returns a sorted, comma-separated list of the
+// officially documented OpenCode Go model IDs, used in error messages so users
+// can see which models are supported when they pick an unknown one.
+func formatOpenCodeModelList() string {
+	models := make([]string, 0, len(opencodeGoModelCatalog))
+	for m := range opencodeGoModelCatalog {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+	return strings.Join(models, ", ")
 }
