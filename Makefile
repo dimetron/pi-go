@@ -8,9 +8,17 @@
 # (build, install, test) compiles the same way.
 export GOEXPERIMENT := simd
 
+# Build verbosity. `-v` is on by default: it names each package as it compiles,
+# which is the difference between "the build is working through a cold module
+# cache" and "the build is wedged" — the case that matters in a fresh dev
+# container. `make build V=1` adds `-x`, which echoes every underlying tool
+# invocation; use it when the failure is in how a command was assembled, not in
+# what it compiled.
+GO_BUILD_FLAGS := -v $(if $(filter-out 0,$(V)),-x,)
+
 build:
-	go build -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
-	go build ./cmd/pi-sandbox
+	go build $(GO_BUILD_FLAGS) -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
+	go build $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
 
 install: build
 
@@ -27,7 +35,7 @@ build-accel: deps-accel
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="-I$$(brew --prefix onnxruntime)/include" \
 	CGO_LDFLAGS="-L$$(brew --prefix onnxruntime)/lib -lonnxruntime -L$$HOME/.pi-go/lib" \
-	go build -tags ORT -o pi ./cmd/pi
+	go build $(GO_BUILD_FLAGS) -tags ORT -o pi ./cmd/pi
 
 # hugot's ORT/XLA paths statically link the Rust HF tokenizers; only the pure-Go
 # path uses the Go tokenizer. Prebuilt for darwin-arm64.

@@ -60,6 +60,8 @@ pi-go dev container ready.
   make build          make lint          make test
   make test-all       make check-cve     make test-coverage
 
+  kind create cluster --name pi-go        # docker-in-docker; kubectl + helm ready
+
 Notes
   * Commit signing (gpg.format=ssh via 1Password's op-ssh-sign) does not work
     in the container — op-ssh-sign is a macOS host binary. Commit from the

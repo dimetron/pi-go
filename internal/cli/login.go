@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/browser"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/provider"
 )
@@ -67,6 +66,8 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	var result *auth.Result
 	var err error
 	switch {
+	case prov.CodexDeviceAuth:
+		result, err = runCodexDeviceFlow(ctx, prov)
 	case prov.UseDeviceFlow:
 		result, err = runDeviceFlow(ctx, prov)
 	case prov.ManualCode:
@@ -97,6 +98,26 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runCodexDeviceFlow drives OpenAI's device auth. Unlike the PKCE path there is
+// no callback to wait on, so the browser is a convenience: the user can equally
+// well open the URL on a phone, which is the point in a headless container.
+func runCodexDeviceFlow(ctx context.Context, prov auth.Provider) (*auth.Result, error) {
+	sess, err := auth.StartCodexDeviceFlow(ctx, prov)
+	if err != nil {
+		return nil, fmt.Errorf("codex device auth: %w", err)
+	}
+
+	fmt.Printf("Open this URL and enter the code:\n\n  %s\n\n  Code: %s\n\n", sess.VerificationURL, sess.UserCode)
+	_ = browser.Open(sess.VerificationURL)
+	fmt.Println("Waiting for authorization...")
+
+	result, err := auth.CompleteCodexDeviceFlow(ctx, prov, sess)
+	if err != nil {
+		return nil, fmt.Errorf("codex device auth: %w", err)
+	}
+	return result, nil
 }
 
 func runDeviceFlow(ctx context.Context, prov auth.Provider) (*auth.Result, error) {
@@ -218,18 +239,12 @@ func maskKey(key string) string {
 var openBrowser = openBrowserDefault
 
 func openBrowserDefault(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Run()
-	case "linux":
-		if err := exec.Command("xdg-open", url).Run(); err != nil {
-			return exec.Command("open", url).Run()
-		}
-		return nil
-	case "windows":
-		return exec.Command("cmd", "/c", "start", "", url).Run()
-	default:
-		fmt.Printf("Open this URL in your browser: %s\n", url)
-		return nil
+	if err := browser.Open(url); err != nil {
+		// Having no handler is the normal case in a dev container or over a
+		// plain SSH session, and the callback server is already listening — so
+		// print the URL and let the user finish the flow by hand rather than
+		// fail a login that is one paste away from working.
+		fmt.Printf("\nOpen this URL to continue:\n\n  %s\n\n", url)
 	}
+	return nil
 }

@@ -3,14 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/browser"
 	"github.com/dimetron/pi-go/internal/config"
 )
 
@@ -109,6 +108,9 @@ func (m *model) loginStart(prov auth.Provider) (tea.Model, tea.Cmd) {
 
 	// Auto-select: device flow > manual-code > PKCE > manual.
 	switch {
+	case prov.CodexDeviceAuth && prov.DeviceURL != "":
+		m.logLogin("selected codex device auth for %s", prov.Name)
+		return m.loginStartCodexDeviceFlow(prov)
 	case prov.UseDeviceFlow && prov.DeviceURL != "":
 		m.logLogin("selected device flow for %s", prov.Name)
 		return m.loginStartDeviceFlow(prov)
@@ -222,6 +224,69 @@ func (m *model) loginStartPKCEFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 				log.Errorf("login: pkce callback/exchange failed provider=%s err=%v", prov.Name, result.Err)
 			} else {
 				log.Info(fmt.Sprintf("login: pkce callback/exchange ok provider=%s key_present=%v", prov.Name, result.APIKey != ""))
+			}
+		}
+		return loginSSOResultMsg{result: result}
+	}
+}
+
+// loginStartCodexDeviceFlow runs OpenAI's device auth. The code is rendered in
+// the chat pane, so the user can approve it from any device — nothing here
+// depends on this machine being able to reach a browser or serve a callback.
+func (m *model) loginStartCodexDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
+	m.login = &loginState{
+		phase:    "device",
+		provider: prov.Name,
+	}
+
+	// Requesting the code is a single fast call; only the polling is slow, so
+	// it runs synchronously to keep the prompt and the code in one frame.
+	sess, err := auth.StartCodexDeviceFlow(context.Background(), prov)
+	if err != nil {
+		m.login = nil
+		m.logLogin("codex device auth failed to start provider=%s err=%v", prov.Name, err)
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Login error for %s: %v", prov.Name, err),
+		})
+		return m, nil
+	}
+
+	_ = openBrowser(sess.VerificationURL)
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf(
+			"**%s Device Login**\n\n"+
+				"1. Open: %s\n"+
+				"2. Enter code: **`%s`**\n"+
+				"3. Approve access\n\n"+
+				"Waiting for authorization... Press **Esc** to cancel.",
+			prov.Name, sess.VerificationURL, sess.UserCode),
+	})
+
+	log := m.cfg.Logger
+	if log != nil {
+		log.Info(fmt.Sprintf("login: codex device prompt provider=%s verify=%s", prov.Name, sess.VerificationURL))
+	}
+
+	return m, func() tea.Msg {
+		// Bounded by the server's own 15-minute expiry in CompleteCodexDeviceFlow;
+		// this is the outer stop so a canceled TUI does not leak the poller.
+		ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
+		defer cancel()
+
+		result, err := auth.CompleteCodexDeviceFlow(ctx, prov, sess)
+		if err != nil {
+			if log != nil {
+				log.Errorf("login: codex device auth aborted provider=%s err=%v", prov.Name, err)
+			}
+			result = &auth.Result{Provider: prov.Name, Err: err}
+		} else if log != nil {
+			if result.Err != nil {
+				log.Errorf("login: codex device auth failed provider=%s err=%v", prov.Name, result.Err)
+			} else {
+				log.Info(fmt.Sprintf("login: codex device auth ok provider=%s key_present=%v", prov.Name, result.APIKey != ""))
 			}
 		}
 		return loginSSOResultMsg{result: result}
@@ -433,17 +498,8 @@ func maskKey(key string) string {
 // It is a var so tests can replace it with a mock.
 var openBrowser = openBrowserDefault
 
+// The TUI already renders the URL alongside the prompt, so callers ignore the
+// error and a missing handler costs the user nothing but a copy-paste.
 func openBrowserDefault(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
-	return cmd.Start()
+	return browser.Open(url)
 }
