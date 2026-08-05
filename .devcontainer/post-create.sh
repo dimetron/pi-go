@@ -28,12 +28,7 @@ go install github.com/go-delve/delve/cmd/dlv@latest
 # goreleaser: dry-runs of .goreleaser.yaml (`goreleaser release --snapshot --clean`).
 go install github.com/goreleaser/goreleaser/v2@latest
 
-# ci.yml asks the action for "v2.11", which resolves to the newest v2.11.x —
-# so pin the patch here rather than v2.11.0, or the container lints with an
-# older ruleset than CI does.
-echo "==> golangci-lint (pinned to the v2.11 line used by .github/workflows/ci.yml)"
-curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh |
-  sudo sh -s -- -b /usr/local/bin v2.11.4
+# golangci-lint is installed by the go feature, pinned in devcontainer.json.
 
 echo "==> grype (make check-cve)"
 curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh |

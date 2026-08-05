@@ -21,9 +21,12 @@
     // toolchain with `go-version-file: go.mod`.
     "ghcr.io/devcontainers/features/go:1": {
       "version": "1.26.5",
-      // Installed pinned to v2.11 in post-create.sh to match the CI job;
-      // the feature's own copy would be an unpinned "latest".
-      "golangciLintVersion": "none"
+      // ci.yml asks the action for "v2.11", which resolves to the newest
+      // v2.11.x — so pin the patch here rather than v2.11.0, or the container
+      // lints with an older ruleset than CI does. The feature has no way to
+      // skip this install: "latest" and "" mean latest, and anything else is
+      // used verbatim as the tag "v${value}" (so "none" 404s on "vnone").
+      "golangciLintVersion": "2.11.4"
     },
     // internal/lsp starts `typescript-language-server --stdio`.
     "ghcr.io/devcontainers/features/node:1": {
