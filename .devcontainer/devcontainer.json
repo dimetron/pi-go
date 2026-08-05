@@ -28,23 +28,12 @@
       // used verbatim as the tag "v${value}" (so "none" 404s on "vnone").
       "golangciLintVersion": "2.11.4"
     },
-    // internal/lsp starts `typescript-language-server --stdio`.
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "lts"
-    },
-    // internal/lsp starts `uvx ty server`; hack/test/lsp/python is a uv project.
-    "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.12",
-      "installTools": false
-    },
-    "ghcr.io/va-h/devcontainers-features/uv:1": {
-      "version": "latest"
-    },
-    // internal/lsp starts `rust-analyzer`; hack/test/lsp/rust is a cargo crate.
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "latest",
-      "profile": "minimal"
-    },
+    // Node, Python and Rust are deliberately absent. They exist only to run
+    // real language servers for internal/lsp, and every test that needs one
+    // skips when it is missing — the whole unit suite passes with just Go on
+    // PATH. Together they added ~2 minutes to each rebuild (python compiles
+    // CPython from source), so they moved to .devcontainer/install-deps.sh.
+    //
     // internal/acp/client/gemini shells out to `docker`. In-docker rather than
     // outside-of-docker because `kind` below needs a daemon it can own: with a
     // shared host socket the cluster's API server lands on the *host's*
@@ -83,10 +72,15 @@
   // simply arrive empty. See CONTRIBUTING.md — at least one is needed to
   // exercise the agent.
   "remoteEnv": {
-    // $GOPATH/bin for `make install` and the tools post-create.sh installs;
-    // ~/.local/bin for `uv tool install`. GOROOT, node, python and cargo are
-    // already on ${containerEnv:PATH} via their features.
-    "PATH": "/home/vscode/go/bin:/home/vscode/.local/bin:${containerEnv:PATH}",
+    // $GOPATH/bin for `make install` and the tools post-create.sh installs.
+    // ~/.local/bin and ~/.cargo/bin are where install-deps.sh puts uv and
+    // rustup, so they are listed even though nothing occupies them until it
+    // runs. GOROOT is already on ${containerEnv:PATH} via the go feature.
+    //
+    // This only reaches processes the dev container tooling starts, so
+    // post-create.sh writes the same entries to /etc/profile.d — otherwise
+    // `docker exec` and SSH sessions into a Codespace come up without them.
+    "PATH": "/home/vscode/go/bin:/home/vscode/.local/bin:/home/vscode/.cargo/bin:${containerEnv:PATH}",
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
     "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}",
     "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",

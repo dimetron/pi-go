@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -16,11 +16,20 @@ export GOEXPERIMENT := simd
 # what it compiled.
 GO_BUILD_FLAGS := -v $(if $(filter-out 0,$(V)),-x,)
 
+# Stamped into `pi version`. Kept in a variable so build and install cannot
+# drift into producing differently-stamped binaries.
+GO_LDFLAGS := -X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)
+
 build:
-	go build $(GO_BUILD_FLAGS) -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
+	go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
 	go build $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
 
-install: build
+# Install onto PATH, i.e. $(go env GOBIN) or $GOPATH/bin. This used to be a bare
+# `install: build`, which has no recipe — it dropped the binaries in the repo
+# root and left nothing on PATH, so `pi` was never a command anywhere.
+install:
+	go install $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
+	go install $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
 
 # Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
 #
