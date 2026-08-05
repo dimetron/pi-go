@@ -90,7 +90,11 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 		for k, v := range llmOpts.ExtraHeaders {
 			opts = append(opts, option.WithHeader(k, v))
 		}
-		baseTransport = BuildTransport(llmOpts)
+		var err error
+		baseTransport, err = BuildTransport(llmOpts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport

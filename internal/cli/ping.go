@@ -59,6 +59,7 @@ Examples:
 		f.NoOptDefVal = ""
 	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
+	cmd.Flags().StringVar(&flagCACert, "ca-cert", "", "PEM bundle to trust for LLM API calls, in addition to the system roots")
 	cmd.Flags().BoolVar(&flagSmol, "smol", false, "Use the smol role")
 	cmd.Flags().BoolVar(&flagSlow, "slow", false, "Use the slow role")
 	cmd.Flags().BoolVar(&flagPlan, "plan", false, "Use the plan role")
@@ -248,16 +249,18 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 		endpoint = "/responses"
 	}
 
+	opts := &provider.LLMOptions{
+		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+	}
+	applyTLSOptions(opts, cfg)
+
 	return &pingTarget{
 		info:         info,
 		apiKey:       apiKey,
 		baseURL:      baseURL,
 		targetURL:    strings.TrimRight(baseURL, "/") + endpoint,
 		codexBackend: codexBackend,
-		opts: &provider.LLMOptions{
-			ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-			InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
-		},
+		opts:         opts,
 	}, nil
 }
 
@@ -459,8 +462,15 @@ func (t *pingTarget) doHTTP(ctx context.Context, w pingWriter) (*http.Response, 
 	req.Header.Set("User-Agent", "pi-go/"+Version)
 	dumpPingRequest(w, req)
 
+	client, err := provider.BuildHTTPClient(t.opts, 30*time.Second)
+	if err != nil {
+		w("* HTTP CLIENT FAILED: %v\n", err)
+		w("*\n* RESULT: configuration issue — could not build the HTTP client\n")
+		return nil, err
+	}
+
 	start := time.Now()
-	resp, err := provider.BuildHTTPClient(t.opts, 30*time.Second).Do(req)
+	resp, err := client.Do(req)
 	dur := time.Since(start)
 	if err != nil {
 		w("* HTTP FAILED: %v  %s(%s)%s\n", err, colorGray, dur.Round(time.Millisecond), colorReset)

@@ -3,47 +3,103 @@ package provider
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"google.golang.org/adk/v2/model"
 )
 
-// BuildTransport creates an http.Transport with optional TLS skip and extra headers.
-// Returns nil if no customization is needed.
-func BuildTransport(opts *LLMOptions) http.RoundTripper {
+// BuildTransport creates an http.RoundTripper carrying the TLS trust, connect
+// timeout and extra headers from opts. It returns (nil, nil) when opts asks for
+// no customization, so callers can leave the SDK's own client in place.
+//
+// Every variant starts from a clone of http.DefaultTransport rather than a
+// fresh &http.Transport{}: the default carries ProxyFromEnvironment,
+// connection pooling and HTTP/2, and building from scratch silently drops
+// HTTPS_PROXY — which is exactly the environment where a custom CA or a TLS
+// skip is needed in the first place.
+func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 	if opts == nil {
-		return nil
+		return nil, nil
 	}
 	hasHeaders := len(opts.ExtraHeaders) > 0
-	if !opts.InsecureSkipTLS && !hasHeaders {
-		return nil
+	needsTLS := opts.InsecureSkipTLS || opts.CACertPath != ""
+	if !needsTLS && !hasHeaders && opts.ConnectTimeout <= 0 {
+		return nil, nil
 	}
 
 	base := http.DefaultTransport
-	if opts.InsecureSkipTLS {
-		base = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // user-requested
+	if def, ok := http.DefaultTransport.(*http.Transport); ok && (needsTLS || opts.ConnectTimeout > 0) {
+		cloned := def.Clone()
+		if needsTLS {
+			tlsConfig, err := buildTLSConfig(opts)
+			if err != nil {
+				return nil, err
+			}
+			cloned.TLSClientConfig = tlsConfig
 		}
+		if opts.ConnectTimeout > 0 {
+			// Bounds connection establishment only, so a long request timeout
+			// (streaming completions run for minutes) doesn't mean an
+			// unreachable endpoint hangs for that whole budget.
+			dialer := &net.Dialer{Timeout: opts.ConnectTimeout, KeepAlive: 30 * time.Second}
+			cloned.DialContext = dialer.DialContext
+		}
+		base = cloned
 	}
 	if hasHeaders {
 		base = &headerTransport{base: base, headers: opts.ExtraHeaders}
 	}
-	return base
+	return base, nil
 }
 
-// BuildHTTPClient creates an *http.Client with optional TLS skip, extra headers, and timeout.
-// Returns a default client if no customization is needed.
-func BuildHTTPClient(opts *LLMOptions, timeout time.Duration) *http.Client {
-	transport := BuildTransport(opts)
-	if transport == nil {
-		return &http.Client{Timeout: timeout}
+// buildTLSConfig turns the TLS fields of opts into a *tls.Config.
+// InsecureSkipTLS wins over CACertPath: it is the bigger hammer, and honoring
+// a CA pool while verification is off would be misleading.
+func buildTLSConfig(opts *LLMOptions) (*tls.Config, error) {
+	if opts.InsecureSkipTLS {
+		return &tls.Config{InsecureSkipVerify: true}, nil //nolint:gosec // user-requested
 	}
-	return &http.Client{Timeout: timeout, Transport: transport}
+
+	caCert, err := os.ReadFile(opts.CACertPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading CA certificate %s: %w", opts.CACertPath, err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("no PEM certificate found in %s", opts.CACertPath)
+	}
+
+	// Additive by default: trust the corporate CA *and* the public roots, so
+	// pointing at an intercepting proxy doesn't break every other endpoint.
+	// An unreadable system pool is not fatal — fall back to the CA alone.
+	if !opts.DisableSystemCAs {
+		if systemCAs, sysErr := x509.SystemCertPool(); sysErr == nil {
+			systemCAs.AppendCertsFromPEM(caCert)
+			roots = systemCAs
+		}
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, nil
+}
+
+// BuildHTTPClient creates an *http.Client with the TLS trust, extra headers,
+// connect timeout and request timeout from opts. Returns a client with the
+// default transport when opts asks for no customization.
+func BuildHTTPClient(opts *LLMOptions, timeout time.Duration) (*http.Client, error) {
+	transport, err := BuildTransport(opts)
+	if err != nil {
+		return nil, err
+	}
+	if transport == nil {
+		return &http.Client{Timeout: timeout}, nil
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}, nil
 }
 
 // headerTransport injects extra HTTP headers into every request.
@@ -53,6 +109,9 @@ type headerTransport struct {
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// RoundTrippers must not modify the request they are given: the caller
+	// still owns it, and the SDKs reuse it across retries.
+	req = req.Clone(req.Context())
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
 	}
@@ -264,9 +323,21 @@ func CheckOllama(baseURL string) error {
 type LLMOptions struct {
 	ExtraHeaders    map[string]string
 	InsecureSkipTLS bool
-	AdvisorModel    string // Advisor model (e.g., "claude-opus-4-7")
-	AdvisorMaxUses  int    // Max advisor calls per request (0 = unlimited)
-	AdvisorCaching  bool   // Enable ephemeral prompt caching for advisor
+	// CACertPath is a PEM bundle to trust in addition to the system roots —
+	// the answer for a TLS-intercepting corporate proxy, which otherwise
+	// forces InsecureSkipTLS and drops verification for every endpoint.
+	// Ignored when InsecureSkipTLS is set.
+	CACertPath string
+	// DisableSystemCAs narrows trust to CACertPath alone. Only useful when
+	// the endpoint must not be reachable through any public root.
+	DisableSystemCAs bool
+	// ConnectTimeout bounds connection establishment only. Zero leaves the Go
+	// default in place. Distinct from the per-client request timeout, which
+	// has to stay generous for streaming completions.
+	ConnectTimeout time.Duration
+	AdvisorModel   string // Advisor model (e.g., "claude-opus-4-7")
+	AdvisorMaxUses int    // Max advisor calls per request (0 = unlimited)
+	AdvisorCaching bool   // Enable ephemeral prompt caching for advisor
 	// DisablePromptCaching turns OFF the cache_control breakpoints the
 	// Anthropic provider stamps on every request. Caching is on by default
 	// because it only ever lowers the bill: requests whose prefix is below
