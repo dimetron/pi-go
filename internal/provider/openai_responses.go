@@ -3,11 +3,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
 	"strings"
 
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -68,8 +70,10 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 		// Thread previous_response_id for multi-turn.
 		// Skip on the codex backend: it doesn't retain responses server-side
 		// (store=false), so PreviousResponseID wouldn't resolve.
+		sentPreviousResponseID := false
 		if !m.codexBackend && state != nil && state.previousResponseID != "" {
 			params.PreviousResponseID = param.NewOpt(state.previousResponseID)
+			sentPreviousResponseID = true
 		}
 
 		if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -90,11 +94,71 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 			}
 		}
 
-		if stream {
-			m.runResponsesStreaming(ctx, params, yield)
-		} else {
-			m.runResponsesNonStreaming(ctx, params, yield)
+		runOnce := func(p responses.ResponseNewParams) (bool, error) {
+			if stream {
+				return m.runResponsesStreaming(ctx, p, yield)
+			}
+			return m.runResponsesNonStreaming(ctx, p, yield)
 		}
+
+		emitted, err := runOnce(params)
+
+		// A stored previous_response_id can stop resolving upstream at any
+		// point: a proxy or load balancer routing the next turn to a different
+		// deployment, `store=false` (zero-data-retention accounts), expiry, or
+		// a model switch. The full conversation is already in params.Input —
+		// previous_response_id is only an optimisation here — so retrying
+		// without it is lossless. Only retry when nothing was streamed yet,
+		// otherwise the caller would see the turn's text twice.
+		if err != nil && sentPreviousResponseID && !emitted && isPreviousResponseNotFound(err) {
+			m.clearPreviousResponseID()
+			params.PreviousResponseID = param.Opt[string]{}
+			// The retry is the last attempt, so its emitted flag is moot.
+			_, err = runOnce(params)
+		}
+
+		if err != nil {
+			// Clear the stale pointer so the next turn starts fresh rather
+			// than replaying the same rejected id.
+			m.clearPreviousResponseID()
+			if stream {
+				_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+				return
+			}
+			_ = yield(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
+		}
+	}
+}
+
+// isPreviousResponseNotFound reports whether err is the upstream's rejection of
+// a previous_response_id it cannot resolve. The structured API error is checked
+// first (code, then param); the string fallback covers proxies that return an
+// error envelope the SDK cannot decode into openai.Error, in which case only
+// the raw body survives in the message.
+func isPreviousResponseNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.Code == "previous_response_not_found" || apiErr.Param == "previous_response_id" {
+			return true
+		}
+		if strings.Contains(strings.ToLower(apiErr.RawJSON()), "previous_response_not_found") {
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "previous_response_not_found") ||
+		(strings.Contains(msg, "previous_response_id") && strings.Contains(msg, "not found"))
+}
+
+// clearPreviousResponseID drops the stored server-side conversation pointer.
+func (m *openaiModel) clearPreviousResponseID() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.responseState != nil {
+		m.responseState.previousResponseID = ""
 	}
 }
 
@@ -238,10 +302,13 @@ func updateResponsesToolCall(s *responsesStreamState, idx int64, id, name, argum
 	s.toolCalls[idx] = acc
 }
 
-// runResponsesStreaming processes a streaming Responses call.
+// runResponsesStreaming processes a streaming Responses call. It reports
+// whether anything was yielded to the caller, and returns the transport error
+// instead of surfacing it, so generateResponses can decide whether the call is
+// safe to retry.
 // The streaming protocol is documented at
 // https://platform.openai.com/docs/guides/responses-streaming
-func (m *openaiModel) runResponsesStreaming(ctx context.Context, params responses.ResponseNewParams, yield func(*model.LLMResponse, error) bool) {
+func (m *openaiModel) runResponsesStreaming(ctx context.Context, params responses.ResponseNewParams, yield func(*model.LLMResponse, error) bool) (emitted bool, retErr error) {
 	stream := m.client.Responses.NewStreaming(ctx, params)
 	//nolint:errcheck // Close() may return error but we can't recover from it in defer
 	defer stream.Close()
@@ -277,30 +344,32 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		// response.error — surface as LLM error.
 		if evtType == "error" {
 			_ = yield(&model.LLMResponse{ErrorCode: evt.Code, ErrorMessage: evt.Message}, nil)
-			return
+			return true, nil
 		}
 
 		// response.output_text.delta — text token.
 		if evtType == "response.output_text.delta" {
 			state.text += evt.Delta
+			emitted = true
 			if !yield(&model.LLMResponse{
 				Partial:      true,
 				TurnComplete: false,
 				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: evt.Delta}}},
 			}, nil) {
-				return
+				return emitted, nil
 			}
 		}
 
 		// response.reasoning_text.delta — reasoning token.
 		if evtType == "response.reasoning_text.delta" {
 			state.reasoning.WriteString(evt.Delta)
+			emitted = true
 			if !yield(&model.LLMResponse{
 				Partial:      true,
 				TurnComplete: false,
 				Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: evt.Delta}}},
 			}, nil) {
-				return
+				return emitted, nil
 			}
 		}
 
@@ -335,16 +404,11 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 
 	if err := stream.Err(); err != nil {
 		if ctx.Err() == context.Canceled {
-			return
+			return emitted, nil
 		}
-		// Clear stale previous_response_id so retry starts fresh.
-		m.mu.Lock()
-		if m.responseState != nil {
-			m.responseState.previousResponseID = ""
-		}
-		m.mu.Unlock()
-		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-		return
+		// Hand the error back to generateResponses: it owns the stale-id
+		// retry and clears previousResponseID before surfacing anything.
+		return emitted, err
 	}
 
 	// Build final response parts.
@@ -375,6 +439,7 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
 	}, nil)
+	return true, nil
 }
 
 // buildResponsesFinalParts assembles the final parts from streaming state.
@@ -413,12 +478,13 @@ func buildResponsesFinalParts(s *responsesStreamState) []*genai.Part {
 	return parts
 }
 
-// runResponsesNonStreaming processes a non-streaming Responses call.
-func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params responses.ResponseNewParams, yield func(*model.LLMResponse, error) bool) {
+// runResponsesNonStreaming processes a non-streaming Responses call. Like the
+// streaming variant it returns the error rather than yielding it, so
+// generateResponses can retry a call rejected for a stale previous_response_id.
+func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params responses.ResponseNewParams, yield func(*model.LLMResponse, error) bool) (bool, error) {
 	resp, err := m.client.Responses.New(ctx, params)
 	if err != nil {
-		_ = yield(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
-		return
+		return false, err
 	}
 
 	parts, finishReason := parseResponsesOutput(resp.Output)
@@ -448,6 +514,7 @@ func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params respo
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: parts},
 	}, nil)
+	return true, nil
 }
 
 // parseResponsesOutput converts Responses API output items to genai.Part list.

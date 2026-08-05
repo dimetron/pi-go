@@ -43,7 +43,10 @@ func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel stri
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)
 	}
-	httpClient := BuildHTTPClient(opts, 10*time.Minute)
+	httpClient, err := BuildHTTPClient(opts, 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
 	// Inject Bearer token for ollama.com cloud API when an API key is provided.
 	if apiKey != "" {
 		baseTransport := httpClient.Transport

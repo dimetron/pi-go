@@ -61,10 +61,16 @@ type Config struct {
 	BaseURLs        map[string]string     `json:"baseURLs,omitempty"` // provider → base URL; overridden by env
 	ExtraHeaders    map[string]string     `json:"extraHeaders,omitempty"`
 	InsecureSkipTLS bool                  `json:"insecureSkipTLS,omitempty"`
-	Tools           map[string]any        `json:"tools,omitempty"`
-	MCP             *MCPConfig            `json:"mcp,omitempty"`
-	Hooks           []HookConfig          `json:"hooks,omitempty"`
-	MaxDailyTokens  int64                 `json:"maxDailyTokens,omitempty"` // 0 = unlimited
+	// CACertPath is a PEM bundle trusted in addition to the system roots, for
+	// TLS-intercepting corporate proxies. Prefer it over insecureSkipTLS,
+	// which turns verification off for every endpoint.
+	CACertPath string `json:"caCertPath,omitempty"`
+	// DisableSystemCAs narrows trust to caCertPath alone.
+	DisableSystemCAs bool           `json:"disableSystemCAs,omitempty"`
+	Tools            map[string]any `json:"tools,omitempty"`
+	MCP              *MCPConfig     `json:"mcp,omitempty"`
+	Hooks            []HookConfig   `json:"hooks,omitempty"`
+	MaxDailyTokens   int64          `json:"maxDailyTokens,omitempty"` // 0 = unlimited
 	// ContextWindow overrides the model's context window in tokens. Needed for
 	// models absent from the embedded catalog (notably the opencode ones):
 	// auto-compaction measures a percentage of the window, so it stays off

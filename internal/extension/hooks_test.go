@@ -563,7 +563,7 @@ func TestBuildLLMTracingCallbacks(t *testing.T) {
 	// BuildLLMTracingCallbacks creates before/after model callbacks that emit OTEL spans.
 	// We test that the callbacks are created and can be called without panicking.
 	// The actual span emission depends on OTEL configuration at runtime.
-	before, after := BuildLLMTracingCallbacks()
+	before, after := BuildLLMTracingCallbacks("openai")
 	if len(before) != 1 {
 		t.Fatalf("expected 1 before callback, got %d", len(before))
 	}
@@ -607,10 +607,11 @@ func TestBuildLLMTracingCallbacks(t *testing.T) {
 // with future agent.Context surface growth.
 type mockReadonlyContext struct {
 	context.Context
+	invocationID string
 }
 
 func (c *mockReadonlyContext) UserContent() *genai.Content          { return nil }
-func (c *mockReadonlyContext) InvocationID() string                 { return "" }
+func (c *mockReadonlyContext) InvocationID() string                 { return c.invocationID }
 func (c *mockReadonlyContext) AgentName() string                    { return "" }
 func (c *mockReadonlyContext) ReadonlyState() session.ReadonlyState { return nil }
 func (c *mockReadonlyContext) UserID() string                       { return "" }

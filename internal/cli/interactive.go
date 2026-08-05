@@ -317,7 +317,7 @@ func deferredInit(
 	afterCBs = append(afterCBs, compactorCB, tools.BuildDedupCallback(resultDeduper))
 
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
-	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
+	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(providerName)
 
 	// Inject image bytes (screenshots) as visible InlineData parts for the model.
 	llmBefore = append(llmBefore, extension.BuildReadImageCallback(sandbox))
@@ -859,9 +859,9 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	}
 
 	llmOpts := &provider.LLMOptions{
-		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
+		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 	}
+	applyTLSOptions(llmOpts, cfg)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("creating LLM: %w", err)

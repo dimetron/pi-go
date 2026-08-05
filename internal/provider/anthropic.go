@@ -64,7 +64,11 @@ func NewAnthropic(_ context.Context, modelName, apiKey, baseURL, thinkingLevel s
 		for k, v := range llmOpts.ExtraHeaders {
 			opts = append(opts, anthropicopt.WithHeader(k, v))
 		}
-		if transport := BuildTransport(llmOpts); transport != nil {
+		transport, err := BuildTransport(llmOpts)
+		if err != nil {
+			return nil, err
+		}
+		if transport != nil {
 			opts = append(opts, anthropicopt.WithHTTPClient(&http.Client{Transport: transport}))
 		}
 	}

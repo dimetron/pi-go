@@ -405,6 +405,48 @@ func TestInsecureSkipTLSFalseByDefault(t *testing.T) {
 	}
 }
 
+func TestCACertFromConfig(t *testing.T) {
+	tmp := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfgDir := filepath.Join(tmp, ".pi-go")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgJSON := `{
+		"roles": {"default": {"model": "gpt-4o"}},
+		"caCertPath": "/etc/ssl/corp-ca.pem",
+		"disableSystemCAs": true
+	}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.CACertPath != "/etc/ssl/corp-ca.pem" {
+		t.Errorf("CACertPath = %q, want /etc/ssl/corp-ca.pem", cfg.CACertPath)
+	}
+	if !cfg.DisableSystemCAs {
+		t.Error("expected DisableSystemCAs to be true")
+	}
+}
+
+func TestCACertAbsentByDefault(t *testing.T) {
+	cfg := Defaults()
+	if cfg.CACertPath != "" || cfg.DisableSystemCAs {
+		t.Errorf("expected no CA settings by default, got %q / %v", cfg.CACertPath, cfg.DisableSystemCAs)
+	}
+}
+
 func TestMemoryDefaults(t *testing.T) {
 	m := MemoryDefaults()
 	if m.TokenBudget != 8000 {

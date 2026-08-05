@@ -2,10 +2,12 @@ package provider
 
 import (
 	"context"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -554,82 +556,209 @@ func TestHeaderTransport(t *testing.T) {
 }
 
 func TestBuildTransport(t *testing.T) {
+	mustBuild := func(t *testing.T, opts *LLMOptions) http.RoundTripper {
+		t.Helper()
+		tr, err := BuildTransport(opts)
+		if err != nil {
+			t.Fatalf("BuildTransport: %v", err)
+		}
+		return tr
+	}
+
 	t.Run("nil opts returns nil", func(t *testing.T) {
-		tr := BuildTransport(nil)
-		if tr != nil {
+		if tr := mustBuild(t, nil); tr != nil {
 			t.Fatal("expected nil transport")
 		}
 	})
 
 	t.Run("no customization returns nil", func(t *testing.T) {
-		tr := BuildTransport(&LLMOptions{})
-		if tr != nil {
+		if tr := mustBuild(t, &LLMOptions{}); tr != nil {
 			t.Fatal("expected nil transport")
 		}
 	})
 
 	t.Run("insecure only", func(t *testing.T) {
-		tr := BuildTransport(&LLMOptions{InsecureSkipTLS: true})
-		if tr == nil {
-			t.Fatal("expected non-nil transport")
-		}
-		// Should be an *http.Transport with InsecureSkipVerify.
-		if _, ok := tr.(*http.Transport); !ok {
+		tr := mustBuild(t, &LLMOptions{InsecureSkipTLS: true})
+		ht, ok := tr.(*http.Transport)
+		if !ok {
 			t.Fatalf("expected *http.Transport, got %T", tr)
+		}
+		if ht.TLSClientConfig == nil || !ht.TLSClientConfig.InsecureSkipVerify {
+			t.Error("expected InsecureSkipVerify")
+		}
+		// The clone must keep the settings of http.DefaultTransport — losing
+		// Proxy here would silently break HTTPS_PROXY users.
+		if ht.Proxy == nil {
+			t.Error("cloned transport lost Proxy (HTTPS_PROXY would stop working)")
 		}
 	})
 
 	t.Run("headers only", func(t *testing.T) {
-		tr := BuildTransport(&LLMOptions{ExtraHeaders: map[string]string{"X-Test": "val"}})
-		if tr == nil {
-			t.Fatal("expected non-nil transport")
-		}
+		tr := mustBuild(t, &LLMOptions{ExtraHeaders: map[string]string{"X-Test": "val"}})
 		if _, ok := tr.(*headerTransport); !ok {
 			t.Fatalf("expected *headerTransport, got %T", tr)
 		}
 	})
 
 	t.Run("insecure + headers chains transports", func(t *testing.T) {
-		tr := BuildTransport(&LLMOptions{
+		tr := mustBuild(t, &LLMOptions{
 			ExtraHeaders:    map[string]string{"X-Test": "val"},
 			InsecureSkipTLS: true,
 		})
-		if tr == nil {
-			t.Fatal("expected non-nil transport")
-		}
 		ht, ok := tr.(*headerTransport)
 		if !ok {
 			t.Fatalf("expected outer *headerTransport, got %T", tr)
 		}
-		// Inner transport should be *http.Transport with InsecureSkipVerify.
 		if _, ok := ht.base.(*http.Transport); !ok {
 			t.Fatalf("expected inner *http.Transport, got %T", ht.base)
 		}
 	})
+
+	t.Run("connect timeout alone customizes the dialer", func(t *testing.T) {
+		tr := mustBuild(t, &LLMOptions{ConnectTimeout: 2 * time.Second})
+		ht, ok := tr.(*http.Transport)
+		if !ok {
+			t.Fatalf("expected *http.Transport, got %T", tr)
+		}
+		if ht.DialContext == nil {
+			t.Error("expected a custom DialContext")
+		}
+	})
+
+	t.Run("missing CA file reports the path", func(t *testing.T) {
+		_, err := BuildTransport(&LLMOptions{CACertPath: filepath.Join(t.TempDir(), "absent.pem")})
+		if err == nil {
+			t.Fatal("expected an error for a missing CA bundle")
+		}
+		if !strings.Contains(err.Error(), "absent.pem") {
+			t.Errorf("error should name the file, got %v", err)
+		}
+	})
+
+	t.Run("non-PEM CA file is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "junk.pem")
+		if err := os.WriteFile(path, []byte("not a certificate"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildTransport(&LLMOptions{CACertPath: path}); err == nil {
+			t.Fatal("expected an error for a file with no PEM block")
+		}
+	})
+
+	t.Run("insecure wins over CA path", func(t *testing.T) {
+		tr := mustBuild(t, &LLMOptions{
+			InsecureSkipTLS: true,
+			CACertPath:      filepath.Join(t.TempDir(), "absent.pem"), // never read
+		})
+		ht := tr.(*http.Transport)
+		if !ht.TLSClientConfig.InsecureSkipVerify {
+			t.Error("expected InsecureSkipVerify to win")
+		}
+	})
+}
+
+// TestBuildTransportCustomCA drives a real TLS handshake against a server whose
+// certificate is signed by a CA the system roots do not know.
+func TestBuildTransportCustomCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: srv.Certificate().Raw,
+	})
+	if err := os.WriteFile(caPath, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the CA the handshake must fail...
+	plain := &http.Client{Timeout: 5 * time.Second}
+	if _, err := plain.Get(srv.URL); err == nil { //nolint:bodyclose // request is expected to fail
+		t.Fatal("expected the untrusted certificate to be rejected")
+	}
+
+	for _, disableSystemCAs := range []bool{false, true} {
+		client, err := BuildHTTPClient(&LLMOptions{
+			CACertPath:       caPath,
+			DisableSystemCAs: disableSystemCAs,
+		}, 5*time.Second)
+		if err != nil {
+			t.Fatalf("BuildHTTPClient(disableSystemCAs=%v): %v", disableSystemCAs, err)
+		}
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("GET with custom CA (disableSystemCAs=%v): %v", disableSystemCAs, err)
+		}
+		resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
+	}
+}
+
+// TestHeaderTransportDoesNotMutateRequest pins the RoundTripper contract: the
+// request handed in belongs to the caller, and the SDKs replay it on retry.
+func TestHeaderTransportDoesNotMutateRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Test"); got != "val" {
+			t.Errorf("X-Test header = %q, want val", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client, err := BuildHTTPClient(&LLMOptions{ExtraHeaders: map[string]string{"X-Test": "val"}}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("BuildHTTPClient: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close() //nolint:errcheck
+
+	if got := req.Header.Get("X-Test"); got != "" {
+		t.Errorf("caller's request was mutated: X-Test = %q", got)
+	}
 }
 
 func TestBuildHTTPClient(t *testing.T) {
 	t.Run("nil opts returns default client", func(t *testing.T) {
-		c := BuildHTTPClient(nil, 5*time.Second)
-		if c == nil {
-			t.Fatal("expected non-nil client")
-		} else {
-			if c.Timeout != 5*time.Second {
-				t.Errorf("timeout = %v, want 5s", c.Timeout)
-			}
-			if c.Transport != nil {
-				t.Error("expected nil transport for default client")
-			}
+		c, err := BuildHTTPClient(nil, 5*time.Second)
+		if err != nil {
+			t.Fatalf("BuildHTTPClient: %v", err)
+		}
+		if c.Timeout != 5*time.Second {
+			t.Errorf("timeout = %v, want 5s", c.Timeout)
+		}
+		if c.Transport != nil {
+			t.Error("expected nil transport for default client")
 		}
 	})
 
 	t.Run("insecure client has custom transport", func(t *testing.T) {
-		c := BuildHTTPClient(&LLMOptions{InsecureSkipTLS: true}, 10*time.Second)
+		c, err := BuildHTTPClient(&LLMOptions{InsecureSkipTLS: true}, 10*time.Second)
+		if err != nil {
+			t.Fatalf("BuildHTTPClient: %v", err)
+		}
 		if c.Transport == nil {
 			t.Fatal("expected non-nil transport")
 		}
 		if c.Timeout != 10*time.Second {
 			t.Errorf("timeout = %v, want 10s", c.Timeout)
+		}
+	})
+
+	t.Run("bad CA path is surfaced, not swallowed", func(t *testing.T) {
+		if _, err := BuildHTTPClient(&LLMOptions{CACertPath: "/nonexistent/ca.pem"}, time.Second); err == nil {
+			t.Fatal("expected an error")
 		}
 	})
 }

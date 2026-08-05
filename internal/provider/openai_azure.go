@@ -60,7 +60,11 @@ func NewAzureOpenAI(_ context.Context, deploymentName, apiKey, endpoint, apiVers
 		for k, v := range llmOpts.ExtraHeaders {
 			opts = append(opts, option.WithHeader(k, v))
 		}
-		if transport := BuildTransport(llmOpts); transport != nil {
+		transport, err := BuildTransport(llmOpts)
+		if err != nil {
+			return nil, err
+		}
+		if transport != nil {
 			opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
 		}
 	}

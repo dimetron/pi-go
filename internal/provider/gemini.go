@@ -42,8 +42,12 @@ func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions)
 	if baseURL != "" || (opts != nil && len(opts.ExtraHeaders) > 0) {
 		cfg.HTTPOptions = httpOpts
 	}
-	if opts != nil && opts.InsecureSkipTLS {
-		cfg.HTTPClient = BuildHTTPClient(opts, 0)
+	if opts != nil && (opts.InsecureSkipTLS || opts.CACertPath != "" || opts.ConnectTimeout > 0) {
+		httpClient, err := BuildHTTPClient(opts, 0)
+		if err != nil {
+			return nil, err
+		}
+		cfg.HTTPClient = httpClient
 	}
 
 	llm, err := gemini.NewModel(ctx, modelName, cfg)

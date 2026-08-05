@@ -56,6 +56,7 @@ var (
 
 	flagContinue  bool
 	flagInsecure  bool
+	flagCACert    string
 	flagSmol      bool
 	flagSlow      bool
 	flagPlan      bool
@@ -126,6 +127,7 @@ func newRootCmd() *cobra.Command {
 		f.NoOptDefVal = ""
 	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
+	cmd.Flags().StringVar(&flagCACert, "ca-cert", "", "PEM bundle to trust for LLM API calls, in addition to the system roots")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
 	// Persistent, not local: `pi memory mine . --pprof true` and every other
 	// subcommand must accept these too. As local flags they were rejected with
@@ -247,12 +249,12 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	llmOpts := &provider.LLMOptions{
-		ExtraHeaders:    mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-		InsecureSkipTLS: cfg.InsecureSkipTLS || flagInsecure,
-		AdvisorModel:    advisorModel,
-		AdvisorMaxUses:  advisorMaxUses,
-		AdvisorCaching:  advisorCaching,
+		ExtraHeaders:   mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+		AdvisorModel:   advisorModel,
+		AdvisorMaxUses: advisorMaxUses,
+		AdvisorCaching: advisorCaching,
 	}
+	applyTLSOptions(llmOpts, cfg)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("creating LLM provider: %w", err)
@@ -1407,6 +1409,18 @@ func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[st
 		return nil
 	}
 	return merged
+}
+
+// applyTLSOptions layers the --insecure/--ca-cert flags over the TLS trust
+// settings from config. The flags are additive: neither one can turn a
+// config-enabled setting back off, matching how --header behaves.
+func applyTLSOptions(opts *provider.LLMOptions, cfg config.Config) {
+	opts.InsecureSkipTLS = cfg.InsecureSkipTLS || flagInsecure
+	opts.CACertPath = cfg.CACertPath
+	if flagCACert != "" {
+		opts.CACertPath = flagCACert
+	}
+	opts.DisableSystemCAs = cfg.DisableSystemCAs
 }
 
 // convertHooks converts config.HookConfig to extension.HookConfig.
