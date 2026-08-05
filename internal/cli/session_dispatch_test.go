@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/config"
+
 	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
@@ -76,7 +78,7 @@ func TestDispatchModeNoPrompt(t *testing.T) {
 
 			var err error
 			out := captureStderr(t, func() {
-				err = dispatchMode(context.Background(), mode, "", nil, "sid", nil, "test-model")
+				err = dispatchMode(context.Background(), mode, "", nil, "sid", nil, "test-model", config.Config{}, nil)
 			})
 
 			if err != nil {

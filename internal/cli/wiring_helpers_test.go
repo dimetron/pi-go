@@ -271,7 +271,7 @@ func TestDispatchModeWithoutPromptIsNoOp(t *testing.T) {
 			t.Parallel()
 			// A nil agent is safe here precisely because an empty prompt must
 			// return before the agent is ever touched.
-			if err := dispatchMode(context.Background(), mode, "", nil, "sess", nil, "test-model"); err != nil {
+			if err := dispatchMode(context.Background(), mode, "", nil, "sess", nil, "test-model", config.Config{}, nil); err != nil {
 				t.Errorf("dispatchMode(%q, empty prompt) = %v, want nil", mode, err)
 			}
 		})

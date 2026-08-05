@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+
+	adkmodel "google.golang.org/adk/v2/model"
+
+	"github.com/dimetron/pi-go/internal/agent"
 )
 
 // decodeLines parses NDJSON output into generic maps.
@@ -143,6 +148,87 @@ func TestMalformedLineDoesNotKillTheServer(t *testing.T) {
 	last := got[len(got)-1]
 	if last["id"] != "after" || last["success"] != true {
 		t.Errorf("server did not recover from malformed input: %v", last)
+	}
+}
+
+// A client that believes it switched models but did not is worse than one
+// told the switch failed, so every set_model failure must surface as an error
+// response rather than a cosmetic success.
+func TestSetModelFailuresAreReportedNotSwallowed(t *testing.T) {
+	okSwitcher := func(context.Context, string, string) (adkmodel.LLM, string, string, error) {
+		return nil, "m", "p", nil
+	}
+
+	tests := []struct {
+		name    string
+		server  *Server
+		modelID string
+		wantErr string
+	}{
+		{
+			name:    "empty model id",
+			server:  NewServer(Config{Agent: &agent.Agent{}, ModelSwitcher: okSwitcher}),
+			modelID: "",
+			wantErr: "modelId is required",
+		},
+		{
+			name:    "no switcher configured",
+			server:  NewServer(Config{Agent: &agent.Agent{}}),
+			modelID: "gpt-5.6-luna",
+			wantErr: "unavailable",
+		},
+		{
+			name: "switcher rejects the model",
+			server: NewServer(Config{Agent: &agent.Agent{},
+				ModelSwitcher: func(context.Context, string, string) (adkmodel.LLM, string, string, error) {
+					return nil, "", "", errors.New("unknown model")
+				}}),
+			modelID: "not-a-real-model",
+			wantErr: "unknown model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.server.setModel(context.Background(), tt.modelID, "")
+			if err == nil {
+				t.Fatal("setModel() = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// RebuildWithModel replaces the agent's LLM wholesale, which would swap the
+// model out from under a response that is still streaming.
+func TestSetModelRefusedDuringTurn(t *testing.T) {
+	s := NewServer(Config{
+		Agent: &agent.Agent{},
+		ModelSwitcher: func(context.Context, string, string) (adkmodel.LLM, string, string, error) {
+			t.Error("switcher called while a turn was running")
+			return nil, "", "", nil
+		},
+	})
+	s.cancel = func() {} // simulate an in-flight turn
+
+	err := s.setModel(context.Background(), "gpt-5.6-luna", "")
+	if err == nil || !strings.Contains(err.Error(), "while a turn is running") {
+		t.Fatalf("setModel() error = %v, want a turn-in-progress refusal", err)
+	}
+}
+
+func TestSetModelCommandReportsFailure(t *testing.T) {
+	got := runCommands(t, `{"type":"set_model","id":"m1","provider":"openai","modelId":"gpt-5.6-luna"}`)
+	if len(got) != 1 {
+		t.Fatalf("got %d responses, want 1", len(got))
+	}
+	if got[0]["success"] != false {
+		t.Errorf("success = %v, want false when no switcher is wired", got[0]["success"])
+	}
+	if got[0]["error"] == nil {
+		t.Error("error field missing; the client would render a switch that never happened")
 	}
 }
 

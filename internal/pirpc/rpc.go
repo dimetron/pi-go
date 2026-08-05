@@ -48,6 +48,7 @@ import (
 	"strconv"
 	"sync"
 
+	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 
 	"github.com/dimetron/pi-go/internal/agent"
@@ -63,16 +64,32 @@ type Config struct {
 	Out       io.Writer
 	Log       *logger.Logger
 	Model     string
+
+	// ModelSwitcher builds a replacement LLM for a model name, returning the
+	// resolved model and provider. When nil, set_model is rejected rather
+	// than silently accepted — a client that believes it switched models but
+	// did not is worse than one told the switch is unsupported.
+	//
+	// providerHint carries the provider the ACP client named ("" if it named
+	// none). Honoring it matters: pi-go otherwise infers the provider from
+	// the configured default role, which would route e.g. an OpenAI model
+	// through Ollama when the default role happens to be an Ollama model.
+	ModelSwitcher func(ctx context.Context, modelName, providerHint string) (adkmodel.LLM, string, string, error)
 }
 
 // Server serves pi-compatible RPC commands over stdio.
 type Server struct {
-	agent     *agent.Agent
-	sessionID string
-	in        io.Reader
-	out       io.Writer
-	log       *logger.Logger
-	model     string
+	agent         *agent.Agent
+	sessionID     string
+	in            io.Reader
+	out           io.Writer
+	log           *logger.Logger
+	modelSwitcher func(ctx context.Context, modelName, providerHint string) (adkmodel.LLM, string, string, error)
+
+	// model and provider are guarded by mu: set_model mutates them from the
+	// read loop while a turn goroutine may be reading them via state().
+	model    string
+	provider string
 
 	// writeMu serializes stdout writes. The turn goroutine and the command
 	// read loop both emit, and interleaved NDJSON would be unparseable.
@@ -88,12 +105,13 @@ type Server struct {
 // NewServer creates a stdio RPC server.
 func NewServer(cfg Config) *Server {
 	return &Server{
-		agent:     cfg.Agent,
-		sessionID: cfg.SessionID,
-		in:        cfg.In,
-		out:       cfg.Out,
-		log:       cfg.Log,
-		model:     cfg.Model,
+		agent:         cfg.Agent,
+		sessionID:     cfg.SessionID,
+		in:            cfg.In,
+		out:           cfg.Out,
+		log:           cfg.Log,
+		model:         cfg.Model,
+		modelSwitcher: cfg.ModelSwitcher,
 	}
 }
 
@@ -205,10 +223,9 @@ func (s *Server) dispatch(ctx context.Context, cmd command) {
 			Data: map[string]any{"messages": []any{}}})
 
 	case "set_model":
-		// Model selection is resolved per-run from config; record the request
-		// so /model reflects it, but do not fail the command.
-		if cmd.ModelID != "" {
-			s.model = cmd.ModelID
+		if err := s.setModel(ctx, cmd.ModelID, cmd.Provider); err != nil {
+			s.reply(response{ID: cmd.ID, Command: cmd.Type, Error: err.Error()})
+			return
 		}
 		s.reply(response{ID: cmd.ID, Command: cmd.Type, Success: true, Data: s.state()})
 
@@ -355,13 +372,61 @@ func (s *Server) emitError(err error) {
 	s.emitDelta("text_delta", "\n\nError: "+err.Error()+"\n")
 }
 
+// setModel swaps the running agent's LLM, the same way the TUI's /model does:
+// build a replacement LLM, then rebuild the agent around it. The change takes
+// effect on the next turn.
+//
+// Every failure path returns an error rather than a success response. An ACP
+// client that believes it switched models but did not is worse than one told
+// the switch failed — GoLand and Zed both render the selection optimistically.
+func (s *Server) setModel(ctx context.Context, modelName, providerHint string) error {
+	if modelName == "" {
+		return errors.New("modelId is required")
+	}
+	if s.modelSwitcher == nil || s.agent == nil {
+		return errors.New("model switching is unavailable in this session")
+	}
+
+	// RebuildWithModel replaces the agent's LLM wholesale; doing that under a
+	// streaming turn would swap the model mid-response. The TUI refuses for
+	// the same reason.
+	s.mu.Lock()
+	running := s.cancel != nil
+	s.mu.Unlock()
+	if running {
+		return errors.New("cannot switch model while a turn is running")
+	}
+
+	llm, name, providerName, err := s.modelSwitcher(ctx, modelName, providerHint)
+	if err != nil {
+		return fmt.Errorf("switching to %q: %w", modelName, err)
+	}
+	if err := s.agent.RebuildWithModel(llm); err != nil {
+		return fmt.Errorf("rebuilding agent for %q: %w", name, err)
+	}
+
+	s.mu.Lock()
+	s.model, s.provider = name, providerName
+	s.mu.Unlock()
+
+	if s.log != nil {
+		s.log.Info("acp: switched model to " + name + " (provider: " + providerName + ")")
+	}
+	return nil
+}
+
 // state reports session identity and token/cost counters. pi-acp reads
 // sessionId and sessionFile from this for its session map, and the tokens
 // block for /session.
 func (s *Server) state() map[string]any {
+	s.mu.Lock()
+	model, providerName := s.model, s.provider
+	s.mu.Unlock()
+
 	st := map[string]any{
 		"sessionId":     s.sessionID,
-		"model":         s.model,
+		"model":         model,
+		"provider":      providerName,
 		"totalMessages": 0,
 		"cost":          0,
 		"tokens": map[string]any{
