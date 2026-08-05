@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -145,71 +147,218 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 	return cbs
 }
 
+// spanRegistry hands a span from a before-callback to its matching
+// after-callback.
+//
+// ADK's callback signatures return no context, so the context returned by
+// tracer.Start cannot reach the after-callback: reading the span back with
+// trace.SpanFromContext there finds the *parent* span instead, ends that, and
+// leaves the real span unended — and an unended span is never exported. The
+// registry keys spans by an identifier both callbacks can see: the function
+// call id for tools, the invocation id for model calls.
+//
+// Values are stacks because one invocation issues several model calls in
+// sequence; push/pop keeps each paired with its own span.
+type spanRegistry struct {
+	mu    sync.Mutex
+	spans map[string][]trace.Span
+}
+
+func newSpanRegistry() *spanRegistry {
+	return &spanRegistry{spans: make(map[string][]trace.Span)}
+}
+
+func (r *spanRegistry) push(key string, span trace.Span) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spans[key] = append(r.spans[key], span)
+}
+
+// pop removes and returns the most recent span for key, or nil when there is
+// none — an after-callback firing without a matching before-callback must not
+// end somebody else's span.
+func (r *spanRegistry) pop(key string) trace.Span {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stack := r.spans[key]
+	if len(stack) == 0 {
+		return nil
+	}
+	span := stack[len(stack)-1]
+	if len(stack) == 1 {
+		delete(r.spans, key)
+	} else {
+		r.spans[key] = stack[:len(stack)-1]
+	}
+	return span
+}
+
 // BuildTracingCallbacks returns before/after tool callbacks that emit OTEL spans
 // for every tool invocation. The parent span context is propagated from the
 // context passed to the callback, so spans are linked to the agent's trace.
+//
+// Spans are carried between the two callbacks through a registry keyed by
+// function call id, which is unique per tool call and so stays correct when
+// the model runs several tools in parallel.
 func BuildTracingCallbacks() ([]llmagent.BeforeToolCallback, []llmagent.AfterToolCallback) {
 	tracer := otel.Tracer("pi-go")
+	spans := newSpanRegistry()
 
 	beforeCB := func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-		_, span := tracer.Start(ctx, "tool."+t.Name())
+		_, span := tracer.Start(ctx, "execute_tool "+t.Name())
 		span.SetAttributes(
+			semconv.GenAIOperationNameExecuteTool,
+			semconv.GenAIToolName(t.Name()),
 			otel.AttributeString("tool.name", t.Name()),
 			otel.AttributeInt("tool.args_count", len(args)),
 		)
-		_ = span // span lifetime managed by afterCB
+		spans.push(toolSpanKey(ctx, t), span)
 		return nil, nil
 	}
 
 	afterCB := func(ctx agent.Context, t tool.Tool, args, result map[string]any, runErr error) (map[string]any, error) {
-		span := trace.SpanFromContext(ctx)
-		if span.IsRecording() {
-			if runErr != nil {
-				span.RecordError(runErr)
-				span.SetStatus(codes.Error, runErr.Error())
-			} else {
-				span.SetStatus(codes.Ok, "")
-			}
-			span.SetAttributes(
-				otel.AttributeString("tool.name", t.Name()),
-				otel.AttributeBool("tool.success", runErr == nil),
-			)
-			span.End()
+		span := spans.pop(toolSpanKey(ctx, t))
+		if span == nil {
+			return result, nil
 		}
+		if runErr != nil {
+			span.RecordError(runErr)
+			span.SetStatus(codes.Error, runErr.Error())
+		} else {
+			span.SetStatus(codes.Ok, "")
+		}
+		span.SetAttributes(otel.AttributeBool("tool.success", runErr == nil))
+		span.End()
 		return result, nil
 	}
 
 	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}
 }
 
-// BuildLLMTracingCallbacks returns before/after model callbacks that emit OTEL spans
-// for each LLM invocation inside the agent loop.
-func BuildLLMTracingCallbacks() ([]llmagent.BeforeModelCallback, []llmagent.AfterModelCallback) {
+// toolSpanKey identifies one tool call. FunctionCallID is unique per call and
+// is what keeps parallel tool calls from ending each other's spans; it falls
+// back to invocation+tool name for contexts that leave it empty.
+func toolSpanKey(ctx agent.Context, t tool.Tool) string {
+	if id := ctx.FunctionCallID(); id != "" {
+		return id
+	}
+	return ctx.InvocationID() + "/" + t.Name()
+}
+
+// BuildLLMTracingCallbacks returns before/after model callbacks that emit one
+// OTEL span per LLM invocation, named and attributed per the OpenTelemetry
+// GenAI semantic conventions (semconv v1.37.0): `chat <model>`, carrying
+// gen_ai.provider.name, gen_ai.request.model, gen_ai.response.model,
+// gen_ai.response.finish_reasons and the gen_ai.usage.* token counts.
+//
+// providerName is pi-go's provider id ("openai", "anthropic", …); it is mapped
+// onto the semconv enum where one exists and passed through otherwise.
+//
+// ADK callbacks cannot hand a context back to the framework, so the span
+// cannot be carried between the two callbacks through ctx. It is held in a
+// registry keyed by invocation instead — see llmSpans.
+func BuildLLMTracingCallbacks(providerName string) ([]llmagent.BeforeModelCallback, []llmagent.AfterModelCallback) {
 	tracer := otel.Tracer("pi-go")
+	spans := newSpanRegistry()
+	provider := genAIProviderAttr(providerName)
 
 	beforeCB := func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		_, span := tracer.Start(ctx, "llm."+req.Model)
+		// Span name is `<operation> <model>` per the GenAI conventions.
+		_, span := tracer.Start(ctx, "chat "+req.Model)
 		span.SetAttributes(
-			otel.AttributeString("llm.model", req.Model),
+			semconv.GenAIOperationNameChat,
+			provider,
+			semconv.GenAIRequestModel(req.Model),
 		)
+		spans.push(ctx.InvocationID(), span)
 		return nil, nil
 	}
 
 	afterCB := func(ctx agent.Context, resp *model.LLMResponse, respErr error) (*model.LLMResponse, error) {
-		span := trace.SpanFromContext(ctx)
-		if span.IsRecording() {
-			if respErr != nil {
-				span.RecordError(respErr)
-				span.SetStatus(codes.Error, respErr.Error())
-			} else {
-				span.SetStatus(codes.Ok, "")
-			}
-			span.End()
+		// A streaming call reports every chunk through this callback. Only the
+		// terminal one closes the span — usage metadata rides on that final
+		// response, so ending early would drop the token counts entirely.
+		if respErr == nil && resp != nil && resp.Partial {
+			return resp, nil
 		}
+
+		span := spans.pop(ctx.InvocationID())
+		if span == nil {
+			return resp, nil
+		}
+		if resp != nil {
+			setLLMResponseAttributes(span, resp)
+		}
+		switch {
+		case respErr != nil:
+			span.RecordError(respErr)
+			span.SetStatus(codes.Error, respErr.Error())
+		case resp != nil && resp.ErrorCode != "":
+			span.SetStatus(codes.Error, resp.ErrorCode+": "+resp.ErrorMessage)
+		default:
+			span.SetStatus(codes.Ok, "")
+		}
+		span.End()
 		return resp, nil
 	}
 
 	return []llmagent.BeforeModelCallback{beforeCB}, []llmagent.AfterModelCallback{afterCB}
+}
+
+// setLLMResponseAttributes stamps the response model, finish reason and token
+// usage onto span. Zero counts are skipped rather than reported as 0, so a
+// provider that omits usage is distinguishable from one that reports none.
+func setLLMResponseAttributes(span trace.Span, resp *model.LLMResponse) {
+	attrs := make([]attribute.KeyValue, 0, 8)
+	if resp.ModelVersion != "" {
+		attrs = append(attrs, semconv.GenAIResponseModel(resp.ModelVersion))
+	}
+	if resp.FinishReason != "" {
+		attrs = append(attrs, semconv.GenAIResponseFinishReasons(string(resp.FinishReason)))
+	}
+	if u := resp.UsageMetadata; u != nil {
+		if u.PromptTokenCount > 0 {
+			attrs = append(attrs, semconv.GenAIUsageInputTokens(int(u.PromptTokenCount)))
+		}
+		if u.CandidatesTokenCount > 0 {
+			attrs = append(attrs, semconv.GenAIUsageOutputTokens(int(u.CandidatesTokenCount)))
+		}
+		// The remaining counts have no semconv equivalent yet, but they are
+		// what the bill actually turns on: a cache read costs a fraction of a
+		// fresh input token, and reasoning tokens are billed as output.
+		if u.CachedContentTokenCount > 0 {
+			attrs = append(attrs, otel.AttributeInt("gen_ai.usage.cached_input_tokens", int(u.CachedContentTokenCount)))
+		}
+		if u.ThoughtsTokenCount > 0 {
+			attrs = append(attrs, otel.AttributeInt("gen_ai.usage.reasoning_tokens", int(u.ThoughtsTokenCount)))
+		}
+		if u.TotalTokenCount > 0 {
+			attrs = append(attrs, otel.AttributeInt("gen_ai.usage.total_tokens", int(u.TotalTokenCount)))
+		}
+	}
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
+}
+
+// genAIProviderAttr maps a pi-go provider id onto the semconv gen_ai.provider.name
+// enum. Providers with no enum entry (ollama, opencode) pass through as-is,
+// which the convention allows.
+func genAIProviderAttr(providerName string) attribute.KeyValue {
+	switch providerName {
+	case "openai":
+		return semconv.GenAIProviderNameOpenAI
+	case "anthropic":
+		return semconv.GenAIProviderNameAnthropic
+	case "gemini":
+		return semconv.GenAIProviderNameGCPGemini
+	case "mistral":
+		return semconv.GenAIProviderNameMistralAI
+	case "azure":
+		return semconv.GenAIProviderNameAzureAIOpenAI
+	default:
+		return semconv.GenAIProviderNameKey.String(providerName)
+	}
 }
 
 // runHookCommand executes a hook's shell command with the tool name and data as JSON on stdin.

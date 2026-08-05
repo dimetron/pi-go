@@ -317,7 +317,7 @@ func deferredInit(
 	afterCBs = append(afterCBs, compactorCB, tools.BuildDedupCallback(resultDeduper))
 
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
-	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks()
+	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(providerName)
 
 	// Inject image bytes (screenshots) as visible InlineData parts for the model.
 	llmBefore = append(llmBefore, extension.BuildReadImageCallback(sandbox))
