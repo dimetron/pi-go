@@ -42,27 +42,48 @@
       "version": "latest",
       "profile": "minimal"
     },
-    // internal/acp/client/gemini shells out to `docker`. Outside-of-docker
-    // shares the host daemon socket — cheaper and faster than docker-in-docker,
-    // at the cost of bind mounts being host paths.
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+    // internal/acp/client/gemini shells out to `docker`. In-docker rather than
+    // outside-of-docker because `kind` below needs a daemon it can own: with a
+    // shared host socket the cluster's API server lands on the *host's*
+    // 127.0.0.1, so the kubeconfig kind writes is unreachable from in here.
+    // Costs a privileged container and a cold image cache per rebuild; buys
+    // bind mounts that use container paths, which is what the gemini client
+    // assumes anyway.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "moby": false
+    },
+    "ghcr.io/devcontainers-extra/features/kind:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      // kind is the cluster; minikube would just be a second, unused VM driver.
+      "minikube": "none"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
-  // Ordered so the toolchains land on PATH the way internal/lsp/manager.go
-  // probes for them ($GOPATH/bin, ~/.cargo/bin, ~/.local/bin).
   "containerEnv": {
+    // Overrides the go feature's default of /go, so the module cache volume
+    // below can live under the user's home. Do NOT set PATH here: every
+    // toolchain feature contributes its own bin dir through its containerEnv,
+    // and a PATH key in devcontainer.json wins over all of them while
+    // ${containerEnv:PATH} still resolves against the *base image* — which
+    // silently drops /usr/local/go/bin, node, python and cargo. Extra entries
+    // go in remoteEnv, where ${containerEnv:PATH} sees the assembled value.
     "GOPATH": "/home/vscode/go",
     // Matches `export GOEXPERIMENT := simd` in the Makefile and the
     // workflow-level env in ci.yml, so the build cache is not split.
-    "GOEXPERIMENT": "simd",
-    "PATH": "/home/vscode/go/bin:/home/vscode/.cargo/bin:/home/vscode/.local/bin:${containerEnv:PATH}"
+    "GOEXPERIMENT": "simd"
   },
   // Provider keys are read straight from the host environment; absent ones
   // simply arrive empty. See CONTRIBUTING.md — at least one is needed to
   // exercise the agent.
   "remoteEnv": {
+    // $GOPATH/bin for `make install` and the tools post-create.sh installs;
+    // ~/.local/bin for `uv tool install`. GOROOT, node, python and cargo are
+    // already on ${containerEnv:PATH} via their features.
+    "PATH": "/home/vscode/go/bin:/home/vscode/.local/bin:${containerEnv:PATH}",
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
     "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}",
     "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
