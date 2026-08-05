@@ -131,7 +131,8 @@ pi --url "..."    # custom API endpoint URL
 # Non-interactive modes
 pi --mode print "explain this codebase"
 pi --mode json "list all TODO comments"
-pi --mode rpc --socket /tmp/pi-go.sock   # start RPC server
+pi --mode socket --socket /tmp/pi-go.sock  # JSON-RPC 2.0 over a Unix socket
+pi --mode rpc                              # pi-compatible NDJSON over stdio (for pi-acp)
 ```
 
 ### Slash commands
