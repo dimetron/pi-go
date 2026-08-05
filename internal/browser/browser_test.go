@@ -2,7 +2,10 @@ package browser
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -99,5 +102,63 @@ func TestOpen_NoHandler(t *testing.T) {
 
 	if err := Open("https://example.invalid/"); !errors.Is(err, ErrNoHandler) {
 		t.Errorf("Open() = %v, want ErrNoHandler", err)
+	}
+}
+
+// TestOpen_UsesBrowserEnv is the dev-container case this package exists for:
+// $BROWSER is the only handler that reaches a human, so it must be run in
+// preference to anything installed alongside it.
+//
+// The stand-in handler is a script that records its arguments, which also pins
+// that Open passes the URL through unmangled.
+func TestOpen_UsesBrowserEnv(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "opened.txt")
+	handler := filepath.Join(dir, "fake-browser")
+
+	script := "#!/bin/sh\nprintf '%s' \"$1\" > " + record + "\n"
+	if err := os.WriteFile(handler, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fake browser: %v", err)
+	}
+
+	t.Setenv("BROWSER", handler)
+
+	const url = "https://auth.openai.com/codex/device"
+	if err := Open(url); err != nil {
+		t.Fatalf("Open() = %v, want nil when $BROWSER can run", err)
+	}
+
+	// Open uses Start, not Run, so the handler may not have finished yet.
+	var got []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(record); err == nil && len(b) > 0 {
+			got = b
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	if string(got) != url {
+		t.Errorf("$BROWSER received %q, want %q", got, url)
+	}
+}
+
+// An entry that is not on PATH must be skipped rather than aborting the whole
+// search — that fallthrough is what makes the per-platform handler list useful.
+func TestOpen_SkipsMissingHandlers(t *testing.T) {
+	dir := t.TempDir()
+	handler := filepath.Join(dir, "fallback-browser")
+	if err := os.WriteFile(handler, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("writing fake browser: %v", err)
+	}
+
+	// An empty PATH means every platform default fails LookPath; only the
+	// absolute $BROWSER path can resolve.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("BROWSER", handler)
+
+	if err := Open("https://example.invalid/"); err != nil {
+		t.Errorf("Open() = %v, want nil; the reachable handler was skipped", err)
 	}
 }
