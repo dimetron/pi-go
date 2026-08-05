@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -38,7 +39,39 @@ import (
 var (
 	tracerProvider *sdktrace.TracerProvider
 	initOnce       sync.Once
+
+	// exportErrCount and lastExportErr capture what the OTel SDK would
+	// otherwise print to stderr. See captureExportError.
+	exportErrCount atomic.Int64
+	lastExportErr  atomic.Pointer[string]
 )
+
+// captureExportError is the global OTel ErrorHandler. The SDK's default
+// handler writes to stderr with a plain log.Logger, so an unreachable
+// collector paints lines like
+//
+//	2026/08/05 09:54:16 traces export: exporter export timeout: rpc error: ...
+//
+// straight over whatever the TUI had drawn. Every batch retry repeats it.
+// pi owns the screen, so these are recorded here instead of printed; read
+// them back with ExportErrors when diagnosing a silent collector.
+func captureExportError(err error) {
+	if err == nil {
+		return
+	}
+	exportErrCount.Add(1)
+	msg := err.Error()
+	lastExportErr.Store(&msg)
+}
+
+// ExportErrors returns how many telemetry export errors have been swallowed
+// since start, and the most recent one ("" if there has been none).
+func ExportErrors() (count int64, last string) {
+	if p := lastExportErr.Load(); p != nil {
+		last = *p
+	}
+	return exportErrCount.Load(), last
+}
 
 // ResetForTest resets the lazy-initialized tracer provider. It is intended
 // for tests that need to re-read the OTEL configuration from the current
@@ -69,6 +102,9 @@ func initProvider() {
 		// SDK messages (URL parse errors, etc.) ever reach the user's terminal.
 		// The SDK default is stdr→os.Stderr which pollutes ACP/TUI stdout streams.
 		otel.SetLogger(logr.Discard())
+		// Same reasoning for the error handler: batch export failures reach
+		// the terminal through otel.Handle, not through the logger.
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(captureExportError))
 
 		ctx := context.Background()
 

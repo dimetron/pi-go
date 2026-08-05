@@ -2,10 +2,12 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -192,6 +194,42 @@ func TestIsAvailable_SetsExporterNoneIfNotAvailable(t *testing.T) {
 		t.Skip("a collector is running on port 4317 — skipping test")
 	}
 	// If we get here, no collector is running, which is the expected state.
+}
+
+func TestCaptureExportError(t *testing.T) {
+	before, _ := ExportErrors()
+
+	captureExportError(nil) // must not count
+	if got, _ := ExportErrors(); got != before {
+		t.Fatalf("captureExportError(nil) changed count: %d, want %d", got, before)
+	}
+
+	captureExportError(errors.New("traces export: connection refused"))
+	count, last := ExportErrors()
+	if count != before+1 {
+		t.Fatalf("count = %d, want %d", count, before+1)
+	}
+	if last != "traces export: connection refused" {
+		t.Fatalf("last = %q, want the recorded error", last)
+	}
+}
+
+// TestGlobalErrorHandlerIsInstalled guards the actual bug: an unreachable
+// collector made the SDK's default handler print export failures over the TUI.
+// After init, otel.Handle must reach captureExportError instead of stderr.
+func TestGlobalErrorHandlerIsInstalled(t *testing.T) {
+	_ = Tracer("error-handler-test") // drives initProvider
+
+	before, _ := ExportErrors()
+	otel.Handle(errors.New("exporter export timeout"))
+
+	count, last := ExportErrors()
+	if count != before+1 {
+		t.Fatalf("otel.Handle did not reach captureExportError: count = %d, want %d", count, before+1)
+	}
+	if last != "exporter export timeout" {
+		t.Fatalf("last = %q, want %q", last, "exporter export timeout")
+	}
 }
 
 func TestShutdown(t *testing.T) {
