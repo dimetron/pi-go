@@ -56,3 +56,9 @@ sandbox.log
 /tmp/
 /mcp
 /.tmp-adk-inspect/
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/config.json
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/model.onnx
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/special_tokens_map.json
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/tokenizer.json
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/tokenizer_config.json
+/internal/cli/sentence-transformers_all-MiniLM-L6-v2/vocab.txt
