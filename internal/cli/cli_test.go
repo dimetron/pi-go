@@ -183,9 +183,13 @@ func TestCLI_SmolFlag(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
-	// Write a config with smol role.
+	// Write a config with smol role. Run inside the tmpDir so the
+	// loadDotEnv walk-up from cwd doesn't reach this machine's real
+	// ~/.pi-go/.env — on a dev box with a saved codex OAuth token,
+	// that walk-up would override OPENAI_API_KEY=test-key with the
+	// JWT and trip "model not supported by the ChatGPT codex
+	// backend" in NewOpenAI for non-codex-listed models.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
@@ -194,6 +198,8 @@ func TestCLI_SmolFlag(t *testing.T) {
 			"smol": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
+	t.Setenv("HOME", tmpDir)
+	t.Chdir(tmpDir)
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--smol", "--mode", "print"})
@@ -252,7 +258,14 @@ func TestRootCmdDefaultModelNoPrompt(t *testing.T) {
 
 func TestRootCmdMissingAPIKey(t *testing.T) {
 	// Isolate HOME so loadDotEnv cannot pull credentials from the real machine.
-	t.Setenv("HOME", t.TempDir())
+	// Also chdir into the same tmpDir so findNearestDotEnv cannot walk up
+	// from cwd and reach the real ~/.pi-go/.env above this repo — without
+	// that chdir the walk-up re-introduces the host's saved OPENAI_API_KEY
+	// (or, worse, a codex OAuth token) and the test's "no key set" intent
+	// never reaches buildRootRuntime.
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Chdir(tmpDir)
 
 	// Ensure no provider API keys are set.
 	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"} {
