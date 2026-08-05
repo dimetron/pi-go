@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -8,11 +8,28 @@
 # (build, install, test) compiles the same way.
 export GOEXPERIMENT := simd
 
-build:
-	go build -ldflags "-X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)" ./cmd/pi
-	go build ./cmd/pi-sandbox
+# Build verbosity. `-v` is on by default: it names each package as it compiles,
+# which is the difference between "the build is working through a cold module
+# cache" and "the build is wedged" — the case that matters in a fresh dev
+# container. `make build V=1` adds `-x`, which echoes every underlying tool
+# invocation; use it when the failure is in how a command was assembled, not in
+# what it compiled.
+GO_BUILD_FLAGS := -v $(if $(filter-out 0,$(V)),-x,)
 
-install: build
+# Stamped into `pi version`. Kept in a variable so build and install cannot
+# drift into producing differently-stamped binaries.
+GO_LDFLAGS := -X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)
+
+build:
+	go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
+	go build $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
+
+# Install onto PATH, i.e. $(go env GOBIN) or $GOPATH/bin. This used to be a bare
+# `install: build`, which has no recipe — it dropped the binaries in the repo
+# root and left nothing on PATH, so `pi` was never a command anywhere.
+install:
+	go install $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
+	go install $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
 
 # Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
 #
@@ -27,7 +44,7 @@ build-accel: deps-accel
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="-I$$(brew --prefix onnxruntime)/include" \
 	CGO_LDFLAGS="-L$$(brew --prefix onnxruntime)/lib -lonnxruntime -L$$HOME/.pi-go/lib" \
-	go build -tags ORT -o pi ./cmd/pi
+	go build $(GO_BUILD_FLAGS) -tags ORT -o pi ./cmd/pi
 
 # hugot's ORT/XLA paths statically link the Rust HF tokenizers; only the pure-Go
 # path uses the Go tokenizer. Prebuilt for darwin-arm64.

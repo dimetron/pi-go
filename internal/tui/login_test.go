@@ -161,35 +161,37 @@ func TestHandleLoginCommand_AnthropicRejected(t *testing.T) {
 	}
 }
 
-func TestHandleLoginCommand_CodexOAuthFlow(t *testing.T) {
+func TestHandleLoginCommand_CodexDeviceAuth(t *testing.T) {
 	withMockBrowser(t)
 	m := &model{}
-	// Codex uses Codex OAuth (opens browser, waits for callback, then exchanges for an API key).
-	// TLS preflight runs first; if it fails with tls-cert, login is blocked.
-	// Otherwise OAuth starts.
+	// Codex uses OpenAI's device auth rather than PKCE: there is no local
+	// callback, so the code is rendered in the chat pane for the user to enter
+	// anywhere. TLS preflight still runs first and can block the flow.
 	m.handleLoginCommand([]string{"codex"})
 
-	if m.login != nil && m.login.phase == "sso" {
-		// OAuth flow started — TLS preflight passed.
+	if m.login != nil && m.login.phase == "device" {
 		if m.login.provider != "codex" {
 			t.Errorf("expected provider codex, got %q", m.login.provider)
 		}
 		lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
-		if !strings.Contains(lastMsg.content, "codex OAuth") {
-			t.Errorf("expected codex OAuth message, got: %s", lastMsg.content)
+		if !strings.Contains(lastMsg.content, "Enter code:") {
+			t.Errorf("expected a device code prompt, got: %s", lastMsg.content)
 		}
 		return
 	}
-	// TLS preflight may have failed (network issue in CI).
-	if len(m.chatModel.Messages) > 0 {
-		lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
-		if strings.Contains(lastMsg.content, "TLS certificate") ||
-			strings.Contains(lastMsg.content, "preflight") ||
-			strings.Contains(lastMsg.content, "login") {
-			return // Expected: TLS preflight failure message.
+
+	// Without network the preflight or the usercode request fails first; both
+	// are legitimate outcomes for this test, which only pins the routing.
+	if len(m.chatModel.Messages) == 0 {
+		t.Fatal("expected either a device code prompt or an error message")
+	}
+	lastMsg := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	for _, want := range []string{"TLS certificate", "preflight", "Login error", "device auth"} {
+		if strings.Contains(lastMsg.content, want) {
+			return
 		}
 	}
-	t.Error("expected either PKCE flow started or TLS preflight error")
+	t.Errorf("expected a device prompt or a login/preflight error, got: %s", lastMsg.content)
 }
 
 func TestHandleLoginCommand_OpenAIDeviceFlow(t *testing.T) {

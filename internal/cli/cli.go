@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
 	"net/http"
 	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
 	"os"
@@ -30,6 +31,7 @@ import (
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/pirpc"
 	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -46,6 +48,11 @@ var (
 	flagSocket  string
 	flagURL     string
 	flagHeaders []string
+
+	// flagSocketChanged records whether --socket was passed explicitly, so
+	// the deprecated `--mode rpc --socket` spelling can be distinguished
+	// from the default value. Set by runRoot.
+	flagSocketChanged bool
 
 	flagContinue  bool
 	flagInsecure  bool
@@ -99,8 +106,13 @@ func newRootCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
-	cmd.Flags().StringVar(&flagMode, "mode", "", "Output mode: interactive, print, json, rpc")
-	cmd.Flags().StringVar(&flagSocket, "socket", "/tmp/pi-go.sock", "Unix socket path for RPC mode")
+	cmd.Flags().StringVar(&flagMode, "mode", "", "Output mode: interactive, print, json, socket, rpc")
+	cmd.Flags().StringVar(&flagSocket, "socket", "/tmp/pi-go.sock", "Unix socket path for socket mode")
+	// pi-acp unconditionally spawns `pi --mode rpc --no-themes`. pi-go has no
+	// themes to disable, but rejecting the flag kills the child on spawn and
+	// the adapter reports only "stream was destroyed", so accept and ignore.
+	cmd.Flags().Bool("no-themes", false, "Accepted for pi CLI compatibility; ignored")
+	_ = cmd.Flags().MarkHidden("no-themes")
 	cmd.Flags().StringVar(&flagSession, "session", "", "Session ID to resume")
 	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the LLM API endpoint")
 	cmd.Flags().BoolVar(&flagContinue, "continue", false, "Continue last session")
@@ -331,6 +343,11 @@ func startPprofServer() {
 }
 
 func runRoot(cmd *cobra.Command, args []string) error {
+	// --socket has a non-empty default, so its value alone cannot tell us
+	// whether the caller asked for it. Record explicit use here so
+	// dispatchMode can honor the pre-rename `--mode rpc --socket` spelling.
+	flagSocketChanged = cmd.Flags().Changed("socket")
+
 	// Load API keys from ~/.pi-go/.env (set by /login command).
 	loadDotEnv()
 
@@ -607,7 +624,7 @@ func runNonInteractive(
 	}
 
 	sessionLog.SessionStart(sessionID, llm.Name(), mode)
-	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name())
+	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker)
 }
 
 // loadNonInteractiveSkills loads the skill set and reports what it found.
@@ -666,13 +683,54 @@ func resolveSessionID(ctx context.Context, ag *agent.Agent, sessionSvc *pisessio
 	return sessionID, nil
 }
 
-// dispatchMode runs the agent in the requested non-interactive mode. The rpc
-// server serves requests instead of a prompt; the others need one.
-func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, sessionID string, sessionLog *logger.Logger, modelName string) error {
-	if mode == "rpc" {
+// dispatchMode runs the agent in the requested non-interactive mode. The
+// server modes serve requests instead of a prompt; the others need one.
+//
+// Two server modes exist and they are not interchangeable:
+//
+//   - "socket": pi-go's own JSON-RPC 2.0 over a Unix socket, for editor/IDE
+//     integration. This was spelled "rpc" before the rename.
+//   - "rpc": the stdio NDJSON protocol that `pi-acp` drives, wire-compatible
+//     with upstream pi's `--mode rpc`.
+func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, sessionID string, sessionLog *logger.Logger, modelName string, cfg config.Config, tokenTracker *guardrail.Tracker) error {
+	// Pre-rename spelling: `--mode rpc --socket <path>` meant the Unix socket
+	// server. Honor it with a warning rather than silently starting the
+	// stdio server and leaving the caller's socket client hanging.
+	if mode == "rpc" && flagSocketChanged {
+		fmt.Fprintln(os.Stderr,
+			"pi-go: `--mode rpc --socket` is deprecated and will be removed; use `--mode socket`.")
+		mode = "socket"
+	}
+	if mode == "socket" {
 		return jsonrpc.NewServer(jsonrpc.Config{
 			Agent:      ag,
 			SocketPath: flagSocket,
+		}).Run(ctx)
+	}
+	if mode == "rpc" {
+		return pirpc.NewServer(pirpc.Config{
+			Agent:     ag,
+			SessionID: sessionID,
+			In:        os.Stdin,
+			Out:       os.Stdout,
+			Log:       sessionLog,
+			Model:     modelName,
+			ModelSwitcher: func(switchCtx context.Context, name, providerHint string) (adkmodel.LLM, string, string, error) {
+				// buildSwitchedLLM seeds the provider from the default role
+				// and then overrides detection with it, so a stale pin would
+				// route e.g. an OpenAI model through Ollama. Substitute the
+				// provider the ACP client named; when it names none, clearing
+				// the pin lets pi-go detect from the model name.
+				switchCfg := cfg
+				switchCfg.Roles = maps.Clone(cfg.Roles)
+				if switchCfg.Roles == nil {
+					switchCfg.Roles = map[string]config.RoleConfig{}
+				}
+				rc := switchCfg.Roles["default"]
+				rc.Provider = providerHint
+				switchCfg.Roles["default"] = rc
+				return buildSwitchedLLM(switchCtx, switchCfg, tokenTracker, name)
+			},
 		}).Run(ctx)
 	}
 	if prompt == "" {

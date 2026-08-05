@@ -72,7 +72,10 @@ type Provider struct {
 	TokenToKey        func(tok *TokenResponse) string
 	KeyPageURL        string // fallback manual key page
 	DeviceURL         string // device authorization endpoint (optional)
-	UseDeviceFlow     bool   // prefer device code flow over PKCE
+	UseDeviceFlow     bool   // prefer RFC 8628 device code flow over PKCE
+	CodexDeviceAuth   bool   // use OpenAI's non-RFC-8628 device auth (see codex_device.go)
+	DeviceVerifyURL   string // page the user opens to enter the code
+	DeviceRedirectURI string // redirect_uri asserted in the device code exchange
 	TLSPreflight      bool   // run TLS preflight before OAuth (OpenAI Codex)
 	CodexOAuth        bool   // use Codex OAuth callback + token-exchange semantics
 	ManualCode        bool   // user pastes a code or callback URL (no local listener)
@@ -138,6 +141,13 @@ func Providers() []Provider {
 			KeyPageURL:   "https://platform.openai.com/api-keys",
 			TLSPreflight: true,
 			CodexOAuth:   true,
+			// Device auth is preferred over PKCE because it needs no local
+			// callback listener, so it works unchanged in a dev container, a
+			// Codespace, or over SSH — where the localhost redirect does not.
+			CodexDeviceAuth:   true,
+			DeviceURL:         "https://auth.openai.com/api/accounts/deviceauth",
+			DeviceVerifyURL:   "https://auth.openai.com/codex/device",
+			DeviceRedirectURI: "https://auth.openai.com/deviceauth/callback",
 		},
 	}
 }

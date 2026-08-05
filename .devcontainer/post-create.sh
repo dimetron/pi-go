@@ -21,30 +21,45 @@ sudo rm -rf /var/lib/apt/lists/*
 echo "==> Go tools"
 # gopls: the Go language server internal/lsp starts, and the VS Code Go extension.
 go install golang.org/x/tools/gopls@latest
-# govulncheck: `make check-cve`.
-go install golang.org/x/vuln/cmd/govulncheck@latest
 # dlv: debugging from the IDE.
 go install github.com/go-delve/delve/cmd/dlv@latest
-# goreleaser: dry-runs of .goreleaser.yaml (`goreleaser release --snapshot --clean`).
-go install github.com/goreleaser/goreleaser/v2@latest
+# govulncheck is not installed here: `make check-cve` installs it itself.
+# grype and goreleaser live in install-deps.sh — they serve the CVE and release
+# targets, not the build/test/lint loop this container exists for.
 
 # golangci-lint is installed by the go feature, pinned in devcontainer.json.
 
-echo "==> grype (make check-cve)"
-curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh |
-  sudo sh -s -- -b /usr/local/bin
-
-echo "==> language servers"
-# typescript: installHint in internal/lsp/manager.go.
-npm install -g typescript typescript-language-server
-# rust: `rustup component add rust-analyzer`, same hint.
-rustup component add rust-analyzer clippy rustfmt
-# python: internal/lsp runs `uvx ty server`; warm the tool cache so the first
-# LSP start is not a cold download.
-uv tool install ty || true
-
 echo "==> warm module cache"
 go mod download
+
+echo "==> PATH"
+# remoteEnv in devcontainer.json covers VS Code terminals and the lifecycle
+# commands, but not `docker exec`, an SSH session into a Codespace, or anything
+# else that starts a shell directly. Write the same entries into the system
+# profile so `pi` — which `make install` puts in $GOPATH/bin — resolves in every
+# shell however it was started.
+sudo tee /etc/profile.d/10-pi-go-path.sh >/dev/null <<'EOF'
+export GOPATH="${GOPATH:-$HOME/go}"
+# Prepend only when absent, so re-sourcing does not stack duplicate entries.
+for _dir in "$GOPATH/bin" "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+	case ":$PATH:" in
+	*":$_dir:"*) ;;
+	*) PATH="$_dir:$PATH" ;;
+	esac
+done
+unset _dir
+export PATH
+EOF
+sudo chmod 0644 /etc/profile.d/10-pi-go-path.sh
+mkdir -p "${GOPATH:-$HOME/go}/bin" "$HOME/.local/bin"
+
+# Interactive non-login shells — what `docker exec -it … zsh` gives you — read
+# only the rc files, which do not source /etc/profile.d.
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+	[ -f "$rc" ] || continue
+	grep -q '10-pi-go-path' "$rc" ||
+		printf '\n. /etc/profile.d/10-pi-go-path.sh\n' >>"$rc"
+done
 
 echo "==> git"
 # CONTRIBUTING.md ships a prepare-commit-msg hook under .githooks/.
@@ -59,6 +74,15 @@ pi-go dev container ready.
 
   make build          make lint          make test
   make test-all       make check-cve     make test-coverage
+  make install        # puts `pi` in $GOPATH/bin, already on PATH
+
+  kind create cluster --name pi-go        # docker-in-docker; kubectl + helm ready
+
+This image ships Go only — the full unit suite passes with nothing else on
+PATH. Node, Python, Rust, grype and goreleaser install on demand:
+
+  .devcontainer/install-deps.sh                # everything
+  .devcontainer/install-deps.sh rust python    # only what you need
 
 Notes
   * Commit signing (gpg.format=ssh via 1Password's op-ssh-sign) does not work

@@ -408,10 +408,21 @@ func TestCodexProviderConfig(t *testing.T) {
 		t.Error("codex should use Codex OAuth semantics")
 	}
 	if p.UseDeviceFlow {
-		t.Error("codex should NOT use the generic device flow")
+		t.Error("codex should NOT use the generic RFC 8628 device flow")
 	}
-	if p.DeviceURL != "" {
-		t.Error("codex should not have DeviceURL")
+	// Codex uses OpenAI's own device auth instead, which needs the base URL its
+	// /usercode and /token endpoints hang off.
+	if !p.CodexDeviceAuth {
+		t.Error("codex should use codex device auth")
+	}
+	if p.DeviceURL == "" {
+		t.Error("codex device auth needs DeviceURL")
+	}
+	if p.DeviceVerifyURL == "" {
+		t.Error("codex device auth needs DeviceVerifyURL to show the user")
+	}
+	if p.DeviceRedirectURI == "" {
+		t.Error("codex device auth needs DeviceRedirectURI for the code exchange")
 	}
 	if p.AuthURL == "" {
 		t.Error("codex must have AuthURL")
