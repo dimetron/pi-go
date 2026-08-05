@@ -3,6 +3,7 @@ package otel
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -281,4 +282,63 @@ func TestResetForTest_NotYetInitialized(t *testing.T) {
 	// must not panic even when the provider has never been initialized.
 	ResetForTest()
 	ResetForTest()
+}
+
+func TestDialAddress(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		protocol string
+		want     string
+	}{
+		{"host and port are honored", "collector.example.com:4317", "grpc", "collector.example.com:4317"},
+		{"scheme is stripped", "http://collector.example.com:4318", "http", "collector.example.com:4318"},
+		{"https without a port uses 443", "https://otlp.vendor.io", "http", "otlp.vendor.io:443"},
+		{"grpc default port", "http://collector", "grpc", "collector:4317"},
+		{"http default port", "http://collector", "http", "collector:4318"},
+		{"empty endpoint falls back to the grpc local default", "", "grpc", "localhost:4317"},
+		{"empty endpoint falls back to the http local default", "", "http", "localhost:4318"},
+		{"ipv6 literal keeps its brackets", "http://[::1]:4317", "grpc", "[::1]:4317"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dialAddress(tc.endpoint, tc.protocol); got != tc.want {
+				t.Errorf("dialAddress(%q, %q) = %q, want %q", tc.endpoint, tc.protocol, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsAvailable_ProbesTheConfiguredHost is the regression test for probing
+// localhost regardless of configuration: a listener on 127.0.0.1 must not make
+// a collector on some other host look reachable.
+func TestIsAvailable_ProbesTheConfiguredHost(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close() //nolint:errcheck
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// envOr consults ~/.pi-go/.env before the process environment, so an
+	// empty HOME is what makes t.Setenv authoritative here.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+
+	// The local listener is reachable, so its own address must report true.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:"+port)
+	if !IsAvailable() {
+		t.Error("IsAvailable() = false for a reachable local endpoint")
+	}
+
+	// TEST-NET-1 is guaranteed unroutable. The old code ignored the host and
+	// probed localhost on the same port, so this reported true.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "192.0.2.1:"+port)
+	if IsAvailable() {
+		t.Error("IsAvailable() = true for an unreachable host — the endpoint host is being ignored")
+	}
 }

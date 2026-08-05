@@ -14,10 +14,9 @@ package otel
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -184,19 +183,46 @@ func IsAvailable() bool {
 	if exporter == "" || exporter == "none" {
 		return false
 	}
+	protocol := envOr(".env", "OTEL_EXPORTER_OTLP_PROTOCOL", "http")
 	endpoint := envOr(".env", "OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	port := 4317
-	if strings.Contains(endpoint, ":") {
-		if p, err := strconv.Atoi(strings.Split(endpoint, ":")[1]); err == nil {
-			port = p
-		}
+
+	addr := dialAddress(endpoint, protocol)
+	if addr == "" {
+		return false
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 500*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 	if err != nil {
 		return false
 	}
 	conn.Close()
 	return true
+}
+
+// dialAddress resolves the configured endpoint to a host:port to probe. It
+// reuses normalizeEndpointURL so the same defaults apply as when the exporter
+// is built, and it honors the endpoint's host: probing localhost regardless of
+// where the collector actually lives reported every remote collector as
+// unavailable — and, worse, reported one as available whenever anything local
+// happened to listen on the same port. Returns "" when the endpoint cannot be
+// parsed.
+func dialAddress(endpoint, protocol string) string {
+	u, err := url.Parse(normalizeEndpointURL(endpoint, protocol))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	// No explicit port: fall back to the scheme's default, then to the OTLP
+	// default for the configured protocol.
+	switch {
+	case u.Scheme == "https":
+		return net.JoinHostPort(u.Hostname(), "443")
+	case protocol == "grpc":
+		return net.JoinHostPort(u.Hostname(), "4317")
+	default:
+		return net.JoinHostPort(u.Hostname(), "4318")
+	}
 }
 
 // Shutdown flushes and shuts down the global TracerProvider.
