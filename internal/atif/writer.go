@@ -25,7 +25,20 @@ type Writer struct {
 	filePath    string
 	trajectory  Trajectory
 	stepCounter int
-	mu          sync.Mutex
+	// flushCount is incremented on every successful flush(). Test-only:
+	// TestWriterAppendEvents_FlushedExactlyOnce reads it instead of
+	// racing a poller against os.Rename to observe temp-file appearance.
+	flushCount int
+	mu         sync.Mutex
+}
+
+// FlushCount returns the number of times flush() has completed successfully
+// since the Writer was created. It is intended for tests that need an exact
+// count of disk writes; production callers should not depend on it.
+func (w *Writer) FlushCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.flushCount
 }
 
 // NewWriter creates a Writer that will maintain an ATIF file at filePath.
@@ -177,5 +190,6 @@ func (w *Writer) flush() error {
 		os.Remove(tmpName)
 	}
 
+	w.flushCount++
 	return nil
 }

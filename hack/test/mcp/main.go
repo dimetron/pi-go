@@ -3,6 +3,8 @@
 // license that can be found in the LICENSE file.
 
 // The everything server implements all supported features of an MCP server.
+//
+//lint:file-ignore SA1019 example server exercises deprecated SEP-2577 APIs (roots, sampling, logging) for demonstration.
 package main
 
 import (
@@ -18,6 +20,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -46,16 +49,23 @@ func main() {
 	}
 }
 
+// gcOnce guards the /gc registration. ServeMux.Handle panics on a duplicate
+// pattern, so registering on every pprofMux call takes the process down the
+// second time round — as `go test -count=2` on this package used to prove.
+var gcOnce sync.Once
+
 // pprofMux returns the pprof mux with a /gc endpoint added. Triggering a few GC
 // cycles before scraping /debug/pprof/heap means the heap profile reports only
 // reachable memory, which is the point when hunting a leak.
 func pprofMux() *http.ServeMux {
-	http.DefaultServeMux.Handle("/gc", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for range 3 {
-			runtime.GC()
-		}
-		fmt.Fprintln(w, "GC'ed")
-	}))
+	gcOnce.Do(func() {
+		http.DefaultServeMux.Handle("/gc", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			for range 3 {
+				runtime.GC()
+			}
+			fmt.Fprintln(w, "GC'ed")
+		}))
+	})
 	return http.DefaultServeMux
 }
 
