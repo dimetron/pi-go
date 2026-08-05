@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -1744,5 +1745,95 @@ func TestOpenAIResponsesRequestUsesPreviousResponseID(t *testing.T) {
 	}
 	if params.Store.Valid() {
 		t.Fatalf("Store should be unset so Responses API can retain server-side state; got valid=%v value=%v", params.Store.Valid(), params.Store.Value)
+	}
+}
+
+// TestOpenAIResponses_PreviousResponseNotFoundRetries covers the recovery path
+// for an upstream that no longer resolves a stored previous_response_id — an
+// Azure/proxy deployment that routed the turn elsewhere, a store=false account,
+// or an expired response. The turn must succeed on a stateless retry rather
+// than surfacing the 400 to the user.
+func TestOpenAIResponses_PreviousResponseNotFoundRetries(t *testing.T) {
+	var bodies []map[string]any
+	okBody := func(id string) map[string]any {
+		return map[string]any{
+			"id": id, "object": "response", "created_at": 1.0, "status": "completed",
+			"model": "gpt-5-codex", "error": nil, "incomplete_details": nil,
+			"instructions": nil, "metadata": map[string]any{}, "tool_choice": "auto",
+			"tools": []any{}, "parallel_tool_calls": true, "temperature": 1, "top_p": 1,
+			"output": []map[string]any{{
+				"type": "message", "id": "msg_x", "role": "assistant", "status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "pong", "annotations": []any{}},
+				},
+			}},
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		// Reject any request carrying a previous_response_id, the way the
+		// upstream proxy does when it cannot find the referenced response.
+		if _, ok := body["previous_response_id"]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Previous response with id 'resp_gone' not found.","type":"invalid_request_error","param":"previous_response_id","code":"previous_response_not_found"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okBody("resp_new"))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	llm, err := NewOpenAI(ctx, "gpt-5-codex", "sk-test", srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewOpenAI: %v", err)
+	}
+	om := llm.(*openaiModel)
+	om.responseState = &responsesState{previousResponseID: "resp_gone"}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "ping"}}}},
+	}
+	var final *model.LLMResponse
+	for resp, genErr := range llm.GenerateContent(ctx, req, false) {
+		if genErr != nil {
+			t.Fatalf("GenerateContent should recover from previous_response_not_found, got %v", genErr)
+		}
+		final = resp
+	}
+	if final == nil || len(final.Content.Parts) == 0 || final.Content.Parts[0].Text != "pong" {
+		t.Fatalf("final response = %+v", final)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 upstream calls (reject + stateless retry), got %d", len(bodies))
+	}
+	if _, ok := bodies[1]["previous_response_id"]; ok {
+		t.Errorf("retry must drop previous_response_id, got %v", bodies[1]["previous_response_id"])
+	}
+	// The retry's own id replaces the dead one.
+	if om.responseState == nil || om.responseState.previousResponseID != "resp_new" {
+		t.Errorf("previousResponseID = %+v, want resp_new", om.responseState)
+	}
+}
+
+func TestIsPreviousResponseNotFound(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"code", errors.New(`400 Bad Request {"code":"previous_response_not_found"}`), true},
+		{"prose", errors.New(`Previous response with id 'x' not found. param: previous_response_id`), true},
+		{"unrelated", errors.New("429 Too Many Requests"), false},
+	}
+	for _, tt := range tests {
+		if got := isPreviousResponseNotFound(tt.err); got != tt.want {
+			t.Errorf("%s: isPreviousResponseNotFound = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
