@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"google.golang.org/adk/v2/session"
 )
@@ -174,61 +171,23 @@ func TestWriterAppendEvents_MixedEmpty(t *testing.T) {
 	}
 }
 
-// countFlushTransitions spins a polling goroutine that observes how many
-// times a .atif-*.tmp file appears in dir. Each call to flush() creates
-// exactly one such temp file (via os.CreateTemp) and removes it via
-// os.Rename. So the number of "appearing" transitions is a lower bound on
-// the number of flush() calls.
-//
-// The poller is best-effort: on very fast filesystems, a single flush may
-// complete between two polls and be missed entirely. The function returns
-// the observed count plus the "currently visible" indicator so the caller
-// can also reason about duration.
-func countFlushTransitions(t *testing.T, dir string, work func()) int {
+// runAndCountFlushes runs work() against a fresh Writer and returns the number
+// of flushes the writer performed, sampled directly from Writer.FlushCount
+// before and after the call. This is race-free — it does not depend on
+// file-system polling — unlike the previous countFlushTransitions helper,
+// which raced against os.Rename and missed flushes on fast filesystems.
+func runAndCountFlushes(t *testing.T, fp string, meta SessionMeta, work func(w *Writer)) int {
 	t.Helper()
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	var transitions int
-	var inTmp bool
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			entries, _ := os.ReadDir(dir)
-			hasTmp := false
-			for _, e := range entries {
-				name := e.Name()
-				if strings.HasPrefix(name, ".atif-") && strings.HasSuffix(name, ".tmp") {
-					hasTmp = true
-					break
-				}
-			}
-			if hasTmp && !inTmp {
-				transitions++
-				inTmp = true
-			} else if !hasTmp && inTmp {
-				inTmp = false
-			}
-			runtime.Gosched()
-		}
-	}()
-	work()
-	// Allow poller to drain the dir.
-	time.Sleep(2 * time.Millisecond)
-	close(stop)
-	<-done
-	return transitions
+	w := NewWriter(fp, meta)
+	before := w.FlushCount()
+	work(w)
+	return w.FlushCount() - before
 }
 
 // TestWriterAppendEvents_FlushedExactlyOnce verifies that AppendEvents flushes
-// the trajectory to disk once at the end, not once per event. The test
-// counts how many times a .atif-*.tmp file is observed in the dir during
-// the call, and compares against the same count for N per-event AppendEvent
-// calls. AppendEvents must produce strictly fewer flushes.
+// the trajectory to disk exactly once, not once per event. The number of
+// flushes is read directly from Writer.FlushCount (no filesystem polling),
+// so the assertions are exact on every filesystem.
 func TestWriterAppendEvents_FlushedExactlyOnce(t *testing.T) {
 	const N = 30
 
@@ -240,8 +199,7 @@ func TestWriterAppendEvents_FlushedExactlyOnce(t *testing.T) {
 	}
 
 	// Batch path: one AppendEvents call.
-	batchCount := countFlushTransitions(t, dir, func() {
-		w := NewWriter(fp, SessionMeta{SessionID: "sess-batch", AgentName: "pi-go"})
+	batchCount := runAndCountFlushes(t, fp, SessionMeta{SessionID: "sess-batch", AgentName: "pi-go"}, func(w *Writer) {
 		if err := w.AppendEvents(events); err != nil {
 			t.Errorf("AppendEvents: %v", err)
 		}
@@ -250,8 +208,7 @@ func TestWriterAppendEvents_FlushedExactlyOnce(t *testing.T) {
 	// Live path: N AppendEvent calls in a fresh dir.
 	dirLive := t.TempDir()
 	fpLive := filepath.Join(dirLive, "trajectory.atif.json")
-	liveCount := countFlushTransitions(t, dirLive, func() {
-		w := NewWriter(fpLive, SessionMeta{SessionID: "sess-live", AgentName: "pi-go"})
+	liveCount := runAndCountFlushes(t, fpLive, SessionMeta{SessionID: "sess-live", AgentName: "pi-go"}, func(w *Writer) {
 		for _, ev := range events {
 			if err := w.AppendEvent(ev); err != nil {
 				t.Errorf("AppendEvent: %v", err)
@@ -259,19 +216,11 @@ func TestWriterAppendEvents_FlushedExactlyOnce(t *testing.T) {
 		}
 	})
 
-	if batchCount == 0 {
-		t.Errorf("poller did not observe any flush; test is not reliable on this filesystem")
+	if batchCount != 1 {
+		t.Errorf("AppendEvents produced %d flushes; want exactly 1 (one batch flush at the end)", batchCount)
 	}
-	if liveCount == 0 {
-		t.Errorf("poller did not observe any live flush; test is not reliable on this filesystem")
-	}
-	if batchCount >= liveCount {
-		t.Errorf("AppendEvents should produce fewer flushes than N per-event AppendEvent calls: batch=%d live=%d (N=%d)", batchCount, liveCount, N)
-	}
-	// AppendEvents should be roughly 1; allow a small slack for the
-	// os.Rename-close race in the poller.
-	if batchCount > 3 {
-		t.Errorf("AppendEvents produced %d flush observations; want <= 3 (single flush, with poller race slack)", batchCount)
+	if liveCount != N {
+		t.Errorf("AppendEvent x%d produced %d flushes; want exactly %d (one per event)", N, liveCount, N)
 	}
 }
 
