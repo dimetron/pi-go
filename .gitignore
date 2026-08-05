@@ -54,3 +54,5 @@ sandbox.log
 /wiki/
 /hack/test/tb2/jobs/
 /tmp/
+/mcp
+/.tmp-adk-inspect/

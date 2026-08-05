@@ -1,0 +1,3 @@
+# Rough Idea
+
+session-memory
