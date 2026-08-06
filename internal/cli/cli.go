@@ -26,6 +26,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/jsonrpc"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
@@ -64,6 +65,7 @@ var (
 	flagSystem    string
 	flagPprof     string
 	flagPprofPort string
+	flagTraceHTTP bool
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).
@@ -134,6 +136,10 @@ func newRootCmd() *cobra.Command {
 	// "unknown flag: --pprof" the moment a subcommand was used.
 	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
 	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
+	// Persistent for the same reason as --pprof: `pi ping --trace-http` and the
+	// other subcommands that reach a provider all need it.
+	cmd.PersistentFlags().BoolVar(&flagTraceHTTP, "trace-http", false,
+		"Log full LLM request/response headers and bodies to the session log and OTel spans (credentials masked; prompts are not)")
 
 	cmd.AddCommand(newPingCmd())
 	cmd.AddCommand(newAuditCmd())
@@ -254,7 +260,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		AdvisorMaxUses: advisorMaxUses,
 		AdvisorCaching: advisorCaching,
 	}
-	applyTLSOptions(llmOpts, cfg)
+	applyTransportOptions(llmOpts, cfg)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("creating LLM provider: %w", err)
@@ -569,7 +575,14 @@ func runNonInteractive(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
 	}
-	defer func() { _ = sessionLog.Close() }()
+	// --trace-http entries are dropped until this point, because the transport
+	// is built well before the log file exists. In practice the only requests
+	// that precede it are the ollama health check and model listing.
+	httplog.SetSink(logger.HTTPSink(sessionLog))
+	defer func() {
+		httplog.SetSink(nil)
+		_ = sessionLog.Close()
+	}()
 
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
@@ -1411,16 +1424,24 @@ func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[st
 	return merged
 }
 
-// applyTLSOptions layers the --insecure/--ca-cert flags over the TLS trust
-// settings from config. The flags are additive: neither one can turn a
-// config-enabled setting back off, matching how --header behaves.
-func applyTLSOptions(opts *provider.LLMOptions, cfg config.Config) {
+// applyTransportOptions layers the --insecure/--ca-cert/--trace-http flags over
+// the transport settings from config. The flags are additive: none of them can
+// turn a config-enabled setting back off, matching how --header behaves.
+func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config) {
 	opts.InsecureSkipTLS = cfg.InsecureSkipTLS || flagInsecure
 	opts.CACertPath = cfg.CACertPath
 	if flagCACert != "" {
 		opts.CACertPath = flagCACert
 	}
 	opts.DisableSystemCAs = cfg.DisableSystemCAs
+
+	opts.TraceHTTP = cfg.TraceHTTP || flagTraceHTTP
+	// The transport reads this through httplog rather than from opts, so that
+	// a client built before the flag was parsed still honors it. Setting it
+	// here keeps the two in step for every path that builds an LLM.
+	if opts.TraceHTTP {
+		httplog.SetEnabled(true)
+	}
 }
 
 // convertHooks converts config.HookConfig to extension.HookConfig.
