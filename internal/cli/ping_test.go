@@ -1266,9 +1266,9 @@ func TestDumpPingRequestMasksAzureKey(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	secrets := map[string]string{
-		"Api-Key":       "b38a5a7c-9c76-44ed-bfe6-8dd98296d6af",
-		"X-Api-Key":     "sk-ant-secretvalue-abcdef",
-		"Authorization": "Bearer sk-secretvalue-abcdef",
+		"Api-Key":       "azure-fake-key-for-test",
+		"X-Api-Key":     "anthropic-fake-header-value",
+		"Authorization": "Bearer fake-bearer-token",
 	}
 	for k, v := range secrets {
 		req.Header.Set(k, v)
@@ -1296,13 +1296,13 @@ func TestDumpPingResponseMasksSetCookie(t *testing.T) {
 	resp := &http.Response{
 		ProtoMajor: 2,
 		Status:     "200 OK",
-		Header:     http.Header{"Set-Cookie": {"session=supersecretvalue"}, "Content-Type": {"application/json"}},
+		Header:     http.Header{"Set-Cookie": {"session=fake-cookie-value"}, "Content-Type": {"application/json"}},
 	}
 	var sb strings.Builder
 	dumpPingResponse(func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }, resp, time.Second)
 	out := sb.String()
 
-	if strings.Contains(out, "supersecretvalue") {
+	if strings.Contains(out, "fake-cookie-value") {
 		t.Errorf("dumpPingResponse leaked Set-Cookie:\n%s", out)
 	}
 	if !strings.Contains(out, "application/json") {
