@@ -166,7 +166,24 @@ func mustLoadContextWindowSizes() map[string]int64 {
 	return sizes
 }
 
-func loadContextWindowSizes() (map[string]int64, error) {
+func mustLoadContextWindowSizesByProvider() map[string]map[string]int64 {
+	sizes, err := loadContextWindowSizesByProvider()
+	if err != nil {
+		panic(err)
+	}
+	return sizes
+}
+
+// loadContextWindowSizesByProvider keeps each vendor's windows separate.
+//
+// The flattened form below cannot represent Azure: a deployment is named after
+// the model it serves, but its window is whatever the deployment was
+// provisioned with, and 15 of the 28 Azure deployments disagree with the same
+// model ID on OpenAI's own API — gpt-5.1 is 272K on Azure against 1.05M
+// upstream, gpt-5.6-luna is 1.05M against 272K, both directions. Merging them
+// into one prefix map makes the winner depend on Go's map iteration order, so
+// the same binary would compact at a different threshold run to run.
+func loadContextWindowSizesByProvider() (map[string]map[string]int64, error) {
 	b, err := modelCatalogFS.ReadFile("modeldata/context-windows.json")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded context windows: %w", err)
@@ -175,13 +192,45 @@ func loadContextWindowSizes() (map[string]int64, error) {
 	if err := json.Unmarshal(b, &byProvider); err != nil {
 		return nil, fmt.Errorf("parse embedded context windows: %w", err)
 	}
-	out := make(map[string]int64)
-	for _, models := range byProvider {
+	out := make(map[string]map[string]int64, len(byProvider))
+	for provider, models := range byProvider {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" {
+			continue
+		}
+		cleaned := make(map[string]int64, len(models))
 		for prefix, size := range models {
 			prefix = strings.ToLower(strings.TrimSpace(prefix))
 			if prefix == "" || size <= 0 {
 				continue
 			}
+			cleaned[prefix] = size
+		}
+		if len(cleaned) > 0 {
+			out[provider] = cleaned
+		}
+	}
+	return out, nil
+}
+
+// loadContextWindowSizes flattens every vendor into one prefix map, for the
+// provider-less ContextWindowSize path.
+//
+// Azure is deliberately excluded. Its deployment names collide with OpenAI's
+// model IDs while carrying different windows, so folding it in would corrupt
+// the OpenAI answers for a caller that never asked about Azure. Azure windows
+// are reachable only through ContextWindowSizeFor.
+func loadContextWindowSizes() (map[string]int64, error) {
+	byProvider, err := loadContextWindowSizesByProvider()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64)
+	for provider, models := range byProvider {
+		if provider == "azure" {
+			continue
+		}
+		for prefix, size := range models {
 			out[prefix] = size
 		}
 	}

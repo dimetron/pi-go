@@ -1183,3 +1183,56 @@ func TestMergeExtraHeaders_NoEqualsSign(t *testing.T) {
 		t.Errorf("expected empty map for no-equals, got %v", result)
 	}
 }
+
+// TestDumpPingRequestMasksAzureKey pins the credential-leak fix: the old local
+// mask list covered Authorization and X-Api-Key only, so Azure's `Api-Key`
+// header — the one every Azure request carries — was printed in full.
+func TestDumpPingRequestMasksAzureKey(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://res.openai.azure.com/openai/deployments/d", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	secrets := map[string]string{
+		"Api-Key":       "b38a5a7c-9c76-44ed-bfe6-8dd98296d6af",
+		"X-Api-Key":     "sk-ant-secretvalue-abcdef",
+		"Authorization": "Bearer sk-secretvalue-abcdef",
+	}
+	for k, v := range secrets {
+		req.Header.Set(k, v)
+	}
+
+	var sb strings.Builder
+	dumpPingRequest(func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }, req)
+	out := sb.String()
+
+	for header, secret := range secrets {
+		if strings.Contains(out, secret) {
+			t.Errorf("dumpPingRequest leaked the %s value in full:\n%s", header, out)
+		}
+	}
+	if !strings.Contains(out, "***") {
+		t.Errorf("no masking marker present:\n%s", out)
+	}
+	// The caller still owns the request; redaction must not strip it.
+	if req.Header.Get("Api-Key") != secrets["Api-Key"] {
+		t.Error("dumpPingRequest mutated the request's own headers")
+	}
+}
+
+func TestDumpPingResponseMasksSetCookie(t *testing.T) {
+	resp := &http.Response{
+		ProtoMajor: 2,
+		Status:     "200 OK",
+		Header:     http.Header{"Set-Cookie": {"session=supersecretvalue"}, "Content-Type": {"application/json"}},
+	}
+	var sb strings.Builder
+	dumpPingResponse(func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }, resp, time.Second)
+	out := sb.String()
+
+	if strings.Contains(out, "supersecretvalue") {
+		t.Errorf("dumpPingResponse leaked Set-Cookie:\n%s", out)
+	}
+	if !strings.Contains(out, "application/json") {
+		t.Errorf("ordinary headers must pass through:\n%s", out)
+	}
+}

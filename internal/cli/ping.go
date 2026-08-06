@@ -240,6 +240,14 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
+	// Azure resolves its endpoint and credential through the same helpers a
+	// real run uses, so a passing ping means the settings a real run would pick
+	// up are the ones that worked. Ping used to ignore AZURE_OPENAI_ENDPOINT
+	// entirely and had no fallback for AZUREOPENAI_API_KEY / AZURE_API_KEY.
+	if info.Provider == "azure" {
+		baseURL = provider.AzureEndpoint(baseURL)
+		apiKey = provider.AzureAPIKey(apiKey)
+	}
 	if baseURL == "" {
 		baseURL = defaultAPIBaseURL(info.Provider)
 	}
@@ -255,6 +263,11 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	}
 
 	endpoint := pingEndpointForBaseURL(info.Provider, baseURL)
+	if info.Provider == "azure" {
+		// Same rules NewAzureOpenAI applies to real traffic: deployment path
+		// plus api-version on a native resource, /models on a compat gateway.
+		endpoint = provider.AzureProbePath(info.Model, "", baseURL)
+	}
 	if codexBackend {
 		// The codex backend only exposes POST /responses — use it as a
 		// reachability target (it will 405 for GET, which we treat as
@@ -459,14 +472,17 @@ func pingTraceSink(w pingWriter) func(httplog.Entry) {
 }
 
 // dumpPingRequest echoes the outgoing request curl -v style, masking credentials.
+//
+// Redaction is delegated to httplog rather than kept as a local list. The local
+// one covered Authorization and X-Api-Key only, and so printed Azure keys in
+// full — Azure authenticates with the header spelled `Api-Key`, which did not
+// match either name. Anything that authenticates a request now has exactly one
+// place to be declared.
 func dumpPingRequest(w pingWriter, req *http.Request) {
 	w("%s> %s %s HTTP/1.1%s\n", colorBlue, req.Method, req.URL.RequestURI(), colorReset)
 	w("%s> Host: %s%s\n", colorBlue, req.URL.Host, colorReset)
-	for k, vs := range req.Header {
+	for k, vs := range httplog.Redact(req.Header) {
 		for _, v := range vs {
-			if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "X-Api-Key") {
-				v = v[:min(10, len(v))] + "..."
-			}
 			w("%s> %s: %s%s\n", colorBlue, k, v, colorReset)
 		}
 	}
@@ -474,9 +490,12 @@ func dumpPingRequest(w pingWriter, req *http.Request) {
 }
 
 // dumpPingResponse echoes the response status line, headers and total time.
+//
+// Responses are redacted too: set-cookie and openai-organization identify the
+// account, and ping output is what people paste into a bug report.
 func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 	w("%s< HTTP/%d.%d %s%s\n", colorBlue, resp.ProtoMajor, resp.ProtoMinor, resp.Status, colorReset)
-	for k, vs := range resp.Header {
+	for k, vs := range httplog.Redact(resp.Header) {
 		for _, v := range vs {
 			w("%s< %s: %s%s\n", colorBlue, k, v, colorReset)
 		}

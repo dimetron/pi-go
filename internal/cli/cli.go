@@ -336,7 +336,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	ctxWindowSize := provider.ContextWindowSize(info.Model)
+	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
 	if info.Ollama {
 		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
 			ctxWindowSize = n
