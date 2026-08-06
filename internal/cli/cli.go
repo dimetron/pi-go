@@ -31,6 +31,7 @@ import (
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/pirpc"
 	"github.com/dimetron/pi-go/internal/provider"
@@ -586,6 +587,12 @@ func runNonInteractive(
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
 	afterCBs := extension.BuildAfterToolCallbacks(hooks)
 
+	tracingBefore, tracingAfter := extension.BuildTracingCallbacks()
+	beforeCBs = append(beforeCBs, tracingBefore...)
+	afterCBs = append(afterCBs, tracingAfter...)
+	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(info.Provider)
+	llmBefore = append(llmBefore, extension.BuildReadImageCallback(runtime.sandbox))
+
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
 	// Dedup runs after the compactor so both calls are compared in their final,
@@ -661,9 +668,8 @@ func runNonInteractive(
 		SessionService:      sessionSvc,
 		BeforeToolCallbacks: beforeCBs,
 		AfterToolCallbacks:  afterCBs,
-		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			extension.BuildReadImageCallback(runtime.sandbox),
-		},
+		BeforeModelCallbacks: llmBefore,
+		AfterModelCallbacks:  llmAfter,
 		Logger: sessionLog,
 	})
 	if err != nil {
@@ -1215,6 +1221,10 @@ func formatPrintSkillLoad(count int, err error) string {
 // runPrint runs the agent and prints text responses to stdout.
 // Tool calls are shown as status lines on stderr.
 func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
+	ctx, span := otel.Tracer("pi-go").Start(ctx, "agent.prompt")
+	defer span.End()
+	span.SetAttributes(otel.AttributeInt("prompt.length", len(prompt)))
+
 	log.UserMessage(prompt)
 	// Auto-set the session title from the user prompt. Print mode is
 	// non-interactive, so we don't emit OSC 0 — there may be no terminal, or

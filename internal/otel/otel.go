@@ -129,17 +129,19 @@ func initProvider() {
 		default: // "otlp" or any other value
 			protocol := envOr(".env", "OTEL_EXPORTER_OTLP_PROTOCOL", "http")
 			endpoint := envOr(".env", "OTEL_EXPORTER_OTLP_ENDPOINT", "")
-			endpointURL := normalizeEndpointURL(endpoint, protocol)
 
 			var exp *otlptrace.Exporter
 			var err error
 			if protocol == "grpc" {
 				exp, err = otlptracegrpc.New(ctx,
-					otlptracegrpc.WithEndpointURL(endpointURL),
+					otlptracegrpc.WithEndpointURL(normalizeEndpointURL(endpoint, protocol)),
 				)
 			} else {
+				// OTel Go v1.45+ no longer appends /v1/traces for pathless
+				// WithEndpointURL values; add it so OTEL_EXPORTER_OTLP_ENDPOINT
+				// behaves like the spec (base URL → /v1/traces).
 				exp, err = otlptracehttp.New(ctx,
-					otlptracehttp.WithEndpointURL(endpointURL),
+					otlptracehttp.WithEndpointURL(httpTraceEndpointURL(endpoint)),
 				)
 			}
 			if err == nil {
@@ -259,6 +261,18 @@ func AttributeBool(key string, value bool) attribute.KeyValue {
 // AttributeInt returns an int attribute key-value pair.
 func AttributeInt(key string, value int) attribute.KeyValue {
 	return attribute.Int(key, value)
+}
+
+// httpTraceEndpointURL resolves the OTLP/HTTP traces export URL. When the
+// configured endpoint has no path (or only "/"), /v1/traces is appended so a
+// base URL like http://localhost:4318 reaches the collector's trace endpoint.
+func httpTraceEndpointURL(endpoint string) string {
+	endpointURL := normalizeEndpointURL(endpoint, "http")
+	u, err := url.Parse(endpointURL)
+	if err != nil || u.Path == "" || u.Path == "/" {
+		return strings.TrimSuffix(endpointURL, "/") + "/v1/traces"
+	}
+	return endpointURL
 }
 
 // normalizeEndpointURL ensures the endpoint has an http:// scheme so the OTel
