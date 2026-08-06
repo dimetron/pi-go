@@ -661,16 +661,16 @@ func runNonInteractive(
 	}()
 
 	ag, err := agent.New(agent.Config{
-		Model:               llm,
-		Tools:               coreTools,
-		Toolsets:            allToolsets,
-		Instruction:         instruction,
-		SessionService:      sessionSvc,
-		BeforeToolCallbacks: beforeCBs,
-		AfterToolCallbacks:  afterCBs,
+		Model:                llm,
+		Tools:                coreTools,
+		Toolsets:             allToolsets,
+		Instruction:          instruction,
+		SessionService:       sessionSvc,
+		BeforeToolCallbacks:  beforeCBs,
+		AfterToolCallbacks:   afterCBs,
 		BeforeModelCallbacks: llmBefore,
 		AfterModelCallbacks:  llmAfter,
-		Logger: sessionLog,
+		Logger:               sessionLog,
 	})
 	if err != nil {
 		return fmt.Errorf("creating agent: %w", err)

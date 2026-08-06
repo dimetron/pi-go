@@ -2,12 +2,15 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 // runModelList executes the cobra "model list" command with the given args,
@@ -140,13 +143,15 @@ func TestRunModelList_Gemini(t *testing.T) {
 	}
 }
 
+// Azure lists from the embedded catalog and issues no request at all: there is
+// no key-authenticated route that enumerates deployments. The stub server is
+// here to prove it stays untouched even when --url points at one.
 func TestRunModelList_Azure(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{
-				{"id": "gpt-4o", "owned_by": "azure"},
-			},
-		})
+	isolateRunModelListEnv(t)
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
 	}))
 	defer srv.Close()
 
@@ -154,8 +159,66 @@ func TestRunModelList_Azure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(out, "gpt-4o") {
-		t.Errorf("output missing gpt-4o: %s", out)
+	if hits != 0 {
+		t.Errorf("made %d requests, want 0 — the azure catalog is embedded", hits)
+	}
+	for _, want := range []string{
+		"deployments, from the embedded catalog",
+		"gpt-5.6-luna",
+		"1.05M context",
+		"--model azure/<deployment>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A user with only Azure configured previously got "no providers configured",
+// because azure is absent from allProviders.
+func TestRunModelList_NoArgs_AzureOnly(t *testing.T) {
+	isolateRunModelListEnv(t)
+	t.Setenv("AZURE_OPENAI_API_KEY", "testkey")
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+
+	out, err := runModelListCapture(t)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "gpt-5.6-luna") {
+		t.Errorf("no-args listing omitted the azure catalog:\n%s", out)
+	}
+}
+
+func TestHumanTokens(t *testing.T) {
+	cases := map[int64]string{
+		1_050_000: "1.05M",
+		1_000_000: "1.00M",
+		272_000:   "272K",
+		8_000:     "8K",
+		32_768:    "32K",
+		512:       "512",
+	}
+	for n, want := range cases {
+		if got := humanTokens(n); got != want {
+			t.Errorf("humanTokens(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestPrintAzureDeployments(t *testing.T) {
+	var sb strings.Builder
+	printAzureDeployments(&sb)
+	out := sb.String()
+
+	want := len(provider.AzureDeployments())
+	if !strings.Contains(out, fmt.Sprintf("azure (%d deployments", want)) {
+		t.Errorf("header does not report %d deployments:\n%s", want, out)
+	}
+	// The window is the whole point of showing this table — a deployment name
+	// alone says nothing that --model does not already.
+	if !strings.Contains(out, "gpt-4") || !strings.Contains(out, "context") {
+		t.Errorf("output missing deployment rows:\n%s", out)
 	}
 }
 

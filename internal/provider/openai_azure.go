@@ -65,26 +65,36 @@ func IsAzureCompatProxyEndpoint(endpoint string) bool {
 	return isAzureOpenAICompatProxyEndpoint(endpoint)
 }
 
-// AzureProbePath returns the path `pi ping` should GET for an Azure endpoint,
-// built from the same rules NewAzureOpenAI applies to real traffic.
+// AzureProbePaths returns the paths `pi ping` should GET for an Azure
+// endpoint, most informative first, built from the same rules NewAzureOpenAI
+// applies to real traffic. The caller tries them in order and keeps the first
+// that answers 2xx.
 //
-// A native resource gets /openai/deployments/{deployment}?api-version=…, the
-// data-plane route that actually proves the deployment exists and the key is
-// scoped to it. Pinging the bare host instead — which is what ping did before —
-// only proved a TLS handshake to Azure's front door, and returned the same 404
-// whether the deployment was missing, misnamed, or fine.
+// There are two because neither alone is both reliable and meaningful:
 //
-// A compat proxy gets /models, since deployment paths and api-version break
-// routing there for the same reason they are skipped on real requests.
-func AzureProbePath(deployment, apiVersion, endpoint string) string {
+//   - /openai/models?api-version=… is the data-plane list route. A 200 proves
+//     the resource is reachable AND that the Api-Key is accepted, which is the
+//     part worth knowing. It does not name the deployment.
+//   - /openai/deployments/{deployment}?api-version=… names the deployment, but
+//     it is the legacy Deployments_Get route and current api-versions may not
+//     serve it at all. It is the fallback, not the primary.
+//
+// Neither one establishes that the deployment can serve a completion — only
+// the model ping that follows does. Pinging the bare host, which is what ping
+// did before, proved nothing beyond a TLS handshake to Azure's front door.
+//
+// A compat proxy gets /models alone, since deployment paths and api-version
+// break routing there for the same reason they are skipped on real requests.
+func AzureProbePaths(deployment, apiVersion, endpoint string) []string {
 	if IsAzureCompatProxyEndpoint(endpoint) {
-		return "/models"
+		return []string{"/models"}
 	}
-	path := "/openai/deployments"
+	query := "?api-version=" + url.QueryEscape(AzureAPIVersion(apiVersion))
+	paths := []string{"/openai/models" + query}
 	if deployment != "" {
-		path += "/" + url.PathEscape(deployment)
+		paths = append(paths, "/openai/deployments/"+url.PathEscape(deployment)+query)
 	}
-	return path + "?api-version=" + url.QueryEscape(AzureAPIVersion(apiVersion))
+	return paths
 }
 
 // NewAzureOpenAI creates an Azure OpenAI model.LLM.

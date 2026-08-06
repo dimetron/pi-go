@@ -122,7 +122,11 @@ type pingTarget struct {
 	apiKey    string
 	baseURL   string
 	targetURL string
-	opts      *provider.LLMOptions
+	// fallbackURLs are tried in order when targetURL answers non-2xx. Azure
+	// populates them because no single GET route is both universally served
+	// and meaningful — see provider.AzureProbePaths.
+	fallbackURLs []string
+	opts         *provider.LLMOptions
 	// codexBackend routes through the ChatGPT codex backend because the key is
 	// an OAuth token the platform API would reject.
 	codexBackend bool
@@ -242,8 +246,10 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	}
 	// Azure resolves its endpoint and credential through the same helpers a
 	// real run uses, so a passing ping means the settings a real run would pick
-	// up are the ones that worked. Ping used to ignore AZURE_OPENAI_ENDPOINT
-	// entirely and had no fallback for AZUREOPENAI_API_KEY / AZURE_API_KEY.
+	// up are the ones that worked. config.APIKeys already covers all three key
+	// vars; routing through provider.AzureAPIKey keeps ping and the client on
+	// one chain that cannot drift. The endpoint is the real gap — ping ignored
+	// AZURE_OPENAI_ENDPOINT entirely and saw only the configured base URL.
 	if info.Provider == "azure" {
 		baseURL = provider.AzureEndpoint(baseURL)
 		apiKey = provider.AzureAPIKey(apiKey)
@@ -262,11 +268,16 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 		baseURL = codexPingBaseURL
 	}
 
-	endpoint := pingEndpointForBaseURL(info.Provider, baseURL)
+	var endpoint string
+	var fallbacks []string
 	if info.Provider == "azure" {
-		// Same rules NewAzureOpenAI applies to real traffic: deployment path
-		// plus api-version on a native resource, /models on a compat gateway.
-		endpoint = provider.AzureProbePath(info.Model, "", baseURL)
+		// Same rules NewAzureOpenAI applies to real traffic: api-version on a
+		// native resource, /models on a compat gateway. The first candidate is
+		// the probe; the rest are tried only if it does not answer 2xx.
+		paths := provider.AzureProbePaths(info.Model, "", baseURL)
+		endpoint, fallbacks = paths[0], paths[1:]
+	} else {
+		endpoint = pingEndpointForBaseURL(info.Provider, baseURL)
 	}
 	if codexBackend {
 		// The codex backend only exposes POST /responses — use it as a
@@ -280,11 +291,17 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	}
 	applyTransportOptions(opts, cfg)
 
+	trimmed := strings.TrimRight(baseURL, "/")
+	fallbackURLs := make([]string, 0, len(fallbacks))
+	for _, p := range fallbacks {
+		fallbackURLs = append(fallbackURLs, trimmed+p)
+	}
 	return &pingTarget{
 		info:         info,
 		apiKey:       apiKey,
 		baseURL:      baseURL,
-		targetURL:    strings.TrimRight(baseURL, "/") + endpoint,
+		targetURL:    trimmed + endpoint,
+		fallbackURLs: fallbackURLs,
 		codexBackend: codexBackend,
 		opts:         opts,
 	}, nil
@@ -505,14 +522,45 @@ func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 	w("*\n")
 }
 
-// doHTTP issues the traced health-check request. The caller owns ctx and the
-// returned response body.
+// doHTTP issues the traced health-check request, walking targetURL and then
+// each fallback until one answers 2xx. The caller owns ctx and the returned
+// response body.
+//
+// Only Azure supplies fallbacks: its two candidate routes trade off against
+// each other (one is meaningful, the other is more widely served), so which
+// one a given resource honours is not knowable ahead of the request.
 func (t *pingTarget) doHTTP(ctx context.Context, w pingWriter) (*http.Response, error) {
+	resp, err := t.doHTTPTo(ctx, w, t.targetURL)
+	if err != nil {
+		return nil, err
+	}
+	for _, next := range t.fallbackURLs {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return resp, nil
+		}
+		w("* %s⚠ HTTP %d — retrying the probe at %s%s\n", colorYellow, resp.StatusCode, next, colorReset)
+		_ = resp.Body.Close()
+		// A transport error here is not "this route is unserved" — the first
+		// request already reached the host, so the connection itself broke.
+		// That is worth failing on rather than papering over with the next
+		// candidate.
+		fallbackResp, fallbackErr := t.doHTTPTo(ctx, w, next)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		t.targetURL = next
+		resp = fallbackResp
+	}
+	return resp, nil
+}
+
+// doHTTPTo issues one traced GET against rawURL.
+func (t *pingTarget) doHTTPTo(ctx context.Context, w pingWriter, rawURL string) (*http.Response, error) {
 	w("* %s─── HTTP Request ───%s\n", colorBlue, colorReset)
 
 	req, err := http.NewRequestWithContext(
 		httptrace.WithClientTrace(ctx, pingClientTrace(w)),
-		http.MethodGet, t.targetURL, nil)
+		http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}

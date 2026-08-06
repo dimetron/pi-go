@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -68,17 +69,26 @@ func TestAzureUnknownDeploymentResolves(t *testing.T) {
 }
 
 // The bare "gpt-4" entry is a real 8K deployment, but it is also a prefix of
-// every gpt-4o and gpt-4.1 name. Without an explicit gpt-4o guard, an
-// uncataloged gpt-4o deployment resolved to 8K and compacted ~16x too early.
-func TestAzureGPT4PrefixDoesNotSwallowGPT4o(t *testing.T) {
-	if got := ContextWindowSizeFor("azure", "gpt-4"); got != 8_000 {
-		t.Errorf("gpt-4 = %d, want 8000", got)
+// every gpt-4o, gpt-4.1, gpt-4-turbo and gpt-4-32k name. Without an entry of
+// their own, those resolved to 8K and compacted up to 16x too early.
+//
+// "gpt-4-turbo-128k" does not cover a deployment named plainly "gpt-4-turbo":
+// the catalog key is longer than the name, so it cannot prefix-match it, and
+// the lookup fell through to "gpt-4".
+func TestAzureGPT4PrefixDoesNotSwallowLongerNames(t *testing.T) {
+	cases := map[string]int64{
+		"gpt-4":              8_000,
+		"gpt-4o-autox":       128_000,
+		"gpt-4.1":            1_000_000,
+		"gpt-4-turbo":        128_000,
+		"gpt-4-turbo-128k":   128_000,
+		"gpt-4-turbo-eastus": 128_000,
+		"gpt-4-32k":          32_768,
 	}
-	if got := ContextWindowSizeFor("azure", "gpt-4o-autox"); got != 128_000 {
-		t.Errorf("gpt-4o-autox = %d, want 128000, not the 8K gpt-4 entry", got)
-	}
-	if got := ContextWindowSizeFor("azure", "gpt-4.1"); got != 1_000_000 {
-		t.Errorf("gpt-4.1 = %d, want 1000000, not the 8K gpt-4 entry", got)
+	for model, want := range cases {
+		if got := ContextWindowSizeFor("azure", model); got != want {
+			t.Errorf("ContextWindowSizeFor(azure, %q) = %d, want %d", model, got, want)
+		}
 	}
 }
 
@@ -112,9 +122,11 @@ func TestAzureLongestPrefixWins(t *testing.T) {
 
 func TestAzureDeployments(t *testing.T) {
 	got := AzureDeployments()
-	// 28 deployments from the source table, plus the gpt-4o family guard.
-	if len(got) != 29 {
-		t.Errorf("AzureDeployments() returned %d entries, want 29", len(got))
+	// Every key in the azure block of context-windows.json: the deployments
+	// themselves plus the family guards ("gpt-4o", "gpt-4-turbo", "gpt-4-32k")
+	// that keep the 8K "gpt-4" entry from swallowing longer names.
+	if len(got) != 31 {
+		t.Errorf("AzureDeployments() returned %d entries, want 31", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1].Name >= got[i].Name {
@@ -128,43 +140,65 @@ func TestAzureDeployments(t *testing.T) {
 	}
 }
 
-func TestAzureProbePathNativeResource(t *testing.T) {
-	got := AzureProbePath("gpt-5.6-luna", "2025-04-01-preview", "https://my-res.openai.azure.com")
-	want := "/openai/deployments/gpt-5.6-luna?api-version=2025-04-01-preview"
-	if got != want {
-		t.Errorf("AzureProbePath = %q, want %q", got, want)
+// The credential check comes first, because it is the candidate whose 200
+// means something; the legacy deployment route is the wider-served fallback.
+func TestAzureProbePathsNativeResource(t *testing.T) {
+	got := AzureProbePaths("gpt-5.6-luna", "2025-04-01-preview", "https://my-res.openai.azure.com")
+	want := []string{
+		"/openai/models?api-version=2025-04-01-preview",
+		"/openai/deployments/gpt-5.6-luna?api-version=2025-04-01-preview",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("AzureProbePaths = %q, want %q", got, want)
+	}
+}
+
+// Without a deployment name there is nothing the second candidate could ask
+// about, so it must not be emitted as a bare /openai/deployments listing.
+func TestAzureProbePathsNoDeployment(t *testing.T) {
+	got := AzureProbePaths("", "v1", "https://my-res.openai.azure.com")
+	if len(got) != 1 || got[0] != "/openai/models?api-version=v1" {
+		t.Errorf("AzureProbePaths with no deployment = %q, want just the models route", got)
 	}
 }
 
 // A compat gateway must not get deployment paths or api-version — the same
-// carve-out NewAzureOpenAI makes for real traffic.
-func TestAzureProbePathCompatProxy(t *testing.T) {
-	got := AzureProbePath("gpt-5.6-luna", "", "https://gw.corp.internal/openai/v1")
-	if got != "/models" {
-		t.Errorf("AzureProbePath on a compat proxy = %q, want /models", got)
+// carve-out NewAzureOpenAI makes for real traffic. One candidate only: there
+// is no Azure-shaped route to fall back to.
+func TestAzureProbePathsCompatProxy(t *testing.T) {
+	got := AzureProbePaths("gpt-5.6-luna", "", "https://gw.corp.internal/openai/v1")
+	if len(got) != 1 || got[0] != "/models" {
+		t.Errorf("AzureProbePaths on a compat proxy = %q, want [/models]", got)
 	}
-	if strings.Contains(got, "api-version") {
-		t.Error("compat proxy probe must not carry api-version")
+	for _, p := range got {
+		if strings.Contains(p, "api-version") {
+			t.Errorf("compat proxy probe %q must not carry api-version", p)
+		}
 	}
 }
 
-func TestAzureProbePathDefaultsAPIVersion(t *testing.T) {
+func TestAzureProbePathsDefaultsAPIVersion(t *testing.T) {
 	t.Setenv("OPENAI_API_VERSION", "")
-	got := AzureProbePath("dep", "", "https://my-res.openai.azure.com")
-	if !strings.Contains(got, DefaultAzureAPIVersion) {
-		t.Errorf("AzureProbePath = %q, want the default api-version %q", got, DefaultAzureAPIVersion)
+	got := AzureProbePaths("dep", "", "https://my-res.openai.azure.com")
+	for _, p := range got {
+		if !strings.Contains(p, DefaultAzureAPIVersion) {
+			t.Errorf("AzureProbePaths entry %q lacks the default api-version %q", p, DefaultAzureAPIVersion)
+		}
 	}
 }
 
-func TestAzureProbePathEscapesDeployment(t *testing.T) {
-	got := AzureProbePath("my dep/weird", "v1", "https://my-res.openai.azure.com")
-	if strings.Contains(got, " ") {
-		t.Errorf("AzureProbePath = %q, want the deployment percent-escaped", got)
+func TestAzureProbePathsEscapesDeployment(t *testing.T) {
+	got := AzureProbePaths("my dep/weird", "v1", "https://my-res.openai.azure.com")
+	for _, p := range got {
+		if strings.Contains(p, " ") {
+			t.Errorf("AzureProbePaths entry %q, want the deployment percent-escaped", p)
+		}
 	}
 }
 
-// Ping and the real client must agree on which env var supplies the key;
-// ping previously read only AZURE_OPENAI_API_KEY via config.APIKeys.
+// Ping and the real client must agree on which env var supplies the key.
+// config.APIKeys already reads all three, so this is not a new capability —
+// it is the fallback chain living in one place instead of two that can drift.
 func TestAzureAPIKeyFallbackChain(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZUREOPENAI_API_KEY", "")

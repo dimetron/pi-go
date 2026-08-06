@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 // ---------------------------------------------------------------------------
@@ -205,7 +208,7 @@ func (m *streamAwareMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequ
 }
 
 // TestModelPingAzureNonStreamSoftContinue verifies Azure soft-fails non-stream
-// and still reports alive when stream=true succeeds (Autox Responses behaviour).
+// and still reports alive when stream=true succeeds (Autox Responses behavior).
 func TestModelPingAzureNonStreamSoftContinue(t *testing.T) {
 	llm := &streamAwareMockLLM{
 		name:     "azure-autox",
@@ -1304,5 +1307,76 @@ func TestDumpPingResponseMasksSetCookie(t *testing.T) {
 	}
 	if !strings.Contains(out, "application/json") {
 		t.Errorf("ordinary headers must pass through:\n%s", out)
+	}
+}
+
+// TestDoHTTPWalksFallbacks covers the Azure probe ladder: /openai/models is
+// tried first, and when the resource does not serve it the deployment route is
+// used instead. targetURL is updated so the verdict reports the URL that
+// actually answered.
+func TestDoHTTPWalksFallbacks(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path)
+		if r.URL.Path == "/openai/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	target := &pingTarget{
+		info:         provider.Info{Provider: "azure", Model: "dep"},
+		baseURL:      srv.URL,
+		targetURL:    srv.URL + "/openai/models?api-version=v1",
+		fallbackURLs: []string{srv.URL + "/openai/deployments/dep?api-version=v1"},
+		opts:         &provider.LLMOptions{},
+	}
+
+	resp, err := target.doHTTP(context.Background(), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("doHTTP: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 from the fallback", resp.StatusCode)
+	}
+	want := []string{"/openai/models", "/openai/deployments/dep"}
+	if !slices.Equal(got, want) {
+		t.Errorf("requested %q, want %q", got, want)
+	}
+	if !strings.Contains(target.targetURL, "/openai/deployments/dep") {
+		t.Errorf("targetURL = %q, want it advanced to the route that answered", target.targetURL)
+	}
+}
+
+// The ladder must stop at the first 2xx — a working /openai/models means the
+// legacy deployment route is never touched.
+func TestDoHTTPStopsAtFirstSuccess(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	target := &pingTarget{
+		info:         provider.Info{Provider: "azure", Model: "dep"},
+		baseURL:      srv.URL,
+		targetURL:    srv.URL + "/openai/models?api-version=v1",
+		fallbackURLs: []string{srv.URL + "/openai/deployments/dep?api-version=v1"},
+		opts:         &provider.LLMOptions{},
+	}
+
+	resp, err := target.doHTTP(context.Background(), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("doHTTP: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if calls != 1 {
+		t.Errorf("made %d requests, want 1 — the fallback must not fire after a 2xx", calls)
 	}
 }

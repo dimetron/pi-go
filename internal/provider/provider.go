@@ -201,12 +201,14 @@ func ContextWindowSize(modelName string) int64 {
 // specific provider, falling back to the vendor-agnostic table when that
 // provider publishes no window of its own.
 //
-// The fallback is what keeps a newly provisioned Azure deployment usable: an
-// unlisted name still resolves through the OpenAI entry it was named after,
-// which beats returning 0 — zero disables auto-compaction, so the session grows
-// unchecked until the API rejects it.
+// The fallback is what keeps a newly provisioned Azure deployment usable when
+// an OpenAI entry matches the name it was provisioned from — that beats
+// returning 0, since zero disables auto-compaction and lets the session grow
+// unchecked until the API rejects it. A name that matches nothing anywhere
+// still returns 0; there is no window to guess.
 func ContextWindowSizeFor(providerName, modelName string) int64 {
-	if sizes, ok := contextWindowSizesByProvider[strings.ToLower(providerName)]; ok {
+	key := strings.ToLower(strings.TrimSpace(providerName))
+	if sizes, ok := contextWindowSizesByProvider[key]; ok {
 		if size := longestPrefixSize(sizes, modelName); size > 0 {
 			return size
 		}
