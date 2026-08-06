@@ -374,17 +374,25 @@ func TestOpenAIResponses_NonStreaming(t *testing.T) {
 	if final.FinishReason != genai.FinishReasonStop {
 		t.Errorf("finish = %v, want Stop", final.FinishReason)
 	}
-	// The model should now remember the response ID for multi-turn.
+	// The model still records the response ID, but we no longer thread it
+	// into the next request under store=false — OpenAI wouldn't have the
+	// prior response on the server, and the pointer would 404. Multi-turn
+	// context is carried entirely by params.Input on each call.
 	om := llm.(*openaiModel)
 	if om.responseState == nil || om.responseState.previousResponseID != "resp_test_123" {
 		t.Errorf("responseState not saved, got %+v", om.responseState)
 	}
 
-	// Second call — the stored previous_response_id must be threaded.
+	// Second call — previous_response_id must NOT be threaded under
+	// store=false (it would 404 on the upstream). The full conversation
+	// in input carries multi-turn context.
 	for range llm.GenerateContent(ctx, req, false) {
 	}
-	if receivedBody["previous_response_id"] != "resp_test_123" {
-		t.Errorf("previous_response_id = %v, want resp_test_123", receivedBody["previous_response_id"])
+	if _, present := receivedBody["previous_response_id"]; present {
+		t.Errorf("previous_response_id must be omitted under store=false, got %v", receivedBody["previous_response_id"])
+	}
+	if v, ok := receivedBody["store"]; !ok || v != false {
+		t.Errorf("store = %v, want false on every request", v)
 	}
 }
 

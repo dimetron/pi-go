@@ -1729,61 +1729,51 @@ func TestOpenAIResponsesRequestUsesPreviousResponseID(t *testing.T) {
 	params := responses.ResponseNewParams{
 		Model: m.modelName,
 		Input: input,
+		// New default: store=false. previous_response_id is not threaded
+		// under store=false — OpenAI wouldn't have the prior response on
+		// the server, so the pointer would 404. The full conversation
+		// in params.Input is enough for multi-turn.
+		Store: param.NewOpt(false),
 	}
 	if instructions != "" {
 		params.Instructions = param.NewOpt(instructions)
 	}
-	if m.responseState != nil && m.responseState.previousResponseID != "" {
+	if params.Store.Value && !m.codexBackend && m.responseState != nil && m.responseState.previousResponseID != "" {
 		params.PreviousResponseID = param.NewOpt(m.responseState.previousResponseID)
 	}
 
-	if !params.PreviousResponseID.Valid() {
-		t.Fatal("PreviousResponseID should be set when response state exists")
+	if params.PreviousResponseID.Valid() {
+		t.Fatalf("PreviousResponseID must not be set when Store=false; got %q", params.PreviousResponseID.Value)
 	}
-	if got := params.PreviousResponseID.Value; got != "resp_prev_123" {
-		t.Fatalf("PreviousResponseID = %q, want %q", got, "resp_prev_123")
+	if !params.Store.Valid() {
+		t.Fatal("Store should be set explicitly so server-side state is opt-in only")
 	}
-	if params.Store.Valid() {
-		t.Fatalf("Store should be unset so Responses API can retain server-side state; got valid=%v value=%v", params.Store.Valid(), params.Store.Value)
+	if params.Store.Value {
+		t.Fatalf("Store default = true, want false")
 	}
 }
 
-// TestOpenAIResponses_PreviousResponseNotFoundRetries covers the recovery path
-// for an upstream that no longer resolves a stored previous_response_id — an
-// Azure/proxy deployment that routed the turn elsewhere, a store=false account,
-// or an expired response. The turn must succeed on a stateless retry rather
-// than surfacing the 400 to the user.
-func TestOpenAIResponses_PreviousResponseNotFoundRetries(t *testing.T) {
+// TestOpenAIResponses_StoreFalseByDefault pins the privacy default: every
+// request goes out with store=false, so OpenAI never persists the response on
+// our behalf. Without this, previous_response_id would 404 on the next turn
+// (server has no state), and the full conversation in params.Input is the only
+// thing carrying multi-turn context.
+func TestOpenAIResponses_StoreFalseByDefault(t *testing.T) {
 	var bodies []map[string]any
-	okBody := func(id string) map[string]any {
-		return map[string]any{
-			"id": id, "object": "response", "created_at": 1.0, "status": "completed",
-			"model": "gpt-5-codex", "error": nil, "incomplete_details": nil,
-			"instructions": nil, "metadata": map[string]any{}, "tool_choice": "auto",
-			"tools": []any{}, "parallel_tool_calls": true, "temperature": 1, "top_p": 1,
-			"output": []map[string]any{{
-				"type": "message", "id": "msg_x", "role": "assistant", "status": "completed",
-				"content": []map[string]any{
-					{"type": "output_text", "text": "pong", "annotations": []any{}},
-				},
-			}},
-			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-		}
-	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
-		// Reject any request carrying a previous_response_id, the way the
-		// upstream proxy does when it cannot find the referenced response.
-		if _, ok := body["previous_response_id"]; ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"message":"Previous response with id 'resp_gone' not found.","type":"invalid_request_error","param":"previous_response_id","code":"previous_response_not_found"}}`))
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(okBody("resp_new"))
+		_, _ = w.Write([]byte(`{
+			"id": "resp_x", "object": "response", "created_at": 1.0, "status": "completed",
+			"model": "gpt-5-codex", "error": null, "incomplete_details": null,
+			"instructions": null, "metadata": {}, "tool_choice": "auto",
+			"tools": [], "parallel_tool_calls": true, "temperature": 1, "top_p": 1,
+			"output": [{"type":"message","id":"msg_x","role":"assistant","status":"completed",
+				"content": [{"type":"output_text","text":"pong","annotations":[]}]}],
+			"usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+		}`))
 	}))
 	defer srv.Close()
 
@@ -1793,30 +1783,27 @@ func TestOpenAIResponses_PreviousResponseNotFoundRetries(t *testing.T) {
 		t.Fatalf("NewOpenAI: %v", err)
 	}
 	om := llm.(*openaiModel)
+	// Even with stored state from a previous opt-in, store=false means
+	// previous_response_id must not be threaded (it would 404).
 	om.responseState = &responsesState{previousResponseID: "resp_gone"}
 
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "ping"}}}},
 	}
-	var final *model.LLMResponse
-	for resp, genErr := range llm.GenerateContent(ctx, req, false) {
+	for _, genErr := range llm.GenerateContent(ctx, req, false) {
 		if genErr != nil {
-			t.Fatalf("GenerateContent should recover from previous_response_not_found, got %v", genErr)
+			t.Fatalf("GenerateContent: %v", genErr)
 		}
-		final = resp
 	}
-	if final == nil || len(final.Content.Parts) == 0 || final.Content.Parts[0].Text != "pong" {
-		t.Fatalf("final response = %+v", final)
+	if len(bodies) != 1 {
+		t.Fatalf("want exactly 1 upstream call (no retry), got %d", len(bodies))
 	}
-	if len(bodies) != 2 {
-		t.Fatalf("want 2 upstream calls (reject + stateless retry), got %d", len(bodies))
+	got := bodies[0]
+	if v, ok := got["store"]; !ok || v != false {
+		t.Errorf("body[store] = %v, want false (explicit)", v)
 	}
-	if _, ok := bodies[1]["previous_response_id"]; ok {
-		t.Errorf("retry must drop previous_response_id, got %v", bodies[1]["previous_response_id"])
-	}
-	// The retry's own id replaces the dead one.
-	if om.responseState == nil || om.responseState.previousResponseID != "resp_new" {
-		t.Errorf("previousResponseID = %+v, want resp_new", om.responseState)
+	if _, ok := got["previous_response_id"]; ok {
+		t.Errorf("body must not carry previous_response_id under store=false, got %v", got["previous_response_id"])
 	}
 }
 
