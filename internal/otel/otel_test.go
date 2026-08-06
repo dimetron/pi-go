@@ -342,3 +342,20 @@ func TestIsAvailable_ProbesTheConfiguredHost(t *testing.T) {
 		t.Error("IsAvailable() = true for an unreachable host — the endpoint host is being ignored")
 	}
 }
+
+func TestDialAddress_InvalidEndpoint(t *testing.T) {
+	if got := dialAddress("%", "http"); got != "" {
+		t.Errorf("dialAddress(%%, http) = %q, want empty", got)
+	}
+}
+
+func TestIsAvailable_InvalidEndpoint_ReturnsFalse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "%")
+
+	if IsAvailable() {
+		t.Error("IsAvailable() = true for an invalid endpoint, want false")
+	}
+}
