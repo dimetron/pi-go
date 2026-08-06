@@ -113,6 +113,29 @@ func TestLoadEnvFromDotEnv_NonExistentFile(t *testing.T) {
 	}
 }
 
+func TestHTTPTraceEndpointURL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		desc     string
+		endpoint string
+		want     string
+	}{
+		{"empty uses default traces path", "", "http://localhost:4318/v1/traces"},
+		{"base URL appends traces path", "http://localhost:4318", "http://localhost:4318/v1/traces"},
+		{"root path appends traces path", "http://127.0.0.1:4318/", "http://127.0.0.1:4318/v1/traces"},
+		{"explicit traces path is unchanged", "http://collector:4318/v1/traces", "http://collector:4318/v1/traces"},
+		{"custom path is unchanged", "http://collector:4318/custom/traces", "http://collector:4318/custom/traces"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := httpTraceEndpointURL(tc.endpoint)
+			if got != tc.want {
+				t.Fatalf("httpTraceEndpointURL(%q) = %q, want %q", tc.endpoint, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeEndpointURL(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

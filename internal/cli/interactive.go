@@ -876,7 +876,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	}
 
 	// Update context window size on the existing token tracker.
-	ctxWindowSize := provider.ContextWindowSize(info.Model)
+	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
 	if info.Ollama {
 		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
 			ctxWindowSize = n

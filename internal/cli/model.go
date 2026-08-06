@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -76,9 +77,15 @@ func runModelList(cmd *cobra.Command, args []string) error {
 		case "anthropic", "openai", "gemini", "mistral", "ollama":
 			providers = []string{p}
 		case "azure":
-			providers = []string{"openai"} // Azure uses OpenAI-compatible API
+			// Not a live query: enumerating deployments needs ARM credentials
+			// and the resource ID, not the inference API key, so there is
+			// nothing to call. This used to list OpenAI's catalog instead,
+			// which showed models the subscription does not serve, omitted the
+			// deployments it does, and failed outright without OPENAI_API_KEY.
+			printAzureDeployments(cmd.OutOrStdout())
+			return nil
 		default:
-			return fmt.Errorf("unknown provider %q; valid: anthropic, openai, gemini, mistral, ollama", args[0])
+			return fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, ollama", args[0])
 		}
 	} else {
 		// Query all providers that have credentials or a base URL configured.
@@ -91,7 +98,17 @@ func runModelList(cmd *cobra.Command, args []string) error {
 				providers = append(providers, p)
 			}
 		}
+		// Azure is not in allProviders because it has nothing to query, but a
+		// configured Azure user asking for "every provider" should still see
+		// their deployments rather than have them silently omitted.
+		azureConfigured := keys["azure"] != "" || os.Getenv("AZURE_OPENAI_ENDPOINT") != ""
+		if azureConfigured {
+			printAzureDeployments(cmd.OutOrStdout())
+		}
 		if len(providers) == 0 {
+			if azureConfigured {
+				return nil
+			}
 			return fmt.Errorf("no providers configured; set an API key (e.g. OPENAI_API_KEY) or specify a provider: pi model list <provider>")
 		}
 	}
@@ -142,4 +159,35 @@ func runModelList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("one or more providers failed")
 	}
 	return nil
+}
+
+// printAzureDeployments renders the embedded Azure deployment catalog.
+//
+// The context window is shown because it is the part that actually differs:
+// a deployment is named after the model it serves, but is provisioned with its
+// own limit, and most of these disagree with the same model ID on OpenAI's API.
+// That number drives auto-compaction, so it is worth being able to read it back.
+func printAzureDeployments(w io.Writer) {
+	deployments := provider.AzureDeployments()
+	fmt.Fprintf(w, "azure (%d deployments, from the embedded catalog):\n", len(deployments))
+	for _, d := range deployments {
+		fmt.Fprintf(w, "  %-45s  %s context\n", d.Name, humanTokens(d.ContextWindow))
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  Deployment names are chosen per subscription; use --model azure/<deployment>.")
+	fmt.Fprintln(w, "  An uncataloged name still works — its window falls back to the OpenAI entry")
+	fmt.Fprintln(w, "  it is named after, or override it with \"contextWindow\" in config.json.")
+	fmt.Fprintln(w)
+}
+
+// humanTokens renders a token count as a compact K/M figure.
+func humanTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.2fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%dK", n/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }

@@ -295,7 +295,7 @@ func sessionContextWindow(ctx context.Context, info provider.Info, baseURL strin
 			return n
 		}
 	}
-	return provider.ContextWindowSize(info.Model)
+	return provider.ContextWindowSizeFor(info.Provider, info.Model)
 }
 
 // sessionResources holds the tools and callbacks a session runs with, plus the

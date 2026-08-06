@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,18 +177,77 @@ var OllamaModelPrefixes = []string{}
 // change when official limits change.
 var KnownModels = mustLoadKnownModels()
 
-// contextWindowSizes maps model name prefixes to context window sizes (in tokens).
+// contextWindowSizes maps model name prefixes to context window sizes (in
+// tokens), flattened across every vendor except Azure.
 var contextWindowSizes = mustLoadContextWindowSizes()
+
+// contextWindowSizesByProvider keeps each vendor's windows addressable on their
+// own, which is the only way to answer for an Azure deployment whose name
+// matches an OpenAI model with a different window.
+var contextWindowSizesByProvider = mustLoadContextWindowSizesByProvider()
 
 // ContextWindowSize returns the context window size for a model (in tokens).
 // Returns 0 if the model is unknown.
+//
+// This searches every vendor except Azure. Prefer ContextWindowSizeFor when the
+// provider is known — an Azure deployment shares its name with an OpenAI model
+// but not necessarily its window, so only the provider-aware lookup separates
+// them.
 func ContextWindowSize(modelName string) int64 {
+	return longestPrefixSize(contextWindowSizes, modelName)
+}
+
+// ContextWindowSizeFor returns the context window for a model as served by a
+// specific provider, falling back to the vendor-agnostic table when that
+// provider publishes no window of its own.
+//
+// The fallback is what keeps a newly provisioned Azure deployment usable when
+// an OpenAI entry matches the name it was provisioned from — that beats
+// returning 0, since zero disables auto-compaction and lets the session grow
+// unchecked until the API rejects it. A name that matches nothing anywhere
+// still returns 0; there is no window to guess.
+func ContextWindowSizeFor(providerName, modelName string) int64 {
+	key := strings.ToLower(strings.TrimSpace(providerName))
+	if sizes, ok := contextWindowSizesByProvider[key]; ok {
+		if size := longestPrefixSize(sizes, modelName); size > 0 {
+			return size
+		}
+	}
+	return ContextWindowSize(modelName)
+}
+
+// ModelWindow pairs a model or deployment name with its context window.
+type ModelWindow struct {
+	Name          string
+	ContextWindow int64
+}
+
+// AzureDeployments returns the cataloged Azure OpenAI deployments and the
+// context window each was provisioned with, sorted by name.
+//
+// Azure has no listing endpoint reachable with only an API key — enumerating
+// deployments needs ARM credentials and the resource ID — so this is the
+// embedded catalog, not a live query. It is therefore a description of one
+// subscription's deployments and may not match another's.
+func AzureDeployments() []ModelWindow {
+	sizes := contextWindowSizesByProvider["azure"]
+	out := make([]ModelWindow, 0, len(sizes))
+	for name, window := range sizes {
+		out = append(out, ModelWindow{Name: name, ContextWindow: window})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// longestPrefixSize resolves modelName against a prefix table, preferring the
+// longest match so "gpt-5.1" beats "gpt-5" and "o1-mini" beats "o1".
+func longestPrefixSize(sizes map[string]int64, modelName string) int64 {
 	lower := strings.ToLower(modelName)
 	lower = strings.TrimPrefix(lower, "ollama/")
-	// Try longest prefix match first for accuracy.
+	lower = strings.TrimPrefix(lower, "azure/")
 	bestLen := 0
 	var bestSize int64
-	for prefix, size := range contextWindowSizes {
+	for prefix, size := range sizes {
 		if strings.HasPrefix(lower, prefix) && len(prefix) > bestLen {
 			bestLen = len(prefix)
 			bestSize = size

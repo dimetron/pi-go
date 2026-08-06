@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 // ---------------------------------------------------------------------------
@@ -117,7 +120,7 @@ func TestModelPingPingPong(t *testing.T) {
 		responses: []*model.LLMResponse{{Content: genai.NewContentFromText("prompt-prompt", genai.RoleModel)}},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true)
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -135,7 +138,7 @@ func TestModelPingCustomPrompt(t *testing.T) {
 		responses: []*model.LLMResponse{{Content: genai.NewContentFromText(want, genai.RoleModel)}},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "2+2", false)
+	reply, err := modelPing(context.Background(), llm, "2+2", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -154,7 +157,7 @@ func TestModelPingEmptyResponse(t *testing.T) {
 		},
 	}
 
-	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	_, err := modelPing(context.Background(), llm, "Prompt", true, "")
 	if err == nil {
 		t.Fatal("expected error for empty LLM response, got nil")
 	}
@@ -173,12 +176,82 @@ func TestModelPingLLMError(t *testing.T) {
 		err:  sentinel,
 	}
 
-	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	_, err := modelPing(context.Background(), llm, "Prompt", true, "")
 	if err == nil {
 		t.Fatal("expected error from modelPing, got nil")
 	}
 	if !errors.Is(err, sentinel) && !strings.Contains(err.Error(), sentinel.Error()) {
 		t.Errorf("expected sentinel error to be wrapped, got: %v", err)
+	}
+}
+
+// streamAwareMockLLM fails non-stream calls and succeeds on stream=true.
+// Models Autox Azure Responses: stream=false → 404, stream=true → OK.
+type streamAwareMockLLM struct {
+	name     string
+	nsErr    error
+	response string
+}
+
+func (m *streamAwareMockLLM) Name() string { return m.name }
+
+func (m *streamAwareMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if !stream {
+			yield(nil, m.nsErr)
+			return
+		}
+		yield(&model.LLMResponse{
+			Content: genai.NewContentFromText(m.response, genai.RoleModel),
+		}, nil)
+	}
+}
+
+// TestModelPingAzureNonStreamSoftContinue verifies Azure soft-fails non-stream
+// and still reports alive when stream=true succeeds (Autox Responses behavior).
+func TestModelPingAzureNonStreamSoftContinue(t *testing.T) {
+	llm := &streamAwareMockLLM{
+		name:     "azure-autox",
+		nsErr:    errors.New(`POST ".../responses": 404 Not Found`),
+		response: "prompt-prompt",
+	}
+
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "azure")
+	if err != nil {
+		t.Fatalf("azure modelPing should soft-continue past non-stream: %v", err)
+	}
+	if reply != "prompt-prompt" {
+		t.Errorf("reply = %q, want prompt-prompt from stream path", reply)
+	}
+}
+
+// TestModelPingNonAzureNonStreamHardFail verifies non-Azure providers still
+// hard-fail on the non-stream probe (no soft continue).
+func TestModelPingNonAzureNonStreamHardFail(t *testing.T) {
+	llm := &streamAwareMockLLM{
+		name:     "openai",
+		nsErr:    errors.New("404 Not Found"),
+		response: "prompt-prompt",
+	}
+
+	_, err := modelPing(context.Background(), llm, "prompt-prompt", true, "openai")
+	if err == nil {
+		t.Fatal("expected hard fail for non-azure non-stream error")
+	}
+	if !strings.Contains(err.Error(), "non-streaming") {
+		t.Errorf("error %q should mention non-streaming", err.Error())
+	}
+}
+
+func TestAllowSoftNonStreamFailure(t *testing.T) {
+	if !allowSoftNonStreamFailure("azure") {
+		t.Error("azure should soft-continue")
+	}
+	if allowSoftNonStreamFailure("openai") {
+		t.Error("openai must not soft-continue")
+	}
+	if allowSoftNonStreamFailure("") {
+		t.Error("empty provider must not soft-continue")
 	}
 }
 
@@ -202,7 +275,7 @@ func TestModelPingThinkingRole(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "Explain Go", false)
+	reply, err := modelPing(context.Background(), llm, "Explain Go", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -608,7 +681,7 @@ func TestModelPingStreamingError(t *testing.T) {
 	}
 
 	// Override streaming to return error after non-streaming succeeds
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err == nil {
 		t.Fatal("expected error from streaming mode, got nil")
 	}
@@ -632,7 +705,7 @@ func TestModelPingWithPartialResponse(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -881,7 +954,7 @@ func TestModelPingWithUsageMetadata(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -904,7 +977,7 @@ func TestModelPingStreamingTextAccumulation(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -951,7 +1024,7 @@ func TestModelPingLongResponseTruncation(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -987,7 +1060,7 @@ func TestModelPingWithToolCall(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -1009,7 +1082,7 @@ func TestModelPingPingPongModeSystemMessage(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true)
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "")
 	if err != nil {
 		t.Fatalf("modelPing ping-pong mode returned error: %v", err)
 	}
@@ -1037,7 +1110,7 @@ func TestModelPingWithErrorCode(t *testing.T) {
 	}
 
 	// Error in response should be handled gracefully
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Logf("modelPing returned error: %v", err)
 	}
@@ -1181,5 +1254,129 @@ func TestMergeExtraHeaders_NoEqualsSign(t *testing.T) {
 	result := mergeExtraHeaders(nil, []string{"just-a-key"})
 	if len(result) != 0 {
 		t.Errorf("expected empty map for no-equals, got %v", result)
+	}
+}
+
+// TestDumpPingRequestMasksAzureKey pins the credential-leak fix: the old local
+// mask list covered Authorization and X-Api-Key only, so Azure's `Api-Key`
+// header — the one every Azure request carries — was printed in full.
+func TestDumpPingRequestMasksAzureKey(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://res.openai.azure.com/openai/deployments/d", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	secrets := map[string]string{
+		"Api-Key":       "b38a5a7c-9c76-44ed-bfe6-8dd98296d6af",
+		"X-Api-Key":     "sk-ant-secretvalue-abcdef",
+		"Authorization": "Bearer sk-secretvalue-abcdef",
+	}
+	for k, v := range secrets {
+		req.Header.Set(k, v)
+	}
+
+	var sb strings.Builder
+	dumpPingRequest(func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }, req)
+	out := sb.String()
+
+	for header, secret := range secrets {
+		if strings.Contains(out, secret) {
+			t.Errorf("dumpPingRequest leaked the %s value in full:\n%s", header, out)
+		}
+	}
+	if !strings.Contains(out, "***") {
+		t.Errorf("no masking marker present:\n%s", out)
+	}
+	// The caller still owns the request; redaction must not strip it.
+	if req.Header.Get("Api-Key") != secrets["Api-Key"] {
+		t.Error("dumpPingRequest mutated the request's own headers")
+	}
+}
+
+func TestDumpPingResponseMasksSetCookie(t *testing.T) {
+	resp := &http.Response{
+		ProtoMajor: 2,
+		Status:     "200 OK",
+		Header:     http.Header{"Set-Cookie": {"session=supersecretvalue"}, "Content-Type": {"application/json"}},
+	}
+	var sb strings.Builder
+	dumpPingResponse(func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }, resp, time.Second)
+	out := sb.String()
+
+	if strings.Contains(out, "supersecretvalue") {
+		t.Errorf("dumpPingResponse leaked Set-Cookie:\n%s", out)
+	}
+	if !strings.Contains(out, "application/json") {
+		t.Errorf("ordinary headers must pass through:\n%s", out)
+	}
+}
+
+// TestDoHTTPWalksFallbacks covers the Azure probe ladder: /openai/models is
+// tried first, and when the resource does not serve it the deployment route is
+// used instead. targetURL is updated so the verdict reports the URL that
+// actually answered.
+func TestDoHTTPWalksFallbacks(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path)
+		if r.URL.Path == "/openai/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	target := &pingTarget{
+		info:         provider.Info{Provider: "azure", Model: "dep"},
+		baseURL:      srv.URL,
+		targetURL:    srv.URL + "/openai/models?api-version=v1",
+		fallbackURLs: []string{srv.URL + "/openai/deployments/dep?api-version=v1"},
+		opts:         &provider.LLMOptions{},
+	}
+
+	resp, err := target.doHTTP(context.Background(), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("doHTTP: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 from the fallback", resp.StatusCode)
+	}
+	want := []string{"/openai/models", "/openai/deployments/dep"}
+	if !slices.Equal(got, want) {
+		t.Errorf("requested %q, want %q", got, want)
+	}
+	if !strings.Contains(target.targetURL, "/openai/deployments/dep") {
+		t.Errorf("targetURL = %q, want it advanced to the route that answered", target.targetURL)
+	}
+}
+
+// The ladder must stop at the first 2xx — a working /openai/models means the
+// legacy deployment route is never touched.
+func TestDoHTTPStopsAtFirstSuccess(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	target := &pingTarget{
+		info:         provider.Info{Provider: "azure", Model: "dep"},
+		baseURL:      srv.URL,
+		targetURL:    srv.URL + "/openai/models?api-version=v1",
+		fallbackURLs: []string{srv.URL + "/openai/deployments/dep?api-version=v1"},
+		opts:         &provider.LLMOptions{},
+	}
+
+	resp, err := target.doHTTP(context.Background(), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("doHTTP: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if calls != 1 {
+		t.Errorf("made %d requests, want 1 — the fallback must not fire after a 2xx", calls)
 	}
 }

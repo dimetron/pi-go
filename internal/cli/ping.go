@@ -122,7 +122,11 @@ type pingTarget struct {
 	apiKey    string
 	baseURL   string
 	targetURL string
-	opts      *provider.LLMOptions
+	// fallbackURLs are tried in order when targetURL answers non-2xx. Azure
+	// populates them because no single GET route is both universally served
+	// and meaningful — see provider.AzureProbePaths.
+	fallbackURLs []string
+	opts         *provider.LLMOptions
 	// codexBackend routes through the ChatGPT codex backend because the key is
 	// an OAuth token the platform API would reject.
 	codexBackend bool
@@ -240,6 +244,16 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	if baseURL == "" && info.Ollama {
 		baseURL = "http://localhost:11434"
 	}
+	// Azure resolves its endpoint and credential through the same helpers a
+	// real run uses, so a passing ping means the settings a real run would pick
+	// up are the ones that worked. config.APIKeys already covers all three key
+	// vars; routing through provider.AzureAPIKey keeps ping and the client on
+	// one chain that cannot drift. The endpoint is the real gap — ping ignored
+	// AZURE_OPENAI_ENDPOINT entirely and saw only the configured base URL.
+	if info.Provider == "azure" {
+		baseURL = provider.AzureEndpoint(baseURL)
+		apiKey = provider.AzureAPIKey(apiKey)
+	}
 	if baseURL == "" {
 		baseURL = defaultAPIBaseURL(info.Provider)
 	}
@@ -254,7 +268,17 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 		baseURL = codexPingBaseURL
 	}
 
-	endpoint := pingEndpointForBaseURL(info.Provider, baseURL)
+	var endpoint string
+	var fallbacks []string
+	if info.Provider == "azure" {
+		// Same rules NewAzureOpenAI applies to real traffic: api-version on a
+		// native resource, /models on a compat gateway. The first candidate is
+		// the probe; the rest are tried only if it does not answer 2xx.
+		paths := provider.AzureProbePaths(info.Model, "", baseURL)
+		endpoint, fallbacks = paths[0], paths[1:]
+	} else {
+		endpoint = pingEndpointForBaseURL(info.Provider, baseURL)
+	}
 	if codexBackend {
 		// The codex backend only exposes POST /responses — use it as a
 		// reachability target (it will 405 for GET, which we treat as
@@ -267,11 +291,17 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	}
 	applyTransportOptions(opts, cfg)
 
+	trimmed := strings.TrimRight(baseURL, "/")
+	fallbackURLs := make([]string, 0, len(fallbacks))
+	for _, p := range fallbacks {
+		fallbackURLs = append(fallbackURLs, trimmed+p)
+	}
 	return &pingTarget{
 		info:         info,
 		apiKey:       apiKey,
 		baseURL:      baseURL,
-		targetURL:    strings.TrimRight(baseURL, "/") + endpoint,
+		targetURL:    trimmed + endpoint,
+		fallbackURLs: fallbackURLs,
 		codexBackend: codexBackend,
 		opts:         opts,
 	}, nil
@@ -459,14 +489,17 @@ func pingTraceSink(w pingWriter) func(httplog.Entry) {
 }
 
 // dumpPingRequest echoes the outgoing request curl -v style, masking credentials.
+//
+// Redaction is delegated to httplog rather than kept as a local list. The local
+// one covered Authorization and X-Api-Key only, and so printed Azure keys in
+// full — Azure authenticates with the header spelled `Api-Key`, which did not
+// match either name. Anything that authenticates a request now has exactly one
+// place to be declared.
 func dumpPingRequest(w pingWriter, req *http.Request) {
 	w("%s> %s %s HTTP/1.1%s\n", colorBlue, req.Method, req.URL.RequestURI(), colorReset)
 	w("%s> Host: %s%s\n", colorBlue, req.URL.Host, colorReset)
-	for k, vs := range req.Header {
+	for k, vs := range httplog.Redact(req.Header) {
 		for _, v := range vs {
-			if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "X-Api-Key") {
-				v = v[:min(10, len(v))] + "..."
-			}
 			w("%s> %s: %s%s\n", colorBlue, k, v, colorReset)
 		}
 	}
@@ -474,9 +507,12 @@ func dumpPingRequest(w pingWriter, req *http.Request) {
 }
 
 // dumpPingResponse echoes the response status line, headers and total time.
+//
+// Responses are redacted too: set-cookie and openai-organization identify the
+// account, and ping output is what people paste into a bug report.
 func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 	w("%s< HTTP/%d.%d %s%s\n", colorBlue, resp.ProtoMajor, resp.ProtoMinor, resp.Status, colorReset)
-	for k, vs := range resp.Header {
+	for k, vs := range httplog.Redact(resp.Header) {
 		for _, v := range vs {
 			w("%s< %s: %s%s\n", colorBlue, k, v, colorReset)
 		}
@@ -486,14 +522,45 @@ func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 	w("*\n")
 }
 
-// doHTTP issues the traced health-check request. The caller owns ctx and the
-// returned response body.
+// doHTTP issues the traced health-check request, walking targetURL and then
+// each fallback until one answers 2xx. The caller owns ctx and the returned
+// response body.
+//
+// Only Azure supplies fallbacks: its two candidate routes trade off against
+// each other (one is meaningful, the other is more widely served), so which
+// one a given resource honors is not knowable ahead of the request.
 func (t *pingTarget) doHTTP(ctx context.Context, w pingWriter) (*http.Response, error) {
+	resp, err := t.doHTTPTo(ctx, w, t.targetURL)
+	if err != nil {
+		return nil, err
+	}
+	for _, next := range t.fallbackURLs {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return resp, nil
+		}
+		w("* %s⚠ HTTP %d — retrying the probe at %s%s\n", colorYellow, resp.StatusCode, next, colorReset)
+		_ = resp.Body.Close()
+		// A transport error here is not "this route is unserved" — the first
+		// request already reached the host, so the connection itself broke.
+		// That is worth failing on rather than papering over with the next
+		// candidate.
+		fallbackResp, fallbackErr := t.doHTTPTo(ctx, w, next)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		t.targetURL = next
+		resp = fallbackResp
+	}
+	return resp, nil
+}
+
+// doHTTPTo issues one traced GET against rawURL.
+func (t *pingTarget) doHTTPTo(ctx context.Context, w pingWriter, rawURL string) (*http.Response, error) {
 	w("* %s─── HTTP Request ───%s\n", colorBlue, colorReset)
 
 	req, err := http.NewRequestWithContext(
 		httptrace.WithClientTrace(ctx, pingClientTrace(w)),
-		http.MethodGet, t.targetURL, nil)
+		http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -652,7 +719,7 @@ func (t *pingTarget) sendPrompt(ctx context.Context, w pingWriter, prompt string
 	pingCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	reply, err := modelPing(pingCtx, llm, prompt, isPingPong)
+	reply, err := modelPing(pingCtx, llm, prompt, isPingPong, t.info.Provider)
 	if err != nil {
 		w("* %s✗ Model ping FAILED: %v%s\n", colorYellow, err, colorReset)
 		return "", fmt.Errorf("model ping failed: %w", err)
@@ -712,10 +779,19 @@ func resolveOpenAIModelFromList(resp *http.Response, requested string, w func(st
 	}
 }
 
+// allowSoftNonStreamFailure reports whether a failed stream=false probe should
+// continue into the stream=true probe. Azure/Autox Responses deployments often
+// 404 non-streaming while streaming (what interactive chat uses) succeeds.
+func allowSoftNonStreamFailure(provider string) bool {
+	return provider == "azure"
+}
+
 // modelPing sends a prompt to the model and traces the full response.
-// Used for cloud providers (Anthropic, OpenAI, Gemini).
+// Used for cloud providers (Anthropic, OpenAI, Gemini, Azure).
 // Tests both non-streaming and streaming modes with detailed event tracing.
-func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool) (string, error) {
+// For Azure, a non-stream failure is soft: ping continues with stream=true,
+// matching the path interactive chat actually exercises.
+func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool, provider string) (string, error) {
 	w := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
 
 	systemMsg := "You are a connectivity test. Reply briefly and concisely."
@@ -737,11 +813,13 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 	nsStart := time.Now()
 	var nsResult strings.Builder
 	nsEvents := 0
+	var nsErr error
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		nsEvents++
 		if err != nil {
 			w("*   %s[non-stream]%s ERROR at event %d: %v\n", colorGray, colorReset, nsEvents, err)
-			return "", fmt.Errorf("non-streaming LLM error: %w", err)
+			nsErr = fmt.Errorf("non-streaming LLM error: %w", err)
+			break
 		}
 		w("*   %s[non-stream]%s event %d: partial=%v turnComplete=%v finish=%v",
 			colorGray, colorReset, nsEvents, resp.Partial, resp.TurnComplete, resp.FinishReason)
@@ -772,8 +850,16 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 			}
 		}
 	}
-	nsDur := time.Since(nsStart)
-	w("*   %s[non-stream]%s Done: %d events, %s%s%s\n", colorGray, colorReset, nsEvents, colorGray, nsDur.Round(time.Millisecond), colorReset)
+	if nsErr != nil {
+		if !allowSoftNonStreamFailure(provider) {
+			return "", nsErr
+		}
+		w("*   %s⚠ Non-stream failed; Azure gateways often only serve stream=true for Responses — continuing with stream test%s\n",
+			colorYellow, colorReset)
+	} else {
+		nsDur := time.Since(nsStart)
+		w("*   %s[non-stream]%s Done: %d events, %s%s%s\n", colorGray, colorReset, nsEvents, colorGray, nsDur.Round(time.Millisecond), colorReset)
+	}
 
 	// --- Streaming test ---
 	w("*   %s[stream]%s Calling GenerateContent(stream=true)...\n", colorGray, colorReset)
