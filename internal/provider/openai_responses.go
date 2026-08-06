@@ -51,6 +51,11 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 		params := responses.ResponseNewParams{
 			Model: modelName,
 			Input: input,
+			// Default to store=false so we never persist LLM responses
+			// server-side without an explicit opt-in. Multi-turn continues
+			// to work on the platform Responses API via full conversation
+			// replay (params.Input carries the whole thread).
+			Store: param.NewOpt(false),
 		}
 		if instructions != "" {
 			params.Instructions = param.NewOpt(instructions)
@@ -61,17 +66,16 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 		// encrypted reasoning echo so multi-turn context can round-trip on
 		// the client side. Matches pi-mono's openai-codex-responses body.
 		if m.codexBackend {
-			params.Store = param.NewOpt(false)
 			params.Include = []responses.ResponseIncludable{
 				responses.ResponseIncludableReasoningEncryptedContent,
 			}
 		}
 
-		// Thread previous_response_id for multi-turn.
-		// Skip on the codex backend: it doesn't retain responses server-side
-		// (store=false), so PreviousResponseID wouldn't resolve.
+		// previous_response_id requires OpenAI to retain responses
+		// server-side, which conflicts with store=false. Skip threading
+		// the pointer; the full conversation in params.Input is sufficient.
 		sentPreviousResponseID := false
-		if !m.codexBackend && state != nil && state.previousResponseID != "" {
+		if params.Store.Value && !m.codexBackend && state != nil && state.previousResponseID != "" {
 			params.PreviousResponseID = param.NewOpt(state.previousResponseID)
 			sentPreviousResponseID = true
 		}
