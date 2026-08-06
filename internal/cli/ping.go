@@ -671,7 +671,7 @@ func (t *pingTarget) sendPrompt(ctx context.Context, w pingWriter, prompt string
 	pingCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	reply, err := modelPing(pingCtx, llm, prompt, isPingPong)
+	reply, err := modelPing(pingCtx, llm, prompt, isPingPong, t.info.Provider)
 	if err != nil {
 		w("* %s✗ Model ping FAILED: %v%s\n", colorYellow, err, colorReset)
 		return "", fmt.Errorf("model ping failed: %w", err)
@@ -731,10 +731,19 @@ func resolveOpenAIModelFromList(resp *http.Response, requested string, w func(st
 	}
 }
 
+// allowSoftNonStreamFailure reports whether a failed stream=false probe should
+// continue into the stream=true probe. Azure/Autox Responses deployments often
+// 404 non-streaming while streaming (what interactive chat uses) succeeds.
+func allowSoftNonStreamFailure(provider string) bool {
+	return provider == "azure"
+}
+
 // modelPing sends a prompt to the model and traces the full response.
-// Used for cloud providers (Anthropic, OpenAI, Gemini).
+// Used for cloud providers (Anthropic, OpenAI, Gemini, Azure).
 // Tests both non-streaming and streaming modes with detailed event tracing.
-func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool) (string, error) {
+// For Azure, a non-stream failure is soft: ping continues with stream=true,
+// matching the path interactive chat actually exercises.
+func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool, provider string) (string, error) {
 	w := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
 
 	systemMsg := "You are a connectivity test. Reply briefly and concisely."
@@ -756,11 +765,13 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 	nsStart := time.Now()
 	var nsResult strings.Builder
 	nsEvents := 0
+	var nsErr error
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		nsEvents++
 		if err != nil {
 			w("*   %s[non-stream]%s ERROR at event %d: %v\n", colorGray, colorReset, nsEvents, err)
-			return "", fmt.Errorf("non-streaming LLM error: %w", err)
+			nsErr = fmt.Errorf("non-streaming LLM error: %w", err)
+			break
 		}
 		w("*   %s[non-stream]%s event %d: partial=%v turnComplete=%v finish=%v",
 			colorGray, colorReset, nsEvents, resp.Partial, resp.TurnComplete, resp.FinishReason)
@@ -791,8 +802,16 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 			}
 		}
 	}
-	nsDur := time.Since(nsStart)
-	w("*   %s[non-stream]%s Done: %d events, %s%s%s\n", colorGray, colorReset, nsEvents, colorGray, nsDur.Round(time.Millisecond), colorReset)
+	if nsErr != nil {
+		if !allowSoftNonStreamFailure(provider) {
+			return "", nsErr
+		}
+		w("*   %s⚠ Non-stream failed; Azure gateways often only serve stream=true for Responses — continuing with stream test%s\n",
+			colorYellow, colorReset)
+	} else {
+		nsDur := time.Since(nsStart)
+		w("*   %s[non-stream]%s Done: %d events, %s%s%s\n", colorGray, colorReset, nsEvents, colorGray, nsDur.Round(time.Millisecond), colorReset)
+	}
 
 	// --- Streaming test ---
 	w("*   %s[stream]%s Calling GenerateContent(stream=true)...\n", colorGray, colorReset)

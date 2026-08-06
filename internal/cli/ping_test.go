@@ -117,7 +117,7 @@ func TestModelPingPingPong(t *testing.T) {
 		responses: []*model.LLMResponse{{Content: genai.NewContentFromText("prompt-prompt", genai.RoleModel)}},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true)
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestModelPingCustomPrompt(t *testing.T) {
 		responses: []*model.LLMResponse{{Content: genai.NewContentFromText(want, genai.RoleModel)}},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "2+2", false)
+	reply, err := modelPing(context.Background(), llm, "2+2", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestModelPingEmptyResponse(t *testing.T) {
 		},
 	}
 
-	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	_, err := modelPing(context.Background(), llm, "Prompt", true, "")
 	if err == nil {
 		t.Fatal("expected error for empty LLM response, got nil")
 	}
@@ -173,12 +173,82 @@ func TestModelPingLLMError(t *testing.T) {
 		err:  sentinel,
 	}
 
-	_, err := modelPing(context.Background(), llm, "Prompt", true)
+	_, err := modelPing(context.Background(), llm, "Prompt", true, "")
 	if err == nil {
 		t.Fatal("expected error from modelPing, got nil")
 	}
 	if !errors.Is(err, sentinel) && !strings.Contains(err.Error(), sentinel.Error()) {
 		t.Errorf("expected sentinel error to be wrapped, got: %v", err)
+	}
+}
+
+// streamAwareMockLLM fails non-stream calls and succeeds on stream=true.
+// Models Autox Azure Responses: stream=false → 404, stream=true → OK.
+type streamAwareMockLLM struct {
+	name     string
+	nsErr    error
+	response string
+}
+
+func (m *streamAwareMockLLM) Name() string { return m.name }
+
+func (m *streamAwareMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if !stream {
+			yield(nil, m.nsErr)
+			return
+		}
+		yield(&model.LLMResponse{
+			Content: genai.NewContentFromText(m.response, genai.RoleModel),
+		}, nil)
+	}
+}
+
+// TestModelPingAzureNonStreamSoftContinue verifies Azure soft-fails non-stream
+// and still reports alive when stream=true succeeds (Autox Responses behaviour).
+func TestModelPingAzureNonStreamSoftContinue(t *testing.T) {
+	llm := &streamAwareMockLLM{
+		name:     "azure-autox",
+		nsErr:    errors.New(`POST ".../responses": 404 Not Found`),
+		response: "prompt-prompt",
+	}
+
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "azure")
+	if err != nil {
+		t.Fatalf("azure modelPing should soft-continue past non-stream: %v", err)
+	}
+	if reply != "prompt-prompt" {
+		t.Errorf("reply = %q, want prompt-prompt from stream path", reply)
+	}
+}
+
+// TestModelPingNonAzureNonStreamHardFail verifies non-Azure providers still
+// hard-fail on the non-stream probe (no soft continue).
+func TestModelPingNonAzureNonStreamHardFail(t *testing.T) {
+	llm := &streamAwareMockLLM{
+		name:     "openai",
+		nsErr:    errors.New("404 Not Found"),
+		response: "prompt-prompt",
+	}
+
+	_, err := modelPing(context.Background(), llm, "prompt-prompt", true, "openai")
+	if err == nil {
+		t.Fatal("expected hard fail for non-azure non-stream error")
+	}
+	if !strings.Contains(err.Error(), "non-streaming") {
+		t.Errorf("error %q should mention non-streaming", err.Error())
+	}
+}
+
+func TestAllowSoftNonStreamFailure(t *testing.T) {
+	if !allowSoftNonStreamFailure("azure") {
+		t.Error("azure should soft-continue")
+	}
+	if allowSoftNonStreamFailure("openai") {
+		t.Error("openai must not soft-continue")
+	}
+	if allowSoftNonStreamFailure("") {
+		t.Error("empty provider must not soft-continue")
 	}
 }
 
@@ -202,7 +272,7 @@ func TestModelPingThinkingRole(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "Explain Go", false)
+	reply, err := modelPing(context.Background(), llm, "Explain Go", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned unexpected error: %v", err)
 	}
@@ -608,7 +678,7 @@ func TestModelPingStreamingError(t *testing.T) {
 	}
 
 	// Override streaming to return error after non-streaming succeeds
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err == nil {
 		t.Fatal("expected error from streaming mode, got nil")
 	}
@@ -632,7 +702,7 @@ func TestModelPingWithPartialResponse(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -881,7 +951,7 @@ func TestModelPingWithUsageMetadata(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -904,7 +974,7 @@ func TestModelPingStreamingTextAccumulation(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -951,7 +1021,7 @@ func TestModelPingLongResponseTruncation(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -987,7 +1057,7 @@ func TestModelPingWithToolCall(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Fatalf("modelPing returned error: %v", err)
 	}
@@ -1009,7 +1079,7 @@ func TestModelPingPingPongModeSystemMessage(t *testing.T) {
 		},
 	}
 
-	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true)
+	reply, err := modelPing(context.Background(), llm, "prompt-prompt", true, "")
 	if err != nil {
 		t.Fatalf("modelPing ping-pong mode returned error: %v", err)
 	}
@@ -1037,7 +1107,7 @@ func TestModelPingWithErrorCode(t *testing.T) {
 	}
 
 	// Error in response should be handled gracefully
-	reply, err := modelPing(context.Background(), llm, "test", false)
+	reply, err := modelPing(context.Background(), llm, "test", false, "")
 	if err != nil {
 		t.Logf("modelPing returned error: %v", err)
 	}
