@@ -26,6 +26,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/jsonrpc"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
@@ -64,6 +65,7 @@ var (
 	flagSystem    string
 	flagPprof     string
 	flagPprofPort string
+	flagTraceHTTP bool
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).
@@ -93,9 +95,66 @@ func versionString() string {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "pi [prompt]",
-		Short:   "pi-go coding agent",
-		Long:    "A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.",
+		Use:   "pi [prompt]",
+		Short: "pi-go coding agent",
+		Long: `A Go coding agent with multi-provider LLM support, tool calling, and interactive TUI.
+
+Run with no prompt for the interactive TUI; pass a prompt to answer once and exit.
+
+The provider is inferred from the model name, so --model is usually the only
+routing you need:
+
+  claude-*                 Anthropic       ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN)
+  gpt-*                    OpenAI          OPENAI_API_KEY
+  gemini-*                 Google Gemini   GEMINI_API_KEY (or GOOGLE_API_KEY)
+  mistral-*, magistral-*   Mistral         MISTRAL_API_KEY
+  ollama/<model>           Ollama, local   none; http://localhost:11434
+  <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
+  azure/<deployment>       Azure OpenAI    AZURE_OPENAI_API_KEY
+  opencode/<model>         OpenCode        OPENCODE_API_KEY
+
+A name with no recognized prefix is rejected rather than guessed at — reach for
+the ollama/ prefix or the :cloud suffix to name an Ollama model explicitly.
+
+Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
+--smol, --slow and --plan switch between the roles configured there.`,
+		Example: `  # Anthropic
+  pi --model claude-sonnet-5 "explain what this repo does"
+
+  # OpenAI
+  pi --model gpt-5.2 "add a table-driven test for the parser"
+
+  # Google Gemini
+  pi --model gemini-3.5-pro "review the diff on this branch"
+
+  # Mistral
+  pi --model mistral-large-latest "summarize the changelog"
+
+  # Ollama against a local daemon — no API key needed
+  pi --model ollama/gemma4:e4b "rename this symbol everywhere"
+
+  # Ollama Cloud — the :cloud tag routes to api.ollama.com, needs OLLAMA_API_KEY
+  pi --model minimax-m3:cloud "port this module to generics"
+
+  # Azure OpenAI — the deployment name follows azure/
+  pi --model azure/my-gpt5-deployment "draft release notes"
+
+  # OpenCode
+  pi --model opencode/claude-sonnet-5 "find the goroutine leak"
+
+  # Any OpenAI-compatible gateway, with an extra header and a corporate CA
+  pi --url https://llm.corp.internal/v1 --model gpt-5.2 \
+     --header X-Team=platform --ca-cert /etc/ssl/corp.pem "run the tests"
+
+  # One-shot answer instead of the TUI, and resuming a session
+  pi --mode print "what changed in the last commit?"
+  pi --continue
+  pi --session 01JQ8Z... "carry on where we left off"
+
+  # Diagnosing a provider
+  pi ping                                 # DNS/TCP/TLS/HTTP trace, curl -v style
+  pi ping --model minimax-m3:cloud        # check one model end to end
+  pi --trace-http "why was that rejected?"  # full request/response in the session log`,
 		Version: versionString(),
 		Args:    cobra.ArbitraryArgs,
 		// Start pprof here rather than in runRoot: subcommands (`pi memory mine`,
@@ -106,7 +165,7 @@ func newRootCmd() *cobra.Command {
 		RunE:             runRoot,
 	}
 
-	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro)")
+	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-5, gpt-5.2, gemini-3.5-pro, ollama/gemma4:e4b, minimax-m3:cloud)")
 	cmd.Flags().StringVar(&flagMode, "mode", "", "Output mode: interactive, print, json, socket, rpc")
 	cmd.Flags().StringVar(&flagSocket, "socket", "/tmp/pi-go.sock", "Unix socket path for socket mode")
 	// pi-acp unconditionally spawns `pi --mode rpc --no-themes`. pi-go has no
@@ -134,6 +193,22 @@ func newRootCmd() *cobra.Command {
 	// "unknown flag: --pprof" the moment a subcommand was used.
 	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
 	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
+	// Persistent for the same reason as --pprof: `pi ping --trace-http` and the
+	// other subcommands that reach a provider all need it.
+	cmd.PersistentFlags().BoolVar(&flagTraceHTTP, "trace-http", false,
+		"Log full LLM request/response headers and bodies to the session log and OTel spans (credentials masked; prompts are not)")
+
+	// Append the resolved role table to `pi --help`. A help func set on the
+	// root is inherited by every subcommand, so this reproduces the default
+	// output and only adds the footer when help was asked for the root itself
+	// — `pi audit --help` has no use for it.
+	defaultHelp := cmd.HelpFunc()
+	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		defaultHelp(c, args)
+		if c == cmd {
+			writeRoleSummary(c.OutOrStdout())
+		}
+	})
 
 	cmd.AddCommand(newPingCmd())
 	cmd.AddCommand(newAuditCmd())
@@ -254,7 +329,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		AdvisorMaxUses: advisorMaxUses,
 		AdvisorCaching: advisorCaching,
 	}
-	applyTLSOptions(llmOpts, cfg)
+	applyTransportOptions(llmOpts, cfg)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("creating LLM provider: %w", err)
@@ -569,7 +644,14 @@ func runNonInteractive(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create session log: %v\n", err)
 	}
-	defer func() { _ = sessionLog.Close() }()
+	// --trace-http entries are dropped until this point, because the transport
+	// is built well before the log file exists. In practice the only requests
+	// that precede it are the ollama health check and model listing.
+	httplog.SetSink(logger.HTTPSink(sessionLog))
+	defer func() {
+		httplog.SetSink(nil)
+		_ = sessionLog.Close()
+	}()
 
 	ag, err := agent.New(agent.Config{
 		Model:               llm,
@@ -1411,16 +1493,24 @@ func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[st
 	return merged
 }
 
-// applyTLSOptions layers the --insecure/--ca-cert flags over the TLS trust
-// settings from config. The flags are additive: neither one can turn a
-// config-enabled setting back off, matching how --header behaves.
-func applyTLSOptions(opts *provider.LLMOptions, cfg config.Config) {
+// applyTransportOptions layers the --insecure/--ca-cert/--trace-http flags over
+// the transport settings from config. The flags are additive: none of them can
+// turn a config-enabled setting back off, matching how --header behaves.
+func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config) {
 	opts.InsecureSkipTLS = cfg.InsecureSkipTLS || flagInsecure
 	opts.CACertPath = cfg.CACertPath
 	if flagCACert != "" {
 		opts.CACertPath = flagCACert
 	}
 	opts.DisableSystemCAs = cfg.DisableSystemCAs
+
+	opts.TraceHTTP = cfg.TraceHTTP || flagTraceHTTP
+	// The transport reads this through httplog rather than from opts, so that
+	// a client built before the flag was parsed still honors it. Setting it
+	// here keeps the two in step for every path that builds an LLM.
+	if opts.TraceHTTP {
+		httplog.SetEnabled(true)
+	}
 }
 
 // convertHooks converts config.HookConfig to extension.HookConfig.

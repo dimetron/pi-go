@@ -66,11 +66,18 @@ type Config struct {
 	// which turns verification off for every endpoint.
 	CACertPath string `json:"caCertPath,omitempty"`
 	// DisableSystemCAs narrows trust to caCertPath alone.
-	DisableSystemCAs bool           `json:"disableSystemCAs,omitempty"`
-	Tools            map[string]any `json:"tools,omitempty"`
-	MCP              *MCPConfig     `json:"mcp,omitempty"`
-	Hooks            []HookConfig   `json:"hooks,omitempty"`
-	MaxDailyTokens   int64          `json:"maxDailyTokens,omitempty"` // 0 = unlimited
+	DisableSystemCAs bool `json:"disableSystemCAs,omitempty"`
+	// TraceHTTP logs every LLM request and response in full — headers and
+	// bodies — to the session log and to OTel span events. Equivalent to
+	// --trace-http, which can enable it but never turn it off.
+	//
+	// The resulting log contains the entire conversation, system prompt and
+	// tool output in cleartext. Credentials are masked; nothing else is.
+	TraceHTTP      bool           `json:"traceHTTP,omitempty"`
+	Tools          map[string]any `json:"tools,omitempty"`
+	MCP            *MCPConfig     `json:"mcp,omitempty"`
+	Hooks          []HookConfig   `json:"hooks,omitempty"`
+	MaxDailyTokens int64          `json:"maxDailyTokens,omitempty"` // 0 = unlimited
 	// ContextWindow overrides the model's context window in tokens. Needed for
 	// models absent from the embedded catalog (notably the opencode ones):
 	// auto-compaction measures a percentage of the window, so it stays off

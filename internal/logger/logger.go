@@ -26,13 +26,26 @@ type Logger struct {
 // Entry represents a single log entry.
 type Entry struct {
 	Time    string `json:"time"`
-	Type    string `json:"type"`              // "user", "llm_text", "thinking", "tool_call", "tool_result", "error", "info"
+	Type    string `json:"type"`              // "user", "llm_text", "thinking", "tool_call", "tool_result", "error", "info", "http_request", "http_response"
 	Agent   string `json:"agent,omitempty"`   // agent name (for subagents)
 	Tool    string `json:"tool,omitempty"`    // tool name
-	Content string `json:"content,omitempty"` // text content or error message
+	Content string `json:"content,omitempty"` // text content, error message, or HTTP body
 	Args    any    `json:"args,omitempty"`    // tool call arguments
 	Session string `json:"session,omitempty"` // session ID (logged once at start)
 	Model   string `json:"model,omitempty"`   // model name (logged once at start)
+
+	// HTTP trace fields, set only on "http_request"/"http_response" entries
+	// written under --trace-http. They are part of Entry rather than a
+	// separate record type so the transport trace interleaves with the tool
+	// calls and model output it caused, in one chronologically ordered file.
+	Exchange  uint64              `json:"exchange,omitempty"`  // correlates a request with its response
+	Method    string              `json:"method,omitempty"`    // HTTP method
+	URL       string              `json:"url,omitempty"`       // full request URL
+	Proto     string              `json:"proto,omitempty"`     // e.g. "HTTP/2.0"
+	Status    int                 `json:"status,omitempty"`    // response status code
+	Headers   map[string][]string `json:"headers,omitempty"`   // credential values already masked
+	Truncated bool                `json:"truncated,omitempty"` // body was cut at the cap
+	DurationM int64               `json:"duration_ms,omitempty"`
 }
 
 // New creates a new session logger.
