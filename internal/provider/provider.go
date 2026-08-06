@@ -25,13 +25,16 @@ import (
 // HTTPS_PROXY — which is exactly the environment where a custom CA or a TLS
 // skip is needed in the first place.
 func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
+	// TraceHTTP is checked before the nil guard: a nil opts still has to be
+	// traceable, because several callers pass one and they issue real requests.
+	traceHTTP := opts != nil && opts.TraceHTTP
 	if opts == nil {
-		return nil, nil
+		return maybeTrace(nil, traceHTTP), nil
 	}
 	hasHeaders := len(opts.ExtraHeaders) > 0
 	needsTLS := opts.InsecureSkipTLS || opts.CACertPath != ""
 	if !needsTLS && !hasHeaders && opts.ConnectTimeout <= 0 {
-		return nil, nil
+		return maybeTrace(nil, traceHTTP), nil
 	}
 
 	base := http.DefaultTransport
@@ -53,10 +56,32 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 		}
 		base = cloned
 	}
+	// Innermost, beneath headerTransport: the trace has to record the request
+	// as it actually goes on the wire. Wrapping the other way round would run
+	// the trace first and log a request missing every ExtraHeader the server
+	// went on to receive — the headers a proxy or gateway problem is usually
+	// about.
+	base = maybeTrace(base, traceHTTP)
 	if hasHeaders {
 		base = &headerTransport{base: base, headers: opts.ExtraHeaders}
 	}
 	return base, nil
+}
+
+// maybeTrace wraps base in the HTTP trace transport when tracing is on.
+//
+// A nil base means "no customization was needed"; that becomes
+// http.DefaultTransport rather than staying nil, because a nil RoundTripper
+// tells the caller to leave the SDK's own client alone and the trace would
+// never run.
+func maybeTrace(base http.RoundTripper, trace bool) http.RoundTripper {
+	if !trace {
+		return base
+	}
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return &traceTransport{base: base}
 }
 
 // buildTLSConfig turns the TLS fields of opts into a *tls.Config.
@@ -345,6 +370,12 @@ type LLMOptions struct {
 	// not cached, with no error and no extra cost. Other providers ignore
 	// this flag today.
 	DisablePromptCaching bool
+	// TraceHTTP records every LLM request and response — method, URL, full
+	// headers and body — to the session log and to OTel span events. Set by
+	// --trace-http. Credentials are masked (see httplog.Redact), but prompts
+	// and completions are not: the log holds the entire conversation in
+	// cleartext, which is the point and also the reason it is off by default.
+	TraceHTTP bool
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.

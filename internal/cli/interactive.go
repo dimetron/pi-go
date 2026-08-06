@@ -18,6 +18,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
@@ -41,6 +42,9 @@ type initResources struct {
 
 func (r *initResources) cleanup() {
 	if r.sessionLog != nil {
+		// Detach before closing: a late trace from an in-flight streaming body
+		// would otherwise write into a closed file.
+		httplog.SetSink(nil)
 		_ = r.sessionLog.Close()
 	}
 	if r.memWorker != nil {
@@ -362,6 +366,10 @@ func deferredInit(
 	sessionLog, logErr := logger.New()
 	if logErr == nil {
 		res.sessionLog = sessionLog
+		// --trace-http entries are dropped until the log file exists; the
+		// transport is built before this point. See the matching note in
+		// cli.go. Detached on shutdown where sessionLog is closed.
+		httplog.SetSink(logger.HTTPSink(sessionLog))
 	}
 
 	// Create agent.
@@ -861,7 +869,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	llmOpts := &provider.LLMOptions{
 		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 	}
-	applyTLSOptions(llmOpts, cfg)
+	applyTransportOptions(llmOpts, cfg)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("creating LLM: %w", err)

@@ -5,11 +5,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/provider"
 )
 
@@ -143,6 +146,16 @@ func runPing(cmd *cobra.Command, args []string) error {
 	w := pingWriter(func(format string, a ...any) { _, _ = fmt.Fprintf(os.Stderr, format, a...) })
 	target.printHeader(w)
 
+	// ping has no session log to write to, so --trace-http goes to the same
+	// stream as the rest of its output. Without this the flag would be
+	// accepted here and do nothing. It complements rather than duplicates the
+	// dumpPing* output: that covers only the health-check probe and never
+	// shows a body, while this covers the model API call underneath.
+	if flagTraceHTTP {
+		httplog.SetSink(pingTraceSink(w))
+		defer httplog.SetSink(nil)
+	}
+
 	u, err := url.Parse(target.targetURL)
 	if err != nil {
 		w("* ERROR: invalid URL %q: %v\n", target.targetURL, err)
@@ -252,7 +265,7 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	opts := &provider.LLMOptions{
 		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 	}
-	applyTLSOptions(opts, cfg)
+	applyTransportOptions(opts, cfg)
 
 	return &pingTarget{
 		info:         info,
@@ -413,6 +426,35 @@ func setPingAuthHeaders(req *http.Request, providerName, apiKey string) {
 		q := req.URL.Query()
 		q.Set("key", apiKey)
 		req.URL.RawQuery = q.Encode()
+	}
+}
+
+// pingTraceSink renders --trace-http entries in the same curl -v style as the
+// rest of ping's output, so a full exchange reads as one continuous transcript.
+func pingTraceSink(w pingWriter) func(httplog.Entry) {
+	return func(e httplog.Entry) {
+		marker := ">"
+		if e.Direction == httplog.DirectionResponse {
+			marker = "<"
+		}
+		switch {
+		case e.Err != "":
+			w("%s%s [%d] transport error: %s%s\n", colorYellow, marker, e.Exchange, e.Err, colorReset)
+			return
+		case e.Direction == httplog.DirectionRequest:
+			w("%s%s [%d] %s %s%s\n", colorBlue, marker, e.Exchange, e.Method, e.URL, colorReset)
+		case e.Status != 0:
+			w("%s%s [%d] %s %d (%s)%s\n", colorBlue, marker, e.Exchange, e.Proto, e.Status,
+				e.Duration.Round(time.Millisecond), colorReset)
+		}
+		for _, k := range slices.Sorted(maps.Keys(e.Headers)) {
+			for _, v := range e.Headers[k] {
+				w("%s%s [%d] %s: %s%s\n", colorBlue, marker, e.Exchange, k, v, colorReset)
+			}
+		}
+		if e.Body != "" {
+			w("%s%s [%d] body: %s%s\n", colorGray, marker, e.Exchange, e.Body, colorReset)
+		}
 	}
 }
 
