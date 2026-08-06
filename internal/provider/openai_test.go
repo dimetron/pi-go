@@ -1824,3 +1824,27 @@ func TestIsPreviousResponseNotFound(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldSendPreviousResponseID(t *testing.T) {
+	state := &responsesState{previousResponseID: "resp_prev"}
+	tests := []struct {
+		name  string
+		store bool
+		codex bool
+		state *responsesState
+		want  bool
+	}{
+		{"stored platform response", true, false, state, true},
+		{"stateless response", false, false, state, false},
+		{"codex response", true, true, state, false},
+		{"missing state", true, false, nil, false},
+		{"empty response id", true, false, &responsesState{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSendPreviousResponseID(tt.store, tt.codex, tt.state); got != tt.want {
+				t.Errorf("shouldSendPreviousResponseID(%v, %v, %+v) = %v, want %v", tt.store, tt.codex, tt.state, got, tt.want)
+			}
+		})
+	}
+}

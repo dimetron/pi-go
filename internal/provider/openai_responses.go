@@ -74,10 +74,9 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 		// previous_response_id requires OpenAI to retain responses
 		// server-side, which conflicts with store=false. Skip threading
 		// the pointer; the full conversation in params.Input is sufficient.
-		sentPreviousResponseID := false
-		if params.Store.Value && !m.codexBackend && state != nil && state.previousResponseID != "" {
+		sentPreviousResponseID := shouldSendPreviousResponseID(params.Store.Value, m.codexBackend, state)
+		if sentPreviousResponseID {
 			params.PreviousResponseID = param.NewOpt(state.previousResponseID)
-			sentPreviousResponseID = true
 		}
 
 		if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -132,6 +131,12 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 			_ = yield(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
 		}
 	}
+}
+
+// shouldSendPreviousResponseID reports whether a retained response pointer can
+// be used for the request. Stateless and Codex backends must replay the input.
+func shouldSendPreviousResponseID(store, codexBackend bool, state *responsesState) bool {
+	return store && !codexBackend && state != nil && state.previousResponseID != ""
 }
 
 // isPreviousResponseNotFound reports whether err is the upstream's rejection of
