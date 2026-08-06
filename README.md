@@ -7,24 +7,24 @@
 [![Release](https://img.shields.io/github/v/release/dimetron/pi-go?logo=github&label=latest)](https://github.com/dimetron/pi-go/releases)
 [![codecov](https://codecov.io/gh/dimetron/pi-go/graph/badge.svg)](https://codecov.io/gh/dimetron/pi-go)
 
-A terminal-based coding agent built on [Google ADK Go](https://adk.dev/) with multi-provider LLM support, sandboxed tool
-execution, LSP integration, and a subagent system.
+A terminal-based coding agent built on [Google ADK Go](https://adk.dev/). It connects to multiple LLM providers, runs
+sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 
 ![pi-go TUI](docs/screen/pi-go.gif)
 
 ## Features
 
 - **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), and Ollama for local models
-- **Sandboxed tools** — File read/write/edit, shell execution, grep, find, tree, and git operations, all restricted to the project directory via `os.Root`
-- **Interactive TUI** — Bubble Tea v2 terminal UI with Markdown rendering (Glamour), slash commands, and theming
+- **Sandboxed tools** — read, write, edit, shell, grep, find, tree, and git operations. All tools are restricted to the project directory via `os.Root`.
+- **Interactive TUI** — Bubble Tea v2 with Markdown rendering (Glamour), slash commands, and theming
 - **Session persistence** — JSONL append-only event logs with branching, compaction, and resume
 - **Model roles** — Named configurations (default, smol, slow, plan, commit) selectable via CLI flags
 - **Subagents** — Process-based multi-agent system with types: explore, plan, designer, reviewer, task, quick_task
-- **LSP integration** — JSON-RPC client for Go, TypeScript/JS, Python, Rust with auto-format and diagnostics hooks
+- **LSP** — JSON-RPC client for Go, TypeScript/JS, Python, and Rust, with auto-format and diagnostics hooks
 - **AI Git tools** — Repository overview, file diffs, hunk parsing, and LLM-generated conventional commits (`/commit`)
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
 - **Memory Palace** — 4-layer contextual memory with SQLite storage, semantic embeddings (all-MiniLM-L6-v2), temporal knowledge graph, and project/conversation miners
-- **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and MCP server support
+- **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and Model Context Protocol (MCP) servers
 - **Skills audit** — Security scanning for hidden Unicode characters, BiDi attacks, and supply-chain threats in skill files (`pi audit`)
 
 ## Architecture
@@ -147,7 +147,7 @@ pi --mode rpc                              # pi-compatible NDJSON over stdio (fo
 | `/compact`      | Compact session history                                  |
 | `/agents`       | Show running subagents                                   |
 | `/history`      | Show command history                                     |
-| `/plan`         | Start PDD planning session (auto-resumes if spec exists) |
+| `/plan`         | Start a Plan-Driven Development (PDD) session (auto-resumes if a spec exists) |
 | `/run`          | Execute a spec with task agent                           |
 | `/skill-create` | Create a new skill                                       |
 | `/skill-list`   | List available skills                                    |
@@ -236,7 +236,7 @@ Skills are automatically scanned on load — skills with critical findings (Unic
 
 ## Configuration
 
-Pi looks for configuration in `~/.pi-go/config.json` (global) and `.pi-go/config.json` (project-local):
+Pi reads configuration from `~/.pi-go/config.json` (global) and `.pi-go/config.json` (project-local):
 
 - **Model roles** — Map role names to specific model strings
 - **Hooks** — Shell commands triggered on tool events (e.g., post-write formatting)
@@ -259,9 +259,9 @@ Self-hosted or LAN endpoints can be declared in config instead of exported in ev
 }
 ```
 
-Precedence is `--url` flag > environment variable > `baseURLs` config. The matching env vars are
-`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, and `OLLAMA_HOST`, so a
-per-shell or CI override still takes effect. An empty env var does not mask a configured value.
+Precedence is `--url` flag, then environment variable, then `baseURLs` config. The matching env vars are
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
+CI override still takes effect. An empty env var does not mask a configured value.
 
 ### Custom OpenAI-compatible provider
 
@@ -299,10 +299,10 @@ OPENAI_API_KEY="your-api-key" pi --model Qwen3.5-397B-A17B-FP8 --url https://api
 When `--url` or `OPENAI_BASE_URL` is set, unknown model names are treated as custom OpenAI-compatible models. Setting
 `provider: "openai"` in config avoids relying on model-prefix detection.
 
-### MCP Server Integration
+### MCP server integration
 
-Pi supports the [Model Context Protocol](https://modelcontextprotocol.io/) for extending the agent with external tools.
-Configure servers in `~/.pi-go/config.json`:
+Pi supports the [Model Context Protocol](https://modelcontextprotocol.io/). Use it to extend the agent with external tools. Configure servers in
+`~/.pi-go/config.json`:
 
 ```json
 {
@@ -353,9 +353,9 @@ Or in standalone `~/.pi-go/mcp.json` (Claude Desktop compatible format):
 
 **Environment variable substitution:** Pi automatically expands `${ENV_VAR}` patterns in server URLs using `.pi-go/.env`
 
-## Editor Integration
+## Editor integration
 
-Pi can run as an ACP server, allowing it to be used from IDEs that support the Agent CP protocol.
+Pi can run as an Agent Client Protocol (ACP) server. Use it from any IDE that supports ACP.
 
 ### Zed
 
@@ -376,11 +376,6 @@ Add pi to Zed's `agent_servers` in your settings:
 
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
-
-## License
-
-See [LICENSE](LICENSE) for details.
-tools and memory.
 
 ## License
 
