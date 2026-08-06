@@ -528,7 +528,7 @@ func dumpPingResponse(w pingWriter, resp *http.Response, dur time.Duration) {
 //
 // Only Azure supplies fallbacks: its two candidate routes trade off against
 // each other (one is meaningful, the other is more widely served), so which
-// one a given resource honours is not knowable ahead of the request.
+// one a given resource honors is not knowable ahead of the request.
 func (t *pingTarget) doHTTP(ctx context.Context, w pingWriter) (*http.Response, error) {
 	resp, err := t.doHTTPTo(ctx, w, t.targetURL)
 	if err != nil {

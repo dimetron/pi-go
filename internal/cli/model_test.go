@@ -177,9 +177,15 @@ func TestRunModelList_Azure(t *testing.T) {
 // A user with only Azure configured previously got "no providers configured",
 // because azure is absent from allProviders.
 func TestRunModelList_NoArgs_AzureOnly(t *testing.T) {
+	// The no-args path always queries ollama, so it needs a stub to reach —
+	// otherwise the run fails on ollama and never says anything about azure.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
+	}))
+	defer srv.Close()
 	isolateRunModelListEnv(t)
 	t.Setenv("AZURE_OPENAI_API_KEY", "testkey")
-	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+	t.Setenv("OLLAMA_HOST", srv.URL)
 
 	out, err := runModelListCapture(t)
 	if err != nil {
