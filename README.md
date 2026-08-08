@@ -8,7 +8,6 @@
 [![codecov](https://codecov.io/gh/dimetron/pi-go/graph/badge.svg)](https://codecov.io/gh/dimetron/pi-go)
 [![GitHub stars](https://img.shields.io/github/stars/dimetron/pi-go?style=social)](https://github.com/dimetron/pi-go)
 [![GitHub issues](https://img.shields.io/github/issues/dimetron/pi-go)](https://github.com/dimetron/pi-go/issues)
-[![Last commit](https://img.shields.io/github/last-commit/dimetron/pi-go)](https://github.com/dimetron/pi-go/commits/main)
 
 A terminal-based coding agent built on [Google ADK Go](https://adk.dev/). It connects to multiple LLM providers, runs
 sandboxed tools, integrates LSP, and ships with a process-based subagent system.
