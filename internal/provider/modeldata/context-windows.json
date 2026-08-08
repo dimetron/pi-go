@@ -118,5 +118,8 @@
     "qwen": 4096,
     "phi4:14b": 16384,
     "glm-5.2": 976000
+  },
+  "opencode": {
+    "deepseek-v4-flash": 1000000
   }
 }
