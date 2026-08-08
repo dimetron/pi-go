@@ -126,6 +126,24 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 	return nil
 }
 
+// OnBashOutput forwards live shell activity to the ACP peer without adding it
+// to the assistant's final response text.
+func (s *Stream) OnBashOutput(ctx context.Context, execID, kind, content string) error {
+	if content == "" {
+		return nil
+	}
+	s.mu.Lock()
+	updater := s.updater
+	s.mu.Unlock()
+	if updater == nil {
+		return nil
+	}
+	if err := updater.Update(ctx, acp.UpdateAgentThoughtText(content)); err != nil {
+		return fmt.Errorf("stream: bash %s update for %s: %w", kind, execID, err)
+	}
+	return nil
+}
+
 // Final returns the accumulated assistant text with surrounding whitespace
 // trimmed. Safe to call multiple times; always reflects the latest state.
 func (s *Stream) Final() string {

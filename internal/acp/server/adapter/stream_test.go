@@ -263,3 +263,18 @@ func TestStream_FinalTrimsSurroundingWhitespace(t *testing.T) {
 		t.Fatalf("Final() = %q, want %q", got, want)
 	}
 }
+
+func TestOnBashOutputForwardsThoughtUpdate(t *testing.T) {
+	up := &fakeUpdater{}
+	s := New(up)
+	if err := s.OnBashOutput(context.Background(), "bg_1", "output", "building\\n"); err != nil {
+		t.Fatalf("OnBashOutput: %v", err)
+	}
+	if got := len(up.updates); got != 1 {
+		t.Fatalf("updates = %d, want 1", got)
+	}
+	thought := up.updates[0].AgentThoughtChunk
+	if thought == nil || thought.Content.Text == nil || thought.Content.Text.Text != "building\\n" {
+		t.Fatalf("thought update = %+v, want bash output", thought)
+	}
+}

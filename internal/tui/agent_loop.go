@@ -1077,13 +1077,15 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.chatModel.Thinking = ""
 	m.agentCh = nil
 	m.refreshDiffStats()
-	// A finished turn hands control back to the user, so both lifecycle
-	// events fire here: the turn is complete, and the agent is now waiting
-	// for the next user input. A hook can subscribe to either.
+	// Every terminal outcome completes the turn, but only a successful turn has
+	// returned to an input-ready state. Do not tell lifecycle consumers that a
+	// failed or canceled run is awaiting input.
 	m.runLifecycleHooks("turn_complete", map[string]any{
 		"error": msg.err != nil,
 	})
-	m.runLifecycleHooks("user_input_required", map[string]any{})
+	if msg.err == nil {
+		m.runLifecycleHooks("user_input_required", map[string]any{})
+	}
 	return m, nil
 }
 
@@ -1136,6 +1138,9 @@ func (m *model) enqueueHook(fn func()) {
 	if m.hookQueue == nil {
 		m.hookQueue = make(chan func(), hookQueueDepth)
 		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		go func(q <-chan func()) {
 			// The queue is never closed — the worker's exit signal is the
 			// session context, so a drained queue is not a shutdown.

@@ -47,9 +47,11 @@ type RuntimeConfig struct {
 // piSessionState caches the per-ACP-session pi runtime so all turns within one
 // session share a single agent instance and its conversation history.
 type piSessionState struct {
+	mu          sync.Mutex // serializes turns, which share the agent and bash output sink
 	agent       *piagent.Agent
 	sessionID   string // ADK session ID — reused across turns for history continuity
 	streamProxy *streamProxy
+	bashSup     *tools.BashSupervisor
 	cleanup     func()
 }
 
@@ -87,6 +89,19 @@ func (p *streamProxy) OnToolEnd(ctx context.Context, callID string, args map[str
 	return s.OnToolEnd(ctx, callID, args, result, runErr)
 }
 
+// beginTurnStream connects the session's shared callbacks to one active ACP
+// turn. Call the returned function before releasing the session turn lock.
+func (p *piSessionState) beginTurnStream(ctx context.Context, stream *adapter.Stream) func() {
+	p.streamProxy.swap(stream)
+	p.bashSup.SetSink(func(execID, kind, content string) {
+		_ = stream.OnBashOutput(ctx, execID, kind, content)
+	})
+	return func() {
+		p.bashSup.SetSink(nil)
+		p.streamProxy.swap(nil)
+	}
+}
+
 // NewPromptHandler returns a real pi-backed ACP prompt handler. It maintains a
 // per-ACP-session cache so the pi agent (and its ADK session history) is reused
 // across turns rather than re-created on every prompt.
@@ -110,10 +125,13 @@ func NewPromptHandler(rt RuntimeConfig) PromptHandler {
 			mu.Unlock()
 		}
 
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+
 		// Fresh stream per turn so tool-call IDs and text are isolated.
 		stream := adapter.New(turn.Updater)
-		ps.streamProxy.swap(stream)
-		defer ps.streamProxy.swap(nil)
+		finishTurn := ps.beginTurnStream(ctx, stream)
+		defer finishTurn()
 
 		return runPromptTurn(ctx, turn, ps, stream)
 	}
@@ -183,6 +201,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		agent:       ag,
 		sessionID:   sessionID,
 		streamProxy: res.proxy,
+		bashSup:     res.bashSup,
 		cleanup:     res.cleanup,
 	}, nil
 }
@@ -306,6 +325,7 @@ type sessionResources struct {
 	afterCBs       []llmagent.AfterToolCallback
 	beforeModelCBs []llmagent.BeforeModelCallback
 	proxy          *streamProxy
+	bashSup        *tools.BashSupervisor
 	cleanup        func()
 }
 
@@ -389,6 +409,7 @@ func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn,
 		afterCBs:       afterCBs,
 		beforeModelCBs: beforeModelCBs,
 		proxy:          proxy,
+		bashSup:        bashSup,
 		cleanup:        cleanup,
 	}, nil
 }
