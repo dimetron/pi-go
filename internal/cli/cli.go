@@ -465,6 +465,7 @@ type nonInteractiveRuntime struct {
 	coreTools    []adktool.Tool
 	orch         *subagent.Orchestrator
 	agentEventCh chan tui.AgentSubEvent
+	bashSup      *tools.BashSupervisor
 }
 
 func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, sandboxRoot, worktreeDir string) (*nonInteractiveRuntime, error) {
@@ -479,11 +480,18 @@ func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, san
 		}
 	}
 
-	coreTools, err := tools.CoreTools(sandbox)
+	bashSup := tools.NewBashSupervisor()
+	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
 	if err != nil {
 		_ = sandbox.Close()
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
+	bashCtlTools, err := tools.BashControlTools(bashSup)
+	if err != nil {
+		_ = sandbox.Close()
+		return nil, fmt.Errorf("creating bash control tools: %w", err)
+	}
+	coreTools = append(coreTools, bashCtlTools...)
 
 	repoRoot := detectGitRoot(ctx, cwd)
 	discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth)
@@ -512,17 +520,27 @@ func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, san
 	}
 	coreTools = append(coreTools, agentTools...)
 
+	bashSup.SetSink(func(execID, kind, content string) {
+		agentEventCB(execID, tui.BashEventKind(kind), content)
+	})
+
 	return &nonInteractiveRuntime{
 		sandbox:      sandbox,
 		coreTools:    coreTools,
 		orch:         orch,
 		agentEventCh: agentEventCh,
+		bashSup:      bashSup,
 	}, nil
 }
 
 func (r *nonInteractiveRuntime) close() {
 	if r == nil {
 		return
+	}
+	// Backgrounded commands have no owner but this supervisor; leaving them
+	// running past the run is a leaked process tree.
+	if r.bashSup != nil {
+		r.bashSup.KillAll()
 	}
 	if r.orch != nil {
 		r.orch.Shutdown()

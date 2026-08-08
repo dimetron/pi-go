@@ -947,8 +947,71 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 	return m, waitForAgent(m.agentCh)
 }
 
+// bashEventPrefix namespaces live shell-command events on the same channel the
+// subagent stream uses, so a command's output cannot be mistaken for a
+// subagent's.
+const bashEventPrefix = "bash:"
+
+// maxLiveBashEvents caps the events retained per running command. Only the last
+// few are ever drawn, and a command that prints for two minutes would otherwise
+// grow this without bound behind a window that shows five lines.
+const maxLiveBashEvents = 64
+
+// handleBashEvent routes one live event from a running shell command to its
+// card.
+//
+// Binding is by command text on the "start" event, not by position: the model
+// can issue several bash calls in one turn, and matching "the most recent bash
+// card" would interleave two commands' output into one card.
+func (m *model) handleBashEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
+	kind := strings.TrimPrefix(msg.kind, bashEventPrefix)
+
+	if kind == "start" {
+		if idx := findUnassignedBashCard(m.chatModel.Messages, msg.content); idx >= 0 {
+			m.chatModel.Messages[idx].agentID = msg.agentID
+		}
+		return m, waitForSubEvent(m.cfg.AgentEventCh)
+	}
+
+	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+		if m.chatModel.Messages[i].tool != "bash" || m.chatModel.Messages[i].agentID != msg.agentID {
+			continue
+		}
+		evs := append(m.chatModel.Messages[i].agentEvents, agentEv{kind: kind, content: msg.content})
+		if len(evs) > maxLiveBashEvents {
+			evs = evs[len(evs)-maxLiveBashEvents:]
+		}
+		m.chatModel.Messages[i].agentEvents = evs
+		break
+	}
+	m.chatModel.Scroll = 0
+	return m, waitForSubEvent(m.cfg.AgentEventCh)
+}
+
+// findUnassignedBashCard returns the newest bash card still waiting for a
+// command to claim it, preferring an exact command match.
+func findUnassignedBashCard(messages []message, command string) int {
+	fallback := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.tool != "bash" || msg.agentID != "" || msg.content != "" {
+			continue
+		}
+		if msg.toolIn == command {
+			return i
+		}
+		if fallback == -1 {
+			fallback = i
+		}
+	}
+	return fallback
+}
+
 // handleAgentSubEvent processes an agentSubEventMsg.
 func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
+	if strings.HasPrefix(msg.kind, bashEventPrefix) {
+		return m.handleBashEvent(msg)
+	}
 	m.matrix.feed(msg.kind+msg.content, m.mainWidth())
 	if msg.kind == "spawn" {
 		// Agent IDs from the orchestrator are "<agent-name>-<unix-nano>".

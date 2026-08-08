@@ -327,15 +327,25 @@ func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn,
 		_ = sandbox.AddExtraDir(filepath.Join(home, ".pi-go"))
 	}
 
-	coreTools, err := tools.CoreTools(sandbox)
+	bashSup := tools.NewBashSupervisor()
+	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
 	if err != nil {
 		_ = sandbox.Close()
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
+	bashCtlTools, err := tools.BashControlTools(bashSup)
+	if err != nil {
+		_ = sandbox.Close()
+		return nil, fmt.Errorf("creating bash control tools: %w", err)
+	}
+	coreTools = append(coreTools, bashCtlTools...)
 
 	orch := newSessionOrchestrator(rt, cfg, cwd)
 	lspMgr := lsp.NewManager(nil)
 	cleanup := func() {
+		// Backgrounded commands outlive the turn by design, so the session
+		// teardown is the only thing that will ever reap them.
+		bashSup.KillAll()
 		lspMgr.Shutdown()
 		orch.Shutdown()
 		_ = sandbox.Close()

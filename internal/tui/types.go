@@ -160,6 +160,14 @@ type TokenTracker interface {
 	CachePrefixTokens() int64   // stable cached prefix for this window
 }
 
+// BashEventKind namespaces a live shell-command event so it can share the
+// subagent event channel without being mistaken for subagent activity.
+// Producers outside this package must route bash events through it rather than
+// hard-coding the prefix.
+func BashEventKind(kind string) string {
+	return bashEventPrefix + kind
+}
+
 // AgentSubEvent carries a subagent event from the agent tool to the TUI.
 type AgentSubEvent struct {
 	AgentID    string

@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/dimetron/pi-go/internal/procs"
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
@@ -673,7 +673,7 @@ func runGates(ctx context.Context, workDir string, gates []Gate) runGateResultMs
 	allPassed := true
 
 	for _, gate := range gates {
-		cmd := exec.CommandContext(ctx, "sh", "-c", gate.Command)
+		cmd := procs.CommandContext(ctx, "sh", "-c", gate.Command)
 		cmd.Dir = workDir
 
 		var stdout, stderr bytes.Buffer
