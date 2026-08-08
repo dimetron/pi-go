@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
+	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
 )
@@ -334,6 +336,73 @@ func (c *ChatModel) invalidateRenderCaches() {
 // markdownLinkRe matches markdown links with both text and URL.
 // Pattern: [text](url) where url starts with file://, http://, or https://
 var markdownLinkRe = regexp.MustCompile(`\[([^\]]+)\]\((file://[^)]+|http://[^)]+|https://[^)]+)\)`)
+var httpURLRe = regexp.MustCompile(`https?://[^\s<>()\[\]{}"']+`)
+
+const (
+	osc8Open  = "\x1b]8;;"
+	osc8Close = "\x1b]8;;\x1b\\"
+)
+
+// hyperlinkURLs wraps HTTP(S) URLs in OSC 8 hyperlink sequences. Supporting
+// terminals open these URLs with their normal click behavior; other terminals
+// render the URL text unchanged.
+func hyperlinkURLs(text string) string {
+	return httpURLRe.ReplaceAllStringFunc(text, func(raw string) string {
+		link := strings.TrimRight(raw, ".,;:!?")
+		if link == "" {
+			return raw
+		}
+		u, err := url.Parse(link)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return raw
+		}
+		return osc8Open + link + "\x1b\\" + link + osc8Close + strings.TrimPrefix(raw, link)
+	})
+}
+
+// hyperlinkRenderedURLs adds OSC 8 hyperlinks to ANSI-styled text. Glamour
+// styles URLs with SGR sequences, so each rendered line is processed separately
+// with display columns while retaining the original style bytes.
+func hyperlinkRenderedURLs(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = hyperlinkRenderedLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func hyperlinkRenderedLine(line string) string {
+	plain := ansi.Strip(line)
+	matches := httpURLRe.FindAllStringIndex(plain, -1)
+	if len(matches) == 0 {
+		return line
+	}
+
+	var out strings.Builder
+	column := 0
+	for _, match := range matches {
+		raw := plain[match[0]:match[1]]
+		link := strings.TrimRight(raw, ".,;:!?")
+		start := lipgloss.Width(plain[:match[0]])
+		end := start + lipgloss.Width(link)
+		rawEnd := start + lipgloss.Width(raw)
+
+		out.WriteString(ansi.Cut(line, column, start))
+		if hyperlinkURLs(link) == link {
+			out.WriteString(ansi.Cut(line, start, rawEnd))
+		} else {
+			out.WriteString(osc8Open)
+			out.WriteString(link)
+			out.WriteString("\x1b\\")
+			out.WriteString(ansi.Cut(line, start, end))
+			out.WriteString(osc8Close)
+			out.WriteString(ansi.Cut(line, end, rawEnd))
+		}
+		column = rawEnd
+	}
+	out.WriteString(ansi.Cut(line, column, lipgloss.Width(plain)))
+	return out.String()
+}
 
 // expandLinks expands markdown links into inline format when the link text differs from the URL.
 // For example: [Link Text](file:///path) becomes "Link Text (/path)"
@@ -374,7 +443,7 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 	if err != nil {
 		return text
 	}
-	return strings.TrimRight(rendered, "\n")
+	return hyperlinkRenderedURLs(strings.TrimRight(rendered, "\n"))
 }
 
 // PlainTranscript returns the conversation as copy-friendly plain text.
