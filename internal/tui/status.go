@@ -40,6 +40,7 @@ type StatusRenderInput struct {
 	HostName     string          // local hostname
 	LoadingItems map[string]bool // item -> done; nil means not loading
 	Flash        string          // transient notice ("Copied!"); empty when none
+	Palette      Palette         // resolved theme palette; zero = dark default
 }
 
 // runCycleInfo carries /run state for the status bar.
@@ -54,7 +55,7 @@ const contextBarWidth = 10
 
 // renderContextBar returns a color-coded visual bar like "████░░░░░░ 42%".
 // Colors: green < 60%, orange 60-80%, red > 80%.
-func renderContextBar(pct float64, bg color.Color) string {
+func renderContextBar(pct float64, bg color.Color, p Palette) string {
 	if pct < 0 {
 		pct = 0
 	}
@@ -71,15 +72,15 @@ func renderContextBar(pct float64, bg color.Color) string {
 	var fg color.Color
 	switch {
 	case pct >= 80:
-		fg = lipgloss.Color("#f38ba8") // Mocha red
+		fg = p.Red
 	case pct >= 60:
-		fg = lipgloss.Color("#fab387") // Mocha peach
+		fg = p.Peach
 	default:
-		fg = lipgloss.Color("#a6e3a1") // Mocha green
+		fg = p.Green
 	}
 
 	filledStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
-	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(p.Surface)
 	pctStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
 
 	return filledStyle.Render(strings.Repeat("█", filled)) +
@@ -89,12 +90,12 @@ func renderContextBar(pct float64, bg color.Color) string {
 
 // Render renders the status bar string.
 func (s *StatusModel) Render(in StatusRenderInput) string {
-	dimFg := lipgloss.Color("#bac2de") // Mocha subtext1
+	p := paletteOrDark(in.Palette)
 
-	dim := lipgloss.NewStyle().Foreground(dimFg)
+	dim := lipgloss.NewStyle().Foreground(p.Dim)
 	bar := lipgloss.NewStyle().Width(s.Width)
 
-	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+	sepStyle := lipgloss.NewStyle().Foreground(p.Surface)
 	sep := sepStyle.Render("  │  ")
 
 	var parts []string
@@ -113,16 +114,16 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	}
 	switch {
 	case in.Flash != "":
-		flashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")).Bold(true) // Mocha green
+		flashStyle := lipgloss.NewStyle().Foreground(p.Green).Bold(true)
 		parts = append(parts, flashStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(in.Flash))))
 	case mode == "plan":
-		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
+		modeStyle := lipgloss.NewStyle().Foreground(p.Peach)
 		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
 	case in.Running && s.ActiveTool == "":
-		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
+		verbStyle := lipgloss.NewStyle().Foreground(p.Blue)
 		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
 	default:
-		verbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa")) // Mocha blue
+		verbStyle := lipgloss.NewStyle().Foreground(p.Blue)
 		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
 	}
 
@@ -131,10 +132,10 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		var items []string
 		for _, name := range sortedKeys(in.LoadingItems) {
 			if in.LoadingItems[name] {
-				okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a6e3a1")) // Mocha green
+				okStyle := lipgloss.NewStyle().Foreground(p.Green)
 				items = append(items, okStyle.Render(name+" \u2713"))
 			} else {
-				loadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
+				loadStyle := lipgloss.NewStyle().Foreground(p.Peach)
 				items = append(items, loadStyle.Render(name+"..."))
 			}
 		}
@@ -143,10 +144,10 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	}
 
 	// Context % bar (visual bar with color coding).
-	noBg := lipgloss.Color("#00000000") // transparent for context bar
+	noBg := p.Transparent
 	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
 		pct := tt.PercentUsed()
-		parts = append(parts, renderContextBar(pct, noBg))
+		parts = append(parts, renderContextBar(pct, noBg, p))
 	} else {
 		// Fallback: rough context size estimate (~4 chars per token).
 		ctxChars := 0
@@ -171,9 +172,9 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			var tokenStyle lipgloss.Style
 			switch {
 			case pct >= 100:
-				tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8")) // Mocha red
+				tokenStyle = lipgloss.NewStyle().Foreground(p.Red)
 			case pct >= 80:
-				tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
+				tokenStyle = lipgloss.NewStyle().Foreground(p.Peach)
 			default:
 				tokenStyle = dim
 			}
@@ -186,8 +187,8 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 
 	// Directory | host.
 	if in.FolderName != "" || in.HostName != "" {
-		dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7"))  // Mocha mauve
-		hostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#89dceb")) // Mocha sky
+		dirStyle := lipgloss.NewStyle().Foreground(p.Mauve)
+		hostStyle := lipgloss.NewStyle().Foreground(p.Sky)
 
 		var locationParts []string
 		if in.FolderName != "" {
@@ -200,7 +201,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	}
 
 	// Active tools or thinking status.
-	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74c7ec")) // Mocha sapphire
+	toolStyle := lipgloss.NewStyle().Foreground(p.Sapphire)
 	if len(s.ActiveTools) > 1 {
 		var toolNames []string
 		for name := range s.ActiveTools {
@@ -216,7 +217,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	// /run cycle indicator. The spec name is omitted: it is long enough to wrap
 	// the status bar onto a second line, and it is already shown in the sidebar.
 	if in.RunCycle != nil {
-		runStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fab387")) // Mocha peach
+		runStyle := lipgloss.NewStyle().Foreground(p.Peach)
 		parts = append(parts, runStyle.Render(fmt.Sprintf("cycle %d/%d",
 			in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
 	}

@@ -85,7 +85,10 @@ func TestURLArrowNavigation_DoesNotRewriteCursorCellInline(t *testing.T) {
 	}
 
 	view := im.View(false)
-	reverseVideo := regexp.MustCompile(`\x1b\[[0-9;]*7[0-9;]*m`)
+	// Reverse video is the standalone SGR parameter 7. The \b guards keep this
+	// from matching a truecolor sequence like 38;2;137;180;250, whose 137
+	// contains a 7 but is not reverse video.
+	reverseVideo := regexp.MustCompile(`\x1b\[[0-9;]*\b7\b[0-9;]*m`)
 	if reverseVideo.MatchString(view) {
 		t.Fatalf("input view should not render an inline reverse-video cursor in URL text: %q", view)
 	}

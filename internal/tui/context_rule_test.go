@@ -16,7 +16,7 @@ var sgrSegment = regexp.MustCompile(`\x1b\[(38;2;\d+;\d+;\d+)m([^\x1b]*)\x1b\[m`
 // filledCells counts the leading run drawn in the severity color. The gauge
 // encodes usage in color, not glyph, so this is what "filled" means.
 func filledCells(out string, pct float64) int {
-	want := truecolorFragment(contextSeverityColor(pct))
+	want := truecolorFragment(contextSeverityColor(pct, darkPalette))
 	for _, m := range sgrSegment.FindAllStringSubmatch(out, -1) {
 		if m[1] == want {
 			return ansi.StringWidth(m[2])
@@ -28,7 +28,7 @@ func filledCells(out string, pct float64) int {
 // hasSeverityColor reports whether the gauge drew any run in a severity color,
 // i.e. whether it is showing a reading at all.
 func hasSeverityColor(out string, pct float64) bool {
-	return strings.Contains(out, truecolorFragment(contextSeverityColor(pct)))
+	return strings.Contains(out, truecolorFragment(contextSeverityColor(pct, darkPalette)))
 }
 
 // I1: the gauge is a frame row, so it must be exactly the terminal width at
@@ -38,7 +38,7 @@ func TestContextRule_ExactWidth(t *testing.T) {
 	for _, width := range []int{20, 40, 60, 80, 120, 200} {
 		for _, used := range []int64{0, 1, 1_000, 50_000, 128_000, 255_999, 256_000, 999_999} {
 			in := contextRuleInput{Width: width, UsedTokens: used, WindowSize: defaultContextWindow}
-			got := ansi.StringWidth(renderContextRule(in))
+			got := ansi.StringWidth(renderContextRule(in, darkPalette))
 			if got != width {
 				t.Errorf("width=%d used=%d: rule is %d cells, want %d", width, used, got, width)
 			}
@@ -50,7 +50,7 @@ func TestContextRule_ExactWidth(t *testing.T) {
 func TestContextRule_NoEscapeLeak(t *testing.T) {
 	out := renderContextRule(contextRuleInput{
 		Width: 120, UsedTokens: 150_000, WindowSize: defaultContextWindow,
-	})
+	}, darkPalette)
 	if strings.Contains(ansi.Strip(out), "38;5;") || strings.Contains(ansi.Strip(out), "[0m") {
 		t.Errorf("escape leaked into visible text: %q", ansi.Strip(out))
 	}
@@ -74,7 +74,7 @@ func TestContextRule_SeverityLadder(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := contextSeverityColor(tc.pct)
+			got := contextSeverityColor(tc.pct, darkPalette)
 			if got == nil {
 				t.Fatal("nil color")
 			}
@@ -114,7 +114,7 @@ func TestContextRule_DumbZoneEntryTurnsRed(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			out := renderContextRule(contextRuleInput{
 				Width: 120, UsedTokens: tc.used, WindowSize: tc.window,
-			})
+			}, darkPalette)
 			if !hasSeverityColor(out, 100) {
 				t.Errorf("used=%d window=%d: gauge at dumb-zone entry should be red, got %q",
 					tc.used, tc.window, out)
@@ -137,7 +137,7 @@ func TestContextRule_FillGrowsWithUsage(t *testing.T) {
 		}
 		out := renderContextRule(contextRuleInput{
 			Width: width, UsedTokens: used, WindowSize: defaultContextWindow,
-		})
+		}, darkPalette)
 		filled := filledCells(out, pct)
 		if filled <= prev {
 			t.Errorf("used=%d: filled=%d did not grow past %d", used, filled, prev)
@@ -153,13 +153,13 @@ func TestContextRule_PegsAtDumbZoneEntry(t *testing.T) {
 	const width = 120
 	atBoundary := renderContextRule(contextRuleInput{
 		Width: width, UsedTokens: 179_200, WindowSize: defaultContextWindow,
-	})
+	}, darkPalette)
 	pastBoundary := renderContextRule(contextRuleInput{
 		Width: width, UsedTokens: 200_000, WindowSize: defaultContextWindow,
-	})
+	}, darkPalette)
 	wellPast := renderContextRule(contextRuleInput{
 		Width: width, UsedTokens: 256_000, WindowSize: defaultContextWindow,
-	})
+	}, darkPalette)
 	atFill := filledCells(atBoundary, 100)
 	pastFill := filledCells(pastBoundary, 100)
 	wellPastFill := filledCells(wellPast, 100)
@@ -173,7 +173,7 @@ func TestContextRule_PegsAtDumbZoneEntry(t *testing.T) {
 }
 
 func TestContextRule_UnmeasuredRendersPlainRule(t *testing.T) {
-	out := renderContextRule(contextRuleInput{Width: 80})
+	out := renderContextRule(contextRuleInput{Width: 80}, darkPalette)
 	if hasSeverityColor(out, 0) {
 		t.Error("an unmeasured context must not render a filled gauge")
 	}
@@ -190,7 +190,7 @@ func TestContextRule_AnyUsageShowsAtLeastOneCell(t *testing.T) {
 	// still read as a gauge rather than an empty rule.
 	out := renderContextRule(contextRuleInput{
 		Width: 120, UsedTokens: 1, WindowSize: defaultContextWindow,
-	})
+	}, darkPalette)
 	if got := filledCells(out, 0); got < 1 {
 		t.Errorf("measured usage must show at least one filled cell, got %d", got)
 	}
@@ -202,7 +202,7 @@ func TestContextRule_FallsBackToDefaultWindow(t *testing.T) {
 	//
 	// 128k of a 256k window sits at 50% of the window, which under the dumb-zone
 	// calibration equals 50/70 ≈ 71.4% of the bar (100 = dumb-zone entry).
-	out := renderContextRule(contextRuleInput{Width: 120, UsedTokens: 128_000})
+	out := renderContextRule(contextRuleInput{Width: 120, UsedTokens: 128_000}, darkPalette)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "256.0k") {
 		t.Errorf("expected the assumed 256k denominator, got %q", plain)
@@ -269,7 +269,7 @@ func TestContextRule_ReadoutNamesTheScaleInUse(t *testing.T) {
 		{800_000, "1.0M", "100%"},
 	}
 	for _, tc := range tests {
-		out := ansi.Strip(renderContextRule(contextRuleInput{Width: 120, UsedTokens: tc.used}))
+		out := ansi.Strip(renderContextRule(contextRuleInput{Width: 120, UsedTokens: tc.used}, darkPalette))
 		if !strings.Contains(out, tc.wantScale) {
 			t.Errorf("used=%d: readout %q does not name scale %s", tc.used, out, tc.wantScale)
 		}
@@ -290,8 +290,8 @@ func TestContextRule_StepUpRescalesDownward(t *testing.T) {
 	var belowUsed int64 = midScaleThreshold - 1
 	atUsed := int64(midScaleThreshold)
 
-	below := renderContextRule(contextRuleInput{Width: width, UsedTokens: belowUsed})
-	at := renderContextRule(contextRuleInput{Width: width, UsedTokens: atUsed})
+	below := renderContextRule(contextRuleInput{Width: width, UsedTokens: belowUsed}, darkPalette)
+	at := renderContextRule(contextRuleInput{Width: width, UsedTokens: atUsed}, darkPalette)
 
 	belowPct := float64(belowUsed) / (float64(defaultContextWindow) * dumbZoneFraction) * 100
 	if belowPct > 100 {
@@ -317,7 +317,7 @@ func TestContextRule_ExactWidthAcrossScales(t *testing.T) {
 		for _, used := range []int64{
 			0, 199_999, 200_000, 399_999, 400_000, 999_999, 1_000_000, 2_000_000,
 		} {
-			out := renderContextRule(contextRuleInput{Width: width, UsedTokens: used})
+			out := renderContextRule(contextRuleInput{Width: width, UsedTokens: used}, darkPalette)
 			if got := ansi.StringWidth(out); got != width {
 				t.Errorf("width=%d used=%d: rule is %d cells", width, used, got)
 			}
@@ -327,7 +327,7 @@ func TestContextRule_ExactWidthAcrossScales(t *testing.T) {
 
 // Usage past the top scale pegs at 100% rather than overflowing the rule.
 func TestContextRule_BeyondTopScalePegs(t *testing.T) {
-	out := ansi.Strip(renderContextRule(contextRuleInput{Width: 120, UsedTokens: 5_000_000}))
+	out := ansi.Strip(renderContextRule(contextRuleInput{Width: 120, UsedTokens: 5_000_000}, darkPalette))
 	if !strings.Contains(out, "100%") {
 		t.Errorf("usage beyond the top scale should peg at 100%%, got %q", out)
 	}
@@ -336,7 +336,7 @@ func TestContextRule_BeyondTopScalePegs(t *testing.T) {
 func TestContextRule_RealWindowWins(t *testing.T) {
 	out := renderContextRule(contextRuleInput{
 		Width: 120, UsedTokens: 100_000, WindowSize: 200_000,
-	})
+	}, darkPalette)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "200.0k") {
 		t.Errorf("a known window must override the assumed one, got %q", plain)
@@ -345,7 +345,7 @@ func TestContextRule_RealWindowWins(t *testing.T) {
 
 func TestContextRule_EstimateUsedBeforeFirstResponse(t *testing.T) {
 	pct := 40_000.0 / float64(defaultContextWindow) * 100
-	out := renderContextRule(contextRuleInput{Width: 120, FallbackEst: 40_000})
+	out := renderContextRule(contextRuleInput{Width: 120, FallbackEst: 40_000}, darkPalette)
 	if filledCells(out, pct) < 1 {
 		t.Error("the pre-response estimate should still drive the gauge")
 	}
@@ -355,15 +355,15 @@ func TestContextRule_NarrowTerminalDegradesGracefully(t *testing.T) {
 	for _, width := range []int{1, 2, 5, 10, 15} {
 		out := renderContextRule(contextRuleInput{
 			Width: width, UsedTokens: 128_000, WindowSize: defaultContextWindow,
-		})
+		}, darkPalette)
 		if got := ansi.StringWidth(out); got != width {
 			t.Errorf("width=%d: got %d cells", width, got)
 		}
 	}
-	if renderContextRule(contextRuleInput{Width: 0}) != "" {
+	if renderContextRule(contextRuleInput{Width: 0}, darkPalette) != "" {
 		t.Error("zero width must render nothing")
 	}
-	if renderContextRule(contextRuleInput{Width: -5}) != "" {
+	if renderContextRule(contextRuleInput{Width: -5}, darkPalette) != "" {
 		t.Error("negative width must render nothing")
 	}
 }

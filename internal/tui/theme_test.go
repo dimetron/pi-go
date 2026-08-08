@@ -244,3 +244,43 @@ func TestNewThemeManagerFromJSON(t *testing.T) {
 		t.Error("NewThemeManagerFromJSON should error on invalid JSON")
 	}
 }
+
+// TestPaletteForLightThemeRendersDifferently pins the fix for light themes:
+// before the palette was threaded into the renderers, switching to a light
+// theme changed nothing on screen because every renderer hardcoded dark Mocha
+// colors. paletteFor must produce a palette whose key differs from the dark
+// default, so the render cache and the renderers actually pick up the change.
+func TestPaletteForLightThemeRendersDifferently(t *testing.T) {
+	tm := NewThemeManager()
+	if err := tm.SetTheme("github-light"); err != nil {
+		t.Fatalf("SetTheme(github-light) error: %v", err)
+	}
+	light := paletteFor(tm.Current())
+	if !light.Valid {
+		t.Fatal("light palette should be valid")
+	}
+	if paletteKey(light) == paletteKey(darkPalette) {
+		t.Error("light palette key equals dark palette key; light theme would not re-render")
+	}
+	// The light palette's text must be dark (legible on a light background),
+	// not the dark theme's light text.
+	if colorString(light.Text) == colorString(darkPalette.Text) {
+		t.Errorf("light theme text %q should differ from dark theme text %q",
+			colorString(light.Text), colorString(darkPalette.Text))
+	}
+}
+
+// TestPaletteForDarkThemeMatchesDefault ensures the default (dark) theme
+// resolves to the same Mocha palette the renderers used before theming, so
+// existing dark output is byte-for-byte unchanged.
+func TestPaletteForDarkThemeMatchesDefault(t *testing.T) {
+	tm := NewThemeManager()
+	dark := paletteFor(tm.Current())
+	if !dark.Valid {
+		t.Fatal("dark palette should be valid")
+	}
+	if paletteKey(dark) != paletteKey(darkPalette) {
+		t.Errorf("default theme palette key %d != dark default %d",
+			paletteKey(dark), paletteKey(darkPalette))
+	}
+}

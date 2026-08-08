@@ -91,6 +91,9 @@ type ToolDisplayModel struct {
 	Width int
 	// CompactTools when true shows one-line summaries instead of full output.
 	CompactTools bool
+	// Palette is the resolved theme palette, set each frame by the model before
+	// rendering. Zero means the dark default.
+	Palette Palette
 }
 
 // RenderToolMessage renders a tool message (role=="tool") into a styled string.
@@ -98,22 +101,23 @@ type ToolDisplayModel struct {
 // (with syntax-highlighted output). When CompactTools is true, renders a
 // one-line summary instead of full output.
 func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	p := paletteOrDark(t.Palette)
+	dim := lipgloss.NewStyle().Foreground(p.Dim)
 
 	if t.CompactTools {
-		return t.renderCompactTool(msg, dim)
+		return t.renderCompactTool(msg, dim, p)
 	}
 	if msg.tool == "agent" || msg.tool == "subagent" {
-		return t.renderAgentTool(msg, dim)
+		return t.renderAgentTool(msg, dim, p)
 	}
-	return t.renderRegularTool(msg, dim)
+	return t.renderRegularTool(msg, dim, p)
 }
 
 // renderCompactTool renders a one-line tally for a tool message.
-func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) string {
-	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
-	checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("◉ ")
+func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p Palette) string {
+	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
+	checkStyle := lipgloss.NewStyle().Foreground(p.Tool)
+	toolBullet := lipgloss.NewStyle().Foreground(p.Tool).Bold(true).Render("◉ ")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -149,7 +153,7 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) st
 
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
-func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) string {
+func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Palette) string {
 	agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("◉ ")
 	typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -173,7 +177,7 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 	// renderable remainder, keep the newest maxAgentOutputLines so the user
 	// always sees the latest activity — not a stream truncated into silence.
 	if len(msg.agentEvents) > 0 {
-		evStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		evStyle := lipgloss.NewStyle().Foreground(p.Dim)
 		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(agentToolColor(msg.agentType)))
 
 		renderable := make([]agentEv, 0, len(msg.agentEvents))
@@ -261,11 +265,11 @@ const maxLiveOutputLines = 5
 // nothing is indistinguishable from a hung one, and that ambiguity is what let
 // two sessions sit wedged for an hour without anyone noticing. "1m30s — no
 // output" removes it.
-func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style) string {
+func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style, p Palette) string {
 	cw := t.contentWidth()
-	outStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("173"))
-	stateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	outStyle := lipgloss.NewStyle().Foreground(p.Dim)
+	errStyle := lipgloss.NewStyle().Foreground(p.Error)
+	stateStyle := lipgloss.NewStyle().Foreground(p.Warning)
 
 	var (
 		lines []string
@@ -408,7 +412,7 @@ func softWrap(s string, width int) []string {
 
 // renderRegularTool renders a standard tool message with name, args, and
 // syntax-highlighted output.
-func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) string {
+func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
 	argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("◉ ")
@@ -427,7 +431,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		// Still running: show the live tail instead of an empty card. Once the
 		// result arrives, msg.content takes over and the final output replaces
 		// this window — the stream is a progress indicator, not a transcript.
-		b.WriteString(t.renderLiveOutput(msg, dim))
+		b.WriteString(t.renderLiveOutput(msg, dim, p))
 	}
 	if msg.content != "" {
 		lines := strings.Split(msg.content, "\n")
@@ -449,7 +453,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		var styled []string
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
-			styled = highlightReadOutput(lines, msg.toolIn)
+			styled = highlightReadOutput(lines, msg.toolIn, p)
 		case msg.tool == "bash":
 			// Bash output is plain text most of the time but frequently contains
 			// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
@@ -464,9 +468,9 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		// "grep" here meant grep output was never highlighted in practice and
 		// fell through to the dim default.
 		case msg.tool == "grep" || msg.tool == "ripgrep":
-			styled = highlightGrepOutput(lines)
+			styled = highlightGrepOutput(lines, p)
 		case msg.tool == "find":
-			styled = highlightFindOutput(lines)
+			styled = highlightFindOutput(lines, p)
 		default:
 			styled = make([]string, len(lines))
 			for i, line := range lines {
@@ -720,8 +724,8 @@ func formatToolResult(data map[string]any) string {
 
 // highlightReadOutput applies syntax highlighting to read tool output lines.
 // Each line has format "     1\tcontent" — line numbers are styled separately.
-func highlightReadOutput(lines []string, filename string) []string {
-	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+func highlightReadOutput(lines []string, filename string, p Palette) []string {
+	numStyle := lipgloss.NewStyle().Foreground(p.Faint)
 
 	// Separate line numbers from code
 	var codeLines []string
@@ -864,10 +868,10 @@ func highlightBashOutput(lines []string) []string {
 }
 
 // highlightGrepOutput styles grep result lines of the form "file:line: content".
-func highlightGrepOutput(lines []string) []string {
-	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))     // blue
-	lineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // gray
-	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+func highlightGrepOutput(lines []string, p Palette) []string {
+	fileStyle := lipgloss.NewStyle().Foreground(p.Blue)     // blue
+	lineNumStyle := lipgloss.NewStyle().Foreground(p.Faint) // gray
+	sepStyle := lipgloss.NewStyle().Foreground(p.Faint)
 
 	result := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -875,12 +879,12 @@ func highlightGrepOutput(lines []string) []string {
 		first := strings.IndexByte(line, ':')
 		if first < 0 {
 			// Not a match line (e.g. truncation note) — dim it.
-			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
+			result = append(result, lipgloss.NewStyle().Foreground(p.Faint).Render(line))
 			continue
 		}
 		second := strings.IndexByte(line[first+1:], ':')
 		if second < 0 {
-			result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(line))
+			result = append(result, lipgloss.NewStyle().Foreground(p.Faint).Render(line))
 			continue
 		}
 		second += first + 1 // absolute index of second colon
@@ -907,10 +911,10 @@ func highlightGrepOutput(lines []string) []string {
 }
 
 // highlightFindOutput styles find/glob result lines as file paths.
-func highlightFindOutput(lines []string) []string {
-	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // blue
-	dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+func highlightFindOutput(lines []string, p Palette) []string {
+	fileStyle := lipgloss.NewStyle().Foreground(p.Blue) // blue
+	dirStyle := lipgloss.NewStyle().Foreground(p.Cyan).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(p.Faint)
 
 	result := make([]string, 0, len(lines))
 	for _, line := range lines {

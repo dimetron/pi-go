@@ -951,7 +951,7 @@ func TestRenderContextBar(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bg := lipgloss.Color("236")
-			result := renderContextBar(tc.pct, bg)
+			result := renderContextBar(tc.pct, bg, darkPalette)
 			if !strings.Contains(result, tc.want) {
 				t.Errorf("renderContextBar(%.0f) = %q, want substring %q", tc.pct, result, tc.want)
 			}

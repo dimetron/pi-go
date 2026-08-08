@@ -74,7 +74,7 @@ func TestHighlightReadOutput_BasicGoFile(t *testing.T) {
 		"     2\t",
 		"     3\tfunc main() {}",
 	}
-	result := highlightReadOutput(lines, "main.go")
+	result := highlightReadOutput(lines, "main.go", darkPalette)
 
 	if len(result) != 3 {
 		t.Fatalf("expected 3 lines, got %d", len(result))
@@ -98,7 +98,7 @@ func TestHighlightReadOutput_NoTabSeparator(t *testing.T) {
 		"     1\tpackage main",
 		"... (truncated)",
 	}
-	result := highlightReadOutput(lines, "main.go")
+	result := highlightReadOutput(lines, "main.go", darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -111,7 +111,7 @@ func TestHighlightReadOutput_NoTabSeparator(t *testing.T) {
 
 func TestHighlightReadOutput_EmptyLines(t *testing.T) {
 	lines := []string{}
-	result := highlightReadOutput(lines, "main.go")
+	result := highlightReadOutput(lines, "main.go", darkPalette)
 	if len(result) != 0 {
 		t.Errorf("expected 0 lines for empty input, got %d", len(result))
 	}
@@ -122,7 +122,7 @@ func TestHighlightReadOutput_PreservesLineNumberFormat(t *testing.T) {
 		"    42\tx := 1",
 		"    43\ty := 2",
 	}
-	result := highlightReadOutput(lines, "test.go")
+	result := highlightReadOutput(lines, "test.go", darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -143,7 +143,7 @@ func TestHighlightGrepOutput_BasicMatch(t *testing.T) {
 		"main.go:10: func main() {}",
 		"utils.go:25: var x = 42",
 	}
-	result := highlightGrepOutput(lines)
+	result := highlightGrepOutput(lines, darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -167,7 +167,7 @@ func TestHighlightGrepOutput_TruncationNote(t *testing.T) {
 		"file.go:1: x := 1",
 		"... (200 total matches, truncated)",
 	}
-	result := highlightGrepOutput(lines)
+	result := highlightGrepOutput(lines, darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -178,7 +178,7 @@ func TestHighlightGrepOutput_TruncationNote(t *testing.T) {
 }
 
 func TestHighlightGrepOutput_EmptyLines(t *testing.T) {
-	result := highlightGrepOutput([]string{})
+	result := highlightGrepOutput([]string{}, darkPalette)
 	if len(result) != 0 {
 		t.Errorf("expected 0 lines, got %d", len(result))
 	}
@@ -186,7 +186,7 @@ func TestHighlightGrepOutput_EmptyLines(t *testing.T) {
 
 func TestHighlightGrepOutput_NoColonLine(t *testing.T) {
 	lines := []string{"just a line without colons"}
-	result := highlightGrepOutput(lines)
+	result := highlightGrepOutput(lines, darkPalette)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(result))
 	}
@@ -200,7 +200,7 @@ func TestHighlightGrepOutput_SyntaxHighlightedContent(t *testing.T) {
 	lines := []string{
 		"main.go:5: func main() {}",
 	}
-	result := highlightGrepOutput(lines)
+	result := highlightGrepOutput(lines, darkPalette)
 
 	// Content portion should have chroma highlighting (ANSI codes).
 	if len(result) != 1 {
@@ -216,7 +216,7 @@ func TestHighlightGrepOutput_PythonFile(t *testing.T) {
 	lines := []string{
 		"script.py:3: def hello():",
 	}
-	result := highlightGrepOutput(lines)
+	result := highlightGrepOutput(lines, darkPalette)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(result))
 	}
@@ -233,7 +233,7 @@ func TestHighlightFindOutput_FileList(t *testing.T) {
 		"internal/tools/write.go",
 		"internal/tui/tui.go",
 	}
-	result := highlightFindOutput(lines)
+	result := highlightFindOutput(lines, darkPalette)
 
 	if len(result) != 3 {
 		t.Fatalf("expected 3 lines, got %d", len(result))
@@ -254,7 +254,7 @@ func TestHighlightFindOutput_WithDirectories(t *testing.T) {
 		"src/",
 		"src/main.go",
 	}
-	result := highlightFindOutput(lines)
+	result := highlightFindOutput(lines, darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -270,7 +270,7 @@ func TestHighlightFindOutput_TruncationNote(t *testing.T) {
 		"file1.go",
 		"... (500 total files, truncated)",
 	}
-	result := highlightFindOutput(lines)
+	result := highlightFindOutput(lines, darkPalette)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(result))
@@ -281,7 +281,7 @@ func TestHighlightFindOutput_TruncationNote(t *testing.T) {
 }
 
 func TestHighlightFindOutput_EmptyLines(t *testing.T) {
-	result := highlightFindOutput([]string{})
+	result := highlightFindOutput([]string{}, darkPalette)
 	if len(result) != 0 {
 		t.Errorf("expected 0 lines, got %d", len(result))
 	}

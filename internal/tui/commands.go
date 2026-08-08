@@ -558,7 +558,7 @@ func (m *model) formatContextUsage() string {
 		}
 		b.WriteString("*Context usage*\n\n")
 		b.WriteString(RenderContextBreakdown(
-			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64)))
+			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64), m.palette))
 		b.WriteString("\n\n")
 	}
 

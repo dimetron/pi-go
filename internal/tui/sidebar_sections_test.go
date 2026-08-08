@@ -19,6 +19,12 @@ func plain(lines []string) string {
 	return ansi.Strip(strings.Join(lines, "\n"))
 }
 
+// testSidebarStyles returns the dark sidebar styles for tests that call the
+// section renderers directly.
+func testSidebarStyles() sidebarStyles {
+	return newSidebarStyles(darkPalette)
+}
+
 func TestTruncateLabel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -78,7 +84,7 @@ func TestSidebarMoodLines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := sidebarMoodLines(tt.in)
+			got := sidebarMoodLines(tt.in, testSidebarStyles())
 			if len(got) != tt.wantLen {
 				t.Fatalf("sidebarMoodLines() returned %d lines, want %d", len(got), tt.wantLen)
 			}
@@ -97,13 +103,13 @@ func TestSidebarHiddenSections(t *testing.T) {
 		name string
 		got  []string
 	}{
-		{"no artifacts", sidebarArtifactLines(empty, 27)},
-		{"no git branch", sidebarGitLines(empty, 27)},
-		{"no orchestrator", sidebarAgentLines(empty, 27)},
-		{"no skills", sidebarSkillLines(empty)},
-		{"no memory status", sidebarMemoryLines(empty)},
-		{"no mcp tools", sidebarMCPLines(empty, 27)},
-		{"no loading items", sidebarLoadingLines(empty)},
+		{"no artifacts", sidebarArtifactLines(empty, 27, testSidebarStyles())},
+		{"no git branch", sidebarGitLines(empty, 27, testSidebarStyles())},
+		{"no orchestrator", sidebarAgentLines(empty, 27, testSidebarStyles())},
+		{"no skills", sidebarSkillLines(empty, testSidebarStyles())},
+		{"no memory status", sidebarMemoryLines(empty, testSidebarStyles())},
+		{"no mcp tools", sidebarMCPLines(empty, 27, testSidebarStyles())},
+		{"no loading items", sidebarLoadingLines(empty, testSidebarStyles())},
 	}
 
 	for _, tt := range tests {
@@ -145,7 +151,7 @@ func TestSidebarGitLines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			out := plain(sidebarGitLines(tt.in, 27))
+			out := plain(sidebarGitLines(tt.in, 27, testSidebarStyles()))
 			for _, want := range tt.wantParts {
 				if !strings.Contains(out, want) {
 					t.Errorf("expected %q in:\n%s", want, out)
@@ -175,7 +181,7 @@ func TestSidebarModeLines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			out := plain(sidebarModeLines(tt.in, 27))
+			out := plain(sidebarModeLines(tt.in, 27, testSidebarStyles()))
 			if !strings.Contains(out, tt.want) {
 				t.Errorf("expected %q in:\n%s", tt.want, out)
 			}
@@ -196,7 +202,7 @@ func TestSidebarModeLinesRunChecklist(t *testing.T) {
 		},
 	}
 
-	out := plain(sidebarModeLines(in, 27))
+	out := plain(sidebarModeLines(in, 27, testSidebarStyles()))
 	for _, want := range []string{"Run: my-spec", "cycle 2/5 ∙ implement", "[x] write tests", "[ ] make them pass"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in:\n%s", want, out)
@@ -267,7 +273,7 @@ func TestAgentRowIcons(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
 			t.Parallel()
-			got := ansi.Strip(agentRow(tt.status, "worker"))
+			got := ansi.Strip(agentRow(tt.status, "worker", testSidebarStyles()))
 			if !strings.Contains(got, tt.want) {
 				t.Errorf("agentRow(%q) = %q, want icon %q", tt.status, got, tt.want)
 			}
@@ -301,7 +307,7 @@ func TestSidebarMCPLinesCountsPerServer(t *testing.T) {
 		{Server: "alpha", Tool: "two"},
 		{Server: "beta", Tool: "three"},
 	}}
-	out := plain(sidebarMCPLines(in, 27))
+	out := plain(sidebarMCPLines(in, 27, testSidebarStyles()))
 
 	if !strings.Contains(out, "MCP Tools [3]") {
 		t.Errorf("expected a total of 3 tools, got:\n%s", out)
@@ -317,7 +323,7 @@ func TestSidebarMCPLinesCountsPerServer(t *testing.T) {
 func TestSidebarLoadingLines(t *testing.T) {
 	t.Parallel()
 	in := SidebarRenderInput{LoadingItems: map[string]bool{"mcp": true, "skills": false}}
-	out := plain(sidebarLoadingLines(in))
+	out := plain(sidebarLoadingLines(in, testSidebarStyles()))
 
 	if !strings.Contains(out, "✓ mcp") {
 		t.Errorf("expected a tick for the loaded item, got:\n%s", out)
@@ -331,7 +337,7 @@ func TestSidebarLoadingLinesEmptyMapStillShowsHeading(t *testing.T) {
 	t.Parallel()
 	// A non-nil but empty map means "loading started, nothing reported yet",
 	// which is different from nil (hidden).
-	got := sidebarLoadingLines(SidebarRenderInput{LoadingItems: map[string]bool{}})
+	got := sidebarLoadingLines(SidebarRenderInput{LoadingItems: map[string]bool{}}, testSidebarStyles())
 	if len(got) == 0 {
 		t.Fatal("an empty (non-nil) loading map should still render the heading")
 	}
