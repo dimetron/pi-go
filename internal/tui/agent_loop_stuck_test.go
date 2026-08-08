@@ -106,6 +106,62 @@ func TestStuckDetector_Observe_StreakThreshold(t *testing.T) {
 	}
 }
 
+// TestStuckDetector_ObserveResult_PollingNotStuck reproduces session
+// 260808-1813: bash_output polled a running background command with identical
+// args, but every response carried fresh progress (elapsed, streamed output).
+// Changing results must reset the identical-call streak so productive polling
+// outlives maxRepeatToolCalls.
+func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
+	s := &stuckDetector{}
+	args := map[string]any{"handle": "bg_16", "wait_ms": 1000}
+	for i := 0; i < maxRepeatToolCalls*3; i++ {
+		stuck, detail := s.observe("bash_output", args)
+		if stuck {
+			t.Fatalf("poll %d flagged stuck: %s", i, detail)
+		}
+		s.observeResult("bash_output", map[string]any{
+			"handle":  "bg_16",
+			"elapsed": i, // progress: every response differs
+			"running": true,
+		})
+	}
+}
+
+func TestStuckDetector_ObserveResult_IdenticalResultsStillStuck(t *testing.T) {
+	s := &stuckDetector{}
+	args := map[string]any{"handle": "bg_16"}
+	resp := map[string]any{"running": false, "stdout": "done"}
+	tripped := false
+	for i := 0; i < maxRepeatToolCalls; i++ {
+		stuck, _ := s.observe("bash_output", args)
+		tripped = tripped || stuck
+		s.observeResult("bash_output", resp)
+	}
+	if !tripped {
+		t.Errorf("identical calls with identical results should still trip after %d repeats", maxRepeatToolCalls)
+	}
+}
+
+func TestStuckDetector_ObserveResult_OtherToolDoesNotReset(t *testing.T) {
+	s := &stuckDetector{}
+	s.observe("read", map[string]any{"path": "/foo"})
+	s.observe("read", map[string]any{"path": "/foo"})
+	s.observeResult("write", map[string]any{"changed": 1})
+	s.observeResult("write", map[string]any{"changed": 2})
+	if s.streak != 2 {
+		t.Errorf("streak = %d, want 2: another tool's results must not reset it", s.streak)
+	}
+}
+
+func TestStuckDetector_ObserveResult_FirstResultOnlySetsBaseline(t *testing.T) {
+	s := &stuckDetector{}
+	s.observe("read", map[string]any{"path": "/foo"})
+	s.observeResult("read", map[string]any{"content": "x"})
+	if s.streak != 1 {
+		t.Errorf("streak = %d, want 1: the first result has nothing to compare against", s.streak)
+	}
+}
+
 func TestDetectCycle_ShortWindow(t *testing.T) {
 	s := &stuckDetector{}
 	// Window < 6 should return ""
