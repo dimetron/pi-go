@@ -54,6 +54,10 @@ type Config struct {
 	CompactMetrics CompactStatsProvider
 	// ThemeName is the configured theme name from config. Empty or "default" uses tokyo-night.
 	ThemeName string
+	// LifecycleHooks are shell-command hooks fired on agent lifecycle events
+	// (turn_complete, user_input_required). Each carries the event name and a
+	// small data payload as JSON on stdin. Nil disables lifecycle hooks.
+	LifecycleHooks []extension.HookConfig
 
 	// DeferredInit, if non-nil, is a channel of InitEvent messages.
 	// When set, the TUI starts immediately in loading state and receives

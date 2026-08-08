@@ -2,7 +2,9 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -671,3 +673,45 @@ func (c *mockReadonlyContext) WithDelta(*agent.CommonContextDelta) agent.Context
 }
 
 var _ agent.Context = (*mockReadonlyContext)(nil)
+
+func TestRunLifecycleHook(t *testing.T) {
+	dir := t.TempDir()
+	out := dir + "/out.json"
+	hook := HookConfig{
+		Event:   "turn_complete",
+		Command: "cat > " + out,
+		Timeout: 5,
+	}
+	ctx := context.Background()
+
+	err := RunLifecycleHook(ctx, hook, "turn_complete", map[string]any{"error": false})
+	if err != nil {
+		t.Fatalf("RunLifecycleHook() error = %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading hook output: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal hook output: %v", err)
+	}
+	if got["event"] != "turn_complete" {
+		t.Errorf("event = %v, want turn_complete", got["event"])
+	}
+	if d, ok := got["data"].(map[string]any); !ok || d["error"] != false {
+		t.Errorf("data = %v, want {error:false}", got["data"])
+	}
+}
+
+func TestRunLifecycleHookTimeout(t *testing.T) {
+	hook := HookConfig{
+		Event:   "user_input_required",
+		Command: "sleep 10",
+		Timeout: 1,
+	}
+	ctx := context.Background()
+	if err := RunLifecycleHook(ctx, hook, "user_input_required", nil); err == nil {
+		t.Error("expected timeout error")
+	}
+}

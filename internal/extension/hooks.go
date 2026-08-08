@@ -361,6 +361,35 @@ func genAIProviderAttr(providerName string) attribute.KeyValue {
 	}
 }
 
+// RunLifecycleHook executes a lifecycle hook's shell command with the event
+// name and data as JSON on stdin. Lifecycle hooks (turn_complete,
+// user_input_required) have no tool, so the payload carries the event instead.
+// A non-zero exit or timeout is logged by the caller, never fatal.
+func RunLifecycleHook(ctx context.Context, hook HookConfig, event string, data map[string]any) error {
+	hookCtx, cancel := context.WithTimeout(ctx, hook.timeout())
+	defer cancel()
+
+	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook.Command)
+
+	input := map[string]any{
+		"event": event,
+		"data":  data,
+	}
+	jsonBytes, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("marshaling hook input: %w", err)
+	}
+	cmd.Stdin = bytes.NewReader(jsonBytes)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("command %q: %w (stderr: %s)", hook.Command, err, stderr.String())
+	}
+	return nil
+}
+
 // runHookCommand executes a hook's shell command with the tool name and data as JSON on stdin.
 func runHookCommand(ctx context.Context, hook HookConfig, toolName string, data map[string]any) error {
 	hookCtx, cancel := context.WithTimeout(ctx, hook.timeout())

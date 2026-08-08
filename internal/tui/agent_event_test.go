@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/extension"
 )
 
 // --- toolCallSummary for agent ---
@@ -1402,5 +1406,41 @@ func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 	}
 	if mm.chatModel.Messages[0].content == "" {
 		t.Error("expected message content to be updated")
+	}
+}
+
+func TestAgentDoneMsg_FiresLifecycleHooks(t *testing.T) {
+	dir := t.TempDir()
+	turnOut := dir + "/turn.json"
+	inputOut := dir + "/input.json"
+	m := &model{
+		ctx:       context.Background(),
+		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
+		cfg: Config{
+			LifecycleHooks: []extension.HookConfig{
+				{Event: "turn_complete", Command: "cat > " + turnOut, Timeout: 5},
+				{Event: "user_input_required", Command: "cat > " + inputOut, Timeout: 5},
+			},
+		},
+	}
+
+	if _, err := m.handleAgentDone(agentDoneMsg{}); err != nil {
+		t.Fatalf("handleAgentDone returned a Cmd, want nil")
+	}
+
+	for name, path := range map[string]string{"turn_complete": turnOut, "user_input_required": inputOut} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s hook output: %v", name, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("unmarshal %s hook output: %v", name, err)
+		}
+		if got["event"] != name {
+			t.Errorf("%s event = %v, want %s", name, got["event"], name)
+		}
 	}
 }
