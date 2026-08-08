@@ -319,6 +319,11 @@ func TestDefaultSessionTitle_RealGitRepo(t *testing.T) {
 	runGit("init", "-q")
 	runGit("config", "user.email", "t@t")
 	runGit("config", "user.name", "t")
+	// commit.gpgsign is set globally in this repo and signs through 1Password,
+	// which a temp repo inherits; without this the commit blocks on the agent
+	// and fails after a 60s timeout.
+	runGit("config", "commit.gpgsign", "false")
+	runGit("config", "tag.gpgsign", "false")
 	runGit("commit", "--allow-empty", "-q", "-m", "init")
 
 	// A fresh repo on the default branch should produce

@@ -163,6 +163,23 @@ func (p *bashProc) running() bool {
 	}
 }
 
+// exitStatus returns the reaped exit code and whether the command has actually
+// been reaped yet.
+//
+// exitCode is written by the reaping goroutine in start, which closes done
+// immediately afterwards. Receiving from done is therefore what establishes
+// happens-before for the read; reading the field without checking races with
+// that write, and yields a zero value that reads as a clean "exit 0" for a
+// command that has not exited at all.
+func (p *bashProc) exitStatus() (code int, reaped bool) {
+	select {
+	case <-p.done:
+		return p.exitCode, true
+	default:
+		return 0, false
+	}
+}
+
 // runRequest is one call into the supervisor.
 type runRequest struct {
 	dir         string
@@ -564,15 +581,26 @@ func (s *BashSupervisor) killHandle(handle string) (BashStatus, error) {
 	p.outCur, p.errCur = outNext, errNext
 	p.curMu.Unlock()
 
+	exitCode, reaped := p.exitStatus()
 	st := BashStatus{
 		Handle:   handle,
 		Command:  p.command,
 		Running:  false,
-		ExitCode: p.exitCode,
+		ExitCode: exitCode,
 		Stdout:   redactSecrets(truncateOutput(outStr)),
 		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(errStr))),
 		Elapsed:  roundDur(time.Since(p.started)).String(),
 		Note:     "Killed, along with every process it spawned.",
+	}
+	// The wait delay and the exec package's own WaitDelay are the same
+	// duration, so losing that race is expected rather than exotic: a
+	// descendant still holding a pipe keeps Wait blocked for exactly as long
+	// as we are willing to wait for it. Say so instead of reporting the zero
+	// value as a clean exit.
+	if !reaped {
+		st.ExitCode = -1
+		st.Note = "Killed, along with every process it spawned. It had not been reaped " +
+			roundDur(procs.DefaultWaitDelay).String() + " after the signal, so no exit status is available."
 	}
 	s.forget(handle)
 	return st, nil
