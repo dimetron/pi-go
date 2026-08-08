@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/tools"
 )
 
 func TestLoadSessionConfig(t *testing.T) {
@@ -131,5 +134,21 @@ func TestStreamProxyIsSafeWhenUnset(t *testing.T) {
 	p.swap(nil)
 	if _, err := p.OnToolStart(t.Context(), "grep", nil); err != nil {
 		t.Errorf("OnToolStart after swap(nil) = %v, want nil", err)
+	}
+}
+
+func TestBeginTurnStreamDetachesSharedCallbacks(t *testing.T) {
+	state := &piSessionState{
+		streamProxy: &streamProxy{},
+		bashSup:     tools.NewBashSupervisor(),
+	}
+	finish := state.beginTurnStream(context.Background(), adapter.New(nil))
+
+	if id, err := state.streamProxy.OnToolStart(context.Background(), "read", nil); err != nil || id == "" {
+		t.Fatalf("tool start while active = (%q, %v), want a call ID", id, err)
+	}
+	finish()
+	if id, err := state.streamProxy.OnToolStart(context.Background(), "read", nil); err != nil || id != "" {
+		t.Fatalf("tool start after cleanup = (%q, %v), want empty ID", id, err)
 	}
 }
