@@ -22,7 +22,10 @@ import (
 
 const (
 	// maxRepeatToolCalls is the number of identical consecutive tool calls
-	// before the loop is considered stuck and aborted.
+	// before the loop is considered stuck and aborted. A repeated call whose
+	// result changes resets the count (see observeResult): polling tools like
+	// bash_output repeat identical args by design, and only identical results
+	// make the repetition meaningless.
 	maxRepeatToolCalls = 10
 
 	// maxRepeatErrorCalls aliases maxRepeatToolCalls for callers that frame
@@ -117,7 +120,9 @@ func extractAgentType(args map[string]any) string {
 type stuckDetector struct {
 	recent      []string // ring of fingerprints (len <= recentWindowSize)
 	lastPrint   string   // fingerprint of last tool call
-	streak      int      // consecutive identical tool calls
+	lastName    string   // tool name behind lastPrint
+	lastResult  string   // fingerprint of the streak's previous result ("" = none yet)
+	streak      int      // consecutive identical tool calls with identical results
 	lastErrTool string   // name of last tool that errored
 	errStreak   int      // consecutive errors for that tool
 	outBuf      string   // rolling tail of the model's own output
@@ -171,6 +176,8 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 	} else {
 		s.streak = 1
 		s.lastPrint = fp
+		s.lastName = name
+		s.lastResult = ""
 	}
 
 	// Sliding window.
@@ -189,6 +196,27 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 	}
 
 	return false, ""
+}
+
+// observeResult records a tool call's response. Polling tools repeat identical
+// calls by design — bash_output on a running command sends the same handle
+// every time and gets fresh output back — so a response that differs from the
+// streak's previous response is progress, and resets the identical-call
+// streak. A response identical to the last one keeps the streak counting:
+// re-polling a finished command or re-reading an unchanged file is genuine
+// repetition. A stuck loop whose responses vary trivially (timestamps) escapes
+// this detector, but observeError and observeOutput still cover that shape.
+func (s *stuckDetector) observeResult(name string, response map[string]any) {
+	if name != s.lastName {
+		return
+	}
+	b, _ := json.Marshal(response)
+	sum := sha256.Sum256(b)
+	fp := hex.EncodeToString(sum[:])[:16]
+	if s.lastResult != "" && fp != s.lastResult {
+		s.streak = 0
+	}
+	s.lastResult = fp
 }
 
 // observeError records the outcome of a tool call by name. Consecutive errors
@@ -694,6 +722,11 @@ func (m *model) emitEventParts(
 			respJSON, _ := json.Marshal(fr.Response)
 			log.ToolResult(ev.Author, fr.Name, string(respJSON))
 			m.agentCh <- agentToolResultMsg{name: fr.Name, content: string(respJSON)}
+
+			// A changed result on a repeated call is progress, not a loop
+			// (a poll returning fresh output) — let it reset the
+			// identical-call streak before the next call is observed.
+			detector.observeResult(fr.Name, fr.Response)
 
 			// Track per-tool error streaks: ADK wraps tool errors as
 			// map[string]any{"error": ...}. Anything else (including a
