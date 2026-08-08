@@ -1673,3 +1673,25 @@ func TestHandleRunAgentDone_ParallelAllCompleted_ProceedsToGates(t *testing.T) {
 		t.Errorf("phase = %q, want gating (parallel all completed)", m.run.phase)
 	}
 }
+
+func TestHandleRunAgentDone_UsesTerminalStatusAfterOrchestratorEviction(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg:       Config{Orchestrator: orch},
+		run: &runState{
+			specName: "evicted-agent",
+			phase:    "running",
+			agentID:  "task-evicted",
+		},
+	}
+
+	// The terminal event is authoritative even though the bounded orchestrator
+	// status map no longer contains the completed agent.
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-evicted", status: "completed"})
+
+	if m.run.phase != "merging" {
+		t.Fatalf("phase = %q, want merging", m.run.phase)
+	}
+}

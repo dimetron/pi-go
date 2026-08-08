@@ -91,4 +91,5 @@ type Event struct {
 	SessionID  string `json:"session_id,omitempty"` // Subprocess session ID (from message_start)
 	StopReason string `json:"stopReason,omitempty"` // ACP stopReason on message_end
 	ToolArgs   any    `json:"tool_input,omitempty"` // Tool arguments for tool_call (from pi --mode json)
+	Status     string `json:"status,omitempty"`     // Final status for run_done events
 }
