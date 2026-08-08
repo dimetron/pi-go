@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os/exec"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -24,6 +23,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/otel"
+	"github.com/dimetron/pi-go/internal/procs"
 )
 
 // HookConfig defines a shell command hook that runs before or after tool calls.
@@ -403,7 +403,7 @@ func RunLifecycleHook(ctx context.Context, hook HookConfig, event string, data m
 	hookCtx, cancel := context.WithTimeout(ctx, hook.timeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook.Command)
+	cmd := procs.CommandContext(hookCtx, "sh", "-c", hook.Command)
 
 	input := map[string]any{
 		"event": event,
@@ -429,7 +429,7 @@ func runHookCommand(ctx context.Context, hook HookConfig, toolName string, data 
 	hookCtx, cancel := context.WithTimeout(ctx, hook.timeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook.Command)
+	cmd := procs.CommandContext(hookCtx, "sh", "-c", hook.Command)
 
 	// Pass context as JSON on stdin.
 	input := map[string]any{

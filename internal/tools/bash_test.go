@@ -9,13 +9,24 @@ import (
 	"testing"
 )
 
+// testSupervisor returns a supervisor that stops everything it started when the
+// test ends. Background handoff means a test can leave a live process behind,
+// and a leaked `sleep` outliving the run is exactly the failure mode this whole
+// change exists to remove.
+func testSupervisor(t *testing.T) *BashSupervisor {
+	t.Helper()
+	sup := NewBashSupervisor()
+	t.Cleanup(sup.KillAll)
+	return sup
+}
+
 // TestNewBashTool ensures newBashTool constructs successfully and is registered
 // with the correct name and description.
 func TestNewBashTool(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
 
-	tool, err := newBashTool(sb)
+	tool, err := newBashTool(sb, testSupervisor(t))
 	if err != nil {
 		t.Fatalf("newBashTool: %v", err)
 	}
@@ -36,7 +47,7 @@ func TestBashHandler_TimeoutCappedAtTenMinutes(t *testing.T) {
 
 	// Timeout of 20 minutes should be capped at 10 minutes.
 	// The command itself completes in a fraction of a second.
-	out, err := bashHandler(sb, nil, BashInput{Command: "echo capped", Timeout: 20 * 60 * 1000})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo capped", Timeout: 20 * 60 * 1000})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
@@ -54,7 +65,7 @@ func TestBashHandler_TimeoutZeroUsesDefault(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
 
-	out, err := bashHandler(sb, nil, BashInput{Command: "echo default", Timeout: 0})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo default", Timeout: 0})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
@@ -72,7 +83,7 @@ func TestBashHandler_SigpipeTreatedAsSuccess(t *testing.T) {
 	// yes will receive SIGPIPE when head closes the pipe after 1 line.
 	// Bash reports the producer exit status as 141 (128 + SIGPIPE=13).
 	// The `pipefail` option surfaces SIGPIPE to the shell's exit code.
-	out, err := bashHandler(sb, nil, BashInput{
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
 		Command: "set -o pipefail; yes | head -n 1",
 	})
 	if err != nil {
@@ -93,7 +104,7 @@ func TestBashHandler_SecretsRedacted(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
 
-	out, err := bashHandler(sb, nil, BashInput{
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
 		Command: "echo export API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234",
 	})
 	if err != nil {
@@ -119,7 +130,7 @@ func TestBashHandler_RunsInSandboxDir(t *testing.T) {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	out, err := bashHandler(sb, nil, BashInput{Command: "cat marker.txt"})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "cat marker.txt"})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
@@ -131,15 +142,16 @@ func TestBashHandler_RunsInSandboxDir(t *testing.T) {
 	}
 }
 
-// TestBashHandler_TimeoutExact confirms a command that runs longer than the
-// given timeout reports a non-zero exit code. Depending on the system,
-// timed-out bash may surface as either ExitCode=-1 (DeadlineExceeded branch)
-// or the SIGKILL exit status via ExitError, so we only assert non-zero.
-func TestBashHandler_TimeoutExact(t *testing.T) {
+// TestBashHandler_TimeoutHandsOffToBackground confirms a command that outruns
+// its timeout is reported as still running, with a handle, rather than killed.
+// Killing it would discard whatever it had produced and tell the model nothing
+// about why it stopped.
+func TestBashHandler_TimeoutHandsOffToBackground(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
+	sup := testSupervisor(t)
 
-	out, err := bashHandler(sb, nil, BashInput{
+	out, err := bashHandler(sb, sup, nil, BashInput{
 		Command: "sleep 5",
 		Timeout: 200, // 200 ms
 	})
@@ -148,6 +160,23 @@ func TestBashHandler_TimeoutExact(t *testing.T) {
 	}
 	if out.ExitCode == 0 {
 		t.Errorf("expected non-zero ExitCode for timeout, got %d", out.ExitCode)
+	}
+	if !out.Running {
+		t.Error("expected Running=true after the timeout")
+	}
+	if out.Handle == "" {
+		t.Fatal("expected a handle for the backgrounded command")
+	}
+	if !strings.Contains(out.Note, out.Handle) {
+		t.Errorf("Note should name the handle so the model can act on it, got %q", out.Note)
+	}
+
+	st, err := sup.killHandle(out.Handle)
+	if err != nil {
+		t.Fatalf("killHandle: %v", err)
+	}
+	if st.Running {
+		t.Error("command still running after kill")
 	}
 }
 
@@ -160,7 +189,7 @@ func TestBashHandler_StdoutAndStderrAreSeparated(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
 
-	out, err := bashHandler(sb, nil, BashInput{
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
 		Command: "echo stdout-marker; echo stderr-marker >&2",
 	})
 	if err != nil {
@@ -193,7 +222,7 @@ func TestBashHandler_OutputIsNotInput(t *testing.T) {
 	sb := testSandbox(t, dir)
 
 	cmd := "echo unique-output-value-xyz"
-	out, err := bashHandler(sb, nil, BashInput{Command: cmd})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: cmd})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
@@ -213,6 +242,7 @@ func TestBashHandler_ConcurrentCallsProduceIndependentOutput(t *testing.T) {
 	const workers = 20
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
+	sup := testSupervisor(t)
 
 	type result struct {
 		id  int
@@ -225,7 +255,7 @@ func TestBashHandler_ConcurrentCallsProduceIndependentOutput(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer wg.Done()
-			out, err := bashHandler(sb, nil, BashInput{
+			out, err := bashHandler(sb, sup, nil, BashInput{
 				Command: fmt.Sprintf("echo worker-%d-stdout; echo worker-%d-stderr >&2", i, i),
 			})
 			results[i] = result{id: i, out: out, err: err}
@@ -269,7 +299,7 @@ func TestBashHandler_BothStreamsAndExitCode(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
 
-	out, err := bashHandler(sb, nil, BashInput{
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
 		Command: "echo out-line; echo err-line >&2; exit 7",
 	})
 	if err != nil {

@@ -38,9 +38,16 @@ type initResources struct {
 	memWorker  *memory.Worker
 	sessionLog *logger.Logger
 	sessionID  string // captured for resume hint on exit
+	bashSup    *tools.BashSupervisor
 }
 
 func (r *initResources) cleanup() {
+	// Stop backgrounded shell commands first. Nothing else owns them, so a
+	// command still running when the session ends is a leaked process — the
+	// exact failure this supervisor was introduced to prevent.
+	if r.bashSup != nil {
+		r.bashSup.KillAll()
+	}
 	if r.sessionLog != nil {
 		// Detach before closing: a late trace from an in-flight streaming body
 		// would otherwise write into a closed file.
@@ -155,11 +162,23 @@ func deferredInit(
 		_ = sandbox.AddExtraDir(filepath.Join(home, ".pi-go"))
 	}
 
-	coreTools, err := tools.CoreTools(sandbox)
+	// The supervisor is built here, before the UI event channel exists, because
+	// the bash tool needs it at construction time. Its sink is attached later,
+	// once there is somewhere to stream to.
+	bashSup := tools.NewBashSupervisor()
+	res.bashSup = bashSup
+
+	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
 	if err != nil {
 		fail(fmt.Errorf("creating core tools: %w", err))
 		return
 	}
+	bashCtlTools, err := tools.BashControlTools(bashSup)
+	if err != nil {
+		fail(fmt.Errorf("creating bash control tools: %w", err))
+		return
+	}
+	coreTools = append(coreTools, bashCtlTools...)
 
 	send("tools", true)
 
@@ -269,6 +288,13 @@ func deferredInit(
 	}
 	agentTools, _ := tools.AgentTools(orch, agentEventCB)
 	coreTools = append(coreTools, agentTools...)
+
+	// Stream live shell output to the same channel the subagent cards use. The
+	// prefix keeps the two streams apart; the non-blocking send in agentEventCB
+	// is what keeps a slow UI from stalling a running command.
+	bashSup.SetSink(func(execID, kind, content string) {
+		agentEventCB(execID, tui.BashEventKind(kind), content)
+	})
 
 	// Append LSP tools.
 	if ps.lspTools != nil {

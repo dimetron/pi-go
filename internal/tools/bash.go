@@ -1,11 +1,8 @@
 package tools
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"os/exec"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -15,14 +12,22 @@ import (
 	"github.com/dimetron/pi-go/internal/otel"
 )
 
-const defaultBashTimeout = 120 * time.Second
+const (
+	defaultBashTimeout = 120 * time.Second
+	maxBashTimeout     = 10 * time.Minute
+)
 
 // BashInput defines the parameters for the bash tool.
 type BashInput struct {
 	// The shell command to execute.
 	Command string `json:"command"`
 	// Optional timeout in milliseconds. Default: 120000 (2 minutes). Max: 600000 (10 minutes).
+	// On expiry the command is moved to the background, not killed.
 	Timeout int `json:"timeout,omitempty"`
+	// Optional idle timeout in milliseconds. A command that produces no output
+	// at all for this long is moved to the background. Default: 90000.
+	// Set it higher for commands that are legitimately quiet for a long time.
+	IdleTimeout int `json:"idle_timeout,omitempty"`
 }
 
 // BashOutput contains the result of executing a shell command.
@@ -31,33 +36,74 @@ type BashOutput struct {
 	Stdout string `json:"stdout"`
 	// Standard error from the command.
 	Stderr string `json:"stderr"`
-	// Exit code of the command.
+	// Exit code of the command. -1 when the command has not exited.
 	ExitCode int `json:"exit_code"`
+	// Running is true when the command outlived its timeout and is still
+	// executing in the background.
+	Running bool `json:"running,omitempty"`
+	// Handle identifies a still-running command for bash_output and bash_kill.
+	Handle string `json:"handle,omitempty"`
+	// Note explains a non-obvious outcome in terms the model can act on.
+	Note string `json:"note,omitempty"`
 }
 
-func newBashTool(sb *Sandbox) (tool.Tool, error) {
-	return newTool("bash", "Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.", func(ctx agent.Context, input BashInput) (BashOutput, error) {
-		return bashHandler(sb, ctx, input)
+// BashStatus is the result of inspecting or stopping a backgrounded command.
+type BashStatus struct {
+	Handle  string `json:"handle"`
+	Command string `json:"command"`
+	// Running reports whether the command is still executing.
+	Running bool `json:"running"`
+	// ExitCode is meaningful only once Running is false.
+	ExitCode int `json:"exit_code,omitempty"`
+	// Stdout and Stderr carry only what was produced since the previous read.
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+	// Elapsed is how long the command has been running in total.
+	Elapsed string `json:"elapsed,omitempty"`
+	// Idle is how long it has been since the command last produced output.
+	Idle string `json:"idle,omitempty"`
+	Note string `json:"note,omitempty"`
+}
+
+// BashOutputInput asks for output accumulated by a backgrounded command.
+type BashOutputInput struct {
+	// Handle returned by a previous bash call.
+	Handle string `json:"handle"`
+	// WaitMs blocks up to this long for new output or for the command to exit,
+	// instead of returning immediately. Max 60000. Prefer waiting over polling
+	// in a loop.
+	WaitMs int `json:"wait_ms,omitempty"`
+}
+
+// BashKillInput identifies a backgrounded command to stop.
+type BashKillInput struct {
+	// Handle returned by a previous bash call.
+	Handle string `json:"handle"`
+}
+
+const maxBashOutputWait = 60 * time.Second
+
+const bashDescription = `Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.
+
+A command that runs past its timeout, or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Use bash_output to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.`
+
+func newBashTool(sb *Sandbox, sup *BashSupervisor) (tool.Tool, error) {
+	return newTool("bash", bashDescription, func(ctx agent.Context, input BashInput) (BashOutput, error) {
+		return bashHandler(sb, sup, ctx, input)
 	})
 }
 
-func bashHandler(sb *Sandbox, ctx agent.Context, input BashInput) (BashOutput, error) {
+func bashHandler(sb *Sandbox, sup *BashSupervisor, ctx agent.Context, input BashInput) (BashOutput, error) {
 	if input.Command == "" {
 		return BashOutput{}, fmt.Errorf("command is required")
 	}
 
-	timeout := defaultBashTimeout
-	if input.Timeout > 0 {
-		timeout = time.Duration(input.Timeout) * time.Millisecond
-		if timeout > 10*time.Minute {
-			timeout = 10 * time.Minute
-		}
-	}
-
 	// Use background context if agent.Context is nil (e.g. in unit tests)
-	var parentCtx = context.Background()
+	var parentCtx context.Context
 	if ctx != nil {
 		parentCtx = ctx
+	} else {
+		parentCtx = context.Background()
 	}
 
 	parentCtx, span := otel.Tracer("pi-go").Start(parentCtx, "tool.bash")
@@ -67,53 +113,69 @@ func bashHandler(sb *Sandbox, ctx agent.Context, input BashInput) (BashOutput, e
 	)
 	defer span.End()
 
-	cmdCtx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", input.Command)
-	cmd.Dir = sb.Dir()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	exitCode := 0
+	out, err := sup.Run(parentCtx, runRequest{
+		dir:         sb.Dir(),
+		command:     input.Command,
+		timeout:     clampDuration(input.Timeout, defaultBashTimeout, maxBashTimeout),
+		idleTimeout: clampDuration(input.IdleTimeout, 0, maxBashTimeout),
+	})
 	if err != nil {
-		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-			exitCode = exitErr.ExitCode()
-		} else if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			span.SetAttributes(
-				attribute.Int("bash.exit_code", -1),
-				attribute.Int("bash.stdout_len", stdout.Len()),
-				attribute.Int("bash.stderr_len", stderr.Len()),
-			)
-			return BashOutput{
-				Stdout:   redactSecrets(truncateOutput(stdout.String())),
-				Stderr:   redactSecrets(truncateOutput("command timed out\n" + stripRuntimeNoise(stderr.String()))),
-				ExitCode: -1,
-			}, nil
-		} else {
-			span.RecordError(err)
-			return BashOutput{}, fmt.Errorf("executing command: %w", err)
-		}
-	}
-
-	// SIGPIPE (exit 141 = signal 13 + 128) is benign — the consumer closed the pipe
-	// before the producer finished writing. Treat it as success.
-	if exitCode == 141 {
-		exitCode = 0
+		span.RecordError(err)
+		return BashOutput{}, fmt.Errorf("executing command: %w", err)
 	}
 
 	span.SetAttributes(
-		attribute.Int("bash.exit_code", exitCode),
-		attribute.Int("bash.stdout_len", stdout.Len()),
-		attribute.Int("bash.stderr_len", stderr.Len()),
+		attribute.Int("bash.exit_code", out.ExitCode),
+		attribute.Int("bash.stdout_len", len(out.Stdout)),
+		attribute.Int("bash.stderr_len", len(out.Stderr)),
+		attribute.Bool("bash.backgrounded", out.Running),
 	)
-	return BashOutput{
-		Stdout:   redactSecrets(truncateOutput(stdout.String())),
-		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(stderr.String()))),
-		ExitCode: exitCode,
-	}, nil
+	return out, nil
+}
+
+// clampDuration converts a millisecond input to a duration, substituting
+// fallback when unset and capping at maxDur.
+func clampDuration(ms int, fallback, maxDur time.Duration) time.Duration {
+	if ms <= 0 {
+		return fallback
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d > maxDur {
+		return maxDur
+	}
+	return d
+}
+
+// BashControlTools returns the tools for inspecting and stopping commands that
+// the bash tool moved to the background.
+//
+// They are separate from CoreTools because they are only worth advertising to
+// the model when something can actually background a command — a caller that
+// builds its own supervisor and never streams need not carry the extra schema.
+func BashControlTools(sup *BashSupervisor) ([]tool.Tool, error) {
+	outputTool, err := newTool("bash_output",
+		"Read output produced by a backgrounded shell command since the last read. Returns running=false and the exit code once it finishes, after which the handle is spent. Set wait_ms to block for new output instead of polling in a loop.",
+		func(_ agent.Context, input BashOutputInput) (BashStatus, error) {
+			if input.Handle == "" {
+				return BashStatus{}, fmt.Errorf("handle is required (running: %v)", sup.Handles())
+			}
+			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, 0, maxBashOutputWait))
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	killTool, err := newTool("bash_kill",
+		"Stop a backgrounded shell command and every process it spawned. Returns any output produced since the last read.",
+		func(_ agent.Context, input BashKillInput) (BashStatus, error) {
+			if input.Handle == "" {
+				return BashStatus{}, fmt.Errorf("handle is required (running: %v)", sup.Handles())
+			}
+			return sup.killHandle(input.Handle)
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return []tool.Tool{outputTool, killTool}, nil
 }

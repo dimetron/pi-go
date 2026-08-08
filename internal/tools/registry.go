@@ -14,15 +14,39 @@ import (
 	"google.golang.org/genai"
 )
 
+// CoreOption customizes the core tool set.
+type CoreOption func(*coreConfig)
+
+type coreConfig struct {
+	bashSupervisor *BashSupervisor
+}
+
+// WithBashSupervisor makes the bash tool use a caller-owned supervisor, so the
+// caller can attach a live-output sink and stop backgrounded commands at
+// shutdown. Without it CoreTools builds a private supervisor: commands still
+// get process-group isolation and background handoff, but nothing outside the
+// tool can see or reap them.
+func WithBashSupervisor(sup *BashSupervisor) CoreOption {
+	return func(c *coreConfig) { c.bashSupervisor = sup }
+}
+
 // CoreTools returns the core coding agent tools as ADK FunctionTools.
 // The sandbox restricts file-system access to the given root directory.
-func CoreTools(sandbox *Sandbox) ([]tool.Tool, error) {
+func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
+	cfg := coreConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.bashSupervisor == nil {
+		cfg.bashSupervisor = NewBashSupervisor()
+	}
+
 	builders := []func(*Sandbox) (tool.Tool, error){
 		newReadTool,
 		newReadImageTool,
 		newWriteTool,
 		newEditTool,
-		newBashTool,
+		func(sb *Sandbox) (tool.Tool, error) { return newBashTool(sb, cfg.bashSupervisor) },
 		newGrepTool,
 		newFindTool,
 		newLsTool,

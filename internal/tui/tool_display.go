@@ -248,6 +248,63 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style) stri
 	return b.String()
 }
 
+// maxLiveOutputLines bounds the rolling window shown under a running command.
+// It is smaller than the finished-output window on purpose: while a command
+// runs, what matters is that it is alive and roughly where it has got to, not
+// the content.
+const maxLiveOutputLines = 5
+
+// renderLiveOutput draws the tail of a running command's output, plus its
+// current state.
+//
+// The state line is the point of the whole exercise. A command that prints
+// nothing is indistinguishable from a hung one, and that ambiguity is what let
+// two sessions sit wedged for an hour without anyone noticing. "1m30s — no
+// output" removes it.
+func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style) string {
+	cw := t.contentWidth()
+	outStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("173"))
+	stateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	var (
+		lines []string
+		state string
+	)
+	for _, ev := range msg.agentEvents {
+		switch ev.kind {
+		case "heartbeat", "stall", "background":
+			// Only the latest state matters; earlier ones are stale by
+			// definition.
+			state = ev.content
+		case "stderr":
+			lines = append(lines, errStyle.Render("▎ "+collapseToSingleLine(ev.content)))
+		case "output":
+			lines = append(lines, outStyle.Render("│ "+collapseToSingleLine(ev.content)))
+		}
+	}
+	if len(lines) > maxLiveOutputLines {
+		lines = lines[len(lines)-maxLiveOutputLines:]
+	}
+
+	var b strings.Builder
+	for _, l := range lines {
+		for _, sl := range softWrap(l, cw) {
+			b.WriteString("  ")
+			b.WriteString(dim.Render("│ "))
+			b.WriteString(sl)
+			b.WriteString("\n")
+		}
+	}
+	if state != "" {
+		b.WriteString("  ")
+		b.WriteString(dim.Render("│ "))
+		b.WriteString(stateStyle.Render("⏳ " + state))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // maxAgentOutputLines bounds a subagent card's live output window. The card is
 // a progress indicator, not a transcript: the agent's full answer arrives in the
 // result summary and in the parent's own reply, so the stream only has to show
@@ -366,6 +423,12 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 		b.WriteString(dim.Render(")"))
 	}
 	b.WriteString("\n")
+	if msg.content == "" && len(msg.agentEvents) > 0 {
+		// Still running: show the live tail instead of an empty card. Once the
+		// result arrives, msg.content takes over and the final output replaces
+		// this window — the stream is a progress indicator, not a transcript.
+		b.WriteString(t.renderLiveOutput(msg, dim))
+	}
 	if msg.content != "" {
 		lines := strings.Split(msg.content, "\n")
 

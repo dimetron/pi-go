@@ -253,7 +253,7 @@ func TestBashHandler(t *testing.T) {
 	sb := testSandbox(t, dir)
 
 	t.Run("simple command", func(t *testing.T) {
-		out, err := bashHandler(sb, nil, BashInput{Command: "echo hello"})
+		out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo hello"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +266,7 @@ func TestBashHandler(t *testing.T) {
 	})
 
 	t.Run("nonzero exit", func(t *testing.T) {
-		out, err := bashHandler(sb, nil, BashInput{Command: "exit 42"})
+		out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "exit 42"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +276,7 @@ func TestBashHandler(t *testing.T) {
 	})
 
 	t.Run("empty command", func(t *testing.T) {
-		_, err := bashHandler(sb, nil, BashInput{})
+		_, err := bashHandler(sb, testSupervisor(t), nil, BashInput{})
 		if err == nil {
 			t.Error("expected error for empty command")
 		}
@@ -405,19 +405,26 @@ func TestLsHandler(t *testing.T) {
 func TestBashTimeout(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
-	out, err := bashHandler(sb, nil, BashInput{Command: "sleep 10", Timeout: 500})
+	sup := testSupervisor(t)
+	out, err := bashHandler(sb, sup, nil, BashInput{Command: "sleep 10", Timeout: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.ExitCode == 0 {
 		t.Error("expected non-zero exit code for timed-out command")
 	}
+	if !out.Running || out.Handle == "" {
+		t.Fatalf("timed-out command should be backgrounded with a handle, got %+v", out)
+	}
+	if _, err := sup.killHandle(out.Handle); err != nil {
+		t.Fatalf("killHandle: %v", err)
+	}
 }
 
 func TestBashStderr(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
-	out, err := bashHandler(sb, nil, BashInput{Command: "echo error >&2; exit 1"})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo error >&2; exit 1"})
 	if err != nil {
 		t.Fatal(err)
 	}
