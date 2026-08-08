@@ -1571,6 +1571,33 @@ func TestOaiContentsToResponsesInput_SkipsFunctionCallsWithoutID(t *testing.T) {
 	}
 }
 
+func TestOaiContentsToResponsesInput_SkipsFunctionResponseWithoutID(t *testing.T) {
+	fr := &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       "",
+			Name:     "find",
+			Response: map[string]any{"result": "found"},
+		},
+	}
+
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Search files"}}},
+		{Role: "user", Parts: []*genai.Part{fr}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items := input.OfInputItemList
+	if len(items) != 1 {
+		t.Fatalf("expected only user message item, got %d", len(items))
+	}
+	if items[0].OfMessage == nil {
+		t.Fatal("expected first item to be a message")
+	}
+}
+
 func TestOaiContentsToResponsesInput_NilConfig(t *testing.T) {
 	contents := []*genai.Content{
 		{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
@@ -1581,6 +1608,29 @@ func TestOaiContentsToResponsesInput_NilConfig(t *testing.T) {
 	}
 	if instructions != "" {
 		t.Errorf("instructions = %q, want empty", instructions)
+	}
+}
+
+func TestOaiContentsToResponsesInput_SkipsNilContentAndParts(t *testing.T) {
+	contents := []*genai.Content{
+		nil,
+		{Role: "user", Parts: []*genai.Part{nil, {Text: "Hello"}}},
+		{Role: "system", Parts: []*genai.Part{{Text: "ignored"}}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items := input.OfInputItemList
+	if len(items) != 1 {
+		t.Fatalf("expected only the user message, got %d items", len(items))
+	}
+	if items[0].OfMessage == nil {
+		t.Fatalf("expected first item to be a message, got %+v", items[0])
+	}
+	if !items[0].OfMessage.Content.OfString.Valid() || items[0].OfMessage.Content.OfString.Value != "Hello" {
+		t.Errorf("message content = %q, want %q", items[0].OfMessage.Content.OfString.Value, "Hello")
 	}
 }
 
