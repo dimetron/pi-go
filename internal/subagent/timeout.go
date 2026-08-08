@@ -8,8 +8,8 @@ import (
 
 // Default timeout values for subagent processes.
 const (
-	// DefaultAbsoluteTimeout is the maximum wall-clock time a subagent can run (10 minutes).
-	DefaultAbsoluteTimeout = 10 * time.Minute
+	// DefaultAbsoluteTimeout is the maximum wall-clock time a subagent can run (5 minutes).
+	DefaultAbsoluteTimeout = 5 * time.Minute
 
 	// DefaultInactivityTimeout is how long a subagent can go without producing output (120 seconds).
 	DefaultInactivityTimeout = 120 * time.Second
