@@ -657,6 +657,9 @@ func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case agentSubEventMsg:
 		model, cmd := m.handleAgentSubEvent(msg)
 		return model, cmd, true
+	case agentWarningMsg:
+		model, cmd := m.handleAgentWarning(msg)
+		return model, cmd, true
 	case systemNoticeMsg:
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
