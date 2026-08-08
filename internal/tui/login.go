@@ -27,7 +27,7 @@ type loginSSOResultMsg struct {
 
 // handleLoginCommand initiates the /login flow.
 // Usage: /login [provider]
-// Providers: codex, openai, anthropic, gemini
+// Providers: codex, opencode
 // Auto-selects the best auth flow (device code, PKCE, or manual key entry).
 func (m *model) handleLoginCommand(args []string) (tea.Model, tea.Cmd) {
 	var provName string
@@ -48,7 +48,7 @@ func (m *model) handleLoginCommand(args []string) (tea.Model, tea.Cmd) {
 		m.logLogin("unknown provider requested: %q", provName)
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown provider: `%s`. Available: codex, openai, anthropic, gemini", provName),
+			content: fmt.Sprintf("Unknown provider: `%s`. Available: codex, opencode", provName),
 		})
 		return m, nil
 	}
@@ -312,7 +312,7 @@ func (m *model) loginStartDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 	}
 
 	// Open browser to verification URI.
-	_ = openBrowser(dcr.VerificationURI)
+	_ = openBrowser(dcr.VerificationURL())
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
@@ -322,21 +322,19 @@ func (m *model) loginStartDeviceFlow(prov auth.Provider) (tea.Model, tea.Cmd) {
 				"2. Enter code: **`%s`**\n"+
 				"3. Approve access in your browser\n\n"+
 				"Waiting for authorization... Press **Esc** to cancel.",
-			prov.Name, dcr.VerificationURI, dcr.UserCode),
+			prov.Name, dcr.VerificationURL(), dcr.UserCode),
 	})
 
 	// Poll for token in background.
-	deviceCode := dcr.DeviceCode
-	interval := dcr.Interval
 	log := m.cfg.Logger
 	if log != nil {
-		log.Info(fmt.Sprintf("login: device flow prompt provider=%s verification_uri=%s interval=%ds", prov.Name, dcr.VerificationURI, interval))
+		log.Info(fmt.Sprintf("login: device flow prompt provider=%s verification_uri=%s interval=%ds", prov.Name, dcr.VerificationURL(), dcr.Interval))
 	}
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		result, err := auth.PollDeviceToken(ctx, prov, deviceCode, interval)
+		result, err := auth.PollDeviceToken(ctx, prov, dcr)
 		if err != nil {
 			if log != nil {
 				log.Errorf("login: device flow poll aborted provider=%s err=%v", prov.Name, err)

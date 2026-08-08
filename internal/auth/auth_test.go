@@ -445,7 +445,7 @@ func TestPollDeviceToken_Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := PollDeviceToken(ctx, prov, "device-test-code", 1)
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "device-test-code", Interval: 1})
 	if err != nil {
 		t.Fatalf("PollDeviceToken error: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	result, err := PollDeviceToken(ctx, prov, "device-code", 1)
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "device-code", Interval: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 }
 
 func TestFindProvider(t *testing.T) {
-	for _, name := range []string{"codex", "Codex", "CODEX"} {
+	for _, name := range []string{"codex", "Codex", "CODEX", "opencode", "OpenCode"} {
 		p, ok := FindProvider(name)
 		if !ok {
 			t.Errorf("expected to find provider %q", name)
@@ -495,6 +495,24 @@ func TestFindProvider(t *testing.T) {
 		if p.Name == "" {
 			t.Errorf("provider %q has empty name", name)
 		}
+	}
+
+	// opencode uses the JSON device flow against the console endpoints.
+	op, ok := FindProvider("opencode")
+	if !ok {
+		t.Fatal("expected opencode provider")
+	}
+	if !op.UseDeviceFlow || !op.DeviceJSONBody {
+		t.Errorf("opencode should use the JSON device flow, got UseDeviceFlow=%v DeviceJSONBody=%v", op.UseDeviceFlow, op.DeviceJSONBody)
+	}
+	if op.DeviceURL == "" || op.TokenURL == "" {
+		t.Errorf("opencode device endpoints not set: device=%q token=%q", op.DeviceURL, op.TokenURL)
+	}
+	if op.TokenToKey == nil {
+		t.Error("opencode TokenToKey must be set")
+	}
+	if got := op.TokenToKey(&TokenResponse{AccessToken: "jwt-token"}); got != "jwt-token" {
+		t.Errorf("opencode TokenToKey should pass access_token through, got %q", got)
 	}
 
 	for _, name := range []string{"anthropic", "openai", "gemini", "unknown"} {
@@ -651,9 +669,10 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 }
 
 func TestProviders_TokenToKey(t *testing.T) {
-	// The codex and anthropic OAuth providers pass access_token through
-	// unchanged (pi-mono parity); other providers prefer api_key when present
-	// and fall back to access_token.
+	// The codex, anthropic and opencode OAuth providers pass access_token
+	// through unchanged (the opencode console token endpoint only ever returns
+	// access_token, never an api_key field); other providers prefer api_key
+	// when present and fall back to access_token.
 	for _, p := range Providers() {
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
@@ -661,7 +680,7 @@ func TestProviders_TokenToKey(t *testing.T) {
 				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-		if p.Name == "codex" || p.Name == "anthropic" {
+		if p.Name == "codex" || p.Name == "anthropic" || p.Name == "opencode" {
 			continue
 		}
 		t.Run(p.Name+"_apikey", func(t *testing.T) {
@@ -955,7 +974,7 @@ func TestPollDeviceToken_SlowDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	result, err := PollDeviceToken(ctx, prov, "code", 1)
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "code", Interval: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1106,7 +1125,7 @@ func TestPollDeviceToken_ContextDone(t *testing.T) {
 		cancel()
 	}()
 
-	result, err := PollDeviceToken(ctx, prov, "code", 60) // 60s interval, context cancels much sooner
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "code", Interval: 60}) // 60s interval, context cancels much sooner
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1137,7 +1156,7 @@ func TestPollDeviceToken_FatalError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := PollDeviceToken(ctx, prov, "code", 1)
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "code", Interval: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1476,5 +1495,144 @@ func TestLooksLikeAuthorizationRequest(t *testing.T) {
 	}
 	if looksLikeAuthorizationRequest(`{"code":"abc","state":"s"}`) {
 		t.Error("callback/code JSON should not be treated as authorization request")
+	}
+}
+
+func TestDeviceFlow_JSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected application/json content type, got %q", ct)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("request body is not JSON: %v", err)
+		}
+		if body["client_id"] != "opencode-cli" {
+			t.Errorf("expected client_id opencode-cli, got %q", body["client_id"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
+			DeviceCode:              "dc-1",
+			UserCode:                "ABCD-EFGH",
+			VerificationURI:         "https://console.opencode.ai/device",
+			VerificationURIComplete: "/device?code=ABCD-EFGH",
+			ExpiresIn:               600,
+			Interval:                5,
+		})
+	}))
+	defer srv.Close()
+
+	prov := Provider{
+		Name:           "opencode",
+		DeviceURL:      srv.URL + "/auth/device/code",
+		ClientID:       "opencode-cli",
+		UseDeviceFlow:  true,
+		DeviceJSONBody: true,
+	}
+
+	dcr, err := DeviceFlow(context.Background(), prov)
+	if err != nil {
+		t.Fatalf("DeviceFlow error: %v", err)
+	}
+	if dcr.DeviceCode != "dc-1" || dcr.UserCode != "ABCD-EFGH" {
+		t.Errorf("unexpected device response: %+v", dcr)
+	}
+	// Relative verification_uri_complete is resolved against the device origin.
+	if got := dcr.VerificationURL(); got != srv.URL+"/device?code=ABCD-EFGH" {
+		t.Errorf("expected resolved one-click URL, got %q", got)
+	}
+}
+
+func TestDeviceFlow_JSONBodyAbsoluteCompleteURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
+			DeviceCode:              "dc-1",
+			UserCode:                "ABCD-EFGH",
+			VerificationURIComplete: "https://example.com/device?code=ABCD-EFGH",
+		})
+	}))
+	defer srv.Close()
+
+	prov := Provider{DeviceURL: srv.URL, ClientID: "c", DeviceJSONBody: true}
+	dcr, err := DeviceFlow(context.Background(), prov)
+	if err != nil {
+		t.Fatalf("DeviceFlow error: %v", err)
+	}
+	if got := dcr.VerificationURL(); got != "https://example.com/device?code=ABCD-EFGH" {
+		t.Errorf("absolute URL must pass through untouched, got %q", got)
+	}
+}
+
+func TestRequestDeviceToken_JSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected application/json content type, got %q", ct)
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["grant_type"] != "urn:ietf:params:oauth:grant-type:device_code" {
+			t.Errorf("wrong grant_type: %q", body["grant_type"])
+		}
+		if body["device_code"] != "dc-1" || body["client_id"] != "opencode-cli" {
+			t.Errorf("unexpected body: %v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: "console-access-token"})
+	}))
+	defer srv.Close()
+
+	prov := Provider{TokenURL: srv.URL, ClientID: "opencode-cli", DeviceJSONBody: true}
+	tok, err := requestDeviceToken(context.Background(), prov, "dc-1")
+	if err != nil {
+		t.Fatalf("requestDeviceToken error: %v", err)
+	}
+	if tok.AccessToken != "console-access-token" {
+		t.Errorf("expected console-access-token, got %q", tok.AccessToken)
+	}
+}
+
+func TestRequestDeviceToken_JSONErrorBodyWithOKStatus(t *testing.T) {
+	// opencode's console can report pending/errors with a 200 status and an
+	// {"error": ...} body; that must surface as an error, not a bogus token.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+	}))
+	defer srv.Close()
+
+	prov := Provider{TokenURL: srv.URL, ClientID: "opencode-cli", DeviceJSONBody: true}
+	_, err := requestDeviceToken(context.Background(), prov, "dc-1")
+	if err == nil {
+		t.Fatal("expected error for 200 response with error body")
+	}
+	if !strings.Contains(err.Error(), "authorization_pending") {
+		t.Errorf("expected authorization_pending, got: %v", err)
+	}
+}
+
+func TestPollDeviceToken_ExpiresIn(t *testing.T) {
+	// Server never authorizes; the device code expires after 1s. With a 1s
+	// interval, the second tick is definitely past the deadline, so the poll
+	// must return the expiry error rather than hanging until the ctx timeout.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+	}))
+	defer srv.Close()
+
+	prov := Provider{Name: "test", TokenURL: srv.URL, ClientID: "test",
+		TokenToKey: func(tok *TokenResponse) string { return tok.AccessToken },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := PollDeviceToken(ctx, prov, &DeviceCodeResponse{DeviceCode: "dc", Interval: 1, ExpiresIn: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "expired") {
+		t.Fatalf("expected device-code-expired error, got: %v", result.Err)
 	}
 }
