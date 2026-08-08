@@ -328,7 +328,7 @@ func slashCommandDesc(cmd string) string {
 	case "/plan":
 		return "Start PDD planning session"
 	case "/run":
-		return "Execute a spec with task agent"
+		return "Execute a spec with task agent (verifies subagent exit status before merging)"
 	case "/theme":
 		return "Switch theme or list themes"
 	case "/skills":
