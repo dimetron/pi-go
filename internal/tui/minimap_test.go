@@ -55,7 +55,7 @@ func TestRenderMinimapCompressesWholeConversation(t *testing.T) {
 		kinds[i] = blockEdit
 	}
 
-	cells := renderMinimap(kinds, 0, 10, 10)
+	cells := renderMinimap(kinds, 0, 10, 10, darkPalette)
 
 	if len(cells) != 10 {
 		t.Fatalf("got %d cells, want one per row (10)", len(cells))
@@ -72,9 +72,9 @@ func TestRenderMinimapCompressesWholeConversation(t *testing.T) {
 // The minimap and the separator are the same rail, so they must be the same
 // width — otherwise the rule appears to change thickness as you scroll.
 func TestMinimapWidthMatchesSeparator(t *testing.T) {
-	sep := ansi.StringWidth(separatorCell())
+	sep := ansi.StringWidth(separatorCell(darkPalette))
 
-	for _, cell := range renderMinimap([]blockKind{blockUser, blockEdit}, 0, 1, 2) {
+	for _, cell := range renderMinimap([]blockKind{blockUser, blockEdit}, 0, 1, 2, darkPalette) {
 		if got := ansi.StringWidth(cell); got != sep {
 			t.Errorf("minimap cell width = %d, separator width = %d; they must match", got, sep)
 		}
@@ -108,7 +108,7 @@ func TestScrollThumbIsThreeDots(t *testing.T) {
 
 	// Whatever the viewport size, the thumb stays three rows.
 	for _, view := range [][2]int{{0, 10}, {0, 100}, {95, 105}, {190, 200}} {
-		cells := renderMinimap(kinds, view[0], view[1], 20)
+		cells := renderMinimap(kinds, view[0], view[1], 20, darkPalette)
 		if n, _ := countThumb(cells); n != thumbRows {
 			t.Errorf("viewport %v: thumb is %d rows, want %d", view, n, thumbRows)
 		}
@@ -116,8 +116,8 @@ func TestScrollThumbIsThreeDots(t *testing.T) {
 
 	// And it rides the track: top of the conversation puts it at the top, the
 	// bottom puts it at the bottom.
-	_, atTop := countThumb(renderMinimap(kinds, 0, 10, 20))
-	_, atBottom := countThumb(renderMinimap(kinds, 190, 200, 20))
+	_, atTop := countThumb(renderMinimap(kinds, 0, 10, 20, darkPalette))
+	_, atBottom := countThumb(renderMinimap(kinds, 190, 200, 20, darkPalette))
 	if atTop != 0 {
 		t.Errorf("scrolled to the top, thumb starts at row %d, want 0", atTop)
 	}
@@ -132,7 +132,7 @@ func TestScrollThumbIsThreeDots(t *testing.T) {
 // A rail shorter than the thumb is filled, rather than showing a thumb longer
 // than its track.
 func TestScrollThumbOnShortRail(t *testing.T) {
-	cells := renderMinimap([]blockKind{blockUser, blockEdit}, 0, 2, 2)
+	cells := renderMinimap([]blockKind{blockUser, blockEdit}, 0, 2, 2, darkPalette)
 	for i, c := range cells {
 		if !strings.Contains(c, railThumb) {
 			t.Errorf("row %d of a 2-row rail has no thumb", i)
@@ -143,7 +143,7 @@ func TestScrollThumbOnShortRail(t *testing.T) {
 // Always visible: an empty chat still gets a track, so the column never appears
 // or disappears under the user.
 func TestRenderMinimapAlwaysDrawsATrack(t *testing.T) {
-	cells := renderMinimap(nil, 0, 0, 5)
+	cells := renderMinimap(nil, 0, 0, 5, darkPalette)
 	if len(cells) != 5 {
 		t.Fatalf("got %d cells for an empty chat, want 5", len(cells))
 	}
@@ -184,9 +184,9 @@ func TestPanelBodyTruncatesOverlongLines(t *testing.T) {
 // gutter this replaces.
 func TestRailIsContinuousAndSingleColumn(t *testing.T) {
 	// Two header rows, three message rows, two footer rows.
-	cells := renderMinimap([]blockKind{blockUser, blockEdit, blockAssistant}, 0, 3, 3)
+	cells := renderMinimap([]blockKind{blockUser, blockEdit, blockAssistant}, 0, 3, 3, darkPalette)
 
-	out := railColumn(7, 2, cells)
+	out := railColumn(7, 2, cells, darkPalette)
 	lines := strings.Split(out, "\n")
 
 	if len(lines) != 7 {

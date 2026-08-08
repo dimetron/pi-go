@@ -60,6 +60,7 @@ type matrixState struct {
 	fullWidth int                       // full terminal width for centering
 	seed      int64                     // accumulated entropy from token bytes
 	active    bool
+	palette   Palette // resolved theme palette for the rain gradient
 }
 
 // randCell generates a random cell using the current RNG.
@@ -107,7 +108,8 @@ func (ms *matrixState) renderLine(row int) string {
 	if n == 0 {
 		return ""
 	}
-	maxShade := len(matrixColors) - 1
+	colors := matrixGradient(ms.palette)
+	maxShade := len(colors) - 1
 	mid := float64(n) / 2.0
 
 	var sb strings.Builder
@@ -138,10 +140,33 @@ func (ms *matrixState) renderLine(row int) string {
 		if shade > maxShade {
 			shade = maxShade
 		}
-		style := lipgloss.NewStyle().Foreground(matrixColors[shade])
+		style := lipgloss.NewStyle().Foreground(colors[shade])
 		sb.WriteString(style.Render(string(cell.ch)))
 	}
 	return sb.String()
+}
+
+// matrixGradient returns the rain gradient for a palette: a ramp from the
+// background through the surface shades up to the bright accent hues, so the
+// rain stays legible on both dark and light themes.
+func matrixGradient(p Palette) []color.Color {
+	if !p.Valid {
+		return matrixColors
+	}
+	return []color.Color{
+		p.Background, // base (nearly invisible)
+		p.Surface0,
+		p.Surface1,
+		p.Surface,
+		p.Overlay0,
+		p.Overlay1,
+		p.Blue,
+		p.Sapphire,
+		p.Teal,
+		p.Lavender,
+		p.Mauve,
+		p.Pink,
+	}
 }
 
 // feed mixes token text into the entropy and shifts characters left.

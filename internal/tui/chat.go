@@ -54,10 +54,10 @@ func wordWrap(text string, maxWidth int) []string {
 }
 
 // renderWelcome builds the startup welcome screen, constrained to available width.
-func (c *ChatModel) renderWelcome() string {
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	cmd := lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
+func (c *ChatModel) renderWelcome(p Palette) string {
+	accent := lipgloss.NewStyle().Foreground(p.Primary).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(p.Dim)
+	cmd := lipgloss.NewStyle().Foreground(p.Cyan)
 
 	// ASCII diagonals, matching the sidebar mascot: ╱ ╲ are East Asian Ambiguous
 	// and widen the row in CJK-configured terminals. See face.go.
@@ -157,7 +157,7 @@ func fnvInt(h uint64, v int) uint64 {
 // (and re-syntax-highlighted) the entire scrollback, several times a second.
 // Keying on the inputs gets the same safety without the cost: a mutated message
 // simply gets a different key and re-renders.
-func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool) uint64 {
+func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool, themeKey uint64) uint64 {
 	h := fnvOffset64
 	h = fnvStr(h, m.role)
 	h = fnvStr(h, m.content)
@@ -175,6 +175,7 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	h = fnvInt(h, width)
 	h = fnvInt(h, m.pipelineStep)
 	h = fnvInt(h, m.pipelineTotal)
+	h = fnvInt(h, int(themeKey))
 
 	var flags byte
 	if m.isWarning {
@@ -219,6 +220,9 @@ type ChatModel struct {
 	TraceLog    []traceEntry
 	Width       int
 	ToolDisplay ToolDisplayModel
+	// Palette is the resolved theme palette, set each frame by the model before
+	// rendering. Zero means the dark default.
+	Palette Palette
 }
 
 // NewChatModel creates a ChatModel with the given markdown renderer.
@@ -434,13 +438,16 @@ func (c *ChatModel) RenderMessages(running bool) string {
 // lines it opened, and collapseBlankLines then drops entries from both together,
 // so kinds[i] always describes the i-th line of the returned string.
 func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
+	p := paletteOrDark(c.Palette)
+	themeKey := paletteKey(p)
+
 	if len(c.Messages) == 0 {
-		welcome := c.renderWelcome()
+		welcome := c.renderWelcome(p)
 		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1)
 	}
 
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	bullet := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render("◉ ")
+	dim := lipgloss.NewStyle().Foreground(p.Dim)
+	bullet := lipgloss.NewStyle().Foreground(p.Accent).Bold(true).Render("◉ ")
 	sepWidth := c.Width
 	if sepWidth < 20 {
 		sepWidth = 20
@@ -454,7 +461,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 		msg := &c.Messages[i]
 
 		isLastAndStreaming := running && i == lastIdx
-		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming)
+		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming, themeKey)
 		if msg.renderCached && msg.renderCacheKey == key {
 			b.WriteString(msg.renderCache)
 			kinds = appendKind(kinds, kindOf(msg), strings.Count(msg.renderCache, "\n"))
@@ -469,7 +476,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 				msgBuf.WriteString("\n")
 			}
 			label := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
+				Foreground(p.Primary).
 				Bold(true).
 				Render("> ")
 			msgBuf.WriteString(label)
@@ -492,8 +499,8 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 
 		case "thinking":
 			if msg.content != "" {
-				thinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
-				thinkBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("💭 ")
+				thinkStyle := lipgloss.NewStyle().Foreground(p.Faint).Italic(true)
+				thinkBullet := lipgloss.NewStyle().Foreground(p.Faint).Render("💭 ")
 				msgBuf.WriteString("\n")
 				msgBuf.WriteString(thinkBullet)
 				// Show last few lines of thinking to keep it compact.

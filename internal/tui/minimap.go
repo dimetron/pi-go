@@ -57,10 +57,6 @@ func thumbRange(start, end, total, rows int) (lo, hi int) {
 	return lo, lo + thumbRows
 }
 
-// separatorColor matches the sidebar's old border (Mocha surface1), so rows with
-// no conversation behind them still read as a plain divider.
-const separatorColor = "#45475a"
-
 // railCell renders one rail cell: glyph repeated to fill railWidth, in color.
 func railCell(glyph, color string) string {
 	return lipgloss.NewStyle().
@@ -70,20 +66,16 @@ func railCell(glyph, color string) string {
 
 // separatorCell is the rail outside the message viewport — above and below the
 // chat, where there is nothing to map.
-func separatorCell() string {
-	return railCell(railGlyph, separatorColor)
+func separatorCell(p Palette) string {
+	return railCell(railGlyph, colorString(p.Surface1))
 }
-
-// ruleColor is the color of the horizontal rules that close the panel and frame
-// the input (Mocha surface2).
-const ruleColor = "#585b70"
 
 // railFootCell is the rail's last cell, the one that sits on the panel's closing
 // rule. A vertical glyph there cuts the rule in half where the panel meets the
 // sidebar; the joint carries the line through instead, so the panel's rule, this
 // cell and the sidebar's rule read as one line across the terminal.
-func railFootCell() string {
-	return railCell(railFoot, ruleColor)
+func railFootCell(p Palette) string {
+	return railCell(railFoot, colorString(p.Surface))
 }
 
 // blockKind classifies a rendered line by the kind of message it came from.
@@ -104,23 +96,36 @@ const (
 	blockTool    // any other tool, incl. MCP
 )
 
-// minimapColors maps each block kind to its bar color, as an ANSI 256 index.
+// minimapColor maps a block kind to its rail color, resolved from the palette.
 // Mutations and commands — the lines a reader most often scrolls back to find —
 // get the warm, high-contrast end of the palette; passive content stays cool
 // and recessive. Colors echo the ones each block already uses in the chat, so
 // the strip reads as a scaled-down copy rather than a separate legend.
-var minimapColors = map[blockKind]string{
-	blockUser:      "39",  // blue, matches the "> " prompt label
-	blockAssistant: "63",  // violet, matches the reply bullet
-	blockWarning:   "226", // yellow, matches the warning bullet
-	blockError:     "203", // red, matches the error bullet
-	blockThinking:  "243", // gray, matches the thinking style
-	blockRead:      "45",  // cyan
-	blockEdit:      "208", // orange
-	blockExecute:   "76",  // green
-	blockAgent:     "141", // purple
-	blockTool:      "102", // muted slate
-	blockNone:      "237", // near-background track
+func minimapColor(kind blockKind, p Palette) string {
+	switch kind {
+	case blockUser:
+		return colorString(p.Primary)
+	case blockAssistant:
+		return colorString(p.Accent)
+	case blockWarning:
+		return colorString(p.Warning)
+	case blockError:
+		return colorString(p.Error)
+	case blockThinking:
+		return colorString(p.Faint)
+	case blockRead:
+		return colorString(p.Cyan)
+	case blockEdit:
+		return colorString(p.Peach)
+	case blockExecute:
+		return colorString(p.Green)
+	case blockAgent:
+		return colorString(p.Mauve)
+	case blockTool:
+		return colorString(p.Overlay)
+	default:
+		return colorString(p.Surface1)
+	}
 }
 
 // kindOf classifies a message for the minimap.
@@ -168,7 +173,7 @@ func toolBlockKind(tool string) blockKind {
 //
 // kinds is the per-line classification of the full rendered chat; start and end
 // bound the slice of it currently visible.
-func renderMinimap(kinds []blockKind, start, end, rows int) []string {
+func renderMinimap(kinds []blockKind, start, end, rows int, p Palette) []string {
 	if rows <= 0 {
 		return nil
 	}
@@ -178,7 +183,7 @@ func renderMinimap(kinds []blockKind, start, end, rows int) []string {
 	if total == 0 {
 		// No content yet: draw the empty track, so the column never appears or
 		// disappears from under the user.
-		empty := railCell(railGlyph, minimapColors[blockNone])
+		empty := railCell(railGlyph, colorString(p.Surface1))
 		for i := range cells {
 			cells[i] = empty
 		}
@@ -199,14 +204,14 @@ func renderMinimap(kinds []blockKind, start, end, rows int) []string {
 
 		kind := dominantKind(kinds[lo:hi])
 
-		glyph, color := railGlyph, minimapColors[kind]
+		glyph, color := railGlyph, minimapColor(kind, p)
 		if row >= thumbLo && row < thumbHi {
 			glyph = railThumb
 			if kind == blockNone {
 				// A thumb over a run of blank lines still has to read as "you
 				// are here", so brighten the track rather than leaving a hole
 				// in it.
-				color = "244"
+				color = colorString(p.Subtext)
 			}
 		}
 		cells[row] = railCell(glyph, color)
@@ -247,8 +252,8 @@ func dominantKind(kinds []blockKind) blockKind {
 //
 // rows is the panel's height; msgStart is the row the message viewport begins
 // on; cells are the minimap cells for it, one per row.
-func railColumn(rows, msgStart int, cells []string) string {
-	sep := separatorCell()
+func railColumn(rows, msgStart int, cells []string, p Palette) string {
+	sep := separatorCell(p)
 
 	out := make([]string, rows)
 	for i := range out {
@@ -258,7 +263,7 @@ func railColumn(rows, msgStart int, cells []string) string {
 		}
 	}
 	if rows > 0 {
-		out[rows-1] = railFootCell()
+		out[rows-1] = railFootCell(p)
 	}
 	return strings.Join(out, "\n")
 }

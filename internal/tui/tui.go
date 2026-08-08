@@ -41,6 +41,10 @@ type model struct {
 	// Theme manager.
 	themeManager *ThemeManager
 
+	// palette is the resolved color palette for the active theme, recomputed
+	// each frame in View so a /theme switch takes effect immediately.
+	palette Palette
+
 	// Agent state.
 	running     bool
 	mode        string             // "chat" or "plan" — shown in status bar
@@ -1277,9 +1281,21 @@ func (m *model) View() tea.View {
 		return tea.NewView("Goodbye!\n")
 	}
 
+	// Resolve the active theme's palette once per frame so a /theme switch
+	// takes effect on the next render. A nil manager (tests) falls back to the
+	// dark palette, keeping existing output unchanged.
+	m.palette = darkPalette
+	if m.themeManager != nil {
+		m.palette = paletteFor(m.themeManager.Current())
+	}
+	m.chatModel.Palette = m.palette
+	m.chatModel.ToolDisplay.Palette = m.palette
+	m.inputModel.Palette = m.palette
+	m.matrix.palette = m.palette
+
 	if m.width == 0 {
 		// Show matrix-style startup text before the first terminal size arrives.
-		matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal)
+		matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal, m.palette)
 		if m.loadingItems != nil {
 			var lines []string
 			lines = append(lines, matrixLine)
@@ -1356,7 +1372,7 @@ func (m *model) View() tea.View {
 
 	// Horizontal rule for separating sections. The panel hr is bodyWidth; the
 	// full-width hr spans the entire terminal (used below the sidebar).
-	hrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Catppuccin Mocha surface2
+	hrStyle := lipgloss.NewStyle().Foreground(m.palette.Surface)
 	hr := hrStyle.Render(strings.Repeat("─", bodyWidth))
 	fullHr := hrStyle.Render(strings.Repeat("─", m.width))
 
@@ -1410,7 +1426,7 @@ func (m *model) View() tea.View {
 	// full terminal width underneath.
 	body := padLinesTo(b.String(), bodyWidth)
 	panelRows := strings.Count(body, "\n") + 1
-	rail := railColumn(panelRows, msgStart, renderMinimap(lineKinds, startLine, endLine, msgRows))
+	rail := railColumn(panelRows, msgStart, renderMinimap(lineKinds, startLine, endLine, msgRows, m.palette), m.palette)
 	leftPanel := lipgloss.JoinHorizontal(lipgloss.Top, body, rail)
 
 	var topSection string
@@ -1444,6 +1460,7 @@ func (m *model) View() tea.View {
 			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
 			MemoryStatus: m.memoryStatus,
 			Artifacts:    m.artifactList(),
+			Palette:      m.palette,
 		}
 		if m.run != nil && m.run.phase != "" {
 			sidebarInput.RunChecklist = m.run.checklist
@@ -1472,7 +1489,7 @@ func (m *model) View() tea.View {
 	bottom.WriteString("\n")
 	// The closing rule doubles as the session context gauge — same row, same
 	// width, now carrying a reading instead of only closing the frame.
-	bottom.WriteString(renderContextRule(m.contextRuleFor(m.width)))
+	bottom.WriteString(renderContextRule(m.contextRuleFor(m.width), m.palette))
 
 	// Pad the bottom section to the full terminal width so no row is wider or
 	// narrower than m.width. The status bar's Width style handles it for that
@@ -1544,7 +1561,7 @@ func drainTerminalResponses() {
 
 const startupProgressBarWidth = 8
 
-func renderStartupMatrixLine(phase int, appVersion string, loadingItems map[string]bool, loadingTotal int) string {
+func renderStartupMatrixLine(phase int, appVersion string, loadingItems map[string]bool, loadingTotal int, p Palette) string {
 	versionSuffix := ""
 	if appVersion != "" {
 		versionSuffix = " " + appVersion
@@ -1555,10 +1572,10 @@ func renderStartupMatrixLine(phase int, appVersion string, loadingItems map[stri
 	if width < 1 || len(matrixRunes) == 0 {
 		return "Loading Pi" + versionSuffix + progress + detail + " .."
 	}
-	bright := lipgloss.NewStyle().Foreground(lipgloss.Color("#94e2d5")).Bold(true)
-	mid := lipgloss.NewStyle().Foreground(lipgloss.Color("#89b4fa"))
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#45475a"))
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true)
+	bright := lipgloss.NewStyle().Foreground(p.Teal).Bold(true)
+	mid := lipgloss.NewStyle().Foreground(p.Blue)
+	dim := lipgloss.NewStyle().Foreground(p.Surface1)
+	accent := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
 
 	dotCount := 2 + phase%3
 	wave := phase % (2 * (width - 1))
@@ -1871,6 +1888,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		HostName:     hostName,
 		LoadingItems: m.loadingItems,
 		Flash:        m.flash,
+		Palette:      m.palette,
 	}
 }
 
@@ -2147,41 +2165,41 @@ func (m *model) renderSearchPopup(width int) string {
 	}
 
 	sp := m.searchPopup
-	bg := lipgloss.Color("236")
+	bg := m.palette.Surface0
 
 	// Get colors based on mode.
 	popupStyle := lipgloss.NewStyle().Background(bg)
 	headerStyle := lipgloss.NewStyle().Background(bg).Bold(true)
 	searchStyle := lipgloss.NewStyle().Background(bg)
 	itemStyle := lipgloss.NewStyle().Background(bg)
-	selectedItemStyle := lipgloss.NewStyle().Background(lipgloss.Color("15"))
+	selectedItemStyle := lipgloss.NewStyle().Background(m.palette.White)
 
 	var header string
 
 	switch sp.mode {
 	case searchModeCommands:
-		border := lipgloss.Color("33") // cyan for commands
+		border := m.palette.Cyan // cyan for commands
 		popupStyle = popupStyle.
-			Foreground(lipgloss.Color("252")).
+			Foreground(m.palette.Subtext).
 			Border(lipgloss.RoundedBorder(), true, true, true, true).
 			BorderForeground(border).
 			Width(width)
-		headerStyle = headerStyle.Foreground(lipgloss.Color("252")).Width(width)
-		searchStyle = searchStyle.Foreground(lipgloss.Color("245"))
-		itemStyle = itemStyle.Foreground(lipgloss.Color("81")) // teal
-		selectedItemStyle = selectedItemStyle.Background(lipgloss.Color("33"))
+		headerStyle = headerStyle.Foreground(m.palette.Subtext).Width(width)
+		searchStyle = searchStyle.Foreground(m.palette.Dim)
+		itemStyle = itemStyle.Foreground(m.palette.Teal) // teal
+		selectedItemStyle = selectedItemStyle.Background(m.palette.Cyan)
 		header = "Commands"
 	case searchModeHistory:
-		border := lipgloss.Color("208") // orange for history
+		border := m.palette.Peach // orange for history
 		popupStyle = popupStyle.
-			Foreground(lipgloss.Color("252")).
+			Foreground(m.palette.Subtext).
 			Border(lipgloss.RoundedBorder(), true, true, true, true).
 			BorderForeground(border).
 			Width(width)
-		headerStyle = headerStyle.Foreground(lipgloss.Color("252")).Width(width)
-		searchStyle = searchStyle.Foreground(lipgloss.Color("245"))
-		itemStyle = itemStyle.Foreground(lipgloss.Color("208")) // orange
-		selectedItemStyle = selectedItemStyle.Background(lipgloss.Color("208"))
+		headerStyle = headerStyle.Foreground(m.palette.Subtext).Width(width)
+		searchStyle = searchStyle.Foreground(m.palette.Dim)
+		itemStyle = itemStyle.Foreground(m.palette.Peach) // orange
+		selectedItemStyle = selectedItemStyle.Background(m.palette.Peach)
 		header = "History"
 	}
 
@@ -2328,15 +2346,15 @@ func (m *model) renderBranchPopup() string {
 	}
 
 	popup := m.branchPopup
-	bg := lipgloss.Color("236")
-	border := lipgloss.Color("240")
-	selected := lipgloss.Color("33")
-	activeFg := lipgloss.Color("35")
-	dimFg := lipgloss.Color("243")
+	bg := m.palette.Surface0
+	border := m.palette.Surface
+	selected := m.palette.Primary
+	activeFg := m.palette.Green
+	dimFg := m.palette.Faint
 
 	style := lipgloss.NewStyle().
 		Background(bg).
-		Foreground(lipgloss.Color("252")).
+		Foreground(m.palette.Subtext).
 		Border(lipgloss.ThickBorder(), true, true, true, true).
 		BorderForeground(border).
 		Width(m.width - 10)
@@ -2350,7 +2368,7 @@ func (m *model) renderBranchPopup() string {
 	// Header
 	header := lipgloss.NewStyle().
 		Background(bg).
-		Foreground(lipgloss.Color("252")).
+		Foreground(m.palette.Subtext).
 		Bold(true).
 		Width(popupWidth).
 		Align(lipgloss.Center).
@@ -2386,7 +2404,7 @@ func (m *model) renderBranchPopup() string {
 		var lineStyle lipgloss.Style
 		switch {
 		case isSelected:
-			lineStyle = lipgloss.NewStyle().Background(selected).Foreground(lipgloss.Color("15"))
+			lineStyle = lipgloss.NewStyle().Background(selected).Foreground(m.palette.White)
 		case isActive:
 			lineStyle = lipgloss.NewStyle().Background(bg).Foreground(activeFg)
 		default:

@@ -211,8 +211,8 @@ func layoutContextRule(in contextRuleInput) (contextRuleLayout, bool) {
 //
 // The result is always exactly Width display cells, so it satisfies the frame's
 // width invariant on its own and needs no padding by the caller.
-func renderContextRule(in contextRuleInput) string {
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70")) // Mocha surface2
+func renderContextRule(in contextRuleInput, p Palette) string {
+	dim := lipgloss.NewStyle().Foreground(p.Surface)
 
 	if in.Width <= 0 {
 		return ""
@@ -233,7 +233,7 @@ func renderContextRule(in contextRuleInput) string {
 		filled = 1
 	}
 
-	fg := contextSeverityColor(lay.Pct)
+	fg := contextSeverityColor(lay.Pct, p)
 	labelStyle := lipgloss.NewStyle().Foreground(fg)
 
 	// The filled run is either one severity-colored block or, when a breakdown
@@ -241,7 +241,7 @@ func renderContextRule(in contextRuleInput) string {
 	// produce exactly `filled` cells, so width is invariant to which is used.
 	var filledRun string
 	if in.Breakdown != nil && in.Breakdown.Total() > 0 {
-		filledRun = renderSegmentedGauge(in.Breakdown.withConversationFrom(lay.Used), filled)
+		filledRun = renderSegmentedGauge(in.Breakdown.withConversationFrom(lay.Used), filled, p)
 	} else {
 		filledRun = lipgloss.NewStyle().Foreground(fg).
 			Render(strings.Repeat(string(gaugeFilledGlyph), filled))
@@ -253,7 +253,7 @@ func renderContextRule(in contextRuleInput) string {
 	// the measurement. White belongs to no zone and so is legible as a control.
 	clear := ""
 	if lay.ShowClear {
-		clear = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).
+		clear = lipgloss.NewStyle().Foreground(p.White).
 			Render(gaugeClearButton)
 	}
 
@@ -276,14 +276,14 @@ func renderContextRule(in contextRuleInput) string {
 // used/window ratio. That keeps the color picker testable by the same number
 // the bar prints, so a user who sees "100%" sees red — the bar reaches 100
 // only at the dumb-zone boundary.
-func contextSeverityColor(pct float64) color.Color {
+func contextSeverityColor(pct float64, p Palette) color.Color {
 	switch {
 	case pct >= 100:
-		return lipgloss.Color("#f38ba8") // Mocha red — dumb zone
+		return p.Red // dumb zone
 	case pct >= warmZoneFraction/dumbZoneFraction*100:
-		return lipgloss.Color("#fab387") // Mocha peach — warm zone
+		return p.Peach // warm zone
 	default:
-		return lipgloss.Color("#a6e3a1") // Mocha green — smart zone
+		return p.Green // smart zone
 	}
 }
 

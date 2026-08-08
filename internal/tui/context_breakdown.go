@@ -58,26 +58,26 @@ func (k ContextSegmentKind) Label() string {
 }
 
 // Color returns the segment's swatch. The palette is chosen so adjacent
-// segments never share a hue and the whole set stays legible on the Mocha
+// segments never share a hue and the whole set stays legible on the theme's
 // background; Conversation is warmest because it is the one that grows.
-func (k ContextSegmentKind) Color() color.Color {
+func (k ContextSegmentKind) Color(p Palette) color.Color {
 	switch k {
 	case SegSystemPrompt:
-		return lipgloss.Color("#9399b2") // overlay2 — inert overhead
+		return p.Overlay2 // inert overhead
 	case SegToolDefs:
-		return lipgloss.Color("#89b4fa") // blue
+		return p.Blue
 	case SegRules:
-		return lipgloss.Color("#a6e3a1") // green
+		return p.Green
 	case SegSkills:
-		return lipgloss.Color("#f9e2af") // yellow
+		return p.Yellow
 	case SegMCPTools:
-		return lipgloss.Color("#cba6f7") // mauve
+		return p.Mauve
 	case SegSubagents:
-		return lipgloss.Color("#89dceb") // sky
+		return p.Sky
 	case SegConversation:
-		return lipgloss.Color("#fab387") // peach — the part that grows
+		return p.Peach // the part that grows
 	default:
-		return lipgloss.Color("#585b70")
+		return p.Surface
 	}
 }
 
@@ -226,7 +226,7 @@ func segmentWidths(b ContextBreakdown, cells int) [segCount]int {
 
 // renderSegmentedGauge draws the proportional bar across exactly `cells`
 // columns, using the rule glyph so the row still reads as a rule.
-func renderSegmentedGauge(b ContextBreakdown, cells int) string {
+func renderSegmentedGauge(b ContextBreakdown, cells int, p Palette) string {
 	if cells <= 0 {
 		return ""
 	}
@@ -239,13 +239,13 @@ func renderSegmentedGauge(b ContextBreakdown, cells int) string {
 		if n <= 0 {
 			continue
 		}
-		style := lipgloss.NewStyle().Foreground(k.Color())
+		style := lipgloss.NewStyle().Foreground(k.Color(p))
 		sb.WriteString(style.Render(strings.Repeat(string(gaugeEmptyGlyph), n)))
 		drawn += n
 	}
 	// Unused remainder of the window, in the dim rule color.
 	if drawn < cells {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70"))
+		dim := lipgloss.NewStyle().Foreground(p.Surface)
 		sb.WriteString(dim.Render(strings.Repeat(string(gaugeEmptyGlyph), cells-drawn)))
 	}
 	return sb.String()
@@ -253,7 +253,7 @@ func renderSegmentedGauge(b ContextBreakdown, cells int) string {
 
 // RenderContextBreakdown renders the legend panel: a header with the headline
 // percentage, the segmented bar, then one row per section.
-func RenderContextBreakdown(b ContextBreakdown, window int64, width int) string {
+func RenderContextBreakdown(b ContextBreakdown, window int64, width int, p Palette) string {
 	if width < 24 {
 		width = 24
 	}
@@ -278,8 +278,8 @@ func RenderContextBreakdown(b ContextBreakdown, window int64, width int) string 
 	if gap < 1 {
 		gap = 1
 	}
-	headStyle := lipgloss.NewStyle().Foreground(contextSeverityColor(pct)).Bold(true)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9399b2"))
+	headStyle := lipgloss.NewStyle().Foreground(contextSeverityColor(pct, p)).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(p.Overlay2)
 	sb.WriteString(headStyle.Render(head) + strings.Repeat(" ", gap) + dimStyle.Render(tail))
 	sb.WriteString("\n\n")
 
@@ -289,9 +289,9 @@ func RenderContextBreakdown(b ContextBreakdown, window int64, width int) string 
 	if window > 0 && total < window {
 		barCells = int(float64(total) / float64(window) * float64(width))
 	}
-	sb.WriteString(renderSegmentedGauge(b, barCells))
+	sb.WriteString(renderSegmentedGauge(b, barCells, p))
 	if barCells < width {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#585b70"))
+		dim := lipgloss.NewStyle().Foreground(p.Surface)
 		sb.WriteString(dim.Render(strings.Repeat(string(gaugeEmptyGlyph), width-barCells)))
 	}
 	sb.WriteString("\n\n")
@@ -301,7 +301,7 @@ func RenderContextBreakdown(b ContextBreakdown, window int64, width int) string 
 		if tok <= 0 {
 			continue
 		}
-		swatch := lipgloss.NewStyle().Foreground(k.Color()).Render("███")
+		swatch := lipgloss.NewStyle().Foreground(k.Color(p)).Render("███")
 		label := k.Label()
 		count := formatTokenCount(tok)
 		pad := width - ansi.StringWidth(swatch) - 1 - ansi.StringWidth(label) - ansi.StringWidth(count)
@@ -309,7 +309,7 @@ func RenderContextBreakdown(b ContextBreakdown, window int64, width int) string 
 			pad = 1
 		}
 		sb.WriteString(swatch + " " +
-			lipgloss.NewStyle().Foreground(lipgloss.Color("#cdd6f4")).Render(label) +
+			lipgloss.NewStyle().Foreground(p.Text).Render(label) +
 			strings.Repeat(" ", pad) +
 			dimStyle.Render(count))
 		sb.WriteString("\n")

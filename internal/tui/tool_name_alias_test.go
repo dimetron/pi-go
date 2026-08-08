@@ -29,11 +29,11 @@ func TestGrepAliasIsRecognized(t *testing.T) {
 			// And the rendered block must be colored, not the dim default.
 			out := td.renderRegularTool(message{
 				role: "tool", tool: name, toolIn: "grepHandler", content: content,
-			}, dim)
+			}, dim, darkPalette)
 
-			// highlightGrepOutput colors the filename blue (39) and the line
-			// number gray (240); the dim default branch emits neither.
-			if !strings.Contains(out, "38;5;39") {
+			// highlightGrepOutput colors the filename blue and the line number
+			// gray; the dim default branch emits neither.
+			if !strings.Contains(out, truecolorFragment(darkPalette.Blue)) {
 				t.Errorf("%q output not highlighted (no grep file color); got %q", name, out)
 			}
 		})
