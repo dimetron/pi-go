@@ -2007,10 +2007,11 @@ func TestToolCallSummary(t *testing.T) {
 	if got := toolCallSummary("bash", map[string]any{"command": "ls"}); got != "ls" {
 		t.Errorf("expected ls, got %q", got)
 	}
-	// bash long
+	// bash long — toolCallSummary preserves the full command; the renderer
+	// clips to terminal width.
 	longCmd := strings.Repeat("x", 100)
-	if got := toolCallSummary("bash", map[string]any{"command": longCmd}); !strings.HasSuffix(got, "...") {
-		t.Errorf("expected truncation, got %q", got)
+	if got := toolCallSummary("bash", map[string]any{"command": longCmd}); got != longCmd {
+		t.Errorf("expected full command preserved, got %q", got)
 	}
 }
 

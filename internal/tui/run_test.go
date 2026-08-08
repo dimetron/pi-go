@@ -523,9 +523,9 @@ func TestHandleRunAgentEvent_ToolCall_PopulatesToolIn(t *testing.T) {
 	if got.tool != "bash" {
 		t.Errorf("bash tool message: tool=%q, want bash", got.tool)
 	}
-	// toolCallSummary truncates to 80 chars.
-	if len(got.toolIn) > 80 {
-		t.Errorf("bash toolIn should be truncated to 80, got %d chars: %q", len(got.toolIn), got.toolIn)
+	// toolCallSummary preserves the full command; the renderer clips to width.
+	if got.toolIn != longCmd {
+		t.Errorf("bash toolIn should preserve the full command, got %d chars: %q", len(got.toolIn), got.toolIn)
 	}
 	if got.toolIn == "" {
 		t.Error("bash toolIn should be populated from args.command")

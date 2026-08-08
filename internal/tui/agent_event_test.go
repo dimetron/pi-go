@@ -99,11 +99,10 @@ func TestToolCallSummary_BashLongCommand(t *testing.T) {
 	long := strings.Repeat("x", 100)
 	args := map[string]any{"command": long}
 	result := toolCallSummary("bash", args)
-	if len(result) > 80 {
-		t.Errorf("expected truncated command, got len=%d", len(result))
-	}
-	if !strings.HasSuffix(result, "...") {
-		t.Error("expected '...' suffix for truncated command")
+	// toolCallSummary no longer truncates — the renderer clips to the
+	// terminal width. The full command is preserved for wide terminals.
+	if result != long {
+		t.Errorf("expected full command preserved, got len=%d", len(result))
 	}
 }
 

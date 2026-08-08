@@ -149,6 +149,38 @@ func TestContentWidth_SmallWidth(t *testing.T) {
 	}
 }
 
+func TestArgWidth_ScalesWithTerminalWidth(t *testing.T) {
+	// Narrow terminal floors at 60.
+	if got := (ToolDisplayModel{Width: 40}).argWidth(); got != 60 {
+		t.Errorf("narrow width: expected 60, got %d", got)
+	}
+	// Wide terminal gives more room for the command.
+	if got := (ToolDisplayModel{Width: 200}).argWidth(); got != 180 {
+		t.Errorf("wide width: expected 180, got %d", got)
+	}
+	// Default width (0 → 80) floors at 60.
+	if got := (ToolDisplayModel{Width: 0}).argWidth(); got != 60 {
+		t.Errorf("default width: expected 60, got %d", got)
+	}
+}
+
+func TestRenderRegularTool_WideTerminalShowsLongerCommand(t *testing.T) {
+	longCmd := strings.Repeat("x", 150)
+	msg := message{role: "tool", tool: "bash", toolIn: longCmd}
+
+	// Narrow terminal truncates the command.
+	narrow := ToolDisplayModel{Width: 80}
+	if out := narrow.RenderToolMessage(msg); strings.Contains(out, longCmd) {
+		t.Error("narrow terminal should truncate the long command")
+	}
+
+	// Wide terminal shows the full command.
+	wide := ToolDisplayModel{Width: 200}
+	if out := wide.RenderToolMessage(msg); !strings.Contains(out, longCmd) {
+		t.Error("wide terminal should show the full command")
+	}
+}
+
 func TestSoftWrap_ShortLine(t *testing.T) {
 	lines := softWrap("hello world", 80)
 	if len(lines) != 1 || lines[0] != "hello world" {
