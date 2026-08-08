@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -102,6 +103,39 @@ func BuildToolCallCallbacks(s ToolCallReporter) ([]llmagent.BeforeToolCallback, 
 	return []llmagent.BeforeToolCallback{beforeCB}, []llmagent.AfterToolCallback{afterCB}
 }
 
+// hookLog is the sink for hook-failure diagnostics. It is nil by default,
+// which means failures go to the standard logger — the right destination for
+// the one-shot CLI and the ACP server, whose stderr is an ordinary stream.
+//
+// The TUI is the exception: it owns the alternate screen, and a line written
+// to stderr is painted over the UI without the renderer knowing those cells
+// were dirtied, so the damage persists until a full redraw. It installs a sink
+// pointing at the session log file instead. Same late-binding idiom as
+// auth.SetDebugLogger.
+var hookLog atomic.Pointer[func(string)]
+
+// SetHookLogger installs a sink for hook-failure diagnostics. Passing nil
+// restores the default (standard logger, i.e. stderr). Hooks run from callback
+// goroutines, so implementations must be goroutine-safe.
+func SetHookLogger(fn func(string)) {
+	if fn == nil {
+		hookLog.Store(nil)
+		return
+	}
+	hookLog.Store(&fn)
+}
+
+// hookLogf reports a hook failure to the installed sink, or to the standard
+// logger when none is installed.
+func hookLogf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if p := hookLog.Load(); p != nil && *p != nil {
+		(*p)(msg)
+		return
+	}
+	log.Print(msg)
+}
+
 // BuildBeforeToolCallbacks converts HookConfigs with event "before_tool" into
 // ADK BeforeToolCallback functions.
 func BuildBeforeToolCallbacks(hooks []HookConfig) []llmagent.BeforeToolCallback {
@@ -116,7 +150,7 @@ func BuildBeforeToolCallbacks(hooks []HookConfig) []llmagent.BeforeToolCallback 
 				return nil, nil
 			}
 			if err := runHookCommand(ctx, hook, t.Name(), args); err != nil {
-				log.Printf("hook %q failed for tool %q: %v", hook.Command, t.Name(), err)
+				hookLogf("hook %q failed for tool %q: %v", hook.Command, t.Name(), err)
 				// Non-fatal: log and continue.
 			}
 			return nil, nil
@@ -139,7 +173,7 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 				return result, nil
 			}
 			if hookErr := runHookCommand(ctx, hook, t.Name(), result); hookErr != nil {
-				log.Printf("hook %q failed for tool %q: %v", hook.Command, t.Name(), hookErr)
+				hookLogf("hook %q failed for tool %q: %v", hook.Command, t.Name(), hookErr)
 			}
 			return result, nil
 		})

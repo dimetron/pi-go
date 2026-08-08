@@ -50,6 +50,11 @@ type model struct {
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
+	// hookQueue serializes lifecycle-hook execution off the Update goroutine.
+	// Created lazily by enqueueHook (see agent_loop.go), which is only ever
+	// reached from Update, so the lazy init needs no lock.
+	hookQueue chan func()
+
 	// Matrix rain animation state for sidebar.
 	matrix matrixState
 
@@ -2016,6 +2021,10 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		} else {
 			auth.SetDebugLogger(nil)
 		}
+		// Hook failures must never reach stderr while the TUI holds the
+		// alternate screen. Installed unconditionally: with no logger the sink
+		// swallows the message, which still beats corrupting the UI.
+		extension.SetHookLogger(func(msg string) { r.Logger.Error("hook: " + msg) })
 		m.cfg.Skills = r.Skills
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg

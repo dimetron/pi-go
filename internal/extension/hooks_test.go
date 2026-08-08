@@ -1,10 +1,13 @@
 package extension
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -713,5 +716,136 @@ func TestRunLifecycleHookTimeout(t *testing.T) {
 	ctx := context.Background()
 	if err := RunLifecycleHook(ctx, hook, "user_input_required", nil); err == nil {
 		t.Error("expected timeout error")
+	}
+}
+
+// --- hook failure diagnostics -------------------------------------------
+
+// TestBuildBeforeToolCallbacks_Invoke covers the callback body: a matching
+// tool runs the command, a non-matching tool is skipped, and a failing command
+// is reported rather than propagated (a broken hook must not fail the tool).
+func TestBuildBeforeToolCallbacks_Invoke(t *testing.T) {
+	dir := t.TempDir()
+	ran := dir + "/ran"
+	var logged []string
+	SetHookLogger(func(msg string) { logged = append(logged, msg) })
+	t.Cleanup(func() { SetHookLogger(nil) })
+
+	cbs := BuildBeforeToolCallbacks([]HookConfig{
+		{Event: "before_tool", Tools: []string{"read"}, Command: "echo ran > " + ran, Timeout: 5},
+		{Event: "before_tool", Tools: []string{"read"}, Command: "exit 3", Timeout: 5},
+	})
+	if len(cbs) != 2 {
+		t.Fatalf("callbacks = %d, want 2", len(cbs))
+	}
+
+	ctx := &mockToolCtx{Context: context.Background(), funcCallID: "fc-1"}
+	for _, cb := range cbs {
+		got, err := cb(ctx, mockTool{nameVal: "read"}, map[string]any{"path": "x"})
+		if err != nil || got != nil {
+			t.Fatalf("callback returned (%v, %v), want (nil, nil)", got, err)
+		}
+	}
+	if _, err := os.ReadFile(ran); err != nil {
+		t.Errorf("matching hook did not run: %v", err)
+	}
+	if len(logged) != 1 {
+		t.Fatalf("logged %d failures, want 1: %v", len(logged), logged)
+	}
+
+	// A tool the hook does not match short-circuits before running anything.
+	logged = nil
+	if err := os.Remove(ran); err != nil {
+		t.Fatalf("removing marker: %v", err)
+	}
+	for _, cb := range cbs {
+		if _, err := cb(ctx, mockTool{nameVal: "write"}, nil); err != nil {
+			t.Fatalf("callback error on non-matching tool: %v", err)
+		}
+	}
+	if _, err := os.Stat(ran); !os.IsNotExist(err) {
+		t.Error("hook ran for a tool it does not match")
+	}
+	if len(logged) != 0 {
+		t.Errorf("logged %v for a non-matching tool, want nothing", logged)
+	}
+}
+
+// TestBuildAfterToolCallbacks_Invoke mirrors the before_tool case, and pins
+// that the tool's result passes through the callback unchanged.
+func TestBuildAfterToolCallbacks_Invoke(t *testing.T) {
+	dir := t.TempDir()
+	payload := dir + "/payload.json"
+	var logged []string
+	SetHookLogger(func(msg string) { logged = append(logged, msg) })
+	t.Cleanup(func() { SetHookLogger(nil) })
+
+	cbs := BuildAfterToolCallbacks([]HookConfig{
+		{Event: "after_tool", Tools: []string{"bash"}, Command: "cat > " + payload, Timeout: 5},
+		{Event: "after_tool", Tools: []string{"bash"}, Command: "exit 3", Timeout: 5},
+	})
+	if len(cbs) != 2 {
+		t.Fatalf("callbacks = %d, want 2", len(cbs))
+	}
+
+	ctx := &mockToolCtx{Context: context.Background(), funcCallID: "fc-2"}
+	result := map[string]any{"stdout": "hi"}
+	for _, cb := range cbs {
+		got, err := cb(ctx, mockTool{nameVal: "bash"}, nil, result, nil)
+		if err != nil {
+			t.Fatalf("callback error: %v", err)
+		}
+		if got["stdout"] != "hi" {
+			t.Errorf("result = %v, want it passed through unchanged", got)
+		}
+	}
+
+	data, err := os.ReadFile(payload)
+	if err != nil {
+		t.Fatalf("reading hook payload: %v", err)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("unmarshal hook payload: %v", err)
+	}
+	if envelope["tool"] != "bash" {
+		t.Errorf("payload tool = %v, want bash", envelope["tool"])
+	}
+	if len(logged) != 1 {
+		t.Errorf("logged %d failures, want 1: %v", len(logged), logged)
+	}
+
+	// Non-matching tool: result still passes through, hook does not fire.
+	logged = nil
+	for _, cb := range cbs {
+		got, err := cb(ctx, mockTool{nameVal: "read"}, nil, result, nil)
+		if err != nil || got["stdout"] != "hi" {
+			t.Fatalf("non-matching callback returned (%v, %v)", got, err)
+		}
+	}
+	if len(logged) != 0 {
+		t.Errorf("logged %v for a non-matching tool, want nothing", logged)
+	}
+}
+
+// TestSetHookLogger_NilRestoresDefault pins that clearing the sink falls back
+// to the standard logger instead of panicking or silently dropping. The
+// fallback is what the one-shot CLI and the ACP server rely on.
+func TestSetHookLogger_NilRestoresDefault(t *testing.T) {
+	var buf bytes.Buffer
+	origFlags, origOut := log.Flags(), log.Writer()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(origOut)
+		log.SetFlags(origFlags)
+	})
+
+	SetHookLogger(func(string) { t.Error("sink called after being cleared") })
+	SetHookLogger(nil)
+	hookLogf("boom %d", 7)
+
+	if got := strings.TrimSpace(buf.String()); got != "boom 7" {
+		t.Errorf("default sink wrote %q, want %q", got, "boom 7")
 	}
 }
