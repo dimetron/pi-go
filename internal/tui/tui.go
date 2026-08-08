@@ -2021,6 +2021,10 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		} else {
 			auth.SetDebugLogger(nil)
 		}
+		// Hook failures must never reach stderr while the TUI holds the
+		// alternate screen. Installed unconditionally: with no logger the sink
+		// swallows the message, which still beats corrupting the UI.
+		extension.SetHookLogger(func(msg string) { r.Logger.Error("hook: " + msg) })
 		m.cfg.Skills = r.Skills
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg

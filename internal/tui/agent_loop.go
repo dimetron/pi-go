@@ -903,14 +903,13 @@ func (m *model) enqueueHook(fn func()) {
 		m.hookQueue = make(chan func(), hookQueueDepth)
 		ctx := m.ctx
 		go func(q <-chan func()) {
+			// The queue is never closed — the worker's exit signal is the
+			// session context, so a drained queue is not a shutdown.
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case job, ok := <-q:
-					if !ok {
-						return
-					}
+				case job := <-q:
 					job()
 				}
 			}
