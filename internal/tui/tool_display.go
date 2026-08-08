@@ -462,7 +462,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 			// a non-gray foreground. Without this branch the output is dim (240)
 			// and reads as an afterthought next to the brightly-highlighted
 			// read/grep/find blocks above it.
-			styled = highlightBashOutput(lines)
+			styled = highlightBashOutput(lines, p)
 		// The grep tool registers itself as "ripgrep" whenever rg is installed
 		// (internal/tools/grep.go), which is the common case — so matching only
 		// "grep" here meant grep output was never highlighted in practice and
@@ -742,7 +742,7 @@ func highlightReadOutput(lines []string, filename string, p Palette) []string {
 
 	// Highlight all code at once for proper multi-line token handling
 	code := strings.Join(codeLines, "\n")
-	highlighted := highlightCode(code, filename)
+	highlighted := highlightCodeWithPalette(code, filename, p)
 	highlightedLines := strings.Split(highlighted, "\n")
 
 	// Recombine with styled line numbers
@@ -810,6 +810,15 @@ var highlightStyle = sync.OnceValue(func() *chroma.Style {
 	return styles.Fallback
 })
 
+func highlightStyleForPalette(p Palette) *chroma.Style {
+	if colorString(p.Background) == colorString(lightPalette.Background) {
+		if style := styles.Get("github"); style != nil {
+			return style
+		}
+	}
+	return highlightStyle()
+}
+
 var highlightFormatter = sync.OnceValue(func() chroma.Formatter {
 	if formatter := formatters.Get("terminal256"); formatter != nil {
 		return formatter
@@ -819,6 +828,11 @@ var highlightFormatter = sync.OnceValue(func() chroma.Formatter {
 
 // highlightCode applies chroma syntax highlighting based on filename extension.
 func highlightCode(code, filename string) string {
+	return highlightCodeWithPalette(code, filename, darkPalette)
+}
+
+func highlightCodeWithPalette(code, filename string, p Palette) string {
+	p = paletteOrDark(p)
 	lexer := matchLexer(filename)
 	if lexer == nil {
 		// Content sniffing depends on the code, not the filename, so it cannot
@@ -830,7 +844,7 @@ func highlightCode(code, filename string) string {
 		lexer = chroma.Coalesce(lexer)
 	}
 
-	style := highlightStyle()
+	style := highlightStyleForPalette(p)
 	formatter := highlightFormatter()
 
 	iterator, err := lexer.Tokenise(nil, code)
@@ -850,9 +864,13 @@ func highlightCode(code, filename string) string {
 // the filename-based lexer always misses; the content-sniffing fallback picks
 // something close to the actual language, and chroma's fallback lexer gives
 // the rest a non-gray foreground either way.
-func highlightBashOutput(lines []string) []string {
+func highlightBashOutput(lines []string, palettes ...Palette) []string {
+	p := darkPalette
+	if len(palettes) > 0 {
+		p = palettes[0]
+	}
 	code := strings.Join(lines, "\n")
-	highlighted := highlightCode(code, "")
+	highlighted := highlightCodeWithPalette(code, "", p)
 	if highlighted == code {
 		// Lexer did not tokenize — every line came back unchanged. Fall back
 		// to a non-gray foreground so the block stands out from the gutter
@@ -897,7 +915,7 @@ func highlightGrepOutput(lines []string, p Palette) []string {
 		}
 
 		// Highlight the content portion using the file extension.
-		highlighted := highlightCode(contentPart, filePart)
+		highlighted := highlightCodeWithPalette(contentPart, filePart, p)
 
 		var sb strings.Builder
 		sb.WriteString(fileStyle.Render(filePart))
