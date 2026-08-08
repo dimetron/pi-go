@@ -277,6 +277,7 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 
 	if err := stream.Err(); err != nil {
 		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
 			return
 		}
 		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)

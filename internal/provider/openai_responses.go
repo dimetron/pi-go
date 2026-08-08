@@ -413,6 +413,7 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 
 	if err := stream.Err(); err != nil {
 		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
 			return emitted, nil
 		}
 		// Hand the error back to generateResponses: it owns the stale-id

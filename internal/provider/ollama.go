@@ -7,6 +7,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +100,13 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			Messages: messages,
 		}
 
+		if n := ollamaNumPredict(); n > 0 {
+			if chatReq.Options == nil {
+				chatReq.Options = map[string]any{}
+			}
+			chatReq.Options["num_predict"] = n
+		}
+
 		// No num_ctx for cloud models. api.ollama.com already serves each model
 		// at its native window, and sending a fixed value caps it instead of
 		// raising it: deepseek-v4-flash:0731-cloud has 1M, so the 256K that
@@ -149,6 +157,30 @@ func ollamaThinkingConfig(level string) *ollamaapi.ThinkValue {
 }
 
 // ollamaFinishReasonToGenai maps Ollama done_reason to genai.FinishReason.
+// defaultOllamaNumPredict bounds the output of a single Ollama turn.
+//
+// Ollama defaults to no client-side limit, so a model that falls into a
+// repetition loop streams until the server's own ceiling: one
+// deepseek-v4-flash:0731:cloud turn emitted 148 KB of the same sentence over 87
+// seconds before it stopped. The cap matches what the Anthropic path already
+// allows a thinking turn (16K), which is far above a normal coding reply.
+const defaultOllamaNumPredict = 16384
+
+// ollamaNumPredict returns the per-turn output cap in tokens.
+// PI_OLLAMA_NUM_PREDICT overrides the default; a value <= 0 removes the cap,
+// restoring the old unbounded behavior for anyone who needs it.
+func ollamaNumPredict() int {
+	raw := strings.TrimSpace(os.Getenv("PI_OLLAMA_NUM_PREDICT"))
+	if raw == "" {
+		return defaultOllamaNumPredict
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultOllamaNumPredict
+	}
+	return n
+}
+
 func ollamaFinishReasonToGenai(reason string) genai.FinishReason {
 	switch reason {
 	case "length":
@@ -444,6 +476,7 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 
 	if err != nil {
 		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
 			return
 		}
 		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)

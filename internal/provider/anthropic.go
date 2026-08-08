@@ -613,6 +613,7 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 
 	if err := stream.Err(); err != nil {
 		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
 			return
 		}
 		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
@@ -748,6 +749,7 @@ func antRunStreamingBeta(ctx context.Context, client *anthropic.BetaService, par
 
 	if err := stream.Err(); err != nil {
 		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
 			return
 		}
 		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)

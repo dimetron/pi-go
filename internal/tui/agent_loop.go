@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/extension"
@@ -38,6 +39,33 @@ const (
 	// recentWindowSize is the sliding window of tool-call fingerprints kept
 	// for repetition detection.
 	recentWindowSize = 12
+
+	// maxOutputRepeats is the number of back-to-back copies of one phrase in
+	// the model's own output before the turn is called degenerate.
+	maxOutputRepeats = 12
+
+	// outputWindowBytes is the rolling tail of streamed output kept for
+	// repetition detection. It has to hold maxOutputRepeats copies of the
+	// longest phrase worth catching (~680 bytes).
+	outputWindowBytes = 8192
+
+	// outputProbeBytes is the suffix matched against earlier output to find
+	// the length of the phrase being repeated.
+	outputProbeBytes = 48
+
+	// minOutputPeriod is the shortest phrase treated as a repetition unit.
+	// Below this, ordinary output (indentation, ASCII art) is periodic often
+	// enough to matter.
+	minOutputPeriod = 16
+
+	// minPeriodVariety is how many distinct bytes the repeating phrase must
+	// contain. A rule of dashes or a run of spaces is perfectly periodic and
+	// perfectly harmless; a sentence the model cannot stop restating is not.
+	minPeriodVariety = 8
+
+	// outputCheckEvery is how much new output accumulates between scans.
+	// Scanning per token would put a linear search in the streaming path.
+	outputCheckEvery = 512
 )
 
 // extractAgentType returns a label for the subagent tool call by inspecting
@@ -92,15 +120,45 @@ type stuckDetector struct {
 	streak      int      // consecutive identical tool calls
 	lastErrTool string   // name of last tool that errored
 	errStreak   int      // consecutive errors for that tool
+	outBuf      string   // rolling tail of the model's own output
+	outSince    int      // bytes of output since the last repetition scan
+}
+
+// volatileToolArgs address a slice of a target rather than the target itself.
+// A model paging through one file — read(x, offset 1), read(x, offset 230),
+// read(x, offset 240) — is repeating itself, but hashing the raw args makes
+// every one of those calls unique and hides the loop from the detector.
+var volatileToolArgs = map[string]bool{
+	"offset":     true,
+	"limit":      true,
+	"head_limit": true,
+	"start_line": true,
+	"end_line":   true,
 }
 
 // toolFingerprint produces a short hash of a tool call for comparison.
+// Pagination arguments are dropped first, so re-reading one file region by
+// region collapses to a single fingerprint. json.Marshal sorts map keys, so
+// the hash does not depend on argument order.
 func toolFingerprint(name string, args map[string]any) string {
 	h := sha256.New()
 	h.Write([]byte(name))
-	b, _ := json.Marshal(args)
+	b, _ := json.Marshal(stableToolArgs(args))
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// stableToolArgs returns args without the volatile keys. The input map belongs
+// to the event being streamed, so it is copied rather than filtered in place.
+func stableToolArgs(args map[string]any) map[string]any {
+	stable := make(map[string]any, len(args))
+	for k, v := range args {
+		if volatileToolArgs[k] {
+			continue
+		}
+		stable[k] = v
+	}
+	return stable
 }
 
 // observe records a tool call and returns true if the loop appears stuck.
@@ -148,6 +206,88 @@ func (s *stuckDetector) observeError(name string, isError bool) (stuck bool, det
 		return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
 	}
 	return false, ""
+}
+
+// observeOutput records a chunk of the model's own output — reply text or
+// thinking — and reports whether the turn has collapsed into repetition.
+//
+// The detectors above watch tool calls, so a turn that makes no calls at all is
+// invisible to them. That is exactly the shape of a degenerate turn: one
+// sentence restated until the output cap is hit, with nothing else emitted.
+// This scans the tail of the stream for a repeating period instead.
+func (s *stuckDetector) observeOutput(text string) (stuck bool, detail string) {
+	if text == "" {
+		return false, ""
+	}
+	s.outBuf += text
+	if len(s.outBuf) > outputWindowBytes {
+		s.outBuf = s.outBuf[len(s.outBuf)-outputWindowBytes:]
+	}
+
+	s.outSince += len(text)
+	if s.outSince < outputCheckEvery {
+		return false, ""
+	}
+	s.outSince = 0
+
+	period := repeatPeriod(s.outBuf)
+	if period < minOutputPeriod || !isPeriodic(s.outBuf, period, maxOutputRepeats) {
+		return false, ""
+	}
+	if !hasVariety(s.outBuf[len(s.outBuf)-period:]) {
+		return false, ""
+	}
+	return true, fmt.Sprintf("model repeated a %d-character phrase %d times", period, maxOutputRepeats)
+}
+
+// repeatPeriod returns the distance between the tail of buf and the previous
+// occurrence of that same tail — the length of the phrase the model may be
+// cycling on — or 0 when the tail does not recur.
+func repeatPeriod(buf string) int {
+	if len(buf) < outputProbeBytes*2 {
+		return 0
+	}
+	probe := buf[len(buf)-outputProbeBytes:]
+	prev := strings.LastIndex(buf[:len(buf)-outputProbeBytes], probe)
+	if prev < 0 {
+		return 0
+	}
+	return len(buf) - outputProbeBytes - prev
+}
+
+// hasVariety reports whether unit contains enough distinct bytes to be a
+// phrase rather than filler.
+func hasVariety(unit string) bool {
+	var seen [256]bool
+	distinct := 0
+	for i := range len(unit) {
+		if seen[unit[i]] {
+			continue
+		}
+		seen[unit[i]] = true
+		distinct++
+		if distinct >= minPeriodVariety {
+			return true
+		}
+	}
+	return false
+}
+
+// isPeriodic reports whether the last period*repeats bytes of buf are one
+// period-long phrase repeated back to back. Comparing bytes is safe for UTF-8
+// here: a byte-exact repeat is a rune-exact repeat.
+func isPeriodic(buf string, period, repeats int) bool {
+	span := period * repeats
+	if period <= 0 || span > len(buf) {
+		return false
+	}
+	tail := buf[len(buf)-span:]
+	for i := period; i < len(tail); i++ {
+		if tail[i] != tail[i-period] {
+			return false
+		}
+	}
+	return true
 }
 
 // detectCycle checks the recent window for repeating subsequences.
@@ -210,6 +350,11 @@ type agentToolResultMsg struct {
 }
 type agentDoneMsg struct{ err error }
 
+// agentWarningMsg carries a non-fatal problem with the turn into the
+// transcript. The turn keeps running; the user just needs to know the reply
+// they are reading is not the whole reply.
+type agentWarningMsg struct{ text string }
+
 // agentSubEventMsg carries a streamed event from a running subagent to the TUI.
 type agentSubEventMsg struct {
 	agentID       string // which subagent
@@ -226,6 +371,7 @@ func (agentThinkingMsg) agentMsg()   {}
 func (agentToolCallMsg) agentMsg()   {}
 func (agentToolResultMsg) agentMsg() {}
 func (agentDoneMsg) agentMsg()       {}
+func (agentWarningMsg) agentMsg()    {}
 func (agentSubEventMsg) agentMsg()   {}
 
 // waitForAgent returns a Cmd that waits for the next message on the agent channel.
@@ -438,6 +584,9 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	// the query set and emit each search exactly once per turn.
 	groundedSeen := map[string]bool{}
 
+	// Warn once per turn, however many events carry the finish reason.
+	truncated := false
+
 	// Start a top-level OTEL span for the entire agent run, inheriting the
 	// per-response context so Esc/Ctrl+C can interrupt it without quitting the TUI.
 	tracer := otel.Tracer("pi-go")
@@ -478,6 +627,16 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 			return
 		}
 
+		// A turn cut short at the output cap is otherwise indistinguishable
+		// from a complete one: the finish reason was mapped by every provider
+		// and then read by nobody, so a truncated reply just looked short.
+		if ev.FinishReason == genai.FinishReasonMaxTokens && !truncated {
+			truncated = true
+			m.agentCh <- agentWarningMsg{
+				text: "Response truncated: the model hit its output-token limit.",
+			}
+		}
+
 		if ev.Content == nil {
 			continue
 		}
@@ -503,6 +662,9 @@ func (m *model) emitEventParts(
 		case part.Text != "" && ev.Content.Role == "thinking":
 			log.Thinking(ev.Author, part.Text)
 			m.agentCh <- agentThinkingMsg{text: part.Text}
+			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
+				return err
+			}
 
 		case part.Text != "":
 			if dedup.SkipText(ev) {
@@ -510,6 +672,9 @@ func (m *model) emitEventParts(
 			}
 			log.LLMText(ev.Author, part.Text)
 			m.agentCh <- agentTextMsg{text: part.Text}
+			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
+				return err
+			}
 		}
 
 		if fc := part.FunctionCall; fc != nil {
@@ -566,6 +731,12 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 		})
 	}
 	m.chatModel.Scroll = 0
+	return m, waitForAgent(m.agentCh)
+}
+
+// handleAgentWarning processes an agentWarningMsg.
+func (m *model) handleAgentWarning(msg agentWarningMsg) (tea.Model, tea.Cmd) {
+	m.chatModel.AppendWarning(msg.text)
 	return m, waitForAgent(m.agentCh)
 }
 
