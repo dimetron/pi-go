@@ -1498,7 +1498,7 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 	}
 }
 
-func TestOaiContentsToResponsesInput_DoesNotInventMissingFunctionOutput(t *testing.T) {
+func TestOaiContentsToResponsesInput_SkipsFunctionCallsWithoutResponse(t *testing.T) {
 	fc := genai.NewPartFromFunctionCall("find", map[string]any{"pattern": "*.go"})
 	fc.FunctionCall.ID = "call_find"
 
@@ -1512,17 +1512,37 @@ func TestOaiContentsToResponsesInput_DoesNotInventMissingFunctionOutput(t *testi
 		t.Fatalf("unexpected error: %v", err)
 	}
 	items := input.OfInputItemList
-	if len(items) != 2 {
-		t.Fatalf("expected message + function call only, got %d items", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected orphaned function call to be omitted, got %d items", len(items))
 	}
-	if items[1].OfFunctionCall == nil {
-		t.Fatalf("expected second item to be function call, got %+v", items[1])
+	if items[0].OfMessage == nil {
+		t.Fatalf("expected only the user message, got %+v", items[0])
 	}
-	if items[1].OfFunctionCall.CallID != "call_find" {
-		t.Errorf("function call CallID = %q, want call_find", items[1].OfFunctionCall.CallID)
+}
+
+func TestOaiContentsToResponsesInput_SkipsFunctionResponseWithoutCall(t *testing.T) {
+	fr := &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       "call_find",
+			Name:     "find",
+			Response: map[string]any{"result": "found"},
+		},
 	}
-	if items[1].OfFunctionCall.Arguments != `{"pattern":"*.go"}` {
-		t.Errorf("function call arguments = %q, want pattern JSON", items[1].OfFunctionCall.Arguments)
+	contents := []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "Search files"}}},
+		{Role: "user", Parts: []*genai.Part{fr}},
+	}
+
+	input, _, err := oaiContentsToResponsesInput(contents, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items := input.OfInputItemList
+	if len(items) != 1 {
+		t.Fatalf("expected orphaned function response to be omitted, got %d items", len(items))
+	}
+	if items[0].OfMessage == nil {
+		t.Fatalf("expected only the user message, got %+v", items[0])
 	}
 }
 

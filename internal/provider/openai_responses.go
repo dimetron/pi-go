@@ -187,6 +187,32 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 	}
 	instructions := strings.TrimSpace(systemBuilder.String())
 
+	// A canceled turn can persist a function call before its tool result is
+	// emitted. Responses requires calls and outputs to be paired, so omit either
+	// half of an incomplete pair when replaying conversation history.
+	callIDs := make(map[string]struct{})
+	responseIDs := make(map[string]struct{})
+	for _, content := range contents {
+		if content == nil {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part == nil {
+				continue
+			}
+			if part.FunctionCall != nil {
+				if id := strings.TrimSpace(part.FunctionCall.ID); id != "" {
+					callIDs[id] = struct{}{}
+				}
+			}
+			if part.FunctionResponse != nil {
+				if id := strings.TrimSpace(part.FunctionResponse.ID); id != "" {
+					responseIDs[id] = struct{}{}
+				}
+			}
+		}
+	}
+
 	// Always build a list of input items. The ChatGPT codex backend
 	// (/backend-api/codex/responses) rejects a bare string with
 	// `{"detail":"Input must be a list"}`. The platform Responses API
@@ -220,12 +246,18 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 				if strings.TrimSpace(fc.ID) == "" {
 					continue
 				}
+				if _, ok := responseIDs[fc.ID]; !ok {
+					continue
+				}
 				argsJSON, _ := json.Marshal(fc.Args)
 				items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(argsJSON), fc.ID, fc.Name))
 			case part.FunctionResponse != nil:
 				flushText()
 				fr := part.FunctionResponse
 				if strings.TrimSpace(fr.ID) == "" {
+					continue
+				}
+				if _, ok := callIDs[fr.ID]; !ok {
 					continue
 				}
 				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
