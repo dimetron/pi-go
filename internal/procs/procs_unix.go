@@ -34,7 +34,27 @@ func terminate(cmd *exec.Cmd, grace time.Duration) error {
 	if err := signalGroup(cmd, syscall.SIGTERM); err != nil {
 		return err
 	}
+	// The follow-up SIGKILL must not fire at a process that has already been
+	// reaped.
+	//
+	// On the normal path SIGTERM works in milliseconds and os/exec reaps the
+	// child immediately, returning its PID to the kernel's free pool. A timer
+	// firing two seconds later would then signal a PID that is no longer ours —
+	// and pi forks constantly, so that PID may since have been handed to one of
+	// its own non-isolated children, which sit in pi's own process group. The
+	// group branch below would resolve to pi's group and take down the session.
+	//
+	// Canceling the timer on reap is not possible from here: Wait belongs to
+	// os/exec and cannot be called twice. Probing with signal 0 is, because
+	// os.Process tracks its own reaped state and reports ErrProcessDone rather
+	// than touching the PID — the one check the raw Getpgid/Kill path skips.
 	time.AfterFunc(grace, func() {
+		if cmd.Process == nil {
+			return
+		}
+		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			return // already reaped, or gone; the PID is not ours to signal
+		}
 		_ = signalGroup(cmd, syscall.SIGKILL)
 	})
 	return nil
@@ -49,9 +69,18 @@ func kill(cmd *exec.Cmd) error {
 //
 // The negative-PID form of kill(2) addresses a group, and getting the sign
 // wrong here is unusually costly: pi runs as a normal user process, so
-// kill(-pid) against our own group would take down the session. The Setpgid
-// check is what rules that out — without it there is no guarantee the child
-// leads a group of its own, and -pid could name the group pi itself is in.
+// kill(-pid) against our own group would take down the session.
+//
+// Three things rule that out, and the first two are not sufficient on their own:
+//
+//   - Setpgid on SysProcAttr says a group was *requested*. It is a struct field,
+//     not proof the kernel applied it — a caller that sets it after Start gets
+//     the flag with no effect, and Getpgid then returns pi's own group.
+//   - pgid > 1 rejects the degenerate targets: kill(-0) is kill(0), which
+//     signals the caller's entire group, and 1 is init.
+//   - Comparing against Getpgrp is what actually closes it. If the resolved
+//     group is the one pi is in, there is no version of this call that is
+//     correct, so fall through to signaling the lone child instead.
 func signalGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
@@ -66,7 +95,7 @@ func signalGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 		// the same for a group leader, but a child that called setpgid itself
 		// has moved on, and signaling a stale group would miss it entirely.
 		pgid, err := syscall.Getpgid(pid)
-		if err == nil && pgid > 1 {
+		if err == nil && pgid > 1 && pgid != syscall.Getpgrp() {
 			if err := syscall.Kill(-pgid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
 				return nil
 			}

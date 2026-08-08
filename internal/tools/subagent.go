@@ -260,6 +260,16 @@ func singleModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input Sub
 				if ev.SessionID != "" {
 					sessID = ev.SessionID
 				}
+			case "run_done":
+				// The orchestrator's terminal status is more specific than the
+				// "failed" inferred from an error event: it distinguishes a
+				// timeout from a crash. That distinction is actionable for the
+				// model — a timed-out agent is worth retrying with a narrower
+				// task, a crashed one is not — and until now it was computed
+				// and then dropped on the floor here.
+				if ev.Status == "timeout" {
+					st = "timeout"
+				}
 			}
 		}
 		return truncateOutput(result.String()), st, em, sessID

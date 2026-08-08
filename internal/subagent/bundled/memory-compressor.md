@@ -4,7 +4,7 @@ description: Compress tool observations into structured memory entries
 role: smol
 worktree: false
 tools: []
-timeout: 30
+timeout: 600000
 ---
 You are a memory compression agent. Your job is to compress raw tool usage data into a concise structured observation.
 

@@ -94,7 +94,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, info.Provider, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -134,6 +134,7 @@ func deferredInit(
 	cfg config.Config,
 	llm adkmodel.LLM,
 	providerName string,
+	baseURL string,
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
@@ -435,6 +436,10 @@ func deferredInit(
 	if resumed {
 		_ = sessionSvc.SetSessionModel(sessionID, llm.Name()) // best-effort metadata
 	}
+	// Record the backend for every session, resumed or fresh. The model name on
+	// its own does not identify what actually served the request, which is the
+	// first thing anyone needs when reading a transcript back.
+	_ = sessionSvc.SetSessionProvider(sessionID, providerName, baseURL) // best-effort metadata
 
 	// Store session ID for resume hint on exit.
 	res.sessionID = sessionID
@@ -901,6 +906,11 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 			baseURL = "http://localhost:11434"
 		}
 	}
+
+	// Record the endpoint actually chosen, after every fallback above has had
+	// its say, so session metadata names the backend rather than leaving the
+	// model name to be interpreted.
+	info.BaseURL = baseURL
 
 	llmOpts := &provider.LLMOptions{
 		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),

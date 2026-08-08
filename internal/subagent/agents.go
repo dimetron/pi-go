@@ -4,11 +4,17 @@ import (
 	"bufio"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// minAgentTimeoutMs is the smallest frontmatter `timeout:` treated as a real
+// value. Below this the author almost certainly meant seconds; honoring it
+// would kill the agent before it could produce anything.
+const minAgentTimeoutMs = 1000
 
 // AgentScope defines the scope for agent discovery.
 type AgentScope string
@@ -109,7 +115,18 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 				cfg.Worktree = strings.ToLower(value) == "true"
 			case "timeout":
 				if ms, err := strconv.Atoi(value); err == nil && ms > 0 {
-					cfg.Timeout = ms
+					// The unit is milliseconds, which reads as seconds at a
+					// glance — a bundled agent shipped `timeout: 30` and was
+					// SIGKILLed 30ms in, every time, unable to emit a single
+					// token. Anything under a second cannot be deliberate, so
+					// treat it as the unit mistake it is rather than honoring a
+					// value that guarantees the agent never runs.
+					if ms < minAgentTimeoutMs {
+						slog.Warn("subagent: implausibly small timeout ignored; the unit is milliseconds",
+							"agent", cfg.Name, "timeout_ms", ms, "using", "default")
+					} else {
+						cfg.Timeout = ms
+					}
 				}
 			case "tools":
 				for _, t := range strings.Split(value, ",") {

@@ -8,10 +8,21 @@ import (
 
 // Default timeout values for subagent processes.
 const (
-	// DefaultAbsoluteTimeout is the maximum wall-clock time a subagent can run (5 minutes).
-	DefaultAbsoluteTimeout = 5 * time.Minute
+	// DefaultAbsoluteTimeout is the maximum wall-clock time a subagent can run.
+	//
+	// This is a backstop against a pathological agent, not the working limit —
+	// the inactivity timeout below is what actually distinguishes a stuck agent
+	// from a slow one, so this can afford to be generous. It was briefly 5
+	// minutes, which killed productive agents mid-answer: a review across a
+	// day's commits legitimately runs longer than that, and cutting it off
+	// discards everything it had produced.
+	DefaultAbsoluteTimeout = 10 * time.Minute
 
 	// DefaultInactivityTimeout is how long a subagent can go without producing output (120 seconds).
+	//
+	// Silence is the signal that matters. An agent that is streaming tokens or
+	// reporting tool calls is working, however long it takes; one that has said
+	// nothing for two minutes is wedged.
 	DefaultInactivityTimeout = 120 * time.Second
 )
 
@@ -28,10 +39,18 @@ func ResolveTimeout(agentTimeoutMs int) TimeoutConfig {
 	absolute := DefaultAbsoluteTimeout
 	inactivity := DefaultInactivityTimeout
 
-	// Check environment variable override.
+	// Check environment variable overrides.
 	if envMs := os.Getenv("PI_SUBAGENT_TIMEOUT_MS"); envMs != "" {
 		if ms, err := strconv.Atoi(envMs); err == nil && ms > 0 {
 			absolute = time.Duration(ms) * time.Millisecond
+		}
+	}
+	// The inactivity limit is the one that decides whether a long-running agent
+	// is working or wedged, so it needs its own knob rather than being reachable
+	// only through the absolute cap.
+	if envMs := os.Getenv("PI_SUBAGENT_INACTIVITY_MS"); envMs != "" {
+		if ms, err := strconv.Atoi(envMs); err == nil && ms > 0 {
+			inactivity = time.Duration(ms) * time.Millisecond
 		}
 	}
 
