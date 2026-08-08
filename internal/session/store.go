@@ -526,7 +526,14 @@ func (s *FileService) SetSessionModel(sessionID, modelName string) error {
 
 	sess, ok := s.sessions[sessionID]
 	if !ok {
-		return fmt.Errorf("session not found: %s", sessionID)
+		// Lazy-load from disk, like SetSessionTitle: a resumed session is not
+		// in the cache until the runner first reads it, and recording the model
+		// it is resuming under has to happen before that.
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -803,6 +810,20 @@ func writeMeta(sessionDir string, meta *Meta) error {
 		return fmt.Errorf("marshaling meta: %w", err)
 	}
 	return os.WriteFile(filepath.Join(sessionDir, "meta.json"), data, 0o644)
+}
+
+// SessionModel returns the model recorded in a session's metadata, or an empty
+// string when the session is unknown or its model was never recorded.
+//
+// Deliberately not a FileService method: startup needs this before any session
+// is loaded, and going through the cache would parse the whole events.jsonl
+// (and rebuild the ATIF trajectory) to read a single metadata field.
+func SessionModel(baseDir, sessionID string) string {
+	meta, err := readMeta(filepath.Join(baseDir, sessionID))
+	if err != nil || meta.Model == UnknownModel {
+		return ""
+	}
+	return strings.TrimSpace(meta.Model)
 }
 
 func readMeta(sessionDir string) (*Meta, error) {
