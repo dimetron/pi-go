@@ -50,6 +50,11 @@ type model struct {
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
+	// hookQueue serializes lifecycle-hook execution off the Update goroutine.
+	// Created lazily by enqueueHook (see agent_loop.go), which is only ever
+	// reached from Update, so the lazy init needs no lock.
+	hookQueue chan func()
+
 	// Matrix rain animation state for sidebar.
 	matrix matrixState
 

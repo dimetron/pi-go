@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	stdlog "log"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -412,7 +411,10 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			stdlog.Printf("agent loop panicked: %v\n%s", r, stack)
+			// The session log, not stderr: the TUI holds the alternate
+			// screen, so a stack trace printed here would be painted over
+			// the UI. The panic still reaches the user as the turn's error.
+			m.cfg.Logger.Errorf("agent loop panicked: %v\n%s", r, stack)
 			m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
 		}
 	}()
@@ -852,15 +854,71 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 // runLifecycleHooks fires every configured lifecycle hook for the given event,
-// passing the event name and data as JSON on stdin. Hooks are best-effort: a
-// failure or timeout is logged and never interrupts the agent loop.
+// passing the event name and data as JSON on stdin. Hooks are best-effort and
+// must stay invisible to the TUI, which owns the terminal:
+//
+//   - Each hook runs on its own goroutine. This is called from Update, and a
+//     hook that hangs would otherwise freeze the render loop for its whole
+//     timeout (10s by default, per configured hook).
+//   - A failure goes to the session log file, never to stderr. Writing to
+//     stderr paints raw text over the alternate screen — the Bubble Tea
+//     renderer does not know those cells were touched, so the damage persists
+//     until a full redraw.
+//
+// The child's own stdout and stderr are already captured by RunLifecycleHook
+// and never reach the terminal.
 func (m *model) runLifecycleHooks(event string, data map[string]any) {
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	log := m.cfg.Logger
 	for _, h := range m.cfg.LifecycleHooks {
 		if h.Event != event {
 			continue
 		}
-		if err := extension.RunLifecycleHook(m.ctx, h, event, data); err != nil {
-			stdlog.Printf("lifecycle hook %q failed for event %q: %v", h.Command, event, err)
-		}
+		m.enqueueHook(func() {
+			if err := extension.RunLifecycleHook(ctx, h, event, data); err != nil {
+				log.Errorf("lifecycle hook %q failed for event %q: %v", h.Command, event, err)
+			}
+		})
+	}
+}
+
+// hookQueueDepth bounds the backlog of pending lifecycle hooks. A hook that
+// blocks for its full timeout while turns keep completing must not grow an
+// unbounded queue, so submissions past this depth are dropped and logged.
+const hookQueueDepth = 32
+
+// enqueueHook hands a hook to the model's single hook worker, which runs
+// submissions one at a time in the order they were queued. Serializing matters
+// because the events describe a state machine: turn_complete then
+// user_input_required means "done, now waiting", and a hook that maps those
+// onto an external status (agtermctl, a notifier) would settle on the wrong
+// final state if the two raced.
+//
+// Only ever called from Update, so the lazy channel init needs no lock.
+func (m *model) enqueueHook(fn func()) {
+	if m.hookQueue == nil {
+		m.hookQueue = make(chan func(), hookQueueDepth)
+		ctx := m.ctx
+		go func(q <-chan func()) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job, ok := <-q:
+					if !ok {
+						return
+					}
+					job()
+				}
+			}
+		}(m.hookQueue)
+	}
+	select {
+	case m.hookQueue <- fn:
+	default:
+		m.cfg.Logger.Errorf("lifecycle hook dropped: queue full (%d pending)", hookQueueDepth)
 	}
 }

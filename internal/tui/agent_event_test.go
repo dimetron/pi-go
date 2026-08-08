@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	stdlog "log"
 	"os"
 	"strings"
 	"testing"
@@ -1430,10 +1432,9 @@ func TestAgentDoneMsg_FiresLifecycleHooks(t *testing.T) {
 	}
 
 	for name, path := range map[string]string{"turn_complete": turnOut, "user_input_required": inputOut} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("reading %s hook output: %v", name, err)
-		}
+		// Hooks run off the Update goroutine, so the write is not visible
+		// the instant handleAgentDone returns.
+		data := waitForHookOutput(t, path)
 		var got map[string]any
 		if err := json.Unmarshal(data, &got); err != nil {
 			t.Fatalf("unmarshal %s hook output: %v", name, err)
@@ -1441,5 +1442,113 @@ func TestAgentDoneMsg_FiresLifecycleHooks(t *testing.T) {
 		if got["event"] != name {
 			t.Errorf("%s event = %v, want %s", name, got["event"], name)
 		}
+	}
+}
+
+// waitForHookOutput polls for a lifecycle hook's output file, which is written
+// by the hook worker goroutine rather than by the caller of runLifecycleHooks.
+func waitForHookOutput(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			return data
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for hook output %s (last err: %v)", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestLifecycleHooks_RunInOrder pins the serialization the hook worker
+// provides. The events describe a state machine — turn_complete then
+// user_input_required — so a consumer that maps them onto an external status
+// would settle on the wrong final state if the two ran concurrently.
+func TestLifecycleHooks_RunInOrder(t *testing.T) {
+	out := t.TempDir() + "/order.txt"
+	m := &model{
+		ctx:       context.Background(),
+		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
+		cfg: Config{
+			LifecycleHooks: []extension.HookConfig{
+				// The first hook sleeps, so an unserialized implementation
+				// would let the second one finish first.
+				{Event: "turn_complete", Command: "sleep 0.3; echo turn >> " + out, Timeout: 5},
+				{Event: "user_input_required", Command: "echo input >> " + out, Timeout: 5},
+			},
+		},
+	}
+
+	if _, err := m.handleAgentDone(agentDoneMsg{}); err != nil {
+		t.Fatalf("handleAgentDone returned a Cmd, want nil")
+	}
+
+	var got string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(out)
+		if err == nil {
+			got = strings.TrimSpace(string(data))
+			if got == "turn\ninput" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("hook order = %q, want %q", got, "turn\ninput")
+}
+
+// TestLifecycleHooks_DoNotWriteToStderr guards the TUI's terminal: the Bubble
+// Tea renderer owns the alternate screen, and anything written to stderr is
+// painted over it without the renderer knowing those cells were dirtied.
+func TestLifecycleHooks_DoNotWriteToStderr(t *testing.T) {
+	done := t.TempDir() + "/done"
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr, origLogOut := os.Stderr, stdlog.Writer()
+	os.Stderr = w
+	stdlog.SetOutput(w)
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		stdlog.SetOutput(origLogOut)
+		_ = r.Close()
+	})
+
+	m := &model{
+		ctx:       context.Background(),
+		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
+		cfg: Config{
+			LifecycleHooks: []extension.HookConfig{
+				// Fails, and is noisy on both streams while doing so.
+				{Event: "turn_complete", Command: "echo noise; echo boom >&2; exit 1", Timeout: 5},
+				{Event: "user_input_required", Command: "echo done > " + done, Timeout: 5},
+			},
+		},
+	}
+
+	if _, err := m.handleAgentDone(agentDoneMsg{}); err != nil {
+		t.Fatalf("handleAgentDone returned a Cmd, want nil")
+	}
+	// The second hook is queued behind the first, so its marker appearing
+	// means the failing hook has already been handled and logged.
+	waitForHookOutput(t, done)
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe: %v", err)
+	}
+	leaked, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+	if len(leaked) != 0 {
+		t.Errorf("lifecycle hooks wrote %q to stderr, want nothing", leaked)
 	}
 }
