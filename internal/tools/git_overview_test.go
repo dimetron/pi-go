@@ -32,6 +32,14 @@ func initGitRepo(t *testing.T) string {
 	run("init")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "Test")
+	// This repo sets commit.gpgsign and tag.gpgsign globally, and signing goes
+	// through 1Password's op-ssh-sign. A temp repo inherits that, so every
+	// commit below would block on the 1Password agent and fail with
+	// "failed to fill whole buffer" after a 60s timeout — a test failure that
+	// says nothing about the code under test. Signing a throwaway fixture repo
+	// has no value, so turn it off explicitly.
+	run("config", "commit.gpgsign", "false")
+	run("config", "tag.gpgsign", "false")
 
 	return dir
 }

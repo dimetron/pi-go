@@ -370,6 +370,12 @@ func gitInitRepo(t *testing.T, dir string) {
 		{"init"},
 		{"config", "user.email", "test@test.com"},
 		{"config", "user.name", "Test"},
+		// This repo sets commit.gpgsign globally and signs through 1Password's
+		// op-ssh-sign, which a temp repo inherits. Without turning it off the
+		// commit below blocks on the 1Password agent and fails after a 60s
+		// timeout — a failure that says nothing about the miner under test.
+		{"config", "commit.gpgsign", "false"},
+		{"config", "tag.gpgsign", "false"},
 		{"add", "-A"},
 		{"commit", "-m", "init", "--allow-empty"},
 	} {

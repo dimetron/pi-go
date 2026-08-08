@@ -10,10 +10,19 @@ import (
 
 // runGit is a helper that executes a git command in the given directory
 // and ignores the error (git may not be available in all environments).
+// runGit runs a git command in dir, ignoring failures: these tests set up
+// fixture repos and care about the end state, not each step.
+//
+// Signing is forced off for every invocation. This repo sets commit.gpgsign
+// globally and signs through 1Password's op-ssh-sign, which a temp repo
+// inherits — so an unguarded `commit` here blocks on the 1Password agent for
+// 60s and then fails. Because this helper discards errors, that failure was
+// invisible: the fixture repo silently ended up with no commits and the tests
+// asserted against a weaker world than they meant to.
 func runGit(dir string, args ...string) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
-	cmd.Run()
+	_ = cmd.Run()
 }
 
 // -----------------------------------------------------------------------
