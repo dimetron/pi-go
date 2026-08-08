@@ -1,11 +1,14 @@
 # pi-go
 
 [![CI](https://github.com/dimetron/pi-go/actions/workflows/ci.yml/badge.svg)](https://github.com/dimetron/pi-go/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/dimetron/pi-go)](https://goreportcard.com/report/github.com/dimetron/pi-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dimetron/pi-go.svg)](https://pkg.go.dev/github.com/dimetron/pi-go)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/dimetron/pi-go)](go.mod)
 [![License](https://img.shields.io/github/license/dimetron/pi-go)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/dimetron/pi-go?logo=github&label=latest)](https://github.com/dimetron/pi-go/releases)
 [![codecov](https://codecov.io/gh/dimetron/pi-go/graph/badge.svg)](https://codecov.io/gh/dimetron/pi-go)
+[![GitHub stars](https://img.shields.io/github/stars/dimetron/pi-go?style=social)](https://github.com/dimetron/pi-go)
+[![GitHub issues](https://img.shields.io/github/issues/dimetron/pi-go)](https://github.com/dimetron/pi-go/issues)
+[![Last commit](https://img.shields.io/github/last-commit/dimetron/pi-go)](https://github.com/dimetron/pi-go/commits/main)
 
 A terminal-based coding agent built on [Google ADK Go](https://adk.dev/). It connects to multiple LLM providers, runs
 sandboxed tools, integrates LSP, and ships with a process-based subagent system.
@@ -14,7 +17,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 
 ## Features
 
-- **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), and Ollama for local models
+- **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), OpenCode, and Ollama (local or cloud) for models
 - **Sandboxed tools** — read, write, edit, shell, grep, find, tree, and git operations. All tools are restricted to the project directory via `os.Root`.
 - **Interactive TUI** — Bubble Tea v2 with Markdown rendering (Glamour), slash commands, and theming
 - **Session persistence** — JSONL append-only event logs with branching, compaction, and resume
@@ -92,7 +95,32 @@ Download the latest release for your platform from the [Releases page](https://g
 ## Requirements
 
 - Go 1.25+
-- At least one LLM provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) or a running Ollama instance
+- At least one LLM provider API key or a running Ollama instance
+
+## API keys
+
+Set the API key for your provider as an environment variable. The provider is inferred from the model name, so `--model` is usually the only routing you need.
+
+| Provider | Model prefix | API key env var | Base URL env var |
+|---|---|---|---|
+| Anthropic | `claude-*` | `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) | `ANTHROPIC_BASE_URL` |
+| OpenAI | `gpt-*` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` |
+| Google Gemini | `gemini-*` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_BASE_URL` |
+| Mistral | `mistral-*`, `magistral-*` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` |
+| Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
+| OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
+| Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
+| Ollama Cloud | `<model>:cloud` | `OLLAMA_API_KEY` | `https://api.ollama.com` |
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GEMINI_API_KEY="..."
+export OPENCODE_API_KEY="..."
+export OLLAMA_API_KEY="..."   # only for Ollama Cloud (:cloud suffix)
+```
+
+A name with no recognized prefix is rejected rather than guessed at — reach for the `ollama/` prefix or the `:cloud` suffix to name an Ollama model explicitly.
 
 ## Build
 
@@ -115,6 +143,7 @@ pi --model claude:sonnet
 pi --model openai:gpt-4o
 pi --model gemini:gemini-2.5-pro
 pi --model ollama/gemma4:12b-mlx
+pi --model opencode/kimi-k3
 pi --model minimax-m3:cloud # automatically detect ollama if :cloud
 
 # Use model roles
@@ -260,7 +289,7 @@ Self-hosted or LAN endpoints can be declared in config instead of exported in ev
 ```
 
 Precedence is `--url` flag, then environment variable, then `baseURLs` config. The matching env vars are
-`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
 CI override still takes effect. An empty env var does not mask a configured value.
 
 ### Custom OpenAI-compatible provider
