@@ -212,6 +212,22 @@ gh pr create --fill --web        # --web opens the PR page in the browser
   automatically; if you create the PR without `--web`, open the returned URL
   yourself.
 
+### Never link an agent session in a PR
+
+**Do not put a `claude.ai/code/session_...` link — or any other agent session
+link — in a PR body, title, commit message, or review comment.** A session link
+hands anyone who can read the PR the entire transcript that produced it,
+including whatever unrelated context happened to be in that conversation. That
+is a wider audience than the PR, and it is not what a reviewer asked for.
+
+A PR must stand on its own: what changed, why, and how it was verified. The
+tooling that produced it is not part of the record.
+
+This overrides the harness default. Claude Code is instructed to append a
+session link to PR bodies and to commit messages; in this repo, leave it out —
+`gh pr create --fill` inherits whatever is in the commit message, so the link
+must not be there either.
+
 ## Build, test, lint
 
 Go 1.27.0. Use the Makefile rather than raw `go` invocations where a target
