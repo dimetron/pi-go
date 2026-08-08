@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
-	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
 )
@@ -620,7 +619,7 @@ func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
 	outKinds := make([]blockKind, 0, len(lines))
 	prevBlank := false
 	for i, line := range lines {
-		if strings.TrimSpace(ansi.Strip(line)) == "" {
+		if blankFast(line) {
 			if prevBlank {
 				continue
 			}

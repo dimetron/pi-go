@@ -4,96 +4,21 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
-// This file quantifies TODO.md ## PPROF item 25 and de-risks its proposed fix.
-//
-// collapseBlankLines calls ansi.Strip on every line of the entire rendered
-// history on every frame, purely to answer "is this line blank?". ansi.Strip
-// runs a full ANSI state-machine parse and allocates a new string. The question
-// it is being asked can be answered by a single non-allocating pass.
-//
-// blankFast is the candidate: walk the bytes, skip escape sequences, and bail
-// on the first non-whitespace rune. It answers the same question with no
-// allocation and no parser.
+// This file guards the blank-line fast path in collapse.go and quantifies what
+// it bought. blankFast replaced a per-line ansi.Strip call inside
+// collapseBlankLines, which runs over the whole rendered history on every
+// frame — and bubbletea calls View() once per message, so during streaming that
+// is once per token. A live CPU profile attributed 24% of all CPU to the Strip
+// call that blankFast removes.
 
-// blankFast reports whether line contains no non-whitespace content once ANSI
-// escape sequences are ignored — the allocation-free equivalent of
-// strings.TrimSpace(ansi.Strip(line)) == "".
-//
-// It fast-paths CSI only. CSI (SGR colors, cursor moves) is the entire
-// vocabulary lipgloss, glamour, and our own renderers emit, so the fast path
-// covers 100% of real frames. Anything else — OSC, DCS, SOS, PM, APC, or a
-// malformed escape — falls back to ansi.Strip for that one line.
-//
-// The fallback is not defensive padding; it is load-bearing. Two rounds of
-// FuzzBlankFast killed hand-rolled attempts to reproduce ansi.Strip's behavior
-// on exotic sequences: "\x1bX0" (SOS, which Strip swallows) and "\x1bX\xd0"
-// (unterminated SOS with invalid UTF-8, which Strip emits as content). Matching
-// a parser's edge-case quirks by hand is a losing game. Deferring to it for the
-// ~0% of lines that need it costs nothing and is correct by construction.
-func blankFast(line string) bool {
-	for i := 0; i < len(line); {
-		c := line[i]
-		if c == 0x1b { // ESC
-			if i+1 >= len(line) || line[i+1] != '[' {
-				return slowBlank(line) // not CSI: defer to the parser
-			}
-			// Fast-path ONLY the exact CSI grammar lipgloss/glamour emit:
-			//   ESC [ <param bytes 0x30-0x3f> <final byte 0x40-0x7e>
-			// Intermediate bytes (0x20-0x2f) are deliberately excluded: they are
-			// legal CSI but order-sensitive, and ansi.Strip aborts on bad order
-			// (FuzzBlankFast: "\x1b[ 0A"). C0 controls abort too ("\x1b[\x1c").
-			// Every deviation defers to the parser instead of guessing.
-			j := i + 2
-			for j < len(line) && line[j] >= 0x30 && line[j] <= 0x3f {
-				j++
-			}
-			if j >= len(line) || line[j] < 0x40 || line[j] > 0x7e {
-				return slowBlank(line)
-			}
-			i = j + 1 // consume final byte
-			continue
-		}
-		if c < utf8.RuneSelf { // ASCII fast path — the overwhelmingly common case
-			if !isASCIISpace(c) {
-				return false
-			}
-			i++
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(line[i:])
-		if r == utf8.RuneError && size <= 1 {
-			// Invalid UTF-8. ansi.Strip has its own opinion about these bytes
-			// (FuzzBlankFast: "\xa0" is blank to Strip but not to a naive
-			// decoder), so defer rather than guess. Valid multi-byte runes —
-			// the ▌ gutter, box drawing, emoji — take the fast path above.
-			return slowBlank(line)
-		}
-		if !unicode.IsSpace(r) {
-			return false
-		}
-		i += size
-	}
-	return true
-}
-
-// slowBlank is the reference implementation blankFast must agree with.
-func slowBlank(line string) bool {
-	return strings.TrimSpace(ansi.Strip(line)) == ""
-}
-
-func isASCIISpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'
-}
-
-// collapseBlankLinesFast is collapseBlankLines with only the blank test swapped.
-// Everything else is identical, so the benchmark isolates the ansi.Strip cost.
-func collapseBlankLinesFast(s string, kinds []blockKind) (string, []blockKind) {
+// collapseBlankLinesStrip is the original implementation: collapseBlankLines
+// with the ansi.Strip blank test it used before blankFast. Kept as the
+// benchmark baseline and as an independent reference for the correctness gate.
+func collapseBlankLinesStrip(s string, kinds []blockKind) (string, []blockKind) {
 	if s == "" {
 		return s, nil
 	}
@@ -105,7 +30,7 @@ func collapseBlankLinesFast(s string, kinds []blockKind) (string, []blockKind) {
 	outKinds := make([]blockKind, 0, len(lines))
 	prevBlank := false
 	for i, line := range lines {
-		if blankFast(line) {
+		if strings.TrimSpace(ansi.Strip(line)) == "" {
 			if prevBlank {
 				continue
 			}
@@ -176,18 +101,18 @@ func FuzzBlankFast(f *testing.F) {
 func BenchmarkCollapseBlankLines(b *testing.B) {
 	for _, n := range []int{10, 100, 500} {
 		h := history(n)
-		b.Run(fmt.Sprintf("current/msgs=%d", n), func(b *testing.B) {
+		b.Run(fmt.Sprintf("strip/msgs=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(h)))
 			for b.Loop() {
-				collapseBlankLines(h, nil)
+				collapseBlankLinesStrip(h, nil)
 			}
 		})
 		b.Run(fmt.Sprintf("fast/msgs=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(h)))
 			for b.Loop() {
-				collapseBlankLinesFast(h, nil)
+				collapseBlankLines(h, nil)
 			}
 		})
 	}
