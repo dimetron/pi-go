@@ -35,6 +35,7 @@ func TestContextWindowSize(t *testing.T) {
 		{"mistral-large tag variant", "mistral-large-2512", 256_000},
 		{"qwen custom model defaults to 4k", "qwen-3.6-27b-q4", 4_096},
 		{"ollama phi4 14b context", "ollama/phi4:14b", 16_384},
+		{"opencode deepseek-v4-flash resolves to 1M", "deepseek-v4-flash", 1_000_000},
 		{"unknown returns 0", "nonexistent-model-xyz", 0},
 	}
 	for _, tt := range tests {

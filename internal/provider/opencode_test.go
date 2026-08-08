@@ -148,6 +148,15 @@ func TestNewOpenCode_AnthropicBaseURLStripped(t *testing.T) {
 	}
 }
 
+// The opencode/ prefix is stripped before the provider-aware lookup
+// (provider.go), so the cataloged window must resolve for the bare model name
+// under the opencode provider.
+func TestContextWindowSizeForOpenCode(t *testing.T) {
+	if got := ContextWindowSizeFor("opencode", "deepseek-v4-flash"); got != 1_000_000 {
+		t.Errorf("ContextWindowSizeFor(opencode, deepseek-v4-flash) = %d, want 1000000", got)
+	}
+}
+
 func TestNewOpenCode_AllCatalogModels(t *testing.T) {
 	// Verify every model in the catalog can be constructed without error.
 	for modelID, family := range opencodeGoModelCatalog {
