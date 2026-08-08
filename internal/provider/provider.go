@@ -150,6 +150,11 @@ type Info struct {
 	Model    string
 	Ollama   bool // true when model is served by Ollama
 	Custom   bool // true when using an explicit custom OpenAI-compatible endpoint
+	// BaseURL is the endpoint finally selected for this model, recorded so a
+	// session transcript identifies the backend and not just the model name.
+	// The same name served by ollama, by a gateway, and by a vendor API behaves
+	// differently, and a transcript without it cannot be reproduced.
+	BaseURL string
 }
 
 // Known model prefixes mapped to providers.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,26 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrSubagentTimeout marks a subagent that was stopped by one of its own time
+// limits rather than by failing.
+//
+// It exists because the kill is indistinguishable from a crash at the point the
+// caller reads it. os/exec's Wait prefers the *ExitError from Process.Wait over
+// the context error — watch.err is only consulted when err == nil — and a
+// SIGKILLed process always exits unsuccessfully. So context.DeadlineExceeded is
+// discarded and every timeout surfaced as the bare text "signal: killed", which
+// tells the reader nothing about which limit was hit or how to raise it.
+var ErrSubagentTimeout = errors.New("subagent timeout")
+
+// maxStderrCapture bounds the stderr retained for error reporting. The whole
+// point of draining stderr concurrently is to unblock a chatty child, so the
+// buffer must not become the new place the memory goes.
+const maxStderrCapture = 64 * 1024
+
+// timeoutHint names the knobs, because a subagent killed by a limit is exactly
+// the moment the reader wants to know the limit is adjustable.
+const timeoutHint = "raise it with PI_SUBAGENT_TIMEOUT_MS or a `timeout:` (milliseconds) key in the agent's frontmatter"
 
 // SpawnOpts holds options for spawning a subagent process.
 type SpawnOpts struct {
@@ -147,65 +168,133 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 		cancel: cancel,
 	}
 
+	// Drain stderr concurrently with stdout.
+	//
+	// These are two independent pipes with their own kernel buffers. Reading
+	// them in sequence — stdout to EOF, then stderr — deadlocks the moment the
+	// child writes more than a pipe buffer (~64KB) to stderr: the child blocks
+	// in write(2), so it never closes stdout, so the parent never finishes the
+	// stdout scan and never reaches the stderr read. The child then sits there
+	// until a timeout kills it, and because stderr was never drained the error
+	// arrives with no diagnostic text attached at all.
+	var (
+		stderrMu   sync.Mutex
+		stderrBuf  strings.Builder
+		stderrDone = make(chan struct{})
+	)
+	go func() {
+		defer close(stderrDone)
+		sc := bufio.NewScanner(stderr)
+		for sc.Scan() {
+			stderrMu.Lock()
+			if stderrBuf.Len() < maxStderrCapture {
+				stderrBuf.WriteString(sc.Text())
+				stderrBuf.WriteByte('\n')
+			}
+			stderrMu.Unlock()
+		}
+	}()
+
+	// Feed stdout lines to the reader below rather than scanning inline, so the
+	// reader can wait on "a line arrived" and "nothing has arrived in a while"
+	// at the same time. A bare `for scanner.Scan()` can only block.
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 256*1024), 1024*1024) // up to 1MB lines
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+
 	// Reader goroutine: parse JSONL from stdout, send events.
 	go func() {
 		defer close(proc.done)
 		defer close(proc.events)
 
 		var resultBuilder strings.Builder
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024) // up to 1MB lines
 
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
+		// The inactivity timer is what separates "slow" from "wedged". Without
+		// it the absolute cap is the only limit, so a long but productive agent
+		// is killed on the same rule as one that has hung — which is precisely
+		// the failure this fixes.
+		idle := NewInactivityTimer(timeoutCfg.Inactivity)
+		defer idle.Stop()
 
-			var ev jsonEvent
-			if err := json.Unmarshal([]byte(line), &ev); err != nil {
-				// Non-JSON output; emit as text.
-				proc.sendEvent(Event{Type: "text_delta", Content: line})
-				continue
-			}
+		timedOutIdle := false
 
-			switch ev.Type {
-			case "text_delta":
-				resultBuilder.WriteString(ev.Delta)
-				proc.sendEvent(Event{Type: "text_delta", Content: ev.Delta})
-			case "tool_call":
-				proc.sendEvent(Event{Type: "tool_call", Content: ev.ToolName, ToolArgs: ev.ToolInput})
-			case "tool_result":
-				proc.sendEvent(Event{Type: "tool_result", Content: ev.Content})
-			case "message_start":
-				proc.sendEvent(Event{Type: "message_start", SessionID: ev.SessionID})
-			case "message_end":
-				proc.sendEvent(Event{Type: "message_end"})
-			default:
-				proc.sendEvent(Event{Type: ev.Type, Content: ev.Delta + ev.Content})
+	read:
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					break read
+				}
+				idle.Reset()
+				if line == "" {
+					continue
+				}
+
+				var ev jsonEvent
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					// Non-JSON output; emit as text.
+					proc.sendEvent(Event{Type: "text_delta", Content: line})
+					continue
+				}
+
+				switch ev.Type {
+				case "text_delta":
+					resultBuilder.WriteString(ev.Delta)
+					proc.sendEvent(Event{Type: "text_delta", Content: ev.Delta})
+				case "tool_call":
+					proc.sendEvent(Event{Type: "tool_call", Content: ev.ToolName, ToolArgs: ev.ToolInput})
+				case "tool_result":
+					proc.sendEvent(Event{Type: "tool_result", Content: ev.Content})
+				case "message_start":
+					proc.sendEvent(Event{Type: "message_start", SessionID: ev.SessionID})
+				case "message_end":
+					proc.sendEvent(Event{Type: "message_end"})
+				default:
+					proc.sendEvent(Event{Type: ev.Type, Content: ev.Delta + ev.Content})
+				}
+
+			case <-idle.C():
+				timedOutIdle = true
+				cancel()          // kills the process group; stdout closes, so lines drains
+				for range lines { //nolint:revive // drain so the scanner goroutine can exit
+				}
+				break read
 			}
 		}
 
-		// Capture stderr for error reporting.
-		stderrScanner := bufio.NewScanner(stderr)
-		var stderrBuf strings.Builder
-		for stderrScanner.Scan() {
-			stderrBuf.WriteString(stderrScanner.Text())
-			stderrBuf.WriteByte('\n')
-		}
+		// Both pipes must be at EOF before Wait, and stderr is wanted for the
+		// error message below.
+		<-stderrDone
 
 		// Wait for process exit.
 		waitErr := cmd.Wait()
 
 		proc.mu.Lock()
 		proc.result = resultBuilder.String()
-		if waitErr != nil {
-			stderrStr := strings.TrimSpace(stderrBuf.String())
-			if stderrStr != "" {
-				proc.err = fmt.Errorf("pi process failed: %w: %s", waitErr, stderrStr)
-			} else {
-				proc.err = fmt.Errorf("pi process failed: %w", waitErr)
-			}
+
+		stderrMu.Lock()
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		stderrMu.Unlock()
+
+		switch {
+		case timedOutIdle:
+			proc.err = fmt.Errorf("pi subagent produced no output for %s: %w (%s)",
+				timeoutCfg.Inactivity, ErrSubagentTimeout, timeoutHint)
+		case errors.Is(procCtx.Err(), context.DeadlineExceeded):
+			proc.err = fmt.Errorf("pi subagent exceeded its %s time limit: %w (%s)",
+				timeoutCfg.Absolute, ErrSubagentTimeout, timeoutHint)
+		case waitErr != nil && stderrStr != "":
+			proc.err = fmt.Errorf("pi process failed: %w: %s", waitErr, stderrStr)
+		case waitErr != nil:
+			proc.err = fmt.Errorf("pi process failed: %w", waitErr)
+		}
+		if proc.err != nil {
 			proc.sendEvent(Event{Type: "error", Error: proc.err.Error()})
 		}
 		proc.mu.Unlock()

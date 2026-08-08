@@ -45,14 +45,29 @@ const MaxSessionTitle = 200
 
 // Meta holds session metadata persisted in meta.json.
 type Meta struct {
-	ID          string       `json:"id"`
-	AppName     string       `json:"appName"`
-	UserID      string       `json:"userID"`
-	WorkDir     string       `json:"workDir,omitempty"`
-	Model       string       `json:"model"`
-	Title       string       `json:"title,omitempty"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	UpdatedAt   time.Time    `json:"updatedAt"`
+	ID      string `json:"id"`
+	AppName string `json:"appName"`
+	UserID  string `json:"userID"`
+	WorkDir string `json:"workDir,omitempty"`
+
+	// Model is the model name as configured. Provider is recorded alongside it
+	// because the same name means different things to different backends —
+	// "qwen2.5:latest" via ollama and via a hosted gateway are not the same
+	// model, and a transcript that records only the name cannot tell them apart
+	// after the fact.
+	Model    string `json:"model"`
+	Provider string `json:"provider,omitempty"`
+	BaseURL  string `json:"baseURL,omitempty"`
+
+	Title     string    `json:"title,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Host is a snapshot of the machine when the session began. It is here so a
+	// process that later dies with nothing but "signal: killed" can be checked
+	// against the resources it had, instead of guessed at.
+	Host *HostEnv `json:"host,omitempty"`
+
 	PlanContext *PlanContext `json:"planContext,omitempty"`
 }
 
@@ -132,6 +147,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 
 	now := time.Now()
 	cwd, _ := os.Getwd()
+	host := captureHostEnv(sessionDir)
 	meta := Meta{
 		ID:        sessionID,
 		AppName:   req.AppName,
@@ -140,6 +156,7 @@ func (s *FileService) Create(_ context.Context, req *session.CreateRequest) (*se
 		Model:     UnknownModel,
 		CreatedAt: now,
 		UpdatedAt: now,
+		Host:      &host,
 	}
 
 	if err := writeMeta(sessionDir, &meta); err != nil {
@@ -538,6 +555,37 @@ func (s *FileService) SetSessionModel(sessionID, modelName string) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.meta.Model = modelName
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// SetSessionProvider records which backend served the model, and the base URL
+// when one was configured.
+//
+// The model name alone is ambiguous: the same string routed to ollama, to a
+// hosted gateway, or to a vendor API is three different models with three
+// different failure modes. Recording the name without the backend leaves a
+// transcript that cannot be reproduced. Both fields are optional — an empty
+// value clears rather than writes a blank string, so meta.json stays quiet when
+// there is nothing to say.
+func (s *FileService) SetSessionProvider(sessionID, provider, baseURL string) error {
+	provider = strings.TrimSpace(provider)
+	baseURL = strings.TrimSpace(baseURL)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Provider = provider
+	sess.meta.BaseURL = baseURL
 	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
 }
 

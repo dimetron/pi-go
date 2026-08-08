@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 func TestResolveMode_ExplicitFlag(t *testing.T) {
@@ -84,17 +85,14 @@ func TestRunInteractive_CancelContext(t *testing.T) {
 	}
 }
 
-// provInfo returns a provider.Info-like struct. We use a minimal shim
-// because importing provider.Info here just duplicates setup.
-func provInfo(provider, model string) provInfoT {
-	return provInfoT{Provider: provider, Model: model}
-}
-
-type provInfoT = struct {
-	Provider string
-	Model    string
-	Ollama   bool
-	Custom   bool
+// provInfo builds a provider.Info for tests.
+//
+// This used to be a structurally-identical shim, on the reasoning that
+// importing provider.Info "just duplicates setup". The shim silently became a
+// compile error the first time a field was added to the real struct, which is
+// the failure mode a mirror type always has. Use the real one.
+func provInfo(providerName, model string) provider.Info {
+	return provider.Info{Provider: providerName, Model: model}
 }
 
 func TestRunNonInteractive_JSONEmptyPromptEarlyExit(t *testing.T) {

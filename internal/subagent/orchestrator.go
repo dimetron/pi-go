@@ -500,12 +500,18 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 
 		o.mu.Lock()
 		if state.Status == "running" {
-			// Distinguish killed-by-signal (e.g., timeout, OOM) from actual failures.
-			if waitErr != nil && isKilledBySignal(waitErr) {
+			// Distinguish a timeout from a crash from an exit-code failure. A
+			// timeout is reported first because it also arrives as a signal
+			// kill — the spawner SIGKILLs the group — and would otherwise be
+			// indistinguishable from an OOM.
+			switch {
+			case errors.Is(waitErr, ErrSubagentTimeout):
+				state.Status = "timeout"
+			case waitErr != nil && isKilledBySignal(waitErr):
 				state.Status = "killed"
-			} else if waitErr != nil {
+			case waitErr != nil:
 				state.Status = "failed"
-			} else {
+			default:
 				state.Status = "completed"
 			}
 			state.FinishedAt = time.Now()
