@@ -107,3 +107,15 @@ func TestEnqueueHook_NilContextIsSafe(t *testing.T) {
 		t.Error("hookQueue created with no hooks configured")
 	}
 }
+
+func TestEnqueueHook_NilContextRunsHook(t *testing.T) {
+	m := &model{}
+	ran := make(chan struct{})
+	m.enqueueHook(func() { close(ran) })
+
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hook did not run with a nil model context")
+	}
+}

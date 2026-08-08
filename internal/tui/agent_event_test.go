@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	stdlog "log"
@@ -1550,5 +1551,38 @@ func TestLifecycleHooks_DoNotWriteToStderr(t *testing.T) {
 	}
 	if len(leaked) != 0 {
 		t.Errorf("lifecycle hooks wrote %q to stderr, want nothing", leaked)
+	}
+}
+
+func TestAgentDoneMsg_ErrorDoesNotFireUserInputHook(t *testing.T) {
+	dir := t.TempDir()
+	turnOut := dir + "/turn.json"
+	inputOut := dir + "/input.json"
+	m := &model{
+		ctx:       context.Background(),
+		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
+		cfg: Config{LifecycleHooks: []extension.HookConfig{
+			{Event: "turn_complete", Command: "cat > " + turnOut, Timeout: 5},
+			{Event: "user_input_required", Command: "cat > " + inputOut, Timeout: 5},
+		}},
+	}
+
+	m.handleAgentDone(agentDoneMsg{err: errors.New("request canceled")})
+	data := waitForHookOutput(t, turnOut)
+	var payload struct {
+		Event string         `json:"event"`
+		Data  map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal turn_complete output: %v", err)
+	}
+	if payload.Data["error"] != true {
+		t.Errorf("turn_complete error = %v, want true", payload.Data["error"])
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(inputOut); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("user_input_required hook ran after an error, stat err = %v", err)
 	}
 }
