@@ -76,3 +76,22 @@ func TestStripRuntimeNoise(t *testing.T) {
 		})
 	}
 }
+
+func TestIsRuntimeNoise(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"MallocStackLogging: warning", true},
+		{"x(123) MallocStackLogging: warning", true},
+		{"malloc: nano zone abandoned due to pressure", true},
+		{"x(123) malloc: nano zone abandoned due to pressure", true},
+		{"malloc allocation failed", false},
+		{"ordinary stderr", false},
+	}
+	for _, tt := range tests {
+		if got := isRuntimeNoise(tt.line); got != tt.want {
+			t.Errorf("isRuntimeNoise(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
