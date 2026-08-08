@@ -99,10 +99,15 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			Messages: messages,
 		}
 
-		// Cloud models (e.g. "model:cloud") support large context windows.
-		if strings.HasSuffix(modelName, ":cloud") {
-			chatReq.Options = map[string]any{"num_ctx": 262144} // 256K
-		}
+		// No num_ctx for cloud models. api.ollama.com already serves each model
+		// at its native window, and sending a fixed value caps it instead of
+		// raising it: deepseek-v4-flash:0731-cloud has 1M, so the 256K that
+		// used to be set here would have thrown away three quarters of it.
+		//
+		// The old test also only matched ":cloud", never the ":<size>-cloud"
+		// form that most of the cloud catalog uses, so it silently did nothing
+		// for those models — the routing checks in config.go and provider.go
+		// accept both suffixes.
 
 		// Configure thinking. nothink models must not have thinking forced on.
 		if strings.Contains(strings.ToLower(modelName), "nothink") {
@@ -360,31 +365,65 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 	var toolCalls []ollamaapi.ToolCall
 	var doneReason string
 	var promptTokens, evalTokens int
+	var splitter thinkSplitter
+
+	emitThinking := func(text string) error {
+		if text == "" {
+			return nil
+		}
+		aggregatedThinking += text
+		if !yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: text}}},
+		}, nil) {
+			return fmt.Errorf("yield canceled")
+		}
+		return nil
+	}
+
+	emitText := func(text string) error {
+		if text == "" {
+			return nil
+		}
+		aggregatedText += text
+		if !yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: text}}},
+		}, nil) {
+			return fmt.Errorf("yield canceled")
+		}
+		return nil
+	}
 
 	err := client.Chat(ctx, chatReq, func(resp ollamaapi.ChatResponse) error {
 		msg := resp.Message
 
-		// Yield thinking content as partial response.
-		if msg.Thinking != "" {
-			aggregatedThinking += msg.Thinking
-			if !yield(&model.LLMResponse{
-				Partial:      true,
-				TurnComplete: false,
-				Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: msg.Thinking}}},
-			}, nil) {
-				return fmt.Errorf("yield canceled")
+		// Reasoning that Ollama already separated out.
+		if err := emitThinking(msg.Thinking); err != nil {
+			return err
+		}
+
+		// Reasoning the model left inline as <think>...</think> is routed to
+		// the thinking stream instead of surfacing as the answer.
+		if msg.Content != "" {
+			inlineThinking, text := splitter.split(msg.Content)
+			if err := emitThinking(inlineThinking); err != nil {
+				return err
+			}
+			if err := emitText(text); err != nil {
+				return err
 			}
 		}
 
-		// Yield text content as partial response.
-		if msg.Content != "" {
-			aggregatedText += msg.Content
-			if !yield(&model.LLMResponse{
-				Partial:      true,
-				TurnComplete: false,
-				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: msg.Content}}},
-			}, nil) {
-				return fmt.Errorf("yield canceled")
+		if resp.Done {
+			inlineThinking, text := splitter.flush()
+			if err := emitThinking(inlineThinking); err != nil {
+				return err
+			}
+			if err := emitText(text); err != nil {
+				return err
 			}
 		}
 
@@ -465,12 +504,23 @@ func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatRe
 	msg := finalResp.Message
 	parts := make([]*genai.Part, 0, 1+len(msg.ToolCalls))
 
-	// Include thinking content as text if present.
-	if msg.Thinking != "" {
-		parts = append(parts, &genai.Part{Text: msg.Thinking})
+	// Include thinking content as text if present. Reasoning the model left
+	// inline as <think>...</think> is pulled out of the content the same way
+	// the streaming path does it, so the tags never reach the caller.
+	thinking := msg.Thinking
+	content := msg.Content
+	if content != "" {
+		var splitter thinkSplitter
+		inlineThinking, text := splitter.split(content)
+		trailingThinking, trailingText := splitter.flush()
+		thinking += inlineThinking + trailingThinking
+		content = text + trailingText
 	}
-	if msg.Content != "" {
-		parts = append(parts, &genai.Part{Text: msg.Content})
+	if thinking != "" {
+		parts = append(parts, &genai.Part{Text: thinking})
+	}
+	if content != "" {
+		parts = append(parts, &genai.Part{Text: content})
 	}
 
 	for _, tc := range msg.ToolCalls {
