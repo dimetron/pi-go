@@ -41,7 +41,7 @@ func TestSegmentWidths_SumExactly(t *testing.T) {
 func TestRenderSegmentedGauge_ExactWidth(t *testing.T) {
 	b := realisticBreakdown()
 	for _, cells := range []int{1, 3, 7, 20, 40, 76, 120, 200} {
-		if got := ansi.StringWidth(renderSegmentedGauge(b, cells)); got != cells {
+		if got := ansi.StringWidth(renderSegmentedGauge(b, cells, darkPalette)); got != cells {
 			t.Errorf("cells=%d: rendered %d", cells, got)
 		}
 	}
@@ -146,7 +146,7 @@ func TestContextSegmentKind_LabelsAndColorsAreDistinct(t *testing.T) {
 		}
 		seenLabel[l] = true
 
-		c := truecolorFragment(k.Color())
+		c := truecolorFragment(k.Color(darkPalette))
 		if seenColor[c] {
 			t.Errorf("%s reuses another segment's color", l)
 		}
@@ -162,7 +162,7 @@ func TestContextRule_SegmentedKeepsExactWidth(t *testing.T) {
 		for _, used := range []int64{1_000, 85_000, 200_000, 400_000, 1_000_000} {
 			out := renderContextRule(contextRuleInput{
 				Width: width, UsedTokens: used, Breakdown: &b,
-			})
+			}, darkPalette)
 			if got := ansi.StringWidth(out); got != width {
 				t.Errorf("width=%d used=%d: rule is %d cells", width, used, got)
 			}
@@ -172,9 +172,9 @@ func TestContextRule_SegmentedKeepsExactWidth(t *testing.T) {
 
 func TestContextRule_SegmentedUsesSegmentColors(t *testing.T) {
 	b := realisticBreakdown()
-	out := renderContextRule(contextRuleInput{Width: 160, UsedTokens: 85_000, Breakdown: &b})
+	out := renderContextRule(contextRuleInput{Width: 160, UsedTokens: 85_000, Breakdown: &b}, darkPalette)
 	for _, k := range []ContextSegmentKind{SegToolDefs, SegRules, SegMCPTools, SegConversation} {
-		if !strings.Contains(out, truecolorFragment(k.Color())) {
+		if !strings.Contains(out, truecolorFragment(k.Color(darkPalette))) {
 			t.Errorf("segmented rule missing %s color", k.Label())
 		}
 	}
@@ -182,7 +182,7 @@ func TestContextRule_SegmentedUsesSegmentColors(t *testing.T) {
 
 func TestRenderContextBreakdown_ListsEveryNonZeroSection(t *testing.T) {
 	b := realisticBreakdown()
-	out := ansi.Strip(RenderContextBreakdown(b, 200_000, 60))
+	out := ansi.Strip(RenderContextBreakdown(b, 200_000, 60, darkPalette))
 	for k := ContextSegmentKind(0); k < segCount; k++ {
 		if b.Tokens(k) <= 0 {
 			continue
@@ -198,7 +198,7 @@ func TestRenderContextBreakdown_ListsEveryNonZeroSection(t *testing.T) {
 
 func TestRenderContextBreakdown_OmitsZeroSections(t *testing.T) {
 	b := ContextBreakdown{SystemPrompt: 500, Conversation: 5_000}
-	out := ansi.Strip(RenderContextBreakdown(b, 200_000, 60))
+	out := ansi.Strip(RenderContextBreakdown(b, 200_000, 60, darkPalette))
 	if strings.Contains(out, "MCP & dynamic tools") {
 		t.Error("a zero section must not be listed")
 	}
@@ -209,7 +209,7 @@ func TestRenderContextBreakdown_OmitsZeroSections(t *testing.T) {
 
 func TestRenderContextBreakdown_NarrowWidthDoesNotPanic(t *testing.T) {
 	for _, w := range []int{0, 1, 10, 24, 40} {
-		out := RenderContextBreakdown(realisticBreakdown(), 200_000, w)
+		out := RenderContextBreakdown(realisticBreakdown(), 200_000, w, darkPalette)
 		if out == "" {
 			t.Errorf("width=%d produced nothing", w)
 		}

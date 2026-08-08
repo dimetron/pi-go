@@ -72,7 +72,7 @@ func TestUpdateWindowSizeClampsScrollAndInvalidatesWidth(t *testing.T) {
 	}
 	// The cache must have been repopulated at the new width, keyed to it.
 	got := &mm.chatModel.Messages[0]
-	wantKey := got.renderKey(wantChat, mm.chatModel.ToolDisplay.CompactTools, false, false)
+	wantKey := got.renderKey(wantChat, mm.chatModel.ToolDisplay.CompactTools, false, false, paletteKey(paletteOrDark(mm.chatModel.Palette)))
 	if !got.renderCached || got.renderCacheKey != wantKey {
 		t.Fatalf("render cache not repopulated for width %d: cached=%v key=%d want %d",
 			wantChat, got.renderCached, got.renderCacheKey, wantKey)

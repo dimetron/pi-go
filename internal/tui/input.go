@@ -66,6 +66,10 @@ type InputModel struct {
 	SkillDirs []string
 	WorkDir   string
 
+	// Palette is the resolved theme palette, set each frame by the model before
+	// rendering. Zero means the dark default.
+	Palette Palette
+
 	input textinput.Model
 }
 
@@ -150,11 +154,12 @@ func (im *InputModel) SetWidth(width int) {
 func (im *InputModel) View(running bool) string {
 	im.ensureInput()
 	if running {
+		p := paletteOrDark(im.Palette)
 		prefix := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
+			Foreground(p.Primary).
 			Bold(true).
 			Render("> ")
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		dim := lipgloss.NewStyle().Foreground(p.Dim)
 		return prefix + dim.Render("(waiting for response...)")
 	}
 	return im.input.View()
@@ -223,13 +228,14 @@ func (im *InputModel) Cursor() *tea.Cursor {
 func (im *InputModel) ensureInput() {
 	if im.input.KeyMap.CharacterForward.Keys() == nil {
 		im.input = textinput.New()
+		p := paletteOrDark(im.Palette)
 		promptStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
+			Foreground(p.Primary).
 			Bold(true)
 		styles := im.input.Styles()
 		styles.Focused.Prompt = promptStyle
 		styles.Blurred.Prompt = promptStyle
-		styles.Cursor.Color = lipgloss.Color("39")
+		styles.Cursor.Color = p.Primary
 		styles.Cursor.Shape = tea.CursorBar
 		im.input.SetStyles(styles)
 		im.input.Prompt = "> "
