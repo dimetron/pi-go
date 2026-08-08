@@ -256,11 +256,46 @@ Hooks run shell commands before or after tool calls. They are configured in `con
 
 | Field | Description |
 |---|---|
-| `event` | `before_tool` or `after_tool` |
-| `tool` | Tool name to match (e.g., `write`, `edit`, `bash`) |
+| `event` | `before_tool`, `after_tool`, `turn_complete`, or `user_input_required` |
+| `tool` | Tool name to match (e.g., `write`, `edit`, `bash`) — tool hooks only |
 | `command` | Shell command; tool args passed as JSON on stdin |
 
 The LSP integration uses `after_tool` hooks internally: after `write` or `edit`, gopls formats the file and collects diagnostics automatically.
+
+### Lifecycle hooks
+
+Beyond tool events, pi-go fires two lifecycle hooks that let you signal the
+host terminal (e.g. agterm) when the agent's state changes:
+
+- `turn_complete` — a turn finished (success or error). Payload: `{"event":"turn_complete","data":{"error":false}}`.
+- `user_input_required` — the agent finished and is now waiting for your next prompt. Payload: `{"event":"user_input_required","data":{}}`.
+
+Both fire together at the end of a turn, so a hook can subscribe to either.
+They are best-effort: a failure or timeout is logged and never interrupts the
+agent loop.
+
+**agterm example** — set the session's agent-status indicator to `completed`
+when a turn finishes, and to `blocked` when it needs your input. agterm injects
+`AGTERM_SESSION_ID` and `AGTERM_SOCKET` into every shell it spawns, so the hook
+targets the right session:
+
+```json
+{
+  "hooks": [
+    {
+      "event": "turn_complete",
+      "command": "agtermctl session status completed --target '$AGTERM_SESSION_ID' --socket '$AGTERM_SOCKET'"
+    },
+    {
+      "event": "user_input_required",
+      "command": "agtermctl session status blocked --target '$AGTERM_SESSION_ID' --socket '$AGTERM_SOCKET'"
+    }
+  ]
+}
+```
+
+For a one-shot desktop banner instead of the persistent indicator, use
+`agtermctl notify "pi finished" --target "$AGTERM_SESSION_ID" --socket "$AGTERM_SOCKET"`.
 
 ---
 

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/otel"
 )
@@ -840,5 +841,26 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.chatModel.Thinking = ""
 	m.agentCh = nil
 	m.refreshDiffStats()
+	// A finished turn hands control back to the user, so both lifecycle
+	// events fire here: the turn is complete, and the agent is now waiting
+	// for the next user input. A hook can subscribe to either.
+	m.runLifecycleHooks("turn_complete", map[string]any{
+		"error": msg.err != nil,
+	})
+	m.runLifecycleHooks("user_input_required", map[string]any{})
 	return m, nil
+}
+
+// runLifecycleHooks fires every configured lifecycle hook for the given event,
+// passing the event name and data as JSON on stdin. Hooks are best-effort: a
+// failure or timeout is logged and never interrupts the agent loop.
+func (m *model) runLifecycleHooks(event string, data map[string]any) {
+	for _, h := range m.cfg.LifecycleHooks {
+		if h.Event != event {
+			continue
+		}
+		if err := extension.RunLifecycleHook(m.ctx, h, event, data); err != nil {
+			stdlog.Printf("lifecycle hook %q failed for event %q: %v", h.Command, event, err)
+		}
+	}
 }
