@@ -27,8 +27,9 @@ type ChecklistStep struct {
 type parallelAgent struct {
 	agentID string
 	events  <-chan subagent.Event
-	slices  []int // which checklist indices this agent handles
-	done    bool  // true when events channel has closed
+	slices  []int  // which checklist indices this agent handles
+	done    bool   // true when events channel has closed
+	status  string // authoritative terminal status from run_done
 }
 
 // runState tracks the state of a /run command execution.
@@ -37,6 +38,7 @@ type runState struct {
 	promptMD    string
 	gates       []Gate
 	agentID     string
+	status      string // authoritative terminal status from the subagent
 	phase       string // "running", "gating", "merging", "done", "failed"
 	retries     int
 	maxRetries  int
@@ -74,6 +76,7 @@ type runAgentEventMsg struct {
 // runAgentDoneMsg signals that a subagent has finished (events channel closed).
 type runAgentDoneMsg struct {
 	agentID string // which agent finished (for parallel mode)
+	status  string // authoritative terminal status from the subagent
 }
 
 // GateResult holds the result of running a single gate command.
@@ -409,6 +412,9 @@ func waitForRunAgent(events <-chan subagent.Event, agentID string) tea.Cmd {
 		if !ok {
 			return runAgentDoneMsg{agentID: agentID}
 		}
+		if ev.Type == "run_done" {
+			return runAgentDoneMsg{agentID: agentID, status: ev.Status}
+		}
 		return runAgentEventMsg{event: ev, agentID: agentID}
 	}
 }
@@ -519,6 +525,7 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 		for _, pa := range m.run.parallel {
 			if pa.agentID == msg.agentID {
 				pa.done = true
+				pa.status = msg.status
 				break
 			}
 		}
@@ -540,13 +547,10 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 	m.statusModel.ActiveTool = ""
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
+	m.run.status = msg.status
 
 	// Verify that every subagent exited cleanly (status == "completed")
-	// before moving on to gate validation. A "failed" / "killed" /
-	// "canceled" status means the subagent process exited non-zero (or
-	// was killed), so the work in its worktree is unreliable — skip
-	// gates/merge and surface the failure to the user instead. The
-	// worktree is preserved so they can inspect it manually.
+	// before moving on to gate validation.
 	if bad := m.failedAgentIDs(); len(bad) > 0 {
 		m.run.phase = "failed"
 		wtPaths := m.runWorktreePathsFor(bad)
@@ -597,18 +601,28 @@ func (m *model) failedAgentIDs() []string {
 		return nil
 	}
 	var bad []string
-	check := func(agentID string) {
-		st, ok := m.cfg.Orchestrator.Get(agentID)
-		if !ok || st.Status != "completed" {
-			bad = append(bad, agentID)
-		}
-	}
 	if m.run.isParallel() {
 		for _, pa := range m.run.parallel {
-			check(pa.agentID)
+			status := pa.status
+			if status == "" && m.cfg.Orchestrator != nil {
+				if st, ok := m.cfg.Orchestrator.Get(pa.agentID); ok {
+					status = st.Status
+				}
+			}
+			if status != "completed" {
+				bad = append(bad, pa.agentID)
+			}
 		}
 	} else if m.run.agentID != "" {
-		check(m.run.agentID)
+		status := m.run.status
+		if status == "" && m.cfg.Orchestrator != nil {
+			if st, ok := m.cfg.Orchestrator.Get(m.run.agentID); ok {
+				status = st.Status
+			}
+		}
+		if status != "completed" {
+			bad = append(bad, m.run.agentID)
+		}
 	}
 	return bad
 }
@@ -1117,6 +1131,8 @@ func (m *model) waitForParallelRunEvents() tea.Cmd {
 			ev, ok := <-pa.events
 			if !ok {
 				ch <- result{msg: runAgentDoneMsg{agentID: pa.agentID}}
+			} else if ev.Type == "run_done" {
+				ch <- result{msg: runAgentDoneMsg{agentID: pa.agentID, status: ev.Status}}
 			} else {
 				ch <- result{msg: runAgentEventMsg{event: ev, agentID: pa.agentID}}
 			}

@@ -510,8 +510,13 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 			}
 			state.FinishedAt = time.Now()
 		}
+		finalStatus := state.Status
 		o.evictCompletedAgentsLocked()
 		o.mu.Unlock()
+
+		// Publish the terminal status before closing the channel. Consumers must
+		// use this snapshot rather than querying the evictable status map.
+		events <- Event{Type: "run_done", Status: finalStatus}
 
 		// Worktree cleanup is intentionally NOT done here. Deletion is
 		// deferred to the caller (e.g. the TUI /run flow calls
