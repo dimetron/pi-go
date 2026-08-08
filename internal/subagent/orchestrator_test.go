@@ -688,3 +688,38 @@ func TestValidateAgentForCancel(t *testing.T) {
 		})
 	}
 }
+
+// TestGet_ReturnsSeededStatus verifies that Get returns the recorded
+// status of a seeded agent and reports (zero, false) for unknown IDs.
+func TestGet_ReturnsSeededStatus(t *testing.T) {
+	o := NewOrchestrator(&config.Config{}, "", nil)
+
+	if _, ok := o.Get("nope"); ok {
+		t.Fatal("Get on unknown agent should return ok=false")
+	}
+
+	if !o.SetStatusForTest("task-1", "completed") {
+		t.Fatal("SetStatusForTest should succeed on a fresh orchestrator")
+	}
+	st, ok := o.Get("task-1")
+	if !ok {
+		t.Fatal("Get should find seeded agent")
+	}
+	if st.Status != "completed" {
+		t.Errorf("status = %q, want completed", st.Status)
+	}
+	if st.AgentID != "task-1" {
+		t.Errorf("agentID = %q, want task-1", st.AgentID)
+	}
+	if st.Duration == "" {
+		t.Error("Duration should be populated for finished agents")
+	}
+
+	if !o.SetStatusForTest("task-2", "failed") {
+		t.Fatal("SetStatusForTest should succeed")
+	}
+	st2, _ := o.Get("task-2")
+	if st2.Status != "failed" {
+		t.Errorf("status = %q, want failed", st2.Status)
+	}
+}

@@ -571,6 +571,7 @@ func TestE2E_MergeSuccessFlow(t *testing.T) {
 
 func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
 	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	orch.SetStatusForTest("task-flow-1", "completed")
 
 	m := &model{
 		cfg: Config{
