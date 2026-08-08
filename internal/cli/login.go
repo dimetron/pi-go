@@ -19,14 +19,16 @@ var flagLoginModel string
 func newLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login [provider]",
-		Short: "Authenticate with Codex",
-		Long: `Authenticate with Codex and save the credentials.
+		Short: "Authenticate with a provider",
+		Long: `Authenticate with a provider and save the credentials.
 
 Supported providers:
-  codex        ChatGPT (chatgpt.com) — browser OAuth PKCE
+  codex        ChatGPT (chatgpt.com) — device auth
+  opencode     OpenCode Console (console.opencode.ai) — device auth
 
 Examples:
   pi login codex                        # Authenticate with Codex
+  pi login opencode                     # Authenticate with OpenCode Console
   pi login                              # Interactive provider selection`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runLogin,
@@ -55,7 +57,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Find the provider.
 	prov, ok := auth.FindProvider(providerName)
 	if !ok {
-		return fmt.Errorf("unknown provider %q — supported: codex", providerName)
+		return fmt.Errorf("unknown provider %q — supported: codex, opencode", providerName)
 	}
 
 	fmt.Printf("Logging in to %s...\n\n", prov.Name)
@@ -126,11 +128,11 @@ func runDeviceFlow(ctx context.Context, prov auth.Provider) (*auth.Result, error
 		return nil, fmt.Errorf("device flow: %w", err)
 	}
 
-	fmt.Printf("Visit: %s\n", sess.VerificationURI)
+	fmt.Printf("Visit: %s\n", sess.VerificationURL())
 	fmt.Printf("Code:  %s\n\n", sess.UserCode)
 	fmt.Println("Waiting for authorization...")
 
-	result, err := auth.PollDeviceToken(ctx, prov, sess.DeviceCode, sess.Interval)
+	result, err := auth.PollDeviceToken(ctx, prov, sess)
 	if err != nil {
 		return nil, fmt.Errorf("polling device token: %w", err)
 	}

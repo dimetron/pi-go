@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -76,6 +77,7 @@ type Provider struct {
 	CodexDeviceAuth   bool   // use OpenAI's non-RFC-8628 device auth (see codex_device.go)
 	DeviceVerifyURL   string // page the user opens to enter the code
 	DeviceRedirectURI string // redirect_uri asserted in the device code exchange
+	DeviceJSONBody    bool   // POST device endpoints as JSON (opencode console) instead of form-encoded
 	TLSPreflight      bool   // run TLS preflight before OAuth (OpenAI Codex)
 	CodexOAuth        bool   // use Codex OAuth callback + token-exchange semantics
 	ManualCode        bool   // user pastes a code or callback URL (no local listener)
@@ -100,11 +102,25 @@ type TokenResponse struct {
 
 // DeviceCodeResponse holds the device authorization response.
 type DeviceCodeResponse struct {
-	DeviceCode      string `json:"device_code"`
-	UserCode        string `json:"user_code"`
-	VerificationURI string `json:"verification_uri"`
-	ExpiresIn       int    `json:"expires_in"`
-	Interval        int    `json:"interval"`
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"` // one-click URL that already embeds the code (optional)
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+// VerificationURL returns the most specific verification URL for the device
+// flow: the one-click verification_uri_complete when present (it already
+// contains the user code), otherwise the plain verification_uri.
+func (d *DeviceCodeResponse) VerificationURL() string {
+	if d != nil && d.VerificationURIComplete != "" {
+		return d.VerificationURIComplete
+	}
+	if d != nil {
+		return d.VerificationURI
+	}
+	return ""
 }
 
 // Result is the outcome of an SSO login flow.
@@ -148,6 +164,24 @@ func Providers() []Provider {
 			DeviceURL:         "https://auth.openai.com/api/accounts/deviceauth",
 			DeviceVerifyURL:   "https://auth.openai.com/codex/device",
 			DeviceRedirectURI: "https://auth.openai.com/deviceauth/callback",
+		},
+		{
+			// OpenCode Console (console.opencode.ai) device flow — the same
+			// RFC 8628 flow the opencode CLI runs for `opencode console
+			// login` / `/connect`. The access token returned by the device
+			// grant is the bearer credential pi-go sends to
+			// opencode.ai/zen/go/v1, so it is saved as OPENCODE_API_KEY.
+			// The console endpoints speak JSON, not form-encoded.
+			Name:           "opencode",
+			EnvVar:         "OPENCODE_API_KEY",
+			ClientID:       "opencode-cli",
+			UseDeviceFlow:  true,
+			DeviceJSONBody: true,
+			DeviceURL:      "https://console.opencode.ai/auth/device/code",
+			TokenURL:       "https://console.opencode.ai/auth/device/token",
+			TokenToKey: func(tok *TokenResponse) string {
+				return tok.AccessToken
+			},
 		},
 	}
 }
@@ -457,15 +491,36 @@ func DeviceFlow(ctx context.Context, prov Provider) (*DeviceCodeResponse, error)
 		return nil, fmt.Errorf("provider %s does not support device code flow", prov.Name)
 	}
 
-	data := url.Values{
-		"client_id": {prov.ClientID},
-		"scope":     {strings.Join(prov.Scopes, " ")},
+	var resp *http.Response
+	var err error
+	if prov.DeviceJSONBody {
+		payload := map[string]string{"client_id": prov.ClientID}
+		if scope := strings.Join(prov.Scopes, " "); scope != "" {
+			payload["scope"] = scope
+		}
+		for k, v := range prov.ExtraParams {
+			payload[k] = v
+		}
+		body, merr := json.Marshal(payload)
+		if merr != nil {
+			return nil, fmt.Errorf("device code request: %w", merr)
+		}
+		req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, prov.DeviceURL, bytes.NewReader(body))
+		if rerr != nil {
+			return nil, fmt.Errorf("device code request: %w", rerr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = http.DefaultClient.Do(req)
+	} else {
+		data := url.Values{
+			"client_id": {prov.ClientID},
+			"scope":     {strings.Join(prov.Scopes, " ")},
+		}
+		for k, v := range prov.ExtraParams {
+			data.Set(k, v)
+		}
+		resp, err = http.PostForm(prov.DeviceURL, data)
 	}
-	for k, v := range prov.ExtraParams {
-		data.Set(k, v)
-	}
-
-	resp, err := http.PostForm(prov.DeviceURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("device code request: %w", err)
 	}
@@ -483,28 +538,59 @@ func DeviceFlow(ctx context.Context, prov Provider) (*DeviceCodeResponse, error)
 	if dcr.Interval == 0 {
 		dcr.Interval = 5
 	}
+	// opencode's console returns verification_uri_complete as a path relative
+	// to the console origin; resolve it against the device endpoint so callers
+	// can open the one-click URL directly.
+	if dcr.VerificationURIComplete != "" &&
+		!strings.HasPrefix(dcr.VerificationURIComplete, "http://") &&
+		!strings.HasPrefix(dcr.VerificationURIComplete, "https://") {
+		if u, perr := url.Parse(prov.DeviceURL); perr == nil && u.Scheme != "" && u.Host != "" {
+			dcr.VerificationURIComplete = u.Scheme + "://" + u.Host + dcr.VerificationURIComplete
+		}
+	}
 	return &dcr, nil
 }
 
 // PollDeviceToken polls for the device code token until authorized or expired.
-func PollDeviceToken(ctx context.Context, prov Provider, deviceCode string, interval int) (*Result, error) {
+// Polling is bounded by the response's expires_in (RFC 8628 §3.2) — when the
+// deadline passes before the user approves, the code has expired. A zero
+// expires_in means poll until the context is done.
+func PollDeviceToken(ctx context.Context, prov Provider, device *DeviceCodeResponse) (*Result, error) {
+	if device == nil {
+		return nil, fmt.Errorf("nil device code response")
+	}
+	interval := device.Interval
+	if interval < 1 {
+		interval = 5
+	}
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
+
+	var deadline time.Time
+	if device.ExpiresIn > 0 {
+		deadline = time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return &Result{Provider: prov.Name, Err: ctx.Err()}, nil
 		case <-ticker.C:
-			tok, err := requestDeviceToken(ctx, prov, deviceCode)
+			if !deadline.IsZero() && time.Now().After(deadline) {
+				return &Result{Provider: prov.Name, Err: fmt.Errorf("device authorization timed out: device code expired")}, nil
+			}
+			tok, err := requestDeviceToken(ctx, prov, device.DeviceCode)
 			if err != nil {
 				// Check for "authorization_pending" — keep polling.
 				if strings.Contains(err.Error(), "authorization_pending") {
 					continue
 				}
-				// "slow_down" — increase interval.
+				// "slow_down" — increase the interval (RFC 8628 §3.5) and keep
+				// polling; the bump is cumulative across repeated slow_down
+				// responses.
 				if strings.Contains(err.Error(), "slow_down") {
-					ticker.Reset(time.Duration(interval+5) * time.Second)
+					interval += 5
+					ticker.Reset(time.Duration(interval) * time.Second)
 					continue
 				}
 				return &Result{Provider: prov.Name, Err: err}, nil
@@ -641,17 +727,34 @@ func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifie
 }
 
 func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (*TokenResponse, error) {
-	data := url.Values{
-		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-		"device_code": {deviceCode},
-		"client_id":   {prov.ClientID},
+	var payload []byte
+	if prov.DeviceJSONBody {
+		var err error
+		payload, err = json.Marshal(map[string]string{
+			"grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
+			"device_code": deviceCode,
+			"client_id":   prov.ClientID,
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		payload = []byte(url.Values{
+			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+			"device_code": {deviceCode},
+			"client_id":   {prov.ClientID},
+		}.Encode())
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.TokenURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if prov.DeviceJSONBody {
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -661,14 +764,14 @@ func requestDeviceToken(ctx context.Context, prov Provider, deviceCode string) (
 
 	body, _ := io.ReadAll(resp.Body)
 
-	// Check for pending/slow_down errors (returned as 400 with error JSON).
-	if resp.StatusCode == http.StatusBadRequest {
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
-			return nil, fmt.Errorf("%s", errResp.Error)
-		}
+	// Device endpoints report pending/slow_down/denied as {"error": "..."}.
+	// opencode's console may return this with a 4xx status or with 200, so
+	// check the body for an error field before the status handling.
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+		return nil, fmt.Errorf("%s", errResp.Error)
 	}
 
 	if resp.StatusCode != http.StatusOK {
