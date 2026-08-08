@@ -27,6 +27,19 @@ func TestHighlightCode_GoFile(t *testing.T) {
 	}
 }
 
+func TestHighlightCode_LightPaletteUsesLightSyntaxStyle(t *testing.T) {
+	code := "package main\n\nfunc main() {}"
+	dark := highlightCodeWithPalette(code, "main.go", darkPalette)
+	light := highlightCodeWithPalette(code, "main.go", lightPalette)
+
+	if dark == light {
+		t.Fatal("light palette produced the dark syntax highlighting output")
+	}
+	if !strings.Contains(light, "package") || !strings.Contains(light, "main") {
+		t.Fatal("light syntax highlighting did not preserve code")
+	}
+}
+
 func TestHighlightCode_PythonFile(t *testing.T) {
 	code := "def hello():\n    print('hi')"
 	result := highlightCode(code, "script.py")
