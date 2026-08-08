@@ -239,6 +239,33 @@ make check-cve
 - **Profiling endpoints are on localhost**, so `curl localhost:6060/...` is
   blocked by the sandbox too. See the `go-pprof` skill.
 
+## TUI output safety: never write to stdout/stderr
+
+The interactive TUI runs on the terminal's alternate screen. **Any write to
+stdout or stderr from inside the TUI corrupts the display** — stray `fmt.Print*`,
+`log.Print*`, `os.Stdout.Write`, or `os.Stderr.Write` calls render as garbage
+over the UI and break the session.
+
+Rules:
+
+- **Never** use `fmt.Print*`, `log.Print*`, `stdlog`, `os.Stdout`, or
+  `os.Stderr` to emit diagnostics or output from code that runs while the TUI
+  is active (agent loop, callbacks, hooks, commands, model/tool callbacks).
+- **Route diagnostics through the session logger** (`m.cfg.Logger` /
+  `logger.Logger`) instead — `Info`, `Error`, `Errorf`, etc. These write to the
+  session log file, never the terminal.
+- **Allowed TUI outputs** are the only sanctioned ways to surface text to the
+  user: the chat transcript, `SystemNoticeCh` (short system notices like
+  auto-compaction outcomes), and the TUI's own status/error rendering. If a
+  message must reach the user, deliver it through one of these, not a raw
+  stdout/stderr write.
+- A panic handler may write to stderr only as a last resort before the process
+  dies; it must never be used for routine logging.
+
+When in doubt, grep for `Printf|Println|os.Stdout|os.Stderr|stdlog` in the
+package you are touching and confirm every hit is either outside the TUI path
+or routed through the session logger.
+
 ## Profiling
 
 `pi --pprof true` serves `net/http/pprof` on `http://localhost:6060/debug/pprof`.
