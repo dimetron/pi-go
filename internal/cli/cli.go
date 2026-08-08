@@ -273,7 +273,16 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		return rootRuntime{}, err
 	}
 
+	// Resolve which session we are resuming before the model is picked: the
+	// model restore below reads that session's metadata, and --continue has to
+	// become a concrete ID for the lookup to happen at all.
+	if err := resolveResumeSession(); err != nil {
+		return rootRuntime{}, err
+	}
+
 	activeRole := resolveActiveRole()
+	applyResumedModel(&cfg, activeRole)
+
 	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole(activeRole)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("resolving model role: %w", err)
@@ -360,23 +369,6 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		sandboxRoot = cwd
 	}
 	worktreeDir := os.Getenv("PI_WORKTREE_ROOT")
-
-	if flagContinue {
-		homeDir, hErr := os.UserHomeDir()
-		if hErr != nil {
-			return rootRuntime{}, fmt.Errorf("getting home dir: %w", hErr)
-		}
-		sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
-		sessionSvc, sErr := pisession.NewFileService(sessionsDir)
-		if sErr != nil {
-			return rootRuntime{}, fmt.Errorf("creating session service: %w", sErr)
-		}
-		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
-		if lastID == "" {
-			return rootRuntime{}, fmt.Errorf("no previous session found to continue")
-		}
-		flagSession = lastID
-	}
 
 	checkForRapidRestartAndWarn(cwd)
 	_ = writeLastSession(cwd, info.Provider, llm.Name())
@@ -621,12 +613,11 @@ func runNonInteractive(
 	loadNonInteractiveSkills(mode)
 	instruction += memoryInstructionContext(parentCtx, memStore, cfg, cwd)
 
-	homeDir, err := os.UserHomeDir()
+	sessionsPath, err := sessionsDir()
 	if err != nil {
-		return fmt.Errorf("getting home dir: %w", err)
+		return err
 	}
-	sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
-	sessionSvc, err := pisession.NewFileService(sessionsDir)
+	sessionSvc, err := pisession.NewFileService(sessionsPath)
 	if err != nil {
 		return fmt.Errorf("creating session service: %w", err)
 	}
@@ -700,7 +691,7 @@ func runNonInteractive(
 	}
 
 	// Capture ACP subagent events (claude, gemini) under the session dir.
-	orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
+	orch.SetACPLogPath(filepath.Join(sessionsPath, sessionID, "acp.jsonl"))
 
 	if memStore != nil {
 		// Arms the observation callback wired above.
@@ -751,9 +742,82 @@ func memoryInstructionContext(ctx context.Context, store memory.Store, cfg confi
 	return "\n\n" + memContext
 }
 
+// sessionsDir is the directory FileService keeps one subdirectory per session
+// in. Startup reaches for it before any session service exists, so it cannot
+// be asked of the service itself.
+func sessionsDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".pi-go", "sessions"), nil
+}
+
+// resolveResumeSession turns --continue into an explicit --session value, so
+// everything downstream — the model restore, the agent, the TUI's transcript
+// restore — reads one resolved session ID instead of handling two ways of
+// asking for the same thing.
+func resolveResumeSession() error {
+	if !flagContinue {
+		return nil
+	}
+	dir, err := sessionsDir()
+	if err != nil {
+		return err
+	}
+	sessionSvc, err := pisession.NewFileService(dir)
+	if err != nil {
+		return fmt.Errorf("creating session service: %w", err)
+	}
+	lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
+	if lastID == "" {
+		return fmt.Errorf("no previous session found to continue")
+	}
+	flagSession = lastID
+	return nil
+}
+
+// applyResumedModel restores the model a resumed session last ran under.
+//
+// Sessions record their model in meta.json, but startup used to resolve the
+// model from config alone: `pi --session <id>` continued a conversation held
+// with one model under whatever the default role happened to point at, with
+// nothing on screen admitting the swap. Since the whole transcript is replayed
+// to the new model, the switch is silent and total.
+//
+// Explicit intent still wins. --model names a model outright, and --smol /
+// --slow / --plan pick a role for a reason, so each leaves the session's
+// recorded model alone.
+func applyResumedModel(cfg *config.Config, activeRole string) {
+	if flagSession == "" || flagModel != "" || activeRole != "default" || cfg.Roles == nil {
+		return
+	}
+	dir, err := sessionsDir()
+	if err != nil {
+		return
+	}
+	name := pisession.SessionModel(dir, flagSession)
+	if name == "" {
+		return
+	}
+	rc := cfg.Roles["default"]
+	if rc.Model == name {
+		return
+	}
+	rc.Model = name
+	// The configured provider belongs to the configured model. Carrying it
+	// over would route the session's model to the wrong API — an anthropic
+	// role serving a gpt-* model — so let it be re-detected from the name.
+	rc.Provider = ""
+	cfg.Roles["default"] = rc
+}
+
 // resolveSessionID picks the session to run in: an explicit --session, the most
 // recent one under --continue, or a freshly created session.
 func resolveSessionID(ctx context.Context, ag *agent.Agent, sessionSvc *pisession.FileService) (string, error) {
+	// buildRootRuntime already resolved --continue into flagSession, but this
+	// branch stays authoritative: --continue with nothing to continue is an
+	// error, and must never fall through to opening a brand-new session.
 	if flagContinue {
 		lastID := sessionSvc.LastSessionID(agent.AppName, agent.DefaultUserID)
 		if lastID == "" {

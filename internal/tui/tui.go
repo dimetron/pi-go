@@ -2034,6 +2034,12 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.inputModel.Skills = r.Skills
 		m.inputModel.SkillDirs = r.SkillDirs
 
+		// Rebuild the transcript last: it reads the session service and token
+		// tracker that were just installed above.
+		if r.Resumed {
+			m.restoreSession()
+		}
+
 		var cmds []tea.Cmd
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))

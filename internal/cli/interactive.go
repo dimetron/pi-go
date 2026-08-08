@@ -332,13 +332,12 @@ func deferredInit(
 	}
 
 	// Session service.
-	homeDir, err := os.UserHomeDir()
+	sessionsPath, err := sessionsDir()
 	if err != nil {
-		fail(fmt.Errorf("getting home dir: %w", err))
+		fail(err)
 		return
 	}
-	sessionsDir := filepath.Join(homeDir, ".pi-go", "sessions")
-	sessionSvc, err := pisession.NewFileService(sessionsDir)
+	sessionSvc, err := pisession.NewFileService(sessionsPath)
 	if err != nil {
 		fail(fmt.Errorf("creating session service: %w", err))
 		return
@@ -393,6 +392,7 @@ func deferredInit(
 
 	// Resolve session (--continue is resolved in fast path, flagSession is set).
 	sessionID := flagSession
+	resumed := sessionID != ""
 	var defaultTitle string
 	if sessionID == "" {
 		sessionID, defaultTitle, err = ag.CreateSession(ctx)
@@ -400,6 +400,14 @@ func deferredInit(
 			fail(fmt.Errorf("creating session: %w", err))
 			return
 		}
+	}
+
+	// Keep the recorded model honest. meta.Model used to be written once, at
+	// creation, so a session resumed under a different model (via --model) kept
+	// advertising the old one — and the next resume would restore that instead
+	// of what the session actually last ran with.
+	if resumed {
+		_ = sessionSvc.SetSessionModel(sessionID, llm.Name()) // best-effort metadata
 	}
 
 	// Store session ID for resume hint on exit.
@@ -427,7 +435,7 @@ func deferredInit(
 	}
 
 	// Capture ACP subagent events (claude, gemini) under the session dir.
-	res.orch.SetACPLogPath(filepath.Join(sessionsDir, sessionID, "acp.jsonl"))
+	res.orch.SetACPLogPath(filepath.Join(sessionsPath, sessionID, "acp.jsonl"))
 
 	// Session logger was created above; record the session start now that the
 	// session ID is known.
@@ -447,6 +455,7 @@ func deferredInit(
 			Agent:             ag,
 			SessionID:         sessionID,
 			SessionTitle:      defaultTitle,
+			Resumed:           resumed,
 			SessionService:    sessionSvc,
 			Orchestrator:      orch,
 			Logger:            sessionLog,

@@ -94,7 +94,11 @@ type InitResult struct {
 	// (git repo name, or CWD basename). The TUI seeds its terminal window/tab
 	// title with it so the user sees a label before the first user prompt
 	// arrives. Empty if the agent has no title namer or no CWD to derive from.
-	SessionTitle      string
+	SessionTitle string
+	// Resumed reports that SessionID names an existing session rather than one
+	// created for this run, so the TUI knows to rebuild its transcript from the
+	// session's events instead of opening on the welcome splash.
+	Resumed           bool
 	SessionService    *pisession.FileService
 	Orchestrator      *subagent.Orchestrator
 	Logger            *logger.Logger
