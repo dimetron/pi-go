@@ -14,14 +14,14 @@ directory and its own branch, so a switch in one cannot destroy another.
 Create one before starting any task that edits tracked files:
 
 ```bash
-git worktree add -b fix/<topic> ../pi-go.worktrees/fix-<topic> HEAD
-cd ../pi-go.worktrees/fix-<topic>
+git worktree add -b fix/<topic> .worktrees/fix-<topic> HEAD
+cd .worktrees/fix-<topic>
 ```
 
 Remove it when the branch is merged or abandoned:
 
 ```bash
-git worktree remove ../pi-go.worktrees/fix-<topic>
+git worktree remove .worktrees/fix-<topic>
 git worktree list          # verify; prune stale metadata with `git worktree prune`
 ```
 
@@ -31,7 +31,7 @@ Three conventions coexist. Match the one that fits who is doing the work.
 
 | Creator | Path | Branch | Notes |
 |---|---|---|---|
-| Human / Claude Code | `../pi-go.worktrees/<branch-with-dashes>` | `fix/…`, `feat/…` | Sibling of the repo, so it is outside the checkout |
+| Human / Claude Code | `<repo>/.worktrees/<branch-with-dashes>` | `fix/…`, `feat/…` | Inside the repo, so it stays within the sandbox; `.worktrees/` is gitignored |
 | pi-go agent (`/run`, subagents) | `<repo>/.pi-go/tasks/<pathID>` | `pi-agent-<shortID>`, or the sanitized requested name | Created by `internal/subagent/worktree.go`; `.pi-go/` is gitignored |
 | `arbor` tool | `~/.arbor/worktrees/pi-go/<name>` | matches dir name | External tool, listed here only so `git worktree list` output is not surprising |
 
@@ -121,6 +121,27 @@ The hook that usually tempts this is `golangci-lint`, which runs against the
 branch never touched (currently 10 `SA1019` deprecation errors in
 `hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
 the unrelated lint failure or to have the user decide, not to bypass the hook.
+
+## Creating a pull request
+
+When the user asks to create a PR, open the browser link to the PR after it is
+created, and include **all pending changes** in the PR.
+
+```bash
+# Push the branch and create the PR with all pending (uncommitted) changes.
+# Stage everything, commit, push, then open the PR in the browser.
+git add -A
+git commit -s -S -m "..."        # sign off and sign, per the rules above
+git push -u origin <branch>
+gh pr create --fill --web        # --web opens the PR page in the browser
+```
+
+- **All pending changes**: stage and commit everything outstanding on the branch
+  before creating the PR — do not leave uncommitted work behind.
+- **Open the browser link**: after the PR is created, open the PR URL in the
+  browser so the user can review it immediately. `gh pr create --web` does this
+  automatically; if you create the PR without `--web`, open the returned URL
+  yourself.
 
 ## Build, test, lint
 
