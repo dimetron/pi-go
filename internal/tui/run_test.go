@@ -523,9 +523,9 @@ func TestHandleRunAgentEvent_ToolCall_PopulatesToolIn(t *testing.T) {
 	if got.tool != "bash" {
 		t.Errorf("bash tool message: tool=%q, want bash", got.tool)
 	}
-	// toolCallSummary truncates to 80 chars.
-	if len(got.toolIn) > 80 {
-		t.Errorf("bash toolIn should be truncated to 80, got %d chars: %q", len(got.toolIn), got.toolIn)
+	// toolCallSummary preserves the full command; the renderer clips to width.
+	if got.toolIn != longCmd {
+		t.Errorf("bash toolIn should preserve the full command, got %d chars: %q", len(got.toolIn), got.toolIn)
 	}
 	if got.toolIn == "" {
 		t.Error("bash toolIn should be populated from args.command")
@@ -856,9 +856,11 @@ func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 }
 
 func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	orch.SetStatusForTest("task-123", "completed")
 	m := &model{
 		cfg: Config{
-			Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil),
+			Orchestrator: orch,
 		},
 		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:   true,
@@ -1476,5 +1478,198 @@ func TestRunWorktreeName(t *testing.T) {
 	}
 	if got := runWorktreeName("features/SUB/skills-subagents", "part-2"); got != "features-SUB-skills-subagents-part-2" {
 		t.Fatalf("runWorktreeName() with suffix = %q", got)
+	}
+}
+
+// TestHandleRunAgentDone_CompletedStatus_ProceedsToGatesOrMerge verifies
+// that when the orchestrator reports the subagent's status as
+// "completed" (i.e. clean exit code 0), handleRunAgentDone continues
+// to the normal gate/merge flow. This is the "happy path" of the
+// post-spawn verification step.
+func TestHandleRunAgentDone_CompletedStatus_ProceedsToGatesOrMerge(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	orch.SetStatusForTest("task-1", "completed")
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg:       Config{Orchestrator: orch},
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			agentID:  "task-1",
+			gates:    nil, // no gates → goes straight to merge
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1"})
+
+	if m.run.phase != "merging" {
+		t.Errorf("phase = %q, want merging (completed status, no gates)", m.run.phase)
+	}
+	if m.running {
+		t.Error("model should not still be running after done")
+	}
+}
+
+// TestHandleRunAgentDone_FailedStatus_SkipsGatesAndMerge verifies that
+// when the subagent exited non-zero (status != "completed"), the run
+// is marked failed, gates/merge are skipped, and the worktree is
+// preserved. This is the behavior the user asked for: "check if
+// subagent finished <> 0 exit code".
+func TestHandleRunAgentDone_FailedStatus_SkipsGatesAndMerge(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := subagent.NewOrchestrator(&config.Config{}, tmpDir, nil)
+	orch.SetStatusForTest("task-1", "failed")
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg: Config{
+			Orchestrator: orch,
+			WorkDir:      tmpDir,
+		},
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			agentID:  "task-1",
+			gates:    []Gate{{Name: "test", Command: "go test ./..."}},
+		},
+	}
+
+	// Pre-create a PROMPT.md so writeRunSummary has somewhere to write.
+	if err := os.MkdirAll(filepath.Join(tmpDir, "specs", "test-spec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "specs", "test-spec", "PROMPT.md"),
+		[]byte("# Test\n\n## Gates\n\n- **test**: `go test ./...`\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1"})
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want failed (subagent exited non-zero)", m.run.phase)
+	}
+
+	// User-facing message should mention the non-zero status and the
+	// /run command they can use to resume.
+	var saw bool
+	for _, msg := range m.chatModel.Messages {
+		if strings.Contains(msg.content, "non-zero status") &&
+			strings.Contains(msg.content, "/run test-spec") {
+			saw = true
+			break
+		}
+	}
+	if !saw {
+		t.Error("expected a chat message mentioning non-zero status and the /run command to resume")
+	}
+
+	// Should NOT contain the gate validation message (we skip gates).
+	for _, msg := range m.chatModel.Messages {
+		if strings.Contains(msg.content, "validating gates") {
+			t.Error("should not announce gate validation when subagent failed")
+		}
+	}
+
+	// SUMMARY.md should be written with the new agent_failed outcome.
+	reportPath := filepath.Join(tmpDir, "specs", "test-spec", "SUMMARY.md")
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("expected SUMMARY.md: %v", err)
+	}
+	if !strings.Contains(string(data), "agent_failed") {
+		t.Errorf("SUMMARY.md should mention agent_failed outcome; got:\n%s", string(data))
+	}
+}
+
+// TestHandleRunAgentDone_UnknownStatus_TreatedAsFailed verifies that
+// when the orchestrator has no record of the agent at all (e.g. the
+// events channel closed before the orchestrator recorded a final
+// status), we err on the side of warning the user rather than silently
+// merging.
+func TestHandleRunAgentDone_UnknownStatus_TreatedAsFailed(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	// No SetStatusForTest — the orchestrator has no record of this agent.
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg:       Config{Orchestrator: orch},
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			agentID:  "task-unknown",
+			gates:    []Gate{{Name: "test", Command: "true"}},
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-unknown"})
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want failed (unknown agent)", m.run.phase)
+	}
+}
+
+// TestHandleRunAgentDone_ParallelOneFailed_AbortsRun verifies that if
+// even one parallel agent exits non-zero, the whole run is marked
+// failed and gates/merge are skipped — neither the failing agent nor
+// the successful one should be merged.
+func TestHandleRunAgentDone_ParallelOneFailed_AbortsRun(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	orch.SetStatusForTest("a-1", "completed")
+	orch.SetStatusForTest("a-2", "killed")
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg:       Config{Orchestrator: orch},
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			parallel: []*parallelAgent{
+				{agentID: "a-1", done: true},
+				{agentID: "a-2", done: true},
+			},
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-1"}) // a-1 already done, a-2 also done
+	// (a-2 was already marked done in setup; handleRunAgentDone's
+	//  parallel branch only sets done=true on the matching agentID.)
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-2"})
+
+	if m.run.phase != "failed" {
+		t.Errorf("phase = %q, want failed (a-2 was killed)", m.run.phase)
+	}
+}
+
+// TestHandleRunAgentDone_ParallelAllCompleted_ProceedsToGates verifies
+// the parallel happy path: every agent is "completed" → gates run.
+func TestHandleRunAgentDone_ParallelAllCompleted_ProceedsToGates(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	orch.SetStatusForTest("a-1", "completed")
+	orch.SetStatusForTest("a-2", "completed")
+
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		cfg:       Config{Orchestrator: orch},
+		run: &runState{
+			specName: "test-spec",
+			phase:    "running",
+			gates:    []Gate{{Name: "test", Command: "true"}}, // has gates → phase "gating"
+			parallel: []*parallelAgent{
+				{agentID: "a-1", done: true}, // already done
+				{agentID: "a-2", done: false},
+			},
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-2"})
+
+	if m.run.phase != "gating" {
+		t.Errorf("phase = %q, want gating (parallel all completed)", m.run.phase)
 	}
 }

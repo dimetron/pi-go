@@ -598,6 +598,54 @@ func (o *Orchestrator) List() []AgentStatus {
 	return statuses
 }
 
+// SetStatusForTest is a test-only helper that records a synthetic
+// agent state so callers can exercise post-spawn verification paths
+// without spawning a real subprocess. The agent is marked "running"
+// until SetStatusForTest is called with a final status. Returns false
+// if the orchestrator was already shut down. Not for production use.
+func (o *Orchestrator) SetStatusForTest(agentID, status string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return false
+	}
+	now := time.Now()
+	o.agents[agentID] = &agentState{
+		ID:         agentID,
+		Type:       "test",
+		StartedAt:  now,
+		FinishedAt: now,
+		Status:     status,
+	}
+	return true
+}
+
+// Get returns the status of a single tracked agent by ID.
+// Returns (AgentStatus{}, false) when the agent is unknown. Useful for
+// post-spawn verification (e.g. the /run flow checks exit status before
+// moving on to gate validation).
+func (o *Orchestrator) Get(agentID string) (AgentStatus, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	state, ok := o.agents[agentID]
+	if !ok {
+		return AgentStatus{}, false
+	}
+	dur := ""
+	if state.Status != "running" && !state.FinishedAt.IsZero() {
+		dur = state.FinishedAt.Sub(state.StartedAt).Truncate(time.Millisecond).String()
+	}
+	return AgentStatus{
+		AgentID:   state.ID,
+		Type:      state.Type,
+		Status:    state.Status,
+		Prompt:    state.Prompt,
+		StartedAt: state.StartedAt,
+		Duration:  dur,
+	}, true
+}
+
 // resolveWorktreeUsage determines whether a worktree should be created for a spawn.
 func resolveWorktreeUsage(agentDefault bool, inputOverride *bool, workDir string) bool {
 	if workDir != "" {

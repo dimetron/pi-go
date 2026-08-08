@@ -121,8 +121,8 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) st
 
 	if msg.toolIn != "" {
 		args := msg.toolIn
-		if len(args) > 60 {
-			args = args[:57] + "..."
+		if max := t.argWidth(); len(args) > max {
+			args = truncateRunes(args, max)
 		}
 		b.WriteString(dim.Render("("))
 		b.WriteString(dim.Render(args))
@@ -131,8 +131,8 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style) st
 
 	if msg.content != "" {
 		summary := toolResultSummary(msg.content)
-		if len(summary) > 60 {
-			summary = summary[:57] + "..."
+		if max := t.argWidth(); len(summary) > max {
+			summary = truncateRunes(summary, max)
 		}
 		// Show only the first line of the summary.
 		if idx := strings.IndexByte(summary, '\n'); idx >= 0 {
@@ -308,6 +308,24 @@ func (t *ToolDisplayModel) contentWidth() int {
 	return w*8/10 - 4
 }
 
+// argWidth returns the max rune count for a tool's argument/command shown in
+// the header line. It scales with the terminal width so wide terminals show
+// longer commands instead of truncating everything to a fixed 60/80 chars.
+// The header is "◉ tool(args)" — reserve room for the bullet, tool name, and
+// parens, then give the rest to the args. A floor of 60 keeps narrow
+// terminals readable.
+func (t ToolDisplayModel) argWidth() int {
+	w := t.Width
+	if w < 40 {
+		w = 80 // sensible default when width unknown
+	}
+	// Reserve ~20 chars for "◉ tool(" + ")" and the trailing summary space.
+	if w-20 < 60 {
+		return 60
+	}
+	return w - 20
+}
+
 // collapseToSingleLine replaces newlines and tabs with spaces and collapses
 // runs of whitespace, so long multi-line content renders on a single wrapped
 // line under the agent tool's "│ " gutter rather than drifting to column 0.
@@ -342,7 +360,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style) st
 	b.WriteString(toolBullet)
 	b.WriteString(toolStyle.Render(msg.tool))
 	if msg.toolIn != "" {
-		args := truncateRunes(msg.toolIn, 80)
+		args := truncateRunes(msg.toolIn, t.argWidth())
 		b.WriteString(dim.Render("("))
 		b.WriteString(argStyle.Render(args))
 		b.WriteString(dim.Render(")"))
@@ -428,9 +446,6 @@ func toolCallSummary(name string, args map[string]any) string {
 		}
 	case "bash":
 		if cmd, ok := args["command"].(string); ok {
-			if len(cmd) > 80 {
-				cmd = cmd[:77] + "..."
-			}
 			return cmd
 		}
 	// "ripgrep" is the name the grep tool registers under when rg is installed.

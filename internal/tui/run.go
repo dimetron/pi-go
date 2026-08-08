@@ -541,6 +541,31 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 	m.chatModel.Streaming = ""
 	m.chatModel.Thinking = ""
 
+	// Verify that every subagent exited cleanly (status == "completed")
+	// before moving on to gate validation. A "failed" / "killed" /
+	// "canceled" status means the subagent process exited non-zero (or
+	// was killed), so the work in its worktree is unreliable — skip
+	// gates/merge and surface the failure to the user instead. The
+	// worktree is preserved so they can inspect it manually.
+	if bad := m.failedAgentIDs(); len(bad) > 0 {
+		m.run.phase = "failed"
+		wtPaths := m.runWorktreePathsFor(bad)
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role: "assistant",
+			content: fmt.Sprintf(
+				"**Subagent exited with non-zero status** for spec `%s` — skipping gates and merge.\n"+
+					"Inspect the worktree(s) below and re-run `/run %s` once the issue is fixed.\n%s",
+				m.run.specName, m.run.specName, wtPaths),
+		})
+		if report, rerr := m.writeRunSummary("agent_failed"); rerr == nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: fmt.Sprintf("Summary report: `%s`", report),
+			})
+		}
+		return m, nil
+	}
+
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
 		content: "**All agents finished** — validating gates...",
@@ -559,6 +584,53 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 	// Run gate validation.
 	m.run.phase = "gating"
 	return m, m.runGatesCmd()
+}
+
+// failedAgentIDs returns the IDs of subagents (single or parallel) that
+// did not exit cleanly. An agent is considered failed when its status in
+// the orchestrator is anything other than "completed" or "running".
+// When the orchestrator has no record of an agent yet (race between
+// channel close and state update), it is treated as failed so the user
+// is warned rather than silently merged.
+func (m *model) failedAgentIDs() []string {
+	if m.run == nil || m.cfg.Orchestrator == nil {
+		return nil
+	}
+	var bad []string
+	check := func(agentID string) {
+		st, ok := m.cfg.Orchestrator.Get(agentID)
+		if !ok || st.Status != "completed" {
+			bad = append(bad, agentID)
+		}
+	}
+	if m.run.isParallel() {
+		for _, pa := range m.run.parallel {
+			check(pa.agentID)
+		}
+	} else if m.run.agentID != "" {
+		check(m.run.agentID)
+	}
+	return bad
+}
+
+// runWorktreePathsFor returns a markdown bullet list of worktree paths
+// for the given agent IDs, one per line. Used by the post-run failure
+// message so the user can find the preserved worktree(s).
+func (m *model) runWorktreePathsFor(agentIDs []string) string {
+	if m.cfg.Orchestrator == nil || len(agentIDs) == 0 {
+		return ""
+	}
+	wm := m.cfg.Orchestrator.Worktree()
+	if wm == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, aid := range agentIDs {
+		if p := wm.PathFor(aid); p != "" {
+			fmt.Fprintf(&b, "- `%s`\n", p)
+		}
+	}
+	return b.String()
 }
 
 // runGatesCmd returns a tea.Cmd that runs each gate command sequentially in the worktree.
@@ -947,6 +1019,8 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 		fmt.Fprintf(&b, "Gate validation failed after %d retries. Worktree preserved for manual inspection.\n", rs.retries)
 	case "merge_failed":
 		b.WriteString("Gates passed but merge into the main branch failed. Worktree preserved for manual resolution.\n")
+	case "agent_failed":
+		b.WriteString("Subagent process exited with non-zero status (or was killed) before gates could run. Worktree preserved for manual inspection — see chat for the failing agent IDs and their worktree paths.\n")
 	default:
 		fmt.Fprintf(&b, "Run ended with status: %s\n", outcome)
 	}
