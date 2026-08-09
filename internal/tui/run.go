@@ -159,6 +159,23 @@ func runWorktreeName(specName string, suffix string) string {
 	return name
 }
 
+func runBackupBranchName(specName, suffix string) string {
+	name := strings.Trim(specName, "/")
+	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	if suffix != "" {
+		name += "/" + suffix
+	}
+	return "run/" + name
+}
+
+func (m *model) createRunBackupBranch(agentID, branch string) error {
+	if m.cfg.Orchestrator == nil || m.cfg.Orchestrator.Worktree() == nil {
+		return fmt.Errorf("no worktree manager")
+	}
+	return m.cfg.Orchestrator.Worktree().CreateBackupBranch(agentID, branch)
+}
+
 func formatAvailableRunSpecsTable(specs []string) string {
 	var b strings.Builder
 	b.WriteString("**Available features:**\n\n")
@@ -264,6 +281,11 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if err := m.createRunBackupBranch(agentID, runBackupBranchName(specName, "")); err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Failed to create run backup branch: %v", err)})
+		return m, nil
+	}
+
 	m.run = &runState{
 		specName:   specName,
 		promptMD:   promptMD,
@@ -331,6 +353,15 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 			role:    "assistant",
 			content: fmt.Sprintf("Failed to spawn agent 2 (agent 1 `%s` is running): %v", agentID1, err),
 		})
+		return m, nil
+	}
+
+	if err := m.createRunBackupBranch(agentID1, runBackupBranchName(specName, "part-1")); err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Failed to create run backup branch for agent 1: %v", err)})
+		return m, nil
+	}
+	if err := m.createRunBackupBranch(agentID2, runBackupBranchName(specName, "part-2")); err != nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Failed to create run backup branch for agent 2: %v", err)})
 		return m, nil
 	}
 
