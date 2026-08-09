@@ -18,12 +18,15 @@ const (
 	// discards everything it had produced.
 	DefaultAbsoluteTimeout = 10 * time.Minute
 
-	// DefaultInactivityTimeout is how long a subagent can go without producing output (120 seconds).
+	// DefaultInactivityTimeout is how long a subagent can go without producing output.
 	//
 	// Silence is the signal that matters. An agent that is streaming tokens or
 	// reporting tool calls is working, however long it takes; one that has said
-	// nothing for two minutes is wedged.
-	DefaultInactivityTimeout = 120 * time.Second
+	// nothing for five minutes is wedged. It was briefly 120s, which killed
+	// productive worktree agents mid-task: a long `bash` command (a build, a
+	// test run, a git operation) that produces no output for two minutes is
+	// working, not stuck, and cutting it off discarded everything it had done.
+	DefaultInactivityTimeout = 5 * time.Minute
 )
 
 // TimeoutConfig holds resolved timeout values for a subagent.
