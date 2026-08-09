@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -257,4 +258,279 @@ func TestInputRefreshThemeFollowsPalette(t *testing.T) {
 	if im.stylePaletteKey != paletteKey(lightPalette) {
 		t.Error("input styles did not follow the new palette")
 	}
+}
+
+// --- /theme palette preview ---
+
+func TestFormatPalettePreviewCoversEveryRole(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    Palette
+		want string
+	}{
+		{"light", lightPalette, "light"},
+		{"dark", darkPalette, "dark"},
+		{"zero falls back to dark", Palette{}, "dark"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := formatPalettePreview(tc.p)
+
+			if !strings.Contains(out, "Active render palette ("+tc.want+")") {
+				t.Errorf("missing or wrong palette kind in header: %q", firstLine(out))
+			}
+			// Every row carries a swatch, the role name and its hex.
+			for _, role := range []string{"Text", "Primary", "Error", "Control", "Background"} {
+				if !strings.Contains(out, role) {
+					t.Errorf("missing role %q", role)
+				}
+			}
+			p := paletteOrDark(tc.p)
+			if !strings.Contains(out, colorString(p.Text)) {
+				t.Errorf("missing Text hex %s", colorString(p.Text))
+			}
+			if !strings.Contains(out, colorString(p.Control)) {
+				t.Errorf("missing Control hex %s", colorString(p.Control))
+			}
+			if got := strings.Count(out, "\n") + 1; got < 20 {
+				t.Errorf("expected a row per palette role, got %d lines", got)
+			}
+		})
+	}
+}
+
+func TestSwatchKeepsColumnsAlignedForUnsetColors(t *testing.T) {
+	if got := swatch(nil); got != strings.Repeat(" ", len(swatchGlyph)) {
+		t.Errorf("swatch(nil) = %q, want %d blanks so columns stay aligned",
+			got, len(swatchGlyph))
+	}
+	if got := swatch(lightPalette.Text); !strings.Contains(got, swatchGlyph) {
+		t.Errorf("swatch = %q, want it to contain %q", got, swatchGlyph)
+	}
+}
+
+func TestRenderPaletteRowsAlignsAndOmitsEmptyNotes(t *testing.T) {
+	rows := []paletteRow{
+		{"Text", lightPalette.Text, "body text"},
+		{"AVeryLongRoleName", lightPalette.Primary, ""},
+	}
+	out := renderPaletteRows(rows, lightPalette)
+	lines := strings.Split(out, "\n")
+
+	if len(lines) != len(rows) {
+		t.Fatalf("expected %d rows, got %d", len(rows), len(lines))
+	}
+	if !strings.Contains(lines[0], "body text") {
+		t.Error("note missing from the first row")
+	}
+	// The short role is padded to the width of the long one, so the hex
+	// columns line up.
+	if lipgloss.Width(lines[0]) != lipgloss.Width(lines[1])+len("  body text") {
+		t.Errorf("columns not aligned: %d vs %d",
+			lipgloss.Width(lines[0]), lipgloss.Width(lines[1]))
+	}
+}
+
+func TestThemePaletteSubcommandRendersThePreview(t *testing.T) {
+	m := &model{themeManager: NewThemeManager(), chatModel: ChatModel{Width: 80}}
+	m.syncPalette()
+
+	m.handleThemeCommand([]string{"PALETTE"}) // case-insensitive
+
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
+	}
+	msg := m.chatModel.Messages[0]
+	if !msg.preRendered {
+		t.Error("the palette table carries ANSI, so it must bypass glamour")
+	}
+	if !strings.Contains(msg.content, "Active render palette") {
+		t.Errorf("expected the palette preview, got %q", firstLine(msg.content))
+	}
+	// A subcommand must not be mistaken for a theme name.
+	if got := m.themeManager.CurrentName(); got != DefaultThemeName {
+		t.Errorf("/theme palette changed the theme to %q", got)
+	}
+}
+
+// preRendered content must reach the transcript byte-for-byte; routing it
+// through glamour is what prints escape bytes as text.
+func TestPreRenderedMessageBypassesGlamour(t *testing.T) {
+	body := formatPalettePreview(lightPalette)
+	c := ChatModel{
+		Palette:  lightPalette,
+		Width:    100,
+		Messages: []message{{role: "assistant", content: body, preRendered: true}},
+	}
+	c.UpdateRenderer(100)
+
+	out := c.RenderMessages(false)
+	if !strings.Contains(out, body) {
+		t.Error("pre-rendered content was reformatted on its way to the transcript")
+	}
+	if strings.Contains(out, `\x1b`) || strings.Contains(out, "38;2;") == false {
+		t.Error("expected the original ANSI to survive intact")
+	}
+}
+
+func TestThemeCommandWithoutAThemeManager(t *testing.T) {
+	m := &model{chatModel: ChatModel{}}
+	m.handleThemeCommand([]string{"catppuccin-latte"})
+
+	if len(m.chatModel.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
+	}
+	if !strings.Contains(m.chatModel.Messages[0].content, "not available") {
+		t.Errorf("expected a graceful message, got %q", m.chatModel.Messages[0].content)
+	}
+}
+
+func TestBackgroundColorWithoutAThemeManagerIsANoop(t *testing.T) {
+	m := &model{chatModel: ChatModel{Width: 80}}
+	m.handleBackgroundColor(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
+
+	if !m.bgDetected {
+		t.Error("the reply should still settle the detection question")
+	}
+	if m.palette.Valid {
+		t.Error("no theme manager means no palette to resolve")
+	}
+}
+
+func TestBackgroundColorIgnoresASecondReply(t *testing.T) {
+	m := &model{themeManager: NewThemeManager(), chatModel: ChatModel{Width: 80}}
+	m.handleBackgroundColor(tea.BackgroundColorMsg{Color: lipgloss.Color("#000000")})
+	m.handleBackgroundColor(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
+
+	if got := m.themeManager.CurrentName(); got != DefaultThemeName {
+		t.Errorf("a second reply changed the theme to %q", got)
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// Init must ask the terminal for its background on both startup paths, or a
+// light terminal never gets a light default.
+func TestInitRequestsTheTerminalBackground(t *testing.T) {
+	t.Run("deferred init", func(t *testing.T) {
+		m := &model{initCh: make(chan InitEvent, 1), themeManager: NewThemeManager()}
+		if m.Init() == nil {
+			t.Fatal("Init returned no command")
+		}
+	})
+
+	t.Run("synchronous init", func(t *testing.T) {
+		m := &model{themeManager: NewThemeManager(), cfg: Config{WorkDir: t.TempDir()}}
+		if m.Init() == nil {
+			t.Fatal("Init returned no command")
+		}
+	})
+}
+
+// The handler is only useful if the message actually reaches it.
+func TestBackgroundColorMsgIsDispatched(t *testing.T) {
+	m := &model{themeManager: NewThemeManager(), chatModel: ChatModel{Width: 80}}
+
+	_, _, handled := m.updateTerminal(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
+
+	if !handled {
+		t.Fatal("BackgroundColorMsg was not handled")
+	}
+	if got := m.themeManager.CurrentName(); got != defaultLightTheme {
+		t.Errorf("theme = %q, want %q", got, defaultLightTheme)
+	}
+}
+
+// A theme manager whose themes.json is unusable falls back to pi-classic only,
+// so the light default is genuinely missing and detection has to give up
+// quietly rather than leave a half-applied theme.
+func TestBackgroundColorGivesUpWhenTheLightDefaultIsMissing(t *testing.T) {
+	tm, err := NewThemeManagerFromJSON([]byte(`{"only-dark":{
+		"name":"only-dark","displayName":"Only Dark","themeType":"dark","colors":{}}}`))
+	if err != nil {
+		t.Fatalf("build theme manager: %v", err)
+	}
+	m := &model{themeManager: tm, chatModel: ChatModel{Width: 80}}
+
+	m.handleBackgroundColor(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
+
+	if got := tm.CurrentName(); got != "only-dark" {
+		t.Errorf("theme = %q, want the theme left untouched", got)
+	}
+}
+
+func TestChromaStylesResolve(t *testing.T) {
+	if highlightStyle() == nil || lightHighlightStyle() == nil {
+		t.Fatal("chroma style lookup returned nil")
+	}
+	if highlightStyle() == lightHighlightStyle() {
+		t.Error("light and dark palettes share a syntax style")
+	}
+}
+
+// The original bug: the markdown renderer was constructed before the theme
+// manager existed, so it was always built from the dark palette.
+func TestNewModelBuildsTheRendererFromTheConfiguredTheme(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("light theme from config", func(t *testing.T) {
+		m := newModel(ctx, cancel, Config{ThemeName: "github-light", WorkDir: t.TempDir()})
+
+		if got := m.themeManager.CurrentName(); got != "github-light" {
+			t.Errorf("theme = %q, want github-light", got)
+		}
+		if !m.palette.IsLight {
+			t.Fatal("configured light theme did not resolve to a light palette")
+		}
+		if !m.chatModel.Palette.IsLight {
+			t.Error("the chat model did not receive the light palette")
+		}
+		// Built from the light palette, so nothing should rebuild it.
+		if m.chatModel.RefreshTheme() {
+			t.Error("renderer was built from the wrong palette and needed a rebuild")
+		}
+		out, err := m.chatModel.Renderer.Render("`code`")
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if strings.Contains(out, "48;5;236") {
+			t.Error("renderer used glamour's dark inline-code background")
+		}
+	})
+
+	t.Run("unknown theme falls back to the default", func(t *testing.T) {
+		m := newModel(ctx, cancel, Config{ThemeName: "no-such-theme", WorkDir: t.TempDir()})
+		if got := m.themeManager.CurrentName(); got != DefaultThemeName {
+			t.Errorf("theme = %q, want %q", got, DefaultThemeName)
+		}
+		if m.palette.IsLight {
+			t.Error("the default theme is dark")
+		}
+	})
+
+	t.Run("deferred init", func(t *testing.T) {
+		ch := make(chan InitEvent, 1)
+		m := newModel(ctx, cancel, Config{DeferredInit: ch, WorkDir: t.TempDir()})
+		if !m.loading {
+			t.Error("deferred init should start in the loading state")
+		}
+		if m.initCh == nil {
+			t.Error("deferred init channel not wired")
+		}
+	})
+
+	t.Run("no saved history", func(t *testing.T) {
+		// A home directory with no history file: loadHistory returns nil and
+		// the model must still start with a usable empty slice.
+		t.Setenv("HOME", t.TempDir())
+		m := newModel(ctx, cancel, Config{WorkDir: t.TempDir()})
+		if m.inputModel.History == nil {
+			t.Error("history should be an empty slice, not nil")
+		}
+	})
 }

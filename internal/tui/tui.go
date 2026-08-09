@@ -461,11 +461,11 @@ func (m *model) applyTheme() {
 	m.inputModel.RefreshTheme()
 }
 
-// Run starts the interactive TUI.
-func Run(ctx context.Context, cfg Config) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+// newModel assembles the root model. It is separate from Run so the startup
+// wiring is testable without standing up a Bubble Tea program — notably the
+// ordering below, where building the renderer before the theme was known is
+// what pinned the whole transcript to the dark stylesheet.
+func newModel(ctx context.Context, cancel context.CancelFunc, cfg Config) model {
 	// Initialize the theme manager before the markdown renderer: the glamour
 	// stylesheet is chosen from the palette, so the renderer cannot be built
 	// until the theme is known.
@@ -506,6 +506,15 @@ func Run(ctx context.Context, cfg Config) error {
 	} else {
 		m.statusModel.GitBranch = detectBranch(cfg.WorkDir)
 	}
+	return m
+}
+
+// Run starts the interactive TUI.
+func Run(ctx context.Context, cfg Config) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	m := newModel(ctx, cancel, cfg)
 
 	// Clear inherited terminal state before the first frame is drawn. pi renders
 	// on the normal screen, so whatever the previous command left set is still

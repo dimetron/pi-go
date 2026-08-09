@@ -803,21 +803,16 @@ var cachedHostname = sync.OnceValue(func() string {
 	return name
 })
 
-// highlightStyle and highlightFormatter are resolved once; both are registry
-// lookups whose result never changes.
+// highlightStyle and lightHighlightStyle are resolved once; both are registry
+// lookups whose result never changes. styles.Get returns styles.Fallback for an
+// unknown name rather than nil, so neither needs a nil guard.
 var highlightStyle = sync.OnceValue(func() *chroma.Style {
-	if style := styles.Get("monokai"); style != nil {
-		return style
-	}
-	return styles.Fallback
+	return styles.Get("monokai")
 })
 
-// lightHighlightStyle is the chroma style for light palettes, resolved once.
+// lightHighlightStyle is the chroma style for light palettes.
 var lightHighlightStyle = sync.OnceValue(func() *chroma.Style {
-	if style := styles.Get("github"); style != nil {
-		return style
-	}
-	return highlightStyle()
+	return styles.Get("github")
 })
 
 func highlightStyleForPalette(p Palette) *chroma.Style {
