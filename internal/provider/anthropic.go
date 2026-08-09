@@ -131,7 +131,9 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 			thinkingCfgBeta := antThinkingConfigBeta(m.thinkingLevel)
 			params := m.buildBetaParams(modelName, messages, systemPrompt, maxTokens, thinkingCfgBeta, req.Config)
 			if stream {
-				antRunStreamingBeta(ctx, &m.betaClient, params, yield)
+				retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+					antRunStreamingBeta(ctx, &m.betaClient, params, y)
+				})
 			} else {
 				antRunNonStreamingBeta(ctx, &m.betaClient, params, yield)
 			}
@@ -165,7 +167,9 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 		}
 
 		if stream {
-			antRunStreaming(ctx, &m.client, params, yield)
+			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+				antRunStreaming(ctx, &m.client, params, y)
+			})
 		} else {
 			antRunNonStreaming(ctx, &m.client, params, yield)
 		}

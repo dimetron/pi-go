@@ -80,7 +80,9 @@ func (m *mistralModel) GenerateContent(ctx context.Context, req *model.LLMReques
 		}
 
 		if stream {
-			oaiRunStreaming(ctx, &m.client, params, yield)
+			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+				oaiRunStreaming(ctx, &m.client, params, y)
+			})
 		} else {
 			oaiRunNonStreaming(ctx, &m.client, params, yield)
 		}
