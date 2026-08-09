@@ -71,6 +71,12 @@ type InputModel struct {
 	Palette Palette
 
 	input textinput.Model
+
+	// stylePaletteKey fingerprints the palette `input`'s prompt and cursor
+	// styles were built from, so RefreshTheme can rebuild them on a theme
+	// switch. textinput bakes its styles in at construction, so unlike the
+	// lipgloss chrome they do not follow Palette on their own.
+	stylePaletteKey uint64
 }
 
 // NewInputModel creates an InputModel with initial state.
@@ -225,19 +231,40 @@ func (im *InputModel) Cursor() *tea.Cursor {
 	return im.input.Cursor()
 }
 
+// applyPaletteStyles paints the text input's prompt and cursor from the current
+// palette and records which palette they came from.
+func (im *InputModel) applyPaletteStyles() {
+	p := paletteOrDark(im.Palette)
+	promptStyle := lipgloss.NewStyle().
+		Foreground(p.Primary).
+		Bold(true)
+	styles := im.input.Styles()
+	styles.Focused.Prompt = promptStyle
+	styles.Blurred.Prompt = promptStyle
+	styles.Cursor.Color = p.Primary
+	styles.Cursor.Shape = tea.CursorBar
+	im.input.SetStyles(styles)
+	im.stylePaletteKey = paletteKey(p)
+}
+
+// RefreshTheme repaints the input's prompt and cursor when the palette has
+// changed since they were built, and reports whether it did.
+func (im *InputModel) RefreshTheme() bool {
+	if im.input.KeyMap.CharacterForward.Keys() == nil {
+		// Not constructed yet; ensureInput will pick up the current palette.
+		return false
+	}
+	if im.stylePaletteKey == paletteKey(paletteOrDark(im.Palette)) {
+		return false
+	}
+	im.applyPaletteStyles()
+	return true
+}
+
 func (im *InputModel) ensureInput() {
 	if im.input.KeyMap.CharacterForward.Keys() == nil {
 		im.input = textinput.New()
-		p := paletteOrDark(im.Palette)
-		promptStyle := lipgloss.NewStyle().
-			Foreground(p.Primary).
-			Bold(true)
-		styles := im.input.Styles()
-		styles.Focused.Prompt = promptStyle
-		styles.Blurred.Prompt = promptStyle
-		styles.Cursor.Color = p.Primary
-		styles.Cursor.Shape = tea.CursorBar
-		im.input.SetStyles(styles)
+		im.applyPaletteStyles()
 		im.input.Prompt = "> "
 		im.input.SetVirtualCursor(false)
 		im.input.SetWidth(0)

@@ -45,6 +45,11 @@ type model struct {
 	// each frame in View so a /theme switch takes effect immediately.
 	palette Palette
 
+	// bgDetected records that the terminal background question is settled —
+	// either the reply to RequestBackgroundColor arrived, or the user picked a
+	// theme explicitly. Detection never overrides an explicit choice.
+	bgDetected bool
+
 	// Agent state.
 	running     bool
 	mode        string             // "chat" or "plan" — shown in status bar
@@ -430,23 +435,52 @@ func (sp *searchPopupState) filterSearch() {
 	sp.scrollOff = 0
 }
 
+// syncPalette resolves the active theme's palette and fans it out to every
+// renderer that holds one. It runs once per frame from View, and again from
+// applyResize and the theme-switch paths so the palette is never stale when the
+// markdown renderer is rebuilt. A nil manager (tests) falls back to the dark
+// palette, keeping existing output unchanged.
+func (m *model) syncPalette() {
+	m.palette = darkPalette
+	if m.themeManager != nil {
+		m.palette = paletteFor(m.themeManager.Current())
+	}
+	m.chatModel.Palette = m.palette
+	m.chatModel.ToolDisplay.Palette = m.palette
+	m.inputModel.Palette = m.palette
+	m.matrix.palette = m.palette
+}
+
+// applyTheme fans out a theme change: it repaints the lipgloss chrome via
+// syncPalette, then rebuilds the pieces that cache a palette internally — the
+// glamour markdown renderer and the text input's prompt and cursor styles.
+// Without this a /theme switch would leave the transcript in the old theme.
+func (m *model) applyTheme() {
+	m.syncPalette()
+	m.chatModel.RefreshTheme()
+	m.inputModel.RefreshTheme()
+}
+
 // Run starts the interactive TUI.
 func Run(ctx context.Context, cfg Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	renderer, _ := newMarkdownRenderer(100)
+	// Initialize the theme manager before the markdown renderer: the glamour
+	// stylesheet is chosen from the palette, so the renderer cannot be built
+	// until the theme is known.
+	tm := NewThemeManager()
+	if cfg.ThemeName != "" && cfg.ThemeName != "default" {
+		_ = tm.SetTheme(cfg.ThemeName) // ignore error, falls back to tokyo-night
+	}
+	palette := paletteFor(tm.Current())
+
+	renderer, _ := newMarkdownRenderer(100, palette)
 
 	// Load persistent command history from ~/.pi-go/history.jsonl.
 	history := loadHistory()
 	if history == nil {
 		history = make([]HistoryEntry, 0)
-	}
-
-	// Initialize theme manager.
-	tm := NewThemeManager()
-	if cfg.ThemeName != "" && cfg.ThemeName != "default" {
-		_ = tm.SetTheme(cfg.ThemeName) // ignore error, falls back to tokyo-night
 	}
 
 	m := model{
@@ -457,8 +491,13 @@ func Run(ctx context.Context, cfg Config) error {
 		chatModel:    NewChatModel(renderer),
 		statusModel:  StatusModel{},
 		themeManager: tm,
+		palette:      palette,
 		face:         NewFaceRenderer(),
 	}
+	m.syncPalette()
+	// The renderer above was built from this palette, so record its key rather
+	// than letting the first RefreshTheme rebuild it for nothing.
+	m.chatModel.rendererPaletteKey = paletteKey(palette)
 
 	if cfg.DeferredInit != nil {
 		m.loading = true
@@ -487,10 +526,18 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func (m *model) Init() tea.Cmd {
+	// Ask the terminal for its background color so an unconfigured theme can
+	// match it. The reply arrives as tea.BackgroundColorMsg; terminals that do
+	// not answer simply leave the configured default in place. This is a
+	// program-level command, deliberately not something the render path does —
+	// see TestUpdateRendererDoesNotQueryTerminalBackground.
+	requestBg := tea.RequestBackgroundColor
+
 	if m.initCh != nil {
 		// Deferred init: start listening for init events.
 		// Heavy initialization runs in a background goroutine (started by cli).
 		return tea.Batch(
+			requestBg,
 			waitForInitEvent(m.initCh),
 			tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} }),
 		)
@@ -505,8 +552,39 @@ func (m *model) Init() tea.Cmd {
 	if m.cfg.SystemNoticeCh != nil {
 		cmds = append(cmds, waitForSystemNotice(m.cfg.SystemNoticeCh))
 	}
-	cmds = append(cmds, memoryTickCmd(m.cwd()))
+	cmds = append(cmds, memoryTickCmd(m.cwd()), requestBg)
 	return tea.Batch(cmds...)
+}
+
+// defaultLightTheme is the theme used when the terminal reports a light
+// background and the user has not configured one.
+const defaultLightTheme = "catppuccin-latte"
+
+// handleBackgroundColor applies the terminal's reported background color.
+//
+// It only ever supplies a *default*: a theme named in config, or picked with
+// /theme, is a deliberate choice and is never overridden. Nothing is persisted
+// — the detected theme is a property of the terminal pi happens to be running
+// in, not of the user's configuration.
+func (m *model) handleBackgroundColor(msg tea.BackgroundColorMsg) {
+	if m.bgDetected {
+		return
+	}
+	m.bgDetected = true
+
+	if m.themeManager == nil {
+		return
+	}
+	if m.cfg.ThemeName != "" && m.cfg.ThemeName != "default" {
+		return
+	}
+	if msg.IsDark() {
+		return // the built-in default is already a dark theme
+	}
+	if err := m.themeManager.SetTheme(defaultLightTheme); err != nil {
+		return
+	}
+	m.applyTheme()
 }
 
 // msgHandler consumes a message, reporting whether it handled it. When handled
@@ -540,6 +618,10 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
+
+	case tea.BackgroundColorMsg:
+		m.handleBackgroundColor(msg)
+		return m, nil, true
 
 	case tea.PasteMsg:
 		return m.handlePaste(msg)
@@ -1281,17 +1363,7 @@ func (m *model) View() tea.View {
 		return tea.NewView("Goodbye!\n")
 	}
 
-	// Resolve the active theme's palette once per frame so a /theme switch
-	// takes effect on the next render. A nil manager (tests) falls back to the
-	// dark palette, keeping existing output unchanged.
-	m.palette = darkPalette
-	if m.themeManager != nil {
-		m.palette = paletteFor(m.themeManager.Current())
-	}
-	m.chatModel.Palette = m.palette
-	m.chatModel.ToolDisplay.Palette = m.palette
-	m.inputModel.Palette = m.palette
-	m.matrix.palette = m.palette
+	m.syncPalette()
 
 	if m.width == 0 {
 		// Show matrix-style startup text before the first terminal size arrives.
@@ -1662,6 +1734,11 @@ func renderStartupDetail(loadingItems map[string]bool) string {
 }
 
 func (m *model) applyResize() {
+	// Resolve the palette first: UpdateRenderer picks the glamour stylesheet
+	// from ChatModel.Palette, and on the first resize View has not run yet, so
+	// without this the renderer would be built from the zero palette.
+	m.syncPalette()
+
 	// The chat viewport is sized to the panel minus the rail, which owns the
 	// last column. The status bar spans the full terminal width — it sits below
 	// the sidebar, not beside it — so it gets m.width, not chatWidth.
@@ -2172,7 +2249,9 @@ func (m *model) renderSearchPopup(width int) string {
 	headerStyle := lipgloss.NewStyle().Background(bg).Bold(true)
 	searchStyle := lipgloss.NewStyle().Background(bg)
 	itemStyle := lipgloss.NewStyle().Background(bg)
-	selectedItemStyle := lipgloss.NewStyle().Background(m.palette.White)
+	// Each mode below sets its own selection background; this is just the
+	// starting point.
+	selectedItemStyle := lipgloss.NewStyle().Background(m.palette.Surface0)
 
 	var header string
 
