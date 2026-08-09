@@ -186,6 +186,40 @@ Findings are tracked in `TODO.md` under `## PPROF`; the live-measurement
 write-up is in `MEM_PPROF.md`. Both are gitignored, so they are local notes, not
 shared state — do not assume a teammate can see them.
 
+## Session history lookup
+
+When the user asks to check a specific session (e.g. `260809-0249-c53d2-7561f`)
+or review session history, search under **`$HOME/.pi-go/`** — that is the
+session root, not the repo.
+
+Sessions live in `$HOME/.pi-go/sessions/<session-id>/`, one directory per
+session (`sessionsDir()` in `internal/cli/cli.go:766`). Each contains:
+
+- `meta.json` — id, title, model, provider, workDir, timestamps, host info.
+- `events.jsonl` — the full turn/event stream (user + assistant messages).
+- `trajectory.atif.json` — the ATIF trajectory (agent tool-call trace).
+- `branches.json` — session branch state.
+
+Other useful files under `$HOME/.pi-go/`:
+
+- `last-session.json` — metadata of the most recent session start.
+- `history.jsonl` / `history` — command history.
+- `log/` — runtime logs (check here when init or a run fails).
+- `config.json` — default model and settings.
+- `memory/` — semantic memory store.
+
+Useful commands:
+
+```bash
+ls $HOME/.pi-go/sessions/ | grep <session-id>   # confirm a session exists
+cat $HOME/.pi-go/sessions/<session-id>/meta.json
+tail -n 50 $HOME/.pi-go/sessions/<session-id>/events.jsonl
+```
+
+The `session-stats` tool (`internal/tools/session_stats.go`) scans these
+directories for anomalies; it defaults to `$HOME/.pi-go/sessions` and accepts a
+`session_dir` override.
+
 ## Repo notes
 
 - `TODO.md` and `MEM_PPROF.md` are gitignored (`~/.gitignore` has `**/TODO.md`).
