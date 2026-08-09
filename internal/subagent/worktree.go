@@ -222,6 +222,67 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 	return wtPath, nil
 }
 
+// CommitAll snapshots everything an agent left in its worktree onto the
+// worktree branch, and reports whether there was anything to snapshot.
+//
+// Nothing else in this package commits, and agents are told their edits simply
+// stay local to the worktree (internal/subagent/bundled/task.md), so a worktree
+// branch otherwise sits at the commit it was created from. Every downstream
+// step is defined in terms of commits: CreateBackupBranch points a ref at the
+// branch tip, and MergeBack runs `git merge --no-ff`. Against a branch with no
+// commits, the backup preserves nothing and the merge is a no-op — and then
+// Cleanup runs `git worktree remove --force` and the work is gone. Committing
+// first is what gives both of those something to act on.
+//
+// It is written with plumbing (write-tree/commit-tree) rather than
+// `git commit` so that it runs no hooks and no signing: this is a machine
+// snapshot taken to avoid losing data, and a failing pre-commit hook on
+// half-finished agent work must not be able to turn that into a total loss.
+// The merge the caller makes afterwards still follows the user's own config.
+func (m *WorktreeManager) CommitAll(agentID, message string) (bool, error) {
+	m.mu.Lock()
+	info, exists := m.active[agentID]
+	m.mu.Unlock()
+	if !exists {
+		var err error
+		info, err = m.recoverWorktreeInfo(agentID)
+		if err != nil {
+			return false, fmt.Errorf("no worktree found for agent %s", agentID)
+		}
+	}
+
+	status, err := m.gitIn(info.Path, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("worktree status: %w: %s", err, status)
+	}
+	if status == "" {
+		return false, nil
+	}
+
+	if out, err := m.gitIn(info.Path, "add", "-A"); err != nil {
+		return false, fmt.Errorf("staging worktree changes: %w: %s", err, out)
+	}
+	tree, err := m.gitIn(info.Path, "write-tree")
+	if err != nil {
+		return false, fmt.Errorf("writing worktree tree: %w: %s", err, tree)
+	}
+	parent, err := m.gitIn(info.Path, "rev-parse", "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("resolving worktree HEAD: %w: %s", err, parent)
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "pi-go agent " + shortID(agentID)
+	}
+	commit, err := m.gitIn(info.Path, "commit-tree", tree, "-p", parent, "-m", message)
+	if err != nil {
+		return false, fmt.Errorf("creating worktree commit: %w: %s", err, commit)
+	}
+	if out, err := m.gitIn(info.Path, "update-ref", "HEAD", commit); err != nil {
+		return false, fmt.Errorf("advancing worktree branch: %w: %s", err, out)
+	}
+	return true, nil
+}
+
 // CreateBackupBranch creates a permanent branch pointing at the worktree branch.
 // The backup survives Cleanup, which removes the temporary worktree branch.
 func (m *WorktreeManager) CreateBackupBranch(agentID, backupBranch string) error {
@@ -503,8 +564,13 @@ func (m *WorktreeManager) PathFor(agentID string) string {
 
 // git runs a git command in the repo root directory and returns combined output.
 func (m *WorktreeManager) git(args ...string) (string, error) {
+	return m.gitIn(m.repoRoot, args...)
+}
+
+// gitIn runs a git command in the given directory and returns combined output.
+func (m *WorktreeManager) gitIn(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
-	cmd.Dir = m.repoRoot
+	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

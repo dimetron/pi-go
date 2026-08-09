@@ -890,19 +890,57 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 		}
 	}
 
-	// Collect agent IDs to merge (parallel or single).
-	var agentIDs []string
+	// Collect agent IDs to merge (parallel or single), each with the backup
+	// branch it was given at spawn time so the ref can be moved onto the work.
+	type mergeTarget struct {
+		agentID string
+		backup  string
+	}
+	var targets []mergeTarget
 	if m.run.isParallel() {
-		for _, pa := range m.run.parallel {
-			agentIDs = append(agentIDs, pa.agentID)
+		for i, pa := range m.run.parallel {
+			targets = append(targets, mergeTarget{
+				agentID: pa.agentID,
+				backup:  runBackupBranchName(m.run.specName, fmt.Sprintf("part-%d", i+1)),
+			})
 		}
 	} else {
-		agentIDs = []string{m.run.agentID}
+		targets = []mergeTarget{{
+			agentID: m.run.agentID,
+			backup:  runBackupBranchName(m.run.specName, ""),
+		}}
 	}
+
+	specName := m.run.specName
 
 	return func() tea.Msg {
 		var allOutput strings.Builder
-		for _, aid := range agentIDs {
+		for _, t := range targets {
+			aid := t.agentID
+
+			// Commit what the agent produced before anything can remove it.
+			// The task agent is told its edits stay local to the worktree and
+			// is never asked to commit, so without this the merge below has no
+			// commits to take and Cleanup force-removes the only copy.
+			if _, err := wm.CommitAll(aid, fmt.Sprintf("pi-go run %s (agent %s)", specName, aid)); err != nil {
+				return runMergeResultMsg{
+					output:          allOutput.String(),
+					err:             fmt.Errorf("commit worktree for %s: %w", aid, err),
+					failedAgentID:   aid,
+					preservedWTPath: wm.PathFor(aid),
+				}
+			}
+			// Move the backup ref onto the committed work. It was pointed at
+			// the base commit at spawn time, when there was nothing to back up.
+			if err := wm.CreateBackupBranch(aid, t.backup); err != nil {
+				return runMergeResultMsg{
+					output:          allOutput.String(),
+					err:             fmt.Errorf("back up worktree for %s: %w", aid, err),
+					failedAgentID:   aid,
+					preservedWTPath: wm.PathFor(aid),
+				}
+			}
+
 			out, err := wm.MergeBack(aid)
 			if err != nil {
 				return runMergeResultMsg{
