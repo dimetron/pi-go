@@ -217,11 +217,11 @@ func TestHandleThemeCommand_ListThemes(t *testing.T) {
 		t.Error("theme list carries ANSI, so it must bypass glamour")
 	}
 	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "active: ") {
-		t.Errorf("expected the active theme in the header, got %q", content)
-	}
 	if !strings.Contains(content, "tokyo-night") {
 		t.Errorf("expected theme names in the list, got %q", content)
+	}
+	if !strings.Contains(content, "🌙") || !strings.Contains(content, "☀️") {
+		t.Errorf("expected light/dark icons in the list, got %q", content)
 	}
 }
 
@@ -611,17 +611,14 @@ func TestCommandFormatThemeList(t *testing.T) {
 
 	result := formatThemeList(themes, "dark-one", darkPalette)
 
-	if !strings.Contains(result, "active: dark-one") {
-		t.Error("expected the active theme in the header")
+	if !strings.Contains(result, "dark-one") || !strings.Contains(result, "light-one") {
+		t.Error("expected every theme name in the list")
 	}
-	if !strings.Contains(result, "light-one") {
-		t.Error("expected light theme name")
-	}
-	if !strings.Contains(result, "Light One") {
-		t.Error("expected light theme display name")
+	if lines := strings.Count(result, "\n") + 1; lines != len(themes) {
+		t.Errorf("expected one row per theme, got %d rows for %d themes", lines, len(themes))
 	}
 	if !strings.Contains(result, swatchGlyph[:2]) {
-		t.Error("expected a color swatch strip beside each theme")
+		t.Error("expected a color swatch strip on each row")
 	}
 }
 
