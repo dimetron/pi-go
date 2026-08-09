@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -632,7 +633,14 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 		m.agentCh <- agentDoneMsg{err: err}
 	}
 
-	for ev, err := range m.cfg.Agent.RunStreaming(ctx, m.cfg.SessionID, prompt) {
+	// Same retry wrapper the print and RPC front-ends use, so a run that dies
+	// before producing anything is replayed here too instead of ending the turn
+	// with an error on screen. Mid-turn failures are handled a layer down, in
+	// the provider, where a single request can be re-sent without replaying the
+	// tool calls that already ran.
+	for ev, err := range agent.WithRetry(agent.DefaultRetryConfig(), func() iter.Seq2[*session.Event, error] {
+		return m.cfg.Agent.RunStreaming(ctx, m.cfg.SessionID, prompt)
+	}) {
 		if err != nil {
 			fail(err)
 			return

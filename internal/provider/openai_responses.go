@@ -97,38 +97,48 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 			}
 		}
 
-		runOnce := func(p responses.ResponseNewParams) (bool, error) {
-			if stream {
-				return m.runResponsesStreaming(ctx, p, yield)
+		// send performs the request once, including the previous_response_id
+		// recovery below. It takes its own yield so retryStream can re-run it.
+		send := func(y func(*model.LLMResponse, error) bool) {
+			runOnce := func(p responses.ResponseNewParams) (bool, error) {
+				if stream {
+					return m.runResponsesStreaming(ctx, p, y)
+				}
+				return m.runResponsesNonStreaming(ctx, p, y)
 			}
-			return m.runResponsesNonStreaming(ctx, p, yield)
+
+			emitted, err := runOnce(params)
+
+			// A stored previous_response_id can stop resolving upstream at any
+			// point: a proxy or load balancer routing the next turn to a different
+			// deployment, `store=false` (zero-data-retention accounts), expiry, or
+			// a model switch. The full conversation is already in params.Input —
+			// previous_response_id is only an optimisation here — so retrying
+			// without it is lossless. Only retry when nothing was streamed yet,
+			// otherwise the caller would see the turn's text twice.
+			if err != nil && sentPreviousResponseID && !emitted && isPreviousResponseNotFound(err) {
+				m.clearPreviousResponseID()
+				params.PreviousResponseID = param.Opt[string]{}
+				// The retry is the last attempt, so its emitted flag is moot.
+				_, err = runOnce(params)
+			}
+
+			if err != nil {
+				// Clear the stale pointer so the next turn starts fresh rather
+				// than replaying the same rejected id.
+				m.clearPreviousResponseID()
+				if stream {
+					_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+					return
+				}
+				_ = y(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
+			}
 		}
 
-		emitted, err := runOnce(params)
-
-		// A stored previous_response_id can stop resolving upstream at any
-		// point: a proxy or load balancer routing the next turn to a different
-		// deployment, `store=false` (zero-data-retention accounts), expiry, or
-		// a model switch. The full conversation is already in params.Input —
-		// previous_response_id is only an optimisation here — so retrying
-		// without it is lossless. Only retry when nothing was streamed yet,
-		// otherwise the caller would see the turn's text twice.
-		if err != nil && sentPreviousResponseID && !emitted && isPreviousResponseNotFound(err) {
-			m.clearPreviousResponseID()
-			params.PreviousResponseID = param.Opt[string]{}
-			// The retry is the last attempt, so its emitted flag is moot.
-			_, err = runOnce(params)
-		}
-
-		if err != nil {
-			// Clear the stale pointer so the next turn starts fresh rather
-			// than replaying the same rejected id.
-			m.clearPreviousResponseID()
-			if stream {
-				_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-				return
-			}
-			_ = yield(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
+		if stream {
+			retryStream(ctx, streamRetryConfig(), yield, send)
+		} else {
+			send(yield)
 		}
 	}
 }

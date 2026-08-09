@@ -139,7 +139,9 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		}
 
 		if stream {
-			ollamaRunStreaming(ctx, m.client, chatReq, yield)
+			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+				ollamaRunStreaming(ctx, m.client, chatReq, y)
+			})
 		} else {
 			chatReq.Stream = new(false)
 			ollamaRunNonStreaming(ctx, m.client, chatReq, yield)

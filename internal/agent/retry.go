@@ -1,98 +1,44 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"iter"
-	"math"
-	"strings"
 	"time"
 
 	"google.golang.org/adk/v2/session"
+
+	"github.com/dimetron/pi-go/internal/retry"
 )
 
 // RetryConfig controls retry behavior for transient LLM errors.
-type RetryConfig struct {
-	// MaxRetries is the maximum number of retry attempts (default 3).
-	MaxRetries int
-
-	// InitialDelay is the base delay before the first retry (default 1s).
-	InitialDelay time.Duration
-
-	// MaxDelay caps the exponential backoff delay (default 30s).
-	MaxDelay time.Duration
-}
+type RetryConfig = retry.Config
 
 // DefaultRetryConfig returns sensible defaults for retry behavior.
 func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxRetries:   3,
-		InitialDelay: 1 * time.Second,
-		MaxDelay:     30 * time.Second,
-	}
+	return retry.DefaultConfig()
 }
 
 // isTransient returns true if the error is likely transient and worth retrying.
-// This covers rate limits (429), server errors (5xx), timeouts, and connection resets.
+// Classification lives in internal/retry so that internal/provider, which
+// cannot import this package, applies exactly the same rules.
 func isTransient(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-
-	transientPatterns := []string{
-		"429",
-		"rate limit",
-		"rate_limit",
-		"too many requests",
-		"500",
-		"502",
-		"503",
-		"504",
-		"internal server error",
-		"bad gateway",
-		"service unavailable",
-		"gateway timeout",
-		"connection reset",
-		"connection refused",
-		"timeout",
-		"deadline exceeded",
-		"temporary failure",
-		"overloaded",
-	}
-
-	lower := strings.ToLower(msg)
-	for _, pattern := range transientPatterns {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-
-	var timeoutErr interface{ Timeout() bool }
-	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return true
-	}
-
-	var tempErr interface{ Temporary() bool }
-	if errors.As(err, &tempErr) && tempErr.Temporary() {
-		return true
-	}
-
-	return false
+	return retry.IsTransient(err)
 }
 
-// retryDelay calculates the delay for attempt n using exponential backoff.
+// retryDelay calculates the delay before retry attempt n (0-based).
 func retryDelay(cfg RetryConfig, attempt int) time.Duration {
-	delay := float64(cfg.InitialDelay) * math.Pow(2, float64(attempt))
-	if delay > float64(cfg.MaxDelay) {
-		delay = float64(cfg.MaxDelay)
-	}
-	return time.Duration(delay)
+	return retry.Delay(cfg, attempt, nil)
 }
 
 // WithRetry wraps an agent run function with retry logic for transient errors.
 // If the iterator yields a transient error, it sleeps and retries the entire run.
 // Non-transient errors are yielded immediately without retry.
+//
+// This is the coarse net. It can only replay a run that produced nothing, so it
+// does not help once a turn is underway — by the time a mid-turn request fails,
+// tool calls have already been yielded and re-running them is not safe. The
+// finer net is in internal/provider, which retries the single failed HTTP
+// request without disturbing the turn around it.
 func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
 		for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
@@ -123,8 +69,7 @@ func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) i
 			}
 
 			if attempt < cfg.MaxRetries {
-				delay := retryDelay(cfg, attempt)
-				time.Sleep(delay)
+				time.Sleep(retry.Delay(cfg, attempt, transientErr))
 				continue
 			}
 

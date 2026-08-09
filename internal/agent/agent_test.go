@@ -1317,14 +1317,17 @@ func TestRebuildWithModelNilLLM(t *testing.T) {
 func TestDefaultRetryConfig(t *testing.T) {
 	cfg := DefaultRetryConfig()
 
-	if cfg.MaxRetries != 3 {
-		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
+	if cfg.MaxRetries != 5 {
+		t.Errorf("MaxRetries = %d, want 5", cfg.MaxRetries)
 	}
 	if cfg.InitialDelay != 1*time.Second {
 		t.Errorf("InitialDelay = %v, want 1s", cfg.InitialDelay)
 	}
-	if cfg.MaxDelay != 30*time.Second {
-		t.Errorf("MaxDelay = %v, want 30s", cfg.MaxDelay)
+	// A minute, because the limits that produce a retryable 429 are per-minute
+	// windows: the old 30s cap could only ever retry inside the same exhausted
+	// window it was waiting out.
+	if cfg.MaxDelay != 60*time.Second {
+		t.Errorf("MaxDelay = %v, want 60s", cfg.MaxDelay)
 	}
 }
 
