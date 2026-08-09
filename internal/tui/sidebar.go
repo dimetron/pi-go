@@ -18,11 +18,11 @@ import (
 
 // SidebarWidth is the fixed width of the right sidebar.
 //
-// 18 is 60% of the 30 it used to be: the sidebar's rows are short labels and
-// counts, so the columns it gave back to the chat panel were worth more than
-// the slack it kept. Every consumer reads this constant — mainWidth, the
+// 23 is the 18 it used to be, widened by 5: the sidebar's rows are short labels
+// and counts, so the columns it gives back to the chat panel are worth more than
+// the slack it keeps. Every consumer reads this constant — mainWidth, the
 // render-integrity test's column check — so the whole frame follows from it.
-const SidebarWidth = 18
+const SidebarWidth = 23
 
 // SidebarRenderInput provides data needed by the sidebar.
 type SidebarRenderInput struct {
