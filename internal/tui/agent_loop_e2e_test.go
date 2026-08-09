@@ -46,7 +46,7 @@ func (m *loopLLM) GenerateContent(_ context.Context, _ *llmmodel.LLMRequest, _ b
 // pipeline (not just the stuckDetector in isolation) against a model that keeps
 // emitting an identical failing bash call. It guards the end-to-end wiring:
 // SSE RunStreaming must deliver FunctionResponse events to the loop, and
-// observeResult must abort the run once the same call fails maxRepeatErrorCalls
+// observeResult must abort the run once the same call fails agent.MaxRepeatErrorCalls
 // times in a row. Regression for the minimax-m3:cloud empty-args tool loop.
 func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 	dir := t.TempDir()
@@ -97,7 +97,7 @@ func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 	if doneErr == nil || !strings.Contains(doneErr.Error(), "aborted") {
 		t.Fatalf("expected loop-aborted error, got: %v", doneErr)
 	}
-	if toolCalls != maxRepeatErrorCalls {
-		t.Fatalf("aborted after %d identical failing tool calls, want %d", toolCalls, maxRepeatErrorCalls)
+	if toolCalls != agent.MaxRepeatErrorCalls {
+		t.Fatalf("aborted after %d identical failing tool calls, want %d", toolCalls, agent.MaxRepeatErrorCalls)
 	}
 }

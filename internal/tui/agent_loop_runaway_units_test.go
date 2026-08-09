@@ -14,56 +14,6 @@ import (
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
-func TestStuckDetector_ObserveOutput_EmptyChunkIsNoop(t *testing.T) {
-	s := &stuckDetector{}
-	if stuck, _ := s.observeOutput(""); stuck {
-		t.Error("an empty chunk must not trip the detector")
-	}
-	if s.outBuf != "" || s.outSince != 0 {
-		t.Errorf("an empty chunk must not change detector state: buf=%q since=%d", s.outBuf, s.outSince)
-	}
-}
-
-func TestRepeatPeriod(t *testing.T) {
-	if got := repeatPeriod("short"); got != 0 {
-		t.Errorf("a buffer shorter than two probes has no period, got %d", got)
-	}
-	// The unit must not be periodic within itself, or the probe legitimately
-	// matches at the shorter inner period instead.
-	unit := "the model keeps restating this one sentence, verbatim. "
-	if got := repeatPeriod(strings.Repeat(unit, 4)); got != len(unit) {
-		t.Errorf("repeatPeriod = %d, want %d", got, len(unit))
-	}
-	if got := repeatPeriod(strings.Repeat("q", 200) + "no repetition of the tail whatsoever here!"); got != 0 {
-		t.Errorf("a tail that never recurs has no period, got %d", got)
-	}
-}
-
-func TestIsPeriodic(t *testing.T) {
-	unit := "the same phrase again. "
-	if !isPeriodic(strings.Repeat(unit, 12), len(unit), 12) {
-		t.Error("12 back-to-back copies must read as periodic")
-	}
-	if isPeriodic(strings.Repeat(unit, 12)+"different tail", len(unit), 12) {
-		t.Error("a broken tail must not read as periodic")
-	}
-	if isPeriodic(unit, len(unit), 12) {
-		t.Error("a buffer shorter than period*repeats cannot be periodic")
-	}
-	if isPeriodic(strings.Repeat(unit, 12), 0, 12) {
-		t.Error("a zero period must be rejected")
-	}
-}
-
-func TestHasVariety(t *testing.T) {
-	if hasVariety(strings.Repeat("-", 80)) {
-		t.Error("a rule of dashes is filler, not a phrase")
-	}
-	if !hasVariety("a sentence with plenty of distinct letters") {
-		t.Error("ordinary prose must count as a phrase")
-	}
-}
-
 func TestHandleAgentWarning_AppendsWarning(t *testing.T) {
 	m := newHandlerModel()
 	m.handleAgentWarning(agentWarningMsg{text: "Response truncated: the model hit its output-token limit."})

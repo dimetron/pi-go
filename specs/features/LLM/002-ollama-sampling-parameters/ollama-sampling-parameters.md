@@ -210,10 +210,18 @@ Two consequences follow:
 
 No default is proposed on this evidence.
 
-### Follow-up, not addressed here
+### Follow-up
 
-The runaway guard (`stuckDetector`) is instantiated only in
-`internal/tui/agent_loop.go`. `runPrint` and the json/socket/rpc and ACP paths
-have no repetition protection at all — trials with 71, 67 and 42 byte-exact
-repeats ran to completion without aborting. Sampling parameters reduce the odds
-of a loop; they are not a substitute for that guard.
+**Done (`feat/shared-stuck-guard`).** The runaway guard was instantiated only in
+`internal/tui/agent_loop.go`, so `runPrint`, the json/rpc paths and ACP had no
+repetition protection at all — trials with 71, 67 and 42 byte-exact repeats ran
+to completion without aborting. `StuckDetector` now lives in
+`internal/agent/stuck.go` behind one `ObserveEvent` entry point, and every front
+end calls it. ACP also gained a session log, so its runs are analysable by the
+tooling above like any other mode.
+
+**Still open.** There is no session-level token cap; the only `TokenBudget` in
+the tree belongs to the memory subsystem. And the guard still keys on byte-exact
+periodicity, so it does not catch the semantic looping that survived the
+penalties in the table above — a cap on consecutive thinking events with no tool
+call is the missing arm.
