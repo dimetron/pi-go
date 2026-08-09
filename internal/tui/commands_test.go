@@ -213,12 +213,15 @@ func TestHandleThemeCommand_ListThemes(t *testing.T) {
 	if len(mm.chatModel.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
 	}
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "Current theme") {
-		t.Errorf("expected theme list with 'Current theme', got %q", content)
+	if !mm.chatModel.Messages[0].preRendered {
+		t.Error("theme list carries ANSI, so it must bypass glamour")
 	}
-	if !strings.Contains(content, "Available themes") {
-		t.Errorf("expected 'Available themes' section, got %q", content)
+	content := mm.chatModel.Messages[0].content
+	if !strings.Contains(content, "active: ") {
+		t.Errorf("expected the active theme in the header, got %q", content)
+	}
+	if !strings.Contains(content, "tokyo-night") {
+		t.Errorf("expected theme names in the list, got %q", content)
 	}
 }
 
@@ -606,16 +609,19 @@ func TestCommandFormatThemeList(t *testing.T) {
 		{Name: "light-one", DisplayName: "Light One", ThemeType: "light"},
 	}
 
-	result := formatThemeList(themes, "dark-one")
+	result := formatThemeList(themes, "dark-one", darkPalette)
 
-	if !strings.Contains(result, "Current theme:") {
-		t.Error("expected 'Current theme:' header")
+	if !strings.Contains(result, "active: dark-one") {
+		t.Error("expected the active theme in the header")
 	}
-	if !strings.Contains(result, "dark-one") {
-		t.Error("expected current theme name")
+	if !strings.Contains(result, "light-one") {
+		t.Error("expected light theme name")
 	}
 	if !strings.Contains(result, "Light One") {
 		t.Error("expected light theme display name")
+	}
+	if !strings.Contains(result, swatchGlyph[:2]) {
+		t.Error("expected a color swatch strip beside each theme")
 	}
 }
 

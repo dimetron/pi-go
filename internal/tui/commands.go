@@ -13,6 +13,7 @@ import (
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
@@ -889,23 +890,85 @@ func (m *model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 }
 
-// formatThemeList builds a display string listing all themes with the current one marked.
-func formatThemeList(themes []Theme, currentName string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "**Current theme:** `%s`\n\n", currentName)
-	b.WriteString("**Available themes:**\n")
+// formatThemeList builds the theme list: one row per theme, each with a strip
+// of its declared colors so themes are distinguishable without switching to
+// them one at a time.
+//
+// The rows carry ANSI, so the message must be marked preRendered — glamour
+// prints escape bytes as text.
+func formatThemeList(themes []Theme, currentName string, p Palette) string {
+	p = paletteOrDark(p)
+	head := lipgloss.NewStyle().Foreground(p.Primary).Bold(true)
+	name := lipgloss.NewStyle().Foreground(p.Text)
+	display := lipgloss.NewStyle().Foreground(p.Dim)
+	active := lipgloss.NewStyle().Foreground(p.Success).Bold(true)
+	hint := lipgloss.NewStyle().Foreground(p.Faint)
+
+	nameWidth := 0
 	for _, t := range themes {
-		marker := " "
+		if len(t.Name) > nameWidth {
+			nameWidth = len(t.Name)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(head.Render("Themes"))
+	b.WriteString(display.Render(fmt.Sprintf("  (%d, active: %s)", len(themes), currentName)))
+	b.WriteString("\n\n")
+	for _, t := range themes {
+		marker := "  "
+		nameStyle := name
 		if t.Name == currentName {
-			marker = "*"
+			marker = active.Render("▸ ")
+			nameStyle = active
 		}
 		icon := "🌙"
 		if t.ThemeType == "light" {
 			icon = "☀️"
 		}
-		fmt.Fprintf(&b, "%s %s `%s` — %s\n", marker, icon, t.Name, t.DisplayName)
+		fmt.Fprintf(&b, "%s%s %s  %s  %s\n",
+			marker, swatchStrip(t.Colors), icon,
+			nameStyle.Render(fmt.Sprintf("%-*s", nameWidth, t.Name)),
+			display.Render(t.DisplayName))
 	}
+	b.WriteString("\n")
+	b.WriteString(hint.Render("  /theme <name>          switch"))
+	b.WriteString("\n")
+	b.WriteString(hint.Render("  /theme preview [name]  full swatch table"))
+	b.WriteString("\n")
+	b.WriteString(hint.Render("  /theme palette         colors the renderers actually use"))
 	return b.String()
+}
+
+// handleThemePreview renders the swatch table for a named theme, or for the
+// active one when no name is given.
+func (m *model) handleThemePreview(args []string) (tea.Model, tea.Cmd) {
+	cur := m.themeManager.CurrentName()
+	name := cur
+	if len(args) > 0 {
+		name = strings.ToLower(args[0])
+	}
+	if !m.themeManager.HasTheme(name) {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: formatThemeError(name, m.themeManager.ClosestMatches(name, 5)),
+		})
+		return m, nil
+	}
+
+	var theme Theme
+	for _, t := range m.themeManager.List() {
+		if t.Name == name {
+			theme = t
+			break
+		}
+	}
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:        "assistant",
+		preRendered: true,
+		content:     formatThemePreview(theme, m.palette, name == cur),
+	})
+	return m, nil
 }
 
 // formatThemeError builds an error message with optional close-match suggestions.
@@ -929,8 +992,21 @@ func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 
 	if len(args) == 0 {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: formatThemeList(m.themeManager.List(), m.themeManager.CurrentName()),
+			role:        "assistant",
+			preRendered: true,
+			content:     formatThemeList(m.themeManager.List(), m.themeManager.CurrentName(), m.palette),
+		})
+		return m, nil
+	}
+
+	switch strings.ToLower(args[0]) {
+	case "preview":
+		return m.handleThemePreview(args[1:])
+	case "palette":
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:        "assistant",
+			preRendered: true,
+			content:     formatPalettePreview(m.palette),
 		})
 		return m, nil
 	}
@@ -946,10 +1022,15 @@ func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 
 	saveThemeToConfig(name)
 
+	// An explicit choice wins over terminal background detection for the rest
+	// of the session.
+	m.bgDetected = true
+	m.applyTheme()
+
 	cur := m.themeManager.Current()
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: fmt.Sprintf("Theme switched to `%s` (%s). Colors will apply to new output.", cur.Name, cur.DisplayName),
+		content: fmt.Sprintf("Theme switched to `%s` (%s).", cur.Name, cur.DisplayName),
 	})
 	return m, nil
 }

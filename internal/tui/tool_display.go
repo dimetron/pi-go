@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"sync"
@@ -35,18 +36,19 @@ var acpBundledAgents = map[string]struct{}{
 //
 // Compound types like "claude+gemini" use the color of the first ACP
 // component found. Anything else returns the default tool color (35).
-func agentToolColor(agentType string) string {
+func agentToolColor(agentType string, pal Palette) color.Color {
+	pal = paletteOrDark(pal)
 	for _, p := range strings.Split(agentType, "+") {
 		switch strings.TrimSpace(p) {
 		case "claude":
-			return "208"
+			return pal.Peach
 		case "cursor":
-			return "245"
+			return pal.Overlay
 		case "gemini":
-			return "39"
+			return pal.Blue
 		}
 	}
-	return "35"
+	return pal.Tool
 }
 
 // agentBracketLabel returns the string rendered inside "agent[...]" for a
@@ -154,9 +156,9 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p 
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
 func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Palette) string {
-	agentBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true).Render("◉ ")
-	typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	agentBullet := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true).Render("◉ ")
+	typeStyle := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(p.Text)
 
 	var b strings.Builder
 	b.WriteString(agentBullet)
@@ -178,7 +180,7 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Pa
 	// always sees the latest activity — not a stream truncated into silence.
 	if len(msg.agentEvents) > 0 {
 		evStyle := lipgloss.NewStyle().Foreground(p.Dim)
-		evToolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(agentToolColor(msg.agentType)))
+		evToolStyle := lipgloss.NewStyle().Foreground(agentToolColor(msg.agentType, p))
 
 		renderable := make([]agentEv, 0, len(msg.agentEvents))
 		for _, ev := range msg.agentEvents {
@@ -413,9 +415,9 @@ func softWrap(s string, width int) []string {
 // renderRegularTool renders a standard tool message with name, args, and
 // syntax-highlighted output.
 func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p Palette) string {
-	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
-	argStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	toolBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true).Render("◉ ")
+	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
+	argStyle := lipgloss.NewStyle().Foreground(p.Dim)
+	toolBullet := lipgloss.NewStyle().Foreground(p.Tool).Bold(true).Render("◉ ")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -810,11 +812,17 @@ var highlightStyle = sync.OnceValue(func() *chroma.Style {
 	return styles.Fallback
 })
 
+// lightHighlightStyle is the chroma style for light palettes, resolved once.
+var lightHighlightStyle = sync.OnceValue(func() *chroma.Style {
+	if style := styles.Get("github"); style != nil {
+		return style
+	}
+	return highlightStyle()
+})
+
 func highlightStyleForPalette(p Palette) *chroma.Style {
-	if colorString(p.Background) == colorString(lightPalette.Background) {
-		if style := styles.Get("github"); style != nil {
-			return style
-		}
+	if paletteOrDark(p).IsLight {
+		return lightHighlightStyle()
 	}
 	return highlightStyle()
 }
@@ -825,11 +833,6 @@ var highlightFormatter = sync.OnceValue(func() chroma.Formatter {
 	}
 	return formatters.Fallback
 })
-
-// highlightCode applies chroma syntax highlighting based on filename extension.
-func highlightCode(code, filename string) string {
-	return highlightCodeWithPalette(code, filename, darkPalette)
-}
 
 func highlightCodeWithPalette(code, filename string, p Palette) string {
 	p = paletteOrDark(p)
@@ -864,11 +867,8 @@ func highlightCodeWithPalette(code, filename string, p Palette) string {
 // the filename-based lexer always misses; the content-sniffing fallback picks
 // something close to the actual language, and chroma's fallback lexer gives
 // the rest a non-gray foreground either way.
-func highlightBashOutput(lines []string, palettes ...Palette) []string {
-	p := darkPalette
-	if len(palettes) > 0 {
-		p = palettes[0]
-	}
+func highlightBashOutput(lines []string, p Palette) []string {
+	p = paletteOrDark(p)
 	code := strings.Join(lines, "\n")
 	highlighted := highlightCodeWithPalette(code, "", p)
 	if highlighted == code {
@@ -876,7 +876,7 @@ func highlightBashOutput(lines []string, palettes ...Palette) []string {
 		// to a non-gray foreground so the block stands out from the gutter
 		// instead of looking like unread dim text.
 		styled := make([]string, len(lines))
-		nonDim := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		nonDim := lipgloss.NewStyle().Foreground(p.Text)
 		for i, line := range lines {
 			styled[i] = nonDim.Render(line)
 		}

@@ -1975,9 +1975,9 @@ func TestFormatThemeList(t *testing.T) {
 		{Name: "dark", DisplayName: "Dark Theme", ThemeType: "dark"},
 		{Name: "light", DisplayName: "Light Theme", ThemeType: "light"},
 	}
-	got := formatThemeList(themes, "dark")
+	got := formatThemeList(themes, "dark", darkPalette)
 
-	if !strings.Contains(got, "**Current theme:** `dark`") {
+	if !strings.Contains(got, "active: dark") {
 		t.Errorf("missing current theme header")
 	}
 	if !strings.Contains(got, "☀️") {
@@ -1986,7 +1986,7 @@ func TestFormatThemeList(t *testing.T) {
 	if !strings.Contains(got, "🌙") {
 		t.Errorf("missing dark theme icon")
 	}
-	if !strings.Contains(got, "* 🌙 `dark`") {
+	if !strings.Contains(got, "▸ ") {
 		t.Errorf("missing current theme marker")
 	}
 }

@@ -78,7 +78,7 @@ func TestHighlightBashOutputPreservesLines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := highlightBashOutput(tt.lines)
+			got := highlightBashOutput(tt.lines, darkPalette)
 
 			if len(got) != len(tt.lines) {
 				t.Fatalf("got %d lines, want %d: %q", len(got), len(tt.lines), got)
@@ -95,7 +95,7 @@ func TestHighlightBashOutputPreservesLines(t *testing.T) {
 func TestHighlightBashOutputEmpty(t *testing.T) {
 	t.Parallel()
 
-	if got := highlightBashOutput(nil); len(got) != 0 {
-		t.Errorf("highlightBashOutput(nil) = %q, want empty", got)
+	if got := highlightBashOutput(nil, darkPalette); len(got) != 0 {
+		t.Errorf("highlightBashOutput(nil, darkPalette) = %q, want empty", got)
 	}
 }

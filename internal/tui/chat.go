@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
+	gansi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 
@@ -98,10 +99,14 @@ func (c *ChatModel) renderWelcome(p Palette) string {
 type message struct {
 	role      string // "user", "assistant", or "tool"
 	content   string
-	isWarning bool   // if true, render with warning style
-	isError   bool   // if true, render with error style (takes precedence)
-	tool      string // tool name (for role=="tool")
-	toolIn    string // tool input args (for role=="tool")
+	isWarning bool // if true, render with warning style
+	isError   bool // if true, render with error style (takes precedence)
+	// preRendered marks content that is already terminal output — it carries
+	// its own ANSI and must bypass glamour, which treats escape bytes as text
+	// and prints them. Used by /theme's palette preview.
+	preRendered bool
+	tool        string // tool name (for role=="tool")
+	toolIn      string // tool input args (for role=="tool")
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
 	agentID       string    // subagent ID for matching events
 	agentType     string    // subagent type (e.g. "task", "explore")
@@ -195,6 +200,9 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if m.isError {
 		flags |= 1 << 4
 	}
+	if m.preRendered {
+		flags |= 1 << 5
+	}
 	return fnvByte(h, flags)
 }
 
@@ -214,14 +222,18 @@ type traceEntry struct {
 
 // ChatModel manages the conversation message display, scrolling, and markdown rendering.
 type ChatModel struct {
-	Messages    []message
-	Scroll      int // scroll offset from bottom
-	Streaming   string
-	Thinking    string
-	Renderer    *glamour.TermRenderer
-	TraceLog    []traceEntry
-	Width       int
-	ToolDisplay ToolDisplayModel
+	Messages  []message
+	Scroll    int // scroll offset from bottom
+	Streaming string
+	Thinking  string
+	Renderer  *glamour.TermRenderer
+
+	// rendererPaletteKey fingerprints the palette Renderer was built with, so
+	// RefreshTheme can tell a real theme change from a redundant call.
+	rendererPaletteKey uint64
+	TraceLog           []traceEntry
+	Width              int
+	ToolDisplay        ToolDisplayModel
 	// Palette is the resolved theme palette, set each frame by the model before
 	// rendering. Zero means the dark default.
 	Palette Palette
@@ -304,9 +316,47 @@ func (c *ChatModel) MaxScroll(height int) int {
 	return max
 }
 
-func newMarkdownRenderer(width int) (*glamour.TermRenderer, error) {
+// markdownStyleFor returns the glamour stylesheet for a palette.
+//
+// The style is chosen from the palette, never probed from the terminal:
+// glamour.WithAutoStyle emits an OSC-11 query, and
+// TestUpdateRendererDoesNotQueryTerminalBackground exists to keep that out of
+// the render path.
+//
+// It also drops glamour's chroma "Error" background. Both stock stylesheets
+// paint unrecognized tokens white-on-red, and chroma's fallback lexer classes
+// box-drawing runes (the tree diagrams in our own README) as errors — so an
+// untagged fence renders with a column of red bars. Errors fall back to the
+// ordinary code foreground instead.
+func markdownStyleFor(p Palette) gansi.StyleConfig {
+	cfg := styles.DarkStyleConfig
+	if p.IsLight {
+		cfg = styles.LightStyleConfig
+	}
+	if p.IsLight {
+		// glamour's light stylesheet renders inline code as salmon (ANSI 203)
+		// on a light gray, about 3:1 — under the AA floor for body text. The
+		// dark stylesheet is left exactly as glamour ships it so dark output is
+		// unchanged.
+		hex := colorString(p.Mauve)
+		bg := colorString(p.Surface0)
+		cfg.Code.Color = &hex
+		cfg.Code.BackgroundColor = &bg
+	}
+	if cfg.CodeBlock.Chroma != nil {
+		// Copy before mutating: the StyleConfigs are package-level vars in
+		// glamour and Chroma is a pointer, so writing through it would corrupt
+		// the stylesheet for the whole process.
+		chroma := *cfg.CodeBlock.Chroma
+		chroma.Error = gansi.StylePrimitive{Color: chroma.Text.Color}
+		cfg.CodeBlock.Chroma = &chroma
+	}
+	return cfg
+}
+
+func newMarkdownRenderer(width int, p Palette) (*glamour.TermRenderer, error) {
 	return glamour.NewTermRenderer(
-		glamour.WithStandardStyle(styles.DarkStyle),
+		glamour.WithStyles(markdownStyleFor(paletteOrDark(p))),
 		glamour.WithWordWrap(width),
 		glamour.WithEmoji(),
 	)
@@ -319,9 +369,26 @@ func (c *ChatModel) UpdateRenderer(width int) {
 	if width < 40 {
 		width = 40
 	}
-	c.Renderer, _ = newMarkdownRenderer(width)
+	c.rendererPaletteKey = paletteKey(paletteOrDark(c.Palette))
+	c.Renderer, _ = newMarkdownRenderer(width, c.Palette)
 	// Invalidate render caches — width changed so all cached output is stale.
 	c.invalidateRenderCaches()
+}
+
+// RefreshTheme rebuilds the markdown renderer when the palette has changed
+// since the renderer was built, and reports whether it did.
+//
+// The glamour stylesheet is baked into the TermRenderer, so it is invisible to
+// renderKey — a theme switch that only swapped the palette would repaint the
+// lipgloss chrome and leave the transcript in the old theme. Callers that
+// change the palette (the /theme command, terminal background detection) call
+// this to bring the transcript with them.
+func (c *ChatModel) RefreshTheme() bool {
+	if c.Renderer != nil && c.rendererPaletteKey == paletteKey(paletteOrDark(c.Palette)) {
+		return false
+	}
+	c.UpdateRenderer(c.Width)
+	return true
 }
 
 // invalidateRenderCaches clears cached rendered output for all messages.
@@ -610,10 +677,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 			if content != "" {
 				msgBuf.WriteString("\n")
 				if msg.isError {
-					// 203 is #ff5f5f, the default theme's error color. Kept as a
-					// literal for the same reason the warning bullet below is:
-					// ChatModel has no ThemeManager to read from.
-					errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+					errStyle := lipgloss.NewStyle().Foreground(p.Error).Bold(true)
 					msgBuf.WriteString(errStyle.Render("✖ "))
 					// Provider errors carry the raw JSON body, which is far
 					// wider than the pane. Wrap it like the user/thinking
@@ -630,10 +694,18 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 						msgBuf.WriteString(errStyle.Render(line))
 					}
 				} else if msg.isWarning {
-					warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
-					warnBullet := lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true).Render("⚠ ")
+					// Peach, not Warning: the warning role is a yellow, and
+					// yellow is the classic light-theme casualty — it washes
+					// out to nothing on white. Orange carries the same "look
+					// here, but nothing broke" weight and stays legible on both
+					// backgrounds.
+					warnStyle := lipgloss.NewStyle().Foreground(p.Peach).Bold(true)
+					warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
 					msgBuf.WriteString(warnBullet)
 					msgBuf.WriteString(warnStyle.Render(content))
+				} else if msg.preRendered {
+					msgBuf.WriteString(bullet)
+					msgBuf.WriteString(content)
 				} else {
 					msgBuf.WriteString(bullet)
 					rendered := c.RenderMarkdown(content)

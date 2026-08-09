@@ -22,6 +22,13 @@ import (
 type Palette struct {
 	Valid bool
 
+	// IsLight reports whether this palette is meant for a light terminal
+	// background. Renderers that must pick a whole foreign stylesheet — the
+	// glamour markdown style, the chroma syntax style — branch on this rather
+	// than sniffing Background, which only worked while every light theme
+	// collapsed to one palette.
+	IsLight bool
+
 	// Text roles.
 	Text    color.Color // primary text
 	Subtext color.Color // secondary text
@@ -60,6 +67,7 @@ type Palette struct {
 	Overlay0    color.Color
 	Overlay1    color.Color
 	White       color.Color // deliberately outside the gauge vocabulary
+	Control     color.Color // controls that must sit outside a gauge's color vocabulary
 	Transparent color.Color
 }
 
@@ -67,6 +75,7 @@ type Palette struct {
 // existed. It is the default so existing dark output is unchanged.
 var darkPalette = Palette{
 	Valid:       true,
+	IsLight:     false,
 	Text:        lipgloss.Color("#cdd6f4"),
 	Subtext:     lipgloss.Color("#a6adc8"),
 	Dim:         lipgloss.Color("#a6adc8"),
@@ -98,6 +107,7 @@ var darkPalette = Palette{
 	Overlay0:    lipgloss.Color("#6c7086"),
 	Overlay1:    lipgloss.Color("#7f849c"),
 	White:       lipgloss.Color("#ffffff"),
+	Control:     lipgloss.Color("#ffffff"),
 	Transparent: lipgloss.Color("#00000000"),
 }
 
@@ -108,38 +118,43 @@ var darkPalette = Palette{
 // equivalents of the Mocha hues the renderers used, so the light theme reads as
 // the same UI, just on a light background.
 var lightPalette = Palette{
-	Valid:       true,
-	Text:        lipgloss.Color("#2c2e3e"),
-	Subtext:     lipgloss.Color("#4c4f69"),
-	Dim:         lipgloss.Color("#5c5f73"),
-	Faint:       lipgloss.Color("#63667c"),
-	Primary:     lipgloss.Color("#1a4fd8"),
-	Accent:      lipgloss.Color("#6c2bd9"),
-	Tool:        lipgloss.Color("#2f7d1f"),
-	Success:     lipgloss.Color("#2f7d1f"),
-	Error:       lipgloss.Color("#b30e2f"),
-	Warning:     lipgloss.Color("#9a5c0c"),
-	Blue:        lipgloss.Color("#1a4fd8"),
-	Cyan:        lipgloss.Color("#0369a1"),
-	Teal:        lipgloss.Color("#0f766e"),
-	Green:       lipgloss.Color("#2f7d1f"),
-	Yellow:      lipgloss.Color("#9a5c0c"),
-	Peach:       lipgloss.Color("#c2410c"),
-	Red:         lipgloss.Color("#b30e2f"),
-	Pink:        lipgloss.Color("#be185d"),
-	Mauve:       lipgloss.Color("#6c2bd9"),
-	Sky:         lipgloss.Color("#0369a1"),
-	Sapphire:    lipgloss.Color("#0e7490"),
-	Lavender:    lipgloss.Color("#4f46e5"),
-	Surface:     lipgloss.Color("#9ca0b0"),
-	Surface1:    lipgloss.Color("#bcc0cc"),
-	Overlay:     lipgloss.Color("#8c8fa1"),
-	Overlay2:    lipgloss.Color("#7c7f93"),
-	Background:  lipgloss.Color("#eff1f5"),
-	Surface0:    lipgloss.Color("#ccd0da"),
-	Overlay0:    lipgloss.Color("#8c8fa1"),
+	Valid:      true,
+	IsLight:    true,
+	Text:       lipgloss.Color("#2c2e3e"),
+	Subtext:    lipgloss.Color("#4c4f69"),
+	Dim:        lipgloss.Color("#5c5f73"),
+	Faint:      lipgloss.Color("#63667c"),
+	Primary:    lipgloss.Color("#1a4fd8"),
+	Accent:     lipgloss.Color("#6c2bd9"),
+	Tool:       lipgloss.Color("#2f7d1f"),
+	Success:    lipgloss.Color("#2f7d1f"),
+	Error:      lipgloss.Color("#b30e2f"),
+	Warning:    lipgloss.Color("#9a5c0c"),
+	Blue:       lipgloss.Color("#1a4fd8"),
+	Cyan:       lipgloss.Color("#0369a1"),
+	Teal:       lipgloss.Color("#0f766e"),
+	Green:      lipgloss.Color("#2f7d1f"),
+	Yellow:     lipgloss.Color("#9a5c0c"),
+	Peach:      lipgloss.Color("#c2410c"),
+	Red:        lipgloss.Color("#b30e2f"),
+	Pink:       lipgloss.Color("#be185d"),
+	Mauve:      lipgloss.Color("#6c2bd9"),
+	Sky:        lipgloss.Color("#0369a1"),
+	Sapphire:   lipgloss.Color("#0e7490"),
+	Lavender:   lipgloss.Color("#4f46e5"),
+	Surface:    lipgloss.Color("#9ca0b0"),
+	Surface1:   lipgloss.Color("#bcc0cc"),
+	Overlay:    lipgloss.Color("#8c8fa1"),
+	Overlay2:   lipgloss.Color("#7c7f93"),
+	Background: lipgloss.Color("#eff1f5"),
+	Surface0:   lipgloss.Color("#ccd0da"),
+	// Overlay0 carries incidental text (gutters, elided detail), so unlike
+	// Overlay — which only draws separators — it has to clear 3:1 against the
+	// background. #8c8fa1 managed 2.83:1.
+	Overlay0:    lipgloss.Color("#7c7f93"),
 	Overlay1:    lipgloss.Color("#7c7f93"),
 	White:       lipgloss.Color("#ffffff"),
+	Control:     lipgloss.Color("#1c1e26"),
 	Transparent: lipgloss.Color("#00000000"),
 }
 
