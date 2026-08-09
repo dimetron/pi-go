@@ -1101,6 +1101,11 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.matrix.clear()
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
+	if msg.err == nil && m.mode == "plan" && m.planWorktree != nil {
+		if err := m.finishPlanWorktree(); err != nil {
+			msg.err = fmt.Errorf("finalize PDD worktree: %w", err)
+		}
+	}
 	if msg.err != nil {
 		if m.face != nil {
 			m.face.SetMood(MoodSad)

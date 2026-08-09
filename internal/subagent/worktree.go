@@ -222,6 +222,28 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 	return wtPath, nil
 }
 
+// CreateBackupBranch creates a permanent branch pointing at the worktree branch.
+// The backup survives Cleanup, which removes the temporary worktree branch.
+func (m *WorktreeManager) CreateBackupBranch(agentID, backupBranch string) error {
+	m.mu.Lock()
+	info, exists := m.active[agentID]
+	m.mu.Unlock()
+	if !exists {
+		var err error
+		info, err = m.recoverWorktreeInfo(agentID)
+		if err != nil {
+			return fmt.Errorf("no worktree found for agent %s", agentID)
+		}
+	}
+	if strings.TrimSpace(backupBranch) == "" {
+		return fmt.Errorf("backup branch is required")
+	}
+	if _, err := m.git("branch", "-f", backupBranch, info.Branch); err != nil {
+		return fmt.Errorf("create backup branch %q: %w", backupBranch, err)
+	}
+	return nil
+}
+
 // Cleanup removes the worktree and branch for the given agent ID.
 // After CleanupAll has started (closed=true), late Cleanup calls are
 // no-ops — CleanupAll owns all remaining entries at that point.

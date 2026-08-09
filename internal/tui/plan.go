@@ -164,10 +164,53 @@ func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 	return specDir, nil
 }
 
+// startPlanWorktree creates the isolated branch used by /plan.
+func (m *model) startPlanWorktree(taskName string) (string, error) {
+	if m.cfg.Orchestrator == nil || m.cfg.Orchestrator.Worktree() == nil {
+		return "", fmt.Errorf("/plan requires a git worktree manager")
+	}
+	wm := m.cfg.Orchestrator.Worktree()
+	agentID := "plan-" + taskName
+	wtPath, err := wm.Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		return "", fmt.Errorf("create PDD worktree: %w", err)
+	}
+	m.planWorktreeAgentID = agentID
+	m.planWorktreePath = wtPath
+	m.planTaskName = taskName
+	m.planBackupBranch = "specs/" + taskName
+	m.planWorktree = wm
+	return wtPath, nil
+}
+
+// finishPlanWorktree preserves the completed spec under specs/<task-name>,
+// merges the temporary planning branch into the invoking branch, and removes
+// only the temporary worktree branch.
+func (m *model) finishPlanWorktree() error {
+	if m.planWorktree == nil {
+		return nil
+	}
+	promptPath := filepath.Join(m.planWorktreePath, "specs", m.planTaskName, "PROMPT.md")
+	if _, err := os.Stat(promptPath); err != nil {
+		return nil
+	}
+	if err := m.planWorktree.CreateBackupBranch(m.planWorktreeAgentID, m.planBackupBranch); err != nil {
+		return err
+	}
+	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
+		return err
+	}
+	if err := m.planWorktree.Cleanup(m.planWorktreeAgentID); err != nil {
+		return err
+	}
+	m.planWorktree = nil
+	return nil
+}
+
 // handlePlanCommand processes "/plan <rough idea>" input.
-// Creates the spec skeleton, loads the PDD SOP, injects it as the system
-// instruction, clears the conversation, and sends the rough idea as the
-// first user message so the LLM drives the PDD flow.
+// Creates the spec skeleton in an isolated worktree, loads the PDD SOP,
+// injects it as the system instruction, clears the conversation, and sends
+// the rough idea as the first user message so the LLM drives the PDD flow.
 func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	if len(parts) == 0 {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -181,20 +224,30 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 	roughIdea := strings.Join(parts, " ")
 	baseName := toKebabCase(roughIdea)
 
-	// Detect category and check for existing spec with the same base name.
 	category := detectCategory(roughIdea)
 	var taskName string
-	if existing := findExistingSpec(m.cfg.WorkDir, category, baseName); existing != "" {
+	workDir := m.cfg.WorkDir
+	if existing := findExistingSpec(workDir, category, baseName); existing != "" {
 		taskName = existing
 	} else {
-		num := nextSpecNumber(m.cfg.WorkDir, category)
+		num := nextSpecNumber(workDir, category)
 		taskName = filepath.Join(category, num+"-"+baseName)
 	}
 
-	specDir, err := createSpecSkeleton(m.cfg.WorkDir, taskName, roughIdea)
+	if m.planWorktree == nil {
+		wtPath, wtErr := m.startPlanWorktree(taskName)
+		if wtErr != nil {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Error: %v", wtErr)})
+			m.inputModel.Clear()
+			return m, nil
+		}
+		workDir = wtPath
+	}
+
+	specDir, err := createSpecSkeleton(workDir, taskName, roughIdea)
 	if err != nil {
 		// Directory exists — auto-resume the existing plan.
-		existingDir := filepath.Join(m.cfg.WorkDir, "specs", taskName)
+		existingDir := filepath.Join(workDir, "specs", taskName)
 		if strings.Contains(err.Error(), "already exists") {
 			specDir = existingDir
 			return m.startPlanSession(taskName, roughIdea, specDir)
@@ -212,8 +265,12 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 
 // startPlanSession loads the SOP, rebuilds the agent, and starts streaming.
 func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model, tea.Cmd) {
+	workDir := m.cfg.WorkDir
+	if m.planWorktreePath != "" {
+		workDir = m.planWorktreePath
+	}
 	// Load PDD SOP (project override → global override → embedded default).
-	sopText, err := sop.LoadPDD(m.cfg.WorkDir)
+	sopText, err := sop.LoadPDD(workDir)
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
@@ -223,15 +280,15 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 		return m, nil
 	}
 
-	// Construct augmented system instruction with SOP + task context.
 	instruction := sopText + "\n\n## Current Task\n" +
 		"- Task name: " + taskName + "\n" +
-		"- Spec directory: specs/" + taskName + "/\n" +
+		"- Spec directory: " + specDir + "/\n" +
 		"- Rough idea: " + roughIdea + "\n\n" +
 		"## Instructions\n" +
 		"The spec skeleton has been created at `" + specDir + "`. " +
 		"Begin the PDD process starting with Step 2 (Initial Process Planning).\n" +
-		"Artifacts should be written to `specs/" + taskName + "/` using the write and edit tools.\n"
+		"Artifacts must be written to `" + specDir + "/` using the write and edit tools. " +
+		"The current planning branch is isolated from the invoking branch; do not write PDD artifacts to the invoking checkout.\n"
 
 	// Rebuild the agent with the PDD SOP as system instruction.
 	if m.cfg.Agent == nil {
