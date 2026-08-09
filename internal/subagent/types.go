@@ -16,6 +16,7 @@ type SpawnInput struct {
 	SkipCleanup  bool        `json:"skip_cleanup,omitempty"`  // Don't auto-cleanup worktree on completion
 	Env          []string    `json:"env,omitempty"`           // Additional environment variables
 	MaxRetries   int         `json:"max_retries,omitempty"`   // Max retry attempts on crash (default 0, max 3)
+	Timeout      int         `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
 }
 
 // AgentInput is the legacy input to spawn a subagent (deprecated, use SpawnInput).
@@ -29,6 +30,7 @@ type AgentInput struct {
 	WorkDir      string `json:"work_dir,omitempty"`      // Override working directory (e.g. existing worktree path)
 	Background   bool   `json:"background,omitempty"`    // Run in background
 	SkipCleanup  bool   `json:"skip_cleanup,omitempty"`  // Deprecated: worktree cleanup is always deferred to the caller or shutdown
+	Timeout      int    `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
 }
 
 // ToSpawnInput converts a legacy AgentInput to the new SpawnInput format.
@@ -61,6 +63,7 @@ func (a AgentInput) ToSpawnInput() (SpawnInput, error) {
 		WorkDir:      a.WorkDir,
 		Background:   a.Background,
 		SkipCleanup:  a.SkipCleanup,
+		Timeout:      a.Timeout,
 	}, nil
 }
 
