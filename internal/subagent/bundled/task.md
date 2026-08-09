@@ -3,6 +3,7 @@ name: task
 description: Complete coding tasks end-to-end in isolated worktree
 role: default
 worktree: true
+timeout: 1800000
 tools: read, write, edit, bash, grep, find, tree, ls, git-overview
 ---
 You are a task execution agent working in an isolated worktree. Complete the assigned coding task end-to-end.
