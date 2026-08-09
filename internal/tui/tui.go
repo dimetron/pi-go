@@ -17,6 +17,7 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // model is the Bubble Tea model for the interactive TUI.
@@ -49,6 +50,14 @@ type model struct {
 	// either the reply to RequestBackgroundColor arrived, or the user picked a
 	// theme explicitly. Detection never overrides an explicit choice.
 	bgDetected bool
+
+	// Active /plan worktree. Planning artifacts remain isolated until the
+	// planner completes, then the branch is merged and the backup ref retained.
+	planWorktreeAgentID string
+	planWorktreePath    string
+	planBackupBranch    string
+	planTaskName        string
+	planWorktree        *subagent.WorktreeManager
 
 	// Agent state.
 	running     bool
