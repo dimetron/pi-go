@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -432,5 +433,175 @@ func TestObserveEvent_ProductivePollingSurvives(t *testing.T) {
 		if err := d.ObserveEvent(respEvent("bash_output", map[string]any{"out": i})); err != nil {
 			t.Fatalf("productive polling aborted on result at %d: %v", i, err)
 		}
+	}
+}
+
+// The tool-free-thinking arm: a turn that reasons at length and never acts.
+
+// thinkingChunk returns a distinct ~360-byte block of model reasoning. Distinct
+// matters: identical blocks would trip ObserveOutput's byte-exact arm first, and
+// the test would silently stop exercising the arm it names.
+func thinkingChunk(i int) string {
+	return fmt.Sprintf("Pass %d: restating the goal in fresh words, %s, and still calling nothing.\n",
+		i, strings.Repeat(fmt.Sprintf("clause-%d ", i), 30))
+}
+
+// bigThinkingEvent is one model event carrying that block.
+func bigThinkingEvent(i int) *session.Event {
+	return textEvent("thinking", thinkingChunk(i), true)
+}
+
+func TestObserveEvent_TripsOnToolFreeThinking(t *testing.T) {
+	var d StuckDetector
+	var err error
+	seen := 0
+	for i := range MaxThinkingEventStreak * 2 {
+		seen = i + 1
+		if err = d.ObserveEvent(bigThinkingEvent(i)); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatalf("%d tool-free thinking events must abort", seen)
+	}
+	if !strings.Contains(err.Error(), "no tool call") {
+		t.Fatalf("a different arm fired: %q", err)
+	}
+	if seen < MaxThinkingEventStreak {
+		t.Errorf("aborted after %d events, want at least %d", seen, MaxThinkingEventStreak)
+	}
+}
+
+func TestObserveEvent_ThinkingBelowThresholdSurvives(t *testing.T) {
+	var d StuckDetector
+	for i := range MaxThinkingEventStreak - 1 {
+		if err := d.ObserveEvent(bigThinkingEvent(i)); err != nil {
+			t.Fatalf("aborted at event %d, below the threshold of %d: %v", i+1, MaxThinkingEventStreak, err)
+		}
+	}
+}
+
+// Volume alone is not enough either: a long streak of tiny chunks is how a
+// token-level provider packetizes ordinary reasoning, not a stalled turn.
+func TestObserveEvent_TinyThinkingChunksSurvive(t *testing.T) {
+	var d StuckDetector
+	total := 0
+	for i := range MaxThinkingEventStreak * 20 {
+		chunk := fmt.Sprintf("ok%d ", i)
+		total += len(chunk)
+		if err := d.ObserveEvent(textEvent("thinking", chunk, true)); err != nil {
+			t.Fatalf("aborted at event %d on %d bytes: %v", i+1, total, err)
+		}
+	}
+	if total >= MinThinkingStreakBytes {
+		t.Fatalf("test fed %d bytes, at or above the %d-byte floor; it no longer proves anything",
+			total, MinThinkingStreakBytes)
+	}
+}
+
+// A turn that alternates reasoning with action never accumulates a streak, no
+// matter how long it runs.
+func TestObserveEvent_ToolCallResetsThinkingStreak(t *testing.T) {
+	var d StuckDetector
+	for i := range MaxThinkingEventStreak * 10 {
+		if err := d.ObserveEvent(bigThinkingEvent(i)); err != nil {
+			t.Fatalf("interleaved run aborted at thinking event %d: %v", i+1, err)
+		}
+		if i%(MaxThinkingEventStreak-1) != 0 {
+			continue
+		}
+		// Distinct args, so neither the identical-call nor the cycle arm fires.
+		if err := d.ObserveEvent(callEvent("read", map[string]any{"path": fmt.Sprintf("f%d.go", i)})); err != nil {
+			t.Fatalf("interleaved run aborted on the tool call at %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestObserveEvent_ToolResponseResetsThinkingStreak(t *testing.T) {
+	var d StuckDetector
+	for range 3 {
+		for i := range MaxThinkingEventStreak - 1 {
+			if err := d.ObserveEvent(bigThinkingEvent(i)); err != nil {
+				t.Fatalf("aborted at thinking event %d: %v", i+1, err)
+			}
+		}
+		if err := d.ObserveEvent(respEvent("read", map[string]any{"content": "ok"})); err != nil {
+			t.Fatalf("aborted on the tool response: %v", err)
+		}
+	}
+}
+
+// Text from anyone but the model is a new turn, not a continuation of the streak.
+func TestObserveEvent_UserTextResetsThinkingStreak(t *testing.T) {
+	var d StuckDetector
+	for range 3 {
+		for i := range MaxThinkingEventStreak - 1 {
+			if err := d.ObserveEvent(bigThinkingEvent(i)); err != nil {
+				t.Fatalf("aborted at thinking event %d: %v", i+1, err)
+			}
+		}
+		if err := d.ObserveEvent(textEvent("user", "actually, do this instead", false)); err != nil {
+			t.Fatalf("aborted on the user turn: %v", err)
+		}
+	}
+}
+
+// An event that both reasons and acts is progress; it must not count as
+// tool-free even though it carries text.
+func TestObserveEvent_ThinkingWithCallInSameEventIsProgress(t *testing.T) {
+	var d StuckDetector
+	for i := range MaxThinkingEventStreak * 3 {
+		ev := bigThinkingEvent(i)
+		ev.Content.Parts = append(ev.Content.Parts, &genai.Part{
+			FunctionCall: &genai.FunctionCall{Name: "read", Args: map[string]any{"path": fmt.Sprintf("f%d.go", i)}},
+		})
+		if err := d.ObserveEvent(ev); err != nil {
+			t.Fatalf("an event that reasons and acts aborted at %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestObserveThinking_RequiresBothGates(t *testing.T) {
+	// Count without volume.
+	var byCount StuckDetector
+	for range MaxThinkingEventStreak * 4 {
+		if stuck, detail := byCount.ObserveThinking(1); stuck {
+			t.Fatalf("one-byte events must not trip on count alone: %s", detail)
+		}
+	}
+	// Volume without count.
+	var byBytes StuckDetector
+	if stuck, detail := byBytes.ObserveThinking(MinThinkingStreakBytes * 4); stuck {
+		t.Fatalf("a single large block must not trip on volume alone: %s", detail)
+	}
+	// Both.
+	var both StuckDetector
+	var stuck bool
+	var detail string
+	for range MaxThinkingEventStreak {
+		stuck, detail = both.ObserveThinking(MinThinkingStreakBytes/MaxThinkingEventStreak + 1)
+	}
+	if !stuck {
+		t.Fatal("meeting both gates must trip")
+	}
+	if !strings.Contains(detail, "no tool call") {
+		t.Errorf("detail = %q, want it to name the missing tool call", detail)
+	}
+}
+
+func TestObserveThinking_ResetAndEmpty(t *testing.T) {
+	var d StuckDetector
+	for range MaxThinkingEventStreak - 1 {
+		d.ObserveThinking(MinThinkingStreakBytes)
+	}
+	d.ResetThinking()
+	if d.thinkEvents != 0 || d.thinkBytes != 0 {
+		t.Fatalf("ResetThinking left events=%d bytes=%d, want both 0", d.thinkEvents, d.thinkBytes)
+	}
+	if stuck, _ := d.ObserveThinking(0); stuck {
+		t.Error("an event with no text must not count")
+	}
+	if d.thinkEvents != 0 {
+		t.Errorf("an event with no text advanced the streak to %d", d.thinkEvents)
 	}
 }

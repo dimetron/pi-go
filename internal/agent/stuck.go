@@ -11,10 +11,11 @@ import (
 )
 
 // StuckDetector recognizes an agent turn that has stopped making progress:
-// identical tool calls, a tool failing over and over, or the model's own output
-// collapsing into repetition. It lives here rather than in the TUI so every
-// front end -- interactive, print, json, rpc and ACP -- shares one guard. A
-// front end that skips it runs unprotected.
+// identical tool calls, a tool failing over and over, the model's own output
+// collapsing into repetition, or the model reasoning at length without ever
+// acting. It lives here rather than in the TUI so every front end --
+// interactive, print, json, rpc and ACP -- shares one guard. A front end that
+// skips it runs unprotected.
 //
 // The zero value is ready to use. Not safe for concurrent use; one value tracks
 // one run.
@@ -68,6 +69,40 @@ const (
 	// outputCheckEvery is how much new output accumulates between scans.
 	// Scanning per token would put a linear search in the streaming path.
 	outputCheckEvery = 512
+
+	// MaxThinkingEventStreak is how many consecutive model events may carry
+	// thinking or reply text without a single tool call before the turn is
+	// called degenerate. It is only half the test: MinThinkingStreakBytes
+	// must be met as well (see ObserveThinking).
+	//
+	// The number comes from measured runs. The longest tool-free reasoning
+	// burst seen in a *healthy* run was 45 events / 13 KB (minimax-m3, in a
+	// session that went on to make 37 tool calls); claude-sonnet's longest was
+	// 7. Degenerate runs measured 21, 34, 38, 57, 68, 78, 87, 89, 122 and 164
+	// events, spanning 10 KB to 148 KB. The two populations overlap at the low
+	// end, so no threshold separates them cleanly and the choice is which
+	// error to make. A false abort kills legitimate deep reasoning outright,
+	// while a missed loop is still covered by the other three arms — so this
+	// arm is deliberately biased towards missing.
+	//
+	// 50 sits above every healthy run observed and catches 7 of the 10
+	// degenerate ones, including the 57-event / 23 KB case that motivated this
+	// arm and tripped nothing else (its output was semantically repetitive but
+	// never byte-exact, so ObserveOutput saw reps=0). The three shortest
+	// degenerate runs are below the healthy ceiling and are conceded.
+	MaxThinkingEventStreak = 50
+
+	// MinThinkingStreakBytes is how much tool-free text must accompany that
+	// streak. Event *count* alone is not a safe signal: providers chunk the
+	// stream differently, and measured events range from 1 byte to ~2.9 KB, so
+	// a token-level stream reaches 50 events in a sentence. Requiring volume
+	// as well makes the arm depend on how much the model actually said rather
+	// than on how its provider happens to packetize.
+	//
+	// 16 KiB clears the 13 KB of the largest healthy burst with room to spare,
+	// so a legitimate reasoning burst has to beat the observed ceiling on
+	// *both* axes at once to trip — a far stronger bar than either alone.
+	MinThinkingStreakBytes = 16384
 )
 
 // StuckDetector tracks recent tool calls and detects repetition loops.
@@ -81,6 +116,8 @@ type StuckDetector struct {
 	errStreak   int      // consecutive errors for that tool
 	outBuf      string   // rolling tail of the model's own output
 	outSince    int      // bytes of output since the last repetition scan
+	thinkEvents int      // consecutive model events with text and no tool call
+	thinkBytes  int      // text bytes accumulated over that streak
 }
 
 // volatileToolArgs address a slice of a target rather than the target itself.
@@ -222,6 +259,41 @@ func (s *StuckDetector) ObserveOutput(text string) (stuck bool, detail string) {
 	return true, fmt.Sprintf("model repeated a %d-character phrase %d times", period, MaxOutputRepeats)
 }
 
+// ObserveThinking records one model event that carried textBytes of thinking or
+// reply text and made no tool call, and reports whether the turn has spent too
+// long reasoning without ever acting.
+//
+// ObserveOutput above already watches for a turn that makes no tool calls, but
+// only catches *byte-exact* repetition. A model can loop semantically instead —
+// restating the same intent in fresh words on every pass, never calling a tool,
+// never making progress. Repetition penalties make that shape more likely, not
+// less, because they suppress the very signature ObserveOutput keys on. This
+// arm ignores what the text says and watches only for the absence of action.
+//
+// Both MaxThinkingEventStreak and MinThinkingStreakBytes must be exceeded; see
+// their comments for why one alone is not a safe signal.
+func (s *StuckDetector) ObserveThinking(textBytes int) (stuck bool, detail string) {
+	if textBytes <= 0 {
+		return false, ""
+	}
+	s.thinkEvents++
+	s.thinkBytes += textBytes
+	if s.thinkEvents < MaxThinkingEventStreak || s.thinkBytes < MinThinkingStreakBytes {
+		return false, ""
+	}
+	return true, fmt.Sprintf("model produced %d thinking events (%d bytes) with no tool call",
+		s.thinkEvents, s.thinkBytes)
+}
+
+// ResetThinking clears the tool-free streak. A tool call is progress by
+// definition, and so is its response; a turn that alternates reasoning with
+// action never accumulates a streak no matter how long it runs. Text authored
+// by anyone but the model resets it too, because that begins a fresh turn.
+func (s *StuckDetector) ResetThinking() {
+	s.thinkEvents = 0
+	s.thinkBytes = 0
+}
+
 // repeatPeriod returns the distance between the tail of buf and the previous
 // occurrence of that same tail — the length of the phrase the model may be
 // cycling on — or 0 when the tail does not recur.
@@ -333,22 +405,41 @@ func StuckErr(stuck bool, detail string) error {
 //
 // This exists so each front end does not hand-roll the same four calls in a
 // different order and drift apart.
+//
+// The tool-free-thinking arm is scored per event rather than per part, so an
+// event carrying three text parts counts once; the parts are summed first and
+// the verdict taken after the loop, once it is known whether the same event
+// also acted.
+//
+// No stream dedup is applied here, so under SSE the aggregate re-send is
+// counted alongside the deltas and the byte total runs roughly double. That is
+// deliberate rather than overlooked: the session logs the thresholds were
+// calibrated from are written without dedup on the thinking path too, so
+// measurement and runtime inflate alike. The practical effect is that
+// MinThinkingStreakBytes behaves like ~8 KiB of genuine text, which offsets
+// some of the conservatism chosen above.
 func (s *StuckDetector) ObserveEvent(ev *session.Event) error {
 	if ev == nil || ev.Content == nil {
 		return nil
 	}
+	textBytes, acted := 0, false
 	for _, part := range ev.Content.Parts {
 		if part.Text != "" {
+			textBytes += len(part.Text)
 			if err := StuckErr(s.ObserveOutput(part.Text)); err != nil {
 				return err
 			}
 		}
 		if fc := part.FunctionCall; fc != nil {
+			acted = true
+			s.ResetThinking()
 			if err := StuckErr(s.Observe(fc.Name, fc.Args)); err != nil {
 				return err
 			}
 		}
 		if fr := part.FunctionResponse; fr != nil {
+			acted = true
+			s.ResetThinking()
 			// A changed result on a repeated call is progress, not a loop.
 			s.ObserveResult(fr.Name, fr.Response)
 			_, isErr := fr.Response["error"]
@@ -357,5 +448,14 @@ func (s *StuckDetector) ObserveEvent(ev *session.Event) error {
 			}
 		}
 	}
-	return nil
+	if acted || textBytes == 0 {
+		return nil
+	}
+	// Text the model did not author — a user turn — starts the count over
+	// rather than adding to it.
+	if !modelRoles[ev.Content.Role] {
+		s.ResetThinking()
+		return nil
+	}
+	return StuckErr(s.ObserveThinking(textBytes))
 }
