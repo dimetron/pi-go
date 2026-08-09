@@ -1322,6 +1322,7 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 	// SSE delivers the reply as deltas and then once more as an aggregate;
 	// without this the whole answer prints twice.
 	var dedup agent.StreamDedup
+	var detector agent.StuckDetector
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
@@ -1384,6 +1385,10 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
 			}
 		}
+		if err := detector.ObserveEvent(ev); err != nil {
+			log.Error(err.Error())
+			return err
+		}
 	}
 	fmt.Println()
 	return nil
@@ -1418,6 +1423,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	// SSE delivers the reply as deltas and then once more as an aggregate;
 	// without this every text_delta is emitted twice.
 	var dedup agent.StreamDedup
+	var detector agent.StuckDetector
 
 	retryCfg := agent.DefaultRetryConfig()
 	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
@@ -1500,6 +1506,11 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 				})
 				log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
 			}
+		}
+		if err := detector.ObserveEvent(ev); err != nil {
+			log.Error(err.Error())
+			_ = enc.Encode(jsonEvent{Type: "error", Agent: ev.Author, Error: err.Error()})
+			return err
 		}
 	}
 	if !started {

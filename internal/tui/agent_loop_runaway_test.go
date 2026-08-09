@@ -17,76 +17,6 @@ import (
 
 const runawayPhrase = "Let me look at how the TUI renders messages and whether hook output surfaces. "
 
-func TestStuckDetector_ObserveOutput_TripsOnRepeatedPhrase(t *testing.T) {
-	s := &stuckDetector{}
-	var stuck bool
-	var detail string
-	for range maxOutputRepeats * 4 {
-		if stuck, detail = s.observeOutput(runawayPhrase); stuck {
-			break
-		}
-	}
-	if !stuck {
-		t.Fatal("expected the repeated phrase to trip the detector")
-	}
-	if !strings.Contains(detail, "repeated") {
-		t.Errorf("detail = %q, want it to mention repetition", detail)
-	}
-}
-
-func TestStuckDetector_ObserveOutput_AllowsProse(t *testing.T) {
-	s := &stuckDetector{}
-	// Distinct sentences, well past the byte volume that trips a repeat.
-	for i := range 400 {
-		text := strings.Repeat("x", i%37) + " unique sentence number " + strings.Repeat("y", i%29) + ". "
-		if stuck, detail := s.observeOutput(text); stuck {
-			t.Fatalf("non-repeating output tripped the detector at chunk %d: %s", i, detail)
-		}
-	}
-}
-
-func TestStuckDetector_ObserveOutput_IgnoresShortPeriods(t *testing.T) {
-	// A horizontal rule is periodic with period 1; it must not count.
-	s := &stuckDetector{}
-	for range 40 {
-		if stuck, _ := s.observeOutput(strings.Repeat("-", 80) + "\n"); stuck {
-			t.Fatal("a run of dashes must not be treated as a repetition loop")
-		}
-	}
-}
-
-func TestToolFingerprint_IgnoresPagination(t *testing.T) {
-	base := map[string]any{"file_path": "/repo/chat.go"}
-	paged := map[string]any{"file_path": "/repo/chat.go", "offset": 230, "limit": 40}
-	if toolFingerprint("read", base) != toolFingerprint("read", paged) {
-		t.Error("pagination args must not change the fingerprint")
-	}
-	other := map[string]any{"file_path": "/repo/other.go", "offset": 230, "limit": 40}
-	if toolFingerprint("read", paged) == toolFingerprint("read", other) {
-		t.Error("a different file must change the fingerprint")
-	}
-}
-
-func TestStuckDetector_Observe_TripsOnPagedRereads(t *testing.T) {
-	s := &stuckDetector{}
-	var stuck bool
-	for i := range maxRepeatToolCalls {
-		stuck, _ = s.observe("read", map[string]any{"file_path": "/repo/chat.go", "offset": i * 40})
-	}
-	if !stuck {
-		t.Fatalf("re-reading one file %d times must trip the detector", maxRepeatToolCalls)
-	}
-}
-
-// runawayLLM streams one sentence over and over and never calls a tool,
-// reproducing the deepseek-v4-flash:0731:cloud turn that emitted 148 KB of the
-// same text before the output cap stopped it.
-type runawayLLM struct {
-	name string
-	mu   sync.Mutex
-	n    int
-}
-
 func (m *runawayLLM) Name() string { return m.name }
 
 func (m *runawayLLM) GenerateContent(_ context.Context, _ *llmmodel.LLMRequest, _ bool) iter.Seq2[*llmmodel.LLMResponse, error] {
@@ -233,4 +163,12 @@ func TestRunAgentLoop_WarnsOnTruncatedTurn(t *testing.T) {
 	if !strings.Contains(warnings[0], "truncated") {
 		t.Errorf("warning = %q, want it to say the reply was truncated", warnings[0])
 	}
+}
+
+// reproducing the deepseek-v4-flash:0731:cloud turn that emitted 148 KB of the
+// same text before the output cap stopped it.
+type runawayLLM struct {
+	name string
+	mu   sync.Mutex
+	n    int
 }

@@ -18,7 +18,7 @@ Sibling skill `pi-check-session-logs` covers *tool call errors*. This one covers
 |---|---|
 | Session logs (JSONL, one per run) | `~/.pi-go/log/<yyyy-mm-dd>/session-HH-MM-SS.log` |
 | Session state (resumable) | `~/.pi-go/sessions/<id>/` — `events.jsonl`, `meta.json`, `trajectory.atif.json` |
-| Detector source | `internal/tui/agent_loop.go` |
+| Detector source | `internal/agent/stuck.go` (shared by every front end) |
 
 Log rows are `{"time","type","content",...}` with `type` in `session_start`,
 `thinking`, `llm_text`, `tool_call`, `tool_result`, `user`, `error`. The model
@@ -26,7 +26,9 @@ name is on the `session_start` row — always record it, findings are per-model.
 
 ## How the guard actually works
 
-`stuckDetector` (`internal/tui/agent_loop.go:119`) has three independent arms:
+`StuckDetector` (`internal/agent/stuck.go`) has three independent arms. Front
+ends drive it through the single entry point `ObserveEvent`, which feeds one
+event's parts to all three:
 
 - `observe` — identical consecutive tool calls, trips at `maxRepeatToolCalls`=10.
   Pagination args are stripped first (`volatileToolArgs`), so paging one file
@@ -37,8 +39,12 @@ name is on the `session_start` row — always record it, findings are per-model.
   `maxOutputRepeats`=12 **byte-exact** back-to-back copies inside an 8 KB tail.
 
 The third arm is the only one that sees a turn making no tool calls at all.
-`outBuf` is never reset across a run, and the thinking branch (`:690`) skips
-`dedup.SkipText`, unlike the text branch (`:697`).
+`outBuf` is never reset across a run.
+
+The detector used to live in `internal/tui`, so **only the TUI was guarded** —
+`print`, `json`, `rpc` and ACP ran with no protection, and replay trials with
+71, 67 and 42 byte-exact repeats ran to completion without aborting. When
+reading logs from before that move, do not treat "no abort" as "no loop".
 
 **Timeline caveat — check this before judging any old log.** Sessions predating
 these commits cannot be compared against current behavior:

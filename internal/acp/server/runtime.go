@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/provider"
@@ -52,6 +54,7 @@ type piSessionState struct {
 	sessionID   string // ADK session ID — reused across turns for history continuity
 	streamProxy *streamProxy
 	bashSup     *tools.BashSupervisor
+	sessionLog  *logger.Logger // per-ACP-session log, same format as every other mode
 	cleanup     func()
 }
 
@@ -197,12 +200,29 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating session: %w", err)
 	}
 
+	// ACP used to write no session log at all, which left its runs invisible
+	// to every tool that reads ~/.pi-go/log. A failure here is not fatal: the
+	// server should still serve, just without forensics.
+	sessionLog, logErr := logger.New()
+	if logErr != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: could not create ACP session log: %v\n", logErr)
+	} else {
+		sessionLog.SessionStart(sessionID, llm.Name(), "acp-server")
+	}
+
+	cleanup := res.cleanup
 	return &piSessionState{
 		agent:       ag,
 		sessionID:   sessionID,
 		streamProxy: res.proxy,
 		bashSup:     res.bashSup,
-		cleanup:     res.cleanup,
+		sessionLog:  sessionLog,
+		cleanup: func() {
+			if sessionLog != nil {
+				_ = sessionLog.Close()
+			}
+			cleanup()
+		},
 	}, nil
 }
 
@@ -433,7 +453,12 @@ func newSessionOrchestrator(rt RuntimeConfig, cfg config.Config, cwd string) *su
 
 // runPromptTurn runs one prompt turn against the cached pi session.
 func runPromptTurn(ctx context.Context, turn PromptTurn, ps *piSessionState, stream *adapter.Stream) (PromptResult, error) {
+	log := ps.sessionLog
+	log.UserMessage(turn.Prompt)
 	retryCfg := piagent.DefaultRetryConfig()
+	// ACP ran with no runaway protection at all until this was added: a
+	// degenerate turn streamed to the client until the provider stopped it.
+	var detector piagent.StuckDetector
 	for ev, err := range piagent.WithRetry(retryCfg, func() iter.Seq2[*adksession.Event, error] {
 		return ps.agent.RunStreaming(ctx, ps.sessionID, turn.Prompt)
 	}) {
@@ -450,6 +475,11 @@ func runPromptTurn(ctx context.Context, turn PromptTurn, ps *piSessionState, str
 		}
 		if err := stream.OnEvent(ctx, ev); err != nil {
 			return PromptResult{}, fmt.Errorf("stream event: %w", err)
+		}
+		logEventParts(log, ev)
+		if err := detector.ObserveEvent(ev); err != nil {
+			log.Error(err.Error())
+			return PromptResult{}, err
 		}
 	}
 	if ctx.Err() != nil {
@@ -535,4 +565,32 @@ func detectGitRoot(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// logEventParts records one event's parts in the session log, in the same
+// shape the TUI, print and json modes produce, so ~/.pi-go/log analysis tools
+// work against ACP runs too. A nil logger is a no-op: the *logger.Logger
+// methods tolerate a nil receiver, and ACP must serve even without a log.
+func logEventParts(log *logger.Logger, ev *adksession.Event) {
+	if log == nil || ev == nil || ev.Content == nil {
+		return
+	}
+	for _, part := range ev.Content.Parts {
+		switch {
+		case part.Text != "" && ev.Content.Role == "thinking":
+			log.Thinking(ev.Author, part.Text)
+		case part.Text != "":
+			log.LLMText(ev.Author, part.Text)
+		}
+		if fc := part.FunctionCall; fc != nil {
+			log.ToolCall(ev.Author, fc.Name, fc.Args)
+		}
+		if fr := part.FunctionResponse; fr != nil {
+			respJSON, err := json.Marshal(fr.Response)
+			if err != nil {
+				respJSON = []byte(fmt.Sprintf("%v", fr.Response))
+			}
+			log.ToolResult(ev.Author, fr.Name, string(respJSON))
+		}
+	}
 }
