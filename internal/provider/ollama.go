@@ -107,6 +107,15 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			chatReq.Options["num_predict"] = n
 		}
 
+		if sampling := ollamaSamplingOptions(); len(sampling) > 0 {
+			if chatReq.Options == nil {
+				chatReq.Options = map[string]any{}
+			}
+			for k, v := range sampling {
+				chatReq.Options[k] = v
+			}
+		}
+
 		// No num_ctx for cloud models. api.ollama.com already serves each model
 		// at its native window, and sending a fixed value caps it instead of
 		// raising it: deepseek-v4-flash:0731-cloud has 1M, so the 256K that
@@ -179,6 +188,69 @@ func ollamaNumPredict() int {
 		return defaultOllamaNumPredict
 	}
 	return n
+}
+
+// ollamaSamplingOptions returns Ollama's repetition-control knobs, omitting any
+// the operator has not set so the server's own defaults stay in force. Nothing
+// is sent by default: these change generation quality for every model, and the
+// value that helps one can degrade another.
+//
+// They exist because num_predict only bounds how far a degenerate turn runs, it
+// does not stop the turn degenerating. Ollama applies repeat_penalty (default
+// 1.1) across the last repeat_last_n (default 64) tokens only. Measured
+// degenerate turns on deepseek-v4-flash cycle on phrases of 89-194 bytes,
+// roughly 25-55 tokens, so a 64-token window may not span a full cycle and the
+// penalty never sees the repetition it is meant to suppress. Widening
+// PI_OLLAMA_REPEAT_LAST_N is the knob that addresses that directly.
+//
+//	PI_OLLAMA_REPEAT_PENALTY     float, Ollama default 1.1 (1.0 disables)
+//	PI_OLLAMA_REPEAT_LAST_N      int, Ollama default 64 (0 disables, -1 = num_ctx)
+//	PI_OLLAMA_PRESENCE_PENALTY   float, Ollama default 0.0
+//	PI_OLLAMA_FREQUENCY_PENALTY  float, Ollama default 0.0
+//
+// An unparseable value is ignored rather than fatal: a typo in an env var
+// should not take down a session that would otherwise run.
+func ollamaSamplingOptions() map[string]any {
+	opts := make(map[string]any, 4)
+	if v, ok := ollamaEnvFloat("PI_OLLAMA_REPEAT_PENALTY"); ok {
+		opts["repeat_penalty"] = v
+	}
+	if v, ok := ollamaEnvInt("PI_OLLAMA_REPEAT_LAST_N"); ok {
+		opts["repeat_last_n"] = v
+	}
+	if v, ok := ollamaEnvFloat("PI_OLLAMA_PRESENCE_PENALTY"); ok {
+		opts["presence_penalty"] = v
+	}
+	if v, ok := ollamaEnvFloat("PI_OLLAMA_FREQUENCY_PENALTY"); ok {
+		opts["frequency_penalty"] = v
+	}
+	return opts
+}
+
+// ollamaEnvFloat reads a float env var, reporting whether it was set and valid.
+func ollamaEnvFloat(name string) (float64, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// ollamaEnvInt reads an int env var, reporting whether it was set and valid.
+func ollamaEnvInt(name string) (int, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 func ollamaFinishReasonToGenai(reason string) genai.FinishReason {
