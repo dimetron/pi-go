@@ -291,6 +291,39 @@ Precedence is `--url` flag, then environment variable, then `baseURLs` config. T
 `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
 CI override still takes effect. An empty env var does not mask a configured value.
 
+### Ollama generation tuning
+
+Ollama's per-request options are left at the server's own defaults, except for an
+output cap. Each knob below is opt-in: unset means the option is not sent at all,
+so Ollama's default stays in force. An unparseable value is ignored rather than
+fatal — a typo in an env var should not take down an otherwise healthy session.
+
+| Env var | Ollama option | Ollama default | Purpose |
+|---|---|---|---|
+| `PI_OLLAMA_NUM_PREDICT` | `num_predict` | unlimited | Max tokens generated per turn. Pi defaults this to `16384`; `0` or less removes the cap. |
+| `PI_OLLAMA_REPEAT_PENALTY` | `repeat_penalty` | `1.1` | How strongly repeated tokens are penalised. `1.0` disables. |
+| `PI_OLLAMA_REPEAT_LAST_N` | `repeat_last_n` | `64` | How many recent tokens the penalty looks back over. `0` disables, `-1` uses the full context. |
+| `PI_OLLAMA_PRESENCE_PENALTY` | `presence_penalty` | `0.0` | Flat penalty for tokens already used. |
+| `PI_OLLAMA_FREQUENCY_PENALTY` | `frequency_penalty` | `0.0` | Penalty scaled by how often a token was used. |
+
+These matter for models prone to repetition collapse, where a turn stops making
+progress and restates the same phrase until it hits a limit. `num_predict` only
+bounds how far such a turn runs; it does not stop it degenerating. The penalty
+window is the knob that targets the cause, and the default window is narrow:
+Ollama penalises repeats across the last 64 tokens only, while observed
+degenerate turns cycle on phrases of roughly 25–55 tokens, so a full cycle can
+fall outside the window the penalty can see.
+
+```bash
+# Widen the repetition window and penalise repeats harder.
+export PI_OLLAMA_REPEAT_LAST_N=512
+export PI_OLLAMA_REPEAT_PENALTY=1.2
+```
+
+Both apply to local Ollama and Ollama Cloud — they share one request path. Raising
+these trades diversity for repetition control, and a value that helps one model can
+degrade another, so tune per model rather than setting them globally.
+
 ### Custom OpenAI-compatible provider
 
 For OpenAI-compatible APIs with model names that Pi cannot infer from a prefix, explicitly set the role provider to
