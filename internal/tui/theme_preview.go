@@ -21,12 +21,16 @@ func swatch(c color.Color) string {
 	return lipgloss.NewStyle().Foreground(c).Render(swatchGlyph)
 }
 
-// themeSwatchRoles are the roles shown in the one-line strip beside each theme
-// in the /theme list: enough hues to tell two themes apart at a glance.
+// themeSwatchRoles are the colors shown in the strip beside each theme in the
+// /theme list. The list row is the whole preview, so this covers the full set a
+// theme declares rather than a representative few — background and text first,
+// since those decide whether a theme is usable at all.
 func themeSwatchRoles(c ThemeColors) []color.Color {
 	return []color.Color{
-		c.PrimaryColor(), c.ToolColor(), c.SuccessColor(),
-		c.WarningColor(), c.ErrorColor(), c.InfoColor(),
+		c.BaseColor(), c.TextColor(), c.SecondaryColor(),
+		c.PrimaryColor(), c.InfoColor(), c.ToolColor(),
+		c.SuccessColor(), c.WarningColor(), c.ErrorColor(),
+		c.DiffAddedTextColor(), c.DiffRemovedTextColor(),
 	}
 }
 
@@ -39,30 +43,11 @@ func swatchStrip(c ThemeColors) string {
 	return b.String()
 }
 
-// paletteRow is one line of a preview table.
+// paletteRow is one line of the palette table.
 type paletteRow struct {
 	role  string
 	color color.Color
 	note  string
-}
-
-// themeColorRows lists the 13 roles a theme declares in themes.json.
-func themeColorRows(c ThemeColors) []paletteRow {
-	return []paletteRow{
-		{"text", c.TextColor(), "body text"},
-		{"base", c.BaseColor(), "background"},
-		{"primary", c.PrimaryColor(), "prompts, links"},
-		{"secondary", c.SecondaryColor(), "muted text"},
-		{"tool", c.ToolColor(), "tool names"},
-		{"success", c.SuccessColor(), "success"},
-		{"error", c.ErrorColor(), "errors"},
-		{"warning", c.WarningColor(), "warnings"},
-		{"info", c.InfoColor(), "info, accents"},
-		{"diffAdded", c.DiffAddedColor(), "diff + background"},
-		{"diffRemoved", c.DiffRemovedColor(), "diff - background"},
-		{"diffAddedText", c.DiffAddedTextColor(), "diff + text"},
-		{"diffRemovedText", c.DiffRemovedTextColor(), "diff - text"},
-	}
 }
 
 // renderPaletteRows draws an aligned swatch/role/hex/note table.
@@ -93,41 +78,6 @@ func renderPaletteRows(rows []paletteRow, p Palette) string {
 			b.WriteString("  " + noteStyle.Render(r.note))
 		}
 	}
-	return b.String()
-}
-
-// formatThemePreview renders the swatch table for one theme.
-//
-// It shows the colors the theme declares in themes.json. Those are not
-// currently what the chat pane draws with — paletteFor collapses every theme
-// onto one of two built-in palettes, chosen only by the theme's light/dark type
-// — so the preview says so rather than implying a fidelity it does not have.
-func formatThemePreview(t Theme, p Palette, isCurrent bool) string {
-	p = paletteOrDark(p)
-	head := lipgloss.NewStyle().Foreground(p.Primary).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(p.Dim)
-	faint := lipgloss.NewStyle().Foreground(p.Faint)
-
-	kind := "dark"
-	icon := "🌙"
-	if t.ThemeType == "light" {
-		kind, icon = "light", "☀️"
-	}
-
-	var b strings.Builder
-	b.WriteString(head.Render(fmt.Sprintf("%s %s", icon, t.DisplayName)))
-	b.WriteString(dim.Render(fmt.Sprintf("  %s  %s", t.Name, kind)))
-	if isCurrent {
-		b.WriteString(lipgloss.NewStyle().Foreground(p.Success).Render("  ← active"))
-	}
-	b.WriteString("\n\n")
-	b.WriteString(renderPaletteRows(themeColorRows(t.Colors), p))
-	b.WriteString("\n\n")
-	b.WriteString(faint.Render(
-		"  Declared colors. The transcript currently renders from a built-in " + kind + " palette;"))
-	b.WriteString("\n")
-	b.WriteString(faint.Render(
-		"  a theme selects which one by its light/dark type, not by these values."))
 	return b.String()
 }
 
