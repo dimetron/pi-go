@@ -418,6 +418,13 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		}
 	}
 
+	// An explicit spawn timeout overrides the agent definition; otherwise use
+	// the timeout declared by the resolved agent.
+	timeout := agent.Timeout
+	if input.Timeout > 0 {
+		timeout = input.Timeout
+	}
+
 	// Build spawn options shared by the pi spawner and the ACP dispatcher.
 	spawnOpts := SpawnOpts{
 		AgentID:     agentID,
@@ -425,7 +432,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		WorkDir:     workDir,
 		Prompt:      input.Prompt,
 		Instruction: agent.Instruction,
-		Timeout:     agent.Timeout,
+		Timeout:     timeout,
 		Env:         env,
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,

@@ -272,6 +272,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		Worktree:     new(true),
 		WorktreeName: runWorktreeName(specName, ""),
 		SkipCleanup:  true,
+		Timeout:      int((60 * time.Minute) / time.Millisecond),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -331,6 +332,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		Worktree:     &useWorktree,
 		WorktreeName: runWorktreeName(specName, "part-1"),
 		SkipCleanup:  true,
+		Timeout:      int((60 * time.Minute) / time.Millisecond),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -347,6 +349,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		Worktree:     &useWorktree,
 		WorktreeName: runWorktreeName(specName, "part-2"),
 		SkipCleanup:  true,
+		Timeout:      int((60 * time.Minute) / time.Millisecond),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
