@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1970,23 +1971,28 @@ func TestRenderSidebar_WithTokenTracker(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestAgentToolColor(t *testing.T) {
-	if got := agentToolColor("claude"); got != "208" {
-		t.Errorf("expected 208, got %q", got)
+	cases := []struct {
+		agentType string
+		want      color.Color
+	}{
+		{"claude", darkPalette.Peach},
+		{"cursor", darkPalette.Overlay},
+		{"gemini", darkPalette.Blue},
+		{"other", darkPalette.Tool},
+		{"claude+gemini", darkPalette.Peach}, // first match wins
+		{"", darkPalette.Tool},
 	}
-	if got := agentToolColor("cursor"); got != "245" {
-		t.Errorf("expected 245, got %q", got)
+	for _, tc := range cases {
+		if got := agentToolColor(tc.agentType, darkPalette); colorString(got) != colorString(tc.want) {
+			t.Errorf("agentToolColor(%q) = %s, want %s",
+				tc.agentType, colorString(got), colorString(tc.want))
+		}
 	}
-	if got := agentToolColor("gemini"); got != "39" {
-		t.Errorf("expected 39, got %q", got)
-	}
-	if got := agentToolColor("other"); got != "35" {
-		t.Errorf("expected 35, got %q", got)
-	}
-	if got := agentToolColor("claude+gemini"); got != "208" {
-		t.Errorf("expected 208 (first match), got %q", got)
-	}
-	if got := agentToolColor(""); got != "35" {
-		t.Errorf("expected 35 for empty, got %q", got)
+
+	// The color must come from the palette, not a hardcoded ANSI index.
+	if got := agentToolColor("claude", lightPalette); colorString(got) != colorString(lightPalette.Peach) {
+		t.Errorf("agentToolColor with light palette = %s, want %s",
+			colorString(got), colorString(lightPalette.Peach))
 	}
 }
 

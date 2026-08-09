@@ -9,7 +9,7 @@ import (
 
 func TestHighlightCode_GoFile(t *testing.T) {
 	code := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}"
-	result := highlightCode(code, "main.go")
+	result := highlightCodeWithPalette(code, "main.go", darkPalette)
 
 	// Should contain ANSI escape codes (chroma terminal256 output).
 	if !strings.Contains(result, "\033[") {
@@ -42,7 +42,7 @@ func TestHighlightCode_LightPaletteUsesLightSyntaxStyle(t *testing.T) {
 
 func TestHighlightCode_PythonFile(t *testing.T) {
 	code := "def hello():\n    print('hi')"
-	result := highlightCode(code, "script.py")
+	result := highlightCodeWithPalette(code, "script.py", darkPalette)
 
 	if !strings.Contains(result, "\033[") {
 		t.Error("expected ANSI escape codes for Python highlighting")
@@ -54,7 +54,7 @@ func TestHighlightCode_PythonFile(t *testing.T) {
 
 func TestHighlightCode_UnknownExtension(t *testing.T) {
 	code := "some plain text content"
-	result := highlightCode(code, "file.xyz")
+	result := highlightCodeWithPalette(code, "file.xyz", darkPalette)
 
 	// Should not crash; returns content (possibly with fallback styling).
 	if !strings.Contains(result, "some plain text") {
@@ -63,7 +63,7 @@ func TestHighlightCode_UnknownExtension(t *testing.T) {
 }
 
 func TestHighlightCode_EmptyCode(t *testing.T) {
-	result := highlightCode("", "main.go")
+	result := highlightCodeWithPalette("", "main.go", darkPalette)
 	// Should not crash on empty input.
 	if result != "" {
 		// Chroma may output trailing whitespace; just verify no crash.
@@ -73,7 +73,7 @@ func TestHighlightCode_EmptyCode(t *testing.T) {
 
 func TestHighlightCode_JSONFile(t *testing.T) {
 	code := `{"key": "value", "num": 42}`
-	result := highlightCode(code, "data.json")
+	result := highlightCodeWithPalette(code, "data.json", darkPalette)
 	if !strings.Contains(result, "key") {
 		t.Error("expected 'key' in highlighted JSON output")
 	}

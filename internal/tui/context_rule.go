@@ -247,13 +247,15 @@ func renderContextRule(in contextRuleInput, p Palette) string {
 			Render(strings.Repeat(string(gaugeFilledGlyph), filled))
 	}
 
-	// White, deliberately outside the gauge's vocabulary. Everything else on
-	// this row encodes a reading — green/peach/red for severity, dim for the
+	// Control is deliberately outside the gauge's vocabulary. Everything else
+	// on this row encodes a reading — green/peach/red for severity, dim for the
 	// unfilled track — so a button in any of those colors would read as part of
-	// the measurement. White belongs to no zone and so is legible as a control.
+	// the measurement. Control belongs to no zone and so is legible as a
+	// control: white on a dark background, near-black on a light one. Hardcoded
+	// white here made the button invisible under a light theme.
 	clear := ""
 	if lay.ShowClear {
-		clear = lipgloss.NewStyle().Foreground(p.White).
+		clear = lipgloss.NewStyle().Foreground(p.Control).
 			Render(gaugeClearButton)
 	}
 
