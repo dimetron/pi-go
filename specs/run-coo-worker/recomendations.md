@@ -148,11 +148,47 @@ to the user's terminal.
 Truncate on a rune boundary. One function, reusing the approach already proven
 in `internal/tools/truncate.go`.
 
+## Finding 4 — the SOP promises parallelism the runtime will not deliver
+
+Found by reviewing the SOP against the runtime *after* the Finding 1 fix, which
+is the only order in which it is visible.
+
+`coordinatorContract` (`internal/tui/run.go`) told the coordinator it may batch
+"several slices at once … (max 8)". The SOP repeated the advice for both slice
+execution and Phase 3 research. Both numbers came from `maxParallelTasks = 8`
+(`internal/tools/subagent.go:25`), and the subagent tool description advertised
+the same figure.
+
+But `maxParallelTasks` caps **how many tasks one call may name**. What actually
+gates a spawn is the pool. With the budget from Finding 1 a coordinator sits at
+depth 1 and gets a pool of 1, so an eight-task batch does not overlap at all:
+the tasks queue inside a single tool call and that call takes roughly eight
+times as long. A batch that was supposed to save time becomes the most likely
+thing to hit the agent timeout.
+
+This is worth stating as its own finding because it is a hazard *created by*
+fixing Finding 1. Lowering concurrency without correcting the guidance would
+have traded a rate-limit failure for a timeout failure.
+
+### Recommendation
+
+Report the effective concurrency, not the per-call cap, and make the advice
+follow it:
+
+- `Orchestrator.Concurrency()` exposes the pool size.
+- The subagent tool description states both numbers and what happens past the
+  smaller one; at a concurrency of 1 it says plainly that parallel mode buys
+  nothing.
+- The coordinator contract and the SOP tell the agent to size batches to the
+  reported concurrency, and that one slice per call is the normal case.
+
 ## Priority
 
 1. **Finding 1** — this is what stops runs completing.
-2. **Finding 3** — small, self-contained, and already corrupting stored data.
-3. **Finding 2** — additive and valuable, but nothing is blocked on it today.
+2. **Finding 4** — must ship with Finding 1, not after it. On its own, Finding
+   1 converts a rate-limit failure into a timeout failure.
+3. **Finding 3** — small, self-contained, and already corrupting stored data.
+4. **Finding 2** — additive and valuable, but nothing is blocked on it today.
 
 ## What this does not address
 

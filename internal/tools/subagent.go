@@ -142,7 +142,21 @@ Worktree agents:
 		fmt.Fprintf(&b, "- %s%s: %s\n", ac.Name, marker, ac.Description)
 	}
 
-	fmt.Fprintf(&b, "\nMaximum %d concurrent subagents. Each agent runs as a separate process.", maxParallelTasks)
+	// Report the pool size, not just the per-call cap. They are different
+	// numbers and the model needs the smaller one: maxParallelTasks limits how
+	// many tasks a single call may name, while the pool is what actually gates
+	// a spawn. Naming more tasks than the pool allows does not run them in
+	// parallel — they queue, and the one tool call takes proportionally longer,
+	// which is how a "parallel" batch turns into a timeout.
+	concurrency := orch.Concurrency()
+	fmt.Fprintf(&b, "\nAt most %d task(s) per call. This process runs %d subagent(s) at a time",
+		maxParallelTasks, concurrency)
+	if concurrency <= 1 {
+		b.WriteString(" — parallel mode gives no speed-up here, so prefer one task per call")
+	} else {
+		fmt.Fprintf(&b, ", so batches larger than %d queue rather than overlap", concurrency)
+	}
+	b.WriteString(". Each agent runs as a separate process.")
 	return b.String()
 }
 
