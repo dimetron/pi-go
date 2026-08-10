@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,10 +16,53 @@ func TestMemoryCmd_SubcommandsRegistered(t *testing.T) {
 		subcommands[sub.Name()] = true
 	}
 
-	for _, name := range []string{"model", "init", "status", "mine", "search", "kg", "wake-up", "recent"} {
+	for _, name := range []string{"model", "init", "status", "mine", "search", "kg", "wake-up", "recent", "clear"} {
 		if !subcommands[name] {
 			t.Errorf("missing subcommand %q", name)
 		}
+	}
+}
+
+func TestMemoryClear_RemovesDatabases(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{
+		filepath.Join(dir, ".pi-go", "memory", "claude-mem.db"),
+		filepath.Join(dir, ".pi-go", "palace.db"),
+	}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("database"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := runMemoryClear(dir, true, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("clear error: %v", err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("database still exists: %s", path)
+		}
+	}
+}
+
+func TestMemoryClear_Canceled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".pi-go", "palace.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runMemoryClear(dir, false, strings.NewReader("n\n"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("clear error: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database was removed after cancellation: %v", err)
 	}
 }
 
