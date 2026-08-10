@@ -102,6 +102,29 @@ func (rs *runState) collapseParallel() {
 	rs.parallel = nil
 }
 
+// mergeTargets lists every worktree the run must merge, each paired with the
+// backup branch it was given at spawn time. It covers all three shapes a run
+// can end in: a single agent, a live parallel fan-out, and a run that has
+// collapsed to one coordinator but still carries the other agents' worktrees.
+func (rs *runState) mergeTargets() []mergeTarget {
+	var targets []mergeTarget
+	if rs.isParallel() {
+		for i, pa := range rs.parallel {
+			targets = append(targets, mergeTarget{
+				agentID: pa.agentID,
+				backup:  runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1)),
+			})
+		}
+	} else {
+		targets = []mergeTarget{{
+			agentID: rs.worktreeAgentID,
+			backup:  runBackupBranchName(rs.specName, ""),
+		}}
+	}
+	// Worktrees left over from a collapsed parallel run still hold work.
+	return append(targets, rs.carried...)
+}
+
 // --- Message types for /run streaming ---
 
 // runAgentEventMsg wraps a subagent event for the TUI update loop.
@@ -1119,22 +1142,7 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 
 	// Collect agent IDs to merge (parallel or single), each with the backup
 	// branch it was given at spawn time so the ref can be moved onto the work.
-	var targets []mergeTarget
-	if m.run.isParallel() {
-		for i, pa := range m.run.parallel {
-			targets = append(targets, mergeTarget{
-				agentID: pa.agentID,
-				backup:  runBackupBranchName(m.run.specName, fmt.Sprintf("part-%d", i+1)),
-			})
-		}
-	} else {
-		targets = []mergeTarget{{
-			agentID: m.run.worktreeAgentID,
-			backup:  runBackupBranchName(m.run.specName, ""),
-		}}
-	}
-	// Worktrees left over from a collapsed parallel run still hold work.
-	targets = append(targets, m.run.carried...)
+	targets := m.run.mergeTargets()
 
 	specName := m.run.specName
 
@@ -1370,24 +1378,39 @@ func (m *model) refreshRunChecklist() {
 	if wm == nil {
 		return
 	}
-	// In parallel mode each agent ticks its own slices in its OWN worktree's
-	// plan.md, so no single worktree ever shows the whole plan complete.
-	// Reading only the primary would leave the other agent's slices forever
-	// unchecked and the Verifier permanently failing. Union the views: a slice
-	// is done if any worktree records it done.
+	if merged := checklistFromWorktrees(m.runChecklistPaths(wm), m.run.specName); len(merged) > 0 {
+		m.run.checklist = merged
+	}
+}
+
+// runChecklistPaths lists every worktree whose plan.md counts toward progress:
+// the one the run owns, plus each parallel agent's own tree.
+func (m *model) runChecklistPaths(wm *subagent.WorktreeManager) []string {
 	paths := []string{wm.PathFor(m.run.worktreeAgentID)}
 	for _, pa := range m.run.parallel {
 		if p := wm.PathFor(pa.agentID); p != "" {
 			paths = append(paths, p)
 		}
 	}
+	return paths
+}
 
+// checklistFromWorktrees reads plan.md from each worktree and unions the
+// results. In parallel mode each agent ticks only its OWN slices in its OWN
+// worktree, so no single tree ever shows the plan complete; reading just one
+// would leave the other agent's slices permanently unchecked and the Verifier
+// permanently failing. A slice counts as done if any worktree records it done.
+//
+// Worktrees whose plan.md is missing, unreadable or a different length are
+// skipped rather than allowed to overwrite a good view — a truncated or
+// rewritten plan must not silently un-tick completed work.
+func checklistFromWorktrees(paths []string, specName string) []ChecklistStep {
 	var merged []ChecklistStep
 	for _, wtPath := range paths {
 		if wtPath == "" {
 			continue
 		}
-		view := parsePlanChecklistFrom(wtPath, m.run.specName)
+		view := parsePlanChecklistFrom(wtPath, specName)
 		if len(view) == 0 {
 			continue
 		}
@@ -1395,20 +1418,16 @@ func (m *model) refreshRunChecklist() {
 			merged = view
 			continue
 		}
-		// Same plan.md in every worktree, so the step order matches; OR the
-		// Done flags together rather than letting the last read win.
-		if len(view) == len(merged) {
-			for i := range view {
-				if view[i].Done {
-					merged[i].Done = true
-				}
+		if len(view) != len(merged) {
+			continue
+		}
+		for i := range view {
+			if view[i].Done {
+				merged[i].Done = true
 			}
 		}
 	}
-
-	if len(merged) > 0 {
-		m.run.checklist = merged
-	}
+	return merged
 }
 
 // waitForRunEvents returns a tea.Cmd to consume the next event from the running subagent.
