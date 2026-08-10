@@ -73,14 +73,24 @@ func retryStream(ctx context.Context, cfg retry.Config, yield func(*model.LLMRes
 			return
 		}
 
-		if attempt >= cfg.MaxRetries || !retry.IsTransient(cause) || ctx.Err() != nil {
+		// Cancellation is checked on its own, and before the budget, because a
+		// canceled turn ends the way Esc ends it whatever else went wrong: the
+		// user is not waiting on the answer any more, so the provider's error
+		// is noise. Folding this into the condition below would report that
+		// error instead, and which of the two the user saw would depend on
+		// whether the cancel landed before this line or during the sleep.
+		if ctx.Err() != nil {
+			_ = yield(canceledResponse(), nil)
+			return
+		}
+
+		if attempt >= cfg.MaxRetries || !retry.IsTransient(cause) {
 			_ = yield(failResp, failErr)
 			return
 		}
 
 		if !sleepCtx(ctx, retry.Delay(cfg, attempt, cause)) {
-			// Canceled while waiting. Report it as a cancellation rather than
-			// as the rate limit, so the turn ends the way Esc ends it.
+			// Canceled while waiting: same reasoning as above.
 			_ = yield(canceledResponse(), nil)
 			return
 		}
