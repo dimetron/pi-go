@@ -129,8 +129,10 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 
 	cmd := exec.CommandContext(procCtx, s.PiBinary, args...)
 
-	// Set up environment: filtered process env + additional env vars.
-	baseEnv := FilterEnv(nil)
+	// Set up environment: filtered process env + additional env vars. The
+	// child's concurrency budget is this process's share, not a copy of it —
+	// see ChildEnv.
+	baseEnv := ChildEnv(ConcurrencyFromEnv())
 	if len(opts.Env) > 0 {
 		cmd.Env = append(baseEnv, opts.Env...)
 	} else {

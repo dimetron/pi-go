@@ -1988,6 +1988,106 @@ func TestRunWorktreePath_NilOrchestrator(t *testing.T) {
 	}
 }
 
+// --- Spec length budget: warn when a spec outgrows the read window ---
+
+func writeSpecFile(t *testing.T, workDir, specName, file string, lines int) {
+	t.Helper()
+	dir := filepath.Join(workDir, "specs", specName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("a line of plan prose\n", lines)
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOversizedSpecFiles_UnderWindowIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "small", "plan.md", readWindowLines)
+
+	if got := oversizedSpecFiles(dir, "small"); len(got) != 0 {
+		t.Errorf("a plan exactly at the window should not warn, got %+v", got)
+	}
+}
+
+func TestOversizedSpecFiles_OverWindowIsReported(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "plan.md", readWindowLines+1)
+
+	got := oversizedSpecFiles(dir, "big")
+	if len(got) != 1 {
+		t.Fatalf("got %d oversized files, want 1", len(got))
+	}
+	if got[0].Name != "plan.md" {
+		t.Errorf("Name = %q, want plan.md", got[0].Name)
+	}
+	if got[0].Lines != readWindowLines+1 {
+		t.Errorf("Lines = %d, want %d", got[0].Lines, readWindowLines+1)
+	}
+}
+
+// design.md is read by workers too, so it carries the same ceiling.
+func TestOversizedSpecFiles_ChecksDesignToo(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "plan.md", 10)
+	writeSpecFile(t, dir, "big", "design.md", readWindowLines+50)
+
+	got := oversizedSpecFiles(dir, "big")
+	if len(got) != 1 || got[0].Name != "design.md" {
+		t.Fatalf("got %+v, want only design.md", got)
+	}
+}
+
+// PROMPT.md is embedded whole via os.ReadFile, so the window never applies.
+func TestOversizedSpecFiles_IgnoresPromptMD(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "PROMPT.md", readWindowLines*2)
+
+	if got := oversizedSpecFiles(dir, "big"); len(got) != 0 {
+		t.Errorf("PROMPT.md is never windowed, got %+v", got)
+	}
+}
+
+// A spec with no design.md is normal, not an error.
+func TestOversizedSpecFiles_MissingFilesAreSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if got := oversizedSpecFiles(dir, "nonexistent"); len(got) != 0 {
+		t.Errorf("missing spec should yield no warnings, got %+v", got)
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"empty", "", 0},
+		{"one line no newline", "a", 1},
+		{"one line trailing newline", "a\n", 1},
+		{"two lines trailing newline", "a\nb\n", 2},
+		{"two lines no trailing newline", "a\nb", 2},
+		{"blank line counts", "a\n\nb\n", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := countLines([]byte(tc.in)); got != tc.want {
+				t.Errorf("countLines(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatOversizedSpecWarning(t *testing.T) {
+	out := formatOversizedSpecWarning([]oversizedSpecFile{{Name: "plan.md", Lines: 2500}})
+
+	for _, want := range []string{"plan.md", "2500", "2000", "sequential specs", "Running anyway"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("warning missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
 // --- Worktree ownership survives a retry ---
 
 // A retry agent is spawned with WorkDir set to the existing worktree and never
@@ -2061,21 +2161,393 @@ func TestCollapseParallel_SingleAgentCarriesNothing(t *testing.T) {
 	}
 }
 
-// The union in refreshRunChecklist is what stops parallel verification from
-// failing forever; this pins the merge rule itself.
-func TestChecklistUnion_SliceDoneInEitherWorktreeCounts(t *testing.T) {
-	primary := []ChecklistStep{{Title: "A", Done: true}, {Title: "B", Done: false}}
-	secondary := []ChecklistStep{{Title: "A", Done: false}, {Title: "B", Done: true}}
+// --- Checklist union across parallel worktrees ---
 
-	merged := primary
-	for i := range secondary {
-		if secondary[i].Done {
-			merged[i].Done = true
+// writePlanChecklist writes a plan.md into a fake worktree with the given
+// checkbox states, mirroring what an agent leaves behind in its own tree.
+func writePlanChecklist(t *testing.T, wtPath, specName string, done []bool) {
+	t.Helper()
+	dir := filepath.Join(wtPath, "specs", specName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	b.WriteString("# Plan\n\n## Progress\n\n")
+	for i, d := range done {
+		mark := " "
+		if d {
+			mark = "x"
+		}
+		fmt.Fprintf(&b, "- [%s] Step %d: slice %d\n", mark, i+1, i+1)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func doneFlags(steps []ChecklistStep) []bool {
+	out := make([]bool, len(steps))
+	for i, s := range steps {
+		out[i] = s.Done
+	}
+	return out
+}
+
+// Each parallel agent ticks only its own slices in its own worktree. Reading
+// one tree alone leaves the other agent's slices unchecked forever, so the
+// union is what lets a parallel run ever verify complete.
+func TestChecklistFromWorktrees_UnionsParallelViews(t *testing.T) {
+	wt1, wt2 := t.TempDir(), t.TempDir()
+	writePlanChecklist(t, wt1, "spec", []bool{true, true, false, false})
+	writePlanChecklist(t, wt2, "spec", []bool{false, false, true, true})
+
+	got := checklistFromWorktrees([]string{wt1, wt2}, "spec")
+
+	want := []bool{true, true, true, true}
+	if diff := doneFlags(got); !slicesEqualBool(diff, want) {
+		t.Errorf("done flags = %v, want %v", diff, want)
+	}
+}
+
+// The union must never un-tick: a slice done in the first tree stays done even
+// though the second tree still shows it open.
+func TestChecklistFromWorktrees_NeverUnticks(t *testing.T) {
+	wt1, wt2 := t.TempDir(), t.TempDir()
+	writePlanChecklist(t, wt1, "spec", []bool{true, true})
+	writePlanChecklist(t, wt2, "spec", []bool{false, false})
+
+	got := checklistFromWorktrees([]string{wt1, wt2}, "spec")
+
+	if flags := doneFlags(got); !slicesEqualBool(flags, []bool{true, true}) {
+		t.Errorf("done flags = %v, want [true true] — the union must not un-tick", flags)
+	}
+}
+
+// A worktree whose plan.md was rewritten to a different length must be skipped,
+// not allowed to overwrite a good view.
+func TestChecklistFromWorktrees_MismatchedLengthIsSkipped(t *testing.T) {
+	wt1, wt2 := t.TempDir(), t.TempDir()
+	writePlanChecklist(t, wt1, "spec", []bool{true, true, false})
+	writePlanChecklist(t, wt2, "spec", []bool{false})
+
+	got := checklistFromWorktrees([]string{wt1, wt2}, "spec")
+
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want the 3-step view preserved", len(got))
+	}
+	if flags := doneFlags(got); !slicesEqualBool(flags, []bool{true, true, false}) {
+		t.Errorf("done flags = %v, want the first view unchanged", flags)
+	}
+}
+
+// Missing, empty and blank paths are skipped rather than treated as a plan
+// with zero slices, which would read as "nothing to do".
+func TestChecklistFromWorktrees_SkipsUnreadable(t *testing.T) {
+	wt := t.TempDir()
+	writePlanChecklist(t, wt, "spec", []bool{true, false})
+
+	got := checklistFromWorktrees([]string{"", filepath.Join(wt, "nope"), wt}, "spec")
+
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 from the one readable worktree", len(got))
+	}
+}
+
+func TestChecklistFromWorktrees_NoWorktreesYieldsNothing(t *testing.T) {
+	if got := checklistFromWorktrees(nil, "spec"); got != nil {
+		t.Errorf("got %v, want nil when there is nothing to read", got)
+	}
+}
+
+// A single-agent run still reads its own worktree.
+func TestChecklistFromWorktrees_SingleWorktree(t *testing.T) {
+	wt := t.TempDir()
+	writePlanChecklist(t, wt, "spec", []bool{true, false, true})
+
+	got := checklistFromWorktrees([]string{wt}, "spec")
+
+	if flags := doneFlags(got); !slicesEqualBool(flags, []bool{true, false, true}) {
+		t.Errorf("done flags = %v, want [true false true]", flags)
+	}
+}
+
+func slicesEqualBool(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
+	return true
+}
 
-	rs := &runState{checklist: merged}
-	if pending := rs.unfinishedSlices(); len(pending) != 0 {
-		t.Errorf("unfinished = %v, want none once both worktrees are unioned", pending)
+// --- Merge target collection ---
+
+func targetIDs(targets []mergeTarget) []string {
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = t.agentID
+	}
+	return out
+}
+
+func TestMergeTargets_SingleAgentUsesTheWorktreeOwner(t *testing.T) {
+	// agentID is the retry agent, which owns no worktree; the merge must
+	// target the owner instead.
+	rs := &runState{specName: "spec", agentID: "task-retry", worktreeAgentID: "task-owner"}
+
+	got := rs.mergeTargets()
+
+	if ids := targetIDs(got); len(ids) != 1 || ids[0] != "task-owner" {
+		t.Errorf("targets = %v, want [task-owner]", ids)
+	}
+	if got[0].backup == "" {
+		t.Error("single-agent target should carry a backup branch")
+	}
+}
+
+func TestMergeTargets_ParallelCoversEveryAgent(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+	}
+
+	got := rs.mergeTargets()
+
+	if ids := targetIDs(got); len(ids) != 2 || ids[0] != "task-1" || ids[1] != "task-2" {
+		t.Errorf("targets = %v, want [task-1 task-2]", ids)
+	}
+	if got[0].backup == got[1].backup {
+		t.Error("parallel agents must get distinct backup branches")
+	}
+}
+
+// After collapsing, the carried worktrees must still be merged — that is where
+// the second agent's slices live.
+func TestMergeTargets_IncludesCarriedAfterCollapse(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+	}
+	rs.collapseParallel()
+
+	got := targetIDs(rs.mergeTargets())
+
+	if len(got) != 2 {
+		t.Fatalf("targets = %v, want the owner plus the carried worktree", got)
+	}
+	var seenOwner, seenCarried bool
+	for _, id := range got {
+		switch id {
+		case "task-1":
+			seenOwner = true
+		case "task-2":
+			seenCarried = true
+		}
+	}
+	if !seenOwner || !seenCarried {
+		t.Errorf("targets = %v, want both task-1 and task-2", got)
+	}
+}
+
+// The owner must not be merged twice once it has also been carried.
+func TestMergeTargets_NoDuplicateAfterCollapse(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+	}
+	rs.collapseParallel()
+
+	seen := map[string]int{}
+	for _, id := range targetIDs(rs.mergeTargets()) {
+		seen[id]++
+	}
+	for id, n := range seen {
+		if n > 1 {
+			t.Errorf("agent %s appears %d times; merging one branch twice", id, n)
+		}
+	}
+}
+
+// --- Worktree path gathering ---
+
+// A parallel run must offer every agent's worktree to the checklist reader,
+// not just the one the run owns.
+func TestRunChecklistPaths_CoversOwnerAndParallelAgents(t *testing.T) {
+	wm := subagent.NewWorktreeManager(t.TempDir())
+
+	m := &model{
+		run: &runState{
+			worktreeAgentID: "task-1",
+			parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+		},
+	}
+
+	paths := m.runChecklistPaths(wm)
+
+	// No worktrees are registered, so every lookup is empty — but the owner
+	// slot must always be present, and checklistFromWorktrees skips blanks.
+	if len(paths) != 1 {
+		t.Fatalf("paths = %v, want just the owner slot when nothing is registered", paths)
+	}
+	if got := checklistFromWorktrees(paths, "spec"); got != nil {
+		t.Errorf("got %v, want nil when no worktree has a plan.md", got)
+	}
+}
+
+// A single-agent run asks for exactly one worktree.
+func TestRunChecklistPaths_SingleAgent(t *testing.T) {
+	wm := subagent.NewWorktreeManager(t.TempDir())
+	m := &model{run: &runState{worktreeAgentID: "task-1"}}
+
+	if paths := m.runChecklistPaths(wm); len(paths) != 1 {
+		t.Errorf("paths = %v, want exactly one entry", paths)
+	}
+}
+
+// refreshRunChecklist must not panic or wipe state when there is no
+// orchestrator or worktree manager to ask.
+func TestRefreshRunChecklist_NoOrchestratorLeavesChecklistIntact(t *testing.T) {
+	original := []ChecklistStep{{Title: "A", Done: true}}
+	m := &model{run: &runState{specName: "spec", checklist: original}}
+
+	m.refreshRunChecklist()
+
+	if len(m.run.checklist) != 1 || !m.run.checklist[0].Done {
+		t.Errorf("checklist = %v, want it untouched without an orchestrator", m.run.checklist)
+	}
+}
+
+// An unreadable worktree must leave the last good checklist in place rather
+// than clearing it — a cleared checklist reads as "no slices", which the
+// Verifier would treat as complete.
+func TestRefreshRunChecklist_UnreadableWorktreeKeepsLastGoodView(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, t.TempDir(), nil)
+	original := []ChecklistStep{{Title: "A", Done: true}, {Title: "B", Done: false}}
+
+	m := &model{
+		cfg: Config{Orchestrator: orch},
+		run: &runState{specName: "spec", worktreeAgentID: "task-1", checklist: original},
+	}
+
+	m.refreshRunChecklist()
+
+	if len(m.run.checklist) != 2 {
+		t.Fatalf("checklist = %v, want the previous 2-step view kept", m.run.checklist)
+	}
+	if !m.run.checklist[0].Done {
+		t.Error("a failed refresh must not un-tick completed slices")
+	}
+}
+
+// End-to-end over real git worktrees: the union is what makes a parallel run
+// verifiable, so it is worth proving against actual worktrees rather than
+// only against the pure helper.
+func TestRefreshRunChecklist_UnionsRealParallelWorktrees(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const agent1, agent2 = "task-union-1", "task-union-2"
+	wt1, err := orch.Worktree().Create(agent1)
+	if err != nil {
+		t.Fatalf("creating worktree 1: %v", err)
+	}
+	wt2, err := orch.Worktree().Create(agent2)
+	if err != nil {
+		t.Fatalf("creating worktree 2: %v", err)
+	}
+
+	// Each agent ticks only its own half, in its own tree.
+	writePlanChecklist(t, wt1, "spec", []bool{true, true, false, false})
+	writePlanChecklist(t, wt2, "spec", []bool{false, false, true, true})
+
+	m := &model{
+		cfg: Config{Orchestrator: orch},
+		run: &runState{
+			specName:        "spec",
+			worktreeAgentID: agent1,
+			parallel:        []*parallelAgent{{agentID: agent1}, {agentID: agent2}},
+		},
+	}
+
+	m.refreshRunChecklist()
+
+	if n := len(m.run.checklist); n != 4 {
+		t.Fatalf("checklist length = %d, want 4", n)
+	}
+	if pending := m.run.unfinishedSlices(); len(pending) != 0 {
+		t.Errorf("unfinished = %v, want none — both worktrees together complete the plan", pending)
+	}
+}
+
+// Without the union, the primary worktree alone leaves the second agent's
+// slices unchecked. This pins that the verifier would have failed.
+func TestRefreshRunChecklist_PrimaryAloneIsIncomplete(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const agent1 = "task-solo-1"
+	wt1, err := orch.Worktree().Create(agent1)
+	if err != nil {
+		t.Fatalf("creating worktree: %v", err)
+	}
+	writePlanChecklist(t, wt1, "spec", []bool{true, true, false, false})
+
+	m := &model{
+		cfg: Config{Orchestrator: orch},
+		run: &runState{specName: "spec", worktreeAgentID: agent1},
+	}
+
+	m.refreshRunChecklist()
+
+	if pending := m.run.unfinishedSlices(); len(pending) != 2 {
+		t.Errorf("unfinished = %v, want the 2 slices the other agent owns", pending)
+	}
+}
+
+// git cannot hold both "run/spec" and "run/spec/part-2" — the first is a ref,
+// the second needs it to be a directory. A collapsed run must therefore keep
+// the owner on its part-N name rather than falling back to the bare one.
+func TestCollapseParallel_OwnerKeepsItsPartName(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+	}
+
+	rs.collapseParallel()
+
+	targets := rs.mergeTargets()
+	if len(targets) != 2 {
+		t.Fatalf("targets = %v, want owner plus carried", targetIDs(targets))
+	}
+
+	bare := runBackupBranchName("spec", "")
+	for _, tgt := range targets {
+		if tgt.backup == bare {
+			t.Errorf("agent %s uses the bare backup %q, which git cannot hold "+
+				"alongside its part-N siblings", tgt.agentID, bare)
+		}
+		if !strings.HasPrefix(tgt.backup, bare+"/") {
+			t.Errorf("agent %s backup = %q, want a %s/part-N sibling", tgt.agentID, tgt.backup, bare)
+		}
+	}
+}
+
+// A run that never went parallel still uses the plain backup name.
+func TestMergeTargets_NeverParallelUsesBareBackup(t *testing.T) {
+	rs := &runState{specName: "spec", worktreeAgentID: "task-1"}
+
+	got := rs.mergeTargets()
+
+	if want := runBackupBranchName("spec", ""); got[0].backup != want {
+		t.Errorf("backup = %q, want %q", got[0].backup, want)
 	}
 }
