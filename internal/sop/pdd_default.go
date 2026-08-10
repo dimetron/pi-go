@@ -84,6 +84,14 @@ You can reference rough-idea.md for the original idea.
   that needs more than ~10 files or ~400 lines of change is too big: split it.
   Oversized slices are the single largest cause of failed runs — the worker's context
   grows past the model limit and the provider drops the stream mid-slice.
+- **Keep plan.md under 2000 lines.** That is the read tool's window: a file longer
+  than it comes back one page at a time, so a worker sent to read its slice may act
+  on a partial plan or spend turns paging. design.md has the same ceiling.
+- **A plan that will not fit is telling you the spec is too big.** Do not solve it by
+  shrinking the prose or splitting plan.md into fragments — split the *feature* into
+  sequential specs, each with its own requirements/design/plan/PROMPT.md, and note
+  the running order in each one's Constraints. A plan too long to read in one call
+  is also too long to execute in one Coordinator.
 
 ### Phase 7: PROMPT.md Generation
 - Write PROMPT.md — the compressed execution briefing

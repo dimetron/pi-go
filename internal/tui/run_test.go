@@ -1988,6 +1988,106 @@ func TestRunWorktreePath_NilOrchestrator(t *testing.T) {
 	}
 }
 
+// --- Spec length budget: warn when a spec outgrows the read window ---
+
+func writeSpecFile(t *testing.T, workDir, specName, file string, lines int) {
+	t.Helper()
+	dir := filepath.Join(workDir, "specs", specName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("a line of plan prose\n", lines)
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOversizedSpecFiles_UnderWindowIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "small", "plan.md", readWindowLines)
+
+	if got := oversizedSpecFiles(dir, "small"); len(got) != 0 {
+		t.Errorf("a plan exactly at the window should not warn, got %+v", got)
+	}
+}
+
+func TestOversizedSpecFiles_OverWindowIsReported(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "plan.md", readWindowLines+1)
+
+	got := oversizedSpecFiles(dir, "big")
+	if len(got) != 1 {
+		t.Fatalf("got %d oversized files, want 1", len(got))
+	}
+	if got[0].Name != "plan.md" {
+		t.Errorf("Name = %q, want plan.md", got[0].Name)
+	}
+	if got[0].Lines != readWindowLines+1 {
+		t.Errorf("Lines = %d, want %d", got[0].Lines, readWindowLines+1)
+	}
+}
+
+// design.md is read by workers too, so it carries the same ceiling.
+func TestOversizedSpecFiles_ChecksDesignToo(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "plan.md", 10)
+	writeSpecFile(t, dir, "big", "design.md", readWindowLines+50)
+
+	got := oversizedSpecFiles(dir, "big")
+	if len(got) != 1 || got[0].Name != "design.md" {
+		t.Fatalf("got %+v, want only design.md", got)
+	}
+}
+
+// PROMPT.md is embedded whole via os.ReadFile, so the window never applies.
+func TestOversizedSpecFiles_IgnoresPromptMD(t *testing.T) {
+	dir := t.TempDir()
+	writeSpecFile(t, dir, "big", "PROMPT.md", readWindowLines*2)
+
+	if got := oversizedSpecFiles(dir, "big"); len(got) != 0 {
+		t.Errorf("PROMPT.md is never windowed, got %+v", got)
+	}
+}
+
+// A spec with no design.md is normal, not an error.
+func TestOversizedSpecFiles_MissingFilesAreSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if got := oversizedSpecFiles(dir, "nonexistent"); len(got) != 0 {
+		t.Errorf("missing spec should yield no warnings, got %+v", got)
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"empty", "", 0},
+		{"one line no newline", "a", 1},
+		{"one line trailing newline", "a\n", 1},
+		{"two lines trailing newline", "a\nb\n", 2},
+		{"two lines no trailing newline", "a\nb", 2},
+		{"blank line counts", "a\n\nb\n", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := countLines([]byte(tc.in)); got != tc.want {
+				t.Errorf("countLines(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatOversizedSpecWarning(t *testing.T) {
+	out := formatOversizedSpecWarning([]oversizedSpecFile{{Name: "plan.md", Lines: 2500}})
+
+	for _, want := range []string{"plan.md", "2500", "2000", "sequential specs", "Running anyway"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("warning missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
 // --- Worktree ownership survives a retry ---
 
 // A retry agent is spawned with WorkDir set to the existing worktree and never
