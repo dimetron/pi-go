@@ -457,6 +457,10 @@ func (m *model) syncPalette() {
 	}
 	m.chatModel.Palette = m.palette
 	m.chatModel.ToolDisplay.Palette = m.palette
+	// The pending-tool bullet blinks on a ~1s cycle. The phase is derived from
+	// wall clock so it advances on its own; the matrix tick (150ms while
+	// running) re-renders often enough to animate it.
+	m.chatModel.ToolDisplay.BlinkOn = time.Now().UnixMilli()/500%2 == 0
 	m.inputModel.Palette = m.palette
 	m.matrix.palette = m.palette
 }
