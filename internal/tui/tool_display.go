@@ -582,131 +582,267 @@ func toolResultSummary(content string) string {
 	return content
 }
 
-// formatToolResult extracts a readable summary from a parsed tool result.
-func formatToolResult(data map[string]any) string {
-	// ls tool: show file/dir names
-	if entries, ok := data["entries"].([]any); ok {
-		var names []string
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				name, _ := m["name"].(string)
-				if isDir, ok := m["is_dir"].(bool); ok && isDir {
-					name += "/"
-				}
-				names = append(names, name)
-			}
-		}
-		result := strings.Join(names, "  ")
-		if len(result) > 120 {
-			return result[:117] + "..."
-		}
-		return result
-	}
-	// tree tool: show dirs/files count
-	if _, ok := data["tree"].(string); ok {
-		d, _ := data["dirs"].(float64)
-		f, _ := data["files"].(float64)
-		return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
-	}
-	// grep tool: show matches with file:line: content
-	if matchList, ok := data["matches"].([]any); ok {
-		total, _ := data["total_matches"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, m := range matchList {
-			if entry, ok := m.(map[string]any); ok {
-				file, _ := entry["file"].(string)
-				line, _ := entry["line"].(float64)
-				content, _ := entry["content"].(string)
-				fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if matches, ok := data["total_matches"].(float64); ok {
-		return fmt.Sprintf("%d matches", int(matches))
-	}
-	// find tool: show file list
-	if fileList, ok := data["files"].([]any); ok {
-		total, _ := data["total_files"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, f := range fileList {
-			if name, ok := f.(string); ok {
-				sb.WriteString(name)
-				sb.WriteByte('\n')
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if total, ok := data["total_files"].(float64); ok {
-		return fmt.Sprintf("%d files", int(total))
-	}
-	// read tool: show actual content with line numbers
-	if content, ok := data["content"].(string); ok {
-		total, _ := data["total_lines"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		if trunc {
-			content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
-		}
-		return content
-	}
-	if total, ok := data["total_lines"].(float64); ok {
-		trunc := ""
-		if t, ok := data["truncated"].(bool); ok && t {
-			trunc = " (truncated)"
-		}
-		return fmt.Sprintf("%d lines%s", int(total), trunc)
-	}
-	// write tool: show bytes written
-	if bw, ok := data["bytes_written"].(float64); ok {
-		if p, ok := data["path"].(string); ok {
-			return fmt.Sprintf("%s (%d bytes)", p, int(bw))
-		}
-	}
-	// edit tool: show replacements
-	if r, ok := data["replacements"].(float64); ok {
-		return fmt.Sprintf("%d replacements", int(r))
-	}
-	// lsp_diagnostics: show diagnostics (already prefixed with ⚠ by formatDiagnosticsForDisplay)
-	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
-		return diag
-	}
+// resultFormatter renders one shape of tool result. probe reports whether a
+// parsed result carries that shape; format turns it into the summary text.
+//
+// The two are kept apart so the dispatch order can live in one readable list
+// (resultFormatters) instead of in the arrangement of a fifteen-deep if-chain,
+// where it was invisible and one misplaced insertion away from breaking a tool's
+// rendering.
+type resultFormatter struct {
+	// name identifies the shape in the table and in test failures. It is never
+	// rendered to the user.
+	name   string
+	probe  func(data map[string]any) bool
+	format func(data map[string]any) string
+}
+
+// resultFormatters is probed in order; the first match renders the result.
+//
+// The order is load-bearing. Several tool results carry the keys of more than
+// one shape, and the earlier entry is the one that gets them:
+//
+//   - "bash window" must precede "bash exit". A backgrounded command carries a
+//     handle *and* the -1 exit-code placeholder; taking the exit shape first
+//     printed "exit -1: <first output line>" for a live lint run that would go on
+//     to pass.
+//   - "read content" must precede "line count", "grep matches" must precede
+//     "match count", and "find files" must precede "file count". Each detail
+//     shape also carries its own count, and the detail is what the user wants.
+//
+// Nothing enforces the order at compile time, so TestResultFormatters_Order in
+// tool_result_dispatch_test.go pins the pairs above.
+var resultFormatters = []resultFormatter{
+	{name: "ls entries", probe: hasList("entries"), format: formatLsEntries},
+	{name: "tree", probe: hasString("tree"), format: formatTree},
+	{name: "grep matches", probe: hasList("matches"), format: formatGrepMatches},
+	{name: "match count", probe: hasNumber("total_matches"), format: formatMatchCount},
+	{name: "find files", probe: hasList("files"), format: formatFindFiles},
+	{name: "file count", probe: hasNumber("total_files"), format: formatFileCount},
+	{name: "read content", probe: hasString("content"), format: formatReadContent},
+	{name: "line count", probe: hasNumber("total_lines"), format: formatLineCount},
+	// A write result needs both keys to say anything useful; one without a path
+	// falls through to the raw-JSON fallback rather than reporting a byte count
+	// for a file it cannot name.
+	{name: "write bytes", probe: hasWriteResult, format: formatWriteBytes},
+	{name: "edit replacements", probe: hasNumber("replacements"), format: formatEditReplacements},
+	// Empty diagnostics mean "nothing to report", not "render an empty line".
+	{name: "lsp diagnostics", probe: hasNonEmptyString("lsp_diagnostics"), format: formatLSPDiagnostics},
 	// A backgrounded command, either at the moment of handoff (the bash tool) or
-	// on any later poll of it (bash_output, bash_kill). Both carry a handle, and
-	// both have to be taken before the exit-code branch below.
+	// on any later poll of it (bash_output, bash_kill). Both carry a handle.
 	//
 	// While such a command is still running it has no exit status: the bash tool
-	// reports the -1 placeholder, which the exit-code branch renders as
+	// reports the -1 placeholder, which the exit shape below renders as
 	// "exit -1: <first line of output>" — a live lint run reading as a crashed
 	// one. A poll is worse: BashStatus omits exit_code entirely while running, so
-	// it missed the branch altogether and fell through to the raw-JSON fallback,
+	// it matched no shape at all and fell through to the raw-JSON fallback,
 	// printing &-escaped argument soup instead of the command's output.
-	if handle, ok := data["handle"].(string); ok && handle != "" {
-		return formatBashWindow(handle, data)
-	}
-	// bash tool: show exit code + first 2 and last 2 output lines (preserve newlines for better visibility)
-	if code, ok := data["exit_code"].(float64); ok {
-		stdout, _ := data["stdout"].(string)
-		stderr, _ := data["stderr"].(string)
-		result := bashOutputPreview(stdout, stderr)
-		if result == "" {
-			result = "(No output)"
+	{name: "bash window", probe: hasNonEmptyString("handle"), format: formatBashWindow},
+	{name: "bash exit", probe: hasNumber("exit_code"), format: formatBashExit},
+}
+
+// formatToolResult extracts a readable summary from a parsed tool result.
+func formatToolResult(data map[string]any) string {
+	for _, f := range resultFormatters {
+		if f.probe(data) {
+			return f.format(data)
 		}
-		if int(code) != 0 {
-			return fmt.Sprintf("exit %d: %s", int(code), result)
-		}
-		return result
 	}
-	// Fallback: compact JSON
+	return formatRawJSON(data)
+}
+
+// hasList, hasNumber, hasString and hasNonEmptyString build the probes used by
+// resultFormatters. They exist so the table reads as a list of result shapes
+// rather than a list of type assertions. JSON numbers always arrive as float64
+// through encoding/json's any decoding, so hasNumber checks only that.
+func hasList(key string) func(data map[string]any) bool {
+	return func(data map[string]any) bool {
+		_, ok := data[key].([]any)
+		return ok
+	}
+}
+
+func hasNumber(key string) func(data map[string]any) bool {
+	return func(data map[string]any) bool {
+		_, ok := data[key].(float64)
+		return ok
+	}
+}
+
+func hasString(key string) func(data map[string]any) bool {
+	return func(data map[string]any) bool {
+		_, ok := data[key].(string)
+		return ok
+	}
+}
+
+func hasNonEmptyString(key string) func(data map[string]any) bool {
+	return func(data map[string]any) bool {
+		s, ok := data[key].(string)
+		return ok && s != ""
+	}
+}
+
+// hasWriteResult reports a write result complete enough to summarize: the byte
+// count is only meaningful next to the path it was written to.
+func hasWriteResult(data map[string]any) bool {
+	_, hasBytes := data["bytes_written"].(float64)
+	_, hasPath := data["path"].(string)
+	return hasBytes && hasPath
+}
+
+// formatLsEntries renders an ls result as a run of names, directories marked
+// with a trailing slash.
+func formatLsEntries(data map[string]any) string {
+	entries, _ := data["entries"].([]any)
+	var names []string
+	for _, e := range entries {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if isDir, ok := m["is_dir"].(bool); ok && isDir {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	return clipToSummaryWidth(strings.Join(names, "  "))
+}
+
+// formatTree renders a tree result as its dir/file tally. The rendered tree
+// itself is far too tall for a summary line.
+func formatTree(data map[string]any) string {
+	d, _ := data["dirs"].(float64)
+	f, _ := data["files"].(float64)
+	return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
+}
+
+// formatGrepMatches renders grep matches as "file:line: content" rows.
+func formatGrepMatches(data map[string]any) string {
+	matchList, _ := data["matches"].([]any)
+	total, _ := data["total_matches"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, m := range matchList {
+		entry, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		file, _ := entry["file"].(string)
+		line, _ := entry["line"].(float64)
+		content, _ := entry["content"].(string)
+		fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
+	}
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// formatMatchCount renders a grep result that carried a count but no matches.
+func formatMatchCount(data map[string]any) string {
+	total, _ := data["total_matches"].(float64)
+	return fmt.Sprintf("%d matches", int(total))
+}
+
+// formatFindFiles renders a find result as one path per line.
+func formatFindFiles(data map[string]any) string {
+	fileList, _ := data["files"].([]any)
+	total, _ := data["total_files"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, f := range fileList {
+		if name, ok := f.(string); ok {
+			sb.WriteString(name)
+			sb.WriteByte('\n')
+		}
+	}
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// formatFileCount renders a find result that carried a count but no file list.
+func formatFileCount(data map[string]any) string {
+	total, _ := data["total_files"].(float64)
+	return fmt.Sprintf("%d files", int(total))
+}
+
+// formatReadContent renders a read result as its content, line numbers and all,
+// so the caller's own highlighter can style it.
+func formatReadContent(data map[string]any) string {
+	content, _ := data["content"].(string)
+	total, _ := data["total_lines"].(float64)
+	if trunc, _ := data["truncated"].(bool); trunc {
+		content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
+	}
+	return content
+}
+
+// formatLineCount renders a read result that carried a count but no content.
+func formatLineCount(data map[string]any) string {
+	total, _ := data["total_lines"].(float64)
+	trunc := ""
+	if t, ok := data["truncated"].(bool); ok && t {
+		trunc = " (truncated)"
+	}
+	return fmt.Sprintf("%d lines%s", int(total), trunc)
+}
+
+// formatWriteBytes renders a write result as path and size.
+func formatWriteBytes(data map[string]any) string {
+	bw, _ := data["bytes_written"].(float64)
+	p, _ := data["path"].(string)
+	return fmt.Sprintf("%s (%d bytes)", p, int(bw))
+}
+
+// formatEditReplacements renders an edit result as its replacement count.
+func formatEditReplacements(data map[string]any) string {
+	r, _ := data["replacements"].(float64)
+	return fmt.Sprintf("%d replacements", int(r))
+}
+
+// formatLSPDiagnostics passes the diagnostics through unchanged — they were
+// already prefixed with ⚠ by formatDiagnosticsForDisplay.
+func formatLSPDiagnostics(data map[string]any) string {
+	diag, _ := data["lsp_diagnostics"].(string)
+	return diag
+}
+
+// formatBashExit renders a foreground bash result: exit code plus the first two
+// and last two output lines. Newlines are preserved — a wall of output squeezed
+// onto one line hides the part that matters.
+func formatBashExit(data map[string]any) string {
+	code, _ := data["exit_code"].(float64)
+	stdout, _ := data["stdout"].(string)
+	stderr, _ := data["stderr"].(string)
+	result := bashOutputPreview(stdout, stderr)
+	if result == "" {
+		result = "(No output)"
+	}
+	if int(code) != 0 {
+		return fmt.Sprintf("exit %d: %s", int(code), result)
+	}
+	return result
+}
+
+// formatRawJSON is the last resort for a result shape nothing above recognizes:
+// re-marshal it compactly and clip it.
+//
+// It is a poor summary by design — JSON escaping turns a shell command into
+// &-escaped soup, and the clip lands mid-token — so a result that lands here
+// regularly is a missing entry in resultFormatters, not a formatting nicety.
+func formatRawJSON(data map[string]any) string {
 	b, _ := json.Marshal(data)
-	s := string(b)
+	return clipToSummaryWidth(string(b))
+}
+
+// clipToSummaryWidth trims s to the 120 columns a summary line gets, marking the
+// cut. Byte-indexed, matching the long-standing behavior of the branches it was
+// lifted from.
+func clipToSummaryWidth(s string) string {
 	if len(s) > 120 {
 		return s[:117] + "..."
 	}
@@ -721,7 +857,8 @@ func formatToolResult(data map[string]any) string {
 // returns no new output is otherwise a blank card, indistinguishable from a
 // finished one, which is how fifty-five consecutive polls of the same handle
 // scrolled past without saying anything at all.
-func formatBashWindow(handle string, data map[string]any) string {
+func formatBashWindow(data map[string]any) string {
+	handle, _ := data["handle"].(string)
 	running, _ := data["running"].(bool)
 	stdout, _ := data["stdout"].(string)
 	stderr, _ := data["stderr"].(string)
