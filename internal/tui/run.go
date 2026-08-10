@@ -34,10 +34,19 @@ type parallelAgent struct {
 
 // runState tracks the state of a /run command execution.
 type runState struct {
-	specName    string
-	promptMD    string
-	gates       []Gate
-	agentID     string
+	specName string
+	promptMD string
+	gates    []Gate
+	agentID  string // the subagent currently streaming
+
+	// worktreeAgentID is the agent that OWNS the worktree the run lives in.
+	// It is not the same as agentID once a retry has happened: a retry agent
+	// is spawned with WorkDir set to the existing worktree and never creates
+	// one of its own, so gates, checklist refresh and the merge must all keep
+	// asking the original owner. Looking them up by agentID after a retry
+	// finds no worktree at all.
+	worktreeAgentID string
+
 	status      string // authoritative terminal status from the subagent
 	phase       string // "running", "gating", "verifying", "retrying", "merging", "done", "failed"
 	retries     int
@@ -48,6 +57,18 @@ type runState struct {
 	startTime   time.Time             // when the run started
 	checklist   []ChecklistStep       // parsed from plan.md
 	parallel    []*parallelAgent      // parallel agents (nil for single-agent mode)
+
+	// carried holds agents whose worktrees still hold unmerged work after the
+	// run collapsed from parallel to a single resuming coordinator. Without
+	// it, retrying a parallel run silently drops every worktree but the one
+	// the retry resumed in.
+	carried []mergeTarget
+}
+
+// mergeTarget names a worktree to merge and the backup branch to move onto it.
+type mergeTarget struct {
+	agentID string
+	backup  string
 }
 
 // isParallel returns true if this run uses multiple parallel agents.
@@ -63,6 +84,22 @@ func (rs *runState) allAgentsDone() bool {
 		}
 	}
 	return true
+}
+
+// collapseParallel ends parallel fan-in, moving every worktree that is not the
+// run's own into carried so the merge still takes it. Dropping those worktrees
+// is silent data loss: the second agent's slices live there and nowhere else.
+func (rs *runState) collapseParallel() {
+	for i, pa := range rs.parallel {
+		if pa.agentID == rs.worktreeAgentID {
+			continue // the worktree the retry resumes in; merged as the owner
+		}
+		rs.carried = append(rs.carried, mergeTarget{
+			agentID: pa.agentID,
+			backup:  runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1)),
+		})
+	}
+	rs.parallel = nil
 }
 
 // --- Message types for /run streaming ---
@@ -340,15 +377,17 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	m.run = &runState{
-		specName:   specName,
-		promptMD:   promptMD,
-		gates:      gates,
-		agentID:    agentID,
-		phase:      "running",
-		maxRetries: 10,
-		events:     events,
-		startTime:  time.Now(),
-		checklist:  checklist,
+		specName: specName,
+		promptMD: promptMD,
+		gates:    gates,
+		agentID:  agentID,
+		// The spawning agent owns the worktree; retries resume inside it.
+		worktreeAgentID: agentID,
+		phase:           "running",
+		maxRetries:      10,
+		events:          events,
+		startTime:       time.Now(),
+		checklist:       checklist,
 	}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -431,14 +470,16 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 	}
 
 	m.run = &runState{
-		specName:   specName,
-		promptMD:   promptMD,
-		gates:      gates,
-		agentID:    agentID1, // primary agent for fallback
-		phase:      "running",
-		maxRetries: 10,
-		startTime:  time.Now(),
-		checklist:  checklist,
+		specName: specName,
+		promptMD: promptMD,
+		gates:    gates,
+		agentID:  agentID1, // primary agent for fallback
+		// Gates and verification run in the first agent's worktree.
+		worktreeAgentID: agentID1,
+		phase:           "running",
+		maxRetries:      10,
+		startTime:       time.Now(),
+		checklist:       checklist,
 		parallel: []*parallelAgent{
 			{agentID: agentID1, events: events1, slices: slices1},
 			{agentID: agentID2, events: events2, slices: slices2},
@@ -750,7 +791,7 @@ func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
 
 	// Cycles exhausted with work still outstanding — do not merge.
 	m.run.phase = "failed"
-	wtPath := m.runWorktreePath(m.run.agentID)
+	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
@@ -796,7 +837,7 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 	m.run.retries++
 	m.run.phase = "retrying"
 
-	wtPath := m.runWorktreePath(m.run.agentID)
+	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
@@ -824,9 +865,10 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 
 	// The new agent owns the run from here; parallel fan-in is over once we
 	// fall back to a single resuming coordinator.
+	m.run.collapseParallel()
+
 	m.run.agentID = agentID
 	m.run.events = events
-	m.run.parallel = nil
 	m.run.status = ""
 	m.run.phase = "running"
 
@@ -932,12 +974,9 @@ func (m *model) runGatesCmd() tea.Cmd {
 		}
 	}
 
-	// In parallel mode, use the first agent's worktree for gate validation.
-	agentID := m.run.agentID
-	if m.run.isParallel() {
-		agentID = m.run.parallel[0].agentID
-	}
-	worktreePath := wm.PathFor(agentID)
+	// Gates run in the worktree the run owns — not the agent currently
+	// streaming, which after a retry has no worktree of its own.
+	worktreePath := wm.PathFor(m.run.worktreeAgentID)
 	if worktreePath == "" {
 		// No worktree path found — treat as pass (agent may not have used worktree).
 		return func() tea.Msg {
@@ -1045,7 +1084,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	// Retries exhausted.
 	m.run.phase = "failed"
 
-	wtPath := m.runWorktreePath(m.run.agentID)
+	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
@@ -1080,10 +1119,6 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 
 	// Collect agent IDs to merge (parallel or single), each with the backup
 	// branch it was given at spawn time so the ref can be moved onto the work.
-	type mergeTarget struct {
-		agentID string
-		backup  string
-	}
 	var targets []mergeTarget
 	if m.run.isParallel() {
 		for i, pa := range m.run.parallel {
@@ -1094,10 +1129,12 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 		}
 	} else {
 		targets = []mergeTarget{{
-			agentID: m.run.agentID,
+			agentID: m.run.worktreeAgentID,
 			backup:  runBackupBranchName(m.run.specName, ""),
 		}}
 	}
+	// Worktrees left over from a collapsed parallel run still hold work.
+	targets = append(targets, m.run.carried...)
 
 	specName := m.run.specName
 
@@ -1161,14 +1198,11 @@ func (m *model) handleRunMergeResult(msg runMergeResultMsg) (tea.Model, tea.Cmd)
 
 		wtPath := msg.preservedWTPath
 		if wtPath == "" {
-			wm := m.cfg.Orchestrator.Worktree()
-			if wm != nil {
-				targetAgentID := m.run.agentID
-				if msg.failedAgentID != "" {
-					targetAgentID = msg.failedAgentID
-				}
-				wtPath = wm.PathFor(targetAgentID)
+			targetAgentID := m.run.worktreeAgentID
+			if msg.failedAgentID != "" {
+				targetAgentID = msg.failedAgentID
 			}
+			wtPath = m.runWorktreePath(targetAgentID)
 		}
 
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -1336,12 +1370,44 @@ func (m *model) refreshRunChecklist() {
 	if wm == nil {
 		return
 	}
-	wtPath := wm.PathFor(m.run.agentID)
-	if wtPath == "" {
-		return
+	// In parallel mode each agent ticks its own slices in its OWN worktree's
+	// plan.md, so no single worktree ever shows the whole plan complete.
+	// Reading only the primary would leave the other agent's slices forever
+	// unchecked and the Verifier permanently failing. Union the views: a slice
+	// is done if any worktree records it done.
+	paths := []string{wm.PathFor(m.run.worktreeAgentID)}
+	for _, pa := range m.run.parallel {
+		if p := wm.PathFor(pa.agentID); p != "" {
+			paths = append(paths, p)
+		}
 	}
-	if updated := parsePlanChecklistFrom(wtPath, m.run.specName); len(updated) > 0 {
-		m.run.checklist = updated
+
+	var merged []ChecklistStep
+	for _, wtPath := range paths {
+		if wtPath == "" {
+			continue
+		}
+		view := parsePlanChecklistFrom(wtPath, m.run.specName)
+		if len(view) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = view
+			continue
+		}
+		// Same plan.md in every worktree, so the step order matches; OR the
+		// Done flags together rather than letting the last read win.
+		if len(view) == len(merged) {
+			for i := range view {
+				if view[i].Done {
+					merged[i].Done = true
+				}
+			}
+		}
+	}
+
+	if len(merged) > 0 {
+		m.run.checklist = merged
 	}
 }
 
