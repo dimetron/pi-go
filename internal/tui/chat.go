@@ -107,6 +107,13 @@ type message struct {
 	preRendered bool
 	tool        string // tool name (for role=="tool")
 	toolIn      string // tool input args (for role=="tool")
+	// toolID is the provider's function-call ID, carried so an arriving result
+	// binds to the card for its own call. A turn routinely issues several calls
+	// to the same tool at once (two `read`s, six `edit`s), and matching by name
+	// alone hands each result to whichever same-named card is still empty —
+	// which is the wrong one. Empty for synthetic cards (grounding) and for any
+	// provider that does not populate FunctionCall.ID; see matchToolResultCard.
+	toolID string
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
 	agentID       string    // subagent ID for matching events
 	agentType     string    // subagent type (e.g. "task", "explore")

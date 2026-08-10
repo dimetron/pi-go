@@ -370,10 +370,16 @@ type agentMsg interface{ agentMsg() }
 type agentTextMsg struct{ text string }
 type agentThinkingMsg struct{ text string }
 type agentToolCallMsg struct {
+	// id is the provider's function-call ID, the only thing that pairs a
+	// result with its own call when a turn issues several calls to the same
+	// tool at once. Empty when a provider omits it, or for the synthetic
+	// grounding pair.
+	id   string
 	name string
 	args map[string]any
 }
 type agentToolResultMsg struct {
+	id      string // matches the agentToolCallMsg.id this answers
 	name    string
 	content string
 }
@@ -752,7 +758,7 @@ func (m *model) emitEventParts(
 			// fires after `maxRepeatToolCalls` observations, so the abort
 			// semantics are unchanged — only the message ordering moves.
 			log.ToolCall(ev.Author, fc.Name, fc.Args)
-			ch <- agentToolCallMsg{name: fc.Name, args: fc.Args}
+			ch <- agentToolCallMsg{id: fc.ID, name: fc.Name, args: fc.Args}
 
 			if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
 				return err
@@ -762,7 +768,7 @@ func (m *model) emitEventParts(
 		if fr := part.FunctionResponse; fr != nil {
 			respJSON, _ := json.Marshal(fr.Response)
 			log.ToolResult(ev.Author, fr.Name, string(respJSON))
-			ch <- agentToolResultMsg{name: fr.Name, content: string(respJSON)}
+			ch <- agentToolResultMsg{id: fr.ID, name: fr.Name, content: string(respJSON)}
 
 			// A changed result on a repeated call is progress, not a loop
 			// (a poll returning fresh output) — let it reset the
@@ -870,7 +876,7 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 	})
 	toolIn := toolCallSummary(msg.name, msg.args)
 	newMsg := message{
-		role: "tool", tool: msg.name, toolIn: toolIn,
+		role: "tool", tool: msg.name, toolIn: toolIn, toolID: msg.id,
 	}
 	if msg.name == "agent" || msg.name == "subagent" {
 		// A single subagent tool call in parallel/chain mode spawns N children.
@@ -1011,14 +1017,61 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 	if msg.name != groundingToolName {
 		content = toolResultSummary(msg.content)
 	}
-	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
-		if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].tool == msg.name && m.chatModel.Messages[i].content == "" {
-			m.chatModel.Messages[i].content = content
-			break
-		}
+	if i := matchToolResultCard(m.chatModel.Messages, msg.id, msg.name); i >= 0 {
+		m.chatModel.Messages[i].content = content
 	}
 	m.refreshDiffStats()
 	return m, waitForAgent(m.agentCh)
+}
+
+// matchToolResultCard finds the chat card an arriving tool result belongs to,
+// or -1 when none is waiting for it.
+//
+// The call ID is what makes this correct. A model turn routinely emits several
+// FunctionCall parts for the same tool in one response — two `read`s, three
+// `bash`es, six `edit`s are all ordinary — and ADK runs them concurrently and
+// answers with one merged event carrying every response. Picking "the newest
+// same-named card with no content yet" therefore handed the first result to the
+// last card and the last result to the first, so the user read each call's
+// output under the other call's arguments.
+//
+// Name matching survives as a fallback for cards that carry no ID: the
+// synthetic grounding pair, restored transcripts written before IDs were kept,
+// and any provider that leaves FunctionCall.ID empty. Unidentified cards are
+// preferred there so an ID-less result cannot steal a card that belongs to an
+// identified call, but an identified card is still accepted as a last resort
+// rather than leaving the result unrendered.
+func matchToolResultCard(messages []message, id, name string) int {
+	if id != "" {
+		claimed := false
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].role != "tool" || messages[i].toolID != id {
+				continue
+			}
+			if messages[i].content == "" {
+				return i
+			}
+			// The card for this call already has its result: a duplicate
+			// re-send, which must not spill onto a different call's card.
+			claimed = true
+		}
+		if claimed {
+			return -1
+		}
+	}
+	fallback := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].role != "tool" || messages[i].tool != name || messages[i].content != "" {
+			continue
+		}
+		if messages[i].toolID == "" {
+			return i
+		}
+		if fallback == -1 {
+			fallback = i
+		}
+	}
+	return fallback
 }
 
 // bashEventPrefix namespaces live shell-command events on the same channel the
