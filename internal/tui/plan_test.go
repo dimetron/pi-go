@@ -120,7 +120,7 @@ func TestCreateSpecSkeleton_AlreadyExists(t *testing.T) {
 
 	_, err := createSpecSkeleton(tmpDir, "existing-feature", "Some idea")
 	if err == nil {
-		t.Error("expected error when spec directory already exists")
+		t.Fatal("expected error when spec directory already exists")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)
@@ -248,7 +248,7 @@ func TestPlanInstruction_ExistingSpecReturnsError(t *testing.T) {
 	// createSpecSkeleton should fail with "already exists".
 	_, err := createSpecSkeleton(tmpDir, "existing-feature", "Some idea")
 	if err == nil {
-		t.Error("expected error when spec directory already exists")
+		t.Fatal("expected error when spec directory already exists")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)

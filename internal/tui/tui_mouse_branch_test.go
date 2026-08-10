@@ -379,7 +379,7 @@ func TestNewBranchPopup_WithBranches(t *testing.T) {
 	m.newBranchPopup()
 
 	if m.branchPopup == nil {
-		t.Error("branchPopup should be created")
+		t.Fatal("branchPopup should be created")
 	}
 	if len(m.branchPopup.branches) == 0 {
 		t.Error("branches should not be empty for a git repo")
