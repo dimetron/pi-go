@@ -36,11 +36,12 @@ func restoreTranscript(events []*session.Event) []message {
 					role:   "tool",
 					tool:   fc.Name,
 					toolIn: toolCallSummary(fc.Name, fc.Args),
+					toolID: fc.ID,
 				})
 			case part.FunctionResponse != nil:
 				fr := part.FunctionResponse
 				respJSON, _ := json.Marshal(fr.Response)
-				attachToolResult(msgs, fr.Name, toolResultSummary(string(respJSON)))
+				attachToolResult(msgs, fr.ID, fr.Name, toolResultSummary(string(respJSON)))
 			case part.Text != "":
 				msgs = appendText(msgs, ev.Content.Role, part.Text)
 			}
@@ -64,16 +65,14 @@ func appendText(msgs []message, role, text string) []message {
 	return append(msgs, message{role: "assistant", content: text})
 }
 
-// attachToolResult fills in the output of the most recent still-unanswered call
-// to the named tool, mirroring handleAgentToolResult. Results arrive in their
-// own events, and parallel calls mean the matching call is not always the last
-// message.
-func attachToolResult(msgs []message, name, content string) {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].role == "tool" && msgs[i].tool == name && msgs[i].content == "" {
-			msgs[i].content = content
-			return
-		}
+// attachToolResult fills in the output of the call this response answers,
+// mirroring handleAgentToolResult — a replayed transcript must pair calls with
+// results the same way the live one did, or a resumed session shows parallel
+// same-tool calls holding each other's output. See matchToolResultCard for why
+// the call ID and not the tool name is what pairs them.
+func attachToolResult(msgs []message, id, name, content string) {
+	if i := matchToolResultCard(msgs, id, name); i >= 0 {
+		msgs[i].content = content
 	}
 }
 

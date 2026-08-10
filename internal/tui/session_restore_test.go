@@ -73,8 +73,10 @@ func TestRestoreTranscript_ToolCallPairsWithResult(t *testing.T) {
 	}
 }
 
-// A result must fill in its own call, not the nearest one, or parallel calls to
-// the same tool would show each other's output.
+// Two calls with no IDs — the pre-ID persisted shape. All this can pin is that
+// each call gets some answer and the two answers are distinct; nothing in the
+// events says which result belongs to which call. Pairing them correctly needs
+// the call ID, which TestRestoreTranscript_ParallelSameToolNotTransposed covers.
 func TestRestoreTranscript_ResultFillsOldestOpenCall(t *testing.T) {
 	msgs := restoreTranscript([]*session.Event{
 		event("model", callPart("grep", nil)),
