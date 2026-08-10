@@ -415,7 +415,7 @@ func TestE2E_PlanDuplicateSpecName(t *testing.T) {
 	// Second creation should fail.
 	_, err = createSpecSkeleton(tmpDir, taskName, idea)
 	if err == nil {
-		t.Error("expected error for duplicate spec name")
+		t.Fatal("expected error for duplicate spec name")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)
