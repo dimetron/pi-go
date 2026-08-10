@@ -62,6 +62,40 @@ func runNamedTool(t *testing.T, ts []tool.Tool, name string, args map[string]any
 
 // TestBashControlTools_RoundTrip drives a backgrounded command through the two
 // tools the way a model would: read, then kill.
+func TestBashControlTools_DefaultWaitsForOutput(t *testing.T) {
+	sup := fastSupervisor(t)
+	sb := testSandbox(t, t.TempDir())
+	ts, err := BashControlTools(sup)
+	if err != nil {
+		t.Fatalf("BashControlTools: %v", err)
+	}
+
+	out, err := bashHandler(sb, sup, nil, BashInput{Command: "sleep 0.2; echo default-wait; sleep 30"})
+	if err != nil {
+		t.Fatalf("bashHandler: %v", err)
+	}
+	if !out.Running || out.Handle == "" {
+		t.Fatalf("expected a backgrounded command, got %+v", out)
+	}
+
+	// An omitted wait_ms must use the same blocking-by-default behavior exposed
+	// by bash_output, rather than immediately returning an empty poll result.
+	res, err := runNamedTool(t, ts, "bash_output", map[string]any{"handle": out.Handle})
+	if err != nil {
+		t.Fatalf("bash_output: %v", err)
+	}
+	if !strings.Contains(fmtAny(res["stdout"]), "default-wait") {
+		t.Fatalf("bash_output default wait did not deliver the line: %v", res)
+	}
+	if running, _ := res["running"].(bool); !running {
+		t.Errorf("command should still be running, got %v", res)
+	}
+
+	if _, err := runNamedTool(t, ts, "bash_kill", map[string]any{"handle": out.Handle}); err != nil {
+		t.Fatalf("bash_kill: %v", err)
+	}
+}
+
 func TestBashControlTools_RoundTrip(t *testing.T) {
 	sup := fastSupervisor(t)
 	sb := testSandbox(t, t.TempDir())
