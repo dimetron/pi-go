@@ -112,7 +112,7 @@ func driveRunLoop(t *testing.T, a *agent.Agent, sid, prompt string) runResult {
 		}
 	}()
 
-	go m.runAgentLoop(context.Background(), prompt, m.agentCh)
+	go m.runAgentLoop(context.Background(), prompt, m.agentCh, m.agentRun())
 
 	select {
 	case <-done:
@@ -136,7 +136,7 @@ func TestRunAgentLoop_AgentNotConfigured(t *testing.T) {
 			}
 		}
 	}()
-	go m.runAgentLoop(context.Background(), "hi", m.agentCh)
+	go m.runAgentLoop(context.Background(), "hi", m.agentCh, m.agentRun())
 	<-done
 
 	if doneErr == nil || !strings.Contains(doneErr.Error(), "not configured") {
