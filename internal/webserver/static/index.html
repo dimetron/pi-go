@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pi-Go Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <link rel="stylesheet" href="/static/style.css">
     <style>
         html, body {
@@ -88,11 +87,18 @@
     </div>
     <div id="terminal"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
-    <script>
+    <script type="module">
+        // ghostty-web is Ghostty's VT parser compiled to WebAssembly, behind an
+        // xterm.js-compatible API. It is vendored rather than loaded from a CDN
+        // so `pi serve` is self-contained and works offline — see
+        // static/vendor/README.md for how the wasm is delivered.
+        import { init, Terminal, FitAddon, UrlRegexProvider } from '/static/vendor/ghostty-web.js';
+
+        // The WebAssembly module has to be instantiated before any Terminal
+        // exists. Everything below therefore runs after this await, which is
+        // the one structural difference from the xterm.js setup this replaced.
+        await init();
+
         // Terminal setup
         const terminal = new Terminal({
             cursorBlink: true,
@@ -131,26 +137,26 @@
             }
         });
 
-        // Addons
-        const fitAddon = new FitAddon.FitAddon();
-        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        // Addons. FitAddon ships inside ghostty-web itself rather than as a
+        // separate package, so there is nothing else to load.
+        const fitAddon = new FitAddon();
 
         const termEl = document.getElementById('terminal');
         terminal.loadAddon(fitAddon);
-        terminal.loadAddon(webLinksAddon);
-
-        // Pin the character-width table to Unicode 11. xterm's built-in table is
-        // Unicode 6, which disagrees with the Go side (charmbracelet/x/ansi) on
-        // a long list of runes the TUI draws — the frame is then measured one
-        // width and painted another, and rows carrying those glyphs sit a cell
-        // off. With unicode11 loaded, both ends resolve East Asian Ambiguous to
-        // a single cell and the grid lines up.
-        if (window.Unicode11Addon) {
-            terminal.loadAddon(new Unicode11Addon.Unicode11Addon());
-            terminal.unicode.activeVersion = '11';
-        }
 
         terminal.open(termEl);
+
+        // Clickable URLs, replacing xterm-addon-web-links. The provider needs
+        // the terminal, so it is registered after open().
+        terminal.registerLinkProvider(new UrlRegexProvider(terminal));
+
+        // No Unicode-version pinning here, and that is deliberate. Under
+        // xterm.js the built-in width table was Unicode 6 and disagreed with the
+        // Go side (charmbracelet/x/ansi) about a long list of runes the TUI
+        // draws, so rows carrying those glyphs sat a cell off and the addon had
+        // to force version 11. ghostty-web measures with Ghostty's own grapheme
+        // handling — the same code as the native terminal — and exposes
+        // unicode.activeVersion as read-only, so there is nothing to pin.
 
         // Connection status
         const statusEl = document.getElementById('status');
@@ -164,8 +170,8 @@
         // Sizing
         //
         // Resizing the terminal is deliberately debounced rather than run per
-        // animation frame. Every fit reflows the buffer xterm already holds to
-        // the new column count, and that buffer was drawn by a TUI that still
+        // animation frame. Every fit reflows the buffer the terminal already
+        // holds to the new column count, and it was drawn by a TUI that still
         // thinks it is the old width — the frame breaks apart, long lines hard
         // wrap and the right-hand rail lands on the wrong row. Holding the old
         // geometry until the drag settles means the reflow happens once,
@@ -177,10 +183,10 @@
         let resizeTimer = null;
 
         // The PTY must never be wider than the browser terminal: if it is, every
-        // full-width line the TUI draws overflows and xterm wraps it onto the
-        // next row. terminal.cols/rows are the dimensions xterm actually applied,
+        // full-width line the TUI draws overflows and the terminal wraps it onto
+        // the next row. terminal.cols/rows are the dimensions actually applied,
         // so they are the only safe values to report — proposeDimensions() is
-        // what xterm intends to become, not what it is.
+        // what the terminal intends to become, not what it is.
         function sendSize(force) {
             const size = terminal.cols + 'x' + terminal.rows;
             if (!force && size === lastSentSize) {
@@ -247,7 +253,7 @@
             }
         });
 
-        // Web fonts change the cell metrics under xterm. Fitting before the font
+        // Web fonts change the cell metrics. Fitting before the font
         // lands measures the fallback monospace and leaves the column count off
         // by several, which is what made long lines wrap mid-render.
         if (document.fonts && document.fonts.ready) {
@@ -376,8 +382,8 @@
             sendMessage('input', data);
         });
 
-        // xterm resizes itself for reasons beyond our fit calls (DECCOLM, addon
-        // internals) — mirror any dimension change to the PTY.
+        // The terminal resizes itself for reasons beyond our fit calls (DECCOLM,
+        // addon internals) — mirror any dimension change to the PTY.
         terminal.onResize(function () {
             sendSize(false);
         });
