@@ -75,7 +75,7 @@ type ReadOutput struct {
 	Note string `json:"note,omitempty"`
 }
 
-func newReadTool(sb *Sandbox) (tool.Tool, error) {
+func newReadTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("read", `Read a file's contents. Returns the content with line numbers.
 
 Required: file_path (absolute path to the file).
@@ -103,26 +103,49 @@ Large files come back a window at a time; next_offset is the exact offset to pas
 }
 
 func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
+	return readHandlerWithLedger(sb, input, nil)
+}
+
+func readHandlerWithLedger(sb *Sandbox, input ReadInput, ledger *ReadLedger) (ReadOutput, error) {
 	if input.FilePath == "" {
 		return ReadOutput{}, fmt.Errorf("file_path is required")
 	}
 
-	info, err := sb.Stat(input.FilePath)
+	// A path that does not resolve as written may still be a real file spelled
+	// differently — see resolveReadPath. Failing that, the error names near
+	// neighbors rather than leaving the model to list the directory itself.
+	path, info, err := resolveReadPath(sb, input.FilePath)
 	if err != nil {
-		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+		return ReadOutput{}, err
 	}
 	if info.IsDir() {
-		return ReadOutput{}, fmt.Errorf("%s is a directory, not a file", input.FilePath)
+		return ReadOutput{}, fmt.Errorf("%s is a directory, not a file", path)
 	}
 
 	if info.Size() == 0 {
+		// An empty file has been seen in full by definition.
+		ledger.Record(path, info, false)
 		return ReadOutput{
 			TotalLines: 0,
-			Note:       fmt.Sprintf("%s is empty (0 bytes).", input.FilePath),
+			Note:       fmt.Sprintf("%s is empty (0 bytes).", path),
 		}, nil
 	}
 
-	totalLines, err := countFileLines(sb, input.FilePath)
+	// Decide what the file is before reading any of it as text, so bytes that
+	// are not text never reach the transcript.
+	prefix, err := readPrefix(sb, path, sniffLen)
+	if err != nil {
+		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+	}
+	kind := classifyContent(prefix, path)
+	if out := describeNonText(kind, path, prefix, info.Size()); out != nil {
+		return *out, nil
+	}
+	if kind == kindNotebook {
+		return readNotebook(sb, path)
+	}
+
+	totalLines, err := countFileLines(sb, path)
 	if err != nil {
 		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
 	}
@@ -134,7 +157,7 @@ func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
 		return ReadOutput{
 			TotalLines: totalLines,
 			Note: fmt.Sprintf("offset %d is past the end of %s, which has %d lines. Valid offsets are 1-%d.",
-				offset, input.FilePath, totalLines, totalLines),
+				offset, path, totalLines, totalLines),
 		}, nil
 	}
 
@@ -144,7 +167,7 @@ func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
 		limit = defaultReadLimit
 	}
 
-	win, err := readWindow(sb, input.FilePath, offset, limit)
+	win, err := readWindow(sb, path, offset, limit)
 	if err != nil {
 		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
 	}
@@ -176,7 +199,50 @@ func readHandler(sb *Sandbox, input ReadInput) (ReadOutput, error) {
 	}
 	out.Note = strings.Join(notes, " ")
 
+	// A window that stopped early, or one that started past line 1, is a
+	// partial view: overwriting on the strength of it would discard lines the
+	// agent never saw.
+	ledger.Record(path, info, win.stoppedEarly || offset > 1)
+
 	return out, nil
+}
+
+// readPrefix reads up to n bytes from the start of a file for classification.
+func readPrefix(sb *Sandbox, path string, n int) ([]byte, error) {
+	f, err := sb.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, n)
+	read, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	return buf[:read], nil
+}
+
+// readNotebook renders a .ipynb as a document rather than returning its JSON.
+func readNotebook(sb *Sandbox, path string) (ReadOutput, error) {
+	data, err := sb.ReadFile(path)
+	if err != nil {
+		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
+	}
+	rendered, err := renderNotebook(data)
+	if err != nil {
+		// A malformed notebook is still a text file; fall back rather than
+		// refusing to show the reader anything at all.
+		return ReadOutput{}, err
+	}
+	content := truncateOutput(rendered)
+	return ReadOutput{
+		Content:    content,
+		TotalLines: strings.Count(rendered, "\n"),
+		Truncated:  len(content) < len(rendered),
+		Note: fmt.Sprintf("%s is a Jupyter notebook, rendered as cells. "+
+			"Line numbers refer to this rendering, not to the underlying JSON.", path),
+	}, nil
 }
 
 // window is the result of formatting one slice of a file.

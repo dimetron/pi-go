@@ -29,17 +29,24 @@ type EditOutput struct {
 	Replacements int `json:"replacements"`
 }
 
-func newEditTool(sb *Sandbox) (tool.Tool, error) {
+func newEditTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("edit", `Edit a file by replacing an exact string match.
 
 Required: file_path (absolute path), old_string (text to find).
 Optional: new_string (replacement, default "" = delete old_string), replace_all (bool, default false).
 old_string must be unique unless replace_all is true.`, func(_ agent.Context, input EditInput) (EditOutput, error) {
-		return editHandler(sb, input)
+		return editHandlerWithLedger(sb, input, ledger)
 	})
 }
 
 func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
+	return editHandlerWithLedger(sb, input, nil)
+}
+
+// editHandlerWithLedger does not gate on the ledger: an exact-string edit
+// already names the content it replaces, so requiring a prior read would be
+// friction with no safety gained. It only keeps the ledger current.
+func editHandlerWithLedger(sb *Sandbox, input EditInput, ledger *ReadLedger) (EditOutput, error) {
 	if input.FilePath == "" {
 		return EditOutput{}, fmt.Errorf("file_path is required")
 	}
@@ -66,7 +73,7 @@ func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
 
 		if count > 0 {
 			// Found the target string, proceed with edit
-			return performEdit(sb, input, content, count)
+			return performEdit(sb, ledger, input, content, count)
 		}
 
 		// Not found - this might be a race condition with concurrent modification
@@ -81,7 +88,7 @@ func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
 }
 
 // performEdit does the actual string replacement and file write.
-func performEdit(sb *Sandbox, input EditInput, content string, count int) (EditOutput, error) {
+func performEdit(sb *Sandbox, ledger *ReadLedger, input EditInput, content string, count int) (EditOutput, error) {
 	if count > 1 && !input.ReplaceAll {
 		// Find line numbers for all occurrences to help the caller
 		lines := strings.Split(content, "\n")
@@ -106,6 +113,12 @@ func performEdit(sb *Sandbox, input EditInput, content string, count int) (EditO
 
 	if err := sb.WriteFile(input.FilePath, []byte(result), 0o644); err != nil {
 		return EditOutput{}, fmt.Errorf("writing file: %w", err)
+	}
+
+	// The agent changed this file itself, so refresh the recorded stat rather
+	// than letting its own edit trip the changed-on-disk check later.
+	if info, statErr := sb.Stat(input.FilePath); statErr == nil {
+		ledger.Touch(input.FilePath, info)
 	}
 
 	return EditOutput{
