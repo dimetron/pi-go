@@ -61,6 +61,14 @@ echo '{"type":"message_end"}'
 	t.Cleanup(func() { startACPSessionFn = prevStart })
 
 	// 3. Build orchestrator with our mocked pi spawner.
+	//
+	// This test asserts that four agents run at once, which needs a pool of at
+	// least four. The shipped default is deliberately smaller — see
+	// DefaultPoolSize — so the requirement is stated here rather than being
+	// silently inherited from it. Without this the fourth agent queues and the
+	// concurrency assertion below fails for a reason unrelated to spawning.
+	t.Setenv(ConcurrencyEnvVar, "4")
+
 	cfg := testConfig()
 	orch := NewOrchestrator(cfg, "", nil)
 	orch.spawner = NewSpawner(piBinary)

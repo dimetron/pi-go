@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -83,6 +84,31 @@ func FilterEnv(allowlist []string) []string {
 		}
 	}
 	return filtered
+}
+
+// ChildEnv returns the environment for a spawned subagent: the allowlisted
+// parent environment, with the concurrency budget replaced by this process's
+// share for its children.
+//
+// The override is the point. PI_ is a forwarded prefix, so without it the
+// parent's budget is inherited verbatim — and because each spawned agent is a
+// pi process that builds its own pool, an inherited budget is a fresh
+// allowance per process rather than a shared one. Total concurrency then grows
+// as depth x budget, which is how eight agents ended up in flight against a
+// per-minute token limit.
+func ChildEnv(parentBudget int) []string {
+	env := FilterEnv(nil)
+	child := childConcurrency(parentBudget)
+
+	prefix := ConcurrencyEnvVar + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue // replaced below, never inherited unchanged
+		}
+		out = append(out, entry)
+	}
+	return append(out, prefix+strconv.Itoa(child))
 }
 
 // matchesAllowlist checks if an env var name matches any entry in the allowlist.

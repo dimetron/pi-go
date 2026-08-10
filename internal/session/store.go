@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -643,11 +644,23 @@ func sanitizeSessionTitle(title string) string {
 		// "title" inject arbitrary ANSI/OSC into the terminal. Drop it.
 		b.WriteRune(r)
 	}
-	title = b.String()
-	if len(title) > MaxSessionTitle {
-		title = title[:MaxSessionTitle]
+	return truncateTitle(b.String())
+}
+
+// truncateTitle caps a title at MaxSessionTitle bytes without splitting a
+// rune. A plain byte slice cuts multi-byte characters in half, and the
+// fragment is stored in meta.json and written to the terminal inside an OSC 0
+// sequence — where it shows up as U+FFFD. Half of recent session titles
+// carried one before this backed the cut up to a boundary.
+func truncateTitle(title string) string {
+	if len(title) <= MaxSessionTitle {
+		return title
 	}
-	return title
+	cut := MaxSessionTitle
+	for cut > 0 && !utf8.RuneStart(title[cut]) {
+		cut--
+	}
+	return title[:cut]
 }
 
 // GetSessionTitle returns the current title for the given session, or "" if

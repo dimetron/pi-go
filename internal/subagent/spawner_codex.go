@@ -112,7 +112,7 @@ func startCodexSession(ctx context.Context, agentName, prompt string, opts Spawn
 
 	sessOpts.CWD = opts.WorkDir
 	sessOpts.Prompt = prompt
-	sessOpts.Env = append(FilterEnv(nil), opts.Env...)
+	sessOpts.Env = append(ChildEnv(ConcurrencyFromEnv()), opts.Env...)
 
 	sess, err := codex.NewSession(ctx, sessOpts)
 	if err != nil {

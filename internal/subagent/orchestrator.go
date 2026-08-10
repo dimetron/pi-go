@@ -16,7 +16,14 @@ import (
 )
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
-const DefaultPoolSize = 5
+//
+// Three rather than five, because the budget is per process and a spawned
+// coordinator builds its own pool: with the Coordinator/Worker SOP the totals
+// multiply with nesting. Measured over six hours of runs, 39% of sessions died
+// on the provider's per-minute token limit at a peak of eight agents in
+// flight. Raise it with PI_SUBAGENT_CONCURRENCY where the account has headroom
+// — see ConcurrencyFromEnv.
+const DefaultPoolSize = 3
 
 // recentTaskTTL is how long a completed subagent result is kept before being evicted.
 const recentTaskTTL = 30 * time.Minute
@@ -107,7 +114,7 @@ func NewOrchestrator(cfg *config.Config, repoRoot string, agentConfigs []AgentCo
 	}
 
 	return &Orchestrator{
-		pool:        NewPool(DefaultPoolSize),
+		pool:        NewPool(ConcurrencyFromEnv()),
 		spawner:     NewSpawner(""),
 		worktree:    wm,
 		cfg:         cfg,
