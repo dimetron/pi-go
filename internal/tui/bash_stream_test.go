@@ -77,6 +77,100 @@ func TestHandleBashEvent_CapsRetainedEvents(t *testing.T) {
 	}
 }
 
+// TestToolCallSummary_BashControl shows the handle in the card header of a
+// bash_output/bash_kill poll. Without a case for these tools the header fell
+// through to the empty summary and rendered as a bare "◉ bash_output" with no
+// clue which command was being polled.
+func TestToolCallSummary_BashControl(t *testing.T) {
+	if got := toolCallSummary("bash_output", map[string]any{"handle": "bg_1"}); got != "bg_1" {
+		t.Errorf("bash_output summary = %q, want bg_1", got)
+	}
+	if got := toolCallSummary("bash_kill", map[string]any{"handle": "bg_2"}); got != "bg_2" {
+		t.Errorf("bash_kill summary = %q, want bg_2", got)
+	}
+}
+
+// TestHandleAgentToolCall_BashControlHeaderFoldsCommand verifies that a poll of
+// a backgrounded command names the command in its card header. The bash card
+// bound to the handle carries the command (handleBashEvent stamps agentID), and
+// the poll card should read "bash_output(bg_1: sleep 10 ...)" rather than a
+// bare "◉ bash_output".
+func TestHandleAgentToolCall_BashControlHeaderFoldsCommand(t *testing.T) {
+	m := newHandlerModel()
+	m.chatModel.Messages = []message{
+		{role: "tool", tool: "bash", toolIn: `sleep 10 && echo "done"`, agentID: "bg_1"},
+	}
+
+	m.handleAgentToolCall(agentToolCallMsg{
+		id: "call_poll", name: "bash_output", args: map[string]any{"handle": "bg_1"},
+	})
+
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	if want := `bg_1: sleep 10 && echo "done"`; last.toolIn != want {
+		t.Errorf("bash_output card toolIn = %q, want %q", last.toolIn, want)
+	}
+}
+
+// TestHandleAgentToolCall_BashControlHeaderFallsBackToHandle: when no bash card
+// is bound to the handle (restored transcript, supervisor forgotten the
+// command), the poll card still shows the handle.
+func TestHandleAgentToolCall_BashControlHeaderFallsBackToHandle(t *testing.T) {
+	m := newHandlerModel()
+
+	m.handleAgentToolCall(agentToolCallMsg{
+		id: "call_poll", name: "bash_kill", args: map[string]any{"handle": "bg_9"},
+	})
+
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	if last.toolIn != "bg_9" {
+		t.Errorf("bash_kill card toolIn = %q, want bg_9", last.toolIn)
+	}
+}
+
+// TestHandleAgentToolResult_BindsBashHandleFromResult covers the recovery path
+// for a lost bash:start binding: when the start event arrives before the card
+// exists (separate buffered channel), the card never gets its agentID stamped.
+// The bash result carries the handle, so it is the reliable place to bind —
+// a later bash_output/bash_kill card then still finds the command.
+func TestHandleAgentToolResult_BindsBashHandleFromResult(t *testing.T) {
+	m := newHandlerModel()
+	m.chatModel.Messages = []message{
+		{role: "tool", tool: "bash", toolIn: "sleep 10", toolID: "call_1"},
+	}
+
+	m.handleAgentToolResult(agentToolResultMsg{
+		id: "call_1", name: "bash",
+		content: `{"handle":"bg_1","running":true,"exit_code":-1}`,
+	})
+
+	if got := m.chatModel.Messages[0].agentID; got != "bg_1" {
+		t.Errorf("bash card agentID = %q, want bg_1 (bound from result)", got)
+	}
+
+	// A foreground result (no handle) must not stamp anything.
+	m2 := newHandlerModel()
+	m2.chatModel.Messages = []message{
+		{role: "tool", tool: "bash", toolIn: "echo hi", toolID: "call_2"},
+	}
+	m2.handleAgentToolResult(agentToolResultMsg{id: "call_2", name: "bash", content: `{"exit_code":0,"stdout":"hi"}`})
+	if got := m2.chatModel.Messages[0].agentID; got != "" {
+		t.Errorf("foreground bash card agentID = %q, want empty", got)
+	}
+}
+
+// TestBashHandleFromResult covers the handle extractor directly.
+func TestBashHandleFromResult(t *testing.T) {
+	if got := bashHandleFromResult(`{"handle":"bg_3","running":true}`); got != "bg_3" {
+		t.Errorf("bashHandleFromResult = %q, want bg_3", got)
+	}
+	if got := bashHandleFromResult(`{"exit_code":0,"stdout":"hi"}`); got != "" {
+		t.Errorf("bashHandleFromResult = %q, want empty for foreground result", got)
+	}
+	if got := bashHandleFromResult("not json"); got != "" {
+		t.Errorf("bashHandleFromResult = %q, want empty for non-JSON", got)
+	}
+}
+
 // TestRenderLiveOutput_ShowsStallState is the reason the stream exists: a
 // command that prints nothing must still show that it is alive and stuck,
 // rather than rendering as an empty card indistinguishable from a hang.
