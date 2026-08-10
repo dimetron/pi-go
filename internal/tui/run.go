@@ -750,11 +750,7 @@ func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
 
 	// Cycles exhausted with work still outstanding — do not merge.
 	m.run.phase = "failed"
-	wm := m.cfg.Orchestrator.Worktree()
-	wtPath := ""
-	if wm != nil {
-		wtPath = wm.PathFor(m.run.agentID)
-	}
+	wtPath := m.runWorktreePath(m.run.agentID)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
@@ -769,6 +765,20 @@ func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
 		})
 	}
 	return m, nil
+}
+
+// runWorktreePath returns the worktree directory for an agent, or "" when
+// there is no orchestrator or worktree manager to ask. Callers reach it from
+// terminal-reporting paths that may run without either.
+func (m *model) runWorktreePath(agentID string) string {
+	if m.cfg.Orchestrator == nil {
+		return ""
+	}
+	wm := m.cfg.Orchestrator.Worktree()
+	if wm == nil {
+		return ""
+	}
+	return wm.PathFor(agentID)
 }
 
 // retryRun spawns the next cycle in the same worktree, carrying `context`
@@ -786,10 +796,7 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 	m.run.retries++
 	m.run.phase = "retrying"
 
-	wtPath := ""
-	if wm := m.cfg.Orchestrator.Worktree(); wm != nil {
-		wtPath = wm.PathFor(m.run.agentID)
-	}
+	wtPath := m.runWorktreePath(m.run.agentID)
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
@@ -1038,11 +1045,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	// Retries exhausted.
 	m.run.phase = "failed"
 
-	wm := m.cfg.Orchestrator.Worktree()
-	wtPath := ""
-	if wm != nil {
-		wtPath = wm.PathFor(m.run.agentID)
-	}
+	wtPath := m.runWorktreePath(m.run.agentID)
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",

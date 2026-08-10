@@ -1958,3 +1958,32 @@ func TestBuildRunPrompt_CarriesCoordinatorContract(t *testing.T) {
 		t.Error("run prompt should forbid delegating to [worktree] agents")
 	}
 }
+
+// Terminal verifier reporting runs on paths that may have no orchestrator at
+// all; looking up the worktree there must not panic.
+func TestVerifier_ExhaustedRetriesWithoutOrchestrator(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:   "stuck",
+			agentID:    "task-1",
+			phase:      "gating",
+			retries:    3,
+			maxRetries: 3,
+			checklist:  []ChecklistStep{{Title: "HTTP", Done: false}},
+		},
+	}
+
+	m.verifyRunComplete()
+
+	if m.run.phase != "failed" {
+		t.Fatalf("phase = %q, want failed", m.run.phase)
+	}
+}
+
+func TestRunWorktreePath_NilOrchestrator(t *testing.T) {
+	m := &model{}
+	if got := m.runWorktreePath("task-1"); got != "" {
+		t.Errorf("runWorktreePath = %q, want empty with no orchestrator", got)
+	}
+}
