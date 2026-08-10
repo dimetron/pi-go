@@ -204,6 +204,7 @@ func TestEvalRun(t *testing.T) {
 	conc := eval.ComputeConcurrencyMetrics(orch.Concurrency(), samples)
 	mu.Unlock()
 	tools := eval.ComputeToolsMetrics(loaded)
+	tokens := eval.ComputeTokenMetrics(loaded)
 
 	// --- golden + baseline checks -------------------------------------------
 	goldenFiles := []string{"go.mod", "add.go", "add_test.go"}
@@ -252,6 +253,7 @@ func TestEvalRun(t *testing.T) {
 		Trajectory:  traj,
 		Concurrency: conc,
 		Tools:       tools,
+		Tokens:      tokens,
 	}
 
 	// --- LLM judge (advisory, graded from the assembled report) -------------

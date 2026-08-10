@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,5 +299,69 @@ func TestDiffGolden(t *testing.T) {
 	write(produced, "add_test.go", "package artifacts\n\nfunc TestAdd(t *testing.T) {\n\tif got := Add(1, 2); got != 3 {\n\t\tt.Fatal(got)\n\t}\n}\n")
 	if _, pass := DiffGolden(produced, golden, []string{"go.mod", "add.go", "add_test.go"}); !pass {
 		t.Errorf("DiffGolden pass = false, want true for identical files")
+	}
+}
+
+func TestComputeTokenMetrics(t *testing.T) {
+	dir := t.TempDir()
+
+	// Two sessions with events.jsonl usage blocks; one session with no events.
+	writeEvents := func(sessionID string, lines ...string) {
+		t.Helper()
+		sd := filepath.Join(dir, sessionID)
+		if err := os.MkdirAll(sd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, l := range lines {
+			b.WriteString(l)
+			b.WriteString("\n")
+		}
+		if err := os.WriteFile(filepath.Join(sd, "events.jsonl"), []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeEvents("sess-a",
+		`{"UsageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20}}`,
+		`{"UsageMetadata":{"promptTokenCount":50,"candidatesTokenCount":10}}`,
+		`{"Content":{"parts":[]}}`, // no usage block — ignored
+	)
+	writeEvents("sess-b",
+		`{"UsageMetadata":{"promptTokenCount":30,"candidatesTokenCount":5,"cachedContentTokenCount":7}}`,
+	)
+	writeTraj(t, dir, "sess-a", baseTraj("sess-a", "pi-go"))
+	writeTraj(t, dir, "sess-b", baseTraj("sess-b", "pi-go"))
+	writeTraj(t, dir, "sess-c", baseTraj("sess-c", "pi-go")) // no events.jsonl
+
+	loaded, err := LoadTrajectories(dir)
+	if err != nil {
+		t.Fatalf("LoadTrajectories: %v", err)
+	}
+	m := ComputeTokenMetrics(loaded)
+
+	if m.PromptTokens != 180 {
+		t.Errorf("PromptTokens = %d, want 180", m.PromptTokens)
+	}
+	if m.CompletionTokens != 35 {
+		t.Errorf("CompletionTokens = %d, want 35", m.CompletionTokens)
+	}
+	if m.CachedTokens != 7 {
+		t.Errorf("CachedTokens = %d, want 7", m.CachedTokens)
+	}
+	if m.TotalTokens != 222 {
+		t.Errorf("TotalTokens = %d, want 222", m.TotalTokens)
+	}
+	if len(m.Sessions) != 2 {
+		t.Errorf("len(Sessions) = %d, want 2 (sess-c has no usage)", len(m.Sessions))
+	}
+	byID := map[string]SessionTokenUsage{}
+	for _, s := range m.Sessions {
+		byID[s.SessionID] = s
+	}
+	if a := byID["sess-a"]; a.PromptTokens != 150 || a.CompletionTokens != 30 {
+		t.Errorf("sess-a usage = %+v, want prompt 150 completion 30", a)
+	}
+	if b := byID["sess-b"]; b.PromptTokens != 30 || b.CompletionTokens != 5 || b.CachedTokens != 7 {
+		t.Errorf("sess-b usage = %+v, want prompt 30 completion 5 cached 7", b)
 	}
 }

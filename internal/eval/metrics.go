@@ -6,6 +6,7 @@
 package eval
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ type RunReport struct {
 	Trajectory  TrajectoryMetrics  `json:"trajectory"`
 	Concurrency ConcurrencyMetrics `json:"concurrency"`
 	Tools       ToolsMetrics       `json:"tools"`
+	Tokens      TokenMetrics       `json:"tokens"`
 	// Judge is the LLM grader's advisory verdict, absent when no judge ran.
 	Judge *JudgeVerdict `json:"judge,omitempty"`
 }
@@ -599,6 +601,84 @@ func looksLikeError(content any) bool {
 		}
 	}
 	return false
+}
+
+// --- Token metrics ---
+
+// TokenMetrics aggregates provider-reported token usage across every session
+// in the run. Usage is read from each session's events.jsonl because the ATIF
+// trajectory does not carry it.
+type TokenMetrics struct {
+	PromptTokens     int                 `json:"prompt_tokens"`
+	CompletionTokens int                 `json:"completion_tokens"`
+	CachedTokens     int                 `json:"cached_tokens"`
+	TotalTokens      int                 `json:"total_tokens"`
+	CostUSD          float64             `json:"cost_usd,omitempty"`
+	Sessions         []SessionTokenUsage `json:"sessions,omitempty"`
+}
+
+// SessionTokenUsage is the token usage attributed to one session.
+type SessionTokenUsage struct {
+	SessionID        string `json:"session_id"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	CachedTokens     int    `json:"cached_tokens"`
+}
+
+// usageEvent is the subset of a persisted session event we need: the provider
+// usage block. Partial events are never persisted (FileService.AppendEvent
+// drops them), so every event with a non-nil UsageMetadata is a final response
+// and summing them does not double-count a streamed turn.
+type usageEvent struct {
+	UsageMetadata *struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+	} `json:"UsageMetadata"`
+}
+
+// ComputeTokenMetrics sums provider-reported token usage across every session
+// in the run, attributing each session's usage to its trajectory.
+func ComputeTokenMetrics(loaded []*LoadedTrajectory) TokenMetrics {
+	m := TokenMetrics{}
+	for _, lt := range loaded {
+		u := sessionTokenUsage(lt.SessionDir)
+		m.PromptTokens += u.PromptTokens
+		m.CompletionTokens += u.CompletionTokens
+		m.CachedTokens += u.CachedTokens
+		if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.CachedTokens > 0 {
+			u.SessionID = lt.SessionID
+			m.Sessions = append(m.Sessions, u)
+		}
+	}
+	m.TotalTokens = m.PromptTokens + m.CompletionTokens + m.CachedTokens
+	return m
+}
+
+// sessionTokenUsage reads one session's events.jsonl and sums its usage blocks.
+func sessionTokenUsage(sessionDir string) SessionTokenUsage {
+	var u SessionTokenUsage
+	f, err := os.Open(filepath.Join(sessionDir, "events.jsonl"))
+	if err != nil {
+		return u
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		var ev usageEvent
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			continue
+		}
+		if ev.UsageMetadata == nil {
+			continue
+		}
+		u.PromptTokens += ev.UsageMetadata.PromptTokenCount
+		u.CompletionTokens += ev.UsageMetadata.CandidatesTokenCount
+		u.CachedTokens += ev.UsageMetadata.CachedContentTokenCount
+	}
+	return u
 }
 
 // DiffGolden compares each named file between the produced artifacts directory

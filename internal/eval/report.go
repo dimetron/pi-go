@@ -118,6 +118,26 @@ func RenderMarkdown(r *RunReport) string {
 		}
 	}
 
+	fmt.Fprintf(&b, "\n## Tokens\n\n")
+	tk := r.Tokens
+	fmt.Fprintf(&b, "- **prompt tokens**: %d  \n", tk.PromptTokens)
+	fmt.Fprintf(&b, "- **completion tokens**: %d  \n", tk.CompletionTokens)
+	if tk.CachedTokens > 0 {
+		fmt.Fprintf(&b, "- **cached tokens**: %d  \n", tk.CachedTokens)
+	}
+	fmt.Fprintf(&b, "- **total tokens**: %d  \n", tk.TotalTokens)
+	if tk.CostUSD > 0 {
+		fmt.Fprintf(&b, "- **estimated cost**: $%.4f  \n", tk.CostUSD)
+	}
+	if len(tk.Sessions) > 0 {
+		fmt.Fprintf(&b, "\n| session | prompt | completion | total |\n")
+		fmt.Fprintf(&b, "|---|---|---|---|\n")
+		for _, s := range tk.Sessions {
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d |\n",
+				shortID(s.SessionID), s.PromptTokens, s.CompletionTokens, s.PromptTokens+s.CompletionTokens+s.CachedTokens)
+		}
+	}
+
 	return b.String()
 }
 
