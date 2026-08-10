@@ -511,27 +511,33 @@ Build something.
 		t.Error("gate output should not include passed gates")
 	}
 
-	// Build retry prompt.
-	retryPrompt := buildRetryPrompt("my-feature", promptMD, gateOutput)
+	// Build the resume prompt for the next cycle.
+	retryPrompt := buildResumePrompt("my-feature", promptMD, "Gate failed", gateOutput)
 
-	// Verify retry prompt contains all expected sections.
-	if !strings.Contains(retryPrompt, "failed gate validation") {
-		t.Error("retry prompt should mention gate validation failure")
+	// Verify resume prompt contains all expected sections.
+	if !strings.Contains(retryPrompt, "Gate failed") {
+		t.Error("resume prompt should name the reason the cycle stopped")
 	}
-	if !strings.Contains(retryPrompt, "## Gate Failures") {
-		t.Error("retry prompt should contain gate failures section")
+	if !strings.Contains(retryPrompt, "## State") {
+		t.Error("resume prompt should contain the carried-over state section")
 	}
 	if !strings.Contains(retryPrompt, "FAIL: TestFoo") {
-		t.Error("retry prompt should contain specific failure output")
+		t.Error("resume prompt should contain specific failure output")
 	}
 	if !strings.Contains(retryPrompt, "## Original Task") {
-		t.Error("retry prompt should contain original task")
+		t.Error("resume prompt should contain original task")
 	}
 	if !strings.Contains(retryPrompt, "Build something.") {
-		t.Error("retry prompt should contain original objective")
+		t.Error("resume prompt should contain original objective")
 	}
-	if !strings.Contains(retryPrompt, "Fix the issues") {
-		t.Error("retry prompt should contain fix instructions")
+	if !strings.Contains(retryPrompt, "## Resume Instructions") {
+		t.Error("resume prompt should contain resume instructions")
+	}
+	if !strings.Contains(retryPrompt, "SAME worktree") {
+		t.Error("resume prompt should tell the agent the prior work is on disk")
+	}
+	if !strings.Contains(retryPrompt, "Your Role: Coordinator") {
+		t.Error("resume prompt should carry the coordinator contract")
 	}
 }
 

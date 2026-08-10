@@ -157,3 +157,33 @@ func searchString(s, substr string) bool {
 	}
 	return false
 }
+
+// The default SOP must teach the Coordinator → Worker → Verifier model, and
+// must generate a PROMPT.md that /run's verifier can act on. Without these
+// sections a plan produces a single monolithic agent whose context outgrows
+// the model before the last slice lands.
+func TestDefaultPDDSOP_CarriesCoordinatorWorkflow(t *testing.T) {
+	for _, want := range []string{
+		"## Execution Model",
+		"Coordinator → Worker → Verifier",
+		"## Done Criteria",
+		"code-reviewer",
+		"VERDICT: PASS",
+		"parallel-safe",
+	} {
+		if !contains(DefaultPDDSOP, want) {
+			t.Errorf("default PDD SOP missing %q", want)
+		}
+	}
+}
+
+// Delegating to a [worktree] agent from /plan or /run drops the edits into a
+// nested worktree that is never merged, so the SOP must rule it out.
+func TestDefaultPDDSOP_ForbidsWorktreeAgents(t *testing.T) {
+	if !contains(DefaultPDDSOP, "Never delegate to a [worktree] agent") {
+		t.Error("default PDD SOP should forbid delegating to [worktree] agents")
+	}
+	if !contains(DefaultPDDSOP, "explore") {
+		t.Error("default PDD SOP should name the research subagent to delegate to")
+	}
+}

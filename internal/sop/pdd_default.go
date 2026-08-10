@@ -29,6 +29,11 @@ You can reference rough-idea.md for the original idea.
 - When requirements are clear, summarize them and get explicit confirmation before moving on
 
 ### Phase 3: Objective Research
+- Delegate research to subagents rather than reading files into your own context.
+  Split the question into 2-5 independent angles and dispatch them in ONE parallel
+  ` + "`" + `subagent` + "`" + ` call: ` + "`" + `{tasks: [{agent: "explore", task: "..."}, ...]}` + "`" + `.
+  Each angle gets its own agent, and each returns findings — not file contents.
+  This keeps the planning session's context small enough to reach Phase 7.
 - Explore the codebase to understand relevant existing code
 - IMPORTANT: Focus only on facts — how the code works today, what patterns exist, what
   dependencies are involved. Do NOT propose solutions or implementation ideas during research.
@@ -70,14 +75,25 @@ You can reference rough-idea.md for the original idea.
   - What to implement (specific files and changes)
   - Verification checkpoint: what build/test command confirms this slice works
   - Dependencies on previous slices
+  - Parallel-safe: yes/no — "yes" only when the slice shares no files with any
+    other slice that has no ordering dependency on it
 - Every slice must compile and pass tests independently
 - Steps should build incrementally — never require more than one slice to be done before testing
+- **Size every slice to fit one worker subagent's context.** /run does not execute
+  the plan in a single agent — a Coordinator delegates one slice per worker. A slice
+  that needs more than ~10 files or ~400 lines of change is too big: split it.
+  Oversized slices are the single largest cause of failed runs — the worker's context
+  grows past the model limit and the provider drops the stream mid-slice.
 
 ### Phase 7: PROMPT.md Generation
 - Write PROMPT.md — the compressed execution briefing
 - Use the template below
 - IMPORTANT: Discover the project's build and test commands during research
   and embed them in the Gates section
+- IMPORTANT: Fill in the Execution Model and Done Criteria sections. /run reads
+  them to drive the Coordinator → Worker → Verifier loop. A PROMPT.md without
+  Done Criteria makes the Verifier fall back to checkbox counting alone, which
+  cannot tell "implemented" from "stubbed".
 
 ## PROMPT.md Template
 
@@ -95,8 +111,27 @@ You can reference rough-idea.md for the original idea.
 - Given <precondition>, when <action>, then <expected outcome>
 
 ## Implementation Slices
-1. **<Slice name>** — <what to implement>, verify: <build/test command>
-2. **<Slice name>** — <what to implement>, verify: <build/test command>
+1. **<Slice name>** — <what to implement>, files: ` + "`" + `<paths>` + "`" + `, verify: <build/test command>, parallel-safe: <yes|no>
+2. **<Slice name>** — <what to implement>, files: ` + "`" + `<paths>` + "`" + `, verify: <build/test command>, parallel-safe: <yes|no>
+
+## Execution Model
+Coordinator → Worker → Verifier. The agent that receives this PROMPT.md is the
+**Coordinator**; it delegates rather than implements.
+
+- **Workers**: one ` + "`" + `worker` + "`" + ` subagent per slice (` + "`" + `quick-task` + "`" + ` for a single-file
+  mechanical change). Slices marked parallel-safe may be batched in one parallel
+  ` + "`" + `subagent` + "`" + ` call; all others run one at a time, in order.
+- **Verifier**: after the last slice, a ` + "`" + `code-reviewer` + "`" + ` subagent checks the Done
+  Criteria below against the actual diff and returns VERDICT: PASS or VERDICT: FAIL.
+- **Loop**: on FAIL the Coordinator dispatches fix workers and re-verifies, up to
+  10 cycles total.
+
+## Done Criteria
+The Verifier checks these against the diff, not against the checklist. Each must
+be objectively checkable by reading code or running a command.
+- [ ] <observable outcome, e.g. "POST /api/x returns 202 and enqueues a job — see handler_test.go">
+- [ ] <observable outcome>
+- [ ] No slice is left as a stub, TODO, or panic("not implemented")
 
 ## Gates
 - **build**: ` + "`" + `<build command discovered during research>` + "`" + `
@@ -133,4 +168,11 @@ Follow the conventions in specs/AGENTS.md for spec directory structure and namin
 - Gates should use the project's actual build/test commands
 - Be thorough but efficient — ask only necessary questions
 - Aim for plans with <50 distinct instructions per phase — large instruction counts degrade LLM compliance
+- **Delegate to subagents for anything small and self-contained** — a file lookup,
+  an API-shape check, a convention question. Spawn ` + "`" + `explore` + "`" + ` (research) or
+  ` + "`" + `quick-task` + "`" + ` (small edits); batch independent ones into a single parallel call.
+  Read files directly only when you need the exact text in your own context.
+- **Never delegate to a [worktree] agent from /plan or /run** (` + "`" + `task` + "`" + `, ` + "`" + `designer` + "`" + `).
+  Their edits land in a nested worktree that is never merged, so the work is lost.
+  Use ` + "`" + `worker` + "`" + ` or ` + "`" + `quick-task` + "`" + ` — they edit the current directory.
 `
