@@ -63,6 +63,13 @@ type runState struct {
 	// it, retrying a parallel run silently drops every worktree but the one
 	// the retry resumed in.
 	carried []mergeTarget
+
+	// ownerBackup is the backup branch the worktree owner was given at spawn
+	// time. It is recorded on collapse because the owner keeps its parallel
+	// name: git cannot hold both "run/spec" and "run/spec/part-2" — one is a
+	// ref, the other wants it to be a directory — so a collapsed run must not
+	// fall back to the bare single-agent name while carrying part-N siblings.
+	ownerBackup string
 }
 
 // mergeTarget names a worktree to merge and the backup branch to move onto it.
@@ -91,15 +98,41 @@ func (rs *runState) allAgentsDone() bool {
 // is silent data loss: the second agent's slices live there and nowhere else.
 func (rs *runState) collapseParallel() {
 	for i, pa := range rs.parallel {
+		backup := runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1))
 		if pa.agentID == rs.worktreeAgentID {
-			continue // the worktree the retry resumes in; merged as the owner
+			// The worktree the retry resumes in; merged as the owner. Keep the
+			// name it was spawned with so it stays a sibling of the carried
+			// refs rather than their parent directory.
+			rs.ownerBackup = backup
+			continue
 		}
-		rs.carried = append(rs.carried, mergeTarget{
-			agentID: pa.agentID,
-			backup:  runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1)),
-		})
+		rs.carried = append(rs.carried, mergeTarget{agentID: pa.agentID, backup: backup})
 	}
 	rs.parallel = nil
+}
+
+// mergeTargets lists every worktree the run must merge, each paired with the
+// backup branch it was given at spawn time. It covers all three shapes a run
+// can end in: a single agent, a live parallel fan-out, and a run that has
+// collapsed to one coordinator but still carries the other agents' worktrees.
+func (rs *runState) mergeTargets() []mergeTarget {
+	var targets []mergeTarget
+	if rs.isParallel() {
+		for i, pa := range rs.parallel {
+			targets = append(targets, mergeTarget{
+				agentID: pa.agentID,
+				backup:  runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1)),
+			})
+		}
+	} else {
+		backup := rs.ownerBackup
+		if backup == "" {
+			backup = runBackupBranchName(rs.specName, "")
+		}
+		targets = []mergeTarget{{agentID: rs.worktreeAgentID, backup: backup}}
+	}
+	// Worktrees left over from a collapsed parallel run still hold work.
+	return append(targets, rs.carried...)
 }
 
 // --- Message types for /run streaming ---
@@ -1130,72 +1163,65 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 
 	// Collect agent IDs to merge (parallel or single), each with the backup
 	// branch it was given at spawn time so the ref can be moved onto the work.
-	var targets []mergeTarget
-	if m.run.isParallel() {
-		for i, pa := range m.run.parallel {
-			targets = append(targets, mergeTarget{
-				agentID: pa.agentID,
-				backup:  runBackupBranchName(m.run.specName, fmt.Sprintf("part-%d", i+1)),
-			})
-		}
-	} else {
-		targets = []mergeTarget{{
-			agentID: m.run.worktreeAgentID,
-			backup:  runBackupBranchName(m.run.specName, ""),
-		}}
-	}
-	// Worktrees left over from a collapsed parallel run still hold work.
-	targets = append(targets, m.run.carried...)
+	targets := m.run.mergeTargets()
 
 	specName := m.run.specName
 
 	return func() tea.Msg {
-		var allOutput strings.Builder
-		for _, t := range targets {
-			aid := t.agentID
+		return mergeRunTargets(wm, targets, specName)
+	}
+}
 
-			// Commit what the agent produced before anything can remove it.
-			// The task agent is told its edits stay local to the worktree and
-			// is never asked to commit, so without this the merge below has no
-			// commits to take and Cleanup force-removes the only copy.
-			if _, err := wm.CommitAll(aid, fmt.Sprintf("pi-go run %s (agent %s)", specName, aid)); err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String(),
-					err:             fmt.Errorf("commit worktree for %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
-			// Move the backup ref onto the committed work. It was pointed at
-			// the base commit at spawn time, when there was nothing to back up.
-			if err := wm.CreateBackupBranch(aid, t.backup); err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String(),
-					err:             fmt.Errorf("back up worktree for %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
+// mergeRunTargets commits, backs up and merges each worktree in turn, stopping
+// at the first failure so the offending worktree is preserved rather than
+// cleaned up behind a half-finished merge. It is a package-level function, not
+// a closure, so the whole sequence can be driven directly in tests.
+func mergeRunTargets(wm *subagent.WorktreeManager, targets []mergeTarget, specName string) runMergeResultMsg {
+	var allOutput strings.Builder
+	for _, t := range targets {
+		aid := t.agentID
 
-			out, err := wm.MergeBack(aid)
-			if err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String() + out,
-					err:             fmt.Errorf("merge %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
-			// Auto-cleanup on success: worktrees accumulate otherwise
-			// and there's no UI to inspect them. Conflicts are handled
-			// by the err branch above, which preserves the worktree.
-			_ = wm.Cleanup(aid)
-			if out != "" {
-				fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
+		// Commit what the agent produced before anything can remove it.
+		// The task agent is told its edits stay local to the worktree and
+		// is never asked to commit, so without this the merge below has no
+		// commits to take and Cleanup force-removes the only copy.
+		if _, err := wm.CommitAll(aid, fmt.Sprintf("pi-go run %s (agent %s)", specName, aid)); err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String(),
+				err:             fmt.Errorf("commit worktree for %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
 			}
 		}
-		return runMergeResultMsg{output: allOutput.String()}
+		// Move the backup ref onto the committed work. It was pointed at
+		// the base commit at spawn time, when there was nothing to back up.
+		if err := wm.CreateBackupBranch(aid, t.backup); err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String(),
+				err:             fmt.Errorf("back up worktree for %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
+			}
+		}
+
+		out, err := wm.MergeBack(aid)
+		if err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String() + out,
+				err:             fmt.Errorf("merge %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
+			}
+		}
+		// Auto-cleanup on success: worktrees accumulate otherwise
+		// and there's no UI to inspect them. Conflicts are handled
+		// by the err branch above, which preserves the worktree.
+		_ = wm.Cleanup(aid)
+		if out != "" {
+			fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
+		}
 	}
+	return runMergeResultMsg{output: allOutput.String()}
 }
 
 // handleRunMergeResult processes the merge result.
@@ -1381,24 +1407,39 @@ func (m *model) refreshRunChecklist() {
 	if wm == nil {
 		return
 	}
-	// In parallel mode each agent ticks its own slices in its OWN worktree's
-	// plan.md, so no single worktree ever shows the whole plan complete.
-	// Reading only the primary would leave the other agent's slices forever
-	// unchecked and the Verifier permanently failing. Union the views: a slice
-	// is done if any worktree records it done.
+	if merged := checklistFromWorktrees(m.runChecklistPaths(wm), m.run.specName); len(merged) > 0 {
+		m.run.checklist = merged
+	}
+}
+
+// runChecklistPaths lists every worktree whose plan.md counts toward progress:
+// the one the run owns, plus each parallel agent's own tree.
+func (m *model) runChecklistPaths(wm *subagent.WorktreeManager) []string {
 	paths := []string{wm.PathFor(m.run.worktreeAgentID)}
 	for _, pa := range m.run.parallel {
 		if p := wm.PathFor(pa.agentID); p != "" {
 			paths = append(paths, p)
 		}
 	}
+	return paths
+}
 
+// checklistFromWorktrees reads plan.md from each worktree and unions the
+// results. In parallel mode each agent ticks only its OWN slices in its OWN
+// worktree, so no single tree ever shows the plan complete; reading just one
+// would leave the other agent's slices permanently unchecked and the Verifier
+// permanently failing. A slice counts as done if any worktree records it done.
+//
+// Worktrees whose plan.md is missing, unreadable or a different length are
+// skipped rather than allowed to overwrite a good view — a truncated or
+// rewritten plan must not silently un-tick completed work.
+func checklistFromWorktrees(paths []string, specName string) []ChecklistStep {
 	var merged []ChecklistStep
 	for _, wtPath := range paths {
 		if wtPath == "" {
 			continue
 		}
-		view := parsePlanChecklistFrom(wtPath, m.run.specName)
+		view := parsePlanChecklistFrom(wtPath, specName)
 		if len(view) == 0 {
 			continue
 		}
@@ -1406,20 +1447,16 @@ func (m *model) refreshRunChecklist() {
 			merged = view
 			continue
 		}
-		// Same plan.md in every worktree, so the step order matches; OR the
-		// Done flags together rather than letting the last read win.
-		if len(view) == len(merged) {
-			for i := range view {
-				if view[i].Done {
-					merged[i].Done = true
-				}
+		if len(view) != len(merged) {
+			continue
+		}
+		for i := range view {
+			if view[i].Done {
+				merged[i].Done = true
 			}
 		}
 	}
-
-	if len(merged) > 0 {
-		m.run.checklist = merged
-	}
+	return merged
 }
 
 // waitForRunEvents returns a tea.Cmd to consume the next event from the running subagent.
