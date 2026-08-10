@@ -60,14 +60,14 @@ func TestUpdate_PasteMsg(t *testing.T) {
 	}
 }
 
-func TestUpdate_PasteMsg_IgnoredWhenRunning(t *testing.T) {
+func TestUpdate_PasteMsg_AcceptedWhenRunning(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
 	m.inputModel.Text = "before"
 	m.inputModel.CursorPos = 6
 	m.Update(tea.PasteMsg{Content: "paste"})
-	if m.inputModel.Text != "before" {
-		t.Errorf("expected input unchanged when running, got %q", m.inputModel.Text)
+	if m.inputModel.Text != "beforepaste" {
+		t.Errorf("expected input accepted when running, got %q", m.inputModel.Text)
 	}
 }
 
@@ -588,13 +588,13 @@ func TestHandleKey_Esc_CancelRunning(t *testing.T) {
 	}
 }
 
-func TestHandleKey_IgnoresWhenRunning(t *testing.T) {
+func TestHandleKey_AcceptsInputWhenRunning(t *testing.T) {
 	m := newTestModel(t)
 	m.running = true
-	m.inputModel.Text = "before"
+	m.inputModel.setValue("before")
 	m.handleKey(makeTextKey("x"))
-	if m.inputModel.Text != "before" {
-		t.Error("expected input unchanged when running")
+	if m.inputModel.Text != "beforex" {
+		t.Error("expected input accepted when running")
 	}
 }
 

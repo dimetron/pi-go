@@ -502,6 +502,31 @@ func (m *model) startAgentLoop(prompt string) tea.Cmd {
 	return waitForAgent(m.agentCh)
 }
 
+type queuedPrompt struct {
+	text     string
+	mentions []string
+}
+
+const maxPendingPrompts = 32
+
+func (m *model) enqueuePrompt(text string, mentions []string) (tea.Model, tea.Cmd) {
+	if len(m.pendingPrompts) >= maxPendingPrompts {
+		m.flash = "Prompt queue full"
+		return m, nil
+	}
+	m.pendingPrompts = append(m.pendingPrompts, queuedPrompt{text: text, mentions: append([]string(nil), mentions...)})
+	return m.startNextPrompt()
+}
+
+func (m *model) startNextPrompt() (tea.Model, tea.Cmd) {
+	if m.running || len(m.pendingPrompts) == 0 {
+		return m, nil
+	}
+	next := m.pendingPrompts[0]
+	m.pendingPrompts = m.pendingPrompts[1:]
+	return m.submitPrompt(next.text, next.mentions)
+}
+
 // submitPrompt sends a user prompt to the agent.
 func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd) {
 	// Append referenced file annotations for @mentions.
@@ -1131,6 +1156,9 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	})
 	if msg.err == nil {
 		m.runLifecycleHooks("user_input_required", map[string]any{})
+	}
+	if len(m.pendingPrompts) > 0 {
+		return m.startNextPrompt()
 	}
 	return m, nil
 }

@@ -60,10 +60,11 @@ type model struct {
 	planWorktree        *subagent.WorktreeManager
 
 	// Agent state.
-	running     bool
-	mode        string             // "chat" or "plan" — shown in status bar
-	agentCh     chan agentMsg      // channel for receiving agent events
-	agentCancel context.CancelFunc // cancels the active agent response without quitting the TUI
+	running        bool
+	mode           string             // "chat" or "plan" — shown in status bar
+	agentCh        chan agentMsg      // channel for receiving agent events
+	agentCancel    context.CancelFunc // cancels the active agent response without quitting the TUI
+	pendingPrompts []queuedPrompt     // prompts submitted while a response is active
 
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
@@ -658,10 +659,13 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case InputSubmitMsg:
 		if strings.HasPrefix(msg.Text, "/") {
+			if m.running {
+				return m, nil, true
+			}
 			model, cmd := m.handleSlashCommand(msg.Text)
 			return model, cmd, true
 		}
-		model, cmd := m.submitPrompt(msg.Text, msg.Mentions)
+		model, cmd := m.enqueuePrompt(msg.Text, msg.Mentions)
 		return model, cmd, true
 
 	case resetCtrlCCountMsg:
@@ -724,7 +728,7 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, boo
 // while the agent runs or that are really resize noise. Outside a resize drain
 // the message is left unhandled so the agent listener stays alive.
 func (m *model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd, bool) {
-	if !m.running && !m.resizeDraining() && isUserPaste(msg.Content) {
+	if !m.resizeDraining() && isUserPaste(msg.Content) {
 		m.inputModel.InsertText(msg.Content)
 	}
 	if m.resizeDraining() {
@@ -1029,7 +1033,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Everything below edits the prompt, which is read-only while busy.
-	if m.running || m.loading {
+	if m.loading {
 		return m, nil
 	}
 
@@ -1418,9 +1422,9 @@ func (m *model) View() tea.View {
 	m.inputModel.SetWidth(max(0, m.width-3))
 	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
 	statusBar := m.statusModel.Render(m.statusRenderInput())
-	inputArea := m.inputModel.View(m.running || m.loading)
+	inputArea := m.inputModel.View(m.loading)
 	var inputCursor *tea.Cursor
-	if !m.running && !m.loading {
+	if !m.loading {
 		inputCursor = m.inputModel.Cursor()
 	}
 
@@ -1797,7 +1801,7 @@ func (m *model) messageViewportHeight() int {
 		m.statusModel.Width = m.width
 	}
 	statusBar := m.statusModel.Render(m.statusRenderInput())
-	inputArea := m.inputModel.View(m.running || m.loading)
+	inputArea := m.inputModel.View(m.loading)
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
 	// The chrome around the messages: the panel's closing rule plus the two rules
@@ -1972,6 +1976,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		ProviderName: m.providerDisplayName(),
 		ModelName:    m.cfg.ModelName,
 		Running:      m.running,
+		Pending:      len(m.pendingPrompts),
 		Mode:         mode,
 		Eyes:         m.eyes(),
 		Messages:     m.chatModel.Messages,

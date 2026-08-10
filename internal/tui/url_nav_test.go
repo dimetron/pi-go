@@ -127,7 +127,7 @@ func TestView_UsesRealBubbleTeaCursorForInput(t *testing.T) {
 
 	m.running = true
 	view = m.View()
-	if view.Cursor != nil {
-		t.Fatalf("expected no editable input cursor while running, got %+v", view.Cursor)
+	if view.Cursor == nil {
+		t.Fatalf("expected editable input cursor while running, got %+v", view.Cursor)
 	}
 }
