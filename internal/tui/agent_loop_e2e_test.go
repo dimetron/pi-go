@@ -86,7 +86,7 @@ func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 		}
 	}()
 
-	go m.runAgentLoop(ctx, "run the analysis script")
+	go m.runAgentLoop(ctx, "run the analysis script", m.agentCh)
 
 	select {
 	case <-done:

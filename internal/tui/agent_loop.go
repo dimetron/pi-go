@@ -495,10 +495,11 @@ func (m *model) cancelAgent() {
 }
 
 func (m *model) startAgentLoop(prompt string) tea.Cmd {
-	m.agentCh = make(chan agentMsg, 64)
+	ch := make(chan agentMsg, 64)
+	m.agentCh = ch
 	agentCtx, agentCancel := context.WithCancel(m.ctx)
 	m.agentCancel = agentCancel
-	go m.runAgentLoop(agentCtx, prompt)
+	go m.runAgentLoop(agentCtx, prompt, ch)
 	return waitForAgent(m.agentCh)
 }
 
@@ -605,9 +606,15 @@ func (m *model) setSessionTitle(text string) string {
 	return title
 }
 
-// runAgentLoop runs the agent and sends events to the channel.
-func (m *model) runAgentLoop(ctx context.Context, prompt string) {
-	defer close(m.agentCh)
+// runAgentLoop runs the agent and sends events to the channel. The channel is
+// passed in rather than read from m.agentCh: the goroutine outlives the Update
+// call that started it, and a subsequent turn's handleAgentDone→startNextPrompt
+// chain replaces m.agentCh before this goroutine finishes unwinding (defer
+// close). Reading the shared field here would race with that write and, worse,
+// could close the next turn's channel. Capturing the channel by value makes
+// every send target the channel this turn actually owns.
+func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMsg) {
+	defer close(ch)
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -615,13 +622,13 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 			// screen, so a stack trace printed here would be painted over
 			// the UI. The panic still reaches the user as the turn's error.
 			m.cfg.Logger.Errorf("agent loop panicked: %v\n%s", r, stack)
-			m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
+			ch <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
 		}
 	}()
 
 	// Guard against missing agent config (unit tests)
 	if m.cfg.Agent == nil {
-		m.agentCh <- agentDoneMsg{err: fmt.Errorf("agent not configured")}
+		ch <- agentDoneMsg{err: fmt.Errorf("agent not configured")}
 		return
 	}
 
@@ -655,7 +662,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 	// nil receiver), so no call site needs to check.
 	fail := func(err error) {
 		log.Error(err.Error())
-		m.agentCh <- agentDoneMsg{err: err}
+		ch <- agentDoneMsg{err: err}
 	}
 
 	// Same retry wrapper the print and RPC front-ends use, so a run that dies
@@ -679,7 +686,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 		// evidence is GroundingMetadata riding on the response, so surface it as
 		// a synthetic tool call/result pair. Checked before the Content
 		// nil-guard, since the metadata hangs off the event, not the content.
-		m.emitGroundingEvents(ev.GroundingMetadata, groundedSeen, log)
+		m.emitGroundingEvents(ch, ev.GroundingMetadata, groundedSeen, log)
 
 		// A provider failure is a content-less event, so it has to be caught
 		// before the guard below drops it. See agent.EventError.
@@ -693,7 +700,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 		// and then read by nobody, so a truncated reply just looked short.
 		if ev.FinishReason == genai.FinishReasonMaxTokens && !truncated {
 			truncated = true
-			m.agentCh <- agentWarningMsg{
+			ch <- agentWarningMsg{
 				text: "Response truncated: the model hit its output-token limit.",
 			}
 		}
@@ -702,7 +709,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 			continue
 		}
 		dedup.BeginEvent(ev)
-		if abortErr := m.emitEventParts(ev, &dedup, detector, log); abortErr != nil {
+		if abortErr := m.emitEventParts(ch, ev, &dedup, detector, log); abortErr != nil {
 			fail(abortErr)
 			return
 		}
@@ -713,6 +720,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string) {
 // non-nil error when the stuck detector has seen enough repetition to call the
 // run dead, in which case the caller must stop iterating.
 func (m *model) emitEventParts(
+	ch chan agentMsg,
 	ev *session.Event,
 	dedup *agent.StreamDedup,
 	detector *stuckDetector,
@@ -722,7 +730,7 @@ func (m *model) emitEventParts(
 		switch {
 		case part.Text != "" && ev.Content.Role == "thinking":
 			log.Thinking(ev.Author, part.Text)
-			m.agentCh <- agentThinkingMsg{text: part.Text}
+			ch <- agentThinkingMsg{text: part.Text}
 			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
 				return err
 			}
@@ -732,7 +740,7 @@ func (m *model) emitEventParts(
 				continue // aggregate re-send; deltas already went out
 			}
 			log.LLMText(ev.Author, part.Text)
-			m.agentCh <- agentTextMsg{text: part.Text}
+			ch <- agentTextMsg{text: part.Text}
 			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
 				return err
 			}
@@ -744,7 +752,7 @@ func (m *model) emitEventParts(
 			// fires after `maxRepeatToolCalls` observations, so the abort
 			// semantics are unchanged — only the message ordering moves.
 			log.ToolCall(ev.Author, fc.Name, fc.Args)
-			m.agentCh <- agentToolCallMsg{name: fc.Name, args: fc.Args}
+			ch <- agentToolCallMsg{name: fc.Name, args: fc.Args}
 
 			if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
 				return err
@@ -754,7 +762,7 @@ func (m *model) emitEventParts(
 		if fr := part.FunctionResponse; fr != nil {
 			respJSON, _ := json.Marshal(fr.Response)
 			log.ToolResult(ev.Author, fr.Name, string(respJSON))
-			m.agentCh <- agentToolResultMsg{name: fr.Name, content: string(respJSON)}
+			ch <- agentToolResultMsg{name: fr.Name, content: string(respJSON)}
 
 			// A changed result on a repeated call is progress, not a loop
 			// (a poll returning fresh output) — let it reset the

@@ -64,7 +64,7 @@ func TestRunAgentLoop_SurfacesProviderAPIError(t *testing.T) {
 		}
 	}()
 
-	go m.runAgentLoop(ctx, "hello")
+	go m.runAgentLoop(ctx, "hello", m.agentCh)
 
 	select {
 	case <-done:
