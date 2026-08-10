@@ -214,28 +214,20 @@ func LoadTrajectories(sessionsDir string) ([]*LoadedTrajectory, error) {
 func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 	m := TrajectoryMetrics{}
 
-	byID := make(map[string]*LoadedTrajectory, len(loaded))
-	for _, lt := range loaded {
-		byID[lt.SessionID] = lt
-	}
-
 	// childRefs[sessionID] → set of child session IDs referenced from its
-	// observations. parentOf[child] → count of parents, for root detection.
+	// observations.
 	childRefs := make(map[string]map[string]bool)
-	parentOf := make(map[string]int)
 	for _, lt := range loaded {
 		refs := subagentRefs(lt.Traj)
 		if len(refs) > 0 {
 			childRefs[lt.SessionID] = refs
-			for child := range refs {
-				parentOf[child]++
-			}
 		}
 		m.NestedAgentCalls += len(refs)
 	}
 
 	// Roots are sessions nobody references. Depth is memoized DFS:
 	// depth(child) = 1 + max(depth(parent)).
+	parentsOf := invertRefs(childRefs)
 	depth := make(map[string]int, len(loaded))
 	var depthOf func(id string, stack map[string]bool) int
 	depthOf = func(id string, stack map[string]bool) int {
@@ -247,7 +239,7 @@ func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 		}
 		stack[id] = true
 		best := 0
-		for parent := range parentsOf(id, loaded, childRefs) {
+		for parent := range parentsOf[id] {
 			if d := depthOf(parent, stack) + 1; d > best {
 				best = d
 			}
@@ -296,15 +288,20 @@ func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 	return m
 }
 
-// parentsOf returns the session IDs that directly reference id as a subagent.
-func parentsOf(id string, loaded []*LoadedTrajectory, childRefs map[string]map[string]bool) map[string]bool {
-	out := make(map[string]bool)
+// invertRefs turns the parent→children map into child→parents, so depth can be
+// resolved with a single lookup per session instead of rescanning every
+// parent's ref set for each one.
+func invertRefs(childRefs map[string]map[string]bool) map[string]map[string]bool {
+	parents := make(map[string]map[string]bool, len(childRefs))
 	for parent, children := range childRefs {
-		if children[id] {
-			out[parent] = true
+		for child := range children {
+			if parents[child] == nil {
+				parents[child] = make(map[string]bool)
+			}
+			parents[child][parent] = true
 		}
 	}
-	return out
+	return parents
 }
 
 // subagentRefs returns the set of subagent trajectory refs (as session IDs)
@@ -417,12 +414,20 @@ type callRecord struct {
 }
 
 // ComputeToolsMetrics derives per-tool efficiency from the run's trajectories.
+//
+// Consumers that render ByTool must sort its keys themselves: a Go map has no
+// order, so there is nothing this function can do to make ranging it stable.
 func ComputeToolsMetrics(loaded []*LoadedTrajectory) ToolsMetrics {
 	m := ToolsMetrics{ByTool: make(map[string]ToolStats)}
 
+	// latencySamples[tool] counts the calls that contributed to AvgLatencyMs.
+	// It is not the same as Results: a result whose call or observation step
+	// carried no parseable timestamp yields no latency, and averaging over
+	// Results would then understate the real latency.
+	latencySamples := make(map[string]int)
+
 	for _, lt := range loaded {
-		records := pairCalls(lt.Traj)
-		for id, rec := range records {
+		for _, rec := range pairCalls(lt.Traj) {
 			st := m.ByTool[rec.fn]
 			st.Calls++
 			if rec.observed {
@@ -433,6 +438,7 @@ func ComputeToolsMetrics(loaded []*LoadedTrajectory) ToolsMetrics {
 				st.AvgResultBytes += rec.obsBytes
 				if !rec.stepTS.IsZero() && !rec.obsStepTS.IsZero() {
 					st.AvgLatencyMs += int(rec.obsStepTS.Sub(rec.stepTS).Milliseconds())
+					latencySamples[rec.fn]++
 				}
 			} else {
 				st.Wasted++
@@ -447,33 +453,24 @@ func ComputeToolsMetrics(loaded []*LoadedTrajectory) ToolsMetrics {
 			if rec.fn == "subagent" {
 				m.NestedAgentCalls++
 			}
-			_ = id
 		}
 	}
 
-	// Per-tool averages and duplicate detection.
+	// Per-tool averages and duplicate detection. Duplicates are counted for
+	// every tool in one pass rather than rescanning all trajectories per tool.
+	dups := duplicateCounts(loaded)
 	for name := range m.ByTool {
 		st := m.ByTool[name]
 		if st.Results > 0 {
 			st.AvgResultBytes /= st.Results
-			st.AvgLatencyMs /= st.Results
 		}
-		st.Duplicates = duplicateCount(loaded, name)
+		if n := latencySamples[name]; n > 0 {
+			st.AvgLatencyMs /= n
+		}
+		st.Duplicates = dups[name]
 		m.ByTool[name] = st
 		m.Duplicates += st.Duplicates
 	}
-
-	// Deterministic tool ordering.
-	sorted := make([]string, 0, len(m.ByTool))
-	for name := range m.ByTool {
-		sorted = append(sorted, name)
-	}
-	sort.Strings(sorted)
-	ordered := make(map[string]ToolStats, len(sorted))
-	for _, name := range sorted {
-		ordered[name] = m.ByTool[name]
-	}
-	m.ByTool = ordered
 
 	return m
 }
@@ -518,25 +515,31 @@ func pairCalls(t *atif.Trajectory) map[string]*callRecord {
 	return records
 }
 
-// duplicateCount counts repeated identical (function_name, arguments) pairs
-// for one tool across all trajectories: occurrences after the first.
-func duplicateCount(loaded []*LoadedTrajectory, tool string) int {
-	counts := make(map[string]int)
+// duplicateCounts counts, per tool, the repeated identical (function_name,
+// arguments) pairs across all trajectories: occurrences after the first.
+func duplicateCounts(loaded []*LoadedTrajectory) map[string]int {
+	// counts[tool][canonical args] → occurrences.
+	counts := make(map[string]map[string]int)
 	for _, lt := range loaded {
 		for i := range lt.Traj.Steps {
 			for j := range lt.Traj.Steps[i].ToolCalls {
 				call := &lt.Traj.Steps[i].ToolCalls[j]
-				if call.FunctionName != tool {
-					continue
+				byArgs, ok := counts[call.FunctionName]
+				if !ok {
+					byArgs = make(map[string]int)
+					counts[call.FunctionName] = byArgs
 				}
-				counts[canonicalArgs(call.Arguments)]++
+				byArgs[canonicalArgs(call.Arguments)]++
 			}
 		}
 	}
-	dups := 0
-	for _, n := range counts {
-		if n > 1 {
-			dups += n - 1
+
+	dups := make(map[string]int, len(counts))
+	for tool, byArgs := range counts {
+		for _, n := range byArgs {
+			if n > 1 {
+				dups[tool] += n - 1
+			}
 		}
 	}
 	return dups

@@ -34,6 +34,13 @@ import (
 
 const evalSpecName = "eval-orchestrator"
 
+// evalPumpDrainGrace is how long a timed-out run's pump goroutine is given to
+// unwind after cancellation before the harness reads the model anyway. The pump
+// blocks in cmd() on agent/gate/merge channels; canceling the context and
+// shutting the orchestrator down closes those, so unwinding is fast when it
+// happens at all.
+const evalPumpDrainGrace = 60 * time.Second
+
 func TestEvalRun(t *testing.T) {
 	if os.Getenv("PI_EVAL_RUN") != "1" {
 		t.Skip("eval harness: set PI_EVAL_RUN=1 to run (make eval-run)")
@@ -169,6 +176,8 @@ func TestEvalRun(t *testing.T) {
 	if v := os.Getenv("PI_EVAL_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			timeout = d
+		} else {
+			t.Fatalf("PI_EVAL_TIMEOUT=%q is not a Go duration: %v", v, err)
 		}
 	}
 
@@ -181,9 +190,20 @@ func TestEvalRun(t *testing.T) {
 	select {
 	case final = <-resultCh:
 	case <-time.After(timeout):
+		// The pump goroutine owns m until it returns. Reading m here while it
+		// is still running is a data race on every field the report touches
+		// (run.phase, run.gateResults, chatModel.Messages), so cancel the run
+		// and give the pump a bounded window to unwind before falling back to
+		// reading m directly.
 		cancel()
 		orch.Shutdown()
-		final = m
+		select {
+		case final = <-resultCh:
+		case <-time.After(evalPumpDrainGrace):
+			t.Errorf("run pump did not unwind %s after cancellation; "+
+				"report is assembled from a model the pump may still be writing", evalPumpDrainGrace)
+			final = m
+		}
 		if final.run == nil {
 			final.run = &runState{}
 		}
@@ -222,7 +242,7 @@ func TestEvalRun(t *testing.T) {
 
 	// --- save golden (tag + branch) ----------------------------------------
 	if os.Getenv("PI_EVAL_SAVE_GOLDEN") == "1" && goldenPass && runPhase(final) == "done" {
-		saveGoldenRefs(t, wtPath, final)
+		saveGoldenRefs(t, wtPath)
 	}
 
 	// --- report -------------------------------------------------------------
@@ -305,25 +325,45 @@ func TestEvalRun(t *testing.T) {
 
 // runEvalPump drives the /run handler chain to completion, mirroring what the
 // bubbletea Update loop does for the run messages.
+//
+// Commands are held in a queue rather than a single "next cmd" variable so a
+// tea.Batch cannot silently truncate the run: dropping the batch's commands
+// would end the pump early and the harness would report a partial run as if it
+// were the real outcome. Batched commands run serially here, which is enough —
+// the run flow returns one command at a time today.
 func runEvalPump(m *model, args []string) *model {
-	var cmd tea.Cmd
-	var cur tea.Model
-	cur, cmd = m.handleRunCommand(args)
-	for cmd != nil {
-		msg := cmd()
-		switch v := msg.(type) {
+	cur, cmd := m.handleRunCommand(args)
+	m = cur.(*model)
+
+	queue := []tea.Cmd{}
+	if cmd != nil {
+		queue = append(queue, cmd)
+	}
+	for len(queue) > 0 {
+		cmd, queue = queue[0], queue[1:]
+		if cmd == nil { // tea.Batch tolerates nil commands; so must the pump
+			continue
+		}
+		var next tea.Cmd
+		switch v := cmd().(type) {
+		case tea.BatchMsg:
+			queue = append(queue, v...)
+			continue
 		case runAgentEventMsg:
-			cur, cmd = m.handleRunAgentEvent(v)
+			cur, next = m.handleRunAgentEvent(v)
 		case runAgentDoneMsg:
-			cur, cmd = m.handleRunAgentDone(v)
+			cur, next = m.handleRunAgentDone(v)
 		case runGateResultMsg:
-			cur, cmd = m.handleRunGateResult(v)
+			cur, next = m.handleRunGateResult(v)
 		case runMergeResultMsg:
-			cur, cmd = m.handleRunMergeResult(v)
+			cur, next = m.handleRunMergeResult(v)
 		default:
-			cur, cmd = m, nil
+			continue
 		}
 		m = cur.(*model)
+		if next != nil {
+			queue = append(queue, next)
+		}
 	}
 	return m
 }
@@ -607,7 +647,7 @@ func diffBaseline(t *testing.T, repoRoot, ref, producedDir string, files []strin
 	return eval.DiffGolden(producedDir, baselineDir, files)
 }
 
-func saveGoldenRefs(t *testing.T, wtPath string, m *model) {
+func saveGoldenRefs(t *testing.T, wtPath string) {
 	t.Helper()
 	ts := time.Now().Format("20060102-150405")
 	if out, err := exec.Command("git", "-C", wtPath, "tag", "-f", "eval/golden-"+ts).CombinedOutput(); err != nil {
@@ -691,10 +731,11 @@ func modelName(cfg *config.Config, envModel string) string {
 	if envModel != "" {
 		return envModel
 	}
-	if cfg != nil {
-		if r, ok := cfg.Roles["default"]; ok {
-			return r.Model
-		}
+	if cfg == nil {
+		return ""
+	}
+	if r, ok := cfg.Roles["default"]; ok {
+		return r.Model
 	}
 	return cfg.DefaultModel
 }

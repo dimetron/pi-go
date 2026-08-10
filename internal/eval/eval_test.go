@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -244,14 +244,57 @@ func TestComputeToolsMetrics(t *testing.T) {
 		t.Errorf("edit errors = %d, want 1 (error content)", edit.Errors)
 	}
 
-	// Deterministic tool order.
-	names := make([]string, 0, len(m.ByTool))
-	for name := range m.ByTool {
-		names = append(names, name)
+	if got := sortedKeys(m.ByTool); !slices.Equal(got, []string{"bash", "edit", "subagent"}) {
+		t.Errorf("tools seen = %v, want [bash edit subagent]", got)
 	}
-	sort.Strings(names)
-	if names[0] != "bash" || names[1] != "edit" || names[2] != "subagent" {
-		t.Errorf("tool order = %v, want [bash edit subagent]", names)
+}
+
+// AvgLatencyMs must average over the calls that actually carried usable
+// timestamps, not over every observed result: a trajectory whose steps are
+// partly untimed would otherwise report a latency several times lower than the
+// one call it could measure.
+func TestComputeToolsMetrics_LatencyAveragesOnlyTimedCalls(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Now().Add(-time.Minute)
+
+	traj := baseTraj("t1", "task")
+	traj.Steps = []atif.Step{
+		// Timed pair: 400ms from call to observation.
+		{
+			StepID:    1,
+			Timestamp: base.Format(time.RFC3339Nano),
+			ToolCalls: []atif.ToolCall{{ToolCallID: "c1", FunctionName: "bash", Arguments: map[string]any{"n": 1}}},
+		},
+		{
+			StepID:      2,
+			Timestamp:   base.Add(400 * time.Millisecond).Format(time.RFC3339Nano),
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{SourceCallID: "c1", Content: "ok"}}},
+		},
+		// Untimed pair: observed, but no timestamps, so it contributes a result
+		// without contributing a latency sample.
+		{
+			StepID:    3,
+			ToolCalls: []atif.ToolCall{{ToolCallID: "c2", FunctionName: "bash", Arguments: map[string]any{"n": 2}}},
+		},
+		{
+			StepID:      4,
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{SourceCallID: "c2", Content: "ok"}}},
+		},
+	}
+	writeTraj(t, dir, "t1", traj)
+
+	loaded, err := LoadTrajectories(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bash := ComputeToolsMetrics(loaded).ByTool["bash"]
+
+	if bash.Results != 2 {
+		t.Fatalf("bash results = %d, want 2", bash.Results)
+	}
+	if bash.AvgLatencyMs < 350 || bash.AvgLatencyMs > 450 {
+		t.Errorf("bash AvgLatencyMs = %d, want ~400 (the one timed call), not the %d "+
+			"that averaging over both results would give", bash.AvgLatencyMs, 200)
 	}
 }
 

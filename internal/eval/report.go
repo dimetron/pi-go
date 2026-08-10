@@ -112,7 +112,11 @@ func RenderMarkdown(r *RunReport) string {
 	if len(tm.ByTool) > 0 {
 		fmt.Fprintf(&b, "\n| tool | calls | results | errors | wasted | duplicates | avg bytes | avg latency |\n")
 		fmt.Fprintf(&b, "|---|---|---|---|---|---|---|---|\n")
-		for name, st := range tm.ByTool {
+		// Sort: ranging a map yields a random order, so the same report would
+		// otherwise render its tool rows differently on every call and two
+		// reports of the same run would not diff cleanly.
+		for _, name := range sortedKeys(tm.ByTool) {
+			st := tm.ByTool[name]
 			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %dms |\n",
 				name, st.Calls, st.Results, st.Errors, st.Wasted, st.Duplicates, st.AvgResultBytes, st.AvgLatencyMs)
 		}
@@ -234,35 +238,41 @@ func sparkline(samples []ConcurrencySample) string {
 		}
 	} else {
 		per := float64(n) / width
-		for i := 0; i < width; i++ {
+		for i := range width {
 			lo, hi := int(float64(i)*per), int(float64(i+1)*per)
 			if hi > n {
 				hi = n
 			}
-			max := 0
+			peak := 0
 			for j := lo; j < hi; j++ {
-				if samples[j].Running > max {
-					max = samples[j].Running
+				if samples[j].Running > peak {
+					peak = samples[j].Running
 				}
 			}
-			buckets = append(buckets, max)
+			buckets = append(buckets, peak)
 		}
 	}
 
-	levels := "▁▂▃▄▅▆▇█"
+	// Runes, not bytes: each block character is three bytes in UTF-8, so
+	// indexing the string directly emits one byte of a multi-byte sequence and
+	// the whole sparkline comes out as invalid UTF-8.
+	levels := []rune("▁▂▃▄▅▆▇█")
 	scale := 1
 	for _, v := range buckets {
 		if v > scale {
 			scale = v
 		}
 	}
-	if scale < 1 {
-		scale = 1
-	}
 	var b strings.Builder
 	for _, v := range buckets {
 		idx := (v * (len(levels) - 1)) / scale
-		b.WriteByte(levels[idx])
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(levels) {
+			idx = len(levels) - 1
+		}
+		b.WriteRune(levels[idx])
 	}
 	fmt.Fprintf(&b, "  (max %d, %d samples)", scale, n)
 	return b.String()
