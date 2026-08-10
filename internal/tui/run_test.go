@@ -902,29 +902,41 @@ func TestFormatGateFailures(t *testing.T) {
 
 // --- Step 7 tests: Retry Logic on Gate Failure ---
 
-func TestBuildRetryPrompt_IncludesGateOutput(t *testing.T) {
+func TestBuildResumePrompt_IncludesGateOutput(t *testing.T) {
 	promptMD := "# My Feature\n\n## Objective\n\nBuild something.\n"
 	gateOutput := "Gate `test` (`go test ./...`) FAILED:\nFAIL pkg/foo\n\n"
 
-	result := buildRetryPrompt("my-feature", promptMD, gateOutput)
+	result := buildResumePrompt("my-feature", promptMD, "Gate failed", gateOutput)
 
-	if !strings.Contains(result, "failed gate validation") {
-		t.Error("retry prompt should mention gate validation failure")
+	if !strings.Contains(result, "Gate failed") {
+		t.Error("resume prompt should name the reason the cycle stopped")
 	}
-	if !strings.Contains(result, "## Gate Failures") {
-		t.Error("retry prompt should contain gate failures section")
+	if !strings.Contains(result, "## State") {
+		t.Error("resume prompt should contain the carried-over state section")
 	}
 	if !strings.Contains(result, "FAIL pkg/foo") {
-		t.Error("retry prompt should include gate failure output")
+		t.Error("resume prompt should include gate failure output")
 	}
 	if !strings.Contains(result, promptMD) {
-		t.Error("retry prompt should include original PROMPT.md")
+		t.Error("resume prompt should include original PROMPT.md")
 	}
 	if !strings.Contains(result, "specs/my-feature/plan.md") {
-		t.Error("retry prompt should reference the spec's plan.md")
+		t.Error("resume prompt should reference the spec's plan.md")
 	}
-	if !strings.Contains(result, "Fix the issues") {
-		t.Error("retry prompt should include fix instructions")
+	if !strings.Contains(result, "## Resume Instructions") {
+		t.Error("resume prompt should include resume instructions")
+	}
+}
+
+// A resume prompt with no carried state must not emit an empty State section.
+func TestBuildResumePrompt_NoStateSection(t *testing.T) {
+	result := buildResumePrompt("my-feature", "# My Feature\n", "agent exited with non-zero status", "")
+
+	if strings.Contains(result, "## State") {
+		t.Error("resume prompt should omit the State section when there is no carried state")
+	}
+	if !strings.Contains(result, "agent exited with non-zero status") {
+		t.Error("resume prompt should still name the reason")
 	}
 }
 
@@ -1435,8 +1447,11 @@ func TestBuildParallelPrompt(t *testing.T) {
 	if strings.Contains(prompt, "Slice 3") {
 		t.Error("should NOT include slice 3 (assigned to other agent)")
 	}
-	if !strings.Contains(prompt, "ONE OF TWO agents") {
+	if !strings.Contains(prompt, "ONE OF TWO coordinators") {
 		t.Error("should explain parallel assignment")
+	}
+	if !strings.Contains(prompt, "Your Role: Coordinator") {
+		t.Error("parallel prompt should carry the coordinator contract")
 	}
 }
 
@@ -1693,5 +1708,253 @@ func TestHandleRunAgentDone_UsesTerminalStatusAfterOrchestratorEviction(t *testi
 
 	if m.run.phase != "merging" {
 		t.Fatalf("phase = %q, want merging", m.run.phase)
+	}
+}
+
+// --- Verifier tests: gates passing must not merge an incomplete plan ---
+
+// A green build over a half-implemented plan is the failure the Verifier
+// exists to catch: gates pass, but slices remain unchecked, so the run must
+// loop instead of merging.
+func TestVerifier_IncompletePlanDoesNotMerge(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx:       ctx,
+		cfg:       Config{Orchestrator: orch},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:   "half-done",
+			promptMD:   "# Test\n",
+			agentID:    "task-1",
+			phase:      "gating",
+			retries:    0,
+			maxRetries: 3,
+			checklist: []ChecklistStep{
+				{Title: "Core", Done: true},
+				{Title: "HTTP", Done: false},
+			},
+		},
+	}
+
+	m.handleRunGateResult(runGateResultMsg{
+		results: []GateResult{{Name: "build", Command: "go build ./...", Passed: true}},
+		passed:  true,
+	})
+
+	if m.run.phase == "merging" || m.run.phase == "done" {
+		t.Fatalf("phase = %q — must not merge while slices are unchecked", m.run.phase)
+	}
+	if m.run.retries != 1 {
+		t.Errorf("retries = %d, want 1 (verifier should trigger a cycle)", m.run.retries)
+	}
+
+	var sawVerdict bool
+	for _, msg := range m.chatModel.Messages {
+		if strings.Contains(msg.content, "Verifier: FAIL") {
+			sawVerdict = true
+		}
+	}
+	if !sawVerdict {
+		t.Error("expected a 'Verifier: FAIL' message")
+	}
+}
+
+// With every slice ticked, the Verifier passes and the run proceeds to merge.
+func TestVerifier_CompletePlanProceedsToMerge(t *testing.T) {
+	m := &model{
+		cfg:       Config{Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil)},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:   "all-done",
+			agentID:    "task-1",
+			phase:      "gating",
+			maxRetries: 3,
+			checklist: []ChecklistStep{
+				{Title: "Core", Done: true},
+				{Title: "HTTP", Done: true},
+			},
+		},
+	}
+
+	m.handleRunGateResult(runGateResultMsg{
+		results: []GateResult{{Name: "build", Command: "go build ./...", Passed: true}},
+		passed:  true,
+	})
+
+	if m.run.phase != "merging" {
+		t.Fatalf("phase = %q, want merging", m.run.phase)
+	}
+	if m.run.retries != 0 {
+		t.Errorf("retries = %d, want 0 — a complete plan should not retry", m.run.retries)
+	}
+}
+
+// A spec with no plan.md checklist has nothing to verify; the run must still
+// merge rather than stalling forever.
+func TestVerifier_NoChecklistProceedsToMerge(t *testing.T) {
+	m := &model{
+		cfg:       Config{Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil)},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:   "no-plan",
+			agentID:    "task-1",
+			phase:      "gating",
+			maxRetries: 3,
+		},
+	}
+
+	m.handleRunGateResult(runGateResultMsg{passed: true})
+
+	if m.run.phase != "merging" {
+		t.Fatalf("phase = %q, want merging", m.run.phase)
+	}
+}
+
+// Once the retry budget is spent, an incomplete plan ends the run as
+// verify_failed — it must never fall through to a merge.
+func TestVerifier_ExhaustedRetriesFailsWithoutMerging(t *testing.T) {
+	m := &model{
+		cfg:       Config{Orchestrator: subagent.NewOrchestrator(&config.Config{}, "", nil)},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:   "stuck",
+			agentID:    "task-1",
+			phase:      "gating",
+			retries:    3,
+			maxRetries: 3,
+			checklist:  []ChecklistStep{{Title: "HTTP", Done: false}},
+		},
+	}
+
+	m.handleRunGateResult(runGateResultMsg{passed: true})
+
+	if m.run.phase != "failed" {
+		t.Fatalf("phase = %q, want failed", m.run.phase)
+	}
+	var sawNotMerging bool
+	for _, msg := range m.chatModel.Messages {
+		if strings.Contains(msg.content, "Not merging") {
+			sawNotMerging = true
+		}
+	}
+	if !sawNotMerging {
+		t.Error("expected the failure message to state that nothing was merged")
+	}
+}
+
+// --- Agent-failure retry: a dropped provider stream must not end the run ---
+
+// A subagent that exits non-clean (429/502 mid-stream) used to end the whole
+// run. It must now consume a retry cycle instead.
+func TestAgentFailure_TriggersRetryInsteadOfGivingUp(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx:       ctx,
+		cfg:       Config{Orchestrator: orch},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		run: &runState{
+			specName:   "dropped-stream",
+			promptMD:   "# Test\n",
+			agentID:    "task-1",
+			phase:      "running",
+			retries:    0,
+			maxRetries: 10,
+			checklist:  []ChecklistStep{{Title: "Core", Done: false}},
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1", status: "failed"})
+
+	if m.run.retries != 1 {
+		t.Errorf("retries = %d, want 1 — an agent failure should start a new cycle", m.run.retries)
+	}
+	if m.run.phase == "gating" || m.run.phase == "merging" {
+		t.Errorf("phase = %q — a failed agent must not reach gates or merge", m.run.phase)
+	}
+}
+
+// With the retry budget spent, an agent failure reports agent_failed and stops.
+func TestAgentFailure_ExhaustedRetriesReportsFailure(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	m := &model{
+		cfg:       Config{Orchestrator: orch},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		run: &runState{
+			specName:   "dropped-stream",
+			agentID:    "task-1",
+			phase:      "running",
+			retries:    10,
+			maxRetries: 10,
+		},
+	}
+
+	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1", status: "failed"})
+
+	if m.run.phase != "failed" {
+		t.Fatalf("phase = %q, want failed", m.run.phase)
+	}
+}
+
+// --- Unfinished-slice context carried into the next cycle ---
+
+func TestUnfinishedSlicesContext(t *testing.T) {
+	m := &model{
+		run: &runState{
+			checklist: []ChecklistStep{
+				{Title: "Core", Done: true},
+				{Title: "HTTP handler", Done: false},
+				{Title: "Docs", Done: false},
+			},
+		},
+	}
+
+	got := m.unfinishedSlicesContext()
+
+	if !strings.Contains(got, "2 of 3 slices unfinished") {
+		t.Errorf("context should count unfinished slices, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Step 2: HTTP handler") {
+		t.Error("context should list unfinished slices with their 1-based index")
+	}
+	if strings.Contains(got, "Step 1: Core") {
+		t.Error("context should not list completed slices")
+	}
+}
+
+func TestUnfinishedSlicesContext_AllDone(t *testing.T) {
+	m := &model{run: &runState{checklist: []ChecklistStep{{Title: "Core", Done: true}}}}
+	if got := m.unfinishedSlicesContext(); got != "" {
+		t.Errorf("context should be empty when all slices are done, got %q", got)
+	}
+}
+
+// --- Coordinator contract present in the /run prompt ---
+
+func TestBuildRunPrompt_CarriesCoordinatorContract(t *testing.T) {
+	prompt := buildRunPrompt("my-feature", "# My Feature\n", nil)
+
+	for _, want := range []string{
+		"Your Role: Coordinator",
+		`{agent: "worker"`,
+		"code-reviewer",
+		"VERDICT: PASS",
+		"specs/my-feature/plan.md",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("run prompt missing %q", want)
+		}
+	}
+
+	// Worktree agents would silently discard their edits into a nested worktree.
+	if !strings.Contains(prompt, "Never spawn `task` or `designer`") {
+		t.Error("run prompt should forbid delegating to [worktree] agents")
 	}
 }

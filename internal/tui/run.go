@@ -39,7 +39,7 @@ type runState struct {
 	gates       []Gate
 	agentID     string
 	status      string // authoritative terminal status from the subagent
-	phase       string // "running", "gating", "merging", "done", "failed"
+	phase       string // "running", "gating", "verifying", "retrying", "merging", "done", "failed"
 	retries     int
 	maxRetries  int
 	events      <-chan subagent.Event // subagent event channel (single-agent mode)
@@ -101,13 +101,65 @@ type runMergeResultMsg struct {
 	preservedWTPath string
 }
 
+// coordinatorContract is the Coordinator → Worker → Verifier execution contract
+// injected into every /run prompt. It is the reason a run survives long plans:
+// the coordinator's own context stays small because each slice is implemented in
+// a fresh worker context that is discarded once the slice lands.
+const coordinatorContract = `
+## Your Role: Coordinator
+
+You are the **Coordinator**. You do NOT implement slices yourself — you delegate
+each one to a worker subagent, verify it, and record progress. Implementing
+slices inline is what makes runs die: the context grows with every file read and
+every diff until the provider drops the stream mid-slice.
+
+### Delegating a slice
+
+Spawn ONE worker per slice with the ` + "`" + `subagent` + "`" + ` tool:
+
+- ` + "`" + `{agent: "worker", task: "<self-contained brief>"}` + "`" + ` — the default.
+- ` + "`" + `{agent: "quick-task", task: "..."}` + "`" + ` — a single-file mechanical change.
+- ` + "`" + `{tasks: [{agent: "worker", task: "..."}, ...]}` + "`" + ` — several slices at once, ONLY
+  when the plan marks them parallel-safe and they touch disjoint files (max 8).
+
+**Never spawn ` + "`" + `task` + "`" + ` or ` + "`" + `designer` + "`" + `.** They are [worktree] agents: their edits go to
+a nested worktree that is never merged back, so the slice silently produces
+nothing. ` + "`" + `worker` + "`" + ` and ` + "`" + `quick-task` + "`" + ` edit the current directory, which is what you want.
+
+Each worker brief must stand alone — the worker cannot see this conversation.
+State the exact files, the change, the surrounding conventions, and the verify
+command. Do NOT paste the whole plan into a worker brief; give it only its slice.
+
+### After each slice
+
+1. Run that slice's verify command yourself.
+2. If it fails, send a fix brief to a new worker (up to 3 attempts per slice),
+   including the exact error output.
+3. Tick the checkbox in specs/%[1]s/plan.md: ` + "`" + `- [ ] Step N:` + "`" + ` → ` + "`" + `- [x] Step N:` + "`" + `.
+
+Tick a box only after its verify command has actually passed. A checked box that
+was never verified is worse than an unchecked one — it ends the run early.
+
+### After the last slice: Verify
+
+Spawn the Verifier and act on its verdict:
+
+` + "`" + `{agent: "code-reviewer", task: "Check the working-tree diff against these Done Criteria: <paste the Done Criteria from the briefing above, or the Acceptance Criteria if absent>. For each criterion answer MET or NOT MET with the file and line that proves it. Flag any stub, TODO, or panic(\"not implemented\") left in the changed files. End your reply with exactly one line: VERDICT: PASS or VERDICT: FAIL."}` + "`" + `
+
+- **VERDICT: FAIL** — dispatch fix workers for the NOT MET items, then verify again.
+  Repeat up to 10 cycles.
+- **VERDICT: PASS** — report the changed files and stop. Do not commit or merge;
+  /run handles gates and the merge.
+`
+
 // buildRunPrompt constructs the augmented prompt for the task subagent.
 // If the plan.md uses heading-only format (no checkboxes), it injects a
 // checklist so the agent can mark steps as completed.
 func buildRunPrompt(specName, promptMD string, checklist []ChecklistStep) string {
 	var b strings.Builder
 	b.WriteString(promptMD)
-	b.WriteString("\n\n## Execution Instructions\n")
+	fmt.Fprintf(&b, coordinatorContract, specName)
+	b.WriteString("\n## Execution Instructions\n")
 	b.WriteString("- Follow the plan in specs/")
 	b.WriteString(specName)
 	b.WriteString("/plan.md step by step\n")
@@ -420,13 +472,15 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 func buildParallelPrompt(specName, promptMD string, checklist []ChecklistStep, from, to int) string {
 	var b strings.Builder
 	b.WriteString(promptMD)
-	b.WriteString("\n\n## Execution Instructions (Parallel Mode)\n")
-	b.WriteString("You are ONE OF TWO agents working on this spec in parallel.\n")
-	b.WriteString("You are responsible for implementing ONLY these slices:\n\n")
+	fmt.Fprintf(&b, coordinatorContract, specName)
+	b.WriteString("\n## Execution Instructions (Parallel Mode)\n")
+	b.WriteString("You are ONE OF TWO coordinators working on this spec in parallel.\n")
+	b.WriteString("You are responsible for delegating ONLY these slices:\n\n")
 	for i := from; i < to; i++ {
 		fmt.Fprintf(&b, "- Slice %d: %s\n", i+1, checklist[i].Title)
 	}
-	b.WriteString("\nDo NOT implement slices assigned to the other agent.\n")
+	b.WriteString("\nDo NOT implement slices assigned to the other coordinator.\n")
+	b.WriteString("Verify only your own slices — the Verifier step covers your half.\n")
 	b.WriteString("- Follow the plan in specs/")
 	b.WriteString(specName)
 	b.WriteString("/plan.md for details on your assigned slices\n")
@@ -584,16 +638,24 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 	m.run.status = msg.status
 
 	// Verify that every subagent exited cleanly (status == "completed")
-	// before moving on to gate validation.
+	// before moving on to gate validation. A non-clean exit is usually a
+	// provider stream error (429/502/400) rather than a decision to stop —
+	// the work so far is intact in the worktree, so resume there rather than
+	// abandoning the whole run.
 	if bad := m.failedAgentIDs(); len(bad) > 0 {
+		m.refreshRunChecklist()
+		if cmd := m.retryRun("agent exited with non-zero status",
+			m.unfinishedSlicesContext()); cmd != nil {
+			return m, cmd
+		}
 		m.run.phase = "failed"
 		wtPaths := m.runWorktreePathsFor(bad)
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "assistant",
 			content: fmt.Sprintf(
-				"**Subagent exited with non-zero status** for spec `%s` — skipping gates and merge.\n"+
+				"**Subagent exited with non-zero status** for spec `%s` after %d retries — skipping gates and merge.\n"+
 					"Inspect the worktree(s) below and re-run `/run %s` once the issue is fixed.\n%s",
-				m.run.specName, m.run.specName, wtPaths),
+				m.run.specName, m.run.maxRetries, m.run.specName, wtPaths),
 		})
 		if report, rerr := m.writeRunSummary("agent_failed"); rerr == nil {
 			m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -609,19 +671,188 @@ func (m *model) handleRunAgentDone(msg runAgentDoneMsg) (tea.Model, tea.Cmd) {
 		content: "**All agents finished** — validating gates...",
 	})
 
-	// If no gates, skip directly to merge.
+	// If no gates, skip straight to completeness verification.
 	if len(m.run.gates) == 0 {
-		m.run.phase = "merging"
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: "No gates defined — proceeding to merge.",
+			content: "No gates defined — verifying plan completeness.",
 		})
-		return m, m.mergeWorktreeCmd()
+		return m.verifyRunComplete()
 	}
 
 	// Run gate validation.
 	m.run.phase = "gating"
 	return m, m.runGatesCmd()
+}
+
+// unfinishedSlices returns the checklist steps that are still unchecked,
+// as 1-based "Step N: Title" strings.
+func (rs *runState) unfinishedSlices() []string {
+	var out []string
+	for i, step := range rs.checklist {
+		if !step.Done {
+			out = append(out, fmt.Sprintf("Step %d: %s", i+1, step.Title))
+		}
+	}
+	return out
+}
+
+// unfinishedSlicesContext renders the unchecked slices as a prompt fragment
+// for the next cycle. Empty when the checklist is absent or fully ticked.
+func (m *model) unfinishedSlicesContext() string {
+	if m.run == nil {
+		return ""
+	}
+	pending := m.run.unfinishedSlices()
+	if len(pending) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The previous cycle stopped with %d of %d slices unfinished:\n\n",
+		len(pending), len(m.run.checklist))
+	for _, p := range pending {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
+	b.WriteString("\nWork already on disk is intact — inspect the worktree before redoing anything.\n")
+	b.WriteString("Resume from the first unfinished slice.\n")
+	return b.String()
+}
+
+// verifyRunComplete is the Verifier stage: gates only prove the tree builds,
+// not that the plan was carried out. A green build over a half-implemented
+// plan is the failure this catches — it re-reads plan.md from the worktree and
+// refuses to merge while slices remain unchecked, looping instead.
+func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
+	m.run.phase = "verifying"
+	m.refreshRunChecklist()
+
+	pending := m.run.unfinishedSlices()
+	if len(pending) == 0 {
+		done := len(m.run.checklist)
+		msg := "**Verifier: PASS** — no plan checklist to verify."
+		if done > 0 {
+			msg = fmt.Sprintf("**Verifier: PASS** — all %d slices complete.", done)
+		}
+		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
+		m.run.phase = "merging"
+		return m, m.mergeWorktreeCmd()
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf("**Verifier: FAIL** — %d of %d slices still unchecked in plan.md.",
+			len(pending), len(m.run.checklist)),
+	})
+
+	if cmd := m.retryRun("plan incomplete", m.unfinishedSlicesContext()); cmd != nil {
+		return m, cmd
+	}
+
+	// Cycles exhausted with work still outstanding — do not merge.
+	m.run.phase = "failed"
+	wm := m.cfg.Orchestrator.Worktree()
+	wtPath := ""
+	if wm != nil {
+		wtPath = wm.PathFor(m.run.agentID)
+	}
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf(
+			"**Verification failed** for spec `%s` after %d retries — %d slices never completed.\n"+
+				"Not merging. Worktree preserved at: `%s`",
+			m.run.specName, m.run.maxRetries, len(pending), wtPath),
+	})
+	if report, err := m.writeRunSummary("verify_failed"); err == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Summary report: `%s`", report),
+		})
+	}
+	return m, nil
+}
+
+// retryRun spawns the next cycle in the same worktree, carrying `context`
+// (unfinished slices, gate output) into the new coordinator's prompt.
+// It returns nil when the retry budget is spent, leaving the caller to
+// decide how to report the terminal failure.
+func (m *model) retryRun(reason, extraContext string) tea.Cmd {
+	if m.run == nil || m.run.retries >= m.run.maxRetries {
+		return nil
+	}
+	if m.cfg.Orchestrator == nil {
+		return nil
+	}
+
+	m.run.retries++
+	m.run.phase = "retrying"
+
+	wtPath := ""
+	if wm := m.cfg.Orchestrator.Worktree(); wm != nil {
+		wtPath = wm.PathFor(m.run.agentID)
+	}
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "assistant",
+		content: fmt.Sprintf("**%s** — cycle %d/%d (retry %d) in worktree `%s`...",
+			reason, m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
+	})
+
+	prompt := buildResumePrompt(m.run.specName, m.run.promptMD, reason, extraContext)
+
+	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
+		Type:        "task",
+		Prompt:      prompt,
+		WorkDir:     wtPath,
+		SkipCleanup: true,
+		Timeout:     int((60 * time.Minute) / time.Millisecond),
+	})
+	if err != nil {
+		m.run.phase = "failed"
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
+		})
+		return nil
+	}
+
+	// The new agent owns the run from here; parallel fan-in is over once we
+	// fall back to a single resuming coordinator.
+	m.run.agentID = agentID
+	m.run.events = events
+	m.run.parallel = nil
+	m.run.status = ""
+	m.run.phase = "running"
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
+	m.chatModel.Streaming = ""
+	m.chatModel.Thinking = ""
+	m.running = true
+	m.chatModel.Scroll = 0
+
+	return waitForRunAgent(events, agentID)
+}
+
+// buildResumePrompt constructs the prompt for a cycle that resumes an
+// interrupted or incomplete run in an existing worktree.
+func buildResumePrompt(specName, promptMD, reason, extraContext string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The previous execution cycle did not finish: %s.\n\n", reason)
+	if extraContext != "" {
+		b.WriteString("## State\n")
+		b.WriteString(extraContext)
+		b.WriteString("\n")
+	}
+	b.WriteString("## Original Task\n")
+	b.WriteString(promptMD)
+	fmt.Fprintf(&b, coordinatorContract, specName)
+	b.WriteString("\n## Resume Instructions\n")
+	b.WriteString("- You are continuing in the SAME worktree as the previous cycle — its work is already on disk\n")
+	b.WriteString("- Read specs/")
+	b.WriteString(specName)
+	b.WriteString("/plan.md first to see which slices are already ticked\n")
+	b.WriteString("- Re-verify one completed slice before trusting the checklist; if a ticked slice does not actually work, untick it\n")
+	b.WriteString("- Delegate the remaining slices to workers as described above\n")
+	return b.String()
 }
 
 // failedAgentIDs returns the IDs of subagents (single or parallel) that
@@ -789,65 +1020,19 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	})
 
 	if msg.passed {
-		// All gates passed — proceed to merge.
-		m.run.phase = "merging"
+		// Gates prove the tree builds; the Verifier proves the plan was done.
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: "All gates passed — merging worktree branch...",
+			content: "All gates passed — verifying plan completeness...",
 		})
-		return m, m.mergeWorktreeCmd()
+		return m.verifyRunComplete()
 	}
 
 	// Gates failed — attempt retry or give up.
 	m.run.gateOutput = formatGateFailures(msg.results)
 
-	if m.run.retries < m.run.maxRetries {
-		// Retry: re-spawn agent in the same worktree with failure context.
-		m.run.retries++
-		m.run.phase = "retrying"
-
-		wm := m.cfg.Orchestrator.Worktree()
-		wtPath := ""
-		if wm != nil {
-			wtPath = wm.PathFor(m.run.agentID)
-		}
-
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role: "assistant",
-			content: fmt.Sprintf("**Gate failed** — cycle %d/%d (retry %d) in worktree `%s`...",
-				m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
-		})
-
-		retryPrompt := buildRetryPrompt(m.run.specName, m.run.promptMD, m.run.gateOutput)
-
-		// Spawn a new agent in the same worktree directory.
-		events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-			Type:        "task",
-			Prompt:      retryPrompt,
-			WorkDir:     wtPath,
-			SkipCleanup: true,
-		})
-		if err != nil {
-			m.run.phase = "failed"
-			m.chatModel.Messages = append(m.chatModel.Messages, message{
-				role:    "assistant",
-				content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
-			})
-			return m, nil
-		}
-
-		m.run.agentID = agentID
-		m.run.phase = "running"
-		m.run.events = events
-
-		// Add empty assistant message for streaming.
-		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
-		m.chatModel.Streaming = ""
-		m.chatModel.Thinking = ""
-		m.running = true
-		m.chatModel.Scroll = 0
-
-		return m, waitForRunAgent(events, agentID)
+	if cmd := m.retryRun("Gate failed", m.run.gateOutput); cmd != nil {
+		return m, cmd
 	}
 
 	// Retries exhausted.
@@ -1017,6 +1202,9 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 	fmt.Fprintf(&b, "| Agent | `%s` |\n", rs.agentID)
 	fmt.Fprintf(&b, "| Outcome | **%s** |\n", outcome)
 	fmt.Fprintf(&b, "| Retries | %d / %d |\n", rs.retries, rs.maxRetries)
+	if n := len(rs.checklist); n > 0 {
+		fmt.Fprintf(&b, "| Slices | %d / %d complete |\n", n-len(rs.unfinishedSlices()), n)
+	}
 	if !rs.startTime.IsZero() {
 		fmt.Fprintf(&b, "| Started | %s |\n", rs.startTime.Format(time.RFC3339))
 		fmt.Fprintf(&b, "| Duration | %s |\n", time.Since(rs.startTime).Truncate(time.Second))
@@ -1058,13 +1246,24 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 		}
 	}
 
+	// Unfinished slices, when the run stopped short of the plan.
+	if pending := rs.unfinishedSlices(); len(pending) > 0 {
+		b.WriteString("## Unfinished Slices\n\n")
+		for _, p := range pending {
+			fmt.Fprintf(&b, "- %s\n", p)
+		}
+		b.WriteString("\n")
+	}
+
 	// Outcome details.
 	b.WriteString("## Result\n\n")
 	switch outcome {
 	case "completed":
-		b.WriteString("All gates passed and changes were merged successfully.\n")
+		b.WriteString("All gates passed, the plan checklist was complete, and changes were merged successfully.\n")
 	case "gate_failed":
 		fmt.Fprintf(&b, "Gate validation failed after %d retries. Worktree preserved for manual inspection.\n", rs.retries)
+	case "verify_failed":
+		fmt.Fprintf(&b, "Gates passed but the plan was still incomplete after %d retries — the run stopped short of the checklist. Nothing was merged; the worktree is preserved so the finished slices are not lost.\n", rs.retries)
 	case "merge_failed":
 		b.WriteString("Gates passed but merge into the main branch failed. Worktree preserved for manual resolution.\n")
 	case "agent_failed":
@@ -1073,23 +1272,6 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 		fmt.Fprintf(&b, "Run ended with status: %s\n", outcome)
 	}
 
-	return b.String()
-}
-
-// buildRetryPrompt constructs the prompt for a retry agent after gate failure.
-func buildRetryPrompt(specName, promptMD, gateOutput string) string {
-	var b strings.Builder
-	b.WriteString("The previous implementation attempt failed gate validation.\n\n")
-	b.WriteString("## Gate Failures\n")
-	b.WriteString(gateOutput)
-	b.WriteString("\n## Original Task\n")
-	b.WriteString(promptMD)
-	b.WriteString("\n\n## Instructions\n")
-	b.WriteString("Fix the issues identified by the gate failures. The failing commands were run in the worktree.\n")
-	b.WriteString("Continue working in the current directory. Run the failing commands yourself to verify fixes.\n")
-	b.WriteString("Update specs/")
-	b.WriteString(specName)
-	b.WriteString("/plan.md checklist as you complete steps.\n")
 	return b.String()
 }
 
