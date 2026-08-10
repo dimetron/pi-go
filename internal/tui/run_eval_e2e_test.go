@@ -58,7 +58,12 @@ func TestEvalRun(t *testing.T) {
 	cleanupStaleRunWorktree(t, repoRoot)
 
 	// --- isolate sessions + seed config for nested workers ------------------
-	home := t.TempDir()
+	// Not t.TempDir(): the run's `go test` populates $HOME/go/pkg/mod, and the
+	// module cache is written read-only. TempDir's cleanup cannot unlink those
+	// files and fails the test *after* a successful measurement — a harness
+	// that reports FAIL for a run it measured fine is worse than one that
+	// leaves a temp dir behind. Clean it up permissively instead.
+	home := evalHomeDir(t)
 	t.Setenv("HOME", home)
 	// Isolating HOME breaks git commit signing: the repo signs commits/tags
 	// with the user's real key (GPG via 1Password), which is not reachable
@@ -440,6 +445,39 @@ func cleanupStaleRunWorktree(t *testing.T, repoRoot string) {
 	}
 	_ = exec.Command("git", "-C", repoRoot, "worktree", "prune").Run()
 	_ = exec.Command("git", "-C", repoRoot, "branch", "-D", branch).Run()
+}
+
+// evalHomeDir creates the isolated HOME for the run and registers a cleanup
+// that chmods the tree writable before removing it. The run's nested `go test`
+// writes a Go module cache under $HOME/go/pkg/mod with read-only files, which
+// os.RemoveAll (and t.TempDir's cleanup) cannot unlink. A cleanup failure here
+// must not fail an otherwise-good run, so removal errors are logged, not
+// fatal.
+func evalHomeDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("", "pi-eval-home-")
+	if err != nil {
+		t.Fatalf("create eval HOME: %v", err)
+	}
+	t.Cleanup(func() {
+		// Restore write permission on the way down; the module cache marks
+		// both files and their directories read-only.
+		_ = filepath.WalkDir(home, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			mode := os.FileMode(0o600)
+			if d.IsDir() {
+				mode = 0o700
+			}
+			_ = os.Chmod(path, mode)
+			return nil
+		})
+		if err := os.RemoveAll(home); err != nil {
+			t.Logf("eval HOME %s left behind: %v", home, err)
+		}
+	})
+	return home
 }
 
 // judgeDigestLimit caps how many tool calls per session reach the judge's

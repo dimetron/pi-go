@@ -155,3 +155,8 @@ grading its own trace is a weaker check.
 - `/run` names the worker's worktree after the spec, so a run that is killed or
   crashes can leave that branch registered in the shared `.git` and block the
   next run. The harness removes any such leftover before starting.
+- The isolated `HOME` is **not** a `t.TempDir()`. The run's nested `go test`
+  populates `$HOME/go/pkg/mod`, and the Go module cache is written read-only —
+  `TempDir`'s cleanup cannot unlink those files and fails the test *after* a
+  successful measurement. The harness chmods the tree writable before removing
+  it, and logs rather than fails if removal still cannot finish.
