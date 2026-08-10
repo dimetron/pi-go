@@ -186,17 +186,34 @@ func (m *model) startPlanWorktree(taskName string) (string, error) {
 // finishPlanWorktree preserves the completed spec under specs/<task-name>,
 // merges the temporary planning branch into the invoking branch, and removes
 // only the temporary worktree branch.
+//
+// It runs at the end of every planning turn, not just the last one, so the
+// commit and the backup ref below double as an incremental snapshot: a plan
+// abandoned before PROMPT.md exists still survives on specs/<task-name> even
+// though shutdown force-removes the temporary worktree and its branch.
 func (m *model) finishPlanWorktree() error {
 	if m.planWorktree == nil {
 		return nil
 	}
-	promptPath := filepath.Join(m.planWorktreePath, "specs", m.planTaskName, "PROMPT.md")
-	if _, err := os.Stat(promptPath); err != nil {
-		return nil
+
+	// Commit first. The planner writes files and never commits — the PDD SOP
+	// says nothing about git — so without this the backup ref below points at
+	// a commit holding none of the plan, MergeBack merges nothing, and Cleanup
+	// deletes the only copy.
+	if _, err := m.planWorktree.CommitAll(m.planWorktreeAgentID, "PDD plan: "+m.planTaskName); err != nil {
+		return err
 	}
 	if err := m.planWorktree.CreateBackupBranch(m.planWorktreeAgentID, m.planBackupBranch); err != nil {
 		return err
 	}
+
+	// The plan is only finished once PROMPT.md exists. Until then keep the
+	// worktree so the next turn can carry on in it.
+	promptPath := filepath.Join(m.planWorktreePath, "specs", m.planTaskName, "PROMPT.md")
+	if _, err := os.Stat(promptPath); err != nil {
+		return nil
+	}
+
 	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
 		return err
 	}
@@ -204,6 +221,9 @@ func (m *model) finishPlanWorktree() error {
 		return err
 	}
 	m.planWorktree = nil
+	// The worktree is gone; leaving its path behind would point later turns at
+	// a directory that no longer exists.
+	m.planWorktreePath = ""
 	return nil
 }
 
