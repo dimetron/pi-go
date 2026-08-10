@@ -634,7 +634,7 @@ type usageEvent struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
 		CachedContentTokenCount int `json:"cachedContentTokenCount"`
-	} `json:"UsageMetadata"`
+	} `json:"usageMetadata"`
 }
 
 // ComputeTokenMetrics sums provider-reported token usage across every session
@@ -651,7 +651,7 @@ func ComputeTokenMetrics(loaded []*LoadedTrajectory) TokenMetrics {
 			m.Sessions = append(m.Sessions, u)
 		}
 	}
-	m.TotalTokens = m.PromptTokens + m.CompletionTokens + m.CachedTokens
+	m.TotalTokens = m.PromptTokens + m.CompletionTokens
 	return m
 }
 

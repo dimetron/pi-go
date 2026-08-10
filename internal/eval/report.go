@@ -134,7 +134,7 @@ func RenderMarkdown(r *RunReport) string {
 		fmt.Fprintf(&b, "|---|---|---|---|\n")
 		for _, s := range tk.Sessions {
 			fmt.Fprintf(&b, "| `%s` | %d | %d | %d |\n",
-				shortID(s.SessionID), s.PromptTokens, s.CompletionTokens, s.PromptTokens+s.CompletionTokens+s.CachedTokens)
+				shortID(s.SessionID), s.PromptTokens, s.CompletionTokens, s.PromptTokens+s.CompletionTokens)
 		}
 	}
 

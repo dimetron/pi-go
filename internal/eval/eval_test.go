@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -248,6 +249,7 @@ func TestComputeToolsMetrics(t *testing.T) {
 	for name := range m.ByTool {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	if names[0] != "bash" || names[1] != "edit" || names[2] != "subagent" {
 		t.Errorf("tool order = %v, want [bash edit subagent]", names)
 	}
@@ -322,12 +324,12 @@ func TestComputeTokenMetrics(t *testing.T) {
 		}
 	}
 	writeEvents("sess-a",
-		`{"UsageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20}}`,
-		`{"UsageMetadata":{"promptTokenCount":50,"candidatesTokenCount":10}}`,
+		`{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20}}`,
+		`{"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":10}}`,
 		`{"Content":{"parts":[]}}`, // no usage block — ignored
 	)
 	writeEvents("sess-b",
-		`{"UsageMetadata":{"promptTokenCount":30,"candidatesTokenCount":5,"cachedContentTokenCount":7}}`,
+		`{"usageMetadata":{"promptTokenCount":30,"candidatesTokenCount":5,"cachedContentTokenCount":7}}`,
 	)
 	writeTraj(t, dir, "sess-a", baseTraj("sess-a", "pi-go"))
 	writeTraj(t, dir, "sess-b", baseTraj("sess-b", "pi-go"))
@@ -348,8 +350,8 @@ func TestComputeTokenMetrics(t *testing.T) {
 	if m.CachedTokens != 7 {
 		t.Errorf("CachedTokens = %d, want 7", m.CachedTokens)
 	}
-	if m.TotalTokens != 222 {
-		t.Errorf("TotalTokens = %d, want 222", m.TotalTokens)
+	if m.TotalTokens != 215 {
+		t.Errorf("TotalTokens = %d, want 215", m.TotalTokens)
 	}
 	if len(m.Sessions) != 2 {
 		t.Errorf("len(Sessions) = %d, want 2 (sess-c has no usage)", len(m.Sessions))
