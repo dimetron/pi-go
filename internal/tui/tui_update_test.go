@@ -73,6 +73,22 @@ func TestPendingPromptsExecuteFIFO(t *testing.T) {
 	}
 }
 
+func TestPendingPromptQueueFull(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.pendingPrompts = make([]queuedPrompt, maxPendingPrompts)
+
+	if _, cmd := m.enqueuePrompt("rejected", nil); cmd != nil {
+		t.Fatal("queue-full prompt should not start")
+	}
+	if got := len(m.pendingPrompts); got != maxPendingPrompts {
+		t.Fatalf("pending prompts = %d, want %d", got, maxPendingPrompts)
+	}
+	if m.flash != "Prompt queue full" {
+		t.Fatalf("flash = %q, want queue-full notice", m.flash)
+	}
+}
+
 func TestStatusShowsPendingPromptCount(t *testing.T) {
 	m := newTestModel(t)
 	m.pendingPrompts = []queuedPrompt{{text: "one"}, {text: "two"}}
