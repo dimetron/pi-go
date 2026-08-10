@@ -96,6 +96,22 @@ type ToolDisplayModel struct {
 	// Palette is the resolved theme palette, set each frame by the model before
 	// rendering. Zero means the dark default.
 	Palette Palette
+	// BlinkOn is the current phase of the pending-tool bullet blink, set each
+	// frame by the model. A tool card with no result yet blinks its ◉ bullet on
+	// and off so an active tool is visible at a glance; finished cards render
+	// the bullet solid.
+	BlinkOn bool
+}
+
+// toolBullet renders the header bullet for a tool card. While the card is still
+// pending (no result yet) the bullet blinks on and off; once the result lands
+// it renders solid. The off phase is a same-width blank so the header does not
+// shift columns.
+func (t *ToolDisplayModel) toolBullet(style lipgloss.Style, pending bool) string {
+	if pending && !t.BlinkOn {
+		return "  "
+	}
+	return style.Render("◉ ")
 }
 
 // RenderToolMessage renders a tool message (role=="tool") into a styled string.
@@ -119,7 +135,7 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
 	checkStyle := lipgloss.NewStyle().Foreground(p.Tool)
-	toolBullet := lipgloss.NewStyle().Foreground(p.Tool).Bold(true).Render("◉ ")
+	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.content == "")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -156,7 +172,7 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p 
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
 func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Palette) string {
-	agentBullet := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true).Render("◉ ")
+	agentBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Mauve).Bold(true), msg.content == "")
 	typeStyle := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
 	titleStyle := lipgloss.NewStyle().Foreground(p.Text)
 
@@ -417,7 +433,7 @@ func softWrap(s string, width int) []string {
 func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
 	argStyle := lipgloss.NewStyle().Foreground(p.Dim)
-	toolBullet := lipgloss.NewStyle().Foreground(p.Tool).Bold(true).Render("◉ ")
+	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.content == "")
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -516,6 +532,10 @@ func toolCallSummary(name string, args map[string]any) string {
 	case "bash":
 		if cmd, ok := args["command"].(string); ok {
 			return cmd
+		}
+	case "bash_output", "bash_kill":
+		if h, ok := args["handle"].(string); ok {
+			return h
 		}
 	// "ripgrep" is the name the grep tool registers under when rg is installed.
 	case "grep", "ripgrep":

@@ -171,7 +171,7 @@ func fnvInt(h uint64, v int) uint64 {
 // (and re-syntax-highlighted) the entire scrollback, several times a second.
 // Keying on the inputs gets the same safety without the cost: a mutated message
 // simply gets a different key and re-renders.
-func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool, themeKey uint64) uint64 {
+func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool, themeKey uint64, blinkOn bool) uint64 {
 	h := fnvOffset64
 	h = fnvStr(h, m.role)
 	h = fnvStr(h, m.content)
@@ -190,6 +190,12 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	h = fnvInt(h, m.pipelineStep)
 	h = fnvInt(h, m.pipelineTotal)
 	h = fnvInt(h, int(themeKey))
+	// The pending-tool bullet blinks on a wall-clock phase; a cached render
+	// must not freeze at one phase, so the phase is part of the key. Finished
+	// cards render the bullet solid and must not re-render on the phase.
+	if blinkOn && m.role == "tool" && m.content == "" {
+		h = fnvByte(h, 1)
+	}
 
 	var flags byte
 	if m.isWarning {
@@ -604,7 +610,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 		msg := &c.Messages[i]
 
 		isLastAndStreaming := running && i == lastIdx
-		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming, themeKey)
+		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming, themeKey, c.ToolDisplay.BlinkOn)
 		if msg.renderCached && msg.renderCacheKey == key {
 			b.WriteString(msg.renderCache)
 			kinds = appendKind(kinds, kindOf(msg), strings.Count(msg.renderCache, "\n"))

@@ -703,6 +703,11 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case matrixTickMsg:
 		if m.running {
 			m.matrix.tick(m.mainWidth())
+			// The pending-tool bullet blinks on a ~1s cycle. The phase advances
+			// here, in Update, so View stays a pure function of model state —
+			// the matrix tick (150ms while running) re-renders often enough to
+			// animate it.
+			m.chatModel.ToolDisplay.BlinkOn = time.Now().UnixMilli()/500%2 == 0
 			return m, matrixTickCmd(), true
 		}
 		return m, nil, true

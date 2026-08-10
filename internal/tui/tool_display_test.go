@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestRenderCompactTool_RegularTool(t *testing.T) {
@@ -351,4 +353,68 @@ func stripANSI(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// TestToolBullet_BlinkOnPending covers the pending-tool bullet blink: a card
+// with no result yet renders ◉ when the blink phase is on and a same-width
+// blank when it is off, so the header pulses without shifting columns. A card
+// that already has its result renders the bullet solid in both phases.
+func TestToolBullet_BlinkOnPending(t *testing.T) {
+	style := lipgloss.NewStyle().Foreground(darkPalette.Tool).Bold(true)
+
+	on := (&ToolDisplayModel{BlinkOn: true}).toolBullet(style, true)
+	off := (&ToolDisplayModel{BlinkOn: false}).toolBullet(style, true)
+	if !strings.Contains(on, "◉") {
+		t.Errorf("pending card with BlinkOn=true should show ◉, got %q", on)
+	}
+	if strings.Contains(off, "◉") {
+		t.Errorf("pending card with BlinkOn=false should hide ◉, got %q", off)
+	}
+	// The off phase must occupy the same two columns so the header does not
+	// shift left and right every half second.
+	if lipgloss.Width(off) != lipgloss.Width(on) {
+		t.Errorf("blink off width %d != on width %d", lipgloss.Width(off), lipgloss.Width(on))
+	}
+
+	// Finished cards never blink.
+	doneOn := (&ToolDisplayModel{BlinkOn: true}).toolBullet(style, false)
+	doneOff := (&ToolDisplayModel{BlinkOn: false}).toolBullet(style, false)
+	if !strings.Contains(doneOn, "◉") || !strings.Contains(doneOff, "◉") {
+		t.Errorf("finished card should always show ◉, got on=%q off=%q", doneOn, doneOff)
+	}
+}
+
+// TestRenderRegularTool_PendingBlink verifies the blink reaches the rendered
+// header: a pending bash card alternates between a ◉ header and a blank-bullet
+// header as BlinkOn flips, and the tool name stays put in both phases.
+func TestRenderRegularTool_PendingBlink(t *testing.T) {
+	msg := message{role: "tool", tool: "bash", toolIn: "sleep 10"}
+
+	on := stripANSI((&ToolDisplayModel{Width: 100, BlinkOn: true}).RenderToolMessage(msg))
+	off := stripANSI((&ToolDisplayModel{Width: 100, BlinkOn: false}).RenderToolMessage(msg))
+
+	if !strings.Contains(on, "◉ bash") {
+		t.Errorf("BlinkOn=true header should read ◉ bash, got %q", on)
+	}
+	if strings.Contains(off, "◉") {
+		t.Errorf("BlinkOn=false header should hide the bullet, got %q", off)
+	}
+	if !strings.Contains(off, "bash(sleep 10)") {
+		t.Errorf("BlinkOn=false header lost the tool name, got %q", off)
+	}
+}
+
+// TestRenderKey_BlinkPhaseDistinct guards the render cache: the blink phase is
+// part of the key for pending tool cards, so a cached render cannot freeze the
+// bullet at one phase.
+func TestRenderKey_BlinkPhaseDistinct(t *testing.T) {
+	pending := message{role: "tool", tool: "bash", toolIn: "ls"}
+	if pending.renderKey(80, false, false, false, 0, true) == pending.renderKey(80, false, false, false, 0, false) {
+		t.Fatal("renderKey collides across blink phases -- cached render would freeze the bullet")
+	}
+	// Finished cards do not blink, so their key must not depend on the phase.
+	done := message{role: "tool", tool: "bash", toolIn: "ls", content: "done"}
+	if done.renderKey(80, false, false, false, 0, true) != done.renderKey(80, false, false, false, 0, false) {
+		t.Fatal("finished card key depends on blink phase -- it would re-render needlessly")
+	}
 }

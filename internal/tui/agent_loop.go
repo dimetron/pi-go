@@ -916,6 +916,9 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		detail:  string(argsJSON),
 	})
 	toolIn := toolCallSummary(msg.name, msg.args)
+	if msg.name == "bash_output" || msg.name == "bash_kill" {
+		toolIn = m.bashControlToolIn(msg.name, msg.args, toolIn)
+	}
 	newMsg := message{
 		role: "tool", tool: msg.name, toolIn: toolIn, toolID: msg.id,
 	}
@@ -1060,9 +1063,30 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 	}
 	if i := matchToolResultCard(m.chatModel.Messages, msg.id, msg.name); i >= 0 {
 		m.chatModel.Messages[i].content = content
+		// Bind the card to its background handle when the bash result carries
+		// one. The bash:start event that normally stamps agentID travels on a
+		// separate channel and can arrive before the card exists, dropping the
+		// binding; the result is the reliable place to recover it so a later
+		// bash_output/bash_kill card can still find the command.
+		if msg.name == "bash" {
+			if handle := bashHandleFromResult(msg.content); handle != "" {
+				m.chatModel.Messages[i].agentID = handle
+			}
+		}
 	}
 	m.refreshDiffStats()
 	return m, waitForAgent(m.agentCh)
+}
+
+// bashHandleFromResult extracts the background handle from a raw bash tool
+// result, or "" when the command finished in the foreground (no handle).
+func bashHandleFromResult(content string) string {
+	var data map[string]any
+	if json.Unmarshal([]byte(content), &data) != nil {
+		return ""
+	}
+	h, _ := data["handle"].(string)
+	return h
 }
 
 // matchToolResultCard finds the chat card an arriving tool result belongs to,
@@ -1124,6 +1148,29 @@ const bashEventPrefix = "bash:"
 // few are ever drawn, and a command that prints for two minutes would otherwise
 // grow this without bound behind a window that shows five lines.
 const maxLiveBashEvents = 64
+
+// bashControlToolIn builds the header text for a bash_output/bash_kill card.
+//
+// A poll's args carry only a handle, which on its own says nothing about what
+// is being polled. The original command lives on the bash card the supervisor
+// bound to this handle (handleBashEvent stamps it into agentID), so the header
+// folds that command in: "bash_output(bg_1): sleep 10 && echo done" reads far
+// better than a bare "bash_output". Falls back to the handle alone when no card
+// is bound — the supervisor may have forgotten the command, or the transcript
+// was restored without one.
+func (m *model) bashControlToolIn(name string, args map[string]any, fallback string) string {
+	handle, _ := args["handle"].(string)
+	if handle == "" {
+		return fallback
+	}
+	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+		msg := m.chatModel.Messages[i]
+		if msg.tool == "bash" && msg.agentID == handle && msg.toolIn != "" {
+			return fmt.Sprintf("%s: %s", handle, msg.toolIn)
+		}
+	}
+	return handle
+}
 
 // handleBashEvent routes one live event from a running shell command to its
 // card.
