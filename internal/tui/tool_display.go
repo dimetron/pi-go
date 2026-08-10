@@ -456,7 +456,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
 			styled = highlightReadOutput(lines, msg.toolIn, p)
-		case msg.tool == "bash":
+		case msg.tool == "bash" || msg.tool == "bash_output" || msg.tool == "bash_kill":
 			// Bash output is plain text most of the time but frequently contains
 			// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
 			// through chroma's content-sniffing lexer so it gets at least some
@@ -731,14 +731,14 @@ func formatBashWindow(handle string, data map[string]any) string {
 	var lines []string
 	switch {
 	case running:
-		lines = append(lines, fmt.Sprintf("running (%s)%s", handle, timing))
+		lines = append(lines, "⏳"+timing)
 	case hasCode && int(code) == -1:
 		// Killed, or killed and not reaped before the wait delay expired. Either
 		// way there is no status to report, and printing "exit -1" invites the
 		// reader to look for a exit code that never existed.
-		lines = append(lines, fmt.Sprintf("killed, no exit status (%s)%s", handle, timing))
+		lines = append(lines, fmt.Sprintf("killed, no exit status (%s)%s", handle, commaTiming(timing)))
 	default:
-		lines = append(lines, fmt.Sprintf("exit %d (%s)%s", int(code), handle, timing))
+		lines = append(lines, fmt.Sprintf("exit %d (%s)%s", int(code), handle, commaTiming(timing)))
 	}
 
 	if preview := bashOutputPreview(stdout, stderr); preview != "" {
@@ -754,17 +754,24 @@ func formatBashWindow(handle string, data map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
+func commaTiming(timing string) string {
+	if timing == "" {
+		return ""
+	}
+	return "," + timing
+}
+
 // bashTiming renders however much of the elapsed/idle pair the result carries.
 func bashTiming(data map[string]any) string {
 	elapsed, _ := data["elapsed"].(string)
 	idle, _ := data["idle"].(string)
 	switch {
 	case elapsed != "" && idle != "":
-		return fmt.Sprintf(", %s elapsed, %s idle", elapsed, idle)
+		return fmt.Sprintf(" %s elapsed, %s without output", elapsed, idle)
 	case elapsed != "":
-		return ", " + elapsed + " elapsed"
+		return " " + elapsed + " elapsed"
 	case idle != "":
-		return ", " + idle + " idle"
+		return " " + idle + " without output"
 	}
 	return ""
 }

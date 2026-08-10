@@ -28,7 +28,7 @@ func TestFormatToolResult_BackgroundedCommandIsNotAFailure(t *testing.T) {
 	if strings.Contains(got, "exit -1") {
 		t.Errorf("a running command must not be reported as an exit status, got %q", got)
 	}
-	for _, want := range []string{"running", "bg_16", "5s elapsed", "golangci-lint run ./..."} {
+	for _, want := range []string{"⏳", "5s elapsed", "golangci-lint run ./..."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
 		}
