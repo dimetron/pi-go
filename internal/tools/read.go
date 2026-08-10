@@ -83,7 +83,10 @@ Optional: offset (start line, 1-based), limit (max lines to read).
 
 Large files come back a window at a time; next_offset is the exact offset to pass to continue.`,
 		func(_ agent.Context, input ReadInput) (ReadOutput, error) {
-			return readHandler(sb, input)
+			// The ledger must be threaded through here, not dropped: write
+			// gates on it, so a read that does not record leaves every
+			// overwrite of an existing file permanently rejected.
+			return readHandlerWithLedger(sb, input, ledger)
 		}, map[string]string{
 			// The model reaches for all of these; repairing them costs nothing
 			// and each one otherwise burns a turn on a schema error.
