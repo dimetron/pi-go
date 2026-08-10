@@ -319,13 +319,26 @@ func (m *model) hitContextClear(x, y int) bool {
 	return x >= lay.ClearStart && x < lay.ClearEnd
 }
 
-// estimateContextTokenCount approximates context size from message text at the
-// usual ~4 characters per token, for the window before the provider reports a
-// real count.
+// messageChars is what a message contributes to a context estimate. Kept in one
+// place because three call sites used to spell the field list out for
+// themselves, and a field added to message would have been counted by some of
+// them and not others.
+func messageChars(msg message) int {
+	return len(msg.content) + len(msg.tool) + len(msg.toolIn)
+}
+
+// estimateTokens converts a character count at the usual ~4 characters per
+// token. The ratio is a guess, which is exactly why it should be guessed once.
+func estimateTokens(chars int) int64 {
+	return int64(chars / 4)
+}
+
+// estimateContextTokenCount approximates context size from message text, for
+// the window before the provider reports a real count.
 func estimateContextTokenCount(msgs []message) int64 {
 	chars := 0
 	for _, msg := range msgs {
-		chars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
+		chars += messageChars(msg)
 	}
-	return int64(chars / 4)
+	return estimateTokens(chars)
 }

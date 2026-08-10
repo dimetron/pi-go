@@ -57,17 +57,9 @@ const contextBarWidth = 10
 // renderContextBar returns a color-coded visual bar like "████░░░░░░ 42%".
 // Colors: green < 60%, orange 60-80%, red > 80%.
 func renderContextBar(pct float64, bg color.Color, p Palette) string {
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
+	pct = min(max(pct, 0), 100)
 
-	filled := int(pct / 100 * contextBarWidth)
-	if filled > contextBarWidth {
-		filled = contextBarWidth
-	}
+	filled := barFill(pct/100, contextBarWidth)
 	empty := contextBarWidth - filled
 
 	var fg color.Color
@@ -84,8 +76,8 @@ func renderContextBar(pct float64, bg color.Color, p Palette) string {
 	emptyStyle := lipgloss.NewStyle().Background(bg).Foreground(p.Surface)
 	pctStyle := lipgloss.NewStyle().Background(bg).Foreground(fg)
 
-	return filledStyle.Render(strings.Repeat("█", filled)) +
-		emptyStyle.Render(strings.Repeat("░", empty)) +
+	return filledStyle.Render(strings.Repeat(barFilled, filled)) +
+		emptyStyle.Render(strings.Repeat(barEmpty, empty)) +
 		pctStyle.Render(fmt.Sprintf(" %.0f%%", pct))
 }
 
@@ -157,12 +149,9 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		pct := tt.PercentUsed()
 		parts = append(parts, renderContextBar(pct, noBg, p))
 	} else {
-		// Fallback: rough context size estimate (~4 chars per token).
-		ctxChars := 0
-		for _, msg := range in.Messages {
-			ctxChars += len(msg.content) + len(msg.tool) + len(msg.toolIn)
-		}
-		ctxTokens := ctxChars / 4
+		// Fallback: the same rough estimate /context shows, so the two cannot
+		// disagree about the same conversation.
+		ctxTokens := estimateContextTokenCount(in.Messages)
 		switch {
 		case ctxTokens >= 1000:
 			parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
