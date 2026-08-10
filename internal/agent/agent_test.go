@@ -462,6 +462,29 @@ func TestRunStreaming(t *testing.T) {
 	}
 }
 
+func TestLoadInstructionInjectsRuntimeEnvironment(t *testing.T) {
+	t.Setenv("HOME", "/tmp/test-home")
+	t.Setenv("USER", "test-user")
+	t.Setenv("PWD", "/tmp/test-project")
+
+	got := loadInstructionFrom("Base instruction.", "/tmp/fallback-cwd", "/tmp/test-home")
+	want := "# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=\"/tmp/test-home\"\n- USER=\"test-user\"\n- PWD=\"/tmp/test-project\"\n\nBase instruction."
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("runtime environment should be the first prompt section, got %q", got)
+	}
+}
+
+func TestLoadInstructionInjectsWorkingDirectoryWhenPWDUnset(t *testing.T) {
+	t.Setenv("HOME", "/tmp/test-home")
+	t.Setenv("USER", "test-user")
+	t.Setenv("PWD", "")
+
+	got := loadInstructionFrom("Base instruction.", "/tmp/fallback-cwd", "/tmp/test-home")
+	if !strings.Contains(got, "- PWD=\"/tmp/fallback-cwd\"") {
+		t.Fatalf("expected working directory fallback for PWD, got %q", got)
+	}
+}
+
 func TestLoadInstruction(t *testing.T) {
 	base := "Base instruction."
 	result := loadInstructionFrom(base, t.TempDir(), "")

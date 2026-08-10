@@ -652,7 +652,7 @@ var contextFileNames = []string{
 func LoadInstruction(baseInstruction string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return baseInstruction
+		return prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), "")
 	}
 	home, _ := os.UserHomeDir()
 	return loadInstructionFrom(baseInstruction, cwd, home)
@@ -689,14 +689,23 @@ func loadInstructionFrom(baseInstruction, cwd, home string) string {
 func LoadInstructionParts(baseInstruction string) InstructionParts {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return InstructionParts{Base: baseInstruction}
+		return InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), "")}
 	}
 	home, _ := os.UserHomeDir()
 	return loadInstructionPartsFrom(baseInstruction, cwd, home)
 }
 
+// prependEnvironmentContext adds the process context before the built-in prompt
+// so the agent has authoritative values for common shell variables.
+func prependEnvironmentContext(baseInstruction, home, user, pwd, cwd string) string {
+	if pwd == "" {
+		pwd = cwd
+	}
+	return fmt.Sprintf("# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=%q\n- USER=%q\n- PWD=%q\n\n%s", home, user, pwd, baseInstruction)
+}
+
 func loadInstructionPartsFrom(baseInstruction, cwd, home string) InstructionParts {
-	parts := InstructionParts{Base: baseInstruction}
+	parts := InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), cwd)}
 
 	if contents := discoverContextFiles(cwd, home); len(contents) > 0 {
 		parts.Rules = "\n\n# Project Rules\n\n" + strings.Join(contents, "\n\n")
