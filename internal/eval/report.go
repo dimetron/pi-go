@@ -47,17 +47,26 @@ func RenderMarkdown(r *RunReport) string {
 	fmt.Fprintf(&b, "- **model**: %s  \n", meta.Model)
 	fmt.Fprintf(&b, "- **binary**: %s  \n", meta.Binary)
 	fmt.Fprintf(&b, "- **git head**: `%s`  \n", shortHead(meta.GitHead))
+	if meta.BaseRef != "" {
+		fmt.Fprintf(&b, "- **base ref**: `%s` (`%s`)  \n", meta.BaseRef, shortHead(meta.BaseCommit))
+	}
 	fmt.Fprintf(&b, "- **timestamp**: %s  \n", meta.Timestamp.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- **duration**: %s  \n", meta.Duration)
 
 	fmt.Fprintf(&b, "\n## Outcome\n\n")
 	fmt.Fprintf(&b, "- **final phase**: `%s`  \n", r.Outcome.FinalPhase)
 	fmt.Fprintf(&b, "- **retries**: %d  \n", r.Outcome.Retries)
+	if r.Outcome.Reason != "" {
+		fmt.Fprintf(&b, "\n```\n%s\n```\n", strings.TrimSpace(r.Outcome.Reason))
+	}
 	renderGates(&b, r.Outcome.GateResults)
 	renderGolden(&b, "Golden check", r.Outcome.GoldenCheck, r.Outcome.GoldenPass)
-	if len(r.Outcome.BaselineCheck) > 0 {
+	if r.Outcome.BaselineRef != "" {
+		fmt.Fprintf(&b, "\n- **baseline ref**: `%s`  \n", r.Outcome.BaselineRef)
 		renderGolden(&b, "Baseline check", r.Outcome.BaselineCheck, r.Outcome.BaselinePass)
 	}
+
+	renderJudge(&b, r.Judge)
 
 	fmt.Fprintf(&b, "\n## Trajectory\n\n")
 	tr := r.Trajectory
@@ -110,6 +119,46 @@ func RenderMarkdown(r *RunReport) string {
 	}
 
 	return b.String()
+}
+
+// renderJudge writes the LLM grader's verdict. The verdict is advisory — it is
+// shown alongside the measured numbers, never in place of them — so a judge
+// that could not run degrades to a one-line note.
+func renderJudge(b *strings.Builder, j *JudgeVerdict) {
+	if j == nil {
+		return
+	}
+	fmt.Fprintf(b, "\n## LLM judge\n\n")
+	if j.Error != "" {
+		fmt.Fprintf(b, "- **judge**: unavailable (%s)\n", j.Error)
+		return
+	}
+	fmt.Fprintf(b, "- **judge model**: %s  \n", j.Model)
+	fmt.Fprintf(b, "- **verdict**: %s  \n", strings.ToUpper(j.Verdict))
+	fmt.Fprintf(b, "- **overall**: %.2f / 5  \n", j.Overall)
+	if j.Summary != "" {
+		fmt.Fprintf(b, "\n%s\n", j.Summary)
+	}
+	if len(j.Scores) > 0 {
+		fmt.Fprintf(b, "\n| dimension | score | rationale |\n|---|---|---|\n")
+		for _, s := range j.Scores {
+			fmt.Fprintf(b, "| %s | %d/5 | %s |\n", s.Dimension, s.Score, escapeCell(s.Rationale))
+		}
+	}
+	if len(j.Issues) > 0 {
+		fmt.Fprintf(b, "\n**Issues raised:**\n\n")
+		for _, issue := range j.Issues {
+			fmt.Fprintf(b, "- %s\n", issue)
+		}
+	}
+}
+
+// escapeCell keeps model-authored prose from breaking the Markdown table it
+// lands in.
+func escapeCell(s string) string {
+	s = strings.ReplaceAll(s, "|", `\|`)
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
 }
 
 func renderGates(b *strings.Builder, gates []GateResult) {

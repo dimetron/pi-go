@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,9 +24,12 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/eval"
+	"github.com/dimetron/pi-go/internal/provider"
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
+	llmmodel "google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 const evalSpecName = "eval-orchestrator"
@@ -45,9 +49,29 @@ func TestEvalRun(t *testing.T) {
 	}
 	bin := resolvePiBinary(t, repoRoot)
 
+	// The run worker's worktree is named after the spec (runWorktreeName), so
+	// every run of this spec reuses branch "eval-orchestrator". A run that was
+	// killed, timed out or crashed exits before the merge flow cleans that
+	// worktree up, leaving the branch registered in the shared .git at an
+	// orphaned path — which makes WorktreeManager.Create refuse the next run.
+	// Remove any such leftover before creating a fresh worktree.
+	cleanupStaleRunWorktree(t, repoRoot)
+
 	// --- isolate sessions + seed config for nested workers ------------------
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Isolating HOME breaks git commit signing: the repo signs commits/tags
+	// with the user's real key (GPG via 1Password), which is not reachable
+	// from the temp HOME, so the run's `git merge --no-ff` fails at
+	// "gpg: No secret key". The eval's commits are throwaway — they live in
+	// the temp eval worktree, removed when the test ends — so skip signing
+	// for every git call this run makes. Scoped to this process via
+	// GIT_CONFIG_*; the shared repo config is untouched.
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+	t.Setenv("GIT_CONFIG_KEY_1", "tag.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
 	if cc := os.Getenv("PI_EVAL_CONCURRENCY"); cc != "" {
 		t.Setenv("PI_SUBAGENT_CONCURRENCY", cc)
 	}
@@ -61,8 +85,14 @@ func TestEvalRun(t *testing.T) {
 	}
 	writeHomeConfig(t, home, &cfg)
 
-	// --- temp worktree of the current repo (primary checkout untouched) -----
-	wtPath, cleanupWT := addEvalWorktree(t, repoRoot)
+	// --- temp worktree at the pinned base (primary checkout untouched) ------
+	// Every run starts from the same commit so runs are comparable: a run
+	// against a moving HEAD measures the repo's drift as much as /run's
+	// behavior. PI_EVAL_BASE names the ref (default: the eval/base tag, or
+	// HEAD when it has never been pinned).
+	baseRef := resolveBaseRef(t, repoRoot)
+	baseCommit := revParse(t, repoRoot, baseRef)
+	wtPath, cleanupWT := addEvalWorktree(t, repoRoot, baseRef)
 	defer cleanupWT()
 
 	// --- orchestrator over the eval worktree --------------------------------
@@ -178,7 +208,9 @@ func TestEvalRun(t *testing.T) {
 
 	var baselineCheck []eval.GoldenFile
 	baselinePass := true
+	var baselineRef string
 	if ref := os.Getenv("PI_EVAL_BASELINE"); ref != "" {
+		baselineRef = ref
 		baselineCheck, baselinePass = diffBaseline(t, repoRoot, ref, producedDir, goldenFiles)
 	}
 
@@ -188,29 +220,50 @@ func TestEvalRun(t *testing.T) {
 	}
 
 	// --- report -------------------------------------------------------------
-	finalPhase, retries, gateResults := runOutcome(final)
+	finalPhase, retries, gateResults, failReason := runOutcome(final)
 	report := &eval.RunReport{
 		Metadata: eval.ReportMetadata{
-			Spec:      evalSpecName,
-			Mode:      mode,
-			Model:     modelName(&cfg, evalModel),
-			Binary:    bin,
-			GitHead:   gitHead(t, repoRoot),
-			Timestamp: time.Now(),
-			Duration:  time.Since(start).Round(time.Second).String(),
+			Spec:       evalSpecName,
+			Mode:       mode,
+			Model:      modelName(&cfg, evalModel),
+			Binary:     bin,
+			GitHead:    gitHead(t, repoRoot),
+			BaseRef:    baseRef,
+			BaseCommit: baseCommit,
+			Timestamp:  time.Now(),
+			Duration:   time.Since(start).Round(time.Second).String(),
 		},
 		Outcome: eval.RunOutcome{
 			FinalPhase:    finalPhase,
 			Retries:       retries,
+			Reason:        failReason,
 			GateResults:   gateResults,
 			GoldenCheck:   goldenCheck,
 			GoldenPass:    goldenPass,
+			BaselineRef:   baselineRef,
 			BaselineCheck: baselineCheck,
 			BaselinePass:  baselinePass,
 		},
 		Trajectory:  traj,
 		Concurrency: conc,
 		Tools:       tools,
+	}
+
+	// --- LLM judge (advisory, graded from the assembled report) -------------
+	// The judge grades the report it is handed, so it runs after the metrics
+	// are computed and before the report is written. Its verdict is recorded,
+	// never asserted on: a grader is not a stable enough signal to fail a run,
+	// but it catches the qualitative regressions counters miss.
+	if judgeModel := os.Getenv("PI_EVAL_JUDGE_MODEL"); judgeModel != "" {
+		complete := judgeComplete(t, judgeModel)
+		digest := eval.TrajectoryDigest(loaded, judgeDigestLimit())
+		judgeCtx, judgeCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		verdict := eval.Judge(judgeCtx, complete, judgeModel, report, digest)
+		judgeCancel()
+		report.Judge = &verdict
+		if verdict.Error != "" {
+			t.Logf("judge unavailable: %s", verdict.Error)
+		}
 	}
 
 	outDir := os.Getenv("PI_EVAL_OUT")
@@ -335,14 +388,14 @@ func writeHomeConfig(t *testing.T, home string, cfg *config.Config) {
 	}
 }
 
-// addEvalWorktree creates a temp worktree of repoRoot at HEAD and returns its
-// path plus a cleanup func. Fails the test only if the add fails for a real
+// addEvalWorktree creates a temp worktree of repoRoot at baseRef and returns
+// its path plus a cleanup func. Fails the test only if the add fails for a real
 // reason; a dirty primary checkout is reported as a skip.
-func addEvalWorktree(t *testing.T, repoRoot string) (string, func()) {
+func addEvalWorktree(t *testing.T, repoRoot, baseRef string) (string, func()) {
 	t.Helper()
 	wtPath := filepath.Join(t.TempDir(), "eval-wt")
 	branch := fmt.Sprintf("eval-run-%d", time.Now().UnixNano())
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "HEAD")
+	cmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, baseRef)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("git worktree add failed (is the primary checkout dirty?): %v\n%s", err, out)
@@ -353,6 +406,148 @@ func addEvalWorktree(t *testing.T, repoRoot string) (string, func()) {
 		_ = exec.Command("git", "-C", repoRoot, "branch", "-D", branch).Run()
 	}
 	return wtPath, cleanup
+}
+
+// cleanupStaleRunWorktree removes any worktree a previous /run for this eval
+// spec left registered in the shared .git. The worker's worktree is named
+// after the spec (runWorktreeName), so every run of this spec uses the same
+// branch. A run that is killed, times out or crashes exits before the merge
+// flow cleans the worktree up, leaving the branch checked out at an orphaned
+// path — which makes WorktreeManager.Create refuse the next run with "branch
+// is already checked out at ...". Pruning it here keeps re-runs working after
+// any interrupted run.
+func cleanupStaleRunWorktree(t *testing.T, repoRoot string) {
+	t.Helper()
+	branch := runWorktreeName(evalSpecName, "")
+
+	out, err := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		t.Logf("cleanup stale run worktree: list worktrees: %v", err)
+		return
+	}
+	var wtPath string
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			wtPath = strings.TrimPrefix(line, "worktree ")
+		case line == "branch refs/heads/"+branch && wtPath != "":
+			if err := exec.Command("git", "-C", repoRoot, "worktree", "remove", "--force", wtPath).Run(); err != nil {
+				t.Logf("cleanup stale run worktree: remove %s: %v", wtPath, err)
+			} else {
+				t.Logf("removed stale run worktree %s left by a previous run", wtPath)
+			}
+		}
+	}
+	_ = exec.Command("git", "-C", repoRoot, "worktree", "prune").Run()
+	_ = exec.Command("git", "-C", repoRoot, "branch", "-D", branch).Run()
+}
+
+// judgeDigestLimit caps how many tool calls per session reach the judge's
+// prompt. A worker that thrashed can emit hundreds; the cap keeps one runaway
+// session from crowding the others out of the context window.
+func judgeDigestLimit() int {
+	if v := os.Getenv("PI_EVAL_JUDGE_MAX_CALLS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 60
+}
+
+// evalBaseRef is the tag naming the pinned starting point every eval run
+// branches from. Pinning matters because a run against a moving HEAD measures
+// the repository's drift as much as /run's behavior: two runs a week apart are
+// only comparable if they started from the same code.
+const evalBaseRef = "eval/base"
+
+// resolveBaseRef picks the commit the eval worktree is created from:
+// PI_EVAL_BASE when set, else the eval/base tag, else HEAD. With
+// PI_EVAL_PIN_BASE=1 the tag is (re)created at HEAD first, which is how the
+// baseline is established or deliberately moved.
+func resolveBaseRef(t *testing.T, repoRoot string) string {
+	t.Helper()
+
+	if os.Getenv("PI_EVAL_PIN_BASE") == "1" {
+		if out, err := exec.Command("git", "-C", repoRoot, "tag", "-f", evalBaseRef, "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("pin base ref %s: %v\n%s", evalBaseRef, err, out)
+		}
+		t.Logf("pinned %s at %s", evalBaseRef, gitHead(t, repoRoot))
+	}
+
+	if ref := os.Getenv("PI_EVAL_BASE"); ref != "" {
+		if revParse(t, repoRoot, ref) == "" {
+			t.Fatalf("PI_EVAL_BASE=%s does not resolve to a commit", ref)
+		}
+		return ref
+	}
+	if revParse(t, repoRoot, evalBaseRef) != "" {
+		return evalBaseRef
+	}
+	t.Logf("no %s tag yet — running against HEAD; pin it with PI_EVAL_PIN_BASE=1 to make runs comparable", evalBaseRef)
+	return "HEAD"
+}
+
+// revParse resolves a ref to a full commit SHA, returning "" when it does not
+// resolve.
+func revParse(t *testing.T, repoRoot, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--verify", ref+"^{commit}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// judgeComplete builds the single-shot LLM call the judge uses, resolving the
+// judge model the same way the CLI resolves any model. Returns nil when no
+// judge is configured or no API key is available for it, so the eval still
+// produces its measured report without a grader.
+func judgeComplete(t *testing.T, model string) eval.CompleteFunc {
+	t.Helper()
+	if model == "" {
+		return nil
+	}
+	info, err := provider.Resolve(model)
+	if err != nil {
+		t.Logf("judge model %q unresolvable: %v", model, err)
+		return nil
+	}
+	apiKey := config.APIKeys()[info.Provider]
+	if apiKey == "" && !info.Ollama {
+		t.Logf("judge model %q has no API key for provider %q — skipping judge", model, info.Provider)
+		return nil
+	}
+
+	return func(ctx context.Context, system, user string) (string, error) {
+		llm, err := provider.NewLLM(ctx, info, apiKey, "", "none", &provider.LLMOptions{})
+		if err != nil {
+			return "", fmt.Errorf("create judge llm: %w", err)
+		}
+		req := &llmmodel.LLMRequest{
+			Contents: []*genai.Content{genai.NewContentFromText(user, genai.RoleUser)},
+			Config: &genai.GenerateContentConfig{
+				SystemInstruction: genai.NewContentFromText(system, genai.RoleUser),
+			},
+		}
+		var reply strings.Builder
+		for resp, err := range llm.GenerateContent(ctx, req, false) {
+			if err != nil {
+				return "", fmt.Errorf("judge llm: %w", err)
+			}
+			if resp.Content == nil {
+				continue
+			}
+			for _, part := range resp.Content.Parts {
+				if part.Text != "" && !part.Thought {
+					reply.WriteString(part.Text)
+				}
+			}
+		}
+		if strings.TrimSpace(reply.String()) == "" {
+			return "", fmt.Errorf("judge returned an empty reply")
+		}
+		return reply.String(), nil
+	}
 }
 
 func diffBaseline(t *testing.T, repoRoot, ref, producedDir string, files []string) ([]eval.GoldenFile, bool) {
@@ -391,10 +586,12 @@ func runPhase(m *model) string {
 	return m.run.phase
 }
 
-// runOutcome extracts the final phase, retry count and gate results from the
-// run state, so the report reflects the run even when it did not finish.
-func runOutcome(m *model) (phase string, retries int, gates []eval.GateResult) {
+// runOutcome extracts the final phase, retry count, gate results and failure
+// reason from the run state, so the report reflects the run even when it did
+// not finish.
+func runOutcome(m *model) (phase string, retries int, gates []eval.GateResult, reason string) {
 	phase = "not_started"
+	reason = runFailureReason(m)
 	if m == nil || m.run == nil {
 		return
 	}
@@ -408,6 +605,46 @@ func runOutcome(m *model) (phase string, retries int, gates []eval.GateResult) {
 		gates = append(gates, eval.GateResult{Name: g.Name, Command: g.Command, Passed: g.Passed, Output: out})
 	}
 	return
+}
+
+// runFailureReason returns the terminal failure message from the run's chat
+// log. Every failure path in the /run flow appends a distinctive assistant
+// message ("**Merge failed**…", "**Verification failed**…", "Failed to spawn
+// task agent: …") before stopping, so the last message matching one of those
+// markers is the definitive cause. Returns "" when the run did not fail.
+func runFailureReason(m *model) string {
+	if m == nil {
+		return ""
+	}
+	markers := []string{
+		"**Merge failed**",
+		"**Verification failed**",
+		"**Gate validation failed**",
+		"**Subagent exited with non-zero status**",
+		"Failed to spawn retry agent",
+		"Failed to spawn task agent",
+		"Failed to spawn agent 1",
+		"Failed to spawn agent 2",
+		"Failed to create run backup branch for agent 1",
+		"Failed to create run backup branch for agent 2",
+	}
+	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+		msg := m.chatModel.Messages[i]
+		if msg.role != "assistant" {
+			continue
+		}
+		for _, marker := range markers {
+			if !strings.Contains(msg.content, marker) {
+				continue
+			}
+			reason := msg.content
+			if len(reason) > 2000 {
+				reason = reason[:2000] + "...(truncated)"
+			}
+			return reason
+		}
+	}
+	return ""
 }
 
 func modelName(cfg *config.Config, envModel string) string {

@@ -26,6 +26,8 @@ type RunReport struct {
 	Trajectory  TrajectoryMetrics  `json:"trajectory"`
 	Concurrency ConcurrencyMetrics `json:"concurrency"`
 	Tools       ToolsMetrics       `json:"tools"`
+	// Judge is the LLM grader's advisory verdict, absent when no judge ran.
+	Judge *JudgeVerdict `json:"judge,omitempty"`
 }
 
 // ReportMetadata describes what was run and when.
@@ -37,18 +39,30 @@ type ReportMetadata struct {
 	GitHead   string    `json:"git_head"`
 	Timestamp time.Time `json:"timestamp"`
 	Duration  string    `json:"duration"`
+	// BaseRef is the pinned starting point the run's worktree was created
+	// from. Runs started from the same BaseRef are comparable; a run against
+	// a moving HEAD is not comparable with anything.
+	BaseRef string `json:"base_ref,omitempty"`
+	// BaseCommit is BaseRef resolved to a commit, so a report stays meaningful
+	// after the ref moves.
+	BaseCommit string `json:"base_commit,omitempty"`
 }
 
 // RunOutcome captures how the run itself ended and whether the produced
 // artifacts matched the golden copy.
 type RunOutcome struct {
-	FinalPhase    string       `json:"final_phase"` // "done", "failed", ...
-	Retries       int          `json:"retries"`
+	FinalPhase string `json:"final_phase"` // "done", "failed", ...
+	Retries    int    `json:"retries"`
+	// Reason is the terminal failure message from the run flow ("Merge
+	// failed…", "Verification failed…", …), empty when the run did not fail.
+	Reason        string       `json:"reason,omitempty"`
 	GateResults   []GateResult `json:"gate_results"`
 	GoldenCheck   []GoldenFile `json:"golden_check"`
 	GoldenPass    bool         `json:"golden_pass"`
+	BaselineRef   string       `json:"baseline_ref,omitempty"`
 	BaselineCheck []GoldenFile `json:"baseline_check,omitempty"`
-	BaselinePass  bool         `json:"baseline_pass"`
+	// BaselinePass is only meaningful when BaselineRef is non-empty.
+	BaselinePass bool `json:"baseline_pass"`
 }
 
 // GateResult is the result of a single gate command.

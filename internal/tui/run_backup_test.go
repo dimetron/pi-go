@@ -44,9 +44,9 @@ func TestRunBackupBranchName(t *testing.T) {
 	}{
 		{"plain spec", "my-spec", "", "run/my-spec"},
 		{"nested spec flattens to dashes", "area/my-spec", "", "run/area-my-spec"},
-		{"suffix becomes a branch segment", "my-spec", "part-1", "run/my-spec/part-1"},
+		{"suffix becomes a branch segment", "my-spec", "part-1", "run/my-spec-part-1"},
 		{"surrounding slashes are trimmed", "/my-spec/", "", "run/my-spec"},
-		{"nested spec with suffix", "area/my-spec", "part-2", "run/area-my-spec/part-2"},
+		{"nested spec with suffix", "area/my-spec", "part-2", "run/area-my-spec-part-2"},
 	}
 
 	for _, tt := range tests {
