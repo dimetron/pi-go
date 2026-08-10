@@ -1,0 +1,34 @@
+*Context usage*
+
+[1;38;2;166;227;161m9% Full[m                                   [38;2;147;153;178m~24.1k / 256.0k Tokens[m
+
+[38;2;147;153;178m─[m[38;2;137;180;250m─[m[38;2;166;227;161m─[m[38;2;249;226;175m─[m[38;2;203;166;247m─[m[38;2;250;179;135m─[m[38;2;88;91;112m──────────────────────────────────────────────────────────[m
+
+[38;2;147;153;178m███[m [38;2;205;214;244mSystem prompt[m                                           [38;2;147;153;178m2.4k[m
+[38;2;137;180;250m███[m [38;2;205;214;244mTool definitions[m                                        [38;2;147;153;178m8.1k[m
+[38;2;166;227;161m███[m [38;2;205;214;244mRules[m                                                   [38;2;147;153;178m1.9k[m
+[38;2;249;226;175m███[m [38;2;205;214;244mSkills[m                                                  [38;2;147;153;178m3.3k[m
+[38;2;203;166;247m███[m [38;2;205;214;244mMCP & dynamic tools[m                                     [38;2;147;153;178m5.6k[m
+[38;2;137;220;235m███[m [38;2;205;214;244mSubagent definitions[m                                    [38;2;147;153;178m1.2k[m
+[38;2;250;179;135m███[m [38;2;205;214;244mConversation[m                                            [38;2;147;153;178m1.6k[m
+
+**Context Usage**
+
+`█░░░░░░░░░░░░░░░░░░░`  anthropic | claude-opus-5 · ctx ~1.6k tokens
+
+*Estimated usage by category*
+- **User messages**: ~302 tokens (2 msgs)
+- **Assistant messages**: ~1.0k tokens (2 msgs)
+- **Tool calls**: ~227 tokens (1 calls)
+- **Total context**: ~1.6k tokens (5 messages)
+
+*Skills* (3 loaded)
+- /go-pprof — profile a process [bundled]  body: not loaded
+- /go-testing — (no description) [user]  body: not loaded
+- /zoe-html — code screenshots [project]  body: not loaded
+
+*Subagents*
+- **Total**: 3 (running: 1, done: 1, failed: 1)
+
+*Output compaction*
+- **Compacted**: 3 outputs, 12.4k tokens saved
