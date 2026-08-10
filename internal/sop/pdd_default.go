@@ -120,7 +120,9 @@ Coordinator → Worker → Verifier. The agent that receives this PROMPT.md is t
 
 - **Workers**: one ` + "`" + `worker` + "`" + ` subagent per slice (` + "`" + `quick-task` + "`" + ` for a single-file
   mechanical change). Slices marked parallel-safe may be batched in one parallel
-  ` + "`" + `subagent` + "`" + ` call; all others run one at a time, in order.
+  ` + "`" + `subagent` + "`" + ` call, but only up to the concurrency the ` + "`" + `subagent` + "`" + ` tool reports for
+  the running process — beyond that the tasks queue inside one call instead of
+  overlapping. All other slices run one at a time, in order.
 - **Verifier**: after the last slice, a ` + "`" + `code-reviewer` + "`" + ` subagent checks the Done
   Criteria below against the actual diff and returns VERDICT: PASS or VERDICT: FAIL.
 - **Loop**: on FAIL the Coordinator dispatches fix workers and re-verifies, up to
@@ -170,7 +172,9 @@ Follow the conventions in specs/AGENTS.md for spec directory structure and namin
 - Aim for plans with <50 distinct instructions per phase — large instruction counts degrade LLM compliance
 - **Delegate to subagents for anything small and self-contained** — a file lookup,
   an API-shape check, a convention question. Spawn ` + "`" + `explore` + "`" + ` (research) or
-  ` + "`" + `quick-task` + "`" + ` (small edits); batch independent ones into a single parallel call.
+  ` + "`" + `quick-task` + "`" + ` (small edits); batch independent ones into a single parallel call,
+  sized to the concurrency the ` + "`" + `subagent` + "`" + ` tool reports rather than to the number
+  of questions you have.
   Read files directly only when you need the exact text in your own context.
 - **Never delegate to a [worktree] agent from /plan or /run** (` + "`" + `task` + "`" + `, ` + "`" + `designer` + "`" + `).
   Their edits land in a nested worktree that is never merged, so the work is lost.

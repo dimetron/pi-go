@@ -710,6 +710,18 @@ func (o *Orchestrator) Cancel(agentID string) error {
 	return nil
 }
 
+// Concurrency reports how many subagents this process may run at once. It is
+// the pool size, which is what actually gates a spawn — not maxParallelTasks,
+// which only caps how many tasks one call may name. A batch larger than this
+// does not run in parallel; it queues, and the call takes proportionally
+// longer.
+func (o *Orchestrator) Concurrency() int {
+	if o == nil || o.pool == nil {
+		return 0
+	}
+	return o.pool.Size()
+}
+
 // Worktree returns the WorktreeManager (may be nil if worktrees are disabled).
 func (o *Orchestrator) Worktree() *WorktreeManager {
 	return o.worktree

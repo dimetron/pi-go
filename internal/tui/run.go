@@ -157,7 +157,12 @@ Spawn ONE worker per slice with the ` + "`" + `subagent` + "`" + ` tool:
 - ` + "`" + `{agent: "worker", task: "<self-contained brief>"}` + "`" + ` — the default.
 - ` + "`" + `{agent: "quick-task", task: "..."}` + "`" + ` — a single-file mechanical change.
 - ` + "`" + `{tasks: [{agent: "worker", task: "..."}, ...]}` + "`" + ` — several slices at once, ONLY
-  when the plan marks them parallel-safe and they touch disjoint files (max 8).
+  when the plan marks them parallel-safe, they touch disjoint files, AND the
+  ` + "`" + `subagent` + "`" + ` tool description says this process runs more than one subagent at a
+  time. Batching past that number does not overlap anything: the extra tasks
+  queue inside the same tool call and it takes proportionally longer, which is
+  how a "parallel" batch turns into a timeout. When in doubt, dispatch one
+  slice per call — sequential slices are the normal case.
 
 **Never spawn ` + "`" + `task` + "`" + ` or ` + "`" + `designer` + "`" + `.** They are [worktree] agents: their edits go to
 a nested worktree that is never merged back, so the slice silently produces
