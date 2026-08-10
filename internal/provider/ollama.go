@@ -24,22 +24,49 @@ type ollamaModel struct {
 	thinkingLevel string // "none", "low", "medium", "high"
 }
 
+// Ollama's two default endpoints. Which one a model belongs to is decided by
+// its tag, never by whether a key happens to be exported.
+const (
+	ollamaLocalURL = "http://localhost:11434"
+	ollamaCloudURL = "https://api.ollama.com"
+)
+
+// resolveOllamaEndpoint picks the server a model should be sent to.
+//
+// Routing follows the model's cloud tag, which is the rule the CLI help and
+// every other routing check in the tree already state. It used to follow the
+// presence of an API key instead, and that made OLLAMA_API_KEY a global switch:
+// exporting it once for a :cloud model silently sent every *local* model to
+// api.ollama.com too, where a privately pulled name like muse-glimmer:30b-mlx
+// does not exist. The key is a credential, not a destination.
+//
+// An explicit baseURL (OLLAMA_HOST) always wins — that is how someone points at
+// another machine, a container, or an authenticated proxy.
+//
+// Who receives the key is deliberately not decided here. It still goes to
+// whatever endpoint is chosen whenever one is set, unchanged, because an
+// authenticated daemon may be reached over loopback as easily as over the
+// network and this function cannot tell the two apart.
+func resolveOllamaEndpoint(modelName, baseURL string) string {
+	if endpoint := normalizeBaseURL(baseURL); endpoint != "" {
+		return endpoint
+	}
+	if isOllamaCloudModel(modelName) {
+		return ollamaCloudURL
+	}
+	return ollamaLocalURL
+}
+
 // NewOllama creates an Ollama model.LLM using the native Ollama Go client.
-// baseURL defaults to http://localhost:11434 if empty, or https://api.ollama.com
-// if an apiKey is provided (ollama.com cloud).
+// The server is chosen by resolveOllamaEndpoint: an explicit baseURL if given,
+// otherwise api.ollama.com for a :cloud/-cloud tagged model and localhost for
+// everything else.
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
 func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
-	baseURL = normalizeBaseURL(baseURL)
-	if baseURL == "" {
-		if apiKey != "" {
-			baseURL = "https://api.ollama.com"
-		} else {
-			baseURL = "http://localhost:11434"
-		}
-	}
+	baseURL = resolveOllamaEndpoint(modelName, baseURL)
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)
@@ -48,7 +75,7 @@ func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel stri
 	if err != nil {
 		return nil, err
 	}
-	// Inject Bearer token for ollama.com cloud API when an API key is provided.
+	// Inject Bearer token for the ollama.com cloud API when an API key is provided.
 	if apiKey != "" {
 		baseTransport := httpClient.Transport
 		if baseTransport == nil {
