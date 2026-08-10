@@ -186,8 +186,40 @@ func TestRetryStreamSuccessIsNotRetried(t *testing.T) {
 	}
 }
 
+// The same guarantee at the other observation point: a cancel that lands
+// before the backoff even starts. Canceling inside the attempt makes this
+// deterministic — ctx is already canceled when retryStream inspects it — where
+// TestRetryStreamCancelDuringBackoff races the cancel against the sleep and so
+// can exercise either path.
+func TestRetryStreamCancelBeforeBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+	got := collectStream(ctx, t, fastRetry(3), func(y func(*model.LLMResponse, error) bool) {
+		calls++
+		cancel()
+		y(streamError("503 service unavailable"), nil)
+	})
+
+	if calls != 1 {
+		t.Errorf("attempts = %d, want 1 (canceled)", calls)
+	}
+	if len(got) != 1 {
+		t.Fatalf("forwarded %d responses, want 1", len(got))
+	}
+	if got[0].ErrorCode != "" {
+		t.Errorf("want a cancellation, got error %+v", got[0])
+	}
+	if !got[0].TurnComplete {
+		t.Error("want the canceled response to complete the turn")
+	}
+}
+
 // Canceling mid-wait must end the turn the way Esc ends it, not by reporting
-// the rate limit the user never needs to see.
+// the rate limit the user never needs to see. The cancel races the backoff, so
+// retryStream may notice it either before the sleep or during it; both are
+// cancellations, and the assertions below hold whichever one wins.
 func TestRetryStreamCancelDuringBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := retry.Config{MaxRetries: 3, InitialDelay: time.Hour, MaxDelay: time.Hour}
