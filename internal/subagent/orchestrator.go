@@ -133,6 +133,16 @@ func (o *Orchestrator) SetProviderOptions(baseURL string, insecure bool, headers
 	o.Headers = headers
 }
 
+// SetPiBinary overrides the binary used to spawn pi subagents.
+//
+// NewSpawner("") defaults to os.Executable(), which in a test harness is the
+// test binary itself — spawning that would re-exec the test instead of a real
+// pi worker. The eval harness resolves the real binary and points the
+// orchestrator at it here.
+func (o *Orchestrator) SetPiBinary(path string) {
+	o.spawner.PiBinary = path
+}
+
 // SetACPLogPath configures where ACP subagent events (claude, gemini) are
 // captured as JSONL. Pass an empty string to disable.
 func (o *Orchestrator) SetACPLogPath(path string) {

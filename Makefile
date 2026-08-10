@@ -76,6 +76,12 @@ test-e2e:
 # keep old name as alias
 e2e: test-e2e
 
+# Manually-run full e2e eval of `/run` against the current repo. Requires a
+# built binary (make build) and an LLM API key in the environment. See
+# internal/eval/eval.md for env knobs and the golden baseline flow.
+eval-run: build
+	PI_EVAL_RUN=1 PI_BINARY=$(abspath ./pi) go test -tags e2e -v -run '^TestEvalRun$$' ./internal/tui/ -timeout 45m
+
 test-all: test-unit test-integration test-e2e
 
 test-coverage:
