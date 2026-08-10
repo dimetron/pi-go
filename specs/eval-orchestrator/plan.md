@@ -4,9 +4,9 @@ Three short steps, each producing a file under `specs/eval-orchestrator/artifact
 
 ## Progress
 
-- [ ] Step 1: Create `specs/eval-orchestrator/artifacts/go.mod`
-- [ ] Step 2: Create `specs/eval-orchestrator/artifacts/add.go` with `Add`
-- [ ] Step 3: Create `specs/eval-orchestrator/artifacts/add_test.go` and make `go test ./...` pass
+- [x] Step 1: Create `specs/eval-orchestrator/artifacts/go.mod`
+- [x] Step 2: Create `specs/eval-orchestrator/artifacts/add.go` with `Add`
+- [x] Step 3: Create `specs/eval-orchestrator/artifacts/add_test.go` and make `go test ./...` pass
 
 ## Gates
 
