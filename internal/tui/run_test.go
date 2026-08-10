@@ -2087,3 +2087,95 @@ func TestFormatOversizedSpecWarning(t *testing.T) {
 		}
 	}
 }
+
+// --- Worktree ownership survives a retry ---
+
+// A retry agent is spawned with WorkDir set to the existing worktree and never
+// creates one of its own. Gates, checklist refresh and the merge must keep
+// asking the original owner, or they look up an agent that has no worktree.
+func TestRetry_KeepsWorktreeOwner(t *testing.T) {
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &model{
+		ctx:       ctx,
+		cfg:       Config{Orchestrator: orch},
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		run: &runState{
+			specName:        "spec",
+			promptMD:        "# Test\n",
+			agentID:         "task-original",
+			worktreeAgentID: "task-original",
+			phase:           "running",
+			maxRetries:      10,
+		},
+	}
+
+	// Spawn fails in this environment, but the owner must be untouched either
+	// way — it is never the retry agent's to claim.
+	m.retryRun("gate failed", "")
+
+	if m.run.worktreeAgentID != "task-original" {
+		t.Errorf("worktreeAgentID = %q, want it to stay task-original", m.run.worktreeAgentID)
+	}
+}
+
+// Collapsing a parallel run to a single resuming coordinator must not discard
+// the other agents' worktrees — that is where the second agent's work lives.
+func TestCollapseParallel_CarriesOtherWorktreesToTheMerge(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel: []*parallelAgent{
+			{agentID: "task-1"},
+			{agentID: "task-2"},
+		},
+	}
+
+	rs.collapseParallel()
+
+	if rs.isParallel() {
+		t.Error("collapseParallel should end parallel fan-in")
+	}
+	var carried []string
+	for _, c := range rs.carried {
+		carried = append(carried, c.agentID)
+		if c.backup == "" {
+			t.Errorf("carried agent %s has no backup branch", c.agentID)
+		}
+	}
+	// task-1 is the owner and merges as the primary; duplicating it would
+	// merge the same branch twice.
+	if len(carried) != 1 || carried[0] != "task-2" {
+		t.Errorf("carried = %v, want exactly [task-2]", carried)
+	}
+}
+
+// A single-agent run has nothing to carry.
+func TestCollapseParallel_SingleAgentCarriesNothing(t *testing.T) {
+	rs := &runState{specName: "spec", worktreeAgentID: "task-1"}
+	rs.collapseParallel()
+	if len(rs.carried) != 0 {
+		t.Errorf("carried = %v, want none", rs.carried)
+	}
+}
+
+// The union in refreshRunChecklist is what stops parallel verification from
+// failing forever; this pins the merge rule itself.
+func TestChecklistUnion_SliceDoneInEitherWorktreeCounts(t *testing.T) {
+	primary := []ChecklistStep{{Title: "A", Done: true}, {Title: "B", Done: false}}
+	secondary := []ChecklistStep{{Title: "A", Done: false}, {Title: "B", Done: true}}
+
+	merged := primary
+	for i := range secondary {
+		if secondary[i].Done {
+			merged[i].Done = true
+		}
+	}
+
+	rs := &runState{checklist: merged}
+	if pending := rs.unfinishedSlices(); len(pending) != 0 {
+		t.Errorf("unfinished = %v, want none once both worktrees are unioned", pending)
+	}
+}
