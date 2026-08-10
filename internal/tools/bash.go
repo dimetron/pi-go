@@ -86,7 +86,7 @@ type BashOutputInput struct {
 	// Handle returned by a previous bash call.
 	Handle string `json:"handle"`
 	// WaitMs blocks up to this long for new output or for the command to exit,
-	// instead of returning immediately. Max 60000. Prefer waiting over polling
+	// Defaults to 60000. Prefer waiting over polling
 	// in a loop.
 	WaitMs int `json:"wait_ms,omitempty"`
 }
@@ -170,12 +170,12 @@ func clampDuration(ms int, fallback, maxDur time.Duration) time.Duration {
 // builds its own supervisor and never streams need not carry the extra schema.
 func BashControlTools(sup *BashSupervisor) ([]tool.Tool, error) {
 	outputTool, err := newTool("bash_output",
-		"Read output produced by a backgrounded shell command since the last read. Returns running=false and the exit code once it finishes, after which the handle is spent. Set wait_ms to block for new output instead of polling in a loop.",
+		"Read output produced by a backgrounded shell command since the last read. Blocks up to 60 seconds for new output or command exit; use wait_ms to choose a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent.",
 		func(_ agent.Context, input BashOutputInput) (BashStatus, error) {
 			if input.Handle == "" {
 				return BashStatus{}, fmt.Errorf("handle is required (running: %v)", sup.Handles())
 			}
-			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, 0, maxBashOutputWait))
+			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, maxBashOutputWait, maxBashOutputWait))
 		})
 	if err != nil {
 		return nil, err
