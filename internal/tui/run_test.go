@@ -2411,3 +2411,43 @@ func TestRefreshRunChecklist_PrimaryAloneIsIncomplete(t *testing.T) {
 		t.Errorf("unfinished = %v, want the 2 slices the other agent owns", pending)
 	}
 }
+
+// git cannot hold both "run/spec" and "run/spec/part-2" — the first is a ref,
+// the second needs it to be a directory. A collapsed run must therefore keep
+// the owner on its part-N name rather than falling back to the bare one.
+func TestCollapseParallel_OwnerKeepsItsPartName(t *testing.T) {
+	rs := &runState{
+		specName:        "spec",
+		worktreeAgentID: "task-1",
+		parallel:        []*parallelAgent{{agentID: "task-1"}, {agentID: "task-2"}},
+	}
+
+	rs.collapseParallel()
+
+	targets := rs.mergeTargets()
+	if len(targets) != 2 {
+		t.Fatalf("targets = %v, want owner plus carried", targetIDs(targets))
+	}
+
+	bare := runBackupBranchName("spec", "")
+	for _, tgt := range targets {
+		if tgt.backup == bare {
+			t.Errorf("agent %s uses the bare backup %q, which git cannot hold "+
+				"alongside its part-N siblings", tgt.agentID, bare)
+		}
+		if !strings.HasPrefix(tgt.backup, bare+"/") {
+			t.Errorf("agent %s backup = %q, want a %s/part-N sibling", tgt.agentID, tgt.backup, bare)
+		}
+	}
+}
+
+// A run that never went parallel still uses the plain backup name.
+func TestMergeTargets_NeverParallelUsesBareBackup(t *testing.T) {
+	rs := &runState{specName: "spec", worktreeAgentID: "task-1"}
+
+	got := rs.mergeTargets()
+
+	if want := runBackupBranchName("spec", ""); got[0].backup != want {
+		t.Errorf("backup = %q, want %q", got[0].backup, want)
+	}
+}

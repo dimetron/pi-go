@@ -63,6 +63,13 @@ type runState struct {
 	// it, retrying a parallel run silently drops every worktree but the one
 	// the retry resumed in.
 	carried []mergeTarget
+
+	// ownerBackup is the backup branch the worktree owner was given at spawn
+	// time. It is recorded on collapse because the owner keeps its parallel
+	// name: git cannot hold both "run/spec" and "run/spec/part-2" — one is a
+	// ref, the other wants it to be a directory — so a collapsed run must not
+	// fall back to the bare single-agent name while carrying part-N siblings.
+	ownerBackup string
 }
 
 // mergeTarget names a worktree to merge and the backup branch to move onto it.
@@ -91,13 +98,15 @@ func (rs *runState) allAgentsDone() bool {
 // is silent data loss: the second agent's slices live there and nowhere else.
 func (rs *runState) collapseParallel() {
 	for i, pa := range rs.parallel {
+		backup := runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1))
 		if pa.agentID == rs.worktreeAgentID {
-			continue // the worktree the retry resumes in; merged as the owner
+			// The worktree the retry resumes in; merged as the owner. Keep the
+			// name it was spawned with so it stays a sibling of the carried
+			// refs rather than their parent directory.
+			rs.ownerBackup = backup
+			continue
 		}
-		rs.carried = append(rs.carried, mergeTarget{
-			agentID: pa.agentID,
-			backup:  runBackupBranchName(rs.specName, fmt.Sprintf("part-%d", i+1)),
-		})
+		rs.carried = append(rs.carried, mergeTarget{agentID: pa.agentID, backup: backup})
 	}
 	rs.parallel = nil
 }
@@ -116,10 +125,11 @@ func (rs *runState) mergeTargets() []mergeTarget {
 			})
 		}
 	} else {
-		targets = []mergeTarget{{
-			agentID: rs.worktreeAgentID,
-			backup:  runBackupBranchName(rs.specName, ""),
-		}}
+		backup := rs.ownerBackup
+		if backup == "" {
+			backup = runBackupBranchName(rs.specName, "")
+		}
+		targets = []mergeTarget{{agentID: rs.worktreeAgentID, backup: backup}}
 	}
 	// Worktrees left over from a collapsed parallel run still hold work.
 	return append(targets, rs.carried...)
@@ -1147,52 +1157,60 @@ func (m *model) mergeWorktreeCmd() tea.Cmd {
 	specName := m.run.specName
 
 	return func() tea.Msg {
-		var allOutput strings.Builder
-		for _, t := range targets {
-			aid := t.agentID
+		return mergeRunTargets(wm, targets, specName)
+	}
+}
 
-			// Commit what the agent produced before anything can remove it.
-			// The task agent is told its edits stay local to the worktree and
-			// is never asked to commit, so without this the merge below has no
-			// commits to take and Cleanup force-removes the only copy.
-			if _, err := wm.CommitAll(aid, fmt.Sprintf("pi-go run %s (agent %s)", specName, aid)); err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String(),
-					err:             fmt.Errorf("commit worktree for %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
-			// Move the backup ref onto the committed work. It was pointed at
-			// the base commit at spawn time, when there was nothing to back up.
-			if err := wm.CreateBackupBranch(aid, t.backup); err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String(),
-					err:             fmt.Errorf("back up worktree for %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
+// mergeRunTargets commits, backs up and merges each worktree in turn, stopping
+// at the first failure so the offending worktree is preserved rather than
+// cleaned up behind a half-finished merge. It is a package-level function, not
+// a closure, so the whole sequence can be driven directly in tests.
+func mergeRunTargets(wm *subagent.WorktreeManager, targets []mergeTarget, specName string) runMergeResultMsg {
+	var allOutput strings.Builder
+	for _, t := range targets {
+		aid := t.agentID
 
-			out, err := wm.MergeBack(aid)
-			if err != nil {
-				return runMergeResultMsg{
-					output:          allOutput.String() + out,
-					err:             fmt.Errorf("merge %s: %w", aid, err),
-					failedAgentID:   aid,
-					preservedWTPath: wm.PathFor(aid),
-				}
-			}
-			// Auto-cleanup on success: worktrees accumulate otherwise
-			// and there's no UI to inspect them. Conflicts are handled
-			// by the err branch above, which preserves the worktree.
-			_ = wm.Cleanup(aid)
-			if out != "" {
-				fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
+		// Commit what the agent produced before anything can remove it.
+		// The task agent is told its edits stay local to the worktree and
+		// is never asked to commit, so without this the merge below has no
+		// commits to take and Cleanup force-removes the only copy.
+		if _, err := wm.CommitAll(aid, fmt.Sprintf("pi-go run %s (agent %s)", specName, aid)); err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String(),
+				err:             fmt.Errorf("commit worktree for %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
 			}
 		}
-		return runMergeResultMsg{output: allOutput.String()}
+		// Move the backup ref onto the committed work. It was pointed at
+		// the base commit at spawn time, when there was nothing to back up.
+		if err := wm.CreateBackupBranch(aid, t.backup); err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String(),
+				err:             fmt.Errorf("back up worktree for %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
+			}
+		}
+
+		out, err := wm.MergeBack(aid)
+		if err != nil {
+			return runMergeResultMsg{
+				output:          allOutput.String() + out,
+				err:             fmt.Errorf("merge %s: %w", aid, err),
+				failedAgentID:   aid,
+				preservedWTPath: wm.PathFor(aid),
+			}
+		}
+		// Auto-cleanup on success: worktrees accumulate otherwise
+		// and there's no UI to inspect them. Conflicts are handled
+		// by the err branch above, which preserves the worktree.
+		_ = wm.Cleanup(aid)
+		if out != "" {
+			fmt.Fprintf(&allOutput, "[%s] %s\n", aid, out)
+		}
 	}
+	return runMergeResultMsg{output: allOutput.String()}
 }
 
 // handleRunMergeResult processes the merge result.
