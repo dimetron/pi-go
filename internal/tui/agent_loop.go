@@ -1063,9 +1063,30 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 	}
 	if i := matchToolResultCard(m.chatModel.Messages, msg.id, msg.name); i >= 0 {
 		m.chatModel.Messages[i].content = content
+		// Bind the card to its background handle when the bash result carries
+		// one. The bash:start event that normally stamps agentID travels on a
+		// separate channel and can arrive before the card exists, dropping the
+		// binding; the result is the reliable place to recover it so a later
+		// bash_output/bash_kill card can still find the command.
+		if msg.name == "bash" {
+			if handle := bashHandleFromResult(msg.content); handle != "" {
+				m.chatModel.Messages[i].agentID = handle
+			}
+		}
 	}
 	m.refreshDiffStats()
 	return m, waitForAgent(m.agentCh)
+}
+
+// bashHandleFromResult extracts the background handle from a raw bash tool
+// result, or "" when the command finished in the foreground (no handle).
+func bashHandleFromResult(content string) string {
+	var data map[string]any
+	if json.Unmarshal([]byte(content), &data) != nil {
+		return ""
+	}
+	h, _ := data["handle"].(string)
+	return h
 }
 
 // matchToolResultCard finds the chat card an arriving tool result belongs to,

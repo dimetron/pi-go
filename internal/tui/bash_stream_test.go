@@ -127,6 +127,50 @@ func TestHandleAgentToolCall_BashControlHeaderFallsBackToHandle(t *testing.T) {
 	}
 }
 
+// TestHandleAgentToolResult_BindsBashHandleFromResult covers the recovery path
+// for a lost bash:start binding: when the start event arrives before the card
+// exists (separate buffered channel), the card never gets its agentID stamped.
+// The bash result carries the handle, so it is the reliable place to bind —
+// a later bash_output/bash_kill card then still finds the command.
+func TestHandleAgentToolResult_BindsBashHandleFromResult(t *testing.T) {
+	m := newHandlerModel()
+	m.chatModel.Messages = []message{
+		{role: "tool", tool: "bash", toolIn: "sleep 10", toolID: "call_1"},
+	}
+
+	m.handleAgentToolResult(agentToolResultMsg{
+		id: "call_1", name: "bash",
+		content: `{"handle":"bg_1","running":true,"exit_code":-1}`,
+	})
+
+	if got := m.chatModel.Messages[0].agentID; got != "bg_1" {
+		t.Errorf("bash card agentID = %q, want bg_1 (bound from result)", got)
+	}
+
+	// A foreground result (no handle) must not stamp anything.
+	m2 := newHandlerModel()
+	m2.chatModel.Messages = []message{
+		{role: "tool", tool: "bash", toolIn: "echo hi", toolID: "call_2"},
+	}
+	m2.handleAgentToolResult(agentToolResultMsg{id: "call_2", name: "bash", content: `{"exit_code":0,"stdout":"hi"}`})
+	if got := m2.chatModel.Messages[0].agentID; got != "" {
+		t.Errorf("foreground bash card agentID = %q, want empty", got)
+	}
+}
+
+// TestBashHandleFromResult covers the handle extractor directly.
+func TestBashHandleFromResult(t *testing.T) {
+	if got := bashHandleFromResult(`{"handle":"bg_3","running":true}`); got != "bg_3" {
+		t.Errorf("bashHandleFromResult = %q, want bg_3", got)
+	}
+	if got := bashHandleFromResult(`{"exit_code":0,"stdout":"hi"}`); got != "" {
+		t.Errorf("bashHandleFromResult = %q, want empty for foreground result", got)
+	}
+	if got := bashHandleFromResult("not json"); got != "" {
+		t.Errorf("bashHandleFromResult = %q, want empty for non-JSON", got)
+	}
+}
+
 // TestRenderLiveOutput_ShowsStallState is the reason the stream exists: a
 // command that prints nothing must still show that it is alive and stuck,
 // rather than rendering as an empty card indistinguishable from a hang.
