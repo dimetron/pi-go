@@ -40,10 +40,6 @@ old_string must be unique unless replace_all is true.`, func(_ agent.Context, in
 }
 
 func editHandler(sb *Sandbox, input EditInput) (EditOutput, error) {
-	return editHandlerWithCache(sb, input, nil)
-}
-
-func editHandlerWithCache(sb *Sandbox, input EditInput, cache *FileContentCache) (EditOutput, error) {
 	if input.FilePath == "" {
 		return EditOutput{}, fmt.Errorf("file_path is required")
 	}
@@ -59,11 +55,6 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *FileContentCache)
 
 	// Retry loop for handling concurrent modifications
 	for attempt := 0; attempt < maxEditRetries; attempt++ {
-		// Invalidate cache before reading (fresh read each attempt)
-		if cache != nil {
-			cache.Invalidate(input.FilePath)
-		}
-
 		var err error
 		data, err = sb.ReadFile(input.FilePath)
 		if err != nil {
@@ -75,7 +66,7 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *FileContentCache)
 
 		if count > 0 {
 			// Found the target string, proceed with edit
-			return performEdit(sb, cache, input, content, count)
+			return performEdit(sb, input, content, count)
 		}
 
 		// Not found - this might be a race condition with concurrent modification
@@ -90,7 +81,7 @@ func editHandlerWithCache(sb *Sandbox, input EditInput, cache *FileContentCache)
 }
 
 // performEdit does the actual string replacement and file write.
-func performEdit(sb *Sandbox, cache *FileContentCache, input EditInput, content string, count int) (EditOutput, error) {
+func performEdit(sb *Sandbox, input EditInput, content string, count int) (EditOutput, error) {
 	if count > 1 && !input.ReplaceAll {
 		// Find line numbers for all occurrences to help the caller
 		lines := strings.Split(content, "\n")
@@ -115,11 +106,6 @@ func performEdit(sb *Sandbox, cache *FileContentCache, input EditInput, content 
 
 	if err := sb.WriteFile(input.FilePath, []byte(result), 0o644); err != nil {
 		return EditOutput{}, fmt.Errorf("writing file: %w", err)
-	}
-
-	// Invalidate cache after successful edit
-	if cache != nil {
-		cache.Invalidate(input.FilePath)
 	}
 
 	return EditOutput{

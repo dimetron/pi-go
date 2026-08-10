@@ -324,10 +324,12 @@ func (s *BashSupervisor) finish(p *bashProc) BashOutput {
 		exitCode = 0
 	}
 
+	outStr, errStr := budgetStreams(stdout, stderr)
 	out := BashOutput{
-		Stdout:   redactSecrets(truncateOutput(stdout)),
-		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(stderr))),
+		Stdout:   outStr,
+		Stderr:   errStr,
 		ExitCode: exitCode,
+		Note:     droppedNote(p.stdout.droppedBytes() + p.stderr.droppedBytes()),
 	}
 	// A failure to start at all (bad interpreter, missing cwd) surfaces through
 	// waitErr rather than an exit status, and would otherwise read as a silent
@@ -367,14 +369,46 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 		note += " It has produced no output at all — if that is unexpected, the command is probably too broad (a filesystem-wide scan, or a prompt waiting for input) and should be killed and narrowed."
 	}
 
+	outStr, errStr := budgetStreams(stdout, stderr)
+	if d := droppedNote(p.stdout.droppedBytes() + p.stderr.droppedBytes()); d != "" {
+		note += " " + d
+	}
+
 	return BashOutput{
-		Stdout:   redactSecrets(truncateOutput(stdout)),
-		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(stderr))),
+		Stdout:   outStr,
+		Stderr:   errStr,
 		ExitCode: -1,
 		Running:  true,
 		Handle:   p.id,
 		Note:     note,
 	}
+}
+
+// budgetStreams applies the standard cleanup to both streams.
+//
+// The byte cap here is a backstop only: the stream buffers are already bounded
+// at the same size and drop from the front, so what arrives is at most one
+// buffer's worth. What actually goes missing is reported by droppedNote.
+func budgetStreams(stdout, stderr string) (string, string) {
+	return redactSecrets(truncateOutput(stdout)),
+		redactSecrets(truncateOutput(stripRuntimeNoise(stderr)))
+}
+
+// droppedNote describes output that aged out of the buffer, in terms the model
+// can act on, or "" when nothing was lost.
+//
+// Without this the loss is invisible: the buffers keep the most recent 256KB
+// and discard everything before it, so a command that printed a gigabyte
+// returns a plausible-looking transcript that silently begins in the middle.
+func droppedNote(dropped int64) string {
+	if dropped <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%d earlier bytes were discarded to stay within the output buffer — what you see starts mid-stream, "+
+			"and the beginning of this command's output is gone. Re-run with a narrower command "+
+			"(grep, head, --quiet) if you need it.",
+		dropped)
 }
 
 // register adds p to the background set, enforcing the cap and arming the
@@ -519,16 +553,20 @@ func (s *BashSupervisor) readOutput(handle string, wait time.Duration) (BashStat
 	p.outCur, p.errCur = outNext, errNext
 	p.curMu.Unlock()
 
+	budgetedOut, budgetedErr := budgetStreams(outStr, errStr)
 	st := BashStatus{
 		Handle:  handle,
 		Command: p.command,
 		Running: p.running(),
-		Stdout:  redactSecrets(truncateOutput(outStr)),
-		Stderr:  redactSecrets(truncateOutput(stripRuntimeNoise(errStr))),
+		Stdout:  budgetedOut,
+		Stderr:  budgetedErr,
 		Elapsed: roundDur(time.Since(p.started)).String(),
 	}
+	// Here the drop is measured against this reader's own cursor, not the whole
+	// stream: it counts output this caller had not yet collected when the buffer
+	// aged it out, which is the loss it can actually do something about.
 	if dropped := outDropped + errDropped; dropped > 0 {
-		st.Note = fmt.Sprintf("%d bytes of earlier output were discarded (buffer limit).", dropped)
+		st.Note = droppedNote(dropped)
 	}
 	if st.Running {
 		st.Idle = roundDur(p.idleFor()).String()
@@ -582,13 +620,14 @@ func (s *BashSupervisor) killHandle(handle string) (BashStatus, error) {
 	p.curMu.Unlock()
 
 	exitCode, reaped := p.exitStatus()
+	budgetedOut, budgetedErr := budgetStreams(outStr, errStr)
 	st := BashStatus{
 		Handle:   handle,
 		Command:  p.command,
 		Running:  false,
 		ExitCode: exitCode,
-		Stdout:   redactSecrets(truncateOutput(outStr)),
-		Stderr:   redactSecrets(truncateOutput(stripRuntimeNoise(errStr))),
+		Stdout:   budgetedOut,
+		Stderr:   budgetedErr,
 		Elapsed:  roundDur(time.Since(p.started)).String(),
 		Note:     "Killed, along with every process it spawned.",
 	}

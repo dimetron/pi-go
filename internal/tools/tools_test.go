@@ -39,8 +39,10 @@ func TestReadHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out.TotalLines != 6 { // trailing newline creates empty last line
-			t.Errorf("expected 6 total lines, got %d", out.TotalLines)
+		// 5 lines, not 6: the trailing newline terminates line 5, it does not
+		// start a sixth.
+		if out.TotalLines != 5 {
+			t.Errorf("expected 5 total lines, got %d", out.TotalLines)
 		}
 		if !strings.Contains(out.Content, "line1") {
 			t.Error("expected content to contain 'line1'")
@@ -478,6 +480,13 @@ func TestReadBeyondOffset(t *testing.T) {
 	if out.Content != "" {
 		t.Errorf("expected empty content for offset beyond file, got %q", out.Content)
 	}
+	// Silence here used to cost a turn to diagnose; the note names the range.
+	if !strings.Contains(out.Note, "past the end") {
+		t.Errorf("expected a note explaining the offset, got %q", out.Note)
+	}
+	if !strings.Contains(out.Note, "1-1") {
+		t.Errorf("expected the note to name the valid range, got %q", out.Note)
+	}
 }
 
 func TestGrepNoMatches(t *testing.T) {
@@ -616,7 +625,10 @@ func TestReadTruncatesLargeFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("source code files not truncated by default", func(t *testing.T) {
+	// Source files used to bypass the line window entirely, which meant the
+	// largest files in a repo were the ones with no ceiling at all. They now
+	// window like everything else, and say where to continue.
+	t.Run("source code files window like any other file", func(t *testing.T) {
 		for _, ext := range []string{".go", ".rs", ".py", ".ts"} {
 			codePath := filepath.Join(dir, "large"+ext)
 			os.WriteFile(codePath, []byte(b.String()), 0o644)
@@ -624,11 +636,14 @@ func TestReadTruncatesLargeFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ext %s: %v", ext, err)
 			}
-			if out.Truncated {
-				t.Errorf("ext %s: expected Truncated=false for source code file", ext)
+			if !out.Truncated {
+				t.Errorf("ext %s: expected Truncated=true for a 3000-line file", ext)
 			}
-			if out.TotalLines != 3001 { // 3000 lines + trailing empty
-				t.Errorf("ext %s: expected 3001 total lines, got %d", ext, out.TotalLines)
+			if out.NextOffset != 2001 {
+				t.Errorf("ext %s: NextOffset = %d, want 2001", ext, out.NextOffset)
+			}
+			if out.TotalLines != 3000 {
+				t.Errorf("ext %s: expected 3000 total lines, got %d", ext, out.TotalLines)
 			}
 		}
 	})
@@ -786,66 +801,6 @@ func TestCoreTools(t *testing.T) {
 	for name := range expected {
 		t.Errorf("missing tool: %s", name)
 	}
-}
-
-func TestReadHandlerWithCache(t *testing.T) {
-	dir := t.TempDir()
-	sb := testSandbox(t, dir)
-	path := filepath.Join(dir, "cached.go")
-	os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644)
-
-	cache := NewFileContentCache(10, 0) // no age limit
-
-	t.Run("first read populates cache", func(t *testing.T) {
-		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if out.TotalLines != 4 { // 3 lines + trailing empty
-			t.Errorf("expected 4 lines, got %d", out.TotalLines)
-		}
-		if cache.Len() != 1 {
-			t.Errorf("expected 1 cache entry, got %d", cache.Len())
-		}
-	})
-
-	t.Run("second read hits cache", func(t *testing.T) {
-		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(out.Content, "line1") {
-			t.Error("expected cached content to contain line1")
-		}
-	})
-
-	t.Run("modified file invalidates cache", func(t *testing.T) {
-		os.WriteFile(path, []byte("new1\nnew2\n"), 0o644)
-		out, err := readHandlerWithCache(sb, ReadInput{FilePath: path}, cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(out.Content, "new1") {
-			t.Error("expected fresh content after file modification")
-		}
-	})
-
-	t.Run("source code file not truncated via cache", func(t *testing.T) {
-		bigPath := filepath.Join(dir, "big.go")
-		var b strings.Builder
-		for i := 0; i < 3000; i++ {
-			b.WriteString("code line\n")
-		}
-		os.WriteFile(bigPath, []byte(b.String()), 0o644)
-
-		out, err := readHandlerWithCache(sb, ReadInput{FilePath: bigPath}, cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if out.Truncated {
-			t.Error("source code file should not be truncated")
-		}
-	})
 }
 
 func TestFindSkipsGitignoredFiles(t *testing.T) {
