@@ -1715,24 +1715,19 @@ func renderStartupProgress(loadingItems map[string]bool, loadingTotal int) strin
 		total = len(loadingItems)
 	}
 	if total < 1 {
-		return fmt.Sprintf(" [%s 0%%]", strings.Repeat("░", startupProgressBarWidth))
+		return fmt.Sprintf(" [%s 0%%]", barGlyphs(0, startupProgressBarWidth))
 	}
 
-	pct := done * 100 / total
-	if pct > 100 {
-		pct = 100
-	}
+	pct := min(done*100/total, 100)
 
+	// Any progress at all claims a block. Init finishes a long tail of small
+	// items, and a bar that reads empty for the first few of them looks stuck.
 	filled := done * startupProgressBarWidth / total
 	if done > 0 && filled == 0 {
 		filled = 1
 	}
-	if filled > startupProgressBarWidth {
-		filled = startupProgressBarWidth
-	}
 
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", startupProgressBarWidth-filled)
-	return fmt.Sprintf(" [%s %d%% %d/%d]", bar, pct, done, total)
+	return fmt.Sprintf(" [%s %d%% %d/%d]", barGlyphs(filled, startupProgressBarWidth), pct, done, total)
 }
 
 func renderStartupDetail(loadingItems map[string]bool) string {

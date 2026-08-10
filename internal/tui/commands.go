@@ -563,10 +563,10 @@ func (m *model) formatContextUsage() string {
 		b.WriteString("\n\n")
 	}
 
-	// Count chars per role (rough token estimate: ~4 chars per token).
+	// Same estimate as the status bar's, split by role.
 	userChars, assistantChars, toolChars := 0, 0, 0
 	for _, msg := range m.chatModel.Messages {
-		size := len(msg.content) + len(msg.tool) + len(msg.toolIn)
+		size := messageChars(msg)
 		switch msg.role {
 		case "user":
 			userChars += size
@@ -576,11 +576,10 @@ func (m *model) formatContextUsage() string {
 			toolChars += size
 		}
 	}
-	totalChars := userChars + assistantChars + toolChars
-	totalTokens := int64(totalChars / 4)
-	userTokens := int64(userChars / 4)
-	assistantTokens := int64(assistantChars / 4)
-	toolTokens := int64(toolChars / 4)
+	totalTokens := estimateTokens(userChars + assistantChars + toolChars)
+	userTokens := estimateTokens(userChars)
+	assistantTokens := estimateTokens(assistantChars)
+	toolTokens := estimateTokens(toolChars)
 
 	// Header.
 	b.WriteString("**Context Usage**\n\n")
@@ -591,27 +590,17 @@ func (m *model) formatContextUsage() string {
 	var limitTokens int64
 	if tt := m.cfg.TokenTracker; tt != nil && tt.Limit() > 0 {
 		limitTokens = tt.Limit()
-		pct := float64(tt.TotalUsed()) / float64(limitTokens)
-		usedBlocks = int(pct * barLen)
-		if usedBlocks > barLen {
-			usedBlocks = barLen
-		}
-	} else {
-		// No limit — show context proportion only.
-		if totalTokens > 0 {
-			usedBlocks = 1
-			if totalTokens > 10000 {
-				usedBlocks = int(float64(totalTokens) / 100000 * barLen)
-				if usedBlocks < 1 {
-					usedBlocks = 1
-				}
-				if usedBlocks > barLen {
-					usedBlocks = barLen
-				}
-			}
+		usedBlocks = barFill(float64(tt.TotalUsed())/float64(limitTokens), barLen)
+	} else if totalTokens > 0 {
+		// No limit to measure against — show the context against a nominal 100k
+		// window instead, and never less than one block, so a short conversation
+		// still reads as "something is in here".
+		usedBlocks = 1
+		if totalTokens > 10000 {
+			usedBlocks = max(barFill(float64(totalTokens)/100000, barLen), 1)
 		}
 	}
-	bar := strings.Repeat("█", usedBlocks) + strings.Repeat("░", barLen-usedBlocks)
+	bar := barGlyphs(usedBlocks, barLen)
 
 	// Model line with bar.
 	modelLabel := m.cfg.ModelName
@@ -665,11 +654,7 @@ func (m *model) formatContextUsage() string {
 			}
 
 			const ctxBarLen = 20
-			ctxUsedBlocks := int(pct / 100 * ctxBarLen)
-			if ctxUsedBlocks > ctxBarLen {
-				ctxUsedBlocks = ctxBarLen
-			}
-			ctxBar := strings.Repeat("█", ctxUsedBlocks) + strings.Repeat("░", ctxBarLen-ctxUsedBlocks)
+			ctxBar := barGlyphs(barFill(pct/100, ctxBarLen), ctxBarLen)
 
 			fmt.Fprintf(&b, "`%s`  %s / %s (%.0f%%)\n",
 				ctxBar,
