@@ -211,7 +211,19 @@ func (s *stuckDetector) observeResult(name string, response map[string]any) {
 	if name != s.lastName {
 		return
 	}
-	b, _ := json.Marshal(response)
+	// bash_output includes elapsed/idle fields that change on every poll even
+	// when the command produced no new output. Those fields are progress for the
+	// UI, not progress from the command, so exclude them from loop detection.
+	stable := response
+	if name == "bash_output" {
+		stable = make(map[string]any, len(response))
+		for key, value := range response {
+			if key != "elapsed" && key != "idle" {
+				stable[key] = value
+			}
+		}
+	}
+	b, _ := json.Marshal(stable)
 	sum := sha256.Sum256(b)
 	fp := hex.EncodeToString(sum[:])[:16]
 	if s.lastResult != "" && fp != s.lastResult {

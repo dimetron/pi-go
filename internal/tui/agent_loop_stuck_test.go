@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -121,8 +122,28 @@ func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
 		}
 		s.observeResult("bash_output", map[string]any{
 			"handle":  "bg_16",
-			"elapsed": i, // progress: every response differs
+			"elapsed": i,
+			"stdout":  fmt.Sprintf("line %d\n", i), // command progress: every response differs
 			"running": true,
+		})
+	}
+}
+
+func TestStuckDetector_ObserveResult_ChangingTimingDoesNotReset(t *testing.T) {
+	s := &stuckDetector{}
+	args := map[string]any{"handle": "bg_16"}
+	for i := 0; i < maxRepeatToolCalls; i++ {
+		stuck, _ := s.observe("bash_output", args)
+		if i == maxRepeatToolCalls-1 && !stuck {
+			t.Fatalf("timing-only polls should trip after %d repeats", maxRepeatToolCalls)
+		}
+		s.observeResult("bash_output", map[string]any{
+			"handle":  "bg_16",
+			"elapsed": i,
+			"idle":    i + 1,
+			"running": true,
+			"stdout":  "",
+			"stderr":  "",
 		})
 	}
 }
