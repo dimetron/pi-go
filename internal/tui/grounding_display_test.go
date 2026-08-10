@@ -39,7 +39,7 @@ func TestEmitGroundingEvents(t *testing.T) {
 	m := &model{agentCh: make(chan agentMsg, 8)}
 	seen := map[string]bool{}
 
-	m.emitGroundingEvents(groundedMetadata("who won", "a.test", "b.test"), seen, nil)
+	m.emitGroundingEvents(m.agentCh, groundedMetadata("who won", "a.test", "b.test"), seen, nil)
 
 	msgs := drainAgentCh(m)
 	if len(msgs) != 2 {
@@ -78,15 +78,15 @@ func TestEmitGroundingEventsReportsEachSearchOnce(t *testing.T) {
 	seen := map[string]bool{}
 	gm := groundedMetadata("who won", "a.test")
 
-	m.emitGroundingEvents(gm, seen, nil)
-	m.emitGroundingEvents(gm, seen, nil) // same metadata, next streamed chunk
+	m.emitGroundingEvents(m.agentCh, gm, seen, nil)
+	m.emitGroundingEvents(m.agentCh, gm, seen, nil) // same metadata, next streamed chunk
 
 	if n := len(drainAgentCh(m)); n != 2 {
 		t.Errorf("got %d messages across two chunks, want 2 (reported once)", n)
 	}
 
 	// A genuinely different search in the same turn is still reported.
-	m.emitGroundingEvents(groundedMetadata("something else", "c.test"), seen, nil)
+	m.emitGroundingEvents(m.agentCh, groundedMetadata("something else", "c.test"), seen, nil)
 	if n := len(drainAgentCh(m)); n != 2 {
 		t.Errorf("got %d messages for a second distinct search, want 2", n)
 	}
@@ -107,7 +107,7 @@ func TestEmitGroundingEventsIgnoresUngroundedResponses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := &model{agentCh: make(chan agentMsg, 8)}
-			m.emitGroundingEvents(tt.gm, map[string]bool{}, nil)
+			m.emitGroundingEvents(m.agentCh, tt.gm, map[string]bool{}, nil)
 			if n := len(drainAgentCh(m)); n != 0 {
 				t.Errorf("got %d messages for an ungrounded response, want 0", n)
 			}
@@ -127,7 +127,7 @@ func TestEmitGroundingEventsTracesToLog(t *testing.T) {
 	defer log.Close()
 
 	m := &model{agentCh: make(chan agentMsg, 8)}
-	m.emitGroundingEvents(groundedMetadata("who won", "a.test"), map[string]bool{}, log)
+	m.emitGroundingEvents(m.agentCh, groundedMetadata("who won", "a.test"), map[string]bool{}, log)
 
 	msgs := drainAgentCh(m)
 	if len(msgs) != 2 {

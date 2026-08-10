@@ -8,9 +8,97 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// -----------------------------------------------------------------------
-// Update message handling tests
-// -----------------------------------------------------------------------
+func TestPendingPromptStartsAfterActiveTurn(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+
+	_, cmd := m.enqueuePrompt("first queued", nil)
+	if cmd != nil {
+		t.Fatal("queued prompt should not start while another turn is running")
+	}
+	if len(m.pendingPrompts) != 1 {
+		t.Fatalf("pending prompts = %d, want 1", len(m.pendingPrompts))
+	}
+
+	_, nextCmd := m.Update(agentDoneMsg{})
+	if nextCmd == nil {
+		t.Fatal("expected next queued prompt to start immediately after agentDoneMsg")
+	}
+	if !m.running {
+		t.Fatal("queued turn was not started after the active turn completed")
+	}
+	if len(m.pendingPrompts) != 0 {
+		t.Fatalf("pending prompts = %d after dequeue, want 0", len(m.pendingPrompts))
+	}
+	if len(m.chatModel.Messages) == 0 || m.chatModel.Messages[len(m.chatModel.Messages)-2].content != "first queued" {
+		t.Fatal("queued prompt was not submitted immediately after completion")
+	}
+}
+
+func TestPendingPromptsExecuteFIFO(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+	for _, prompt := range []string{"sleep 1", "sleep 1", "sleep 3"} {
+		if _, cmd := m.enqueuePrompt(prompt, nil); cmd != nil {
+			t.Fatalf("%q started while another turn was running", prompt)
+		}
+	}
+	if got := len(m.pendingPrompts); got != 3 {
+		t.Fatalf("queued prompts = %d, want 3", got)
+	}
+
+	wants := []string{"sleep 1", "sleep 1", "sleep 3"}
+	for i, want := range wants {
+		_, cmd := m.Update(agentDoneMsg{})
+		if cmd == nil {
+			t.Fatalf("turn %d did not start the next queued prompt", i+1)
+		}
+		if !m.running {
+			t.Fatalf("turn %d is not running", i+1)
+		}
+		var users []string
+		for _, msg := range m.chatModel.Messages {
+			if msg.role == "user" {
+				users = append(users, msg.content)
+			}
+		}
+		if len(users) != i+1 || users[i] != want {
+			t.Fatalf("turn %d executed prompts %v, want prefix %v", i+1, users, wants[:i+1])
+		}
+		if got := len(m.pendingPrompts); got != 2-i {
+			t.Fatalf("after turn %d, queued prompts = %d, want %d", i+1, got, 2-i)
+		}
+	}
+}
+
+func TestPendingPromptQueueFull(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.pendingPrompts = make([]queuedPrompt, maxPendingPrompts)
+
+	if _, cmd := m.enqueuePrompt("rejected", nil); cmd != nil {
+		t.Fatal("queue-full prompt should not start")
+	}
+	if got := len(m.pendingPrompts); got != maxPendingPrompts {
+		t.Fatalf("pending prompts = %d, want %d", got, maxPendingPrompts)
+	}
+	if m.flash != "Prompt queue full" {
+		t.Fatalf("flash = %q, want queue-full notice", m.flash)
+	}
+}
+
+func TestStatusShowsPendingPromptCount(t *testing.T) {
+	m := newTestModel(t)
+	m.pendingPrompts = []queuedPrompt{{text: "one"}, {text: "two"}}
+	if got := m.statusRenderInput().Pending; got != 2 {
+		t.Fatalf("pending count = %d, want 2", got)
+	}
+	if got := m.statusModel.Render(m.statusRenderInput()); !strings.Contains(got, "queued: 2") {
+		t.Fatalf("status bar missing pending count: %q", got)
+	}
+}
 
 func TestUpdateWindowSizeWide(t *testing.T) {
 	m := &model{
@@ -182,7 +270,7 @@ func TestUpdatePasteMsg_TerminalEscapeRejected(t *testing.T) {
 	}
 }
 
-func TestUpdatePasteMsgWhileRunning(t *testing.T) {
+func TestUpdatePasteMsgWhileRunningAccepted(t *testing.T) {
 	m := &model{
 		running:    true, // agent running
 		inputModel: InputModel{Text: ""},
@@ -193,9 +281,9 @@ func TestUpdatePasteMsgWhileRunning(t *testing.T) {
 	newM, _ := m.Update(tea.PasteMsg{Content: "pasted text"})
 	mm := newM.(*model)
 
-	// Paste should be ignored when running
-	if mm.inputModel.Text != originalText {
-		t.Error("paste should be ignored when agent is running")
+	// Paste should be accepted when running
+	if mm.inputModel.Text == originalText {
+		t.Error("paste should be accepted when agent is running")
 	}
 }
 

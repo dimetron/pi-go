@@ -19,7 +19,7 @@ const groundingToolName = agent.GroundingToolName
 // Does nothing when the response was not grounded, or when this search was
 // already reported for the current turn — GroundingMetadata is repeated on every
 // streamed chunk of the response it grounds.
-func (m *model) emitGroundingEvents(gm *genai.GroundingMetadata, seen map[string]bool, log *logger.Logger) {
+func (m *model) emitGroundingEvents(ch chan agentMsg, gm *genai.GroundingMetadata, seen map[string]bool, log *logger.Logger) {
 	if gm == nil || len(gm.WebSearchQueries) == 0 {
 		return
 	}
@@ -37,6 +37,6 @@ func (m *model) emitGroundingEvents(gm *genai.GroundingMetadata, seen map[string
 		log.ToolResult("grounding", groundingToolName, agent.GroundingSources(gm))
 	}
 
-	m.agentCh <- agentToolCallMsg{name: groundingToolName, args: args}
-	m.agentCh <- agentToolResultMsg{name: groundingToolName, content: agent.GroundingSummary(gm)}
+	ch <- agentToolCallMsg{name: groundingToolName, args: args}
+	ch <- agentToolResultMsg{name: groundingToolName, content: agent.GroundingSummary(gm)}
 }

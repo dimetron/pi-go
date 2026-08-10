@@ -29,6 +29,7 @@ type StatusRenderInput struct {
 	ProviderName string
 	ModelName    string
 	Running      bool
+	Pending      int          // prompts waiting behind the active response
 	Mode         string       // "chat" or "plan"
 	Eyes         string       // mood eyes e.g. "◕ ◕"
 	Messages     []message    // for context estimate
@@ -141,6 +142,13 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 		}
 		parts = append(parts, dim.Render("load: ")+strings.Join(items, dim.Render(" ")))
 		return bar.Render(strings.Join(parts, sep))
+	}
+
+	// Pending prompts are shown even while the active response is streaming,
+	// so the user can see that Enter was accepted without waiting for it.
+	if in.Pending > 0 {
+		queueStyle := lipgloss.NewStyle().Foreground(p.Peach)
+		parts = append(parts, queueStyle.Render(fmt.Sprintf("queued: %d", in.Pending)))
 	}
 
 	// Context % bar (visual bar with color coding).
