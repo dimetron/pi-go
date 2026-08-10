@@ -291,7 +291,10 @@ func runBackupBranchName(specName, suffix string) string {
 	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
 	name = strings.ReplaceAll(name, "/", "-")
 	if suffix != "" {
-		name += "/" + suffix
+		// Dash, not slash: a nested ref (run/<spec>/part-1) collides with the
+		// flat branch (run/<spec>) once both exist — git cannot create
+		// refs/heads/run/<spec>/part-1 while refs/heads/run/<spec> is a file.
+		name += "-" + suffix
 	}
 	return "run/" + name
 }

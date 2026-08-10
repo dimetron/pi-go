@@ -2512,9 +2512,9 @@ func TestRefreshRunChecklist_PrimaryAloneIsIncomplete(t *testing.T) {
 	}
 }
 
-// git cannot hold both "run/spec" and "run/spec/part-2" — the first is a ref,
-// the second needs it to be a directory. A collapsed run must therefore keep
-// the owner on its part-N name rather than falling back to the bare one.
+// A collapsed run keeps the owner on its part-N backup name rather than falling
+// back to the bare one, so the merge still holds a distinct branch per agent
+// (run/spec-part-1 for the owner, run/spec-part-2 for the carried worktree).
 func TestCollapseParallel_OwnerKeepsItsPartName(t *testing.T) {
 	rs := &runState{
 		specName:        "spec",
@@ -2532,11 +2532,10 @@ func TestCollapseParallel_OwnerKeepsItsPartName(t *testing.T) {
 	bare := runBackupBranchName("spec", "")
 	for _, tgt := range targets {
 		if tgt.backup == bare {
-			t.Errorf("agent %s uses the bare backup %q, which git cannot hold "+
-				"alongside its part-N siblings", tgt.agentID, bare)
+			t.Errorf("agent %s uses the bare backup %q instead of its part-N name", tgt.agentID, bare)
 		}
-		if !strings.HasPrefix(tgt.backup, bare+"/") {
-			t.Errorf("agent %s backup = %q, want a %s/part-N sibling", tgt.agentID, tgt.backup, bare)
+		if !strings.HasPrefix(tgt.backup, bare+"-part-") {
+			t.Errorf("agent %s backup = %q, want a %s-part-N sibling", tgt.agentID, tgt.backup, bare)
 		}
 	}
 }

@@ -43,6 +43,7 @@ Thumbs.db
 /.agents/
 /.scratch/
 .worktrees/
+/eval-reports/
 /pi-test
 sandbox-trace.log
 sandbox.log

@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -75,6 +75,26 @@ test-e2e:
 
 # keep old name as alias
 e2e: test-e2e
+
+# Manually-run full e2e eval of `/run`. Requires a built binary (make build)
+# and an LLM API key in the environment. Runs from the pinned eval/base commit
+# so re-runs are comparable. See internal/eval/eval.md for env knobs, the
+# golden baseline flow and the LLM judge.
+eval-run: build
+	PI_EVAL_RUN=1 PI_BINARY=$(abspath ./pi) go test -tags e2e -v -run '^TestEvalRun$$' ./internal/tui/ -timeout 45m
+
+# Pin the eval starting point at the current HEAD (tag eval/base) and run.
+# Do this once when establishing a baseline, or deliberately to move it.
+eval-pin: build
+	PI_EVAL_RUN=1 PI_EVAL_PIN_BASE=1 PI_EVAL_SAVE_GOLDEN=1 PI_BINARY=$(abspath ./pi) \
+		go test -tags e2e -v -run '^TestEvalRun$$' ./internal/tui/ -timeout 45m
+
+# Re-evaluate against the recorded golden baseline, with the LLM judge on.
+# Override the grader with PI_EVAL_JUDGE_MODEL=<model>.
+PI_EVAL_JUDGE_MODEL ?= claude-sonnet-4-6
+eval-judge: build
+	PI_EVAL_RUN=1 PI_EVAL_BASELINE=eval/golden PI_EVAL_JUDGE_MODEL=$(PI_EVAL_JUDGE_MODEL) \
+		PI_BINARY=$(abspath ./pi) go test -tags e2e -v -run '^TestEvalRun$$' ./internal/tui/ -timeout 45m
 
 test-all: test-unit test-integration test-e2e
 
