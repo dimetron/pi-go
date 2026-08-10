@@ -19,6 +19,7 @@ type CoreOption func(*coreConfig)
 
 type coreConfig struct {
 	bashSupervisor *BashSupervisor
+	readLedger     *ReadLedger
 }
 
 // WithBashSupervisor makes the bash tool use a caller-owned supervisor, so the
@@ -28,6 +29,14 @@ type coreConfig struct {
 // tool can see or reap them.
 func WithBashSupervisor(sup *BashSupervisor) CoreOption {
 	return func(c *coreConfig) { c.bashSupervisor = sup }
+}
+
+// WithReadLedger makes read, write and edit share a caller-owned ledger, so
+// the read-before-write check spans a whole session rather than one tool set.
+// Without it CoreTools builds a private one and the check still holds, but only
+// for tools built by this call.
+func WithReadLedger(l *ReadLedger) CoreOption {
+	return func(c *coreConfig) { c.readLedger = l }
 }
 
 // CoreTools returns the core coding agent tools as ADK FunctionTools.
@@ -40,12 +49,15 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 	if cfg.bashSupervisor == nil {
 		cfg.bashSupervisor = NewBashSupervisor()
 	}
+	if cfg.readLedger == nil {
+		cfg.readLedger = NewReadLedger()
+	}
 
 	builders := []func(*Sandbox) (tool.Tool, error){
-		newReadTool,
+		func(sb *Sandbox) (tool.Tool, error) { return newReadTool(sb, cfg.readLedger) },
 		newReadImageTool,
-		newWriteTool,
-		newEditTool,
+		func(sb *Sandbox) (tool.Tool, error) { return newWriteTool(sb, cfg.readLedger) },
+		func(sb *Sandbox) (tool.Tool, error) { return newEditTool(sb, cfg.readLedger) },
 		func(sb *Sandbox) (tool.Tool, error) { return newBashTool(sb, cfg.bashSupervisor) },
 		newGrepTool,
 		newFindTool,

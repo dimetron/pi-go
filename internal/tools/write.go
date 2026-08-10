@@ -23,22 +23,40 @@ type WriteOutput struct {
 	BytesWritten int `json:"bytes_written"`
 }
 
-func newWriteTool(sb *Sandbox) (tool.Tool, error) {
+func newWriteTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("write", `Write content to a file. Creates parent directories if needed. Overwrites existing files.
 
+An existing file must have been read in full first, so the content being replaced is known.
+
 Required: file_path (absolute path), content (file content to write).`, func(_ agent.Context, input WriteInput) (WriteOutput, error) {
-		return writeHandler(sb, input)
+		return writeHandlerWithLedger(sb, input, ledger)
 	})
 }
 
 func writeHandler(sb *Sandbox, input WriteInput) (WriteOutput, error) {
+	return writeHandlerWithLedger(sb, input, nil)
+}
+
+func writeHandlerWithLedger(sb *Sandbox, input WriteInput, ledger *ReadLedger) (WriteOutput, error) {
 	if input.FilePath == "" {
 		return WriteOutput{}, fmt.Errorf("file_path is required")
+	}
+
+	// Creating a file is always allowed; only replacing existing content needs
+	// the agent to know what it is replacing.
+	if info, statErr := sb.Stat(input.FilePath); statErr == nil && !info.IsDir() {
+		if err := ledger.CheckOverwrite(input.FilePath, info); err != nil {
+			return WriteOutput{}, err
+		}
 	}
 
 	if err := sb.WriteFile(input.FilePath, []byte(input.Content), 0o644); err != nil {
 		return WriteOutput{}, fmt.Errorf("writing file: %w", err)
 	}
+
+	// The file the ledger knew about no longer exists; a later overwrite must
+	// be judged on a fresh read of the new content.
+	ledger.Forget(input.FilePath)
 
 	return WriteOutput{
 		Path:         input.FilePath,

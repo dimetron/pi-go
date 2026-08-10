@@ -81,6 +81,19 @@ func (s *stream) String() string {
 	return string(s.data)
 }
 
+// droppedBytes reports how many bytes aged out of the front of the buffer and
+// were therefore never shown to anyone.
+//
+// base is the absolute offset of data[0], so it is exactly the count discarded
+// to stay bounded. Reporting it is what keeps a truncated transcript honest:
+// without it a command that printed a gigabyte returns its last 256KB looking
+// exactly like a command that printed 256KB.
+func (s *stream) droppedBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.base
+}
+
 // Len reports the total number of bytes ever written, including bytes since
 // discarded. Callers use it to detect progress, so it must not shrink when the
 // buffer trims.
