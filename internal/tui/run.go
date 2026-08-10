@@ -300,6 +300,17 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 	// Parse plan.md checklist for sidebar display.
 	checklist := parsePlanChecklist(m.cfg.WorkDir, specName)
 
+	// Warn before spawning: a spec file past the read window is served to
+	// workers one page at a time, so a worker sent to read its slice can act
+	// on a partial plan. The SOP tells /plan to avoid this; this catches the
+	// plans that arrive oversized anyway.
+	if oversized := oversizedSpecFiles(m.cfg.WorkDir, specName); len(oversized) > 0 {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: formatOversizedSpecWarning(oversized),
+		})
+	}
+
 	// Format gate info for display.
 	gateInfo := "none"
 	if len(gates) > 0 {
@@ -1450,6 +1461,67 @@ func parseGates(promptMD string) []Gate {
 	}
 
 	return gates
+}
+
+// readWindowLines mirrors the read tool's default line window
+// (defaultReadLimit in internal/tools/read.go). A spec file longer than this
+// is returned a page at a time, so a worker reading it may see only part.
+const readWindowLines = 2000
+
+// windowedSpecFiles are the spec documents a worker reads for slice detail.
+// PROMPT.md is excluded: /run loads it with os.ReadFile and embeds it whole in
+// the coordinator prompt, so the read window never applies to it.
+var windowedSpecFiles = []string{"plan.md", "design.md"}
+
+// oversizedSpecFile names a spec document that exceeds the read window.
+type oversizedSpecFile struct {
+	Name  string
+	Lines int
+}
+
+// oversizedSpecFiles returns the spec documents that exceed the read window,
+// in the order listed by windowedSpecFiles. Missing or unreadable files are
+// skipped — a spec without a design.md is normal, not an error.
+func oversizedSpecFiles(workDir, specName string) []oversizedSpecFile {
+	var out []oversizedSpecFile
+	for _, name := range windowedSpecFiles {
+		content, err := os.ReadFile(filepath.Join(workDir, "specs", specName, name))
+		if err != nil {
+			continue
+		}
+		if n := countLines(content); n > readWindowLines {
+			out = append(out, oversizedSpecFile{Name: name, Lines: n})
+		}
+	}
+	return out
+}
+
+// countLines counts the lines in a file, not counting a trailing newline as a
+// line of its own — the same off-by-one the read tool was corrected for.
+func countLines(content []byte) int {
+	if len(content) == 0 {
+		return 0
+	}
+	n := bytes.Count(content, []byte("\n"))
+	if !bytes.HasSuffix(content, []byte("\n")) {
+		n++
+	}
+	return n
+}
+
+// formatOversizedSpecWarning explains what the length costs and what to do,
+// rather than only reporting the number.
+func formatOversizedSpecWarning(files []oversizedSpecFile) string {
+	var b strings.Builder
+	b.WriteString("**Spec exceeds the read window** — workers will page through it:\n\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "- `%s`: %d lines (window is %d)\n", f.Name, f.Lines, readWindowLines)
+	}
+	b.WriteString("\nA worker sent to read its slice may act on a partial view. ")
+	b.WriteString("Prefer splitting the feature into sequential specs over shrinking the prose — ")
+	b.WriteString("a plan too long to read in one call is also too long for one Coordinator.\n")
+	b.WriteString("Running anyway.\n")
+	return b.String()
 }
 
 // readPromptMD reads the PROMPT.md file from a spec directory.

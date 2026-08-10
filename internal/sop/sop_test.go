@@ -187,3 +187,19 @@ func TestDefaultPDDSOP_ForbidsWorktreeAgents(t *testing.T) {
 		t.Error("default PDD SOP should name the research subagent to delegate to")
 	}
 }
+
+// A plan longer than the read tool's window is served to workers a page at a
+// time, so the SOP must budget for it at planning time and say what to do
+// instead of letting the plan grow.
+func TestDefaultPDDSOP_BudgetsPlanLength(t *testing.T) {
+	for _, want := range []string{
+		"Keep plan.md under 2000 lines",
+		"read tool's window",
+		"design.md has the same ceiling",
+		"split the *feature* into",
+	} {
+		if !contains(DefaultPDDSOP, want) {
+			t.Errorf("default PDD SOP missing %q", want)
+		}
+	}
+}
