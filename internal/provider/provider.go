@@ -172,6 +172,18 @@ var modelPrefixes = map[string]string{
 // ollama/ prefix, or the :cloud tag for Ollama cloud models.
 var OllamaModelPrefixes = []string{}
 
+// isOllamaCloudModel reports whether a model name is tagged for ollama.com's
+// hosted service. Ollama publishes both forms — a bare ":cloud" and the
+// ":<size>-cloud" that most of the catalog uses — so a check for one alone
+// silently misses the other.
+//
+// This is the single fact that decides local versus cloud, and it is the
+// model's name that decides it. Nothing about the caller's environment enters
+// into it.
+func isOllamaCloudModel(modelName string) bool {
+	return strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud")
+}
+
 // KnownModels lists recognized model names per provider.
 // The check is prefix-based: a model is valid if it starts with any entry.
 // Ollama models are not validated here (they are dynamic).
@@ -334,7 +346,7 @@ func Resolve(modelName string) (Info, error) {
 
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
-	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
+	if isOllamaCloudModel(modelName) {
 		return Info{Provider: "ollama", Model: modelName, Ollama: true}, nil
 	}
 
