@@ -31,6 +31,15 @@ const (
 	// enough to trip on every build is merely annoying.
 	defaultIdleTimeout = 90 * time.Second
 
+	// shortIdleTimeout is the threshold below which a caller-supplied
+	// idle_timeout is treated as self-defeating and called out in the result.
+	//
+	// Nothing is overridden — a caller that genuinely wants a hair trigger
+	// keeps it. But the heartbeat only samples every 5s, so any value below
+	// that cannot fire sooner than 5s anyway, and values in that range
+	// background every build in this repo on its first quiet moment.
+	shortIdleTimeout = 15 * time.Second
+
 	// heartbeatInterval is how often a running command reports that it is still
 	// alive. It drives the "45s, no output" line in the UI, which is the whole
 	// point of streaming — a stall you can see is not a hang.
@@ -129,6 +138,12 @@ type bashProc struct {
 
 	started time.Time
 	lastOut atomic.Int64 // UnixNano of the most recent byte of output
+
+	// The resolved limits this command runs under, kept so a handoff or a later
+	// poll can report them. They are set once before the process starts and
+	// never written again, so no synchronization is needed.
+	timeout     time.Duration
+	idleTimeout time.Duration
 
 	done     chan struct{} // closed once the process has been reaped
 	exitCode int
@@ -230,15 +245,17 @@ func (s *BashSupervisor) start(ctx context.Context, req runRequest) (*bashProc, 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	p := &bashProc{
-		sup:     s,
-		id:      s.nextID(),
-		command: req.command,
-		dir:     req.dir,
-		cancel:  cancel,
-		stdout:  newStream(streamCap),
-		stderr:  newStream(streamCap),
-		started: time.Now(),
-		done:    make(chan struct{}),
+		sup:         s,
+		id:          s.nextID(),
+		command:     req.command,
+		dir:         req.dir,
+		cancel:      cancel,
+		stdout:      newStream(streamCap),
+		stderr:      newStream(streamCap),
+		started:     time.Now(),
+		timeout:     req.timeout,
+		idleTimeout: req.idleTimeout,
+		done:        make(chan struct{}),
 	}
 
 	cmd := exec.CommandContext(runCtx, "bash", "-c", req.command)
@@ -368,6 +385,7 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 	if strings.TrimSpace(stdout) == "" && strings.TrimSpace(stderr) == "" {
 		note += " It has produced no output at all — if that is unexpected, the command is probably too broad (a filesystem-wide scan, or a prompt waiting for input) and should be killed and narrowed."
 	}
+	note += " " + limitsHint(p.timeout, p.idleTimeout)
 
 	outStr, errStr := budgetStreams(stdout, stderr)
 	if d := droppedNote(p.stdout.droppedBytes() + p.stderr.droppedBytes()); d != "" {
@@ -375,13 +393,37 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 	}
 
 	return BashOutput{
-		Stdout:   outStr,
-		Stderr:   errStr,
-		ExitCode: -1,
-		Running:  true,
-		Handle:   p.id,
-		Note:     note,
+		Stdout:      outStr,
+		Stderr:      errStr,
+		ExitCode:    -1,
+		Running:     true,
+		Handle:      p.id,
+		Elapsed:     roundDur(time.Since(p.started)).String(),
+		Idle:        roundDur(p.idleFor()).String(),
+		Timeout:     p.timeout.String(),
+		IdleTimeout: p.idleTimeout.String(),
+		Note:        note,
 	}
+}
+
+// limitsHint states the limits a command ran under and what to do about them.
+//
+// It exists because the handoff is otherwise a dead end for the caller: the
+// note says the command went quiet, but not that the threshold it crossed was
+// one the caller chose. A one-second idle_timeout backgrounds every build,
+// lint, and test run in this repo on its first quiet moment, and the only
+// visible consequence is a handle the model then polls dozens of times. Naming
+// the limit turns that into a one-line fix.
+func limitsHint(timeout, idle time.Duration) string {
+	hint := fmt.Sprintf("Limits for this command: timeout %s, idle_timeout %s.",
+		roundDur(timeout), roundDur(idle))
+	if idle < shortIdleTimeout {
+		hint += fmt.Sprintf(" An idle_timeout under %s backgrounds ordinary builds and"+
+			" test runs the moment they go quiet — pass a larger idle_timeout"+
+			" (or omit it for the %s default) rather than polling the handle.",
+			roundDur(shortIdleTimeout), roundDur(defaultIdleTimeout))
+	}
+	return hint
 }
 
 // budgetStreams applies the standard cleanup to both streams.
@@ -555,12 +597,14 @@ func (s *BashSupervisor) readOutput(handle string, wait time.Duration) (BashStat
 
 	budgetedOut, budgetedErr := budgetStreams(outStr, errStr)
 	st := BashStatus{
-		Handle:  handle,
-		Command: p.command,
-		Running: p.running(),
-		Stdout:  budgetedOut,
-		Stderr:  budgetedErr,
-		Elapsed: roundDur(time.Since(p.started)).String(),
+		Handle:      handle,
+		Command:     p.command,
+		Running:     p.running(),
+		Stdout:      budgetedOut,
+		Stderr:      budgetedErr,
+		Elapsed:     roundDur(time.Since(p.started)).String(),
+		Timeout:     p.timeout.String(),
+		IdleTimeout: p.idleTimeout.String(),
 	}
 	// Here the drop is measured against this reader's own cursor, not the whole
 	// stream: it counts output this caller had not yet collected when the buffer

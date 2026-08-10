@@ -43,6 +43,17 @@ type BashOutput struct {
 	Running bool `json:"running,omitempty"`
 	// Handle identifies a still-running command for bash_output and bash_kill.
 	Handle string `json:"handle,omitempty"`
+	// Elapsed is how long the command has been running in total.
+	Elapsed string `json:"elapsed,omitempty"`
+	// Idle is how long it has been since the command last produced output.
+	Idle string `json:"idle,omitempty"`
+	// Timeout and IdleTimeout are the limits this command actually ran under,
+	// after defaults and clamping. They are reported rather than left implicit
+	// because a handoff is otherwise unexplainable from the result alone: the
+	// caller sees "moved to the background" with no way to tell whether the
+	// limit it hit was the 90s default or a 1s value it passed itself.
+	Timeout     string `json:"timeout,omitempty"`
+	IdleTimeout string `json:"idle_timeout,omitempty"`
 	// Note explains a non-obvious outcome in terms the model can act on.
 	Note string `json:"note,omitempty"`
 }
@@ -62,7 +73,12 @@ type BashStatus struct {
 	Elapsed string `json:"elapsed,omitempty"`
 	// Idle is how long it has been since the command last produced output.
 	Idle string `json:"idle,omitempty"`
-	Note string `json:"note,omitempty"`
+	// Timeout and IdleTimeout are the limits the command was started under, so
+	// a poll can say why it was handed off without the caller having to
+	// remember what it asked for several turns ago.
+	Timeout     string `json:"timeout,omitempty"`
+	IdleTimeout string `json:"idle_timeout,omitempty"`
+	Note        string `json:"note,omitempty"`
 }
 
 // BashOutputInput asks for output accumulated by a backgrounded command.

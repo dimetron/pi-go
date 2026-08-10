@@ -678,38 +678,27 @@ func formatToolResult(data map[string]any) string {
 	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
 		return diag
 	}
+	// A backgrounded command, either at the moment of handoff (the bash tool) or
+	// on any later poll of it (bash_output, bash_kill). Both carry a handle, and
+	// both have to be taken before the exit-code branch below.
+	//
+	// While such a command is still running it has no exit status: the bash tool
+	// reports the -1 placeholder, which the exit-code branch renders as
+	// "exit -1: <first line of output>" — a live lint run reading as a crashed
+	// one. A poll is worse: BashStatus omits exit_code entirely while running, so
+	// it missed the branch altogether and fell through to the raw-JSON fallback,
+	// printing &-escaped argument soup instead of the command's output.
+	if handle, ok := data["handle"].(string); ok && handle != "" {
+		return formatBashWindow(handle, data)
+	}
 	// bash tool: show exit code + first 2 and last 2 output lines (preserve newlines for better visibility)
 	if code, ok := data["exit_code"].(float64); ok {
 		stdout, _ := data["stdout"].(string)
 		stderr, _ := data["stderr"].(string)
-
-		// For bash streaming display, show first 2 and last 2 lines of stdout (or stderr if stdout is empty).
-		var preview string
-		output := stdout
-		if output == "" {
-			output = stderr
+		result := bashOutputPreview(stdout, stderr)
+		if result == "" {
+			result = "(No output)"
 		}
-		if output != "" {
-			lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-			if len(lines) > 4 {
-				preview = strings.Join([]string{lines[0], lines[1], lines[len(lines)-2], lines[len(lines)-1]}, "\n")
-			} else {
-				preview = strings.Join(lines, "\n")
-			}
-		} else {
-			preview = "(No output)"
-		}
-
-		// Truncate each line to 80 chars for display
-		var truncated []string
-		for _, line := range strings.Split(preview, "\n") {
-			if len(line) > 80 {
-				line = line[:77] + "..."
-			}
-			truncated = append(truncated, line)
-		}
-		result := strings.Join(truncated, "\n")
-
 		if int(code) != 0 {
 			return fmt.Sprintf("exit %d: %s", int(code), result)
 		}
@@ -722,6 +711,103 @@ func formatToolResult(data map[string]any) string {
 		return s[:117] + "..."
 	}
 	return s
+}
+
+// formatBashWindow renders the card for a backgrounded command: what state it
+// is in, what it has printed, and — while it is still running — the limits it
+// was started under.
+//
+// The state line is the point of the card and is never omitted. A poll that
+// returns no new output is otherwise a blank card, indistinguishable from a
+// finished one, which is how fifty-five consecutive polls of the same handle
+// scrolled past without saying anything at all.
+func formatBashWindow(handle string, data map[string]any) string {
+	running, _ := data["running"].(bool)
+	stdout, _ := data["stdout"].(string)
+	stderr, _ := data["stderr"].(string)
+	code, hasCode := data["exit_code"].(float64)
+	timing := bashTiming(data)
+
+	var lines []string
+	switch {
+	case running:
+		lines = append(lines, fmt.Sprintf("running (%s)%s", handle, timing))
+	case hasCode && int(code) == -1:
+		// Killed, or killed and not reaped before the wait delay expired. Either
+		// way there is no status to report, and printing "exit -1" invites the
+		// reader to look for a exit code that never existed.
+		lines = append(lines, fmt.Sprintf("killed, no exit status (%s)%s", handle, timing))
+	default:
+		lines = append(lines, fmt.Sprintf("exit %d (%s)%s", int(code), handle, timing))
+	}
+
+	if preview := bashOutputPreview(stdout, stderr); preview != "" {
+		lines = append(lines, preview)
+	} else if running {
+		lines = append(lines, "(no new output)")
+	}
+	if running {
+		if hint := bashLimitsHint(data); hint != "" {
+			lines = append(lines, hint)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// bashTiming renders however much of the elapsed/idle pair the result carries.
+func bashTiming(data map[string]any) string {
+	elapsed, _ := data["elapsed"].(string)
+	idle, _ := data["idle"].(string)
+	switch {
+	case elapsed != "" && idle != "":
+		return fmt.Sprintf(", %s elapsed, %s idle", elapsed, idle)
+	case elapsed != "":
+		return ", " + elapsed + " elapsed"
+	case idle != "":
+		return ", " + idle + " idle"
+	}
+	return ""
+}
+
+// bashLimitsHint names the limits a running command was started under.
+//
+// Without it the card says a command went to the background but not that the
+// threshold it crossed was one the caller picked — which is the difference
+// between "this build is slow" and "idle_timeout was set to one second".
+func bashLimitsHint(data map[string]any) string {
+	timeout, _ := data["timeout"].(string)
+	idle, _ := data["idle_timeout"].(string)
+	switch {
+	case timeout != "" && idle != "":
+		return fmt.Sprintf("limits: idle_timeout %s, timeout %s", idle, timeout)
+	case timeout != "":
+		return "limits: timeout " + timeout
+	case idle != "":
+		return "limits: idle_timeout " + idle
+	}
+	return ""
+}
+
+// bashOutputPreview condenses command output to its first and last two lines,
+// each clipped to 80 columns. Returns "" when there was no output at all, which
+// callers report in their own words.
+func bashOutputPreview(stdout, stderr string) string {
+	output := stdout
+	if output == "" {
+		output = stderr
+	}
+	if output == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) > 4 {
+		lines = []string{lines[0], lines[1], lines[len(lines)-2], lines[len(lines)-1]}
+	}
+	clipped := make([]string, len(lines))
+	for i, line := range lines {
+		clipped[i] = truncateRunes(line, 80)
+	}
+	return strings.Join(clipped, "\n")
 }
 
 // highlightReadOutput applies syntax highlighting to read tool output lines.
