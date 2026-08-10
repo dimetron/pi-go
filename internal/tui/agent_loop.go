@@ -499,8 +499,37 @@ func (m *model) startAgentLoop(prompt string) tea.Cmd {
 	m.agentCh = ch
 	agentCtx, agentCancel := context.WithCancel(m.ctx)
 	m.agentCancel = agentCancel
-	go m.runAgentLoop(agentCtx, prompt, ch)
+	go m.runAgentLoop(agentCtx, prompt, ch, m.agentRun())
 	return waitForAgent(m.agentCh)
+}
+
+// agentRunConfig is the slice of cfg the agent loop needs, read once on the
+// Update goroutine and handed over by value.
+//
+// The loop used to reach through m.cfg for these while it ran. Update writes
+// m.cfg from a dozen places — /model swaps LLM, ModelName, ProviderName and
+// ActiveRole, /plan replaces SessionID, skill creation rewrites Skills, and
+// init assigns Agent and Logger outright — so the loop's read and Update's
+// write are two goroutines touching the same words. Nothing structural
+// separated them; the only reason it held was that handleModelCommand happens
+// to return early while m.running.
+//
+// Commit 35c3b25 fixed the sibling case, the agent channel, the same way: pass
+// what the goroutine needs rather than let it reach for the live struct.
+// Grouping the fields into a sub-struct would not have helped — the race is
+// about who may read m, not about how m is laid out.
+type agentRunConfig struct {
+	agent     *agent.Agent
+	sessionID string
+	logger    *logger.Logger
+}
+
+func (m *model) agentRun() agentRunConfig {
+	return agentRunConfig{
+		agent:     m.cfg.Agent,
+		sessionID: m.cfg.SessionID,
+		logger:    m.cfg.Logger,
+	}
 }
 
 type queuedPrompt struct {
@@ -613,7 +642,7 @@ func (m *model) setSessionTitle(text string) string {
 // close). Reading the shared field here would race with that write and, worse,
 // could close the next turn's channel. Capturing the channel by value makes
 // every send target the channel this turn actually owns.
-func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMsg) {
+func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMsg, run agentRunConfig) {
 	defer close(ch)
 	defer func() {
 		if r := recover(); r != nil {
@@ -621,18 +650,18 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 			// The session log, not stderr: the TUI holds the alternate
 			// screen, so a stack trace printed here would be painted over
 			// the UI. The panic still reaches the user as the turn's error.
-			m.cfg.Logger.Errorf("agent loop panicked: %v\n%s", r, stack)
+			run.logger.Errorf("agent loop panicked: %v\n%s", r, stack)
 			ch <- agentDoneMsg{err: fmt.Errorf("agent panic: %v", r)}
 		}
 	}()
 
 	// Guard against missing agent config (unit tests)
-	if m.cfg.Agent == nil {
+	if run.agent == nil {
 		ch <- agentDoneMsg{err: fmt.Errorf("agent not configured")}
 		return
 	}
 
-	log := m.cfg.Logger
+	log := run.logger
 	detector := &stuckDetector{}
 
 	// Providers like ollama/minimax emit per-token partial events AND a final
@@ -671,7 +700,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 	// the provider, where a single request can be re-sent without replaying the
 	// tool calls that already ran.
 	for ev, err := range agent.WithRetry(agent.DefaultRetryConfig(), func() iter.Seq2[*session.Event, error] {
-		return m.cfg.Agent.RunStreaming(ctx, m.cfg.SessionID, prompt)
+		return run.agent.RunStreaming(ctx, run.sessionID, prompt)
 	}) {
 		if err != nil {
 			fail(err)

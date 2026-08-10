@@ -155,7 +155,7 @@ func TestRunAgentLoop_AbortsRunawayReplyText(t *testing.T) {
 		}
 	}()
 
-	go m.runAgentLoop(ctx, "explain the hook", m.agentCh)
+	go m.runAgentLoop(ctx, "explain the hook", m.agentCh, m.agentRun())
 
 	select {
 	case <-done:

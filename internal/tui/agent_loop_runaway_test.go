@@ -153,7 +153,7 @@ func TestRunAgentLoop_AbortsRunawayOutput(t *testing.T) {
 		}
 	}()
 
-	go m.runAgentLoop(ctx, "why is the hook message visible", m.agentCh)
+	go m.runAgentLoop(ctx, "why is the hook message visible", m.agentCh, m.agentRun())
 
 	select {
 	case <-done:
@@ -219,7 +219,7 @@ func TestRunAgentLoop_WarnsOnTruncatedTurn(t *testing.T) {
 		}
 	}()
 
-	go m.runAgentLoop(ctx, "write something long", m.agentCh)
+	go m.runAgentLoop(ctx, "write something long", m.agentCh, m.agentRun())
 
 	select {
 	case <-done:
