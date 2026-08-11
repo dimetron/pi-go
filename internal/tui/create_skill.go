@@ -25,6 +25,15 @@ func (m *model) handleSkillCommand(skill extension.Skill, args []string) (tea.Mo
 	if m.cfg.Logger != nil {
 		m.cfg.Logger.Info(fmt.Sprintf("skill:%s instruction=%d bytes", skill.Name, len(body)))
 	}
+	// Show a visible confirmation that the skill was loaded and activated. The
+	// card renders as "⏺ Skill(disk-check) Successfully loaded skill" so a
+	// slash-activated skill is not invisible in the transcript.
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "tool",
+		tool:    "skill",
+		toolIn:  skill.Name,
+		content: "Successfully loaded skill",
+	})
 	// Send the user's args (without the body) as the user prompt.
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: display})
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})

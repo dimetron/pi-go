@@ -225,6 +225,25 @@ func TestHandleSkillCommand_UserMessageIsClean(t *testing.T) {
 
 	_, _ = m.handleSkillCommand(skills[0], []string{"simplify", "this"})
 
+	// The skill-activation confirmation card must be present before the user
+	// message: "⏺ Skill(ponytail) Successfully loaded skill".
+	var skillCard *message
+	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
+		if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].tool == "skill" {
+			skillCard = &m.chatModel.Messages[i]
+			break
+		}
+	}
+	if skillCard == nil {
+		t.Fatal("no skill-activation card appended by handleSkillCommand")
+	}
+	if skillCard.toolIn != "ponytail" {
+		t.Errorf("skill card toolIn = %q, want %q", skillCard.toolIn, "ponytail")
+	}
+	if skillCard.content != "Successfully loaded skill" {
+		t.Errorf("skill card content = %q, want %q", skillCard.content, "Successfully loaded skill")
+	}
+
 	// Find the user message (the last "user" role before any tool events).
 	var userMsg *message
 	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
