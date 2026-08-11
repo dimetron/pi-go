@@ -125,10 +125,36 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 	if t.CompactTools {
 		return t.renderCompactTool(msg, dim, p)
 	}
+	if msg.tool == "skill" {
+		return t.renderSkillTool(msg, dim, p)
+	}
 	if msg.tool == "agent" || msg.tool == "subagent" {
 		return t.renderAgentTool(msg, dim, p)
 	}
 	return t.renderRegularTool(msg, dim, p)
+}
+
+// renderSkillTool renders a skill-activation confirmation on a single line:
+// "◉ skill(disk-check) Successfully loaded skill". The card is a notice, not a
+// tool with output, so it never opens a content gutter.
+func (t *ToolDisplayModel) renderSkillTool(msg message, dim lipgloss.Style, p Palette) string {
+	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
+	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), false)
+
+	var b strings.Builder
+	b.WriteString(toolBullet)
+	b.WriteString(toolStyle.Render(msg.tool))
+	if msg.toolIn != "" {
+		b.WriteString(dim.Render("("))
+		b.WriteString(dim.Render(msg.toolIn))
+		b.WriteString(dim.Render(")"))
+	}
+	if msg.content != "" {
+		b.WriteString(" ")
+		b.WriteString(dim.Render(msg.content))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // renderCompactTool renders a one-line tally for a tool message.

@@ -124,6 +124,51 @@ func TestRenderCompactTool_NoContent(t *testing.T) {
 	}
 }
 
+// TestRenderSkillTool verifies the skill-activation confirmation card renders
+// as a single line: "◉ skill(disk-check) Successfully loaded skill". It must
+// not open a content gutter like a regular tool card.
+func TestRenderSkillTool(t *testing.T) {
+	td := ToolDisplayModel{Width: 80}
+	msg := message{
+		role:    "tool",
+		tool:    "skill",
+		toolIn:  "disk-check",
+		content: "Successfully loaded skill",
+	}
+	result := td.RenderToolMessage(msg)
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "skill(disk-check)") {
+		t.Errorf("expected skill name in parens, got %q", plain)
+	}
+	if !strings.Contains(plain, "Successfully loaded skill") {
+		t.Errorf("expected success message, got %q", plain)
+	}
+	// Single line, no content gutter.
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected 1 line, got %d: %q", len(lines), result)
+	}
+	if strings.Contains(result, "│") {
+		t.Errorf("skill card must not open a content gutter, got %q", result)
+	}
+}
+
+// TestRenderSkillTool_NoContent renders a skill card with no result text; the
+// header must still show the skill name.
+func TestRenderSkillTool_NoContent(t *testing.T) {
+	td := ToolDisplayModel{Width: 80}
+	msg := message{
+		role:   "tool",
+		tool:   "skill",
+		toolIn: "ponytail",
+	}
+	result := td.RenderToolMessage(msg)
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "skill(ponytail)") {
+		t.Errorf("expected skill name in parens, got %q", plain)
+	}
+}
+
 func TestContentWidth_DefaultWhenZero(t *testing.T) {
 	td := ToolDisplayModel{Width: 0}
 	cw := td.contentWidth()
