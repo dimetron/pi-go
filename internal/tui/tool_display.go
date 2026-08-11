@@ -331,7 +331,7 @@ func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style, p P
 // a progress indicator, not a transcript: the agent's full answer arrives in the
 // result summary and in the parent's own reply, so the stream only has to show
 // enough to see what the agent is doing right now.
-const maxAgentOutputLines = 7
+const maxAgentOutputLines = 3
 
 // agentEventLines renders one subagent event into the lines it occupies in the
 // card, already styled and soft-wrapped to width.
@@ -356,6 +356,10 @@ func agentEventLines(ev agentEv, evStyle, evToolStyle lipgloss.Style, width int)
 		// internal blank-line runs so paragraph spacing from streamed chunks
 		// doesn't produce wide gaps in the card.
 		line = evStyle.Render("» " + collapseToSingleLine(ev.content))
+	case "thinking_delta":
+		// Subagent reasoning — show it with the same 💭 marker the main
+		// chat uses for thinking, so it reads as thought, not speech.
+		line = evStyle.Render("💭 " + collapseToSingleLine(ev.content))
 	default:
 		content := collapseToSingleLine(ev.content)
 		if content == "" {

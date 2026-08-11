@@ -20,10 +20,10 @@ func agentCardLines(t *testing.T, msg message, width int) []string {
 	return out
 }
 
-// The subagent output window is 7 lines.
-func TestAgentOutputWindowIsSevenLines(t *testing.T) {
-	if maxAgentOutputLines != 7 {
-		t.Fatalf("maxAgentOutputLines = %d, want 7", maxAgentOutputLines)
+// The subagent output window is 3 lines.
+func TestAgentOutputWindowIsThreeLines(t *testing.T) {
+	if maxAgentOutputLines != 3 {
+		t.Fatalf("maxAgentOutputLines = %d, want 3", maxAgentOutputLines)
 	}
 }
 
@@ -42,9 +42,9 @@ func TestAgentOutputWindowCapsAHugeSingleEvent(t *testing.T) {
 
 	lines := agentCardLines(t, msg, 100)
 
-	// 7 output lines, plus the note saying output was withheld.
-	if len(lines) > 8 {
-		t.Fatalf("one huge event rendered %d gutter lines, want 7 plus a note", len(lines))
+	// 3 output lines, plus the note saying output was withheld.
+	if len(lines) > 4 {
+		t.Fatalf("one huge event rendered %d gutter lines, want 3 plus a note", len(lines))
 	}
 	if len(lines) == 0 {
 		t.Fatal("the window swallowed the output entirely")
@@ -105,6 +105,27 @@ func TestAgentOutputWindowLeavesShortStreamsAlone(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "read server.go") {
 		t.Error("a short stream must render in full")
+	}
+}
+
+// A subagent's thinking_delta events render with the 💭 marker, not a raw
+// "thinking_delta:" label.
+func TestAgentOutputWindowRendersThinkingDeltaWithIcon(t *testing.T) {
+	msg := message{
+		role: "tool", tool: "agent", agentType: "pi",
+		agentEvents: []agentEv{{kind: "thinking_delta", content: "weighing the options"}},
+	}
+
+	rendered := (&ToolDisplayModel{Width: 100}).RenderToolMessage(msg)
+
+	if !strings.Contains(rendered, "💭") {
+		t.Errorf("thinking_delta rendered without the 💭 icon: %q", rendered)
+	}
+	if strings.Contains(rendered, "thinking_delta:") {
+		t.Errorf("thinking_delta rendered with the raw kind label: %q", rendered)
+	}
+	if !strings.Contains(rendered, "weighing the options") {
+		t.Errorf("thinking_delta content missing from card: %q", rendered)
 	}
 }
 
