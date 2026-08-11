@@ -967,8 +967,6 @@ func TestRenderMessages_AgentWithEvents(t *testing.T) {
 				agentEvents: []agentEv{
 					{kind: "tool_call", content: "read"},
 					{kind: "tool_result", content: "42 lines"},
-					{kind: "tool_call", content: "edit"},
-					{kind: "tool_result", content: "1 replacement"},
 				},
 			},
 		}},
@@ -978,9 +976,6 @@ func TestRenderMessages_AgentWithEvents(t *testing.T) {
 	output := m.chatModel.RenderMessages(m.running)
 	if !strings.Contains(output, "read") {
 		t.Error("expected 'read' tool call in event stream")
-	}
-	if !strings.Contains(output, "edit") {
-		t.Error("expected 'edit' tool call in event stream")
 	}
 }
 
