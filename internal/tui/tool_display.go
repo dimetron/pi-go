@@ -810,11 +810,11 @@ func bashLimitsHint(data map[string]any) string {
 	idle, _ := data["idle_timeout"].(string)
 	switch {
 	case timeout != "" && idle != "":
-		return fmt.Sprintf("limits: idle_timeout %s, timeout %s", idle, timeout)
+		return fmt.Sprintf("idle_timeout %s, timeout %s", idle, timeout)
 	case timeout != "":
-		return "limits: timeout " + timeout
+		return "timeout " + timeout
 	case idle != "":
-		return "limits: idle_timeout " + idle
+		return "idle_timeout " + idle
 	}
 	return ""
 }
