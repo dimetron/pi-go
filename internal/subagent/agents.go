@@ -34,7 +34,12 @@ type AgentConfig struct {
 	Timeout     int      // Absolute timeout in milliseconds (0 = use default)
 	Instruction string   // System prompt (markdown body)
 	Tools       []string // Allowed tool names (empty = all tools)
-	Source      string   // "bundled", "user", or "project"
+	// LSP selects this agent's language-server surface: "off", "min" or
+	// "full". Empty means inherit the child process default (min). Set it in
+	// frontmatter on agents that navigate code, so the wide LSP surface is
+	// bought per-agent instead of by every session.
+	LSP    string
+	Source string // "bundled", "user", or "project"
 }
 
 // AgentDiscoveryResult contains all discovered agents.
@@ -128,6 +133,8 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 						cfg.Timeout = ms
 					}
 				}
+			case "lsp":
+				cfg.LSP = strings.ToLower(strings.TrimSpace(value))
 			case "tools":
 				for _, t := range strings.Split(value, ",") {
 					t = strings.TrimSpace(t)

@@ -208,16 +208,72 @@ Line and column are 0-based.`,
 		}, lspFileAliases)
 }
 
-// LSPTools returns the LSP ADK tools.
+// LSPMode selects how much of the LSP surface is advertised to the model.
+type LSPMode string
+
+const (
+	// LSPOff registers nothing.
+	LSPOff LSPMode = "off"
+	// LSPMin registers symbols + diagnostics only. This is the default.
+	LSPMin LSPMode = "min"
+	// LSPFull registers all seven tools.
+	LSPFull LSPMode = "full"
+)
+
+// ParseLSPMode maps a flag value to a mode. It accepts the three mode names
+// plus the truthy/falsey spellings a user is likely to reach for, so
+// `--lsp true` and `--lsp full` mean the same thing. An unrecognized value
+// returns LSPMin and false, letting the caller report it rather than guess.
+func ParseLSPMode(v string) (LSPMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "min", "minimal", "default":
+		return LSPMin, true
+	case "full", "all", "1", "true", "yes", "on":
+		return LSPFull, true
+	case "off", "none", "0", "false", "no":
+		return LSPOff, true
+	default:
+		return LSPMin, false
+	}
+}
+
+// minimalLSPBuilders is the pair that carries the traffic. Measured over this
+// repo's session history, lsp-symbols and lsp-diagnostics are 592 of 657 LSP
+// calls — 90% — while the other five cost 989 tokens on every request for the
+// remaining 65. The model reaches for ripgrep instead of lsp-references
+// (8171 calls vs 3), so the wide surface is not paying for itself.
+//
+// Use LSPFull to get the rest back; see ParseLSPMode.
+var minimalLSPBuilders = []func(*lsp.Manager) (tool.Tool, error){
+	newLSPSymbolsTool,
+	newLSPDiagnosticsTool,
+}
+
+var fullLSPBuilders = []func(*lsp.Manager) (tool.Tool, error){
+	newLSPDiagnosticsTool,
+	newLSPDefinitionTool,
+	newLSPReferencesTool,
+	newLSPHoverTool,
+	newLSPSymbolsTool,
+	newLSPWorkspaceSymbolTool,
+	newLSPCodeActionTool,
+}
+
+// LSPTools returns the default (minimal) LSP tool set.
 func LSPTools(mgr *lsp.Manager) ([]tool.Tool, error) {
-	builders := []func(*lsp.Manager) (tool.Tool, error){
-		newLSPDiagnosticsTool,
-		newLSPDefinitionTool,
-		newLSPReferencesTool,
-		newLSPHoverTool,
-		newLSPSymbolsTool,
-		newLSPWorkspaceSymbolTool,
-		newLSPCodeActionTool,
+	return LSPToolsFor(mgr, LSPMin)
+}
+
+// LSPToolsFor returns the LSP ADK tools for the given mode.
+func LSPToolsFor(mgr *lsp.Manager, mode LSPMode) ([]tool.Tool, error) {
+	var builders []func(*lsp.Manager) (tool.Tool, error)
+	switch mode {
+	case LSPOff:
+		return nil, nil
+	case LSPFull:
+		builders = fullLSPBuilders
+	default:
+		builders = minimalLSPBuilders
 	}
 
 	result := make([]tool.Tool, 0, len(builders))

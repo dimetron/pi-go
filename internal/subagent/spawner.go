@@ -45,6 +45,11 @@ type SpawnOpts struct {
 	BaseURL     string   // LLM API base URL (passed as --url flag)
 	Insecure    bool     // Skip TLS verification (passed as --insecure flag)
 	Headers     []string // Extra HTTP headers (passed as --header flags)
+	// LSP selects the child's language-server tool surface (passed as --lsp).
+	// Empty leaves the flag off, so the child uses its own default. This is the
+	// seam that lets a navigation-heavy agent run with the full LSP set while
+	// the parent session pays for none of it.
+	LSP string
 }
 
 // Spawner creates and manages subagent pi processes.
@@ -98,17 +103,10 @@ func (p *Process) Cancel() {
 	p.cancel()
 }
 
-// Spawn starts a pi subprocess in JSON mode and returns a Process handle for streaming events.
-func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
-	if opts.Prompt == "" {
-		return nil, fmt.Errorf("prompt is required")
-	}
-
-	// Resolve timeout configuration (applies defaults if not set).
-	timeoutCfg := ResolveTimeout(opts.Timeout)
-	procCtx, cancel := context.WithTimeout(ctx, timeoutCfg.Absolute)
-
-	// Build command arguments.
+// spawnArgs builds the child pi command line. Split out from Spawn so the flag
+// wiring can be tested without starting a process — the --lsp value in
+// particular decides how much context the child spends on tool declarations.
+func spawnArgs(opts SpawnOpts) []string {
 	args := []string{"--mode", "json"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -125,7 +123,24 @@ func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
 	if opts.Instruction != "" {
 		args = append(args, "--system", opts.Instruction)
 	}
-	args = append(args, opts.Prompt)
+	if opts.LSP != "" {
+		args = append(args, "--lsp", opts.LSP)
+	}
+	// The prompt is positional and must stay last.
+	return append(args, opts.Prompt)
+}
+
+// Spawn starts a pi subprocess in JSON mode and returns a Process handle for streaming events.
+func (s *Spawner) Spawn(ctx context.Context, opts SpawnOpts) (*Process, error) {
+	if opts.Prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+
+	// Resolve timeout configuration (applies defaults if not set).
+	timeoutCfg := ResolveTimeout(opts.Timeout)
+	procCtx, cancel := context.WithTimeout(ctx, timeoutCfg.Absolute)
+
+	args := spawnArgs(opts)
 
 	cmd := exec.CommandContext(procCtx, s.PiBinary, args...)
 
