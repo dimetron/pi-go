@@ -78,12 +78,12 @@ func TestHandleBashEvent_CapsRetainedEvents(t *testing.T) {
 }
 
 // TestToolCallSummary_BashControl shows the handle in the card header of a
-// bash_output/bash_kill poll. Without a case for these tools the header fell
-// through to the empty summary and rendered as a bare "◉ bash_output" with no
+// bash_wait/bash_kill poll. Without a case for these tools the header fell
+// through to the empty summary and rendered as a bare "◉ bash_wait" with no
 // clue which command was being polled.
 func TestToolCallSummary_BashControl(t *testing.T) {
-	if got := toolCallSummary("bash_output", map[string]any{"handle": "bg_1"}); got != "bg_1" {
-		t.Errorf("bash_output summary = %q, want bg_1", got)
+	if got := toolCallSummary("bash_wait", map[string]any{"handle": "bg_1"}); got != "bg_1" {
+		t.Errorf("bash_wait summary = %q, want bg_1", got)
 	}
 	if got := toolCallSummary("bash_kill", map[string]any{"handle": "bg_2"}); got != "bg_2" {
 		t.Errorf("bash_kill summary = %q, want bg_2", got)
@@ -93,8 +93,8 @@ func TestToolCallSummary_BashControl(t *testing.T) {
 // TestHandleAgentToolCall_BashControlHeaderFoldsCommand verifies that a poll of
 // a backgrounded command names the command in its card header. The bash card
 // bound to the handle carries the command (handleBashEvent stamps agentID), and
-// the poll card should read "bash_output(bg_1: sleep 10 ...)" rather than a
-// bare "◉ bash_output".
+// the poll card should read "bash_wait(bg_1: sleep 10 ...)" rather than a
+// bare "◉ bash_wait".
 func TestHandleAgentToolCall_BashControlHeaderFoldsCommand(t *testing.T) {
 	m := newHandlerModel()
 	m.chatModel.Messages = []message{
@@ -102,12 +102,12 @@ func TestHandleAgentToolCall_BashControlHeaderFoldsCommand(t *testing.T) {
 	}
 
 	m.handleAgentToolCall(agentToolCallMsg{
-		id: "call_poll", name: "bash_output", args: map[string]any{"handle": "bg_1"},
+		id: "call_poll", name: "bash_wait", args: map[string]any{"handle": "bg_1"},
 	})
 
 	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
 	if want := `bg_1: sleep 10 && echo "done"`; last.toolIn != want {
-		t.Errorf("bash_output card toolIn = %q, want %q", last.toolIn, want)
+		t.Errorf("bash_wait card toolIn = %q, want %q", last.toolIn, want)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestHandleAgentToolCall_BashControlHeaderFallsBackToHandle(t *testing.T) {
 // for a lost bash:start binding: when the start event arrives before the card
 // exists (separate buffered channel), the card never gets its agentID stamped.
 // The bash result carries the handle, so it is the reliable place to bind —
-// a later bash_output/bash_kill card then still finds the command.
+// a later bash_wait/bash_kill card then still finds the command.
 func TestHandleAgentToolResult_BindsBashHandleFromResult(t *testing.T) {
 	m := newHandlerModel()
 	m.chatModel.Messages = []message{

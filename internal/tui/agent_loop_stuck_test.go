@@ -108,7 +108,7 @@ func TestStuckDetector_Observe_StreakThreshold(t *testing.T) {
 }
 
 // TestStuckDetector_ObserveResult_PollingNotStuck reproduces session
-// 260808-1813: bash_output polled a running background command with identical
+// 260808-1813: bash_wait polled a running background command with identical
 // args, but every response carried fresh progress (elapsed, streamed output).
 // Changing results must reset the identical-call streak so productive polling
 // outlives maxRepeatToolCalls.
@@ -116,11 +116,11 @@ func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
 	s := &stuckDetector{}
 	args := map[string]any{"handle": "bg_16", "wait_ms": 1000}
 	for i := 0; i < maxRepeatToolCalls*3; i++ {
-		stuck, detail := s.observe("bash_output", args)
+		stuck, detail := s.observe("bash_wait", args)
 		if stuck {
 			t.Fatalf("poll %d flagged stuck: %s", i, detail)
 		}
-		s.observeResult("bash_output", map[string]any{
+		s.observeResult("bash_wait", map[string]any{
 			"handle":  "bg_16",
 			"elapsed": i,
 			"stdout":  fmt.Sprintf("line %d\n", i), // command progress: every response differs
@@ -133,11 +133,11 @@ func TestStuckDetector_ObserveResult_ChangingTimingDoesNotReset(t *testing.T) {
 	s := &stuckDetector{}
 	args := map[string]any{"handle": "bg_16"}
 	for i := 0; i < maxRepeatToolCalls; i++ {
-		stuck, _ := s.observe("bash_output", args)
+		stuck, _ := s.observe("bash_wait", args)
 		if i == maxRepeatToolCalls-1 && !stuck {
 			t.Fatalf("timing-only polls should trip after %d repeats", maxRepeatToolCalls)
 		}
-		s.observeResult("bash_output", map[string]any{
+		s.observeResult("bash_wait", map[string]any{
 			"handle":  "bg_16",
 			"elapsed": i,
 			"idle":    i + 1,
@@ -154,9 +154,9 @@ func TestStuckDetector_ObserveResult_IdenticalResultsStillStuck(t *testing.T) {
 	resp := map[string]any{"running": false, "stdout": "done"}
 	tripped := false
 	for i := 0; i < maxRepeatToolCalls; i++ {
-		stuck, _ := s.observe("bash_output", args)
+		stuck, _ := s.observe("bash_wait", args)
 		tripped = tripped || stuck
-		s.observeResult("bash_output", resp)
+		s.observeResult("bash_wait", resp)
 	}
 	if !tripped {
 		t.Errorf("identical calls with identical results should still trip after %d repeats", maxRepeatToolCalls)

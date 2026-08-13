@@ -13,7 +13,19 @@ import (
 )
 
 const (
-	defaultBashTimeout = 120 * time.Second
+	// defaultBashTimeout caps how long a command holds the foreground before it
+	// is handed to the supervisor. It is a budget for the *turn*, not for the
+	// command: nothing is killed at the threshold, the command keeps running,
+	// and the caller gets a handle to watch it with.
+	//
+	// Thirty seconds is chosen so the common case stays whole — the vast
+	// majority of commands in this repo (git, go vet, a package test run, a
+	// warm build) finish well inside it — while anything genuinely long stops
+	// blocking a turn for two minutes before it says so. A caller that knows
+	// its command is long should raise `timeout` rather than discover this
+	// limit; the idle check then does the real work, firing well before the
+	// raised hard limit.
+	defaultBashTimeout = 30 * time.Second
 	maxBashTimeout     = 10 * time.Minute
 )
 
@@ -21,8 +33,10 @@ const (
 type BashInput struct {
 	// The shell command to execute.
 	Command string `json:"command"`
-	// Optional timeout in milliseconds. Default: 120000 (2 minutes). Max: 600000 (10 minutes).
-	// On expiry the command is moved to the background, not killed.
+	// Optional timeout in milliseconds. Default: 30000 (30 seconds). Max: 600000 (10 minutes).
+	// On expiry the command is moved to the background, not killed. Raise it for
+	// work you already know is long (a full test suite, an image build) so it
+	// finishes in the foreground instead of costing a round trip.
 	Timeout int `json:"timeout,omitempty"`
 	// Optional idle timeout in milliseconds. A command that produces no output
 	// at all for this long is moved to the background. Default: 90000.
@@ -41,7 +55,7 @@ type BashOutput struct {
 	// Running is true when the command outlived its timeout and is still
 	// executing in the background.
 	Running bool `json:"running,omitempty"`
-	// Handle identifies a still-running command for bash_output and bash_kill.
+	// Handle identifies a still-running command for bash_wait and bash_kill.
 	Handle string `json:"handle,omitempty"`
 	// Elapsed is how long the command has been running in total.
 	Elapsed string `json:"elapsed,omitempty"`
@@ -81,8 +95,8 @@ type BashStatus struct {
 	Note        string `json:"note,omitempty"`
 }
 
-// BashOutputInput asks for output accumulated by a backgrounded command.
-type BashOutputInput struct {
+// BashWaitInput asks for output accumulated by a backgrounded command.
+type BashWaitInput struct {
 	// Handle returned by a previous bash call.
 	Handle string `json:"handle"`
 	// WaitMs blocks up to this long for new output or for the command to exit,
@@ -97,11 +111,11 @@ type BashKillInput struct {
 	Handle string `json:"handle"`
 }
 
-const maxBashOutputWait = 60 * time.Second
+const maxBashWait = 60 * time.Second
 
 const bashDescription = `Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.
 
-A command that runs past its timeout, or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Use bash_output to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.`
+A command that runs past its timeout (30s by default), or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Pass a larger timeout for work you already know is long — a full test suite, an image build — rather than letting the default hand it off. Use bash_wait to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.`
 
 func newBashTool(sb *Sandbox, sup *BashSupervisor) (tool.Tool, error) {
 	return newTool("bash", bashDescription, func(ctx agent.Context, input BashInput) (BashOutput, error) {
@@ -169,13 +183,13 @@ func clampDuration(ms int, fallback, maxDur time.Duration) time.Duration {
 // the model when something can actually background a command — a caller that
 // builds its own supervisor and never streams need not carry the extra schema.
 func BashControlTools(sup *BashSupervisor) ([]tool.Tool, error) {
-	outputTool, err := newTool("bash_output",
-		"Read output produced by a backgrounded shell command since the last read. Blocks up to 60 seconds for new output or command exit; use wait_ms to choose a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent.",
-		func(_ agent.Context, input BashOutputInput) (BashStatus, error) {
+	waitTool, err := newTool("bash_wait",
+		"Wait on a backgrounded shell command and return whatever it produced since the last wait. Blocks up to 60 seconds for new output or for the command to exit; use wait_ms for a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent. Wait once with a generous wait_ms rather than calling this in a loop — each call is a round trip, and an empty result means nothing new since the last one, not that the command is stuck.",
+		func(_ agent.Context, input BashWaitInput) (BashStatus, error) {
 			if input.Handle == "" {
 				return BashStatus{}, fmt.Errorf("handle is required (running: %v)", sup.Handles())
 			}
-			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, maxBashOutputWait, maxBashOutputWait))
+			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, maxBashWait, maxBashWait))
 		})
 	if err != nil {
 		return nil, err
@@ -193,5 +207,5 @@ func BashControlTools(sup *BashSupervisor) ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{outputTool, killTool}, nil
+	return []tool.Tool{waitTool, killTool}, nil
 }

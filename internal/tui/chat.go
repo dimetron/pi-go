@@ -114,6 +114,19 @@ type message struct {
 	// which is the wrong one. Empty for synthetic cards (grounding) and for any
 	// provider that does not populate FunctionCall.ID; see matchToolResultCard.
 	toolID string
+	// pollCount counts how many calls have folded into this card. A polling
+	// tool (bash_wait on a running command) repeats the same call every few
+	// seconds by design; each repeat used to append a fresh card, so a command
+	// polled fifty times scrolled fifty near-identical blocks past the user.
+	// Repeats now refresh the card in place and bump this counter, which the
+	// header shows as "×N". Zero for a card that was called once.
+	pollCount int
+	// pendingRefresh marks a card whose result has been superseded by a newer
+	// call that folded into it: the previous output is still on screen, but a
+	// fresh result is in flight. It is what lets the card keep showing the last
+	// poll's window instead of blanking for the seconds a poll takes, and
+	// matchToolResultCard treats it like an empty card when binding the result.
+	pendingRefresh bool
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
 	agentID       string    // subagent ID for matching events
 	agentType     string    // subagent type (e.g. "task", "explore")
@@ -189,11 +202,12 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	h = fnvInt(h, width)
 	h = fnvInt(h, m.pipelineStep)
 	h = fnvInt(h, m.pipelineTotal)
+	h = fnvInt(h, m.pollCount)
 	h = fnvInt(h, int(themeKey))
 	// The pending-tool bullet blinks on a wall-clock phase; a cached render
 	// must not freeze at one phase, so the phase is part of the key. Finished
 	// cards render the bullet solid and must not re-render on the phase.
-	if blinkOn && m.role == "tool" && m.content == "" {
+	if blinkOn && m.toolPending() {
 		h = fnvByte(h, 1)
 	}
 
@@ -216,7 +230,17 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if m.preRendered {
 		flags |= 1 << 5
 	}
+	if m.pendingRefresh {
+		flags |= 1 << 6
+	}
 	return fnvByte(h, flags)
+}
+
+// toolPending reports whether a tool card is still waiting on a result, and so
+// should draw the blinking bullet rather than the solid one. A card refreshed
+// by a repeat call is pending even though it still shows the previous result.
+func (m *message) toolPending() bool {
+	return m.role == "tool" && (m.content == "" || m.pendingRefresh)
 }
 
 // agentEv is a single event from a subagent's event stream.
