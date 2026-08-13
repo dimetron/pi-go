@@ -46,13 +46,14 @@ func xaiServerSideTools() []responses.ToolUnionParam {
 	return out
 }
 
+// xaiBuiltInTool builds `{"type":"<typ>"}`, which is the whole of a built-in
+// tool object on xAI's wire. The JSON is written out directly rather than
+// marshaled from a map: typ only ever comes from xaiServerSideToolTypes, so
+// the shape is fixed, there is nothing in it that needs escaping, and the
+// alternative is an error path that can never be taken and never be tested.
+// TestXAIBuiltInToolWireFormat pins the bytes against the marshaled form.
 func xaiBuiltInTool(typ string) responses.ToolUnionParam {
-	raw, err := json.Marshal(map[string]string{"type": typ})
-	if err != nil {
-		// typ is a package-level constant; marshal of a string map cannot fail.
-		panic("xai built-in tool: " + err.Error())
-	}
-	return param.Override[responses.ToolUnionParam](json.RawMessage(raw))
+	return param.Override[responses.ToolUnionParam](json.RawMessage(`{"type":"` + typ + `"}`))
 }
 
 // xaiToolsEnabled reports whether the caller explicitly enabled xAI server-side tools.
