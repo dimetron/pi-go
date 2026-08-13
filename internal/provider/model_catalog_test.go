@@ -23,6 +23,7 @@ func TestEmbeddedModelCatalog(t *testing.T) {
 		{"anthropic", "claude-opus-5"},
 		{"anthropic", "claude-opus-4-8"},
 		{"anthropic", "claude-3-5-sonnet-20241022"},
+		{"gemini", "gemini-3.7-flash"},
 		{"gemini", "gemini-3.6-flash"},
 		{"gemini", "gemini-3.5-flash"},
 	}
@@ -74,6 +75,7 @@ func TestEmbeddedContextWindows(t *testing.T) {
 		{"claude-mythos-5", 1_000_000},
 		{"claude-opus-5", 1_000_000},
 		{"claude-3-5-sonnet", 200_000},
+		{"gemini-3.7-flash", 1_048_576},
 		{"gemini-3.6-flash", 1_048_576},
 		{"phi4:14b", 16_384},
 	}

@@ -3,7 +3,7 @@
 Models available through `pi model list`, organized by provider.
 The latest 5 top generative/chat models per provider are listed below.
 
-Last updated: 2026-08-01
+Last updated: 2026-08-13
 
 ## Anthropic
 
@@ -21,13 +21,13 @@ Last updated: 2026-08-01
 
 | # | Model Name | Description |
 |---|------------|-------------|
-| 1 | `gemini-3.6-flash` | Gemini 3.6 Flash |
-| 2 | `gemini-3.5-flash` | Gemini 3.5 Flash |
-| 3 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite |
-| 4 | `gemini-3.5-pro` | Gemini 3.5 Pro |
-| 5 | `gemini-3.1-pro-preview` | Gemini 3.1 Pro Preview |
+| 1 | `gemini-3.7-flash` | Gemini 3.7 Flash |
+| 2 | `gemini-3.6-flash` | Gemini 3.6 Flash |
+| 3 | `gemini-3.5-flash` | Gemini 3.5 Flash |
+| 4 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite |
+| 5 | `gemini-3.5-pro` | Gemini 3.5 Pro |
 
-> 50 models total. Excludes embedding, imagen, lyria, veo, robotics, tts, and audio models.
+> 51 models total. Excludes embedding, imagen, lyria, veo, robotics, tts, and audio models.
 > See `pi model list gemini` for the full list.
 
 ## Ollama
