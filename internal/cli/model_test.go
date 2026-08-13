@@ -40,12 +40,21 @@ func isolateRunModelListEnv(t *testing.T) {
 	// config.APIKeys/BaseURLs lookups. Do NOT clear vars the caller may have
 	// already set; we clear here only the unprefixed "real machine" sources
 	// that we know about.
+	//
+	// Every entry in allProviders needs its key and base-URL vars listed here.
+	// The no-args path queries any provider with either one set, so a var left
+	// out sends a live request to that vendor from a unit test — which then
+	// fails, or passes, depending on whose machine it runs on. loadDotEnv uses
+	// os.Setenv, so a value picked up from .pi-go/.env by an earlier
+	// non-isolated test outlives that test and reaches this one.
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 		"GEMINI_API_KEY", "GOOGLE_API_KEY",
 		"MISTRAL_API_KEY",
+		"XAI_API_KEY",
 		"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY",
 		"ANTHROPIC_BASE_URL", "GEMINI_BASE_URL", "MISTRAL_BASE_URL",
+		"XAI_BASE_URL",
 		"OLLAMA_HOST",
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
 	} {

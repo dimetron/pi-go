@@ -83,6 +83,8 @@ func defaultAPIBaseURL(providerName string) string {
 		return "https://api.openai.com"
 	case "gemini":
 		return "https://generativelanguage.googleapis.com"
+	case "xai":
+		return "https://api.x.ai"
 	default:
 		return ""
 	}
@@ -97,6 +99,8 @@ func pingEndpoint(providerName string) string {
 		return "/v1/models"
 	case "gemini":
 		return "/v1beta/models"
+	case "xai":
+		return "/v1/models"
 	default:
 		return "/"
 	}
@@ -106,8 +110,11 @@ func pingEndpoint(providerName string) string {
 // custom base URL that may already include the provider API version prefix.
 func pingEndpointForBaseURL(providerName, baseURL string) string {
 	endpoint := pingEndpoint(providerName)
-	if providerName == "openai" && strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
-		return "/models"
+	switch providerName {
+	case "openai", "xai":
+		if strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
+			return "/models"
+		}
 	}
 	return endpoint
 }
@@ -448,7 +455,7 @@ func setPingAuthHeaders(req *http.Request, providerName, apiKey string) {
 	case "anthropic":
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "openai":
+	case "openai", "xai":
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	case "azure":
 		req.Header.Set("Api-Key", apiKey)

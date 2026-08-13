@@ -106,6 +106,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | OpenAI | `gpt-*` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` |
 | Google Gemini | `gemini-*` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_BASE_URL` |
 | Mistral | `mistral-*`, `magistral-*` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` |
+| xAI (Grok) | `grok-*` | `XAI_API_KEY` | `XAI_BASE_URL` |
 | Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
 | OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
 | Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
@@ -288,7 +289,7 @@ Self-hosted or LAN endpoints can be declared in config instead of exported in ev
 ```
 
 Precedence is `--url` flag, then environment variable, then `baseURLs` config. The matching env vars are
-`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `XAI_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
 CI override still takes effect. An empty env var does not mask a configured value.
 
 ### Ollama generation tuning

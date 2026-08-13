@@ -104,6 +104,12 @@ func TestSetPingAuthHeaders(t *testing.T) {
 			wantHeaders: map[string]string{"Authorization": "Bearer sk-openai"},
 		},
 		{
+			name:        "xai uses bearer",
+			provider:    "xai",
+			apiKey:      "xai-key",
+			wantHeaders: map[string]string{"Authorization": "Bearer xai-key"},
+		},
+		{
 			name:        "azure uses api-key header",
 			provider:    "azure",
 			apiKey:      "azure-key",

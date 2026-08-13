@@ -2,7 +2,7 @@
 //
 // cache_apply.go provides the shared helper that any provider's wire builder
 // may call to check whether the user has opted out of prompt caching. Today
-// only the Anthropic provider honors it; the openai, gemini, mistral,
+// only the Anthropic provider honors it; the openai, gemini, mistral, xai,
 // ollama, and azure builders ignore the option entirely.
 package provider
 

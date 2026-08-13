@@ -103,6 +103,21 @@ func loadKnownModels() (map[string][]string, error) {
 			"pixtral",
 			"ministral",
 		},
+		"xai": {
+			// Grok 4.x generalist tiers. Matching is prefix-based, so the
+			// undated base names below also accept xAI's "-latest" aliases
+			// (grok-4.6-latest) and any future dated build of the same tier.
+			"grok-4.6",
+			"grok-4.5",
+			"grok-4.3",
+			// The 4.20 builds ship as separate reasoning and non-reasoning
+			// model IDs; neither name is a prefix of the other, so both are
+			// listed.
+			"grok-4.20-0309-reasoning",
+			"grok-4.20-0309-non-reasoning",
+			"grok-4.20-multi-agent-0309",
+			"grok-build-0.1",
+		},
 	}
 
 	for _, provider := range []string{"anthropic", "openai"} {

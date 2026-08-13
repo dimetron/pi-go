@@ -165,6 +165,7 @@ var modelPrefixes = map[string]string{
 	"gemini":    "gemini",
 	"mistral":   "mistral",
 	"magistral": "mistral",
+	"grok":      "xai",
 }
 
 // OllamaModelPrefixes are model prefixes that previously auto-routed to Ollama.
@@ -368,7 +369,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -475,6 +476,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "mistral":
 		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
+	case "xai":
+		return NewXAI(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "opencode":
 		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	default:

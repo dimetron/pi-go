@@ -178,6 +178,7 @@ var modelPrefixes = map[string]string{
 	"gpt":    "openai",
 	"gpt-5":  "openai",
 	"gemini": "gemini",
+	"grok":   "xai",
 }
 
 // ResolveRole returns the model name, provider, and advisor settings for a given role.
@@ -539,6 +540,7 @@ func APIKeys() map[string]string {
 		"azure":     {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
 		"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		"mistral":   {"MISTRAL_API_KEY"},
+		"xai":       {"XAI_API_KEY"},
 		"ollama":    {"OLLAMA_API_KEY"},
 		"opencode":  {"OPENCODE_API_KEY"},
 	}
@@ -563,6 +565,7 @@ func BaseURLs() map[string]string {
 		"openai":    "OPENAI_BASE_URL",
 		"gemini":    "GEMINI_BASE_URL",
 		"mistral":   "MISTRAL_BASE_URL",
+		"xai":       "XAI_BASE_URL",
 		"ollama":    "OLLAMA_HOST",
 		"opencode":  "OPENCODE_BASE_URL",
 	}

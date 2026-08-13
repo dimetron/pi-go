@@ -19,6 +19,10 @@ func TestProviderDefaultBaseURL(t *testing.T) {
 		{"openai", "https://api.openai.com"},
 		{"gemini", "https://generativelanguage.googleapis.com"},
 		{"mistral", "https://api.mistral.ai"},
+		// Deliberately without the /v1 segment that the LLM-side default
+		// carries: listBearerModels appends it, and a versioned value here
+		// would produce /v1/v1/models.
+		{"xai", "https://api.x.ai"},
 		{"unknown", ""},
 	}
 	for _, tt := range tests {
