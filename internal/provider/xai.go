@@ -10,33 +10,37 @@ import (
 	"github.com/google/uuid"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"google.golang.org/adk/v2/model"
 )
 
 const xaiDefaultBaseURL = "https://api.x.ai/v1"
 
-// xaiConversationHeader is xAI's cache-affinity hint for the Chat Completions
-// endpoint. xAI routes every request carrying the same value to the same
-// server, which is what makes a prompt cache hit likely; without it a
-// multi-turn session lands on a cache-cold server and pays full input price on
-// the whole prefix every turn. (The Responses API spells the same thing
-// `prompt_cache_key`.)
+// xaiConversationHeader is xAI's cache-affinity hint. xAI routes every request
+// carrying the same value to the same server, which is what makes a prompt
+// cache hit likely; without it a multi-turn session lands on a cache-cold
+// server and pays full input price on the whole prefix every turn. The
+// Responses API also accepts prompt_cache_key; we keep the header because it
+// is what the Chat Completions docs named and gateways already know.
 const xaiConversationHeader = "x-grok-conv-id"
 
 // xaiModel implements model.LLM for the xAI (Grok) API.
 //
-// xAI exposes an OpenAI-compatible chat completions endpoint, so this reuses
-// the OpenAI SDK and the shared oai* request/response helpers against
-// api.x.ai. Two things are xAI's own: the conversation header above, and
-// reasoning_effort, which Grok reasoning models accept with an extra "xhigh"
-// tier above OpenAI's.
+// xAI's recommended surface is the OpenAI-compatible Responses API
+// (/v1/responses). Chat Completions still works for function calling, but
+// server-side tools (web_search, x_search, code_interpreter) only run on
+// Responses — that is the loop the Python SDK's server_side_tools.py example
+// drives. This type embeds openaiModel so it can reuse the Responses stream
+// and non-stream runners; the xAI-specific pieces are the conversation
+// header, the extra reasoning_effort tier, and the built-in tools.
 type xaiModel struct {
-	modelName string
-	client    openai.Client
+	openaiModel
 	// reasoningEffort is the resolved thinking level, empty when the level is
 	// unset or unrecognized so the field is left off the wire entirely.
 	reasoningEffort shared.ReasoningEffort
+	enableXAITools  bool
 }
 
 // NewXAI creates an xAI model.LLM.
@@ -73,52 +77,98 @@ func NewXAI(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string,
 	}
 	client := openai.NewClient(opts...)
 	return &xaiModel{
-		modelName:       modelName,
-		client:          client,
+		openaiModel: openaiModel{
+			modelName: modelName,
+			client:    client,
+		},
+		enableXAITools:  xaiToolsEnabled(llmOpts != nil && llmOpts.EnableXAITools),
 		reasoningEffort: xaiReasoningEffort(thinkingLevel),
 	}, nil
 }
 
-func (m *xaiModel) Name() string { return m.modelName }
-
 func (m *xaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, systemInstruction := oaiContentsToMessages(req.Contents, req.Config)
+		if req == nil {
+			_ = yield(nil, fmt.Errorf("xAI responses: nil LLM request"))
+			return
+		}
+		input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
+		if err != nil {
+			_ = yield(nil, fmt.Errorf("xAI responses input: %w", err))
+			return
+		}
 
 		modelName := req.Model
 		if modelName == "" {
 			modelName = m.modelName
 		}
 
-		params := openai.ChatCompletionNewParams{
-			Model:    modelName,
-			Messages: messages,
+		params := responses.ResponseNewParams{
+			Model: modelName,
+			Input: input,
+			// Match the OpenAI Responses default: do not persist the turn
+			// server-side. Multi-turn continues via the full conversation
+			// replayed in params.Input.
+			Store: param.NewOpt(false),
 		}
-		if systemInstruction != "" {
-			params.Messages = append([]openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemInstruction),
-			}, params.Messages...)
+		if instructions != "" {
+			params.Instructions = param.NewOpt(instructions)
 		}
 
-		if req.Config != nil && len(req.Config.Tools) > 0 {
-			params.Tools = oaiGenaiToolsToOpenAI(req.Config.Tools)
-			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-				OfAuto: openai.String("auto"),
+		tools := xaiRequestTools(req, m.enableXAITools)
+		if len(tools) > 0 {
+			params.Tools = tools
+		}
+		if !xaiToolsDisabled() && m.enableXAITools {
+			params.Include = []responses.ResponseIncludable{
+				responses.ResponseIncludableWebSearchCallResults,
+				responses.ResponseIncludableWebSearchCallActionSources,
+				responses.ResponseIncludableCodeInterpreterCallOutputs,
 			}
 		}
 
 		if m.reasoningEffort != "" && xaiModelReasons(modelName) {
-			params.ReasoningEffort = m.reasoningEffort
+			params.Reasoning = shared.ReasoningParam{Effort: m.reasoningEffort}
+		}
+
+		send := func(y func(*model.LLMResponse, error) bool) {
+			var sendErr error
+			if stream {
+				_, sendErr = m.runResponsesStreaming(ctx, params, y)
+			} else {
+				_, sendErr = m.runResponsesNonStreaming(ctx, params, y)
+			}
+			if sendErr == nil {
+				return
+			}
+			if stream {
+				_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: sendErr.Error()}, nil)
+				return
+			}
+			_ = y(nil, fmt.Errorf("xAI Responses API failed: %w", sendErr))
 		}
 
 		if stream {
-			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-				oaiRunStreaming(ctx, &m.client, params, y)
-			})
+			retryStream(ctx, streamRetryConfig(), yield, send)
 		} else {
-			oaiRunNonStreaming(ctx, &m.client, params, yield)
+			send(yield)
 		}
 	}
+}
+
+// xaiRequestTools is the function declarations from the ADK request plus
+// xAI's built-in server-side tools. The built-ins run inside the request
+// (the model searches / executes and keeps going); client-side functions
+// still come back as FunctionCalls for pi's own loop to execute.
+func xaiRequestTools(req *model.LLMRequest, enabled bool) []responses.ToolUnionParam {
+	var tools []responses.ToolUnionParam
+	if req != nil && req.Config != nil && len(req.Config.Tools) > 0 {
+		tools = oaiGenaiToolsToResponses(req.Config.Tools)
+	}
+	if enabled && !xaiToolsDisabled() {
+		tools = append(tools, xaiServerSideTools()...)
+	}
+	return tools
 }
 
 // xaiReasoningEffort maps pi's thinking level onto xAI's reasoning_effort.

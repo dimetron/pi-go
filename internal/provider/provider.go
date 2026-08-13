@@ -454,6 +454,9 @@ type LLMOptions struct {
 	// and completions are not: the log holds the entire conversation in
 	// cleartext, which is the point and also the reason it is off by default.
 	TraceHTTP bool
+	// EnableXAITools opts into xAI server-side tools (web search, X search,
+	// and code interpreter) for xAI Responses API requests.
+	EnableXAITools bool
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.
