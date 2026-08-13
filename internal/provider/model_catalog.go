@@ -68,9 +68,11 @@ func loadKnownModels() (map[string][]string, error) {
 		"anthropic": nil,
 		"openai":    nil,
 		"gemini": {
-			// Latest stable Gemini tier: 3.6 Flash.
+			// Latest stable Gemini tier: 3.7 Flash.
+			"gemini-3.7-flash",
+			// 3.6 Flash (previous stable).
 			"gemini-3.6-flash",
-			// 3.5 series (previous stable).
+			// 3.5 series.
 			"gemini-3.5-flash",
 			"gemini-3.5-flash-lite",
 			"gemini-3.5-pro",
