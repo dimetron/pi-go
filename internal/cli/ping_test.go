@@ -410,6 +410,10 @@ func TestPingEndpointForBaseURL(t *testing.T) {
 		{"openai versioned custom base", "openai", "http://127.0.0.1:2276/v1", "/models"},
 		{"openai versioned custom base with slash", "openai", "http://127.0.0.1:2276/v1/", "/models"},
 		{"anthropic unchanged", "anthropic", "https://api.anthropic.com/v1", "/v1/messages"},
+		// XAI_BASE_URL is documented with the version segment, so the
+		// versioned form is the common case here, not the exception.
+		{"xai default base", "xai", "https://api.x.ai", "/v1/models"},
+		{"xai versioned custom base", "xai", "https://api.x.ai/v1", "/models"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

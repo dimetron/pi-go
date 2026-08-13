@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/openai/openai-go/v3/shared"
@@ -40,6 +41,13 @@ func TestNewXAIWithTransportOptions(t *testing.T) {
 	}
 	if m == nil {
 		t.Fatal("expected non-nil model")
+	}
+}
+
+func TestNewXAIRejectsBadCACert(t *testing.T) {
+	opts := &LLMOptions{CACertPath: filepath.Join(t.TempDir(), "absent.pem")}
+	if _, err := NewXAI(context.Background(), "grok-4.6", "test-key", "", "high", opts); err == nil {
+		t.Fatal("expected an error for an unreadable CA certificate")
 	}
 }
 
@@ -293,6 +301,110 @@ func TestXAIExtraHeaderOverridesConvID(t *testing.T) {
 	xaiDrain(t, m, "")
 	if got := header.Get(xaiConversationHeader); got != "pinned-id" {
 		t.Errorf("%s = %q, want the explicit override %q", xaiConversationHeader, got, "pinned-id")
+	}
+}
+
+func TestXAISendsSystemInstructionAndTools(t *testing.T) {
+	var header http.Header
+	var body map[string]any
+	srv := xaiCaptureServer(t, &header, &body)
+	defer srv.Close()
+
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", nil)
+	if err != nil {
+		t.Fatalf("NewXAI() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}}},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: "You are terse."}}},
+			Tools: []*genai.Tool{{
+				FunctionDeclarations: []*genai.FunctionDeclaration{{
+					Name:        "read_file",
+					Description: "Read a file",
+				}},
+			}},
+		},
+	}
+	for _, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+	}
+
+	messages, _ := body["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatal("expected messages on the wire")
+	}
+	first, _ := messages[0].(map[string]any)
+	if first["role"] != "system" || first["content"] != "You are terse." {
+		t.Errorf("first message = %v, want the system instruction prepended", first)
+	}
+
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %v, want one declaration", body["tools"])
+	}
+	if body["tool_choice"] != "auto" {
+		t.Errorf("tool_choice = %v, want auto", body["tool_choice"])
+	}
+}
+
+func TestXAIStreaming(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`,
+			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{"content":" from Grok"},"finish_reason":null}]}`,
+			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`,
+		}
+		for _, c := range chunks {
+			_, _ = w.Write([]byte("data: " + c + "\n\n"))
+			w.(http.Flusher).Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", nil)
+	if err != nil {
+		t.Fatalf("NewXAI() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}}},
+	}
+	var partials []string
+	var final *model.LLMResponse
+	for resp, err := range m.GenerateContent(context.Background(), req, true) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+		if resp.Partial {
+			partials = append(partials, resp.Content.Parts[0].Text)
+			continue
+		}
+		final = resp
+	}
+
+	if len(partials) != 2 {
+		t.Errorf("partials = %v, want two deltas", partials)
+	}
+	if final == nil {
+		t.Fatal("expected a final response")
+	}
+	if !final.TurnComplete {
+		t.Error("expected TurnComplete = true on the final response")
+	}
+	if final.Content == nil || len(final.Content.Parts) == 0 {
+		t.Fatal("expected content with parts")
+	}
+	if got := final.Content.Parts[0].Text; got != "Hello from Grok" {
+		t.Errorf("accumulated text = %q, want %q", got, "Hello from Grok")
+	}
+	if final.UsageMetadata == nil || final.UsageMetadata.PromptTokenCount != 8 {
+		t.Errorf("usage = %+v, want prompt_tokens 8", final.UsageMetadata)
 	}
 }
 
