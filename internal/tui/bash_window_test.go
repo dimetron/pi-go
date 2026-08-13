@@ -76,7 +76,10 @@ func TestFormatToolResult_PollOfRunningCommandIsReadable(t *testing.T) {
 
 	got := formatToolResult(data)
 
-	if strings.Contains(got, `&`) || strings.HasPrefix(got, "{") {
+	// The tell for the raw-JSON fallback is Go's `\u0026` escaping of &, not a
+	// bare ampersand: the window now prints the command, and shell commands are
+	// full of legitimate &&.
+	if strings.Contains(got, `\u0026`) || strings.HasPrefix(got, "{") {
 		t.Errorf("poll rendered as raw JSON: %q", got)
 	}
 	if !strings.Contains(got, "no new output") {
@@ -84,6 +87,42 @@ func TestFormatToolResult_PollOfRunningCommandIsReadable(t *testing.T) {
 	}
 	if !strings.Contains(got, "1m30s elapsed") {
 		t.Errorf("expected elapsed time in %q", got)
+	}
+	// The command being watched belongs in the box, not only in the card header,
+	// which truncates to the terminal's arg width.
+	if !strings.Contains(got, "$ make lint && make vet") {
+		t.Errorf("expected the watched command in the window, got %q", got)
+	}
+}
+
+// The bash tool's own handoff result carries no command field — only a poll's
+// BashStatus does — and that card needs none, since its header is the command.
+// A "$ " line with nothing after it would be worse than no line.
+func TestFormatBashWindow_NoCommandLineWhenResultNamesNoCommand(t *testing.T) {
+	got := formatToolResult(map[string]any{
+		"handle": "bg_1", "running": true, "stdout": "compiling\n",
+		"elapsed": "5s", "idle": "1s",
+	})
+
+	if strings.Contains(got, "$ ") {
+		t.Errorf("empty command line rendered: %q", got)
+	}
+	if !strings.Contains(got, "compiling") {
+		t.Errorf("expected the output in %q", got)
+	}
+}
+
+// A backgrounded heredoc or multi-line pipeline must be collapsed before it
+// reaches the box: raw newlines there break out of the "  │ " gutter and knock
+// the rail out of its column.
+func TestFormatBashWindow_CollapsesMultiLineCommand(t *testing.T) {
+	got := formatToolResult(map[string]any{
+		"handle": "bg_1", "command": "cat <<EOF\n  one\n  two\nEOF",
+		"running": true, "stdout": "", "elapsed": "5s",
+	})
+
+	if !strings.Contains(got, "$ cat <<EOF one two EOF") {
+		t.Errorf("multi-line command not collapsed: %q", got)
 	}
 }
 

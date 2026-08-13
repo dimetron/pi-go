@@ -25,7 +25,7 @@ const (
 	// maxRepeatToolCalls is the number of identical consecutive tool calls
 	// before the loop is considered stuck and aborted. A repeated call whose
 	// result changes resets the count (see observeResult): polling tools like
-	// bash_output repeat identical args by design, and only identical results
+	// bash_wait repeat identical args by design, and only identical results
 	// make the repetition meaningless.
 	maxRepeatToolCalls = 10
 
@@ -200,7 +200,7 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 }
 
 // observeResult records a tool call's response. Polling tools repeat identical
-// calls by design — bash_output on a running command sends the same handle
+// calls by design — bash_wait on a running command sends the same handle
 // every time and gets fresh output back — so a response that differs from the
 // streak's previous response is progress, and resets the identical-call
 // streak. A response identical to the last one keeps the streak counting:
@@ -211,11 +211,11 @@ func (s *stuckDetector) observeResult(name string, response map[string]any) {
 	if name != s.lastName {
 		return
 	}
-	// bash_output includes elapsed/idle fields that change on every poll even
+	// bash_wait includes elapsed/idle fields that change on every poll even
 	// when the command produced no new output. Those fields are progress for the
 	// UI, not progress from the command, so exclude them from loop detection.
 	stable := response
-	if name == "bash_output" {
+	if isBashPoll(name) {
 		stable = make(map[string]any, len(response))
 		for key, value := range response {
 			if key != "elapsed" && key != "idle" {
@@ -916,11 +916,26 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		detail:  string(argsJSON),
 	})
 	toolIn := toolCallSummary(msg.name, msg.args)
-	if msg.name == "bash_output" || msg.name == "bash_kill" {
+	handle, _ := msg.args["handle"].(string)
+	if isBashControl(msg.name) {
 		toolIn = m.bashControlToolIn(msg.name, msg.args, toolIn)
+	}
+	if isBashPoll(msg.name) {
+		if i := findPollCard(m.chatModel.Messages, handle); i >= 0 {
+			card := &m.chatModel.Messages[i]
+			card.toolID = msg.id
+			card.pollCount++
+			card.pendingRefresh = true
+			return m, waitForAgent(m.agentCh)
+		}
 	}
 	newMsg := message{
 		role: "tool", tool: msg.name, toolIn: toolIn, toolID: msg.id,
+		// The handle identifies the command this card polls, so the next poll of
+		// the same handle can find and refresh this card instead of adding one.
+		// Only bash cards use agentID for live-event routing (handleBashEvent
+		// filters on tool=="bash"), so reusing the field here cannot cross wires.
+		agentID: handle, pollCount: 1,
 	}
 	if msg.name == "agent" || msg.name == "subagent" {
 		// A single subagent tool call in parallel/chain mode spawns N children.
@@ -1063,19 +1078,52 @@ func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cm
 	}
 	if i := matchToolResultCard(m.chatModel.Messages, msg.id, msg.name); i >= 0 {
 		m.chatModel.Messages[i].content = content
+		m.chatModel.Messages[i].pendingRefresh = false
 		// Bind the card to its background handle when the bash result carries
 		// one. The bash:start event that normally stamps agentID travels on a
 		// separate channel and can arrive before the card exists, dropping the
 		// binding; the result is the reliable place to recover it so a later
-		// bash_output/bash_kill card can still find the command.
+		// bash_wait/bash_kill card can still find the command.
 		if msg.name == "bash" {
 			if handle := bashHandleFromResult(msg.content); handle != "" {
 				m.chatModel.Messages[i].agentID = handle
 			}
 		}
+		// A poll names its command in its own result, so a card that had to
+		// settle for a bare handle at call time can say what it is polling as
+		// soon as the answer lands. bashControlToolIn can only find the command
+		// when the bash card that started it is still in this transcript; after a
+		// /resume, a compaction, or a lost bash:start binding it is not, and the
+		// header read "bash_wait(bg_4)" for the rest of the command's life.
+		if isBashControl(msg.name) {
+			if header := bashControlHeaderFromResult(msg.content); header != "" {
+				m.chatModel.Messages[i].toolIn = header
+			}
+		}
 	}
 	m.refreshDiffStats()
 	return m, waitForAgent(m.agentCh)
+}
+
+// bashControlHeaderFromResult builds the "handle: command" header for a
+// bash_wait/bash_kill card out of the poll's own result, which carries both
+// (BashStatus.Command). Returns "" when either is missing, so the header the
+// card already has survives.
+//
+// The command is collapsed to one line: a header is one line by construction,
+// and a backgrounded heredoc or a multi-line pipeline would otherwise write its
+// newlines straight into the card and knock the rail out of its column.
+func bashControlHeaderFromResult(content string) string {
+	var data map[string]any
+	if json.Unmarshal([]byte(content), &data) != nil {
+		return ""
+	}
+	handle, _ := data["handle"].(string)
+	command, _ := data["command"].(string)
+	if handle == "" || command == "" {
+		return ""
+	}
+	return handle + ": " + collapseToSingleLine(command)
 }
 
 // bashHandleFromResult extracts the background handle from a raw bash tool
@@ -1087,6 +1135,28 @@ func bashHandleFromResult(content string) string {
 	}
 	h, _ := data["handle"].(string)
 	return h
+}
+
+// findPollCard returns the index of the card a repeated bash_wait poll should
+// refresh in place, or -1 when the poll deserves a card of its own.
+//
+// The rule is deliberately narrow: only the newest card in the transcript
+// qualifies, and only when it polls the same handle. Folding into an older card
+// would move fresh output above whatever the model did in between — a card that
+// jumps up the scrollback is worse than a duplicate one — and folding across
+// handles would merge two commands' windows. Anything the model says or does
+// between two polls therefore starts a new card, which is right: that text is
+// what makes the second poll a separate beat rather than a repeat.
+func findPollCard(messages []message, handle string) int {
+	if handle == "" || len(messages) == 0 {
+		return -1
+	}
+	i := len(messages) - 1
+	last := messages[i]
+	if last.role != "tool" || !isBashPoll(last.tool) || last.agentID != handle {
+		return -1
+	}
+	return i
 }
 
 // matchToolResultCard finds the chat card an arriving tool result belongs to,
@@ -1113,7 +1183,12 @@ func matchToolResultCard(messages []message, id, name string) int {
 			if messages[i].role != "tool" || messages[i].toolID != id {
 				continue
 			}
-			if messages[i].content == "" {
+			// pendingRefresh: a repeated poll folded into this card and its
+			// result is the one arriving now. The card still shows the previous
+			// poll's window — that is the point, it keeps the card from blanking
+			// while the poll runs — so the non-empty content must not read as
+			// "already answered" here.
+			if messages[i].content == "" || messages[i].pendingRefresh {
 				return i
 			}
 			// The card for this call already has its result: a duplicate
@@ -1149,13 +1224,13 @@ const bashEventPrefix = "bash:"
 // grow this without bound behind a window that shows five lines.
 const maxLiveBashEvents = 64
 
-// bashControlToolIn builds the header text for a bash_output/bash_kill card.
+// bashControlToolIn builds the header text for a bash_wait/bash_kill card.
 //
 // A poll's args carry only a handle, which on its own says nothing about what
 // is being polled. The original command lives on the bash card the supervisor
 // bound to this handle (handleBashEvent stamps it into agentID), so the header
-// folds that command in: "bash_output(bg_1): sleep 10 && echo done" reads far
-// better than a bare "bash_output". Falls back to the handle alone when no card
+// folds that command in: "bash_wait(bg_1): sleep 10 && echo done" reads far
+// better than a bare "bash_wait". Falls back to the handle alone when no card
 // is bound — the supervisor may have forgotten the command, or the transcript
 // was restored without one.
 func (m *model) bashControlToolIn(name string, args map[string]any, fallback string) string {

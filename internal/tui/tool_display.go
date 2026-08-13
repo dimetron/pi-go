@@ -157,11 +157,22 @@ func (t *ToolDisplayModel) renderSkillTool(msg message, dim lipgloss.Style, p Pa
 	return b.String()
 }
 
+// pollTally renders the "×N" suffix for a card that several repeated calls
+// folded into, or "" for a card called once. It tells the reader that the one
+// window on screen is the latest of N polls rather than the only one — the
+// count is the only trace those earlier polls now leave.
+func pollTally(msg message, dim lipgloss.Style) string {
+	if msg.pollCount < 2 {
+		return ""
+	}
+	return dim.Render(fmt.Sprintf(" ×%d", msg.pollCount))
+}
+
 // renderCompactTool renders a one-line tally for a tool message.
 func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
 	checkStyle := lipgloss.NewStyle().Foreground(p.Tool)
-	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.content == "")
+	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.toolPending())
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -176,6 +187,7 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p 
 		b.WriteString(dim.Render(args))
 		b.WriteString(dim.Render(")"))
 	}
+	b.WriteString(pollTally(msg, dim))
 
 	if msg.content != "" {
 		summary := toolResultSummary(msg.content)
@@ -463,7 +475,7 @@ func softWrap(s string, width int) []string {
 func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
 	argStyle := lipgloss.NewStyle().Foreground(p.Dim)
-	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.content == "")
+	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.toolPending())
 
 	var b strings.Builder
 	b.WriteString(toolBullet)
@@ -474,6 +486,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 		b.WriteString(argStyle.Render(args))
 		b.WriteString(dim.Render(")"))
 	}
+	b.WriteString(pollTally(msg, dim))
 	b.WriteString("\n")
 	if msg.content == "" && len(msg.agentEvents) > 0 {
 		// Still running: show the live tail instead of an empty card. Once the
@@ -502,7 +515,7 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 		switch {
 		case msg.tool == "read" && msg.toolIn != "":
 			styled = highlightReadOutput(lines, msg.toolIn, p)
-		case msg.tool == "bash" || msg.tool == "bash_output" || msg.tool == "bash_kill":
+		case msg.tool == "bash" || isBashControl(msg.tool):
 			// Bash output is plain text most of the time but frequently contains
 			// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
 			// through chroma's content-sniffing lexer so it gets at least some
@@ -563,7 +576,7 @@ func toolCallSummary(name string, args map[string]any) string {
 		if cmd, ok := args["command"].(string); ok {
 			return cmd
 		}
-	case "bash_output", "bash_kill":
+	case "bash_wait", "bash_output", "bash_kill":
 		if h, ok := args["handle"].(string); ok {
 			return h
 		}
@@ -729,7 +742,7 @@ func formatToolResult(data map[string]any) string {
 		return diag
 	}
 	// A backgrounded command, either at the moment of handoff (the bash tool) or
-	// on any later poll of it (bash_output, bash_kill). Both carry a handle, and
+	// on any later poll of it (bash_wait, bash_kill). Both carry a handle, and
 	// both have to be taken before the exit-code branch below.
 	//
 	// While such a command is still running it has no exit status: the bash tool
@@ -779,6 +792,16 @@ func formatBashWindow(handle string, data map[string]any) string {
 	timing := bashTiming(data)
 
 	var lines []string
+	// What is being watched, inside the box rather than only in the header.
+	// The header truncates to the terminal's arg width and leads with the
+	// handle, so on a narrow terminal a long pipeline reads as
+	// "bash_wait(bg_4: cd wiki && make dai...)" — the box has the full
+	// command, soft-wrapped, and stays legible when several handles are live.
+	// The bash tool's own handoff result carries no command field (only a poll's
+	// BashStatus does), and needs none: that card's header is the command.
+	if cmd := collapseToSingleLine(commandOf(data)); cmd != "" {
+		lines = append(lines, "$ "+cmd)
+	}
 	switch {
 	case running:
 		lines = append(lines, "⏳"+timing)
@@ -802,6 +825,32 @@ func formatBashWindow(handle string, data map[string]any) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// commandOf returns the command a bash result describes, or "" when the result
+// does not name one. Only a poll's BashStatus carries it; the bash tool's own
+// BashOutput does not.
+func commandOf(data map[string]any) string {
+	cmd, _ := data["command"].(string)
+	return cmd
+}
+
+// isBashPoll reports whether name is the tool the model uses to read a
+// backgrounded command.
+//
+// "bash_output" is the pre-rename name. It is still accepted because a restored
+// session written before the rename replays the old name, and without this the
+// card would lose its header, its formatter and its poll fold and render as a
+// bare unknown tool. Same reason the display answers to both "grep" and
+// "ripgrep".
+func isBashPoll(name string) bool {
+	return name == "bash_wait" || name == "bash_output"
+}
+
+// isBashControl reports whether name is one of the handle-taking tools that act
+// on an already-backgrounded command.
+func isBashControl(name string) bool {
+	return isBashPoll(name) || name == "bash_kill"
 }
 
 func commaTiming(timing string) string {

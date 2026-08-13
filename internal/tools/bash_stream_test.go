@@ -66,7 +66,7 @@ func TestStream_LenCountsEverythingEverWritten(t *testing.T) {
 	}
 }
 
-// TestStream_WaitWakesOnWrite covers the blocking read used by bash_output, and
+// TestStream_WaitWakesOnWrite covers the blocking read used by bash_wait, and
 // specifically the check-then-wait ordering: a waiter that took the channel
 // before a write must still be woken by it.
 func TestStream_WaitWakesOnWrite(t *testing.T) {

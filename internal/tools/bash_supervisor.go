@@ -379,7 +379,7 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 
 	note := fmt.Sprintf(
 		"Command %s and was moved to the background; it is still running. "+
-			"Read more with bash_output(handle=%q) or stop it with bash_kill(handle=%q). "+
+			"Read more with bash_wait(handle=%q) or stop it with bash_kill(handle=%q). "+
 			"Output above is everything produced so far.",
 		reason, p.id, p.id)
 	if strings.TrimSpace(stdout) == "" && strings.TrimSpace(stderr) == "" {

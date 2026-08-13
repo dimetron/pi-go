@@ -30,7 +30,7 @@ func TestBashControlTools_Registered(t *testing.T) {
 	for _, tool := range ts {
 		names[tool.Name()] = true
 	}
-	for _, want := range []string{"bash_output", "bash_kill"} {
+	for _, want := range []string{"bash_wait", "bash_kill"} {
 		if !names[want] {
 			t.Errorf("missing tool %q; got %v", want, names)
 		}
@@ -79,13 +79,13 @@ func TestBashControlTools_DefaultWaitsForOutput(t *testing.T) {
 	}
 
 	// An omitted wait_ms must use the same blocking-by-default behavior exposed
-	// by bash_output, rather than immediately returning an empty poll result.
-	res, err := runNamedTool(t, ts, "bash_output", map[string]any{"handle": out.Handle})
+	// by bash_wait, rather than immediately returning an empty poll result.
+	res, err := runNamedTool(t, ts, "bash_wait", map[string]any{"handle": out.Handle})
 	if err != nil {
-		t.Fatalf("bash_output: %v", err)
+		t.Fatalf("bash_wait: %v", err)
 	}
 	if !strings.Contains(fmtAny(res["stdout"]), "default-wait") {
-		t.Fatalf("bash_output default wait did not deliver the line: %v", res)
+		t.Fatalf("bash_wait default wait did not deliver the line: %v", res)
 	}
 	if running, _ := res["running"].(bool); !running {
 		t.Errorf("command should still be running, got %v", res)
@@ -113,15 +113,15 @@ func TestBashControlTools_RoundTrip(t *testing.T) {
 	}
 
 	// wait_ms means one call, not a polling loop — the whole reason it exists.
-	res, err := runNamedTool(t, ts, "bash_output", map[string]any{
+	res, err := runNamedTool(t, ts, "bash_wait", map[string]any{
 		"handle":  out.Handle,
 		"wait_ms": 3000,
 	})
 	if err != nil {
-		t.Fatalf("bash_output: %v", err)
+		t.Fatalf("bash_wait: %v", err)
 	}
 	if !strings.Contains(fmtAny(res["stdout"]), "hello") {
-		t.Fatalf("bash_output did not deliver the line: %v", res)
+		t.Fatalf("bash_wait did not deliver the line: %v", res)
 	}
 	if running, _ := res["running"].(bool); !running {
 		t.Errorf("command should still be running, got %v", res)
@@ -139,7 +139,7 @@ func TestBashControlTools_RoundTrip(t *testing.T) {
 	}
 
 	// A spent handle must not resolve again.
-	if _, err := runNamedTool(t, ts, "bash_output", map[string]any{"handle": out.Handle}); err == nil {
+	if _, err := runNamedTool(t, ts, "bash_wait", map[string]any{"handle": out.Handle}); err == nil {
 		t.Error("expected an error reading a killed handle")
 	}
 }
@@ -200,7 +200,7 @@ func TestBashControlTools_RejectMissingHandle(t *testing.T) {
 		t.Fatalf("BashControlTools: %v", err)
 	}
 
-	for _, name := range []string{"bash_output", "bash_kill"} {
+	for _, name := range []string{"bash_wait", "bash_kill"} {
 		if _, err := runNamedTool(t, ts, name, map[string]any{}); err == nil {
 			t.Errorf("%s accepted a call with no handle", name)
 		}
@@ -461,5 +461,23 @@ func TestSupervisorDefaults(t *testing.T) {
 	}
 	if got := s.capacity(); got != maxBackgroundProcs {
 		t.Errorf("capacity() = %d, want %d", got, maxBackgroundProcs)
+	}
+}
+
+// The foreground budget is a turn budget, not a command budget: a command that
+// crosses it is handed off with a handle, never killed. Thirty seconds is short
+// enough that the pin matters — a silent bump back to two minutes would put the
+// old round-trip cost back without failing anything else.
+func TestBashDefaultTimeout_IsTheForegroundBudget(t *testing.T) {
+	if defaultBashTimeout != 30*time.Second {
+		t.Errorf("defaultBashTimeout = %s, want 30s", defaultBashTimeout)
+	}
+	// The idle check only earns its keep while it can fire before the hard
+	// limit, which under defaults it cannot — it exists for callers that raise
+	// the timeout for known-long work.
+	if defaultIdleTimeout <= defaultBashTimeout {
+		t.Errorf("defaultIdleTimeout %s must stay above the foreground budget %s;"+
+			" below it the hard limit fires first and the idle check is dead code",
+			defaultIdleTimeout, defaultBashTimeout)
 	}
 }
