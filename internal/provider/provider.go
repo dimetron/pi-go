@@ -480,6 +480,9 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	case "mistral":
 		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
 	case "xai":
+		// xAI server-side tools, including x_search, are enabled for the
+		// xAI provider by default. PI_NO_XAI_TOOLS remains the kill switch.
+		opts.EnableXAITools = true
 		return NewXAI(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "opencode":
 		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
