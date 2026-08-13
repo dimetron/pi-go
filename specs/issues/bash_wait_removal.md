@@ -291,6 +291,24 @@ Latent rather than live: the model cannot know the handle until the call
 returns, so nothing can currently race it. Worth reordering anyway — an
 in-process consumer of the supervisor API has no such protection.
 
+### D5. A lingering grandchild costs the exit status, and five seconds
+
+`cmd.Wait()` cannot return until every writer of the inherited stdout pipe is
+gone. A command that backgrounds anything — `some-daemon &`, and by extension
+most "start it and move on" shell idioms — leaves a grandchild holding that
+pipe after the shell itself has exited 0.
+
+Wait therefore blocks past the shell's exit until `procs.DefaultWaitDelay`
+(5s, `internal/procs/procs.go:34`) fires and the group is killed, and the
+result reports `exit_code: -1` for a command that succeeded. Measured, not
+inferred: `TestBashWait_LingeringGrandchildCostsTheExitStatus` sees the wait
+return after ~4.7s with -1.
+
+Not a hang — the wait ends and the card honestly renders "killed, no exit
+status" rather than inventing a code — but the status is wrong and the delay is
+paid on every such command. A fix would give the shell its own pipe rather than
+sharing one with whatever it spawns.
+
 ## Recommended change
 
 1. **`BashInput.Background bool`** (`internal/tools/bash.go:20`):

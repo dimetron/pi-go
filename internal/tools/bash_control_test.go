@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/tool"
+
+	"github.com/dimetron/pi-go/internal/procs"
 )
 
 // TestBashControlTools_Registered checks the two control tools exist under the
@@ -479,5 +481,90 @@ func TestBashDefaultTimeout_IsTheForegroundBudget(t *testing.T) {
 		t.Errorf("defaultIdleTimeout %s must stay above the foreground budget %s;"+
 			" below it the hard limit fires first and the idle check is dead code",
 			defaultIdleTimeout, defaultBashTimeout)
+	}
+}
+
+// A wait must end when the child exits, not when its budget runs out. The
+// distinction is invisible until a command produces no output at all — a run
+// with `> file 2>&1` sends everything to the file, so the streams the wait
+// parks on never fire and only process exit can wake it. If that path were
+// broken, every such command would sit for the full 60s after finishing and
+// look hung when it was done.
+func TestBashWait_EndsWhenTheChildExits(t *testing.T) {
+	sup := testSupervisor(t)
+	sup.heartbeat = 20 * time.Millisecond
+
+	out, err := sup.Run(t.Context(), runRequest{
+		dir:     t.TempDir(),
+		command: `sleep 2 > out.log 2>&1`,
+		timeout: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !out.Running {
+		t.Fatalf("expected a handoff, got %+v", out)
+	}
+
+	start := time.Now()
+	st, err := sup.readOutput(out.Handle, 30*time.Second)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("readOutput: %v", err)
+	}
+	if st.Running {
+		t.Errorf("still reported running after %s; exit was not detected", elapsed)
+	}
+	if st.ExitCode != 0 {
+		t.Errorf("exit_code = %d, want 0", st.ExitCode)
+	}
+	// Generous, because it only has to separate "woken by exit" (~2s) from
+	// "waited out the budget" (30s).
+	if elapsed > 10*time.Second {
+		t.Errorf("wait took %s; it burned its budget instead of ending on exit", elapsed)
+	}
+}
+
+// A command that leaves a grandchild behind — `some-daemon &` — does not get a
+// clean exit status, and this pins how long that costs and what it reports.
+//
+// cmd.Wait() cannot return until every writer of the inherited pipe is gone,
+// and the backgrounded grandchild holds it. Wait therefore blocks past the
+// shell's own exit until procs.DefaultWaitDelay fires and the group is killed,
+// so a shell that exited 0 is reported as exit -1 a few seconds later. That is
+// a fidelity loss, not a hang: the wait still ends, and the card renders
+// "killed, no exit status" rather than inventing a code.
+func TestBashWait_LingeringGrandchildCostsTheExitStatus(t *testing.T) {
+	sup := testSupervisor(t)
+	sup.heartbeat = 20 * time.Millisecond
+
+	out, err := sup.Run(t.Context(), runRequest{
+		dir:     t.TempDir(),
+		command: `sleep 30 & echo started > out.log 2>&1; exit 0`,
+		timeout: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !out.Running {
+		t.Skip("command completed in the foreground; nothing to observe")
+	}
+
+	start := time.Now()
+	st, err := sup.readOutput(out.Handle, 30*time.Second)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("readOutput: %v", err)
+	}
+	if st.Running {
+		t.Errorf("still running after %s; the group was never reaped", elapsed)
+	}
+	if st.ExitCode != -1 {
+		t.Logf("exit_code = %d (was -1 when this was written; Wait no longer"+
+			" blocks on the inherited pipe, which is an improvement)", st.ExitCode)
+	}
+	if elapsed > 15*time.Second {
+		t.Errorf("wait took %s; expected it to end when the wait delay (%s) fires",
+			elapsed, procs.DefaultWaitDelay)
 	}
 }
