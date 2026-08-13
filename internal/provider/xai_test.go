@@ -452,8 +452,13 @@ func TestXAISendsSystemInstructionAndTools(t *testing.T) {
 		}
 	}
 
-	if got := body["include"]; got == nil {
-		t.Error("include is missing for enabled xAI server-side tools")
+	// The OpenAI-style `include` list must NOT be sent: xAI's Responses API
+	// rejects it with a 400 ("Argument not supported: \"web_search_call.results\"
+	// in \"include\" field"), which took the whole default-on xAI search feature
+	// down in production. The server-side tools run and return their results
+	// without it.
+	if got := body["include"]; got != nil {
+		t.Errorf("include = %v, want it omitted: xAI's Responses API rejects the OpenAI include field", got)
 	}
 	if got := body["instructions"]; got != "You are terse." {
 		t.Errorf("instructions = %v, want the system instruction", got)
@@ -470,8 +475,9 @@ func TestXAISendsSystemInstructionAndTools(t *testing.T) {
 }
 
 // PI_NO_XAI_TOOLS is the kill switch: it has to beat an explicit opt-in, and
-// it has to strip both the built-in tools and the include list that only makes
-// sense alongside them, while leaving client-side functions untouched.
+// it has to strip the built-in tools while leaving client-side functions
+// untouched. There is no include list to strip anymore — the field is never
+// sent, because xAI's Responses API rejects it.
 func TestXAIToolsKillSwitchBeatsOptIn(t *testing.T) {
 	t.Setenv(xaiToolsDisableEnvVar, "1")
 

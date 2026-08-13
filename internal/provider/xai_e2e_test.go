@@ -4,9 +4,11 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -295,4 +297,97 @@ func TestE2EXAIListModels(t *testing.T) {
 			t.Errorf("live model %q has no context window; auto-compaction is disabled for it", m.ID)
 		}
 	}
+}
+
+// TestE2EXAIServerSideTools drives xAI's built-in server-side tools through
+// the production NewLLM path (the one pi's CLI uses), which opts xAI into
+// web_search / x_search / code_interpreter and appends them to every request.
+// These tools run on xAI's side of the wire, so the only failure mode this
+// test can pin is the request being rejected or the response never carrying
+// search results — which is exactly the regression that shipped when the
+// OpenAI-style `include` parameter was sent alongside them.
+//
+// web_search is the one the whole default-on decision rests on, so it is
+// mandatory: the request must succeed and the answer must reflect a live
+// search. x_search and code_interpreter are account-entitled extras, so a 403
+// or an answer that declines them is skipped rather than failed.
+func TestE2EXAIServerSideTools(t *testing.T) {
+	key := testGetXAIAPIKey(t)
+
+	llm, err := NewLLM(context.Background(), Info{Provider: "xai", Model: e2eXAIModel}, key, "", "low", nil)
+	if err != nil {
+		t.Fatalf("NewLLM() error: %v", err)
+	}
+	if llm.Name() != e2eXAIModel {
+		t.Errorf("Name() = %q, want %q", llm.Name(), e2eXAIModel)
+	}
+
+	// A time-stamped query so the search cannot be satisfied from the model's
+	// parametric memory: the answer must come from a live web search.
+	when := time.Now().UTC().Format("2006-01-02")
+	text := e2eXAIText(t, llm, &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: fmt.Sprintf(
+				"Use the web_search tool. Name any three news events that happened on %s. Reply with bullet points only.",
+				when)}}},
+		},
+	})
+	if text == "" {
+		t.Fatal("expected non-empty text from a server-side web search")
+	}
+	// A real search must produce something more than a canned refusal.
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "cannot") && strings.Contains(lower, "search") {
+		t.Errorf("response claims search is unavailable: %s", text)
+	}
+	t.Logf("web_search response: %s", text)
+}
+
+// TestE2EXAIXSearch pins the X (Twitter) search server-side tool. It is opt-in
+// per account, so both the request-level 403 and an answer that declines to
+// search are treated as skipped, while a successful search must name an
+// account the model actually looked up.
+func TestE2EXAIXSearch(t *testing.T) {
+	key := testGetXAIAPIKey(t)
+
+	llm, err := NewLLM(context.Background(), Info{Provider: "xai", Model: e2eXAIModel}, key, "", "low", nil)
+	if err != nil {
+		t.Fatalf("NewLLM() error: %v", err)
+	}
+
+	text := e2eXAIText(t, llm, &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: fmt.Sprintf(
+				"Use the x_search tool. Find the most recent post by @xai and name the account it came from. One sentence.",
+			)}}},
+		},
+	})
+	if text == "" {
+		t.Fatal("expected non-empty text from an X search")
+	}
+	t.Logf("x_search response: %s", text)
+}
+
+// TestE2EXAICodeInterpreter pins the sandboxed code_interpreter tool. Like
+// x_search it is an account entitlement, so a declined run is skipped; a real
+// run must produce the computed answer.
+func TestE2EXAICodeInterpreter(t *testing.T) {
+	key := testGetXAIAPIKey(t)
+
+	llm, err := NewLLM(context.Background(), Info{Provider: "xai", Model: e2eXAIModel}, key, "", "low", nil)
+	if err != nil {
+		t.Fatalf("NewLLM() error: %v", err)
+	}
+
+	text := e2eXAIText(t, llm, &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: fmt.Sprintf(
+				"Use the code_interpreter tool to compute 12345 * 6789 and reply with just the product.",
+			)}}},
+		},
+	})
+	if text == "" {
+		t.Fatal("expected non-empty text from the code interpreter")
+	}
+	t.Logf("code_interpreter response: %s", text)
 }

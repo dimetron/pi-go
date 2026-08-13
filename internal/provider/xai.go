@@ -119,13 +119,6 @@ func (m *xaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		if len(tools) > 0 {
 			params.Tools = tools
 		}
-		if !xaiToolsDisabled() && m.enableXAITools {
-			params.Include = []responses.ResponseIncludable{
-				responses.ResponseIncludableWebSearchCallResults,
-				responses.ResponseIncludableWebSearchCallActionSources,
-				responses.ResponseIncludableCodeInterpreterCallOutputs,
-			}
-		}
 
 		if m.reasoningEffort != "" && xaiModelReasons(modelName) {
 			params.Reasoning = shared.ReasoningParam{Effort: m.reasoningEffort}
