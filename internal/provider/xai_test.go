@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3/shared"
@@ -152,7 +153,89 @@ func TestXAIModelReasons(t *testing.T) {
 	}
 }
 
-// xaiCaptureServer answers one chat completion and hands the caller the
+func TestXAIToolsDisabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"one", "1", true},
+		{"true", "true", true},
+		{"yes", "yes", true},
+		{"on", "on", true},
+		{"mixed case", "TrUe", true},
+		{"surrounded by whitespace", "  on\t", true},
+		{"zero", "0", false},
+		{"false", "false", false},
+		{"unrecognized", "maybe", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(xaiToolsDisableEnvVar, tt.value)
+			if got := xaiToolsDisabled(); got != tt.want {
+				t.Errorf("xaiToolsDisabled() with %s=%q = %v, want %v", xaiToolsDisableEnvVar, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestXAIToolsEnabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured bool
+		value      string
+		want       bool
+	}{
+		// The configured flag short-circuits before the environment is read,
+		// so an explicit --xai-tools cannot be undone by a stale export.
+		{"configured with empty env", true, "", true},
+		{"configured with falsey env", true, "false", true},
+		{"empty env", false, "", false},
+		{"one", false, "1", true},
+		{"true", false, "true", true},
+		{"yes", false, "yes", true},
+		{"on", false, "on", true},
+		{"mixed case", false, "YES", true},
+		{"surrounded by whitespace", false, " 1 ", true},
+		{"zero", false, "0", false},
+		{"false", false, "false", false},
+		{"unrecognized", false, "maybe", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(xaiToolsEnvVar, tt.value)
+			if got := xaiToolsEnabled(tt.configured); got != tt.want {
+				t.Errorf("xaiToolsEnabled(%v) with %s=%q = %v, want %v",
+					tt.configured, xaiToolsEnvVar, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// The built-in tool objects are assembled as raw JSON rather than marshaled,
+// so pin that the bytes still match what marshaling the equivalent map would
+// have produced — that equivalence is the whole justification for writing them
+// out by hand.
+func TestXAIBuiltInToolWireFormat(t *testing.T) {
+	for _, typ := range xaiServerSideToolTypes {
+		t.Run(typ, func(t *testing.T) {
+			want, err := json.Marshal(map[string]string{"type": typ})
+			if err != nil {
+				t.Fatalf("marshaling the reference form: %v", err)
+			}
+			got, err := json.Marshal(xaiBuiltInTool(typ))
+			if err != nil {
+				t.Fatalf("marshaling xaiBuiltInTool(%q): %v", typ, err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("xaiBuiltInTool(%q) = %s, want %s", typ, got, want)
+			}
+		})
+	}
+}
+
+// xaiCaptureServer answers one Responses call and hands the caller the
 // request headers and decoded body that produced it.
 func xaiCaptureServer(t *testing.T, header *http.Header, body *map[string]any) *httptest.Server {
 	t.Helper()
@@ -163,17 +246,53 @@ func xaiCaptureServer(t *testing.T, header *http.Header, body *map[string]any) *
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":     "chat-123",
-			"object": "chat.completion",
+			"id":     "resp_x",
+			"object": "response",
+			"status": "completed",
 			"model":  "grok-4.6",
-			"choices": []map[string]any{{
-				"index":         0,
-				"message":       map[string]any{"role": "assistant", "content": "Hello from Grok!"},
-				"finish_reason": "stop",
+			"output": []map[string]any{{
+				"type":   "message",
+				"id":     "msg_x",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{{
+					"type":        "output_text",
+					"text":        "Hello from Grok!",
+					"annotations": []any{},
+				}},
 			}},
-			"usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
 		})
 	}))
+}
+
+func xaiReasoningFromBody(body map[string]any) any {
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if reasoning == nil {
+		return nil
+	}
+	return reasoning["effort"]
+}
+
+func xaiToolTypes(body map[string]any) []string {
+	raw, _ := body["tools"].([]any)
+	var types []string
+	for _, item := range raw {
+		tool, _ := item.(map[string]any)
+		if typ, _ := tool["type"].(string); typ != "" {
+			types = append(types, typ)
+		}
+	}
+	return types
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func xaiDrain(t *testing.T, m model.LLM, modelName string) []*model.LLMResponse {
@@ -218,8 +337,8 @@ func TestXAINonStreamingSendsReasoningAndConvID(t *testing.T) {
 		t.Error("expected TurnComplete = true")
 	}
 
-	if got := body["reasoning_effort"]; got != "medium" {
-		t.Errorf("reasoning_effort = %v, want medium", got)
+	if got := xaiReasoningFromBody(body); got != "medium" {
+		t.Errorf("reasoning.effort = %v, want medium", got)
 	}
 	if got := header.Get(xaiConversationHeader); got == "" {
 		t.Errorf("%s header not sent; cache affinity depends on it", xaiConversationHeader)
@@ -259,8 +378,8 @@ func TestXAIOmitsReasoningForNonReasoningModel(t *testing.T) {
 	}
 
 	xaiDrain(t, m, "")
-	if _, ok := body["reasoning_effort"]; ok {
-		t.Errorf("reasoning_effort sent to a non-reasoning model: %v", body["reasoning_effort"])
+	if got := xaiReasoningFromBody(body); got != nil {
+		t.Errorf("reasoning.effort sent to a non-reasoning model: %v", got)
 	}
 }
 
@@ -278,8 +397,8 @@ func TestXAIPerRequestModelOverrideGatesReasoning(t *testing.T) {
 	}
 
 	xaiDrain(t, m, "grok-4.20-0309-non-reasoning")
-	if _, ok := body["reasoning_effort"]; ok {
-		t.Errorf("reasoning_effort sent for request model override: %v", body["reasoning_effort"])
+	if got := xaiReasoningFromBody(body); got != nil {
+		t.Errorf("reasoning.effort sent for request model override: %v", got)
 	}
 	if got := body["model"]; got != "grok-4.20-0309-non-reasoning" {
 		t.Errorf("model = %v, want the per-request override", got)
@@ -310,7 +429,7 @@ func TestXAISendsSystemInstructionAndTools(t *testing.T) {
 	srv := xaiCaptureServer(t, &header, &body)
 	defer srv.Close()
 
-	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", nil)
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", &LLMOptions{EnableXAITools: true})
 	if err != nil {
 		t.Fatalf("NewXAI() error: %v", err)
 	}
@@ -333,37 +452,171 @@ func TestXAISendsSystemInstructionAndTools(t *testing.T) {
 		}
 	}
 
-	messages, _ := body["messages"].([]any)
-	if len(messages) == 0 {
-		t.Fatal("expected messages on the wire")
+	if got := body["include"]; got == nil {
+		t.Error("include is missing for enabled xAI server-side tools")
 	}
-	first, _ := messages[0].(map[string]any)
-	if first["role"] != "system" || first["content"] != "You are terse." {
-		t.Errorf("first message = %v, want the system instruction prepended", first)
+	if got := body["instructions"]; got != "You are terse." {
+		t.Errorf("instructions = %v, want the system instruction", got)
+	}
+	types := xaiToolTypes(body)
+	if !containsString(types, "function") {
+		t.Errorf("tools = %v, want a function declaration", types)
+	}
+	for _, want := range xaiServerSideToolTypes {
+		if !containsString(types, want) {
+			t.Errorf("tools = %v, want built-in %q", types, want)
+		}
+	}
+}
+
+// PI_NO_XAI_TOOLS is the kill switch: it has to beat an explicit opt-in, and
+// it has to strip both the built-in tools and the include list that only makes
+// sense alongside them, while leaving client-side functions untouched.
+func TestXAIToolsKillSwitchBeatsOptIn(t *testing.T) {
+	t.Setenv(xaiToolsDisableEnvVar, "1")
+
+	var header http.Header
+	var body map[string]any
+	srv := xaiCaptureServer(t, &header, &body)
+	defer srv.Close()
+
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", &LLMOptions{EnableXAITools: true})
+	if err != nil {
+		t.Fatalf("NewXAI() error: %v", err)
 	}
 
-	tools, _ := body["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("tools = %v, want one declaration", body["tools"])
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}}},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{
+				FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "read_file"}},
+			}},
+		},
 	}
-	if body["tool_choice"] != "auto" {
-		t.Errorf("tool_choice = %v, want auto", body["tool_choice"])
+	for _, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
 	}
+
+	if got := body["include"]; got != nil {
+		t.Errorf("include = %v, want it omitted when %s is set", got, xaiToolsDisableEnvVar)
+	}
+	types := xaiToolTypes(body)
+	if !containsString(types, "function") {
+		t.Errorf("tools = %v, want the client-side function to survive the kill switch", types)
+	}
+	for _, unwanted := range xaiServerSideToolTypes {
+		if containsString(types, unwanted) {
+			t.Errorf("tools = %v, want built-in %q suppressed by %s", types, unwanted, xaiToolsDisableEnvVar)
+		}
+	}
+}
+
+func TestXAIRejectsNilRequest(t *testing.T) {
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", "http://127.0.0.1:1", "high", nil)
+	if err != nil {
+		t.Fatalf("NewXAI() error: %v", err)
+	}
+
+	for _, stream := range []bool{false, true} {
+		name := "non-streaming"
+		if stream {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			var errs []error
+			for resp, err := range m.GenerateContent(context.Background(), nil, stream) {
+				if resp != nil {
+					t.Errorf("expected no response for a nil request, got %+v", resp)
+				}
+				errs = append(errs, err)
+			}
+			if len(errs) != 1 {
+				t.Fatalf("expected exactly one error, got %d: %v", len(errs), errs)
+			}
+			if got := errs[0]; got == nil || !strings.Contains(got.Error(), "nil LLM request") {
+				t.Errorf("error = %v, want it to name the nil request", got)
+			}
+		})
+	}
+}
+
+// A send failure surfaces differently by mode: streaming reports it as a
+// content-less response carrying STREAM_ERROR (which is what lets retryStream
+// see it), non-streaming as a wrapped Go error.
+func TestXAISendErrorSurfaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"invalid request"}}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", srv.URL, "high", nil)
+	if err != nil {
+		t.Fatalf("NewXAI() error: %v", err)
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}}},
+	}
+
+	t.Run("non-streaming", func(t *testing.T) {
+		var errs []error
+		for _, err := range m.GenerateContent(context.Background(), req, false) {
+			errs = append(errs, err)
+		}
+		if len(errs) != 1 || errs[0] == nil {
+			t.Fatalf("expected exactly one error, got %v", errs)
+		}
+		if got := errs[0].Error(); !strings.Contains(got, "xAI Responses API failed") {
+			t.Errorf("error = %q, want it wrapped with the xAI Responses prefix", got)
+		}
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		var resps []*model.LLMResponse
+		for resp, err := range m.GenerateContent(context.Background(), req, true) {
+			if err != nil {
+				t.Fatalf("streaming yielded a Go error, want a STREAM_ERROR response: %v", err)
+			}
+			resps = append(resps, resp)
+		}
+		if len(resps) != 1 {
+			t.Fatalf("expected exactly one response, got %d", len(resps))
+		}
+		if got := resps[0].ErrorCode; got != "STREAM_ERROR" {
+			t.Errorf("ErrorCode = %q, want STREAM_ERROR", got)
+		}
+		if resps[0].ErrorMessage == "" {
+			t.Error("ErrorMessage is empty; the provider failure is invisible without it")
+		}
+	})
 }
 
 func TestXAIStreaming(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		chunks := []string{
-			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`,
-			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{"content":" from Grok"},"finish_reason":null}]}`,
-			`{"id":"c1","object":"chat.completion.chunk","model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`,
+		flusher := w.(http.Flusher)
+		writeEvent := func(payload map[string]any) {
+			b, _ := json.Marshal(payload)
+			_, _ = w.Write([]byte("event: " + payload["type"].(string) + "\n"))
+			_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
+			flusher.Flush()
 		}
-		for _, c := range chunks {
-			_, _ = w.Write([]byte("data: " + c + "\n\n"))
-			w.(http.Flusher).Flush()
-		}
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		writeEvent(map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 1,
+			"item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Hello",
+		})
+		writeEvent(map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 2,
+			"item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": " from Grok",
+		})
+		writeEvent(map[string]any{
+			"type": "response.completed", "sequence_number": 3,
+			"response": map[string]any{
+				"id": "resp_1", "object": "response", "status": "completed",
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+			},
+		})
 	}))
 	defer srv.Close()
 
