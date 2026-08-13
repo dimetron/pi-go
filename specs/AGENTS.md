@@ -18,6 +18,7 @@ specs/
 │   ├── TUI/             # Terminal UI
 │   └── WEB/             # Web server
 ├── issues/               # Issue tracking/fixes
+├── memory-fixes/         # Memory subsystem repair
 ├── research/             # Architecture improvements
 ├── sessio-errors/        # Session error analysis
 └── tools/                # Tool specifications
@@ -126,6 +127,12 @@ specs/
 | 007-write-tool-data-loss/ | readme | `write`/`edit` truncate before writing and never fsync — data loss on quit |
 | 008-adk-utils-go-review/  | research | adk-utils-go feature comparison & scored recommendations                  |
 | 009-tui-review-followups/ | readme | Deferred follow-ups from the TUI review and the PR #134 review           |
+
+### memory-fixes/
+
+| Spec           | Phases       | Description                                                                     |
+|----------------|--------------|---------------------------------------------------------------------------------|
+| memory-fixes/  | idea..prompt | Repair the memory subsystem: dead after-tool callback chain, worker lifecycle, palace paths, TUI wiring |
 
 ### research/
 
