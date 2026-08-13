@@ -36,7 +36,7 @@ If a provider is specified as an argument, only that provider is queried.
 If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
-Providers: anthropic, openai, gemini, mistral, ollama
+Providers: anthropic, openai, gemini, mistral, xai, ollama
 
 Examples:
   pi model list                 # list models for all configured providers
@@ -44,6 +44,7 @@ Examples:
   pi model list openai          # list models from OpenAI
   pi model list gemini          # list models from Gemini
   pi model list mistral         # list models from Mistral
+  pi model list xai             # list models from xAI
   pi model list ollama          # list locally installed Ollama models`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runModelList,
@@ -55,7 +56,7 @@ Examples:
 }
 
 // allProviders is the fixed list of providers supporting model listing.
-var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "ollama"}
+var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama"}
 
 func runModelList(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
@@ -74,7 +75,7 @@ func runModelList(cmd *cobra.Command, args []string) error {
 	if len(args) == 1 {
 		p := strings.ToLower(args[0])
 		switch p {
-		case "anthropic", "openai", "gemini", "mistral", "ollama":
+		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama":
 			providers = []string{p}
 		case "azure":
 			// Not a live query: enumerating deployments needs ARM credentials
@@ -85,7 +86,7 @@ func runModelList(cmd *cobra.Command, args []string) error {
 			printAzureDeployments(cmd.OutOrStdout())
 			return nil
 		default:
-			return fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, ollama", args[0])
+			return fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama", args[0])
 		}
 	} else {
 		// Query all providers that have credentials or a base URL configured.

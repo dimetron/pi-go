@@ -388,6 +388,8 @@ func genAIProviderAttr(providerName string) attribute.KeyValue {
 		return semconv.GenAIProviderNameGCPGemini
 	case "mistral":
 		return semconv.GenAIProviderNameMistralAI
+	case "xai":
+		return semconv.GenAIProviderNameXAI
 	case "azure":
 		return semconv.GenAIProviderNameAzureAIOpenAI
 	default:

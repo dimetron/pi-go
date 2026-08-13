@@ -52,6 +52,8 @@ func providerDefaultBaseURL(p string) string {
 		return "https://generativelanguage.googleapis.com"
 	case "mistral":
 		return "https://api.mistral.ai"
+	case "xai":
+		return "https://api.x.ai"
 	default:
 		return ""
 	}
@@ -59,7 +61,7 @@ func providerDefaultBaseURL(p string) string {
 
 // ListModels calls the given provider's model listing API and returns
 // available model IDs. Supported providers: anthropic, openai, gemini,
-// mistral, ollama.
+// mistral, xai, ollama.
 func ListModels(ctx context.Context, providerName string, opts ListModelsOptions) ([]ModelInfo, error) {
 	switch providerName {
 	case "anthropic":
@@ -70,6 +72,8 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 		return listGeminiModels(ctx, opts)
 	case "mistral":
 		return listMistralModels(ctx, opts)
+	case "xai":
+		return listXAIModels(ctx, opts)
 	case "ollama":
 		names, err := OllamaListModels(ctx, opts.BaseURL)
 		if err != nil {
@@ -86,40 +90,39 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 }
 
 // listOpenAIModels fetches models from GET /v1/models.
-// Works for OpenAI platform, Azure-compatible, and Mistral-compatible endpoints.
+// Works for OpenAI platform and Azure-compatible endpoints.
 func listOpenAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
-	baseURL := opts.BaseURL
-	if baseURL == "" {
-		baseURL = providerDefaultBaseURL("openai")
-	}
-	endpoint := strings.TrimRight(baseURL, "/") + "/v1/models"
-	if strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
-		endpoint = strings.TrimRight(baseURL, "/") + "/models"
-	}
-
-	var payload struct {
-		Data []struct {
-			ID      string `json:"id"`
-			OwnedBy string `json:"owned_by"`
-		} `json:"data"`
-	}
-	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "openai", &payload); err != nil {
-		return nil, fmt.Errorf("listing OpenAI models: %w", err)
-	}
-	models := make([]ModelInfo, len(payload.Data))
-	for i, m := range payload.Data {
-		models[i] = ModelInfo{ID: m.ID, OwnedBy: m.OwnedBy}
-	}
-	return models, nil
+	return listBearerModels(ctx, opts, "openai", "OpenAI")
 }
 
 // listMistralModels fetches models from GET /v1/models.
 func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
+	return listBearerModels(ctx, opts, "mistral", "Mistral")
+}
+
+// listXAIModels fetches models from GET /v1/models.
+func listXAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
+	return listBearerModels(ctx, opts, "xai", "xAI")
+}
+
+// listBearerModels fetches models from GET <base>/v1/models with bearer auth
+// and OpenAI's {"data":[{"id","owned_by"}]} envelope — the shape every
+// OpenAI-compatible vendor endpoint shares. displayName only labels the error.
+//
+// A base URL that already ends in /v1 is not extended again: the LLM-side
+// default for these vendors carries the version segment (api.x.ai/v1), so a
+// user who exports the same value as XAI_BASE_URL would otherwise be sent to
+// /v1/v1/models.
+func listBearerModels(ctx context.Context, opts ListModelsOptions, providerName, displayName string) ([]ModelInfo, error) {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
-		baseURL = providerDefaultBaseURL("mistral")
+		baseURL = providerDefaultBaseURL(providerName)
 	}
-	endpoint := strings.TrimRight(baseURL, "/") + "/v1/models"
+	trimmed := strings.TrimRight(baseURL, "/")
+	endpoint := trimmed + "/v1/models"
+	if strings.HasSuffix(trimmed, "/v1") {
+		endpoint = trimmed + "/models"
+	}
 
 	var payload struct {
 		Data []struct {
@@ -127,8 +130,8 @@ func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo
 			OwnedBy string `json:"owned_by"`
 		} `json:"data"`
 	}
-	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "mistral", &payload); err != nil {
-		return nil, fmt.Errorf("listing Mistral models: %w", err)
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, providerName, &payload); err != nil {
+		return nil, fmt.Errorf("listing %s models: %w", displayName, err)
 	}
 	models := make([]ModelInfo, len(payload.Data))
 	for i, m := range payload.Data {
@@ -229,7 +232,7 @@ func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, 
 			req.Header.Set("x-api-key", opts.APIKey)
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "openai", "mistral":
+	case "openai", "mistral", "xai":
 		if opts.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 		}
