@@ -454,6 +454,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,
 		Headers:     o.Headers,
+		LSP:         agent.LSP,
 	}
 
 	// ACP-bundled agents (claude/gemini/cursor/copilot) launch their own CLI

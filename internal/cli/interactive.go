@@ -229,7 +229,13 @@ func deferredInit(
 		defer wg.Done()
 		send("lsp", false)
 		mgr := lsp.NewManager(nil)
-		lt, _ := tools.LSPTools(mgr)
+		// Only advertise the LSP tools when a server can actually answer them —
+		// see the matching note in cli.go. The manager itself is always kept:
+		// the after-tool callback and diagnostics plumbing cost nothing idle.
+		var lt []adktool.Tool
+		if mgr.AnyAvailable() {
+			lt, _ = tools.LSPToolsFor(mgr, resolveLSPMode())
+		}
 		ps.mu.Lock()
 		ps.lspMgr = mgr
 		ps.lspTools = lt

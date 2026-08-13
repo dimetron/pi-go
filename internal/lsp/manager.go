@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -353,6 +354,31 @@ func (m *Manager) Languages() map[string]*LanguageConfig {
 // Available returns whether a language server binary was found.
 func (m *Manager) Available(lang string) bool {
 	return m.available[lang]
+}
+
+// AvailableLanguages returns the languages whose server binary was found, sorted.
+// Callers use it to decide whether registering the LSP tools is worth the
+// context they cost: seven tool declarations are ~1.4k tokens on every request,
+// and in a checkout with no server installed every call they enable fails.
+func (m *Manager) AvailableLanguages() []string {
+	langs := make([]string, 0, len(m.available))
+	for name, ok := range m.available {
+		if ok {
+			langs = append(langs, name)
+		}
+	}
+	slices.Sort(langs)
+	return langs
+}
+
+// AnyAvailable reports whether at least one language server is installed.
+func (m *Manager) AnyAvailable() bool {
+	for _, ok := range m.available {
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Shutdown gracefully shuts down all running servers.

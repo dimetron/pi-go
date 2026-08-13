@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 	"net/http"
 	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
@@ -63,6 +64,7 @@ var (
 	flagSlow      bool
 	flagPlan      bool
 	flagMemoryOff bool
+	flagLSP       string
 	flagSystem    string
 	flagPprof     string
 	flagPprofPort string
@@ -193,6 +195,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().StringVar(&flagCACert, "ca-cert", "", "PEM bundle to trust for LLM API calls, in addition to the system roots")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
+	cmd.Flags().StringVar(&flagLSP, "lsp", "min", "Language-server tools: off, min (symbols+diagnostics), or full (all seven)")
 	// Persistent, not local: `pi memory mine . --pprof true` and every other
 	// subcommand must accept these too. As local flags they were rejected with
 	// "unknown flag: --pprof" the moment a subcommand was used.
@@ -624,11 +627,18 @@ func runNonInteractive(
 		afterCBs = append(afterCBs, memoryObservationCallback(memWorker, cfg, cwd, &memSessionID))
 	}
 
-	lspTools, err := tools.LSPTools(lspMgr)
-	if err != nil {
-		return fmt.Errorf("creating LSP tools: %w", err)
+	// LSP tool declarations are billed on every request, and with no server
+	// installed every call they enable fails — so the model pays tokens for
+	// capability it cannot use. Gate on a server existing, then advertise only
+	// as much surface as the mode asks for. The after-tool callback stays wired
+	// either way; it is free when no server starts.
+	if lspMgr.AnyAvailable() {
+		lspTools, lspErr := tools.LSPToolsFor(lspMgr, resolveLSPMode())
+		if lspErr != nil {
+			return fmt.Errorf("creating LSP tools: %w", lspErr)
+		}
+		coreTools = append(coreTools, lspTools...)
 	}
-	coreTools = append(coreTools, lspTools...)
 
 	allToolsets := buildToolsets(cfg)
 
@@ -967,6 +977,32 @@ func setupMemory(ctx context.Context, cfg config.Config, orch *subagent.Orchestr
 	}
 }
 
+// resolveLSPMode turns the --lsp flag into a mode, warning once on a value it
+// does not recognize rather than silently picking one. A subagent inherits the
+// parent's choice through the same flag on its command line, which is how an
+// agent that needs the wide surface gets it without every session paying for it.
+func resolveLSPMode() tools.LSPMode {
+	mode, ok := tools.ParseLSPMode(flagLSP)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: unknown --lsp value %q; using %q\n", flagLSP, mode)
+	}
+	return mode
+}
+
+// palaceHasContent reports whether the palace holds at least one drawer.
+// A count error is treated as "no content": the tools would fail anyway, and
+// the caller's job is to decide whether advertising them is worth the tokens.
+func palaceHasContent(p *palace.Palace) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	status, err := p.Status(ctx)
+	if err != nil {
+		slog.Warn("palace: drawer count failed, not advertising palace tools", "error", err)
+		return false
+	}
+	return status.DrawerCount > 0
+}
+
 // setupPalace opens the memory palace when one already exists on disk, and
 // returns its tools plus the wake-up context to inject into the system prompt.
 // A missing palace is not an error — it simply contributes nothing.
@@ -992,6 +1028,21 @@ func setupPalace(cfg config.Config, memWorker *memory.Worker) ([]adktool.Tool, s
 		return nil, "", noop
 	}
 	closePalace := func() { _ = p.Close() }
+
+	// Eleven palace tool declarations cost ~1.6k tokens on every request. An
+	// empty palace has nothing for them to find, so searching it is a wasted
+	// call and the tokens buy nothing — the same trade the LSP gate makes. An
+	// existing file is not evidence of content: `pi memory init` creates one
+	// with zero drawers. Gate on drawers, not on the file.
+	//
+	// The palace is still opened when empty: the bridge below fills it, and the
+	// tools appear on the next session once it has content.
+	if !palaceHasContent(p) {
+		if memWorker != nil {
+			memWorker.OnAfterStore(palace.NewObservationBridge(p).ConvertAndStore)
+		}
+		return nil, "", closePalace
+	}
 
 	// A tool-building failure still leaves a usable palace for the bridge and
 	// the wake-up context below, so it only costs the tools.

@@ -7,13 +7,16 @@ import (
 	"github.com/dimetron/pi-go/internal/lsp"
 )
 
+// TestLSPTools_Count covers the full set, which LSPTools no longer returns by
+// default: the default is now the two-tool minimal set (see
+// TestLSPToolsDefaultsToMinimal), and the seven are reached via LSPFull.
 func TestLSPTools_Count(t *testing.T) {
 	mgr := lsp.NewManager(nil)
 	defer mgr.Shutdown()
 
-	tools, err := LSPTools(mgr)
+	tools, err := LSPToolsFor(mgr, LSPFull)
 	if err != nil {
-		t.Fatalf("LSPTools: %v", err)
+		t.Fatalf("LSPToolsFor(full): %v", err)
 	}
 	if len(tools) != 7 {
 		t.Fatalf("expected 7 LSP tools, got %d", len(tools))
