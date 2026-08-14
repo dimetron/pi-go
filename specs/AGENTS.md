@@ -7,6 +7,7 @@ Each spec follows a phased workflow from rough idea through implementation.
 
 ```
 specs/
+├── batch-api-optimization/ # LLM cost: round trips vs provider Batch APIs
 ├── evaluations/          # Benchmark/evaluation specs
 ├── features/             # Feature implementations by component
 │   ├── COD/             # Coding, testing & audit
@@ -127,6 +128,12 @@ specs/
 | 007-write-tool-data-loss/ | readme | `write`/`edit` truncate before writing and never fsync — data loss on quit |
 | 008-adk-utils-go-review/  | research | adk-utils-go feature comparison & scored recommendations                  |
 | 009-tui-review-followups/ | readme | Deferred follow-ups from the TUI review and the PR #134 review           |
+
+### batch-api-optimization/
+
+| Spec                     | Phases     | Description                                                                                          |
+|--------------------------|------------|------------------------------------------------------------------------------------------------------|
+| batch-api-optimization/  | idea..plan | LLM cost analysis: provider Batch APIs rejected with numbers; reduce model round trips instead        |
 
 ### memory-fixes/
 
