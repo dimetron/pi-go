@@ -490,3 +490,30 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}
 }
+
+// APIKeyEnvVar returns the environment variable a provider's key is read from.
+//
+// Kept here rather than in a front-end so every caller — the CLI, the public
+// pimodels package, ping — agrees on where a key comes from. A second copy of
+// this mapping is how "works in the CLI, not when embedded" bugs start.
+func APIKeyEnvVar(providerName string) string {
+	switch providerName {
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "azure":
+		return "AZURE_OPENAI_API_KEY"
+	case "gemini":
+		return "GEMINI_API_KEY"
+	default:
+		return strings.ToUpper(providerName) + "_API_KEY"
+	}
+}
+
+// APIKeyFromEnv returns the configured key for a provider, or "" when unset.
+// Providers that need no key (ollama on localhost) are fine with the empty
+// string; the provider constructors decide, not this helper.
+func APIKeyFromEnv(providerName string) string {
+	return os.Getenv(APIKeyEnvVar(providerName))
+}
