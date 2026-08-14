@@ -28,8 +28,20 @@ func (f *Flow) invokeAfterToolCallbacks(...) (map[string]any, error) {
 }
 ```
 
-A non-nil return means "override the tool result and stop". It does not mean
-"here is the result, carry on".
+There are **two** defects in this one function, and the second is the worse one.
+
+**Defect 1 — the chain stops.** A non-nil return means "override the tool result
+and stop". It does not mean "here is the result, carry on".
+
+**Defect 2 — results are never threaded.** `fResult` is the loop's parameter and
+is never reassigned, so every callback is handed the *original* tool result
+rather than the previous callback's output. Even with defect 1 fixed, a chain
+still would not compose.
+
+Defect 2 matters because pi-go's ordering already assumes composition: dedup is
+registered *after* the compactor precisely so it sees post-compaction results.
+It never has, and fixing only the short-circuit would not give it them. Any fix
+must thread the result forward itself; ADK will not do it.
 
 ### What pi-go registers
 
@@ -56,6 +68,9 @@ Consequences, all four silent:
 - Tool-output compaction: dead — full untruncated outputs reach the model.
 - Result dedup: dead.
 - Memory observation recording: dead.
+
+And independently of the short-circuit, any two callbacks that both transform a
+result cannot chain, because the second never sees the first's output.
 
 ### Proof by experiment
 
