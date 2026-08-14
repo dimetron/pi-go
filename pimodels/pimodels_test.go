@@ -2,9 +2,12 @@ package pimodels
 
 import (
 	"context"
+	"iter"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/adk/v2/model"
 )
 
 func TestNewRejectsEmptyModelName(t *testing.T) {
@@ -188,4 +191,41 @@ func TestFromConfigUnknownRoleFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "pimodels:") {
 		t.Fatalf("error is not attributed to this package: %v", err)
 	}
+}
+
+// fakeLLM is a minimal model.LLM for testing the provider wrapper without a
+// network or a credential.
+type fakeLLM struct{ name string }
+
+func (f fakeLLM) Name() string { return f.name }
+func (f fakeLLM) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(func(*model.LLMResponse, error) bool) {}
+}
+
+// TestProviderModelReportsProvider is the contract piagent type-asserts for.
+// If this breaks, every consumer silently falls back to its own model-name
+// prefix table — which is the duplication this exists to remove.
+func TestProviderModelReportsProvider(t *testing.T) {
+	m := providerModel{LLM: fakeLLM{name: "claude-sonnet-5"}, provider: "anthropic"}
+
+	p, ok := any(m).(interface{ Provider() string })
+	if !ok {
+		t.Fatal("the model returned by New does not satisfy interface{ Provider() string }")
+	}
+	if got := p.Provider(); got != "anthropic" {
+		t.Fatalf("Provider() = %q, want %q", got, "anthropic")
+	}
+	if _, ok := any(m).(ProviderNamer); !ok {
+		t.Error("providerModel does not satisfy the named ProviderNamer interface")
+	}
+}
+
+// TestProviderModelForwardsEmbeddedMethods pins that wrapping is transparent:
+// embedding must forward Name(), and anything ADK adds later, unchanged.
+func TestProviderModelForwardsEmbeddedMethods(t *testing.T) {
+	m := providerModel{LLM: fakeLLM{name: "gpt-5.6-luna"}, provider: "openai"}
+	if got := m.Name(); got != "gpt-5.6-luna" {
+		t.Fatalf("Name() = %q, want the wrapped model's name — wrapping must be transparent", got)
+	}
+	var _ Model = m // must still satisfy the interface an agent consumes
 }

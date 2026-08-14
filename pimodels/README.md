@@ -94,6 +94,21 @@ pimodels.ContextWindowFor("azure", "my-deployment")  // provider-aware
 `Resolve` needs no credential and makes no request, so it is safe to run at
 startup to validate configuration.
 
+## Finding the provider from a model
+
+Every model returned by `New` and `FromConfig` also reports its provider family,
+so a consumer never needs its own model-name prefix table:
+
+```go
+if p, ok := m.(interface{ Provider() string }); ok {
+    span.SetAttributes(attribute.String("gen_ai.provider.name", p.Provider()))
+}
+```
+
+Assert the *shape*, not the named `ProviderNamer` type — that way the consumer
+depends on ADK and a structural interface, not on this package. A model built
+any other way will not satisfy it, so always handle the not-ok branch.
+
 ## A note on `Info.BaseURL`
 
 `Resolve` fills `Info.BaseURL` whenever an explicit endpoint was given. pi-go's

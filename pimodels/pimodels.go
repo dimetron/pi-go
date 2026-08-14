@@ -42,6 +42,43 @@ import (
 	"github.com/dimetron/pi-go/internal/provider"
 )
 
+// ProviderNamer reports which provider family serves a model.
+//
+// Every [Model] returned by [New] and [FromConfig] implements it. It is declared
+// as a named interface for documentation, but consumers should type-assert the
+// *shape* rather than import this package for the type:
+//
+//	if p, ok := m.(interface{ Provider() string }); ok {
+//	    span.SetAttributes(attribute.String("gen_ai.provider.name", p.Provider()))
+//	}
+//
+// That keeps the dependency direction right. A consumer needing the provider —
+// for a span attribute, or to enable a provider-specific tool such as Gemini's
+// server-side grounding — gets it without importing pimodels, and without
+// keeping a second copy of the model-name-to-provider table. Those copies drift
+// the moment a vendor adds a naming convention.
+//
+// A model built any other way will not satisfy the assertion, so always handle
+// the not-ok branch.
+type ProviderNamer interface {
+	// Provider returns the provider family: "openai", "anthropic", "gemini",
+	// "mistral", "xai", "ollama", "azure" or "opencode".
+	Provider() string
+}
+
+// providerModel attaches the resolved provider to a model.
+//
+// model.LLM is embedded rather than delegated field by field, so any method ADK
+// adds later is forwarded automatically and this wrapper cannot silently drift
+// from the thing it wraps. internal/guardrail wraps models the same way, and
+// nothing in pi-go type-asserts a concrete model type, so wrapping is safe.
+type providerModel struct {
+	model.LLM
+	provider string
+}
+
+func (m providerModel) Provider() string { return m.provider }
+
 // Model is the interface an ADK agent consumes. Aliased so an embedder using
 // only this package does not have to import ADK to name the return type; it is
 // the same type, so passing it to any ADK agent works unchanged.
@@ -174,7 +211,9 @@ func New(ctx context.Context, modelName string, opts ...Option) (Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pimodels: building %s model %q: %w", info.Provider, info.Model, err)
 	}
-	return m, nil
+	// Carry the resolved provider on the model itself, so a consumer never has
+	// to keep its own model-name prefix table to find out.
+	return providerModel{LLM: m, provider: info.Provider}, nil
 }
 
 // FromConfig builds the model a `pi` session would use for the given role,
