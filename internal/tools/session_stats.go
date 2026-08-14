@@ -36,6 +36,12 @@ type SessionStatsOutput struct {
 	TotalSessions int `json:"total_sessions"`
 	// Sessions with anomalies.
 	AnomalousSessions int `json:"anomalous_sessions"`
+	// Runs ended by the agent loop guard.
+	AbortedRuns int `json:"aborted_runs"`
+	// Tokens recoverable by capping oversized results and dropping duplicates.
+	ReclaimableTokens int `json:"reclaimable_tokens"`
+	// Provider-reported prompt tokens across the window.
+	PromptTokens int `json:"prompt_tokens"`
 }
 
 // sessionStat holds the computed stats for one session.
@@ -66,6 +72,13 @@ Optional: hours (lookback period, default 24), high_tool_calls (threshold, defau
 		func(_ agent.Context, input SessionStatsInput) (SessionStatsOutput, error) {
 			return sessionStatsHandler(input)
 		})
+}
+
+// SessionStats runs the session analysis and returns the report. Exported so
+// the CLI can reach the same code path the agent tool uses, rather than a
+// second implementation that drifts.
+func SessionStats(input SessionStatsInput) (SessionStatsOutput, error) {
+	return sessionStatsHandler(input)
 }
 
 func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
@@ -103,6 +116,7 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 	}
 
 	var stats []sessionStat
+	totals := newSweepTotals()
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -123,6 +137,7 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 
 		stat := analyzeSessionFile(entry.Name(), eventsPath, highToolCalls, highTurns)
 		stats = append(stats, stat)
+		accumulateSweepFile(totals, eventsPath)
 	}
 
 	// Sort by time (newest first).
@@ -190,10 +205,19 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 		}
 	}
 
+	// The per-session table above says which runs look odd. These sections say
+	// what went wrong across all of them, what it cost, and whether the
+	// recording pipelines are alive — the questions a nightly check exists for.
+	renderSweep(&b, totals, len(stats))
+	renderPipelineHealth(&b, len(stats), cutoff)
+
 	return SessionStatsOutput{
 		Content:           b.String(),
 		TotalSessions:     len(stats),
 		AnomalousSessions: totalAnomalous,
+		AbortedRuns:       totalAborts(totals),
+		ReclaimableTokens: reclaimableTokens(totals),
+		PromptTokens:      totals.PromptTokens,
 	}, nil
 }
 
