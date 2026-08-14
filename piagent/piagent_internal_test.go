@@ -90,8 +90,6 @@ func newTestAgent(t *testing.T, llm model.LLM, extra ...Option) *Agent {
 		WithModel(llm),
 		WithWorkingDir(workDir),
 		WithSessionDir(t.TempDir()),
-		WithMemory(false),
-		WithPalace(false),
 		WithSubagents(false),
 		WithLSP(LSPOff),
 	}, extra...)
@@ -268,6 +266,39 @@ func TestNewRequiresAModel(t *testing.T) {
 	}
 }
 
+// selfNamingLLM is a model that reports its own provider, the way the models
+// package's do. Asserting the shape rather than a named type is what keeps
+// piagent independent of that package.
+type selfNamingLLM struct {
+	fakeLLM
+	provider string
+}
+
+func (s *selfNamingLLM) Provider() string { return s.provider }
+
+func TestProviderOfPrefersTheModelsOwnAnswer(t *testing.T) {
+	// A model that knows its provider is believed even when its name says
+	// otherwise — that is the point of asking it.
+	m := &selfNamingLLM{fakeLLM: fakeLLM{name: "claude-sonnet-5"}, provider: "bedrock"}
+	if got := providerOf(m); got != "bedrock" {
+		t.Errorf("providerOf(self-naming) = %q, want %q", got, "bedrock")
+	}
+
+	// An empty answer is not an answer; fall back to the name.
+	empty := &selfNamingLLM{fakeLLM: fakeLLM{name: "claude-sonnet-5"}}
+	if got := providerOf(empty); got != "anthropic" {
+		t.Errorf("providerOf(empty answer) = %q, want the name-derived %q", got, "anthropic")
+	}
+
+	// A model that cannot say falls back to the name too.
+	if got := providerOf(&fakeLLM{name: "gemini-3-pro"}); got != "gemini" {
+		t.Errorf("providerOf(plain model) = %q, want %q", got, "gemini")
+	}
+	if got := providerOf(&fakeLLM{name: "some-gateway-model"}); got != "" {
+		t.Errorf("providerOf(unrecognized) = %q, want empty", got)
+	}
+}
+
 func TestProviderFromModelName(t *testing.T) {
 	tests := map[string]string{
 		"claude-sonnet-5":    "anthropic",
@@ -322,7 +353,7 @@ func TestNewRejectsAnUnresolvableWorkingDir(t *testing.T) {
 		WithModel(&fakeLLM{name: "fake"}),
 		WithWorkingDir(t.TempDir()),
 		WithSessionDir(file),
-		WithMemory(false), WithPalace(false), WithSubagents(false), WithLSP(LSPOff))
+		WithSubagents(false), WithLSP(LSPOff))
 	if err == nil {
 		t.Fatal("New succeeded with an unusable session directory")
 	}

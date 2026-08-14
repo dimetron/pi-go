@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 
@@ -81,6 +82,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	}
 
 	llm := o.model
+	providerName := providerOf(llm)
 	a := &Agent{
 		workDir:   workDir,
 		modelName: llm.Name(),
@@ -147,10 +149,10 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	coreTools = append(coreTools, lspTools...)
 
 	// Gemini search grounding is a server-side tool, so it only means anything
-	// on a Gemini model; see providerFromModelName for how that is decided.
+	// on a Gemini model; see providerOf for how that is decided.
 	// APPEND, never replace: replacing the slice here would strip every real
 	// tool and leave the model with nothing to call.
-	if gTool, ok := agent.GeminiGroundingTool(providerFromModelName(llm.Name())); ok {
+	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
 		coreTools = append(coreTools, gTool)
 	}
 	coreTools = append(coreTools, o.tools...)
@@ -183,7 +185,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		cfg:       cfg,
 		sandbox:   sandbox,
 		lspMgr:    lspMgr,
-		modelName: llm.Name(),
+		provider:  providerName,
 		worker:    memWorker,
 		project:   workDir,
 		sessionID: &memSessionID,
@@ -324,16 +326,29 @@ func (a *Agent) Model() string { return a.modelName }
 // WorkingDir returns the absolute directory the agent operates in.
 func (a *Agent) WorkingDir() string { return a.workDir }
 
-// modelNamePrefixes maps a model-name prefix onto the provider family it
-// belongs to. It is a heuristic, and it exists because piagent never
-// constructs a provider: the model arrives as an ADK model.LLM and its name is
-// the only thing there is to go on.
-//
-// Two things read it, and both degrade gracefully on a miss: the OTel span
+// providerNamer is satisfied by a model that knows which provider it talks to.
+// The models package implements it; it is declared here structurally, and
+// deliberately not imported, so piagent depends on the shape rather than on
+// the package. isolation_test.go enforces that.
+type providerNamer interface{ Provider() string }
+
+// providerOf names the provider family behind a model: from the model itself
+// when it can say, and from its name when it cannot. Only two things read it,
+// and both degrade quietly on a miss — the OTel gen_ai.provider.name span
 // attribute (which falls back to the raw string) and the Gemini grounding tool
-// (which simply does not register). A model reached under a custom name gets
-// neither, which is the right trade for not coupling this package to provider
-// resolution.
+// (which simply does not register).
+func providerOf(m model.LLM) string {
+	if pn, ok := m.(providerNamer); ok {
+		if name := pn.Provider(); name != "" {
+			return name
+		}
+	}
+	return providerFromModelName(m.Name())
+}
+
+// modelNamePrefixes maps a model-name prefix onto a provider family, for
+// models that cannot name their own provider. It is a fallback, not the
+// mechanism: prefer implementing [providerNamer].
 var modelNamePrefixes = map[string]string{
 	"claude":    "anthropic",
 	"gpt":       "openai",
@@ -360,7 +375,7 @@ type callbackDeps struct {
 	cfg       config.Config
 	sandbox   *tools.Sandbox
 	lspMgr    *lsp.Manager
-	modelName string
+	provider  string
 	worker    *memory.Worker
 	project   string
 	sessionID *string
@@ -395,7 +410,7 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 	beforeTool = append(beforeTool, tracingBefore...)
 	afterTool = append(afterTool, tracingAfter...)
 
-	beforeModel, afterModel := extension.BuildLLMTracingCallbacks(providerFromModelName(d.modelName))
+	beforeModel, afterModel := extension.BuildLLMTracingCallbacks(d.provider)
 	beforeModel = append(beforeModel, extension.BuildReadImageCallback(d.sandbox))
 
 	// Dedup runs after the compactor so both calls are compared in their

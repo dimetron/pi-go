@@ -19,13 +19,14 @@ base URLs, transport options, thinking level, token metering) live in a
 separate package:
 
 ```go
-m, err := pimodels.New(ctx, "claude-sonnet-5")   // providers
-ag, err := piagent.New(ctx, piagent.WithModel(m)) // agent
+m, err := pimodels.FromConfig(ctx, "")            // the model a pi session picks
+ag, err := piagent.New(ctx, piagent.WithModel(m)) // the agent
 ```
 
-Neither package imports the other. A change to provider handling is therefore
-not a breaking change here — and a fake `model.LLM` drives a whole turn in a
-test with no network.
+Neither package imports the other, and `piagent/isolation_test.go` fails the
+build if that ever changes. A change to provider handling is therefore not a
+breaking change here — and a fake `model.LLM` drives a whole turn in a test
+with no network.
 
 ## Minimal embed
 
@@ -43,7 +44,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	m, err := pimodels.New(ctx, "claude-sonnet-5")
+	m, err := pimodels.FromConfig(ctx, "")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,8 +79,8 @@ func main() {
 | Subagents | `.pi-go/agents` plus the bundled set, exposed as tools |
 | Project rules | `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.pi-go/AGENTS.md`, discovered upward from the working directory |
 | Toolsets | MCP servers and A2A agents from configuration |
-| Memory | Observation store, background worker, memory search tools |
-| Palace | Opened when it exists; tools registered only when it holds drawers |
+| Memory | **Off by default** — see below. `WithMemory(true)` opts in |
+| Palace | **Off by default.** Once on, tools register only when it holds drawers |
 | LSP | Registered only when a language server is installed; two tools by default |
 | Sessions | Persisted under `~/.pi-go/sessions`, so `pi --resume` can pick one up |
 
@@ -108,7 +109,8 @@ ag, err := piagent.New(ctx,
 | `WithBeforeToolCallbacks(...)` / `WithAfterToolCallbacks(...)` | Observe or rewrite tool calls |
 | `WithBeforeModelCallbacks(...)` / `WithAfterModelCallbacks(...)` | Observe or rewrite LLM calls |
 | `WithLSP(mode)` | `LSPOff`, `LSPMin` (default) or `LSPFull` |
-| `WithMemory(bool)` / `WithPalace(bool)` / `WithSkills(bool)` / `WithSubagents(bool)` | Toggle optional subsystems |
+| `WithMemory(bool)` / `WithPalace(bool)` | Opt in to the shared `~/.pi-go` stores (off by default) |
+| `WithSkills(bool)` / `WithSubagents(bool)` | Toggle discovery (on by default) |
 | `WithAgentEvents(fn)` | Receive subagent and background-bash progress |
 
 ## Callbacks
@@ -171,10 +173,38 @@ session log. Always defer it.
 - The subagent orchestrator. Subagents are reachable as tools; direct
   orchestration would be a much larger compatibility commitment.
 
-## One heuristic worth knowing
+## One deliberate difference from the CLI
 
-Because the provider is never resolved here, two things key off the model's
-own name (`model.LLM.Name()`): the OpenTelemetry `gen_ai.provider.name` span
-attribute, and whether the Gemini server-side grounding tool registers. A model
-reached under a custom name gets a raw provider attribute and no grounding
-tool. Both degrade quietly; nothing else depends on it.
+**Memory and palace are off by default here.** The CLI has both on, and this is
+the only place `piagent` departs from it.
+
+They are the only subsystems that *write* to state shared with the user:
+`~/.pi-go/memory/claude-mem.db` and `~/.pi-go/palace.db` are the same stores a
+real `pi` session reads and writes. An embedder's process is not a `pi`
+session, and quietly interleaving its observations with the user's is a
+surprise documentation cannot undo. Opt in when your embed is meant to
+contribute:
+
+```go
+piagent.New(ctx, piagent.WithModel(m), piagent.WithMemory(true))
+```
+
+Skills and subagent discovery stay **on**. Those *read* `.pi-go/`, which is the
+whole reason to embed this agent rather than write your own. Reading a
+convention and writing to someone's store are different things.
+
+## Finding the provider behind a model
+
+Two things need to know which provider a model talks to: the OpenTelemetry
+`gen_ai.provider.name` span attribute, and whether Gemini's server-side
+grounding tool is worth registering. `piagent` asks the model:
+
+```go
+if p, ok := m.(interface{ Provider() string }); ok { ... }
+```
+
+The *shape*, never a named type from another package — that is what keeps the
+dependency on ADK alone. Models from `pimodels` satisfy it. A model that
+cannot answer falls back to a prefix match on its name, and an unrecognized
+name gets neither the span attribute nor the grounding tool. Both degrade
+quietly; nothing else depends on it.

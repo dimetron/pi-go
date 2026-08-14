@@ -158,7 +158,7 @@ func TestBuildCallbacksComposesAfterToolIntoOne(t *testing.T) {
 	isolate(t)
 	before, after := buildCallbacks(callbackDeps{
 		cfg:       config.Config{},
-		modelName: "claude-sonnet-5",
+		provider:  "anthropic",
 		sessionID: new(string),
 		opts:      defaultOptions(),
 	})

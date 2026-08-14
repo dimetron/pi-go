@@ -50,13 +50,21 @@ type options struct {
 	onAgentEvent    AgentEventFunc
 }
 
-// defaultOptions mirrors the CLI's defaults: every optional subsystem on, LSP
-// narrow, and everything else resolved from configuration at build time.
+// defaultOptions splits pi-go's conventions along one line: reading them is on
+// by default, writing to shared state is not.
+//
+// Skills and subagents read .pi-go/, which is the whole point of embedding
+// this agent rather than writing your own. Memory and palace write to
+// ~/.pi-go/memory and ~/.pi-go/palace.db — the same stores the user's real pi
+// sessions use — and an embedder's process is not a pi session. Silently
+// interleaving its observations with the user's is a surprise no amount of
+// documentation fixes, so it is opt-in. This is the one place piagent
+// deliberately differs from the CLI's defaults.
 func defaultOptions() options {
 	return options{
 		lspMode:         LSPMin,
-		memoryEnabled:   true,
-		palaceEnabled:   true,
+		memoryEnabled:   false,
+		palaceEnabled:   false,
 		skillsEnabled:   true,
 		subagentEnabled: true,
 	}
@@ -95,7 +103,7 @@ func WithSessionDir(dir string) Option {
 // transport options, thinking level, token metering — live in a separate
 // package that builds one for you:
 //
-//	m, err := pimodels.New(ctx, "claude-sonnet-5")
+//	m, err := pimodels.FromConfig(ctx, "")   // the model a pi session would pick
 //	ag, err := piagent.New(ctx, piagent.WithModel(m))
 //
 // Keeping the seam at ADK's interface means neither package depends on the
@@ -165,15 +173,19 @@ func WithLSP(mode LSPMode) Option {
 	return func(o *options) { o.lspMode = mode }
 }
 
-// WithMemory enables or disables observation memory — the SQLite store under
+// WithMemory turns on observation memory — the SQLite store under
 // ~/.pi-go/memory, its background worker, and the memory search tools.
-// Enabled by default, matching the CLI.
+//
+// Off by default, unlike the CLI. That store is shared with the user's real pi
+// sessions, and an embedder's process is not one of them; opt in when the
+// embedder is meant to contribute to it.
 func WithMemory(enabled bool) Option {
 	return func(o *options) { o.memoryEnabled = enabled }
 }
 
-// WithPalace enables or disables the memory palace. Enabled by default, but
-// its tools still only register when the palace holds at least one drawer.
+// WithPalace turns on the memory palace. Off by default for the same reason as
+// [WithMemory] — ~/.pi-go/palace.db is the user's. Once on, its tools still
+// only register when the palace holds at least one drawer.
 func WithPalace(enabled bool) Option {
 	return func(o *options) { o.palaceEnabled = enabled }
 }

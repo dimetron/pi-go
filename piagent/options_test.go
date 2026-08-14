@@ -9,19 +9,30 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 )
 
-func TestDefaultOptionsMatchTheCLI(t *testing.T) {
+// TestDefaultsReadConventionsButDoNotWriteSharedState pins the one line this
+// package draws differently from the CLI. Skills and subagents read .pi-go/,
+// which is why an embedder reaches for this package at all. Memory and palace
+// write to the stores a user's real pi sessions use, and an embedder's process
+// is not a pi session — so those are opt-in.
+func TestDefaultsReadConventionsButDoNotWriteSharedState(t *testing.T) {
 	o := defaultOptions()
 	if o.lspMode != LSPMin {
 		t.Errorf("default LSP mode = %q, want %q", o.lspMode, LSPMin)
 	}
 	for name, on := range map[string]bool{
-		"memory":    o.memoryEnabled,
-		"palace":    o.palaceEnabled,
 		"skills":    o.skillsEnabled,
 		"subagents": o.subagentEnabled,
 	} {
 		if !on {
-			t.Errorf("%s is off by default; the CLI has it on", name)
+			t.Errorf("%s is off by default; reading pi-go's conventions should not need opting in", name)
+		}
+	}
+	for name, on := range map[string]bool{
+		"memory": o.memoryEnabled,
+		"palace": o.palaceEnabled,
+	} {
+		if on {
+			t.Errorf("%s is on by default; writing to the user's shared ~/.pi-go stores must be opt-in", name)
 		}
 	}
 }
@@ -59,8 +70,8 @@ func TestOptionsAreApplied(t *testing.T) {
 		WithBeforeModelCallbacks(llmagent.BeforeModelCallback(beforeModel)),
 		WithAfterModelCallbacks(llmagent.AfterModelCallback(afterModel)),
 		WithLSP(LSPFull),
-		WithMemory(false),
-		WithPalace(false),
+		WithMemory(true),
+		WithPalace(true),
 		WithSkills(false),
 		WithSubagents(false),
 		WithAgentEvents(func(string, string, string) {}),
@@ -85,8 +96,8 @@ func TestOptionsAreApplied(t *testing.T) {
 		{"beforeModel", len(o.beforeModel) == 1},
 		{"afterModel", len(o.afterModel) == 1},
 		{"lspMode", o.lspMode == LSPFull},
-		{"memory", !o.memoryEnabled},
-		{"palace", !o.palaceEnabled},
+		{"memory", o.memoryEnabled},
+		{"palace", o.palaceEnabled},
 		{"skills", !o.skillsEnabled},
 		{"subagents", !o.subagentEnabled},
 		{"agentEvents", o.onAgentEvent != nil},

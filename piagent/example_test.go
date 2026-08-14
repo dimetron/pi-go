@@ -12,7 +12,7 @@ import (
 	"github.com/dimetron/pi-go/piagent"
 )
 
-// newModel stands in for the models package. piagent takes any ADK model.LLM
+// newModel stands in for pimodels.FromConfig. piagent takes any ADK model.LLM
 // and never builds one itself, so the examples below say nothing about where
 // yours comes from.
 func newModel(context.Context, string) (model.LLM, error) { return nil, nil }
@@ -23,7 +23,7 @@ func newModel(context.Context, string) (model.LLM, error) { return nil, nil }
 func Example() {
 	ctx := context.Background()
 
-	m, err := newModel(ctx, "claude-sonnet-5")
+	m, err := newModel(ctx, "") // pimodels.FromConfig(ctx, "")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,8 +62,7 @@ func ExampleNew_options() {
 		piagent.WithWorkingDir("/srv/checkout"),
 		piagent.WithExtraInstruction("Answer as a release engineer. Never modify files under /srv/checkout/vendor."),
 		piagent.WithLSP(piagent.LSPOff),
-		piagent.WithMemory(false),
-		piagent.WithPalace(false),
+		piagent.WithMemory(true), // opt in to the shared ~/.pi-go stores
 	)
 	if err != nil {
 		log.Fatal(err)

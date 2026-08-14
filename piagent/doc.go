@@ -14,7 +14,7 @@
 // (credentials, base URLs, transport options, thinking level, token metering)
 // live in a separate package that builds one:
 //
-//	m, err := pimodels.New(ctx, "claude-sonnet-5")
+//	m, err := pimodels.FromConfig(ctx, "")   // the model a pi session would pick
 //	if err != nil {
 //		return err
 //	}
@@ -52,10 +52,22 @@
 //   - Project context files (AGENT.md, AGENTS.md, CLAUDE.md, .pi-go/AGENTS.md)
 //     discovered from the working directory up to the filesystem root.
 //   - MCP servers and A2A agents as ADK toolsets.
-//   - Observation memory and the memory palace, each behaving exactly as they
-//     do under the CLI (see "Gated subsystems").
 //   - Sessions persisted under ~/.pi-go/sessions, so a session started by an
 //     embedder is visible to `pi --resume` and vice versa.
+//
+// # One deliberate difference from the CLI
+//
+// Observation memory and the memory palace are OFF by default here, where the
+// CLI has both on. They are the only subsystems that write to state shared
+// with the user: ~/.pi-go/memory/claude-mem.db and ~/.pi-go/palace.db are the
+// same stores a real pi session reads and writes. An embedder's process is not
+// a pi session, and silently interleaving its observations with the user's is
+// a surprise that documentation cannot undo — so it is opt-in, via
+// [WithMemory] and [WithPalace].
+//
+// Skills and subagent discovery stay on. Those read .pi-go/, which is the
+// whole reason to embed this agent instead of writing your own. Reading a
+// convention and writing to someone's store are different things.
 //
 // # Gated subsystems
 //
@@ -68,9 +80,10 @@
 //     [LSPMin], which advertises two tools (symbols and diagnostics); [LSPFull]
 //     advertises all seven. The after-tool LSP hook is wired either way and
 //     costs nothing when no server starts.
-//   - Palace tools register only when the palace database exists and holds at
-//     least one drawer. An empty palace still gets opened, so the observation
-//     bridge can fill it and the tools appear on a later run.
+//   - Palace tools, once [WithPalace] is on, register only when the palace
+//     database exists and holds at least one drawer. An empty palace still gets
+//     opened, so the observation bridge can fill it and the tools appear on a
+//     later run.
 //
 // # Callback composition
 //
@@ -112,4 +125,14 @@
 //
 // The daily-token guardrail, which wraps the model rather than the agent and
 // so belongs with whoever built the model.
+//
+// # Finding the provider behind a model
+//
+// Two things need to know which provider a model talks to: the OpenTelemetry
+// gen_ai.provider.name span attribute, and whether Gemini's server-side
+// grounding tool is worth registering. piagent asks the model itself, by
+// asserting the shape interface{ Provider() string } — the shape, never a
+// named type from another package, so the dependency stays on ADK alone. A
+// model that cannot answer falls back to a prefix match on its name, and an
+// unrecognized name simply gets neither the attribute nor the tool.
 package piagent
