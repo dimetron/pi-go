@@ -106,6 +106,7 @@ ag, err := piagent.New(ctx,
 | `WithInstruction(s)` | Replace the built-in system prompt |
 | `WithExtraInstruction(s)` | Append your own text to the assembled prompt |
 | `WithTools(...)` / `WithToolsets(...)` | Add your own tools |
+| `WithBeforeTurn(...)` / `WithAfterTurn(...)` | Bracket whole turns — admission control and metrics |
 | `WithBeforeToolCallbacks(...)` / `WithAfterToolCallbacks(...)` | Observe or rewrite tool calls |
 | `WithBeforeModelCallbacks(...)` / `WithAfterModelCallbacks(...)` | Observe or rewrite LLM calls |
 | `WithLSP(mode)` | `LSPOff`, `LSPMin` (default) or `LSPFull` |
@@ -170,8 +171,52 @@ session log. Always defer it.
   and would have to be extracted first; install your own via ADK if you need it.
 - A process-global HTTP trace sink. A library has no business claiming one.
 - The daily-token guardrail, which wraps the model rather than the agent.
+- Config-driven shell hooks as a programmatic option. They still load from
+  `~/.pi-go/config.json`, but an embedder writing Go gets a Go func rather than
+  a subprocess.
 - The subagent orchestrator. Subagents are reachable as tools; direct
   orchestration would be a much larger compatibility commitment.
+
+## Turn hooks
+
+Tool and model callbacks fire *inside* a turn. `WithBeforeTurn` and
+`WithAfterTurn` bracket the whole thing, which is the level metrics, audit
+trails and admission control actually work at.
+
+```go
+piagent.New(ctx,
+	piagent.WithModel(m),
+
+	// Admission control: returning an error aborts the turn before it
+	// reaches the model.
+	piagent.WithBeforeTurn(func(ctx context.Context, sessionID, message string) error {
+		return budget.Check(sessionID)
+	}),
+
+	// Metrics and audit. Cannot change the outcome.
+	piagent.WithAfterTurn(func(ctx context.Context, i piagent.TurnInfo) {
+		metrics.Record(i.SessionID, i.Duration, i.ToolCalls, i.Err)
+	}),
+)
+```
+
+`TurnInfo` carries `SessionID`, `Message`, `Duration`, `Events`, `ToolCalls`,
+`Err` and `Abandoned`.
+
+Three behaviours worth knowing, because each is a bug if you assume otherwise:
+
+- **They fire on iteration, not on the `Run` call.** A sequence nobody ranges
+  over is not a turn, and recording one would put a turn that never happened
+  into your metrics.
+- **An abandoned turn still reports.** Break out of the range loop and the
+  after-turn hook still runs, with `Abandoned: true` — a caller that stops
+  consuming has still spent the tokens.
+- **An aborted turn does not.** If a before-turn hook denies the turn, no
+  request is made and there is nothing to report, so the after-turn hook is
+  not called.
+
+This is the headless equivalent of pi-go's `turn_complete` lifecycle hook,
+which is otherwise dispatched only from the TUI.
 
 ## One deliberate difference from the CLI
 

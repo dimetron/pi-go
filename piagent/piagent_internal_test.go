@@ -65,6 +65,12 @@ func (f *fakeLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bo
 	}
 }
 
+func (f *fakeLLM) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func (f *fakeLLM) systemPrompt() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

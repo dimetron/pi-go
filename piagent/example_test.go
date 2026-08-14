@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -136,4 +137,39 @@ func ExampleAgent_Run() {
 			}
 		}
 	}
+}
+
+// ExampleWithAfterTurn brackets whole turns rather than individual tool calls,
+// which is the level metrics and audit logs work at. The before-turn hook is
+// admission control: returning an error aborts the turn before it reaches the
+// model.
+func ExampleWithAfterTurn() {
+	ctx := context.Background()
+
+	var spent atomic.Int64
+	const budget = 500
+
+	m, err := newModel(ctx, "")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ag, err := piagent.New(ctx,
+		piagent.WithModel(m),
+		piagent.WithBeforeTurn(func(_ context.Context, sessionID, message string) error {
+			if spent.Load() >= budget {
+				return fmt.Errorf("session %s is over its %d-turn budget", sessionID, budget)
+			}
+			return nil
+		}),
+		piagent.WithAfterTurn(func(_ context.Context, info piagent.TurnInfo) {
+			spent.Add(1)
+			log.Printf("turn: session=%s tools=%d events=%d took=%s abandoned=%t err=%v",
+				info.SessionID, info.ToolCalls, info.Events, info.Duration, info.Abandoned, info.Err)
+		}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ag.Close()
 }
