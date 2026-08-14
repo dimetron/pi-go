@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"runtime/debug"
@@ -70,6 +71,12 @@ const (
 	// outputCheckEvery is how much new output accumulates between scans.
 	// Scanning per token would put a linear search in the streaming path.
 	outputCheckEvery = 512
+
+	// maxStuckRecoveries is how many times a stuck turn is handed back to the
+	// model with the detector's reason before the run is ended for real.
+	// Deliberately small: repetition that survives being named is not going to
+	// be fixed by naming it a third time, and each attempt costs a whole turn.
+	maxStuckRecoveries = 2
 )
 
 // extractAgentType returns a label for the subagent tool call by inspecting
@@ -680,12 +687,6 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 	}
 
 	log := run.logger
-	detector := &stuckDetector{}
-
-	// Providers like ollama/minimax emit per-token partial events AND a final
-	// aggregate containing the whole turn; forwarding both duplicates the text
-	// on screen (observed as "I'll spawn...I'll spawn...").
-	var dedup agent.StreamDedup
 
 	// GroundingMetadata is repeated on every streamed chunk of the response it
 	// grounds, so the same search would otherwise print once per chunk. Key on
@@ -712,6 +713,56 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		ch <- agentDoneMsg{err: err}
 	}
 
+	// A stuck turn is recoverable: the model gets told what the detector saw and
+	// continues in the same session, so the work already done is not thrown
+	// away. The budget is small on purpose — repetition that survives being
+	// named is not going to be fixed by naming it again, and every attempt
+	// costs a full turn.
+	for attempt := 0; ; attempt++ {
+		err := m.streamTurn(ctx, ch, prompt, run, groundedSeen, &truncated, log)
+
+		var stuck *stuckError
+		if !errors.As(err, &stuck) {
+			if err != nil {
+				fail(err)
+			}
+			return
+		}
+
+		if attempt >= maxStuckRecoveries {
+			fail(fmt.Errorf("%w (gave up after %d recovery attempt(s))", err, attempt))
+			return
+		}
+
+		log.Info(fmt.Sprintf("agent loop stuck (%s); telling the model and resuming", stuck.Detail()))
+		ch <- agentWarningMsg{
+			text: fmt.Sprintf("Loop detected (%s) — telling the model and resuming (attempt %d of %d).",
+				stuck.Detail(), attempt+1, maxStuckRecoveries),
+		}
+		prompt = recoverStuckPrompt(stuck.Detail())
+	}
+}
+
+// streamTurn runs one streaming turn and forwards its events. It returns a
+// *stuckError when the detectors call the turn dead, any other error when the
+// run failed outright, and nil on a clean finish.
+//
+// The stuck detector and the stream deduper are per-turn state and are rebuilt
+// here on every attempt: carrying the previous attempt's output window across a
+// recovery would re-trip the guard on text the model has already been told to
+// stop producing.
+func (m *model) streamTurn(
+	ctx context.Context,
+	ch chan agentMsg,
+	prompt string,
+	run agentRunConfig,
+	groundedSeen map[string]bool,
+	truncated *bool,
+	log *logger.Logger,
+) error {
+	detector := &stuckDetector{}
+	var dedup agent.StreamDedup
+
 	// Same retry wrapper the print and RPC front-ends use, so a run that dies
 	// before producing anything is replayed here too instead of ending the turn
 	// with an error on screen. Mid-turn failures are handled a layer down, in
@@ -721,8 +772,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		return run.agent.RunStreaming(ctx, run.sessionID, prompt)
 	}) {
 		if err != nil {
-			fail(err)
-			return
+			return err
 		}
 		if ev == nil {
 			continue
@@ -738,15 +788,14 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		// A provider failure is a content-less event, so it has to be caught
 		// before the guard below drops it. See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
-			fail(evErr)
-			return
+			return evErr
 		}
 
 		// A turn cut short at the output cap is otherwise indistinguishable
 		// from a complete one: the finish reason was mapped by every provider
 		// and then read by nobody, so a truncated reply just looked short.
-		if ev.FinishReason == genai.FinishReasonMaxTokens && !truncated {
-			truncated = true
+		if ev.FinishReason == genai.FinishReasonMaxTokens && !*truncated {
+			*truncated = true
 			ch <- agentWarningMsg{
 				text: "Response truncated: the model hit its output-token limit.",
 			}
@@ -757,10 +806,10 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		}
 		dedup.BeginEvent(ev)
 		if abortErr := m.emitEventParts(ch, ev, &dedup, detector, log); abortErr != nil {
-			fail(abortErr)
-			return
+			return abortErr
 		}
 	}
+	return nil
 }
 
 // emitEventParts forwards one event's parts to the TUI channel. It returns a
@@ -828,13 +877,45 @@ func (m *model) emitEventParts(
 	return nil
 }
 
+// stuckError is a loop abort the run can recover from. It is distinguished
+// from a fatal error so runAgentLoop can hand the detail back to the model and
+// let it try again, rather than ending the turn on the model's first bad
+// stretch. See recoverStuckPrompt.
+type stuckError struct{ detail string }
+
+func (e *stuckError) Error() string { return "agent loop aborted: " + e.detail }
+
+// Detail returns the human-readable reason the loop was called dead.
+func (e *stuckError) Detail() string { return e.detail }
+
 // stuckErr adapts a stuckDetector verdict into an error, so both detector call
 // sites read as a single guard instead of a repeated five-line block.
 func stuckErr(stuck bool, detail string) error {
 	if !stuck {
 		return nil
 	}
-	return fmt.Errorf("agent loop aborted: %s", detail)
+	return &stuckError{detail: detail}
+}
+
+// recoverStuckPrompt is what the model is told after it gets stuck. It names
+// the specific failure the detector saw, because "try again" on its own tends
+// to produce the same output a second time — the model has no way to know what
+// tripped the guard unless it is told.
+func recoverStuckPrompt(detail string) string {
+	return fmt.Sprintf(
+		`Your previous turn was stopped automatically: %s.
+
+That is a loop, not progress, and repeating it will stop the turn again. Do not
+continue where you left off and do not restate what you already said.
+
+Change approach:
+- If you were repeating text, say the point once and move on.
+- If you were repeating a tool call, the call is not going to start working —
+  use a different tool, different arguments, or reason from what you already have.
+- If you are genuinely blocked, say so plainly and stop, rather than filling
+  the turn.
+
+Continue the original task from here.`, detail)
 }
 
 // handleAgentThinking processes an agentThinkingMsg.

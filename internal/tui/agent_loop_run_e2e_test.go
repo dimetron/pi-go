@@ -194,8 +194,10 @@ func TestRunAgentLoop_AbortsIdenticalSuccessfulCallLoop(t *testing.T) {
 	if res.doneErr == nil || !strings.Contains(res.doneErr.Error(), "aborted") {
 		t.Fatalf("expected loop-aborted error, got %v", res.doneErr)
 	}
-	if len(res.toolCalls) > maxRepeatToolCalls {
-		t.Fatalf("detector allowed %d identical calls (want <= %d)", len(res.toolCalls), maxRepeatToolCalls)
+	// Bounded per attempt: the turn is retried maxStuckRecoveries times with
+	// the reason fed back to the model before the run is ended.
+	if want := maxRepeatToolCalls * (1 + maxStuckRecoveries); len(res.toolCalls) > want {
+		t.Fatalf("detector allowed %d identical calls (want <= %d)", len(res.toolCalls), want)
 	}
 }
 
@@ -211,8 +213,8 @@ func TestRunAgentLoop_AbortsSameToolVaryingArgs(t *testing.T) {
 	if res.doneErr == nil || !strings.Contains(res.doneErr.Error(), "aborted") {
 		t.Fatalf("expected loop-aborted error, got %v", res.doneErr)
 	}
-	if len(res.toolCalls) > maxToolErrorStreak {
-		t.Fatalf("same-tool guard allowed %d failing calls (want <= %d)", len(res.toolCalls), maxToolErrorStreak)
+	if want := maxToolErrorStreak * (1 + maxStuckRecoveries); len(res.toolCalls) > want {
+		t.Fatalf("same-tool guard allowed %d failing calls (want <= %d)", len(res.toolCalls), want)
 	}
 }
 
