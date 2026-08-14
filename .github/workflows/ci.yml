@@ -80,7 +80,18 @@ jobs:
           toolchain: stable
           cache-workspaces: hack/test/lsp/rust
       - name: Run tests with coverage
-        run: go test -coverprofile=coverage.out -coverpkg=./internal/... ./internal/...
+        # Every package except cmd/ (excluded in codecov.yml) and the hack/
+        # fixtures. Derived from `go list` rather than hard-coded to
+        # ./internal/..., because that pattern silently omitted the public
+        # packages: their files never entered the profile, so Codecov counted
+        # every line of them as a miss on the diff.
+        #
+        # Not -coverpkg=./... — instrumenting cmd/ and hack/ too slows the
+        # test binaries enough to trip the idle-timeout assertion in
+        # internal/tools' bash supervisor tests.
+        run: |
+          pkgs=$(go list ./... | grep -Ev '/(cmd|hack)/')
+          go test -coverprofile=coverage.out -coverpkg="$(echo "$pkgs" | paste -sd, -)" $pkgs
       - name: Coverage report
         run: go tool cover -func=coverage.out
       - name: Upload coverage to Codecov
