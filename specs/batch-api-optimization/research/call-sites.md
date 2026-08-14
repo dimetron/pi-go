@@ -29,8 +29,12 @@ calls `orchestrator.Spawn`. The dispatch at
 > binary via the ACP adapter; codex agents launch `codex app-server` … **everyone
 > else runs as a child `pi --mode json`**."
 
-`memory-compressor` is in the "everyone else" branch. So each compression is a
-full process boot with pi's base system prompt, not a bare model call.
+`memory-compressor` is in the "everyone else" branch, and the child is a real
+process: `spawnArgs` builds `{"--mode", "json", …}`
+(`internal/subagent/spawner.go:110`) and `Spawn` runs
+`exec.CommandContext(procCtx, s.PiBinary, args...)`
+(`internal/subagent/spawner.go:145`). Each compression is a full `pi` boot, not
+a bare model call.
 
 The agent definition (`internal/subagent/bundled/memory-compressor.md`):
 
@@ -42,17 +46,76 @@ tools: []
 timeout: 600000
 ```
 
-`tools: []` keeps tool declarations out of the request, which is the larger half
-of the fixed overhead. The prompt payload is small and bounded: `tool_name`,
-`tool_input`, and `tool_output` truncated at
-`maxPromptOutput = 4096` bytes (`internal/memory/compress.go:14,81`) —
-roughly 1,100 tokens of payload plus a ~350-token instruction.
+Two of those five lines do not do what they appear to do.
+
+**`tools: []` is inert.** `AgentConfig.Tools` is populated from frontmatter at
+`internal/subagent/agents.go:142` and **never read again anywhere in the repo**:
+
+```
+$ grep -rn "\.Tools" --include='*.go' internal/subagent/ | grep -v _test
+internal/subagent/agents.go:142:   cfg.Tools = append(cfg.Tools, t)
+```
+
+`SpawnOpts` (`internal/subagent/orchestrator.go:446-458`) carries `Model`,
+`WorkDir`, `Prompt`, `Instruction`, `Timeout`, `Env`, `BaseURL` and `LSP` — no
+tool list. The child therefore boots with pi's **default full toolset and full
+system prompt**. The per-observation request is not the 4 KB the payload cap
+suggests.
+
+**`role: smol` resolves to the frontier model.** `ResolveRole`
+(`internal/config/config.go:186`) falls back to `Roles["default"]` when the
+named role is absent, and `Defaults()` (`internal/config/config.go:165`) ships
+exactly one role:
+
+```go
+Roles: map[string]RoleConfig{
+    "default": {Model: "gpt-5.6-sol"},
+},
+```
+
+There is no `smol` role out of the box, and none in this machine's
+`$HOME/.pi-go/config.json` either. **On shipped defaults the memory compressor
+runs on `gpt-5.6-sol` at $5/$30 per MTok** — the frontier model, once per tool
+call, in a child process carrying the full system prompt.
+
+**`memory.compression_model_role` is dead code.** The config key exists
+(`internal/config/config.go:37`) and defaults to `"smol"`
+(`internal/config/config.go:48`), but nothing reads it:
+
+```
+$ grep -rn "CompressionRole" --include='*.go' . | grep -v _test
+internal/config/config.go:37:  CompressionRole  string `json:"compression_model_role,omitempty"`
+internal/config/config.go:48:  CompressionRole: "smol",
+```
+
+The role actually used comes from the agent's own frontmatter, not from config.
+
+Prompt payload, for what it is worth: `buildCompressionPrompt`
+(`internal/memory/compress.go:75-92`) marshals `tool_name`, `tool_input` and
+`tool_output`. Only `tool_output` is truncated, at `maxPromptOutput = 4096`
+bytes (`internal/memory/compress.go:14,81`). **`tool_input` is not truncated at
+all**, so a `write` or `edit` with a large `content` argument goes in whole.
+
+Delivery shape, which bounds how much any of this can cost at once: `Enqueue`
+is non-blocking and **drops** when the channel is full
+(`internal/memory/worker.go:55-64`, buffer = `max_pending_observations`,
+default 100). `Start` drains with a **single goroutine**
+(`internal/memory/worker.go:67-76`), so compressions are serial — one child
+process at a time — and the orchestrator pool it competes for is
+`DefaultPoolSize = 3` (`internal/subagent/orchestrator.go:26`), **shared with
+user-facing subagents**. Shutdown gives the drain 5 seconds
+(`internal/cli/cli.go:975-979`); anything still queued is discarded. There are
+no retries — `compress.go:46` calls `Spawn`, not `SpawnWithRetry`.
 
 **This site is already scheduled for repair.** `specs/memory-fixes` R4 requires
-that compression "does not spawn a `pi` child process per tool call" and moves
-it in-process against the resolved `smol` role. That change removes the
-per-call process boot and its system prompt. Whatever a batch API could save
-here, it saves on the *residue* after R4, not on today's shape.
+that compression "does not spawn a `pi` child process per tool call", moves it
+in-process against the resolved `smol` role, and requires that "if no `smol`
+role is configured, the fallback must be logged once per session, **not
+silently billed at frontier prices**". That last clause is exactly the defect
+above, and R4 was written before it was traced to `ResolveRole`.
+
+Whatever a batch API could save here, it saves on the *residue* after R4 — and
+R4 is worth roughly 40× more than the batching (`design.md` § D1).
 
 **And today it runs zero times** — see `research/measurements.md` § M7. One
 observation exists in the database, written during the memory-fixes work itself.
@@ -70,7 +133,14 @@ candidate. It is a batch candidate for code that would have to be written first.
 ### C3 — Palace KG extraction makes no LLM call at all
 
 `internal/palace/tool_kg_extract.go` was listed as a batch candidate. It is not
-one: it contains no model invocation. Triple extraction is pure heuristics —
+one, and the file says so itself (`internal/palace/tool_kg_extract.go:25-30`):
+
+> "The tool is heuristic: **it does not call an LLM. That is deliberate** — the
+> extraction runs in the hot path of tool use and would otherwise add an extra
+> model call per observation. The agent already has a model; it can reject bad
+> candidates."
+
+Triple extraction is pure heuristics —
 `extractTriples` (line 178) matches Go-style function declarations with regexes,
 `emitImport` (line 114) parses import paths, `isStdlibImport` (line 340) and
 `isCommonWord` (line 375) filter with static lists.

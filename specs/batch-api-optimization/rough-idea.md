@@ -37,9 +37,17 @@ offer a clean 50% discount at a 24-hour worst case, and all three Go SDKs are
 already in `go.mod`. None of that matters, because pi-go has almost nothing to
 put in a batch. Of eight model call sites, five block a user who is watching,
 one (`SummarizeSession`) has no production caller, one (palace KG extraction)
-turns out to make no LLM call at all, and the last — the memory compressor —
-has issued exactly **one** request in the database's lifetime, because the
-callback chain that feeds it is dead.
+turns out to make no LLM call at all *by explicit design*, and the last — the
+memory compressor — has issued exactly **one** request in the database's
+lifetime, because the callback chain that feeds it is dead.
+
+Costing that one candidate turned up three defects that matter more than
+batching ever could: the compressor's `tools: []` declaration is inert, its
+`role: smol` silently falls back to the frontier model, and the config key that
+appears to control the role is read by nothing. On shipped defaults a repaired
+compressor would run `gpt-5.6-sol` once per tool call, in a child process
+carrying the full toolset. Fixing that is worth ~40× what a Batch API would
+save on top of it — and `specs/memory-fixes` R4 already covers it.
 
 **Batching tool calls is where the money is, and it needs no new machinery.**
 ADK already dispatches multiple function calls from one response concurrently.

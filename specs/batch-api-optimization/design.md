@@ -34,22 +34,52 @@ after-tool callback chain that feeds it is dead.
 
 ### The number, computed anyway
 
-Suppose `specs/memory-fixes` lands and the compressor runs on every tool call.
-Measured tool-call volume is 5,248 over two days = **2,624 calls/day**.
+Suppose the dead callback chain is repaired and the compressor runs on every
+tool call. Measured tool-call volume is 5,248 over two days = **2,624
+calls/day**.
 
-Per compression, after memory-fixes R4 moves it in-process against `smol`:
-~350 tokens of instruction (`internal/subagent/bundled/memory-compressor.md`)
-plus a payload capped at `maxPromptOutput = 4096` bytes ≈ 1,150 tokens, and
-~150 output tokens. Call it 1,500 in / 150 out.
+Per-compression prompt size depends entirely on which of two shapes is in play,
+and the difference is a factor of six.
 
-Daily: 3.94M prompt tokens, 0.39M output tokens.
+**Today's shape.** The child is a full `pi --mode json` process
+(`internal/subagent/spawner.go:110,145`) carrying pi's default system prompt
+*and its complete tool declarations* — the `tools: []` line in the agent
+definition is inert, because `AgentConfig.Tools` is written at
+`internal/subagent/agents.go:142` and never read (`research/call-sites.md` § C1).
+The best available proxy for that fixed cost is the measured median prompt of a
+session's first request, 9,131 tokens (`research/measurements.md` § M1), which
+is the same system prompt plus tool declarations plus a short first message.
+Call it ~9,500 in / 150 out.
 
-| `smol` model | Standard cost/day | With 50% batch | **Saving** |
-|--------------|-------------------|----------------|------------|
-| gpt-5.6-luna ($0.20 / $1.20) | $1.26 | $0.63 | **$0.63/day** |
-| Claude Haiku 4.5 ($1 / $5)   | $5.91 | $2.96 | **$2.96/day** |
+**After memory-fixes R4**, compression runs in-process against a resolved
+`smol` role: ~350 tokens of instruction plus a payload capped at
+`maxPromptOutput = 4096` bytes ≈ 1,150 tokens. Call it ~1,500 in / 150 out.
 
-**$0.63 to $2.96 per day.** Against that:
+| Shape | Model | Prompt tok/day | Cost/day | With 50% batch | **Batch saving** |
+|-------|-------|----------------|----------|----------------|------------------|
+| Today | gpt-5.6-sol (shipped default) | 24.9M | $136.30 | $68.15 | **$68.15/day** |
+| Today | gpt-5.6-luna (this machine)   | 24.9M | $5.46   | $2.73  | **$2.73/day**  |
+| After R4 | Claude Haiku 4.5 `smol`    | 3.94M | $5.91   | $2.96  | **$2.96/day**  |
+| After R4 | gpt-5.6-luna `smol`        | 3.94M | $1.26   | $0.63  | **$0.63/day**  |
+
+The `gpt-5.6-sol` row is not hypothetical. `ResolveRole`
+(`internal/config/config.go:186`) falls back to `Roles["default"]` when a role
+is missing, and `Defaults()` ships only `{"default": {Model: "gpt-5.6-sol"}}` —
+there is no `smol` role out of the box. **On shipped defaults, a repaired
+compressor would run the frontier model once per tool call.**
+
+That row is also the argument against building a batch client rather than for
+it. Compare the two fixes on the same traffic:
+
+| Change | Saving/day (shipped defaults) |
+|--------|-------------------------------|
+| memory-fixes R4 — in-process, real `smol` model | **~$135** |
+| Batch API layered on top of R4                  | ~$3       |
+
+**R4 is worth roughly 40× the batching, has no 24-hour latency, and is already
+specced.** Build R4. Do not build the batch client.
+
+Post-R4 the batch saving is **$0.63 to $2.96 per day.** Against that:
 
 - A durable job store. Batches take up to 24 hours; pi is a CLI that exits.
   Pending batch IDs and their custom-ID → observation mappings must survive
@@ -65,20 +95,24 @@ Daily: 3.94M prompt tokens, 0.39M output tokens.
   retrieval — but it does mean a session's own observations are never available
   to the session that produced them, or to the next few.
 
-### The alternative that beats it
+### Three defects found while costing this
 
-`specs/memory-fixes` R4 already requires the compressor to stop spawning a child
-`pi --mode json` per tool call. Today each compression is a full process boot
-carrying pi's base system prompt — roughly 5,500 prompt tokens instead of 1,500.
+None is in this spec's scope to fix — all three belong to `specs/memory-fixes` —
+but they are recorded here because they are what makes the compressor's
+hypothetical bill large, and because two of them are invisible from the config
+that appears to control them.
 
-| Change | Saving/day (Haiku 4.5 `smol`) |
-|--------|-------------------------------|
-| memory-fixes R4 (in-process compression) | ~$10.5 |
-| Batch API on top of R4                   | ~$3.0  |
+1. **`tools: []` in the agent definition is inert.** `AgentConfig.Tools` is
+   written at `internal/subagent/agents.go:142` and never read; `SpawnOpts`
+   does not carry a tool list. The child boots with the full default toolset.
+2. **`role: smol` silently resolves to the frontier model.** No `smol` role
+   ships in `Defaults()`, and `ResolveRole` falls back to `default`.
+3. **`memory.compression_model_role` is dead config.** Written at
+   `internal/config/config.go:37,48`, read nowhere.
 
-**The fix that is already specced saves more than the fix this spec was asked to
-consider, and it has no 24-hour latency and no durable job store.** That is the
-whole argument.
+Defect 2 is precisely what memory-fixes R4 anticipated when it required that a
+missing `smol` role be "logged once per session, not silently billed at frontier
+prices". R4 was written before the cause was traced to `ResolveRole`.
 
 ### What would change the answer
 
