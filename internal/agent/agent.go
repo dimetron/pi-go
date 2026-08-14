@@ -268,11 +268,31 @@ type Config struct {
 	// AfterModelCallbacks run after each LLM invocation.
 	AfterModelCallbacks []AfterModelCallback
 
+	// WorkingDir, when non-empty, is the directory reported to the model as
+	// the current working directory. Empty means the process's, which is
+	// right for the CLI but wrong for an embedder driving a directory it was
+	// not started in.
+	WorkingDir string
+
 	// Logger, if non-nil, receives non-fatal diagnostics such as unresolved
 	// instruction placeholders. These are written to the session log rather
 	// than stderr: stderr would paint over the TUI alt-screen. Its methods
 	// are nil-safe, so a nil Logger silently discards.
 	Logger *logger.Logger
+}
+
+// workingDir returns the directory to report to the model: the configured one
+// when set, otherwise the process's. An unreadable process cwd yields "", and
+// the caller then omits the line rather than reporting a directory it guessed.
+func (c Config) workingDir() string {
+	if c.WorkingDir != "" {
+		return c.WorkingDir
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
 }
 
 // Agent wraps an ADK Runner and session management for the coding agent.
@@ -401,8 +421,7 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	// Add working directory context to the instruction.
-	cwd, err := os.Getwd()
-	if err == nil {
+	if cwd := cfg.workingDir(); cwd != "" {
 		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
 	}
 
@@ -458,7 +477,7 @@ func (a *Agent) RebuildWithModel(llm model.LLM) error {
 	if instruction == "" {
 		instruction = SystemInstruction
 	}
-	if cwd, err := os.Getwd(); err == nil {
+	if cwd := cfg.workingDir(); cwd != "" {
 		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
 	}
 
@@ -513,8 +532,7 @@ func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle stri
 	// in /sessions listings have a sensible label before the first user prompt
 	// overwrites it via the TUI's applySessionTitle / runPrint's derivePrintTitle.
 	if tn, ok := a.sessionService.(titleNamer); ok {
-		cwd, _ := os.Getwd()
-		if title := defaultSessionTitle(cwd); title != "" {
+		if title := defaultSessionTitle(a.config.workingDir()); title != "" {
 			_ = tn.SetSessionTitle(sid, title) // best-effort metadata
 			return sid, title, nil
 		}
@@ -682,6 +700,16 @@ func (p InstructionParts) String() string {
 // context files and skills relative to explicit cwd and home directories.
 func loadInstructionFrom(baseInstruction, cwd, home string) string {
 	return loadInstructionPartsFrom(baseInstruction, cwd, home).String()
+}
+
+// LoadInstructionPartsFor resolves the system prompt for an explicit working
+// directory instead of the process's, and returns it broken into its sections.
+// Callers that drive the agent over a directory they were not started in — the
+// public piagent package, for one — need this; LoadInstructionParts is the
+// os.Getwd() convenience on top of it.
+func LoadInstructionPartsFor(baseInstruction, cwd string) InstructionParts {
+	home, _ := os.UserHomeDir()
+	return loadInstructionPartsFrom(baseInstruction, cwd, home)
 }
 
 // LoadInstructionParts resolves the system prompt and returns it broken into
