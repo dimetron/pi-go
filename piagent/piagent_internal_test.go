@@ -266,26 +266,88 @@ func TestNewRequiresAModel(t *testing.T) {
 	}
 }
 
-// selfNamingLLM is a model that reports its own provider, the way the models
-// package's do. Asserting the shape rather than a named type is what keeps
-// piagent independent of that package.
+// selfNamingLLM is a model that reports its own provider, mirroring how the
+// models package wraps one: a struct embedding model.LLM, with Provider() on
+// the value receiver — so a value, not just a pointer, satisfies the shape.
+// That is the form that actually ships; a pointer-only method would leave
+// every consumer silently on the fallback path.
+//
+// Asserting the shape rather than a named type is what keeps piagent
+// independent of that package.
 type selfNamingLLM struct {
-	fakeLLM
+	model.LLM
 	provider string
 }
 
-func (s *selfNamingLLM) Provider() string { return s.provider }
+func (s selfNamingLLM) Provider() string { return s.provider }
+
+// TestProviderAssertionDrivesToolRegistration is the end-to-end half of the
+// contract: a model that says it is Gemini gets the grounding tool even though
+// nothing about its name suggests it. If the shape assertion ever stops
+// matching what the models package returns, this fails while the unit test on
+// providerOf keeps passing.
+func TestProviderAssertionDrivesToolRegistration(t *testing.T) {
+	isolate(t)
+
+	hasGrounding := func(ag *Agent) bool {
+		for _, tl := range ag.Tools() {
+			if tl.Name() == agent.GroundingToolName {
+				return true
+			}
+		}
+		return false
+	}
+
+	named := newTestAgent(t, selfNamingLLM{
+		LLM:      &fakeLLM{name: "internal-codename-7", reply: "ok"},
+		provider: "gemini",
+	})
+	if !hasGrounding(named) {
+		t.Error("a model reporting Provider() == gemini did not get the grounding tool")
+	}
+}
+
+// TestModelWithoutProviderStillBuilds pins the not-ok branch. Every model built
+// outside the models package lands here — a hand-rolled ADK model, a test fake,
+// anything wrapping a third-party client — so this is the path that breaks in
+// someone else's codebase rather than in ours.
+func TestModelWithoutProviderStillBuilds(t *testing.T) {
+	isolate(t)
+
+	plain := &fakeLLM{name: "internal-codename-7", reply: "still works"}
+	if _, ok := any(plain).(interface{ Provider() string }); ok {
+		t.Fatal("the fake reports a provider; this test needs one that cannot")
+	}
+
+	ag := newTestAgent(t, plain)
+	sessionID, err := ag.NewSession(t.Context())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	got, err := ag.Ask(t.Context(), sessionID, "hi")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if got != "still works" {
+		t.Errorf("Ask = %q, want the turn to complete normally", got)
+	}
+	// An unrecognized name yields no provider, and the degradation is silent:
+	// a raw span attribute and no grounding tool, never a failure to build.
+	if got := providerOf(plain); got != "" {
+		t.Errorf("providerOf = %q, want empty for an unrecognizable model", got)
+	}
+}
 
 func TestProviderOfPrefersTheModelsOwnAnswer(t *testing.T) {
 	// A model that knows its provider is believed even when its name says
 	// otherwise — that is the point of asking it.
-	m := &selfNamingLLM{fakeLLM: fakeLLM{name: "claude-sonnet-5"}, provider: "bedrock"}
+	m := selfNamingLLM{LLM: &fakeLLM{name: "claude-sonnet-5"}, provider: "bedrock"}
 	if got := providerOf(m); got != "bedrock" {
 		t.Errorf("providerOf(self-naming) = %q, want %q", got, "bedrock")
 	}
 
 	// An empty answer is not an answer; fall back to the name.
-	empty := &selfNamingLLM{fakeLLM: fakeLLM{name: "claude-sonnet-5"}}
+	empty := selfNamingLLM{LLM: &fakeLLM{name: "claude-sonnet-5"}}
 	if got := providerOf(empty); got != "anthropic" {
 		t.Errorf("providerOf(empty answer) = %q, want the name-derived %q", got, "anthropic")
 	}
