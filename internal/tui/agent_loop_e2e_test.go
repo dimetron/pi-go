@@ -97,7 +97,12 @@ func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 	if doneErr == nil || !strings.Contains(doneErr.Error(), "aborted") {
 		t.Fatalf("expected loop-aborted error, got: %v", doneErr)
 	}
-	if toolCalls != maxRepeatErrorCalls {
-		t.Fatalf("aborted after %d identical failing tool calls, want %d", toolCalls, maxRepeatErrorCalls)
+	// The guard fires every attempt, and a stuck turn is handed back to the
+	// model maxStuckRecoveries times before the run ends — so the bound is
+	// per-attempt, not per-run. Anything above this means a guard stopped firing.
+	wantCalls := maxRepeatErrorCalls * (1 + maxStuckRecoveries)
+	if toolCalls != wantCalls {
+		t.Fatalf("aborted after %d identical failing tool calls, want %d (%d per attempt x %d attempts)",
+			toolCalls, wantCalls, maxRepeatErrorCalls, 1+maxStuckRecoveries)
 	}
 }
