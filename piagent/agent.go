@@ -44,6 +44,8 @@ type Agent struct {
 	// onNewSession arms the subsystems that can only be told a session ID
 	// after the session exists — memory recording and the ACP event log.
 	onNewSession func(sessionID string)
+	beforeTurn   []BeforeTurnFunc
+	afterTurn    []AfterTurnFunc
 	closers      []func() error
 }
 
@@ -84,8 +86,10 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	llm := o.model
 	providerName := providerOf(llm)
 	a := &Agent{
-		workDir:   workDir,
-		modelName: llm.Name(),
+		workDir:    workDir,
+		modelName:  llm.Name(),
+		beforeTurn: o.beforeTurn,
+		afterTurn:  o.afterTurn,
 	}
 
 	sandbox, err := buildSandbox(workDir, o.extraSandbox)
@@ -267,14 +271,14 @@ func (a *Agent) NewSession(ctx context.Context) (string, error) {
 // Run sends a message and returns the turn's ADK events. Iterate the sequence
 // to completion, or stop early to abandon the turn.
 func (a *Agent) Run(ctx context.Context, sessionID, message string) iter.Seq2[*session.Event, error] {
-	return a.inner.Run(ctx, sessionID, message)
+	return a.observeTurn(ctx, sessionID, message, a.inner.Run)
 }
 
 // RunStreaming is [Agent.Run] with SSE streaming, so text arrives as deltas.
 // The final aggregate event repeats the whole reply; a caller that prints
 // deltas must skip it.
 func (a *Agent) RunStreaming(ctx context.Context, sessionID, message string) iter.Seq2[*session.Event, error] {
-	return a.inner.RunStreaming(ctx, sessionID, message)
+	return a.observeTurn(ctx, sessionID, message, a.inner.RunStreaming)
 }
 
 // Ask runs one turn and returns the assistant's text, discarding tool calls,

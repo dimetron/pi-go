@@ -104,6 +104,27 @@
 // Before-tool and model callbacks are passed to ADK as slices: for those,
 // ADK's "run until one intervenes" semantics are already what you want.
 //
+// # Turn hooks
+//
+// Tool and model callbacks fire inside a turn. [WithBeforeTurn] and
+// [WithAfterTurn] bracket the whole turn instead, which is the level metrics,
+// audit trails and admission control actually work at:
+//
+//   - A before-turn hook sees the session ID and the outgoing message, and
+//     returning an error aborts the turn before it reaches the model. Budget
+//     checks, rate limits and moderation belong here.
+//   - An after-turn hook receives a [TurnInfo] — duration, event and tool-call
+//     counts, the failure if there was one, and whether the caller abandoned
+//     the turn by breaking out of the loop early.
+//
+// Both fire when the caller starts iterating, not when Run returns: a sequence
+// nobody ranges over is not a turn, and recording one would be a lie in
+// whatever the hook writes down. An abandoned turn still reports, because a
+// caller that stops consuming has still spent the tokens.
+//
+// This is the headless equivalent of pi-go's turn_complete lifecycle hook,
+// which is otherwise dispatched only from the TUI.
+//
 // # Lifetime
 //
 // [Agent.Close] releases everything [New] acquired — sandbox, bash supervisor
@@ -122,6 +143,11 @@
 //
 // A process-global HTTP trace sink, because a library has no business
 // claiming one.
+//
+// Config-driven shell hooks as a programmatic option. Those still load from
+// ~/.pi-go/config.json and run for tool calls, but an embedder writing Go gets
+// a Go func rather than a subprocess: [WithBeforeTurn] and
+// [WithAfterToolCallbacks] do the same work without the fork.
 //
 // The daily-token guardrail, which wraps the model rather than the agent and
 // so belongs with whoever built the model.

@@ -42,6 +42,8 @@ type options struct {
 	afterTool       []llmagent.AfterToolCallback
 	beforeModel     []llmagent.BeforeModelCallback
 	afterModel      []llmagent.AfterModelCallback
+	beforeTurn      []BeforeTurnFunc
+	afterTurn       []AfterTurnFunc
 	lspMode         LSPMode
 	memoryEnabled   bool
 	palaceEnabled   bool
@@ -165,6 +167,30 @@ func WithBeforeModelCallbacks(cbs ...llmagent.BeforeModelCallback) Option {
 // WithAfterModelCallbacks adds after-model callbacks after pi-go's own.
 func WithAfterModelCallbacks(cbs ...llmagent.AfterModelCallback) Option {
 	return func(o *options) { o.afterModel = append(o.afterModel, cbs...) }
+}
+
+// WithBeforeTurn adds hooks that run before each turn is dispatched, in the
+// order given. The first to return an error aborts the turn — nothing reaches
+// the model, and the error surfaces through the event sequence.
+//
+// Use it for admission control: budget and quota checks, rate limiting,
+// moderating the outgoing message, or seeding session state.
+//
+// A hook runs when the caller starts iterating, not when Run returns. A
+// sequence nobody ranges over is not a turn.
+func WithBeforeTurn(fns ...BeforeTurnFunc) Option {
+	return func(o *options) { o.beforeTurn = append(o.beforeTurn, fns...) }
+}
+
+// WithAfterTurn adds hooks that run once a turn has finished — including when
+// it failed, and when the caller broke out of the loop early, which
+// [TurnInfo].Abandoned reports. They cannot change the outcome.
+//
+// Use it for metrics, audit trails and persistence. This is the headless
+// equivalent of pi-go's turn_complete lifecycle hook, which otherwise fires
+// only from the TUI.
+func WithAfterTurn(fns ...AfterTurnFunc) Option {
+	return func(o *options) { o.afterTurn = append(o.afterTurn, fns...) }
 }
 
 // WithLSP selects the LSP tool surface. Even [LSPFull] registers nothing when
