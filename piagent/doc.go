@@ -6,11 +6,20 @@
 // terminal UI, and hands it back as a small type you can drive from your own
 // code.
 //
-// # Zero configuration
+// # The model comes from outside
 //
-// The shortest useful program is:
+// piagent never constructs a provider. The model arrives through [WithModel]
+// as a google.golang.org/adk/v2/model.LLM — the interface the agent already
+// runs on — and [New] returns [ErrNoModel] without one. pi-go's own providers
+// (credentials, base URLs, transport options, thinking level, token metering)
+// live in a separate package that builds one:
 //
-//	ag, err := piagent.New(ctx)
+//	m, err := pimodels.New(ctx, "claude-sonnet-5")
+//	if err != nil {
+//		return err
+//	}
+//
+//	ag, err := piagent.New(ctx, piagent.WithModel(m))
 //	if err != nil {
 //		return err
 //	}
@@ -22,11 +31,17 @@
 //	}
 //	answer, err := ag.Ask(ctx, sid, "what does this repo do?")
 //
-// That call alone gives you:
+// Keeping the seam at ADK's interface means neither package imports the other,
+// a change to provider handling is not a breaking change here, and a fake
+// model.LLM drives a whole turn in a test with no network.
 //
-//   - Configuration from ~/.pi-go/config.json plus any project override, with
-//     the model, provider, base URL, API key and thinking level resolved the
-//     way the CLI resolves them.
+// # What one option buys
+//
+// That single option aside, everything else is resolved from pi-go's
+// conventions:
+//
+//   - Hooks, MCP servers, A2A agents, memory, palace and compactor settings
+//     from ~/.pi-go/config.json plus any project override.
 //   - A filesystem sandbox rooted at the working directory (plus ~/.pi-go), and
 //     the core tool set: read, write, edit, bash with its supervisor and the
 //     bash control tools, search, and the rest of pi-go's built-ins.
@@ -36,7 +51,7 @@
 //     orchestrator and exposed as tools.
 //   - Project context files (AGENT.md, AGENTS.md, CLAUDE.md, .pi-go/AGENTS.md)
 //     discovered from the working directory up to the filesystem root.
-//   - MCP servers and A2A agents from the configuration, as ADK toolsets.
+//   - MCP servers and A2A agents as ADK toolsets.
 //   - Observation memory and the memory palace, each behaving exactly as they
 //     do under the CLI (see "Gated subsystems").
 //   - Sessions persisted under ~/.pi-go/sessions, so a session started by an
@@ -84,9 +99,17 @@
 //
 // # Deliberately not included
 //
-// Two things the CLI does are not reproduced here. The two-stage
-// auto-compaction pre-turn hook lives in internal/cli and would have to be
-// extracted first; embedders that need it can install their own via ADK. And
-// piagent never installs a process-global HTTP trace sink, because a library
-// has no business claiming one.
+// Provider construction, in any form: no model name, base URL, API key or
+// credential option exists here, because each one would drag provider
+// resolution into this package's public surface.
+//
+// The CLI's two-stage auto-compaction pre-turn hook, which lives in
+// internal/cli and would have to be extracted first; embedders that need it
+// can install their own via ADK.
+//
+// A process-global HTTP trace sink, because a library has no business
+// claiming one.
+//
+// The daily-token guardrail, which wraps the model rather than the agent and
+// so belongs with whoever built the model.
 package piagent

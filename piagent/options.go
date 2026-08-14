@@ -33,10 +33,7 @@ type options struct {
 	workDir         string
 	extraSandbox    []string
 	sessionDir      string
-	modelName       string
-	baseURL         string
-	apiKey          string
-	llm             model.LLM
+	model           model.LLM
 	instruction     string
 	extraPrompt     string
 	tools           []tool.Tool
@@ -90,33 +87,23 @@ func WithSessionDir(dir string) Option {
 	return func(o *options) { o.sessionDir = dir }
 }
 
-// WithModel overrides the model name from configuration, e.g.
-// "claude-sonnet-5" or "ollama/qwen3". Ignored when [WithLLM] is used.
-func WithModel(name string) Option {
-	return func(o *options) { o.modelName = name }
-}
-
-// WithBaseURL points the provider at a custom OpenAI-compatible endpoint.
-// Ignored when [WithLLM] is used.
-func WithBaseURL(url string) Option {
-	return func(o *options) { o.baseURL = url }
-}
-
-// WithAPIKey supplies the provider credential directly, for embedders that
-// hold keys somewhere other than the environment or ~/.pi-go/.env. Ignored
-// when [WithLLM] is used.
-func WithAPIKey(key string) Option {
-	return func(o *options) { o.apiKey = key }
-}
-
-// WithLLM supplies a ready ADK model, bypassing provider resolution entirely.
-// Use it to drive the agent from a model you already constructed — or from a
-// fake, which is how you test an embed without a network.
+// WithModel supplies the model the agent runs on. It is required: piagent
+// never constructs a provider, so there is no default to fall back to and
+// [New] returns [ErrNoModel] without it.
 //
-// The daily-token guardrail is not applied to an injected model: metering
-// someone else's model is their decision, not ours.
-func WithLLM(llm model.LLM) Option {
-	return func(o *options) { o.llm = llm }
+// Any ADK model works. pi-go's own providers — credentials, base URLs,
+// transport options, thinking level, token metering — live in a separate
+// package that builds one for you:
+//
+//	m, err := pimodels.New(ctx, "claude-sonnet-5")
+//	ag, err := piagent.New(ctx, piagent.WithModel(m))
+//
+// Keeping the seam at ADK's interface means neither package depends on the
+// other, and a change to provider handling is not a breaking change here. It
+// is also what makes an embed testable: a fake model.LLM drives a whole turn
+// with no network.
+func WithModel(m model.LLM) Option {
+	return func(o *options) { o.model = m }
 }
 
 // WithInstruction replaces pi-go's built-in system prompt. Project context

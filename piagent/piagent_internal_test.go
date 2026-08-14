@@ -15,6 +15,8 @@ import (
 	"google.golang.org/adk/v2/model"
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/agent"
 )
 
 // fakeLLM is the seam that makes an embed testable without a network: it
@@ -85,7 +87,7 @@ func newTestAgent(t *testing.T, llm model.LLM, extra ...Option) *Agent {
 	t.Helper()
 	workDir := t.TempDir()
 	opts := append([]Option{
-		WithLLM(llm),
+		WithModel(llm),
 		WithWorkingDir(workDir),
 		WithSessionDir(t.TempDir()),
 		WithMemory(false),
@@ -129,9 +131,6 @@ func TestNewZeroSubsystemsRunsATurn(t *testing.T) {
 
 	if ag.Model() != "fake-model" {
 		t.Errorf("Model() = %q, want %q", ag.Model(), "fake-model")
-	}
-	if ag.Provider() != "" {
-		t.Errorf("Provider() = %q, want empty for an injected model", ag.Provider())
 	}
 	if len(ag.Tools()) == 0 {
 		t.Error("Tools() is empty; core tools should always be registered")
@@ -256,6 +255,61 @@ func TestAbortReleasesWhatWasAlreadyAcquired(t *testing.T) {
 	}
 }
 
+func TestNewRequiresAModel(t *testing.T) {
+	isolate(t)
+	_, err := New(t.Context(), WithWorkingDir(t.TempDir()))
+	if !errors.Is(err, ErrNoModel) {
+		t.Fatalf("New without a model = %v, want ErrNoModel", err)
+	}
+	// The error has to send the reader somewhere, since this package cannot
+	// build a model for them.
+	if !strings.Contains(err.Error(), "WithModel") || !strings.Contains(err.Error(), "pimodels") {
+		t.Errorf("error = %q, want it to name both the option and the models package", err)
+	}
+}
+
+func TestProviderFromModelName(t *testing.T) {
+	tests := map[string]string{
+		"claude-sonnet-5":    "anthropic",
+		"gpt-5.6-sol":        "openai",
+		"gemini-3-pro":       "gemini",
+		"GEMINI-3-PRO":       "gemini",
+		"grok-4":             "xai",
+		"mistral-large":      "mistral",
+		"magistral-small":    "mistral",
+		"some-gateway-model": "",
+		"":                   "",
+	}
+	for in, want := range tests {
+		if got := providerFromModelName(in); got != want {
+			t.Errorf("providerFromModelName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGeminiGroundingRegistersOnlyForGemini(t *testing.T) {
+	isolate(t)
+
+	hasGrounding := func(ag *Agent) bool {
+		for _, tl := range ag.Tools() {
+			if tl.Name() == agent.GroundingToolName {
+				return true
+			}
+		}
+		return false
+	}
+
+	gemini := newTestAgent(t, &fakeLLM{name: "gemini-3-pro", reply: "ok"})
+	if !hasGrounding(gemini) {
+		t.Error("a Gemini model did not get the grounding tool")
+	}
+
+	other := newTestAgent(t, &fakeLLM{name: "claude-sonnet-5", reply: "ok"})
+	if hasGrounding(other) {
+		t.Error("a non-Gemini model got the Gemini grounding tool")
+	}
+}
+
 func TestNewRejectsAnUnresolvableWorkingDir(t *testing.T) {
 	isolate(t)
 	// A session directory that cannot be created is the earliest failure a
@@ -265,7 +319,7 @@ func TestNewRejectsAnUnresolvableWorkingDir(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	_, err := New(t.Context(),
-		WithLLM(&fakeLLM{name: "fake"}),
+		WithModel(&fakeLLM{name: "fake"}),
 		WithWorkingDir(t.TempDir()),
 		WithSessionDir(file),
 		WithMemory(false), WithPalace(false), WithSubagents(false), WithLSP(LSPOff))
@@ -281,7 +335,7 @@ func TestNewWithSubagentsAndMemory(t *testing.T) {
 	var mu sync.Mutex
 
 	ag, err := New(t.Context(),
-		WithLLM(&fakeLLM{name: "fake", reply: "ok"}),
+		WithModel(&fakeLLM{name: "fake", reply: "ok"}),
 		WithWorkingDir(workDir),
 		WithSessionDir(t.TempDir()),
 		WithExtraSandboxDirs(home),

@@ -35,7 +35,6 @@ type Agent struct {
 	inner     *agent.Agent
 	workDir   string
 	modelName string
-	provider  string
 	tools     []adktool.Tool
 	memStore  memory.Store
 	// sessionLog is nil-safe: every method tolerates a nil receiver, so a
@@ -47,9 +46,14 @@ type Agent struct {
 	closers      []func() error
 }
 
-// New assembles an embedded agent. With no options it reproduces the pi CLI's
-// headless setup for the process working directory; see the package
-// documentation for exactly what that includes.
+// ErrNoModel is returned by [New] when no model was supplied. piagent does not
+// construct providers, so there is nothing to fall back to.
+var ErrNoModel = errors.New("piagent: no model supplied — pass WithModel(m) with an ADK model.LLM (pi-go's providers are in the pimodels package)")
+
+// New assembles an embedded agent around the model given to [WithModel], which
+// is the one required option. Everything else — working directory, tools,
+// skills, subagents, project rules, toolsets, memory and palace — is resolved
+// from pi-go's conventions; see the package documentation.
 //
 // The returned Agent owns a sandbox, a process supervisor, a subagent
 // orchestrator and possibly an LSP manager, a memory worker and a palace.
@@ -58,6 +62,9 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if o.model == nil {
+		return nil, ErrNoModel
 	}
 
 	workDir, err := resolveWorkDir(o.workDir)
@@ -73,15 +80,10 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
-	llm, info, err := buildLLM(ctx, cfg, o)
-	if err != nil {
-		return nil, err
-	}
-
+	llm := o.model
 	a := &Agent{
 		workDir:   workDir,
 		modelName: llm.Name(),
-		provider:  info.Provider,
 	}
 
 	sandbox, err := buildSandbox(workDir, o.extraSandbox)
@@ -144,10 +146,11 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	a.push(func() error { lspMgr.Shutdown(); return nil })
 	coreTools = append(coreTools, lspTools...)
 
-	// Gemini search grounding is a server-side tool. APPEND, never replace:
-	// replacing the slice here would strip every real tool and leave the model
-	// with nothing to call.
-	if gTool, ok := agent.GeminiGroundingTool(info.Provider); ok {
+	// Gemini search grounding is a server-side tool, so it only means anything
+	// on a Gemini model; see providerFromModelName for how that is decided.
+	// APPEND, never replace: replacing the slice here would strip every real
+	// tool and leave the model with nothing to call.
+	if gTool, ok := agent.GeminiGroundingTool(providerFromModelName(llm.Name())); ok {
 		coreTools = append(coreTools, gTool)
 	}
 	coreTools = append(coreTools, o.tools...)
@@ -180,7 +183,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		cfg:       cfg,
 		sandbox:   sandbox,
 		lspMgr:    lspMgr,
-		provider:  info.Provider,
+		modelName: llm.Name(),
 		worker:    memWorker,
 		project:   workDir,
 		sessionID: &memSessionID,
@@ -315,21 +318,49 @@ func (a *Agent) Tools() []adktool.Tool {
 	return slices.Clone(a.tools)
 }
 
-// Model returns the resolved model name.
+// Model returns the name reported by the model the agent runs on.
 func (a *Agent) Model() string { return a.modelName }
-
-// Provider returns the resolved provider name, or "" for an injected model.
-func (a *Agent) Provider() string { return a.provider }
 
 // WorkingDir returns the absolute directory the agent operates in.
 func (a *Agent) WorkingDir() string { return a.workDir }
+
+// modelNamePrefixes maps a model-name prefix onto the provider family it
+// belongs to. It is a heuristic, and it exists because piagent never
+// constructs a provider: the model arrives as an ADK model.LLM and its name is
+// the only thing there is to go on.
+//
+// Two things read it, and both degrade gracefully on a miss: the OTel span
+// attribute (which falls back to the raw string) and the Gemini grounding tool
+// (which simply does not register). A model reached under a custom name gets
+// neither, which is the right trade for not coupling this package to provider
+// resolution.
+var modelNamePrefixes = map[string]string{
+	"claude":    "anthropic",
+	"gpt":       "openai",
+	"gemini":    "gemini",
+	"grok":      "xai",
+	"mistral":   "mistral",
+	"magistral": "mistral",
+}
+
+// providerFromModelName returns the provider family for a model name, or ""
+// when the name is not recognized.
+func providerFromModelName(modelName string) string {
+	lower := strings.ToLower(modelName)
+	for prefix, name := range modelNamePrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return name
+		}
+	}
+	return ""
+}
 
 // callbackDeps carries what the callback chains need to be built.
 type callbackDeps struct {
 	cfg       config.Config
 	sandbox   *tools.Sandbox
 	lspMgr    *lsp.Manager
-	provider  string
+	modelName string
 	worker    *memory.Worker
 	project   string
 	sessionID *string
@@ -364,7 +395,7 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 	beforeTool = append(beforeTool, tracingBefore...)
 	afterTool = append(afterTool, tracingAfter...)
 
-	beforeModel, afterModel := extension.BuildLLMTracingCallbacks(d.provider)
+	beforeModel, afterModel := extension.BuildLLMTracingCallbacks(providerFromModelName(d.modelName))
 	beforeModel = append(beforeModel, extension.BuildReadImageCallback(d.sandbox))
 
 	// Dedup runs after the compactor so both calls are compared in their

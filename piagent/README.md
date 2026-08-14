@@ -10,6 +10,23 @@ headlessly (`--mode print`), minus the terminal UI.
 go get github.com/dimetron/pi-go
 ```
 
+## The model comes from outside
+
+`piagent` **never constructs a provider**. The model arrives through
+`WithModel` as an ADK `model.LLM` — the interface the agent already runs on —
+and `New` returns `ErrNoModel` without one. pi-go's providers (credentials,
+base URLs, transport options, thinking level, token metering) live in a
+separate package:
+
+```go
+m, err := pimodels.New(ctx, "claude-sonnet-5")   // providers
+ag, err := piagent.New(ctx, piagent.WithModel(m)) // agent
+```
+
+Neither package imports the other. A change to provider handling is therefore
+not a breaking change here — and a fake `model.LLM` drives a whole turn in a
+test with no network.
+
 ## Minimal embed
 
 ```go
@@ -26,7 +43,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	ag, err := piagent.New(ctx)
+	m, err := pimodels.New(ctx, "claude-sonnet-5")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ag, err := piagent.New(ctx, piagent.WithModel(m))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,15 +67,11 @@ func main() {
 }
 ```
 
-`New(ctx)` with no options reads `~/.pi-go/config.json` and any project
-override, so it needs a configured model and credential — the same ones the CLI
-uses. Nothing else has to be set up.
-
-## What the zero-config path gives you
+## What that one option buys
 
 | Concern | Behaviour |
 |---|---|
-| Model / provider | Resolved from the `default` role, including base URL, API key and thinking level |
+| Config | Hooks, MCP, A2A, memory, palace and compactor settings from `~/.pi-go/config.json` plus any project override |
 | Filesystem | Sandbox rooted at the working directory, plus `~/.pi-go` |
 | Tools | read, write, edit, bash (+ supervisor and control tools), grep, find, ls, tree, git tools, session-stats |
 | Skills | `.pi-go/skills/`, the user directory and the bundled set, summarized into the prompt |
@@ -69,8 +87,8 @@ uses. Nothing else has to be set up.
 
 ```go
 ag, err := piagent.New(ctx,
+	piagent.WithModel(m),
 	piagent.WithWorkingDir("/srv/checkout"),
-	piagent.WithModel("claude-sonnet-5"),
 	piagent.WithExtraInstruction("Answer as a release engineer."),
 	piagent.WithLSP(piagent.LSPOff),
 	piagent.WithMemory(false),
@@ -83,8 +101,7 @@ ag, err := piagent.New(ctx,
 | `WithWorkingDir(dir)` | Directory to work in; sandbox root and discovery anchor |
 | `WithExtraSandboxDirs(dirs...)` | Grant file access outside the working directory |
 | `WithSessionDir(dir)` | Where sessions are persisted |
-| `WithModel(name)` / `WithBaseURL(url)` / `WithAPIKey(key)` | Override provider resolution |
-| `WithLLM(llm)` | Supply a ready ADK model, bypassing resolution entirely |
+| `WithModel(m)` | **Required.** The ADK `model.LLM` the agent runs on |
 | `WithInstruction(s)` | Replace the built-in system prompt |
 | `WithExtraInstruction(s)` | Append your own text to the assembled prompt |
 | `WithTools(...)` / `WithToolsets(...)` | Add your own tools |
@@ -118,12 +135,12 @@ result. Before-tool and model callbacks are handed to ADK as slices, where
 
 ## Testing an embed
 
-`WithLLM` takes any `google.golang.org/adk/v2/model.LLM`, so a fake model drives
-a whole turn without a network:
+`WithModel` takes any `google.golang.org/adk/v2/model.LLM`, so a fake model
+drives a whole turn without a network:
 
 ```go
 ag, err := piagent.New(ctx,
-	piagent.WithLLM(&fakeLLM{reply: "hello"}),
+	piagent.WithModel(&fakeLLM{reply: "hello"}),
 	piagent.WithWorkingDir(t.TempDir()),
 	piagent.WithSessionDir(t.TempDir()),
 	piagent.WithMemory(false),
@@ -133,8 +150,8 @@ ag, err := piagent.New(ctx,
 )
 ```
 
-An injected model is not wrapped in the daily-token guardrail: metering someone
-else's model is their decision.
+Nothing wraps the model on the way in — metering, retries and transport belong
+to whoever built it.
 
 ## Lifetime
 
@@ -144,8 +161,20 @@ session log. Always defer it.
 
 ## Not included
 
+- **Provider construction, in any form.** No model-name, base-URL, API-key or
+  credential option exists here — each would drag provider resolution into this
+  package's public surface.
 - The CLI's two-stage auto-compaction pre-turn hook. It lives in `internal/cli`
   and would have to be extracted first; install your own via ADK if you need it.
 - A process-global HTTP trace sink. A library has no business claiming one.
-- The subagent orchestrator is not exposed. Subagents are reachable as tools;
-  direct orchestration would be a much larger compatibility commitment.
+- The daily-token guardrail, which wraps the model rather than the agent.
+- The subagent orchestrator. Subagents are reachable as tools; direct
+  orchestration would be a much larger compatibility commitment.
+
+## One heuristic worth knowing
+
+Because the provider is never resolved here, two things key off the model's
+own name (`model.LLM.Name()`): the OpenTelemetry `gen_ai.provider.name` span
+attribute, and whether the Gemini server-side grounding tool registers. A model
+reached under a custom name gets a raw provider attribute and no grounding
+tool. Both degrade quietly; nothing else depends on it.

@@ -6,18 +6,29 @@ import (
 	"log"
 
 	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
 	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/piagent"
 )
 
-// Example is the whole embed: build an agent, open a session, ask a question.
-// Model, provider, credentials, tools, skills and project rules all come from
-// pi-go's own configuration.
+// newModel stands in for the models package. piagent takes any ADK model.LLM
+// and never builds one itself, so the examples below say nothing about where
+// yours comes from.
+func newModel(context.Context, string) (model.LLM, error) { return nil, nil }
+
+// Example is the whole embed: bring a model, build an agent, ask a question.
+// Tools, skills, project rules, subagents and sessions all come from pi-go's
+// own conventions.
 func Example() {
 	ctx := context.Background()
 
-	ag, err := piagent.New(ctx)
+	m, err := newModel(ctx, "claude-sonnet-5")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ag, err := piagent.New(ctx, piagent.WithModel(m))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,14 +47,19 @@ func Example() {
 }
 
 // ExampleNew_options shows the knobs an embedder usually reaches for: a
-// specific directory and model, an application-specific instruction, and the
-// optional subsystems turned off to keep the run cheap and self-contained.
+// specific directory, an application-specific instruction, and the optional
+// subsystems turned off to keep the run cheap and self-contained.
 func ExampleNew_options() {
 	ctx := context.Background()
 
+	m, err := newModel(ctx, "claude-sonnet-5")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	ag, err := piagent.New(ctx,
+		piagent.WithModel(m),
 		piagent.WithWorkingDir("/srv/checkout"),
-		piagent.WithModel("claude-sonnet-5"),
 		piagent.WithExtraInstruction("Answer as a release engineer. Never modify files under /srv/checkout/vendor."),
 		piagent.WithLSP(piagent.LSPOff),
 		piagent.WithMemory(false),
@@ -61,6 +77,8 @@ func ExampleNew_options() {
 // nil to leave the result untouched; returning a map would replace the result
 // for every later callback and for the model.
 func ExampleWithAfterToolCallbacks() {
+	ctx := context.Background()
+
 	audit := func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 		if toolErr != nil {
 			log.Printf("tool %s failed: %v", t.Name(), toolErr)
@@ -70,7 +88,12 @@ func ExampleWithAfterToolCallbacks() {
 		return nil, nil
 	}
 
-	ag, err := piagent.New(context.Background(), piagent.WithAfterToolCallbacks(audit))
+	m, err := newModel(ctx, "claude-sonnet-5")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ag, err := piagent.New(ctx, piagent.WithModel(m), piagent.WithAfterToolCallbacks(audit))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -82,7 +105,12 @@ func ExampleWithAfterToolCallbacks() {
 func ExampleAgent_Run() {
 	ctx := context.Background()
 
-	ag, err := piagent.New(ctx)
+	m, err := newModel(ctx, "claude-sonnet-5")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ag, err := piagent.New(ctx, piagent.WithModel(m))
 	if err != nil {
 		log.Fatal(err)
 	}
