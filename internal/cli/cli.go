@@ -1157,19 +1157,10 @@ func buildToolsets(cfg config.Config) []adktool.Toolset {
 	return toolsets
 }
 
+// providerEnvVar delegates to the provider package so the CLI and the public
+// pimodels package cannot drift on where a key comes from.
 func providerEnvVar(p string) string {
-	switch p {
-	case "anthropic":
-		return "ANTHROPIC_API_KEY"
-	case "openai":
-		return "OPENAI_API_KEY"
-	case "azure":
-		return "AZURE_OPENAI_API_KEY"
-	case "gemini":
-		return "GEMINI_API_KEY"
-	default:
-		return strings.ToUpper(p) + "_API_KEY"
-	}
+	return provider.APIKeyEnvVar(p)
 }
 
 // detectMode returns the default output mode based on terminal state.
