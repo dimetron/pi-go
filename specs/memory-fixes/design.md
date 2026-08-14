@@ -4,9 +4,15 @@
 
 ### Problem
 
-ADK's contract is "first non-nil result wins and ends the chain". pi-go treats
-the slice as a broadcast list. Both readings are defensible; only one is the
-library's. See `research/findings.md` § F1.
+Two defects, not one. ADK's contract is "first non-nil result wins and ends the
+chain", and separately it hands every callback the *original* `fResult` rather
+than the previous callback's output. pi-go treats the slice as a broadcast list
+that also composes; it is neither. See `research/findings.md` § F1.
+
+The second defect is why this design threads the result forward explicitly
+rather than only removing the short-circuit: dedup sits after the compactor so
+it can see post-compaction results, and no amount of un-short-circuiting would
+deliver them.
 
 ### Decision
 

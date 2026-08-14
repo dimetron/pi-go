@@ -23,7 +23,12 @@ the model sees is the one produced by the last transforming callback.
 - Regression test asserts all of: an observation is enqueued, the compactor
   truncated the output, and the deduper saw the call — for one tool call.
 
-**Rationale:** this is the whole outage. See `research/findings.md` § F1.
+- A callback that transforms a result must have that transformation visible to
+  the next callback. ADK does not do this: it passes the original `fResult` to
+  every callback, so the compactor-then-dedup ordering has never composed.
+
+**Rationale:** this is the whole outage. See `research/findings.md` § F1, which
+records both defects.
 
 ### R2 — Observations survive a short session
 
