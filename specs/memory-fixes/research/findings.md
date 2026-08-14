@@ -9,21 +9,29 @@ running the binary. Line references are against `69b4d03`.
 
 ### Upstream semantics
 
-`$(go env GOMODCACHE)/google.golang.org/adk/v2@v2.0.0/internal/llminternal/base_flow.go:1296`
+`$(go env GOMODCACHE)/google.golang.org/adk/v2@v2.0.0/internal/llminternal/base_flow.go:1296-1309`
+
+The full signature matters here, so it is not elided: `fResult` is a **parameter**
+of this function, which is what makes defect 2 below visible rather than
+something to take on trust.
 
 ```go
-func (f *Flow) invokeAfterToolCallbacks(...) (map[string]any, error) {
+func (f *Flow) invokeAfterToolCallbacks(toolCtx agent.Context, tool toolinternal.FunctionTool,
+	fArgs, fResult map[string]any, fErr error) (map[string]any, error) {
 	for _, callback := range f.AfterToolCallbacks {
 		result, err := callback(toolCtx, tool, fArgs, fResult, fErr)
+		//                                            ^^^^^^^ defect 2: the parameter,
+		//                                            never reassigned by the loop
 		if err != nil {
 			return nil, err
 		}
 		// When a list of callbacks is provided, the callbacks will be called in the
 		// order they are listed while a callback returns nil.
 		if result != nil {
-			return result, nil
+			return result, nil // defect 1: the chain ends here
 		}
 	}
+	// If no callback returned a result/error, return the original result/error.
 	return fResult, fErr
 }
 ```
