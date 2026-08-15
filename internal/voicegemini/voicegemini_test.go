@@ -358,3 +358,29 @@ func TestServerMessageDecoding(t *testing.T) {
 		})
 	}
 }
+
+func TestToolResponseMessage(t *testing.T) {
+	msg := ToolResponseMessage([]FunctionResponse{
+		{ID: "call-1", Name: "search", Response: map[string]any{"output": "ok"}},
+	})
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got struct {
+		ToolResponse struct {
+			FunctionResponses []FunctionResponse `json:"functionResponses"`
+		} `json:"toolResponse"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.ToolResponse.FunctionResponses) != 1 {
+		t.Fatalf("functionResponses = %+v, want one", got.ToolResponse.FunctionResponses)
+	}
+	// The id is what matches the answer to the call; dropping it strands the turn.
+	fr := got.ToolResponse.FunctionResponses[0]
+	if fr.ID != "call-1" || fr.Name != "search" || fr.Response["output"] != "ok" {
+		t.Errorf("functionResponse = %+v", fr)
+	}
+}
