@@ -87,12 +87,21 @@
     </div>
     <div id="terminal"></div>
 
+    <!-- Voice controls stay hidden until /api/voice/config reports enabled, so
+         a build without GEMINI_API_KEY shows no button that would 503. -->
+    <div class="voice-bar" id="voice-bar" hidden>
+        <button type="button" class="voice-button" id="voice-toggle">🎙 Talk</button>
+        <span class="voice-status" id="voice-status"></span>
+    </div>
+    <div class="voice-transcript" id="voice-transcript" hidden></div>
+
     <script type="module">
         // ghostty-web is Ghostty's VT parser compiled to WebAssembly, behind an
         // xterm.js-compatible API. It is vendored rather than loaded from a CDN
         // so `pi serve` is self-contained and works offline — see
         // static/vendor/README.md for how the wasm is delivered.
         import { init, Terminal, FitAddon, UrlRegexProvider } from '/static/vendor/ghostty-web.js';
+        import { initVoice, loadVoiceConfig } from '/static/voice.js';
 
         // The WebAssembly module has to be instantiated before any Terminal
         // exists. Everything below therefore runs after this await, which is
@@ -390,6 +399,71 @@
 
         // Connect
         connect();
+
+        // ---- Voice ----------------------------------------------------------
+        // The transcript panel is a running log of what was heard and said. It
+        // is deliberately separate from the terminal: voice is a side channel
+        // onto the same server, not another source of PTY input.
+        const voiceCfg = await loadVoiceConfig();
+        if (voiceCfg.enabled) {
+            const bar = document.getElementById('voice-bar');
+            const btn = document.getElementById('voice-toggle');
+            const statusEl = document.getElementById('voice-status');
+            const panel = document.getElementById('voice-transcript');
+            bar.hidden = false;
+
+            // One element per utterance. `first` is what tells us to open a new
+            // line rather than rewrite the last, because Gemini streams the
+            // user transcript as increments of one growing sentence.
+            let userLine = null;
+            let assistantLine = null;
+
+            const line = (cls, text) => {
+                const el = document.createElement('div');
+                el.className = 'voice-line ' + cls;
+                el.textContent = text;
+                panel.hidden = false;
+                panel.appendChild(el);
+                panel.scrollTop = panel.scrollHeight;
+                return el;
+            };
+
+            const voice = initVoice({
+                onStatus(status, message) {
+                    statusEl.textContent = message ? status + ' — ' + message : status;
+                    btn.textContent = (status === 'active' || status === 'connecting') ? '⏹ Stop' : '🎙 Talk';
+                    btn.classList.toggle('active', status === 'active');
+                    if (status === 'error') line('error', message || 'voice error');
+                },
+                onUserTranscript(text, first) {
+                    if (first || !userLine) userLine = line('user', text);
+                    else userLine.textContent = text;
+                },
+                onAssistantDelta(text) {
+                    if (!assistantLine) assistantLine = line('assistant', '');
+                    assistantLine.textContent += text;
+                    panel.scrollTop = panel.scrollHeight;
+                },
+                onAssistantFinal() {
+                    userLine = null;
+                    assistantLine = null;
+                },
+                onInterrupt() {
+                    if (assistantLine) assistantLine.classList.add('interrupted');
+                    assistantLine = null;
+                },
+                onLog(stage, detail) {
+                    console.log('[voice] ' + stage + ': ' + detail);
+                },
+            });
+
+            btn.addEventListener('click', () => voice.toggle(voiceCfg.model));
+            // A tab that goes away mid-session should release the relay slot
+            // now rather than at the session TTL.
+            window.addEventListener('pagehide', () => voice.stop());
+        } else if (voiceCfg.reason) {
+            console.log('[voice] disabled: ' + voiceCfg.reason);
+        }
     </script>
 </body>
 </html>
