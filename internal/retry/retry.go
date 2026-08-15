@@ -128,6 +128,12 @@ func IsTerminal(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A server-supplied retry window means the failure clears when the window
+	// reopens, so it is not terminal even when the prose otherwise reads like
+	// quota exhaustion (see IsTransient for why that happens).
+	if _, ok := ServerDelay(err); ok {
+		return false
+	}
 	return containsAny(strings.ToLower(err.Error()), terminalPatterns)
 }
 
@@ -137,6 +143,18 @@ func IsTransient(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+
+	// A server-supplied retry window wins over everything else. Providers only
+	// name a window ("retry in 59s", "retryDelay:59s") for failures that clear
+	// — per-minute token limits, throttling — never for the quota/plan
+	// exhaustion that arrives with terminal prose. This beats the terminal
+	// patterns because Gemini's per-minute token limit reuses that prose
+	// verbatim ("You exceeded your current quota", "quota exceeded", "check
+	// your plan and billing") while still telling us exactly when its window
+	// reopens.
+	if _, ok := ServerDelay(err); ok {
+		return true
+	}
 
 	// Terminal wins on a tie: a quota 429 matches both lists.
 	if containsAny(msg, terminalPatterns) {
@@ -169,20 +187,23 @@ func containsAny(msg string, patterns []string) bool {
 }
 
 // durationHintRe matches a Go-parseable duration after a retry hint, covering
-// the "9.422s" and "6m0.339s" forms OpenAI uses.
+// the "9.422s" and "6m0.339s" forms OpenAI uses and the "59.440629838s" form
+// Gemini uses.
 var durationHintRe = regexp.MustCompile(
-	`(?i)(?:try again in|retry[- ]after:?)\s+((?:[0-9]+h)?(?:[0-9]+m)?[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h))`)
+	`(?i)(?:try again in|retry[- ]after:?|retry in|retrydelay:?)\s*((?:[0-9]+h)?(?:[0-9]+m)?[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h))`)
 
 // numberHintRe matches a bare number followed by an optional spelled-out unit,
 // covering "retry after 30 seconds" and a raw Retry-After value.
 var numberHintRe = regexp.MustCompile(
-	`(?i)(?:try again in|retry[- ]after:?)\s+([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|seconds?|secs?|minutes?|mins?)?`)
+	`(?i)(?:try again in|retry[- ]after:?|retry in|retrydelay:?)\s*([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|seconds?|secs?|minutes?|mins?)?`)
 
 // ServerDelay extracts the wait the provider asked for, if it named one.
 //
 // A rate-limit body usually carries the exact figure ("Please try again in
-// 9.422s"), and honoring it is the difference between one well-timed retry and
-// a backoff schedule that keeps landing inside the same exhausted window.
+// 9.422s" from OpenAI, "Please retry in 59.440629838s" or a
+// "retryDelay:59s" detail from Gemini), and honoring it is the difference
+// between one well-timed retry and a backoff schedule that keeps landing
+// inside the same exhausted window.
 func ServerDelay(err error) (time.Duration, bool) {
 	if err == nil {
 		return 0, false
