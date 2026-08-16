@@ -142,6 +142,9 @@ func kindOf(msg *message) blockKind {
 		if msg.isWarning {
 			return blockWarning
 		}
+		if msg.isMeta {
+			return blockNone
+		}
 		return blockAssistant
 	case "tool":
 		return toolBlockKind(msg.tool)

@@ -101,6 +101,7 @@ type message struct {
 	content   string
 	isWarning bool // if true, render with warning style
 	isError   bool // if true, render with error style (takes precedence)
+	isMeta    bool // if true, render as a dim one-line note (no bullet)
 	// preRendered marks content that is already terminal output — it carries
 	// its own ANSI and must bypass glamour, which treats escape bytes as text
 	// and prints them. Used by /theme's palette preview.
@@ -233,6 +234,9 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if m.pendingRefresh {
 		flags |= 1 << 6
 	}
+	if m.isMeta {
+		flags |= 1 << 7
+	}
 	return fnvByte(h, flags)
 }
 
@@ -308,6 +312,18 @@ func (c *ChatModel) AppendWarning(text string) {
 		role:      "assistant",
 		content:   text,
 		isWarning: true,
+	})
+	c.Scroll = 0
+}
+
+// AppendMeta adds a dim, single-line metadata note to the transcript (e.g. the
+// per-turn token summary). It is deliberately low-contrast: it must read as
+// chrome around the reply, not as content.
+func (c *ChatModel) AppendMeta(text string) {
+	c.Messages = append(c.Messages, message{
+		role:    "assistant",
+		content: text,
+		isMeta:  true,
 	})
 	c.Scroll = 0
 }
@@ -740,6 +756,12 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 					warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
 					msgBuf.WriteString(warnBullet)
 					msgBuf.WriteString(warnStyle.Render(content))
+				} else if msg.isMeta {
+					// A dim "Σ" prefix marks the line as a per-turn tally rather
+					// than the model's own words — the reply uses "◉", so the
+					// two must never be confusable.
+					metaStyle := lipgloss.NewStyle().Foreground(p.Dim)
+					msgBuf.WriteString(metaStyle.Render("Σ " + content))
 				} else if msg.preRendered {
 					msgBuf.WriteString(bullet)
 					msgBuf.WriteString(content)
