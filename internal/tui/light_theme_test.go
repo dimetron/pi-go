@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Before this, every renderer test passed darkPalette, so a hardcoded ANSI
@@ -256,5 +257,36 @@ func TestInputRefreshThemeFollowsPalette(t *testing.T) {
 	}
 	if im.stylePaletteKey != paletteKey(lightPalette) {
 		t.Error("input styles did not follow the new palette")
+	}
+}
+
+// The main window body — the chat pane, thinking blocks, separators, status bar
+// — must sit on the theme's background under a light theme. Before this, only
+// the sidebar painted its background, so the grayed thinking text rendered on
+// the terminal's default surface instead of the theme's. Dark themes keep the
+// body unpainted (they rely on a dark terminal), so this only asserts the light
+// path.
+func TestLightThemePaintsTheWholeFrame(t *testing.T) {
+	m := historyModel(t, "first")
+	m.themeManager = NewThemeManager()
+	_ = m.themeManager.SetTheme("catppuccin-latte")
+	m.syncPalette()
+	m.chatModel.Messages = []message{{role: "thinking", content: "let me think"}}
+	m.chatModel.UpdateRenderer(80)
+	m.applyResize()
+
+	if !m.palette.IsLight {
+		t.Fatal("catppuccin-latte resolved to a dark palette")
+	}
+
+	frame := m.View().Content
+	mainW := m.mainWidth()
+	for i, row := range strings.Split(frame, "\n") {
+		// The body is everything before the rail; the sidebar legitimately
+		// paints its own background, so scope the check to the body region.
+		body := ansi.Cut(row, 0, mainW-1)
+		if !strings.Contains(body, "48;2;") {
+			t.Errorf("light row %d body has no themed background: %q", i, ansi.Strip(body))
+		}
 	}
 }

@@ -1569,6 +1569,15 @@ func (m *model) View() tea.View {
 	bottomStr := padLinesTo(bottom.String(), m.width)
 	final := topSection + "\n" + bottomStr
 
+	// A light theme paints the whole frame with its background so the muted
+	// (grayed) text — thinking blocks, separators, the status bar — sits on the
+	// theme's surface rather than the terminal's default. Dark themes keep the
+	// existing behavior: the body is unpainted and relies on a dark terminal, so
+	// dark output is byte-for-byte unchanged.
+	if m.palette.IsLight {
+		final = lipgloss.NewStyle().Background(m.palette.Background).Render(final)
+	}
+
 	// Remember the frame the mouse is pointing at, then draw the selection over
 	// it. The selection is in screen coordinates, so it has to be applied to the
 	// composed frame — and the copy on release reads back from this same string,

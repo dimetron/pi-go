@@ -117,13 +117,22 @@ var darkPalette = Palette{
 // UI reads clearly on a light screen. The extended hues are the Latte
 // equivalents of the Mocha hues the renderers used, so the light theme reads as
 // the same UI, just on a light background.
+//
+// The grayed tiers are tuned together with the background. The main window body
+// is painted with the theme background (see View), so the grayed font that sits
+// on it — thinking blocks render in Faint italic — needs a surface light enough
+// and tones dark enough to clear the 7:1 AAA floor. Stock Latte's base (#eff1f5)
+// plus its subtext grays only managed ~5:1; this palette uses a near-white
+// background (#fafbfc) with Faint and Dim darkened until every grayed tier reads
+// comfortably. The hierarchy survives: Text, then Subtext, then Dim, then Faint,
+// each quieter than the last.
 var lightPalette = Palette{
 	Valid:      true,
 	IsLight:    true,
 	Text:       lipgloss.Color("#2c2e3e"),
 	Subtext:    lipgloss.Color("#4c4f69"),
-	Dim:        lipgloss.Color("#5c5f73"),
-	Faint:      lipgloss.Color("#63667c"),
+	Dim:        lipgloss.Color("#4f5163"),
+	Faint:      lipgloss.Color("#515365"),
 	Primary:    lipgloss.Color("#1a4fd8"),
 	Accent:     lipgloss.Color("#6c2bd9"),
 	Tool:       lipgloss.Color("#2f7d1f"),
@@ -146,7 +155,7 @@ var lightPalette = Palette{
 	Surface1:   lipgloss.Color("#bcc0cc"),
 	Overlay:    lipgloss.Color("#8c8fa1"),
 	Overlay2:   lipgloss.Color("#7c7f93"),
-	Background: lipgloss.Color("#eff1f5"),
+	Background: lipgloss.Color("#fafbfc"),
 	Surface0:   lipgloss.Color("#ccd0da"),
 	// Overlay0 carries incidental text (gutters, elided detail), so unlike
 	// Overlay — which only draws separators — it has to clear 3:1 against the

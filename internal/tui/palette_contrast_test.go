@@ -165,6 +165,27 @@ func TestPaletteSurfaceRolesSitOnTheCorrectSideOfTheBackground(t *testing.T) {
 	}
 }
 
+// The grayed font is the text the light background has to serve most
+// carefully: thinking blocks render in Faint italic, and dim labels in Dim.
+// Both are meant to be quieter than body text, but on a light screen they must
+// still clear AAA (7:1) so a long reasoning block stays readable. Stock Latte's
+// base (#eff1f5) only managed ~5:1 for Faint — the near-white background and
+// the darkened grayed tones are what push them over the line.
+func TestLightGrayedFontClearsAAA(t *testing.T) {
+	for _, tc := range []struct {
+		role string
+		c    color.Color
+	}{
+		{"Faint", lightPalette.Faint},
+		{"Dim", lightPalette.Dim},
+	} {
+		if got := contrastRatio(tc.c, lightPalette.Background); got < 7.0 {
+			t.Errorf("light %s (%s) on background %s = %.2f:1, want >= 7:1 for the grayed font",
+				tc.role, colorString(tc.c), colorString(lightPalette.Background), got)
+		}
+	}
+}
+
 // The gauge clear button used to be hardcoded white, which vanished on a light
 // terminal. Control is the role that replaced it.
 func TestControlRoleIsLegibleOnBothBackgrounds(t *testing.T) {
