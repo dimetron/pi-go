@@ -471,9 +471,10 @@ func formatTurnUsage(u *genai.GenerateContentResponseUsageMetadata) string {
 	cache := int64(u.CachedContentTokenCount)
 	total := int64(u.TotalTokenCount)
 	if total <= 0 {
-		total = in + out
+		total = in + out + int64(u.ThoughtsTokenCount)
 	}
-	if in == 0 && out == 0 && cache == 0 && total == 0 {
+	if in == 0 && out == 0 && cache == 0 &&
+		u.ThoughtsTokenCount == 0 && total == 0 {
 		return ""
 	}
 	var b strings.Builder
