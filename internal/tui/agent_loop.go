@@ -404,6 +404,14 @@ type agentToolResultMsg struct {
 }
 type agentDoneMsg struct{ err error }
 
+// agentUsageMsg carries the per-turn token usage block to the TUI at the end of
+// a successful turn. It arrives after the reply text and before the channel
+// close that synthesizes agentDoneMsg, so the summary renders directly under
+// the answer.
+type agentUsageMsg struct {
+	usage *genai.GenerateContentResponseUsageMetadata
+}
+
 // agentWarningMsg carries a non-fatal problem with the turn into the
 // transcript. The turn keeps running; the user just needs to know the reply
 // they are reading is not the whole reply.
@@ -425,8 +433,70 @@ func (agentThinkingMsg) agentMsg()   {}
 func (agentToolCallMsg) agentMsg()   {}
 func (agentToolResultMsg) agentMsg() {}
 func (agentDoneMsg) agentMsg()       {}
+func (agentUsageMsg) agentMsg()      {}
 func (agentWarningMsg) agentMsg()    {}
 func (agentSubEventMsg) agentMsg()   {}
+
+// addUsage folds one LLM response's usage block into a running per-turn total.
+// It returns dst unchanged when src is nil, so callers need no nil check. A
+// turn is one or more model calls (tool loops, stuck recoveries), and only
+// final responses carry non-nil usage, so summing yields the turn's true token
+// spend rather than the last response's.
+func addUsage(dst, src *genai.GenerateContentResponseUsageMetadata) *genai.GenerateContentResponseUsageMetadata {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		cp := *src
+		return &cp
+	}
+	dst.PromptTokenCount += src.PromptTokenCount
+	dst.CandidatesTokenCount += src.CandidatesTokenCount
+	dst.CachedContentTokenCount += src.CachedContentTokenCount
+	dst.ThoughtsTokenCount += src.ThoughtsTokenCount
+	dst.TotalTokenCount += src.TotalTokenCount
+	return dst
+}
+
+// formatTurnUsage renders a per-turn token summary as one dim line: input,
+// cached reads, output, reasoning, and total. It returns "" when u is nil or
+// all-zero, so a provider that reports no usage shows no line rather than
+// "0 in · 0 out".
+func formatTurnUsage(u *genai.GenerateContentResponseUsageMetadata) string {
+	if u == nil {
+		return ""
+	}
+	in := int64(u.PromptTokenCount)
+	out := int64(u.CandidatesTokenCount)
+	cache := int64(u.CachedContentTokenCount)
+	total := int64(u.TotalTokenCount)
+	if total <= 0 {
+		total = in + out
+	}
+	if in == 0 && out == 0 && cache == 0 && total == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(formatTokenCount(in))
+	b.WriteString(" in")
+	if cache > 0 {
+		b.WriteString(" (")
+		b.WriteString(formatTokenCount(cache))
+		b.WriteString(" cached)")
+	}
+	b.WriteString(" · ")
+	b.WriteString(formatTokenCount(out))
+	b.WriteString(" out")
+	if u.ThoughtsTokenCount > 0 {
+		b.WriteString(" · ")
+		b.WriteString(formatTokenCount(int64(u.ThoughtsTokenCount)))
+		b.WriteString(" reasoning")
+	}
+	b.WriteString(" · ")
+	b.WriteString(formatTokenCount(total))
+	b.WriteString(" total")
+	return b.String()
+}
 
 // waitForAgent returns a Cmd that waits for the next message on the agent channel.
 func waitForAgent(ch chan agentMsg) tea.Cmd {
@@ -718,11 +788,16 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 	// away. The budget is small on purpose — repetition that survives being
 	// named is not going to be fixed by naming it again, and every attempt
 	// costs a full turn.
+	var turnUsage *genai.GenerateContentResponseUsageMetadata
 	for attempt := 0; ; attempt++ {
-		err := m.streamTurn(ctx, ch, prompt, run, groundedSeen, &truncated, log)
+		usage, err := m.streamTurn(ctx, ch, prompt, run, groundedSeen, &truncated, log)
+		turnUsage = addUsage(turnUsage, usage)
 
 		var stuck *stuckError
 		if !errors.As(err, &stuck) {
+			if err == nil && turnUsage != nil {
+				ch <- agentUsageMsg{usage: turnUsage}
+			}
 			if err != nil {
 				fail(err)
 			}
@@ -759,9 +834,10 @@ func (m *model) streamTurn(
 	groundedSeen map[string]bool,
 	truncated *bool,
 	log *logger.Logger,
-) error {
+) (*genai.GenerateContentResponseUsageMetadata, error) {
 	detector := &stuckDetector{}
 	var dedup agent.StreamDedup
+	var turnUsage *genai.GenerateContentResponseUsageMetadata
 
 	// Same retry wrapper the print and RPC front-ends use, so a run that dies
 	// before producing anything is replayed here too instead of ending the turn
@@ -772,11 +848,12 @@ func (m *model) streamTurn(
 		return run.agent.RunStreaming(ctx, run.sessionID, prompt)
 	}) {
 		if err != nil {
-			return err
+			return turnUsage, err
 		}
 		if ev == nil {
 			continue
 		}
+		turnUsage = addUsage(turnUsage, ev.UsageMetadata)
 		// Gemini search grounding runs server-side: it never produces a
 		// FunctionCall part, so without this the search is invisible — the
 		// model just answers with fresh facts and no sign it searched. The only
@@ -788,7 +865,7 @@ func (m *model) streamTurn(
 		// A provider failure is a content-less event, so it has to be caught
 		// before the guard below drops it. See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
-			return evErr
+			return turnUsage, evErr
 		}
 
 		// A turn cut short at the output cap is otherwise indistinguishable
@@ -806,10 +883,10 @@ func (m *model) streamTurn(
 		}
 		dedup.BeginEvent(ev)
 		if abortErr := m.emitEventParts(ch, ev, &dedup, detector, log); abortErr != nil {
-			return abortErr
+			return turnUsage, abortErr
 		}
 	}
-	return nil
+	return turnUsage, nil
 }
 
 // emitEventParts forwards one event's parts to the TUI channel. It returns a
@@ -939,6 +1016,16 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 // handleAgentWarning processes an agentWarningMsg.
 func (m *model) handleAgentWarning(msg agentWarningMsg) (tea.Model, tea.Cmd) {
 	m.chatModel.AppendWarning(msg.text)
+	return m, waitForAgent(m.agentCh)
+}
+
+// handleAgentUsage appends the per-turn token summary to the transcript. A nil
+// or all-zero usage block renders nothing, so providers that omit usage are
+// indistinguishable from a turn that happened to report zero.
+func (m *model) handleAgentUsage(msg agentUsageMsg) (tea.Model, tea.Cmd) {
+	if s := formatTurnUsage(msg.usage); s != "" {
+		m.chatModel.AppendMeta(s)
+	}
 	return m, waitForAgent(m.agentCh)
 }
 
