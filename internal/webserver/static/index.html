@@ -401,9 +401,10 @@
         connect();
 
         // ---- Voice ----------------------------------------------------------
-        // The transcript panel is a running log of what was heard and said. It
-        // is deliberately separate from the terminal: voice is a side channel
-        // onto the same server, not another source of PTY input.
+        // The transcript panel is a running log of what was heard, said, and
+        // done. Voice drives this same terminal — it types prompts into the pi
+        // session below and reads its output back — so the panel also shows the
+        // tool calls, or the terminal would appear to move on its own.
         const voiceCfg = await loadVoiceConfig();
         if (voiceCfg.enabled) {
             const bar = document.getElementById('voice-bar');
@@ -448,6 +449,12 @@
                     userLine = null;
                     assistantLine = null;
                 },
+                onToolCall(name, summary) {
+                    line('tool', summary);
+                    // A tool call ends the current spoken line: what the model
+                    // says next is a reaction to the result, not a continuation.
+                    assistantLine = null;
+                },
                 onInterrupt() {
                     if (assistantLine) assistantLine.classList.add('interrupted');
                     assistantLine = null;
@@ -455,6 +462,9 @@
                 onLog(stage, detail) {
                     console.log('[voice] ' + stage + ': ' + detail);
                 },
+                // Binds the voice session to this tab's PTY, which is what lets
+                // its tools drive the pi session on screen.
+                terminalSession: () => sessionID,
             });
 
             btn.addEventListener('click', () => voice.toggle(voiceCfg.model));

@@ -244,6 +244,19 @@ button:disabled {
     font-style: italic;
 }
 
+/* Tool activity is what voice DID to the coding agent, not what anyone said.
+   It reads as a machine note — dimmer, monospaced, marked — so it never gets
+   mistaken for the assistant's own words in a fast-scrolling panel. */
+.voice-line.tool {
+    color: #9aa0a6;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding-left: 10px;
+    border-left: 2px solid #3c4043;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .voice-line.error {
     color: #f28b82;
 }

@@ -35,8 +35,13 @@ const maxVoiceSessions = 4
 
 // voiceSession is one browser-to-provider relay slot.
 type voiceSession struct {
-	ID        string
-	Model     string
+	ID    string
+	Model string
+	// Terminal is the browser's PTY session id, which binds this voice session
+	// to the pi process the user is watching. Empty means the page reported
+	// none, and every agent tool then fails with an explanation rather than
+	// silently driving some other tab's session.
+	Terminal  string
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
@@ -88,7 +93,7 @@ func newVoiceStore() *voiceStore {
 // create registers a new session, first evicting anything expired. It fails
 // when the server is already at maxVoiceSessions, because silently replacing a
 // live conversation would be worse than refusing a new one.
-func (st *voiceStore) create(model string) (*voiceSession, error) {
+func (st *voiceStore) create(model, terminal string) (*voiceSession, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := time.Now()
@@ -103,6 +108,7 @@ func (st *voiceStore) create(model string) (*voiceSession, error) {
 	vs := &voiceSession{
 		ID:        randomVoiceID(),
 		Model:     model,
+		Terminal:  terminal,
 		CreatedAt: now,
 		ExpiresAt: now.Add(voiceSessionTTL),
 	}
@@ -153,7 +159,10 @@ func (s *ServerV2) voiceEnabled() bool { return s.voiceGemini != nil }
 
 // handleVoiceConfig reports whether voice is available and what the browser may
 // choose, so the page can render (or hide) the control without guessing.
-func (s *ServerV2) handleVoiceConfig(w http.ResponseWriter, _ *http.Request) {
+func (s *ServerV2) handleVoiceConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.voiceAuthorized(w, r) {
+		return
+	}
 	if !s.voiceEnabled() {
 		writeJSON(w, map[string]any{
 			"enabled": false,
@@ -172,6 +181,9 @@ func (s *ServerV2) handleVoiceConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handleCreateVoiceSession mints a relay slot for one browser.
 func (s *ServerV2) handleCreateVoiceSession(w http.ResponseWriter, r *http.Request) {
+	if !s.voiceAuthorized(w, r) {
+		return
+	}
 	if !s.voiceEnabled() {
 		voiceHTTPError(w, http.StatusServiceUnavailable,
 			fmt.Errorf("voice is not configured — set GEMINI_API_KEY and run `pi serve --voice`"))
@@ -181,15 +193,20 @@ func (s *ServerV2) handleCreateVoiceSession(w http.ResponseWriter, r *http.Reque
 	// A model the browser did not name, or named badly, resolves to the
 	// server's default rather than failing: the selection is a preference, and
 	// WithModelSelection is what enforces the allowlist.
+	//
+	// Terminal is the browser's own PTY session id. Taking it from the page
+	// rather than picking a bridge server-side is what keeps voice pointed at
+	// the terminal this user is looking at when several tabs are open.
 	var body struct {
-		Model string `json:"model"`
+		Model    string `json:"model"`
+		Terminal string `json:"terminal"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body)
 	}
 	creator := s.voiceGemini.WithModelSelection(strings.TrimSpace(body.Model))
 
-	vs, err := s.voiceStore.create(creator.Model)
+	vs, err := s.voiceStore.create(creator.Model, strings.TrimSpace(body.Terminal))
 	if err != nil {
 		voiceHTTPError(w, http.StatusConflict, err)
 		return
@@ -202,7 +219,7 @@ func (s *ServerV2) handleCreateVoiceSession(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.log.Info("voice session created", "session", vs.ID, "model", creator.Model)
+	s.log.Info("voice session created", "session", vs.ID, "model", creator.Model, "terminal", vs.Terminal)
 	writeJSON(w, map[string]any{
 		"id":        vs.ID,
 		"model":     creator.Model,
@@ -215,6 +232,9 @@ func (s *ServerV2) handleCreateVoiceSession(w http.ResponseWriter, r *http.Reque
 // which is the tidy path; the relay's own teardown covers every other way a
 // session ends.
 func (s *ServerV2) handleDeleteVoiceSession(w http.ResponseWriter, r *http.Request) {
+	if !s.voiceAuthorized(w, r) {
+		return
+	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/voice/sessions/")
 	if id == "" {
 		voiceHTTPError(w, http.StatusBadRequest, fmt.Errorf("missing session id"))
@@ -232,6 +252,22 @@ func voiceHTTPError(w http.ResponseWriter, status int, err error) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 }
 
+// voiceAuthorized gates every voice endpoint behind the same pairing token the
+// terminal uses, answering 401 and reporting false when it is missing.
+//
+// This is not defense in depth, it is the actual boundary. `pi serve` binds all
+// interfaces, and a voice session can now type into the coding agent — which
+// can edit files and run commands. An unauthenticated caller reaching
+// POST /api/voice/sessions would therefore be reaching a shell, so voice must
+// be exactly as protected as the terminal it drives.
+func (s *ServerV2) voiceAuthorized(w http.ResponseWriter, r *http.Request) bool {
+	if s.pairingToken(r) {
+		return true
+	}
+	voiceHTTPError(w, http.StatusUnauthorized, fmt.Errorf("pair this browser with the server before using voice"))
+	return false
+}
+
 // EnableVoice configures the Gemini Live transport and verifies the key and
 // model before the first microphone byte.
 //
@@ -243,7 +279,17 @@ func (s *ServerV2) EnableVoice(ctx context.Context, apiKey string, opts ...voice
 	if err := c.Verify(ctx); err != nil {
 		return err
 	}
+	// The agent tools are what make this voice rather than a chat next to one.
+	// They are attached after the caller's options so a caller cannot silently
+	// end up with a voice session that can talk about the project but not touch
+	// it; a schema this build cannot express is a boot error, not a session
+	// that dies at the microphone with WebSocket 1007.
+	tools, err := agentVoiceTools()
+	if err != nil {
+		return fmt.Errorf("building the voice agent tools: %w", err)
+	}
+	c.Tools = append(c.Tools, tools...)
 	s.voiceGemini = c
-	s.log.Info("voice enabled", "model", c.Model, "key", voicegemini.MaskKey(apiKey))
+	s.log.Info("voice enabled", "model", c.Model, "key", voicegemini.MaskKey(apiKey), "tools", len(c.Tools))
 	return nil
 }

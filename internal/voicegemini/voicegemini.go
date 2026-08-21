@@ -180,6 +180,28 @@ func (c *Creator) WithModelSelection(sel string) *Creator {
 	return &cp
 }
 
+// WithSessionInstructions returns a copy of c whose system instruction is the
+// given text, or c itself when the text is empty.
+//
+// It is always a copy, never a mutation, for the same reason
+// WithModelSelection is: two tabs run two live sessions off one shared Creator,
+// and a per-session instruction — which is what an instruction carrying the
+// current terminal's contents necessarily is — must not become every session's
+// instruction. Empty is a deliberate no-op so a caller that has nothing
+// session-specific to say falls through to whatever WithInstructions or
+// InstructionsFunc configured.
+func (c *Creator) WithSessionInstructions(text string) *Creator {
+	if text == "" {
+		return c
+	}
+	cp := *c
+	cp.Instructions = text
+	// A per-session instruction is the more specific answer, so it must win
+	// over the process-wide hook that SetupMessage otherwise prefers.
+	cp.InstructionsFunc = nil
+	return &cp
+}
+
 // LiveMethod is the generation method a Live (BidiGenerateContent) session
 // needs. Most Gemini models exist and answer GET /models/<name> while having no
 // Live support at all, so "the model exists" is not the check worth making.

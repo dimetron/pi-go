@@ -130,6 +130,13 @@ type relayHarness struct {
 
 func newRelayHarness(t *testing.T, fp *fakeProvider) *relayHarness {
 	t.Helper()
+	return newRelayHarnessOn(t, fp, "")
+}
+
+// newRelayHarnessOn is newRelayHarness with the voice session bound to a
+// terminal id, which is what the agent tools drive.
+func newRelayHarnessOn(t *testing.T, fp *fakeProvider, terminal string) *relayHarness {
+	t.Helper()
 
 	s := NewServerV2(Config{Addr: "127.0.0.1:0"})
 	s.voiceGemini = voicegemini.New("AIzaSyTestKeyLongEnough", voicegemini.WithLiveURL(fp.wsURL()))
@@ -139,7 +146,11 @@ func newRelayHarness(t *testing.T, fp *fakeProvider) *relayHarness {
 	httpSrv := httptest.NewServer(mux)
 	t.Cleanup(httpSrv.Close)
 
-	res, err := httpSrv.Client().Post(httpSrv.URL+"/api/voice/sessions", "application/json", strings.NewReader(`{}`))
+	// Voice endpoints are paired-only, so the harness pairs before it can reach
+	// any of them — the same order the browser follows.
+	token := voiceToken(t, s)
+	body, _ := json.Marshal(map[string]string{"terminal": terminal})
+	res, err := httpSrv.Client().Post(httpSrv.URL+"/api/voice/sessions?token="+token, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -152,7 +163,7 @@ func newRelayHarness(t *testing.T, fp *fakeProvider) *relayHarness {
 		t.Fatalf("decode session: %v", err)
 	}
 
-	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/api/voice/gemini/ws?session=" + created.ID
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/api/voice/gemini/ws?token=" + token + "&session=" + created.ID
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial relay: %v", err)
@@ -310,9 +321,9 @@ func TestRelayForwardsGoAwayAndToolCancel(t *testing.T) {
 	}
 }
 
-// This build declares no tools, so an invented call must be refused rather than
-// left to stall the turn waiting on a response that never comes.
-func TestRelayRefusesToolCalls(t *testing.T) {
+// A name this build does not declare must be refused rather than left to stall
+// the turn waiting on a response that never comes.
+func TestRelayRefusesUnknownToolCalls(t *testing.T) {
 	fp := newFakeProvider(t, func(t *testing.T, conn *websocket.Conn) {
 		_ = conn.WriteJSON(map[string]any{"setupComplete": map[string]any{}})
 		_ = conn.WriteJSON(map[string]any{"toolCall": map[string]any{
@@ -450,7 +461,8 @@ func TestRelayReportsDialFailure(t *testing.T) {
 	httpSrv := httptest.NewServer(mux)
 	defer httpSrv.Close()
 
-	res, err := httpSrv.Client().Post(httpSrv.URL+"/api/voice/sessions", "application/json", strings.NewReader(`{}`))
+	token := voiceToken(t, s)
+	res, err := httpSrv.Client().Post(httpSrv.URL+"/api/voice/sessions?token="+token, "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -460,7 +472,7 @@ func TestRelayReportsDialFailure(t *testing.T) {
 	}
 	_ = json.NewDecoder(res.Body).Decode(&created)
 
-	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/api/voice/gemini/ws?session=" + created.ID
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/api/voice/gemini/ws?token=" + token + "&session=" + created.ID
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial relay: %v", err)
@@ -546,5 +558,140 @@ func TestEnableVoice(t *testing.T) {
 				t.Error("voice was not enabled")
 			}
 		})
+	}
+}
+
+// The whole point of the feature: a tool call from the model types into the pi
+// session the browser is watching, and the browser is told it happened.
+//
+// Only the provider is faked. The session store, the relay, the dispatch, the
+// prompt sanitizer and the PTY write are all production code, so this is the
+// one test that would catch the wiring being right in every part and wrong
+// between them.
+func TestRelayToolCallDrivesTheCodingAgent(t *testing.T) {
+	// The terminal has to be registered before the call arrives; the harness
+	// cannot create it until the server exists, so the script waits for it.
+	bound := make(chan struct{})
+	fp := newFakeProvider(t, func(t *testing.T, conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{"setupComplete": map[string]any{}})
+		<-bound
+		_ = conn.WriteJSON(map[string]any{"toolCall": map[string]any{
+			"functionCalls": []map[string]any{{
+				"id":   "call-1",
+				"name": voiceToolSendPrompt,
+				"args": map[string]any{"prompt": "add a test for the parser"},
+			}},
+		}})
+		time.Sleep(time.Second)
+	})
+
+	h := newRelayHarnessOn(t, fp, "term-1")
+	_, pty := testBridge(t, h.server, "term-1")
+	close(bound)
+	_ = h.nextEvent(t) // ready
+
+	// The provider gets its answer, so the turn can continue.
+	resp := fp.waitFor(t, "toolResponse")
+	fns, _ := resp["functionResponses"].([]any)
+	if len(fns) != 1 {
+		t.Fatalf("functionResponses = %v, want one", resp["functionResponses"])
+	}
+	fn, _ := fns[0].(map[string]any)
+	if fn["id"] != "call-1" || fn["name"] != voiceToolSendPrompt {
+		t.Errorf("response = %v, want it matched to the call", fn)
+	}
+	payload, _ := fn["response"].(map[string]any)
+	if payload["error"] != nil {
+		t.Fatalf("the tool failed: %v", payload)
+	}
+
+	// The prompt reached the terminal the browser is watching.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(pty.written.String(), "add a test") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := pty.written.String(); !strings.Contains(got, "add a test for the parser") {
+		t.Errorf("the pty received %q, want the dictated prompt", got)
+	}
+
+	// And the page was told, so the terminal does not appear to move on its own.
+	for {
+		ev := h.nextEvent(t)
+		if ev["type"] == "tool_call" {
+			if summary, _ := ev["summary"].(string); !strings.Contains(summary, "add a test") {
+				t.Errorf("tool_call summary = %q, want the prompt", summary)
+			}
+			break
+		}
+	}
+}
+
+// The setup instruction has to carry the live session's context, or the model
+// is talking about a project it knows nothing about.
+func TestRelaySetupCarriesAgentContext(t *testing.T) {
+	fp := newFakeProvider(t, func(t *testing.T, conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{"setupComplete": map[string]any{}})
+		time.Sleep(300 * time.Millisecond)
+	})
+
+	h := newRelayHarnessOn(t, fp, "term-1")
+	b, _ := testBridge(t, h.server, "term-1")
+	b.captureOutput([]byte("pi > ready\r\n"))
+	_ = h.nextEvent(t) // ready
+
+	setup := fp.waitFor(t, "setup")
+	raw, _ := json.Marshal(setup["systemInstruction"])
+	for _, want := range []string{"pi", voiceToolSendPrompt, voiceToolReadScreen} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the system instruction does not mention %q: %s", want, raw)
+		}
+	}
+}
+
+// A wait that ran on the read loop would stop the relay reading the provider —
+// no audio out and no barge-in for the length of the wait. It must not.
+func TestRelayKeepsPumpingWhileAToolBlocks(t *testing.T) {
+	audio := base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})
+	bound := make(chan struct{})
+	fp := newFakeProvider(t, func(t *testing.T, conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{"setupComplete": map[string]any{}})
+		<-bound
+		// A wait that will not finish early: nothing is writing to the PTY, so
+		// LastOutput stays zero and WaitForIdle runs its full timeout.
+		_ = conn.WriteJSON(map[string]any{"toolCall": map[string]any{
+			"functionCalls": []map[string]any{{
+				"id": "call-1", "name": voiceToolWait,
+				"args": map[string]any{"seconds": 10},
+			}},
+		}})
+		_ = conn.WriteJSON(map[string]any{"serverContent": map[string]any{
+			"modelTurn": map[string]any{"parts": []map[string]any{
+				{"inlineData": map[string]any{"mimeType": "audio/pcm;rate=24000", "data": audio}},
+			}},
+		}})
+		time.Sleep(2 * time.Second)
+	})
+
+	h := newRelayHarnessOn(t, fp, "term-1")
+	testBridge(t, h.server, "term-1")
+	close(bound)
+	_ = h.nextEvent(t) // ready
+
+	// The audio queued behind the blocking tool must still arrive promptly.
+	deadline := time.Now().Add(3 * time.Second)
+	if err := h.browser.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	for {
+		kind, data, err := h.browser.ReadMessage()
+		if err != nil {
+			t.Fatalf("the relay stopped pumping while a tool ran: %v", err)
+		}
+		if kind == websocket.BinaryMessage {
+			if len(data) != 4 {
+				t.Errorf("audio frame = %v, want the 4 bytes the provider sent", data)
+			}
+			return
+		}
 	}
 }

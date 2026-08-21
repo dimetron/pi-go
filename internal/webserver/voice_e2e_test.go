@@ -25,14 +25,17 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/voicegemini"
 )
 
 func liveKey(t *testing.T) string {
 	t.Helper()
-	key := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	// Resolved the way `pi serve --voice` resolves it, so a key living in
+	// ~/.pi-go/.env runs these tests instead of skipping them.
+	key, _ := config.LookupEnv("GEMINI_API_KEY", "GOOGLE_API_KEY")
 	if key == "" {
-		t.Skip("GEMINI_API_KEY is not set; skipping the live Gemini voice check")
+		t.Skip("no GEMINI_API_KEY in the environment or .env; skipping the live Gemini voice check")
 	}
 	return key
 }
@@ -90,7 +93,8 @@ func TestVoiceRelayLive(t *testing.T) {
 	defer srv.Close()
 
 	// 1. Create the session the way the page does.
-	res, err := srv.Client().Post(srv.URL+"/api/voice/sessions", "application/json", strings.NewReader(`{}`))
+	token := voiceToken(t, s)
+	res, err := srv.Client().Post(srv.URL+"/api/voice/sessions?token="+token, "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -109,7 +113,7 @@ func TestVoiceRelayLive(t *testing.T) {
 
 	// 2. Dial the relay.
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") +
-		created.Realtime["ws"].(string) + "?session=" + created.ID
+		created.Realtime["ws"].(string) + "?token=" + token + "&session=" + created.ID
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		status := 0
@@ -176,7 +180,8 @@ func TestVoiceRelayAudioLive(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	res, err := srv.Client().Post(srv.URL+"/api/voice/sessions", "application/json", strings.NewReader(`{}`))
+	token := voiceToken(t, s)
+	res, err := srv.Client().Post(srv.URL+"/api/voice/sessions?token="+token, "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -190,7 +195,7 @@ func TestVoiceRelayAudioLive(t *testing.T) {
 	}
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") +
-		created.Realtime["ws"].(string) + "?session=" + created.ID
+		created.Realtime["ws"].(string) + "?token=" + token + "&session=" + created.ID
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial relay: %v", err)
@@ -358,4 +363,164 @@ func stripWAVHeader(t *testing.T, raw []byte) []byte {
 	}
 	t.Fatal("no data chunk in the synthesized WAV")
 	return nil
+}
+
+// TestVoiceDrivesAgentLive is the whole feature, end to end and for real:
+// speech goes in, and a prompt comes out the other side typed into the pi
+// session the browser is watching.
+//
+// Nothing here is faked except the child process behind the PTY. The Live model
+// is the real one, deciding on its own — from the system instruction this build
+// writes and the tool declarations it exposes — that a spoken request means
+// calling pi_send_prompt. That decision is exactly what every other test has to
+// take on faith.
+//
+// It is inherently non-deterministic: a model may answer a request by talking
+// instead of acting. The spoken phrase is therefore an unambiguous instruction
+// to the agent, and a failure here is worth reading as "the instruction or the
+// tool descriptions stopped steering the model", not as flakiness to retry away.
+func TestVoiceDrivesAgentLive(t *testing.T) {
+	key := liveKey(t)
+
+	s := NewServerV2(Config{Addr: "127.0.0.1:0", Project: t.TempDir(), Model: "claude-sonnet-5"})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := s.EnableVoice(ctx, key); err != nil {
+		t.Fatalf("EnableVoice() = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	s.setupRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// The terminal the voice session will drive. The bridge is real; only the
+	// process behind it is a stand-in, so the write path under test is the one
+	// production uses.
+	_, pty := testBridge(t, s, "term-live")
+
+	token := voiceToken(t, s)
+	body := `{"terminal":"term-live"}`
+	res, err := srv.Client().Post(srv.URL+"/api/voice/sessions?token="+token, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create session status = %d", res.StatusCode)
+	}
+	var created struct {
+		ID       string         `json:"id"`
+		Realtime map[string]any `json:"realtime"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") +
+		created.Realtime["ws"].(string) + "?token=" + token + "&session=" + created.ID
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial relay: %v", err)
+	}
+	defer conn.Close()
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	for ready := false; !ready; {
+		kind, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("waiting for ready: %v", err)
+		}
+		if kind != websocket.TextMessage {
+			continue
+		}
+		var ev struct{ Type, Message string }
+		_ = json.Unmarshal(data, &ev)
+		if ev.Type == "error" {
+			t.Fatalf("relay error before ready: %s", ev.Message)
+		}
+		ready = ev.Type == "ready"
+	}
+
+	speak(t, conn, "Please tell the coding agent to add a unit test for the login handler.")
+
+	var toolCalls []string
+	var heardAssistant string
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) && len(toolCalls) == 0 {
+		kind, data, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if kind == websocket.BinaryMessage {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Name    string `json:"name"`
+			Summary string `json:"summary"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "transcript_assistant_delta":
+			heardAssistant += ev.Text
+		case "tool_call":
+			t.Logf("tool_call %s: %s", ev.Name, ev.Summary)
+			toolCalls = append(toolCalls, ev.Name)
+		case "error":
+			t.Fatalf("relay error mid-turn: %s", ev.Message)
+		}
+	}
+	t.Logf("assistant said %q; tools called: %v", heardAssistant, toolCalls)
+
+	if len(toolCalls) == 0 {
+		t.Fatalf("the model called no tool for a direct request to the coding agent; it said %q", heardAssistant)
+	}
+
+	// The point of it all: the dictated instruction reached the terminal.
+	typed := pty.written.String()
+	if typed == "" {
+		t.Fatalf("no bytes reached the pi session; tools called: %v", toolCalls)
+	}
+	t.Logf("pi session received %q", typed)
+	if !strings.HasSuffix(typed, "\r") {
+		t.Errorf("the prompt was typed but never submitted: %q", typed)
+	}
+	if !strings.Contains(strings.ToLower(typed), "test") {
+		t.Errorf("the typed prompt %q does not carry the spoken request", typed)
+	}
+}
+
+// speak streams one synthesized sentence to the relay the way the capture
+// worklet does, then trails silence so the provider's voice-activity detection
+// sees the utterance end.
+func speak(t *testing.T, conn *websocket.Conn, phrase string) {
+	t.Helper()
+	pcm := synthesizeSpeech(t, phrase)
+
+	const frameSamples = 640
+	frameBytes := frameSamples * 2
+	for off := 0; off < len(pcm); off += frameBytes {
+		end := min(off+frameBytes, len(pcm))
+		if err := conn.WriteMessage(websocket.BinaryMessage, pcm[off:end]); err != nil {
+			t.Fatalf("send audio frame at %d: %v", off, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	silence := make([]byte, frameBytes)
+	for i := 0; i < 25; i++ {
+		if err := conn.WriteMessage(websocket.BinaryMessage, silence); err != nil {
+			t.Fatalf("send trailing silence: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

@@ -2,6 +2,7 @@ package webserver
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,32 @@ func testServer(t *testing.T) *ServerV2 {
 	return NewServerV2(Config{Addr: "127.0.0.1:0"})
 }
 
+// voiceToken pairs a browser with s and returns the approved token. Voice
+// endpoints are gated on it, so every test that reaches one has to hold it —
+// which is the point: a voice session can type into the coding agent.
+func voiceToken(t *testing.T, s *ServerV2) string {
+	t.Helper()
+	code, _, err := s.BootstrapPair(".")
+	if err != nil {
+		t.Fatalf("BootstrapPair() = %v", err)
+	}
+	token, err := s.pairingMgr.Approve(code)
+	if err != nil {
+		t.Fatalf("Approve() = %v", err)
+	}
+	return token
+}
+
+// voiceReq builds a request to a voice endpoint carrying an approved token.
+func voiceReq(t *testing.T, s *ServerV2, method, target string, body io.Reader) *http.Request {
+	t.Helper()
+	sep := "?"
+	if strings.Contains(target, "?") {
+		sep = "&"
+	}
+	return httptest.NewRequest(method, target+sep+"token="+voiceToken(t, s), body)
+}
+
 // withVoice returns a server whose voice transport is configured without
 // touching the network — EnableVoice would verify against Google.
 func withVoice(t *testing.T, s *ServerV2) *ServerV2 {
@@ -29,7 +56,7 @@ func withVoice(t *testing.T, s *ServerV2) *ServerV2 {
 func TestVoiceConfigDisabled(t *testing.T) {
 	s := testServer(t)
 	rec := httptest.NewRecorder()
-	s.handleVoiceConfig(rec, httptest.NewRequest(http.MethodGet, "/api/voice/config", nil))
+	s.handleVoiceConfig(rec, voiceReq(t, s, http.MethodGet, "/api/voice/config", nil))
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -47,7 +74,7 @@ func TestVoiceConfigDisabled(t *testing.T) {
 func TestVoiceConfigEnabled(t *testing.T) {
 	s := withVoice(t, testServer(t))
 	rec := httptest.NewRecorder()
-	s.handleVoiceConfig(rec, httptest.NewRequest(http.MethodGet, "/api/voice/config", nil))
+	s.handleVoiceConfig(rec, voiceReq(t, s, http.MethodGet, "/api/voice/config", nil))
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -72,7 +99,7 @@ func TestVoiceConfigEnabled(t *testing.T) {
 func TestCreateVoiceSessionRequiresVoice(t *testing.T) {
 	s := testServer(t)
 	rec := httptest.NewRecorder()
-	s.handleCreateVoiceSession(rec, httptest.NewRequest(http.MethodPost, "/api/voice/sessions", nil))
+	s.handleCreateVoiceSession(rec, voiceReq(t, s, http.MethodPost, "/api/voice/sessions", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
@@ -82,7 +109,7 @@ func TestCreateVoiceSessionRequiresVoice(t *testing.T) {
 func TestCreateVoiceSession(t *testing.T) {
 	s := withVoice(t, testServer(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`))
+	req := voiceReq(t, s, http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`))
 	s.handleCreateVoiceSession(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -115,7 +142,7 @@ func TestCreateVoiceSessionLeaksNoCredential(t *testing.T) {
 	s.voiceGemini = voicegemini.New("AIzaSyVerySecretKeyValue123")
 
 	rec := httptest.NewRecorder()
-	s.handleCreateVoiceSession(rec, httptest.NewRequest(http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`)))
+	s.handleCreateVoiceSession(rec, voiceReq(t, s, http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`)))
 
 	if strings.Contains(rec.Body.String(), "AIzaSy") {
 		t.Fatalf("the session response leaked a credential: %s", rec.Body)
@@ -127,7 +154,7 @@ func TestCreateVoiceSessionLeaksNoCredential(t *testing.T) {
 func TestCreateVoiceSessionIgnoresUnknownModel(t *testing.T) {
 	s := withVoice(t, testServer(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/voice/sessions", strings.NewReader(`{"model":"gemini-made-up"}`))
+	req := voiceReq(t, s, http.MethodPost, "/api/voice/sessions", strings.NewReader(`{"model":"gemini-made-up"}`))
 	s.handleCreateVoiceSession(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -145,12 +172,12 @@ func TestCreateVoiceSessionIgnoresUnknownModel(t *testing.T) {
 func TestCreateVoiceSessionCap(t *testing.T) {
 	s := withVoice(t, testServer(t))
 	for i := 0; i < maxVoiceSessions; i++ {
-		if _, err := s.voiceStore.create(voicegemini.DefaultModel); err != nil {
+		if _, err := s.voiceStore.create(voicegemini.DefaultModel, ""); err != nil {
 			t.Fatalf("create %d: %v", i, err)
 		}
 	}
 	rec := httptest.NewRecorder()
-	s.handleCreateVoiceSession(rec, httptest.NewRequest(http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`)))
+	s.handleCreateVoiceSession(rec, voiceReq(t, s, http.MethodPost, "/api/voice/sessions", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusConflict {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusConflict)
 	}
@@ -158,13 +185,13 @@ func TestCreateVoiceSessionCap(t *testing.T) {
 
 func TestDeleteVoiceSession(t *testing.T) {
 	s := withVoice(t, testServer(t))
-	vs, err := s.voiceStore.create(voicegemini.DefaultModel)
+	vs, err := s.voiceStore.create(voicegemini.DefaultModel, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/api/voice/sessions/"+vs.ID, nil)
+	req := voiceReq(t, s, http.MethodDelete, "/api/voice/sessions/"+vs.ID, nil)
 	s.handleDeleteVoiceSession(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -177,7 +204,7 @@ func TestDeleteVoiceSession(t *testing.T) {
 
 func TestDeleteVoiceSessionRunsTheRelayTeardown(t *testing.T) {
 	st := newVoiceStore()
-	vs, err := st.create(voicegemini.DefaultModel)
+	vs, err := st.create(voicegemini.DefaultModel, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -194,7 +221,7 @@ func TestDeleteVoiceSessionRunsTheRelayTeardown(t *testing.T) {
 
 func TestVoiceStoreExpiry(t *testing.T) {
 	st := newVoiceStore()
-	vs, err := st.create(voicegemini.DefaultModel)
+	vs, err := st.create(voicegemini.DefaultModel, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -205,7 +232,7 @@ func TestVoiceStoreExpiry(t *testing.T) {
 	}
 	// Expiry has to free the slot too, or the cap would fill with dead entries.
 	for i := 0; i < maxVoiceSessions; i++ {
-		if _, err := st.create(voicegemini.DefaultModel); err != nil {
+		if _, err := st.create(voicegemini.DefaultModel, ""); err != nil {
 			t.Fatalf("create %d after expiry: %v", i, err)
 		}
 	}
@@ -236,7 +263,7 @@ func TestVoiceSessionIDsAreUnique(t *testing.T) {
 func TestGeminiVoiceWSRejectsUnknownSession(t *testing.T) {
 	s := withVoice(t, testServer(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/voice/gemini/ws?session=vs-nope", nil)
+	req := voiceReq(t, s, http.MethodGet, "/api/voice/gemini/ws?session=vs-nope", nil)
 	s.handleGeminiVoiceWS(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -247,7 +274,7 @@ func TestGeminiVoiceWSRejectsUnknownSession(t *testing.T) {
 func TestGeminiVoiceWSRequiresVoice(t *testing.T) {
 	s := testServer(t)
 	rec := httptest.NewRecorder()
-	s.handleGeminiVoiceWS(rec, httptest.NewRequest(http.MethodGet, "/api/voice/gemini/ws?session=x", nil))
+	s.handleGeminiVoiceWS(rec, voiceReq(t, s, http.MethodGet, "/api/voice/gemini/ws?session=x", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
@@ -256,14 +283,14 @@ func TestGeminiVoiceWSRequiresVoice(t *testing.T) {
 
 func TestGeminiVoiceWSRejectsASecondRelay(t *testing.T) {
 	s := withVoice(t, testServer(t))
-	vs, err := s.voiceStore.create(voicegemini.DefaultModel)
+	vs, err := s.voiceStore.create(voicegemini.DefaultModel, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	vs.claimed() // the first relay
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/voice/gemini/ws?session="+vs.ID, nil)
+	req := voiceReq(t, s, http.MethodGet, "/api/voice/gemini/ws?session="+vs.ID, nil)
 	s.handleGeminiVoiceWS(rec, req)
 
 	if rec.Code != http.StatusConflict {
@@ -291,7 +318,7 @@ func TestVoiceOriginOK(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewServerV2(Config{Addr: "127.0.0.1:0", Insecure: tt.insecure})
-			req := httptest.NewRequest(http.MethodGet, "/api/voice/gemini/ws", nil)
+			req := voiceReq(t, s, http.MethodGet, "/api/voice/gemini/ws", nil)
 			req.Host = tt.host
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)

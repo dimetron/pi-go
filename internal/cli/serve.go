@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/voicegemini"
 	"github.com/dimetron/pi-go/internal/webserver"
 )
@@ -47,7 +48,7 @@ Each browser tab gets its own isolated agent session.`,
 	cmd.Flags().StringVar(&flagServeURL, "url", "", "LLM API base URL to use for the web terminal")
 	cmd.Flags().StringArrayVar(&flagServeHeaders, "header", nil, "Extra HTTP header for LLM requests (key=value, repeatable)")
 	cmd.Flags().BoolVar(&flagServeInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
-	cmd.Flags().BoolVar(&flagServeVoice, "voice", false, "Enable the Gemini Live voice session in the browser (needs GEMINI_API_KEY)")
+	cmd.Flags().BoolVar(&flagServeVoice, "voice", false, "Talk to the coding agent from the browser: a Gemini Live session that types prompts into this project's pi terminal and reads its output back (needs GEMINI_API_KEY, from the environment or .env)")
 	cmd.Flags().StringVar(&flagServeVoiceModel, "voice-model", "", "Gemini Live model for voice (default "+voicegemini.DefaultModel+"; also GEMINI_LIVE_MODEL)")
 
 	return cmd
@@ -131,7 +132,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		fmt.Println("TLS verification: disabled (--insecure)")
 	}
 	if flagServeVoice {
-		fmt.Printf("Voice: enabled (%s)\n", serveVoiceModel())
+		fmt.Printf("Voice: enabled (%s) — speech drives the pi session in this project\n", serveVoiceModel())
 	}
 	fmt.Printf("Pairing timeout: %s\n", flagServePairingTimeout)
 	fmt.Printf("Pair code: %s\n", code)
@@ -185,6 +186,19 @@ func ParsePairingCode(input string) (code, token string, err error) {
 	return input, "", nil
 }
 
+// serveProjectDir is the directory `pi serve` is serving, which is where a
+// project-local .env lives. It repeats the resolution runServe does because the
+// voice key is looked up before the server is built.
+func serveProjectDir() string {
+	if flagServeProject != "" {
+		return flagServeProject
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
+}
+
 // serveVoiceModel resolves the Live model from the flag, the environment, and
 // the package default, in that order. The flag wins so a single run can try a
 // new model without editing the environment.
@@ -192,7 +206,7 @@ func serveVoiceModel() string {
 	if flagServeVoiceModel != "" {
 		return flagServeVoiceModel
 	}
-	if m := strings.TrimSpace(os.Getenv("GEMINI_LIVE_MODEL")); m != "" {
+	if m, _ := config.LookupEnvFrom(serveProjectDir(), "GEMINI_LIVE_MODEL"); m != "" {
 		return m
 	}
 	return voicegemini.DefaultModel
@@ -200,11 +214,19 @@ func serveVoiceModel() string {
 
 // enableServeVoice turns on the browser voice session, failing with an
 // actionable message when the key is absent.
+//
+// The key is resolved through config.LookupEnvFrom rather than os.Getenv so
+// that the file `pi login` writes it to counts. Requiring an export for voice
+// alone — when every other pi command finds the same key in ~/.pi-go/.env —
+// reads as "voice is broken", and the operator has no way to tell an unset key
+// from an unread one.
 func enableServeVoice(ctx context.Context, server *webserver.ServerV2) error {
-	key := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	key, source := config.LookupEnvFrom(serveProjectDir(), "GEMINI_API_KEY", "GOOGLE_API_KEY")
 	if key == "" {
-		return fmt.Errorf("--voice needs GEMINI_API_KEY to be set")
+		return fmt.Errorf("--voice needs GEMINI_API_KEY: export it, or put it in .pi-go/.env, .env, or ~/.pi-go/.env")
 	}
+	fmt.Printf("Voice: GEMINI_API_KEY from %s\n", source)
+
 	if ctx == nil {
 		ctx = context.Background()
 	}

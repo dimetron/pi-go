@@ -48,6 +48,13 @@ export function createVoiceState() {
   };
 }
 
+// summarizeToolCall renders one relay tool_call event for the transcript panel.
+// The server already writes the summary; this only supplies wording for the
+// case where it did not, so the panel never shows a blank line.
+export function summarizeToolCall(ev) {
+  return (ev && ev.summary) || (ev && ev.name) || 'agent tool';
+}
+
 // handleVoiceEvent folds one JSON event from the relay into the next state plus
 // the actions the caller should render. Audio never reaches this function: it
 // arrives as binary frames.
@@ -73,6 +80,11 @@ export function handleVoiceEvent(state, ev) {
         state: { ...state, assistantText: state.assistantText + (ev.text || '') },
         actions: [{ type: 'assistantDelta', text: ev.text || '' }],
       };
+    case 'tool_call':
+      // Tool activity is narration, not conversation: it does not touch the
+      // transcript state, so an assistant sentence spanning a tool call stays
+      // one line rather than being split by it.
+      return { state, actions: [{ type: 'toolCall', name: ev.name || '', summary: summarizeToolCall(ev) }] };
     case 'turn_complete':
       return {
         // Clearing both transcripts at the turn boundary is what makes `first`
@@ -119,7 +131,11 @@ const CAPTURE_WORKLET = `registerProcessor('pi-pcm-capture', class extends Audio
 //   onAssistantDelta(text)     — incremental assistant transcript
 //   onAssistantFinal(text)     — the turn's assistant transcript, complete
 //   onInterrupt()              — the model was cut off mid-utterance
+//   onToolCall(name, summary)  — voice drove the coding agent
 //   onLog(stage, detail)       — optional diagnostics
+//   terminalSession()          — the PTY session id to bind the voice session
+//                                to, so its tools drive the terminal this tab
+//                                is showing rather than another tab's
 export function initVoice(deps = {}) {
   let state = createVoiceState();
   let sessionID = '';
@@ -131,6 +147,11 @@ export function initVoice(deps = {}) {
   let sources = [];
 
   const log = (stage, detail) => deps.onLog && deps.onLog(stage, detail);
+  // Resolved per start, not once: a tab that reconnects keeps its session id in
+  // sessionStorage, and reading it late is what keeps voice bound to whatever
+  // terminal the page is actually attached to now.
+  const terminalSession = () =>
+    (typeof deps.terminalSession === 'function' ? deps.terminalSession() : deps.terminalSession) || '';
 
   function setStatus(status, message) {
     state = { ...state, status };
@@ -159,6 +180,9 @@ export function initVoice(deps = {}) {
           break;
         case 'assistantFinal':
           deps.onAssistantFinal && deps.onAssistantFinal(a.text);
+          break;
+        case 'toolCall':
+          deps.onToolCall && deps.onToolCall(a.name, a.summary);
           break;
         case 'interrupt':
           deps.onInterrupt && deps.onInterrupt();
@@ -220,7 +244,7 @@ export function initVoice(deps = {}) {
       const res = await fetch('/api/voice/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model || '' }),
+        body: JSON.stringify({ model: model || '', terminal: terminalSession() }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -229,7 +253,8 @@ export function initVoice(deps = {}) {
       }
       sessionID = body.id;
       realtime = body.realtime || {};
-      log('session', 'created ' + sessionID + ' on ' + body.model);
+      log('session', 'created ' + sessionID + ' on ' + body.model +
+        (terminalSession() ? ' bound to terminal ' + terminalSession() : ' with NO terminal bound'));
     } catch (e) {
       fail('session', 'could not reach this server to create a voice session: ' + e.message);
       return;
@@ -341,7 +366,14 @@ export function initVoice(deps = {}) {
 export async function loadVoiceConfig() {
   try {
     const res = await fetch('/api/voice/config');
-    return await res.json();
+    const body = await res.json();
+    if (!res.ok) {
+      // The endpoint is paired-only, because a voice session can type into the
+      // coding agent. An expired cookie therefore shows up here rather than as
+      // a control that 401s when pressed.
+      return { enabled: false, reason: body.error || ('the server refused it (status ' + res.status + ')') };
+    }
+    return body;
   } catch {
     return { enabled: false, reason: 'the server did not answer /api/voice/config' };
   }

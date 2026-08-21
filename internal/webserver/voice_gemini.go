@@ -26,8 +26,13 @@ import (
 // Browser-bound frames:
 //   - binary: raw little-endian PCM16 output audio at 24kHz, ready to play
 //   - text (JSON): {type: ready | transcript_user_delta |
-//     transcript_assistant_delta | interrupted | turn_complete | go_away |
-//     tool_cancel | error, text?, message?}
+//     transcript_assistant_delta | tool_call | interrupted | turn_complete |
+//     go_away | tool_cancel | error, text?, message?}
+//
+// tool_call is the relay narrating what voice did to the coding agent, so the
+// transcript panel shows the prompt that was typed and the reads that followed
+// rather than leaving the user to infer them from the terminal moving on its
+// own.
 //
 // Server-bound frames:
 //   - binary: raw PCM16 mic audio at 16kHz; the relay base64-wraps it into a
@@ -60,6 +65,13 @@ const maxVoiceCloseText = 400
 // handleGeminiVoiceWS relays one live session between the browser and the
 // Gemini Live API.
 func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
+	// The session id is already a single-use secret only an authorized caller
+	// could hold, but the relay is the socket that reaches the coding agent, so
+	// it re-checks the pairing rather than inheriting trust from a POST that
+	// happened minutes ago.
+	if !s.voiceAuthorized(w, r) {
+		return
+	}
 	if !s.voiceEnabled() {
 		voiceHTTPError(w, http.StatusServiceUnavailable,
 			fmt.Errorf("voice is not configured — set GEMINI_API_KEY and run `pi serve --voice`"))
@@ -124,6 +136,11 @@ func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
 	// tools. The model comes from the session (the browser picked it from the
 	// server's list at create time and it was validated there), so two tabs can
 	// run different models at once.
+	//
+	// The instruction is built per session because it carries live state: which
+	// project pi is working in, and what its terminal already shows. A session
+	// opened mid-run should know what it walked into.
+	creator = creator.WithSessionInstructions(s.voiceInstructions(vs))
 	if err := pw.writeJSON(creator.SetupMessage()); err != nil {
 		s.log.Error("voice setup send failed", "session", vs.ID, "err", err)
 		_ = bw.writeJSON(map[string]any{"type": "error", "message": geminiCloseMessage(err)})
@@ -194,11 +211,12 @@ func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
 		case sm.ServerContent != nil:
 			relayGeminiContent(bw, sm.ServerContent)
 		case sm.ToolCall != nil:
-			// This build declares no function declarations at setup, so a
-			// toolCall here means the model invented one. Answering it keeps the
-			// turn moving instead of leaving the provider waiting on a response
-			// that will never come.
-			s.answerUnsupportedToolCalls(pw, vs.ID, sm.ToolCall)
+			// Off the read loop: pi_wait_for_agent blocks for as long as the
+			// agent keeps working, and running it here would stop the relay
+			// reading the provider — no audio out, no barge-in, for the length
+			// of the wait. The provider matches responses by call id, so
+			// answering out of order is fine, and pw serializes the writes.
+			go s.runVoiceToolCalls(ctx, pw, bw, vs, sm.ToolCall)
 		case sm.ToolCancel != nil:
 			_ = bw.writeJSON(map[string]any{"type": "tool_cancel", "ids": sm.ToolCancel.IDs})
 		case sm.GoAway != nil:
@@ -230,17 +248,27 @@ func relayGeminiContent(bw *wsWriter, sc *voicegemini.ServerContent) {
 	}
 }
 
-// answerUnsupportedToolCalls replies to every call in one toolCall with an
-// error response. A provider left waiting on a function response stalls the
-// conversation, so an explicit refusal is strictly better than silence.
-func (s *ServerV2) answerUnsupportedToolCalls(pw *wsWriter, sessionID string, tc *voicegemini.ToolCall) {
+// runVoiceToolCalls executes one toolCall batch against the bound pi session,
+// tells the browser what happened, and answers the provider.
+//
+// Every call is answered, including the ones that failed: a provider left
+// waiting on a function response stalls the conversation, and a model told
+// "pi's terminal is not running" can say so out loud — which is the only
+// outcome that helps whoever is talking.
+func (s *ServerV2) runVoiceToolCalls(ctx context.Context, pw, bw *wsWriter, vs *voiceSession, tc *voicegemini.ToolCall) {
 	responses := make([]voicegemini.FunctionResponse, 0, len(tc.FunctionCalls))
 	for _, fc := range tc.FunctionCalls {
-		s.log.Warn("voice tool call declined", "session", sessionID, "tool", fc.Name)
+		res := s.executeVoiceTool(ctx, vs, fc)
+		if _, failed := res.Response["error"]; failed {
+			s.log.Warn("voice tool failed", "session", vs.ID, "tool", fc.Name, "detail", res.Response["error"])
+		} else {
+			s.log.Info("voice tool", "session", vs.ID, "tool", fc.Name, "summary", res.Summary)
+		}
+		_ = bw.writeJSON(map[string]any{"type": "tool_call", "name": fc.Name, "summary": res.Summary})
 		responses = append(responses, voicegemini.FunctionResponse{
 			ID:       fc.ID,
 			Name:     fc.Name,
-			Response: map[string]any{"error": "this voice session exposes no tools"},
+			Response: res.Response,
 		})
 	}
 	if len(responses) > 0 {
