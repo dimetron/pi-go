@@ -68,6 +68,13 @@ type PtyBridge struct {
 
 	done      chan struct{} // closed when PTY process exits
 	closeOnce sync.Once
+
+	// screen is a replay of what the PTY has drawn, kept so a non-browser
+	// consumer (the voice relay) can read the coding agent's output. It is
+	// filled by copyPtyToWS, the only reader of the PTY.
+	screenMu   sync.Mutex
+	screen     *screenBuf
+	lastOutput time.Time
 }
 
 // pipeWrapper wraps stdin/stdout/stderr pipes to implement io.ReadWriteCloser
@@ -349,6 +356,9 @@ func (pb *PtyBridge) copyPtyToWS(conn *websocket.Conn, wsDone <-chan struct{}) {
 		n, err := pb.ptyFile.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
+			// Capture before the UTF-8 split below: the screen replay wants
+			// every byte in order, and it does its own rune handling.
+			pb.captureOutput(chunk)
 			if len(carry) > 0 {
 				chunk = append(carry, chunk...)
 			}

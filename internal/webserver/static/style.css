@@ -162,3 +162,101 @@ button:disabled {
         opacity: 0.7;
     }
 }
+
+/* ---- Voice ---------------------------------------------------------------
+   The voice bar floats over the terminal rather than taking a row from it: the
+   terminal's size is negotiated with the PTY, so anything that reflows it on
+   an unrelated event costs a resize round-trip. */
+
+.voice-bar {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 10;
+}
+
+.voice-button {
+    font: inherit;
+    font-size: 14px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid #3a3a3a;
+    background: #1e1e1e;
+    color: #e6e6e6;
+    cursor: pointer;
+}
+
+.voice-button:hover {
+    border-color: #5a5a5a;
+}
+
+.voice-button.active {
+    background: #7d2020;
+    border-color: #a83232;
+    animation: pulse 1.6s ease-in-out infinite;
+}
+
+.voice-status {
+    font-size: 12px;
+    color: #9a9a9a;
+    max-width: 40ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voice-transcript {
+    position: fixed;
+    right: 16px;
+    bottom: 64px;
+    width: min(46ch, calc(100vw - 32px));
+    max-height: 40vh;
+    overflow-y: auto;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #303030;
+    background: rgba(20, 20, 20, 0.94);
+    color: #dcdcdc;
+    font-size: 13px;
+    line-height: 1.45;
+    z-index: 10;
+}
+
+.voice-line {
+    margin: 4px 0;
+}
+
+.voice-line.user {
+    color: #8ab4f8;
+}
+
+.voice-line.assistant {
+    color: #dcdcdc;
+}
+
+/* An interrupted answer stays on screen — the user needs to see what they cut
+   off — but reads as abandoned rather than as a complete reply. */
+.voice-line.interrupted {
+    opacity: 0.55;
+    font-style: italic;
+}
+
+/* Tool activity is what voice DID to the coding agent, not what anyone said.
+   It reads as a machine note — dimmer, monospaced, marked — so it never gets
+   mistaken for the assistant's own words in a fast-scrolling panel. */
+.voice-line.tool {
+    color: #9aa0a6;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding-left: 10px;
+    border-left: 2px solid #3c4043;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.voice-line.error {
+    color: #f28b82;
+}

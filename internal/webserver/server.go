@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/dimetron/pi-go/internal/voicegemini"
 )
 
 // ServerV2 is the main web server.
@@ -26,6 +28,11 @@ type ServerV2 struct {
 	log        *slog.Logger
 	cfg        Config
 	listenAddr string // actual address after binding (useful for port 0)
+
+	// voiceGemini is nil until EnableVoice succeeds; nil means the voice
+	// endpoints answer 503 and the page hides the control.
+	voiceGemini *voicegemini.Creator
+	voiceStore  *voiceStore
 
 	mu              sync.Mutex
 	activePairCode  string
@@ -51,6 +58,7 @@ func NewServerV2(cfg Config) *ServerV2 {
 		pairingMgr: NewPairingManager(cfg.PairingTimeout),
 		sessions:   NewSessionManager(),
 		ptyPool:    NewPtyPool(logger),
+		voiceStore: newVoiceStore(),
 		log:        logger,
 		cfg:        cfg,
 	}
@@ -82,6 +90,14 @@ func (s *ServerV2) setupRoutes(mux *http.ServeMux) {
 
 	// WebSocket endpoint
 	mux.HandleFunc("GET /ws/", s.handleWebSocket)
+
+	// Voice endpoints. These answer 503 until EnableVoice succeeds, so the
+	// routes exist unconditionally and the page asks /api/voice/config rather
+	// than probing for a 404.
+	mux.HandleFunc("GET /api/voice/config", s.handleVoiceConfig)
+	mux.HandleFunc("POST /api/voice/sessions", s.handleCreateVoiceSession)
+	mux.HandleFunc("DELETE /api/voice/sessions/", s.handleDeleteVoiceSession)
+	mux.HandleFunc("GET /api/voice/gemini/ws", s.handleGeminiVoiceWS)
 
 	// Static assets are embedded by default and can be overridden with cfg.StaticDir.
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticAssetsFileServer(s.cfg.StaticDir)))
