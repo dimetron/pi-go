@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -111,6 +111,13 @@ check-cve:
 	govulncheck ./... | grep -A7 Vulnerability || :
 	grype .
 
+# Same invocation the release workflow uses for the aggregate SBOM, so a
+# release-time syft failure can be reproduced locally.
+sbom:
+	syft scan dir:. --exclude './hack/**' --source-name pi-go \
+		--source-version "$$(git describe --tags --always)" \
+		--output spdx-json=sbom.spdx.json
+
 lint:
 	golangci-lint run ./...
 
@@ -118,7 +125,7 @@ vet:
 	go vet ./...
 
 clean:
-	rm -f pi coverage.out
+	rm -f pi coverage.out sbom.spdx.json
 
 ## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
 sandbox-run: install

@@ -91,6 +91,88 @@ go install ./cmd/pi
 
 Download the latest release for your platform from the [Releases page](https://github.com/dimetron/pi-go/releases).
 
+### Verifying a release
+
+`pi verify` checks the running binary against the attestations published for
+it, with no other tooling required:
+
+```bash
+pi verify                                     # the running binary
+pi verify ./pi                                # a specific file
+pi verify pi-go_1.2.3_linux_amd64.tar.gz      # a downloaded archive, before extracting
+pi verify --json                              # machine-readable
+pi verify --sbom > sbom.spdx.json             # print the attested SBOM document
+```
+
+```
+/usr/local/bin/pi
+  sha256:abd70659b49183320320426af4abf34555b031e432aff27afbdbf1be39e1ecff
+
+  ✓ build provenance
+      repository  github.com/dimetron/pi-go
+      workflow    .github/workflows/release.yml@refs/tags/v1.2.3
+      commit      4086645aa1f2c3d4e5f60718293a4b5c6d7e8f90
+      run         https://github.com/dimetron/pi-go/actions/runs/1234/attempts/1
+      signer      https://github.com/dimetron/pi-go/.github/workflows/release.yml@refs/tags/v1.2.3
+      signed      2026-08-21T12:00:00Z
+
+  ✓ SBOM
+      format      SPDX 2.3
+      packages    192
+      ecosystems  golang 180, github 12
+      signer      https://github.com/dimetron/pi-go/.github/workflows/release.yml@refs/tags/v1.2.3
+      signed      2026-08-21T12:00:00Z
+```
+
+The check starts from the file's SHA-256 and nothing else — the version
+compiled into the binary, the name it was installed under and the URL it came
+from are all attacker-controlled. That digest is looked up in GitHub's
+attestations API and the returned [Sigstore](https://www.sigstore.dev/) bundles
+are verified against the public-good Sigstore trust root: certificate chain,
+Rekor transparency-log inclusion, signed certificate timestamp, and a
+certificate identity that must name **this repository's release workflow,
+running on a tag**. A signature from any other workflow, branch or repository
+is rejected.
+
+A binary you built yourself has no attestation and reports as unverified. That
+is the expected answer, not a failure.
+
+Verification needs network access. The Sigstore trust root is cached in
+`~/.pi-go/sigstore` after the first run.
+
+#### Verifying with the GitHub CLI
+
+The same attestations are readable by `gh`, if you would rather not trust the
+binary to vouch for itself:
+
+```bash
+gh attestation verify ./pi --repo dimetron/pi-go
+
+# SBOM attestation. The predicate type carries the SPDX version syft emitted.
+gh attestation verify ./pi --repo dimetron/pi-go \
+  --predicate-type https://spdx.dev/Document/v2.3
+```
+
+#### What is attested, and what is published
+
+Both the release archives **and the raw binaries inside them** are attestation
+subjects. `scripts/install.sh` extracts the binary and puts it on your PATH, so
+the archive digest is not the digest you end up running; attesting only the
+archive would leave the installed binary unverifiable. The binaries themselves
+are not published as release assets — the digest is all verification needs.
+
+Each release publishes SBOMs as assets, in SPDX JSON:
+
+- `pi-go_<version>_<os>_<arch>.tar.gz.sbom.json` — cataloged by syft from the
+  contents of that specific archive.
+- `pi-go_<version>_sbom.spdx.json` — the aggregate SBOM cataloged from the
+  source tree, and the one the SBOM attestation binds to. It covers the Go
+  module graph, which is the same across every platform in the build matrix,
+  plus the pinned GitHub Actions the release itself was built with.
+
+Regenerate the aggregate SBOM locally with `make sbom` (requires
+[syft](https://github.com/anchore/syft)).
+
 ## Requirements
 
 - Go 1.25+
