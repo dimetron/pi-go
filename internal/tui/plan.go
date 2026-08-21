@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -214,6 +215,20 @@ func (m *model) finishPlanWorktree() error {
 		return nil
 	}
 
+	// Copy the finished spec into the invoking checkout's specs/ tree first.
+	// The git merge below is defined in terms of commits, which is fragile: the
+	// specs/ path is gitignored (both a global **/specs/ and the project's
+	// .pi-go/ rule), so a force-add is required for the artifacts to enter the
+	// snapshot at all. A direct filesystem copy is the durable guarantee that
+	// /run — which reads <workDir>/specs/<task>/PROMPT.md — can find the spec
+	// even if the merge ever fails or is a no-op. Copying the whole spec dir
+	// mirrors everything the planner wrote, so research/ and supporting files
+	// survive too.
+	if err := copyDir(filepath.Join(m.planWorktreePath, "specs", m.planTaskName),
+		filepath.Join(m.cfg.WorkDir, "specs", m.planTaskName)); err != nil {
+		return fmt.Errorf("copying finished spec into invoking checkout: %w", err)
+	}
+
 	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
 		return err
 	}
@@ -224,6 +239,56 @@ func (m *model) finishPlanWorktree() error {
 	// The worktree is gone; leaving its path behind would point later turns at
 	// a directory that no longer exists.
 	m.planWorktreePath = ""
+	return nil
+}
+
+// copyDir recursively copies the contents of src into dst. dst is created if
+// missing; existing files are overwritten. It mirrors the worktree's spec
+// directory into the invoking checkout so /run can consume it independently of
+// any git merge.
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		srcPath := filepath.Join(src, e.Name())
+		dstPath := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		// Skip symlinks to avoid following anything unexpected.
+		if e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		in, err := os.Open(srcPath)
+		if err != nil {
+			return err
+		}
+		out, err := os.Create(dstPath)
+		if err != nil {
+			in.Close()
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			in.Close()
+			out.Close()
+			return err
+		}
+		if err := in.Close(); err != nil {
+			out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
