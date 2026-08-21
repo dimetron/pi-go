@@ -12,12 +12,16 @@ import (
 const terminalTitleApp = "π -"
 
 // terminalTitleWorkingSymbols rotate through the prefix's symbol slot while a
-// turn is running, so the tab title itself animates ("π *", "π +", "π ∙",
-// "π -") and a backgrounded session is visibly still working. The set starts
-// on '-' so the idle prefix is one phase of the same cycle rather than a
-// separate shape, and the '∙' is the same dot the status-bar spinner uses
-// (spinnerSymbols in spinner.go) so the two animations read as one thing.
-var terminalTitleWorkingSymbols = []rune{'-', '*', '+', '∙'}
+// turn is running, so the tab title itself animates ("π ⠋", "π ⠙", "π ⠹", …)
+// and a backgrounded session is visibly still working.
+//
+// They are braille cells, not the ASCII/∙ set the status-bar spinner uses,
+// because the tab title is rendered in a proportional font where the status
+// bar is monospace. In a proportional font '*' and '+' are wider than '-' and
+// '∙', so rotating through them made the tab bar jitter in width every phase.
+// Every braille cell occupies the same 2×2 dot grid, so the title holds a
+// constant width whatever phase it is on.
+var terminalTitleWorkingSymbols = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
 
 // terminalTitleSpinPeriod is the wall-clock dwell of one symbol. The frame that
 // carries the title is redrawn on the 150ms matrix tick while running, so this
