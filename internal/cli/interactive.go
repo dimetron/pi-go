@@ -905,12 +905,8 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
 
-	if baseURL == "" && info.Ollama {
-		if apiKey != "" {
-			baseURL = "https://api.ollama.com"
-		} else {
-			baseURL = "http://localhost:11434"
-		}
+	if info.Ollama {
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
 	}
 
 	// Record the endpoint actually chosen, after every fallback above has had

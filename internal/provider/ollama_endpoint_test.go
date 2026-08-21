@@ -80,8 +80,8 @@ func TestResolveOllamaEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if endpoint := resolveOllamaEndpoint(tt.model, tt.baseURL); endpoint != tt.wantEndpoint {
-				t.Errorf("resolveOllamaEndpoint(%q, %q) = %q, want %q",
+			if endpoint := ResolveOllamaEndpoint(tt.model, tt.baseURL); endpoint != tt.wantEndpoint {
+				t.Errorf("ResolveOllamaEndpoint(%q, %q) = %q, want %q",
 					tt.model, tt.baseURL, endpoint, tt.wantEndpoint)
 			}
 		})
@@ -100,13 +100,13 @@ func TestIsOllamaCloudModel(t *testing.T) {
 	}
 
 	for _, m := range cloud {
-		if !isOllamaCloudModel(m) {
-			t.Errorf("isOllamaCloudModel(%q) = false, want true", m)
+		if !IsOllamaCloudModel(m) {
+			t.Errorf("IsOllamaCloudModel(%q) = false, want true", m)
 		}
 	}
 	for _, m := range local {
-		if isOllamaCloudModel(m) {
-			t.Errorf("isOllamaCloudModel(%q) = true, want false", m)
+		if IsOllamaCloudModel(m) {
+			t.Errorf("IsOllamaCloudModel(%q) = true, want false", m)
 		}
 	}
 }
@@ -120,5 +120,39 @@ func TestNewOllamaAcceptsLocalTaggedModel(t *testing.T) {
 	}
 	if got := llm.Name(); got != "muse-glimmer:30b-mlx" {
 		t.Errorf("Name() = %q, want the model name unchanged", got)
+	}
+}
+
+// Telling the two apart is what keeps a missing OLLAMA_API_KEY from being
+// reported as an unreachable daemon: CheckOllama is only meaningful against a
+// host someone runs themselves.
+func TestIsOllamaCloudEndpoint(t *testing.T) {
+	cloud := []string{
+		ollamaCloudURL,
+		"https://api.ollama.com/",
+		"https://ollama.com",
+		"api.ollama.com", // no scheme, as OLLAMA_HOST is often written
+		"HTTPS://API.OLLAMA.COM",
+	}
+	local := []string{
+		ollamaLocalURL,
+		"http://127.0.0.1:11434",
+		"http://[::1]:11434",
+		"http://gpu-box.lan:11434",
+		"https://ollama.internal.example.com",
+		// A proxy that merely mentions the cloud host is not the cloud host.
+		"https://ollama-proxy.example.com/api.ollama.com",
+		"",
+	}
+
+	for _, u := range cloud {
+		if !IsOllamaCloudEndpoint(u) {
+			t.Errorf("IsOllamaCloudEndpoint(%q) = false, want true", u)
+		}
+	}
+	for _, u := range local {
+		if IsOllamaCloudEndpoint(u) {
+			t.Errorf("IsOllamaCloudEndpoint(%q) = true, want false", u)
+		}
 	}
 }

@@ -31,14 +31,18 @@ const (
 	ollamaCloudURL = "https://api.ollama.com"
 )
 
-// resolveOllamaEndpoint picks the server a model should be sent to.
+// ResolveOllamaEndpoint picks the server a model should be sent to. It is
+// exported because every caller that builds an Ollama client — the CLI, the
+// TUI's /model switch, the ACP server, ping — has to reach the same answer;
+// each one deciding for itself is how the key-as-destination bug survived in
+// three places after this function stopped making that mistake.
 //
 // Routing follows the model's cloud tag, which is the rule the CLI help and
 // every other routing check in the tree already state. It used to follow the
 // presence of an API key instead, and that made OLLAMA_API_KEY a global switch:
 // exporting it once for a :cloud model silently sent every *local* model to
-// api.ollama.com too, where a privately pulled name like muse-glimmer:30b-mlx
-// does not exist. The key is a credential, not a destination.
+// api.ollama.com too, where a privately pulled name like qwen3.8:27b-mlx does
+// not exist. The key is a credential, not a destination.
 //
 // An explicit baseURL (OLLAMA_HOST) always wins — that is how someone points at
 // another machine, a container, or an authenticated proxy.
@@ -47,18 +51,37 @@ const (
 // whatever endpoint is chosen whenever one is set, unchanged, because an
 // authenticated daemon may be reached over loopback as easily as over the
 // network and this function cannot tell the two apart.
-func resolveOllamaEndpoint(modelName, baseURL string) string {
+func ResolveOllamaEndpoint(modelName, baseURL string) string {
 	if endpoint := normalizeBaseURL(baseURL); endpoint != "" {
 		return endpoint
 	}
-	if isOllamaCloudModel(modelName) {
+	if IsOllamaCloudModel(modelName) {
 		return ollamaCloudURL
 	}
 	return ollamaLocalURL
 }
 
+// IsOllamaCloudEndpoint reports whether an already-resolved endpoint is
+// ollama.com's hosted API.
+//
+// Callers need this to tell a reachability problem from a credential problem:
+// the TCP-and-GET health check in CheckOllama is a statement about a daemon on
+// a host someone controls, and running it against api.ollama.com turns a
+// missing OLLAMA_API_KEY into a misleading "ollama not reachable".
+//
+// It matches on host, not on a string compare with ollamaCloudURL, so an
+// OLLAMA_HOST pointed at the cloud API by hand is recognized too.
+func IsOllamaCloudEndpoint(baseURL string) bool {
+	u, err := url.Parse(normalizeBaseURL(baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "api.ollama.com" || host == "ollama.com"
+}
+
 // NewOllama creates an Ollama model.LLM using the native Ollama Go client.
-// The server is chosen by resolveOllamaEndpoint: an explicit baseURL if given,
+// The server is chosen by ResolveOllamaEndpoint: an explicit baseURL if given,
 // otherwise api.ollama.com for a :cloud/-cloud tagged model and localhost for
 // everything else.
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
@@ -66,7 +89,7 @@ func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel stri
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
-	baseURL = resolveOllamaEndpoint(modelName, baseURL)
+	baseURL = ResolveOllamaEndpoint(modelName, baseURL)
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)

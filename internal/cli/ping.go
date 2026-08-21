@@ -248,8 +248,8 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
-	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+	if info.Ollama {
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
 	}
 	// Azure resolves its endpoint and credential through the same helpers a
 	// real run uses, so a passing ping means the settings a real run would pick

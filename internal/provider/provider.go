@@ -173,7 +173,7 @@ var modelPrefixes = map[string]string{
 // ollama/ prefix, or the :cloud tag for Ollama cloud models.
 var OllamaModelPrefixes = []string{}
 
-// isOllamaCloudModel reports whether a model name is tagged for ollama.com's
+// IsOllamaCloudModel reports whether a model name is tagged for ollama.com's
 // hosted service. Ollama publishes both forms — a bare ":cloud" and the
 // ":<size>-cloud" that most of the catalog uses — so a check for one alone
 // silently misses the other.
@@ -181,7 +181,7 @@ var OllamaModelPrefixes = []string{}
 // This is the single fact that decides local versus cloud, and it is the
 // model's name that decides it. Nothing about the caller's environment enters
 // into it.
-func isOllamaCloudModel(modelName string) bool {
+func IsOllamaCloudModel(modelName string) bool {
 	return strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud")
 }
 
@@ -347,7 +347,7 @@ func Resolve(modelName string) (Info, error) {
 
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
-	if isOllamaCloudModel(modelName) {
+	if IsOllamaCloudModel(modelName) {
 		return Info{Provider: "ollama", Model: modelName, Ollama: true}, nil
 	}
 
