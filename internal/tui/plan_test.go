@@ -9,6 +9,71 @@ import (
 	"github.com/dimetron/pi-go/internal/sop"
 )
 
+func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	// Nested file under research/ plus a top-level file.
+	if err := os.MkdirAll(filepath.Join(src, "research"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "research", "notes.md"), []byte("notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst); err != nil {
+		t.Fatalf("copyDir: %v", err)
+	}
+
+	for _, rel := range []string{"PROMPT.md", "research", filepath.Join("research", "notes.md")} {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("copied %s missing in dst: %v", rel, err)
+		}
+	}
+
+	// Overwrite an existing destination file.
+	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("plan-v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyDir(src, dst); err != nil {
+		t.Fatalf("copyDir overwrite: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "plan-v2" {
+		t.Errorf("overwrite did not take effect: got %q, want %q", got, "plan-v2")
+	}
+}
+
+func TestCopyDir_SkipsSymlinks(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "real.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(src, "real.md"), filepath.Join(src, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst); err != nil {
+		t.Fatalf("copyDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "real.md")); err != nil {
+		t.Errorf("real.md not copied: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "link.md")); err == nil {
+		t.Error("symlink should not be copied")
+	}
+}
+
 func TestToKebabCase_Simple(t *testing.T) {
 	got := toKebabCase("add rate limiting")
 	want := "add-rate-limiting"
