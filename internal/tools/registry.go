@@ -376,9 +376,8 @@ func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
 	item := arr[idx]
 
 	// Check if array itself needs coercion (e.g., string -> array)
-	itemPath := parentPath
-	if c.jsonProps[itemPath] {
-		if coerced := c.tryCoerce(item, itemPath); coerced != nil {
+	if c.jsonProps[parentPath] {
+		if coerced := c.tryCoerce(item, parentPath); coerced != nil {
 			arr[idx] = coerced
 			item = coerced
 		}
@@ -388,33 +387,8 @@ func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
 	switch vv := item.(type) {
 	case map[string]any:
 		// Array of objects - check each property against parent.$ paths
-		for nestedK, nestedV := range vv {
-			// Check both the nested key itself and parent.$ nestedK
-			nestedPath := parentPath + "." + nestedK
-			parentItemPath := parentPath + ".$." + nestedK
-
-			// Try to coerce using the full nested path
-			if c.intProps[nestedPath] || c.boolProps[nestedPath] || c.jsonProps[nestedPath] {
-				if coerced := c.tryCoerce(nestedV, nestedPath); coerced != nil {
-					vv[nestedK] = coerced
-				}
-			}
-			// Also check parent.$ paths (for array item properties)
-			if c.intProps[parentItemPath] || c.boolProps[parentItemPath] || c.jsonProps[parentItemPath] {
-				if coerced := c.tryCoerce(nestedV, parentItemPath); coerced != nil {
-					vv[nestedK] = coerced
-				}
-			}
-
-			// Recurse into nested objects/arrays
-			switch nv := vv[nestedK].(type) {
-			case map[string]any:
-				c.coerceValueAtKey(nv, nestedK)
-			case []any:
-				for i := range nv {
-					c.coerceArrayItem(nv, i, nestedPath)
-				}
-			}
+		for nestedK := range vv {
+			c.coerceItemField(vv, nestedK, parentPath)
 		}
 	case []any:
 		// Nested array
@@ -424,57 +398,123 @@ func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
 	}
 }
 
+// coerceItemField coerces one field of an object that sits inside an array,
+// then recurses into whatever that field holds. The field is tried against two
+// candidate schema paths because collectFromSchema registers array item
+// properties under a ".$" segment as well as under the plain dotted path.
+func (c *coercingTool) coerceItemField(item map[string]any, key, parentPath string) {
+	nestedPath := parentPath + "." + key
+	parentItemPath := parentPath + ".$." + key
+
+	// Both passes read the ORIGINAL value rather than what the previous pass
+	// wrote, so a key registered under two different property classes ends up
+	// holding whatever the ".$" pass produced.
+	original := item[key]
+	for _, path := range [...]string{nestedPath, parentItemPath} {
+		if !c.intProps[path] && !c.boolProps[path] && !c.jsonProps[path] {
+			continue
+		}
+		if coerced := c.tryCoerce(original, path); coerced != nil {
+			item[key] = coerced
+		}
+	}
+
+	// Recurse into nested objects/arrays
+	switch nv := item[key].(type) {
+	case map[string]any:
+		c.coerceValueAtKey(nv, key)
+	case []any:
+		for i := range nv {
+			c.coerceArrayItem(nv, i, nestedPath)
+		}
+	}
+}
+
 // tryCoerce attempts to coerce a value based on the property path.
 // Returns the coerced value or nil if coercion was not applied.
 func (c *coercingTool) tryCoerce(val any, path string) any {
 	switch v := val.(type) {
 	case string:
-		if c.intProps[path] {
-			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
-				return float64(i) // JSON numbers are float64 in Go maps
-			} else if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f
-			}
-		} else if c.boolProps[path] {
-			if b, err := strconv.ParseBool(v); err == nil {
-				return b
-			}
-		} else if c.jsonProps[path] {
-			// LLMs sometimes stringify JSON arrays/objects. Parse them back.
-			v = strings.TrimSpace(v)
-			if (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) ||
-				(strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) {
-				var parsed any
-				if err := json.Unmarshal([]byte(v), &parsed); err == nil {
-					return parsed
-				}
-			}
-		}
+		return c.coerceString(v, path)
 	case float64:
-		// Already float64 from JSON
+		// Already float64 from JSON.
 		return nil
 	case float32, int, int64, int32:
-		// Numbers - keep as-is for intProps, convert to float64
-		if c.intProps[path] {
-			switch n := v.(type) {
-			case float64:
-				return n
-			case float32:
-				return float64(n)
-			case int:
-				return float64(n)
-			case int64:
-				return float64(n)
-			case int32:
-				return float64(n)
-			}
+		if !c.intProps[path] {
+			return nil
 		}
+		return widenToFloat64(v)
 	case json.Number:
-		if c.intProps[path] {
-			if f, err := v.Float64(); err == nil {
-				return f
-			}
+		if !c.intProps[path] {
+			return nil
 		}
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+	}
+	return nil
+}
+
+// coerceString converts a stringified argument to the type its schema declares.
+// The property classes are tried in order, so a path registered in more than
+// one class is coerced as an integer first, then a bool, then JSON — and a
+// class that matches but cannot parse declines rather than falling through.
+func (c *coercingTool) coerceString(v, path string) any {
+	switch {
+	case c.intProps[path]:
+		return parseNumericString(v)
+	case c.boolProps[path]:
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	case c.jsonProps[path]:
+		return parseStringifiedJSON(v)
+	}
+	return nil
+}
+
+// parseNumericString parses an integer-typed argument that arrived as a string,
+// falling back to a float parse so a value like "3.5" is still recovered.
+// Returns nil when the string is not a number at all.
+func parseNumericString(v string) any {
+	if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return float64(i) // JSON numbers are float64 in Go maps
+	}
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		return f
+	}
+	return nil
+}
+
+// parseStringifiedJSON parses an array or object that an LLM stringified.
+// Input that is not bracketed, or that fails to parse, is declined so the
+// caller keeps the original string.
+func parseStringifiedJSON(v string) any {
+	v = strings.TrimSpace(v)
+	bracketed := (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) ||
+		(strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}"))
+	if !bracketed {
+		return nil
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(v), &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
+// widenToFloat64 widens the numeric kinds a decoder can hand back to the
+// float64 that JSON object maps use. Returns nil for any other kind.
+func widenToFloat64(v any) any {
+	switch n := v.(type) {
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int32:
+		return float64(n)
 	}
 	return nil
 }

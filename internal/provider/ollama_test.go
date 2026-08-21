@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	ollamaapi "github.com/ollama/ollama/api"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -1663,4 +1664,281 @@ func TestBearerTransport(t *testing.T) {
 			t.Errorf("expected no Authorization header, got %q", gotAuth)
 		}
 	})
+}
+
+func TestOllamaTextMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		role     string
+		wantRole string
+	}{
+		{name: "model maps to assistant", role: "model", wantRole: "assistant"},
+		{name: "assistant stays assistant", role: "assistant", wantRole: "assistant"},
+		{name: "user maps to user", role: "user", wantRole: "user"},
+		{name: "unknown role maps to user", role: "narrator", wantRole: "user"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ollamaTextMessage(tt.role, []string{"one", "two"})
+			if got.Role != tt.wantRole {
+				t.Errorf("role = %q, want %q", got.Role, tt.wantRole)
+			}
+			if got.Content != "one\ntwo" {
+				t.Errorf("content = %q, want the parts joined by a newline", got.Content)
+			}
+		})
+	}
+}
+
+func TestOllamaToolCallMessages(t *testing.T) {
+	t.Parallel()
+
+	calls := []*genai.FunctionCall{
+		{ID: "answered", Name: "f", Args: map[string]any{"k": "v"}},
+		{ID: "unanswered", Name: "g"},
+	}
+	responses := map[string]*genai.FunctionResponse{
+		"answered": {ID: "answered", Response: map[string]any{"result": "ok"}},
+	}
+
+	got := ollamaToolCallMessages([]string{"calling tools"}, calls, responses)
+
+	if len(got) != 3 {
+		t.Fatalf("ollamaToolCallMessages() returned %d messages, want assistant plus one per call", len(got))
+	}
+
+	asst := got[0]
+	if asst.Role != "assistant" {
+		t.Errorf("first message role = %q, want %q", asst.Role, "assistant")
+	}
+	if asst.Content != "calling tools" {
+		t.Errorf("assistant content = %q, want the joined text parts", asst.Content)
+	}
+	if len(asst.ToolCalls) != 2 {
+		t.Fatalf("assistant carries %d tool calls, want 2", len(asst.ToolCalls))
+	}
+	if asst.ToolCalls[0].ID != "answered" || asst.ToolCalls[0].Function.Name != "f" {
+		t.Errorf("first tool call = %+v, want id=answered name=f", asst.ToolCalls[0])
+	}
+
+	if got[1].Role != "tool" || got[1].ToolCallID != "answered" {
+		t.Errorf("second message = %+v, want a tool message for %q", got[1], "answered")
+	}
+	if got[1].Content == "" {
+		t.Error("answered tool message has empty content, want the rendered response")
+	}
+
+	// Ollama leaves a missing result empty rather than substituting the
+	// placeholder text the OpenAI and Anthropic converters use.
+	if got[2].ToolCallID != "unanswered" {
+		t.Fatalf("third message = %+v, want a tool message for %q", got[2], "unanswered")
+	}
+	if got[2].Content != "" {
+		t.Errorf("unanswered tool content = %q, want it empty", got[2].Content)
+	}
+}
+
+func TestOllamaToolCallMessagesNoText(t *testing.T) {
+	t.Parallel()
+
+	got := ollamaToolCallMessages(nil, []*genai.FunctionCall{{ID: "a", Name: "f"}}, nil)
+	if len(got) != 2 {
+		t.Fatalf("ollamaToolCallMessages() returned %d messages, want 2", len(got))
+	}
+	if got[0].Content != "" {
+		t.Errorf("assistant content = %q, want it empty when there are no text parts", got[0].Content)
+	}
+}
+
+// collectYield returns a yield func that appends every response it receives,
+// and stops consuming after stopAfter calls (0 means never stop).
+func collectYield(got *[]*model.LLMResponse, stopAfter int) func(*model.LLMResponse, error) bool {
+	return func(r *model.LLMResponse, _ error) bool {
+		*got = append(*got, r)
+		return stopAfter == 0 || len(*got) < stopAfter
+	}
+}
+
+func TestOllamaStreamAccumulatorAnswerText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		text      string
+		thinking  string
+		toolCalls []ollamaapi.ToolCall
+		want      string
+	}{
+		{
+			name: "nothing accumulated",
+		},
+		{
+			name: "answer text wins",
+			text: "the answer", thinking: "reasoning",
+			want: "the answer",
+		},
+		{
+			// A nothink model forced to think returns only thinking tokens;
+			// surfacing them beats returning nothing.
+			name:     "thinking is the fallback when there is no answer",
+			thinking: "reasoning",
+			want:     "reasoning",
+		},
+		{
+			// The minimax-m3:cloud regression: a turn that thinks and then
+			// calls a tool has already said something, so restating the
+			// reasoning as the answer would print it above the real reply.
+			name:      "no fallback when the turn produced a tool call",
+			thinking:  "The user wants me to run a bash command...",
+			toolCalls: []ollamaapi.ToolCall{{ID: "a"}},
+			want:      "",
+		},
+		{
+			name: "answer text still wins alongside a tool call",
+			text: "answer", thinking: "reasoning",
+			toolCalls: []ollamaapi.ToolCall{{ID: "a"}},
+			want:      "answer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			acc := &ollamaStreamAccumulator{text: tt.text, thinking: tt.thinking, toolCalls: tt.toolCalls}
+			if got := acc.answerText(); got != tt.want {
+				t.Errorf("answerText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOllamaStreamAccumulatorUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prompt  int
+		eval    int
+		wantNil bool
+	}{
+		{name: "no counts", wantNil: true},
+		{name: "prompt only", prompt: 3},
+		{name: "eval only", eval: 4},
+		{name: "both", prompt: 3, eval: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			acc := &ollamaStreamAccumulator{promptTokens: tt.prompt, evalTokens: tt.eval}
+			got := acc.usage()
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("usage() = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("usage() = nil, want usage metadata")
+			}
+			if int(got.PromptTokenCount) != tt.prompt || int(got.CandidatesTokenCount) != tt.eval {
+				t.Errorf("usage() = %+v, want prompt=%d eval=%d", got, tt.prompt, tt.eval)
+			}
+		})
+	}
+}
+
+func TestOllamaStreamAccumulatorHandleChunk(t *testing.T) {
+	t.Parallel()
+
+	var got []*model.LLMResponse
+	acc := &ollamaStreamAccumulator{yield: collectYield(&got, 0)}
+
+	if err := acc.handleChunk(ollamaapi.ChatResponse{
+		Message: ollamaapi.Message{Thinking: "pondering", Content: "hello "},
+	}); err != nil {
+		t.Fatalf("handleChunk() error: %v", err)
+	}
+	if err := acc.handleChunk(ollamaapi.ChatResponse{
+		Message:    ollamaapi.Message{Content: "world", ToolCalls: []ollamaapi.ToolCall{{ID: "t1"}}},
+		Done:       true,
+		DoneReason: "stop",
+		Metrics:    ollamaapi.Metrics{PromptEvalCount: 11, EvalCount: 22},
+	}); err != nil {
+		t.Fatalf("handleChunk() error: %v", err)
+	}
+
+	if acc.text != "hello world" {
+		t.Errorf("text = %q, want %q", acc.text, "hello world")
+	}
+	if acc.thinking != "pondering" {
+		t.Errorf("thinking = %q, want %q", acc.thinking, "pondering")
+	}
+	if len(acc.toolCalls) != 1 || acc.toolCalls[0].ID != "t1" {
+		t.Errorf("toolCalls = %+v, want one call with id t1", acc.toolCalls)
+	}
+	if acc.doneReason != "stop" || acc.promptTokens != 11 || acc.evalTokens != 22 {
+		t.Errorf("done metrics = %q/%d/%d, want stop/11/22", acc.doneReason, acc.promptTokens, acc.evalTokens)
+	}
+
+	// Reasoning is forwarded under the thinking role, answer text under the
+	// model role, and empty chunks are never forwarded at all.
+	if len(got) != 3 {
+		t.Fatalf("forwarded %d responses, want 3", len(got))
+	}
+	if got[0].Content.Role != "thinking" {
+		t.Errorf("first forwarded role = %q, want %q", got[0].Content.Role, "thinking")
+	}
+	for _, r := range got[1:] {
+		if r.Content.Role != string(genai.RoleModel) {
+			t.Errorf("forwarded role = %q, want %q", r.Content.Role, string(genai.RoleModel))
+		}
+	}
+}
+
+func TestOllamaStreamAccumulatorHandleChunkStopsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	var got []*model.LLMResponse
+	acc := &ollamaStreamAccumulator{yield: collectYield(&got, 1)} // refuse after the first
+
+	err := acc.handleChunk(ollamaapi.ChatResponse{
+		Message: ollamaapi.Message{Thinking: "a", Content: "b"},
+	})
+	if err == nil {
+		t.Fatal("handleChunk() = nil, want an error so client.Chat unwinds")
+	}
+}
+
+func TestOllamaStreamAccumulatorFinalParts(t *testing.T) {
+	t.Parallel()
+
+	acc := &ollamaStreamAccumulator{
+		text:      "answer",
+		toolCalls: []ollamaapi.ToolCall{{ID: "t1", Function: ollamaapi.ToolCallFunction{Name: "f"}}},
+	}
+	parts := acc.finalParts()
+
+	if len(parts) != 2 {
+		t.Fatalf("finalParts() returned %d parts, want text plus one call", len(parts))
+	}
+	if parts[0].Text != "answer" {
+		t.Errorf("first part text = %q, want %q", parts[0].Text, "answer")
+	}
+	if parts[1].FunctionCall == nil || parts[1].FunctionCall.ID != "t1" || parts[1].FunctionCall.Name != "f" {
+		t.Errorf("second part = %+v, want a function call t1/f", parts[1])
+	}
+}
+
+func TestOllamaStreamAccumulatorFinalPartsEmpty(t *testing.T) {
+	t.Parallel()
+
+	parts := (&ollamaStreamAccumulator{}).finalParts()
+	if len(parts) != 0 {
+		t.Errorf("finalParts() = %+v, want no parts when nothing accumulated", parts)
+	}
 }

@@ -50,97 +50,89 @@ func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, m
 
 // oaiContentsToMessages converts genai.Content to OpenAI messages (Chat Completions path).
 func oaiContentsToMessages(contents []*genai.Content, config *genai.GenerateContentConfig) ([]openai.ChatCompletionMessageParamUnion, string) {
-	var systemBuilder strings.Builder
-	if config != nil && config.SystemInstruction != nil {
-		for _, p := range config.SystemInstruction.Parts {
-			if p != nil && p.Text != "" {
-				systemBuilder.WriteString(p.Text)
-				systemBuilder.WriteByte('\n')
-			}
-		}
-	}
-	systemInstruction := strings.TrimSpace(systemBuilder.String())
-
-	// Collect function responses for matching with function calls.
-	functionResponses := make(map[string]*genai.FunctionResponse)
-	for _, c := range contents {
-		if c == nil || c.Parts == nil {
-			continue
-		}
-		for _, p := range c.Parts {
-			if p != nil && p.FunctionResponse != nil {
-				functionResponses[p.FunctionResponse.ID] = p.FunctionResponse
-			}
-		}
-	}
+	systemInstruction := genaiSystemInstruction(config)
+	functionResponses := genaiFunctionResponses(contents)
 
 	var messages []openai.ChatCompletionMessageParamUnion
 	for _, content := range contents {
-		if content == nil || strings.TrimSpace(content.Role) == "system" {
+		if content == nil {
 			continue
 		}
 		role := strings.TrimSpace(content.Role)
-		var textParts []string
-		var functionCalls []*genai.FunctionCall
-
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.Text != "" {
-				textParts = append(textParts, part.Text)
-			} else if part.FunctionCall != nil {
-				functionCalls = append(functionCalls, part.FunctionCall)
-			}
+		if role == "system" {
+			continue
 		}
+		textParts, functionCalls := genaiSplitParts(content)
 
-		if len(functionCalls) > 0 && (role == "model" || role == "assistant") {
-			toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(functionCalls))
-			var toolResponseMessages []openai.ChatCompletionMessageParamUnion
-			for _, fc := range functionCalls {
-				if fc == nil || strings.TrimSpace(fc.ID) == "" {
-					continue
-				}
-				argsJSON, _ := json.Marshal(fc.Args)
-				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-						ID:   fc.ID,
-						Type: constant.Function("function"),
-						Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-							Name:      fc.Name,
-							Arguments: string(argsJSON),
-						},
-					},
-				})
-				contentStr := "No response available for this function call."
-				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response)
-				}
-				toolResponseMessages = append(toolResponseMessages, openai.ToolMessage(contentStr, fc.ID))
-			}
-			asst := openai.ChatCompletionAssistantMessageParam{
-				Role:      constant.Assistant("assistant"),
-				ToolCalls: toolCalls,
-			}
-			if len(textParts) > 0 {
-				asst.Content.OfString = param.NewOpt(strings.Join(textParts, "\n"))
-			}
-			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &asst})
-			messages = append(messages, toolResponseMessages...)
-		} else if len(textParts) > 0 {
-			text := strings.Join(textParts, "\n")
-			if role == "model" || role == "assistant" {
-				asst := openai.ChatCompletionAssistantMessageParam{
-					Role: constant.Assistant("assistant"),
-				}
-				asst.Content.OfString = param.NewOpt(text)
-				messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &asst})
-			} else {
-				messages = append(messages, openai.UserMessage(text))
-			}
+		switch {
+		case len(functionCalls) > 0 && genaiRoleIsAssistant(role):
+			messages = append(messages, oaiToolCallMessages(textParts, functionCalls, functionResponses)...)
+		case len(textParts) > 0:
+			messages = append(messages, oaiTextMessage(role, strings.Join(textParts, "\n")))
 		}
 	}
 	return messages, systemInstruction
+}
+
+// oaiToolCallMessages renders an assistant turn that made tool calls: the
+// assistant message carrying the tool_calls array, followed by one tool
+// message per call holding its result. A call with no ID is dropped entirely —
+// Chat Completions rejects a tool call without one, and there would be no way
+// to pair a result with it. A call whose result is missing still gets a tool
+// message, with placeholder text, so every tool call stays answered.
+func oaiToolCallMessages(
+	textParts []string,
+	functionCalls []*genai.FunctionCall,
+	functionResponses map[string]*genai.FunctionResponse,
+) []openai.ChatCompletionMessageParamUnion {
+	toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(functionCalls))
+	var toolResponseMessages []openai.ChatCompletionMessageParamUnion
+	for _, fc := range functionCalls {
+		if fc == nil || strings.TrimSpace(fc.ID) == "" {
+			continue
+		}
+		argsJSON, _ := json.Marshal(fc.Args)
+		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+				ID:   fc.ID,
+				Type: constant.Function("function"),
+				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+					Name:      fc.Name,
+					Arguments: string(argsJSON),
+				},
+			},
+		})
+		contentStr := "No response available for this function call."
+		if fr := functionResponses[fc.ID]; fr != nil {
+			contentStr = oaiFunctionResponseContent(fr.Response)
+		}
+		toolResponseMessages = append(toolResponseMessages, openai.ToolMessage(contentStr, fc.ID))
+	}
+
+	asst := openai.ChatCompletionAssistantMessageParam{
+		Role:      constant.Assistant("assistant"),
+		ToolCalls: toolCalls,
+	}
+	if len(textParts) > 0 {
+		asst.Content.OfString = param.NewOpt(strings.Join(textParts, "\n"))
+	}
+
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 1+len(toolResponseMessages))
+	messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &asst})
+	return append(messages, toolResponseMessages...)
+}
+
+// oaiTextMessage renders a plain text turn, mapping genai's "model" role onto
+// OpenAI's "assistant" and everything else onto "user".
+func oaiTextMessage(role, text string) openai.ChatCompletionMessageParamUnion {
+	if !genaiRoleIsAssistant(role) {
+		return openai.UserMessage(text)
+	}
+	asst := openai.ChatCompletionAssistantMessageParam{
+		Role: constant.Assistant("assistant"),
+	}
+	asst.Content.OfString = param.NewOpt(text)
+	return openai.ChatCompletionMessageParamUnion{OfAssistant: &asst}
 }
 
 func oaiGenaiToolsToOpenAI(tools []*genai.Tool) []openai.ChatCompletionToolUnionParam {

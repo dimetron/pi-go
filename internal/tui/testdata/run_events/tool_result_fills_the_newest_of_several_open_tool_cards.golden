@@ -1,0 +1,8 @@
+streaming="" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=-5957641618855401512
+messages:
+  [0] role="tool" tool="read" toolIn="" content=""
+  [1] role="tool" tool="bash" toolIn="" content="second result"
+trace:
+  [0] kind="tool_result" summary="<<< result" detail="second result" timeSet=true
+run phase="running" checklist=0

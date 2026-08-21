@@ -1362,3 +1362,442 @@ func TestAnthropicNonStreamingPropagatesCacheRead(t *testing.T) {
 		t.Errorf("CachedContentTokenCount = %d, want 75 (cache_read_input_tokens)", final.UsageMetadata.CachedContentTokenCount)
 	}
 }
+
+func TestAntTextMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		role     string
+		wantRole anthropic.MessageParamRole
+	}{
+		{name: "model maps to assistant", role: "model", wantRole: anthropic.MessageParamRoleAssistant},
+		{name: "assistant stays assistant", role: "assistant", wantRole: anthropic.MessageParamRoleAssistant},
+		{name: "user maps to user", role: "user", wantRole: anthropic.MessageParamRoleUser},
+		{name: "unknown role maps to user", role: "narrator", wantRole: anthropic.MessageParamRoleUser},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := antTextMessage(tt.role, []string{"one", "two"})
+			if got.Role != tt.wantRole {
+				t.Errorf("role = %q, want %q", got.Role, tt.wantRole)
+			}
+			if len(got.Content) != 1 {
+				t.Fatalf("content has %d blocks, want a single text block", len(got.Content))
+			}
+			if got.Content[0].OfText == nil {
+				t.Fatal("content block is not a text block")
+			}
+			if text := got.Content[0].OfText.Text; text != "one\ntwo" {
+				t.Errorf("text = %q, want the parts joined by a newline", text)
+			}
+		})
+	}
+}
+
+func TestAntToolUseMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		textParts  []string
+		calls      []*genai.FunctionCall
+		wantBlocks int
+		wantText   string
+	}{
+		{
+			name:       "text block precedes the tool_use blocks",
+			textParts:  []string{"thinking"},
+			calls:      []*genai.FunctionCall{{ID: "a", Name: "f", Args: map[string]any{"k": "v"}}},
+			wantBlocks: 2,
+			wantText:   "thinking",
+		},
+		{
+			name:       "no text yields tool_use blocks only",
+			calls:      []*genai.FunctionCall{{ID: "a", Name: "f"}, {ID: "b", Name: "g"}},
+			wantBlocks: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := antToolUseMessage(tt.textParts, tt.calls)
+			if got.Role != anthropic.MessageParamRoleAssistant {
+				t.Errorf("role = %q, want %q", got.Role, anthropic.MessageParamRoleAssistant)
+			}
+			if len(got.Content) != tt.wantBlocks {
+				t.Fatalf("content has %d blocks, want %d", len(got.Content), tt.wantBlocks)
+			}
+			if tt.wantText == "" {
+				if got.Content[0].OfToolUse == nil {
+					t.Error("first block is not a tool_use block")
+				}
+				return
+			}
+			if got.Content[0].OfText == nil || got.Content[0].OfText.Text != tt.wantText {
+				t.Errorf("first block = %+v, want text %q", got.Content[0], tt.wantText)
+			}
+		})
+	}
+}
+
+func TestAntToolUseMessageNilArgsBecomeEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	// A nil Args map marshals to JSON null, which unmarshals back to a nil
+	// map. The Messages API rejects a null tool_use input, so it must become
+	// an empty object instead.
+	got := antToolUseMessage(nil, []*genai.FunctionCall{{ID: "a", Name: "f", Args: nil}})
+	if len(got.Content) != 1 {
+		t.Fatalf("content has %d blocks, want 1", len(got.Content))
+	}
+	block := got.Content[0].OfToolUse
+	if block == nil {
+		t.Fatal("content block is not a tool_use block")
+	}
+	input, ok := block.Input.(map[string]any)
+	if !ok {
+		t.Fatalf("tool_use input is %T, want map[string]any", block.Input)
+	}
+	if input == nil {
+		t.Error("tool_use input is a nil map, want an empty non-nil map")
+	}
+	if len(input) != 0 {
+		t.Errorf("tool_use input = %v, want it empty", input)
+	}
+}
+
+func TestAntToolResultMessage(t *testing.T) {
+	t.Parallel()
+
+	calls := []*genai.FunctionCall{
+		{ID: "answered", Name: "f"},
+		{ID: "unanswered", Name: "g"},
+	}
+	responses := map[string]*genai.FunctionResponse{
+		"answered": {ID: "answered", Response: map[string]any{"result": "ok"}},
+	}
+
+	got := antToolResultMessage(calls, responses)
+
+	if got.Role != anthropic.MessageParamRoleUser {
+		t.Errorf("role = %q, want %q", got.Role, anthropic.MessageParamRoleUser)
+	}
+	if len(got.Content) != 2 {
+		t.Fatalf("content has %d blocks, want one per call", len(got.Content))
+	}
+	for i, block := range got.Content {
+		if block.OfToolResult == nil {
+			t.Fatalf("block %d is not a tool_result block", i)
+		}
+	}
+	if id := got.Content[0].OfToolResult.ToolUseID; id != "answered" {
+		t.Errorf("first tool_use_id = %q, want %q", id, "answered")
+	}
+
+	// Anthropic substitutes placeholder text for a missing result, where the
+	// Ollama converter leaves the content empty.
+	want := "No response available for this function call."
+	unanswered := got.Content[1].OfToolResult.Content
+	if len(unanswered) != 1 || unanswered[0].OfText == nil || unanswered[0].OfText.Text != want {
+		t.Errorf("unanswered tool_result content = %+v, want the placeholder %q", unanswered, want)
+	}
+}
+
+func TestAntFinishStream(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		streamErr     error
+		ctxCanceled   bool
+		wantErrorCode string
+		wantFinish    genai.FinishReason
+	}{
+		{
+			name:       "clean stream yields the assembled response",
+			wantFinish: genai.FinishReasonStop,
+		},
+		{
+			// A canceled context is the user interrupting, not a failure:
+			// it must not surface as STREAM_ERROR.
+			name:        "canceled context yields the cancellation response",
+			streamErr:   io.ErrUnexpectedEOF,
+			ctxCanceled: true,
+			wantFinish:  genai.FinishReasonOther,
+		},
+		{
+			name:          "transport failure yields STREAM_ERROR",
+			streamErr:     io.ErrUnexpectedEOF,
+			wantErrorCode: "STREAM_ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			if tt.ctxCanceled {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
+
+			var got []*model.LLMResponse
+			antFinishStream(ctx, tt.streamErr, &antStreamState{toolUse: map[int]antToolUseAcc{}},
+				func(r *model.LLMResponse, _ error) bool {
+					got = append(got, r)
+					return true
+				})
+
+			if len(got) != 1 {
+				t.Fatalf("antFinishStream() yielded %d responses, want 1", len(got))
+			}
+			if got[0].ErrorCode != tt.wantErrorCode {
+				t.Errorf("ErrorCode = %q, want %q", got[0].ErrorCode, tt.wantErrorCode)
+			}
+			if tt.wantErrorCode == "" && got[0].FinishReason != tt.wantFinish {
+				t.Errorf("FinishReason = %q, want %q", got[0].FinishReason, tt.wantFinish)
+			}
+		})
+	}
+}
+
+func TestAntAppendToolInput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("appends to an open block", func(t *testing.T) {
+		t.Parallel()
+		state := &antStreamState{toolUse: map[int]antToolUseAcc{0: {id: "a", inputJSON: `{"k`}}}
+		antAppendToolInput(state, 0, `":1}`)
+		if got := state.toolUse[0].inputJSON; got != `{"k":1}` {
+			t.Errorf("inputJSON = %q, want the concatenated deltas", got)
+		}
+	})
+
+	t.Run("drops a delta for a block that never opened", func(t *testing.T) {
+		t.Parallel()
+		// There is no id or name to attach the JSON to, so the delta has
+		// nowhere to go and must not create a phantom accumulator entry.
+		state := &antStreamState{toolUse: map[int]antToolUseAcc{}}
+		antAppendToolInput(state, 7, `{"orphan":true}`)
+		if len(state.toolUse) != 0 {
+			t.Errorf("toolUse = %+v, want no entries", state.toolUse)
+		}
+	})
+}
+
+func TestAntPartialResponse(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"thinking", "advisor", string(genai.RoleModel)} {
+		t.Run("role="+role, func(t *testing.T) {
+			t.Parallel()
+			got := antPartialResponse(role, "tok")
+			if !got.Partial || got.TurnComplete {
+				t.Errorf("Partial=%v TurnComplete=%v, want true/false", got.Partial, got.TurnComplete)
+			}
+			if got.Content.Role != role {
+				t.Errorf("role = %q, want %q", got.Content.Role, role)
+			}
+			if len(got.Content.Parts) != 1 || got.Content.Parts[0].Text != "tok" {
+				t.Errorf("parts = %v, want a single %q part", got.Content.Parts, "tok")
+			}
+		})
+	}
+}
+
+// antEventFromJSON decodes a wire payload into an Anthropic stream event.
+// The delta unions carry their source JSON in an unexported field and their
+// As*() accessors read it, so an event has to be unmarshalled rather than
+// built with a struct literal.
+func antEventFromJSON[E any](t *testing.T, payload string) E {
+	t.Helper()
+	var e E
+	if err := json.Unmarshal([]byte(payload), &e); err != nil {
+		t.Fatalf("decode %T from %s: %v", e, payload, err)
+	}
+	return e
+}
+
+func TestAntApplyMessageDelta(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		initial           antStreamState
+		payload           string
+		wantStop          anthropic.StopReason
+		wantOutput        int64
+		wantCacheRead     int64
+		wantCacheCreation int64
+	}{
+		{
+			name:     "stop reason and usage are recorded",
+			payload:  `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}`,
+			wantStop: anthropic.StopReasonEndTurn, wantOutput: 42,
+			wantCacheRead: 10, wantCacheCreation: 5,
+		},
+		{
+			// Cache counts are monotonically increasing across a response, so
+			// a lower value in a later delta must not overwrite a higher one.
+			name:     "a smaller cache count does not overwrite a larger one",
+			initial:  antStreamState{cacheReadTokens: 99, cacheCreationTokens: 88},
+			payload:  `{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":7,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}`,
+			wantStop: anthropic.StopReasonMaxTokens, wantOutput: 7,
+			wantCacheRead: 99, wantCacheCreation: 88,
+		},
+		{
+			name:     "a larger cache count is taken",
+			initial:  antStreamState{cacheReadTokens: 1, cacheCreationTokens: 1},
+			payload:  `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}`,
+			wantStop: anthropic.StopReasonToolUse, wantOutput: 7,
+			wantCacheRead: 10, wantCacheCreation: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			state := tt.initial
+			state.toolUse = map[int]antToolUseAcc{}
+			antApplyMessageDelta(&state, antEventFromJSON[anthropic.MessageDeltaEvent](t, tt.payload))
+
+			if state.stopReason != tt.wantStop {
+				t.Errorf("stopReason = %q, want %q", state.stopReason, tt.wantStop)
+			}
+			if state.outputTokens != tt.wantOutput {
+				t.Errorf("outputTokens = %d, want %d", state.outputTokens, tt.wantOutput)
+			}
+			if state.cacheReadTokens != tt.wantCacheRead {
+				t.Errorf("cacheReadTokens = %d, want %d", state.cacheReadTokens, tt.wantCacheRead)
+			}
+			if state.cacheCreationTokens != tt.wantCacheCreation {
+				t.Errorf("cacheCreationTokens = %d, want %d", state.cacheCreationTokens, tt.wantCacheCreation)
+			}
+		})
+	}
+}
+
+func TestAntApplyContentBlockStart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		payload  string
+		wantOpen bool
+	}{
+		{
+			name:     "a tool_use block is recorded",
+			payload:  `{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu_1","name":"bash","input":{}}}`,
+			wantOpen: true,
+		},
+		{
+			name:    "a text block opens nothing",
+			payload: `{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+		},
+		{
+			name:    "a thinking block opens nothing",
+			payload: `{"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":""}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			state := &antStreamState{toolUse: map[int]antToolUseAcc{}}
+			antApplyContentBlockStart(state, antEventFromJSON[anthropic.ContentBlockStartEvent](t, tt.payload))
+
+			block, open := state.toolUse[2]
+			if open != tt.wantOpen {
+				t.Fatalf("tool call open at index 2 = %v, want %v", open, tt.wantOpen)
+			}
+			if !tt.wantOpen {
+				return
+			}
+			if block.id != "tu_1" || block.name != "bash" {
+				t.Errorf("accumulator = %+v, want id=tu_1 name=bash", block)
+			}
+		})
+	}
+}
+
+func TestAntApplyContentBlockDelta(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		payload      string
+		stopConsumer bool
+		wantText     string
+		wantRole     string
+		wantJSON     string
+		wantStop     bool
+	}{
+		{
+			name:     "text delta accumulates and is forwarded",
+			payload:  `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+			wantText: "hi", wantRole: string(genai.RoleModel),
+		},
+		{
+			// Reasoning is forwarded but deliberately not accumulated into
+			// state.text: it is not part of the answer.
+			name:     "thinking delta is forwarded but not accumulated",
+			payload:  `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}`,
+			wantRole: "thinking",
+		},
+		{
+			name:     "input json delta accumulates and is not forwarded",
+			payload:  `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"k\":1}"}}`,
+			wantJSON: `{"k":1}`,
+		},
+		{
+			name:         "a consumer that stops is reported",
+			payload:      `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+			stopConsumer: true,
+			wantText:     "hi", wantRole: string(genai.RoleModel), wantStop: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := &antStreamState{toolUse: map[int]antToolUseAcc{0: {id: "tu_1", name: "bash"}}}
+			var got []*model.LLMResponse
+			stop := antApplyContentBlockDelta(state,
+				antEventFromJSON[anthropic.ContentBlockDeltaEvent](t, tt.payload),
+				func(r *model.LLMResponse, _ error) bool {
+					got = append(got, r)
+					return !tt.stopConsumer
+				})
+
+			if stop != tt.wantStop {
+				t.Errorf("stop = %v, want %v", stop, tt.wantStop)
+			}
+			if state.text != tt.wantText {
+				t.Errorf("state.text = %q, want %q", state.text, tt.wantText)
+			}
+			if state.toolUse[0].inputJSON != tt.wantJSON {
+				t.Errorf("inputJSON = %q, want %q", state.toolUse[0].inputJSON, tt.wantJSON)
+			}
+
+			if tt.wantRole == "" {
+				if len(got) != 0 {
+					t.Errorf("forwarded %d responses, want none", len(got))
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("forwarded %d responses, want 1", len(got))
+			}
+			if got[0].Content.Role != tt.wantRole {
+				t.Errorf("forwarded role = %q, want %q", got[0].Content.Role, tt.wantRole)
+			}
+		})
+	}
+}

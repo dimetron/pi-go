@@ -557,77 +557,83 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 	return b.String()
 }
 
+// toolSummaryArg maps a tool name to the single argument whose value is that
+// tool's one-line summary. Tools whose summary takes more than a lookup — ls,
+// tree and agent — are handled in toolCallSummary itself.
+var toolSummaryArg = map[string]string{
+	"read":  "file_path",
+	"write": "file_path",
+	"edit":  "file_path",
+	"bash":  "command",
+
+	"bash_wait":   "handle",
+	"bash_output": "handle",
+	"bash_kill":   "handle",
+
+	// "ripgrep" is the name the grep tool registers under when rg is installed.
+	"grep":    "pattern",
+	"ripgrep": "pattern",
+	"find":    "pattern",
+
+	// Gemini's server-side search, surfaced as a synthetic tool call so a
+	// grounded answer shows the query it searched for.
+	groundingToolName: "query",
+}
+
 // toolCallSummary returns a short one-line summary of tool arguments.
 func toolCallSummary(name string, args map[string]any) string {
 	switch name {
-	case "read":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "write":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "edit":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "bash":
-		if cmd, ok := args["command"].(string); ok {
-			return cmd
-		}
-	case "bash_wait", "bash_output", "bash_kill":
-		if h, ok := args["handle"].(string); ok {
-			return h
-		}
-	// "ripgrep" is the name the grep tool registers under when rg is installed.
-	case "grep", "ripgrep":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	// Gemini's server-side search, surfaced as a synthetic tool call so a
-	// grounded answer shows the query it searched for.
-	case groundingToolName:
-		if q, ok := args["query"].(string); ok {
-			return q
-		}
-	case "find":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
 	case "ls":
+		// A path that is present but empty is shown as given; only a missing
+		// path falls back to the working directory.
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
 		return "."
 	case "tree":
-		p, _ := args["path"].(string)
-		if p == "" {
-			p = "."
-		}
-		if d, ok := args["depth"].(float64); ok && d > 0 {
-			return fmt.Sprintf("%s (depth %d)", p, int(d))
-		}
-		return p
+		return treeCallSummary(args)
 	case "agent":
-		typ, _ := args["type"].(string)
-		prompt, _ := args["prompt"].(string)
-		// Truncate prompt to first line, max 60 chars.
-		if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
-			prompt = prompt[:idx]
-		}
-		if len(prompt) > 60 {
-			prompt = prompt[:57] + "..."
-		}
-		if typ != "" && prompt != "" {
-			return fmt.Sprintf("%s: %s", typ, prompt)
-		}
-		if typ != "" {
-			return typ
-		}
-		return prompt
+		return agentCallSummary(args)
+	}
+	if key, ok := toolSummaryArg[name]; ok {
+		s, _ := args[key].(string)
+		return s
 	}
 	return ""
+}
+
+// treeCallSummary describes a tree call as its root path, plus the depth when
+// one was asked for. Unlike ls, an empty path reads as the working directory.
+func treeCallSummary(args map[string]any) string {
+	p, _ := args["path"].(string)
+	if p == "" {
+		p = "."
+	}
+	if d, ok := args["depth"].(float64); ok && d > 0 {
+		return fmt.Sprintf("%s (depth %d)", p, int(d))
+	}
+	return p
+}
+
+// agentCallSummary describes a subagent call as "type: prompt", falling back to
+// whichever of the two the call carries. The prompt is cut to its first line
+// and 60 columns so a multi-paragraph brief cannot take over the card header.
+func agentCallSummary(args map[string]any) string {
+	typ, _ := args["type"].(string)
+	prompt, _ := args["prompt"].(string)
+	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+		prompt = prompt[:idx]
+	}
+	if len(prompt) > 60 {
+		prompt = prompt[:57] + "..."
+	}
+	switch {
+	case typ != "" && prompt != "":
+		return fmt.Sprintf("%s: %s", typ, prompt)
+	case typ != "":
+		return typ
+	}
+	return prompt
 }
 
 // toolResultSummary returns a short one-line summary of a tool result.
@@ -638,142 +644,240 @@ func toolResultSummary(content string) string {
 		return formatToolResult(data)
 	}
 	// Collapse to single line.
-	content = strings.ReplaceAll(content, "\n", " ")
-	if len(content) > 120 {
-		return content[:117] + "..."
+	return clipSummary(strings.ReplaceAll(content, "\n", " "))
+}
+
+// summaryWidth is the column budget for a one-line tool summary. Anything
+// longer is cut to summaryWidth-3 bytes and given an ellipsis, so the rendered
+// field is never wider than summaryWidth.
+const summaryWidth = 120
+
+// clipSummary cuts s to summaryWidth, marking the cut with an ellipsis. The cut
+// is by byte, which is what these cards have always rendered.
+func clipSummary(s string) string {
+	if len(s) > summaryWidth {
+		return s[:summaryWidth-3] + "..."
 	}
-	return content
+	return s
+}
+
+// resultFormatter renders a parsed tool result, reporting whether the result
+// was one it recognizes. When ok is false the string returned is ignored and
+// the next formatter is tried.
+type resultFormatter func(data map[string]any) (_ string, ok bool)
+
+// resultFormatters are tried in order, and the first that recognizes the result
+// wins. The order is load-bearing in two places: a formatter that accepts both
+// a full payload and the bare count standing in for it has to check the payload
+// first, and bashWindowSummary has to run before bashExitSummary — see its
+// comment for what happens when it does not.
+var resultFormatters = []resultFormatter{
+	lsEntriesSummary,
+	treeCountsSummary,
+	grepMatchesSummary,
+	findFilesSummary,
+	readContentSummary,
+	writeBytesSummary,
+	editReplacementsSummary,
+	diagnosticsSummary,
+	bashWindowSummary,
+	bashExitSummary,
 }
 
 // formatToolResult extracts a readable summary from a parsed tool result.
 func formatToolResult(data map[string]any) string {
-	// ls tool: show file/dir names
-	if entries, ok := data["entries"].([]any); ok {
-		var names []string
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				name, _ := m["name"].(string)
-				if isDir, ok := m["is_dir"].(bool); ok && isDir {
-					name += "/"
-				}
-				names = append(names, name)
-			}
+	for _, format := range resultFormatters {
+		if s, ok := format(data); ok {
+			return s
 		}
-		result := strings.Join(names, "  ")
-		if len(result) > 120 {
-			return result[:117] + "..."
+	}
+	// Fallback: compact JSON
+	b, _ := json.Marshal(data)
+	return clipSummary(string(b))
+}
+
+// lsEntriesSummary lists an ls result's names, marking directories with a
+// trailing slash.
+func lsEntriesSummary(data map[string]any) (string, bool) {
+	entries, ok := data["entries"].([]any)
+	if !ok {
+		return "", false
+	}
+	var names []string
+	for _, e := range entries {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
 		}
-		return result
-	}
-	// tree tool: show dirs/files count
-	if _, ok := data["tree"].(string); ok {
-		d, _ := data["dirs"].(float64)
-		f, _ := data["files"].(float64)
-		return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
-	}
-	// grep tool: show matches with file:line: content
-	if matchList, ok := data["matches"].([]any); ok {
-		total, _ := data["total_matches"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, m := range matchList {
-			if entry, ok := m.(map[string]any); ok {
-				file, _ := entry["file"].(string)
-				line, _ := entry["line"].(float64)
-				content, _ := entry["content"].(string)
-				fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
-			}
+		name, _ := m["name"].(string)
+		if isDir, ok := m["is_dir"].(bool); ok && isDir {
+			name += "/"
 		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
+		names = append(names, name)
+	}
+	return clipSummary(strings.Join(names, "  ")), true
+}
+
+// treeCountsSummary reduces a tree result to the counts it reported. The tree
+// itself is far too tall for a one-line summary.
+func treeCountsSummary(data map[string]any) (string, bool) {
+	if _, ok := data["tree"].(string); !ok {
+		return "", false
+	}
+	d, _ := data["dirs"].(float64)
+	f, _ := data["files"].(float64)
+	return fmt.Sprintf("%d dirs, %d files", int(d), int(f)), true
+}
+
+// grepMatchesSummary lists a grep result as one "file:line: content" per match,
+// falling back to the match count when the result carried only the count.
+func grepMatchesSummary(data map[string]any) (string, bool) {
+	matchList, hasList := data["matches"].([]any)
+	if !hasList {
+		total, hasTotal := data["total_matches"].(float64)
+		if !hasTotal {
+			return "", false
 		}
-		return strings.TrimRight(sb.String(), "\n")
+		return fmt.Sprintf("%d matches", int(total)), true
 	}
-	if matches, ok := data["total_matches"].(float64); ok {
-		return fmt.Sprintf("%d matches", int(matches))
-	}
-	// find tool: show file list
-	if fileList, ok := data["files"].([]any); ok {
-		total, _ := data["total_files"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, f := range fileList {
-			if name, ok := f.(string); ok {
-				sb.WriteString(name)
-				sb.WriteByte('\n')
-			}
+	total, _ := data["total_matches"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, m := range matchList {
+		entry, ok := m.(map[string]any)
+		if !ok {
+			continue
 		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
+		file, _ := entry["file"].(string)
+		line, _ := entry["line"].(float64)
+		content, _ := entry["content"].(string)
+		fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
+	}
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n"), true
+}
+
+// findFilesSummary lists a find result's paths one per line, falling back to
+// the file count when the result carried only the count.
+func findFilesSummary(data map[string]any) (string, bool) {
+	fileList, hasList := data["files"].([]any)
+	if !hasList {
+		total, hasTotal := data["total_files"].(float64)
+		if !hasTotal {
+			return "", false
 		}
-		return strings.TrimRight(sb.String(), "\n")
+		return fmt.Sprintf("%d files", int(total)), true
 	}
-	if total, ok := data["total_files"].(float64); ok {
-		return fmt.Sprintf("%d files", int(total))
-	}
-	// read tool: show actual content with line numbers
-	if content, ok := data["content"].(string); ok {
-		total, _ := data["total_lines"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		if trunc {
-			content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
+	total, _ := data["total_files"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, f := range fileList {
+		if name, ok := f.(string); ok {
+			sb.WriteString(name)
+			sb.WriteByte('\n')
 		}
-		return content
 	}
-	if total, ok := data["total_lines"].(float64); ok {
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n"), true
+}
+
+// readContentSummary hands a read result's content through untouched — the card
+// numbers and highlights it — or reports the line count when the result carried
+// only that.
+func readContentSummary(data map[string]any) (string, bool) {
+	content, hasContent := data["content"].(string)
+	if !hasContent {
+		total, hasTotal := data["total_lines"].(float64)
+		if !hasTotal {
+			return "", false
+		}
 		trunc := ""
 		if t, ok := data["truncated"].(bool); ok && t {
 			trunc = " (truncated)"
 		}
-		return fmt.Sprintf("%d lines%s", int(total), trunc)
+		return fmt.Sprintf("%d lines%s", int(total), trunc), true
 	}
-	// write tool: show bytes written
-	if bw, ok := data["bytes_written"].(float64); ok {
-		if p, ok := data["path"].(string); ok {
-			return fmt.Sprintf("%s (%d bytes)", p, int(bw))
-		}
+	total, _ := data["total_lines"].(float64)
+	if trunc, _ := data["truncated"].(bool); trunc {
+		content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
 	}
-	// edit tool: show replacements
-	if r, ok := data["replacements"].(float64); ok {
-		return fmt.Sprintf("%d replacements", int(r))
+	return content, true
+}
+
+// writeBytesSummary reports what a write landed. A result carrying the byte
+// count but no path is deliberately not claimed: the count on its own names no
+// file, and a later formatter may still recognize the result.
+func writeBytesSummary(data map[string]any) (string, bool) {
+	bw, hasBytes := data["bytes_written"].(float64)
+	if !hasBytes {
+		return "", false
 	}
-	// lsp_diagnostics: show diagnostics (already prefixed with ⚠ by formatDiagnosticsForDisplay)
-	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
-		return diag
+	p, hasPath := data["path"].(string)
+	if !hasPath {
+		return "", false
 	}
-	// A backgrounded command, either at the moment of handoff (the bash tool) or
-	// on any later poll of it (bash_wait, bash_kill). Both carry a handle, and
-	// both have to be taken before the exit-code branch below.
-	//
-	// While such a command is still running it has no exit status: the bash tool
-	// reports the -1 placeholder, which the exit-code branch renders as
-	// "exit -1: <first line of output>" — a live lint run reading as a crashed
-	// one. A poll is worse: BashStatus omits exit_code entirely while running, so
-	// it missed the branch altogether and fell through to the raw-JSON fallback,
-	// printing &-escaped argument soup instead of the command's output.
-	if handle, ok := data["handle"].(string); ok && handle != "" {
-		return formatBashWindow(handle, data)
+	return fmt.Sprintf("%s (%d bytes)", p, int(bw)), true
+}
+
+// editReplacementsSummary reports how many edits an edit result applied.
+func editReplacementsSummary(data map[string]any) (string, bool) {
+	r, ok := data["replacements"].(float64)
+	if !ok {
+		return "", false
 	}
-	// bash tool: show exit code + first 2 and last 2 output lines (preserve newlines for better visibility)
-	if code, ok := data["exit_code"].(float64); ok {
-		stdout, _ := data["stdout"].(string)
-		stderr, _ := data["stderr"].(string)
-		result := bashOutputPreview(stdout, stderr)
-		if result == "" {
-			result = "(No output)"
-		}
-		if int(code) != 0 {
-			return fmt.Sprintf("exit %d: %s", int(code), result)
-		}
-		return result
+	return fmt.Sprintf("%d replacements", int(r)), true
+}
+
+// diagnosticsSummary passes lsp_diagnostics through, already prefixed with ⚠ by
+// formatDiagnosticsForDisplay. An empty diagnostics string is not claimed, so a
+// clean run falls through to whatever else the result carries.
+func diagnosticsSummary(data map[string]any) (string, bool) {
+	diag, ok := data["lsp_diagnostics"].(string)
+	if !ok || diag == "" {
+		return "", false
 	}
-	// Fallback: compact JSON
-	b, _ := json.Marshal(data)
-	s := string(b)
-	if len(s) > 120 {
-		return s[:117] + "..."
+	return diag, true
+}
+
+// bashWindowSummary renders a backgrounded command, either at the moment of
+// handoff (the bash tool) or on any later poll of it (bash_wait, bash_kill).
+// Both carry a handle, and both have to be taken before bashExitSummary.
+//
+// While such a command is still running it has no exit status: the bash tool
+// reports the -1 placeholder, which bashExitSummary renders as
+// "exit -1: <first line of output>" — a live lint run reading as a crashed one.
+// A poll is worse: BashStatus omits exit_code entirely while running, so it
+// missed bashExitSummary altogether and fell through to the raw-JSON fallback,
+// printing &-escaped argument soup instead of the command's output.
+func bashWindowSummary(data map[string]any) (string, bool) {
+	handle, ok := data["handle"].(string)
+	if !ok || handle == "" {
+		return "", false
 	}
-	return s
+	return formatBashWindow(handle, data), true
+}
+
+// bashExitSummary renders a foreground bash result: its exit code, and the
+// first and last two lines of what it printed.
+func bashExitSummary(data map[string]any) (string, bool) {
+	code, ok := data["exit_code"].(float64)
+	if !ok {
+		return "", false
+	}
+	stdout, _ := data["stdout"].(string)
+	stderr, _ := data["stderr"].(string)
+	result := bashOutputPreview(stdout, stderr)
+	if result == "" {
+		result = "(No output)"
+	}
+	if int(code) != 0 {
+		return fmt.Sprintf("exit %d: %s", int(code), result), true
+	}
+	return result, true
 }
 
 // formatBashWindow renders the card for a backgrounded command: what state it

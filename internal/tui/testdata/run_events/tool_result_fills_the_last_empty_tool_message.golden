@@ -1,0 +1,9 @@
+streaming="" scroll=0 activeTool="" toolStartSet=true
+matrix active=true seed=-5097548136811212583
+messages:
+  [0] role="assistant" tool="" toolIn="" content=""
+  [1] role="tool" tool="bash" toolIn="" content="ok"
+trace:
+  [0] kind="tool_call" summary=">>> bash" detail="" timeSet=true
+  [1] kind="tool_result" summary="<<< result" detail="{\"exit_code\": 0, \"stdout\": \"ok\"}" timeSet=true
+run phase="running" checklist=0

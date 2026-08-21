@@ -343,30 +343,16 @@ func (o *Orchestrator) SpawnWithRetry(ctx context.Context, input SpawnInput) (<-
 		}
 
 		// Wait for the subagent to complete and check status.
-		var status string
-		for ev := range events {
-			// Forward events to caller (consume the channel).
-			if ev.Type == "message_end" || ev.Type == "error" {
-				// Check agent state.
-				o.mu.Lock()
-				state := o.agents[agentID]
-				if state != nil {
-					status = state.Status
-				}
-				o.mu.Unlock()
-
-				if status == "failed" || status == "killed" {
-					// Crash detected — retry if we have attempts left.
-					if attempt < maxRetries {
-						break
-					}
-					return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
-				}
-				return finalEvents, finalAgentID, nil
-			}
+		outcome := o.awaitOutcome(events, agentID)
+		if outcome == outcomeOK {
+			return finalEvents, finalAgentID, nil
+		}
+		if outcome == outcomeCrashed && attempt >= maxRetries {
+			return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
 		}
 
-		// If we broke out of the loop for retry, continue to next attempt.
+		// Crashed with attempts left, or the stream ended without ever
+		// reporting a terminal event: retry while we can.
 		if attempt < maxRetries {
 			continue
 		}
@@ -374,6 +360,44 @@ func (o *Orchestrator) SpawnWithRetry(ctx context.Context, input SpawnInput) (<-
 	}
 
 	return finalEvents, finalAgentID, lastErr
+}
+
+// runOutcome is what awaiting a spawned subagent's event stream concluded.
+type runOutcome int
+
+const (
+	// outcomeOK: a terminal event arrived and the agent was not in a crash state.
+	outcomeOK runOutcome = iota
+	// outcomeCrashed: a terminal event arrived with status "failed" or "killed".
+	outcomeCrashed
+	// outcomeSilent: the stream closed without ever reporting a terminal event.
+	// Treated as retryable, but unlike a crash it is not an error on the last
+	// attempt — the caller still gets the channel back.
+	outcomeSilent
+)
+
+// awaitOutcome consumes events until the subagent reports it is done, and
+// classifies how it ended. Events are drained rather than forwarded: the caller
+// hands the same channel back, so anything after the terminal event is still
+// readable by whoever it is returned to.
+func (o *Orchestrator) awaitOutcome(events <-chan Event, agentID string) runOutcome {
+	for ev := range events {
+		if ev.Type != "message_end" && ev.Type != "error" {
+			continue
+		}
+		o.mu.Lock()
+		var status string
+		if state := o.agents[agentID]; state != nil {
+			status = state.Status
+		}
+		o.mu.Unlock()
+
+		if status == "failed" || status == "killed" {
+			return outcomeCrashed
+		}
+		return outcomeOK
+	}
+	return outcomeSilent
 }
 
 // Spawn starts a new subagent and returns an event channel.
@@ -409,30 +433,21 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	// Generate agent ID.
 	agentID := fmt.Sprintf("%s-%d", agent.Name, time.Now().UnixNano())
 
-	// Determine if worktree is needed.
-	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir)
-
-	workDir := o.repoRoot // default to project root so subagents run in the right directory
-	if input.WorkDir != "" {
-		workDir = input.WorkDir
-	} else if useWorktree && o.worktree != nil {
-		wtPath, err := o.worktree.Create(agentID, input.WorktreeName)
-		if err != nil {
-			o.pool.Release()
-			return nil, "", fmt.Errorf("creating worktree: %w", err)
-		}
-		workDir = wtPath
+	workDir, useWorktree, err := o.prepareWorkDir(agentID, input)
+	if err != nil {
+		o.pool.Release()
+		return nil, "", err
 	}
 
-	// Pass repo root to subagent so its sandbox covers the full repo,
-	// not just the worktree directory.
-	env := input.Env
-	if o.worktree != nil {
-		env = append(append([]string(nil), env...), "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
-		// Also pass the worktree path so subagent can normalize relative paths
-		if workDir != "" {
-			env = append(env, "PI_WORKTREE_ROOT="+workDir)
+	// releaseSpawn undoes everything acquired above. It is safe to call on any
+	// failure path from here on, and is deliberately *not* deferred: on the
+	// success path the pool slot is released by the forwarding goroutine when
+	// the subagent finishes, long after Spawn has returned.
+	releaseSpawn := func() {
+		if useWorktree && o.worktree != nil {
+			_ = o.worktree.Cleanup(agentID)
 		}
+		o.pool.Release()
 	}
 
 	// An explicit spawn timeout overrides the agent definition; otherwise use
@@ -450,31 +465,16 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		Prompt:      input.Prompt,
 		Instruction: agent.Instruction,
 		Timeout:     timeout,
-		Env:         env,
+		Env:         o.subagentEnv(input.Env, workDir),
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,
 		Headers:     o.Headers,
 		LSP:         agent.LSP,
 	}
 
-	// ACP-bundled agents (claude/gemini/cursor/copilot) launch their own CLI
-	// binary via the ACP adapter; codex agents launch `codex app-server` and
-	// speak its JSON-RPC protocol directly; everyone else runs as a child
-	// pi --mode json.
-	var proc *Process
-	switch {
-	case isACPAgent(agent.Name):
-		proc, err = dispatchACP(ctx, spawnOpts, agent.Name)
-	case isCodexAgent(agent.Name):
-		proc, err = dispatchCodex(ctx, spawnOpts, agent.Name)
-	default:
-		proc, err = o.spawner.Spawn(ctx, spawnOpts)
-	}
+	proc, err := o.dispatchProcess(ctx, spawnOpts, agent.Name)
 	if err != nil {
-		if useWorktree && o.worktree != nil {
-			_ = o.worktree.Cleanup(agentID)
-		}
-		o.pool.Release()
+		releaseSpawn()
 		return nil, "", fmt.Errorf("spawning agent: %w", err)
 	}
 
@@ -494,10 +494,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		o.mu.Unlock()
 		// Orchestrator shut down while we were setting up — clean up and bail.
 		proc.Cancel()
-		if useWorktree && o.worktree != nil {
-			_ = o.worktree.Cleanup(agentID)
-		}
-		o.pool.Release()
+		releaseSpawn()
 		return nil, "", fmt.Errorf("orchestrator is shut down")
 	}
 	o.agents[agentID] = state
@@ -509,55 +506,118 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	// records external-CLI subagent event streams, and the Event shape is the
 	// same regardless of which protocol produced it.
 	logACP := isACPAgent(agent.Name) || isCodexAgent(agent.Name)
-	go func() {
-		defer close(events)
-		defer o.pool.Release()
-
-		for ev := range proc.Events() {
-			if logACP {
-				o.writeACPEvent(agentID, agent.Name, ev)
-			}
-			events <- ev
-		}
-
-		// Process done — update state.
-		_, waitErr := proc.Wait()
-
-		o.mu.Lock()
-		if state.Status == "running" {
-			// Distinguish a timeout from a crash from an exit-code failure. A
-			// timeout is reported first because it also arrives as a signal
-			// kill — the spawner SIGKILLs the group — and would otherwise be
-			// indistinguishable from an OOM.
-			switch {
-			case errors.Is(waitErr, ErrSubagentTimeout):
-				state.Status = "timeout"
-			case waitErr != nil && isKilledBySignal(waitErr):
-				state.Status = "killed"
-			case waitErr != nil:
-				state.Status = "failed"
-			default:
-				state.Status = "completed"
-			}
-			state.FinishedAt = time.Now()
-		}
-		finalStatus := state.Status
-		o.evictCompletedAgentsLocked()
-		o.mu.Unlock()
-
-		// Publish the terminal status before closing the channel. Consumers must
-		// use this snapshot rather than querying the evictable status map.
-		events <- Event{Type: "run_done", Status: finalStatus}
-
-		// Worktree cleanup is intentionally NOT done here. Deletion is
-		// deferred to the caller (e.g. the TUI /run flow calls
-		// wm.Cleanup after a successful merge) or to Shutdown via
-		// CleanupAll. Auto-cleaning on process exit raced with the
-		// merge step, causing "no worktree found" merge failures.
-		_ = state.SkipCleanup // kept for API stability; no longer gated here
-	}()
+	go o.forwardEvents(proc, state, events, logACP)
 
 	return events, agentID, nil
+}
+
+// prepareWorkDir decides where the subagent runs and creates its worktree when
+// one is called for. It returns the working directory and whether a worktree
+// was requested — the latter drives cleanup on the failure paths, so it is
+// reported even when no manager is configured to act on it.
+func (o *Orchestrator) prepareWorkDir(agentID string, input SpawnInput) (string, bool, error) {
+	useWorktree := resolveWorktreeUsage(input.Agent.Worktree, input.Worktree, input.WorkDir)
+
+	if input.WorkDir != "" {
+		return input.WorkDir, useWorktree, nil
+	}
+	if useWorktree && o.worktree != nil {
+		wtPath, err := o.worktree.Create(agentID, input.WorktreeName)
+		if err != nil {
+			return "", useWorktree, fmt.Errorf("creating worktree: %w", err)
+		}
+		return wtPath, useWorktree, nil
+	}
+	// Default to project root so subagents run in the right directory.
+	return o.repoRoot, useWorktree, nil
+}
+
+// subagentEnv extends the caller's environment with the roots a child needs to
+// resolve paths: the repo root, so its sandbox covers the whole repository
+// rather than just the worktree, and the worktree path so it can normalize
+// relative paths against it.
+func (o *Orchestrator) subagentEnv(env []string, workDir string) []string {
+	if o.worktree == nil {
+		return env
+	}
+	env = append(append([]string(nil), env...), "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
+	if workDir != "" {
+		env = append(env, "PI_WORKTREE_ROOT="+workDir)
+	}
+	return env
+}
+
+// dispatchProcess starts the child process for the named agent.
+//
+// ACP-bundled agents (claude/gemini/cursor/copilot) launch their own CLI binary
+// via the ACP adapter; codex agents launch `codex app-server` and speak its
+// JSON-RPC protocol directly; everyone else runs as a child pi --mode json.
+func (o *Orchestrator) dispatchProcess(ctx context.Context, opts SpawnOpts, agentName string) (*Process, error) {
+	switch {
+	case isACPAgent(agentName):
+		return dispatchACP(ctx, opts, agentName)
+	case isCodexAgent(agentName):
+		return dispatchCodex(ctx, opts, agentName)
+	default:
+		return o.spawner.Spawn(ctx, opts)
+	}
+}
+
+// forwardEvents relays the child's events to the caller's channel, then records
+// the terminal status and releases the pool slot. It runs as the goroutine that
+// owns the spawn for the rest of the subagent's life, so it — not Spawn —
+// closes events and releases the slot.
+func (o *Orchestrator) forwardEvents(proc *Process, state *agentState, events chan Event, logACP bool) {
+	defer close(events)
+	defer o.pool.Release()
+
+	for ev := range proc.Events() {
+		if logACP {
+			o.writeACPEvent(state.ID, state.Type, ev)
+		}
+		events <- ev
+	}
+
+	// Process done — update state.
+	_, waitErr := proc.Wait()
+
+	o.mu.Lock()
+	if state.Status == "running" {
+		state.Status = terminalStatus(waitErr)
+		state.FinishedAt = time.Now()
+	}
+	finalStatus := state.Status
+	o.evictCompletedAgentsLocked()
+	o.mu.Unlock()
+
+	// Publish the terminal status before closing the channel. Consumers must
+	// use this snapshot rather than querying the evictable status map.
+	events <- Event{Type: "run_done", Status: finalStatus}
+
+	// Worktree cleanup is intentionally NOT done here. Deletion is
+	// deferred to the caller (e.g. the TUI /run flow calls
+	// wm.Cleanup after a successful merge) or to Shutdown via
+	// CleanupAll. Auto-cleaning on process exit raced with the
+	// merge step, causing "no worktree found" merge failures.
+	_ = state.SkipCleanup // kept for API stability; no longer gated here
+}
+
+// terminalStatus classifies how a subagent process ended.
+//
+// It distinguishes a timeout from a crash from an exit-code failure. A timeout
+// is reported first because it also arrives as a signal kill — the spawner
+// SIGKILLs the group — and would otherwise be indistinguishable from an OOM.
+func terminalStatus(waitErr error) string {
+	switch {
+	case errors.Is(waitErr, ErrSubagentTimeout):
+		return "timeout"
+	case waitErr != nil && isKilledBySignal(waitErr):
+		return "killed"
+	case waitErr != nil:
+		return "failed"
+	default:
+		return "completed"
+	}
 }
 
 // isKilledBySignal returns true if the error indicates the process was killed by a signal

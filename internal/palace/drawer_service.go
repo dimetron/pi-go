@@ -116,9 +116,14 @@ func (ds *DrawerService) AddDrawer(ctx context.Context, input DrawerInput) (*Dra
 }
 
 // Search performs a combined search using both semantic vector similarity and
-// FTS5 keyword matching. When the embedder is available, results from both methods
-// are merged and deduplicated by drawer ID, with semantic results prioritized.
-// Returns results sorted by combined relevance score.
+// FTS5 keyword matching. When the embedder is available, results from both
+// methods are merged and deduplicated by drawer ID, with semantic results
+// prioritized — the order is semantic-first, not score-first, so a
+// keyword-only hit can carry a higher score than the semantic hit above it.
+//
+// The keyword half is best-effort: a failing FTS5 query degrades to no keyword
+// hits. The semantic half is not, and a failure to read the stored embeddings
+// fails the search.
 func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchResult, error) {
 	if q.Query == "" {
 		return nil, fmt.Errorf("palace: search query must not be empty")
@@ -139,111 +144,143 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 		ftsResults = nil
 	}
 
-	// If no embedder, return FTS5 results only.
 	if ds.embedder == nil {
-		// Ensure FTS5 results have proper similarity scores.
-		maxRank := 1
-		for _, r := range ftsResults {
-			if r.Rank > maxRank {
-				maxRank = r.Rank
-			}
-		}
-		if maxRank == 0 {
-			maxRank = 1
-		}
-		for i := range ftsResults {
-			if ftsResults[i].Rank != 0 {
-				ftsResults[i].Similarity = float32(0.5 + (0.5 * float64(maxRank-ftsResults[i].Rank) / float64(maxRank)))
-			}
-		}
-		if len(ftsResults) > q.Limit {
-			ftsResults = ftsResults[:q.Limit]
-		}
+		return keywordOnlyResults(ftsResults, q.Limit), nil
+	}
+
+	// A query with no usable vector degrades to the keyword hits exactly as
+	// the store returned them: unscored, untrimmed, and not merged.
+	vec, ok := ds.queryVector(q.Query)
+	if !ok {
 		return ftsResults, nil
 	}
 
-	// Semantic search.
-	vecs, err := ds.embedder.Embed([]string{q.Query})
+	semantic, err := ds.semanticResults(ctx, vec, filter, q.Limit*3)
+	if err != nil {
+		return nil, err
+	}
+	return mergeSearchResults(semantic, ftsResults, q.Limit), nil
+}
+
+// queryVector embeds the query text for the semantic half of Search. It
+// reports false rather than an error for both of its failure modes, because
+// both are recoverable: the caller degrades to keyword results instead of
+// failing the search.
+func (ds *DrawerService) queryVector(query string) ([]float32, bool) {
+	vecs, err := ds.embedder.Embed([]string{query})
 	if err != nil {
 		slog.Warn("palace: search embedding failed, falling back to keyword", "error", err)
-		return ftsResults, nil
+		return nil, false
 	}
 	if len(vecs) == 0 {
-		return ftsResults, nil
+		return nil, false
 	}
+	return vecs[0], true
+}
 
+// semanticResults ranks the stored embeddings matching filter against vec and
+// loads the drawer behind each hit, keeping rank order. A drawer that ranks but
+// cannot be loaded is dropped rather than failing the search — the ranking came
+// from the embeddings table and the row may since have gone.
+func (ds *DrawerService) semanticResults(ctx context.Context, vec []float32, filter DrawerFilter, limit int) ([]SearchResult, error) {
 	candidates, err := ds.candidates(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("palace: search get embeddings: %w", err)
 	}
 
-	ranked := RankBySimilarity(vecs[0], candidates, q.Limit*3)
-
-	// Build a map of semantic results keyed by drawer ID.
-	semanticMap := make(map[string]SearchResult)
+	ranked := RankBySimilarity(vec, candidates, limit)
+	results := make([]SearchResult, 0, len(ranked))
 	for _, sr := range ranked {
 		drawer, err := ds.store.GetDrawer(ctx, sr.DrawerID)
 		if err != nil {
 			continue
 		}
-		semanticMap[sr.DrawerID] = SearchResult{
+		results = append(results, SearchResult{
 			Drawer:     *drawer,
 			Similarity: sr.Similarity,
+		})
+	}
+	return results, nil
+}
+
+// keywordOnlyResults scores and trims the keyword hits for the no-embedder
+// path, in place.
+//
+// A hit at rank 0 keeps whatever Similarity it arrived with instead of being
+// scored. That is the one place this path differs from mergeSearchResults,
+// which scores every keyword hit including those at rank 0.
+func keywordOnlyResults(results []SearchResult, limit int) []SearchResult {
+	maxRank := maxKeywordRank(results)
+	for i := range results {
+		if results[i].Rank != 0 {
+			results[i].Similarity = keywordSimilarity(results[i].Rank, maxRank)
 		}
 	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results
+}
 
-	// Merge FTS5 results into semantic map.
-	// FTS5 results get a boosted score: 0.5 + (0.5 * normalizedRank)
-	// This ensures exact keyword matches rank high but semantic still matters.
+// mergeSearchResults returns the semantic hits followed by the keyword hits
+// they did not already cover, trimmed to limit.
+//
+// Semantic hits keep their true cosine similarity and their rank order;
+// keyword-only hits follow with a boosted score. A drawer found by both sides
+// appears once, with its cosine score, because the semantic pass claims the ID
+// first.
+func mergeSearchResults(semantic, keyword []SearchResult, limit int) []SearchResult {
+	merged := make([]SearchResult, 0, len(semantic)+len(keyword))
+	seen := make(map[string]bool, len(semantic)+len(keyword))
+
+	for _, sr := range semantic {
+		merged = append(merged, sr)
+		seen[sr.Drawer.ID] = true
+	}
+
+	maxRank := maxKeywordRank(keyword)
+	for _, kw := range keyword {
+		if seen[kw.Drawer.ID] {
+			continue
+		}
+		seen[kw.Drawer.ID] = true
+		merged = append(merged, SearchResult{
+			Drawer:     kw.Drawer,
+			Similarity: keywordSimilarity(kw.Rank, maxRank),
+			Rank:       kw.Rank,
+		})
+	}
+
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
+}
+
+// maxKeywordRank returns the largest FTS5 rank in results, floored at 1 so it
+// is always safe to divide by.
+//
+// The floor is not a corner case. SQLite's bm25 rank is negative — more
+// negative means more relevant — so the maximum is normally the floor itself,
+// and keywordSimilarity then scores a negative rank above 1. That contradicts
+// the 0-1 range SearchResult.Similarity documents, and is pinned as-is by
+// TestDrawerServiceSearch_KeywordOnlyScoring rather than fixed here.
+func maxKeywordRank(results []SearchResult) int {
 	maxRank := 1
-	for _, r := range ftsResults {
+	for _, r := range results {
 		if r.Rank > maxRank {
 			maxRank = r.Rank
 		}
 	}
-	if maxRank == 0 {
-		maxRank = 1
-	}
+	return maxRank
+}
 
-	merged := make([]SearchResult, 0, len(semanticMap)+len(ftsResults))
-	seen := make(map[string]bool)
-
-	// Add semantic results first (they have true similarity scores).
-	for _, sr := range ranked {
-		if result, ok := semanticMap[sr.DrawerID]; ok {
-			merged = append(merged, result)
-			seen[sr.DrawerID] = true
-		}
-	}
-
-	// Add FTS5 results not already in semantic results.
-	for _, fts := range ftsResults {
-		if seen[fts.Drawer.ID] {
-			continue
-		}
-		// Convert FTS5 rank to a relevance score (higher = better).
-		// FTS5 rank is negative (more negative = more relevant), so we normalize.
-		var ftsScore float64
-		if maxRank > 0 {
-			// Normalize: most negative = highest score
-			ftsScore = 0.5 + (0.5 * float64(maxRank-fts.Rank) / float64(maxRank))
-		} else {
-			ftsScore = 0.5
-		}
-		merged = append(merged, SearchResult{
-			Drawer:     fts.Drawer,
-			Similarity: float32(ftsScore),
-			Rank:       fts.Rank,
-		})
-		seen[fts.Drawer.ID] = true
-	}
-
-	// Trim to requested limit.
-	if len(merged) > q.Limit {
-		merged = merged[:q.Limit]
-	}
-
-	return merged, nil
+// keywordSimilarity converts an FTS5 rank into a score in the same space as
+// cosine similarity, so keyword and semantic hits can share one list: rank 0
+// scores 1 and the worst observed rank scores 0.5. maxRank must come from
+// maxKeywordRank, which guarantees a non-zero divisor.
+func keywordSimilarity(rank, maxRank int) float32 {
+	return float32(0.5 + (0.5 * float64(maxRank-rank) / float64(maxRank)))
 }
 
 // DeleteDrawer removes a drawer by ID.

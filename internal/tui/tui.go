@@ -663,15 +663,7 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 
 	case InputSubmitMsg:
-		if strings.HasPrefix(msg.Text, "/") {
-			if m.running {
-				return m, nil, true
-			}
-			model, cmd := m.handleSlashCommand(msg.Text)
-			return model, cmd, true
-		}
-		model, cmd := m.enqueuePrompt(msg.Text, msg.Mentions)
-		return model, cmd, true
+		return m.handleInputSubmit(msg)
 
 	case resetCtrlCCountMsg:
 		model, cmd := m.handleResetCtrlCCount()
@@ -691,35 +683,10 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case loadingTickMsg:
-		// The loading-dots ticker was the engine behind TODO §30/§42: every
-		// 300 ms fire it mutated m.loadingDots and re-armed unconditionally,
-		// producing a 3.3 Hz full-history re-render for the life of the
-		// process. The dots only animate the deferred-init splash
-		// (m.loading is set at tui.go:455 and cleared at :1963/:1985), so
-		// the re-arm belongs to that lifecycle, not to process uptime.
-		// Re-arming only while m.loading is true stops the chain at init
-		// completion and removes the idle 3.3 Hz floor.
-		if !m.loading {
-			return m, nil, true
-		}
-		m.loadingDots = (m.loadingDots + 1) % 4
-		return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
+		return m.handleLoadingTick()
 
 	case matrixTickMsg:
-		if m.running {
-			m.matrix.tick(m.mainWidth())
-			// The pending-tool bullet blinks on a ~1s cycle. The phase advances
-			// here, in Update, so View stays a pure function of model state —
-			// the matrix tick (150ms while running) re-renders often enough to
-			// animate it.
-			now := time.Now()
-			m.chatModel.ToolDisplay.BlinkOn = now.UnixMilli()/500%2 == 0
-			// Same idea one level out: the tab title's prefix symbol rotates so
-			// a backgrounded session still shows it is working.
-			m.titleSpin = terminalTitleSpinIndex(now)
-			return m, matrixTickCmd(), true
-		}
-		return m, nil, true
+		return m.handleMatrixTick()
 	}
 	return nil, nil, false
 }
@@ -736,6 +703,55 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, boo
 		return m, tea.Batch(cmd, waitForAgent(m.agentCh)), true
 	}
 	return m, cmd, true
+}
+
+// handleInputSubmit routes a submitted line: a slash command runs as one,
+// anything else joins the prompt queue. A slash command is dropped outright
+// while a turn is running, because the commands mutate state that turn is using.
+func (m *model) handleInputSubmit(msg InputSubmitMsg) (tea.Model, tea.Cmd, bool) {
+	if !strings.HasPrefix(msg.Text, "/") {
+		model, cmd := m.enqueuePrompt(msg.Text, msg.Mentions)
+		return model, cmd, true
+	}
+	if m.running {
+		return m, nil, true
+	}
+	model, cmd := m.handleSlashCommand(msg.Text)
+	return model, cmd, true
+}
+
+// handleLoadingTick advances the splash dots and re-arms the ticker only while
+// the deferred-init splash is still up.
+//
+// The re-arm used to be unconditional (TODO §30/§42): every 300 ms fire mutated
+// m.loadingDots and re-armed regardless, producing a 3.3 Hz full-history
+// re-render for the life of the process. The dots only animate the splash
+// (m.loading is set at tui.go:455 and cleared at :1963/:1985), so the re-arm
+// belongs to that lifecycle, not to process uptime. Stopping the chain when
+// m.loading clears is what removes the idle 3.3 Hz floor.
+func (m *model) handleLoadingTick() (tea.Model, tea.Cmd, bool) {
+	if !m.loading {
+		return m, nil, true
+	}
+	m.loadingDots = (m.loadingDots + 1) % 4
+	return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
+}
+
+// handleMatrixTick advances everything that animates while a turn runs: the
+// matrix rain, the pending-tool bullet blink on its ~1s cycle, and the tab
+// title's rotating prefix, which keeps a backgrounded session showing progress.
+//
+// All three phases advance here, in Update, so View stays a pure function of
+// model state — the 150ms tick re-renders often enough to animate them.
+func (m *model) handleMatrixTick() (tea.Model, tea.Cmd, bool) {
+	if !m.running {
+		return m, nil, true
+	}
+	m.matrix.tick(m.mainWidth())
+	now := time.Now()
+	m.chatModel.ToolDisplay.BlinkOn = now.UnixMilli()/500%2 == 0
+	m.titleSpin = terminalTitleSpinIndex(now)
+	return m, matrixTickCmd(), true
 }
 
 // handlePaste inserts pasted text into the prompt, ignoring pastes that arrive
@@ -1314,87 +1330,220 @@ func (m *model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleSearchPopupKey routes a key press to the open search popup, reporting
+// whether the popup consumed it. Every key the popup understands is claimed;
+// anything else falls through to the handler behind it, which is how a modified
+// key still reaches the prompt while the popup is open.
 func (m *model) handleSearchPopupKey(key tea.Key) bool {
 	if m.searchPopup == nil {
 		return false
 	}
-
 	sp := m.searchPopup
 
 	switch key.Code {
 	case tea.KeyUp:
-		if sp.selected > 0 {
-			sp.selected--
-		} else if len(sp.filtered) > 1 {
-			// Wrap to last item on Up from first.
-			sp.selected = len(sp.filtered) - 1
-		}
-		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		sp.selectPrev()
 		return true
 	case tea.KeyDown:
-		if sp.selected < len(sp.filtered)-1 {
-			sp.selected++
-		} else if len(sp.filtered) > 1 {
-			// Wrap to first item on Down from last.
-			sp.selected = 0
-		}
-		if sp.selected >= sp.scrollOff+sp.height {
-			sp.scrollOff = sp.selected - sp.height + 1
-		}
+		sp.selectNext()
 		return true
 	case tea.KeyTab:
-		if len(sp.filtered) == 0 {
-			return true
-		}
-		if key.Mod == tea.ModShift {
-			if sp.selected > 0 {
-				sp.selected--
-			} else {
-				// Wrap to last item on Shift+Tab from first.
-				sp.selected = len(sp.filtered) - 1
-			}
-		} else {
-			// Tab advances; stays at last item (no wrap).
-			if sp.selected < len(sp.filtered)-1 {
-				sp.selected++
-			}
-		}
-		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		sp.selectByTab(key.Mod == tea.ModShift)
 		return true
 	case tea.KeyEnter:
-		if len(sp.filtered) > 0 && sp.selected < len(sp.filtered) {
-			item := sp.filtered[sp.selected]
-			switch sp.mode {
-			case searchModeCommands:
-				m.inputModel.SetText(item.Text + " ")
-				m.searchPopup = nil
-			case searchModeHistory:
-				m.inputModel.SetText(item.Text)
-				m.searchPopup = nil
-			}
-		}
+		m.acceptSearchSelection()
 		return true
 	case tea.KeyEsc:
 		m.searchPopup = nil
 		return true
 	case tea.KeyBackspace:
-		if len(sp.search) > 0 {
-			sp.search = sp.search[:len(sp.search)-1]
-			sp.filterSearch()
-		} else {
-			// If search is empty, close popup on backspace
-			m.searchPopup = nil
-		}
+		m.backspaceSearch()
 		return true
-	default:
-		// Type to search (only for printable single characters).
-		if key.Text != "" && len(key.Text) == 1 && key.Mod == 0 {
-			sp.search += key.Text
-			sp.filterSearch()
-			return true
-		}
+	}
+	return m.typeIntoSearch(key)
+}
+
+// selectPrev moves the highlight one row up, wrapping to the last item from the
+// first, and scrolls the window so the highlight stays visible.
+func (sp *searchPopupState) selectPrev() {
+	if sp.selected > 0 {
+		sp.selected--
+	} else if len(sp.filtered) > 1 {
+		// Wrap to last item on Up from first.
+		sp.selected = len(sp.filtered) - 1
+	}
+	sp.scrollOff = max(0, sp.selected-sp.height+1)
+}
+
+// selectNext moves the highlight one row down, wrapping to the first item from
+// the last.
+//
+// Note the asymmetry with selectPrev: this scrolls only when the highlight has
+// run off the bottom, rather than recomputing scrollOff unconditionally. That
+// is the existing behavior and is preserved deliberately — see the wrap note in
+// TestSearchPopupNavigation.
+func (sp *searchPopupState) selectNext() {
+	if sp.selected < len(sp.filtered)-1 {
+		sp.selected++
+	} else if len(sp.filtered) > 1 {
+		// Wrap to first item on Down from last.
+		sp.selected = 0
+	}
+	if sp.selected >= sp.scrollOff+sp.height {
+		sp.scrollOff = sp.selected - sp.height + 1
+	}
+}
+
+// selectByTab moves the highlight for Tab and Shift+Tab. Shift+Tab wraps to the
+// last item from the first; plain Tab deliberately does not wrap — it stops on
+// the last item, so holding Tab settles on a choice instead of cycling forever.
+// An empty list is left completely untouched, scrollOff included.
+func (sp *searchPopupState) selectByTab(shift bool) {
+	if len(sp.filtered) == 0 {
+		return
+	}
+	switch {
+	case shift && sp.selected > 0:
+		sp.selected--
+	case shift:
+		// Wrap to last item on Shift+Tab from first.
+		sp.selected = len(sp.filtered) - 1
+	case sp.selected < len(sp.filtered)-1:
+		sp.selected++
+	}
+	sp.scrollOff = max(0, sp.selected-sp.height+1)
+}
+
+// acceptSearchSelection puts the highlighted entry into the prompt and closes
+// the popup. A command gets a trailing space so arguments can be typed straight
+// on; a history entry is restored verbatim.
+//
+// Nothing at all happens when the highlight does not point at a real entry, or
+// when the mode is one this function does not know — the popup stays open
+// rather than closing on a key that did nothing.
+func (m *model) acceptSearchSelection() {
+	sp := m.searchPopup
+	if len(sp.filtered) == 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	item := sp.filtered[sp.selected]
+	switch sp.mode {
+	case searchModeCommands:
+		m.inputModel.SetText(item.Text + " ")
+		m.searchPopup = nil
+	case searchModeHistory:
+		m.inputModel.SetText(item.Text)
+		m.searchPopup = nil
+	}
+}
+
+// backspaceSearch removes the last character of the filter, or closes the popup
+// when there is nothing left to remove — so Backspace walks all the way out
+// instead of dead-ending on an empty filter.
+func (m *model) backspaceSearch() {
+	sp := m.searchPopup
+	if len(sp.search) == 0 {
+		m.searchPopup = nil
+		return
+	}
+	sp.search = sp.search[:len(sp.search)-1]
+	sp.filterSearch()
+}
+
+// typeIntoSearch appends a printable keystroke to the popup's filter, reporting
+// whether it took the key. A modified key, a bare modifier, or a character that
+// is not a single byte is declined so it falls through to the prompt.
+func (m *model) typeIntoSearch(key tea.Key) bool {
+	// Type to search (only for printable single characters).
+	if key.Text == "" || len(key.Text) != 1 || key.Mod != 0 {
 		return false
 	}
+	m.searchPopup.search += key.Text
+	m.searchPopup.filterSearch()
+	return true
+}
+
+// renderStartupView is the splash shown before the first terminal size arrives.
+// With no width there is no layout to compute, so this lists the deferred-init
+// subsystems and ticks each as it finishes; before any are registered it is the
+// matrix line alone.
+func (m *model) renderStartupView() tea.View {
+	// Show matrix-style startup text before the first terminal size arrives.
+	matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal, m.palette)
+	if m.loadingItems == nil {
+		return tea.NewView(matrixLine + "\n")
+	}
+	lines := []string{matrixLine}
+	for _, item := range sortedKeys(m.loadingItems) {
+		mark := " "
+		if m.loadingItems[item] {
+			mark = "✓"
+		}
+		lines = append(lines, "  "+mark+" "+item)
+	}
+	return tea.NewView(strings.Join(lines, "\n") + "\n")
+}
+
+// visibleMessageWindow picks the rows the message viewport shows: the last
+// availableHeight rows of the buffer, walked back by the scroll offset and
+// clamped to both ends. The range is half-open, [start, end).
+//
+// The window is also what the minimap is drawn from, so the same clamp decides
+// the scrollbar's extent — an off-by-one here moves the thumb, not just the text.
+func visibleMessageWindow(totalLines, availableHeight, scroll int) (int, int) {
+	start := totalLines - availableHeight - scroll
+	if start < 0 {
+		start = 0
+	}
+	end := start + availableHeight
+	if end > totalLines {
+		end = totalLines
+	}
+	return start, end
+}
+
+// sidebarInputFor gathers everything the sidebar renders for this frame.
+//
+// Height is the panel's row count, not the terminal's. Sized to the terminal
+// the sidebar outran the panel: JoinHorizontal padded the panel with blank
+// rows, leaving a gap below the prompt while the sidebar's filler dots carried
+// on past it.
+func (m *model) sidebarInputFor(width, panelRows int) SidebarRenderInput {
+	hostName := cachedHostname()
+	in := SidebarRenderInput{
+		Width:        width,
+		Height:       panelRows,
+		Mascot:       m.mascot(),
+		Mode:         m.mode,
+		ProviderName: m.providerDisplayName(),
+		ModelName:    m.cfg.ModelName,
+		GitBranch:    m.statusModel.GitBranch,
+		DiffAdded:    m.diffAdded,
+		DiffRemoved:  m.diffRemoved,
+		Running:      m.running,
+		TokenTracker: m.cfg.TokenTracker,
+		AppVersion:   m.cfg.AppVersion,
+		HostName:     hostName,
+		FolderName:   sidebarFolderName(m.cwd()),
+		Messages:     m.chatModel.Messages,
+		ActiveTool:   m.statusModel.ActiveTool,
+		LoadingItems: m.loadingItems,
+		MatrixLines:  "",
+		StatusLine:   "",
+		Orchestrator: m.cfg.Orchestrator,
+		MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+		MemoryStatus: m.memoryStatus,
+		Artifacts:    m.artifactList(),
+		Palette:      m.palette,
+	}
+	if m.run != nil && m.run.phase != "" {
+		in.RunChecklist = m.run.checklist
+		in.RunPhase = m.run.phase
+		in.RunSpec = m.run.specName
+		in.RunCycle = m.run.retries + 1
+		in.RunMaxCycle = m.run.maxRetries
+	}
+	return in
 }
 
 func (m *model) View() tea.View {
@@ -1405,22 +1554,7 @@ func (m *model) View() tea.View {
 	m.syncPalette()
 
 	if m.width == 0 {
-		// Show matrix-style startup text before the first terminal size arrives.
-		matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal, m.palette)
-		if m.loadingItems != nil {
-			var lines []string
-			lines = append(lines, matrixLine)
-			for _, item := range sortedKeys(m.loadingItems) {
-				done := m.loadingItems[item]
-				mark := " "
-				if done {
-					mark = "✓"
-				}
-				lines = append(lines, "  "+mark+" "+item)
-			}
-			return tea.NewView(strings.Join(lines, "\n") + "\n")
-		}
-		return tea.NewView(matrixLine + "\n")
+		return m.renderStartupView()
 	}
 
 	// Layout: messages + sidebar on top, status bar + input spanning the full
@@ -1450,17 +1584,7 @@ func (m *model) View() tea.View {
 
 	// Truncate messages to fit viewport.
 	msgLines := strings.Split(messagesView, "\n")
-	totalLines := len(msgLines)
-
-	startLine := totalLines - availableHeight - m.chatModel.Scroll
-	if startLine < 0 {
-		startLine = 0
-	}
-	endLine := startLine + availableHeight
-	if endLine > totalLines {
-		endLine = totalLines
-	}
-
+	startLine, endLine := visibleMessageWindow(len(msgLines), availableHeight, m.chatModel.Scroll)
 	visibleMessages := strings.Join(msgLines[startLine:endLine], "\n")
 
 	// Pad to fill the viewport. availableHeight is message rows only — the blank
@@ -1542,45 +1666,7 @@ func (m *model) View() tea.View {
 
 	var topSection string
 	if showSidebar {
-		hostName := cachedHostname()
-		sidebarInput := SidebarRenderInput{
-			Width: sidebarWidth,
-			// Exactly as tall as the panel beside it. Sized to the terminal
-			// instead, the sidebar outran the panel — JoinHorizontal padded the
-			// panel with blank rows, leaving a gap below the prompt while the
-			// sidebar's filler dots carried on past it.
-			Height:       panelRows,
-			Mascot:       m.mascot(),
-			Mode:         m.mode,
-			ProviderName: m.providerDisplayName(),
-			ModelName:    m.cfg.ModelName,
-			GitBranch:    m.statusModel.GitBranch,
-			DiffAdded:    m.diffAdded,
-			DiffRemoved:  m.diffRemoved,
-			Running:      m.running,
-			TokenTracker: m.cfg.TokenTracker,
-			AppVersion:   m.cfg.AppVersion,
-			HostName:     hostName,
-			FolderName:   sidebarFolderName(m.cwd()),
-			Messages:     m.chatModel.Messages,
-			ActiveTool:   m.statusModel.ActiveTool,
-			LoadingItems: m.loadingItems,
-			MatrixLines:  "",
-			StatusLine:   "",
-			Orchestrator: m.cfg.Orchestrator,
-			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
-			MemoryStatus: m.memoryStatus,
-			Artifacts:    m.artifactList(),
-			Palette:      m.palette,
-		}
-		if m.run != nil && m.run.phase != "" {
-			sidebarInput.RunChecklist = m.run.checklist
-			sidebarInput.RunPhase = m.run.phase
-			sidebarInput.RunSpec = m.run.specName
-			sidebarInput.RunCycle = m.run.retries + 1
-			sidebarInput.RunMaxCycle = m.run.maxRetries
-		}
-		sidebar := RenderSidebar(sidebarInput)
+		sidebar := RenderSidebar(m.sidebarInputFor(sidebarWidth, panelRows))
 		topSection = joinPanelSidebar(leftPanel, sidebar, mainWidth, sidebarWidth)
 	} else {
 		topSection = padLinesTo(leftPanel, m.width)

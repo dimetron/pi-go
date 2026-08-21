@@ -109,6 +109,50 @@ func (m *WorktreeManager) popStashByMessage(msg string) error {
 	return nil
 }
 
+// stashBeforeWorktree stashes uncommitted changes in the primary checkout,
+// because `git worktree add HEAD` fails on a dirty tree. It reports the unique
+// stash message and whether an entry was actually created.
+//
+// Exit code semantics (stable across git versions and locales):
+//
+//	0   — changes stashed
+//	1   — nothing to stash (clean tree)
+//	128 — fatal (e.g. not a git repo, corrupt repo)
+//
+// "Did stash happen" is decided by counting stash entries before and after
+// rather than by string-matching the (locale-dependent) output.
+//
+// On success the entry deliberately SURVIVES: the caller records the message in
+// worktreeInfo so MergeBack/Cleanup can pop it later. Dropping it is the
+// caller's job on its own failure path — which is why this returns the flag
+// instead of offering a cleanup closure to defer.
+func (m *WorktreeManager) stashBeforeWorktree(agentID string) (string, bool, error) {
+	// Use -u to also stash untracked files.
+	stashMsg := stashMessage(agentID)
+	beforeCount, _ := m.stashIndexAfter()
+	stashOut, stashErr := m.git("stash", "push", "-u", "-m", stashMsg)
+	if stashErr != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(stashErr, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", false, fmt.Errorf("git stash before worktree: %w (output: %s)", stashErr, stashOut)
+		}
+		// Nothing to stash — proceed without tracking a stash entry.
+		stashErr = nil
+	}
+	afterCount, _ := m.stashIndexAfter()
+	return stashMsg, stashErr == nil && afterCount > beforeCount, nil
+}
+
+// addWorktree runs `git worktree add`. A branch that already exists but is not
+// checked out anywhere is attached without `-b`; otherwise a fresh branch is
+// created from HEAD.
+func (m *WorktreeManager) addWorktree(branch, wtPath string, branchExists bool) (string, error) {
+	if branchExists {
+		return m.git("worktree", "add", wtPath, branch)
+	}
+	return m.git("worktree", "add", "-b", branch, wtPath, "HEAD")
+}
+
 // Create creates a new git worktree for the given agent ID.
 // If the current branch has uncommitted changes, they are stashed before
 // creating the worktree and tracked in `pendingStash` so that MergeBack
@@ -165,46 +209,17 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 		_ = os.RemoveAll(wtPath)
 	}
 
-	// Stash any uncommitted changes before creating the worktree.
-	// git worktree add HEAD fails if the working tree is dirty.
-	// Use -u to also stash untracked files.
-	//
-	// Exit code semantics (stable across git versions and locales):
-	//   0   — changes stashed
-	//   1   — nothing to stash (clean tree)
-	//   128 — fatal (e.g. not a git repo, corrupt repo)
-	//
-	// We detect "did stash happen" by counting stash entries before/after
-	// rather than by string-matching the (locale-dependent) output.
-	stashMsg := stashMessage(agentID)
-	beforeCount, _ := m.stashIndexAfter()
-	stashOut, stashErr := m.git("stash", "push", "-u", "-m", stashMsg)
-	if stashErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(stashErr, &exitErr) && exitErr.ExitCode() == 1 {
-			// Nothing to stash — proceed without tracking a stash entry.
-			stashErr = nil
-		} else {
-			return "", fmt.Errorf("git stash before worktree: %w (output: %s)", stashErr, stashOut)
-		}
-	}
-	afterCount, _ := m.stashIndexAfter()
-	stashedSomething := stashErr == nil && afterCount > beforeCount
-
-	// If the branch already exists but is not checked out anywhere, attach
-	// it without `-b`. Otherwise create a fresh branch from HEAD.
-	var out string
-	var err error
-	if branchExists {
-		out, err = m.git("worktree", "add", wtPath, branch)
-	} else {
-		out, err = m.git("worktree", "add", "-b", branch, wtPath, "HEAD")
-	}
+	stashMsg, stashedSomething, err := m.stashBeforeWorktree(agentID)
 	if err != nil {
-		// Restore stashed changes on failure. We do this regardless of
-		// whether `beforeCount` showed entries — if anything landed in
-		// the stash list, drop it so the user isn't left with orphaned
-		// entries after a failed Create.
+		return "", err
+	}
+
+	out, err := m.addWorktree(branch, wtPath, branchExists)
+	if err != nil {
+		// Drop the stash we just pushed, so the user isn't left with an
+		// orphaned entry after a failed Create. Only when stashBeforeWorktree
+		// reported it actually created one — a clean tree stashes nothing, and
+		// dropping then would discard some unrelated entry at stash@{0}.
 		if stashedSomething {
 			_, _ = m.git("stash", "drop", "--quiet", "stash@{0}")
 		}

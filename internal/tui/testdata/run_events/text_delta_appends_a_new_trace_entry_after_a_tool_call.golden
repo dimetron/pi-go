@@ -1,0 +1,10 @@
+streaming="firstsecond" scroll=0 activeTool="read" toolStartSet=true
+matrix active=true seed=8899108315356195923
+messages:
+  [0] role="assistant" tool="" toolIn="" content="firstsecond"
+  [1] role="tool" tool="read" toolIn="" content=""
+trace:
+  [0] kind="llm" summary="agent response" detail="first" timeSet=true
+  [1] kind="tool_call" summary=">>> read" detail="" timeSet=true
+  [2] kind="llm" summary="agent response" detail="second" timeSet=true
+run phase="running" checklist=0

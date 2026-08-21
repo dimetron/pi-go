@@ -1,0 +1,18 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `bare` |
+| Agent | `task-0` |
+| Outcome | **completed** |
+| Retries | 0 / 3 |
+
+## Gates
+
+No gates defined.
+
+## Result
+
+All gates passed, the plan checklist was complete, and changes were merged successfully.

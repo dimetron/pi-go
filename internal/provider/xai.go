@@ -92,11 +92,7 @@ func (m *xaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			_ = yield(nil, fmt.Errorf("xAI responses: nil LLM request"))
 			return
 		}
-		input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
-		if err != nil {
-			_ = yield(nil, fmt.Errorf("xAI responses input: %w", err))
-			return
-		}
+		input, instructions := oaiContentsToResponsesInput(req.Contents, req.Config)
 
 		modelName := req.Model
 		if modelName == "" {

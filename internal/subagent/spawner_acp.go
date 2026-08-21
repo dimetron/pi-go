@@ -164,24 +164,14 @@ func pumpACPSession(sess acpSession, proc *Process, agentName string) {
 			sendProcEvent(proc, Event{Type: "message_start", SessionID: ev.SessionID})
 			sentStart = true
 		}
-		switch ev.Type {
-		case sharedacp.EventTypeMessage:
-			sendProcEvent(proc, Event{Type: "text_delta", Content: ev.Content, SessionID: ev.SessionID})
-			if !gracefulCompletion {
-				textAcc.WriteString(ev.Content)
-				if strings.Contains(textAcc.String(), acpCompletionMatcher) {
-					gracefulCompletion = true
-					_ = sess.Cancel()
-				}
+		sendProcEvent(proc, acpEventFor(ev))
+
+		if ev.Type == sharedacp.EventTypeMessage && !gracefulCompletion {
+			textAcc.WriteString(ev.Content)
+			if strings.Contains(textAcc.String(), acpCompletionMatcher) {
+				gracefulCompletion = true
+				_ = sess.Cancel()
 			}
-		case sharedacp.EventTypeProgress, sharedacp.EventTypeTool:
-			sendProcEvent(proc, Event{Type: "tool_call", Content: ev.Content, SessionID: ev.SessionID})
-		case sharedacp.EventTypeStderr:
-			sendProcEvent(proc, Event{Type: "stderr", Content: ev.Content, SessionID: ev.SessionID})
-		case sharedacp.EventTypeError:
-			sendProcEvent(proc, Event{Type: "error", Error: ev.Error, SessionID: ev.SessionID})
-		default:
-			sendProcEvent(proc, Event{Type: ev.Type, Content: ev.Content, SessionID: ev.SessionID})
 		}
 	}
 
@@ -192,44 +182,81 @@ func pumpACPSession(sess acpSession, proc *Process, agentName string) {
 	}
 
 	if gracefulCompletion {
-		// The Cancel() above will typically make the runner surface a kill
-		// error; override so the caller sees a clean completion and strip
-		// both the strict and the loose sentinel form from the final text.
-		result.Status = sharedacp.StatusSuccess
-		result.Error = ""
-		r := result.Result
-		r = strings.ReplaceAll(r, acpCompletionSentinel, "")
-		r = strings.ReplaceAll(r, acpCompletionMatcher, "")
-		result.Result = strings.TrimSpace(r)
+		result = applyGracefulCompletion(result)
 	}
 
+	// Capture the error text under the lock rather than re-reading proc.err
+	// after unlocking, so the send below touches no shared state.
 	proc.mu.Lock()
 	proc.result = result.Result
+	var errText string
 	if result.Status == sharedacp.StatusError {
-		errMsg := strings.TrimSpace(result.Error)
-		// Always append stderr for diagnostics, especially on timeout/kill.
-		// The RunResult may contain stderr content from the subprocess.
-		if result.Stderr != "" {
-			stderrMsg := strings.TrimSpace(result.Stderr)
-			if stderrMsg != "" {
-				if errMsg != "" {
-					errMsg = fmt.Sprintf("%s\nstderr: %s", errMsg, stderrMsg)
-				} else {
-					errMsg = fmt.Sprintf("stderr: %s", stderrMsg)
-				}
-			}
-		}
-		if errMsg == "" {
-			errMsg = "subprocess failed"
-		}
-		proc.err = fmt.Errorf("%s ACP %s", agentName, errMsg)
-		proc.mu.Unlock()
-		sendProcEvent(proc, Event{Type: "error", Error: proc.err.Error(), SessionID: result.SessionID})
-	} else {
-		proc.mu.Unlock()
+		proc.err = fmt.Errorf("%s ACP %s", agentName, acpErrorMessage(result))
+		errText = proc.err.Error()
+	}
+	proc.mu.Unlock()
+
+	if errText != "" {
+		sendProcEvent(proc, Event{Type: "error", Error: errText, SessionID: result.SessionID})
 	}
 
+	// message_end MUST stay the final send: consumers treat it as the terminal
+	// event of the stream. Do not add sends below this line.
 	sendProcEvent(proc, Event{Type: "message_end", SessionID: result.SessionID, StopReason: result.StopReason})
+}
+
+// acpEventFor maps an ACP session event onto the orchestrator Event that
+// carries it. Each kind moves a different field across, which is why this is a
+// switch and not a struct copy; an unknown kind keeps its own type name.
+func acpEventFor(ev sharedacp.Event) Event {
+	switch ev.Type {
+	case sharedacp.EventTypeMessage:
+		return Event{Type: "text_delta", Content: ev.Content, SessionID: ev.SessionID}
+	case sharedacp.EventTypeProgress, sharedacp.EventTypeTool:
+		return Event{Type: "tool_call", Content: ev.Content, SessionID: ev.SessionID}
+	case sharedacp.EventTypeStderr:
+		return Event{Type: "stderr", Content: ev.Content, SessionID: ev.SessionID}
+	case sharedacp.EventTypeError:
+		return Event{Type: "error", Error: ev.Error, SessionID: ev.SessionID}
+	default:
+		return Event{Type: ev.Type, Content: ev.Content, SessionID: ev.SessionID}
+	}
+}
+
+// applyGracefulCompletion rewrites a result whose agent announced it was done
+// via the <Task Completed>! sentinel. The sess.Cancel() that announcement
+// triggers will typically make the runner surface a kill error; override it so
+// the caller sees a clean completion, and strip both the strict and the loose
+// sentinel form from the final text.
+func applyGracefulCompletion(result sharedacp.RunResult) sharedacp.RunResult {
+	result.Status = sharedacp.StatusSuccess
+	result.Error = ""
+	r := result.Result
+	r = strings.ReplaceAll(r, acpCompletionSentinel, "")
+	r = strings.ReplaceAll(r, acpCompletionMatcher, "")
+	result.Result = strings.TrimSpace(r)
+	return result
+}
+
+// acpErrorMessage builds the diagnostic text for a failed ACP run. Stderr is
+// always appended when present — on a timeout or a kill it is often the only
+// thing that says what happened — and a run that failed with nothing to say at
+// all still gets a non-empty message.
+func acpErrorMessage(result sharedacp.RunResult) string {
+	errMsg := strings.TrimSpace(result.Error)
+	stderrMsg := strings.TrimSpace(result.Stderr)
+	switch {
+	case stderrMsg == "":
+		// nothing to append
+	case errMsg == "":
+		errMsg = fmt.Sprintf("stderr: %s", stderrMsg)
+	default:
+		errMsg = fmt.Sprintf("%s\nstderr: %s", errMsg, stderrMsg)
+	}
+	if errMsg == "" {
+		return "subprocess failed"
+	}
+	return errMsg
 }
 
 // sendProcEvent enqueues an event without blocking; events are dropped if

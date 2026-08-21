@@ -220,6 +220,25 @@ func (ms *matrixState) render() string {
 }
 
 // tick advances the matrix animation by one step using time-based entropy.
+//
+// It mixes time.Now().UnixNano() into the seed, so the rain glyphs differ on
+// every call. That is the point for an animation, but it has a consequence
+// worth knowing before you write a test: **View is not reproducible run to
+// run**. Rendering the same model state twice produces two different frames.
+// spinnerVerb (see its call site in status.go) is a second, independent source
+// of the same thing while a turn is running.
+//
+// So a golden-frame test of View cannot work without pinning both. That is why
+// render_integrity_test.go asserts invariants — every row is exactly the
+// terminal width, the rail owns its column, no escape leaked into the visible
+// text — rather than comparing frames.
+//
+// If you need a byte-for-byte frame comparison anyway, as a throwaway check
+// that a refactor changed nothing: set ms.seed to a constant and rebuild the
+// grid under it (reproducing the geometry below, so only the glyph choice is
+// pinned and not the layout), pin the spinner state too, and confirm two
+// consecutive runs match before you trust a single diff. Skipping that last
+// step is how you spend an hour reading noise as a regression.
 func (ms *matrixState) tick(width int) {
 	if !ms.active {
 		return

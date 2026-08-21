@@ -1,0 +1,14 @@
+streaming="" scroll=0 activeTool="edit" toolStartSet=true
+matrix active=true seed=-2677555182401033970
+messages:
+  [0] role="assistant" tool="" toolIn="" content=""
+  [1] role="tool" tool="read" toolIn="internal/tui/run.go" content=""
+  [2] role="tool" tool="bash" toolIn="go test ./..." content=""
+  [3] role="tool" tool="grep" toolIn="" content=""
+  [4] role="tool" tool="edit" toolIn="" content=""
+trace:
+  [0] kind="tool_call" summary=">>> read" detail="" timeSet=true
+  [1] kind="tool_call" summary=">>> bash" detail="" timeSet=true
+  [2] kind="tool_call" summary=">>> grep" detail="" timeSet=true
+  [3] kind="tool_call" summary=">>> edit" detail="" timeSet=true
+run phase="running" checklist=0

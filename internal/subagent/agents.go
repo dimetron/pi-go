@@ -109,40 +109,7 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 			if !ok {
 				continue
 			}
-			switch key {
-			case "name":
-				cfg.Name = value
-			case "description":
-				cfg.Description = value
-			case "role":
-				cfg.Role = value
-			case "worktree":
-				cfg.Worktree = strings.ToLower(value) == "true"
-			case "timeout":
-				if ms, err := strconv.Atoi(value); err == nil && ms > 0 {
-					// The unit is milliseconds, which reads as seconds at a
-					// glance — a bundled agent shipped `timeout: 30` and was
-					// SIGKILLed 30ms in, every time, unable to emit a single
-					// token. Anything under a second cannot be deliberate, so
-					// treat it as the unit mistake it is rather than honoring a
-					// value that guarantees the agent never runs.
-					if ms < minAgentTimeoutMs {
-						slog.Warn("subagent: implausibly small timeout ignored; the unit is milliseconds",
-							"agent", cfg.Name, "timeout_ms", ms, "using", "default")
-					} else {
-						cfg.Timeout = ms
-					}
-				}
-			case "lsp":
-				cfg.LSP = strings.ToLower(strings.TrimSpace(value))
-			case "tools":
-				for _, t := range strings.Split(value, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						cfg.Tools = append(cfg.Tools, t)
-					}
-				}
-			}
+			applyAgentFrontmatterKey(&cfg, key, value)
 		} else {
 			body.WriteString(line)
 			body.WriteString("\n")
@@ -155,6 +122,54 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 
 	cfg.Instruction = strings.TrimSpace(body.String())
 	return cfg, nil
+}
+
+// applyAgentFrontmatterKey applies one parsed frontmatter key to cfg.
+// An unrecognized key is ignored, as is a value that fails its own validation,
+// so a malformed field degrades to the default rather than failing the parse.
+func applyAgentFrontmatterKey(cfg *AgentConfig, key, value string) {
+	switch key {
+	case "name":
+		cfg.Name = value
+	case "description":
+		cfg.Description = value
+	case "role":
+		cfg.Role = value
+	case "worktree":
+		cfg.Worktree = strings.ToLower(value) == "true"
+	case "timeout":
+		cfg.Timeout = agentTimeoutFrom(value, cfg.Name, cfg.Timeout)
+	case "lsp":
+		cfg.LSP = strings.ToLower(strings.TrimSpace(value))
+	case "tools":
+		for _, t := range strings.Split(value, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				cfg.Tools = append(cfg.Tools, t)
+			}
+		}
+	}
+}
+
+// agentTimeoutFrom parses a `timeout:` frontmatter value in milliseconds,
+// returning current unchanged when the value is unusable.
+//
+// The unit is milliseconds, which reads as seconds at a glance — a bundled
+// agent shipped `timeout: 30` and was SIGKILLed 30ms in, every time, unable to
+// emit a single token. Anything under a second cannot be deliberate, so treat
+// it as the unit mistake it is rather than honoring a value that guarantees the
+// agent never runs.
+func agentTimeoutFrom(value, agentName string, current int) int {
+	ms, err := strconv.Atoi(value)
+	if err != nil || ms <= 0 {
+		return current
+	}
+	if ms < minAgentTimeoutMs {
+		slog.Warn("subagent: implausibly small timeout ignored; the unit is milliseconds",
+			"agent", agentName, "timeout_ms", ms, "using", "default")
+		return current
+	}
+	return ms
 }
 
 // parseAgentFrontmatterLine parses "key: value" from a frontmatter line.
@@ -211,6 +226,22 @@ func findNearestProjectAgentsDir(cwd string) (string, error) {
 
 // DiscoverAgents loads agents from bundled, user, and project directories.
 // Priority: project > user > bundled (later sources override earlier ones by name).
+// mergeAgentLayer merges one priority layer into all, keyed by agent name.
+// An agent whose name is already present replaces it in place, so the merged
+// slice keeps the order in which names were first seen; seen is updated with
+// any new names. The caller applies layers lowest priority first.
+func mergeAgentLayer(all []AgentConfig, seen map[string]int, layer []AgentConfig) []AgentConfig {
+	for _, agent := range layer {
+		if idx, ok := seen[agent.Name]; ok {
+			all[idx] = agent
+			continue
+		}
+		seen[agent.Name] = len(all)
+		all = append(all, agent)
+	}
+	return all
+}
+
 func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error) {
 	result := &AgentDiscoveryResult{}
 
@@ -248,31 +279,11 @@ func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error)
 		result.Project = projectAgents
 	}
 
-	// Merge all agents with priority: project > user > bundled
+	// Merge all agents with priority: project > user > bundled. Applying the
+	// layers lowest-priority-first means each one overrides what came before.
 	seen := make(map[string]int) // name → index in All
-	for _, agent := range result.Bundled {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // bundled is lowest priority
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
-	}
-	for _, agent := range result.User {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // user overrides bundled
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
-	}
-	for _, agent := range result.Project {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // project overrides user
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
+	for _, layer := range [][]AgentConfig{result.Bundled, result.User, result.Project} {
+		result.All = mergeAgentLayer(result.All, seen, layer)
 	}
 
 	// Filter based on scope

@@ -1,0 +1,7 @@
+streaming="Hello world" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=4029215268080288898
+messages:
+  [0] role="assistant" tool="" toolIn="" content="Hello world"
+trace:
+  [0] kind="llm" summary="agent response" detail="Hello world" timeSet=true
+run phase="running" checklist=0

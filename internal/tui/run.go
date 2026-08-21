@@ -601,96 +601,152 @@ func waitForRunAgent(events <-chan subagent.Event, agentID string) tea.Cmd {
 }
 
 // handleRunAgentEvent processes a streaming event from the /run subagent.
+// Every event kind is applied for its side effect on the model; the command
+// returned is always the one that keeps the stream draining.
 func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 	ev := msg.event
-
-	// Feed the matrix rain widget so it visibly reacts to ACP subagent output.
-	if ev.Content != "" {
-		m.matrix.feed(ev.Content, m.mainWidth())
-	} else if ev.Type != "" {
-		m.matrix.feed(ev.Type, m.mainWidth())
-	}
+	m.feedMatrixFromRunEvent(ev)
 
 	switch ev.Type {
 	case "text_delta":
-		m.chatModel.Streaming += ev.Content
-		// Update the last assistant message with accumulated text.
-		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
-			if m.chatModel.Messages[i].role == "assistant" {
-				m.chatModel.Messages[i].content = m.chatModel.Streaming
-				break
-			}
-		}
-		m.chatModel.Scroll = 0
-		// Trace.
-		if len(m.chatModel.TraceLog) > 0 && m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].kind == "llm" {
-			m.chatModel.TraceLog[len(m.chatModel.TraceLog)-1].detail = m.chatModel.Streaming
-		} else {
-			m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
-				time: time.Now(), kind: "llm", summary: "agent response", detail: ev.Content,
-			})
-		}
-
+		m.applyRunTextDelta(ev)
 	case "tool_call":
-		m.statusModel.ActiveTool = ev.Content
-		m.statusModel.ToolStart = time.Now()
-		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
-			time: time.Now(), kind: "tool_call", summary: fmt.Sprintf(">>> %s", ev.Content),
-		})
-		// Compute a one-liner from the tool args so the chat card can render
-		// the file path / command alongside the tool name — without this the
-		// header would only show the bare tool name (e.g. "read") in gray,
-		// while the parent path (see agent_loop.go) already fills toolIn.
-		var toolIn string
-		if args, ok := ev.ToolArgs.(map[string]any); ok {
-			toolIn = toolCallSummary(ev.Content, args)
-		}
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role: "tool", tool: ev.Content, toolIn: toolIn,
-		})
-
+		m.applyRunToolCall(ev)
 	case "tool_result":
-		prevTool := m.statusModel.ActiveTool
-		m.statusModel.ActiveTool = ""
-		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
-			time: time.Now(), kind: "tool_result", summary: "<<< result",
-			detail: ev.Content,
-		})
-		// Update the last tool message with the result.
-		for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
-			if m.chatModel.Messages[i].role == "tool" && m.chatModel.Messages[i].content == "" {
-				m.chatModel.Messages[i].content = toolResultSummary(ev.Content)
-				break
-			}
-		}
-
-		// Refresh checklist after write/edit operations — the agent may have
-		// updated plan.md checkboxes. This is a cheap disk read.
-		if m.run != nil && (prevTool == "write" || prevTool == "edit") {
-			m.refreshRunChecklist()
-		}
-
+		m.applyRunToolResult(ev)
 	case "message_start":
 		// New message from the agent — add an empty assistant placeholder.
 		m.chatModel.Streaming = ""
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
-
 	case "message_end":
 		// Message completed — reset streaming accumulator for the next message.
 		m.chatModel.Streaming = ""
-
 	case "error":
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Agent error: %s", ev.Error),
-		})
-		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
-			time: time.Now(), kind: "error", summary: "agent error", detail: ev.Error,
-		})
+		m.applyRunError(ev)
 	}
 
 	// Keep consuming events from the subagent.
 	return m, m.waitForRunEvents()
+}
+
+// feedMatrixFromRunEvent drives the matrix rain widget so it visibly reacts to
+// ACP subagent output. An event carrying no content still counts: its type
+// name keeps the rain moving, so a quiet stream does not look like a stalled
+// one. An event with neither feeds nothing.
+func (m *model) feedMatrixFromRunEvent(ev subagent.Event) {
+	switch {
+	case ev.Content != "":
+		m.matrix.feed(ev.Content, m.mainWidth())
+	case ev.Type != "":
+		m.matrix.feed(ev.Type, m.mainWidth())
+	}
+}
+
+// applyRunTextDelta appends streamed text to the open assistant message.
+func (m *model) applyRunTextDelta(ev subagent.Event) {
+	m.chatModel.Streaming += ev.Content
+
+	// Update the last assistant message with accumulated text.
+	if msg := lastMessageMatching(m.chatModel.Messages, func(msg *message) bool {
+		return msg.role == "assistant"
+	}); msg != nil {
+		msg.content = m.chatModel.Streaming
+	}
+	m.chatModel.Scroll = 0
+
+	m.recordRunStreamingTrace(ev.Content)
+}
+
+// recordRunStreamingTrace keeps one trace entry per contiguous model turn: it
+// extends the open "llm" entry with the accumulated text, or starts a new one
+// when something else (a tool call) interrupted the stream. The new entry
+// records only the delta that opened it, matching what the trace shows for a
+// turn that starts mid-stream.
+func (m *model) recordRunStreamingTrace(delta string) {
+	if n := len(m.chatModel.TraceLog); n > 0 && m.chatModel.TraceLog[n-1].kind == "llm" {
+		m.chatModel.TraceLog[n-1].detail = m.chatModel.Streaming
+		return
+	}
+	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
+		time: time.Now(), kind: "llm", summary: "agent response", detail: delta,
+	})
+}
+
+// applyRunToolCall opens a tool card for a call the subagent just started.
+func (m *model) applyRunToolCall(ev subagent.Event) {
+	m.statusModel.ActiveTool = ev.Content
+	m.statusModel.ToolStart = time.Now()
+	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
+		time: time.Now(), kind: "tool_call", summary: fmt.Sprintf(">>> %s", ev.Content),
+	})
+
+	// Compute a one-liner from the tool args so the chat card can render
+	// the file path / command alongside the tool name — without this the
+	// header would only show the bare tool name (e.g. "read") in gray,
+	// while the parent path (see agent_loop.go) already fills toolIn.
+	var toolIn string
+	if args, ok := ev.ToolArgs.(map[string]any); ok {
+		toolIn = toolCallSummary(ev.Content, args)
+	}
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role: "tool", tool: ev.Content, toolIn: toolIn,
+	})
+}
+
+// applyRunToolResult closes the open tool card with its result.
+func (m *model) applyRunToolResult(ev subagent.Event) {
+	prevTool := m.statusModel.ActiveTool
+	m.statusModel.ActiveTool = ""
+	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
+		time: time.Now(), kind: "tool_result", summary: "<<< result",
+		detail: ev.Content,
+	})
+
+	// Update the last tool message with the result.
+	if msg := lastMessageMatching(m.chatModel.Messages, func(msg *message) bool {
+		return msg.role == "tool" && msg.content == ""
+	}); msg != nil {
+		msg.content = toolResultSummary(ev.Content)
+	}
+
+	// Refresh checklist after write/edit operations — the agent may have
+	// updated plan.md checkboxes. This is a cheap disk read.
+	if m.run != nil && toolMayTickChecklist(prevTool) {
+		m.refreshRunChecklist()
+	}
+}
+
+// toolMayTickChecklist reports whether a finished tool call could have ticked
+// a plan.md checkbox, which is what makes re-reading the plan worth the disk
+// hit. Only the tools that write files qualify.
+func toolMayTickChecklist(tool string) bool {
+	return tool == "write" || tool == "edit"
+}
+
+// applyRunError surfaces a subagent error in the transcript and the trace.
+func (m *model) applyRunError(ev subagent.Event) {
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Agent error: %s", ev.Error),
+	})
+	m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
+		time: time.Now(), kind: "error", summary: "agent error", detail: ev.Error,
+	})
+}
+
+// lastMessageMatching returns a pointer to the most recent message satisfying
+// pred, or nil when none does. A stream always updates the newest matching
+// card — an older one has already been closed out and must not be rewritten.
+//
+// The pointer aliases the slice, so the caller must not append to Messages
+// while holding it.
+func lastMessageMatching(msgs []message, pred func(*message) bool) *message {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if pred(&msgs[i]) {
+			return &msgs[i]
+		}
+	}
+	return nil
 }
 
 // handleRunAgentDone is called when a subagent events channel closes.
@@ -1309,12 +1365,30 @@ func (m *model) writeRunSummary(outcome string) (string, error) {
 }
 
 // buildRunSummaryReport generates a markdown summary of a /run execution.
+//
+// Each section renders independently and returns "" when it has nothing to
+// report, so the body is a straight concatenation in document order.
 func buildRunSummaryReport(rs *runState, outcome string) string {
 	var b strings.Builder
 
 	b.WriteString("# Run Summary\n\n")
+	for _, section := range []string{
+		runSummaryMetadata(rs, outcome),
+		runSummaryGates(rs),
+		runSummaryUnfinished(rs),
+		runSummaryResult(rs, outcome),
+	} {
+		b.WriteString(section)
+	}
+	return b.String()
+}
 
-	// Metadata.
+// runSummaryMetadata renders the identifying table: which spec, which agent,
+// how it ended, and how long it took. Slice and timing rows appear only when
+// there was a checklist and a recorded start.
+func runSummaryMetadata(rs *runState, outcome string) string {
+	var b strings.Builder
+
 	b.WriteString("## Metadata\n\n")
 	b.WriteString("| Field | Value |\n")
 	b.WriteString("|-------|-------|\n")
@@ -1330,53 +1404,93 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 		fmt.Fprintf(&b, "| Duration | %s |\n", time.Since(rs.startTime).Truncate(time.Second))
 	}
 	b.WriteString("\n")
+	return b.String()
+}
 
-	// Gate results.
+// runSummaryGates renders the gate section. The three cases are meaningfully
+// different to a reader: no gates were configured at all, gates were
+// configured but the run never reached them, or gates actually ran.
+func runSummaryGates(rs *runState) string {
+	var b strings.Builder
 	b.WriteString("## Gates\n\n")
-	if len(rs.gateResults) == 0 && len(rs.gates) == 0 {
+
+	switch {
+	case len(rs.gateResults) == 0 && len(rs.gates) == 0:
 		b.WriteString("No gates defined.\n\n")
-	} else if len(rs.gateResults) == 0 {
+	case len(rs.gateResults) == 0:
 		b.WriteString("Gates were defined but not executed.\n\n")
 		for _, g := range rs.gates {
 			fmt.Fprintf(&b, "- **%s**: `%s`\n", g.Name, g.Command)
 		}
 		b.WriteString("\n")
+	default:
+		b.WriteString(runSummaryGateResults(rs.gateResults))
+	}
+	return b.String()
+}
+
+// runSummaryGateResults lists each executed gate with its verdict, quoting the
+// output of the ones that failed, and closes with the overall verdict.
+func runSummaryGateResults(results []GateResult) string {
+	var b strings.Builder
+
+	allPassed := true
+	for _, r := range results {
+		status := "PASS"
+		if !r.Passed {
+			status = "FAIL"
+			allPassed = false
+		}
+		fmt.Fprintf(&b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
+		if !r.Passed && r.Output != "" {
+			fmt.Fprintf(&b, "  ```\n  %s\n  ```\n", truncateGateOutput(r.Output))
+		}
+	}
+	b.WriteString("\n")
+
+	if allPassed {
+		b.WriteString("All gates **passed**.\n\n")
 	} else {
-		allPassed := true
-		for _, r := range rs.gateResults {
-			status := "PASS"
-			if !r.Passed {
-				status = "FAIL"
-				allPassed = false
-			}
-			fmt.Fprintf(&b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
-			if !r.Passed && r.Output != "" {
-				out := strings.TrimSpace(r.Output)
-				if len(out) > 1000 {
-					out = out[:1000] + "\n...(truncated)"
-				}
-				fmt.Fprintf(&b, "  ```\n  %s\n  ```\n", out)
-			}
-		}
-		b.WriteString("\n")
-		if allPassed {
-			b.WriteString("All gates **passed**.\n\n")
-		} else {
-			b.WriteString("Some gates **failed**.\n\n")
-		}
+		b.WriteString("Some gates **failed**.\n\n")
+	}
+	return b.String()
+}
+
+// truncateGateOutput trims a gate's captured output and caps it, so a runaway
+// test log cannot bury the rest of the report.
+func truncateGateOutput(output string) string {
+	const maxGateOutput = 1000
+	out := strings.TrimSpace(output)
+	if len(out) > maxGateOutput {
+		out = out[:maxGateOutput] + "\n...(truncated)"
+	}
+	return out
+}
+
+// runSummaryUnfinished lists the plan steps the run never ticked. Empty when
+// the run finished the checklist.
+func runSummaryUnfinished(rs *runState) string {
+	pending := rs.unfinishedSlices()
+	if len(pending) == 0 {
+		return ""
 	}
 
-	// Unfinished slices, when the run stopped short of the plan.
-	if pending := rs.unfinishedSlices(); len(pending) > 0 {
-		b.WriteString("## Unfinished Slices\n\n")
-		for _, p := range pending {
-			fmt.Fprintf(&b, "- %s\n", p)
-		}
-		b.WriteString("\n")
+	var b strings.Builder
+	b.WriteString("## Unfinished Slices\n\n")
+	for _, p := range pending {
+		fmt.Fprintf(&b, "- %s\n", p)
 	}
+	b.WriteString("\n")
+	return b.String()
+}
 
-	// Outcome details.
+// runSummaryResult explains the outcome in prose, including what was left
+// behind — which worktree survived, and why — so the reader knows what to do
+// next without reconstructing it from the gate table.
+func runSummaryResult(rs *runState, outcome string) string {
+	var b strings.Builder
 	b.WriteString("## Result\n\n")
+
 	switch outcome {
 	case "completed":
 		b.WriteString("All gates passed, the plan checklist was complete, and changes were merged successfully.\n")
@@ -1391,7 +1505,6 @@ func buildRunSummaryReport(rs *runState, outcome string) string {
 	default:
 		fmt.Fprintf(&b, "Run ended with status: %s\n", outcome)
 	}
-
 	return b.String()
 }
 

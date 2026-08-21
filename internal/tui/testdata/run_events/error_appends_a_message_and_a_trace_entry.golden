@@ -1,0 +1,8 @@
+streaming="" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=3000332025
+messages:
+  [0] role="assistant" tool="" toolIn="" content=""
+  [1] role="assistant" tool="" toolIn="" content="Agent error: connection reset by peer"
+trace:
+  [0] kind="error" summary="agent error" detail="connection reset by peer" timeSet=true
+run phase="running" checklist=0

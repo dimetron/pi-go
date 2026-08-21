@@ -1,0 +1,7 @@
+streaming="orphan" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=101883261049
+messages:
+  [0] role="user" tool="" toolIn="" content="go"
+trace:
+  [0] kind="llm" summary="agent response" detail="orphan" timeSet=true
+run phase="running" checklist=0

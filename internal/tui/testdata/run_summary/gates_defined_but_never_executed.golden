@@ -1,0 +1,23 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `rate-limiter` |
+| Agent | `task-42` |
+| Outcome | **agent_failed** |
+| Retries | 1 / 3 |
+| Started | 2026-03-14T09:26:53Z |
+| Duration | <elapsed> |
+
+## Gates
+
+Gates were defined but not executed.
+
+- **build**: `go build ./...`
+- **test**: `go test ./...`
+
+## Result
+
+Subagent process exited with non-zero status (or was killed) before gates could run. Worktree preserved for manual inspection — see chat for the failing agent IDs and their worktree paths.

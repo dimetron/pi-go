@@ -1384,10 +1384,7 @@ func TestOaiContentsToResponsesInput_SimpleText(t *testing.T) {
 		{Role: "user", Parts: []*genai.Part{{Text: "Hello world"}}},
 	}
 
-	input, instructions, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, instructions := oaiContentsToResponsesInput(contents, nil)
 	if instructions != "" {
 		t.Errorf("instructions = %q, want empty", instructions)
 	}
@@ -1408,10 +1405,7 @@ func TestOaiContentsToResponsesInput_PreservesMessageOrderAndRoles(t *testing.T)
 		{Role: "user", Parts: []*genai.Part{{Text: "second"}}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	items := input.OfInputItemList
 	if len(items) != 3 {
 		t.Fatalf("expected 3 input items, got %d", len(items))
@@ -1446,10 +1440,7 @@ func TestOaiContentsToResponsesInput_WithSystemInstruction(t *testing.T) {
 		{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
 	}
 
-	_, instructions, err := oaiContentsToResponsesInput(contents, config)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	_, instructions := oaiContentsToResponsesInput(contents, config)
 	if instructions != "You are a helpful assistant." {
 		t.Errorf("instructions = %q, want %q", instructions, "You are a helpful assistant.")
 	}
@@ -1473,10 +1464,7 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 		{Role: "user", Parts: []*genai.Part{fr}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	if input.OfInputItemList == nil {
 		t.Fatal("expected input item list")
 	}
@@ -1507,10 +1495,7 @@ func TestOaiContentsToResponsesInput_SkipsFunctionCallsWithoutResponse(t *testin
 		{Role: "model", Parts: []*genai.Part{fc}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	items := input.OfInputItemList
 	if len(items) != 1 {
 		t.Fatalf("expected orphaned function call to be omitted, got %d items", len(items))
@@ -1533,10 +1518,7 @@ func TestOaiContentsToResponsesInput_SkipsFunctionResponseWithoutCall(t *testing
 		{Role: "user", Parts: []*genai.Part{fr}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	items := input.OfInputItemList
 	if len(items) != 1 {
 		t.Fatalf("expected orphaned function response to be omitted, got %d items", len(items))
@@ -1555,10 +1537,7 @@ func TestOaiContentsToResponsesInput_SkipsFunctionCallsWithoutID(t *testing.T) {
 		{Role: "model", Parts: []*genai.Part{fc}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	if input.OfInputItemList == nil {
 		t.Fatal("expected input item list")
 	}
@@ -1585,10 +1564,7 @@ func TestOaiContentsToResponsesInput_SkipsFunctionResponseWithoutID(t *testing.T
 		{Role: "user", Parts: []*genai.Part{fr}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	items := input.OfInputItemList
 	if len(items) != 1 {
 		t.Fatalf("expected only user message item, got %d", len(items))
@@ -1602,10 +1578,7 @@ func TestOaiContentsToResponsesInput_NilConfig(t *testing.T) {
 	contents := []*genai.Content{
 		{Role: "user", Parts: []*genai.Part{{Text: "Hello"}}},
 	}
-	_, instructions, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	_, instructions := oaiContentsToResponsesInput(contents, nil)
 	if instructions != "" {
 		t.Errorf("instructions = %q, want empty", instructions)
 	}
@@ -1618,10 +1591,7 @@ func TestOaiContentsToResponsesInput_SkipsNilContentAndParts(t *testing.T) {
 		{Role: "system", Parts: []*genai.Part{{Text: "ignored"}}},
 	}
 
-	input, _, err := oaiContentsToResponsesInput(contents, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	input, _ := oaiContentsToResponsesInput(contents, nil)
 	items := input.OfInputItemList
 	if len(items) != 1 {
 		t.Fatalf("expected only the user message, got %d items", len(items))
@@ -1788,13 +1758,10 @@ func TestOpenAIResponsesRequestUsesPreviousResponseID(t *testing.T) {
 		},
 	}
 
-	input, instructions, err := oaiContentsToResponsesInput([]*genai.Content{{
+	input, instructions := oaiContentsToResponsesInput([]*genai.Content{{
 		Role:  string(genai.RoleUser),
 		Parts: []*genai.Part{{Text: "review this"}},
 	}}, nil)
-	if err != nil {
-		t.Fatalf("oaiContentsToResponsesInput() error: %v", err)
-	}
 
 	params := responses.ResponseNewParams{
 		Model: m.modelName,

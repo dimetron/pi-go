@@ -539,33 +539,46 @@ func saveModelToConfig(modelName, provider string) {
 }
 
 // formatContextUsage builds a context usage display similar to Claude Code's /context.
+//
+// Each section renders independently and returns "" when it has nothing to say,
+// so the body is a straight concatenation in display order.
 func (m *model) formatContextUsage() string {
+	rt := estimateRoleTokens(m.chatModel.Messages)
+
 	var b strings.Builder
-
-	// The breakdown answers "what is filling the window", which is the question
-	// a user asks before deciding what to trim. Lead with it.
-	if bd := m.cfg.ContextBreakdown; bd != nil {
-		used := int64(0)
-		window := int64(0)
-		if tt := m.cfg.TokenTracker; tt != nil {
-			used = tt.LastPromptTokens()
-			window = tt.ContextWindowSize()
-		}
-		if used == 0 {
-			used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
-		}
-		if window <= 0 {
-			window = autoRangeWindow(used)
-		}
-		b.WriteString("*Context usage*\n\n")
-		b.WriteString(RenderContextBreakdown(
-			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64), m.palette))
-		b.WriteString("\n\n")
+	for _, section := range []string{
+		// The breakdown answers "what is filling the window", which is the
+		// question a user asks before deciding what to trim. Lead with it.
+		m.contextBreakdownSection(),
+		m.contextHeadlineSection(rt.total),
+		m.contextCategorySection(rt),
+		m.contextDailySection(),
+		m.contextWindowSection(),
+		m.contextSkillsSection(),
+		m.contextSubagentSection(),
+		m.contextCompactionSection(),
+	} {
+		b.WriteString(section)
 	}
+	return b.String()
+}
 
-	// Same estimate as the status bar's, split by role.
+// roleTokens is the conversation's estimated size, split by who produced it.
+// total is estimated from the combined character count rather than summed from
+// the three parts, so it matches the status bar's number exactly instead of
+// accumulating three separate roundings.
+type roleTokens struct {
+	user      int64
+	assistant int64
+	tool      int64
+	total     int64
+}
+
+// estimateRoleTokens splits the transcript by role. Anything that is neither a
+// user nor an assistant message counts as tool output.
+func estimateRoleTokens(msgs []message) roleTokens {
 	userChars, assistantChars, toolChars := 0, 0, 0
-	for _, msg := range m.chatModel.Messages {
+	for _, msg := range msgs {
 		size := messageChars(msg)
 		switch msg.role {
 		case "user":
@@ -576,16 +589,46 @@ func (m *model) formatContextUsage() string {
 			toolChars += size
 		}
 	}
-	totalTokens := estimateTokens(userChars + assistantChars + toolChars)
-	userTokens := estimateTokens(userChars)
-	assistantTokens := estimateTokens(assistantChars)
-	toolTokens := estimateTokens(toolChars)
+	return roleTokens{
+		user:      estimateTokens(userChars),
+		assistant: estimateTokens(assistantChars),
+		tool:      estimateTokens(toolChars),
+		total:     estimateTokens(userChars + assistantChars + toolChars),
+	}
+}
 
-	// Header.
-	b.WriteString("**Context Usage**\n\n")
+// contextBreakdownSection renders the segmented gauge attributing the window to
+// its origins. Empty when no breakdown was measured.
+func (m *model) contextBreakdownSection() string {
+	bd := m.cfg.ContextBreakdown
+	if bd == nil {
+		return ""
+	}
 
-	// Progress bar (20 blocks).
+	used, window := int64(0), int64(0)
+	if tt := m.cfg.TokenTracker; tt != nil {
+		used = tt.LastPromptTokens()
+		window = tt.ContextWindowSize()
+	}
+	if used == 0 {
+		used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
+	}
+	if window <= 0 {
+		window = autoRangeWindow(used)
+	}
+
+	// The gauge is inset by 4 from the chat content width and capped at 64 so
+	// it stays a readable block on a wide terminal.
+	return "*Context usage*\n\n" + RenderContextBreakdown(
+		bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64), m.palette) + "\n\n"
+}
+
+// contextHeadlineSection renders the header and the daily-budget bar beside the
+// model label. totalTokens is the estimated conversation size, used only when
+// there is no daily limit to measure against.
+func (m *model) contextHeadlineSection(totalTokens int64) string {
 	const barLen = 20
+
 	var usedBlocks int
 	var limitTokens int64
 	if tt := m.cfg.TokenTracker; tt != nil && tt.Limit() > 0 {
@@ -602,11 +645,13 @@ func (m *model) formatContextUsage() string {
 	}
 	bar := barGlyphs(usedBlocks, barLen)
 
-	// Model line with bar.
 	modelLabel := m.cfg.ModelName
 	if m.cfg.ProviderName != "" {
 		modelLabel = m.cfg.ProviderName + " | " + modelLabel
 	}
+
+	var b strings.Builder
+	b.WriteString("**Context Usage**\n\n")
 	if limitTokens > 0 {
 		tt := m.cfg.TokenTracker
 		fmt.Fprintf(&b, "`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
@@ -616,141 +661,188 @@ func (m *model) formatContextUsage() string {
 		fmt.Fprintf(&b, "`%s`  %s · ctx ~%s tokens\n\n",
 			bar, modelLabel, formatTokenCount(totalTokens))
 	}
+	return b.String()
+}
 
-	// Category breakdown.
+// contextCategorySection lists the estimated per-role split of the transcript.
+func (m *model) contextCategorySection(rt roleTokens) string {
+	msgs := m.chatModel.Messages
+
+	var b strings.Builder
 	b.WriteString("*Estimated usage by category*\n")
 	fmt.Fprintf(&b, "- **User messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(userTokens), countByRole(m.chatModel.Messages, "user"))
+		formatTokenCount(rt.user), countByRole(msgs, "user"))
 	fmt.Fprintf(&b, "- **Assistant messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(assistantTokens), countByRole(m.chatModel.Messages, "assistant"))
+		formatTokenCount(rt.assistant), countByRole(msgs, "assistant"))
 	fmt.Fprintf(&b, "- **Tool calls**: ~%s tokens (%d calls)\n",
-		formatTokenCount(toolTokens), countByRole(m.chatModel.Messages, "tool"))
+		formatTokenCount(rt.tool), countByRole(msgs, "tool"))
 	fmt.Fprintf(&b, "- **Total context**: ~%s tokens (%d messages)\n",
-		formatTokenCount(totalTokens), len(m.chatModel.Messages))
-
-	// Daily token usage (actual, not estimated).
-	if tt := m.cfg.TokenTracker; tt != nil {
-		total := tt.TotalUsed()
-		if total > 0 {
-			b.WriteString("\n*Daily token usage*\n")
-			fmt.Fprintf(&b, "- **Consumed today**: %s tokens\n", formatTokenCount(total))
-			if tt.Limit() > 0 {
-				fmt.Fprintf(&b, "- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining()))
-			}
-		}
-	}
-
-	// Context window usage (from last LLM response).
-	if tt := m.cfg.TokenTracker; tt != nil && tt.LastPromptTokens() > 0 {
-		promptTokens := tt.LastPromptTokens()
-		ctxWindow := tt.ContextWindowSize()
-
-		b.WriteString("\n*Context window*\n")
-		if ctxWindow > 0 {
-			pct := tt.ContextPercentUsed()
-			freeTokens := ctxWindow - promptTokens
-			if freeTokens < 0 {
-				freeTokens = 0
-			}
-
-			const ctxBarLen = 20
-			ctxBar := barGlyphs(barFill(pct/100, ctxBarLen), ctxBarLen)
-
-			fmt.Fprintf(&b, "`%s`  %s / %s (%.0f%%)\n",
-				ctxBar,
-				formatTokenCount(promptTokens), formatTokenCount(ctxWindow), pct)
-			fmt.Fprintf(&b, "- **Used**: %s tokens\n", formatTokenCount(promptTokens))
-			fmt.Fprintf(&b, "- **Free**: %s tokens (%.0f%%)\n",
-				formatTokenCount(freeTokens), 100-pct)
-		} else {
-			fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
-				formatTokenCount(promptTokens))
-		}
-
-		// Prompt cache. Reported explicitly even at zero hits — a silent
-		// section reads the same whether caching works or is entirely absent.
-		b.WriteString("\n*Prompt cache*\n")
-		cached := tt.LastCachedTokens()
-		if cached > 0 {
-			fmt.Fprintf(&b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
-				formatTokenCount(cached), formatTokenCount(promptTokens),
-				float64(cached)/float64(promptTokens)*100)
-		} else {
-			b.WriteString("- **Last request**: no cache hit\n")
-		}
-		if today := tt.CachedTokensToday(); today > 0 {
-			fmt.Fprintf(&b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
-				formatTokenCount(today), tt.CacheHitRateToday())
-		}
-		if prefix := tt.CachePrefixTokens(); prefix > 0 {
-			fmt.Fprintf(&b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
-				formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
-		}
-	}
-
-	// Skills.
-	if len(m.cfg.Skills) > 0 {
-		b.WriteString("\n*Skills* ")
-		fmt.Fprintf(&b, "(%d loaded)\n", len(m.cfg.Skills))
-		// Stable, alphabetical listing for predictable /context output.
-		names := make([]string, 0, len(m.cfg.Skills))
-		byName := make(map[string]extension.Skill, len(m.cfg.Skills))
-		for _, s := range m.cfg.Skills {
-			names = append(names, s.Name)
-			byName[s.Name] = s
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			s := byName[name]
-			source := s.Source
-			if source == "" {
-				source = "user"
-			}
-			var bodyDesc string
-			if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
-				bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
-			} else {
-				bodyDesc = "body: not loaded"
-			}
-			desc := s.Description
-			if desc == "" {
-				desc = "(no description)"
-			}
-			fmt.Fprintf(&b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
-		}
-	}
-
-	// Subagents.
-	if m.cfg.Orchestrator != nil {
-		agents := m.cfg.Orchestrator.List()
-		if len(agents) > 0 {
-			running, done, failed := 0, 0, 0
-			for _, a := range agents {
-				switch a.Status {
-				case "running":
-					running++
-				case "failed":
-					failed++
-				default:
-					done++
-				}
-			}
-			b.WriteString("\n*Subagents*\n")
-			fmt.Fprintf(&b, "- **Total**: %d (running: %d, done: %d, failed: %d)\n",
-				len(agents), running, done, failed)
-		}
-	}
-
-	// Compaction stats.
-	if cm := m.cfg.CompactMetrics; cm != nil {
-		stats := cm.FormatStats()
-		if stats != "" {
-			b.WriteString("\n*Output compaction*\n")
-			b.WriteString(stats)
-		}
-	}
-
+		formatTokenCount(rt.total), len(msgs))
 	return b.String()
+}
+
+// contextDailySection reports the day's actual (not estimated) consumption.
+func (m *model) contextDailySection() string {
+	tt := m.cfg.TokenTracker
+	if tt == nil {
+		return ""
+	}
+	total := tt.TotalUsed()
+	if total <= 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n*Daily token usage*\n")
+	fmt.Fprintf(&b, "- **Consumed today**: %s tokens\n", formatTokenCount(total))
+	if tt.Limit() > 0 {
+		fmt.Fprintf(&b, "- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining()))
+	}
+	return b.String()
+}
+
+// contextWindowSection reports the window occupancy of the last LLM response,
+// followed by the prompt-cache numbers for the same request.
+func (m *model) contextWindowSection() string {
+	tt := m.cfg.TokenTracker
+	if tt == nil || tt.LastPromptTokens() <= 0 {
+		return ""
+	}
+	promptTokens := tt.LastPromptTokens()
+	ctxWindow := tt.ContextWindowSize()
+
+	var b strings.Builder
+	b.WriteString("\n*Context window*\n")
+	if ctxWindow > 0 {
+		pct := tt.ContextPercentUsed()
+		freeTokens := max(ctxWindow-promptTokens, 0)
+
+		const ctxBarLen = 20
+		ctxBar := barGlyphs(barFill(pct/100, ctxBarLen), ctxBarLen)
+
+		fmt.Fprintf(&b, "`%s`  %s / %s (%.0f%%)\n",
+			ctxBar,
+			formatTokenCount(promptTokens), formatTokenCount(ctxWindow), pct)
+		fmt.Fprintf(&b, "- **Used**: %s tokens\n", formatTokenCount(promptTokens))
+		fmt.Fprintf(&b, "- **Free**: %s tokens (%.0f%%)\n",
+			formatTokenCount(freeTokens), 100-pct)
+	} else {
+		fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
+			formatTokenCount(promptTokens))
+	}
+	b.WriteString(contextCacheSection(tt, promptTokens))
+	return b.String()
+}
+
+// contextCacheSection reports prompt caching for the last request. It is
+// reported explicitly even at zero hits — a silent section reads the same
+// whether caching works or is entirely absent.
+func contextCacheSection(tt TokenTracker, promptTokens int64) string {
+	var b strings.Builder
+	b.WriteString("\n*Prompt cache*\n")
+
+	if cached := tt.LastCachedTokens(); cached > 0 {
+		fmt.Fprintf(&b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
+			formatTokenCount(cached), formatTokenCount(promptTokens),
+			float64(cached)/float64(promptTokens)*100)
+	} else {
+		b.WriteString("- **Last request**: no cache hit\n")
+	}
+	if today := tt.CachedTokensToday(); today > 0 {
+		fmt.Fprintf(&b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
+			formatTokenCount(today), tt.CacheHitRateToday())
+	}
+	if prefix := tt.CachePrefixTokens(); prefix > 0 {
+		fmt.Fprintf(&b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
+			formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
+	}
+	return b.String()
+}
+
+// contextSkillsSection lists the loaded skills alphabetically, so /context
+// output is stable between runs.
+func (m *model) contextSkillsSection() string {
+	if len(m.cfg.Skills) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n*Skills* ")
+	fmt.Fprintf(&b, "(%d loaded)\n", len(m.cfg.Skills))
+
+	names := make([]string, 0, len(m.cfg.Skills))
+	byName := make(map[string]extension.Skill, len(m.cfg.Skills))
+	for _, s := range m.cfg.Skills {
+		names = append(names, s.Name)
+		byName[s.Name] = s
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s := byName[name]
+		source := s.Source
+		if source == "" {
+			source = "user"
+		}
+		bodyDesc := "body: not loaded"
+		if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
+			bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
+		}
+		desc := s.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(&b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
+	}
+	return b.String()
+}
+
+// contextSubagentSection tallies spawned subagents by status.
+func (m *model) contextSubagentSection() string {
+	if m.cfg.Orchestrator == nil {
+		return ""
+	}
+	agents := m.cfg.Orchestrator.List()
+	if len(agents) == 0 {
+		return ""
+	}
+
+	running, done, failed := countAgentStatuses(agents)
+
+	var b strings.Builder
+	b.WriteString("\n*Subagents*\n")
+	fmt.Fprintf(&b, "- **Total**: %d (running: %d, done: %d, failed: %d)\n",
+		len(agents), running, done, failed)
+	return b.String()
+}
+
+// countAgentStatuses buckets subagent statuses into the three the summary
+// shows. Every status that is neither "running" nor "failed" — completed,
+// canceled, killed, timeout — counts as done.
+func countAgentStatuses(agents []subagent.AgentStatus) (running, done, failed int) {
+	for _, a := range agents {
+		switch a.Status {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		default:
+			done++
+		}
+	}
+	return running, done, failed
+}
+
+// contextCompactionSection reports how much tool output compaction saved.
+func (m *model) contextCompactionSection() string {
+	cm := m.cfg.CompactMetrics
+	if cm == nil {
+		return ""
+	}
+	stats := cm.FormatStats()
+	if stats == "" {
+		return ""
+	}
+	return "\n*Output compaction*\n" + stats
 }
 
 // showCommandList displays available slash commands as an assistant message.

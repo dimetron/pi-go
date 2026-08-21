@@ -1,0 +1,35 @@
+*Context usage*
+
+30% Full                                  ~60.0k / 200.0k Tokens
+
+────────────────────────────────────────────────────────────────
+
+███ System prompt                                           3.5k
+███ Tool definitions                                        7.2k
+███ Rules                                                   1.1k
+███ Skills                                                   900
+███ MCP & dynamic tools                                     2.4k
+███ Subagent definitions                                     650
+███ Conversation                                           44.2k
+
+**Context Usage**
+
+`████████░░░░░░░░░░░░`  anthropic | claude-sonnet · 40.0k/100.0k tokens (40%)
+
+*Estimated usage by category*
+- **User messages**: ~105 tokens (2 msgs)
+- **Assistant messages**: ~200 tokens (1 msgs)
+- **Tool calls**: ~302 tokens (1 calls)
+- **Total context**: ~607 tokens (4 messages)
+
+*Daily token usage*
+- **Consumed today**: 40.0k tokens
+- **Remaining**: 0 tokens
+
+*Context window*
+`██████░░░░░░░░░░░░░░`  60.0k / 200.0k (30%)
+- **Used**: 60.0k tokens
+- **Free**: 140.0k tokens (70%)
+
+*Prompt cache*
+- **Last request**: no cache hit

@@ -1,0 +1,6 @@
+streaming="" scroll=0 activeTool="" toolStartSet=false
+matrix active=false seed=0
+messages:
+  [0] role="assistant" tool="" toolIn="" content=""
+trace:
+run phase="running" checklist=0

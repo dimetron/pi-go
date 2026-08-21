@@ -1,0 +1,23 @@
+*Context usage*
+
+6% Full          ~16.4k / 256.0k Tokens
+
+───────────────────────────────────────
+
+███ System prompt                  3.5k
+███ Tool definitions               7.2k
+███ Rules                          1.1k
+███ Skills                          900
+███ MCP & dynamic tools            2.4k
+███ Subagent definitions            650
+███ Conversation                    607
+
+**Context Usage**
+
+`█░░░░░░░░░░░░░░░░░░░`  test-model · ctx ~607 tokens
+
+*Estimated usage by category*
+- **User messages**: ~105 tokens (2 msgs)
+- **Assistant messages**: ~200 tokens (1 msgs)
+- **Tool calls**: ~302 tokens (1 calls)
+- **Total context**: ~607 tokens (4 messages)

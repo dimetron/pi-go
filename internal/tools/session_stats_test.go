@@ -2,11 +2,14 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestSessionStatsHandler(t *testing.T) {
@@ -724,4 +727,210 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+func TestResolveSessionStatsSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		input             SessionStatsInput
+		wantHighToolCalls int
+		wantHighTurns     int
+		wantHours         int
+	}{
+		{"all unset take defaults", SessionStatsInput{SessionDir: "/x"}, 20, 5, 24},
+		{
+			name:              "explicit values are kept",
+			input:             SessionStatsInput{SessionDir: "/x", HighToolCalls: 3, HighTurns: 2, Hours: 1},
+			wantHighToolCalls: 3, wantHighTurns: 2, wantHours: 1,
+		},
+		{
+			name:              "non-positive counts as unset",
+			input:             SessionStatsInput{SessionDir: "/x", HighToolCalls: -1, HighTurns: -1, Hours: -1},
+			wantHighToolCalls: 20, wantHighTurns: 5, wantHours: 24,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveSessionStatsSettings(tt.input)
+			if err != nil {
+				t.Fatalf("resolveSessionStatsSettings: %v", err)
+			}
+			if got.dir != tt.input.SessionDir {
+				t.Errorf("dir = %q, want %q", got.dir, tt.input.SessionDir)
+			}
+			if got.highToolCalls != tt.wantHighToolCalls {
+				t.Errorf("highToolCalls = %d, want %d", got.highToolCalls, tt.wantHighToolCalls)
+			}
+			if got.highTurns != tt.wantHighTurns {
+				t.Errorf("highTurns = %d, want %d", got.highTurns, tt.wantHighTurns)
+			}
+			if got.hours != tt.wantHours {
+				t.Errorf("hours = %d, want %d", got.hours, tt.wantHours)
+			}
+			wantCutoff := time.Now().Add(-time.Duration(tt.wantHours) * time.Hour)
+			if d := got.cutoff.Sub(wantCutoff); d > time.Minute || d < -time.Minute {
+				t.Errorf("cutoff = %v, want within a minute of %v", got.cutoff, wantCutoff)
+			}
+		})
+	}
+}
+
+// TestResolveSessionStatsSettings_DefaultDir covers the branch that derives the
+// session directory from the home directory when the input leaves it blank.
+func TestResolveSessionStatsSettings_DefaultDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	got, err := resolveSessionStatsSettings(SessionStatsInput{})
+	if err != nil {
+		t.Fatalf("resolveSessionStatsSettings: %v", err)
+	}
+	if want := filepath.Join(home, ".pi-go", "sessions"); got.dir != want {
+		t.Errorf("dir = %q, want %q", got.dir, want)
+	}
+}
+
+func TestSessionAnomalies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		stat sessionStat
+		want []string
+	}{
+		{"clean session", sessionStat{ToolCalls: 1, Turns: 1}, nil},
+		{"at threshold is not an anomaly", sessionStat{ToolCalls: 20, Turns: 5}, nil},
+		{"high tool calls", sessionStat{ToolCalls: 21}, []string{"high tool calls (21)"}},
+		{"excessive turns", sessionStat{ToolCalls: 1, Turns: 6}, []string{"excessive turns (6)"}},
+		{"a single error is flagged", sessionStat{ToolCalls: 1, Errors: 1}, []string{"errors (1)"}},
+		{
+			name: "git ops over the fixed threshold",
+			stat: sessionStat{ToolCalls: 1, GitOps: defaultHighGitOps + 1},
+			want: []string{fmt.Sprintf("many git operations (%d)", defaultHighGitOps+1)},
+		},
+		{
+			name: "long idle needs both a long duration and few calls",
+			stat: sessionStat{ToolCalls: 4, Duration: 31 * time.Minute},
+			want: []string{"long idle session"},
+		},
+		{
+			name: "long but busy is not idle",
+			stat: sessionStat{ToolCalls: 5, Duration: 31 * time.Minute},
+			want: nil,
+		},
+		{
+			name: "anomalies report in a fixed order",
+			stat: sessionStat{ToolCalls: 21, Turns: 6, Errors: 2, GitOps: 100},
+			want: []string{
+				"high tool calls (21)", "excessive turns (6)",
+				"errors (2)", "many git operations (100)",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := sessionAnomalies(tt.stat, 20, 5)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("sessionAnomalies mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestCountAnomalousSessions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		stats []sessionStat
+		want  int
+	}{
+		{"no sessions", nil, 0},
+		{"all clean", []sessionStat{{ID: "a"}, {ID: "b"}}, 0},
+		{
+			name:  "mixed",
+			stats: []sessionStat{{ID: "a", Anomalies: []string{"x"}}, {ID: "b"}, {ID: "c", Anomalies: []string{"y", "z"}}},
+			want:  2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := countAnomalousSessions(tt.stats); got != tt.want {
+				t.Errorf("countAnomalousSessions = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteAnomalyDetails(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writes nothing when every session is clean", func(t *testing.T) {
+		t.Parallel()
+		var b strings.Builder
+		writeAnomalyDetails(&b, []sessionStat{{ID: "a"}, {ID: "b"}})
+		if b.Len() != 0 {
+			t.Errorf("wrote %q, want nothing (not even the heading)", b.String())
+		}
+	})
+
+	t.Run("lists only the anomalous sessions", func(t *testing.T) {
+		t.Parallel()
+		var b strings.Builder
+		writeAnomalyDetails(&b, []sessionStat{
+			{ID: "clean"},
+			{ID: "noisy", Lines: 4, ToolCalls: 3, Turns: 2, Errors: 1, Anomalies: []string{"errors (1)"}},
+		})
+		out := b.String()
+		if !strings.Contains(out, "### Anomaly Details") {
+			t.Errorf("missing heading in %q", out)
+		}
+		if !strings.Contains(out, "**noisy**") {
+			t.Errorf("missing anomalous session in %q", out)
+		}
+		if strings.Contains(out, "clean") {
+			t.Errorf("clean session should not appear in %q", out)
+		}
+	})
+}
+
+func TestWriteSessionTable(t *testing.T) {
+	t.Parallel()
+
+	stats := []sessionStat{
+		{ID: "clean", Duration: 2 * time.Second},
+		{ID: "noisy", Errors: 1, Anomalies: []string{"errors (1)"}},
+	}
+
+	t.Run("all=false lists only anomalous rows", func(t *testing.T) {
+		t.Parallel()
+		var b strings.Builder
+		writeSessionTable(&b, stats, false)
+		out := b.String()
+		if strings.Contains(out, "| clean |") {
+			t.Errorf("clean session should be omitted from %q", out)
+		}
+		if !strings.Contains(out, "| noisy |") {
+			t.Errorf("missing anomalous row in %q", out)
+		}
+	})
+
+	t.Run("all=true lists every row with an em dash for no anomalies", func(t *testing.T) {
+		t.Parallel()
+		var b strings.Builder
+		writeSessionTable(&b, stats, true)
+		out := b.String()
+		if !strings.Contains(out, "| clean | 0 | 0 | 0 | 0 | 2s | — |") {
+			t.Errorf("missing clean row in %q", out)
+		}
+	})
 }

@@ -1,0 +1,24 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `rate-limiter` |
+| Agent | `task-42` |
+| Outcome | **completed** |
+| Retries | 1 / 3 |
+| Slices | 3 / 3 complete |
+| Started | 2026-03-14T09:26:53Z |
+| Duration | <elapsed> |
+
+## Gates
+
+- **build** (`go build ./...`): **PASS**
+- **test** (`go test ./...`): **PASS**
+
+All gates **passed**.
+
+## Result
+
+All gates passed, the plan checklist was complete, and changes were merged successfully.

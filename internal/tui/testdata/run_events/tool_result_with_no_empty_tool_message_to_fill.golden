@@ -1,0 +1,7 @@
+streaming="" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=-830252635369984020
+messages:
+  [0] role="tool" tool="bash" toolIn="" content="done"
+trace:
+  [0] kind="tool_result" summary="<<< result" detail="orphan result" timeSet=true
+run phase="running" checklist=0

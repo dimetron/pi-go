@@ -1,0 +1,25 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `rate-limiter` |
+| Agent | `task-42` |
+| Outcome | **merge_failed** |
+| Retries | 1 / 3 |
+| Slices | 2 / 3 complete |
+| Started | 2026-03-14T09:26:53Z |
+| Duration | <elapsed> |
+
+## Gates
+
+No gates defined.
+
+## Unfinished Slices
+
+- Step 3: add metrics
+
+## Result
+
+Gates passed but merge into the main branch failed. Worktree preserved for manual resolution.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // ---------------------------------------------------------------------------
@@ -1432,5 +1434,563 @@ func TestBuildCompactorCallback_KnownToolCompacts(t *testing.T) {
 	summary := metrics.Summary()
 	if summary.TotalOrig == 0 {
 		t.Errorf("expected compactor metrics to record compaction, got empty summary")
+	}
+}
+
+func TestLineScore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		line string
+		want int
+	}{
+		{"error anywhere", "  the ERROR was here", 10},
+		{"fail substring", "--- FAIL: TestX", 10},
+		{"failure counts as fail", "one failure", 10},
+		{"panic", "panic: nil deref", 10},
+		{"fatal", "Fatal: cannot continue", 10},
+		{"error outranks warning", "warning: error inside", 10},
+		{"warning", "warning: deprecated", 7},
+		{"warning outranks declaration", "package with a Warning", 7},
+		{"import declaration", `import "fmt"`, 5},
+		{"package declaration", "package tools", 5},
+		{"func needs trailing space", "func Foo() {", 5},
+		{"type needs trailing space", "type Bar struct {", 5},
+		{"declaration prefix is case sensitive", "Package tools", 1},
+		{"bare func is not a declaration", "func", 1},
+		{"declaration must be at line start", "  func Foo() {", 1},
+		{"empty line", "", 0},
+		{"whitespace-only line", " \t ", 0},
+		{"plain line", "ok  pkg  0.1s", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := lineScore(tt.line); got != tt.want {
+				t.Errorf("lineScore(%q) = %d, want %d", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectMiddle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		middle []string
+		want   int
+		out    []string
+	}{
+		{
+			name:   "high priority wins over plain lines",
+			middle: []string{"a", "b", "error: x", "c"},
+			want:   2,
+			out:    []string{"error: x", "a", "... (2 lines omitted)"},
+		},
+		{
+			name:   "blank lines are dropped entirely",
+			middle: []string{"", "  ", "keep"},
+			want:   2,
+			out:    []string{"keep", "... (1 lines omitted)"},
+		},
+		{
+			name:   "want zero keeps nothing but the note",
+			middle: []string{"error: x", "a"},
+			want:   0,
+			out:    []string{"... (2 lines omitted)"},
+		},
+		{
+			name:   "note counts against want, not against what was kept",
+			middle: []string{"", "", "a"},
+			want:   1,
+			out:    []string{"a", "... (2 lines omitted)"},
+		},
+		{
+			name:   "original order preserved within a priority band",
+			middle: []string{"warning: w", "func F() {", "error: e"},
+			want:   3,
+			out:    []string{"warning: w", "func F() {", "error: e", "... (0 lines omitted)"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := selectMiddle(tt.middle, tt.want)
+			if diff := cmp.Diff(tt.out, got); diff != "" {
+				t.Errorf("selectMiddle mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestSmartTruncate_Golden pins the exact composed output, so a change to the
+// head/middle/tail split shows up as a diff rather than a line-count check.
+func TestSmartTruncate_Golden(t *testing.T) {
+	t.Parallel()
+
+	var lines []string
+	for i := range 40 {
+		switch i % 7 {
+		case 3:
+			lines = append(lines, fmt.Sprintf("error: failure number %d occurred", i))
+		case 5:
+			lines = append(lines, "")
+		default:
+			lines = append(lines, fmt.Sprintf("ordinary output line number %d", i))
+		}
+	}
+
+	got, applied := smartTruncate(strings.Join(lines, "\n"), CompactorConfig{MaxLines: 20})
+	if !applied {
+		t.Fatal("smartTruncate(applied) = false, want true")
+	}
+
+	want := strings.Join([]string{
+		// Head: MaxLines/10 == 2 lines, kept verbatim.
+		"ordinary output line number 0",
+		"ordinary output line number 1",
+		// Middle: 16 slots, errors first, then plain lines; blanks dropped.
+		"error: failure number 3 occurred",
+		"error: failure number 10 occurred",
+		"error: failure number 17 occurred",
+		"error: failure number 24 occurred",
+		"error: failure number 31 occurred",
+		"ordinary output line number 2",
+		"ordinary output line number 4",
+		"ordinary output line number 6",
+		"ordinary output line number 7",
+		"ordinary output line number 8",
+		"ordinary output line number 9",
+		"ordinary output line number 11",
+		"ordinary output line number 13",
+		"ordinary output line number 14",
+		"ordinary output line number 15",
+		"ordinary output line number 16",
+		"... (20 lines omitted)",
+		// Tail: MaxLines/10 == 2 lines, kept verbatim.
+		"error: failure number 38 occurred",
+		"ordinary output line number 39",
+	}, "\n")
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("smartTruncate mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestSmartTruncate_ReportsNotAppliedWhenOutputGrows pins a long-standing
+// quirk: applied is a byte-length comparison, so on a short input the omitted
+// note can make the result longer than the original and smartTruncate reports
+// false even though it dropped lines. Callers then keep the untruncated text.
+func TestSmartTruncate_ReportsNotAppliedWhenOutputGrows(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Join([]string{
+		"h0", "h1", "h2",
+		"plain a", "", "error: boom", "plain b", "warning: w",
+		"func F() {", "plain c", "", "plain d",
+		"t0", "t1", "t2",
+	}, "\n")
+
+	got, applied := smartTruncate(input, CompactorConfig{MaxLines: 12})
+	if applied {
+		t.Error("smartTruncate(applied) = true, want false when the result grows")
+	}
+	if len(got) <= len(input) {
+		t.Errorf("len(got) = %d, want > len(input) = %d", len(got), len(input))
+	}
+}
+
+// TestSmartTruncate_ShorterThanMaxLines covers the untouched path: the input is
+// returned byte-for-byte and applied is false.
+func TestSmartTruncate_ShorterThanMaxLines(t *testing.T) {
+	t.Parallel()
+
+	input := "a\nb\nc"
+	got, applied := smartTruncate(input, CompactorConfig{MaxLines: 3})
+	if applied || got != input {
+		t.Errorf("smartTruncate = (%q, %v), want (%q, false)", got, applied, input)
+	}
+}
+
+// aggTestLines builds a padded block of `go test` output. Padding exists only
+// to clear the 20-line floor; every pad line is an "=== RUN" line, which the
+// scanner treats as ordinary context.
+func aggTestLines(t *testing.T, head []string, padCount int, tail ...string) string {
+	t.Helper()
+	lines := append([]string(nil), head...)
+	for i := range padCount {
+		lines = append(lines, fmt.Sprintf("=== RUN   TestPad%d", i))
+	}
+	return strings.Join(append(lines, tail...), "\n")
+}
+
+// TestAggregateTestOutput_Golden pins the exact rendered report. The existing
+// tests only assert that a few substrings appear; this one fixes the layout,
+// the blank-line separators, and which input lines get swallowed into a
+// failure's detail block.
+func TestAggregateTestOutput_Golden(t *testing.T) {
+	t.Parallel()
+
+	input := aggTestLines(t, []string{
+		"=== RUN   TestA",
+		"--- PASS: TestA (0.00s)",
+		"=== RUN   TestB",
+		"--- FAIL: TestB (0.01s)",
+		"    b_test.go:15: expected 42, got 0",
+		"    b_test.go:16: more detail",
+		"=== RUN   TestC",
+		"--- SKIP: TestC (0.00s)",
+		"=== RUN   TestD",
+		"--- FAIL: TestD (0.02s)",
+		"    d_test.go:9: boom",
+	}, 12, "ok  \tpkg/foo\t0.5s", "FAIL\tpkg/bar\t0.1s")
+
+	got, applied := aggregateTestOutput(input, CompactorConfig{MaxTestFailures: 10, MaxTestFailLines: 8})
+	if !applied {
+		t.Fatal("aggregateTestOutput(applied) = false, want true")
+	}
+
+	want := strings.Join([]string{
+		"Test Summary: PASS=1 FAIL=1 SKIP=1",
+		"",
+		"Failure Details:",
+		// TestB's detail absorbs everything up to the next FAIL header,
+		// including unrelated "=== RUN" lines. Only "--- SKIP" is filtered.
+		"--- FAIL: TestB (0.01s)",
+		"    b_test.go:15: expected 42, got 0",
+		"    b_test.go:16: more detail",
+		"=== RUN   TestC",
+		"=== RUN   TestD",
+		"",
+		// TestD's detail runs to the MaxTestFailLines cap of 8.
+		"--- FAIL: TestD (0.02s)",
+		"    d_test.go:9: boom",
+		"=== RUN   TestPad0",
+		"=== RUN   TestPad1",
+		"=== RUN   TestPad2",
+		"=== RUN   TestPad3",
+		"=== RUN   TestPad4",
+		"=== RUN   TestPad5",
+		"=== RUN   TestPad6",
+		"",
+		"",
+		"Package Results:",
+		"ok  \tpkg/foo\t0.5s",
+		"FAIL\tpkg/bar\t0.1s",
+		"",
+	}, "\n")
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("aggregateTestOutput mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestAggregateTestOutput_FailureCap pins the overflow note: detail is kept
+// for the first MaxTestFailures failures only, while the header count keeps
+// running so the "and N more" line stays honest.
+func TestAggregateTestOutput_FailureCap(t *testing.T) {
+	t.Parallel()
+
+	var head []string
+	for i := range 3 {
+		head = append(head,
+			fmt.Sprintf("--- FAIL: TestF%d (0.01s)", i),
+			fmt.Sprintf("    f_test.go:%d: detail", i))
+	}
+	input := aggTestLines(t, head, 16, "FAIL\tpkg/x\t0.1s")
+
+	got, applied := aggregateTestOutput(input, CompactorConfig{MaxTestFailures: 2, MaxTestFailLines: 8})
+	if !applied {
+		t.Fatal("aggregateTestOutput(applied) = false, want true")
+	}
+
+	want := strings.Join([]string{
+		"Test Summary: PASS=0 FAIL=1 SKIP=0",
+		"",
+		"Failure Details:",
+		"--- FAIL: TestF0 (0.01s)",
+		"    f_test.go:0: detail",
+		"",
+		"--- FAIL: TestF1 (0.01s)",
+		"    f_test.go:1: detail",
+		"",
+		"... and 1 more failures",
+		"",
+		"Package Results:",
+		"FAIL\tpkg/x\t0.1s",
+		"",
+	}, "\n")
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("aggregateTestOutput mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestAggregateTestOutput_FailLineCap pins the per-failure line budget: once
+// MaxTestFailLines context lines are captured the run closes, and later lines
+// are dropped until the next failure header.
+func TestAggregateTestOutput_FailLineCap(t *testing.T) {
+	t.Parallel()
+
+	head := []string{"--- FAIL: TestLong (0.01s)"}
+	for i := range 5 {
+		head = append(head, fmt.Sprintf("    long_test.go:%d: line", i))
+	}
+	input := aggTestLines(t, head, 16, "FAIL\tpkg/y\t0.1s")
+
+	got, applied := aggregateTestOutput(input, CompactorConfig{MaxTestFailures: 10, MaxTestFailLines: 2})
+	if !applied {
+		t.Fatal("aggregateTestOutput(applied) = false, want true")
+	}
+
+	want := strings.Join([]string{
+		"Test Summary: PASS=0 FAIL=1 SKIP=0",
+		"",
+		"Failure Details:",
+		"--- FAIL: TestLong (0.01s)",
+		"    long_test.go:0: line",
+		"    long_test.go:1: line",
+		"",
+		"",
+		"Package Results:",
+		"FAIL\tpkg/y\t0.1s",
+		"",
+	}, "\n")
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("aggregateTestOutput mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestTestRunSummary_Parsed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		summary testRunSummary
+		want    bool
+	}{
+		{"empty", testRunSummary{}, false},
+		{"passes only", testRunSummary{passCount: 1}, true},
+		{"failures only", testRunSummary{failCount: 1}, true},
+		{"both", testRunSummary{passCount: 1, failCount: 1}, true},
+		{"skips alone do not count as parsed", testRunSummary{skipCount: 3}, false},
+		{
+			name:    "captured failure detail alone does not count as parsed",
+			summary: testRunSummary{failedTests: []string{"TestX"}, failDetails: []string{"..."}},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.summary.parsed(); got != tt.want {
+				t.Errorf("parsed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderTestSummary drives the renderer straight from struct literals,
+// which is the point of the scan/render split: no synthetic `go test` output
+// is needed to assert on formatting.
+func TestRenderTestSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		summary testRunSummary
+		cfg     CompactorConfig
+		want    string
+	}{
+		{
+			name:    "counts only, both optional sections omitted",
+			summary: testRunSummary{passCount: 3, failCount: 1, skipCount: 2},
+			cfg:     CompactorConfig{MaxTestFailures: 10},
+			want:    "Test Summary: PASS=3 FAIL=1 SKIP=2\n",
+		},
+		{
+			name: "failure details are separated by a blank line",
+			summary: testRunSummary{
+				failCount:   2,
+				failedTests: []string{"TestA", "TestB"},
+				failDetails: []string{"--- FAIL: TestA\n  detail a", "--- FAIL: TestB\n  detail b"},
+			},
+			cfg: CompactorConfig{MaxTestFailures: 10},
+			want: "Test Summary: PASS=0 FAIL=2 SKIP=0\n" +
+				"\nFailure Details:\n" +
+				"--- FAIL: TestA\n  detail a\n\n" +
+				"--- FAIL: TestB\n  detail b\n\n",
+		},
+		{
+			name: "overflow note counts headers beyond the detail cap",
+			summary: testRunSummary{
+				failCount:   5,
+				failedTests: []string{"T1", "T2", "T3", "T4", "T5"},
+				failDetails: []string{"--- FAIL: T1"},
+			},
+			cfg: CompactorConfig{MaxTestFailures: 1},
+			want: "Test Summary: PASS=0 FAIL=5 SKIP=0\n" +
+				"\nFailure Details:\n" +
+				"--- FAIL: T1\n\n" +
+				"... and 4 more failures\n",
+		},
+		{
+			name: "no overflow note when the headers fit the cap",
+			summary: testRunSummary{
+				failCount:   1,
+				failedTests: []string{"T1"},
+				failDetails: []string{"--- FAIL: T1"},
+			},
+			cfg: CompactorConfig{MaxTestFailures: 10},
+			want: "Test Summary: PASS=0 FAIL=1 SKIP=0\n" +
+				"\nFailure Details:\n" +
+				"--- FAIL: T1\n\n",
+		},
+		{
+			// Unreachable via aggregateTestOutput, which only gets here when a
+			// package result line was seen, but the renderer is now callable on
+			// its own so the guard is worth holding to.
+			name:    "package results are omitted when there are none",
+			summary: testRunSummary{passCount: 1},
+			cfg:     CompactorConfig{MaxTestFailures: 10},
+			want:    "Test Summary: PASS=1 FAIL=0 SKIP=0\n",
+		},
+		{
+			name:    "package results section",
+			summary: testRunSummary{passCount: 1, resultLines: []string{"ok  \tpkg/a\t0.1s"}},
+			cfg:     CompactorConfig{MaxTestFailures: 10},
+			want: "Test Summary: PASS=1 FAIL=0 SKIP=0\n" +
+				"\nPackage Results:\nok  \tpkg/a\t0.1s\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if diff := cmp.Diff(tt.want, renderTestSummary(tt.summary, tt.cfg)); diff != "" {
+				t.Errorf("renderTestSummary mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestScanTestOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// maxFailures overrides the detail cap; zero means the default of 10.
+		maxFailures int
+		lines       []string
+		want        testRunSummary
+	}{
+		{
+			name:  "no test lines at all",
+			lines: []string{"just", "some", "output"},
+			want:  testRunSummary{},
+		},
+		{
+			name:  "ok line counts as a pass",
+			lines: []string{"ok  \tpkg/a\t0.1s"},
+			want:  testRunSummary{passCount: 1, resultLines: []string{"ok  \tpkg/a\t0.1s"}},
+		},
+		{
+			name:  "FAIL line counts as a fail",
+			lines: []string{"FAIL\tpkg/a\t0.1s"},
+			want:  testRunSummary{failCount: 1, resultLines: []string{"FAIL\tpkg/a\t0.1s"}},
+		},
+		{
+			name:  "skips are counted but never captured",
+			lines: []string{"--- SKIP: TestA (0.00s)", "--- SKIP: TestB (0.00s)"},
+			want:  testRunSummary{skipCount: 2},
+		},
+		{
+			name:  "a failure header opens a run that the following lines fill",
+			lines: []string{"--- FAIL: TestA (0.01s)", "  detail one", "  detail two"},
+			want: testRunSummary{
+				failedTests: []string{"TestA"},
+				failDetails: []string{"--- FAIL: TestA (0.01s)\n  detail one\n  detail two"},
+			},
+		},
+		{
+			name: "the run closes at MaxTestFailLines and later lines are dropped",
+			lines: []string{
+				"--- FAIL: TestA (0.01s)",
+				"  one", "  two", "  three", "  dropped", "  also dropped",
+			},
+			want: testRunSummary{
+				failedTests: []string{"TestA"},
+				failDetails: []string{"--- FAIL: TestA (0.01s)\n  one\n  two\n  three"},
+			},
+		},
+		{
+			name: "a new header flushes the previous run",
+			lines: []string{
+				"--- FAIL: TestA (0.01s)", "  a detail",
+				"--- FAIL: TestB (0.02s)", "  b detail",
+			},
+			want: testRunSummary{
+				failedTests: []string{"TestA", "TestB"},
+				failDetails: []string{
+					"--- FAIL: TestA (0.01s)\n  a detail",
+					"--- FAIL: TestB (0.02s)\n  b detail",
+				},
+			},
+		},
+		{
+			name: "a skip inside an open run is counted, not captured",
+			lines: []string{
+				"--- FAIL: TestA (0.01s)", "  detail", "--- SKIP: TestS (0.00s)", "  more detail",
+			},
+			want: testRunSummary{
+				skipCount:   1,
+				failedTests: []string{"TestA"},
+				failDetails: []string{"--- FAIL: TestA (0.01s)\n  detail\n  more detail"},
+			},
+		},
+		{
+			// A package result line inside an open run is diverted to
+			// resultLines, so it never lands in the failure detail.
+			name: "a result line inside an open run is not captured as detail",
+			lines: []string{
+				"--- FAIL: TestA (0.01s)", "  detail", "FAIL\tpkg/a\t0.1s", "  more detail",
+			},
+			want: testRunSummary{
+				failCount:   1,
+				resultLines: []string{"FAIL\tpkg/a\t0.1s"},
+				failedTests: []string{"TestA"},
+				failDetails: []string{"--- FAIL: TestA (0.01s)\n  detail\n  more detail"},
+			},
+		},
+		{
+			name:        "detail beyond MaxTestFailures is dropped but headers keep counting",
+			maxFailures: 2,
+			lines: []string{
+				"--- FAIL: T1 (0.01s)", "  one",
+				"--- FAIL: T2 (0.01s)", "  two",
+				"--- FAIL: T3 (0.01s)", "  three",
+			},
+			want: testRunSummary{
+				failedTests: []string{"T1", "T2", "T3"},
+				failDetails: []string{"--- FAIL: T1 (0.01s)\n  one", "--- FAIL: T2 (0.01s)\n  two"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			maxFailures := tt.maxFailures
+			if maxFailures == 0 {
+				maxFailures = 10
+			}
+			cfg := CompactorConfig{MaxTestFailures: maxFailures, MaxTestFailLines: 3}
+			got := scanTestOutput(tt.lines, cfg)
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(testRunSummary{})); diff != "" {
+				t.Errorf("scanTestOutput mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

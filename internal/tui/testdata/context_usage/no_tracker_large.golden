@@ -1,0 +1,9 @@
+**Context Usage**
+
+`██████░░░░░░░░░░░░░░`  openai | gpt-4 · ctx ~30.0k tokens
+
+*Estimated usage by category*
+- **User messages**: ~22.5k tokens (1 msgs)
+- **Assistant messages**: ~7.5k tokens (1 msgs)
+- **Tool calls**: ~0 tokens (0 calls)
+- **Total context**: ~30.0k tokens (2 messages)

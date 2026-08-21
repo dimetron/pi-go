@@ -1,0 +1,22 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `rate-limiter` |
+| Agent | `task-42` |
+| Outcome | **gate_failed** |
+| Retries | 1 / 3 |
+| Started | 2026-03-14T09:26:53Z |
+| Duration | <elapsed> |
+
+## Gates
+
+- **lint** (`golangci-lint run`): **FAIL**
+
+Some gates **failed**.
+
+## Result
+
+Gate validation failed after 1 retries. Worktree preserved for manual inspection.

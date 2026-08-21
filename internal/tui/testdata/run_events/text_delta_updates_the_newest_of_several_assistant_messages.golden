@@ -1,0 +1,9 @@
+streaming="newest" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=100629971163
+messages:
+  [0] role="assistant" tool="" toolIn="" content="older turn"
+  [1] role="tool" tool="bash" toolIn="" content="done"
+  [2] role="assistant" tool="" toolIn="" content="newest"
+trace:
+  [0] kind="llm" summary="agent response" detail="newest" timeSet=true
+run phase="running" checklist=0

@@ -1,0 +1,20 @@
+# Run Summary
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| Spec | `rate-limiter` |
+| Agent | `task-42` |
+| Outcome | **interrupted_by_user** |
+| Retries | 1 / 3 |
+| Started | 2026-03-14T09:26:53Z |
+| Duration | <elapsed> |
+
+## Gates
+
+No gates defined.
+
+## Result
+
+Run ended with status: interrupted_by_user

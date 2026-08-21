@@ -1,0 +1,7 @@
+streaming="" scroll=0 activeTool="" toolStartSet=false
+matrix active=true seed=4772730959683061956
+messages:
+  [0] role="assistant" tool="" toolIn="" content="leftover"
+trace:
+  [0] kind="llm" summary="agent response" detail="leftover" timeSet=true
+run phase="running" checklist=0

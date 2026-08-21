@@ -1,0 +1,23 @@
+**Context Usage**
+
+`███████████░░░░░░░░░`  anthropic | claude-sonnet · 56.8k/100.0k tokens (57%)
+
+*Estimated usage by category*
+- **User messages**: ~105 tokens (2 msgs)
+- **Assistant messages**: ~200 tokens (1 msgs)
+- **Tool calls**: ~302 tokens (1 calls)
+- **Total context**: ~607 tokens (4 messages)
+
+*Daily token usage*
+- **Consumed today**: 56.8k tokens
+- **Remaining**: 43.2k tokens
+
+*Context window*
+`██░░░░░░░░░░░░░░░░░░`  20.0k / 200.0k (10%)
+- **Used**: 20.0k tokens
+- **Free**: 180.0k tokens (90%)
+
+*Prompt cache*
+- **Last request**: 15.0k of 20.0k prompt tokens cached (75%)
+- **Today**: 123.5k tokens read from cache (42% of input)
+- **Stable prefix**: 15.7k tokens · **body since**: 4.3k tokens

@@ -63,110 +63,27 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	var skills []Skill
 	var blocked []string
 
-	// Load bundled skills first (lowest priority).
-	bundledMap, err := LoadBundledSkills()
-	if err == nil {
-		for skillName, files := range bundledMap {
-			var mainFile []byte
-			for _, f := range files {
-				if f.RelPath == "bundled_skills/"+skillName+"/SKILL.md" {
-					mainFile = f.Content
-					break
-				}
-			}
-			if len(mainFile) == 0 && len(files) > 0 {
-				mainFile = files[0].Content
-			}
-			if len(mainFile) == 0 {
-				continue
-			}
-			skill, body, err := parseSkillContent(string(mainFile), skillName)
-			if err != nil {
-				continue
-			}
-			skill.Source = "bundled"
-			skillName := skill.Name
-			seen[skillName] = len(skills)
-			// Body is already in memory for bundled skills — cache it so
-			// LoadSkillBody doesn't need to re-read the embed fs.
-			if body != "" {
-				bundledBodyCache.Store(skillName, body)
-			}
-			skills = append(skills, skill)
-		}
+	// Bundled skills load first, at the lowest priority: a user or project
+	// skill of the same name replaces them in place below.
+	for _, skill := range bundledSkills() {
+		seen[skill.Name] = len(skills)
+		skills = append(skills, skill)
 	}
 
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+		dirSkills, dirBlocked, err := loadDirSkills(dir, opts)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("reading skills dir %s: %w", dir, err)
+			return nil, err
 		}
-
-		skillFiles := []struct {
-			path        string
-			defaultName string
-		}{
-			{path: filepath.Join(dir, "SKILL.md"), defaultName: filepath.Base(dir)},
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			skillFile := filepath.Join(dir, entry.Name(), "SKILL.md")
-			if _, err := os.Stat(skillFile); err != nil {
-				continue
-			}
-			skillFiles = append(skillFiles, struct {
-				path        string
-				defaultName string
-			}{path: skillFile, defaultName: entry.Name()})
-		}
-
-		for _, skillInfo := range skillFiles {
-			if _, err := os.Stat(skillInfo.path); err != nil {
-				continue
-			}
-
-			// Audit the skill file before loading.
-			if opts.AuditMode != AuditSkip {
-				scanResult, scanErr := audit.ScanFile(skillInfo.path)
-				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", skillInfo.path, scanErr)
-				} else if scanResult.HasCritical() {
-					if opts.AuditMode == AuditBlock {
-						blocked = append(blocked, skillInfo.path)
-						fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", skillInfo.defaultName)
-						continue
-					}
-					// AuditWarn: log but continue loading.
-					fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", skillInfo.defaultName)
-				}
-			}
-
-			skill, err := parseSkillFile(skillInfo.path)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s: %w", skillInfo.path, err)
-			}
-			// Default name from directory if not set in frontmatter
-			if skill.Name == "" {
-				skill.Name = skillInfo.defaultName
-			}
-			// Determine source based on whether the path is absolute.
-			source := "user"
-			if !filepath.IsAbs(dir) {
-				source = "project"
-			}
-			skill.Source = source
+		blocked = append(blocked, dirBlocked...)
+		for _, skill := range dirSkills {
 			if idx, ok := seen[skill.Name]; ok {
 				// Override with project/user-level skill.
 				skills[idx] = skill
-			} else {
-				seen[skill.Name] = len(skills)
-				skills = append(skills, skill)
+				continue
 			}
+			seen[skill.Name] = len(skills)
+			skills = append(skills, skill)
 		}
 	}
 
@@ -175,6 +92,147 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	}
 
 	return skills, nil
+}
+
+// bundledSkills parses the skills embedded in the binary. They are the
+// lowest-priority layer and are entirely optional, so a failure to open the
+// embed fs — or to parse any single skill — yields fewer skills rather than an
+// error.
+func bundledSkills() []Skill {
+	bundledMap, err := LoadBundledSkills()
+	if err != nil {
+		return nil
+	}
+
+	skills := make([]Skill, 0, len(bundledMap))
+	for skillName, files := range bundledMap {
+		mainFile := bundledSkillMain(files, skillName)
+		if len(mainFile) == 0 {
+			continue
+		}
+		skill, body, err := parseSkillContent(string(mainFile), skillName)
+		if err != nil {
+			continue
+		}
+		skill.Source = "bundled"
+		// Body is already in memory for bundled skills — cache it so
+		// LoadSkillBody doesn't need to re-read the embed fs.
+		if body != "" {
+			bundledBodyCache.Store(skill.Name, body)
+		}
+		skills = append(skills, skill)
+	}
+	return skills
+}
+
+// bundledSkillMain picks a bundled skill's SKILL.md out of its files. A missing
+// *or empty* SKILL.md falls back to the first file bundled under that name.
+func bundledSkillMain(files []BundledSkillFile, skillName string) []byte {
+	want := "bundled_skills/" + skillName + "/SKILL.md"
+	var mainFile []byte
+	for _, f := range files {
+		if f.RelPath == want {
+			mainFile = f.Content
+			break
+		}
+	}
+	if len(mainFile) == 0 && len(files) > 0 {
+		mainFile = files[0].Content
+	}
+	return mainFile
+}
+
+// skillFileRef locates one SKILL.md and the name it falls back to when the
+// file's frontmatter does not declare one.
+type skillFileRef struct {
+	path        string
+	defaultName string
+}
+
+// skillFileRefs lists the SKILL.md files a skills directory offers: the
+// directory's own, plus one per immediate subdirectory that has one.
+func skillFileRefs(dir string, entries []os.DirEntry) []skillFileRef {
+	refs := []skillFileRef{
+		{path: filepath.Join(dir, "SKILL.md"), defaultName: filepath.Base(dir)},
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillFile := filepath.Join(dir, entry.Name(), "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue
+		}
+		refs = append(refs, skillFileRef{path: skillFile, defaultName: entry.Name()})
+	}
+	return refs
+}
+
+// auditBlocksSkill scans a SKILL.md for hidden-character attacks and reports
+// whether it must be skipped. Only AuditBlock plus a critical finding blocks;
+// a scan that fails, or AuditWarn, warns on stderr and lets the skill load.
+func auditBlocksSkill(ref skillFileRef, mode AuditMode) bool {
+	if mode == AuditSkip {
+		return false
+	}
+	scanResult, scanErr := audit.ScanFile(ref.path)
+	if scanErr != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", ref.path, scanErr)
+		return false
+	}
+	if !scanResult.HasCritical() {
+		return false
+	}
+	if mode == AuditBlock {
+		fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", ref.defaultName)
+		return true
+	}
+	// AuditWarn: log but continue loading.
+	fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", ref.defaultName)
+	return false
+}
+
+// loadDirSkills loads every skill under dir, returning the parsed skills and
+// the paths the audit blocked. A directory that does not exist yields nothing
+// rather than an error; anything else wrong with it is an error, as is a
+// SKILL.md that fails to parse.
+func loadDirSkills(dir string, opts LoadOptions) ([]Skill, []string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("reading skills dir %s: %w", dir, err)
+	}
+
+	// Determine source based on whether the path is absolute.
+	source := "user"
+	if !filepath.IsAbs(dir) {
+		source = "project"
+	}
+
+	var skills []Skill
+	var blocked []string
+	for _, ref := range skillFileRefs(dir, entries) {
+		if _, err := os.Stat(ref.path); err != nil {
+			continue
+		}
+		if auditBlocksSkill(ref, opts.AuditMode) {
+			blocked = append(blocked, ref.path)
+			continue
+		}
+		skill, err := parseSkillFile(ref.path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing %s: %w", ref.path, err)
+		}
+		// Default name from directory if not set in frontmatter
+		if skill.Name == "" {
+			skill.Name = ref.defaultName
+		}
+		skill.Source = source
+		skills = append(skills, skill)
+	}
+	return skills, blocked, nil
 }
 
 // parseSkillFile reads a SKILL.md file and returns its metadata. The body is

@@ -1,0 +1,14 @@
+**Context Usage**
+
+`░░░░░░░░░░░░░░░░░░░░`  test-model · ctx ~0 tokens
+
+*Estimated usage by category*
+- **User messages**: ~0 tokens (0 msgs)
+- **Assistant messages**: ~0 tokens (0 msgs)
+- **Tool calls**: ~0 tokens (0 calls)
+- **Total context**: ~0 tokens (0 messages)
+
+*Skills* (3 loaded)
+- /alpha — First skill [bundled]  body: not loaded
+- /nosource — (no description) [user]  body: not loaded
+- /zebra — Last alphabetically [project]  body: not loaded

@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -521,5 +523,285 @@ func TestAliasArgs_CommonLLMMistakes(t *testing.T) {
 				t.Errorf("aliasArgs: %s should be removed but still exists", tt.wantRemoved)
 			}
 		})
+	}
+}
+
+// TestTryCoerce characterizes every branch of tryCoerce: which value kinds are
+// converted for which property class, and which are declined (nil) so the
+// caller leaves the original value in place.
+func TestTryCoerce(t *testing.T) {
+	t.Parallel()
+
+	c := &coercingTool{
+		intProps:  map[string]bool{"n": true},
+		boolProps: map[string]bool{"b": true},
+		jsonProps: map[string]bool{"j": true},
+	}
+
+	tests := []struct {
+		name string
+		val  any
+		path string
+		want any
+	}{
+		// Strings against an integer property.
+		{"string int", "42", "n", float64(42)},
+		{"string negative int", "-7", "n", float64(-7)},
+		{"string float falls back to ParseFloat", "3.5", "n", 3.5},
+		{"string exponent falls back to ParseFloat", "1e3", "n", float64(1000)},
+		{"string non-numeric declined", "abc", "n", nil},
+		{"string empty declined", "", "n", nil},
+
+		// Strings against a boolean property.
+		{"string true", "true", "b", true},
+		{"string 1 is bool true", "1", "b", true},
+		{"string False", "False", "b", false},
+		{"string non-bool declined", "yes", "b", nil},
+
+		// Strings against a JSON property.
+		{"stringified array", `[1,2]`, "j", []any{float64(1), float64(2)}},
+		{"stringified object", `{"a":1}`, "j", map[string]any{"a": float64(1)}},
+		{"stringified array with surrounding space", "  [1]  ", "j", []any{float64(1)}},
+		{"malformed JSON array declined", `[1,`, "j", nil},
+		{"unbracketed JSON declined", `1,2`, "j", nil},
+		{"mismatched brackets declined", `[1}`, "j", nil},
+
+		// Strings against an unknown property.
+		{"unknown path declined", "42", "other", nil},
+
+		// Numbers.
+		{"float64 always declined", float64(1), "n", nil},
+		{"float64 declined for unknown path", float64(1), "other", nil},
+		{"int to float64", int(5), "n", float64(5)},
+		{"int32 to float64", int32(5), "n", float64(5)},
+		{"int64 to float64", int64(5), "n", float64(5)},
+		{"float32 to float64", float32(2.5), "n", float64(2.5)},
+		{"int declined for non-int prop", int(5), "b", nil},
+		{"json.Number to float64", json.Number("12"), "n", float64(12)},
+		{"json.Number invalid declined", json.Number("nope"), "n", nil},
+		{"json.Number declined for non-int prop", json.Number("12"), "b", nil},
+
+		// Everything else.
+		{"bool declined", true, "b", nil},
+		{"nil declined", nil, "n", nil},
+		{"slice declined", []any{1}, "j", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := c.tryCoerce(tt.val, tt.path)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("tryCoerce(%#v, %q) mismatch (-want +got):\n%s", tt.val, tt.path, diff)
+			}
+		})
+	}
+}
+
+// TestTryCoerce_PropClassPrecedence pins the else-if ordering: a path listed in
+// more than one class is coerced as an integer first, then bool, then JSON.
+func TestTryCoerce_PropClassPrecedence(t *testing.T) {
+	t.Parallel()
+
+	c := &coercingTool{
+		intProps:  map[string]bool{"x": true},
+		boolProps: map[string]bool{"x": true, "y": true},
+		jsonProps: map[string]bool{"x": true, "y": true},
+	}
+
+	// "1" parses as both an int and a bool; intProps wins.
+	if got := c.tryCoerce("1", "x"); got != float64(1) {
+		t.Errorf(`tryCoerce("1", "x") = %#v, want float64(1)`, got)
+	}
+	// "[1]" is valid JSON but not a bool; boolProps still shadows jsonProps, so
+	// the value is declined rather than parsed.
+	if got := c.tryCoerce("[1]", "y"); got != nil {
+		t.Errorf(`tryCoerce("[1]", "y") = %#v, want nil`, got)
+	}
+}
+
+// TestCoerceArrayItem characterizes the recursive array walk: which schema
+// paths reach an array element, and what happens to elements the walk cannot
+// name. Written against the existing behavior, quirks included.
+func TestCoerceArrayItem(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tool *coercingTool
+		in   map[string]any
+		want map[string]any
+	}{
+		{
+			name: "array item properties match the parent.$ path",
+			tool: &coercingTool{intProps: map[string]bool{"tasks.$.depth": true}},
+			in:   map[string]any{"tasks": []any{map[string]any{"depth": "5"}}},
+			want: map[string]any{"tasks": []any{map[string]any{"depth": float64(5)}}},
+		},
+		{
+			name: "array item properties also match the plain dotted path",
+			tool: &coercingTool{intProps: map[string]bool{"tasks.depth": true}},
+			in:   map[string]any{"tasks": []any{map[string]any{"depth": "5"}}},
+			want: map[string]any{"tasks": []any{map[string]any{"depth": float64(5)}}},
+		},
+		{
+			name: "bool array item property",
+			tool: &coercingTool{boolProps: map[string]bool{"tasks.$.on": true}},
+			in:   map[string]any{"tasks": []any{map[string]any{"on": "true"}}},
+			want: map[string]any{"tasks": []any{map[string]any{"on": true}}},
+		},
+		{
+			name: "unregistered array item property is left alone",
+			tool: &coercingTool{intProps: map[string]bool{"other": true}},
+			in:   map[string]any{"tasks": []any{map[string]any{"depth": "5"}}},
+			want: map[string]any{"tasks": []any{map[string]any{"depth": "5"}}},
+		},
+		{
+			name: "every element of the array is visited",
+			tool: &coercingTool{intProps: map[string]bool{"tasks.$.depth": true}},
+			in: map[string]any{"tasks": []any{
+				map[string]any{"depth": "1"},
+				map[string]any{"depth": "2"},
+				map[string]any{"depth": "3"},
+			}},
+			want: map[string]any{"tasks": []any{
+				map[string]any{"depth": float64(1)},
+				map[string]any{"depth": float64(2)},
+				map[string]any{"depth": float64(3)},
+			}},
+		},
+		{
+			name: "scalar array elements are untouched without a json prop",
+			tool: &coercingTool{intProps: map[string]bool{"nums": true}},
+			in:   map[string]any{"nums": []any{"1", "2"}},
+			want: map[string]any{"nums": []any{"1", "2"}},
+		},
+		{
+			name: "a stringified object inside an array is parsed via the array's json prop",
+			tool: &coercingTool{jsonProps: map[string]bool{"tasks": true}},
+			in:   map[string]any{"tasks": []any{`{"a":1}`}},
+			want: map[string]any{"tasks": []any{map[string]any{"a": float64(1)}}},
+		},
+		{
+			name: "an element parsed from a string is then walked as an object",
+			tool: &coercingTool{
+				jsonProps: map[string]bool{"tasks": true},
+				intProps:  map[string]bool{"tasks.$.depth": true},
+			},
+			in:   map[string]any{"tasks": []any{`{"depth":"5"}`}},
+			want: map[string]any{"tasks": []any{map[string]any{"depth": float64(5)}}},
+		},
+		{
+			name: "arrays of arrays reuse the parent path for the inner elements",
+			tool: &coercingTool{intProps: map[string]bool{"grid.$.depth": true}},
+			in:   map[string]any{"grid": []any{[]any{map[string]any{"depth": "7"}}}},
+			want: map[string]any{"grid": []any{[]any{map[string]any{"depth": float64(7)}}}},
+		},
+		{
+			name: "an array nested under an array item property is walked",
+			tool: &coercingTool{intProps: map[string]bool{"tasks.steps.$.n": true}},
+			in: map[string]any{"tasks": []any{
+				map[string]any{"steps": []any{map[string]any{"n": "9"}}},
+			}},
+			want: map[string]any{"tasks": []any{
+				map[string]any{"steps": []any{map[string]any{"n": float64(9)}}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.tool.coerceArgs(tt.in)
+			if diff := cmp.Diff(tt.want, tt.in); diff != "" {
+				t.Errorf("coerceArgs mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestCoerceArrayItem_ObjectNestedInArrayItem pins a real quirk: when an array
+// element holds a nested object, the walk recurses with the PARENT's key
+// instead of iterating the child's own keys. So only a child field that
+// happens to repeat the parent key name is ever reached.
+func TestCoerceArrayItem_ObjectNestedInArrayItem(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a differently named child field is never visited", func(t *testing.T) {
+		t.Parallel()
+		c := &coercingTool{intProps: map[string]bool{
+			"depth": true, "opts.depth": true, "tasks.opts.depth": true, "tasks.$.opts.depth": true,
+		}}
+		m := map[string]any{"tasks": []any{
+			map[string]any{"opts": map[string]any{"depth": "5"}},
+		}}
+		c.coerceArgs(m)
+
+		opts := m["tasks"].([]any)[0].(map[string]any)["opts"].(map[string]any)
+		if opts["depth"] != "5" {
+			t.Errorf("depth = %#v, want the untouched string \"5\"; "+
+				"the nested-object recursion now reaches differently named fields", opts["depth"])
+		}
+	})
+
+	t.Run("a child field repeating the parent key name is visited", func(t *testing.T) {
+		t.Parallel()
+		c := &coercingTool{intProps: map[string]bool{"opts": true}}
+		m := map[string]any{"tasks": []any{
+			map[string]any{"opts": map[string]any{"opts": "5"}},
+		}}
+		c.coerceArgs(m)
+
+		opts := m["tasks"].([]any)[0].(map[string]any)["opts"].(map[string]any)
+		if opts["opts"] != float64(5) {
+			t.Errorf("opts.opts = %#v, want float64(5)", opts["opts"])
+		}
+	})
+}
+
+// TestCoerceArrayItem_BothPathsRegistered pins the double-coercion order: the
+// dotted path is applied first and the parent.$ path second, and the second
+// pass re-reads the ORIGINAL value rather than the result of the first. When
+// the two paths sit in different property classes the parent.$ class wins.
+func TestCoerceArrayItem_BothPathsRegistered(t *testing.T) {
+	t.Parallel()
+
+	c := &coercingTool{
+		intProps:  map[string]bool{"tasks.flag": true},
+		boolProps: map[string]bool{"tasks.$.flag": true},
+	}
+	m := map[string]any{"tasks": []any{map[string]any{"flag": "1"}}}
+	c.coerceArgs(m)
+
+	got := m["tasks"].([]any)[0].(map[string]any)["flag"]
+	if got != true {
+		t.Errorf("flag = %#v (%T), want bool true: the parent.$ pass runs second and overwrites", got, got)
+	}
+}
+
+// TestCoerceValueAtKey_NestedObject covers the top-level object recursion:
+// a nested map is walked key by key, and each key is matched against the bare
+// property name that collectFromSchema also registers for nested properties.
+func TestCoerceValueAtKey_NestedObject(t *testing.T) {
+	t.Parallel()
+
+	c := &coercingTool{
+		intProps:  map[string]bool{"depth": true},
+		boolProps: map[string]bool{"verbose": true},
+	}
+	m := map[string]any{"opts": map[string]any{
+		"depth":   "5",
+		"verbose": "true",
+		"name":    "keep me",
+	}}
+	c.coerceArgs(m)
+
+	want := map[string]any{"opts": map[string]any{
+		"depth":   float64(5),
+		"verbose": true,
+		"name":    "keep me",
+	}}
+	if diff := cmp.Diff(want, m); diff != "" {
+		t.Errorf("coerceArgs mismatch (-want +got):\n%s", diff)
 	}
 }

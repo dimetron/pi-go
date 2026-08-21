@@ -1,0 +1,19 @@
+**Context Usage**
+
+`████░░░░░░░░░░░░░░░░`  test-model · 10.0k/50.0k tokens (20%)
+
+*Estimated usage by category*
+- **User messages**: ~105 tokens (2 msgs)
+- **Assistant messages**: ~200 tokens (1 msgs)
+- **Tool calls**: ~302 tokens (1 calls)
+- **Total context**: ~607 tokens (4 messages)
+
+*Daily token usage*
+- **Consumed today**: 10.0k tokens
+- **Remaining**: 0 tokens
+
+*Context window*
+- **Last prompt**: 7.5k tokens (window size unknown)
+
+*Prompt cache*
+- **Last request**: no cache hit
