@@ -89,16 +89,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # checksums.txt names every artifact GoReleaser published — archives and
-      # their per-archive SBOMs — so one step attests the whole release without
-      # duplicating the build matrix here.
+      # Attest the archives *and* the raw binaries inside them. install.sh
+      # extracts the binary and drops it on the user's PATH, so the archive
+      # digest is not the digest anyone ends up running — without the
+      # `dist/*/pi*` entries, `pi verify` could never verify itself.
+      #
+      # The binaries are attested but not published: an extra ~100 MB asset
+      # per platform is not worth it when the digest is what verification
+      # needs. Patterns that match nothing are ignored, so dropping a platform
+      # from the build matrix does not fail this step.
       - name: Attest build provenance
         if: steps.check_release.outputs.release_exists == 'false'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-checksums: dist/checksums.txt
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*/pi
+            dist/*/pi.exe
 
-      # One SBOM covers every archive: a Go binary's dependency set is its
+      # One SBOM covers every subject: a Go binary's dependency set is its
       # module graph, which is identical across the goos/goarch matrix. The
       # per-platform SBOMs GoReleaser publishes stay available as release
       # assets for anyone who wants the binary-level catalog.
@@ -106,5 +116,9 @@ jobs:
         if: steps.check_release.outputs.release_exists == 'false'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-checksums: dist/checksums.txt
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*/pi
+            dist/*/pi.exe
           sbom-path: sbom.spdx.json

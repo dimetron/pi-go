@@ -227,6 +227,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newACPServerCmd())
 	cmd.AddCommand(newUpgradeCmd())
 	cmd.AddCommand(newSessionStatsCmd())
+	cmd.AddCommand(newVerifyCmd())
 
 	return cmd
 }
