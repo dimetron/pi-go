@@ -91,6 +91,33 @@ go install ./cmd/pi
 
 Download the latest release for your platform from the [Releases page](https://github.com/dimetron/pi-go/releases).
 
+### Verifying a release
+
+Every release archive carries two [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
+signed by Sigstore during the release workflow: SLSA build provenance, and an
+SBOM. Verify a downloaded archive with the GitHub CLI:
+
+```bash
+# Build provenance — proves the archive came from this repo's release workflow.
+gh attestation verify pi-go_1.2.3_linux_amd64.tar.gz --repo dimetron/pi-go
+
+# SBOM attestation. The predicate type carries the SPDX version syft emitted.
+gh attestation verify pi-go_1.2.3_linux_amd64.tar.gz --repo dimetron/pi-go \
+  --predicate-type https://spdx.dev/Document/v2.3
+```
+
+Each release also publishes SBOMs as assets, in SPDX JSON:
+
+- `pi-go_<version>_<os>_<arch>.tar.gz.sbom.json` — catalogued by syft from the
+  contents of that specific archive.
+- `pi-go_<version>_sbom.spdx.json` — the aggregate SBOM catalogued from the
+  source tree, and the one the SBOM attestation binds to. It covers the Go
+  module graph, which is the same across every platform in the build matrix,
+  plus the pinned GitHub Actions the release itself was built with.
+
+Regenerate the aggregate SBOM locally with `make sbom` (requires
+[syft](https://github.com/anchore/syft)).
+
 ## Requirements
 
 - Go 1.25+

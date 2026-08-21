@@ -33,6 +33,9 @@ Thumbs.db
 # GoReleaser
 /dist/
 
+# SBOM produced by `make sbom` and by the release workflow
+/sbom.spdx.json
+
 # pi-go specific
 .pi-go/
 *.sock

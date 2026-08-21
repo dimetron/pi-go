@@ -36,6 +36,23 @@ archives:
       - goos: windows
         format: zip
 
+# Per-archive SBOMs, catalogued by syft from the archive's contents. The sbom
+# pipe runs before the checksum pipe, so every `*.sbom.json` ends up both in
+# checksums.txt and uploaded to the release next to the archive it describes.
+sboms:
+  - id: archives
+    artifacts: archive
+    # Spelled out rather than relying on GoReleaser's defaults, which pass
+    # `--enrich all`: that makes network calls to third-party metadata sources
+    # and would let an outage upstream fail a release.
+    args:
+      - scan
+      - "$artifact"
+      - --output
+      - "spdx-json=$document"
+    documents:
+      - "${artifact}.sbom.json"
+
 checksum:
   name_template: checksums.txt
 
@@ -57,3 +74,11 @@ release:
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
+  # Aggregate source SBOM built by the release workflow before GoReleaser runs.
+  # It is the SBOM bound to every artifact by the attestation step, so publish
+  # it alongside the per-archive ones. extra_files are added by the release
+  # pipe, which runs after checksums, so this file is not listed in
+  # checksums.txt and therefore is not a subject of its own attestation.
+  extra_files:
+    - glob: ./sbom.spdx.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_sbom.spdx.json"
