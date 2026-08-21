@@ -238,26 +238,75 @@ func TestBashHandler_EmptyCommandRejected(t *testing.T) {
 	}
 }
 
-// TestBashHandler_IdleTimeoutIsHonored proves the per-call knob works: a
-// command well inside the default idle window is backgrounded early when the
-// caller asks for it.
-func TestBashHandler_IdleTimeoutIsHonored(t *testing.T) {
+// TestBashHandler_SubMinuteLimitsAreFloored is the regression for a real
+// session: `timeout: 300` meant five minutes, arrived as 300ms, and handed
+// `make test-coverage` to the background 312ms in — before make had printed a
+// line. The command then took two extra round trips to recover work that would
+// have finished in the foreground.
+//
+// A limit under a minute is now raised to one, so the command runs to
+// completion, and the result says what was raised and why.
+func TestBashHandler_SubMinuteLimitsAreFloored(t *testing.T) {
 	sb := testSandbox(t, t.TempDir())
 	sup := testSupervisor(t)
 	sup.heartbeat = 20 * time.Millisecond
 
 	out, err := bashHandler(sb, sup, nil, BashInput{
-		Command:     "sleep 30",
-		IdleTimeout: 150, // ms — far below the 90s default
+		Command:     "sleep 0.4 && echo done",
+		Timeout:     300, // ms — the caller meant 300 seconds
+		IdleTimeout: 150,
 	})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
-	if !out.Running {
-		t.Fatalf("idle_timeout was ignored, got %+v", out)
+	if out.Running {
+		t.Fatalf("a sub-second limit was honored and backgrounded the command: %+v", out)
 	}
-	if _, err := sup.killHandle(out.Handle); err != nil {
-		t.Fatalf("killHandle: %v", err)
+	if !strings.Contains(out.Stdout, "done") {
+		t.Errorf("command should have run to completion, got stdout %q", out.Stdout)
+	}
+	// The note has to teach the unit, or the caller repeats the mistake.
+	for _, want := range []string{"timeout=300ms", "300000", "idle_timeout=150ms", "millisecond"} {
+		if !strings.Contains(out.Note, want) {
+			t.Errorf("Note = %q, want it to contain %q", out.Note, want)
+		}
+	}
+}
+
+// A number too large to be a plausible seconds value gets no "you meant
+// seconds" correction. `idle_timeout: 5000` is a deliberate five seconds, and
+// answering it with "write 5000000 for 1h23m20s" would be worse than silence.
+func TestFlooredNote_WithholdsImplausibleSuggestions(t *testing.T) {
+	note := flooredNote(BashInput{IdleTimeout: 5000})
+
+	if !strings.Contains(note, "idle_timeout=5s") {
+		t.Errorf("note = %q, want it to name the raised limit", note)
+	}
+	for _, unwanted := range []string{"write ", "seconds written"} {
+		if strings.Contains(note, unwanted) {
+			t.Errorf("note = %q, should not contain %q", note, unwanted)
+		}
+	}
+	// A small number keeps the correction, so the two paths stay distinct.
+	if got := flooredNote(BashInput{Timeout: 300}); !strings.Contains(got, "write 300000 for 5m0s") {
+		t.Errorf("note = %q, want the seconds correction", got)
+	}
+}
+
+// A limit the caller meant is left alone: the floor is a unit-mistake guard,
+// not a policy on how long commands may hold the foreground.
+func TestBashHandler_SaneLimitsAreNotAnnotated(t *testing.T) {
+	sb := testSandbox(t, t.TempDir())
+
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
+		Command: "echo hi",
+		Timeout: 120000, // 2m, comfortably above the floor
+	})
+	if err != nil {
+		t.Fatalf("bashHandler: %v", err)
+	}
+	if out.Note != "" {
+		t.Errorf("Note = %q, want none for a limit above the floor", out.Note)
 	}
 }
 
@@ -426,19 +475,32 @@ func TestRoundDur(t *testing.T) {
 
 func TestClampDuration(t *testing.T) {
 	const fallback = 7 * time.Second
+	const minDur = 2 * time.Second
 	const maxDur = 10 * time.Second
 
-	if got := clampDuration(0, fallback, maxDur); got != fallback {
+	if got := clampDuration(0, fallback, minDur, maxDur); got != fallback {
 		t.Errorf("unset input = %v, want the fallback %v", got, fallback)
 	}
-	if got := clampDuration(-5, fallback, maxDur); got != fallback {
+	if got := clampDuration(-5, fallback, minDur, maxDur); got != fallback {
 		t.Errorf("negative input = %v, want the fallback %v", got, fallback)
 	}
-	if got := clampDuration(2000, fallback, maxDur); got != 2*time.Second {
-		t.Errorf("2000ms = %v, want 2s", got)
+	if got := clampDuration(3000, fallback, minDur, maxDur); got != 3*time.Second {
+		t.Errorf("3000ms = %v, want 3s", got)
 	}
-	if got := clampDuration(999999, fallback, maxDur); got != maxDur {
+	if got := clampDuration(50, fallback, minDur, maxDur); got != minDur {
+		t.Errorf("undersized input = %v, want the floor %v", got, minDur)
+	}
+	if got := clampDuration(999999, fallback, minDur, maxDur); got != maxDur {
 		t.Errorf("oversized input = %v, want the cap %v", got, maxDur)
+	}
+	// The floor catches a caller's mistake; it must not bend a default that
+	// was deliberately chosen below it.
+	if got := clampDuration(0, time.Second, minDur, maxDur); got != time.Second {
+		t.Errorf("unset input = %v, want the fallback unbent by the floor", got)
+	}
+	// A zero floor means no floor — bash_wait needs short waits.
+	if got := clampDuration(50, fallback, 0, maxDur); got != 50*time.Millisecond {
+		t.Errorf("50ms with no floor = %v, want 50ms", got)
 	}
 }
 
@@ -471,8 +533,15 @@ func TestSupervisorDefaults(t *testing.T) {
 // enough that the pin matters — a silent bump back to two minutes would put the
 // old round-trip cost back without failing anything else.
 func TestBashDefaultTimeout_IsTheForegroundBudget(t *testing.T) {
-	if defaultBashTimeout != 30*time.Second {
-		t.Errorf("defaultBashTimeout = %s, want 30s", defaultBashTimeout)
+	if defaultBashTimeout != time.Minute {
+		t.Errorf("defaultBashTimeout = %s, want 1m", defaultBashTimeout)
+	}
+	// The default cannot sit below the floor: a caller that passes nothing
+	// would then get a shorter budget than one that asks for the smallest
+	// value the tool accepts, which is indefensible in either direction.
+	if defaultBashTimeout < minBashTimeout {
+		t.Errorf("defaultBashTimeout %s is below the %s floor",
+			defaultBashTimeout, minBashTimeout)
 	}
 	// The idle check only earns its keep while it can fire before the hard
 	// limit, which under defaults it cannot — it exists for callers that raise

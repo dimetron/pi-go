@@ -31,14 +31,15 @@ const (
 	// enough to trip on every build is merely annoying.
 	defaultIdleTimeout = 90 * time.Second
 
-	// shortIdleTimeout is the threshold below which a caller-supplied
-	// idle_timeout is treated as self-defeating and called out in the result.
+	// shortIdleTimeout is the threshold below which an idle limit is treated as
+	// self-defeating and called out in the result.
 	//
-	// Nothing is overridden — a caller that genuinely wants a hair trigger
-	// keeps it. But the heartbeat only samples every 5s, so any value below
-	// that cannot fire sooner than 5s anyway, and values in that range
-	// background every build in this repo on its first quiet moment.
-	shortIdleTimeout = 15 * time.Second
+	// It tracks minBashTimeout, the floor the bash tool applies to both
+	// caller-supplied limits. A value under it cannot arrive through the tool
+	// at all, so what this catches is the other route in: a caller building a
+	// runRequest directly, where nothing clamps anything. Nothing is
+	// overridden on that path — the hint is all the supervisor owes it.
+	shortIdleTimeout = minBashTimeout
 
 	// heartbeatInterval is how often a running command reports that it is still
 	// alive. It drives the "45s, no output" line in the UI, which is the whole
@@ -414,14 +415,19 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 // lint, and test run in this repo on its first quiet moment, and the only
 // visible consequence is a handle the model then polls dozens of times. Naming
 // the limit turns that into a one-line fix.
+//
+// It names `timeout`, not `idle_timeout`, as the knob to raise. Run clamps the
+// idle limit down to the hard limit, so a small idle window is usually not
+// something the caller asked for — it is the hard limit showing through, and
+// raising idle_timeout alone would be clamped straight back and change nothing.
 func limitsHint(timeout, idle time.Duration) string {
 	hint := fmt.Sprintf("Limits for this command: timeout %s, idle_timeout %s.",
 		roundDur(timeout), roundDur(idle))
 	if idle < shortIdleTimeout {
-		hint += fmt.Sprintf(" An idle_timeout under %s backgrounds ordinary builds and"+
-			" test runs the moment they go quiet — pass a larger idle_timeout"+
-			" (or omit it for the %s default) rather than polling the handle.",
-			roundDur(shortIdleTimeout), roundDur(defaultIdleTimeout))
+		hint += fmt.Sprintf(" An idle limit under %s backgrounds ordinary builds and"+
+			" test runs the moment they go quiet. idle_timeout is clamped to"+
+			" timeout, so raise timeout (both are milliseconds) rather than"+
+			" polling the handle.", roundDur(shortIdleTimeout))
 	}
 	return hint
 }
