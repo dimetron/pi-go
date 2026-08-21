@@ -29,12 +29,12 @@ builds:
         goarch: arm64
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 # Per-archive SBOMs, cataloged by syft from the archive's contents. The sbom
 # pipe runs before the checksum pipe, so every `*.sbom.json` ends up both in
