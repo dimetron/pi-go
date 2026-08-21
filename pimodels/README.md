@@ -5,8 +5,11 @@ Build LLM clients for the providers pi-go supports, from outside pi-go.
 ```go
 import "github.com/dimetron/pi-go/pimodels"
 
-m, err := pimodels.New(ctx, "gpt-5.6-luna")
+m, err := pimodels.New(ctx, "gpt-5.6-luna", "")
 ```
+
+The second argument is the model to fall back to when the first is empty. Pass
+`""` when the name is always known.
 
 `m` is an ADK `model.LLM`. Hand it to any ADK agent.
 
@@ -33,7 +36,7 @@ This package and the agent package meet at ADK's `model.LLM`, not at each
 other. Neither imports the other:
 
 ```go
-m, err := pimodels.New(ctx, "gpt-5.6-luna")       // this package
+m, err := pimodels.New(ctx, "gpt-5.6-luna", "")   // this package
 a, err := piagent.New(ctx, piagent.WithModel(m))  // the agent package
 ```
 
@@ -94,12 +97,13 @@ pimodels.ContextWindowFor("azure", "my-deployment")  // provider-aware
 `Resolve` needs no credential and makes no request, so it is safe to run at
 startup to validate configuration.
 
-The second argument is the fallback for a **missing** name, so a value read from
-a flag or a config file can go straight through without the caller testing it
-for empty first:
+`New` and `Resolve` both take a fallback for a **missing** name, so a value read
+from a flag or a config file can go straight through without the caller testing
+it for empty first:
 
 ```go
-info, err := pimodels.Resolve(*modelFlag, "claude-sonnet-5")
+info, err := pimodels.Resolve(*modelFlag, "claude-sonnet-5")  // inspect
+m, err := pimodels.New(ctx, *modelFlag, "claude-sonnet-5")    // build
 ```
 
 | `modelName` | `defaultModel` | Result |
@@ -112,6 +116,23 @@ info, err := pimodels.Resolve(*modelFlag, "claude-sonnet-5")
 The asymmetry is deliberate: a default covers a name nobody supplied, not one
 supplied wrongly. Falling back on an unroutable name would send the request to a
 model the caller never wrote, and nothing would say so.
+
+`New` applies the identical rule, so the two never disagree about what an empty
+name means — they share one helper rather than each implementing it.
+
+### Do not chain Resolve into New
+
+`Resolve` moves the routing prefix out of the name and into `Info.Provider`, so
+`Info.Model` is not a name `New` can take back:
+
+```go
+info, _ := pimodels.Resolve("ollama/gemma4:e4b", "")  // -> ollama, "gemma4:e4b"
+m, err := pimodels.New(ctx, info.Model, "")           // ERROR: unknown model
+```
+
+Every `ollama/`, `azure/` and `opencode/` name fails this way. Give `New` the
+name you started with — it resolves internally, which is why it takes the
+fallback itself rather than expecting callers to resolve first.
 
 ## Finding the provider from a model
 

@@ -13,7 +13,7 @@ import (
 func ExampleNew() {
 	ctx := context.Background()
 
-	m, err := pimodels.New(ctx, "gpt-5.6-luna")
+	m, err := pimodels.New(ctx, "gpt-5.6-luna", "")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func ExampleNew() {
 func ExampleNew_gateway() {
 	ctx := context.Background()
 
-	m, err := pimodels.New(ctx, "gpt-5.6-luna",
+	m, err := pimodels.New(ctx, "gpt-5.6-luna", "",
 		pimodels.WithBaseURL("https://llm-gateway.internal/v1"),
 		pimodels.WithAPIKey("tenant-key"),
 		pimodels.WithHeaders(map[string]string{"X-Tenant": "acme"}),

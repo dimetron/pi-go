@@ -11,13 +11,65 @@ import (
 )
 
 func TestNewRejectsEmptyModelName(t *testing.T) {
-	if _, err := New(context.Background(), ""); err == nil {
+	if _, err := New(context.Background(), "", ""); err == nil {
 		t.Fatal("New(\"\") returned no error; an empty model name cannot resolve to anything")
 	}
 }
 
+// TestNewDefaultModel mirrors TestResolveDefaultModel: New must apply the
+// fallback on the same terms, or a caller gets one answer from Resolve and a
+// different one from New for the same pair of names.
+func TestNewDefaultModel(t *testing.T) {
+	m, err := New(context.Background(), "", "claude-sonnet-5")
+	if err != nil {
+		t.Fatalf(`New("", "claude-sonnet-5"): %v`, err)
+	}
+	p, ok := m.(interface{ Provider() string })
+	if !ok {
+		t.Fatal("model does not report its provider")
+	}
+	if got := p.Provider(); got != "anthropic" {
+		t.Fatalf("fallback built a %q model, want anthropic", got)
+	}
+
+	// A present but unroutable name is not a missing one, so the default must
+	// not rescue it.
+	if _, err := New(context.Background(), "not-a-model-at-all-123", "claude-sonnet-5"); err == nil {
+		t.Fatal("expected an unroutable name to fail even with a default given")
+	}
+}
+
+// TestNewNeedsNoResolveRoundTrip pins the reason New takes the default itself.
+// Resolve moves the routing prefix into Info.Provider, so Info.Model cannot be
+// fed back to New -- and every ollama/, azure/ and opencode/ name would break
+// if callers were expected to chain the two.
+func TestNewNeedsNoResolveRoundTrip(t *testing.T) {
+	const name = "ollama/gemma4:e4b"
+
+	info, err := Resolve(name, "")
+	if err != nil {
+		t.Fatalf("Resolve(%q): %v", name, err)
+	}
+	if _, err := Resolve(info.Model, ""); err == nil {
+		t.Skip("Info.Model round-trips again; the round-trip hazard has been fixed elsewhere")
+	}
+
+	// New, given the original name, routes it correctly without the round trip.
+	m, err := New(context.Background(), name, "")
+	if err != nil {
+		t.Fatalf("New(%q): %v", name, err)
+	}
+	p, ok := m.(interface{ Provider() string })
+	if !ok {
+		t.Fatal("model does not report its provider")
+	}
+	if got := p.Provider(); got != "ollama" {
+		t.Fatalf("New(%q) built a %q model, want ollama", name, got)
+	}
+}
+
 func TestNewUnknownModel(t *testing.T) {
-	_, err := New(context.Background(), "definitely-not-a-real-model-xyz")
+	_, err := New(context.Background(), "definitely-not-a-real-model-xyz", "")
 	if err == nil {
 		t.Fatal("expected an error for an unresolvable model name")
 	}

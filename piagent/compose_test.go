@@ -26,7 +26,7 @@ func TestComposeModelIntoAgent(t *testing.T) {
 	// A local Ollama endpoint resolves and constructs without a credential and
 	// without reaching the network, which keeps this about composition rather
 	// than about a vendor being up.
-	m, err := pimodels.New(ctx, "ollama/gemma4:e4b",
+	m, err := pimodels.New(ctx, "ollama/gemma4:e4b", "",
 		pimodels.WithBaseURL("http://127.0.0.1:11434"))
 	if err != nil {
 		t.Fatalf("pimodels.New: %v", err)
@@ -58,7 +58,7 @@ func TestComposeModelIntoAgent(t *testing.T) {
 // that model can read it without importing pimodels. This is what let piagent
 // delete its own model-name prefix table.
 func TestComposeProviderNamerFlowsThrough(t *testing.T) {
-	m, err := pimodels.New(context.Background(), "ollama/gemma4:e4b",
+	m, err := pimodels.New(context.Background(), "ollama/gemma4:e4b", "",
 		pimodels.WithBaseURL("http://127.0.0.1:11434"))
 	if err != nil {
 		t.Fatalf("pimodels.New: %v", err)

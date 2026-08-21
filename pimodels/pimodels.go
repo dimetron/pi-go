@@ -10,7 +10,7 @@
 // tools, sessions or skills, and it must stay that way: an embedder composes the
 // two halves itself.
 //
-//	m, err := pimodels.New(ctx, "gpt-5.6-luna")
+//	m, err := pimodels.New(ctx, "gpt-5.6-luna", "")
 //	if err != nil {
 //	    return err
 //	}
@@ -186,9 +186,18 @@ func WithAdvisor(advisorModel string, maxUses int, caching bool) Option {
 // Anthropic, "gemini-*" is Gemini, "grok-*" is xAI, an "ollama/" prefix or a
 // ":cloud" suffix routes to Ollama, and so on. Pass [WithBaseURL] to override
 // the endpoint for any of them.
-func New(ctx context.Context, modelName string, opts ...Option) (Model, error) {
-	if modelName == "" {
-		return nil, fmt.Errorf("pimodels: model name must not be empty")
+//
+// An empty modelName falls back to defaultModel, on the same terms as
+// [Resolve]: the default covers a missing name, never an unroutable one.
+//
+// Taking the default here rather than leaving the caller to call [Resolve]
+// first matters, because Resolve's answer cannot be fed back in. Resolve moves
+// the routing prefix out of the name and into [Info.Provider], so New would see
+// "gemma4:e4b" where the caller wrote "ollama/gemma4:e4b" and fail to route it.
+func New(ctx context.Context, modelName, defaultModel string, opts ...Option) (Model, error) {
+	modelName, err := applyDefault(modelName, defaultModel)
+	if err != nil {
+		return nil, err
 	}
 
 	var o options
@@ -240,7 +249,7 @@ func FromConfig(ctx context.Context, role string, opts ...Option) (Model, error)
 	if cfg.ThinkingLevel != "" {
 		merged = append([]Option{WithThinkingLevel(cfg.ThinkingLevel)}, merged...)
 	}
-	return New(ctx, modelName, merged...)
+	return New(ctx, modelName, "", merged...)
 }
 
 // Resolve reports how a model name would be routed, without building a client
@@ -259,14 +268,9 @@ func Resolve(modelName, defaultModel string, opts ...Option) (Info, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if modelName == "" {
-		modelName = defaultModel
-	}
-	// Checked here rather than left to resolveInfo: with WithBaseURL set,
-	// provider.ResolveWithBaseURL treats an unrecognized name as a custom
-	// OpenAI-compatible model and would happily return one with an empty Model.
-	if modelName == "" {
-		return Info{}, fmt.Errorf("pimodels: no model name and no default model given")
+	modelName, err := applyDefault(modelName, defaultModel)
+	if err != nil {
+		return Info{}, err
 	}
 	info, err := resolveInfo(modelName, o.baseURL)
 	if err != nil {
@@ -297,6 +301,23 @@ func ContextWindowFor(providerName, modelName string) int64 {
 // from, so an embedder can report a missing credential precisely.
 func APIKeyEnvVar(providerName string) string {
 	return provider.APIKeyEnvVar(providerName)
+}
+
+// applyDefault implements the fallback rule shared by [New] and [Resolve], so
+// the two cannot drift into disagreeing about what an empty name means.
+//
+// The empty result is rejected here rather than left to resolveInfo because
+// resolveInfo does not reliably reject it: with a base URL set,
+// provider.ResolveWithBaseURL treats an unrecognized name as a custom
+// OpenAI-compatible model and returns one with an empty Model and no error.
+func applyDefault(modelName, defaultModel string) (string, error) {
+	if modelName == "" {
+		modelName = defaultModel
+	}
+	if modelName == "" {
+		return "", fmt.Errorf("pimodels: no model name and no default model given")
+	}
+	return modelName, nil
 }
 
 // resolveInfo picks the resolution path: an explicit base URL means the caller
