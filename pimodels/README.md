@@ -84,7 +84,7 @@ here that touches pi-go's configuration; `New` is self-contained.
 ## Inspecting before connecting
 
 ```go
-info, err := pimodels.Resolve("claude-sonnet-5")
+info, err := pimodels.Resolve("claude-sonnet-5", "")
 // info.Provider == "anthropic"
 
 pimodels.ContextWindow("gemini-3.7-flash")           // tokens, 0 if unknown
@@ -93,6 +93,25 @@ pimodels.ContextWindowFor("azure", "my-deployment")  // provider-aware
 
 `Resolve` needs no credential and makes no request, so it is safe to run at
 startup to validate configuration.
+
+The second argument is the fallback for a **missing** name, so a value read from
+a flag or a config file can go straight through without the caller testing it
+for empty first:
+
+```go
+info, err := pimodels.Resolve(*modelFlag, "claude-sonnet-5")
+```
+
+| `modelName` | `defaultModel` | Result |
+|---|---|---|
+| `""` | `"claude-sonnet-5"` | `anthropic` / `claude-sonnet-5` |
+| `"gpt-5.6-luna"` | `"claude-sonnet-5"` | `openai` / `gpt-5.6-luna` — an explicit name always wins |
+| `"cluade-sonet-5"` | `"claude-sonnet-5"` | error — a typo is not a missing name |
+| `""` | `""` | error |
+
+The asymmetry is deliberate: a default covers a name nobody supplied, not one
+supplied wrongly. Falling back on an unroutable name would send the request to a
+model the caller never wrote, and nothing would say so.
 
 ## Finding the provider from a model
 

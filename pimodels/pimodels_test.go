@@ -42,7 +42,7 @@ func TestResolveKnownModels(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info, err := Resolve(tt.model)
+			info, err := Resolve(tt.model, "")
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", tt.model, err)
 			}
@@ -57,8 +57,50 @@ func TestResolveKnownModels(t *testing.T) {
 }
 
 func TestResolveUnknownModel(t *testing.T) {
-	if _, err := Resolve("not-a-model-at-all-123"); err == nil {
+	if _, err := Resolve("not-a-model-at-all-123", ""); err == nil {
 		t.Fatal("expected an error for an unresolvable model name")
+	}
+}
+
+// TestResolveDefaultModel covers the fallback: a missing name takes the
+// default, a present name never does.
+func TestResolveDefaultModel(t *testing.T) {
+	info, err := Resolve("", "claude-sonnet-5")
+	if err != nil {
+		t.Fatalf(`Resolve("", "claude-sonnet-5"): %v`, err)
+	}
+	if info.Provider != "anthropic" || info.Model != "claude-sonnet-5" {
+		t.Fatalf("fallback resolved to %s/%s, want anthropic/claude-sonnet-5", info.Provider, info.Model)
+	}
+
+	// An explicit name wins over the default.
+	info, err = Resolve("gpt-5.6-luna", "claude-sonnet-5")
+	if err != nil {
+		t.Fatalf("Resolve with both names: %v", err)
+	}
+	if info.Provider != "openai" {
+		t.Fatalf("explicit name resolved to %q, want openai", info.Provider)
+	}
+}
+
+// TestResolveUnresolvableNameIgnoresDefault pins the deliberate asymmetry: the
+// default covers a missing name, not a wrong one. Falling back on a typo would
+// route to a different model than the caller wrote, silently.
+func TestResolveUnresolvableNameIgnoresDefault(t *testing.T) {
+	if _, err := Resolve("not-a-model-at-all-123", "claude-sonnet-5"); err == nil {
+		t.Fatal("expected an unroutable name to fail even with a default given")
+	}
+}
+
+// TestResolveNoNameAndNoDefault checks the both-empty case, including with a
+// base URL set — where provider.ResolveWithBaseURL would otherwise return a
+// custom model with an empty name rather than an error.
+func TestResolveNoNameAndNoDefault(t *testing.T) {
+	if _, err := Resolve("", ""); err == nil {
+		t.Fatal("expected an error when neither a name nor a default is given")
+	}
+	if _, err := Resolve("", "", WithBaseURL("https://gateway.example/v1")); err == nil {
+		t.Fatal("expected an error when neither a name nor a default is given, with a base URL")
 	}
 }
 
@@ -66,7 +108,7 @@ func TestResolveUnknownModel(t *testing.T) {
 // wins: a caller naming a gateway must not have the model name silently reroute
 // the request somewhere else.
 func TestResolveWithBaseURLTakesPrecedence(t *testing.T) {
-	info, err := Resolve("gpt-5.6-luna", WithBaseURL("https://gateway.example/v1"))
+	info, err := Resolve("gpt-5.6-luna", "", WithBaseURL("https://gateway.example/v1"))
 	if err != nil {
 		t.Fatalf("Resolve with base URL: %v", err)
 	}

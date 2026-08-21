@@ -245,10 +245,28 @@ func FromConfig(ctx context.Context, role string, opts ...Option) (Model, error)
 
 // Resolve reports how a model name would be routed, without building a client
 // or needing a credential. Useful for validating configuration at startup.
-func Resolve(modelName string, opts ...Option) (Info, error) {
+//
+// An empty modelName falls back to defaultModel, so a caller reading a name
+// from a flag or a config file can pass it straight through instead of
+// branching on the empty string first. Both empty is an error, as is a
+// defaultModel that does not itself resolve.
+//
+// The fallback covers a *missing* name only. A name that is present but
+// unroutable still fails: substituting a different model for a typo hides the
+// mistake until the output or the bill looks wrong.
+func Resolve(modelName, defaultModel string, opts ...Option) (Info, error) {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if modelName == "" {
+		modelName = defaultModel
+	}
+	// Checked here rather than left to resolveInfo: with WithBaseURL set,
+	// provider.ResolveWithBaseURL treats an unrecognized name as a custom
+	// OpenAI-compatible model and would happily return one with an empty Model.
+	if modelName == "" {
+		return Info{}, fmt.Errorf("pimodels: no model name and no default model given")
 	}
 	info, err := resolveInfo(modelName, o.baseURL)
 	if err != nil {
