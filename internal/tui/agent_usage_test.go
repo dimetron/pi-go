@@ -81,6 +81,11 @@ func TestFormatTurnUsage(t *testing.T) {
 			},
 			"2.0k in (1.0k cached) · 500 out · 75 reasoning · 2.5k total",
 		},
+		{
+			"reasoning only, no total",
+			&genai.GenerateContentResponseUsageMetadata{ThoughtsTokenCount: 75},
+			"0 in · 0 out · 75 reasoning · 75 total",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
