@@ -136,6 +136,9 @@ func TestIsOllamaCloudEndpoint(t *testing.T) {
 	}
 	local := []string{
 		ollamaLocalURL,
+		// Unparseable: the guard returns false so a malformed OLLAMA_HOST is
+		// treated as a host someone runs, keeping the reachability check.
+		"http://[::1",
 		"http://127.0.0.1:11434",
 		"http://[::1]:11434",
 		"http://gpu-box.lan:11434",
