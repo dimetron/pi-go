@@ -31,6 +31,13 @@ func TestIsTransient(t *testing.T) {
 		{"rate limit prose", errors.New("rate limit exceeded"), true},
 		{"rate_limit code", errors.New("rate_limit_error"), true},
 
+		// Retryable: Gemini's per-minute token limit. The prose reuses the
+		// quota-exhaustion wording that the terminal list matches, but it also
+		// names its reopening window ("Please retry in 59.44s", retryDelay:59s)
+		// — a window only a clearing failure carries, so it must beat the
+		// terminal prose.
+		{"gemini per-minute token limit", errors.New("Error 429, Message: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to:    https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit.    * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count, limit: 2000000, model: gemini-3.7-flash    Please retry in 59.440629838s., Status: RESOURCE_EXHAUSTED, Details: [map[@type:type.googleapis.com/google.rpc.Help links:[map[description:Learn more about Gemini API quotas    url:https://ai.google.dev/gemini-api/docs/rate-limits]]] map[@type:type.googleapis.com/google.rpc.QuotaFailure violations:[map[quotaDimensions:map[location:global model:gemini-3.7-flash]    quotaId:GenerateContentPaidTierInputTokensPerModelPerMinute quotaMetric:generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count quotaValue:2000000]]]    map[@type:type.googleapis.com/google.rpc.RetryInfo retryDelay:59s]]"), true},
+
 		// Retryable: upstream faults.
 		{"500", errors.New("500 Internal Server Error"), true},
 		{"502", errors.New("502 Bad Gateway"), true},
@@ -110,6 +117,33 @@ func TestIsTransientTerminalBeatsInterface(t *testing.T) {
 	}
 }
 
+// A failure that names a retry window must be transient even when its prose
+// also matches the terminal quota patterns: a provider only tells you when its
+// window reopens if the failure clears when that window closes. This is what
+// Gemini's per-minute token limit does — it carries the plan/billing copy and
+// a "retry in 59.4s" figure at once.
+func TestIsTransientServerWindowBeatsTerminalProse(t *testing.T) {
+	err := providerErr("429 Too Many Requests: you have exceeded your current quota, please check your plan and billing details. Please retry in 59.440629838s.")
+	if !IsTransient(err) {
+		t.Error("a named retry window should make a quota-looking failure transient")
+	}
+	if IsTerminal(err) {
+		t.Error("a named retry window should clear the terminal classification")
+	}
+}
+
+// The terminal list's own quota cases carry no window, so they must stay
+// terminal even with the ServerDelay override in place.
+func TestIsTransientQuotaWithoutWindowStaysTerminal(t *testing.T) {
+	err := providerErr("429 Too Many Requests: you have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade")
+	if IsTransient(err) {
+		t.Error("quota exhaustion without a retry window should be terminal")
+	}
+	if !IsTerminal(err) {
+		t.Error("quota exhaustion without a retry window should be terminal")
+	}
+}
+
 func TestServerDelay(t *testing.T) {
 	tests := []struct {
 		name string
@@ -124,6 +158,8 @@ func TestServerDelay(t *testing.T) {
 		{"spelled out", "retry after 30 seconds", 30 * time.Second, true},
 		{"spelled minutes", "Retry after 2 minutes", 2 * time.Minute, true},
 		{"bare number is seconds", "Retry-After: 30", 30 * time.Second, true},
+		{"gemini retry in", "Please retry in 59.440629838s.", 59*time.Second + 440629838*time.Nanosecond, true},
+		{"gemini retrydelay detail", "retryDelay:59s", 59 * time.Second, true},
 		{"no hint", "429 Too Many Requests", 0, false},
 		{"empty", "", 0, false},
 	}
@@ -172,6 +208,18 @@ func TestDelayPrefersServerHint(t *testing.T) {
 
 	if got := Delay(cfg, 0, err); got != 9422*time.Millisecond {
 		t.Errorf("Delay = %v, want the server's 9.422s", got)
+	}
+}
+
+// Gemini's retryDelay detail must feed the delay just like any other hint, so
+// the retry lands inside the window the server named rather than a backoff
+// schedule that keeps hitting the same exhausted per-minute window.
+func TestDelayPrefersGeminiServerHint(t *testing.T) {
+	cfg := Config{MaxRetries: 5, InitialDelay: time.Second, MaxDelay: time.Minute}
+	err := providerErr("Please retry in 59.440629838s.")
+
+	if got := Delay(cfg, 0, err); got != 59*time.Second+440629838*time.Nanosecond {
+		t.Errorf("Delay = %v, want the server's 59.44s", got)
 	}
 }
 

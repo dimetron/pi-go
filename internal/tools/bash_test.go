@@ -143,17 +143,21 @@ func TestBashHandler_RunsInSandboxDir(t *testing.T) {
 }
 
 // TestBashHandler_TimeoutHandsOffToBackground confirms a command that outruns
-// its timeout is reported as still running, with a handle, rather than killed.
+// its limits is reported as still running, with a handle, rather than killed.
 // Killing it would discard whatever it had produced and tell the model nothing
 // about why it stopped.
+//
+// The handoff is driven by the idle limit on the supervisor rather than a small
+// `timeout` in the input, because minBashTimeout floors anything the caller
+// passes at a minute — which is the whole point of the floor, but leaves the
+// supervisor field as the only way to reach this path inside a test's patience.
 func TestBashHandler_TimeoutHandsOffToBackground(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
-	sup := testSupervisor(t)
+	sup := fastSupervisor(t)
 
 	out, err := bashHandler(sb, sup, nil, BashInput{
 		Command: "sleep 5",
-		Timeout: 200, // 200 ms
 	})
 	if err != nil {
 		t.Fatalf("bashHandler returned error: %v", err)

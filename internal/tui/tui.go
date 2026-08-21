@@ -88,6 +88,11 @@ type model struct {
 	// is surfaced to the terminal via View().WindowTitle so Bubble Tea's
 	// renderer emits the escape sequence in-band with the frame it draws.
 	sessionTitle string
+	// titleSpin is the phase of the animated title prefix ("π *", "π +",
+	// "π -") shown while a turn runs. It is advanced in Update from the
+	// matrix tick, next to ToolDisplay.BlinkOn, so View stays a pure
+	// function of model state.
+	titleSpin int
 	// topSectionRows is the number of rows in the top section (messages + sidebar)
 	// before the full-width status bar. The rail and sidebar only cover these rows.
 	topSectionRowsVal int
@@ -707,7 +712,11 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			// here, in Update, so View stays a pure function of model state —
 			// the matrix tick (150ms while running) re-renders often enough to
 			// animate it.
-			m.chatModel.ToolDisplay.BlinkOn = time.Now().UnixMilli()/500%2 == 0
+			now := time.Now()
+			m.chatModel.ToolDisplay.BlinkOn = now.UnixMilli()/500%2 == 0
+			// Same idea one level out: the tab title's prefix symbol rotates so
+			// a backgrounded session still shows it is working.
+			m.titleSpin = terminalTitleSpinIndex(now)
 			return m, matrixTickCmd(), true
 		}
 		return m, nil, true
@@ -777,6 +786,9 @@ func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	case agentWarningMsg:
 		model, cmd := m.handleAgentWarning(msg)
+		return model, cmd, true
+	case agentUsageMsg:
+		model, cmd := m.handleAgentUsage(msg)
 		return model, cmd, true
 	case systemNoticeMsg:
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -1612,7 +1624,12 @@ func (m *model) View() tea.View {
 	// through the View is what keeps the sequence ordered against the frame
 	// writes — writing it to os.Stdout directly races the renderer and lands
 	// mid-frame, which corrupts the drawn output.
-	v.WindowTitle = formatTerminalTitleWithCWD(m.sessionTitle, m.cfg.WorkDir)
+	//
+	// While a turn runs the "π -" prefix becomes a rotating
+	// "π * / π + / π ∙ / π -" so the tab shows progress even when the window
+	// is not visible.
+	v.WindowTitle = formatTerminalTitleWithPrefix(
+		terminalTitlePrefix(m.running, m.titleSpin), m.sessionTitle, m.cfg.WorkDir)
 	if inputCursor != nil {
 		inputCursor.Y += inputCursorY
 		v.Cursor = inputCursor

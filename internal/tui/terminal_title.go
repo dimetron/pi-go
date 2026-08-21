@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 )
 
 // terminalTitleApp is the constant prefix used when constructing the terminal
@@ -9,6 +10,44 @@ import (
 // internal/tui/face.go); keeping the prefix short leaves room for the
 // prompt-derived title in a typical tab.
 const terminalTitleApp = "π -"
+
+// terminalTitleWorkingSymbols rotate through the prefix's symbol slot while a
+// turn is running, so the tab title itself animates ("π ⠋", "π ⠙", "π ⠹", …)
+// and a backgrounded session is visibly still working.
+//
+// They are braille cells, not the ASCII/∙ set the status-bar spinner uses,
+// because the tab title is rendered in a proportional font where the status
+// bar is monospace. In a proportional font '*' and '+' are wider than '-' and
+// '∙', so rotating through them made the tab bar jitter in width every phase.
+// Every braille cell occupies the same 2×2 dot grid, so the title holds a
+// constant width whatever phase it is on.
+var terminalTitleWorkingSymbols = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+
+// terminalTitleSpinPeriod is the wall-clock dwell of one symbol. The frame that
+// carries the title is redrawn on the 150ms matrix tick while running, so this
+// only has to be a multiple of that; ~half a second keeps the tab bar readable
+// instead of strobing.
+const terminalTitleSpinPeriod = 500 * time.Millisecond
+
+// terminalTitleSpinIndex maps a wall-clock time onto the symbol cycle. It is
+// called from Update (never View) so the rendered frame stays a pure function
+// of model state.
+func terminalTitleSpinIndex(now time.Time) int {
+	return int(now.UnixMilli()/terminalTitleSpinPeriod.Milliseconds()) % len(terminalTitleWorkingSymbols)
+}
+
+// terminalTitlePrefix returns the prefix for the current turn state: the static
+// "π -" when idle, or "π <symbol>" for the given phase while running.
+func terminalTitlePrefix(running bool, spin int) string {
+	if !running {
+		return terminalTitleApp
+	}
+	n := len(terminalTitleWorkingSymbols)
+	// Defensive modulo: spin comes from the model and a negative or out-of-range
+	// value must not panic the render path.
+	i := ((spin % n) + n) % n
+	return "π " + string(terminalTitleWorkingSymbols[i])
+}
 
 // terminalTitleMax caps the title so it fits on a single terminal line. The
 // terminal itself will truncate anything longer, but doing it here keeps the
@@ -72,6 +111,13 @@ func formatTerminalTitle(title string) string {
 // control-character scrub as formatTerminalTitle so the OSC 0 envelope stays
 // well-formed.
 func formatTerminalTitleWithCWD(title, cwd string) string {
+	return formatTerminalTitleWithPrefix(terminalTitleApp, title, cwd)
+}
+
+// formatTerminalTitleWithPrefix is formatTerminalTitleWithCWD with the leading
+// "π -" made a parameter, so a running turn can swap in the rotating symbol
+// (see terminalTitlePrefix) without duplicating the assembly and scrubbing.
+func formatTerminalTitleWithPrefix(prefix, title, cwd string) string {
 	// Scrub the CWD basename the same way the prompt is scrubbed. On Unix a
 	// directory name may legally contain ESC, BEL, or other C0 controls, and
 	// the OSC 0 envelope treats those as terminators — an unsanitized folder
@@ -84,19 +130,19 @@ func formatTerminalTitleWithCWD(title, cwd string) string {
 		// No CWD context — fall back to the bare prefix shape so callers that
 		// never set WorkDir (notably the unit tests) keep the old behavior.
 		if clean == "" {
-			return terminalTitleApp
+			return prefix
 		}
-		return terminalTitleApp + " " + clean
+		return prefix + " " + clean
 	}
 	if clean == "" {
-		return terminalTitleApp + " " + folder
+		return prefix + " " + folder
 	}
 	// Strip the command portion to terminalTitleCmdMax runes (counted in
 	// runes, not bytes, to match terminalTitleMax's rune-safe behavior).
 	if r := []rune(clean); len(r) > terminalTitleCmdMax {
 		clean = string(r[:terminalTitleCmdMax-1]) + "…"
 	}
-	return terminalTitleApp + " " + folder + " | " + clean
+	return prefix + " " + folder + " | " + clean
 }
 
 // stripControlChars is the shared prefix-cleaner: any C0 control (ESC, BEL,

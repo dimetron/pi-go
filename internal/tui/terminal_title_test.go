@@ -448,3 +448,91 @@ func TestHandleSlashCommand_ExitAndQuit_DoNotChangeTitle(t *testing.T) {
 		})
 	}
 }
+
+// While a turn runs, the title's prefix symbol rotates so a backgrounded tab
+// shows the session is still working. Idle keeps the static "π -".
+func TestTerminalTitlePrefix(t *testing.T) {
+	if got := terminalTitlePrefix(false, 2); got != "π -" {
+		t.Errorf("idle prefix = %q, want %q", got, "π -")
+	}
+	seen := map[string]bool{}
+	for i := range terminalTitleWorkingSymbols {
+		got := terminalTitlePrefix(true, i)
+		if len([]rune(got)) != 3 || !strings.HasPrefix(got, "π ") {
+			t.Errorf("running prefix at spin %d = %q, want %q + one symbol", i, got, "π ")
+		}
+		seen[got] = true
+	}
+	if len(seen) != len(terminalTitleWorkingSymbols) {
+		t.Errorf("running prefixes = %v, want one distinct prefix per symbol", seen)
+	}
+	// An out-of-range phase must wrap rather than panic — spin comes from the
+	// model and the render path has no business panicking on it.
+	if got := terminalTitlePrefix(true, len(terminalTitleWorkingSymbols)); got != terminalTitlePrefix(true, 0) {
+		t.Errorf("prefix did not wrap: %q", got)
+	}
+	if got := terminalTitlePrefix(true, -1); got != terminalTitlePrefix(true, len(terminalTitleWorkingSymbols)-1) {
+		t.Errorf("negative spin did not wrap: %q", got)
+	}
+}
+
+// The phase is a pure function of wall-clock time, so any redraw — whatever
+// triggered it — shows the symbol the elapsed time calls for.
+func TestTerminalTitleSpinIndex_AdvancesWithTime(t *testing.T) {
+	base := time.UnixMilli(0)
+	for i := range terminalTitleWorkingSymbols {
+		at := base.Add(time.Duration(i) * terminalTitleSpinPeriod)
+		if got := terminalTitleSpinIndex(at); got != i {
+			t.Errorf("spin index at +%v = %d, want %d", at.Sub(base), got, i)
+		}
+	}
+	// Within one period the phase holds steady.
+	if got := terminalTitleSpinIndex(base.Add(terminalTitleSpinPeriod - time.Millisecond)); got != 0 {
+		t.Errorf("spin index just before the first rollover = %d, want 0", got)
+	}
+	// And it wraps back to the start of the cycle.
+	full := time.Duration(len(terminalTitleWorkingSymbols)) * terminalTitleSpinPeriod
+	if got := terminalTitleSpinIndex(base.Add(full)); got != 0 {
+		t.Errorf("spin index after a full cycle = %d, want 0", got)
+	}
+}
+
+// The animated prefix has to reach the terminal the same way the static one
+// does — through View().WindowTitle, with the session title still attached.
+func TestView_WindowTitle_AnimatesWhileRunning(t *testing.T) {
+	m, _ := newTitleTestModel(t)
+	m.applySessionTitle("fix the top-level render")
+
+	m.running = true
+	for i := range terminalTitleWorkingSymbols {
+		m.titleSpin = i
+		want := terminalTitlePrefix(true, i) + " fix the top-level render"
+		if got := m.View().WindowTitle; got != want {
+			t.Errorf("running WindowTitle at spin %d = %q, want %q", i, got, want)
+		}
+	}
+
+	// Turn over: the prefix goes back to being static, whatever phase the
+	// animation stopped on.
+	m.running = false
+	if got := m.View().WindowTitle; got != "π - fix the top-level render" {
+		t.Errorf("idle WindowTitle = %q, want %q", got, "π - fix the top-level render")
+	}
+}
+
+// The matrix tick is what drives the animation: it already advances the tool
+// bullet's blink while running, and now the title phase alongside it.
+func TestMatrixTick_AdvancesTitleSpin(t *testing.T) {
+	m, _ := newTitleTestModel(t)
+	m.running = true
+	m.titleSpin = -1
+
+	updated, _ := m.Update(matrixTickMsg{})
+	mm, ok := updated.(*model)
+	if !ok {
+		t.Fatalf("Update returned %T, want *model", updated)
+	}
+	if want := terminalTitleSpinIndex(time.Now()); mm.titleSpin != want {
+		t.Errorf("titleSpin after tick = %d, want %d", mm.titleSpin, want)
+	}
+}

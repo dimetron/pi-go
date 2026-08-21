@@ -407,8 +407,11 @@ func TestLsHandler(t *testing.T) {
 func TestBashTimeout(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)
-	sup := testSupervisor(t)
-	out, err := bashHandler(sb, sup, nil, BashInput{Command: "sleep 10", Timeout: 500})
+	// fastSupervisor, not a small Timeout: caller-supplied limits are floored
+	// at minBashTimeout, so the supervisor's idle limit is what makes a handoff
+	// observable in a unit test.
+	sup := fastSupervisor(t)
+	out, err := bashHandler(sb, sup, nil, BashInput{Command: "sleep 10"})
 	if err != nil {
 		t.Fatal(err)
 	}
