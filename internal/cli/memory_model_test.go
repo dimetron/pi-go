@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestRunMemoryModelDownload_AutoDetectPlatformBranch(t *testing.T) {
@@ -42,9 +44,7 @@ func TestNewMemoryModelStatusCmd_RunE(t *testing.T) {
 
 func TestRunMemoryModelDownload_HomeDirError(t *testing.T) {
 	// Test when os.UserHomeDir returns an error (non-existent HOME).
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", "/nonexistent/user/dir")
-	defer os.Setenv("HOME", origHome)
+	testenv.SetUnwritableHome(t)
 
 	// With empty dest and non-existent HOME, should fail.
 	err := runMemoryModelDownload("", "")

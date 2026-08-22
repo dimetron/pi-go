@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestDefaults(t *testing.T) {
@@ -280,13 +282,7 @@ func TestLoad_WithGlobalAndProjectConfig(t *testing.T) {
 	}
 
 	// Override home directory
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = os.Setenv("HOME", origHome)
-	}()
+	testenv.SetHome(t, home)
 
 	// Change to project dir
 	origWd, _ := os.Getwd()
@@ -541,7 +537,7 @@ func TestLoad_MigratesDefaultModelToRolesActual(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	// Change to tmp dir so no project config is found.
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -580,7 +576,7 @@ func TestLoad_MigratesDefaultModelWhenDefaultRoleMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
@@ -642,7 +638,7 @@ func TestLoadMCPServers_GlobalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	servers := LoadMCPServers()
 	if len(servers) != 1 {
 		t.Fatalf("expected 1 server, got %d", len(servers))
@@ -681,7 +677,7 @@ func TestLoadMCPServers_ProjectOverridesGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origWd) }()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	servers := LoadMCPServers()
 	if len(servers) != 1 {
@@ -696,7 +692,7 @@ func TestLoadMCPServers_NoFiles(t *testing.T) {
 	// Use a temp dir with no mcp.json anywhere.
 	tmp := t.TempDir()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	origWd, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -733,7 +729,7 @@ func TestLoad_MergesMCPJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origWd) }()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	cfg, err := Load()
 	if err != nil {
@@ -774,7 +770,7 @@ func TestLoad_MCPConfigOverridesMCPJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origWd) }()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	cfg, err := Load()
 	if err != nil {
@@ -821,7 +817,7 @@ func TestLoadFrom_UsesProvidedCWDForProjectMCPJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origWd) }()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	cfg, err := LoadFrom(sessionCWD)
 	if err != nil {
@@ -853,7 +849,7 @@ func TestLoadMCPServers_ObjectFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(origWd) }()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	servers := LoadMCPServers()
 	if len(servers) != 2 {
@@ -1130,9 +1126,7 @@ func TestMergeEnvFile_PreservesExistingKeys(t *testing.T) {
 func TestConfig_Save(t *testing.T) {
 	// Create a temp HOME directory.
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	testenv.SetHome(t, tmpDir)
 
 	cfg := &Config{
 		DefaultModel: "test-model",
@@ -1165,9 +1159,7 @@ func TestConfig_Save(t *testing.T) {
 
 func TestSaveDefaultRole(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	testenv.SetHome(t, tmpDir)
 
 	// SaveDefaultRole is a package-level function.
 	if err := SaveDefaultRole("my-model", "openai"); err != nil {

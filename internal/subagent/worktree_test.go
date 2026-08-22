@@ -19,6 +19,10 @@ func initTestRepo(t *testing.T) string {
 		{"git", "config", "user.name", "Test"},
 		{"git", "config", "commit.gpgsign", "false"},
 		{"git", "config", "tag.gpgsign", "false"},
+		// Git for Windows defaults core.autocrlf to true, which would rewrite
+		// every LF these tests write into CRLF on checkout and break the
+		// byte-for-byte content assertions.
+		{"git", "config", "core.autocrlf", "false"},
 		{"git", "commit", "--allow-empty", "-m", "initial commit"},
 	}
 	for _, args := range cmds {
@@ -533,9 +537,27 @@ func TestWorktree_CreateWithExistingBranch(t *testing.T) {
 	if !strings.Contains(string(out), "branch refs/heads/my-spec") {
 		t.Errorf("expected worktree on branch my-spec, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), path) {
+	if !listingNamesPath(string(out), path) {
 		t.Errorf("expected worktree at %s in list:\n%s", path, out)
 	}
+}
+
+// listingNamesPath reports whether a `git worktree list --porcelain` listing
+// names path.
+//
+// git prints worktree paths with forward slashes, and on Windows it prints the
+// long form of a directory that t.TempDir hands back in 8.3 short form
+// (C:\Users\RUNNER~1\... vs C:/Users/runneradmin/...), so a plain substring
+// match is not enough there.
+func listingNamesPath(listing, path string) bool {
+	if strings.Contains(listing, path) || strings.Contains(listing, filepath.ToSlash(path)) {
+		return true
+	}
+	long, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(listing, filepath.ToSlash(long))
 }
 
 // TestWorktree_CreateWithExistingBranchAndWorktree verifies that Create

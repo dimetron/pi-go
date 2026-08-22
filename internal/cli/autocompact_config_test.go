@@ -6,6 +6,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/logger"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // TestAutoCompactConfigFrom covers the config.Config -> AutoCompactConfig
@@ -100,7 +101,7 @@ func withEnabled(c pisession.AutoCompactConfig, v bool) pisession.AutoCompactCon
 // appends to the developer's real ~/.pi-go/log tree.
 func newTempLogger(t *testing.T) *logger.Logger {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	l, err := logger.New()
 	if err != nil {
 		t.Fatalf("logger.New: %v", err)

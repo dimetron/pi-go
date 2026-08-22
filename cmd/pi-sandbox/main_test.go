@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -213,6 +214,13 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("denials are written to the log file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			// The stub child is a #!/bin/sh script and the stub log stream is
+			// printf(1); Windows honors neither. pi-sandbox itself is a macOS
+			// launcher (sandbox-exec plus `log stream`), so there is no Windows
+			// behavior being hidden here.
+			t.Skip("stub child is a shell script; pi-sandbox is macOS-only")
+		}
 		cfg := newCfg(t, "true")
 		// Stub log stream: one header line (dropped) and one denial (kept).
 		cfg.logCmd = []string{"printf", "Filtering the log data\ndeny file-write /etc/passwd\n"}

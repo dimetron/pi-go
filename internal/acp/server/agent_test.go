@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -572,7 +573,17 @@ func TestNewPromptHandlerModelOverrideUsesRealConfig(t *testing.T) {
 			}}, nil
 		},
 	})
-	res, err := h(context.Background(), PromptTurn{Prompt: "hello", CWD: t.TempDir()})
+	// Not t.TempDir: a session built by this handler keeps an os.Root open on
+	// its CWD for the life of the process (piSessionState.cleanup has no
+	// caller), so on Windows the directory cannot be removed while the test
+	// binary is still running. Removal is best-effort here.
+	cwd, err := os.MkdirTemp("", "acp-prompt-cwd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cwd) })
+
+	res, err := h(context.Background(), PromptTurn{Prompt: "hello", CWD: cwd})
 	if err != nil {
 		if strings.Contains(err.Error(), "echo:") {
 			t.Fatalf("handler fell back to echo stub: %v", err)

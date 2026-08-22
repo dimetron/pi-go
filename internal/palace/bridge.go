@@ -67,7 +67,8 @@ func deriveWing(project string) string {
 		return "general"
 	}
 	base := filepath.Base(project)
-	if base == "." || base == "/" {
+	// filepath.Base of a root path is "/" on Unix but a backslash on Windows.
+	if base == "." || base == "/" || base == string(filepath.Separator) {
 		return "general"
 	}
 	return strings.ToLower(base)

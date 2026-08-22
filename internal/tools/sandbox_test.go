@@ -550,7 +550,7 @@ func TestSandbox_Resolve_WorktreeRelativePathDeep(t *testing.T) {
 		desc string
 	}{
 		// ../../ from subdir = worktrees/agent-456
-		{"../../go.mod", "worktrees/go.mod", "file in worktrees dir"},
+		{"../../go.mod", filepath.Join("worktrees", "go.mod"), "file in worktrees dir"},
 		{"../go.sum", filepath.Join("worktrees", "agent-456", "go.sum"), "file in agent dir"},
 		{"../..", "worktrees", "parent of agent dir"},
 	}
@@ -1161,8 +1161,12 @@ func TestSandbox_Resolve_AbsoluteOutsideReturnsError(t *testing.T) {
 	sb := testSandbox(t, dir)
 
 	// An absolute path unrelated to sandbox should yield a relative path
-	// containing "..", which Resolve detects and rejects.
-	_, err := sb.Resolve("/completely/unrelated/path")
+	// containing "..", which Resolve detects and rejects. A literal
+	// "/completely/unrelated/path" would not do: on Windows a leading slash is
+	// drive-relative, not absolute, so Resolve would read it as a path inside
+	// the sandbox.
+	outside := filepath.Join(t.TempDir(), "completely", "unrelated", "path")
+	_, err := sb.Resolve(outside)
 	if err == nil {
 		t.Error("expected error for absolute path outside sandbox")
 	}

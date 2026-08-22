@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/audit"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestNewAuditCmd(t *testing.T) {
@@ -294,15 +295,18 @@ func min(a, b int) int {
 // -----------------------------------------------------------------------
 
 func TestRunAuditOutputWriteError(t *testing.T) {
-	// Trying to write to a read-only directory should produce an error.
+	// An unwritable output path should produce an error.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")
 	os.WriteFile(path, []byte("Clean content"), 0644)
 
-	// Create a directory we can't write to.
-	readOnlyDir := filepath.Join(dir, "readonly")
-	os.MkdirAll(readOnlyDir, 0555)
-	outPath := filepath.Join(readOnlyDir, "out.txt")
+	// Point --output at a directory. Every OS refuses to open a directory for
+	// writing; a chmod 0555 parent would not, since Windows ignores the mode
+	// bits entirely.
+	outPath := filepath.Join(dir, "out.txt")
+	if err := os.MkdirAll(outPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	err := runAudit(nil, "", path, false, false, false, false, "text", outPath)
 	if err == nil {
@@ -313,9 +317,7 @@ func TestRunAuditOutputWriteError(t *testing.T) {
 func TestRunAuditDefaultDirsWithNoSkills(t *testing.T) {
 	// When no skill directories exist, runAudit should handle gracefully.
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	testenv.SetHome(t, tmpDir)
 
 	// runAudit scans defaultSkillDirs() — with HOME set to tmpDir
 	// there are no skill dirs under the standard paths, so it should

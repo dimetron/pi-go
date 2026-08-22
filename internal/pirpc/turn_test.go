@@ -22,6 +22,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/logger"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // scriptedLLM is an adkmodel.LLM whose reply depends on which invocation it is.
@@ -436,7 +437,7 @@ func TestAbortCancelsRunningTurn(t *testing.T) {
 // A successful switch has to be visible in get_state, since that is what the
 // client renders as the active model.
 func TestSetModelSuccessUpdatesState(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {
@@ -543,7 +544,7 @@ func TestSetModelRebuildFailureIsReported(t *testing.T) {
 // The log is optional, but when present every channel of a turn should reach
 // it — that log is the only record of a headless RPC session.
 func TestRunTurnWritesToTheSessionLog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {
@@ -584,7 +585,7 @@ func TestRunTurnWritesToTheSessionLog(t *testing.T) {
 }
 
 func TestEmitErrorIsLoggedAndSurfaced(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {
@@ -616,7 +617,7 @@ func TestEmitErrorIsLoggedAndSurfaced(t *testing.T) {
 // does not exist makes a later session/load unresolvable.
 func TestStateAdvertisesSessionFileOnlyWhenItExists(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	s := NewServer(Config{SessionID: "sess-file", Model: "m"})
 	if _, ok := s.state()["sessionFile"]; ok {

@@ -270,17 +270,21 @@ func loadGitignore(dir string) []string {
 // isGitignored checks whether a relative path matches any of the gitignore patterns.
 // This is a simplified check — not a full gitignore implementation.
 func isGitignored(relPath string, patterns []string) bool {
+	// .gitignore patterns are always slash-separated, so compare against a
+	// slash-separated path. Splitting on filepath.Separator instead left every
+	// pattern unmatched on Windows, where a backslash is also filepath.Match's
+	// escape character.
+	rel := filepath.ToSlash(relPath)
 	for _, p := range patterns {
 		p = strings.TrimSuffix(p, "/")
 		// Check if any path component matches the pattern.
-		parts := strings.Split(relPath, string(filepath.Separator))
-		for _, part := range parts {
+		for _, part := range strings.Split(rel, "/") {
 			if matched, _ := filepath.Match(p, part); matched {
 				return true
 			}
 		}
 		// Also check the full relative path.
-		if matched, _ := filepath.Match(p, relPath); matched {
+		if matched, _ := filepath.Match(p, rel); matched {
 			return true
 		}
 	}

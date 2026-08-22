@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/dimetron/pi-go/internal/extension"
 )
@@ -26,14 +25,13 @@ func TestNormalizeDiscoveryCWD(t *testing.T) {
 }
 
 func TestDefaultSkillDirsIn(t *testing.T) {
-	// Save original cwd
-	origCwd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Chdir(origCwd) })
-
-	// Change to temp dir for isolation
+	// Change to temp dir for isolation. t.Chdir registers its restore after
+	// t.TempDir registered its removal, and cleanups run last-registered-first,
+	// so the working directory moves back out before the directory is deleted.
+	// Doing the chdir by hand got that order backwards, and Windows refuses to
+	// delete the process's own working directory.
 	tmpDir := t.TempDir()
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	dirs := extension.DefaultSkillDirsIn(tmpDir)
 

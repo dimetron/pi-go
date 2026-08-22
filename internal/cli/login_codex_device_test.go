@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -184,9 +185,10 @@ func TestOpenBrowserDefault_PrintsURLWhenNoHandlerExists(t *testing.T) {
 // With a handler available the URL is handed off silently; printing it too
 // would be noise in the middle of an interactive login.
 func TestOpenBrowserDefault_SilentWhenAHandlerExists(t *testing.T) {
-	// `true` accepts any arguments and exits 0, so it stands in for a browser
-	// launcher without opening anything.
-	t.Setenv("BROWSER", "/usr/bin/true")
+	// Re-execute this binary in stub mode: it accepts any arguments and exits
+	// 0, standing in for a browser launcher without opening anything.
+	t.Setenv(testBrowserStubEnv, "1")
+	t.Setenv("BROWSER", os.Args[0])
 
 	var err error
 	out := captureStdout(t, func() {

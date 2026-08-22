@@ -9,6 +9,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestRenderSidebar_Minimal(t *testing.T) {
@@ -230,7 +231,7 @@ func TestHandleRestartCommand(t *testing.T) {
 // --- historyPathPlain ---
 
 func TestHistoryPathPlain(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	path := historyPathPlain()
 	// Should return a non-empty path under HOME.
 	if path == "" {

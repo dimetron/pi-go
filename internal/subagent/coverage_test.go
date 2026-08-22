@@ -10,6 +10,7 @@ import (
 	"time"
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // TestOrchestrator_SetProviderOptions exercises the 0%-covered provider-option
@@ -534,7 +535,7 @@ func (e stubError) Error() string { return string(e) }
 func TestDiscoverAgents_UserDirReadError(t *testing.T) {
 	// Isolate HOME to a tempdir.
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	// Create ~/.pi-go/agents as a FILE (not a dir) so ReadDir errors.
 	piDir := filepath.Join(tmpHome, ".pi-go")

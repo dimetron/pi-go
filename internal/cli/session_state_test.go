@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestWriteLastSession_CreatesFile(t *testing.T) {
@@ -32,7 +34,7 @@ func TestWriteLastSession_CreatesFile(t *testing.T) {
 
 func TestLastLoggedError_CorruptedLogLine(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	dateDir := filepath.Join(tmpDir, ".pi-go", "log", "2024-07-01")
 	if err := os.MkdirAll(dateDir, 0o755); err != nil {

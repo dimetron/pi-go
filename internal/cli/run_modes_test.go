@@ -11,6 +11,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestResolveMode_ExplicitFlag(t *testing.T) {
@@ -56,7 +57,7 @@ func TestRunInteractive_CancelContext(t *testing.T) {
 	resetGlobalFlags(t)
 	flagMemoryOff = true
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	llm := &cliMockLLM{name: "test-interactive", response: "ok"}
 	cfg := config.Config{}
@@ -98,7 +99,7 @@ func provInfo(providerName, model string) provider.Info {
 func TestRunNonInteractive_JSONEmptyPromptEarlyExit(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	flagMemoryOff = true
@@ -113,7 +114,7 @@ func TestRunNonInteractive_JSONEmptyPromptEarlyExit(t *testing.T) {
 func TestRunNonInteractive_PrintEmptyPromptEarlyExit(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	flagMemoryOff = true
@@ -128,7 +129,7 @@ func TestRunNonInteractive_PrintEmptyPromptEarlyExit(t *testing.T) {
 func TestRunNonInteractive_WithSystemAndHooks(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	cfgDir := filepath.Join(tmpDir, ".pi-go")

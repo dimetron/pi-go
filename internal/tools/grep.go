@@ -228,7 +228,9 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 		if resolveErr != nil {
 			return GrepOutput{}, resolveErr
 		}
-		_ = fs.WalkDir(fsys, rel, walkFn)
+		// Resolve returns an OS path; fs.FS roots are always slash-separated,
+		// so on Windows the walk would find nothing under a subdirectory.
+		_ = fs.WalkDir(fsys, filepath.ToSlash(rel), walkFn)
 	} else {
 		matches = grepFileSandbox(sb, re, searchPath)
 		total = len(matches)
