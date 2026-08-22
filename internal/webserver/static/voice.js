@@ -132,6 +132,7 @@ const CAPTURE_WORKLET = `registerProcessor('pi-pcm-capture', class extends Audio
 //   onAssistantFinal(text)     — the turn's assistant transcript, complete
 //   onInterrupt()              — the model was cut off mid-utterance
 //   onToolCall(name, summary)  — voice drove the coding agent
+//   onMute(muted)              — the microphone was muted or unmuted
 //   onLog(stage, detail)       — optional diagnostics
 //   terminalSession()          — the PTY session id to bind the voice session
 //                                to, so its tools drive the terminal this tab
@@ -145,6 +146,10 @@ export function initVoice(deps = {}) {
   let playCtx = null;
   let playTime = 0;
   let sources = [];
+  // muted gates the uplink only. The session, the socket and the model's
+  // audio all stay live, so unmuting resumes mid-conversation with nothing to
+  // reconnect.
+  let muted = false;
 
   const log = (stage, detail) => deps.onLog && deps.onLog(stage, detail);
   // Resolved per start, not once: a tab that reconnects keeps its session id in
@@ -191,6 +196,27 @@ export function initVoice(deps = {}) {
     }
   }
 
+  // applyMute records the flag, mirrors it onto the mic tracks and tells the
+  // UI. Disabling the tracks, rather than only dropping frames, is what makes
+  // the browser and OS microphone indicators go dark while muted.
+  function applyMute(next) {
+    muted = next;
+    if (micStream) micStream.getAudioTracks().forEach((t) => { t.enabled = !next; });
+    deps.onMute && deps.onMute(next);
+  }
+
+  function setMuted(next) {
+    if (state.status !== 'connecting' && state.status !== 'active') {
+      log('mute', 'ignored: no session is live');
+      return false;
+    }
+    if (muted !== next) {
+      applyMute(next);
+      log('mute', next ? 'microphone muted' : 'microphone live');
+    }
+    return muted;
+  }
+
   // flushPlayback drops every scheduled output chunk. This is barge-in: the
   // relay transport plays a queue of buffers rather than a live stream, so
   // stopping the model means stopping each one already handed to the clock.
@@ -220,7 +246,12 @@ export function initVoice(deps = {}) {
   }
 
   function cleanup() {
-    if (ws) { try { ws.close(); } catch { /* already closed */ } }
+    if (ws) {
+      // close() delivers onclose asynchronously. Detach first, or a socket
+      // torn down by End can see the next session's "connecting" and fail it.
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+      try { ws.close(); } catch { /* already closed */ }
+    }
     flushPlayback();
     if (capCtx) { try { capCtx.close(); } catch { /* already closed */ } }
     if (playCtx) { try { playCtx.close(); } catch { /* already closed */ } }
@@ -229,6 +260,9 @@ export function initVoice(deps = {}) {
     capCtx = null;
     playCtx = null;
     micStream = null;
+    // A session that ends muted must not leave the next one muted: the UI
+    // would show a live mic the relay never hears.
+    if (muted) applyMute(false);
   }
 
   async function start(model) {
@@ -237,6 +271,7 @@ export function initVoice(deps = {}) {
       return;
     }
     state = createVoiceState();
+    if (muted) applyMute(false);
     setStatus('connecting');
 
     let realtime;
@@ -269,6 +304,9 @@ export function initVoice(deps = {}) {
       log('microphone', 'requesting getUserMedia({audio:true})');
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       log('microphone', 'granted');
+      // Mute can be pressed while the permission prompt is up; the tracks
+      // did not exist then, so mirror the flag onto them now.
+      if (muted) micStream.getAudioTracks().forEach((t) => { t.enabled = false; });
     } catch (e) {
       fail('microphone', 'microphone permission was refused: ' + e.message);
       return;
@@ -327,6 +365,9 @@ export function initVoice(deps = {}) {
       const srcNode = capCtx.createMediaStreamSource(micStream);
       const capNode = new AudioWorkletNode(capCtx, 'pi-pcm-capture');
       capNode.port.onmessage = (e) => {
+        // Disabled tracks already yield silence; not sending it at all is what
+        // keeps a muted tab from streaming 40ms of zeros 25 times a second.
+        if (muted) return;
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(pcm16FromFloat32(e.data).buffer);
       };
       srcNode.connect(capNode);
@@ -340,23 +381,37 @@ export function initVoice(deps = {}) {
   }
 
   async function stop() {
-    log('stop', 'ending session ' + sessionID);
+    const id = sessionID;
+    log('stop', 'ending session ' + id);
     cleanup();
-    if (sessionID) {
+    // Go idle before the DELETE, not after: while that request is in flight
+    // the session is already torn down, and a status still reading "active"
+    // would let mute() re-arm on a dead session and a start() race the late
+    // `sessionID = ''` below.
+    sessionID = '';
+    setStatus('idle');
+    if (id) {
       // Best-effort: the relay's own teardown already frees the slot when this
       // never lands.
       try {
-        await fetch('/api/voice/sessions/' + encodeURIComponent(sessionID), { method: 'DELETE' });
+        await fetch('/api/voice/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
       } catch { /* the relay teardown covers it */ }
-      sessionID = '';
     }
-    setStatus('idle');
   }
 
   return {
     start,
     stop,
     get status() { return state.status; },
+    // mute/unmute/toggleMute are no-ops without a live session and return the
+    // resulting flag. Mute only stops the uplink: the model's audio keeps
+    // playing, and stop()/start() both reset it to false.
+    mute() { return setMuted(true); },
+    unmute() { return setMuted(false); },
+    toggleMute() { return setMuted(!muted); },
+    get muted() { return muted; },
+    // toggle is the one-button form kept for callers that predate the
+    // Talk/Mute/End panel.
     toggle(model) { return state.status === 'active' || state.status === 'connecting' ? stop() : start(model); },
   };
 }

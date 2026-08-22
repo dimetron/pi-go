@@ -168,14 +168,28 @@ button:disabled {
    terminal's size is negotiated with the PTY, so anything that reflows it on
    an unrelated event costs a resize round-trip. */
 
+/* The bar and the transcript share one offset so the panel always stacks
+   above the buttons; change it here, not in either rule. */
+:root {
+    --voice-bar-bottom: 48px;
+}
+
 .voice-bar {
     position: fixed;
     right: 16px;
-    bottom: 16px;
+    bottom: var(--voice-bar-bottom);
     display: flex;
     align-items: center;
     gap: 10px;
     z-index: 10;
+}
+
+/* Talk | Mute | End as three pills. Each does one thing: Talk starts, End
+   stops, and Mute gates the mic without touching the session. */
+.voice-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .voice-button {
@@ -193,10 +207,30 @@ button:disabled {
     border-color: #5a5a5a;
 }
 
+.voice-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+    border-color: #3a3a3a;
+}
+
 .voice-button.active {
     background: #7d2020;
     border-color: #a83232;
     animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Talk is disabled while a session is live, but it reads as "on", not as
+   unavailable: full opacity, pulsing, and no forbidden cursor. */
+.voice-button.active:disabled {
+    opacity: 1;
+    cursor: default;
+}
+
+.voice-button.muted {
+    background: #3d2e0a;
+    border-color: #d19a2a;
+    color: #f3d58a;
 }
 
 .voice-status {
@@ -211,7 +245,8 @@ button:disabled {
 .voice-transcript {
     position: fixed;
     right: 16px;
-    bottom: 64px;
+    /* Bar height plus a gap, measured from the same offset as the bar. */
+    bottom: calc(var(--voice-bar-bottom) + 48px);
     width: min(46ch, calc(100vw - 32px));
     max-height: 40vh;
     overflow-y: auto;

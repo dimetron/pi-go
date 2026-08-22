@@ -90,7 +90,14 @@
     <!-- Voice controls stay hidden until /api/voice/config reports enabled, so
          a build without GEMINI_API_KEY shows no button that would 503. -->
     <div class="voice-bar" id="voice-bar" hidden>
-        <button type="button" class="voice-button" id="voice-toggle">🎙 Talk</button>
+        <div class="voice-controls" role="group" aria-label="Voice controls">
+            <button type="button" class="voice-button" id="voice-talk"
+                    title="Start a voice session">🎙 Talk</button>
+            <button type="button" class="voice-button" id="voice-mute"
+                    title="Mute the microphone; the session stays live" aria-pressed="false" disabled>🔊 Mute</button>
+            <button type="button" class="voice-button" id="voice-end"
+                    title="End the voice session" disabled>⏹ End</button>
+        </div>
         <span class="voice-status" id="voice-status"></span>
     </div>
     <div class="voice-transcript" id="voice-transcript" hidden></div>
@@ -408,7 +415,9 @@
         const voiceCfg = await loadVoiceConfig();
         if (voiceCfg.enabled) {
             const bar = document.getElementById('voice-bar');
-            const btn = document.getElementById('voice-toggle');
+            const talkBtn = document.getElementById('voice-talk');
+            const muteBtn = document.getElementById('voice-mute');
+            const endBtn = document.getElementById('voice-end');
             const statusEl = document.getElementById('voice-status');
             const panel = document.getElementById('voice-transcript');
             bar.hidden = false;
@@ -432,9 +441,23 @@
             const voice = initVoice({
                 onStatus(status, message) {
                     statusEl.textContent = message ? status + ' — ' + message : status;
-                    btn.textContent = (status === 'active' || status === 'connecting') ? '⏹ Stop' : '🎙 Talk';
-                    btn.classList.toggle('active', status === 'active');
+                    // Talk only ever starts; End only ever stops. One button
+                    // that did both was too easy to hit mid-sentence.
+                    const live = status === 'active' || status === 'connecting';
+                    talkBtn.disabled = live;
+                    talkBtn.textContent = status === 'active' ? '🎙 Talking…'
+                        : status === 'connecting' ? '🎙 Connecting…' : '🎙 Talk';
+                    talkBtn.classList.toggle('active', status === 'active');
+                    muteBtn.disabled = !live;
+                    endBtn.disabled = !live;
                     if (status === 'error') line('error', message || 'voice error');
+                },
+                onMute(muted) {
+                    muteBtn.classList.toggle('muted', muted);
+                    muteBtn.setAttribute('aria-pressed', String(muted));
+                    muteBtn.textContent = muted ? '🔇 Mute' : '🔊 Mute';
+                    muteBtn.title = muted ? 'Unmute the microphone'
+                        : 'Mute the microphone; the session stays live';
                 },
                 onUserTranscript(text, first) {
                     if (first || !userLine) userLine = line('user', text);
@@ -467,7 +490,9 @@
                 terminalSession: () => sessionID,
             });
 
-            btn.addEventListener('click', () => voice.toggle(voiceCfg.model));
+            talkBtn.addEventListener('click', () => voice.start(voiceCfg.model));
+            muteBtn.addEventListener('click', () => voice.toggleMute());
+            endBtn.addEventListener('click', () => voice.stop());
             // A tab that goes away mid-session should release the relay slot
             // now rather than at the session TTL.
             window.addEventListener('pagehide', () => voice.stop());
