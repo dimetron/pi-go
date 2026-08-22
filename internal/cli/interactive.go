@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -219,9 +220,11 @@ func deferredInit(
 	// llms.txt documentation sources are cheap to build (no network), so they
 	// attach synchronously here rather than through the deferred loader that
 	// handles MCP servers. Without this the fetch_docs tool exists in one-shot
-	// and piagent modes but never in the interactive TUI.
+	// and piagent modes but never in the interactive TUI. Clip first so the
+	// append never writes into ps.mcpToolsets' backing array, which the MCP
+	// panel keeps using as the list of real MCP servers.
 	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		mcpToolsets = append(mcpToolsets, tools.NewLLMSToolset(cfg.LLMS))
+		mcpToolsets = append(slices.Clip(mcpToolsets), tools.NewLLMSToolset(cfg.LLMS))
 	}
 	// Gemini search grounding (see agent.GeminiGroundingTool doc).
 	//

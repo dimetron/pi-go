@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -347,5 +348,96 @@ func TestLLMSBuildDescriptionIncludesURLs(t *testing.T) {
 	})
 	if !strings.Contains(desc, "https://adk.dev/llms.txt") {
 		t.Fatalf("expected source URL in description so the model can bootstrap, got %q", desc)
+	}
+}
+
+func TestLLMSSources(t *testing.T) {
+	want := []config.LLMSSource{
+		{Name: "adk", URL: "https://adk.dev/llms.txt"},
+		{Name: "langchain", URL: "https://python.langchain.com/llms.txt"},
+	}
+	ts := NewLLMSToolset(&config.LLMSConfig{Sources: want})
+	got := ts.Sources()
+	if len(got) != len(want) {
+		t.Fatalf("Sources() returned %d sources, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Sources()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if NewLLMSToolset(nil).Sources() != nil {
+		t.Fatal("Sources() on a nil config should be nil")
+	}
+}
+
+func TestLLMSCheckRedirectURL(t *testing.T) {
+	// Exercise every branch of the CheckRedirect hook directly, without a
+	// server: the hook is what keeps an open redirect on an allowed host from
+	// defeating the https, SSRF, and allowlist guards.
+	ts := adkToolset()
+	mustURL := func(raw string) *url.URL {
+		t.Helper()
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		return u
+	}
+	hops := func(n int) []*http.Request {
+		via := make([]*http.Request, n)
+		for i := range via {
+			via[i] = &http.Request{URL: mustURL("https://adk.dev/hop")}
+		}
+		return via
+	}
+
+	cases := []struct {
+		name    string
+		target  string
+		via     []*http.Request
+		wantErr string // empty means the hop must be allowed
+	}{
+		{name: "same allowed host", target: "https://adk.dev/page.md", via: hops(1)},
+		{name: "too many redirects", target: "https://adk.dev/page.md", via: hops(llmsMaxRedirects), wantErr: "redirects"},
+		{name: "downgrade to http", target: "http://adk.dev/page.md", via: hops(1), wantErr: "https"},
+		{name: "private host", target: "https://127.0.0.1/page.md", via: hops(1), wantErr: "url rejected"},
+		{name: "disallowed host", target: "https://example.com/page.md", via: hops(1), wantErr: "not an allowed documentation source"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ts.checkRedirectURL(mustURL(tc.target), tc.via)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkRedirectURL() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("checkRedirectURL() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLLMSRedirectLimitEnforced(t *testing.T) {
+	// A redirect loop on an allowed host must stop at llmsMaxRedirects rather
+	// than spin until the client timeout.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop.md", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+
+	ts := NewLLMSToolset(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	})
+	out, _ := ts.FetchDocs(context.Background(), srv.URL+"/loop.md")
+	if out.Content != "" {
+		t.Fatalf("looping redirect must not return content, got %q", out.Content)
+	}
+	if !strings.Contains(out.Error, "fetch failed") || !strings.Contains(out.Error, "redirects") {
+		t.Fatalf("expected redirect-limit failure, got %q", out.Error)
 	}
 }
