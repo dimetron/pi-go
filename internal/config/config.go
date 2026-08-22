@@ -94,6 +94,10 @@ type Config struct {
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
 	LLMS          *LLMSConfig        `json:"llms,omitempty"`
+	// ReroutedLLMS names the MCP servers that were moved to LLMS.Sources
+	// during load because their URL is an llms.txt index. Not serialized: it
+	// describes what this load did, not what the file said.
+	ReroutedLLMS []string `json:"-"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -297,12 +301,12 @@ func LoadFrom(cwd string) (Config, error) {
 	}
 
 	// An llms.txt index configured as an MCP server is rerouted to the
-	// fetch_docs sources; the notice tells the user their entry moved.
-	if moved := routeLLMSDocsServers(&cfg); len(moved) > 0 {
-		notice.Notifyf("MCP server(s) %s point at an llms.txt index, not an MCP endpoint — "+
-			"served by the fetch_docs tool instead. Move them to \"llms\": {\"sources\": [...]} to silence this.",
-			strings.Join(quoteAll(moved), ", "))
-	}
+	// fetch_docs sources. The names are recorded rather than announced here:
+	// config loads before any front end exists, and the TUI's first act is a
+	// full terminal reset that clears the screen and scrollback, so a notice
+	// raised now would be wiped before it could be read. NotifyReroutedLLMS
+	// delivers it once the caller knows where output goes.
+	cfg.ReroutedLLMS = routeLLMSDocsServers(&cfg)
 
 	// Migrate deprecated DefaultModel to roles if roles not set.
 	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
@@ -762,4 +766,21 @@ func quoteAll(names []string) []string {
 		out[i] = strconv.Quote(n)
 	}
 	return out
+}
+
+// NotifyReroutedLLMS announces the MCP servers that load-time rerouting moved
+// to the llms.txt sources. It is separate from LoadFrom so the message is
+// raised only once a front end has claimed the notice sink — in the TUI that
+// means after runInteractive installs it, since anything written before the
+// first frame is erased by the terminal reset.
+//
+// It is safe to call more than once only if the caller intends to repeat the
+// message; each call emits.
+func NotifyReroutedLLMS(cfg Config) {
+	if len(cfg.ReroutedLLMS) == 0 {
+		return
+	}
+	notice.Notifyf("MCP server(s) %s point at an llms.txt index, not an MCP endpoint — "+
+		"served by the fetch_docs tool instead. Move them to \"llms\": {\"sources\": [...]} to silence this.",
+		strings.Join(quoteAll(cfg.ReroutedLLMS), ", "))
 }

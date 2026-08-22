@@ -361,3 +361,85 @@ func TestRemoveMCPOAuthToken(t *testing.T) {
 		t.Errorf("removing an absent token returned %v, want nil", err)
 	}
 }
+
+func TestWithoutAuthorization(t *testing.T) {
+	tests := []struct {
+		name string
+		in   map[string]string
+		want map[string]string
+	}{
+		{"nil", nil, nil},
+		{"empty", map[string]string{}, nil},
+		{"only authorization", map[string]string{"Authorization": "Bearer stale"}, nil},
+		{
+			// HTTP header names are case-insensitive and http.Header.Set
+			// canonicalizes, so a lowercase spelling collides all the same.
+			name: "lowercase spelling",
+			in:   map[string]string{"authorization": "Bearer stale", "X-Title": "pi"},
+			want: map[string]string{"X-Title": "pi"},
+		},
+		{
+			name: "other headers survive",
+			in:   map[string]string{"Authorization": "Bearer stale", "HTTP-Referer": "https://pi.go", "X-Title": "pi"},
+			want: map[string]string{"HTTP-Referer": "https://pi.go", "X-Title": "pi"},
+		},
+	}
+	for _, tc := range tests {
+		got := withoutAuthorization(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for k, v := range tc.want {
+			if got[k] != v {
+				t.Errorf("%s: got[%q] = %q, want %q", tc.name, k, got[k], v)
+			}
+		}
+	}
+}
+
+func TestWithoutAuthorizationDoesNotMutateInput(t *testing.T) {
+	in := map[string]string{"Authorization": "Bearer stale", "X-Title": "pi"}
+	withoutAuthorization(in)
+	if in["Authorization"] != "Bearer stale" {
+		t.Error("withoutAuthorization mutated the caller's header map; it is the loaded config")
+	}
+}
+
+// headerRoundTripper is the client's outermost transport, so it runs after the
+// SDK has set the freshly issued bearer token on the request. Carrying the
+// refused static credential into the retry would overwrite that token and the
+// retry would be rejected exactly like the first attempt.
+func TestResilientToolset_ReauthorizeDropsStaleAuthorizationHeader(t *testing.T) {
+	setTestHome(t)
+	captureNotices(t)
+
+	var gotSrv MCPServerConfig
+	rt := &resilientToolset{
+		inner: &unauthorizedToolset{},
+		name:  "openrouter",
+		srv: MCPServerConfig{
+			Name:    "openrouter",
+			URL:     "https://mcp.example.com/mcp",
+			Headers: map[string]string{"Authorization": "Bearer revoked", "X-Title": "pi"},
+		},
+		reconnect: func(srv MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
+			gotSrv = srv
+			return &successToolset{tools: []tool.Tool{&namedTool{nameVal: "t"}}}, nil, nil
+		},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+
+	if _, ok := gotSrv.Headers["Authorization"]; ok {
+		t.Error("retry carried the refused Authorization header; it would overwrite the new OAuth token")
+	}
+	if gotSrv.Headers["X-Title"] != "pi" {
+		t.Errorf("retry dropped an unrelated header: %v", gotSrv.Headers)
+	}
+	// The loaded config must be left intact for anything else reading it.
+	if rt.srv.Headers["Authorization"] != "Bearer revoked" {
+		t.Error("re-authorization mutated the server's configured headers")
+	}
+}

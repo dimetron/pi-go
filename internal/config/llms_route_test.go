@@ -1,6 +1,13 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/dimetron/pi-go/internal/notice"
+)
 
 func TestIsLLMSDocsURL(t *testing.T) {
 	tests := []struct {
@@ -101,5 +108,63 @@ func TestRouteLLMSDocsServersHandlesEmptyConfig(t *testing.T) {
 	cfg.MCP = &MCPConfig{}
 	if moved := routeLLMSDocsServers(&cfg); moved != nil {
 		t.Errorf("moved = %v, want nil for an empty server list", moved)
+	}
+}
+
+// The notice must not be raised during load. In the TUI, config is read before
+// any front end exists and the first frame is preceded by a full terminal
+// reset (ESC c) that clears screen and scrollback, so a message written at
+// load time is erased before it can be read.
+func TestLoadDefersReroutedLLMSNotice(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	writeProjectMCPFile(t, dir, `{"mcpServers":{"adk-docs-mcp":{"url":"https://adk.dev/llms.txt"}}}`)
+
+	var raised []string
+	prev := notice.SetSink(func(msg string) { raised = append(raised, msg) })
+	defer notice.SetSink(prev)
+
+	cfg, err := LoadFrom(dir)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(raised) != 0 {
+		t.Errorf("LoadFrom raised %v; the notice must wait for a front end", raised)
+	}
+	if len(cfg.ReroutedLLMS) != 1 || cfg.ReroutedLLMS[0] != "adk-docs-mcp" {
+		t.Fatalf("ReroutedLLMS = %v, want [adk-docs-mcp]", cfg.ReroutedLLMS)
+	}
+
+	NotifyReroutedLLMS(cfg)
+	if len(raised) != 1 {
+		t.Fatalf("NotifyReroutedLLMS raised %v, want one notice", raised)
+	}
+	for _, want := range []string{`"adk-docs-mcp"`, "fetch_docs", "llms", "sources"} {
+		if !strings.Contains(raised[0], want) {
+			t.Errorf("notice %q does not mention %q", raised[0], want)
+		}
+	}
+}
+
+func TestNotifyReroutedLLMSSilentWhenNothingMoved(t *testing.T) {
+	var raised []string
+	prev := notice.SetSink(func(msg string) { raised = append(raised, msg) })
+	defer notice.SetSink(prev)
+
+	NotifyReroutedLLMS(Config{})
+	if len(raised) != 0 {
+		t.Errorf("raised %v for a config with nothing rerouted", raised)
+	}
+}
+
+func writeProjectMCPFile(t *testing.T, dir, body string) {
+	t.Helper()
+	piDir := filepath.Join(dir, ".pi-go")
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", piDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(piDir, "mcp.json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("writing mcp.json: %v", err)
 	}
 }

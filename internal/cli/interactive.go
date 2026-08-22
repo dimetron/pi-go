@@ -107,6 +107,11 @@ func runInteractive(
 	// written to os.Stderr would land inside the painted frame.
 	go checkForUpdate(ctx, Version)
 
+	// Likewise for anything config load decided: it ran before the sink
+	// existed, and the terminal reset before the first frame would have
+	// erased a message written then.
+	config.NotifyReroutedLLMS(cfg)
+
 	var res initResources
 	initDone := make(chan struct{})
 

@@ -511,6 +511,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	}
 
 	go checkForUpdate(cmd.Context(), Version)
+	config.NotifyReroutedLLMS(runtime.cfg)
 
 	return runNonInteractive(
 		cmd.Context(),

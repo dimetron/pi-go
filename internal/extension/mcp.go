@@ -255,6 +255,7 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 
 	srv := r.srv
 	srv.OAuth = true
+	srv.Headers = withoutAuthorization(srv.Headers)
 	connect := r.reconnect
 	if connect == nil {
 		connect = newMCPToolset
@@ -273,6 +274,35 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 	// it replaced.
 	r.inner, r.transport = inner, transport
 	return tools, nil
+}
+
+// withoutAuthorization copies headers without any Authorization entry.
+//
+// The OAuth retry must not carry the static credential that was just refused.
+// headerRoundTripper is the client's outermost transport, so it runs after the
+// SDK has set "Authorization: Bearer <fresh token>" on the request and would
+// overwrite that token with the stale configured value — the retry would be
+// rejected exactly like the first attempt. Every other header is kept: they
+// carry routing and API metadata the server still needs.
+//
+// The comparison is canonicalized because HTTP header names are
+// case-insensitive and http.Header.Set canonicalizes on the way out, so a
+// config that spells the key "authorization" collides all the same.
+func withoutAuthorization(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(k) == "Authorization" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // isMCPAuthError reports whether err is the MCP transport's rendering of an
