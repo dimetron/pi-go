@@ -292,7 +292,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 			}
 		}
 		if srv.OAuth {
-			handler, err := newMCPOAuthHandler(srv.Name)
+			handler, err := newMCPOAuthHandler(srv.Name, srv.URL)
 			if err != nil {
 				return nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
 			}
@@ -332,7 +332,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 // received and exchanged for a token. The token source is held by the handler
 // and reused for the lifetime of the connection, so the flow runs only on the
 // first connect (or after the token expires).
-func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
+func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
 	// Pick a free loopback port for the callback server.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -341,17 +341,37 @@ func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
 	port := listener.Addr().(*net.TCPAddr).Port //nolint:errcheck // TCP listener guaranteed
 	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
+	// authChan is buffered so the browser's callback handler never blocks,
+	// even if it fires twice or after the flow has moved on.
 	authChan := make(chan *auth.AuthorizationResult, 1)
-	errChan := make(chan error, 1)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		authChan <- &auth.AuthorizationResult{
-			Code:  r.URL.Query().Get("code"),
-			State: r.URL.Query().Get("state"),
-			Iss:   r.URL.Query().Get("iss"),
+		q := r.URL.Query()
+		if errParam := q.Get("error"); errParam != "" {
+			desc := q.Get("error_description")
+			if desc == "" {
+				desc = errParam
+			}
+			piauth.RenderCallbackPage(w, http.StatusBadRequest, false, "Authentication failed", desc)
+			return
 		}
-		piauth.RenderCallbackPage(w, http.StatusOK, true, "Authentication successful", "You can close this tab and return to pi.")
+		code := q.Get("code")
+		if code == "" {
+			piauth.RenderCallbackPage(w, http.StatusBadRequest, false, "No code received", "")
+			return
+		}
+		select {
+		case authChan <- &auth.AuthorizationResult{
+			Code:  code,
+			State: q.Get("state"),
+			Iss:   q.Get("iss"),
+		}:
+			piauth.RenderCallbackPage(w, http.StatusOK, true, "Authentication successful", "You can close this tab and return to pi.")
+		default:
+			// Flow already completed with this handler; ignore duplicates.
+			piauth.RenderCallbackPage(w, http.StatusOK, true, "Authentication successful", "You can close this tab and return to pi.")
+		}
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(listener) }()
@@ -361,14 +381,21 @@ func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
 		if err := browser.Open(args.URL); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-go: could not open browser for %q; visit this URL manually:\n%s\n", name, args.URL)
 		}
+		defer func() { _ = srv.Close() }() // one-shot: stop serving after the first result
 		select {
 		case res := <-authChan:
 			return res, nil
-		case err := <-errChan:
-			return nil, err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+
+	// Reuse a persisted token from a previous session so the browser flow
+	// runs only once per mcpOAuthTokenTTL. Nil when nothing usable is cached,
+	// which triggers a normal interactive authorization.
+	cachedTS := loadMCPOAuthTokenSource(name, serverURL)
+	if cachedTS != nil {
+		_ = srv.Close() // no browser round-trip ahead; free the loopback port
 	}
 
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
@@ -384,17 +411,17 @@ func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
 		},
 		AuthorizationCodeFetcher: fetcher,
 		RequestRefreshToken:      true,
-		// Reuse a persisted token from a previous session so the browser
-		// flow runs only once per mcpOAuthTokenTTL. Nil when nothing usable
-		// is cached, which triggers a normal interactive authorization.
-		InitialTokenSource: loadMCPOAuthTokenSource(name),
+		InitialTokenSource:       cachedTS,
 		// Persist each freshly authorized token along with the OAuth config
 		// needed to refresh it next session.
 		NewTokenSource: func(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token) (oauth2.TokenSource, error) {
-			if err := saveMCPOAuthToken(name, cfg, tok); err != nil {
+			if err := saveMCPOAuthToken(name, serverURL, cfg, tok); err != nil {
 				fmt.Fprintf(os.Stderr, "pi-go: could not cache OAuth token for MCP server %q: %v\n", name, err)
 			}
-			return cfg.TokenSource(ctx, tok), nil
+			// Wrap so rotated refresh tokens are written back to disk too.
+			return newPersistingTokenSource(cfg.TokenSource(ctx, tok), nil, func(t *oauth2.Token) error {
+				return saveMCPOAuthToken(name, serverURL, cfg, t)
+			}), nil
 		},
 	})
 	if err != nil {
