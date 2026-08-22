@@ -1,3 +1,5 @@
+//go:build !windows
+
 package webserver
 
 // Relay tests drive the real handler against a fake Gemini Live server.
