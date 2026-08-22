@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/mcptoolset"
 
+	piauth "github.com/dimetron/pi-go/internal/auth" // SDK auth pkg is imported above
 	"github.com/dimetron/pi-go/internal/browser"
 )
 
@@ -348,12 +351,7 @@ func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
 			State: r.URL.Query().Get("state"),
 			Iss:   r.URL.Query().Get("iss"),
 		}
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body>
-<h2>✓ Authentication successful</h2>
-<p>You can close this tab and return to pi.</p>
-<script>window.close()</script>
-</body></html>`)
+		piauth.RenderCallbackPage(w, http.StatusOK, true, "Authentication successful", "You can close this tab and return to pi.")
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(listener) }()
@@ -386,6 +384,18 @@ func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
 		},
 		AuthorizationCodeFetcher: fetcher,
 		RequestRefreshToken:      true,
+		// Reuse a persisted token from a previous session so the browser
+		// flow runs only once per mcpOAuthTokenTTL. Nil when nothing usable
+		// is cached, which triggers a normal interactive authorization.
+		InitialTokenSource: loadMCPOAuthTokenSource(name),
+		// Persist each freshly authorized token along with the OAuth config
+		// needed to refresh it next session.
+		NewTokenSource: func(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token) (oauth2.TokenSource, error) {
+			if err := saveMCPOAuthToken(name, cfg, tok); err != nil {
+				fmt.Fprintf(os.Stderr, "pi-go: could not cache OAuth token for MCP server %q: %v\n", name, err)
+			}
+			return cfg.TokenSource(ctx, tok), nil
+		},
 	})
 	if err != nil {
 		_ = srv.Close()

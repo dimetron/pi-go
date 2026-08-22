@@ -729,7 +729,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string
 		}
 		logf("callback: oauth error=%s description=%q", errParam, desc)
 		ch <- codeResult{err: fmt.Errorf("OAuth error: %s", desc)}
-		http.Error(w, "Authentication failed: "+desc, http.StatusBadRequest)
+		RenderCallbackPage(w, http.StatusBadRequest, false, "Authentication failed", desc)
 		return
 	}
 
@@ -744,19 +744,14 @@ func handleCallback(w http.ResponseWriter, r *http.Request, expectedState string
 	if code == "" {
 		logf("callback: no code received")
 		ch <- codeResult{err: fmt.Errorf("no authorization code received")}
-		http.Error(w, "No code received", http.StatusBadRequest)
+		RenderCallbackPage(w, http.StatusBadRequest, false, "No code received", "")
 		return
 	}
 
 	logf("callback: ok code_len=%d", len(code))
 	ch <- codeResult{code: code}
 
-	w.Header().Set("Content-Type", "text/html")
-	_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body>
-<h2>✓ Authentication successful</h2>
-<p>You can close this tab and return to pi.</p>
-<script>window.close()</script>
-</body></html>`)
+	RenderCallbackPage(w, http.StatusOK, true, "Authentication successful", "You can close this tab and return to pi.")
 }
 
 func exchangeCode(ctx context.Context, prov Provider, code, redirectURI, verifier string) (*TokenResponse, error) {
