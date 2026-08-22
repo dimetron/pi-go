@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,17 @@ func fastSupervisor(t *testing.T) *BashSupervisor {
 	sup.heartbeat = 25 * time.Millisecond
 	t.Cleanup(sup.KillAll)
 	return sup
+}
+
+// allowSlowShellStartup widens the idle threshold on Windows for tests whose
+// command must NOT be backgrounded. Starting Git-for-Windows bash alone can
+// take longer than fastSupervisor's 150ms, so a command was judged idle before
+// it had printed anything (seen in CI: Elapsed 154ms, Idle 150ms+). Tests that
+// expect a handoff keep the short threshold, so the code path is unchanged.
+func allowSlowShellStartup(sup *BashSupervisor) {
+	if runtime.GOOS == "windows" {
+		sup.idleTimeout = 2 * time.Second
+	}
 }
 
 // bashWorkDir returns a working directory for a backgrounded shell command.
@@ -89,6 +101,7 @@ func TestSupervisor_SilentCommandIsBackgrounded(t *testing.T) {
 // long it takes, and must be left alone.
 func TestSupervisor_ChattyCommandIsNotBackgrounded(t *testing.T) {
 	sup := fastSupervisor(t)
+	allowSlowShellStartup(sup)
 
 	// Runs for ~500ms, well past the 150ms idle threshold, but never silent
 	// for longer than 50ms.
@@ -280,6 +293,7 @@ func TestSupervisor_CapEvictsOldest(t *testing.T) {
 // is indistinguishable from a hang.
 func TestSupervisor_SinkStreamsOutput(t *testing.T) {
 	sup := fastSupervisor(t)
+	allowSlowShellStartup(sup)
 
 	var mu sync.Mutex
 	kinds := map[string][]string{}

@@ -395,3 +395,68 @@ func TestDeferredInit_WithSkillDir(t *testing.T) {
 	}
 	<-done
 }
+
+// runDeferredInitForTest drives deferredInit to completion with memory off
+// and returns the final InitResult.
+func runDeferredInitForTest(t *testing.T, cfg config.Config) *tui.InitResult {
+	t.Helper()
+	tmpHome := t.TempDir()
+	testenv.SetHome(t, tmpHome)
+
+	origMemOff := flagMemoryOff
+	origSystem := flagSystem
+	t.Cleanup(func() {
+		flagMemoryOff = origMemOff
+		flagSystem = origSystem
+	})
+	flagMemoryOff = true
+	flagSystem = "test system prompt"
+
+	llm := &cliMockLLM{name: "test-llm-llms", response: "ok"}
+	tracker := guardrail.New(0)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ch := make(chan tui.InitEvent, 128)
+	var res initResources
+	t.Cleanup(res.cleanup)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deferredInit(ctx, cfg, llm, "openai", "", tracker, tmpHome, tmpHome, "", ch, &res)
+		close(ch)
+	}()
+	var result *tui.InitResult
+	for ev := range ch {
+		if ev.Err != nil {
+			t.Fatalf("deferredInit reported error: %v", ev.Err)
+		}
+		if ev.Done && ev.Result != nil {
+			result = ev.Result
+		}
+	}
+	<-done
+	if result == nil {
+		t.Fatal("deferredInit did not emit a final Done event with Result")
+	}
+	return result
+}
+
+func TestDeferredInit_WithLLMSSources(t *testing.T) {
+	// llms.txt sources attach the fetch_docs tool to the core tools in the
+	// interactive TUI (the mode the voice agent drives). The tool's
+	// definition must therefore show up in the context breakdown's tool
+	// bytes, on top of what the same init produces without sources.
+	without := runDeferredInitForTest(t, config.Config{})
+	with := runDeferredInitForTest(t, config.Config{
+		LLMS: &config.LLMSConfig{Sources: []config.LLMSSource{{Name: "adk", URL: "https://adk.dev/llms.txt"}}},
+	})
+	if without.ContextBreakdown == nil || with.ContextBreakdown == nil {
+		t.Fatalf("ContextBreakdown missing: without=%v with=%v", without.ContextBreakdown, with.ContextBreakdown)
+	}
+	if with.ContextBreakdown.ToolDefs <= without.ContextBreakdown.ToolDefs {
+		t.Fatalf("ToolDefs with llms sources = %d, want more than %d without (fetch_docs not wired)",
+			with.ContextBreakdown.ToolDefs, without.ContextBreakdown.ToolDefs)
+	}
+}

@@ -46,6 +46,11 @@ const llmsUserAgent = "pi-go/1.0 (+https://github.com/dimetron/pi-go)"
 // srv.Client() so the test's self-signed cert is trusted.
 var llmsClientOverride *http.Client
 
+// llmsCacheCreateTemp creates the temporary file a cache entry is written to
+// before being renamed into place. It is a variable so tests can hand back a
+// file the write will fail on and check the failure path cleans up.
+var llmsCacheCreateTemp = os.CreateTemp
+
 // llmsCacheTTL bounds how old a cached page may be before it is considered
 // stale. Revalidation with a 304 keeps a cache hit fast (small round trip, no
 // body download); this TTL is the floor below which no revalidation is
@@ -380,25 +385,20 @@ func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
 	if err != nil {
 		return
 	}
-	data, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
+	// Marshaling cannot fail here: the entry is plain strings and an int64
+	// (invalid UTF-8 in a body is coerced, not rejected).
+	data, _ := json.Marshal(e)
 	if err := os.MkdirAll(t.cacheDir, 0o700); err != nil {
 		return
 	}
 	dst := t.cachePath(u)
-	tmp, err := os.CreateTemp(t.cacheDir, filepath.Base(dst)+".*.tmp")
+	tmp, err := llmsCacheCreateTemp(t.cacheDir, filepath.Base(dst)+".*.tmp")
 	if err != nil {
 		return
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Close(); err != nil {
+	_, werr := tmp.Write(data)
+	if cerr := tmp.Close(); werr != nil || cerr != nil {
 		_ = os.Remove(tmpName)
 		return
 	}
