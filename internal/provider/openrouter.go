@@ -26,13 +26,16 @@ const openrouterListTimeout = 10 * time.Second
 // OpenRouter exposes an OpenAI-compatible chat completions endpoint,
 // so we reuse the OpenAI SDK with a custom base URL.
 type openrouterModel struct {
-	modelName string
-	client    openai.Client
+	modelName     string
+	client        openai.Client
+	thinkingLevel string // "none", "low", "medium", "high", "max"
 }
 
 // NewOpenRouter creates an OpenRouter model.LLM.
 // If baseURL is empty, the default OpenRouter API endpoint is used.
-func NewOpenRouter(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LLMOptions) (model.LLM, error) {
+// thinkingLevel maps to OpenRouter's unified `reasoning.effort` request
+// parameter; empty or "none" leaves reasoning at the model's default.
+func NewOpenRouter(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("openrouter API key is required (set OPENROUTER_API_KEY)")
 	}
@@ -56,7 +59,7 @@ func NewOpenRouter(_ context.Context, modelName, apiKey, baseURL string, llmOpts
 		}
 	}
 	client := openai.NewClient(opts...)
-	return &openrouterModel{modelName: modelName, client: client}, nil
+	return &openrouterModel{modelName: modelName, client: client, thinkingLevel: thinkingLevel}, nil
 }
 
 func (m *openrouterModel) Name() string { return m.modelName }
@@ -87,12 +90,20 @@ func (m *openrouterModel) GenerateContent(ctx context.Context, req *model.LLMReq
 			}
 		}
 
+		if effort := openrouterReasoningEffort(m.thinkingLevel); effort != "" {
+			// The SDK has no field for OpenRouter's unified `reasoning`
+			// object, so inject it into the request body directly.
+			params.SetExtraFields(map[string]any{
+				"reasoning": map[string]string{"effort": effort},
+			})
+		}
+
 		if stream {
 			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-				oaiRunStreaming(ctx, &m.client, params, y)
+				oaiRunStreamingExtract(ctx, &m.client, params, y, openrouterDeltaThinking)
 			})
 		} else {
-			oaiRunNonStreaming(ctx, &m.client, params, yield)
+			oaiRunNonStreamingExtract(ctx, &m.client, params, yield, openrouterMessageReasoning)
 		}
 	}
 }
@@ -101,6 +112,95 @@ func (m *openrouterModel) GenerateContent(ctx context.Context, req *model.LLMReq
 // OpenRouter uses the same finish reasons as OpenAI.
 func openrouterFinishReasonToGenai(reason string) genai.FinishReason {
 	return oaiFinishReasonToGenai(reason)
+}
+
+// openrouterReasoningEffort maps a thinking level string to OpenRouter's
+// unified reasoning.effort value. Empty and "none" return "" (leave the
+// model's default in force — several reasoning models have no off switch,
+// and effort "none" is rejected by some providers behind OpenRouter).
+func openrouterReasoningEffort(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		// "max" and unknown levels land on the highest documented tier.
+		if strings.EqualFold(strings.TrimSpace(level), "max") {
+			return "max"
+		}
+		return ""
+	}
+}
+
+// Reasoning arrives on OpenRouter chunks as choices[].delta.reasoning (a plain
+// string, the common case) or choices[].delta.reasoning_details[] (typed
+// objects whose text lives under "text" for reasoning.text entries). The
+// openai-go SDK has no fields for either, so both are recovered from the
+// chunk's raw JSON. Non-streaming responses carry them on message.reasoning.
+// See https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.
+
+// openrouterDeltaThinking extracts the reasoning text from one streaming
+// chunk's raw JSON. Returns "" when the chunk carries none.
+func openrouterDeltaThinking(rawChunk string) string {
+	var payload struct {
+		Choices []struct {
+			Delta struct {
+				Reasoning        string `json:"reasoning"`
+				ReasoningDetails []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"reasoning_details"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(rawChunk), &payload); err != nil {
+		return ""
+	}
+	if len(payload.Choices) == 0 {
+		return ""
+	}
+	delta := payload.Choices[0].Delta
+	if delta.Reasoning != "" {
+		return delta.Reasoning
+	}
+	var sb strings.Builder
+	for _, d := range delta.ReasoningDetails {
+		sb.WriteString(d.Text)
+	}
+	return sb.String()
+}
+
+// openrouterMessageReasoning extracts the reasoning from a non-streaming
+// completion's raw JSON. Returns "" when the response carries none.
+func openrouterMessageReasoning(rawResponse string) string {
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Reasoning        string `json:"reasoning"`
+				ReasoningDetails []struct {
+					Text string `json:"text"`
+				} `json:"reasoning_details"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(rawResponse), &payload); err != nil {
+		return ""
+	}
+	if len(payload.Choices) == 0 {
+		return ""
+	}
+	msg := payload.Choices[0].Message
+	if msg.Reasoning != "" {
+		return msg.Reasoning
+	}
+	var sb strings.Builder
+	for _, d := range msg.ReasoningDetails {
+		sb.WriteString(d.Text)
+	}
+	return sb.String()
 }
 
 // OpenRouterContextWindowSize queries OpenRouter's /models listing for the
