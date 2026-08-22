@@ -144,6 +144,7 @@ type MCPServer struct {
 	Args    []string          `json:"args,omitempty"`
 	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
+	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -500,6 +501,9 @@ func applyMCPTransport(srv *MCPServer, m map[string]any) {
 	}
 	if headers, ok := m["headers"].(map[string]any); ok {
 		srv.Headers = toStringMap(headers)
+	}
+	if oauth, ok := m["oauth"].(bool); ok {
+		srv.OAuth = oauth
 	}
 }
 

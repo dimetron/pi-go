@@ -931,6 +931,7 @@ func buildMCPServerConfigs(cfg config.Config) []extension.MCPServerConfig {
 			Args:    s.Args,
 			URL:     s.URL,
 			Headers: s.Headers,
+			OAuth:   s.OAuth,
 		}
 	}
 	return out
