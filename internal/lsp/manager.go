@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -472,16 +471,11 @@ func fileURI(path string) string {
 
 // pathToURI converts an absolute path to a file:// URI.
 //
-// Windows paths start with a drive letter, not a slash. Handing url.URL a Path
-// of "C:/x" makes String emit "file://C:/x", where the drive letter is read as
-// the authority; the extra leading slash is what produces the "file:///C:/x"
-// form language servers expect.
+// The path component comes from URIPath, which on Windows puts the leading
+// slash in front of the drive letter that url.URL needs to emit "file:///C:/x"
+// rather than reading "C:" as the authority.
 func pathToURI(path string) string {
-	p := filepath.ToSlash(path)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	u := &url.URL{Scheme: "file", Path: p}
+	u := &url.URL{Scheme: "file", Path: URIPath(path)}
 	return u.String()
 }
 

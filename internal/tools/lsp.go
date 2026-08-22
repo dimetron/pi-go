@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"google.golang.org/adk/v2/agent"
@@ -494,14 +493,9 @@ func fileURI(path string) string {
 	if err != nil {
 		abs = path
 	}
-	// Windows paths start with a drive letter, not a slash. Without the extra
-	// leading slash url.URL emits "file://C:/x", where the drive letter is read
-	// as the authority instead of part of the path.
-	p := filepath.ToSlash(abs)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	u := &url.URL{Scheme: "file", Path: p}
+	// lsp.URIPath supplies the leading slash a Windows drive path needs so
+	// url.URL emits "file:///C:/x" rather than reading "C:" as the authority.
+	u := &url.URL{Scheme: "file", Path: lsp.URIPath(abs)}
 	return u.String()
 }
 
@@ -547,12 +541,8 @@ func uriToPath(uri string) string {
 		return uri
 	}
 	if u.Scheme == "file" {
-		p := u.Path
-		// Undo the leading slash fileURI puts in front of a drive letter.
-		if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
-			p = p[1:]
-		}
-		return filepath.FromSlash(p)
+		// Undoes the leading slash fileURI puts in front of a drive letter.
+		return lsp.PathFromURIPath(u.Path)
 	}
 	return uri
 }
