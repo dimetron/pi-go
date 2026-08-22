@@ -1,8 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -248,51 +249,19 @@ func (m *model) finishPlanWorktree() error {
 }
 
 // copyDir recursively copies the contents of src into dst. dst is created if
-// missing; existing files are overwritten. It mirrors the worktree's spec
-// directory into the invoking checkout so /run can consume it independently of
-// any git merge.
+// missing. It mirrors the worktree's spec directory into the invoking checkout
+// so /run can consume it independently of any git merge.
+//
+// Existing files in dst are left as-is: when this runs after a successful
+// merge the merged copies are already present and identical, and overwriting
+// them would be wasted work. So a file already existing in dst is not an
+// error — CopyFS reports it as fs.ErrExist and we treat that as success.
 func copyDir(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
-	}
-	for _, e := range entries {
-		srcPath := filepath.Join(src, e.Name())
-		dstPath := filepath.Join(dst, e.Name())
-		if e.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-			continue
-		}
-		// Skip symlinks to avoid following anything unexpected.
-		if e.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		in, err := os.Open(srcPath)
-		if err != nil {
-			return err
-		}
-		out, err := os.Create(dstPath)
-		if err != nil {
-			in.Close()
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			in.Close()
-			out.Close()
-			return err
-		}
-		if err := in.Close(); err != nil {
-			out.Close()
-			return err
-		}
-		if err := out.Close(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

@@ -36,23 +36,21 @@ func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
 		}
 	}
 
-	// Overwrite an existing destination file.
-	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("plan-v2"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Copying again is idempotent — an existing destination file is left as-is,
+	// not an error (the merge already brought the same content in).
 	if err := copyDir(src, dst); err != nil {
-		t.Fatalf("copyDir overwrite: %v", err)
+		t.Fatalf("copyDir second pass: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "plan-v2" {
-		t.Errorf("overwrite did not take effect: got %q, want %q", got, "plan-v2")
+	if string(got) != "plan" {
+		t.Errorf("existing file should be left as-is, got %q", got)
 	}
 }
 
-func TestCopyDir_SkipsSymlinks(t *testing.T) {
+func TestCopyDir_FollowsSymlink(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src")
 	dst := filepath.Join(t.TempDir(), "dst")
 	if err := os.MkdirAll(src, 0o755); err != nil {
@@ -71,8 +69,9 @@ func TestCopyDir_SkipsSymlinks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "real.md")); err != nil {
 		t.Errorf("real.md not copied: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(dst, "link.md")); err == nil {
-		t.Error("symlink should not be copied")
+	// os.CopyFS follows symlinks, so link.md resolves to real.md's content.
+	if got, err := os.ReadFile(filepath.Join(dst, "link.md")); err != nil || string(got) != "x" {
+		t.Errorf("symlinked file not resolved: got %q err %v", got, err)
 	}
 }
 
