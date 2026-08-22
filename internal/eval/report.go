@@ -3,8 +3,6 @@ package eval
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -13,28 +11,13 @@ import (
 // returns both paths. The Markdown rendering is also returned so the caller
 // can print it to stdout without re-reading the file.
 func WriteReport(report *RunReport, outDir string) (jsonPath, mdPath, md string, err error) {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", "", "", fmt.Errorf("create report dir: %w", err)
-	}
-
 	jsonBytes, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", "", "", fmt.Errorf("marshal report: %w", err)
 	}
-
-	ts := report.Metadata.Timestamp.Format("20060102-150405")
-	jsonPath = filepath.Join(outDir, fmt.Sprintf("eval-%s-%s.json", report.Metadata.Spec, ts))
-	if err := os.WriteFile(jsonPath, jsonBytes, 0o644); err != nil {
-		return "", "", "", fmt.Errorf("write json report: %w", err)
-	}
-
 	md = RenderMarkdown(report)
-	mdPath = filepath.Join(outDir, fmt.Sprintf("eval-%s-%s.md", report.Metadata.Spec, ts))
-	if err := os.WriteFile(mdPath, []byte(md), 0o644); err != nil {
-		return "", "", "", fmt.Errorf("write md report: %w", err)
-	}
-
-	return jsonPath, mdPath, md, nil
+	jsonPath, mdPath, err = writeReportFiles(outDir, report.Metadata.Spec, report.Metadata.Timestamp, jsonBytes, md)
+	return jsonPath, mdPath, md, err
 }
 
 // RenderMarkdown renders a RunReport as human-readable Markdown for stdout.
