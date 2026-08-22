@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -158,13 +159,14 @@ func TestWriteReport_WritesJSONAndMarkdown(t *testing.T) {
 		t.Errorf("md basename = %s, want %s.md", filepath.Base(mdPath), wantBase)
 	}
 
-	// Files exist with 0644.
+	// Files exist with 0644. Windows has no Unix permission bits: Go reports
+	// every writable file there as 0666, so only the existence check applies.
 	for _, p := range []string{jsonPath, mdPath} {
 		info, err := os.Stat(p)
 		if err != nil {
 			t.Fatalf("stat %s: %v", p, err)
 		}
-		if perm := info.Mode().Perm(); perm != 0o644 {
+		if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o644 {
 			t.Errorf("mode of %s = %o, want 644", p, perm)
 		}
 	}
