@@ -13,14 +13,23 @@ import (
 // maxPromptOutput is the maximum size of tool output included in the compression prompt.
 const maxPromptOutput = 4096
 
+// compressorRunner is the minimal orchestrator surface the compressor needs.
+// Production code uses *subagent.Orchestrator (which satisfies it); tests use
+// a fake so the adapter's event-stream handling is exercised without launching
+// the subagent machinery.
+type compressorRunner interface {
+	LookupAgent(name string) (subagent.AgentConfig, error)
+	Spawn(ctx context.Context, input subagent.SpawnInput) (<-chan subagent.Event, string, error)
+}
+
 // SubagentCompressor uses a bundled subagent to compress raw observations.
 type SubagentCompressor struct {
-	orchestrator *subagent.Orchestrator
+	runner compressorRunner
 }
 
 // NewSubagentCompressor creates a compressor that uses the memory-compressor subagent.
 func NewSubagentCompressor(orch *subagent.Orchestrator) *SubagentCompressor {
-	return &SubagentCompressor{orchestrator: orch}
+	return &SubagentCompressor{runner: orch}
 }
 
 // compressedResponse is the JSON structure expected from the compression subagent.
@@ -37,13 +46,13 @@ func (c *SubagentCompressor) CompressObservation(ctx context.Context, raw RawObs
 	prompt := buildCompressionPrompt(raw)
 
 	// Look up the memory-compressor agent config.
-	agent, err := c.orchestrator.LookupAgent("memory-compressor")
+	agent, err := c.runner.LookupAgent("memory-compressor")
 	if err != nil {
 		return nil, fmt.Errorf("finding memory-compressor agent: %w", err)
 	}
 
 	// Spawn the compression subagent.
-	events, _, err := c.orchestrator.Spawn(ctx, subagent.SpawnInput{
+	events, _, err := c.runner.Spawn(ctx, subagent.SpawnInput{
 		Agent:  agent,
 		Prompt: prompt,
 	})
@@ -161,12 +170,12 @@ func truncateForError(s string) string {
 func (c *SubagentCompressor) SummarizeSession(ctx context.Context, sessionID, project string, observations []*Observation) (*SessionSummary, error) {
 	prompt := buildSummaryPrompt(observations)
 
-	agent, err := c.orchestrator.LookupAgent("memory-compressor")
+	agent, err := c.runner.LookupAgent("memory-compressor")
 	if err != nil {
 		return nil, fmt.Errorf("finding memory-compressor agent: %w", err)
 	}
 
-	events, _, err := c.orchestrator.Spawn(ctx, subagent.SpawnInput{
+	events, _, err := c.runner.Spawn(ctx, subagent.SpawnInput{
 		Agent:  agent,
 		Prompt: prompt,
 	})
