@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
@@ -291,4 +292,51 @@ func loadFixtureBundle(t *testing.T) *bundle.Bundle {
 		t.Fatalf("loading fixture bundle: %v", err)
 	}
 	return b
+}
+
+// TestTUFCacheDir pins the TUF cache location under the user's own state dir.
+// The test is not parallel: it mutates process environment.
+func TestTUFCacheDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows reads this, not HOME.
+
+	got, err := TUFCacheDir()
+	if err != nil {
+		t.Fatalf("TUFCacheDir: %v", err)
+	}
+	want := filepath.Join(home, ".pi-go", "sigstore")
+	if got != want {
+		t.Errorf("TUFCacheDir() = %q, want %q", got, want)
+	}
+}
+
+// TestVerify_InvalidDigest covers input rejection before any cryptographic
+// work: non-hex and odd-length digests must fail fast.
+func TestVerify_InvalidDigest(t *testing.T) {
+	// A verifier is needed only for the digest-decode step; any valid one works.
+	material := loadPinnedTrustRoot(t)
+	v, err := NewVerifierWithMaterial(DefaultRepo, material)
+	if err != nil {
+		t.Fatalf("NewVerifierWithMaterial: %v", err)
+	}
+
+	for _, digest := range []string{"zzz", "abc", "123"} {
+		if _, err := v.Verify(nil, digest); err == nil {
+			t.Errorf("Verify with digest %q succeeded, want invalid-digest error", digest)
+		} else if !strings.Contains(err.Error(), "invalid digest") {
+			t.Errorf("Verify(%q) error = %q, want \"invalid digest\"", digest, err)
+		}
+	}
+}
+
+// TestNewVerifierWithMaterial_BadRepo: an invalid owner/name form must fail at
+// construction, before any trust material is consulted.
+func TestNewVerifierWithMaterial_BadRepo(t *testing.T) {
+	material := loadPinnedTrustRoot(t)
+	for _, repo := range []string{"", "noslash", "too/many/slashes"} {
+		if _, err := NewVerifierWithMaterial(repo, material); err == nil {
+			t.Errorf("NewVerifierWithMaterial(%q) succeeded, want an error", repo)
+		}
+	}
 }

@@ -7,7 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/voice"
 )
+
+// Compile-time contract: Creator must satisfy voice.SessionCreator, so an
+// interface drift is a build failure rather than a runtime surprise.
+var _ voice.SessionCreator = (*Creator)(nil)
 
 func TestVerify(t *testing.T) {
 	tests := []struct {
