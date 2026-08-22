@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"iter"
 	"time"
@@ -40,16 +41,25 @@ func retryDelay(cfg RetryConfig, attempt int) time.Duration {
 // finer net is in internal/provider, which retries the single failed HTTP
 // request without disturbing the turn around it.
 func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
+	return WithRetryContext(context.Background(), cfg, runFn)
+}
+
+// WithRetryContext is WithRetry with a context: each retry is announced to the
+// retry.Notifier carried on ctx (see retry.WithNotifier), so the front-end can
+// show that it is waiting on a retry rather than on the model, and the backoff
+// sleep ends early if ctx is canceled.
+func WithRetryContext(ctx context.Context, cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
-		retryLoop(cfg, runFn, yield)
+		retryLoop(ctx, cfg, runFn, yield)
 	}
 }
 
 // retryLoop runs runFn up to cfg.MaxRetries+1 times, sleeping between attempts.
 // It returns as soon as an attempt finishes without a transient error — which
 // includes the case where the consumer stopped ranging, since runAttempt stops
-// with no transient error then.
-func retryLoop(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error], yield func(*session.Event, error) bool) {
+// with no transient error then. Each retry is announced to the retry.Notifier
+// on ctx before the pause, and a canceled ctx ends the pause and the loop.
+func retryLoop(ctx context.Context, cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error], yield func(*session.Event, error) bool) {
 	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 		hadEvents, transientErr := runAttempt(runFn, yield)
 
@@ -64,7 +74,17 @@ func retryLoop(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error], y
 		}
 
 		if attempt < cfg.MaxRetries {
-			time.Sleep(retry.Delay(cfg, attempt, transientErr))
+			delay := retry.Delay(cfg, attempt, transientErr)
+			retry.Notify(ctx, retry.Attempt{
+				Attempt:    attempt + 1,
+				MaxRetries: cfg.MaxRetries,
+				Delay:      delay,
+				Err:        transientErr,
+			})
+			if !sleepContext(ctx, delay) {
+				_ = yield(nil, ctx.Err())
+				return
+			}
 			continue
 		}
 
@@ -90,4 +110,19 @@ func runAttempt(runFn func() iter.Seq2[*session.Event, error], yield func(*sessi
 		}
 	}
 	return hadEvents, nil
+}
+
+// sleepContext waits for d, reporting false if ctx was canceled first.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
