@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,10 @@ import (
 // page. Documentation pages are small; anything slower is almost certainly a
 // stalled connection or a denial-of-service attempt.
 const llmsFetchTimeout = 30 * time.Second
+
+// llmsMaxRedirects bounds how many redirects fetch_docs will follow. Every
+// hop is revalidated by checkRedirectURL before being followed.
+const llmsMaxRedirects = 5
 
 // llmsMaxBytes caps the size of a fetched page. llms.txt indexes and their
 // linked markdown pages are typically well under this; the cap prevents an
@@ -56,16 +61,46 @@ type LLMSToolset struct {
 
 // NewLLMSToolset creates a new llms.txt toolset from configuration.
 func NewLLMSToolset(cfg *config.LLMSConfig) *LLMSToolset {
-	ts := &LLMSToolset{client: &http.Client{Timeout: llmsFetchTimeout}}
+	ts := &LLMSToolset{}
 	if cfg != nil {
 		ts.sources = cfg.Sources
 	}
+	// Redirects are re-run through the same https/private-host/host-allowlist
+	// checks as the original request; otherwise an open redirect on an allowed
+	// host could reach arbitrary destinations, defeating both guards.
+	ts.client = &http.Client{
+		Timeout:       llmsFetchTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return ts.checkRedirectURL(req.URL, via) },
+	}
 	return ts
+}
+
+// checkRedirectURL validates one redirect hop. It is the CheckRedirect hook
+// for the toolset's HTTP client and is exported-for-test via unit tests.
+func (t *LLMSToolset) checkRedirectURL(u *url.URL, via []*http.Request) error {
+	if len(via) >= llmsMaxRedirects {
+		return fmt.Errorf("stopped after %d redirects", llmsMaxRedirects)
+	}
+	if u.Scheme != "https" {
+		return errors.New("only https:// URLs are allowed")
+	}
+	if err := rejectPrivateHost(u.Hostname()); err != nil {
+		return fmt.Errorf("url rejected: %w", err)
+	}
+	if !t.hostAllowed(u.Hostname()) {
+		return fmt.Errorf("host %q is not an allowed documentation source", u.Hostname())
+	}
+	return nil
 }
 
 // Name returns the name of the toolset.
 func (t *LLMSToolset) Name() string {
 	return "llms"
+}
+
+// Sources returns the configured llms.txt documentation sources.
+func (t *LLMSToolset) Sources() []config.LLMSSource {
+	return t.sources
 }
 
 // Tools returns the llms.txt tools available.
@@ -88,15 +123,19 @@ func NewLLMSToolFromSet(ts *LLMSToolset) (tool.Tool, error) {
 
 	return newTool("fetch_docs", desc,
 		func(ctx agent.Context, input LLMSInput) (LLMSOutput, error) {
-			return ts.fetchDocs(ctx, input.URL)
+			return ts.FetchDocs(ctx, input.URL)
 		},
 	)
 }
 
-// fetchDocs fetches a documentation URL, restricted to hosts that host one of
+// FetchDocs fetches a documentation URL, restricted to hosts that host one of
 // the configured llms.txt sources. The response is returned as-is (llms.txt
 // and its linked pages are markdown, so no HTML conversion is needed).
-func (t *LLMSToolset) fetchDocs(ctx context.Context, rawURL string) (LLMSOutput, error) {
+//
+// It is exported so the voice agent can drive the same allow-list and SSRF
+// guards for its own fetch_docs tool rather than reimplementing them; it is
+// otherwise the body behind the ADK fetch_docs tool.
+func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return LLMSOutput{Error: "url is required"}, nil
@@ -132,7 +171,13 @@ func (t *LLMSToolset) fetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 
 	client := t.client
 	if llmsClientOverride != nil {
-		client = llmsClientOverride
+		// The test override supplies only transport/TLS settings; the
+		// toolset's redirect policy must survive the swap, or the SSRF and
+		// allowlist guards would not apply to redirect hops in tests (and
+		// nowhere else — production always uses t.client).
+		c := *llmsClientOverride
+		c.CheckRedirect = t.client.CheckRedirect
+		client = &c
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -144,9 +189,14 @@ func (t *LLMSToolset) fetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		return LLMSOutput{Error: fmt.Sprintf("unexpected status %d", resp.StatusCode)}, nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, llmsMaxBytes))
+	// Read one byte past the cap so an oversized body is detected rather than
+	// silently truncated into a successful-looking result.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, llmsMaxBytes+1))
 	if err != nil {
 		return LLMSOutput{Error: fmt.Sprintf("read body: %v", err)}, nil
+	}
+	if len(body) > llmsMaxBytes {
+		return LLMSOutput{Error: fmt.Sprintf("response exceeds %d byte limit", llmsMaxBytes)}, nil
 	}
 	return LLMSOutput{Content: string(body)}, nil
 }
@@ -181,7 +231,7 @@ func buildLLMSDescription(sources []config.LLMSSource) string {
 	sb.WriteString("Available sources: ")
 	names := make([]string, 0, len(sources))
 	for _, s := range sources {
-		names = append(names, s.Name)
+		names = append(names, s.Name+" ("+s.URL+")")
 	}
 	sb.WriteString(strings.Join(names, ", "))
 	sb.WriteString(".")
