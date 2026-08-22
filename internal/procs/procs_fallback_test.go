@@ -27,6 +27,22 @@ func TestSignalGroup_NilAndUnstartedAreNoOps(t *testing.T) {
 	}
 }
 
+// TestTerminate_UnstartedCommandDoesNotEscalate covers the timer callback's
+// cmd.Process == nil return at procs_unix.go:52: terminate on a command that
+// never started must schedule a SIGKILL that finds no process and no-ops,
+// leaving the test runner alive.
+func TestTerminate_UnstartedCommandDoesNotEscalate(t *testing.T) {
+	cmd := exec.Command("bash", "-c", "true") // never started: Process is nil
+	if err := terminate(cmd, 20*time.Millisecond); err != nil {
+		t.Fatalf("terminate(unstarted) = %v, want nil", err)
+	}
+	// Wait past the grace so the AfterFunc timer fires with cmd.Process == nil.
+	time.Sleep(50 * time.Millisecond)
+	if err := syscall.Kill(syscall.Getpid(), 0); err != nil {
+		t.Fatalf("the test process was signaled by a stale timer: %v", err)
+	}
+}
+
 // TestSignalGroup_WithoutSetpgidSignalsTheChildOnly is the safety property that
 // matters most in this file.
 //

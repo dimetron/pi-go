@@ -249,7 +249,7 @@ func sparkline(samples []ConcurrencySample) string {
 		}
 	}
 
-	levels := "▁▂▃▄▅▆▇█"
+	levels := []rune("▁▂▃▄▅▆▇█")
 	scale := 1
 	for _, v := range buckets {
 		if v > scale {
@@ -262,7 +262,10 @@ func sparkline(samples []ConcurrencySample) string {
 	var b strings.Builder
 	for _, v := range buckets {
 		idx := (v * (len(levels) - 1)) / scale
-		b.WriteByte(levels[idx])
+		if idx < 0 {
+			idx = 0
+		}
+		b.WriteRune(levels[idx])
 	}
 	fmt.Fprintf(&b, "  (max %d, %d samples)", scale, n)
 	return b.String()
