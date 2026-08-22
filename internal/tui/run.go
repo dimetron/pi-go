@@ -1015,31 +1015,39 @@ func (m *model) failedAgentIDs() []string {
 	if m.run == nil || m.cfg.Orchestrator == nil {
 		return nil
 	}
-	var bad []string
 	if m.run.isParallel() {
+		var bad []string
 		for _, pa := range m.run.parallel {
-			status := pa.status
-			if status == "" && m.cfg.Orchestrator != nil {
-				if st, ok := m.cfg.Orchestrator.Get(pa.agentID); ok {
-					status = st.Status
-				}
-			}
-			if status != "completed" {
+			if m.resolvedAgentStatus(pa.status, pa.agentID) != "completed" {
 				bad = append(bad, pa.agentID)
 			}
 		}
-	} else if m.run.agentID != "" {
-		status := m.run.status
-		if status == "" && m.cfg.Orchestrator != nil {
-			if st, ok := m.cfg.Orchestrator.Get(m.run.agentID); ok {
-				status = st.Status
-			}
-		}
-		if status != "completed" {
-			bad = append(bad, m.run.agentID)
-		}
+		return bad
 	}
-	return bad
+	if m.run.agentID == "" {
+		return nil
+	}
+	if m.resolvedAgentStatus(m.run.status, m.run.agentID) != "completed" {
+		return []string{m.run.agentID}
+	}
+	return nil
+}
+
+// resolvedAgentStatus returns status when the run already carries one, and
+// otherwise asks the orchestrator for agentID's recorded status. An agent the
+// orchestrator has no record of resolves to "", which every caller reads as
+// "not completed" — see failedAgentIDs.
+func (m *model) resolvedAgentStatus(status, agentID string) string {
+	if status != "" {
+		return status
+	}
+	if m.cfg.Orchestrator == nil {
+		return ""
+	}
+	if st, ok := m.cfg.Orchestrator.Get(agentID); ok {
+		return st.Status
+	}
+	return ""
 }
 
 // runWorktreePathsFor returns a markdown bullet list of worktree paths

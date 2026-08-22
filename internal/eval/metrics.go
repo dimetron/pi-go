@@ -214,56 +214,22 @@ func LoadTrajectories(sessionsDir string) ([]*LoadedTrajectory, error) {
 func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 	m := TrajectoryMetrics{}
 
-	byID := make(map[string]*LoadedTrajectory, len(loaded))
-	for _, lt := range loaded {
-		byID[lt.SessionID] = lt
-	}
-
-	// childRefs[sessionID] → set of child session IDs referenced from its
-	// observations. parentOf[child] → count of parents, for root detection.
 	childRefs := make(map[string]map[string]bool)
-	parentOf := make(map[string]int)
 	for _, lt := range loaded {
 		refs := subagentRefs(lt.Traj)
 		if len(refs) > 0 {
 			childRefs[lt.SessionID] = refs
-			for child := range refs {
-				parentOf[child]++
-			}
 		}
 		m.NestedAgentCalls += len(refs)
 	}
 
-	// Roots are sessions nobody references. Depth is memoized DFS:
-	// depth(child) = 1 + max(depth(parent)).
-	depth := make(map[string]int, len(loaded))
-	var depthOf func(id string, stack map[string]bool) int
-	depthOf = func(id string, stack map[string]bool) int {
-		if d, ok := depth[id]; ok {
-			return d
-		}
-		if stack[id] { // cycle guard — should not happen, but never recurse forever
-			return 0
-		}
-		stack[id] = true
-		best := 0
-		for parent := range parentsOf(id, loaded, childRefs) {
-			if d := depthOf(parent, stack) + 1; d > best {
-				best = d
-			}
-		}
-		delete(stack, id)
-		depth[id] = best
-		return best
-	}
+	depths := sessionDepths(loaded, childRefs)
 
 	for _, lt := range loaded {
 		t := lt.Traj
 		toolCalls := countToolCalls(t)
-		refs := len(subagentRefs(t))
-		d := depthOf(lt.SessionID, map[string]bool{})
-
 		started, duration := stepSpan(t)
+		d := depths[lt.SessionID]
 
 		m.Sessions = append(m.Sessions, SessionSummary{
 			SessionID:     lt.SessionID,
@@ -271,7 +237,7 @@ func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 			Model:         t.Agent.ModelName,
 			Steps:         len(t.Steps),
 			ToolCalls:     toolCalls,
-			SubagentRefs:  refs,
+			SubagentRefs:  len(subagentRefs(t)),
 			Depth:         d,
 			StartedAt:     started,
 			Duration:      duration,
@@ -294,6 +260,50 @@ func ComputeTrajectoryMetrics(loaded []*LoadedTrajectory) TrajectoryMetrics {
 	})
 
 	return m
+}
+
+// sessionDepths resolves every session's nesting depth from the child-ref
+// graph. Roots are sessions nobody references; depth is a memoized DFS over
+// parents, depth(child) = 1 + max(depth(parent)).
+func sessionDepths(loaded []*LoadedTrajectory, childRefs map[string]map[string]bool) map[string]int {
+	depth := make(map[string]int, len(loaded))
+	var depthOf func(id string, stack map[string]bool) int
+	depthOf = func(id string, stack map[string]bool) int {
+		if d, ok := depth[id]; ok {
+			return d
+		}
+		if stack[id] { // cycle guard — should not happen, but never recurse forever
+			return 0
+		}
+		stack[id] = true
+		best := maxParentDepth(id, loaded, childRefs, stack, depthOf)
+		delete(stack, id)
+		depth[id] = best
+		return best
+	}
+
+	for _, lt := range loaded {
+		depthOf(lt.SessionID, map[string]bool{})
+	}
+	return depth
+}
+
+// maxParentDepth returns one more than the deepest parent of id, or 0 when id
+// has no parents. Split out of the DFS so the recursion stays flat.
+func maxParentDepth(
+	id string,
+	loaded []*LoadedTrajectory,
+	childRefs map[string]map[string]bool,
+	stack map[string]bool,
+	depthOf func(string, map[string]bool) int,
+) int {
+	best := 0
+	for parent := range parentsOf(id, loaded, childRefs) {
+		if d := depthOf(parent, stack) + 1; d > best {
+			best = d
+		}
+	}
+	return best
 }
 
 // parentsOf returns the session IDs that directly reference id as a subagent.
@@ -421,33 +431,8 @@ func ComputeToolsMetrics(loaded []*LoadedTrajectory) ToolsMetrics {
 	m := ToolsMetrics{ByTool: make(map[string]ToolStats)}
 
 	for _, lt := range loaded {
-		records := pairCalls(lt.Traj)
-		for id, rec := range records {
-			st := m.ByTool[rec.fn]
-			st.Calls++
-			if rec.observed {
-				st.Results++
-				if rec.isError {
-					st.Errors++
-				}
-				st.AvgResultBytes += rec.obsBytes
-				if !rec.stepTS.IsZero() && !rec.obsStepTS.IsZero() {
-					st.AvgLatencyMs += int(rec.obsStepTS.Sub(rec.stepTS).Milliseconds())
-				}
-			} else {
-				st.Wasted++
-			}
-			m.ByTool[rec.fn] = st
-			m.TotalCalls++
-			if rec.observed {
-				m.TotalResults++
-			} else {
-				m.Wasted++
-			}
-			if rec.fn == "subagent" {
-				m.NestedAgentCalls++
-			}
-			_ = id
+		for _, rec := range pairCalls(lt.Traj) {
+			m.recordCall(rec)
 		}
 	}
 
@@ -463,19 +448,47 @@ func ComputeToolsMetrics(loaded []*LoadedTrajectory) ToolsMetrics {
 		m.Duplicates += st.Duplicates
 	}
 
-	// Deterministic tool ordering.
-	sorted := make([]string, 0, len(m.ByTool))
-	for name := range m.ByTool {
-		sorted = append(sorted, name)
-	}
-	sort.Strings(sorted)
-	ordered := make(map[string]ToolStats, len(sorted))
-	for _, name := range sorted {
-		ordered[name] = m.ByTool[name]
-	}
-	m.ByTool = ordered
-
+	m.ByTool = orderedTools(m.ByTool)
 	return m
+}
+
+// recordCall folds one paired call into the run totals and its tool's stats.
+// The byte and latency averages are accumulated as sums here and divided by
+// the result count once every call has been seen.
+func (m *ToolsMetrics) recordCall(rec *callRecord) {
+	st := m.ByTool[rec.fn]
+	st.Calls++
+	if rec.observed {
+		st.Results++
+		if rec.isError {
+			st.Errors++
+		}
+		st.AvgResultBytes += rec.obsBytes
+		if !rec.stepTS.IsZero() && !rec.obsStepTS.IsZero() {
+			st.AvgLatencyMs += int(rec.obsStepTS.Sub(rec.stepTS).Milliseconds())
+		}
+		m.TotalResults++
+	} else {
+		st.Wasted++
+		m.Wasted++
+	}
+	m.ByTool[rec.fn] = st
+
+	m.TotalCalls++
+	if rec.fn == "subagent" {
+		m.NestedAgentCalls++
+	}
+}
+
+// orderedTools rebuilds the per-tool map in sorted key order, so the report is
+// stable across runs rather than reflecting map iteration order.
+func orderedTools(byTool map[string]ToolStats) map[string]ToolStats {
+	names := sortedKeys(byTool)
+	ordered := make(map[string]ToolStats, len(names))
+	for _, name := range names {
+		ordered[name] = byTool[name]
+	}
+	return ordered
 }
 
 // pairCalls walks a trajectory's steps in order, recording each tool call and

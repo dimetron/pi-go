@@ -449,22 +449,10 @@ func (s *Sandbox) loadGitignore() ([]GitignorePattern, error) {
 		if d.IsDir() && path != "." && shouldSkipDir(d.Name()) {
 			return filepath.SkipDir
 		}
-		if d.Name() == ".gitignore" {
-			gitignoreData, readErr := readFileFromFS(fsys, path)
-			if readErr != nil {
-				return nil
-			}
-			gitignoreDir := filepath.Dir(path)
-			if gitignoreDir == "." {
-				gitignoreDir = ""
-			}
-			scanner := bufio.NewScanner(strings.NewReader(string(gitignoreData)))
-			for scanner.Scan() {
-				if pat, ok := parseGitignoreLine(scanner.Text(), gitignoreDir); ok {
-					dirPatterns[gitignoreDir] = append(dirPatterns[gitignoreDir], pat)
-				}
-			}
+		if d.Name() != ".gitignore" {
+			return nil
 		}
+		collectGitignoreFile(fsys, path, dirPatterns)
 		return nil
 	})
 	if err != nil {
@@ -477,6 +465,28 @@ func (s *Sandbox) loadGitignore() ([]GitignorePattern, error) {
 	}
 
 	return patterns, nil
+}
+
+// collectGitignoreFile parses the .gitignore at path and appends its patterns
+// to the bucket for the directory that contains it. An unreadable file is
+// skipped: a .gitignore that cannot be read contributes no patterns.
+func collectGitignoreFile(fsys fs.FS, path string, dirPatterns map[string][]GitignorePattern) {
+	gitignoreData, readErr := readFileFromFS(fsys, path)
+	if readErr != nil {
+		return
+	}
+
+	gitignoreDir := filepath.Dir(path)
+	if gitignoreDir == "." {
+		gitignoreDir = ""
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(gitignoreData)))
+	for scanner.Scan() {
+		if pat, ok := parseGitignoreLine(scanner.Text(), gitignoreDir); ok {
+			dirPatterns[gitignoreDir] = append(dirPatterns[gitignoreDir], pat)
+		}
+	}
 }
 
 // readFileFromFS reads a file from an fs.FS.

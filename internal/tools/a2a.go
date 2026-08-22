@@ -184,40 +184,47 @@ func (c *ClientCache) sendStreamingMessage(ctx context.Context, client *a2aclien
 		if err != nil {
 			return sb.String(), fmt.Errorf("streaming error: %w", err)
 		}
-
-		switch e := event.(type) {
-		case *a2a.Message:
-			// Terminal message with result
-			for _, part := range e.Parts {
-				if text := part.Text(); text != "" {
-					sb.WriteString(text)
-				}
-			}
+		if appendStreamEvent(&sb, event) {
 			return sb.String(), nil
-
-		case *a2a.Task:
-			// Terminal task (non-streaming completion)
-			result := extractTaskResult(e)
-			sb.WriteString(result)
-			return sb.String(), nil
-
-		case *a2a.TaskStatusUpdateEvent:
-			// State change updates - check for terminal state
-			if e.Status.State.Terminal() {
-				return sb.String(), nil
-			}
-
-		case *a2a.TaskArtifactUpdateEvent:
-			// Extract text from artifact parts
-			for _, part := range e.Artifact.Parts {
-				if text := part.Text(); text != "" {
-					sb.WriteString(text)
-				}
-			}
 		}
 	}
 
 	return sb.String(), nil
+}
+
+// appendStreamEvent writes any text carried by a streaming event to sb and
+// reports whether the event ends the stream.
+func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
+	switch e := event.(type) {
+	case *a2a.Message:
+		// Terminal message with result
+		appendPartsText(sb, e.Parts)
+		return true
+
+	case *a2a.Task:
+		// Terminal task (non-streaming completion)
+		sb.WriteString(extractTaskResult(e))
+		return true
+
+	case *a2a.TaskStatusUpdateEvent:
+		// State change updates - check for terminal state
+		return e.Status.State.Terminal()
+
+	case *a2a.TaskArtifactUpdateEvent:
+		// Extract text from artifact parts
+		appendPartsText(sb, e.Artifact.Parts)
+	}
+
+	return false
+}
+
+// appendPartsText writes the text of every non-empty content part to sb.
+func appendPartsText(sb *strings.Builder, parts a2a.ContentParts) {
+	for _, part := range parts {
+		if text := part.Text(); text != "" {
+			sb.WriteString(text)
+		}
+	}
 }
 
 // extractSendMessageResult extracts text from a SendMessageResult (either *a2a.Task or *a2a.Message).
@@ -238,11 +245,7 @@ func extractMessageText(msg *a2a.Message) string {
 		return ""
 	}
 	var sb strings.Builder
-	for _, part := range msg.Parts {
-		if text := part.Text(); text != "" {
-			sb.WriteString(text)
-		}
-	}
+	appendPartsText(&sb, msg.Parts)
 	return sb.String()
 }
 

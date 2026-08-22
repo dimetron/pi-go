@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 
+	"google.golang.org/genai"
+
 	"github.com/dimetron/pi-go/internal/agent"
 )
 
@@ -174,38 +176,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 // handlePrompt processes a prompt request by running the agent and streaming events.
 func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder, req Request) {
-	var params PromptParams
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		_ = enc.Encode(Response{
-			JSONRPC: "2.0",
-			Error:   &Error{Code: -32602, Message: "invalid params: " + err.Error()},
-			ID:      req.ID,
-		})
+	params, sessionID, ok := s.resolvePrompt(ctx, enc, req)
+	if !ok {
 		return
-	}
-
-	if params.Text == "" {
-		_ = enc.Encode(Response{
-			JSONRPC: "2.0",
-			Error:   &Error{Code: -32602, Message: "params.text is required"},
-			ID:      req.ID,
-		})
-		return
-	}
-
-	// Create a session if not provided.
-	sessionID := params.SessionID
-	if sessionID == "" {
-		var err error
-		sessionID, _, err = s.agent.CreateSession(ctx)
-		if err != nil {
-			_ = enc.Encode(Response{
-				JSONRPC: "2.0",
-				Error:   &Error{Code: -32000, Message: "creating session: " + err.Error()},
-				ID:      req.ID,
-			})
-			return
-		}
 	}
 
 	// Send initial response with session ID to acknowledge the request.
@@ -215,6 +188,40 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 		ID:      req.ID,
 	})
 
+	s.streamRun(ctx, enc, sessionID, params.Text)
+}
+
+// resolvePrompt validates the request and settles which session it runs in,
+// creating one when the client did not name it. It writes the JSON-RPC error
+// response and reports ok=false when the request cannot be served, so the
+// caller has nothing left to do.
+func (s *Server) resolvePrompt(ctx context.Context, enc *json.Encoder, req Request) (params PromptParams, sessionID string, ok bool) {
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeError(enc, req.ID, -32602, "invalid params: "+err.Error())
+		return params, "", false
+	}
+
+	if params.Text == "" {
+		writeError(enc, req.ID, -32602, "params.text is required")
+		return params, "", false
+	}
+
+	// Create a session if not provided.
+	if params.SessionID != "" {
+		return params, params.SessionID, true
+	}
+
+	sessionID, _, err := s.agent.CreateSession(ctx)
+	if err != nil {
+		writeError(enc, req.ID, -32000, "creating session: "+err.Error())
+		return params, "", false
+	}
+	return params, sessionID, true
+}
+
+// streamRun runs the agent and writes its events as JSONL, closing with
+// message_end.
+func (s *Server) streamRun(ctx context.Context, enc *json.Encoder, sessionID, text string) {
 	// Stream JSONL events (same schema as JSON mode).
 	started := false
 
@@ -225,7 +232,7 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 	// re-introduce the data race.
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
-	for ev, err := range s.agent.Run(ctx, sessionID, params.Text) {
+	for ev, err := range s.agent.Run(ctx, sessionID, text) {
 		if err != nil {
 			_ = enc.Encode(Event{Type: "error", Content: err.Error()})
 			break
@@ -244,48 +251,64 @@ func (s *Server) handlePrompt(ctx context.Context, _ net.Conn, enc *json.Encoder
 		}
 
 		for _, part := range ev.Content.Parts {
-			if part.Text != "" {
-				_ = enc.Encode(Event{
-					Type:  "text_delta",
-					Agent: ev.Author,
-					Delta: part.Text,
-				})
-			}
-			if part.FunctionCall != nil {
-				_ = enc.Encode(Event{
-					Type:      "tool_call",
-					Agent:     ev.Author,
-					ToolName:  part.FunctionCall.Name,
-					ToolInput: part.FunctionCall.Args,
-				})
-			}
-			if part.FunctionResponse != nil {
-				respJSON, err := json.Marshal(part.FunctionResponse.Response)
-				if err != nil {
-					respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
-				}
-				_ = enc.Encode(Event{
-					Type:     "tool_result",
-					Agent:    ev.Author,
-					ToolName: part.FunctionResponse.Name,
-					Content:  string(respJSON),
-				})
-			}
+			encodePart(enc, ev.Author, part)
 		}
 	}
 
 	_ = enc.Encode(Event{Type: "message_end"})
 }
 
+// encodePart writes the events one content part carries. A part may carry text,
+// a tool call and a tool result at once, so each is checked in turn; a part
+// carrying none of them produces nothing.
+func encodePart(enc *json.Encoder, author string, part *genai.Part) {
+	if part.Text != "" {
+		_ = enc.Encode(Event{
+			Type:  "text_delta",
+			Agent: author,
+			Delta: part.Text,
+		})
+	}
+	if part.FunctionCall != nil {
+		_ = enc.Encode(Event{
+			Type:      "tool_call",
+			Agent:     author,
+			ToolName:  part.FunctionCall.Name,
+			ToolInput: part.FunctionCall.Args,
+		})
+	}
+	if part.FunctionResponse == nil {
+		return
+	}
+
+	// A response that will not marshal is still worth reporting, so fall back
+	// to its Go rendering rather than dropping the event.
+	respJSON, err := json.Marshal(part.FunctionResponse.Response)
+	if err != nil {
+		respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
+	}
+	_ = enc.Encode(Event{
+		Type:     "tool_result",
+		Agent:    author,
+		ToolName: part.FunctionResponse.Name,
+		Content:  string(respJSON),
+	})
+}
+
+// writeError sends a JSON-RPC error response.
+func writeError(enc *json.Encoder, id any, code int, message string) {
+	_ = enc.Encode(Response{
+		JSONRPC: "2.0",
+		Error:   &Error{Code: code, Message: message},
+		ID:      id,
+	})
+}
+
 // handleSessionCreate creates a new session and returns the ID.
 func (s *Server) handleSessionCreate(ctx context.Context, enc *json.Encoder, req Request) {
 	sessionID, _, err := s.agent.CreateSession(ctx)
 	if err != nil {
-		_ = enc.Encode(Response{
-			JSONRPC: "2.0",
-			Error:   &Error{Code: -32000, Message: "creating session: " + err.Error()},
-			ID:      req.ID,
-		})
+		writeError(enc, req.ID, -32000, "creating session: "+err.Error())
 		return
 	}
 

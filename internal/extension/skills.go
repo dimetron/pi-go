@@ -144,6 +144,12 @@ func appendDirSkills(skills []Skill, seen map[string]int, blocked *[]string, opt
 		return nil, fmt.Errorf("reading skills dir %s: %w", dir, err)
 	}
 
+	// Determine source based on whether the path is absolute.
+	source := "user"
+	if !filepath.IsAbs(dir) {
+		source = "project"
+	}
+
 	for _, skillInfo := range skillCandidates(dir, entries) {
 		if _, err := os.Stat(skillInfo.path); err != nil {
 			continue
@@ -162,21 +168,22 @@ func appendDirSkills(skills []Skill, seen map[string]int, blocked *[]string, opt
 		if skill.Name == "" {
 			skill.Name = skillInfo.defaultName
 		}
-		// Determine source based on whether the path is absolute.
-		source := "user"
-		if !filepath.IsAbs(dir) {
-			source = "project"
-		}
 		skill.Source = source
-		if idx, ok := seen[skill.Name]; ok {
-			// Override with project/user-level skill.
-			skills[idx] = skill
-		} else {
-			seen[skill.Name] = len(skills)
-			skills = append(skills, skill)
-		}
+		skills = appendOrOverrideSkill(skills, seen, skill)
 	}
 	return skills, nil
+}
+
+// appendOrOverrideSkill replaces a same-named skill loaded earlier — that is
+// how a project or user skill overrides a bundled one — or appends the skill
+// and records its index in seen.
+func appendOrOverrideSkill(skills []Skill, seen map[string]int, skill Skill) []Skill {
+	if idx, ok := seen[skill.Name]; ok {
+		skills[idx] = skill
+		return skills
+	}
+	seen[skill.Name] = len(skills)
+	return append(skills, skill)
 }
 
 // skillCandidates lists the SKILL.md files to consider under dir: the
@@ -265,44 +272,52 @@ func parseSkillContent(content, skillName string) (Skill, string, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
 
-		if trimmed == "---" && !frontmatterDone {
-			if !inFrontmatter {
-				inFrontmatter = true
-				continue
-			}
-			// End of frontmatter.
-			inFrontmatter = false
-			frontmatterDone = true
+		// The first "---" opens the frontmatter and the second closes it for
+		// good; a later one is ordinary body text.
+		if !frontmatterDone && strings.TrimSpace(line) == "---" {
+			inFrontmatter = !inFrontmatter
+			frontmatterDone = !inFrontmatter
 			continue
 		}
-
-		if inFrontmatter {
-			key, value, ok := parseFrontmatterLine(line)
-			if !ok {
-				continue
-			}
-			switch key {
-			case "name":
-				skill.Name = value
-			case "description":
-				skill.Description = value
-			case "tools":
-				for _, t := range strings.Split(value, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						skill.Tools = append(skill.Tools, t)
-					}
-				}
-			}
-		} else {
+		if !inFrontmatter {
 			body.WriteString(line)
 			body.WriteString("\n")
+			continue
 		}
+		applyFrontmatterLine(&skill, line)
 	}
 
 	return skill, strings.TrimSpace(body.String()), scanner.Err()
+}
+
+// applyFrontmatterLine records one recognized "key: value" frontmatter line on
+// skill. Lines with no colon, and keys the format does not define, are ignored.
+func applyFrontmatterLine(skill *Skill, line string) {
+	key, value, ok := parseFrontmatterLine(line)
+	if !ok {
+		return
+	}
+	switch key {
+	case "name":
+		skill.Name = value
+	case "description":
+		skill.Description = value
+	case "tools":
+		skill.Tools = append(skill.Tools, splitSkillTools(value)...)
+	}
+}
+
+// splitSkillTools splits a comma-separated "tools:" value, trimming each entry
+// and dropping the empty ones a trailing or doubled comma leaves behind.
+func splitSkillTools(value string) []string {
+	var tools []string
+	for _, t := range strings.Split(value, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			tools = append(tools, t)
+		}
+	}
+	return tools
 }
 
 // parseFrontmatterLine parses "key: value" from a frontmatter line.

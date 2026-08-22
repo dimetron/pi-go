@@ -118,53 +118,7 @@ func BuildJudgePrompt(r *RunReport, digest string) string {
 
 	b.WriteString("# Run under review\n\n")
 	if r != nil {
-		fmt.Fprintf(&b, "Spec: %s (mode: %s, model: %s)\n\n", r.Metadata.Spec, r.Metadata.Mode, r.Metadata.Model)
-
-		b.WriteString("## Outcome\n\n")
-		fmt.Fprintf(&b, "- final phase: %s\n", r.Outcome.FinalPhase)
-		fmt.Fprintf(&b, "- retries: %d\n", r.Outcome.Retries)
-		fmt.Fprintf(&b, "- golden artifacts match: %v\n", r.Outcome.GoldenPass)
-		if r.Outcome.BaselineRef != "" {
-			fmt.Fprintf(&b, "- matches baseline %s: %v\n", r.Outcome.BaselineRef, r.Outcome.BaselinePass)
-		}
-		for _, g := range r.Outcome.GateResults {
-			fmt.Fprintf(&b, "- gate %q (%s): passed=%v\n", g.Name, g.Command, g.Passed)
-		}
-		for _, g := range r.Outcome.GoldenCheck {
-			if !g.Match {
-				fmt.Fprintf(&b, "- golden mismatch: %s\n", g.Name)
-			}
-		}
-		if r.Outcome.Reason != "" {
-			fmt.Fprintf(&b, "- failure reason: %s\n", truncate(oneLine(r.Outcome.Reason), 600))
-		}
-
-		b.WriteString("\n## Trajectory\n\n")
-		fmt.Fprintf(&b, "- sessions: %d\n", len(r.Trajectory.Sessions))
-		fmt.Fprintf(&b, "- total steps: %d\n", r.Trajectory.TotalSteps)
-		fmt.Fprintf(&b, "- total tool calls: %d\n", r.Trajectory.TotalToolCalls)
-		fmt.Fprintf(&b, "- nested agent calls: %d\n", r.Trajectory.NestedAgentCalls)
-		fmt.Fprintf(&b, "- max nesting depth: %d\n", r.Trajectory.MaxDepth)
-
-		b.WriteString("\n## Concurrency\n\n")
-		fmt.Fprintf(&b, "- pool budget: %d (nested worker budget: %d)\n", r.Concurrency.PoolBudget, r.Concurrency.WorkerBudget)
-		fmt.Fprintf(&b, "- max concurrent agents: %d\n", r.Concurrency.MaxRunning)
-		fmt.Fprintf(&b, "- mean concurrent agents: %.2f\n", r.Concurrency.MeanRunning)
-		fmt.Fprintf(&b, "- fraction of time with >1 running: %.2f\n", r.Concurrency.ParallelOverlap)
-
-		b.WriteString("\n## Tools\n\n")
-		fmt.Fprintf(&b, "- total calls: %d (results: %d)\n", r.Tools.TotalCalls, r.Tools.TotalResults)
-		fmt.Fprintf(&b, "- calls with no result: %d\n", r.Tools.Wasted)
-		fmt.Fprintf(&b, "- duplicate calls (same tool, same arguments): %d\n", r.Tools.Duplicates)
-		if len(r.Tools.ByTool) > 0 {
-			b.WriteString("\n| tool | calls | errors | wasted | duplicates | avg result bytes |\n")
-			b.WriteString("|---|---|---|---|---|---|\n")
-			for _, name := range sortedKeys(r.Tools.ByTool) {
-				st := r.Tools.ByTool[name]
-				fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d |\n",
-					name, st.Calls, st.Errors, st.Wasted, st.Duplicates, st.AvgResultBytes)
-			}
-		}
+		writeRunEvidence(&b, r)
 	}
 
 	if strings.TrimSpace(digest) != "" {
@@ -174,6 +128,58 @@ func BuildJudgePrompt(r *RunReport, digest string) string {
 	}
 
 	return b.String()
+}
+
+// writeRunEvidence renders the report's four sections — outcome, trajectory,
+// concurrency, tools — in the order the judge reads them.
+func writeRunEvidence(b *strings.Builder, r *RunReport) {
+	fmt.Fprintf(b, "Spec: %s (mode: %s, model: %s)\n\n", r.Metadata.Spec, r.Metadata.Mode, r.Metadata.Model)
+
+	b.WriteString("## Outcome\n\n")
+	fmt.Fprintf(b, "- final phase: %s\n", r.Outcome.FinalPhase)
+	fmt.Fprintf(b, "- retries: %d\n", r.Outcome.Retries)
+	fmt.Fprintf(b, "- golden artifacts match: %v\n", r.Outcome.GoldenPass)
+	if r.Outcome.BaselineRef != "" {
+		fmt.Fprintf(b, "- matches baseline %s: %v\n", r.Outcome.BaselineRef, r.Outcome.BaselinePass)
+	}
+	for _, g := range r.Outcome.GateResults {
+		fmt.Fprintf(b, "- gate %q (%s): passed=%v\n", g.Name, g.Command, g.Passed)
+	}
+	for _, g := range r.Outcome.GoldenCheck {
+		if !g.Match {
+			fmt.Fprintf(b, "- golden mismatch: %s\n", g.Name)
+		}
+	}
+	if r.Outcome.Reason != "" {
+		fmt.Fprintf(b, "- failure reason: %s\n", truncate(oneLine(r.Outcome.Reason), 600))
+	}
+
+	b.WriteString("\n## Trajectory\n\n")
+	fmt.Fprintf(b, "- sessions: %d\n", len(r.Trajectory.Sessions))
+	fmt.Fprintf(b, "- total steps: %d\n", r.Trajectory.TotalSteps)
+	fmt.Fprintf(b, "- total tool calls: %d\n", r.Trajectory.TotalToolCalls)
+	fmt.Fprintf(b, "- nested agent calls: %d\n", r.Trajectory.NestedAgentCalls)
+	fmt.Fprintf(b, "- max nesting depth: %d\n", r.Trajectory.MaxDepth)
+
+	b.WriteString("\n## Concurrency\n\n")
+	fmt.Fprintf(b, "- pool budget: %d (nested worker budget: %d)\n", r.Concurrency.PoolBudget, r.Concurrency.WorkerBudget)
+	fmt.Fprintf(b, "- max concurrent agents: %d\n", r.Concurrency.MaxRunning)
+	fmt.Fprintf(b, "- mean concurrent agents: %.2f\n", r.Concurrency.MeanRunning)
+	fmt.Fprintf(b, "- fraction of time with >1 running: %.2f\n", r.Concurrency.ParallelOverlap)
+
+	b.WriteString("\n## Tools\n\n")
+	fmt.Fprintf(b, "- total calls: %d (results: %d)\n", r.Tools.TotalCalls, r.Tools.TotalResults)
+	fmt.Fprintf(b, "- calls with no result: %d\n", r.Tools.Wasted)
+	fmt.Fprintf(b, "- duplicate calls (same tool, same arguments): %d\n", r.Tools.Duplicates)
+	if len(r.Tools.ByTool) > 0 {
+		b.WriteString("\n| tool | calls | errors | wasted | duplicates | avg result bytes |\n")
+		b.WriteString("|---|---|---|---|---|---|\n")
+		for _, name := range sortedKeys(r.Tools.ByTool) {
+			st := r.Tools.ByTool[name]
+			fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d |\n",
+				name, st.Calls, st.Errors, st.Wasted, st.Duplicates, st.AvgResultBytes)
+		}
+	}
 }
 
 // ParseJudgeVerdict reads the model's reply into a verdict. Models routinely
@@ -193,38 +199,48 @@ func ParseJudgeVerdict(reply string) (JudgeVerdict, error) {
 		return JudgeVerdict{}, fmt.Errorf("judge reply has no scores")
 	}
 
-	total := 0
-	for i, s := range v.Scores {
-		// Clamp rather than reject: an out-of-range score is still a usable
-		// signal, and losing the whole verdict over one bad number is worse.
-		if s.Score < 1 {
-			v.Scores[i].Score = 1
-		}
-		if s.Score > 5 {
-			v.Scores[i].Score = 5
-		}
-		total += v.Scores[i].Score
-	}
-	v.Overall = float64(total) / float64(len(v.Scores))
-
-	switch strings.ToLower(strings.TrimSpace(v.Verdict)) {
-	case "pass", "fail":
-		v.Verdict = strings.ToLower(strings.TrimSpace(v.Verdict))
-	default:
-		// Derive a verdict the model failed to state, so the field is always
-		// meaningful: any 1 is disqualifying, otherwise a mean of 3 passes.
-		v.Verdict = "pass"
-		for _, s := range v.Scores {
-			if s.Score <= 1 {
-				v.Verdict = "fail"
-			}
-		}
-		if v.Overall < 3 {
-			v.Verdict = "fail"
-		}
-	}
+	v.Overall = float64(clampScores(v.Scores)) / float64(len(v.Scores))
+	v.Verdict = normalizeVerdict(v.Verdict, v.Scores, v.Overall)
 
 	return v, nil
+}
+
+// clampScores pins every score into 1..5 in place and returns their total.
+// Clamping rather than rejecting keeps the verdict usable: an out-of-range
+// score is still a signal, and losing the whole grade over one bad number is
+// worse.
+func clampScores(scores []JudgeScore) int {
+	total := 0
+	for i, s := range scores {
+		switch {
+		case s.Score < 1:
+			scores[i].Score = 1
+		case s.Score > 5:
+			scores[i].Score = 5
+		}
+		total += scores[i].Score
+	}
+	return total
+}
+
+// normalizeVerdict lowercases a stated pass/fail. When the model failed to
+// state one, it is derived so the field is always meaningful: any score of 1
+// is disqualifying, otherwise a mean of 3 passes.
+func normalizeVerdict(stated string, scores []JudgeScore, overall float64) string {
+	switch v := strings.ToLower(strings.TrimSpace(stated)); v {
+	case "pass", "fail":
+		return v
+	}
+
+	if overall < 3 {
+		return "fail"
+	}
+	for _, s := range scores {
+		if s.Score <= 1 {
+			return "fail"
+		}
+	}
+	return "pass"
 }
 
 // TrajectoryDigest condenses the loaded trajectories into the timeline the
@@ -242,47 +258,55 @@ func TrajectoryDigest(loaded []*LoadedTrajectory, maxCallsPerSession int) string
 		if lt == nil || lt.Traj == nil {
 			continue
 		}
-		t := lt.Traj
-		fmt.Fprintf(&b, "### session %s (agent %s)\n", shortID(t.SessionID), t.Agent.Name)
-
-		results := resultsBySourceCall(lt)
-		n := 0
-		truncated := false
-		for _, step := range t.Steps {
-			for _, tc := range step.ToolCalls {
-				if n >= maxCallsPerSession {
-					truncated = true
-					break
-				}
-				n++
-				fmt.Fprintf(&b, "%d. %s(%s)", n, tc.FunctionName, truncate(canonicalArgs(tc.Arguments), 160))
-				if res, ok := results[tc.ToolCallID]; ok {
-					if looksLikeError(res.Content) {
-						fmt.Fprintf(&b, " -> ERROR: %s", truncate(oneLine(contentText(res.Content)), 160))
-					} else {
-						fmt.Fprintf(&b, " -> %d bytes", contentBytes(res.Content))
-					}
-					if res.SubagentTrajectoryRef != "" {
-						b.WriteString(" [spawned subagent]")
-					}
-				} else {
-					b.WriteString(" -> (no result)")
-				}
-				b.WriteString("\n")
-			}
-			if truncated {
-				break
-			}
-		}
-		if truncated {
-			fmt.Fprintf(&b, "... (%d more calls omitted)\n", countToolCalls(t)-n)
-		}
-		if n == 0 {
-			b.WriteString("(no tool calls)\n")
-		}
-		b.WriteString("\n")
+		digestSession(&b, lt, maxCallsPerSession)
 	}
 	return b.String()
+}
+
+// digestSession writes one session's block of the digest: a header line, then
+// one line per tool call up to maxCalls, then a blank separator line. Hitting
+// the cap replaces the remaining lines with a count of what was dropped.
+func digestSession(b *strings.Builder, lt *LoadedTrajectory, maxCalls int) {
+	t := lt.Traj
+	fmt.Fprintf(b, "### session %s (agent %s)\n", shortID(t.SessionID), t.Agent.Name)
+
+	results := resultsBySourceCall(lt)
+	n := 0
+	for _, step := range t.Steps {
+		for _, tc := range step.ToolCalls {
+			if n >= maxCalls {
+				fmt.Fprintf(b, "... (%d more calls omitted)\n", countToolCalls(t)-n)
+				b.WriteString("\n")
+				return
+			}
+			n++
+			fmt.Fprintf(b, "%d. %s(%s)", n, tc.FunctionName, truncate(canonicalArgs(tc.Arguments), 160))
+			res, ok := results[tc.ToolCallID]
+			writeCallOutcome(b, res, ok)
+		}
+	}
+	if n == 0 {
+		b.WriteString("(no tool calls)\n")
+	}
+	b.WriteString("\n")
+}
+
+// writeCallOutcome appends the result half of a tool-call line: the failure
+// marker and message, the result size, or the absence of a result altogether.
+func writeCallOutcome(b *strings.Builder, res atifResult, ok bool) {
+	if !ok {
+		b.WriteString(" -> (no result)\n")
+		return
+	}
+	if looksLikeError(res.Content) {
+		fmt.Fprintf(b, " -> ERROR: %s", truncate(oneLine(contentText(res.Content)), 160))
+	} else {
+		fmt.Fprintf(b, " -> %d bytes", contentBytes(res.Content))
+	}
+	if res.SubagentTrajectoryRef != "" {
+		b.WriteString(" [spawned subagent]")
+	}
+	b.WriteString("\n")
 }
 
 // resultsBySourceCall indexes a trajectory's observation results by the tool

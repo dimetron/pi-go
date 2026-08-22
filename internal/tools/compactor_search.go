@@ -82,26 +82,7 @@ func groupSearchOutput(s string, cfg CompactorConfig) (string, bool) {
 		return s, false
 	}
 
-	// Group lines by file prefix (file:line:content pattern)
-	byFile := make(map[string][]string)
-	var fileOrder []string
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		// Parse file:line:content or file:content patterns
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		file := line[:idx]
-		if _, seen := byFile[file]; !seen {
-			fileOrder = append(fileOrder, file)
-		}
-		byFile[file] = append(byFile[file], line)
-	}
-
+	byFile, fileOrder := groupSearchLinesByFile(lines)
 	if len(byFile) == 0 {
 		return s, false
 	}
@@ -109,29 +90,7 @@ func groupSearchOutput(s string, cfg CompactorConfig) (string, bool) {
 	var b strings.Builder
 	totalShown := 0
 	for _, file := range fileOrder {
-		matches := byFile[file]
-		fmt.Fprintf(&b, "%s (%d matches):\n", file, len(matches))
-		shown := 0
-		for _, m := range matches {
-			if totalShown >= cfg.MaxSearchTotal {
-				break
-			}
-			if shown >= cfg.MaxSearchPerFile {
-				fmt.Fprintf(&b, "  ... and %d more matches\n", len(matches)-shown)
-				break
-			}
-			// Strip file prefix for cleaner output
-			if idx := strings.Index(m, ":"); idx >= 0 {
-				b.WriteString("  ")
-				b.WriteString(m[idx+1:])
-			} else {
-				b.WriteString("  ")
-				b.WriteString(m)
-			}
-			b.WriteString("\n")
-			shown++
-			totalShown++
-		}
+		totalShown = writeSearchFileGroup(&b, file, byFile[file], totalShown, cfg)
 		if totalShown >= cfg.MaxSearchTotal {
 			fmt.Fprintf(&b, "\n... (%d total matches shown, limited to %d)\n",
 				totalShown, cfg.MaxSearchTotal)
@@ -144,4 +103,63 @@ func groupSearchOutput(s string, cfg CompactorConfig) (string, bool) {
 		return s, false
 	}
 	return result, true
+}
+
+// groupSearchLinesByFile buckets search result lines by their file prefix
+// (the file:line:content or file:content pattern), returning the buckets and
+// the order in which the files were first seen. Lines that are empty or carry
+// no colon are dropped.
+func groupSearchLinesByFile(lines []string) (map[string][]string, []string) {
+	byFile := make(map[string][]string)
+	var fileOrder []string
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		file := line[:idx]
+		if _, seen := byFile[file]; !seen {
+			fileOrder = append(fileOrder, file)
+		}
+		byFile[file] = append(byFile[file], line)
+	}
+
+	return byFile, fileOrder
+}
+
+// writeSearchFileGroup writes one file's header and matches to b, honoring the
+// per-file and running limits, and returns the updated running total.
+func writeSearchFileGroup(b *strings.Builder, file string, matches []string, totalShown int, cfg CompactorConfig) int {
+	fmt.Fprintf(b, "%s (%d matches):\n", file, len(matches))
+
+	shown := 0
+	for _, m := range matches {
+		if totalShown >= cfg.MaxSearchTotal {
+			break
+		}
+		if shown >= cfg.MaxSearchPerFile {
+			fmt.Fprintf(b, "  ... and %d more matches\n", len(matches)-shown)
+			break
+		}
+		b.WriteString("  ")
+		b.WriteString(stripSearchLinePrefix(m))
+		b.WriteString("\n")
+		shown++
+		totalShown++
+	}
+
+	return totalShown
+}
+
+// stripSearchLinePrefix drops the leading file: prefix from a match line for
+// cleaner grouped output, returning the line unchanged when it has no colon.
+func stripSearchLinePrefix(m string) string {
+	if idx := strings.Index(m, ":"); idx >= 0 {
+		return m[idx+1:]
+	}
+	return m
 }

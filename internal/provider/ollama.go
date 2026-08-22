@@ -133,70 +133,80 @@ func (m *ollamaModel) Name() string { return m.modelName }
 
 func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, systemPrompt := ollamaContentsToMessages(req.Contents, req.Config)
+		chatReq := m.buildChatRequest(req)
 
-		// Prepend system message if present.
-		if systemPrompt != "" {
-			messages = append([]ollamaapi.Message{{Role: "system", Content: systemPrompt}}, messages...)
-		}
-
-		modelName := m.modelName
-		if req.Model != "" {
-			modelName = req.Model
-		}
-
-		chatReq := &ollamaapi.ChatRequest{
-			Model:    modelName,
-			Messages: messages,
-		}
-
-		if n := ollamaNumPredict(); n > 0 {
-			if chatReq.Options == nil {
-				chatReq.Options = map[string]any{}
-			}
-			chatReq.Options["num_predict"] = n
-		}
-
-		if sampling := ollamaSamplingOptions(); len(sampling) > 0 {
-			if chatReq.Options == nil {
-				chatReq.Options = map[string]any{}
-			}
-			for k, v := range sampling {
-				chatReq.Options[k] = v
-			}
-		}
-
-		// No num_ctx for cloud models. api.ollama.com already serves each model
-		// at its native window, and sending a fixed value caps it instead of
-		// raising it: deepseek-v4-flash:0731-cloud has 1M, so the 256K that
-		// used to be set here would have thrown away three quarters of it.
-		//
-		// The old test also only matched ":cloud", never the ":<size>-cloud"
-		// form that most of the cloud catalog uses, so it silently did nothing
-		// for those models — the routing checks in config.go and provider.go
-		// accept both suffixes.
-
-		// Configure thinking. nothink models must not have thinking forced on.
-		if strings.Contains(strings.ToLower(modelName), "nothink") {
-			chatReq.Think = &ollamaapi.ThinkValue{Value: false}
-		} else if thinkCfg := ollamaThinkingConfig(m.thinkingLevel); thinkCfg != nil {
-			chatReq.Think = thinkCfg
-		}
-
-		// Convert tools.
-		if req.Config != nil && len(req.Config.Tools) > 0 {
-			chatReq.Tools = ollamaGenaiToolsToOllama(req.Config.Tools)
-		}
-
-		if stream {
-			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-				ollamaRunStreaming(ctx, m.client, chatReq, y)
-			})
-		} else {
+		if !stream {
 			chatReq.Stream = new(false)
 			ollamaRunNonStreaming(ctx, m.client, chatReq, yield)
+			return
 		}
+
+		retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+			ollamaRunStreaming(ctx, m.client, chatReq, y)
+		})
 	}
+}
+
+// buildChatRequest assembles the /api/chat request for one turn.
+//
+// No num_ctx is set, for cloud models or any other. api.ollama.com already
+// serves each model at its native window, and sending a fixed value caps it
+// instead of raising it: deepseek-v4-flash:0731-cloud has 1M, so the 256K that
+// used to be set here would have thrown away three quarters of it.
+//
+// The old test also only matched ":cloud", never the ":<size>-cloud" form that
+// most of the cloud catalog uses, so it silently did nothing for those models —
+// the routing checks in config.go and provider.go accept both suffixes.
+func (m *ollamaModel) buildChatRequest(req *model.LLMRequest) *ollamaapi.ChatRequest {
+	messages, systemPrompt := ollamaContentsToMessages(req.Contents, req.Config)
+
+	// Prepend system message if present.
+	if systemPrompt != "" {
+		messages = append([]ollamaapi.Message{{Role: "system", Content: systemPrompt}}, messages...)
+	}
+
+	modelName := m.modelName
+	if req.Model != "" {
+		modelName = req.Model
+	}
+
+	chatReq := &ollamaapi.ChatRequest{
+		Model:    modelName,
+		Messages: messages,
+		Options:  ollamaChatOptions(),
+		Think:    ollamaThinkValue(modelName, m.thinkingLevel),
+	}
+
+	// Convert tools.
+	if req.Config != nil && len(req.Config.Tools) > 0 {
+		chatReq.Tools = ollamaGenaiToolsToOllama(req.Config.Tools)
+	}
+
+	return chatReq
+}
+
+// ollamaChatOptions collects the per-request entries of the Ollama options map,
+// returning nil when none apply so the field stays absent and the server's own
+// defaults hold.
+func ollamaChatOptions() map[string]any {
+	opts := ollamaSamplingOptions()
+	if n := ollamaNumPredict(); n > 0 {
+		opts["num_predict"] = n
+	}
+	if len(opts) == 0 {
+		return nil
+	}
+	return opts
+}
+
+// ollamaThinkValue resolves the think field for one request. nothink models must
+// not have thinking forced on, whichever level the session is running at; a nil
+// result leaves the field off so the model's own default applies.
+func ollamaThinkValue(modelName, thinkingLevel string) *ollamaapi.ThinkValue {
+	if strings.Contains(strings.ToLower(modelName), "nothink") {
+		return &ollamaapi.ThinkValue{Value: false}
+	}
+	return ollamaThinkingConfig(thinkingLevel)
 }
 
 // ollamaThinkingConfig maps a thinking level string to Ollama ThinkValue.
@@ -416,45 +426,64 @@ func ollamaTextMessage(role, text string) ollamaapi.Message {
 func ollamaGenaiToolsToOllama(tools []*genai.Tool) ollamaapi.Tools {
 	var out ollamaapi.Tools
 	for _, t := range tools {
-		if t == nil || t.FunctionDeclarations == nil {
+		if t == nil {
 			continue
 		}
 		for _, fd := range t.FunctionDeclarations {
 			if fd == nil {
 				continue
 			}
-			params := ollamaapi.ToolFunctionParameters{
-				Type:       "object",
-				Properties: ollamaapi.NewToolPropertiesMap(),
-			}
-
-			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
-				if props, ok := m["properties"].(map[string]any); ok {
-					for name, propRaw := range props {
-						prop := convertToToolProperty(propRaw)
-						params.Properties.Set(name, prop)
-					}
-				}
-				if required, ok := m["required"].([]any); ok {
-					for _, r := range required {
-						if s, ok := r.(string); ok {
-							params.Required = append(params.Required, s)
-						}
-					}
-				}
-			}
-
 			out = append(out, ollamaapi.Tool{
 				Type: "function",
 				Function: ollamaapi.ToolFunction{
 					Name:        fd.Name,
 					Description: fd.Description,
-					Parameters:  params,
+					Parameters:  ollamaToolParameters(fd.ParametersJsonSchema),
 				},
 			})
 		}
 	}
 	return out
+}
+
+// ollamaToolParameters renders one declaration's JSON schema as Ollama's
+// parameter object. The Properties map is always allocated, even for a
+// declaration that takes no arguments, and Required is left nil unless the
+// schema carries a list with at least one string in it.
+func ollamaToolParameters(rawSchema any) ollamaapi.ToolFunctionParameters {
+	params := ollamaapi.ToolFunctionParameters{
+		Type:       "object",
+		Properties: ollamaapi.NewToolPropertiesMap(),
+	}
+	m := schemaToMap(rawSchema)
+	if m == nil {
+		return params
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
+		for name, propRaw := range props {
+			params.Properties.Set(name, convertToToolProperty(propRaw))
+		}
+	}
+	params.Required = append(params.Required, jsonSchemaRequiredNames(m["required"])...)
+	return params
+}
+
+// jsonSchemaRequiredNames reads the string entries of a JSON schema "required"
+// list. Anything that is not a list, and any entry in it that is not a string,
+// is dropped: the schema reaches here as `any` and a malformed one must not
+// take down the request that carries it.
+func jsonSchemaRequiredNames(raw any) []string {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(list))
+	for _, r := range list {
+		if s, ok := r.(string); ok {
+			names = append(names, s)
+		}
+	}
+	return names
 }
 
 // schemaToMap normalizes a genai FunctionDeclaration.ParametersJsonSchema (typed
@@ -756,30 +785,49 @@ func OllamaContextWindowSize(ctx context.Context, baseURL, modelName string) int
 		return 0
 	}
 
-	// Parameters is a newline-separated list of "key value" pairs.
 	// num_ctx takes precedence as it reflects the configured context window.
-	for _, line := range strings.Split(resp.Parameters, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "num_ctx" {
-			if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-				return n
-			}
-		}
+	if n, ok := ollamaNumCtxParameter(resp.Parameters); ok {
+		return n
 	}
 
 	// Fall back to the model's native context length from ModelInfo.
-	for key, val := range resp.ModelInfo {
-		if strings.HasSuffix(key, ".context_length") {
-			switch v := val.(type) {
-			case float64:
-				return int64(v)
-			case int64:
-				return v
-			case int:
-				return int64(v)
-			}
+	return ollamaNativeContextLength(resp.ModelInfo)
+}
+
+// ollamaNumCtxParameter reads num_ctx out of a /api/show parameters block, which
+// is a newline-separated list of "key value" pairs. The second return says
+// whether a value was found at all, so a configured num_ctx of 0 is reported as
+// itself rather than falling through to the native context length.
+func ollamaNumCtxParameter(parameters string) (int64, bool) {
+	for _, line := range strings.Split(parameters, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "num_ctx" {
+			continue
+		}
+		if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+			return n, true
 		}
 	}
+	return 0, false
+}
 
+// ollamaNativeContextLength reads the model's native context length out of a
+// /api/show model_info map, returning 0 when no key carries one. A value that
+// arrived over HTTP is always a float64; the integer cases are here for a map
+// built in process.
+func ollamaNativeContextLength(modelInfo map[string]any) int64 {
+	for key, val := range modelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+		switch v := val.(type) {
+		case float64:
+			return int64(v)
+		case int64:
+			return v
+		case int:
+			return int64(v)
+		}
+	}
 	return 0
 }

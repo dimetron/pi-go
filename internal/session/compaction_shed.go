@@ -66,40 +66,62 @@ func ShedSupersededToolResultsWithDedup(
 		return events, res
 	}
 
-	// Index every FunctionCall by its ID so a FunctionResponse can look up the
-	// args it was answering. Without this, the read tool's response (which only
-	// carries content/total_lines/truncated, not file_path) would key on
-	// nothing and two unrelated reads would collapse.
-	callsByID := indexFunctionCalls(events)
+	pass := &shedPass{
+		seen: make(map[string]bool),
+		// Index every FunctionCall by its ID so a FunctionResponse can look up
+		// the args it was answering. Without this, the read tool's response
+		// (which only carries content/total_lines/truncated, not file_path)
+		// would key on nothing and two unrelated reads would collapse.
+		callsByID:     indexFunctionCalls(events),
+		dedupPointers: dedupPointers,
+		res:           res,
+	}
 
 	// Walk backwards so the first sighting of a (tool, args) key is the newest
 	// call — the one worth keeping.
-	seen := make(map[string]bool)
 	for i := cutoff - 1; i >= 0; i-- {
 		ev := events[i]
 		if ev == nil || ev.Content == nil {
 			continue
 		}
-		for _, part := range ev.Content.Parts {
-			fr := part.FunctionResponse
-			if fr == nil || fr.Response == nil {
-				continue
-			}
-			if isDedupPointer(fr, dedupPointers) {
-				continue
-			}
-			key := fr.Name + "\x00" + responseTargetKey(fr, callsByID)
-			if !seen[key] {
-				seen[key] = true
-				continue
-			}
-			if n := shedResponsePayload(fr); n > 0 {
-				res.ResultsShed++
-				res.BytesReclaimed += n
-			}
+		pass.shedParts(ev.Content.Parts)
+	}
+	return events, pass.res
+}
+
+// shedPass is the state one backwards shedding walk carries: the (tool, target)
+// keys already sighted — the first sighting is the newest and is kept — the
+// call index responses are keyed through, the deduper's pointer set, and the
+// running tally.
+type shedPass struct {
+	seen          map[string]bool
+	callsByID     map[string]*genai.FunctionCall
+	dedupPointers map[string]bool
+	res           ShedResult
+}
+
+// shedParts sheds the superseded tool results among one event's parts. A part
+// that is not a tool result, and one holding a dedup pointer rather than a
+// payload of its own, are both out of scope.
+func (p *shedPass) shedParts(parts []*genai.Part) {
+	for _, part := range parts {
+		fr := part.FunctionResponse
+		if fr == nil || fr.Response == nil {
+			continue
+		}
+		if isDedupPointer(fr, p.dedupPointers) {
+			continue
+		}
+		key := fr.Name + "\x00" + responseTargetKey(fr, p.callsByID)
+		if !p.seen[key] {
+			p.seen[key] = true
+			continue
+		}
+		if n := shedResponsePayload(fr); n > 0 {
+			p.res.ResultsShed++
+			p.res.BytesReclaimed += n
 		}
 	}
-	return events, res
 }
 
 // indexFunctionCalls walks the events once and records every FunctionCall by
@@ -111,22 +133,28 @@ func indexFunctionCalls(events []*session.Event) map[string]*genai.FunctionCall 
 		if ev == nil || ev.Content == nil {
 			continue
 		}
-		for _, part := range ev.Content.Parts {
-			if part == nil || part.FunctionCall == nil {
-				continue
-			}
-			fc := part.FunctionCall
-			if fc.ID == "" {
-				continue
-			}
-			// Keep the first sighting — a second FunctionCall with the same ID
-			// is a duplicate, and the first is the authoritative pair partner.
-			if _, dup := out[fc.ID]; !dup {
-				out[fc.ID] = fc
-			}
-		}
+		indexPartCalls(out, ev.Content.Parts)
 	}
 	return out
+}
+
+// indexPartCalls records each part's FunctionCall in out under its ID. Calls
+// with no ID cannot be paired with a response, so they are skipped.
+func indexPartCalls(out map[string]*genai.FunctionCall, parts []*genai.Part) {
+	for _, part := range parts {
+		if part == nil || part.FunctionCall == nil {
+			continue
+		}
+		fc := part.FunctionCall
+		if fc.ID == "" {
+			continue
+		}
+		// Keep the first sighting — a second FunctionCall with the same ID
+		// is a duplicate, and the first is the authoritative pair partner.
+		if _, dup := out[fc.ID]; !dup {
+			out[fc.ID] = fc
+		}
+	}
 }
 
 // isDedupPointer reports whether the response's primary field is a dedup

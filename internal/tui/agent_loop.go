@@ -931,58 +931,99 @@ func (m *model) emitEventParts(
 	log *logger.Logger,
 ) error {
 	for _, part := range ev.Content.Parts {
-		switch {
-		case part.Text != "" && ev.Content.Role == "thinking":
-			log.Thinking(ev.Author, part.Text)
-			ch <- agentThinkingMsg{text: part.Text}
-			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
-				return err
-			}
-
-		case part.Text != "":
-			if dedup.SkipText(ev) {
-				continue // aggregate re-send; deltas already went out
-			}
-			log.LLMText(ev.Author, part.Text)
-			ch <- agentTextMsg{text: part.Text}
-			if err := stuckErr(detector.observeOutput(part.Text)); err != nil {
-				return err
-			}
-		}
-
-		if fc := part.FunctionCall; fc != nil {
-			// Emit the tool call first so the user sees the offending call
-			// before the loop aborts. The stuck-detector threshold still
-			// fires after `maxRepeatToolCalls` observations, so the abort
-			// semantics are unchanged — only the message ordering moves.
-			log.ToolCall(ev.Author, fc.Name, fc.Args)
-			ch <- agentToolCallMsg{id: fc.ID, name: fc.Name, args: fc.Args}
-
-			if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
-				return err
-			}
-		}
-
-		if fr := part.FunctionResponse; fr != nil {
-			respJSON, _ := json.Marshal(fr.Response)
-			log.ToolResult(ev.Author, fr.Name, string(respJSON))
-			ch <- agentToolResultMsg{id: fr.ID, name: fr.Name, content: string(respJSON)}
-
-			// A changed result on a repeated call is progress, not a loop
-			// (a poll returning fresh output) — let it reset the
-			// identical-call streak before the next call is observed.
-			detector.observeResult(fr.Name, fr.Response)
-
-			// Track per-tool error streaks: ADK wraps tool errors as
-			// map[string]any{"error": ...}. Anything else (including a
-			// missing key) is treated as success and resets the streak.
-			_, isErr := fr.Response["error"]
-			if err := stuckErr(detector.observeError(fr.Name, isErr)); err != nil {
-				return err
-			}
+		if err := m.emitEventPart(ch, ev, dedup, detector, log, part); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// emitEventPart forwards one part of an event. Returning nil ends this part and
+// moves on to the next, which is what the dedup skip below relies on.
+func (m *model) emitEventPart(
+	ch chan agentMsg,
+	ev *session.Event,
+	dedup *agent.StreamDedup,
+	detector *stuckDetector,
+	log *logger.Logger,
+	part *genai.Part,
+) error {
+	if part.Text != "" {
+		skipped, err := m.emitPartText(ch, ev, dedup, detector, log, part.Text)
+		if err != nil {
+			return err
+		}
+		if skipped {
+			return nil // aggregate re-send; deltas already went out
+		}
+	}
+
+	if fc := part.FunctionCall; fc != nil {
+		// Emit the tool call first so the user sees the offending call
+		// before the loop aborts. The stuck-detector threshold still
+		// fires after `maxRepeatToolCalls` observations, so the abort
+		// semantics are unchanged — only the message ordering moves.
+		log.ToolCall(ev.Author, fc.Name, fc.Args)
+		ch <- agentToolCallMsg{id: fc.ID, name: fc.Name, args: fc.Args}
+
+		if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
+			return err
+		}
+	}
+
+	if fr := part.FunctionResponse; fr != nil {
+		return m.emitPartResponse(ch, ev, detector, log, fr)
+	}
+	return nil
+}
+
+// emitPartText forwards one part's text, as thinking or as reply text. It
+// reports whether the text was the deduplicated aggregate re-send, in which
+// case the caller must skip the rest of the part rather than emit it twice.
+func (m *model) emitPartText(
+	ch chan agentMsg,
+	ev *session.Event,
+	dedup *agent.StreamDedup,
+	detector *stuckDetector,
+	log *logger.Logger,
+	text string,
+) (skipped bool, err error) {
+	if ev.Content.Role == "thinking" {
+		log.Thinking(ev.Author, text)
+		ch <- agentThinkingMsg{text: text}
+		return false, stuckErr(detector.observeOutput(text))
+	}
+
+	if dedup.SkipText(ev) {
+		return true, nil
+	}
+	log.LLMText(ev.Author, text)
+	ch <- agentTextMsg{text: text}
+	return false, stuckErr(detector.observeOutput(text))
+}
+
+// emitPartResponse forwards one tool result and feeds it to the stuck detector.
+func (m *model) emitPartResponse(
+	ch chan agentMsg,
+	ev *session.Event,
+	detector *stuckDetector,
+	log *logger.Logger,
+	fr *genai.FunctionResponse,
+) error {
+	respJSON, _ := json.Marshal(fr.Response)
+	log.ToolResult(ev.Author, fr.Name, string(respJSON))
+	ch <- agentToolResultMsg{id: fr.ID, name: fr.Name, content: string(respJSON)}
+
+	// A changed result on a repeated call is progress, not a loop
+	// (a poll returning fresh output) — let it reset the
+	// identical-call streak before the next call is observed.
+	detector.observeResult(fr.Name, fr.Response)
+
+	// Track per-tool error streaks: ADK wraps tool errors as
+	// map[string]any{"error": ...}. Anything else (including a
+	// missing key) is treated as success and resets the streak.
+	_, isErr := fr.Response["error"]
+	return stuckErr(detector.observeError(fr.Name, isErr))
 }
 
 // stuckError is a loop abort the run can recover from. It is distinguished
@@ -1377,27 +1418,41 @@ func findPollCard(messages []message, handle string) int {
 // rather than leaving the result unrendered.
 func matchToolResultCard(messages []message, id, name string) int {
 	if id != "" {
-		claimed := false
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].role != "tool" || messages[i].toolID != id {
-				continue
-			}
-			// pendingRefresh: a repeated poll folded into this card and its
-			// result is the one arriving now. The card still shows the previous
-			// poll's window — that is the point, it keeps the card from blanking
-			// while the poll runs — so the non-empty content must not read as
-			// "already answered" here.
-			if messages[i].content == "" || messages[i].pendingRefresh {
-				return i
-			}
-			// The card for this call already has its result: a duplicate
-			// re-send, which must not spill onto a different call's card.
-			claimed = true
-		}
-		if claimed {
-			return -1
+		if i, claimed := matchToolCardByID(messages, id); i >= 0 || claimed {
+			return i
 		}
 	}
+	return matchToolCardByName(messages, name)
+}
+
+// matchToolCardByID finds the card waiting on call id, newest first. It reports
+// claimed when a card for that id exists but already holds its result — a
+// duplicate re-send, which must be dropped rather than fall through to name
+// matching and spill onto a different call's card. (-1, false) means no card
+// carries the id at all.
+func matchToolCardByID(messages []message, id string) (idx int, claimed bool) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].role != "tool" || messages[i].toolID != id {
+			continue
+		}
+		// pendingRefresh: a repeated poll folded into this card and its
+		// result is the one arriving now. The card still shows the previous
+		// poll's window — that is the point, it keeps the card from blanking
+		// while the poll runs — so the non-empty content must not read as
+		// "already answered" here.
+		if messages[i].content == "" || messages[i].pendingRefresh {
+			return i, false
+		}
+		claimed = true
+	}
+	return -1, claimed
+}
+
+// matchToolCardByName finds an unanswered card for the named tool, preferring
+// an ID-less one so an ID-less result cannot steal a card that belongs to an
+// identified call. Returns the newest identified candidate as a last resort,
+// or -1 when nothing is waiting.
+func matchToolCardByName(messages []message, name string) int {
 	fallback := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].role != "tool" || messages[i].tool != name || messages[i].content != "" {

@@ -41,40 +41,53 @@ func retryDelay(cfg RetryConfig, attempt int) time.Duration {
 // request without disturbing the turn around it.
 func WithRetry(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error]) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
-		for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
-			var transientErr error
-			hadEvents := false
+		retryLoop(cfg, runFn, yield)
+	}
+}
 
-			for ev, err := range runFn() {
-				if err != nil && isTransient(err) {
-					transientErr = err
-					break
-				}
-				if !yield(ev, err) {
-					return
-				}
-				if ev != nil {
-					hadEvents = true
-				}
-			}
+// retryLoop runs runFn up to cfg.MaxRetries+1 times, sleeping between attempts.
+// It returns as soon as an attempt finishes without a transient error — which
+// includes the case where the consumer stopped ranging, since runAttempt stops
+// with no transient error then.
+func retryLoop(cfg RetryConfig, runFn func() iter.Seq2[*session.Event, error], yield func(*session.Event, error) bool) {
+	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
+		hadEvents, transientErr := runAttempt(runFn, yield)
 
-			if transientErr == nil {
-				return
-			}
+		if transientErr == nil {
+			return
+		}
 
-			if hadEvents {
-				// Already yielded partial results, cannot retry safely.
-				_ = yield(nil, fmt.Errorf("transient error after partial response (not retrying): %w", transientErr))
-				return
-			}
+		if hadEvents {
+			// Already yielded partial results, cannot retry safely.
+			_ = yield(nil, fmt.Errorf("transient error after partial response (not retrying): %w", transientErr))
+			return
+		}
 
-			if attempt < cfg.MaxRetries {
-				time.Sleep(retry.Delay(cfg, attempt, transientErr))
-				continue
-			}
+		if attempt < cfg.MaxRetries {
+			time.Sleep(retry.Delay(cfg, attempt, transientErr))
+			continue
+		}
 
-			// Exhausted retries.
-			_ = yield(nil, fmt.Errorf("transient error after %d retries: %w", cfg.MaxRetries, transientErr))
+		// Exhausted retries.
+		_ = yield(nil, fmt.Errorf("transient error after %d retries: %w", cfg.MaxRetries, transientErr))
+	}
+}
+
+// runAttempt forwards one run to the consumer. It reports the transient error
+// that cut the run short, if any, and whether a real event reached the consumer
+// — which is what makes a run unreplayable. A consumer that stops ranging ends
+// the attempt with no transient error, so the caller stops too.
+func runAttempt(runFn func() iter.Seq2[*session.Event, error], yield func(*session.Event, error) bool) (hadEvents bool, transientErr error) {
+	for ev, err := range runFn() {
+		if err != nil && isTransient(err) {
+			return hadEvents, err
+		}
+		if !yield(ev, err) {
+			return hadEvents, nil
+		}
+		if ev != nil {
+			hadEvents = true
 		}
 	}
+	return hadEvents, nil
 }

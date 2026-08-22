@@ -64,48 +64,12 @@ func filterSourceCode(s string, level string) (string, bool) {
 		return s, false // not worth filtering short files
 	}
 
+	f := sourceLineFilter{level: level}
 	var filtered []string
-	inBlockComment := false
-	consecutiveBlanks := 0
-
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Track block comments
-		if strings.Contains(trimmed, "/*") {
-			inBlockComment = true
+		if f.keep(line) {
+			filtered = append(filtered, line)
 		}
-		if inBlockComment {
-			if strings.Contains(trimmed, "*/") {
-				inBlockComment = false
-			}
-			if level == "aggressive" {
-				continue
-			}
-		}
-
-		// Skip line comments in aggressive mode
-		if level == "aggressive" && (strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#")) {
-			continue
-		}
-
-		// Minimal: only strip doc comments (multi-line // blocks)
-		if level == "minimal" && strings.HasPrefix(trimmed, "//") {
-			// Keep single inline comments, skip doc blocks
-			continue
-		}
-
-		// Collapse blank line runs
-		if trimmed == "" {
-			consecutiveBlanks++
-			if consecutiveBlanks <= 1 {
-				filtered = append(filtered, line)
-			}
-			continue
-		}
-		consecutiveBlanks = 0
-
-		filtered = append(filtered, line)
 	}
 
 	if len(filtered) >= len(lines) {
@@ -113,4 +77,58 @@ func filterSourceCode(s string, level string) (string, bool) {
 	}
 
 	return strings.Join(filtered, "\n"), true
+}
+
+// sourceLineFilter carries the line-by-line state filterSourceCode threads
+// through a file: whether the scan is inside a /* */ block, and how many blank
+// lines have run consecutively.
+type sourceLineFilter struct {
+	level             string
+	inBlockComment    bool
+	consecutiveBlanks int
+}
+
+// keep reports whether line survives filtering, advancing the filter state.
+func (f *sourceLineFilter) keep(line string) bool {
+	trimmed := strings.TrimSpace(line)
+
+	if f.dropsComment(trimmed) {
+		return false
+	}
+
+	// Collapse blank line runs
+	if trimmed == "" {
+		f.consecutiveBlanks++
+		return f.consecutiveBlanks <= 1
+	}
+	f.consecutiveBlanks = 0
+
+	return true
+}
+
+// dropsComment advances the block-comment state for trimmed and reports whether
+// the configured level strips it as a comment.
+func (f *sourceLineFilter) dropsComment(trimmed string) bool {
+	// Track block comments
+	if strings.Contains(trimmed, "/*") {
+		f.inBlockComment = true
+	}
+	if f.inBlockComment {
+		if strings.Contains(trimmed, "*/") {
+			f.inBlockComment = false
+		}
+		// Skip block comment bodies in aggressive mode
+		if f.level == "aggressive" {
+			return true
+		}
+	}
+
+	// Skip line comments in aggressive mode
+	if f.level == "aggressive" && (strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#")) {
+		return true
+	}
+
+	// Minimal: only strip doc comments (multi-line // blocks), keeping single
+	// inline comments.
+	return f.level == "minimal" && strings.HasPrefix(trimmed, "//")
 }

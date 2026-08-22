@@ -86,21 +86,34 @@ func (t *sweepTotals) sortedTools(key func(*toolUsage) int) []*toolUsage {
 // keys case-insensitively.
 type sweepEvent struct {
 	Content struct {
-		Parts []struct {
-			FunctionCall *struct {
-				Name string `json:"name"`
-			} `json:"functionCall"`
-			FunctionResponse *struct {
-				Name     string          `json:"name"`
-				Response json.RawMessage `json:"response"`
-			} `json:"functionResponse"`
-		} `json:"parts"`
+		Parts []sweepPart `json:"parts"`
 	} `json:"content"`
-	UsageMetadata *struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-	} `json:"usageMetadata"`
-	ErrorMessage string `json:"errorMessage"`
+	UsageMetadata *sweepUsage `json:"usageMetadata"`
+	ErrorMessage  string      `json:"errorMessage"`
+}
+
+// sweepPart is one content part: a tool call, a tool result, or neither.
+type sweepPart struct {
+	FunctionCall     *sweepFunctionCall     `json:"functionCall"`
+	FunctionResponse *sweepFunctionResponse `json:"functionResponse"`
+}
+
+// sweepFunctionCall names the tool the model asked for.
+type sweepFunctionCall struct {
+	Name string `json:"name"`
+}
+
+// sweepFunctionResponse carries a tool result verbatim, so its size on the
+// wire is what the scan measures.
+type sweepFunctionResponse struct {
+	Name     string          `json:"name"`
+	Response json.RawMessage `json:"response"`
+}
+
+// sweepUsage is the per-turn token accounting.
+type sweepUsage struct {
+	PromptTokenCount     int `json:"promptTokenCount"`
+	CandidatesTokenCount int `json:"candidatesTokenCount"`
 }
 
 // accumulateSweepFile folds one session's events into the totals. seen is per
@@ -121,39 +134,50 @@ func accumulateSweepFile(totals *sweepTotals, path string) {
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
 			continue
 		}
-
-		if ev.UsageMetadata != nil {
-			totals.PromptTokens += ev.UsageMetadata.PromptTokenCount
-			totals.OutputTokens += ev.UsageMetadata.CandidatesTokenCount
-		}
-		if detail := abortDetail(ev.ErrorMessage); detail != "" {
-			totals.Aborts[detail]++
-		}
-
-		for _, p := range ev.Content.Parts {
-			if p.FunctionCall != nil {
-				totals.tool(p.FunctionCall.Name).Calls++
-			}
-			if p.FunctionResponse == nil {
-				continue
-			}
-			u := totals.tool(p.FunctionResponse.Name)
-			body := string(p.FunctionResponse.Response)
-			u.Bytes += len(body)
-			totals.ToolBytes += len(body)
-			if strings.Contains(body, `"error"`) {
-				u.Errors++
-			}
-			if len(body) > oversizeChars {
-				u.Oversized += len(body) - oversizeChars
-			}
-			if seen[body] {
-				totals.DupBytes += len(body)
-			} else {
-				seen[body] = true
-			}
-		}
+		accumulateSweepEvent(totals, seen, ev)
 	}
+}
+
+// accumulateSweepEvent folds one event — its token usage, its abort reason if
+// it carries one, and each of its content parts — into the totals.
+func accumulateSweepEvent(totals *sweepTotals, seen map[string]bool, ev sweepEvent) {
+	if ev.UsageMetadata != nil {
+		totals.PromptTokens += ev.UsageMetadata.PromptTokenCount
+		totals.OutputTokens += ev.UsageMetadata.CandidatesTokenCount
+	}
+	if detail := abortDetail(ev.ErrorMessage); detail != "" {
+		totals.Aborts[detail]++
+	}
+
+	for _, p := range ev.Content.Parts {
+		if p.FunctionCall != nil {
+			totals.tool(p.FunctionCall.Name).Calls++
+		}
+		if p.FunctionResponse == nil {
+			continue
+		}
+		accumulateSweepResponse(totals, seen, p.FunctionResponse)
+	}
+}
+
+// accumulateSweepResponse folds one tool result into the per-tool and
+// cross-session totals: volume, error rate, oversize excess and duplicates.
+func accumulateSweepResponse(totals *sweepTotals, seen map[string]bool, resp *sweepFunctionResponse) {
+	u := totals.tool(resp.Name)
+	body := string(resp.Response)
+	u.Bytes += len(body)
+	totals.ToolBytes += len(body)
+	if strings.Contains(body, `"error"`) {
+		u.Errors++
+	}
+	if len(body) > oversizeChars {
+		u.Oversized += len(body) - oversizeChars
+	}
+	if seen[body] {
+		totals.DupBytes += len(body)
+		return
+	}
+	seen[body] = true
 }
 
 // abortDetail extracts the reason from a loop-guard abort, or "" when the

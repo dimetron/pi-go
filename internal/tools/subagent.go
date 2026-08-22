@@ -250,46 +250,7 @@ func singleModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input Sub
 	})
 
 	// Consume events, forward to TUI, accumulate result.
-	forwardAndConsume := func(events <-chan subagent.Event) (string, string, string, string) {
-		var result strings.Builder
-		st := "completed"
-		var em string
-		var sessID string
-		for ev := range events {
-			evContent := ev.Content
-			if ev.Type == "error" && evContent == "" {
-				evContent = ev.Error
-			}
-			emitEvent(onEvent, SubagentEvent{
-				AgentID: agentID, Kind: ev.Type, Content: evContent,
-				PipelineID: pipelineID, Mode: "single", Step: 1, Total: 1,
-			})
-			switch ev.Type {
-			case "text_delta":
-				result.WriteString(ev.Content)
-			case "error":
-				st = "failed"
-				em = ev.Error
-			case "message_start":
-				if ev.SessionID != "" {
-					sessID = ev.SessionID
-				}
-			case "run_done":
-				// The orchestrator's terminal status is more specific than the
-				// "failed" inferred from an error event: it distinguishes a
-				// timeout from a crash. That distinction is actionable for the
-				// model — a timed-out agent is worth retrying with a narrower
-				// task, a crashed one is not — and until now it was computed
-				// and then dropped on the floor here.
-				if ev.Status == "timeout" {
-					st = "timeout"
-				}
-			}
-		}
-		return truncateOutput(result.String()), st, em, sessID
-	}
-
-	resultText, status, errMsg, subSessionID := forwardAndConsume(events)
+	resultText, status, errMsg, subSessionID := forwardSingleModeEvents(events, onEvent, agentID, pipelineID)
 
 	emitEvent(onEvent, SubagentEvent{
 		AgentID: agentID, Kind: "done",
@@ -313,31 +274,98 @@ func singleModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input Sub
 	}, nil
 }
 
-// parallelModeHandler spawns multiple agents concurrently and collects all results.
-func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
-	start := time.Now()
-	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
-	total := len(input.Tasks)
+// forwardSingleModeEvents drains the single agent's event channel, forwarding
+// each event to the TUI, and returns the accumulated output, terminal status,
+// error message and sub-session id.
+//
+// It stays separate from forwardSubagentEvents because single mode reads one
+// more event kind: run_done, whose status distinguishes a timeout from a
+// crash. Parallel and chain do not, and folding the two paths together would
+// change what they report.
+func forwardSingleModeEvents(events <-chan subagent.Event, onEvent SubagentEventCallback, agentID, pipelineID string) (resultText, status, errMsg, sessID string) {
+	var result strings.Builder
+	status = "completed"
+	for ev := range events {
+		evContent := ev.Content
+		if ev.Type == "error" && evContent == "" {
+			evContent = ev.Error
+		}
+		emitEvent(onEvent, SubagentEvent{
+			AgentID: agentID, Kind: ev.Type, Content: evContent,
+			PipelineID: pipelineID, Mode: "single", Step: 1, Total: 1,
+		})
+		switch ev.Type {
+		case "text_delta":
+			result.WriteString(ev.Content)
+		case "error":
+			status = "failed"
+			errMsg = ev.Error
+		case "message_start":
+			if ev.SessionID != "" {
+				sessID = ev.SessionID
+			}
+		case "run_done":
+			// The orchestrator's terminal status is more specific than the
+			// "failed" inferred from an error event: it distinguishes a
+			// timeout from a crash. That distinction is actionable for the
+			// model — a timed-out agent is worth retrying with a narrower
+			// task, a crashed one is not — and until now it was computed
+			// and then dropped on the floor here.
+			if ev.Status == "timeout" {
+				status = "timeout"
+			}
+		}
+	}
+	return truncateOutput(result.String()), status, errMsg, sessID
+}
 
-	// Enforce max parallel tasks.
-	if total > maxParallelTasks {
+// subagentTask is one agent-and-prompt pair, the shape parallel and chain mode
+// have in common once TaskItem and ChainItem are past the JSON boundary.
+type subagentTask struct {
+	Agent string
+	Task  string
+}
+
+// subagentPipelineSpec is what differs between the two multi-agent modes: the
+// mode name reported back, the noun used in the over-limit message, and the
+// per-call limit itself.
+type subagentPipelineSpec struct {
+	Mode  string // "parallel" or "chain"
+	Noun  string // "parallel tasks" or "chain steps"
+	Limit int
+}
+
+// subagentStepMeta is the pipeline position stamped onto every event emitted
+// for one step, so the TUI can group and order them.
+type subagentStepMeta struct {
+	PipelineID string
+	Mode       string
+	Step       int // 1-based
+	Total      int
+}
+
+// checkSubagentPipeline enforces the per-call limit and validates that every
+// named agent exists, before anything is spawned. It returns the failure
+// output and false when the call cannot run.
+func checkSubagentPipeline(orch *subagent.Orchestrator, spec subagentPipelineSpec, tasks []subagentTask, start time.Time) (SubagentOutput, bool) {
+	total := len(tasks)
+	if total > spec.Limit {
 		return SubagentOutput{
-			Mode:    "parallel",
-			Summary: fmt.Sprintf("too many parallel tasks: %d (max %d)", total, maxParallelTasks),
+			Mode:    spec.Mode,
+			Summary: fmt.Sprintf("too many %s: %d (max %d)", spec.Noun, total, spec.Limit),
 			Results: []AgentResult{{
-				Agent:    "parallel",
+				Agent:    spec.Mode,
 				Status:   "failed",
-				Error:    fmt.Sprintf("too many parallel tasks: %d exceeds maximum of %d", total, maxParallelTasks),
+				Error:    fmt.Sprintf("too many %s: %d exceeds maximum of %d", spec.Noun, total, spec.Limit),
 				Duration: time.Since(start).Truncate(time.Millisecond).String(),
 			}},
-		}, nil
+		}, false
 	}
 
-	// Validate all agents exist upfront before spawning any.
-	for _, task := range input.Tasks {
+	for _, task := range tasks {
 		if _, err := orch.LookupAgent(task.Agent); err != nil {
 			return SubagentOutput{
-				Mode: "parallel",
+				Mode: spec.Mode,
 				Results: []AgentResult{{
 					Agent:    task.Agent,
 					Status:   "failed",
@@ -345,101 +373,127 @@ func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input S
 					Duration: time.Since(start).Truncate(time.Millisecond).String(),
 				}},
 				Summary: fmt.Sprintf("validation failed: unknown agent %q", task.Agent),
-			}, nil
+			}, false
+		}
+	}
+	return SubagentOutput{}, true
+}
+
+// runSubagentStep spawns one agent, forwards its events to the callback and
+// returns the finished result. A spawn failure comes back as a failed
+// AgentResult, never as an error: the model can act on the former.
+func runSubagentStep(ctx context.Context, orch *subagent.Orchestrator, onEvent SubagentEventCallback, meta subagentStepMeta, agentName, prompt string) AgentResult {
+	stepStart := time.Now()
+
+	events, agentID, err := orch.SpawnWithInput(ctx, subagent.AgentInput{
+		Type:   agentName,
+		Prompt: prompt,
+	})
+	if err != nil {
+		return AgentResult{
+			Agent:    agentName,
+			Status:   "failed",
+			Error:    err.Error(),
+			Duration: time.Since(stepStart).Truncate(time.Millisecond).String(),
 		}
 	}
 
+	emitEvent(onEvent, SubagentEvent{
+		AgentID:    agentID,
+		Kind:       "spawn",
+		Content:    agentName,
+		PipelineID: meta.PipelineID,
+		Mode:       meta.Mode,
+		Step:       meta.Step,
+		Total:      meta.Total,
+	})
+
+	resultText, status, errMsg, sessID := forwardSubagentEvents(events, onEvent, agentID, meta)
+
+	emitEvent(onEvent, SubagentEvent{
+		AgentID:    agentID,
+		Kind:       "done",
+		PipelineID: meta.PipelineID,
+		Mode:       meta.Mode,
+		Step:       meta.Step,
+		Total:      meta.Total,
+	})
+
+	return AgentResult{
+		Agent:     agentName,
+		AgentID:   agentID,
+		Status:    status,
+		Result:    resultText,
+		Error:     errMsg,
+		Duration:  time.Since(stepStart).Truncate(time.Millisecond).String(),
+		SessionID: sessID,
+	}
+}
+
+// forwardSubagentEvents drains one agent's event channel, forwarding each
+// event to the callback with pipeline metadata attached, and returns the
+// accumulated output, terminal status, error message and sub-session id.
+func forwardSubagentEvents(events <-chan subagent.Event, onEvent SubagentEventCallback, agentID string, meta subagentStepMeta) (resultText, status, errMsg, sessID string) {
+	var result strings.Builder
+	status = "completed"
+
+	for ev := range events {
+		evContent := ev.Content
+		if ev.Type == "error" && evContent == "" {
+			evContent = ev.Error
+		}
+		emitEvent(onEvent, SubagentEvent{
+			AgentID:    agentID,
+			Kind:       ev.Type,
+			Content:    evContent,
+			PipelineID: meta.PipelineID,
+			Mode:       meta.Mode,
+			Step:       meta.Step,
+			Total:      meta.Total,
+		})
+
+		switch ev.Type {
+		case "text_delta":
+			result.WriteString(ev.Content)
+		case "error":
+			status = "failed"
+			errMsg = ev.Error
+		case "message_start":
+			if ev.SessionID != "" {
+				sessID = ev.SessionID
+			}
+		}
+	}
+	return truncateOutput(result.String()), status, errMsg, sessID
+}
+
+// parallelModeHandler spawns multiple agents concurrently and collects all results.
+func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
+	start := time.Now()
+	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
+
+	tasks := make([]subagentTask, len(input.Tasks))
+	for i, t := range input.Tasks {
+		tasks[i] = subagentTask(t)
+	}
+
+	spec := subagentPipelineSpec{Mode: "parallel", Noun: "parallel tasks", Limit: maxParallelTasks}
+	if out, ok := checkSubagentPipeline(orch, spec, tasks, start); !ok {
+		return out, nil
+	}
+
 	// Spawn all agents concurrently and collect results.
+	total := len(tasks)
 	results := make([]AgentResult, total)
 	var wg sync.WaitGroup
 	spawnCtx := resolveContext(ctx)
 
-	for i, task := range input.Tasks {
+	for i, task := range tasks {
 		wg.Add(1)
-		go func(idx int, t TaskItem) {
+		go func(idx int, t subagentTask) {
 			defer wg.Done()
-			taskStart := time.Now()
-			step := idx + 1 // 1-based
-
-			// Spawn agent.
-			events, agentID, err := orch.SpawnWithInput(spawnCtx, subagent.AgentInput{
-				Type:   t.Agent,
-				Prompt: t.Task,
-			})
-			if err != nil {
-				results[idx] = AgentResult{
-					Agent:    t.Agent,
-					Status:   "failed",
-					Error:    err.Error(),
-					Duration: time.Since(taskStart).Truncate(time.Millisecond).String(),
-				}
-				return
-			}
-
-			// Emit spawn event.
-			emitEvent(onEvent, SubagentEvent{
-				AgentID:    agentID,
-				Kind:       "spawn",
-				Content:    t.Agent,
-				PipelineID: pipelineID,
-				Mode:       "parallel",
-				Step:       step,
-				Total:      total,
-			})
-
-			// Consume events, accumulate result, forward to callback.
-			var result strings.Builder
-			status := "completed"
-			var errMsg string
-			var sessID string
-
-			for ev := range events {
-				evContent := ev.Content
-				if ev.Type == "error" && evContent == "" {
-					evContent = ev.Error
-				}
-				emitEvent(onEvent, SubagentEvent{
-					AgentID:    agentID,
-					Kind:       ev.Type,
-					Content:    evContent,
-					PipelineID: pipelineID,
-					Mode:       "parallel",
-					Step:       step,
-					Total:      total,
-				})
-
-				switch ev.Type {
-				case "text_delta":
-					result.WriteString(ev.Content)
-				case "error":
-					status = "failed"
-					errMsg = ev.Error
-				case "message_start":
-					if ev.SessionID != "" {
-						sessID = ev.SessionID
-					}
-				}
-			}
-
-			// Emit done event.
-			emitEvent(onEvent, SubagentEvent{
-				AgentID:    agentID,
-				Kind:       "done",
-				PipelineID: pipelineID,
-				Mode:       "parallel",
-				Step:       step,
-				Total:      total,
-			})
-
-			results[idx] = AgentResult{
-				Agent:     t.Agent,
-				AgentID:   agentID,
-				Status:    status,
-				Result:    truncateOutput(result.String()),
-				Error:     errMsg,
-				Duration:  time.Since(taskStart).Truncate(time.Millisecond).String(),
-				SessionID: sessID,
-			}
+			meta := subagentStepMeta{PipelineID: pipelineID, Mode: spec.Mode, Step: idx + 1, Total: total}
+			results[idx] = runSubagentStep(spawnCtx, orch, onEvent, meta, t.Agent, t.Task)
 		}(i, task)
 	}
 
@@ -447,7 +501,7 @@ func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input S
 
 	duration := time.Since(start).Truncate(time.Millisecond).String()
 	return SubagentOutput{
-		Mode:    "parallel",
+		Mode:    spec.Mode,
 		Results: results,
 		Summary: buildParallelSummary(results, total, duration),
 	}, nil
@@ -458,144 +512,41 @@ func parallelModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input S
 func chainModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input SubagentInput, onEvent SubagentEventCallback) (SubagentOutput, error) {
 	start := time.Now()
 	pipelineID := fmt.Sprintf("pipe-%d", time.Now().UnixNano())
-	total := len(input.Chain)
 
-	// Enforce max chain steps.
-	if total > maxChainSteps {
-		return SubagentOutput{
-			Mode:    "chain",
-			Summary: fmt.Sprintf("too many chain steps: %d (max %d)", total, maxChainSteps),
-			Results: []AgentResult{{
-				Agent:    "chain",
-				Status:   "failed",
-				Error:    fmt.Sprintf("too many chain steps: %d exceeds maximum of %d", total, maxChainSteps),
-				Duration: time.Since(start).Truncate(time.Millisecond).String(),
-			}},
-		}, nil
+	tasks := make([]subagentTask, len(input.Chain))
+	for i, step := range input.Chain {
+		tasks[i] = subagentTask(step)
 	}
 
-	// Validate all agents exist upfront before executing any.
-	for _, step := range input.Chain {
-		if _, err := orch.LookupAgent(step.Agent); err != nil {
-			return SubagentOutput{
-				Mode: "chain",
-				Results: []AgentResult{{
-					Agent:    step.Agent,
-					Status:   "failed",
-					Error:    err.Error(),
-					Duration: time.Since(start).Truncate(time.Millisecond).String(),
-				}},
-				Summary: fmt.Sprintf("validation failed: unknown agent %q", step.Agent),
-			}, nil
-		}
+	spec := subagentPipelineSpec{Mode: "chain", Noun: "chain steps", Limit: maxChainSteps}
+	if out, ok := checkSubagentPipeline(orch, spec, tasks, start); !ok {
+		return out, nil
 	}
 
 	// Execute steps sequentially, passing results forward.
+	total := len(tasks)
 	results := make([]AgentResult, 0, total)
 	spawnCtx := resolveContext(ctx)
 	previousResult := ""
 
-	for idx, step := range input.Chain {
-		stepStart := time.Now()
-		stepNum := idx + 1 // 1-based
-
+	for idx, step := range tasks {
+		meta := subagentStepMeta{PipelineID: pipelineID, Mode: spec.Mode, Step: idx + 1, Total: total}
 		// Expand template placeholders in the task prompt.
-		prompt := expandChainTemplate(step.Task, previousResult)
+		res := runSubagentStep(spawnCtx, orch, onEvent, meta, step.Agent, expandChainTemplate(step.Task, previousResult))
+		results = append(results, res)
 
-		// Spawn agent.
-		events, agentID, err := orch.SpawnWithInput(spawnCtx, subagent.AgentInput{
-			Type:   step.Agent,
-			Prompt: prompt,
-		})
-		if err != nil {
-			results = append(results, AgentResult{
-				Agent:    step.Agent,
-				Status:   "failed",
-				Error:    err.Error(),
-				Duration: time.Since(stepStart).Truncate(time.Millisecond).String(),
-			})
-			// Chain stops on first failure.
-			break
-		}
-
-		// Emit spawn event.
-		emitEvent(onEvent, SubagentEvent{
-			AgentID:    agentID,
-			Kind:       "spawn",
-			Content:    step.Agent,
-			PipelineID: pipelineID,
-			Mode:       "chain",
-			Step:       stepNum,
-			Total:      total,
-		})
-
-		// Consume events, accumulate result, forward to callback.
-		var result strings.Builder
-		status := "completed"
-		var errMsg string
-		var sessID string
-
-		for ev := range events {
-			evContent := ev.Content
-			if ev.Type == "error" && evContent == "" {
-				evContent = ev.Error
-			}
-			emitEvent(onEvent, SubagentEvent{
-				AgentID:    agentID,
-				Kind:       ev.Type,
-				Content:    evContent,
-				PipelineID: pipelineID,
-				Mode:       "chain",
-				Step:       stepNum,
-				Total:      total,
-			})
-
-			switch ev.Type {
-			case "text_delta":
-				result.WriteString(ev.Content)
-			case "error":
-				status = "failed"
-				errMsg = ev.Error
-			case "message_start":
-				if ev.SessionID != "" {
-					sessID = ev.SessionID
-				}
-			}
-		}
-
-		// Emit done event.
-		emitEvent(onEvent, SubagentEvent{
-			AgentID:    agentID,
-			Kind:       "done",
-			PipelineID: pipelineID,
-			Mode:       "chain",
-			Step:       stepNum,
-			Total:      total,
-		})
-
-		resultText := truncateOutput(result.String())
-		results = append(results, AgentResult{
-			Agent:     step.Agent,
-			AgentID:   agentID,
-			Status:    status,
-			Result:    resultText,
-			Error:     errMsg,
-			Duration:  time.Since(stepStart).Truncate(time.Millisecond).String(),
-			SessionID: sessID,
-		})
-
-		// Chain stops on failure.
-		if status != "completed" {
+		// Chain stops on the first failure, spawn failures included.
+		if res.Status != "completed" {
 			break
 		}
 
 		// Pass result to next step.
-		previousResult = resultText
+		previousResult = res.Result
 	}
 
 	duration := time.Since(start).Truncate(time.Millisecond).String()
 	return SubagentOutput{
-		Mode:    "chain",
+		Mode:    spec.Mode,
 		Results: results,
 		Summary: buildChainSummary(results, total, duration),
 	}, nil
