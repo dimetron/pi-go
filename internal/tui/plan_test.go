@@ -26,7 +26,7 @@ func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDir(src, dst, false); err != nil {
 		t.Fatalf("copyDir: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
 
 	// Copying again is idempotent — an existing destination file is left as-is,
 	// not an error (the merge already brought the same content in).
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDir(src, dst, false); err != nil {
 		t.Fatalf("copyDir second pass: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
@@ -63,7 +63,7 @@ func TestCopyDir_FollowsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDir(src, dst, false); err != nil {
 		t.Fatalf("copyDir: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "real.md")); err != nil {
@@ -447,7 +447,66 @@ func TestFinishPlanWorktree_KeepsWorktreeUntilPromptExists(t *testing.T) {
 func TestCopyDir_ReturnsErrorOnMissingSrc(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "does-not-exist")
 	dst := filepath.Join(t.TempDir(), "dst")
-	if err := copyDir(src, dst); err == nil {
+	if err := copyDir(src, dst, false); err == nil {
 		t.Fatal("copyDir should error when the source directory does not exist")
+	}
+}
+
+// TestFinishPlanWorktree_MergeFailureStillCopiesSpec covers the defensive path
+// in finishPlanWorktree where MergeBack fails (here: an untracked collision in
+// the invoking checkout makes the merge abort). Even then the finished spec
+// must be copied out so /run can still find PROMPT.md, and the error must
+// propagate to the caller.
+func TestFinishPlanWorktree_MergeFailureStillCopiesSpec(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-conflict"
+	const agentID = "plan-" + taskName
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(wtSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtSpec, "PROMPT.md"), []byte("# Prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-seed an untracked PROMPT.md in the invoking checkout so the merge
+	// aborts ("untracked working tree files would be overwritten by merge").
+	outSpec := filepath.Join(repo, "specs", taskName)
+	if err := os.MkdirAll(outSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outSpec, "PROMPT.md"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	err = m.finishPlanWorktree()
+	if err == nil {
+		t.Fatal("finishPlanWorktree should surface the merge failure")
+	}
+
+	// Even though the merge failed, the worktree's copy must have been written
+	// out over the stale one, so /run can still find the finished spec.
+	got, readErr := os.ReadFile(filepath.Join(outSpec, "PROMPT.md"))
+	if readErr != nil {
+		t.Fatalf("spec not preserved on merge failure: %v", readErr)
+	}
+	if string(got) != "# Prompt\n" {
+		t.Errorf("spec content = %q, want the worktree's copy %q", got, "# Prompt\n")
 	}
 }
