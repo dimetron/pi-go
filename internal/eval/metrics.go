@@ -599,11 +599,52 @@ func contentBytes(content any) int {
 // reads as a failure. It is intentionally conservative — a successful tool can
 // legitimately contain the word "error" in its output, but the most common
 // failure signatures are distinctive enough to be worth counting.
+//
+// Structured results (the normal case: ATIF records the tool's response map)
+// are judged by shape rather than by text: the ADK runner reports a tool
+// handler error as {"error": "..."}, several tools carry an "error" field of
+// their own, and a bash result with a non-zero exit code is a failed command
+// even though the shell ran fine.
 func looksLikeError(content any) bool {
-	s, ok := content.(string)
-	if !ok {
+	switch v := content.(type) {
+	case string:
+		return textLooksLikeError(v)
+	case map[string]any:
+		return mapLooksLikeError(v)
+	default:
 		return false
 	}
+}
+
+// mapLooksLikeError judges a structured tool result: a non-empty "error"
+// field, or a bash-style exit_code that is neither 0 nor -1 (still running).
+func mapLooksLikeError(m map[string]any) bool {
+	if s, ok := m["error"].(string); ok && strings.TrimSpace(s) != "" {
+		return true
+	}
+	if code, ok := numericField(m["exit_code"]); ok && code != 0 && code != -1 {
+		return true
+	}
+	return false
+}
+
+// numericField reads a JSON number whether it was decoded from disk (float64)
+// or built in-process (int).
+func numericField(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// textLooksLikeError applies the marker heuristic to a plain-string result.
+func textLooksLikeError(s string) bool {
 	lower := strings.ToLower(s)
 	for _, marker := range []string{
 		"error:", "exit status", "panic:", "failed", "timed out", "not found",

@@ -160,3 +160,76 @@ grading its own trace is a weaker check.
   `TempDir`'s cleanup cannot unlink those files and fails the test *after* a
   successful measurement. The harness chmods the tree writable before removing
   it, and logs rather than fails if removal still cannot finish.
+
+## Tool-coverage eval (`make eval-tools`)
+
+`make eval-tools` answers a different question from `make eval-run`: not "how
+well does `/run` orchestrate", but **"does the agent actually use every tool it
+advertises, and does each tool work when it does?"**. It is a suite of small
+headless scenarios — one per tool family — each run through the real `pi`
+binary in print mode, graded deterministically, and rolled up into a coverage
+matrix over the registered tool inventory. The scenarios and the runner live in
+`internal/eval/scenarios/` (see its README for the scenario table, the check
+vocabulary and how to add one); the pure pieces live here:
+
+| piece | what it does |
+|---|---|
+| `Inventory` (`inventory.go`) | enumerates every tool by constructing them through the same constructors the CLI uses (core, bash-control, subagent, memory, lsp, llms, a2a, palace, Gemini grounding). Not a hand-kept list — a new tool shows up automatically. |
+| `Scenario` / `Check` / `EvaluateScenario` (`scenario.go`) | the declarative scenario shape, workspace/memory seeding, and the grader: every target tool called with ≥1 non-error result, every check satisfied. |
+| `ComputeCoverage` (`coverage.go`) | the matrix: per tool, its scenarios or exclusion, calls/results/errors/wasted from the trajectories, and a status (`ok`, `errors-only`, `not-called`, `excluded`, `unmapped`). `UnmappedTools` / `UnknownTargets` back the mapping test. |
+| `ToolsReport` (`report_tools.go`) | JSON + Markdown report, `eval-reports/eval-tools-<ts>.{json,md}`. |
+| `JudgeTools` (`judge_tools.go`) | an advisory LLM grade on `outcome_correctness`, `tool_selection`, `tools_efficiency`, `trajectory_quality`; same degrade-to-a-note semantics as the `/run` judge. `ProviderComplete` builds the judge's LLM call from a model name. |
+
+**Structured error detection.** ATIF records a tool's response map, not a
+string, so `looksLikeError` now also recognizes `{"error": "..."}` (how the ADK
+runner reports a tool failure), a non-empty `error` field, and a bash
+`exit_code` that is neither 0 nor −1. This improves the `errors` column of the
+`/run` report too.
+
+### Running
+
+```bash
+make build
+make eval-tools                                   # whole suite, report in eval-reports/
+PI_EVAL_SCENARIO=git,edit make eval-tools         # a subset
+go test -tags e2e -run 'TestEvalTools/scenario/grep' ./internal/eval/scenarios/   # one, via -run
+PI_EVAL_JUDGE_MODEL=claude-sonnet-4-6 make eval-tools-judge
+```
+
+| Env | Effect |
+|---|---|
+| `PI_EVAL_TOOLS=1` | Gate; the test skips without it. Set by the Makefile targets. |
+| `PI_BINARY`, `PI_EVAL_MODEL`, `PI_EVAL_OUT`, `PI_EVAL_JUDGE_MODEL`, `PI_EVAL_JUDGE_MAX_CALLS` | As for `eval-run`. |
+| `PI_EVAL_SCENARIO` | Comma-separated scenario names to run. A filtered run's coverage gap is partial and the report says so. |
+| `PI_EVAL_THINKING` | Thinking level in the seeded config. Default `none` — cheapest, and the only level every model accepts. |
+| `PI_EVAL_TIMEOUT` | Per-scenario timeout (default `5m`; slow scenarios carry their own longer floor). |
+| `PI_EVAL_STRICT=1` | Fail the subtest on a scenario FAIL/ERROR and the run on a non-empty coverage gap. Default: outcomes are reported, not asserted, like `eval-run`. |
+| `PI_EVAL_SERIAL=1` | Run scenarios one at a time (default: parallel subtests, `-parallel 4`). |
+| `PI_EVAL_OFFLINE=1`, `PI_EVAL_NO_VISION=1` | Declare the host cannot do network / vision; scenarios requiring them are skipped. LSP availability is probed. |
+
+Each scenario gets its own isolated `HOME` (seeded `config.json`: the eval
+model on every role, memory/palace off unless the scenario seeds memory, no
+hooks/MCP/A2A) and its own workspace, so a scenario cannot see another's
+sessions and the user's real `~/.pi-go` is never touched. Git signing is forced
+off for the run, as in `eval-run`.
+
+### The coverage gate is a unit test
+
+`TestScenarios_CoverInventory` in `internal/eval/scenarios` runs in `make test`
+(no binary, no model) and fails when a registered tool has neither a scenario
+nor an entry in `Exclusions`, when a scenario targets a tool that does not
+exist, or when an exclusion is stale. That is what makes "every tool has an
+eval" a property of the repo rather than a one-time audit.
+
+### Interpreting the report
+
+- **Scenarios** — PASS/FAIL/skip/ERROR per scenario with per-tool ✓/✗ and each
+  check's outcome. `skip` means an unmet host requirement; `ERROR` means the
+  `pi` process itself failed (its output tail is in the JSON).
+- **Tool coverage** — the matrix. `gap` is the list of non-excluded tools that
+  no scenario exercised successfully; on a full, unfiltered run it should be
+  empty. `called but not inventoried` catches MCP tools or a constructor the
+  inventory does not know.
+- **Tools efficiency / Tokens** — the same metrics as the `/run` report, over
+  every trajectory the suite produced (including subagents).
+- **LLM judge** — advisory, as above.
