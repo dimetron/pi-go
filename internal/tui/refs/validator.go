@@ -97,15 +97,10 @@ func (v *Validator) isPathTraversal(path, cleaned string) bool {
 		}
 	}
 
-	// A rooted path that filepath.IsAbs does not call absolute still escapes.
-	// On Windows "/etc/passwd" is drive-relative rather than absolute, so the
-	// check above lets it through; filepath.IsLocal rejects it, along with
-	// drive-relative "C:x" and the reserved device names.
-	if !filepath.IsAbs(path) && !filepath.IsLocal(cleaned) {
-		return true
-	}
-
-	return false
+	// A rooted path that filepath.IsAbs does not call absolute can still
+	// escape on Windows ("/etc/passwd" is drive-relative there); that check
+	// lives in validator_windows.go and is a no-op on Unix.
+	return rootedButNotLocal(path, cleaned)
 }
 
 // isBlockedDir checks if the path is in a blocked directory.
