@@ -215,23 +215,28 @@ func (m *model) finishPlanWorktree() error {
 		return nil
 	}
 
-	// Copy the finished spec into the invoking checkout's specs/ tree first.
-	// The git merge below is defined in terms of commits, which is fragile: the
-	// specs/ path is gitignored (both a global **/specs/ and the project's
-	// .pi-go/ rule), so a force-add is required for the artifacts to enter the
-	// snapshot at all. A direct filesystem copy is the durable guarantee that
-	// /run — which reads <workDir>/specs/<task>/PROMPT.md — can find the spec
-	// even if the merge ever fails or is a no-op. Copying the whole spec dir
-	// mirrors everything the planner wrote, so research/ and supporting files
-	// survive too.
+	// Merge the worktree branch into the invoking branch. This brings the spec
+	// files into <workDir>/specs/<task>/ as tracked files.
+	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
+		// Preserve the finished spec by copying it out even though the merge
+		// failed, so /run still finds PROMPT.md.
+		_ = copyDir(filepath.Join(m.planWorktreePath, "specs", m.planTaskName),
+			filepath.Join(m.cfg.WorkDir, "specs", m.planTaskName))
+		return err
+	}
+
+	// Belt-and-suspenders: after the merge, copy the finished spec into the
+	// invoking checkout's specs/ tree too. /run reads <workDir>/specs/<task>/
+	// from disk, so this guarantees the spec is present even if the merge was
+	// somehow a no-op. Copying the whole spec dir mirrors everything the
+	// planner wrote, so research/ and supporting files survive too. (This runs
+	// after the merge, not before: writing untracked copies first would make
+	// the merge abort on files it is about to bring in.)
 	if err := copyDir(filepath.Join(m.planWorktreePath, "specs", m.planTaskName),
 		filepath.Join(m.cfg.WorkDir, "specs", m.planTaskName)); err != nil {
 		return fmt.Errorf("copying finished spec into invoking checkout: %w", err)
 	}
 
-	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
-		return err
-	}
 	if err := m.planWorktree.Cleanup(m.planWorktreeAgentID); err != nil {
 		return err
 	}

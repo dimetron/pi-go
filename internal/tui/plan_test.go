@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/sop"
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
@@ -317,5 +319,81 @@ func TestPlanInstruction_ExistingSpecReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)
+	}
+}
+
+// TestFinishPlanWorktree_CopiesSpecIntoInvokingCheckout drives the end-of-plan
+// worktree teardown with a real git worktree and verifies the finished spec
+// directory is copied into the invoking checkout's specs/ tree. This guards
+// the fix that /run must find specs/<task>/PROMPT.md even though specs/ is
+// gitignored.
+func TestFinishPlanWorktree_CopiesSpecIntoInvokingCheckout(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-demo"
+	const agentID = "plan-" + taskName
+
+	// Seed a worktree like the planner would: it writes specs/<task>/... and
+	// never commits.
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(filepath.Join(wtSpec, "research"), 0o755); err != nil {
+		t.Fatalf("mkdir research: %v", err)
+	}
+	for name, content := range map[string]string{
+		"PROMPT.md":         "# Feature\n\n## Objective\nDo it.\n",
+		"requirements.md":   "# Requirements\n",
+		"research/notes.md": "notes\n",
+	} {
+		if err := os.WriteFile(filepath.Join(wtSpec, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree: %v", err)
+	}
+
+	// The finished spec must be present in the invoking checkout, including the
+	// research/ subtree, independently of the git merge.
+	for _, rel := range []string{
+		"PROMPT.md",
+		"requirements.md",
+		filepath.Join("research", "notes.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(repo, "specs", taskName, rel)); err != nil {
+			t.Errorf("spec %s not copied into invoking checkout: %v", rel, err)
+		}
+	}
+
+	// The plan is complete, so the worktree state should be cleared.
+	if m.planWorktree != nil {
+		t.Error("planWorktree should be nil after a completed plan")
+	}
+	if m.planWorktreePath != "" {
+		t.Errorf("planWorktreePath should be cleared, got %q", m.planWorktreePath)
+	}
+}
+
+// TestFinishPlanWorktree_NoWorktreeIsNoOp ensures a model without an active plan
+// worktree is a safe no-op (no panic, no error).
+func TestFinishPlanWorktree_NoWorktreeIsNoOp(t *testing.T) {
+	m := &model{}
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree with no worktree should be a no-op, got: %v", err)
 	}
 }
