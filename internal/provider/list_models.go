@@ -54,6 +54,8 @@ func providerDefaultBaseURL(p string) string {
 		return "https://api.mistral.ai"
 	case "xai":
 		return "https://api.x.ai"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
 	default:
 		return ""
 	}
@@ -74,6 +76,8 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 		return listMistralModels(ctx, opts)
 	case "xai":
 		return listXAIModels(ctx, opts)
+	case "openrouter":
+		return listOpenRouterModels(ctx, opts)
 	case "ollama":
 		names, err := OllamaListModels(ctx, opts.BaseURL)
 		if err != nil {
@@ -103,6 +107,11 @@ func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo
 // listXAIModels fetches models from GET /v1/models.
 func listXAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
 	return listBearerModels(ctx, opts, "xai", "xAI")
+}
+
+// listOpenRouterModels fetches models from GET /v1/models.
+func listOpenRouterModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
+	return listBearerModels(ctx, opts, "openrouter", "OpenRouter")
 }
 
 // listBearerModels fetches models from GET <base>/v1/models with bearer auth
@@ -232,7 +241,7 @@ func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, 
 			req.Header.Set("x-api-key", opts.APIKey)
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "openai", "mistral", "xai":
+	case "openai", "mistral", "xai", "openrouter":
 		if opts.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 		}

@@ -217,6 +217,7 @@ func TestAPIKeys(t *testing.T) {
 	t.Setenv("AZUREOPENAI_API_KEY", "azure-test-key")
 	t.Setenv("AZURE_API_KEY", "")
 	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
@@ -228,6 +229,9 @@ func TestAPIKeys(t *testing.T) {
 	if keys["opencode"] != "opencode-test-key" {
 		t.Errorf("expected opencode key, got %q", keys["opencode"])
 	}
+	if keys["openrouter"] != "openrouter-test-key" {
+		t.Errorf("expected openrouter key, got %q", keys["openrouter"])
+	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")
 	}
@@ -238,6 +242,7 @@ func TestBaseURLs(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("GEMINI_BASE_URL", "http://localhost:8080")
 	t.Setenv("OPENCODE_BASE_URL", "http://localhost:9999")
+	t.Setenv("OPENROUTER_BASE_URL", "https://custom.example")
 
 	urls := BaseURLs()
 	if urls["anthropic"] != "http://localhost:11434" {
@@ -248,6 +253,9 @@ func TestBaseURLs(t *testing.T) {
 	}
 	if urls["opencode"] != "http://localhost:9999" {
 		t.Errorf("expected opencode base URL, got %q", urls["opencode"])
+	}
+	if urls["openrouter"] != "https://custom.example" {
+		t.Errorf("expected openrouter base URL, got %q", urls["openrouter"])
 	}
 	if _, ok := urls["openai"]; ok {
 		t.Error("expected no openai base URL for empty env var")
