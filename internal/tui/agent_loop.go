@@ -408,8 +408,12 @@ type agentDoneMsg struct{ err error }
 // a successful turn. It arrives after the reply text and before the channel
 // close that synthesizes agentDoneMsg, so the summary renders directly under
 // the answer.
+//
+// elapsed is the turn's wall-clock time, measured across the whole agent loop —
+// every model call, tool call and stuck recovery — not just the final response.
 type agentUsageMsg struct {
-	usage *genai.GenerateContentResponseUsageMetadata
+	usage   *genai.GenerateContentResponseUsageMetadata
+	elapsed time.Duration
 }
 
 // agentWarningMsg carries a non-fatal problem with the turn into the
@@ -459,10 +463,11 @@ func addUsage(dst, src *genai.GenerateContentResponseUsageMetadata) *genai.Gener
 }
 
 // formatTurnUsage renders a per-turn token summary as one dim line: input,
-// cached reads, output, reasoning, and total. It returns "" when u is nil or
-// all-zero, so a provider that reports no usage shows no line rather than
-// "0 in · 0 out".
-func formatTurnUsage(u *genai.GenerateContentResponseUsageMetadata) string {
+// cached reads, output, reasoning, total, and how long the turn took. It
+// returns "" when u is nil or all-zero, so a provider that reports no usage
+// shows no line rather than "0 in · 0 out" — the elapsed time rides along with
+// the token tally rather than standing on its own.
+func formatTurnUsage(u *genai.GenerateContentResponseUsageMetadata, elapsed time.Duration) string {
 	if u == nil {
 		return ""
 	}
@@ -496,7 +501,28 @@ func formatTurnUsage(u *genai.GenerateContentResponseUsageMetadata) string {
 	b.WriteString(" · ")
 	b.WriteString(formatTokenCount(total))
 	b.WriteString(" total")
+	if elapsed > 0 {
+		b.WriteString(" · took ")
+		b.WriteString(formatTurnDuration(elapsed))
+	}
 	return b.String()
+}
+
+// formatTurnDuration renders a turn's wall-clock time at a precision that suits
+// its magnitude: milliseconds under a second, one decimal of seconds under a
+// minute, and whole minutes and hours above that. Sub-second precision on a
+// ten-minute turn is noise, and rounding a fast turn to "0s" hides it.
+func formatTurnDuration(d time.Duration) string {
+	switch {
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	case d < time.Hour:
+		return fmt.Sprintf("%dm %02ds", int(d/time.Minute), int(d/time.Second)%60)
+	default:
+		return fmt.Sprintf("%dh %02dm", int(d/time.Hour), int(d/time.Minute)%60)
+	}
 }
 
 // waitForAgent returns a Cmd that waits for the next message on the agent channel.
@@ -790,6 +816,10 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 	// named is not going to be fixed by naming it again, and every attempt
 	// costs a full turn.
 	var turnUsage *genai.GenerateContentResponseUsageMetadata
+	// Started here rather than at the top of the function so the measurement
+	// covers the model work and not the setup around it; stuck recoveries are
+	// part of the turn the user waited on, so they stay inside the span.
+	turnStart := time.Now()
 	for attempt := 0; ; attempt++ {
 		usage, err := m.streamTurn(ctx, ch, prompt, run, groundedSeen, &truncated, log)
 		turnUsage = addUsage(turnUsage, usage)
@@ -797,7 +827,7 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		var stuck *stuckError
 		if !errors.As(err, &stuck) {
 			if err == nil && turnUsage != nil {
-				ch <- agentUsageMsg{usage: turnUsage}
+				ch <- agentUsageMsg{usage: turnUsage, elapsed: time.Since(turnStart)}
 			}
 			if err != nil {
 				fail(err)
@@ -1024,7 +1054,7 @@ func (m *model) handleAgentWarning(msg agentWarningMsg) (tea.Model, tea.Cmd) {
 // or all-zero usage block renders nothing, so providers that omit usage are
 // indistinguishable from a turn that happened to report zero.
 func (m *model) handleAgentUsage(msg agentUsageMsg) (tea.Model, tea.Cmd) {
-	if s := formatTurnUsage(msg.usage); s != "" {
+	if s := formatTurnUsage(msg.usage, msg.elapsed); s != "" {
 		m.chatModel.AppendMeta(s)
 	}
 	return m, waitForAgent(m.agentCh)
