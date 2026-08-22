@@ -54,7 +54,7 @@ func TestIndexPage_VoiceBarHasTalkMuteEnd(t *testing.T) {
 	}
 }
 
-// The bar sits 3x its original 16px above the bottom edge and the transcript
+// The bar sits 96px (2x the earlier 48px) above the bottom edge and the transcript
 // panel stacks above it from the same custom property, so a later nudge
 // cannot separate them.
 func TestVoiceStyles_BarOffsetSharedWithTranscript(t *testing.T) {
@@ -64,8 +64,8 @@ func TestVoiceStyles_BarOffsetSharedWithTranscript(t *testing.T) {
 	}
 	css := string(data)
 
-	if !strings.Contains(css, "--voice-bar-bottom: 48px;") {
-		t.Error("style.css does not define --voice-bar-bottom: 48px")
+	if !strings.Contains(css, "--voice-bar-bottom: 96px;") {
+		t.Error("style.css does not define --voice-bar-bottom: 96px")
 	}
 	bar := cssRule(css, ".voice-bar")
 	if !strings.Contains(bar, "bottom: var(--voice-bar-bottom)") {
