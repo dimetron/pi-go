@@ -2,12 +2,16 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +21,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // newLLMSTestServer starts an httptest TLS server serving a fixed body and
@@ -246,11 +251,13 @@ func newLLMSCacheTestServer(t *testing.T) (*httptest.Server, *LLMSToolset, *int3
 	withAllowedTestHosts(t, "127.0.0.1", "::1")
 	withLLMSClient(t, srv.Client())
 
+	// A not-yet-existing subdirectory, as ~/.pi-go/llms-cache is on first
+	// use, so the tests exercise the directory creation path too.
 	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
 		Sources: []config.LLMSSource{
 			{Name: "test", URL: srv.URL + "/llms.txt"},
 		},
-	}, t.TempDir())
+	}, filepath.Join(t.TempDir(), "llms-cache"))
 	return srv, ts, &requests
 }
 
@@ -343,6 +350,8 @@ func TestNewLLMSCachedToolsetUsesDefaultCacheDir(t *testing.T) {
 	// NewLLMSCachedToolset, so they must all share one cache directory. Pinning
 	// that here guards against a regression that silently disables the shared
 	// cache for one mode.
+	home := t.TempDir()
+	testenv.SetHome(t, home)
 	ts := NewLLMSCachedToolset(&config.LLMSConfig{
 		Sources: []config.LLMSSource{{Name: "adk", URL: "https://adk.dev/llms.txt"}},
 	})
@@ -352,8 +361,296 @@ func TestNewLLMSCachedToolsetUsesDefaultCacheDir(t *testing.T) {
 	if ts.cacheDir != LLMSDefaultCacheDir() {
 		t.Fatalf("cacheDir = %q, want %q", ts.cacheDir, LLMSDefaultCacheDir())
 	}
-	if !strings.HasSuffix(ts.cacheDir, filepath.Join(".pi-go", "llms-cache")) {
-		t.Fatalf("cacheDir = %q, want it under ~/.pi-go/llms-cache", ts.cacheDir)
+	if want := filepath.Join(home, ".pi-go", "llms-cache"); ts.cacheDir != want {
+		t.Fatalf("cacheDir = %q, want %q (under the test HOME)", ts.cacheDir, want)
+	}
+}
+
+func TestLLMSDefaultCacheDirEmptyWithoutHome(t *testing.T) {
+	// No usable home directory must disable caching rather than point the
+	// cache at a relative path or fail construction.
+	testenv.UnsetHome(t)
+	if got := LLMSDefaultCacheDir(); got != "" {
+		t.Fatalf("LLMSDefaultCacheDir() = %q, want empty without a home directory", got)
+	}
+	ts := NewLLMSCachedToolset(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "adk", URL: "https://adk.dev/llms.txt"}},
+	})
+	if ts.cacheDir != "" {
+		t.Fatalf("cacheDir = %q, want caching disabled without a home directory", ts.cacheDir)
+	}
+}
+
+// ageLLMSCacheEntry rewrites the cached entry for rawURL so it was fetched
+// `by` ago, forcing the next FetchDocs to revalidate (or, past
+// llmsCacheMaxAge, to refuse the entry as a fallback).
+func ageLLMSCacheEntry(t *testing.T, ts *LLMSToolset, rawURL string, by time.Duration) {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	e := ts.cacheRead(u)
+	if e == nil {
+		t.Fatalf("no cache entry for %s", rawURL)
+	}
+	e.FetchedAt = time.Now().Add(-by).Unix()
+	ts.cacheWrite(e)
+}
+
+func TestLLMSFetchCacheStaleReplacedBy200(t *testing.T) {
+	// When revalidation returns a fresh 200 the new body must replace the
+	// cached one, and the conditional headers must have been sent.
+	var requests int32
+	var sawConditional atomic.Bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&requests, 1)
+		if r.Header.Get("If-None-Match") == `"v1"` && r.Header.Get("If-Modified-Since") == "Mon, 02 Jan 2006 15:04:05 GMT" {
+			sawConditional.Store(true)
+		}
+		w.Header().Set("ETag", fmt.Sprintf(`"v%d"`, n))
+		w.Header().Set("Last-Modified", "Mon, 02 Jan 2006 15:04:05 GMT")
+		fmt.Fprintf(w, "Docs v%d", n)
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, t.TempDir())
+	u := srv.URL + "/page.md"
+
+	out, _ := ts.FetchDocs(context.Background(), u)
+	if out.Content != "Docs v1" {
+		t.Fatalf("first fetch = %q, want %q", out.Content, "Docs v1")
+	}
+	ageLLMSCacheEntry(t, ts, u, 2*time.Hour)
+
+	out, _ = ts.FetchDocs(context.Background(), u)
+	if out.Content != "Docs v2" {
+		t.Fatalf("revalidated fetch = %q, want the replaced body %q", out.Content, "Docs v2")
+	}
+	if !sawConditional.Load() {
+		t.Fatal("revalidation request did not carry If-None-Match/If-Modified-Since")
+	}
+	// The replacement is what the cache now serves, with no further request.
+	out, _ = ts.FetchDocs(context.Background(), u)
+	if out.Content != "Docs v2" || atomic.LoadInt32(&requests) != 2 {
+		t.Fatalf("third fetch = %q after %d requests, want %q from cache after 2", out.Content, requests, "Docs v2")
+	}
+}
+
+func TestLLMSFetchCacheFallbackRefusedPastMaxAge(t *testing.T) {
+	// An entry older than llmsCacheMaxAge is not a valid network-down
+	// fallback: the caller sees the fetch error instead of a day-old page.
+	srv, ts, _ := newLLMSCacheTestServer(t)
+	u := srv.URL + "/page.md"
+	if out, _ := ts.FetchDocs(context.Background(), u); out.Error != "" {
+		t.Fatalf("initial fetch error: %s", out.Error)
+	}
+	ageLLMSCacheEntry(t, ts, u, 25*time.Hour)
+
+	withLLMSClient(t, &http.Client{Transport: errorTransport{}})
+	out, _ := ts.FetchDocs(context.Background(), u)
+	if !strings.Contains(out.Error, "fetch failed") {
+		t.Fatalf("expected 'fetch failed' past max age, got content=%q error=%q", out.Content, out.Error)
+	}
+}
+
+func TestLLMSFetchCacheFallsBackOn5xx(t *testing.T) {
+	// A transient upstream 5xx on revalidation serves the reasonably fresh
+	// cached copy; without a cached copy the status is reported.
+	var fail atomic.Bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte("Good Docs"))
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, t.TempDir())
+	u := srv.URL + "/page.md"
+
+	fail.Store(true)
+	if out, _ := ts.FetchDocs(context.Background(), u); !strings.Contains(out.Error, "unexpected status 502") {
+		t.Fatalf("uncached 5xx: got content=%q error=%q, want unexpected status 502", out.Content, out.Error)
+	}
+
+	fail.Store(false)
+	if out, _ := ts.FetchDocs(context.Background(), u); out.Content != "Good Docs" {
+		t.Fatalf("populate: got content=%q error=%q", out.Content, out.Error)
+	}
+	ageLLMSCacheEntry(t, ts, u, 2*time.Hour)
+
+	fail.Store(true)
+	if out, _ := ts.FetchDocs(context.Background(), u); out.Content != "Good Docs" {
+		t.Fatalf("5xx with cache: got content=%q error=%q, want cached body", out.Content, out.Error)
+	}
+	ageLLMSCacheEntry(t, ts, u, 25*time.Hour)
+	if out, _ := ts.FetchDocs(context.Background(), u); !strings.Contains(out.Error, "unexpected status 502") {
+		t.Fatalf("5xx past max age: got content=%q error=%q, want the status error", out.Content, out.Error)
+	}
+}
+
+func TestLLMSFetchCache304WithoutEntry(t *testing.T) {
+	// A server answering 304 to an unconditional request has nothing to
+	// reuse; that must be an explicit error, not empty content.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, t.TempDir())
+	out, _ := ts.FetchDocs(context.Background(), srv.URL+"/page.md")
+	if !strings.Contains(out.Error, "304") {
+		t.Fatalf("got content=%q error=%q, want a 304-without-cache error", out.Content, out.Error)
+	}
+}
+
+func TestLLMSFetchCacheIgnoresBadEntries(t *testing.T) {
+	// Corrupt JSON, an entry recorded for a different URL, and an oversized
+	// body are all treated as a miss: the page is fetched again and the bad
+	// file replaced.
+	srv, ts, requests := newLLMSCacheTestServer(t)
+	rawURL := srv.URL + "/page.md"
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	path := ts.cachePath(u)
+
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"corrupt", []byte("{not json")},
+		{"other-url", mustJSON(t, llmsCacheEntry{URL: srv.URL + "/other.md", Body: "Wrong Page", FetchedAt: time.Now().Unix()})},
+		{"oversized", mustJSON(t, llmsCacheEntry{URL: rawURL, Body: strings.Repeat("x", llmsMaxBytes+1), FetchedAt: time.Now().Unix()})},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.MkdirAll(ts.cacheDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, tc.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := ts.cacheRead(u); got != nil {
+				t.Fatalf("cacheRead returned %+v for a %s entry, want nil", got, tc.name)
+			}
+			out, _ := ts.FetchDocs(context.Background(), rawURL)
+			if out.Content != "# Cached Docs" {
+				t.Fatalf("got content=%q error=%q, want a fresh fetch", out.Content, out.Error)
+			}
+			if got := atomic.LoadInt32(requests); got != int32(i+1) {
+				t.Fatalf("expected %d HTTP requests after refetch, got %d", i+1, got)
+			}
+			if got := ts.cacheRead(u); got == nil || got.Body != "# Cached Docs" {
+				t.Fatalf("bad entry was not replaced by the fresh fetch: %+v", got)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestLLMSFetchCacheDisabledWritesNothing(t *testing.T) {
+	// NewLLMSToolset (no cache dir) must never touch the disk and must refetch
+	// every time.
+	srv, _, requests := newLLMSCacheTestServer(t)
+	ts := NewLLMSToolset(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	})
+	u := srv.URL + "/page.md"
+	for i := 1; i <= 2; i++ {
+		if out, _ := ts.FetchDocs(context.Background(), u); out.Content != "# Cached Docs" {
+			t.Fatalf("fetch %d: got content=%q error=%q", i, out.Content, out.Error)
+		}
+	}
+	if got := atomic.LoadInt32(requests); got != 2 {
+		t.Fatalf("expected 2 HTTP requests with caching disabled, got %d", got)
+	}
+	pu, _ := url.Parse(u)
+	if got := ts.cacheRead(pu); got != nil {
+		t.Fatalf("cacheRead with caching disabled = %+v, want nil", got)
+	}
+	ts.cacheWrite(&llmsCacheEntry{URL: u, Body: "x"}) // must be a no-op, not a panic
+}
+
+func TestLLMSFetchCacheWriteIsPrivateAndAtomic(t *testing.T) {
+	// The shared cache directory is created 0700 and entries 0600, and no
+	// temp file is left behind after a write.
+	srv, ts, _ := newLLMSCacheTestServer(t)
+	u := srv.URL + "/page.md"
+	if out, _ := ts.FetchDocs(context.Background(), u); out.Error != "" {
+		t.Fatalf("fetch error: %s", out.Error)
+	}
+	entries, err := os.ReadDir(ts.cacheDir)
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".json") {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("cache dir = %v, want exactly one .json entry and no temp files", names)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	di, err := os.Stat(ts.cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := di.Mode().Perm(); got != 0o700 {
+		t.Errorf("cache dir perm = %o, want 0700", got)
+	}
+	fi, err := os.Stat(filepath.Join(ts.cacheDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("cache file perm = %o, want 0600", got)
+	}
+}
+
+func TestLLMSFetchCacheKeyIncludesQuery(t *testing.T) {
+	// Two URLs that differ only in query string are distinct cache entries.
+	var requests int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		fmt.Fprintf(w, "q=%s", r.URL.RawQuery)
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, t.TempDir())
+
+	a, _ := ts.FetchDocs(context.Background(), srv.URL+"/page.md?v=1")
+	b, _ := ts.FetchDocs(context.Background(), srv.URL+"/page.md?v=2")
+	if a.Content != "q=v=1" || b.Content != "q=v=2" {
+		t.Fatalf("got %q and %q, want distinct bodies per query", a.Content, b.Content)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("expected 2 HTTP requests for 2 distinct URLs, got %d", got)
 	}
 }
 
@@ -568,4 +865,161 @@ func TestLLMSRedirectLimitEnforced(t *testing.T) {
 	if !strings.Contains(out.Error, "fetch failed") || !strings.Contains(out.Error, "redirects") {
 		t.Fatalf("expected redirect-limit failure, got %q", out.Error)
 	}
+}
+
+func TestLLMSCacheWriteFailuresAreIgnored(t *testing.T) {
+	// Cache writes are best-effort: an unparsable URL or an uncreatable cache
+	// directory (here, a path below a regular file) must neither panic nor
+	// leave anything behind.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts := NewLLMSToolsetWithCache(nil, filepath.Join(blocker, "llms-cache"))
+	ts.cacheWrite(&llmsCacheEntry{URL: "https://adk.dev/page.md", Body: "x", FetchedAt: time.Now().Unix()})
+	if _, err := os.Stat(ts.cacheDir); err == nil {
+		t.Fatal("cache dir below a file: directory exists, want nothing created")
+	}
+
+	ts = NewLLMSToolsetWithCache(nil, filepath.Join(t.TempDir(), "llms-cache"))
+	ts.cacheWrite(&llmsCacheEntry{URL: "https://adk.dev/\x7f", Body: "x"})
+	if _, err := os.Stat(ts.cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("unparsable URL: cache dir was created (stat err = %v), want nothing written", err)
+	}
+}
+
+func TestLLMSFetchCacheNoFallbackOn4xx(t *testing.T) {
+	// A 4xx on revalidation is the origin's verdict on the page (gone, moved,
+	// access revoked): the cached body must not be served as current.
+	var status atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if code := int(status.Load()); code != 0 {
+			w.WriteHeader(code)
+			return
+		}
+		w.Write([]byte("Good Docs"))
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, filepath.Join(t.TempDir(), "llms-cache"))
+	u := srv.URL + "/page.md"
+	if out, _ := ts.FetchDocs(context.Background(), u); out.Content != "Good Docs" {
+		t.Fatalf("populate: got content=%q error=%q", out.Content, out.Error)
+	}
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone} {
+		ageLLMSCacheEntry(t, ts, u, 2*time.Hour)
+		status.Store(int32(code))
+		out, _ := ts.FetchDocs(context.Background(), u)
+		if out.Content != "" || !strings.Contains(out.Error, fmt.Sprintf("unexpected status %d", code)) {
+			t.Fatalf("%d: got content=%q error=%q, want the status error and no cached body", code, out.Content, out.Error)
+		}
+	}
+}
+
+func TestLLMSFetchCacheIgnoresFragment(t *testing.T) {
+	// page.md#a and page.md#b are the same resource on the wire and share one
+	// cache entry; the request itself carries no fragment.
+	var requests int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		if r.URL.Fragment != "" || strings.Contains(r.RequestURI, "#") {
+			t.Errorf("fragment reached the server: %q", r.RequestURI)
+		}
+		w.Write([]byte("Sectioned Docs"))
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, filepath.Join(t.TempDir(), "llms-cache"))
+
+	for _, frag := range []string{"#install", "#usage", ""} {
+		out, _ := ts.FetchDocs(context.Background(), srv.URL+"/page.md"+frag)
+		if out.Content != "Sectioned Docs" {
+			t.Fatalf("%q: got content=%q error=%q", frag, out.Content, out.Error)
+		}
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected 1 HTTP request for three fragments of one page, got %d", got)
+	}
+	entries, err := os.ReadDir(ts.cacheDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cache dir has %d entries (err %v), want exactly 1", len(entries), err)
+	}
+	pu, _ := url.Parse(srv.URL + "/page.md#install")
+	if e := ts.cacheRead(pu); e != nil {
+		t.Fatalf("cacheRead with a fragment found an entry keyed by the fragment: %+v", e)
+	}
+}
+
+func TestLLMSCacheEvictsOldestPastBudget(t *testing.T) {
+	// Past the entry budget the least-recently-written files go first, and
+	// the total-bytes budget is enforced the same way.
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	ts := NewLLMSToolsetWithCache(nil, dir)
+	base := time.Now().Add(-time.Hour)
+	writeAged := func(i int, body string, age time.Duration) string {
+		t.Helper()
+		rawURL := fmt.Sprintf("https://adk.dev/p%d.md", i)
+		ts.cacheWrite(&llmsCacheEntry{URL: rawURL, Body: body, FetchedAt: time.Now().Unix()})
+		pu, _ := url.Parse(rawURL)
+		when := base.Add(-age)
+		if err := os.Chtimes(ts.cachePath(pu), when, when); err != nil {
+			t.Fatal(err)
+		}
+		return rawURL
+	}
+	// llmsCacheMaxEntries entries, the lowest-numbered the oldest; all fit.
+	for i := 0; i < llmsCacheMaxEntries; i++ {
+		writeAged(i, "x", time.Duration(llmsCacheMaxEntries-i)*time.Second)
+	}
+	if n := countLLMSCacheFiles(t, dir); n != llmsCacheMaxEntries {
+		t.Fatalf("before eviction: %d files, want %d", n, llmsCacheMaxEntries)
+	}
+	// One more (newest) evicts exactly the oldest, p0.
+	newest := writeAged(llmsCacheMaxEntries, "x", 0)
+	if n := countLLMSCacheFiles(t, dir); n != llmsCacheMaxEntries {
+		t.Fatalf("after one over budget: %d files, want %d", n, llmsCacheMaxEntries)
+	}
+	p0, _ := url.Parse("https://adk.dev/p0.md")
+	if ts.cacheRead(p0) != nil {
+		t.Fatal("oldest entry p0 survived eviction")
+	}
+	p1, _ := url.Parse("https://adk.dev/p1.md")
+	if ts.cacheRead(p1) == nil {
+		t.Fatal("second-oldest entry p1 was evicted, want only the oldest gone")
+	}
+	nu, _ := url.Parse(newest)
+	if ts.cacheRead(nu) == nil {
+		t.Fatal("the entry just written was evicted")
+	}
+
+	// Bytes budget: a few large, old entries over llmsCacheMaxBytes in total
+	// get trimmed oldest-first until the total fits, in a fresh directory.
+	dir = filepath.Join(t.TempDir(), "llms-cache")
+	ts = NewLLMSToolsetWithCache(nil, dir)
+	big := strings.Repeat("y", llmsMaxBytes) // 2 MB per entry
+	n := llmsCacheMaxBytes/llmsMaxBytes + 1  // one past the budget
+	for i := 0; i < n; i++ {
+		writeAged(i, big, time.Duration(n-i)*time.Second)
+	}
+	if got := countLLMSCacheFiles(t, dir); got >= n {
+		t.Fatalf("bytes budget: %d files remain of %d, want at least one evicted", got, n)
+	}
+	if ts.cacheRead(p0) != nil {
+		t.Fatal("bytes budget: oldest entry p0 survived eviction")
+	}
+}
+
+func countLLMSCacheFiles(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }

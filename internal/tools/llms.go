@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,16 @@ const llmsCacheTTL = 1 * time.Hour
 // fails, so a permanently dead or moved page is not served forever.
 const llmsCacheMaxAge = 24 * time.Hour
 
+// llmsCacheMaxEntries and llmsCacheMaxBytes bound the on-disk cache. fetch_docs
+// is model-controlled and every distinct URL on an allowed host creates an
+// entry of up to llmsMaxBytes, so without a budget the shared directory could
+// grow without limit. When either bound is exceeded after a write, the
+// least-recently-written entries are evicted until both hold again.
+const (
+	llmsCacheMaxEntries = 512
+	llmsCacheMaxBytes   = 64 * 1024 * 1024 // 64 MB
+)
+
 // llmsCacheEntry is the on-disk form of one cached page.
 type llmsCacheEntry struct {
 	URL          string `json:"url"`
@@ -63,6 +74,13 @@ type llmsCacheEntry struct {
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
 	FetchedAt    int64  `json:"fetched_at"`
+}
+
+// age reports how long ago the entry was fetched or last revalidated. It is
+// computed from the timestamp stored inside the entry, not the file's mtime,
+// so it does not depend on filesystem timestamp granularity.
+func (e *llmsCacheEntry) age() time.Duration {
+	return time.Since(time.Unix(e.FetchedAt, 0))
 }
 
 // LLMSInput defines the parameters for the fetch_docs tool.
@@ -205,6 +223,10 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 	if u.Host == "" {
 		return LLMSOutput{Error: "url has no host"}, nil
 	}
+	// A fragment (#section) is never sent on the wire, so page.md#a and
+	// page.md#b are the same resource: drop it before the cache lookup and the
+	// request so they share one entry instead of each downloading a copy.
+	u.Fragment, u.RawFragment = "", ""
 
 	// SSRF guard: reject loopback, private, link-local, multicast, and
 	// unspecified destinations before dialing.
@@ -220,11 +242,11 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 	// A cached copy younger than llmsCacheTTL is served straight from disk —
 	// no network, no revalidation.
 	entry := t.cacheRead(u)
-	if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheTTL {
+	if entry != nil && entry.age() < llmsCacheTTL {
 		return LLMSOutput{Content: entry.Body}, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return LLMSOutput{Error: fmt.Sprintf("build request: %v", err)}, nil
 	}
@@ -255,7 +277,7 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		// Network failure: fall back to a reasonably fresh cached copy rather
 		// than failing the whole call. An entry older than llmsCacheMaxAge is
 		// not served, so a permanently dead page is not resurrected forever.
-		if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheMaxAge {
+		if entry != nil && entry.age() < llmsCacheMaxAge {
 			return LLMSOutput{Content: entry.Body}, nil
 		}
 		return LLMSOutput{Error: fmt.Sprintf("fetch failed: %v", err)}, nil
@@ -286,7 +308,7 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		// downloading it again. Caching is best-effort: a write failure just
 		// means the next call re-fetches.
 		t.cacheWrite(&llmsCacheEntry{
-			URL:          rawURL,
+			URL:          u.String(),
 			Body:         string(body),
 			ETag:         resp.Header.Get("ETag"),
 			LastModified: resp.Header.Get("Last-Modified"),
@@ -296,8 +318,11 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 
 	default:
 		// An upstream 5xx is transient; prefer a reasonably fresh cached copy
-		// to the cached error being surfaced to the model.
-		if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheMaxAge {
+		// to the error being surfaced to the model. A 4xx (401/403/404/410,
+		// …) is the origin's verdict on the page itself — removed, moved, or
+		// access revoked — so the cached body must not be passed off as
+		// current; only the status is reported.
+		if resp.StatusCode >= 500 && entry != nil && entry.age() < llmsCacheMaxAge {
 			return LLMSOutput{Content: entry.Body}, nil
 		}
 		return LLMSOutput{Error: fmt.Sprintf("unexpected status %d", resp.StatusCode)}, nil
@@ -305,16 +330,22 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 }
 
 // cachePath maps a documentation URL to its on-disk cache file. The key is a
-// hash of the full URL so paths and query strings are disambiguated while
-// staying filesystem-safe.
+// hash of the full URL (scheme, host, path and query) so distinct pages and
+// query strings are disambiguated while the file name stays filesystem-safe
+// on every platform: lowercase hex plus a fixed extension.
 func (t *LLMSToolset) cachePath(u *url.URL) string {
 	sum := sha256.Sum256([]byte(u.String()))
 	return filepath.Join(t.cacheDir, hex.EncodeToString(sum[:])+".json")
 }
 
 // cacheRead loads a cached entry for u, or nil when caching is disabled or the
-// entry is missing/corrupt. Cache failures degrade to nil so the caller falls
-// through to a network fetch.
+// entry is missing, corrupt, or does not describe u. Cache failures degrade to
+// nil so the caller falls through to a network fetch.
+//
+// The entry's recorded URL must match the requested one and its body must be
+// within llmsMaxBytes: the cache directory is shared and writable by the user,
+// so a stray or tampered file must not be able to answer for a different URL
+// or hand the model an oversized body the network path would have refused.
 func (t *LLMSToolset) cacheRead(u *url.URL) *llmsCacheEntry {
 	if t.cacheDir == "" {
 		return nil
@@ -327,11 +358,20 @@ func (t *LLMSToolset) cacheRead(u *url.URL) *llmsCacheEntry {
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil
 	}
+	if e.URL != u.String() || len(e.Body) > llmsMaxBytes {
+		return nil
+	}
 	return &e
 }
 
 // cacheWrite persists an entry, creating the cache directory as needed. Cache
 // write failures are ignored: they cost a future re-fetch, not correctness.
+//
+// The entry is written to a temporary file and renamed into place so a
+// concurrent reader in another pi-go process (the directory is shared by every
+// mode) never observes a partially written file. The directory is created
+// 0700 and the files 0600: the content is public documentation, but the
+// directory lives under the user's home and should not be world-readable.
 func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
 	if t.cacheDir == "" {
 		return
@@ -344,10 +384,80 @@ func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(t.cacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(t.cacheDir, 0o700); err != nil {
 		return
 	}
-	_ = os.WriteFile(t.cachePath(u), data, 0o644)
+	dst := t.cachePath(u)
+	tmp, err := os.CreateTemp(t.cacheDir, filepath.Base(dst)+".*.tmp")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	_ = os.Chmod(tmpName, 0o600)
+	// os.Rename replaces an existing destination on every platform (on
+	// Windows it uses MoveFileEx with REPLACE_EXISTING), but can still fail
+	// there if another process has the destination open at that instant. The
+	// write is best-effort, so just discard the temp file in that case.
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	t.cacheEvict()
+}
+
+// cacheEvict enforces llmsCacheMaxEntries and llmsCacheMaxBytes over the
+// cache directory by deleting the least-recently-written entries first. It
+// runs after every write, which only happens after a network round trip, so
+// the directory scan is cheap relative to the fetch it follows. Removal is
+// best-effort: a file another process holds open (Windows) or has already
+// removed is simply skipped.
+func (t *LLMSToolset) cacheEvict() {
+	dirEntries, err := os.ReadDir(t.cacheDir)
+	if err != nil {
+		return
+	}
+	type cacheFile struct {
+		name  string
+		size  int64
+		mtime time.Time
+	}
+	var files []cacheFile
+	var total int64
+	for _, de := range dirEntries {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".json") {
+			continue
+		}
+		info, err := de.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, cacheFile{name: de.Name(), size: info.Size(), mtime: info.ModTime()})
+		total += info.Size()
+	}
+	if len(files) <= llmsCacheMaxEntries && total <= llmsCacheMaxBytes {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mtime.Before(files[j].mtime) })
+	remaining := len(files)
+	for _, f := range files {
+		if remaining <= llmsCacheMaxEntries && total <= llmsCacheMaxBytes {
+			return
+		}
+		if err := os.Remove(filepath.Join(t.cacheDir, f.name)); err != nil && !os.IsNotExist(err) {
+			continue // still on disk; it keeps counting against the budget
+		}
+		remaining--
+		total -= f.size
+	}
 }
 
 // hostAllowed reports whether hostname hosts one of the configured llms.txt
