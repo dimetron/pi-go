@@ -54,9 +54,11 @@ func TestIndexPage_VoiceBarHasTalkMuteEnd(t *testing.T) {
 	}
 }
 
-// The bar sits 3x its original 16px above the bottom edge and the transcript
-// panel stacks above it from the same custom property, so a later nudge
-// cannot separate them.
+// The bar's distance from the bottom edge lives in one custom property and
+// the transcript panel stacks above it from that same property, so a later
+// nudge (the offset has already moved from 16px to 48px to 96px) cannot
+// separate them. The exact pixel value is a design choice and is deliberately
+// not pinned here; only that it is defined and shared.
 func TestVoiceStyles_BarOffsetSharedWithTranscript(t *testing.T) {
 	data, err := embeddedStaticFiles.ReadFile("static/style.css")
 	if err != nil {
@@ -64,8 +66,8 @@ func TestVoiceStyles_BarOffsetSharedWithTranscript(t *testing.T) {
 	}
 	css := string(data)
 
-	if !strings.Contains(css, "--voice-bar-bottom: 48px;") {
-		t.Error("style.css does not define --voice-bar-bottom: 48px")
+	if !regexp.MustCompile(`--voice-bar-bottom:\s*\d+px;`).MatchString(css) {
+		t.Error("style.css does not define --voice-bar-bottom as a px length")
 	}
 	bar := cssRule(css, ".voice-bar")
 	if !strings.Contains(bar, "bottom: var(--voice-bar-bottom)") {
