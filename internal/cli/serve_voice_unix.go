@@ -20,7 +20,10 @@ import (
 // alone — when every other pi command finds the same key in ~/.pi-go/.env —
 // reads as "voice is broken", and the operator has no way to tell an unset key
 // from an unread one.
-func enableServeVoice(ctx context.Context, server *webserver.ServerV2) error {
+//
+// extra options are appended after the model so a test can point Verify at a
+// fake models endpoint; production passes none.
+func enableServeVoice(ctx context.Context, server *webserver.ServerV2, extra ...voicegemini.Option) error {
 	key, source := config.LookupEnvFrom(serveProjectDir(), "GEMINI_API_KEY", "GOOGLE_API_KEY")
 	if key == "" {
 		return fmt.Errorf("--voice needs GEMINI_API_KEY: export it, or put it in .pi-go/.env, .env, or ~/.pi-go/.env")
@@ -34,7 +37,8 @@ func enableServeVoice(ctx context.Context, server *webserver.ServerV2) error {
 	// cannot stall startup indefinitely.
 	vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := server.EnableVoice(vctx, key, voicegemini.WithModel(serveVoiceModel())); err != nil {
+	opts := append([]voicegemini.Option{voicegemini.WithModel(serveVoiceModel())}, extra...)
+	if err := server.EnableVoice(vctx, key, opts...); err != nil {
 		return fmt.Errorf("enabling voice: %w", err)
 	}
 	return nil
