@@ -2,9 +2,14 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"iter"
 	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -13,6 +18,9 @@ import (
 )
 
 const openrouterDefaultBaseURL = "https://openrouter.ai/api/v1"
+
+// openrouterListTimeout bounds each /models fetch for context-window lookup.
+const openrouterListTimeout = 10 * time.Second
 
 // openrouterModel implements model.LLM for the OpenRouter API.
 // OpenRouter exposes an OpenAI-compatible chat completions endpoint,
@@ -93,4 +101,123 @@ func (m *openrouterModel) GenerateContent(ctx context.Context, req *model.LLMReq
 // OpenRouter uses the same finish reasons as OpenAI.
 func openrouterFinishReasonToGenai(reason string) genai.FinishReason {
 	return oaiFinishReasonToGenai(reason)
+}
+
+// OpenRouterContextWindowSize queries OpenRouter's /models listing for the
+// context window of the given model, preferring top_provider.context_length
+// (what the best endpoint for this model enforces) over the model-level
+// context_length. Returns 0 if the size cannot be determined — mirroring
+// OllamaContextWindowSize, so callers can treat 0 as "no live answer" and fall
+// back to the static catalog.
+//
+// OpenRouter has no per-model endpoint (it answers 404), so every lookup scans
+// the full ~700KB listing; results are cached per base URL for an hour.
+func OpenRouterContextWindowSize(ctx context.Context, baseURL, modelName string) int64 {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	if name == "" || name == "auto" {
+		return 0
+	}
+
+	models, ok := openrouterModelContextLengths(ctx, baseURL)
+	if !ok {
+		return 0
+	}
+	return models[name]
+}
+
+// openrouterCacheTTL is how long a fetched /models listing stays trusted.
+const openrouterCacheTTL = time.Hour
+
+// openrouterWindowEntry pairs a parsed model→window table with the time it
+// was fetched, so repeat lookups can tell a fresh entry from a stale one.
+type openrouterWindowEntry struct {
+	models    map[string]int64
+	fetchedAt time.Time
+}
+
+var (
+	openrouterWindowCacheMu sync.Mutex
+	// openrouterWindowCache maps a base URL to its last fetched listing.
+	openrouterWindowCache = map[string]openrouterWindowEntry{}
+)
+
+// openrouterModelContextLengths fetches and parses OpenRouter's /models
+// listing into a lowercase model ID → context length table, serving repeat
+// lookups from a per-base-URL cache until openrouterCacheTTL elapses. ok is
+// false when the listing cannot be fetched or understood; callers treat that
+// as "unknown window".
+func openrouterModelContextLengths(ctx context.Context, baseURL string) (map[string]int64, bool) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = openrouterDefaultBaseURL
+	}
+
+	openrouterWindowCacheMu.Lock()
+	entry, ok := openrouterWindowCache[baseURL]
+	openrouterWindowCacheMu.Unlock()
+	if ok && time.Since(entry.fetchedAt) < openrouterCacheTTL {
+		return entry.models, true
+	}
+
+	models := openrouterFetchModelContextLengths(ctx, baseURL)
+	if models == nil {
+		return nil, false
+	}
+
+	entry = openrouterWindowEntry{models: models, fetchedAt: time.Now()}
+	openrouterWindowCacheMu.Lock()
+	openrouterWindowCache[baseURL] = entry
+	openrouterWindowCacheMu.Unlock()
+	return entry.models, true
+}
+
+// openrouterFetchModelContextLengths performs the live GET <base>/models and
+// extracts each model's context length. It never returns an error: any failure
+// yields nil, matching the Ollama helper's no-error contract.
+func openrouterFetchModelContextLengths(ctx context.Context, baseURL string) map[string]int64 {
+	fetchCtx, cancel := context.WithTimeout(ctx, openrouterListTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, baseURL+"/models", nil)
+	if err != nil {
+		return nil
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var payload struct {
+		Data []struct {
+			ID            string `json:"id"`
+			ContextLength int64  `json:"context_length"`
+			TopProvider   struct {
+				ContextLength int64 `json:"context_length"`
+			} `json:"top_provider"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&payload); err != nil {
+		return nil
+	}
+
+	models := make(map[string]int64, len(payload.Data))
+	for _, m := range payload.Data {
+		id := strings.ToLower(strings.TrimSpace(m.ID))
+		if id == "" {
+			continue
+		}
+		size := m.TopProvider.ContextLength
+		if size <= 0 {
+			size = m.ContextLength
+		}
+		if size > 0 {
+			models[id] = size
+		}
+	}
+	return models
 }
