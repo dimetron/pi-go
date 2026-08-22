@@ -212,6 +212,7 @@ func oaiGenaiToolsToOpenAI(tools []*genai.Tool) []openai.ChatCompletionToolUnion
 // oaiStreamState holds accumulated state from processing OpenAI stream chunks (Chat Completions path).
 type oaiStreamState struct {
 	text             string
+	thinking         string
 	toolCalls        map[int64]map[string]any
 	finishReason     string
 	promptTokens     int64
@@ -244,9 +245,17 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 	}
 	slices.Sort(indices)
 
-	finalParts := make([]*genai.Part, 0, 1+len(s.toolCalls))
+	finalParts := make([]*genai.Part, 0, 2+len(s.toolCalls))
 	if s.text != "" {
 		finalParts = append(finalParts, &genai.Part{Text: s.text})
+	} else if s.thinking != "" && len(s.toolCalls) == 0 {
+		// The model spent the whole turn reasoning and never answered
+		// (e.g. reasoning forced on a non-reasoning model). Surface the
+		// reasoning as the turn's content rather than returning nothing —
+		// the same fallback the Ollama provider applies to thinking-only
+		// turns. Skipped when tool calls follow, where the reasoning is
+		// scratch work ahead of the calls.
+		finalParts = append(finalParts, &genai.Part{Text: s.thinking})
 	}
 	for _, idx := range indices {
 		tc := s.toolCalls[idx]
@@ -282,6 +291,17 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 }
 
 func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool) {
+	oaiRunStreamingExtract(ctx, client, params, yield, nil)
+}
+
+// oaiRunStreamingExtract is oaiRunStreaming with an optional hook that pulls
+// reasoning text out of each chunk's raw JSON. The openai-go SDK has no field
+// for OpenRouter's delta.reasoning / delta.reasoning_details, so providers
+// backed by OpenRouter pass openrouterDeltaThinking here; nil skips the
+// extraction. Reasoning streams as "thinking"-role partials (the same shape
+// the Anthropic and Ollama providers emit, which the TUI renders with 💭);
+// it is re-sent as turn content only when the model produced nothing else.
+func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawChunk string) string) {
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 		IncludeUsage: param.NewOpt(true),
 	}
@@ -297,6 +317,18 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 			state.promptTokens = chunk.Usage.PromptTokens
 			state.completionTokens = chunk.Usage.CompletionTokens
 			state.cachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+		}
+		if extractThinking != nil && len(chunk.Choices) > 0 {
+			if think := extractThinking(chunk.RawJSON()); think != "" {
+				state.thinking += think
+				if !yield(&model.LLMResponse{
+					Partial:      true,
+					TurnComplete: false,
+					Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: think}}},
+				}, nil) {
+					return
+				}
+			}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -334,6 +366,13 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 }
 
 func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool) {
+	oaiRunNonStreamingExtract(ctx, client, params, yield, nil)
+}
+
+// oaiRunNonStreamingExtract is oaiRunNonStreaming with an optional hook that
+// pulls reasoning text out of the completion's raw JSON (see
+// oaiRunStreamingExtract). The reasoning is prepended to the response parts.
+func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawResponse string) string) {
 	completion, err := client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		yield(nil, fmt.Errorf("OpenAI chat completion failed: %w", err))
@@ -345,7 +384,12 @@ func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params opena
 	}
 	choice := completion.Choices[0]
 	msg := choice.Message
-	parts := make([]*genai.Part, 0, 1+len(msg.ToolCalls))
+	parts := make([]*genai.Part, 0, 2+len(msg.ToolCalls))
+	if extractThinking != nil {
+		if thinking := extractThinking(completion.RawJSON()); thinking != "" {
+			parts = append(parts, &genai.Part{Text: thinking})
+		}
+	}
 	if msg.Content != "" {
 		parts = append(parts, &genai.Part{Text: msg.Content})
 	}
