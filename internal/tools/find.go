@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"io/fs"
+	gopath "path"
 	"path/filepath"
 	"strings"
 
@@ -59,17 +60,22 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 		patterns = nil
 	}
 
+	// fs.FS paths are always slash-separated, whatever the host OS. Resolve
+	// hands back an OS path, so it has to be converted before it can be used as
+	// a walk root or compared against a walked path.
+	root := filepath.ToSlash(rel)
+
 	// Normalize doublestar patterns: since WalkDir already recurses,
-	// strip "**/" prefixes so filepath.Match can handle the rest.
+	// strip "**/" prefixes so gopath.Match can handle the rest.
 	// e.g. "**/*.go" → "*.go", "src/**/*.go" → "src/**/*.go" (handled below)
 	w := &findWalk{
-		root:        rel,
+		root:        root,
 		pattern:     input.Pattern,
 		filePattern: normalizeGlobPattern(input.Pattern),
 		patterns:    patterns,
 	}
 
-	_ = fs.WalkDir(fsys, rel, w.visit)
+	_ = fs.WalkDir(fsys, root, w.visit)
 
 	return FindOutput{
 		Files:      w.files,
@@ -121,18 +127,20 @@ func (w *findWalk) visit(path string, d fs.DirEntry, err error) error {
 
 // matches reports whether a file is a hit: by filename first, then by path
 // relative to the walk root, then by doublestar expansion of that path.
+// matches works entirely in io/fs path space: w.root and path are both
+// slash-separated, and the caller's pattern is written that way too. filepath
+// here would take "\" as the separator on Windows and treat "/" as an ordinary
+// character, so a pattern would silently stop matching; filepath.Rel would also
+// hand back a backslash path to compare against a slash pattern.
 func (w *findWalk) matches(path, name string) bool {
 	// Match against the filename using the normalized pattern
-	if matched, _ := filepath.Match(w.filePattern, name); matched {
+	if matched, _ := gopath.Match(w.filePattern, name); matched {
 		return true
 	}
 
 	// Try matching against relative path for patterns like "src/*.go"
-	relPath, relErr := filepath.Rel(w.root, path)
-	if relErr != nil {
-		return false
-	}
-	if matched, _ := filepath.Match(w.filePattern, relPath); matched {
+	relPath := relativeFSPath(w.root, path)
+	if matched, _ := gopath.Match(w.filePattern, relPath); matched {
 		return true
 	}
 
@@ -148,6 +156,16 @@ func shouldSkipDir(base string) bool {
 		return true
 	}
 	return base == "node_modules" || base == "vendor" || base == "__pycache__"
+}
+
+// relativeFSPath returns walked relative to root. Both are slash-separated
+// fs.FS paths, so filepath.Rel is the wrong tool: on Windows it would hand back
+// a backslash-separated result that no glob pattern can match.
+func relativeFSPath(root, walked string) string {
+	if root == "." || root == "" {
+		return walked
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(walked, root), "/")
 }
 
 // normalizeGlobPattern strips leading "**/" from glob patterns since WalkDir
@@ -180,8 +198,8 @@ func matchDoublestar(pattern, path string) bool {
 	// The suffix after the last ** must match the filename
 	suffix := parts[len(parts)-1]
 	if suffix != "" {
-		name := filepath.Base(path)
-		matched, _ := filepath.Match(suffix, name)
+		name := gopath.Base(path)
+		matched, _ := gopath.Match(suffix, name)
 		return matched
 	}
 	return true

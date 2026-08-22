@@ -63,10 +63,17 @@ func TestNewMemoryInitCmd_MaxArgs(t *testing.T) {
 }
 
 func TestRunMemoryInit_AbsDirError(t *testing.T) {
-	// Test with an invalid directory path.
-	err := runMemoryInit("/nonexistent/path/that/cannot/be/resolved", "")
+	// A directory below a regular file cannot be created on any OS. A literal
+	// "/nonexistent/..." only fails on Unix: on Windows the leading slash is
+	// drive-relative, so MkdirAll happily creates C:\nonexistent\... and the
+	// test passes for the wrong reason while leaving litter on the drive.
+	notADir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runMemoryInit(filepath.Join(notADir, "project"), "")
 	if err == nil {
-		t.Error("expected error for non-existent directory")
+		t.Error("expected error for a directory that cannot be created")
 	}
 }
 
@@ -215,7 +222,7 @@ func TestScanRoomCandidates_DotDirs(t *testing.T) {
 }
 
 func TestScanRoomCandidates_UnreadableDir(t *testing.T) {
-	rooms := scanRoomCandidates("/nonexistent/path")
+	rooms := scanRoomCandidates(filepath.Join(t.TempDir(), "nonexistent", "path"))
 	if rooms != nil {
 		t.Errorf("expected nil rooms, got %v", rooms)
 	}

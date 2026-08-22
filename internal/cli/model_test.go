@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // runModelList executes the cobra "model list" command with the given args,
@@ -35,7 +36,7 @@ func runModelListCapture(t *testing.T, args ...string) (string, error) {
 // helper, so those values are not wiped.
 func isolateRunModelListEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	// Clear system-level credentials that may leak through loadDotEnv or
 	// config.APIKeys/BaseURLs lookups. Do NOT clear vars the caller may have
 	// already set; we clear here only the unprefixed "real machine" sources

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // newOllamaHTTPServer returns an httptest server that emulates the subset of
@@ -44,7 +46,7 @@ func newOllamaHTTPServer(t *testing.T, models []string) *httptest.Server {
 func TestRunPing_OllamaModel_Happy(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	srv := newOllamaHTTPServer(t, []string{"llama3:8b"})
 	defer srv.Close()
@@ -70,7 +72,7 @@ func TestRunPing_OllamaModel_Happy(t *testing.T) {
 func TestRunPing_DNSResolutionFailure(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
@@ -95,7 +97,7 @@ func TestRunPing_DNSResolutionFailure(t *testing.T) {
 func TestRunPing_InvalidURLParse(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
@@ -115,7 +117,7 @@ func TestRunPing_InvalidURLParse(t *testing.T) {
 func TestRunPing_InvalidModelResolution(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	_ = os.MkdirAll(cfgDir, 0o755)
@@ -137,7 +139,7 @@ func TestRunPing_InvalidModelResolution(t *testing.T) {
 func TestRunPing_HTTPServerReachable(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "sk-test-fake")
 
 	// httptest server that responds 200 to GET /v1/models.
@@ -164,7 +166,7 @@ func TestRunPing_HTTPServerReachable(t *testing.T) {
 func TestRunPing_HTTPServer401(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "sk-test-fake")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +191,7 @@ func TestRunPing_HTTPServer401(t *testing.T) {
 func TestRunPing_HTTPServer500(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "sk-test-fake")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +216,7 @@ func TestRunPing_HTTPServer500(t *testing.T) {
 func TestRunPing_AnthropicAuthHeaders(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 
 	var gotAPIKey, gotVersion string
@@ -248,7 +250,7 @@ func TestRunPing_AnthropicAuthHeaders(t *testing.T) {
 func TestRunPing_WithPromptArg(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -275,7 +277,7 @@ func TestRunPing_InvalidURL(t *testing.T) {
 	// We need to go through runPing but it requires config resolution.
 	// Instead, test that with a model that doesn't exist, we get an error.
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	// Point config to a model that doesn't resolve.
 	tmpDir := t.TempDir()

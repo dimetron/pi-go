@@ -7,6 +7,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // The endpoint decision has to be the same one in every place that builds an
@@ -16,7 +17,7 @@ import (
 // :cloud model, which is the direction each of them used to get wrong.
 
 func TestBuildSwitchedLLM_OllamaRoutesByTag(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
 	t.Setenv("OLLAMA_HOST", "")
 
@@ -53,7 +54,7 @@ func TestBuildSwitchedLLM_OllamaRoutesByTag(t *testing.T) {
 // nil rather than an error when the model cannot be reached, so the assertion
 // is that a cloud tag yields a usable callback with no local daemon present.
 func TestBuildCommitMsgFunc_OllamaCloudTagSkipsLocalDaemon(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
 	t.Setenv("OLLAMA_HOST", "")
 
@@ -77,7 +78,7 @@ func TestBuildCommitMsgFunc_OllamaCloudTagSkipsLocalDaemon(t *testing.T) {
 // localhost — so `pi ping` against a :cloud model probed a daemon that does
 // not serve it. It now asks the same resolver as everything else.
 func TestResolvePingTarget_OllamaRoutesByTag(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
 	t.Setenv("OLLAMA_HOST", "")
 
@@ -114,7 +115,7 @@ func TestResolvePingTarget_OllamaRoutesByTag(t *testing.T) {
 // deterministic without depending on whether a daemon happens to be running.
 func TestBuildRootRuntime_OllamaHealthCheckFailureIsReported(t *testing.T) {
 	resetGlobalFlags(t)
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "")
 	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
 
@@ -134,7 +135,7 @@ func TestBuildRootRuntime_OllamaHealthCheckFailureIsReported(t *testing.T) {
 // /commit degrades to no generated message rather than failing the session.
 func TestBuildCommitMsgFunc_OllamaUnreachableDaemonYieldsNil(t *testing.T) {
 	resetGlobalFlags(t)
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "")
 	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
 

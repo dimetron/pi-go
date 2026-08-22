@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"io/fs"
+	gopath "path"
 	"path/filepath"
 	"strings"
 
@@ -73,7 +74,8 @@ func treeHandler(sb *Sandbox, input TreeInput) (TreeOutput, error) {
 	b.WriteString("\n")
 
 	dirs, files, count := 0, 0, 0
-	buildTree(fsys, rel, "", depth, &b, &dirs, &files, &count)
+	// fs.FS paths are slash-separated on every OS; Resolve returns an OS path.
+	buildTree(fsys, filepath.ToSlash(rel), "", depth, &b, &dirs, &files, &count)
 
 	summary := fmt.Sprintf("\n%d directories, %d files", dirs, files)
 	if count >= maxTreeEntries {
@@ -130,7 +132,10 @@ func buildTree(fsys fs.FS, dir, prefix string, depth int, b *strings.Builder, di
 		if e.IsDir() {
 			*dirs++
 			b.WriteString(prefix + connector + name + "/\n")
-			buildTree(fsys, filepath.Join(dir, name), childPrefix, depth-1, b, dirs, files, count)
+			// gopath.Join, not filepath.Join: a backslash-joined name is not a
+			// path fs.ReadDir can open, so on Windows the tree stopped one
+			// level down and reported no nested files at all.
+			buildTree(fsys, gopath.Join(dir, name), childPrefix, depth-1, b, dirs, files, count)
 		} else {
 			*files++
 			b.WriteString(prefix + connector + name + "\n")

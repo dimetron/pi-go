@@ -12,6 +12,7 @@ import (
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/subagent"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tools"
 	"github.com/dimetron/pi-go/internal/webserver"
 )
@@ -23,7 +24,7 @@ import (
 func TestCliCleanupWithSessionLog(t *testing.T) {
 	// Create a real logger so cleanup exercises the sessionLog.Close() path.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	lg, err := logger.New()
 	if err != nil {
@@ -93,7 +94,7 @@ func TestCliCleanupWithMemoryWorker(t *testing.T) {
 func TestCliCleanupAllResources(t *testing.T) {
 	// Exercise cleanup with every field populated.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	lg, err := logger.New()
 	if err != nil {
@@ -212,7 +213,7 @@ func TestCliNewRootCmdFlagDefaults(t *testing.T) {
 func TestCliPrintModeNoPromptExitsCleanly(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "print"})
@@ -225,7 +226,7 @@ func TestCliPrintModeNoPromptExitsCleanly(t *testing.T) {
 func TestCliJSONModeNoPromptExitsCleanly(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--model", "gpt-5.4", "--mode", "json"})
@@ -331,7 +332,7 @@ func TestCliRunJSONNilLogger(t *testing.T) {
 
 func TestCliRunPrintWithLogger(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	lg, err := logger.New()
 	if err != nil {
@@ -365,7 +366,7 @@ func TestCliRunPrintWithLogger(t *testing.T) {
 
 func TestCliRunJSONWithLogger(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	lg, err := logger.New()
 	if err != nil {
@@ -648,7 +649,7 @@ func TestFindMemoryDB_PalaceLegacy(t *testing.T) {
 
 func TestFindMemoryDB_NotFound(t *testing.T) {
 	// Override HOME so the global fallback doesn't find a real DB.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	_, err := findMemoryDB(t.TempDir())
 	if err == nil {
 		t.Error("expected error when DB not found")

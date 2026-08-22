@@ -21,6 +21,7 @@ import (
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // ---------------------------------------------------------------------------
@@ -795,7 +796,9 @@ func TestBuildCommand_NoExtraEnvOrWorkDir(t *testing.T) {
 }
 
 func TestStartChildProcess(t *testing.T) {
-	cmd := exec.Command("/bin/echo", "hello")
+	// /bin/echo does not exist on Windows; the runners do carry a POSIX shell.
+	sh := testenv.RequireShell(t)
+	cmd := exec.Command(sh, "-c", "echo hello")
 	stdout, stderr, err := startChildProcess(cmd)
 	if err != nil {
 		t.Fatalf("startChildProcess: %v", err)

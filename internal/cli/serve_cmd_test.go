@@ -3,6 +3,7 @@ package cli
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 )
 
 func TestRunServe_ValidHeadersShortRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// runServe only returns once it is interrupted, and a process cannot
+		// signal itself on Windows: os.Process.Signal supports Kill alone
+		// there, so the interrupt never lands and the server would keep
+		// running for the rest of the package.
+		t.Skip("cannot raise an interrupt against our own process on Windows")
+	}
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
 
@@ -58,6 +66,13 @@ func TestRunServe_ValidHeadersShortRun(t *testing.T) {
 }
 
 func TestRunServe_EmptyProjectUsesCWD(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// runServe only returns once it is interrupted, and a process cannot
+		// signal itself on Windows: os.Process.Signal supports Kill alone
+		// there, so the interrupt never lands and the server would keep
+		// running for the rest of the package.
+		t.Skip("cannot raise an interrupt against our own process on Windows")
+	}
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
 

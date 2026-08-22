@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // -----------------------------------------------------------------------
@@ -219,7 +220,7 @@ func TestSaveResult_WithErrorField(t *testing.T) {
 func TestSaveResult_Success(t *testing.T) {
 	// Redirect HOME so SaveKey writes into a temp dir.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	// Prevent polluting the real env.
 	t.Setenv("TEST_SAVE_RESULT_KEY", "")
@@ -258,7 +259,7 @@ func TestSaveResult_Success(t *testing.T) {
 
 func TestRunLogin_UnknownProvider(t *testing.T) {
 	// Redirect HOME so loadDotEnv doesn't blow up.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	cmd := newLoginCmd()
 	cmd.SetArgs([]string{"not-a-real-provider"})
@@ -278,7 +279,7 @@ func TestRunLogin_UnknownProvider(t *testing.T) {
 func TestRunLogin_PromptCanceled(t *testing.T) {
 	// When no provider is specified and promptProvider returns "" (user cancels),
 	// runLogin returns nil without error.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	cmd := newLoginCmd()
 	cmd.SetArgs([]string{})

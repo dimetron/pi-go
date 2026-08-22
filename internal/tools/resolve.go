@@ -29,7 +29,10 @@ var blockedPaths = map[string]bool{
 
 // isBlockedPath reports whether path names a device that must not be read.
 func isBlockedPath(path string) bool {
-	clean := filepath.Clean(path)
+	// Slash-normalized: these are POSIX device names, and a model hands them
+	// over spelled that way whatever it is running on. filepath.Clean would
+	// turn them into \dev\zero on Windows and the lookup would miss.
+	clean := filepath.ToSlash(filepath.Clean(path))
 	if blockedPaths[clean] {
 		return true
 	}

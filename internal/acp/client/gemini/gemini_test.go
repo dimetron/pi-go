@@ -392,20 +392,13 @@ func TestFindBinaryBranches(t *testing.T) {
 	if err := os.WriteFile(absBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("setup: write file: %v", err)
 	}
-	// Compute a relative path from the test's CWD to the temp file so os.Stat
-	// succeeds for the relative-path branch.
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("setup: getwd: %v", err)
-	}
-	relBin, err := filepath.Rel(cwd, absBin)
-	if err != nil {
-		t.Fatalf("setup: rel path: %v", err)
-	}
-	// Ensure it starts with "." so findBinary treats it as a relative path.
-	if !strings.HasPrefix(relBin, ".") {
-		relBin = "./" + relBin
-	}
+	// Run from the temp dir so the relative-path branch has something to stat.
+	// Relativizing the temp dir against the source tree instead would fail on
+	// Windows, where TEMP and the checkout routinely sit on different volumes
+	// and filepath.Rel cannot cross a drive letter.
+	t.Chdir(tmpDir)
+	// The leading "." is what makes findBinary treat this as a relative path.
+	relBin := "./gemini-fake"
 	nonexistentRel := "./nonexistent-relative-binary"
 	nonexistentAbs := filepath.Join(tmpDir, "no-such-file")
 

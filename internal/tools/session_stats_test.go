@@ -463,7 +463,9 @@ func TestSessionStatsGitOpsAnomaly(t *testing.T) {
 	// Helper to build a session of N `git status` bash calls.
 	build := func(n int) string {
 		t.Helper()
-		id := filepath.Join(tmpDir, "s-"+time.Now().Format("150405.000000")+"-"+itoa(n))
+		// Just the directory name: joining tmpDir with an already-absolute id
+		// produced a path containing a drive letter mid-string on Windows.
+		id := "s-" + time.Now().Format("150405.000000") + "-" + itoa(n)
 		sessionPath := filepath.Join(tmpDir, id)
 		if err := os.MkdirAll(sessionPath, 0o755); err != nil {
 			t.Fatal(err)

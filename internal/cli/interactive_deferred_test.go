@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tui"
 )
 
@@ -20,7 +21,7 @@ import (
 
 func TestDeferredInit_MemoryOffBasic(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	// Save and restore package-level flags.
 	origMemOff := flagMemoryOff
@@ -90,7 +91,7 @@ func TestDeferredInit_MemoryOffBasic(t *testing.T) {
 
 func TestDeferredInit_WithMCP(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origMemOff := flagMemoryOff
 	origSystem := flagSystem
@@ -136,7 +137,7 @@ func TestDeferredInit_WithMCP(t *testing.T) {
 
 func TestDeferredInit_WithMemoryEnabled(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origMemOff := flagMemoryOff
 	defer func() { flagMemoryOff = origMemOff }()
@@ -190,7 +191,7 @@ func TestDeferredInit_WithMemoryEnabled(t *testing.T) {
 
 func TestBuildSwitchedLLM_OpenAI(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origURL := flagURL
 	origInsecure := flagInsecure
@@ -230,7 +231,7 @@ func TestBuildSwitchedLLM_OpenAI(t *testing.T) {
 
 func TestBuildSwitchedLLM_InvalidModel(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origURL := flagURL
 	origHeaders := flagHeaders
@@ -262,7 +263,7 @@ func TestBuildSwitchedLLM_InvalidModel(t *testing.T) {
 
 func TestBuildSwitchedLLM_NoProvider(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origURL := flagURL
 	origHeaders := flagHeaders
@@ -295,7 +296,7 @@ func TestBuildSwitchedLLM_NoProvider(t *testing.T) {
 
 func TestBuildSwitchedLLM_AnthropicProvider(t *testing.T) {
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	origURL := flagURL
 	origHeaders := flagHeaders
@@ -364,7 +365,7 @@ func TestDeferredInitTotal(t *testing.T) {
 func TestDeferredInit_WithSkillDir(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	// Create a skill file.
 	skillsDir := filepath.Join(tmpHome, ".pi-go", "skills", "my-skill")

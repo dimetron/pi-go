@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // TestCodexLoginE2E_BrowserPKCE is the primary e2e test for codex login.
@@ -169,9 +171,7 @@ func TestCodexLoginE2E_BrowserPKCE(t *testing.T) {
 
 	// --- Save key and verify ---
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	testenv.SetHome(t, tmpDir)
 
 	if err := SaveKey(result.EnvVar, result.APIKey); err != nil {
 		t.Fatalf("SaveKey() error: %v", err)

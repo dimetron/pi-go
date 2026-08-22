@@ -54,6 +54,10 @@ func TestRunAgentLoop_AbortsStuckBashLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSandbox: %v", err)
 	}
+	// The sandbox keeps an os.Root open on dir; Windows will not remove a
+	// directory that anything still holds a handle to, so t.TempDir's cleanup
+	// fails unless it is closed.
+	t.Cleanup(func() { _ = sb.Close() })
 	coreTools, err := tools.CoreTools(sb)
 	if err != nil {
 		t.Fatalf("CoreTools: %v", err)

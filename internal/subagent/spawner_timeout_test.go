@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,17 @@ import (
 // writes to stdout/stderr and how long it takes matters here.
 func fakePi(t *testing.T, script string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The stand-in agent is a #!/bin/bash script, and Spawner takes a single
+		// binary path with nowhere to name an interpreter. Go's os/exec on
+		// Windows starts either a real executable or a .bat/.cmd through
+		// cmd.exe; wrapping the script in a .bat would cover the simple cases
+		// but would put cmd.exe between the spawner and bash, so a kill would
+		// land on the wrapper rather than the agent -- which is precisely what
+		// the cancel and inactivity tests measure. Only the fixture is
+		// POSIX-bound here; Spawner itself execs whatever path it is given.
+		t.Skip("stand-in pi agent is a bash script; Windows cannot exec it directly")
+	}
 	path := filepath.Join(t.TempDir(), "fake-pi")
 	body := "#!/bin/bash\n" + script + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
