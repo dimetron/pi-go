@@ -88,6 +88,7 @@ type Config struct {
 	Memory        *MemoryConfig      `json:"memory,omitempty"`
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
+	LLMS          *LLMSConfig        `json:"llms,omitempty"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -144,6 +145,7 @@ type MCPServer struct {
 	Args    []string          `json:"args,omitempty"`
 	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
+	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -155,6 +157,17 @@ type A2AAgentConfig struct {
 // A2AConfig holds configuration for A2A agent connections.
 type A2AConfig struct {
 	Agents []A2AAgentConfig `json:"agents,omitempty"`
+}
+
+// LLMSSource defines a single llms.txt documentation source.
+type LLMSSource struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// LLMSConfig holds configuration for llms.txt documentation sources.
+type LLMSConfig struct {
+	Sources []LLMSSource `json:"sources,omitempty"`
 }
 
 // Defaults returns a Config with default values.
@@ -500,6 +513,9 @@ func applyMCPTransport(srv *MCPServer, m map[string]any) {
 	}
 	if headers, ok := m["headers"].(map[string]any); ok {
 		srv.Headers = toStringMap(headers)
+	}
+	if oauth, ok := m["oauth"].(bool); ok {
+		srv.OAuth = oauth
 	}
 }
 

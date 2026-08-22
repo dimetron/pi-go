@@ -3,19 +3,30 @@ package extension
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/mcptoolset"
+
+	"github.com/dimetron/pi-go/internal/browser"
 )
 
 var mcpConnectTimeout = 30 * time.Second
+
+// mcpOAuthConnectTimeout is used for servers that run the OAuth
+// authorization-code flow on first connect. The browser round-trip (open URL,
+// user approves, redirect back) routinely takes minutes, so the default
+// 30s connect timeout would abort the flow before it completes.
+var mcpOAuthConnectTimeout = 10 * time.Minute
 
 // MCPServerConfig matches the config.MCPServer structure.
 type MCPServerConfig struct {
@@ -24,6 +35,7 @@ type MCPServerConfig struct {
 	Args    []string          `json:"args,omitempty"`
 	URL     string            `json:"url,omitempty"`     // HTTP transport (Streamable HTTP)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL transport
+	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
 }
 
 // BuildMCPToolsets creates ADK Toolsets from MCP server configurations.
@@ -108,6 +120,7 @@ type resilientToolset struct {
 	inner     tool.Toolset
 	name      string
 	transport *connTrackingTransport
+	timeout   time.Duration
 
 	once   sync.Once
 	tools  []tool.Tool
@@ -128,7 +141,11 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 		// ReadonlyContext interface). The inner goroutine respects the
 		// original ctx; we simply abandon it on timeout and mark the
 		// toolset as failed.
-		timeoutCh := time.After(mcpConnectTimeout)
+		timeout := r.timeout
+		if timeout == 0 {
+			timeout = mcpConnectTimeout
+		}
+		timeoutCh := time.After(timeout)
 		go func() {
 			tools, err := r.inner.Tools(ctx)
 			ch <- result{tools, err}
@@ -143,7 +160,7 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			}
 			r.tools = r.deduplicateTools(res.tools)
 		case <-timeoutCh:
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, mcpConnectTimeout)
+			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, timeout)
 			r.failed = true
 			// Close the underlying MCP connection to kill any hung
 			// subprocess and free the blocked goroutine.
@@ -271,6 +288,13 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 				Transport: &headerRoundTripper{headers: srv.Headers},
 			}
 		}
+		if srv.OAuth {
+			handler, err := newMCPOAuthHandler(srv.Name)
+			if err != nil {
+				return nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
+			}
+			t.OAuthHandler = handler
+		}
 		transport = t
 	case srv.Command != "":
 		transport = &respawnTransport{
@@ -290,7 +314,84 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating MCP toolset: %w", err)
 	}
-	return &resilientToolset{inner: ts, name: srv.Name, transport: tracked}, nil
+	timeout := mcpConnectTimeout
+	if srv.OAuth {
+		timeout = mcpOAuthConnectTimeout
+	}
+	return &resilientToolset{inner: ts, name: srv.Name, transport: tracked, timeout: timeout}, nil
+}
+
+// newMCPOAuthHandler builds an OAuth authorization-code handler for a remote
+// MCP server. It uses dynamic client registration (RFC 7591) so no client ID
+// needs to be pre-registered, and a local loopback callback server that the
+// authorization server redirects to after the user approves. The browser is
+// opened to the authorization URL; the handler blocks until the code is
+// received and exchanged for a token. The token source is held by the handler
+// and reused for the lifetime of the connection, so the flow runs only on the
+// first connect (or after the token expires).
+func newMCPOAuthHandler(name string) (auth.OAuthHandler, error) {
+	// Pick a free loopback port for the callback server.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("starting OAuth callback listener: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port //nolint:errcheck // TCP listener guaranteed
+	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+
+	authChan := make(chan *auth.AuthorizationResult, 1)
+	errChan := make(chan error, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		authChan <- &auth.AuthorizationResult{
+			Code:  r.URL.Query().Get("code"),
+			State: r.URL.Query().Get("state"),
+			Iss:   r.URL.Query().Get("iss"),
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body>
+<h2>✓ Authentication successful</h2>
+<p>You can close this tab and return to pi.</p>
+<script>window.close()</script>
+</body></html>`)
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(listener) }()
+
+	fetcher := func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		fmt.Fprintf(os.Stderr, "pi-go: MCP server %q requires authorization. Opening browser...\n", name)
+		if err := browser.Open(args.URL); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-go: could not open browser for %q; visit this URL manually:\n%s\n", name, args.URL)
+		}
+		select {
+		case res := <-authChan:
+			return res, nil
+		case err := <-errChan:
+			return nil, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
+		RedirectURL: redirectURL,
+		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{
+			Metadata: &oauthex.ClientRegistrationMetadata{
+				ClientName:              "pi-go",
+				RedirectURIs:            []string{redirectURL},
+				GrantTypes:              []string{"authorization_code"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "none",
+			},
+		},
+		AuthorizationCodeFetcher: fetcher,
+		RequestRefreshToken:      true,
+	})
+	if err != nil {
+		_ = srv.Close()
+		return nil, fmt.Errorf("creating OAuth handler: %w", err)
+	}
+	return handler, nil
 }
 
 // headerRoundTripper injects static HTTP headers (e.g., API keys, usernames)

@@ -1,4 +1,10 @@
 {
   "mcpServers": {
+    "openrouter": {
+      "type": "remote",
+      "url": "https://mcp.openrouter.ai/mcp",
+      "enabled": true,
+      "oauth": true
+    }
   }
 }

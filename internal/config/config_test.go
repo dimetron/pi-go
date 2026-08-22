@@ -997,6 +997,47 @@ func TestParseMCPServers_Headers_ArrayFormat(t *testing.T) {
 	}
 }
 
+// TestParseMCPServers_OAuth_ObjectFormat verifies that the oauth flag is
+// parsed for the Claude Desktop object format.
+func TestParseMCPServers_OAuth_ObjectFormat(t *testing.T) {
+	objJSON := `{"mcpServers": {"openrouter": {
+		"url": "https://mcp.openrouter.ai/mcp",
+		"oauth": true
+	}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if !servers[0].OAuth {
+		t.Error("expected OAuth=true, got false")
+	}
+}
+
+// TestParseMCPServers_OAuth_DefaultFalse verifies that a server without the
+// oauth flag defaults to false.
+func TestParseMCPServers_OAuth_DefaultFalse(t *testing.T) {
+	objJSON := `{"mcpServers": {"plain": {"url": "https://example.com/mcp"}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if servers[0].OAuth {
+		t.Error("expected OAuth=false by default, got true")
+	}
+}
+
 // TestSubstituteEnvVars_Headers verifies that ${VAR} placeholders in header
 // values are expanded from the environment.
 func TestSubstituteEnvVars_Headers(t *testing.T) {

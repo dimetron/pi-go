@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 
@@ -446,5 +447,61 @@ func TestBuildAfterToolCallbacks_WithMatchingTool(t *testing.T) {
 	cbs := BuildAfterToolCallbacks(hooks)
 	if len(cbs) != 1 {
 		t.Fatalf("expected 1 after callback, got %d", len(cbs))
+	}
+}
+
+// TestBuildMCPToolset_OAuthHandler verifies that a remote server with the
+// oauth flag gets an OAuth authorization-code handler attached to its
+// transport, and that the toolset uses the longer OAuth connect timeout.
+func TestBuildMCPToolset_OAuthHandler(t *testing.T) {
+	ts, err := buildMCPToolset(MCPServerConfig{
+		Name:  "oauth-server",
+		URL:   "https://mcp.example.com/mcp",
+		OAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	rt, ok := ts.(*resilientToolset)
+	if !ok {
+		t.Fatalf("expected *resilientToolset, got %T", ts)
+	}
+	if rt.timeout != mcpOAuthConnectTimeout {
+		t.Errorf("expected OAuth connect timeout %v, got %v", mcpOAuthConnectTimeout, rt.timeout)
+	}
+	// The tracked transport wraps a StreamableClientTransport with an
+	// OAuthHandler set.
+	ct, ok := rt.transport.inner.(*mcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("expected *mcp.StreamableClientTransport, got %T", rt.transport.inner)
+	}
+	if ct.OAuthHandler == nil {
+		t.Error("expected OAuthHandler to be set on the transport")
+	}
+}
+
+// TestBuildMCPToolset_NoOAuthHandler verifies that a remote server without the
+// oauth flag gets no OAuth handler and the default connect timeout.
+func TestBuildMCPToolset_NoOAuthHandler(t *testing.T) {
+	ts, err := buildMCPToolset(MCPServerConfig{
+		Name: "plain-server",
+		URL:  "https://mcp.example.com/mcp",
+	})
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	rt, ok := ts.(*resilientToolset)
+	if !ok {
+		t.Fatalf("expected *resilientToolset, got %T", ts)
+	}
+	if rt.timeout != mcpConnectTimeout {
+		t.Errorf("expected default connect timeout %v, got %v", mcpConnectTimeout, rt.timeout)
+	}
+	ct, ok := rt.transport.inner.(*mcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("expected *mcp.StreamableClientTransport, got %T", rt.transport.inner)
+	}
+	if ct.OAuthHandler != nil {
+		t.Error("expected no OAuthHandler on the transport")
 	}
 }
