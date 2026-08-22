@@ -226,6 +226,10 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(lower, "opencode/") {
 		return "opencode"
 	}
+	// openrouter/ prefix → OpenRouter provider.
+	if strings.HasPrefix(lower, "openrouter/") {
+		return "openrouter"
+	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return "ollama"
