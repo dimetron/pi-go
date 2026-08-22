@@ -59,6 +59,22 @@ jobs:
       - name: Run race tests
         run: go test -race -count=1 $(go list ./... | grep -v '/internal/acp/server$')
 
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        # No -race here: that needs CGO_ENABLED=1 and a C toolchain, which
+        # windows-latest doesn't carry by default. This is the only job that
+        # actually executes the //go:build windows files (internal/tui,
+        # internal/codex, internal/subagent) — the `build` job above only
+        # cross-compiles them from Linux, it never runs them.
+        run: go test -count=1 ./...
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
