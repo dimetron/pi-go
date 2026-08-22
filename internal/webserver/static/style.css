@@ -168,35 +168,77 @@ button:disabled {
    terminal's size is negotiated with the PTY, so anything that reflows it on
    an unrelated event costs a resize round-trip. */
 
+/* The bar and the transcript share one offset so the panel always stacks
+   above the buttons; change it here, not in either rule. */
+:root {
+    --voice-bar-bottom: 96px;
+}
+
 .voice-bar {
     position: fixed;
     right: 16px;
-    bottom: 16px;
+    bottom: var(--voice-bar-bottom);
     display: flex;
     align-items: center;
     gap: 10px;
     z-index: 10;
 }
 
-.voice-button {
-    font: inherit;
-    font-size: 14px;
-    padding: 8px 14px;
+/* Talk | Mute | End grouped on a single rounded panel. The panel is the
+   circle/rounded capsule the buttons sit inside; each button only carries the
+   icon, so the group reads as one small control. */
+.voice-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
     border-radius: 999px;
     border: 1px solid #3a3a3a;
-    background: #1e1e1e;
+    background: #161616;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.voice-button {
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
     color: #e6e6e6;
     cursor: pointer;
+    white-space: nowrap;
+}
+
+.voice-button + .voice-button {
+    border-left: 1px solid #3a3a3a;
 }
 
 .voice-button:hover {
-    border-color: #5a5a5a;
+    background: #2a2a2a;
+}
+
+.voice-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
 }
 
 .voice-button.active {
     background: #7d2020;
-    border-color: #a83232;
     animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Talk is disabled while a session is live, but it reads as "on", not as
+   unavailable: full opacity, pulsing, and no forbidden cursor. */
+.voice-button.active:disabled {
+    opacity: 1;
+    cursor: default;
+}
+
+.voice-button.muted {
+    background: #3d2e0a;
+    color: #f3d58a;
 }
 
 .voice-status {
@@ -211,7 +253,8 @@ button:disabled {
 .voice-transcript {
     position: fixed;
     right: 16px;
-    bottom: 64px;
+    /* Bar height plus a gap, measured from the same offset as the bar. */
+    bottom: calc(var(--voice-bar-bottom) + 48px);
     width: min(46ch, calc(100vw - 32px));
     max-height: 40vh;
     overflow-y: auto;
