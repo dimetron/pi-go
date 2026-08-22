@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -95,6 +95,20 @@ PI_EVAL_JUDGE_MODEL ?= claude-sonnet-4-6
 eval-judge: build
 	PI_EVAL_RUN=1 PI_EVAL_BASELINE=eval/golden PI_EVAL_JUDGE_MODEL=$(PI_EVAL_JUDGE_MODEL) \
 		PI_BINARY=$(abspath ./pi) go test -tags e2e -v -run '^TestEvalRun$$' ./internal/tui/ -timeout 45m
+
+# Tool-coverage eval: one headless `pi --mode print` scenario per tool family,
+# graded deterministically and rolled up into a coverage matrix over every
+# registered tool. Requires a built binary and an LLM API key. Knobs:
+# PI_EVAL_MODEL, PI_EVAL_SCENARIO=<name,...>, PI_EVAL_THINKING, PI_EVAL_TIMEOUT,
+# PI_EVAL_STRICT=1, PI_EVAL_SERIAL=1. See internal/eval/scenarios/README.md.
+eval-tools: build
+	PI_EVAL_TOOLS=1 PI_BINARY=$(abspath ./pi) go test -tags e2e -v -run '^TestEvalTools$$' \
+		./internal/eval/scenarios/ -parallel 4 -timeout 60m
+
+# Same, with the LLM judge grading the suite (PI_EVAL_JUDGE_MODEL to override).
+eval-tools-judge: build
+	PI_EVAL_TOOLS=1 PI_EVAL_JUDGE_MODEL=$(PI_EVAL_JUDGE_MODEL) PI_BINARY=$(abspath ./pi) \
+		go test -tags e2e -v -run '^TestEvalTools$$' ./internal/eval/scenarios/ -parallel 4 -timeout 60m
 
 test-all: test-unit test-integration test-e2e
 
