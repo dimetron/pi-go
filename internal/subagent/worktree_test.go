@@ -712,7 +712,7 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 	mgr := NewWorktreeManager(repo)
 
 	// No stash present.
-	if _, found := mgr.findStashByMessage("anything"); found {
+	if _, _, found := mgr.findStashByMessage("anything"); found {
 		t.Error("findStashByMessage returned true with empty stash list")
 	}
 
@@ -726,7 +726,7 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 		t.Fatalf("stash push: %v: %s", err, out)
 	}
 
-	ref, found := mgr.findStashByMessage("unique-msg-12345")
+	ref, _, found := mgr.findStashByMessage("unique-msg-12345")
 	if !found {
 		t.Fatal("findStashByMessage did not find existing entry")
 	}
@@ -735,11 +735,11 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 	}
 
 	// Wrong message — not found.
-	if _, found := mgr.findStashByMessage("wrong-msg"); found {
+	if _, _, found := mgr.findStashByMessage("wrong-msg"); found {
 		t.Error("findStashByMessage returned true for non-matching message")
 	}
 	// Empty message — not found.
-	if _, found := mgr.findStashByMessage(""); found {
+	if _, _, found := mgr.findStashByMessage(""); found {
 		t.Error("findStashByMessage returned true for empty message")
 	}
 }

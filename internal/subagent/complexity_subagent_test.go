@@ -332,9 +332,14 @@ func TestStashBeforeWorktreeAdd_DirtyTree(t *testing.T) {
 		t.Fatalf("stash list has %d entries, want 1", n)
 	}
 	// The message must be the one findStashByMessage can locate, which is what
-	// makes the eventual pop deterministic.
-	if _, found := mgr.findStashByMessage(msg); !found {
+	// makes the eventual pop deterministic. It must also yield an object id —
+	// that is what the apply addresses the entry by.
+	ref, oid, found := mgr.findStashByMessage(msg)
+	if !found {
 		t.Errorf("stash entry for message %q not found", msg)
+	}
+	if ref == "" || oid == "" {
+		t.Errorf("findStashByMessage returned ref=%q oid=%q, want both non-empty", ref, oid)
 	}
 }
 
@@ -402,22 +407,22 @@ func TestAddWorktree_AttachesExistingBranch(t *testing.T) {
 	}
 }
 
-// TestCreate_DropsStashWhenWorktreeAddFails is the safety-critical case: the
-// stash push succeeded, then `git worktree add` failed. Create must not record
-// the agent, and must not leave the entry orphaned in the stash list.
+// TestCreate_RecordsNothingWhenWorktreeAddFails is the safety-critical case:
+// the stash push succeeded, then `git worktree add` failed. Create must not
+// record the agent, and must not leave the entry orphaned in the stash list.
 //
-// It pins CURRENT behavior, which is not the behavior the code's own comment
-// claims. The comment says "Restore stashed changes on failure"; the code runs
-// `git stash drop`, which deletes the entry WITHOUT applying it — so the
-// uncommitted work the stash was protecting is destroyed. The assertions below
-// spell that out (the dirty file does not come back). This is pre-existing on
-// main and was preserved deliberately: this refactor is behavior-preserving, so
-// fixing it is a separate change. Compare (*WorktreeManager).MergeBack, which
-// gets it right via popStashByMessage (apply, then drop).
+// This test used to be TestCreate_DropsStashWhenWorktreeAddFails and pinned the
+// opposite outcome — it asserted that dirty.txt did NOT come back, because the
+// failure path ran `git stash drop`, deleting the entry WITHOUT applying it and
+// destroying the uncommitted work the stash was protecting. That was left in
+// place deliberately (the refactor it shipped with was behavior-preserving) with
+// a note telling whoever fixed it to flip the assertions to "dirty.txt is
+// restored". That fix has landed, so the assertion below is flipped.
 //
-// Whoever fixes it should expect this test to fail and should flip these
-// assertions to "dirty.txt is restored".
-func TestCreate_DropsStashWhenWorktreeAddFails(t *testing.T) {
+// The restore itself is covered in depth by worktree_stash_test.go; what this
+// test still uniquely pins is Create's bookkeeping after a failure — no active
+// entry, no path recorded.
+func TestCreate_RecordsNothingWhenWorktreeAddFails(t *testing.T) {
 	repo := initTestRepo(t)
 	mgr := NewWorktreeManager(repo)
 
@@ -444,11 +449,11 @@ func TestCreate_DropsStashWhenWorktreeAddFails(t *testing.T) {
 	if n := stashCount(t, repo); n != 0 {
 		t.Errorf("stash list has %d entries after a failed Create, want 0", n)
 	}
-	// The stash was dropped, not applied: the user's uncommitted file is gone
-	// and is no longer recoverable from the stash list. See the doc comment.
-	if _, statErr := os.Stat(filepath.Join(repo, "dirty.txt")); !os.IsNotExist(statErr) {
-		t.Errorf("dirty.txt was restored (stat err = %v); the drop-without-apply "+
-			"behavior this test pins has changed — update the test if that was intended", statErr)
+	// The stash was applied, not dropped: the user's uncommitted file is back
+	// in the working tree. See the doc comment.
+	if _, statErr := os.Stat(filepath.Join(repo, "dirty.txt")); statErr != nil {
+		t.Errorf("dirty.txt was not restored (stat err = %v); the failed "+
+			"worktree add destroyed the user's uncommitted work", statErr)
 	}
 	if mgr.Active() != 0 {
 		t.Errorf("Active() = %d after a failed Create, want 0", mgr.Active())
