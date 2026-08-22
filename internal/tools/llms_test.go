@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
@@ -226,6 +229,131 @@ func TestLLMSToolInvoke(t *testing.T) {
 	content, _ := m["content"].(string)
 	if !strings.Contains(content, "Invoked Docs") {
 		t.Fatalf("expected content to contain 'Invoked Docs', got %q", content)
+	}
+}
+
+// newLLMSCacheTestServer starts a TLS server that counts requests and returns
+// a body on 200, plus a toolset with caching enabled into a temp dir.
+func newLLMSCacheTestServer(t *testing.T) (*httptest.Server, *LLMSToolset, *int32) {
+	t.Helper()
+	var requests int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Write([]byte("# Cached Docs"))
+	}))
+	t.Cleanup(srv.Close)
+
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{
+			{Name: "test", URL: srv.URL + "/llms.txt"},
+		},
+	}, t.TempDir())
+	return srv, ts, &requests
+}
+
+func TestLLMSFetchDocsCachesSecondFetch(t *testing.T) {
+	srv, ts, requests := newLLMSCacheTestServer(t)
+	u := srv.URL + "/page.md"
+
+	out, err := ts.FetchDocs(context.Background(), u)
+	if err != nil || out.Error != "" {
+		t.Fatalf("first FetchDocs() = (%q, %v), want nil error", out.Error, err)
+	}
+
+	// A second fetch within llmsCacheTTL must be served from disk: no HTTP call.
+	out, err = ts.FetchDocs(context.Background(), u)
+	if err != nil {
+		t.Fatalf("second FetchDocs() error = %v", err)
+	}
+	if !strings.Contains(out.Content, "Cached Docs") {
+		t.Fatalf("expected cached content, got %q", out.Content)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Fatalf("expected 1 HTTP request on cached hit, got %d", got)
+	}
+}
+
+func TestLLMSFetchCacheRevalidatesStale(t *testing.T) {
+	var requests int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&requests, 1)
+		if n == 2 && r.Header.Get("If-None-Match") == `"v1"` {
+			// Revalidation request: server confirms the copy is current.
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte("Revalidated Docs"))
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+
+	ts := NewLLMSToolsetWithCache(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
+	}, t.TempDir())
+	u, err := url.Parse(srv.URL + "/page.md")
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+
+	if _, err := ts.FetchDocs(context.Background(), u.String()); err != nil {
+		t.Fatalf("first FetchDocs() error = %v", err)
+	}
+
+	// Age the cached entry past llmsCacheTTL so the next read revalidates.
+	e := ts.cacheRead(u)
+	e.FetchedAt = time.Now().Add(-2 * time.Hour).Unix()
+	ts.cacheWrite(e)
+
+	if _, err := ts.FetchDocs(context.Background(), u.String()); err != nil {
+		t.Fatalf("second FetchDocs() error = %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("expected 2 HTTP requests (initial + revalidate), got %d", got)
+	}
+}
+
+func TestLLMSFetchCacheFallsBackOnNetworkError(t *testing.T) {
+	// First fetch populates the cache; the second uses a transport that always
+	// fails, and must return the cached copy rather than an error.
+	srv, ts, _ := newLLMSCacheTestServer(t)
+	u := srv.URL + "/page.md"
+
+	out, err := ts.FetchDocs(context.Background(), u)
+	if err != nil || out.Error != "" {
+		t.Fatalf("initial FetchDocs() = (%q, %v), want nil error", out.Error, err)
+	}
+
+	withLLMSClient(t, &http.Client{Transport: errorTransport{}})
+	out, err = ts.FetchDocs(context.Background(), u)
+	if err != nil {
+		t.Fatalf("FetchDocs() error = %v", err)
+	}
+	if !strings.Contains(out.Content, "Cached Docs") {
+		t.Fatalf("expected cached content on network failure, got %q", out.Content)
+	}
+}
+
+func TestNewLLMSCachedToolsetUsesDefaultCacheDir(t *testing.T) {
+	// The voice agent, one-shot CLI, and piagent all build the toolset through
+	// NewLLMSCachedToolset, so they must all share one cache directory. Pinning
+	// that here guards against a regression that silently disables the shared
+	// cache for one mode.
+	ts := NewLLMSCachedToolset(&config.LLMSConfig{
+		Sources: []config.LLMSSource{{Name: "adk", URL: "https://adk.dev/llms.txt"}},
+	})
+	if ts.cacheDir == "" {
+		t.Fatal("NewLLMSCachedToolset must enable caching")
+	}
+	if ts.cacheDir != LLMSDefaultCacheDir() {
+		t.Fatalf("cacheDir = %q, want %q", ts.cacheDir, LLMSDefaultCacheDir())
+	}
+	if !strings.HasSuffix(ts.cacheDir, filepath.Join(".pi-go", "llms-cache")) {
+		t.Fatalf("cacheDir = %q, want it under ~/.pi-go/llms-cache", ts.cacheDir)
 	}
 }
 

@@ -225,7 +225,7 @@ func deferredInit(
 	// would be live for the model yet invisible in the breakdown, and the MCP
 	// panel would list a non-MCP source.
 	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSToolset(cfg.LLMS))...)
+		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSCachedToolset(cfg.LLMS))...)
 	}
 	// Gemini search grounding (see agent.GeminiGroundingTool doc).
 	//

@@ -2,11 +2,16 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,6 +45,26 @@ const llmsUserAgent = "pi-go/1.0 (+https://github.com/dimetron/pi-go)"
 // srv.Client() so the test's self-signed cert is trusted.
 var llmsClientOverride *http.Client
 
+// llmsCacheTTL bounds how old a cached page may be before it is considered
+// stale. Revalidation with a 304 keeps a cache hit fast (small round trip, no
+// body download); this TTL is the floor below which no revalidation is
+// attempted at all — a page fetched moments ago is served straight from cache.
+const llmsCacheTTL = 1 * time.Hour
+
+// llmsCacheMaxAge bounds the age of an entry usable as a network-down fallback.
+// A cached page older than this is not returned when the revalidation request
+// fails, so a permanently dead or moved page is not served forever.
+const llmsCacheMaxAge = 24 * time.Hour
+
+// llmsCacheEntry is the on-disk form of one cached page.
+type llmsCacheEntry struct {
+	URL          string `json:"url"`
+	Body         string `json:"body"`
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+	FetchedAt    int64  `json:"fetched_at"`
+}
+
 // LLMSInput defines the parameters for the fetch_docs tool.
 type LLMSInput struct {
 	// URL is the documentation URL to fetch. It must be an https:// URL on a
@@ -55,13 +80,20 @@ type LLMSOutput struct {
 
 // LLMSToolset implements tool.Toolset for llms.txt documentation sources.
 type LLMSToolset struct {
-	sources []config.LLMSSource
-	client  *http.Client
+	sources  []config.LLMSSource
+	client   *http.Client
+	cacheDir string // directory for the on-disk fetch cache; empty disables caching
 }
 
 // NewLLMSToolset creates a new llms.txt toolset from configuration.
 func NewLLMSToolset(cfg *config.LLMSConfig) *LLMSToolset {
-	ts := &LLMSToolset{}
+	return NewLLMSToolsetWithCache(cfg, "")
+}
+
+// NewLLMSToolsetWithCache creates a new llms.txt toolset that caches fetched
+// pages under dir. When dir is empty, caching is disabled.
+func NewLLMSToolsetWithCache(cfg *config.LLMSConfig, dir string) *LLMSToolset {
+	ts := &LLMSToolset{cacheDir: dir}
 	if cfg != nil {
 		ts.sources = cfg.Sources
 	}
@@ -73,6 +105,28 @@ func NewLLMSToolset(cfg *config.LLMSConfig) *LLMSToolset {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return ts.checkRedirectURL(req.URL, via) },
 	}
 	return ts
+}
+
+// NewLLMSCachedToolset creates a new llms.txt toolset whose fetch cache lives
+// under the shared pi-go documentation cache directory (~/.pi-go/llms-cache).
+// Every mode that wires fetch_docs — the piagent, the one-shot CLI, and the
+// interactive TUI (which the voice agent drives) — shares this one directory,
+// so a page fetched by one is a cache hit for the others. Caching degrades to
+// off when no usable home directory exists.
+func NewLLMSCachedToolset(cfg *config.LLMSConfig) *LLMSToolset {
+	return NewLLMSToolsetWithCache(cfg, LLMSDefaultCacheDir())
+}
+
+// LLMSDefaultCacheDir returns the shared directory used to cache fetched
+// documentation pages, or "" when no usable home directory can be found. An
+// empty result disables the fetch cache rather than failing construction: doc
+// fetching is a best effort feature.
+func LLMSDefaultCacheDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".pi-go", "llms-cache")
 }
 
 // checkRedirectURL validates one redirect hop. It is the CheckRedirect hook
@@ -163,11 +217,28 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		return LLMSOutput{Error: fmt.Sprintf("host %q is not an allowed documentation source", u.Hostname())}, nil
 	}
 
+	// A cached copy younger than llmsCacheTTL is served straight from disk —
+	// no network, no revalidation.
+	entry := t.cacheRead(u)
+	if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheTTL {
+		return LLMSOutput{Content: entry.Body}, nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return LLMSOutput{Error: fmt.Sprintf("build request: %v", err)}, nil
 	}
 	req.Header.Set("User-Agent", llmsUserAgent)
+	// Revalidate an existing entry with a conditional request: the server
+	// answers 304 and we reuse the cached body, saving the full download.
+	if entry != nil {
+		if entry.ETag != "" {
+			req.Header.Set("If-None-Match", entry.ETag)
+		}
+		if entry.LastModified != "" {
+			req.Header.Set("If-Modified-Since", entry.LastModified)
+		}
+	}
 
 	client := t.client
 	if llmsClientOverride != nil {
@@ -181,24 +252,102 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// Network failure: fall back to a reasonably fresh cached copy rather
+		// than failing the whole call. An entry older than llmsCacheMaxAge is
+		// not served, so a permanently dead page is not resurrected forever.
+		if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheMaxAge {
+			return LLMSOutput{Content: entry.Body}, nil
+		}
 		return LLMSOutput{Error: fmt.Sprintf("fetch failed: %v", err)}, nil
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusNotModified:
+		// Server confirms the cached copy is still current.
+		if entry != nil {
+			entry.FetchedAt = time.Now().Unix()
+			t.cacheWrite(entry)
+			return LLMSOutput{Content: entry.Body}, nil
+		}
+		return LLMSOutput{Error: "unexpected 304 without a cached entry"}, nil
+
+	case http.StatusOK:
+		// Read one byte past the cap so an oversized body is detected rather
+		// than silently truncated into a successful-looking result.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, llmsMaxBytes+1))
+		if err != nil {
+			return LLMSOutput{Error: fmt.Sprintf("read body: %v", err)}, nil
+		}
+		if len(body) > llmsMaxBytes {
+			return LLMSOutput{Error: fmt.Sprintf("response exceeds %d byte limit", llmsMaxBytes)}, nil
+		}
+		// Cache the fresh body so the next read revalidates instead of
+		// downloading it again. Caching is best-effort: a write failure just
+		// means the next call re-fetches.
+		t.cacheWrite(&llmsCacheEntry{
+			URL:          rawURL,
+			Body:         string(body),
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: resp.Header.Get("Last-Modified"),
+			FetchedAt:    time.Now().Unix(),
+		})
+		return LLMSOutput{Content: string(body)}, nil
+
+	default:
+		// An upstream 5xx is transient; prefer a reasonably fresh cached copy
+		// to the cached error being surfaced to the model.
+		if entry != nil && time.Since(time.Unix(entry.FetchedAt, 0)) < llmsCacheMaxAge {
+			return LLMSOutput{Content: entry.Body}, nil
+		}
 		return LLMSOutput{Error: fmt.Sprintf("unexpected status %d", resp.StatusCode)}, nil
 	}
+}
 
-	// Read one byte past the cap so an oversized body is detected rather than
-	// silently truncated into a successful-looking result.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, llmsMaxBytes+1))
+// cachePath maps a documentation URL to its on-disk cache file. The key is a
+// hash of the full URL so paths and query strings are disambiguated while
+// staying filesystem-safe.
+func (t *LLMSToolset) cachePath(u *url.URL) string {
+	sum := sha256.Sum256([]byte(u.String()))
+	return filepath.Join(t.cacheDir, hex.EncodeToString(sum[:])+".json")
+}
+
+// cacheRead loads a cached entry for u, or nil when caching is disabled or the
+// entry is missing/corrupt. Cache failures degrade to nil so the caller falls
+// through to a network fetch.
+func (t *LLMSToolset) cacheRead(u *url.URL) *llmsCacheEntry {
+	if t.cacheDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(t.cachePath(u))
 	if err != nil {
-		return LLMSOutput{Error: fmt.Sprintf("read body: %v", err)}, nil
+		return nil
 	}
-	if len(body) > llmsMaxBytes {
-		return LLMSOutput{Error: fmt.Sprintf("response exceeds %d byte limit", llmsMaxBytes)}, nil
+	var e llmsCacheEntry
+	if err := json.Unmarshal(data, &e); err != nil {
+		return nil
 	}
-	return LLMSOutput{Content: string(body)}, nil
+	return &e
+}
+
+// cacheWrite persists an entry, creating the cache directory as needed. Cache
+// write failures are ignored: they cost a future re-fetch, not correctness.
+func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
+	if t.cacheDir == "" {
+		return
+	}
+	u, err := url.Parse(e.URL)
+	if err != nil {
+		return
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(t.cacheDir, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(t.cachePath(u), data, 0o644)
 }
 
 // hostAllowed reports whether hostname hosts one of the configured llms.txt

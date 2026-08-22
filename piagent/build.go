@@ -138,7 +138,7 @@ func buildToolsets(cfg config.Config) []adktool.Toolset {
 		toolsets = append(toolsets, tools.NewA2AToolset(cfg.A2A))
 	}
 	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		toolsets = append(toolsets, tools.NewLLMSToolset(cfg.LLMS))
+		toolsets = append(toolsets, tools.NewLLMSCachedToolset(cfg.LLMS))
 	}
 	return toolsets
 }
