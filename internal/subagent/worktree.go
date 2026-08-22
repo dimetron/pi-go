@@ -19,6 +19,13 @@ type WorktreeManager struct {
 	mu       sync.Mutex
 	inflight sync.WaitGroup // tracks in-flight Cleanup calls
 	closed   bool           // set by CleanupAll to reject late Cleanup calls
+
+	// gitRunner replaces the git exec when non-nil; nil means real git.
+	// Create's recovery paths depend on what the repo looks like *between*
+	// two of its git invocations (another process pushing a stash, a file
+	// reappearing), which is otherwise unreachable from a test. Set it before
+	// the manager is used; it is not guarded by mu.
+	gitRunner func(dir string, args ...string) (string, error)
 }
 
 type worktreeInfo struct {
@@ -92,20 +99,59 @@ func (m *WorktreeManager) stashIndexAfter() (int, error) {
 	return len(strings.Split(out, "\n")), nil
 }
 
-// popStashByMessage pops the most recent stash entry whose message matches.
-// Falls back to a plain `stash pop` if the by-message approach fails.
+// The stash lifecycle
+//
+// Create takes a stash so that `git worktree add` sees a clean tree. That
+// entry holds the *user's* uncommitted work — not the agent's, which lives on
+// the worktree branch — and for as long as it exists the working tree no
+// longer holds a copy of it. One rule follows, and every disposal site in this
+// file obeys it:
+//
+//	An entry Create pushed may leave the stash list only after it has been
+//	successfully applied back to the working tree. Every other exit — a failed
+//	`worktree add`, a failed apply, a run abandoned before MergeBack — leaves
+//	the entry where the user can see it and reports why.
+//
+// `git stash drop` on an entry that was never applied is therefore never
+// correct here: it deletes the content instead of restoring it, leaving it
+// reachable only as a dangling commit until gc. A stash list with one extra
+// entry in it is cheap; the work inside that entry is not.
+
+// errStashEntryGone reports that no stash entry carries the requested message.
+// Callers for which a vanished entry is benign — MergeBack and cleanupWorktree
+// both run after something else may already have restored it — filter it out
+// with errors.Is. Create does not: it pushed the entry moments earlier, so its
+// absence there means something went wrong.
+var errStashEntryGone = errors.New("stash entry not found")
+
+// popStashByMessage restores the stash entry whose message matches msg and
+// then removes it from the stash list. A failed apply leaves the entry in
+// place, per "The stash lifecycle" above.
+//
+// The entry is located by message rather than assumed to sit at stash@{0}:
+// anything else with access to the repo — the user, an editor plugin, another
+// pi-go agent — can push a stash between our push and our pop, and applying
+// the top entry blindly would then restore someone else's work over the
+// working tree while leaving ours behind. A message that matches no entry is
+// reported as errStashEntryGone; it never falls back to whatever happens to be
+// on top.
 func (m *WorktreeManager) popStashByMessage(msg string) error {
+	entry, found := m.findStashByMessage(msg)
+	if !found {
+		return fmt.Errorf("%w: %q", errStashEntryGone, msg)
+	}
 	// `git stash pop` is destructive and may collide with new edits.
-	// Try `git stash apply` first so the entry survives if anything goes
+	// Use `git stash apply` first so the entry survives if anything goes
 	// wrong; then drop it explicitly.
-	if out, err := m.git("stash", "apply", "--quiet", "stash@{0}"); err != nil {
+	if out, err := m.git("stash", "apply", "--quiet", entry); err != nil {
 		// If apply failed, the entry is still in the stash list — return the
 		// error but don't drop, so the user can recover manually.
-		return fmt.Errorf("git stash apply: %w: %s", err, out)
+		return fmt.Errorf("git stash apply %s (%s): %w: %s", entry, msg, err, out)
 	}
-	// Best-effort drop. If drop fails (rare), the entry stays in the list
-	// and the user can clean up with `git stash drop`.
-	_, _ = m.git("stash", "drop", "--quiet", "stash@{0}")
+	// `git stash apply` leaves the stash list untouched, so `entry` still
+	// addresses the same commit. Best-effort drop: if it fails (rare), the
+	// entry stays in the list and the user can clean up with `git stash drop`.
+	_, _ = m.git("stash", "drop", "--quiet", entry)
 	return nil
 }
 
@@ -188,8 +234,8 @@ func (m *WorktreeManager) addWorktree(wtPath, branch string, branchExists bool) 
 
 // Create creates a new git worktree for the given agent ID.
 // If the current branch has uncommitted changes, they are stashed before
-// creating the worktree and tracked in `pendingStash` so that MergeBack
-// or Cleanup can pop them later (with a unique message).
+// creating the worktree and recorded in worktreeInfo.StashMsg so that MergeBack
+// or Cleanup can restore them later (looked up by that unique message).
 // Returns the filesystem path to the worktree.
 func (m *WorktreeManager) Create(agentID string, requestedName ...string) (string, error) {
 	m.mu.Lock()
@@ -236,21 +282,30 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 
 	// Everything from here to the success path below is paired with that
 	// stash: the only exit between the two is the failure branch immediately
-	// after `worktree add`, which disposes of the stash entry explicitly.
-	if err := m.addWorktree(wtPath, branch, branchExists); err != nil {
-		// Restore stashed changes on failure. We do this regardless of
-		// what the stash list held beforehand — if anything landed in
-		// the stash list, drop it so the user isn't left with orphaned
-		// entries after a failed Create.
-		if stashedSomething {
-			_, _ = m.git("stash", "drop", "--quiet", "stash@{0}")
+	// after `worktree add`, which restores the stash entry explicitly.
+	if addErr := m.addWorktree(wtPath, branch, branchExists); addErr != nil {
+		if !stashedSomething {
+			return "", addErr
 		}
-		return "", err
+		// Put the stashed changes back. `git stash push -u` has already
+		// reverted the working tree, so at this point the user's uncommitted
+		// work exists *only* as a stash entry: dropping it here (which is what
+		// this branch used to do) deletes it without applying it, leaving the
+		// content reachable only as a dangling commit until gc.
+		if restoreErr := m.popStashByMessage(stashMsg); restoreErr != nil {
+			// A failed restore is worse for the user than the failed worktree
+			// add that got us here, and neither cause may be dropped: they
+			// need to know why the worktree failed *and* that their work is
+			// still sitting in the stash. Both are wrapped so errors.Is/As
+			// still sees them.
+			return "", fmt.Errorf("%w; uncommitted changes could NOT be restored and remain stashed as %q — recover them with `git stash list` and `git stash apply`: %w", addErr, stashMsg, restoreErr)
+		}
+		return "", addErr
 	}
 
-	// Stash survives on success — MergeBack/Cleanup will pop it via
-	// pendingStash. Storing the message here makes the pop deterministic
-	// even if other stash entries appear between Create and pop.
+	// Stash survives on success — MergeBack or, failing that, Cleanup restores
+	// it. Storing the message here is what makes that restore deterministic
+	// even if other stash entries appear between Create and it.
 	info := worktreeInfo{Path: wtPath, Branch: branch}
 	if stashedSomething {
 		info.StashMsg = stashMsg
@@ -379,9 +434,9 @@ func (m *WorktreeManager) Cleanup(agentID string) error {
 
 // cleanupWorktree performs the git operations to remove a worktree and its branch.
 // If cleanup fails, the entry is re-added to the active map so callers can retry.
-// If a stash was created during Create and not yet popped (e.g. MergeBack was
-// never called), the stash entry is best-effort dropped here so it doesn't
-// accumulate in the stash list.
+// If a stash was created during Create and not yet restored (e.g. MergeBack
+// was never called), it is applied back to the working tree here and only then
+// dropped; a failed restore is reported and leaves the entry in place.
 func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) error {
 	var errs []string
 
@@ -408,12 +463,20 @@ func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) err
 		}
 	}
 
-	// Best-effort: drop any stash entry this worktree created. We do this
-	// after the worktree/branch are removed because applying a stash to a
-	// dirty working tree would just re-introduce the conflict.
+	// Restore any stash still outstanding from Create. Reaching here with one
+	// means MergeBack never ran — a spawn that failed, a shutdown mid-setup, a
+	// result the caller discarded — so this is the last place that can hand
+	// the user's uncommitted work back to them. Dropping it instead, which is
+	// what this did, destroyed work that had nothing to do with the agent on
+	// paths that are not even error paths (see "The stash lifecycle").
+	//
+	// It runs after the worktree and branch are gone so the checkout the stash
+	// restores into is the main tree, never one git is about to remove.
 	if info.StashMsg != "" {
-		if entry, found := m.findStashByMessage(info.StashMsg); found {
-			_, _ = m.git("stash", "drop", "--quiet", entry)
+		// errStashEntryGone is expected and benign: MergeBack already restored
+		// and dropped the entry, or the user popped it themselves.
+		if err := m.popStashByMessage(info.StashMsg); err != nil && !errors.Is(err, errStashEntryGone) {
+			errs = append(errs, fmt.Sprintf("restore stashed changes: %v (your uncommitted work is still stashed as %q — recover it with `git stash list` and `git stash apply`)", err, info.StashMsg))
 		}
 	}
 
@@ -430,8 +493,9 @@ func (m *WorktreeManager) cleanupWorktree(agentID string, info worktreeInfo) err
 // MergeBack merges the worktree branch back into the current branch of the
 // main worktree. Returns the merge output.
 //
-// On a successful merge, any stash created during Create is applied back
-// to the main repo and dropped from the stash list.
+// On a successful merge, any stash created during Create is applied back to
+// the main repo and then dropped. If that apply fails the entry is left in the
+// stash list and the failure is returned, per "The stash lifecycle".
 //
 // On a merge conflict, the merge is aborted (so the main repo is left in a
 // clean state) and the worktree is preserved so the user can inspect and
@@ -466,15 +530,15 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 	// We do this only if a stash was recorded; otherwise the main repo
 	// is already clean.
 	if info.StashMsg != "" {
-		if entry, found := m.findStashByMessage(info.StashMsg); found {
-			if applyErr := m.popStashByMessage(info.StashMsg); applyErr != nil {
-				// Stash apply failed (likely conflicts with the merge).
-				// Drop the entry anyway so the stash list stays bounded —
-				// the user can recover via `git stash show` + cherry-pick
-				// or by checking the worktree branch.
-				_, _ = m.git("stash", "drop", "--quiet", entry)
-				return out, fmt.Errorf("merge succeeded but stash apply failed: %w (merge output: %s)", applyErr, out)
-			}
+		// errStashEntryGone is benign here: nothing was outstanding to restore.
+		if applyErr := m.popStashByMessage(info.StashMsg); applyErr != nil && !errors.Is(applyErr, errStashEntryGone) {
+			// The entry stays in the stash list. Apply usually fails because
+			// the merge just landed changes that collide with it, which means
+			// the stash is now the only copy of the user's work — this used to
+			// drop it "so the stash list stays bounded" while pointing the
+			// user at `git stash show`, which by then had nothing left to
+			// show. See "The stash lifecycle".
+			return out, fmt.Errorf("merge succeeded but restoring your stashed changes failed: %w — they are still stashed as %q, recover them with `git stash list` and `git stash apply` (merge output: %s)", applyErr, info.StashMsg, out)
 		}
 	}
 
@@ -614,6 +678,14 @@ func (m *WorktreeManager) git(args ...string) (string, error) {
 
 // gitIn runs a git command in the given directory and returns combined output.
 func (m *WorktreeManager) gitIn(dir string, args ...string) (string, error) {
+	if m.gitRunner != nil {
+		return m.gitRunner(dir, args...)
+	}
+	return runGit(dir, args...)
+}
+
+// runGit shells out to git in dir and returns trimmed combined output.
+func runGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
