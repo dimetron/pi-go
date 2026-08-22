@@ -23,6 +23,7 @@ import (
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -372,7 +373,7 @@ func TestAppendNonInteractiveLSPTools(t *testing.T) {
 
 func TestOpenSessionService(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	path, svc, err := openSessionService()
 	if err != nil {
@@ -553,7 +554,7 @@ func errorLogLine(content string) string {
 
 func TestLastLoggedError(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	t.Run("absent log root is not an error", func(t *testing.T) {
 		path, msg, err := lastLoggedError()

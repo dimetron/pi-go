@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,14 +172,32 @@ func TestLastLoggedError_MultipleDateDirsUsesLast(t *testing.T) {
 // checkForRapidRestartAndWarn — exercise the lastLoggedError branch.
 // -----------------------------------------------------------------------
 
+// lastSessionJSON renders a last-session.json record for workDir stamped
+// "now". It goes through the encoder rather than string concatenation because
+// a Windows temp dir holds backslashes, which an unescaped `"work_dir":"C:\Users\..."`
+// turns into invalid JSON -- readLastSession then fails and the warning under
+// test is never printed.
+func lastSessionJSON(t *testing.T, workDir string) string {
+	t.Helper()
+	blob, err := json.Marshal(map[string]string{
+		"timestamp":  nowTimeStr(),
+		"session_id": "s1",
+		"work_dir":   workDir,
+		"model":      "gpt",
+	})
+	if err != nil {
+		t.Fatalf("marshal last-session: %v", err)
+	}
+	return string(blob)
+}
+
 func TestCheckForRapidRestartAndWarn_WithLoggedError(t *testing.T) {
 	tmpDir := t.TempDir()
 	testenv.SetHome(t, tmpDir)
 
 	// Set up a recent last-session.json for the same workdir.
 	f := filepath.Join(tmpDir, "last-session.json")
-	content := `{"timestamp":"` + nowTimeStr() + `","session_id":"s1","work_dir":"` + tmpDir + `","model":"gpt"}`
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(f, []byte(lastSessionJSON(t, tmpDir)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	orig := lastSessionFile
@@ -207,8 +226,7 @@ func TestCheckForRapidRestartAndWarn_NoLoggedError(t *testing.T) {
 	testenv.SetHome(t, tmpDir)
 
 	f := filepath.Join(tmpDir, "last-session.json")
-	content := `{"timestamp":"` + nowTimeStr() + `","session_id":"s1","work_dir":"` + tmpDir + `","model":"gpt"}`
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(f, []byte(lastSessionJSON(t, tmpDir)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	orig := lastSessionFile

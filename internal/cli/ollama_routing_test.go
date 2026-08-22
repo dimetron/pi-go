@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // The bug this pins: OLLAMA_API_KEY exported for a :cloud model used to be read
@@ -30,7 +32,7 @@ func TestBuildRootRuntime_OllamaKeyDoesNotForceCloud(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resetGlobalFlags(t)
-			t.Setenv("HOME", t.TempDir())
+			testenv.SetHome(t, t.TempDir())
 			// Set, as it must be for any cloud model — and irrelevant to where
 			// a local model goes.
 			t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
@@ -54,7 +56,7 @@ func TestBuildRootRuntime_OllamaKeyDoesNotForceCloud(t *testing.T) {
 // container, or an authenticated proxy, so it outranks the tag either way.
 func TestBuildRootRuntime_OllamaHostWinsOverTag(t *testing.T) {
 	resetGlobalFlags(t)
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
 	t.Setenv("OLLAMA_HOST", "http://gpu-box.lan:11434")
 

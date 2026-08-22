@@ -95,40 +95,45 @@ func (m *cliToolCallingLLM) GenerateContent(_ context.Context, _ *model.LLMReque
 // captureStdout captures os.Stdout during fn execution.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	origStdout := os.Stdout
-	os.Stdout = w
-
-	fn()
-
-	w.Close()
-	os.Stdout = origStdout
-
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
-	return buf.String()
+	return captureFD(t, &os.Stdout, fn)
 }
 
 // captureStderr captures os.Stderr during fn execution.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
+	return captureFD(t, &os.Stderr, fn)
+}
+
+// captureFD swaps *fd for the write end of a pipe while fn runs and returns
+// everything fn wrote to it.
+//
+// The read end is drained concurrently, not after fn returns: a pipe has a
+// fixed buffer (64 KiB on Linux, only 4 KiB on Windows), and a writer that
+// fills it blocks until someone reads. Draining afterwards therefore deadlocks
+// any fn whose output exceeds the buffer -- the rpc server's
+// get_available_models reply already does on Windows.
+func captureFD(t *testing.T, fd **os.File, fn func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	origStderr := os.Stderr
-	os.Stderr = w
+	orig := *fd
+	*fd = w
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = buf.ReadFrom(r)
+	}()
 
 	fn()
 
-	w.Close()
-	os.Stderr = origStderr
-
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_ = w.Close()
+	*fd = orig
+	<-done
+	_ = r.Close()
 	return buf.String()
 }
 

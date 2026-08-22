@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -533,6 +534,11 @@ func (e stubError) Error() string { return string(e) }
 // only if readdir errors. Use a file named .pi-go/agents that's actually a
 // regular file so ReadDir returns a not-a-directory error.
 func TestDiscoverAgents_UserDirReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// os.ReadDir on a regular file is not a non-IsNotExist error there, so
+		// the "loading user agents" branch cannot be reached from the filesystem.
+		t.Skip("ReadDir on a file does not fail with ENOTDIR on Windows")
+	}
 	// Isolate HOME to a tempdir.
 	tmpHome := t.TempDir()
 	testenv.SetHome(t, tmpHome)
