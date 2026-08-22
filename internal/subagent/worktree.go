@@ -251,16 +251,24 @@ func (m *WorktreeManager) CommitAll(agentID, message string) (bool, error) {
 		}
 	}
 
-	status, err := m.gitIn(info.Path, "status", "--porcelain")
-	if err != nil {
-		return false, fmt.Errorf("worktree status: %w: %s", err, status)
-	}
-	if status == "" {
-		return false, nil
-	}
-
-	if out, err := m.gitIn(info.Path, "add", "-A"); err != nil {
+	// Force-add everything an agent left in the worktree, ignoring ignore rules.
+	// A plain `git status --porcelain` + `git add -A` silently drops planner
+	// output: the real repo ignores **/specs/ (global) and .pi-go/ (project),
+	// both of which match the artifacts written into a worktree
+	// (specs/<task>/...). Ignored files do not show in plain `--porcelain`, so a
+	// status-first gate would report "nothing to commit", skip the snapshot, and
+	// then Cleanup would `worktree remove --force` the only copy. Force-adding
+	// first, then checking what was actually staged, keeps the empty-commit
+	// no-op intact while never dropping ignored work.
+	if out, err := m.gitIn(info.Path, "add", "-Af"); err != nil {
 		return false, fmt.Errorf("staging worktree changes: %w: %s", err, out)
+	}
+	staged, err := m.gitIn(info.Path, "diff", "--cached", "--name-only")
+	if err != nil {
+		return false, fmt.Errorf("worktree staged diff: %w: %s", err, staged)
+	}
+	if staged == "" {
+		return false, nil
 	}
 	tree, err := m.gitIn(info.Path, "write-tree")
 	if err != nil {

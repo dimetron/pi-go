@@ -6,8 +6,74 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/sop"
+	"github.com/dimetron/pi-go/internal/subagent"
 )
+
+func TestCopyDir_RecursesAndOverwrites(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	// Nested file under research/ plus a top-level file.
+	if err := os.MkdirAll(filepath.Join(src, "research"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "research", "notes.md"), []byte("notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst, false); err != nil {
+		t.Fatalf("copyDir: %v", err)
+	}
+
+	for _, rel := range []string{"PROMPT.md", "research", filepath.Join("research", "notes.md")} {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("copied %s missing in dst: %v", rel, err)
+		}
+	}
+
+	// Copying again is idempotent — an existing destination file is left as-is,
+	// not an error (the merge already brought the same content in).
+	if err := copyDir(src, dst, false); err != nil {
+		t.Fatalf("copyDir second pass: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "plan" {
+		t.Errorf("existing file should be left as-is, got %q", got)
+	}
+}
+
+func TestCopyDir_FollowsSymlink(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "real.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(src, "real.md"), filepath.Join(src, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst, false); err != nil {
+		t.Fatalf("copyDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "real.md")); err != nil {
+		t.Errorf("real.md not copied: %v", err)
+	}
+	// os.CopyFS follows symlinks, so link.md resolves to real.md's content.
+	if got, err := os.ReadFile(filepath.Join(dst, "link.md")); err != nil || string(got) != "x" {
+		t.Errorf("symlinked file not resolved: got %q err %v", got, err)
+	}
+}
 
 func TestToKebabCase_Simple(t *testing.T) {
 	got := toKebabCase("add rate limiting")
@@ -252,5 +318,258 @@ func TestPlanInstruction_ExistingSpecReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error should mention 'already exists', got: %v", err)
+	}
+}
+
+// TestFinishPlanWorktree_CopiesSpecIntoInvokingCheckout drives the end-of-plan
+// worktree teardown with a real git worktree and verifies the finished spec
+// directory is copied into the invoking checkout's specs/ tree. This guards
+// the fix that /run must find specs/<task>/PROMPT.md even though specs/ is
+// gitignored.
+func TestFinishPlanWorktree_CopiesSpecIntoInvokingCheckout(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-demo"
+	const agentID = "plan-" + taskName
+
+	// Seed a worktree like the planner would: it writes specs/<task>/... and
+	// never commits.
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(filepath.Join(wtSpec, "research"), 0o755); err != nil {
+		t.Fatalf("mkdir research: %v", err)
+	}
+	for name, content := range map[string]string{
+		"PROMPT.md":         "# Feature\n\n## Objective\nDo it.\n",
+		"requirements.md":   "# Requirements\n",
+		"research/notes.md": "notes\n",
+	} {
+		if err := os.WriteFile(filepath.Join(wtSpec, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree: %v", err)
+	}
+
+	// The finished spec must be present in the invoking checkout, including the
+	// research/ subtree, independently of the git merge.
+	for _, rel := range []string{
+		"PROMPT.md",
+		"requirements.md",
+		filepath.Join("research", "notes.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(repo, "specs", taskName, rel)); err != nil {
+			t.Errorf("spec %s not copied into invoking checkout: %v", rel, err)
+		}
+	}
+
+	// The plan is complete, so the worktree state should be cleared.
+	if m.planWorktree != nil {
+		t.Error("planWorktree should be nil after a completed plan")
+	}
+	if m.planWorktreePath != "" {
+		t.Errorf("planWorktreePath should be cleared, got %q", m.planWorktreePath)
+	}
+}
+
+// TestFinishPlanWorktree_NoWorktreeIsNoOp ensures a model without an active plan
+// worktree is a safe no-op (no panic, no error).
+func TestFinishPlanWorktree_NoWorktreeIsNoOp(t *testing.T) {
+	m := &model{}
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree with no worktree should be a no-op, got: %v", err)
+	}
+}
+
+// TestFinishPlanWorktree_KeepsWorktreeUntilPromptExists verifies that an
+// in-progress plan (no PROMPT.md yet) does not merge or copy the spec — the
+// worktree stays put so the next turn can carry on in it.
+func TestFinishPlanWorktree_KeepsWorktreeUntilPromptExists(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-wip"
+	const agentID = "plan-" + taskName
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	// Only requirements.md — the planner has not written PROMPT.md yet.
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(wtSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtSpec, "requirements.md"), []byte("# Req\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree on WIP should not error: %v", err)
+	}
+	// Worktree must be retained for the next planning turn.
+	if m.planWorktree == nil {
+		t.Error("planWorktree should not be cleared before PROMPT.md exists")
+	}
+	// No spec should have been copied out yet.
+	if _, err := os.Stat(filepath.Join(repo, "specs", taskName, "requirements.md")); err == nil {
+		t.Error("in-progress spec should not be copied into the invoking checkout")
+	}
+}
+
+// TestCopyDir_ReturnsErrorOnMissingSrc ensures a missing source directory
+// surfaces as an error rather than silently producing an empty dst.
+func TestCopyDir_ReturnsErrorOnMissingSrc(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "does-not-exist")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyDir(src, dst, false); err == nil {
+		t.Fatal("copyDir should error when the source directory does not exist")
+	}
+}
+
+// TestCopyDir_OverwriteReplacesExistingFiles covers the overwrite=true path
+// used when the merge fails: stale files in dst must be replaced by the
+// source's copy.
+func TestCopyDir_OverwriteReplacesExistingFiles(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("fresh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a stale dst with different content.
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "PROMPT.md"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst, true); err != nil {
+		t.Fatalf("copyDir overwrite: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh\n" {
+		t.Errorf("overwrite did not replace stale content: got %q, want %q", got, "fresh\n")
+	}
+}
+
+// TestCopyDir_ReturnsErrorOnMkdirAllFailure covers the dst-creation error path
+// in copyDir: a dst whose parent cannot be created must surface an error.
+func TestCopyDir_ReturnsErrorOnMkdirAllFailure(t *testing.T) {
+	// Use a path whose parent is a file, so MkdirAll fails.
+	parent := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.md"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(parent, "sub")
+	if err := copyDir(src, dst, false); err == nil {
+		t.Fatal("copyDir should error when dst cannot be created")
+	}
+}
+
+// TestCopyOverwrite_ReturnsErrorOnMissingSrc ensures copyOverwrite surfaces an
+// error when the source directory does not exist.
+func TestCopyOverwrite_ReturnsErrorOnMissingSrc(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "missing-src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyOverwrite(src, dst); err == nil {
+		t.Fatal("copyOverwrite should error when the source directory does not exist")
+	}
+}
+
+// TestFinishPlanWorktree_MergeFailureStillCopiesSpec covers the defensive path
+// in finishPlanWorktree where MergeBack fails (here: an untracked collision in
+// the invoking checkout makes the merge abort). Even then the finished spec
+// must be copied out so /run can still find PROMPT.md, and the error must
+// propagate to the caller.
+func TestFinishPlanWorktree_MergeFailureStillCopiesSpec(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-conflict"
+	const agentID = "plan-" + taskName
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(wtSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtSpec, "PROMPT.md"), []byte("# Prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-seed an untracked PROMPT.md in the invoking checkout so the merge
+	// aborts ("untracked working tree files would be overwritten by merge").
+	outSpec := filepath.Join(repo, "specs", taskName)
+	if err := os.MkdirAll(outSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outSpec, "PROMPT.md"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	err = m.finishPlanWorktree()
+	if err == nil {
+		t.Fatal("finishPlanWorktree should surface the merge failure")
+	}
+
+	// Even though the merge failed, the worktree's copy must have been written
+	// out over the stale one, so /run can still find the finished spec.
+	got, readErr := os.ReadFile(filepath.Join(outSpec, "PROMPT.md"))
+	if readErr != nil {
+		t.Fatalf("spec not preserved on merge failure: %v", readErr)
+	}
+	if string(got) != "# Prompt\n" {
+		t.Errorf("spec content = %q, want the worktree's copy %q", got, "# Prompt\n")
 	}
 }
