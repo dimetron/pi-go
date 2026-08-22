@@ -20,6 +20,7 @@ import (
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/otel"
+	"github.com/dimetron/pi-go/internal/retry"
 )
 
 const (
@@ -802,6 +803,15 @@ func (m *model) runAgentLoop(ctx context.Context, prompt string, ch chan agentMs
 		otel.AttributeInt("prompt.length", len(prompt)),
 	)
 
+	// Surface every retry — the provider re-sending a request that died under
+	// it, or WithRetry replaying a run that produced nothing — as a warning in
+	// the transcript. Without this the pause reads as the model thinking, and
+	// a turn that fails after the budget is spent looks like it failed once.
+	ctx = retry.WithNotifier(ctx, func(a retry.Attempt) {
+		log.Info(a.String())
+		ch <- agentWarningMsg{text: a.String()}
+	})
+
 	// Every exit below reports through fail, so the "tell the user, then stop"
 	// pair can't drift apart. Logger methods are nil-safe (logger.Log guards a
 	// nil receiver), so no call site needs to check.
@@ -875,7 +885,7 @@ func (m *model) streamTurn(
 	// with an error on screen. Mid-turn failures are handled a layer down, in
 	// the provider, where a single request can be re-sent without replaying the
 	// tool calls that already ran.
-	for ev, err := range agent.WithRetry(agent.DefaultRetryConfig(), func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetryContext(ctx, agent.DefaultRetryConfig(), func() iter.Seq2[*session.Event, error] {
 		return run.agent.RunStreaming(ctx, run.sessionID, prompt)
 	}) {
 		if err != nil {

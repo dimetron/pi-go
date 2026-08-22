@@ -36,6 +36,7 @@ import (
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/pirpc"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/retry"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -1484,13 +1485,18 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 		_ = ag.SetSessionTitle(sessionID, title)
 	}
 	retryCfg := agent.DefaultRetryConfig()
+	// Say when a request is being re-sent, so a backoff pause is not mistaken
+	// for a hung run. stderr keeps it out of the captured reply.
+	ctx = retry.WithNotifier(ctx, func(a retry.Attempt) {
+		fmt.Fprintln(os.Stderr, a.String())
+	})
 	// GroundingMetadata repeats on every chunk of the response it grounds;
 	// report each search once.
 	groundedSeen := map[string]bool{}
 	// SSE delivers the reply as deltas and then once more as an aggregate;
 	// without this the whole answer prints twice.
 	var dedup agent.StreamDedup
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetryContext(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
@@ -1604,7 +1610,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	var dedup agent.StreamDedup
 
 	retryCfg := agent.DefaultRetryConfig()
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetryContext(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
