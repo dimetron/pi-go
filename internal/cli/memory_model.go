@@ -50,6 +50,11 @@ Use --onnx to specify a specific ONNX file, e.g.:
 	return cmd
 }
 
+// downloadModel is the fetcher runMemoryModelDownload delegates to. A variable
+// so tests can substitute a fake instead of pulling the real weights from
+// Hugging Face into the test HOME.
+var downloadModel = palace.DownloadModel
+
 func runMemoryModelDownload(dest string, onnxFilePath string) error {
 	if dest == "" {
 		home, err := os.UserHomeDir()
@@ -71,7 +76,7 @@ func runMemoryModelDownload(dest string, onnxFilePath string) error {
 
 	fmt.Printf("Downloading embedding model to %s ...\n", dest)
 
-	modelPath, err := palace.DownloadModel(dest, onnxFilePath)
+	modelPath, err := downloadModel(dest, onnxFilePath)
 	if err != nil {
 		return fmt.Errorf("downloading model: %w", err)
 	}

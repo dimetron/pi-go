@@ -105,13 +105,20 @@ func (e *localEmbedder) Close() {
 	}
 }
 
+// hugotDownloadModel is the fetcher DownloadModel delegates to. It is a
+// variable so tests can stand in a fake: the real one reaches Hugging Face,
+// its parallel download has a data race the race detector flags, and leaving
+// real weights behind makes every later palace test in the same package run
+// real inference.
+var hugotDownloadModel = hugot.DownloadModel
+
 // DownloadModel fetches the all-MiniLM-L6-v2 model to dest and returns the local path.
 func DownloadModel(dest string, onnxFilePath string) (string, error) {
 	opts := hugot.NewDownloadOptions()
 	if onnxFilePath != "" {
 		opts.OnnxFilePath = onnxFilePath
 	}
-	return hugot.DownloadModel(
+	return hugotDownloadModel(
 		context.Background(),
 		"sentence-transformers/all-MiniLM-L6-v2",
 		dest,
