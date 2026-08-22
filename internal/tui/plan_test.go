@@ -397,3 +397,58 @@ func TestFinishPlanWorktree_NoWorktreeIsNoOp(t *testing.T) {
 		t.Fatalf("finishPlanWorktree with no worktree should be a no-op, got: %v", err)
 	}
 }
+
+// TestFinishPlanWorktree_KeepsWorktreeUntilPromptExists verifies that an
+// in-progress plan (no PROMPT.md yet) does not merge or copy the spec — the
+// worktree stays put so the next turn can carry on in it.
+func TestFinishPlanWorktree_KeepsWorktreeUntilPromptExists(t *testing.T) {
+	repo := initRunTestRepo(t)
+	orch := subagent.NewOrchestrator(&config.Config{}, repo, nil)
+	t.Cleanup(orch.Shutdown)
+
+	const taskName = "features/TOO/001-wip"
+	const agentID = "plan-" + taskName
+	wtPath, err := orch.Worktree().Create(agentID, "pdd-"+taskName)
+	if err != nil {
+		t.Fatalf("creating plan worktree: %v", err)
+	}
+	// Only requirements.md — the planner has not written PROMPT.md yet.
+	wtSpec := filepath.Join(wtPath, "specs", taskName)
+	if err := os.MkdirAll(wtSpec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtSpec, "requirements.md"), []byte("# Req\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model{
+		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
+		planWorktreeAgentID: agentID,
+		planWorktreePath:    wtPath,
+		planTaskName:        taskName,
+		planBackupBranch:    "specs/" + taskName,
+		planWorktree:        orch.Worktree(),
+	}
+
+	if err := m.finishPlanWorktree(); err != nil {
+		t.Fatalf("finishPlanWorktree on WIP should not error: %v", err)
+	}
+	// Worktree must be retained for the next planning turn.
+	if m.planWorktree == nil {
+		t.Error("planWorktree should not be cleared before PROMPT.md exists")
+	}
+	// No spec should have been copied out yet.
+	if _, err := os.Stat(filepath.Join(repo, "specs", taskName, "requirements.md")); err == nil {
+		t.Error("in-progress spec should not be copied into the invoking checkout")
+	}
+}
+
+// TestCopyDir_ReturnsErrorOnMissingSrc ensures a missing source directory
+// surfaces as an error rather than silently producing an empty dst.
+func TestCopyDir_ReturnsErrorOnMissingSrc(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "does-not-exist")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyDir(src, dst); err == nil {
+		t.Fatal("copyDir should error when the source directory does not exist")
+	}
+}
