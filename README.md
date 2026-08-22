@@ -16,7 +16,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 
 ## Features
 
-- **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), OpenCode, and Ollama (local or cloud) for models
+- **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), Mistral, Grok (xAI), Azure OpenAI, OpenRouter, OpenCode, and Ollama (local or cloud) for models
 - **Sandboxed tools** — read, write, edit, shell, grep, find, tree, and git operations. All tools are restricted to the project directory via `os.Root`.
 - **Interactive TUI** — Bubble Tea v2 with Markdown rendering (Glamour), slash commands, and theming
 - **Session persistence** — JSONL append-only event logs with branching, compaction, and resume
@@ -189,6 +189,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | Google Gemini | `gemini-*` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_BASE_URL` |
 | Mistral | `mistral-*`, `magistral-*` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` |
 | xAI (Grok) | `grok-*` | `XAI_API_KEY` | `XAI_BASE_URL` |
+| OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` |
 | Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
 | OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
 | Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
@@ -198,6 +199,9 @@ Set the API key for your provider as an environment variable. The provider is in
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export GEMINI_API_KEY="..."
+export MISTRAL_API_KEY="..."     # optional — only if you use Mistral models
+export XAI_API_KEY="..."         # optional — only if you use Grok models
+export OPENROUTER_API_KEY="..."  # optional — only if you use OpenRouter models
 export OPENCODE_API_KEY="..."
 export OLLAMA_API_KEY="..."   # only for Ollama Cloud (:cloud suffix)
 ```
@@ -224,6 +228,10 @@ pi
 pi --model claude:sonnet
 pi --model openai:gpt-4o
 pi --model gemini:gemini-2.5-pro
+pi --model mistral-large-latest
+pi --model grok-4.6
+pi --model azure/my-gpt5-deployment
+pi --model openrouter/google/gemini-3.7-flash
 pi --model ollama/gemma4:12b-mlx
 pi --model opencode/kimi-k3
 pi --model minimax-m3:cloud # automatically detect ollama if :cloud
@@ -371,7 +379,7 @@ Self-hosted or LAN endpoints can be declared in config instead of exported in ev
 ```
 
 Precedence is `--url` flag, then environment variable, then `baseURLs` config. The matching env vars are
-`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `XAI_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GEMINI_BASE_URL`, `MISTRAL_BASE_URL`, `XAI_BASE_URL`, `OPENROUTER_BASE_URL`, `OPENCODE_BASE_URL`, and `OLLAMA_HOST`. A per-shell or
 CI override still takes effect. An empty env var does not mask a configured value.
 
 ### Ollama generation tuning

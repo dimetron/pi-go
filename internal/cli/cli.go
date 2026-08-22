@@ -112,6 +112,7 @@ routing you need:
   gemini-*                 Google Gemini   GEMINI_API_KEY (or GOOGLE_API_KEY)
   mistral-*, magistral-*   Mistral         MISTRAL_API_KEY
   grok-*                   xAI             XAI_API_KEY
+  openrouter/<model>       OpenRouter      OPENROUTER_API_KEY
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
   azure/<deployment>       Azure OpenAI    AZURE_OPENAI_API_KEY
@@ -136,6 +137,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 
   # xAI
   pi --model grok-4.6 "trace where this request handler blocks"
+
+  # OpenRouter — any model in the OpenRouter catalog, vendor-prefixed ID
+  pi --model openrouter/google/gemini-3.7-flash "compare these two APIs"
 
   # Ollama against a local daemon — no API key needed
   pi --model ollama/gemma4:e4b "rename this symbol everywhere"
