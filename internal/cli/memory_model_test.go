@@ -2,10 +2,13 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/testenv"
 )
 
@@ -136,18 +139,71 @@ func TestRunMemoryModelDownload_ExplicitOnnxPath(t *testing.T) {
 	}
 }
 
+// stubDownloadModel replaces the fetcher for the duration of the test and
+// returns a pointer to the arguments it was last called with.
+//
+// The real fetcher pulls the embedding model from Hugging Face into HOME. This
+// test used to do exactly that and only appeared to pass because an earlier
+// test left HOME unset; with HOME isolated properly the download ran, and two
+// things broke under -race: go-huggingface's parallel download has a data
+// race, and every later palace-backed test in this package then found the
+// weights and ran real inference, where gomlx's AVX2 matmul kernel trips
+// checkptr. A fake fetcher keeps the path covered without any of that.
+func stubDownloadModel(t *testing.T, result string, err error) *struct{ dest, onnx string } {
+	t.Helper()
+	var got struct{ dest, onnx string }
+	orig := downloadModel
+	downloadModel = func(dest, onnx string) (string, error) {
+		got.dest, got.onnx = dest, onnx
+		return result, err
+	}
+	t.Cleanup(func() { downloadModel = orig })
+	return &got
+}
+
 func TestRunMemoryModelDownload_DefaultDest(t *testing.T) {
-	// This downloads the real embedding model from Hugging Face into the
-	// package's shared test HOME. It only ever appeared to pass: an earlier
-	// test used to leave HOME unset, so runMemoryModelDownload failed before
-	// reaching the network. With HOME isolated properly the download runs, and
-	// two things break under -race: go-huggingface's parallel download has a
-	// data race, and every later palace-backed test in this package then finds
-	// the weights and runs real inference, where gomlx's AVX2 matmul kernel
-	// trips checkptr. Skip it like its siblings above.
-	t.Skip("skipping: downloads a real model over the network; go-huggingface races under -race and the weights poison later palace tests")
-	err := runMemoryModelDownload("", "")
-	if err != nil {
-		t.Logf("expected error: %v", err)
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	got := stubDownloadModel(t, "model-path", nil)
+
+	out := captureStdout(t, func() {
+		if err := runMemoryModelDownload("", ""); err != nil {
+			t.Errorf("runMemoryModelDownload: %v", err)
+		}
+	})
+
+	wantDest := filepath.Join(home, ".pi-go", "models")
+	if got.dest != wantDest {
+		t.Errorf("dest = %q, want the default under HOME %q", got.dest, wantDest)
+	}
+	if info, err := os.Stat(wantDest); err != nil || !info.IsDir() {
+		t.Errorf("default model directory was not created: %v", err)
+	}
+	if got.onnx != palace.DetectPlatformOnnxFile() {
+		t.Errorf("onnx = %q, want the auto-detected %q", got.onnx, palace.DetectPlatformOnnxFile())
+	}
+	if !strings.Contains(out, "Model downloaded: model-path") {
+		t.Errorf("output = %q, want the downloaded path reported", out)
+	}
+}
+
+func TestRunMemoryModelDownload_ExplicitDestAndOnnxReachTheFetcher(t *testing.T) {
+	got := stubDownloadModel(t, "", nil)
+	dest := filepath.Join(t.TempDir(), "models")
+
+	if err := runMemoryModelDownload(dest, "onnx/custom.onnx"); err != nil {
+		t.Fatalf("runMemoryModelDownload: %v", err)
+	}
+	if got.dest != dest || got.onnx != "onnx/custom.onnx" {
+		t.Errorf("fetcher got dest=%q onnx=%q, want %q / onnx/custom.onnx", got.dest, got.onnx, dest)
+	}
+}
+
+func TestRunMemoryModelDownload_FetcherErrorIsWrapped(t *testing.T) {
+	stubDownloadModel(t, "", errors.New("offline"))
+
+	err := runMemoryModelDownload(t.TempDir(), "")
+	if err == nil || !strings.Contains(err.Error(), "downloading model: offline") {
+		t.Errorf("err = %v, want the fetcher error wrapped as \"downloading model\"", err)
 	}
 }
