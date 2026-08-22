@@ -24,16 +24,7 @@
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
     "adk-docs-mcp": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "mcpdoc",
-        "mcpdoc",
-        "--urls",
-        "AgentDevelopmentKit:https://adk.dev/llms.txt",
-        "--transport",
-        "stdio"
-      ]
+      "url": "https://adk.dev/llms.txt"
     },
     "openrouter": {
       "type": "remote",
