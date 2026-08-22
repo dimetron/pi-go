@@ -151,7 +151,7 @@ func TestCreate_RestoreIgnoresDecoyStashEntry(t *testing.T) {
 	if n := stashCount(t, repo); n != 1 {
 		t.Errorf("stash count = %d, want 1 (only the decoy should remain)", n)
 	}
-	if _, found := mgr.findStashByMessage("decoy-entry"); !found {
+	if _, _, found := mgr.findStashByMessage("decoy-entry"); !found {
 		t.Error("decoy entry is gone from the stash list")
 	}
 }
@@ -232,7 +232,7 @@ func TestCreate_KeepsStashOnSuccess(t *testing.T) {
 	if info.StashMsg == "" {
 		t.Fatal("StashMsg not recorded after a successful Create")
 	}
-	if _, found := mgr.findStashByMessage(info.StashMsg); !found {
+	if _, _, found := mgr.findStashByMessage(info.StashMsg); !found {
 		t.Errorf("recorded StashMsg %q does not match any stash entry", info.StashMsg)
 	}
 
@@ -270,7 +270,7 @@ func TestMergeBack_AppliesOwnStashNotDecoy(t *testing.T) {
 	if n := stashCount(t, repo); n != 1 {
 		t.Errorf("stash count = %d, want 1 (only the decoy should remain)", n)
 	}
-	if _, found := mgr.findStashByMessage("decoy-entry"); !found {
+	if _, _, found := mgr.findStashByMessage("decoy-entry"); !found {
 		t.Error("decoy entry is gone from the stash list")
 	}
 }
@@ -409,7 +409,7 @@ func TestCleanup_IgnoresDecoyStashEntry(t *testing.T) {
 	if n := stashCount(t, repo); n != 1 {
 		t.Errorf("stash count = %d, want 1 (only the decoy should remain)", n)
 	}
-	if _, found := mgr.findStashByMessage("decoy-entry"); !found {
+	if _, _, found := mgr.findStashByMessage("decoy-entry"); !found {
 		t.Error("decoy entry is gone from the stash list")
 	}
 }
@@ -472,5 +472,76 @@ func TestMergeBack_KeepsStashWhenApplyFails(t *testing.T) {
 	}
 	if list := stashGit(t, repo, "stash", "list"); !strings.Contains(list, "pi-go-worktree-agent-merge-blocked-") {
 		t.Errorf("stash list %q no longer holds the entry the error points at", list)
+	}
+}
+
+// dropStashEntry is the half of popStashByMessage that git will not let us
+// address by object id. This pins the failure codex flagged: our entry is gone
+// and something else now occupies the ref we captured, so a positional drop
+// would destroy a stranger's work. It must delete nothing.
+func TestDropStashEntry_RefusesWhenOurEntryIsGone(t *testing.T) {
+	repo := initTestRepo(t)
+	m := NewWorktreeManager(repo)
+
+	writeStashFile(t, repo, "tracked.txt", "ours\n")
+	if _, err := m.git("stash", "push", "-u", "-q", "-m", "pi-agent-ours"); err != nil {
+		t.Fatalf("stash ours: %v", err)
+	}
+	ref, oursOID, ok := m.findStashByMessage("pi-agent-ours")
+	if !ok {
+		t.Fatal("our stash entry not found after push")
+	}
+
+	// Our entry disappears (an impatient user, another agent, a manual drop)
+	// and someone else's stash takes the ref we were holding.
+	if _, err := m.git("stash", "drop", "--quiet", ref); err != nil {
+		t.Fatalf("drop ours: %v", err)
+	}
+	writeStashFile(t, repo, "tracked.txt", "theirs\n")
+	if _, err := m.git("stash", "push", "-u", "-q", "-m", "someone-elses-work"); err != nil {
+		t.Fatalf("stash decoy: %v", err)
+	}
+
+	// Same ref, same object id we captured — but that object is no longer in
+	// the list, so nothing may be dropped.
+	m.dropStashEntry(ref, oursOID, "pi-agent-ours")
+
+	if _, _, found := m.findStashByMessage("someone-elses-work"); !found {
+		t.Error("dropStashEntry deleted an unrelated stash entry that had taken our ref")
+	}
+}
+
+// The companion case: the list shifted but our entry is still there, so the
+// drop should find it at its new position and remove exactly that one.
+func TestDropStashEntry_FollowsEntryToItsNewIndex(t *testing.T) {
+	repo := initTestRepo(t)
+	m := NewWorktreeManager(repo)
+
+	writeStashFile(t, repo, "tracked.txt", "ours\n")
+	if _, err := m.git("stash", "push", "-u", "-q", "-m", "pi-agent-ours"); err != nil {
+		t.Fatalf("stash ours: %v", err)
+	}
+	ref, oid, ok := m.findStashByMessage("pi-agent-ours")
+	if !ok {
+		t.Fatal("our stash entry not found after push")
+	}
+	if ref != "stash@{0}" {
+		t.Fatalf("precondition: want our entry at stash@{0}, got %s", ref)
+	}
+
+	writeStashFile(t, repo, "tracked.txt", "theirs\n")
+	if _, err := m.git("stash", "push", "-u", "-q", "-m", "someone-elses-work"); err != nil {
+		t.Fatalf("stash decoy: %v", err)
+	}
+
+	// Same stale ref as the test above, but this time the object id still
+	// resolves, so the entry is followed to stash@{1} and dropped there.
+	m.dropStashEntry(ref, oid, "pi-agent-ours")
+
+	if _, _, found := m.findStashByMessage("pi-agent-ours"); found {
+		t.Error("our entry survived a drop that should have found it at its new index")
+	}
+	if _, _, found := m.findStashByMessage("someone-elses-work"); !found {
+		t.Error("the unrelated entry was destroyed")
 	}
 }

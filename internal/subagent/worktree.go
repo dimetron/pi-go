@@ -135,24 +135,55 @@ var errStashEntryGone = errors.New("stash entry not found")
 // working tree while leaving ours behind. A message that matches no entry is
 // reported as errStashEntryGone; it never falls back to whatever happens to be
 // on top.
+//
+// Both git commands address the entry by its immutable object id wherever git
+// allows it, because `stash@{N}` is positional: an external push or drop
+// between our lookup and our command renumbers every entry beneath it. Apply
+// takes the object id directly. Drop does not accept one ("is not a stash
+// reference"), so the ref is re-resolved and its object id re-checked
+// immediately beforehand; if it no longer names the entry we just applied we
+// leave the list alone rather than delete a stranger's stash. The manager
+// mutex cannot help here — it does not serialize git invocations from other
+// processes.
 func (m *WorktreeManager) popStashByMessage(msg string) error {
-	entry, found := m.findStashByMessage(msg)
+	entry, oid, found := m.findStashByMessage(msg)
 	if !found {
 		return fmt.Errorf("%w: %q", errStashEntryGone, msg)
 	}
 	// `git stash pop` is destructive and may collide with new edits.
 	// Use `git stash apply` first so the entry survives if anything goes
-	// wrong; then drop it explicitly.
-	if out, err := m.git("stash", "apply", "--quiet", entry); err != nil {
+	// wrong; then drop it explicitly. Applying by object id cannot pick up a
+	// different entry if the list shifted since the lookup.
+	if out, err := m.git("stash", "apply", "--quiet", oid); err != nil {
 		// If apply failed, the entry is still in the stash list — return the
 		// error but don't drop, so the user can recover manually.
-		return fmt.Errorf("git stash apply %s (%s): %w: %s", entry, msg, err, out)
+		return fmt.Errorf("git stash apply %s (%s): %w: %s", oid, msg, err, out)
 	}
-	// `git stash apply` leaves the stash list untouched, so `entry` still
-	// addresses the same commit. Best-effort drop: if it fails (rare), the
-	// entry stays in the list and the user can clean up with `git stash drop`.
-	_, _ = m.git("stash", "drop", "--quiet", entry)
+	m.dropStashEntry(entry, oid, msg)
 	return nil
+}
+
+// dropStashEntry removes the stash entry that popStashByMessage just applied,
+// but only if `stash@{N}` still names that exact object.
+//
+// Every failure here is deliberately silent and non-fatal: the content is
+// already back in the working tree, so the worst outcome is a stale entry the
+// user can clear with `git stash drop`. Deleting the wrong entry, by contrast,
+// destroys work — so a mismatch is always resolved in favor of keeping both.
+func (m *WorktreeManager) dropStashEntry(entry, oid, msg string) {
+	// Re-resolve rather than trusting the ref captured before the apply: an
+	// external `git stash push` in that window shifts every index by one, and
+	// dropping the stale ref would delete whatever now sits at that position.
+	nowEntry, nowOID, ok := m.findStashByMessage(msg)
+	if !ok || nowOID != oid {
+		return
+	}
+	if nowEntry != entry {
+		// The list renumbered under us but the entry survived; drop where it
+		// actually is now.
+		entry = nowEntry
+	}
+	_, _ = m.git("stash", "drop", "--quiet", entry)
 }
 
 // claimExistingWorktree decides what to do about a branch or directory that is
@@ -547,36 +578,37 @@ func (m *WorktreeManager) MergeBack(agentID string) (string, error) {
 	return out, nil
 }
 
-// findStashByMessage returns the stash ref (e.g. "stash@{0}") whose message
-// matches msg, or "" + false if no match is found.
+// findStashByMessage returns the stash ref (e.g. "stash@{0}") AND the entry's
+// immutable object id, for the entry whose message matches msg. Callers need
+// both: the ref is what `git stash drop` accepts, the object id is what makes
+// an operation safe against another process renumbering the list underneath us.
 //
 // Note: `git stash list --format=%s` renders the subject as
 // "On <branch>: <original-message>", so we strip that prefix before comparing.
-func (m *WorktreeManager) findStashByMessage(msg string) (string, bool) {
+func (m *WorktreeManager) findStashByMessage(msg string) (ref, oid string, found bool) {
 	if msg == "" {
-		return "", false
+		return "", "", false
 	}
-	out, err := m.git("stash", "list", "--format=%gd|%s")
+	out, err := m.git("stash", "list", "--format=%gd|%H|%s")
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for _, line := range strings.Split(out, "\n") {
-		// Format: "stash@{N}|On <branch>: <message>"
-		sep := strings.Index(line, "|")
-		if sep < 0 {
+		// Format: "stash@{N}|<sha>|On <branch>: <message>"
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
 			continue
 		}
-		ref := line[:sep]
-		subject := line[sep+1:]
+		subject := parts[2]
 		// Strip "On <branch>: " prefix.
 		if colon := strings.Index(subject, ": "); colon >= 0 {
 			subject = subject[colon+2:]
 		}
 		if subject == msg {
-			return ref, true
+			return parts[0], parts[1], true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func (m *WorktreeManager) recoverWorktreeInfo(agentID string) (worktreeInfo, error) {

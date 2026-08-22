@@ -332,9 +332,14 @@ func TestStashBeforeWorktreeAdd_DirtyTree(t *testing.T) {
 		t.Fatalf("stash list has %d entries, want 1", n)
 	}
 	// The message must be the one findStashByMessage can locate, which is what
-	// makes the eventual pop deterministic.
-	if _, found := mgr.findStashByMessage(msg); !found {
+	// makes the eventual pop deterministic. It must also yield an object id —
+	// that is what the apply addresses the entry by.
+	ref, oid, found := mgr.findStashByMessage(msg)
+	if !found {
 		t.Errorf("stash entry for message %q not found", msg)
+	}
+	if ref == "" || oid == "" {
+		t.Errorf("findStashByMessage returned ref=%q oid=%q, want both non-empty", ref, oid)
 	}
 }
 
