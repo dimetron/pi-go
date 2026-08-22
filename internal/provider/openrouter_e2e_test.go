@@ -25,7 +25,7 @@ func testGetOpenRouterAPIKey(t *testing.T) string {
 func TestE2EOpenRouterNonStreaming(t *testing.T) {
 	key := testGetOpenRouterAPIKey(t)
 
-	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", nil)
+	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", "", nil)
 	if err != nil {
 		t.Fatalf("NewOpenRouter() error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestE2EOpenRouterNonStreaming(t *testing.T) {
 func TestE2EOpenRouterStreaming(t *testing.T) {
 	key := testGetOpenRouterAPIKey(t)
 
-	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", nil)
+	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", "", nil)
 	if err != nil {
 		t.Fatalf("NewOpenRouter() error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestE2EOpenRouterStreaming(t *testing.T) {
 func TestE2EOpenRouterWithSystemPrompt(t *testing.T) {
 	key := testGetOpenRouterAPIKey(t)
 
-	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", nil)
+	llm, err := NewOpenRouter(context.Background(), "google/gemini-3.7-flash", key, "", "", nil)
 	if err != nil {
 		t.Fatalf("NewOpenRouter() error: %v", err)
 	}
