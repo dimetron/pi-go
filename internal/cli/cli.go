@@ -329,14 +329,17 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		return rootRuntime{}, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}
 
-	if baseURL == "" && info.Ollama {
-		if apiKey != "" {
-			baseURL = "https://api.ollama.com"
-		} else {
-			baseURL = "http://localhost:11434"
-		}
+	if info.Ollama {
+		// The model's tag decides the daemon, not whether OLLAMA_API_KEY
+		// happens to be exported: a key set for some :cloud model used to send
+		// locally pulled names like qwen3.8:27b-mlx to api.ollama.com, which
+		// answers 404 for a model only this machine has.
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		// Record the endpoint actually chosen so session metadata names the
+		// backend instead of leaving the model name to be interpreted.
+		info.BaseURL = baseURL
 	}
-	if info.Ollama && apiKey == "" {
+	if info.Ollama && apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return rootRuntime{}, fmt.Errorf("ollama health check: %w", err)
 		}
@@ -1590,11 +1593,11 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[info.Provider]
 	}
-	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+	if info.Ollama {
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
 	}
 
-	if info.Ollama {
+	if info.Ollama && !provider.IsOllamaCloudEndpoint(baseURL) {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return nil
 		}

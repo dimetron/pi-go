@@ -247,14 +247,10 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 		return nil, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, providerEnvVar(info.Provider))
 	}
 
-	if baseURL == "" && info.Ollama {
-		if apiKey != "" {
-			baseURL = "https://api.ollama.com"
-		} else {
-			baseURL = "http://localhost:11434"
-		}
+	if info.Ollama {
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
 	}
-	if info.Ollama && apiKey == "" {
+	if info.Ollama && apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return nil, fmt.Errorf("ollama health check: %w", err)
 		}
