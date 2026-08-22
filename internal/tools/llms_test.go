@@ -334,6 +334,10 @@ func TestLLMSFetchCacheFallsBackOnNetworkError(t *testing.T) {
 	if err != nil || out.Error != "" {
 		t.Fatalf("initial FetchDocs() = (%q, %v), want nil error", out.Error, err)
 	}
+	// Age the entry past llmsCacheTTL: a fresh entry would be served from
+	// disk without ever reaching the failing transport, and the test would
+	// pass without exercising the fallback.
+	ageLLMSCacheEntry(t, ts, u, 2*time.Hour)
 
 	withLLMSClient(t, &http.Client{Transport: errorTransport{}})
 	out, err = ts.FetchDocs(context.Background(), u)
@@ -1022,4 +1026,113 @@ func countLLMSCacheFiles(t *testing.T, dir string) int {
 		t.Fatal(err)
 	}
 	return len(entries)
+}
+
+// requirePOSIXPerms skips tests that rely on permission bits being enforced:
+// Windows ignores them and root bypasses them.
+func requirePOSIXPerms(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission bits")
+	}
+}
+
+func TestLLMSCacheWriteSkipsUnwritableDir(t *testing.T) {
+	// An existing cache directory that cannot be written to (CreateTemp
+	// fails) is a silent no-op, not an error or a panic.
+	requirePOSIXPerms(t)
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	if err := os.MkdirAll(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	ts := NewLLMSToolsetWithCache(nil, dir)
+	ts.cacheWrite(&llmsCacheEntry{URL: "https://adk.dev/page.md", Body: "x", FetchedAt: time.Now().Unix()})
+	if n := countLLMSCacheFiles(t, dir); n != 0 {
+		t.Fatalf("%d files written into a read-only cache dir, want 0", n)
+	}
+}
+
+func TestLLMSCacheWriteRenameFailureLeavesNoTempFile(t *testing.T) {
+	// If the entry cannot be renamed into place (here the destination is a
+	// directory), the temp file is removed rather than left to accumulate.
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	ts := NewLLMSToolsetWithCache(nil, dir)
+	u, _ := url.Parse("https://adk.dev/page.md")
+	if err := os.MkdirAll(ts.cachePath(u), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ts.cacheWrite(&llmsCacheEntry{URL: u.String(), Body: "x", FetchedAt: time.Now().Unix()})
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].IsDir() {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("cache dir = %v, want only the blocking directory (no temp file left)", names)
+	}
+	if ts.cacheRead(u) != nil {
+		t.Fatal("cacheRead returned an entry for a path that is a directory")
+	}
+}
+
+func TestLLMSCacheEvictEdgeCases(t *testing.T) {
+	// A missing cache directory is a no-op; non-entry files and
+	// subdirectories in the cache directory are neither counted nor removed.
+	ts := NewLLMSToolsetWithCache(nil, filepath.Join(t.TempDir(), "never-created"))
+	ts.cacheEvict() // must not panic
+
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	ts = NewLLMSToolsetWithCache(nil, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "subdir.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(dir, "stray.tmp")
+	if err := os.WriteFile(stray, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts.cacheWrite(&llmsCacheEntry{URL: "https://adk.dev/page.md", Body: "x", FetchedAt: time.Now().Unix()})
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("stray non-entry file was touched by eviction: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "subdir.json")); err != nil {
+		t.Fatalf("subdirectory was touched by eviction: %v", err)
+	}
+	if n := countLLMSCacheFiles(t, dir); n != 3 {
+		t.Fatalf("cache dir has %d entries, want 3 (entry, stray file, subdir)", n)
+	}
+}
+
+func TestLLMSCacheEvictToleratesUnremovableEntries(t *testing.T) {
+	// An entry that cannot be removed (read-only directory) keeps counting
+	// against the budget and eviction moves on without failing.
+	requirePOSIXPerms(t)
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	ts := NewLLMSToolsetWithCache(nil, dir)
+	for i := 0; i <= llmsCacheMaxEntries; i++ { // one over budget
+		rawURL := fmt.Sprintf("https://adk.dev/p%d.md", i)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		pu, _ := url.Parse(rawURL)
+		// Write directly so the per-write eviction does not run yet.
+		data := mustJSON(t, llmsCacheEntry{URL: rawURL, Body: "x", FetchedAt: time.Now().Unix()})
+		if err := os.WriteFile(ts.cachePath(pu), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	ts.cacheEvict()
+	if n := countLLMSCacheFiles(t, dir); n != llmsCacheMaxEntries+1 {
+		t.Fatalf("%d entries after eviction in a read-only dir, want all %d untouched", n, llmsCacheMaxEntries+1)
+	}
 }

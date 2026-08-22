@@ -380,10 +380,9 @@ func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
 	if err != nil {
 		return
 	}
-	data, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
+	// Marshaling cannot fail here: the entry is plain strings and an int64
+	// (invalid UTF-8 in a body is coerced, not rejected).
+	data, _ := json.Marshal(e)
 	if err := os.MkdirAll(t.cacheDir, 0o700); err != nil {
 		return
 	}
@@ -393,12 +392,8 @@ func (t *LLMSToolset) cacheWrite(e *llmsCacheEntry) {
 		return
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Close(); err != nil {
+	_, werr := tmp.Write(data)
+	if cerr := tmp.Close(); werr != nil || cerr != nil {
 		_ = os.Remove(tmpName)
 		return
 	}

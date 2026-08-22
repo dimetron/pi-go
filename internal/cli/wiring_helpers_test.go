@@ -207,6 +207,16 @@ func TestBuildToolsets(t *testing.T) {
 			cfg:     config.Config{A2A: &config.A2AConfig{}},
 			wantLen: 0,
 		},
+		{
+			name:    "llms sources add one (cached fetch_docs) toolset",
+			cfg:     config.Config{LLMS: &config.LLMSConfig{Sources: []config.LLMSSource{{Name: "adk", URL: "https://adk.dev/llms.txt"}}}},
+			wantLen: 1,
+		},
+		{
+			name:    "empty llms source list yields nothing",
+			cfg:     config.Config{LLMS: &config.LLMSConfig{}},
+			wantLen: 0,
+		},
 	}
 
 	for _, tt := range tests {
