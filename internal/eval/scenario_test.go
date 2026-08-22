@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,31 @@ func TestSeedWorkspace_GitHistoryAndModifications(t *testing.T) {
 	raw, _ := exec.Command("git", "-C", dir, "cat-file", "commit", "HEAD").Output()
 	if strings.Contains(string(raw), "gpgsig") {
 		t.Error("fixture commit is signed; gitEnv should force signing off")
+	}
+}
+
+func TestHomeEnv(t *testing.T) {
+	home := t.TempDir()
+	env := HomeEnv(home)
+	if env[0] != "HOME="+home {
+		t.Errorf("HomeEnv[0] = %q", env[0])
+	}
+	wantLen := 1
+	if runtime.GOOS == "windows" {
+		wantLen = 2
+		if env[1] != "USERPROFILE="+home {
+			t.Errorf("HomeEnv[1] = %q, want USERPROFILE (os.UserHomeDir reads it on Windows)", env[1])
+		}
+	}
+	if len(env) != wantLen {
+		t.Errorf("HomeEnv = %v, want %d entries", env, wantLen)
+	}
+	// gitEnv must carry the same redirection plus the signing/autocrlf overrides.
+	git := strings.Join(gitEnv(home), "\n")
+	for _, want := range []string{"HOME=" + home, "commit.gpgsign", "tag.gpgsign", "core.autocrlf", "GIT_CONFIG_VALUE_3=false"} {
+		if !strings.Contains(git, want) {
+			t.Errorf("gitEnv missing %q", want)
+		}
 	}
 }
 

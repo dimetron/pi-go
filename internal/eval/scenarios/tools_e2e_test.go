@@ -265,15 +265,16 @@ func runPi(ctx context.Context, bin, workDir, home string, s eval.Scenario, time
 }
 
 // piEnv is the environment a scenario's pi process runs with: the caller's
-// environment (API keys, PATH, go toolchain) with HOME redirected to the
-// isolated home, git signing forced off for anything the agent commits, and
+// environment (API keys, PATH, go toolchain) with the home directory
+// redirected to the isolated home (HOME, plus USERPROFILE on Windows — see
+// eval.HomeEnv), git signing forced off for anything the agent commits, and
 // the sandbox-root override dropped so the workspace is the sandbox.
 func piEnv(home string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		key, _, _ := strings.Cut(kv, "=")
 		switch key {
-		case "HOME", "PI_SANDBOX_ROOT", "GIT_CONFIG_COUNT":
+		case "HOME", "USERPROFILE", "PI_SANDBOX_ROOT", "GIT_CONFIG_COUNT":
 			continue
 		}
 		if strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
@@ -281,8 +282,8 @@ func piEnv(home string) []string {
 		}
 		env = append(env, kv)
 	}
+	env = append(env, eval.HomeEnv(home)...)
 	return append(env,
-		"HOME="+home,
 		"GIT_AUTHOR_NAME=pi-eval", "GIT_AUTHOR_EMAIL=pi-eval@example.invalid",
 		"GIT_COMMITTER_NAME=pi-eval", "GIT_COMMITTER_EMAIL=pi-eval@example.invalid",
 		"GIT_CONFIG_COUNT=2",

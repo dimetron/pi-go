@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -377,20 +378,38 @@ func subagentSpawned(loaded []*LoadedTrajectory) (bool, string) {
 
 // --- Workspace seeding ---
 
+// HomeEnv returns the environment entries that point the home directory at
+// home for a child process. os.UserHomeDir reads HOME on Unix but USERPROFILE
+// on Windows, so both are set there; with HOME alone a pi process on Windows
+// would silently read and write the runner's real ~/.pi-go (the same trap
+// internal/testenv.SetHome guards against in tests).
+func HomeEnv(home string) []string {
+	env := []string{"HOME=" + home}
+	if runtime.GOOS == "windows" {
+		env = append(env, "USERPROFILE="+home)
+	}
+	return env
+}
+
 // gitEnv returns an environment for fixture git commands that cannot touch the
 // user's identity or signing setup: HOME is the eval's isolated home, the
-// author is synthetic, and commit/tag signing is forced off.
+// author is synthetic, commit/tag signing is forced off, and line-ending
+// conversion is disabled so the LF fixtures land in the index and the working
+// tree byte-for-byte on every platform (a global core.autocrlf=true, the Git
+// for Windows default, would otherwise make file_contains checks and git
+// status depend on the host).
 func gitEnv(home string) []string {
-	return append(os.Environ(),
-		"HOME="+home,
+	env := append(os.Environ(), HomeEnv(home)...)
+	return append(env,
 		"GIT_AUTHOR_NAME=pi-eval",
 		"GIT_AUTHOR_EMAIL=pi-eval@example.invalid",
 		"GIT_COMMITTER_NAME=pi-eval",
 		"GIT_COMMITTER_EMAIL=pi-eval@example.invalid",
-		"GIT_CONFIG_COUNT=3",
+		"GIT_CONFIG_COUNT=4",
 		"GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=false",
 		"GIT_CONFIG_KEY_1=tag.gpgsign", "GIT_CONFIG_VALUE_1=false",
 		"GIT_CONFIG_KEY_2=init.defaultBranch", "GIT_CONFIG_VALUE_2=main",
+		"GIT_CONFIG_KEY_3=core.autocrlf", "GIT_CONFIG_VALUE_3=false",
 	)
 }
 
