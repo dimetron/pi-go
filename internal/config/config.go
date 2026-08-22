@@ -88,6 +88,7 @@ type Config struct {
 	Memory        *MemoryConfig      `json:"memory,omitempty"`
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
+	LLMS          *LLMSConfig        `json:"llms,omitempty"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -156,6 +157,17 @@ type A2AAgentConfig struct {
 // A2AConfig holds configuration for A2A agent connections.
 type A2AConfig struct {
 	Agents []A2AAgentConfig `json:"agents,omitempty"`
+}
+
+// LLMSSource defines a single llms.txt documentation source.
+type LLMSSource struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// LLMSConfig holds configuration for llms.txt documentation sources.
+type LLMSConfig struct {
+	Sources []LLMSSource `json:"sources,omitempty"`
 }
 
 // Defaults returns a Config with default values.
