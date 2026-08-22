@@ -1,2 +1,5 @@
 ignore:
   - "cmd/"
+  # Test-only helpers, imported solely from _test.go files; the Windows arms
+  # of these helpers can never execute on the Linux coverage job.
+  - "internal/testenv/"
