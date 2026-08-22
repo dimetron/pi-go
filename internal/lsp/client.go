@@ -221,17 +221,7 @@ func (c *Client) writeMessage(msg any) error {
 // readLoop reads Content-Length framed JSON-RPC messages from stdout.
 func (c *Client) readLoop() {
 	defer func() {
-		// Fail all pending requests.
-		c.pendMu.Lock()
-		for id, ch := range c.pending {
-			ch <- &Response{
-				JSONRPC: "2.0",
-				ID:      &id,
-				Error:   &ResponseError{Code: -1, Message: "server exited"},
-			}
-			delete(c.pending, id)
-		}
-		c.pendMu.Unlock()
+		c.failPending()
 
 		select {
 		case <-c.done:
@@ -242,25 +232,10 @@ func (c *Client) readLoop() {
 
 	reader := bufio.NewReader(c.stdout)
 	for {
-		// Read headers until empty line.
-		contentLength := -1
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			line = strings.TrimRight(line, "\r\n")
-			if line == "" {
-				break // end of headers
-			}
-			if val, ok := strings.CutPrefix(line, "Content-Length: "); ok {
-				n, err := strconv.Atoi(val)
-				if err == nil {
-					contentLength = n
-				}
-			}
+		contentLength, err := readFrameLength(reader)
+		if err != nil {
+			return
 		}
-
 		if contentLength < 0 {
 			continue
 		}
@@ -272,6 +247,47 @@ func (c *Client) readLoop() {
 		}
 
 		c.handleMessage(body)
+	}
+}
+
+// failPending answers every in-flight request with a "server exited" error and
+// empties the pending map. It is the reader goroutine's last act, so a caller
+// blocked in Request is never left waiting for a server that is gone.
+func (c *Client) failPending() {
+	c.pendMu.Lock()
+	for id, ch := range c.pending {
+		ch <- &Response{
+			JSONRPC: "2.0",
+			ID:      &id,
+			Error:   &ResponseError{Code: -1, Message: "server exited"},
+		}
+		delete(c.pending, id)
+	}
+	c.pendMu.Unlock()
+}
+
+// readFrameLength consumes one header block, up to and including the blank line
+// that ends it, and returns the Content-Length it declared. It returns -1 when
+// the block carried no parsable Content-Length, which tells the caller to drop
+// the frame; a read failure ends the reader.
+func readFrameLength(reader *bufio.Reader) (int, error) {
+	contentLength := -1
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return contentLength, nil // end of headers
+		}
+		val, ok := strings.CutPrefix(line, "Content-Length: ")
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(val); err == nil {
+			contentLength = n
+		}
 	}
 }
 

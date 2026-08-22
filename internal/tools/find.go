@@ -62,61 +62,82 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 	// Normalize doublestar patterns: since WalkDir already recurses,
 	// strip "**/" prefixes so filepath.Match can handle the rest.
 	// e.g. "**/*.go" → "*.go", "src/**/*.go" → "src/**/*.go" (handled below)
-	pattern := input.Pattern
-	filePattern := normalizeGlobPattern(pattern)
+	w := &findWalk{
+		root:        rel,
+		pattern:     input.Pattern,
+		filePattern: normalizeGlobPattern(input.Pattern),
+		patterns:    patterns,
+	}
 
-	var files []string
-	total := 0
-
-	_ = fs.WalkDir(fsys, rel, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if shouldSkipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			// Apply .gitignore: if any pattern says skip this directory, skip it
-			if shouldSkipPath(path, d, patterns) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Apply .gitignore file filters
-		if shouldSkipPath(path, d, patterns) {
-			return nil
-		}
-
-		// Match against the filename using the normalized pattern
-		name := d.Name()
-		matched, _ := filepath.Match(filePattern, name)
-		if !matched {
-			// Try matching against relative path for patterns like "src/*.go"
-			relPath, relErr := filepath.Rel(rel, path)
-			if relErr == nil {
-				matched, _ = filepath.Match(filePattern, relPath)
-				if !matched {
-					// For patterns like "src/**/*.go", match each path segment
-					matched = matchDoublestar(pattern, relPath)
-				}
-			}
-		}
-
-		if matched {
-			total++
-			if len(files) < maxFindResults {
-				files = append(files, path)
-			}
-		}
-		return nil
-	})
+	_ = fs.WalkDir(fsys, rel, w.visit)
 
 	return FindOutput{
-		Files:      files,
-		TotalFiles: total,
-		Truncated:  total > len(files),
+		Files:      w.files,
+		TotalFiles: w.total,
+		Truncated:  w.total > len(w.files),
 	}, nil
+}
+
+// findWalk carries the state one find walk accumulates. Holding it here keeps
+// the WalkDir callback a named method at nesting depth zero instead of a
+// closure buried inside findHandler.
+type findWalk struct {
+	root        string // walk root, relative to the sandbox
+	pattern     string // the caller's pattern, as given
+	filePattern string // pattern with leading "**/" stripped
+	patterns    []GitignorePattern
+	files       []string
+	total       int
+}
+
+// visit is the fs.WalkDir callback: it prunes skipped directories, drops
+// gitignored and non-matching files, and records the rest.
+func (w *findWalk) visit(path string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return nil
+	}
+	if d.IsDir() {
+		// Skip always-ignored directories, and any the .gitignore prunes.
+		if shouldSkipDir(d.Name()) || shouldSkipPath(path, d, w.patterns) {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+
+	// Apply .gitignore file filters
+	if shouldSkipPath(path, d, w.patterns) {
+		return nil
+	}
+	if !w.matches(path, d.Name()) {
+		return nil
+	}
+
+	w.total++
+	if len(w.files) < maxFindResults {
+		w.files = append(w.files, path)
+	}
+	return nil
+}
+
+// matches reports whether a file is a hit: by filename first, then by path
+// relative to the walk root, then by doublestar expansion of that path.
+func (w *findWalk) matches(path, name string) bool {
+	// Match against the filename using the normalized pattern
+	if matched, _ := filepath.Match(w.filePattern, name); matched {
+		return true
+	}
+
+	// Try matching against relative path for patterns like "src/*.go"
+	relPath, relErr := filepath.Rel(w.root, path)
+	if relErr != nil {
+		return false
+	}
+	if matched, _ := filepath.Match(w.filePattern, relPath); matched {
+		return true
+	}
+
+	// For patterns like "src/**/*.go", match each path segment
+	return matchDoublestar(w.pattern, relPath)
 }
 
 // shouldSkipDir returns true for directories that should always be skipped.

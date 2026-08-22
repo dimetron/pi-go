@@ -311,69 +311,104 @@ func (o *Orchestrator) LookupAgent(name string) (AgentConfig, error) {
 // It monitors the subagent and re-spawns if the subagent crashes with status "failed" or "killed".
 // Returns the final events channel, agentID, and error (nil on success).
 func (o *Orchestrator) SpawnWithRetry(ctx context.Context, input SpawnInput) (<-chan Event, string, error) {
-	maxRetries := input.MaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
-	if maxRetries > 3 {
-		maxRetries = 3
-	}
+	maxRetries := clampRetries(input.MaxRetries)
 
 	var lastErr error
 	var finalAgentID string
 	var finalEvents <-chan Event
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// The first try is attempt 0, so the last one is attempt == maxRetries
+		// and the count reported in errors is attempt+1.
+		lastAttempt := attempt == maxRetries
+
 		events, agentID, err := o.Spawn(ctx, input)
-		if err != nil {
-			lastErr = err
+		switch {
+		case err != nil && lastAttempt:
+			return nil, "", fmt.Errorf("spawn failed after %d attempts: %w", attempt+1, err)
+		case err != nil:
 			// On spawn error, retry if we have attempts left.
-			if attempt < maxRetries {
-				continue
-			}
-			return nil, "", fmt.Errorf("spawn failed after %d attempts: %w", attempt+1, lastErr)
+			lastErr = err
+			continue
 		}
 
 		finalAgentID = agentID
 		finalEvents = events
 
-		// If no retries configured, return immediately.
+		// If no retries configured, return immediately — the caller gets the
+		// stream undrained.
 		if maxRetries == 0 {
 			return finalEvents, finalAgentID, nil
 		}
 
-		// Wait for the subagent to complete and check status.
-		var status string
-		for ev := range events {
-			// Forward events to caller (consume the channel).
-			if ev.Type == "message_end" || ev.Type == "error" {
-				// Check agent state.
-				o.mu.Lock()
-				state := o.agents[agentID]
-				if state != nil {
-					status = state.Status
-				}
-				o.mu.Unlock()
-
-				if status == "failed" || status == "killed" {
-					// Crash detected — retry if we have attempts left.
-					if attempt < maxRetries {
-						break
-					}
-					return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
-				}
-				return finalEvents, finalAgentID, nil
-			}
+		// Wait for the subagent to reach a terminal event and check status.
+		switch outcome := o.awaitAttemptOutcome(events, agentID); {
+		case outcome == attemptHealthy, outcome == attemptSilent && lastAttempt:
+			return finalEvents, finalAgentID, nil
+		case lastAttempt:
+			return nil, agentID, fmt.Errorf("subagent %s crashed after %d attempts", agentID, attempt+1)
 		}
-
-		// If we broke out of the loop for retry, continue to next attempt.
-		if attempt < maxRetries {
-			continue
-		}
-		return finalEvents, finalAgentID, nil
+		// Crashed or silent with attempts left: re-spawn.
 	}
 
 	return finalEvents, finalAgentID, lastErr
+}
+
+// clampRetries pins a requested retry budget to the supported range: never
+// negative, never more than three re-spawns.
+func clampRetries(maxRetries int) int {
+	if maxRetries < 0 {
+		return 0
+	}
+	if maxRetries > 3 {
+		return 3
+	}
+	return maxRetries
+}
+
+// attemptOutcome is how one SpawnWithRetry attempt ended, as observed on the
+// agent's event stream.
+type attemptOutcome int
+
+const (
+	// attemptHealthy: a terminal event arrived and the agent was not in a
+	// crashed state — the stream belongs to the caller now.
+	attemptHealthy attemptOutcome = iota
+	// attemptCrashed: a terminal event arrived while the agent was tracked as
+	// "failed" or "killed".
+	attemptCrashed
+	// attemptSilent: the stream closed without ever producing a terminal event.
+	attemptSilent
+)
+
+// awaitAttemptOutcome consumes events until the first terminal one
+// ("message_end" or "error") and reports how the attempt ended. Events before
+// that are dropped, which is why the maxRetries==0 shortcut in SpawnWithRetry
+// skips this entirely.
+func (o *Orchestrator) awaitAttemptOutcome(events <-chan Event, agentID string) attemptOutcome {
+	for ev := range events {
+		if ev.Type != "message_end" && ev.Type != "error" {
+			continue
+		}
+		if o.agentCrashed(agentID) {
+			return attemptCrashed
+		}
+		return attemptHealthy
+	}
+	return attemptSilent
+}
+
+// agentCrashed reports whether the tracked agent is in a state worth
+// re-spawning. An agent that has already been evicted from the map is not
+// treated as crashed.
+func (o *Orchestrator) agentCrashed(agentID string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	state := o.agents[agentID]
+	if state == nil {
+		return false
+	}
+	return state.Status == "failed" || state.Status == "killed"
 }
 
 // Spawn starts a new subagent and returns an event channel.

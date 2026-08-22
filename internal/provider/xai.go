@@ -92,61 +92,80 @@ func (m *xaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			_ = yield(nil, fmt.Errorf("xAI responses: nil LLM request"))
 			return
 		}
-		input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
+		params, err := m.buildXAIResponsesParams(req)
 		if err != nil {
-			_ = yield(nil, fmt.Errorf("xAI responses input: %w", err))
+			_ = yield(nil, err)
 			return
 		}
 
-		modelName := req.Model
-		if modelName == "" {
-			modelName = m.modelName
-		}
-
-		params := responses.ResponseNewParams{
-			Model: modelName,
-			Input: input,
-			// Match the OpenAI Responses default: do not persist the turn
-			// server-side. Multi-turn continues via the full conversation
-			// replayed in params.Input.
-			Store: param.NewOpt(false),
-		}
-		if instructions != "" {
-			params.Instructions = param.NewOpt(instructions)
-		}
-
-		tools := xaiRequestTools(req, m.enableXAITools)
-		if len(tools) > 0 {
-			params.Tools = tools
-		}
-
-		if m.reasoningEffort != "" && xaiModelReasons(modelName) {
-			params.Reasoning = shared.ReasoningParam{Effort: m.reasoningEffort}
-		}
-
+		// send performs the request once. It takes its own yield so retryStream
+		// can re-run it across attempts.
 		send := func(y func(*model.LLMResponse, error) bool) {
-			var sendErr error
-			if stream {
-				_, sendErr = m.runResponsesStreaming(ctx, params, y)
-			} else {
-				_, sendErr = m.runResponsesNonStreaming(ctx, params, y)
-			}
-			if sendErr == nil {
-				return
-			}
-			if stream {
-				_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: sendErr.Error()}, nil)
-				return
-			}
-			_ = y(nil, fmt.Errorf("xAI Responses API failed: %w", sendErr))
+			m.sendXAIResponses(ctx, params, stream, y)
 		}
 
-		if stream {
-			retryStream(ctx, streamRetryConfig(), yield, send)
-		} else {
+		if !stream {
 			send(yield)
+			return
 		}
+		retryStream(ctx, streamRetryConfig(), yield, send)
 	}
+}
+
+// buildXAIResponsesParams assembles the Responses request for one turn.
+func (m *xaiModel) buildXAIResponsesParams(req *model.LLMRequest) (responses.ResponseNewParams, error) {
+	input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
+	if err != nil {
+		return responses.ResponseNewParams{}, fmt.Errorf("xAI responses input: %w", err)
+	}
+
+	modelName := req.Model
+	if modelName == "" {
+		modelName = m.modelName
+	}
+
+	params := responses.ResponseNewParams{
+		Model: modelName,
+		Input: input,
+		// Match the OpenAI Responses default: do not persist the turn
+		// server-side. Multi-turn continues via the full conversation
+		// replayed in params.Input.
+		Store: param.NewOpt(false),
+	}
+	if instructions != "" {
+		params.Instructions = param.NewOpt(instructions)
+	}
+	if tools := xaiRequestTools(req, m.enableXAITools); len(tools) > 0 {
+		params.Tools = tools
+	}
+	if m.reasoningEffort != "" && xaiModelReasons(modelName) {
+		params.Reasoning = shared.ReasoningParam{Effort: m.reasoningEffort}
+	}
+	return params, nil
+}
+
+// sendXAIResponses runs one Responses request and reports a failure in the shape
+// the caller's mode expects: a STREAM_ERROR response while streaming, so the
+// turn ends cleanly, and a yielded error otherwise.
+//
+// The name keeps it distinct from the embedded openaiModel's sendResponses,
+// which it does not replace: that one also recovers from a rejected
+// previous_response_id, and xAI requests never carry one.
+func (m *xaiModel) sendXAIResponses(ctx context.Context, params responses.ResponseNewParams, stream bool, y func(*model.LLMResponse, error) bool) {
+	var err error
+	if stream {
+		_, err = m.runResponsesStreaming(ctx, params, y)
+	} else {
+		_, err = m.runResponsesNonStreaming(ctx, params, y)
+	}
+	if err == nil {
+		return
+	}
+	if stream {
+		_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+		return
+	}
+	_ = y(nil, fmt.Errorf("xAI Responses API failed: %w", err))
 }
 
 // xaiRequestTools is the function declarations from the ADK request plus

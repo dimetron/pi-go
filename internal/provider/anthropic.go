@@ -109,71 +109,91 @@ func isAnthropicOAuthToken(apiKey string) bool {
 
 func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, systemPrompt := antContentsToMessages(req.Contents, req.Config)
+		m.generate(ctx, req, stream, yield)
+	}
+}
 
-		modelName := m.modelName
-		if req.Model != "" && req.Model != "anthropic" {
-			modelName = req.Model
-		}
-		if modelName == "" || modelName == "anthropic" {
-			modelName = "claude-sonnet-5"
-		}
+// generate runs one request against whichever Anthropic surface the model is
+// configured for. It lives outside the iterator closure so the routing reads at
+// the top level rather than one nesting level down.
+func (m *anthropicModel) generate(ctx context.Context, req *model.LLMRequest, stream bool, yield func(*model.LLMResponse, error) bool) {
+	messages, systemPrompt := antContentsToMessages(req.Contents, req.Config)
+	modelName := antResolveModelName(m.modelName, req.Model)
 
-		maxTokens := defaultMaxTokens
-		thinkingCfg := antThinkingConfig(m.thinkingLevel)
-		if thinkingCfg != nil {
-			// Thinking requires higher max_tokens to accommodate the thinking budget.
-			maxTokens = 16384
-		}
+	maxTokens := defaultMaxTokens
+	thinkingCfg := antThinkingConfig(m.thinkingLevel)
+	if thinkingCfg != nil {
+		// Thinking requires higher max_tokens to accommodate the thinking budget.
+		maxTokens = 16384
+	}
 
-		// Route to advisor-aware or standard implementation.
-		if m.advisorModel != "" {
-			thinkingCfgBeta := antThinkingConfigBeta(m.thinkingLevel)
-			params := m.buildBetaParams(modelName, messages, systemPrompt, maxTokens, thinkingCfgBeta, req.Config)
-			if stream {
-				retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-					antRunStreamingBeta(ctx, &m.betaClient, params, y)
-				})
-			} else {
-				antRunNonStreamingBeta(ctx, &m.betaClient, params, yield)
-			}
+	// Route to advisor-aware or standard implementation.
+	if m.advisorModel != "" {
+		thinkingCfgBeta := antThinkingConfigBeta(m.thinkingLevel)
+		params := m.buildBetaParams(modelName, messages, systemPrompt, maxTokens, thinkingCfgBeta, req.Config)
+		if !stream {
+			antRunNonStreamingBeta(ctx, &m.betaClient, params, yield)
 			return
 		}
+		retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+			antRunStreamingBeta(ctx, &m.betaClient, params, y)
+		})
+		return
+	}
 
-		params := anthropic.MessageNewParams{
-			Model:     modelName,
-			Messages:  messages,
-			MaxTokens: maxTokens,
-		}
+	params := m.buildParams(modelName, messages, systemPrompt, maxTokens, thinkingCfg, req.Config)
+	if !stream {
+		antRunNonStreaming(ctx, &m.client, params, yield)
+		return
+	}
+	retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+		antRunStreaming(ctx, &m.client, params, y)
+	})
+}
 
-		if thinkingCfg != nil {
-			params.Thinking = *thinkingCfg
-		}
+// antResolveModelName picks the model one request runs against: the request's
+// own override when it names a concrete model, else the configured default,
+// else the built-in fallback. "anthropic" is the provider alias, not a model.
+func antResolveModelName(configured, requested string) string {
+	modelName := configured
+	if requested != "" && requested != "anthropic" {
+		modelName = requested
+	}
+	if modelName == "" || modelName == "anthropic" {
+		return "claude-sonnet-5"
+	}
+	return modelName
+}
 
-		if systemPrompt != "" {
-			params.System = []anthropic.TextBlockParam{
-				{Text: systemPrompt},
-			}
-		}
+// buildParams constructs MessageNewParams for the standard (non-advisor) path.
+func (m *anthropicModel) buildParams(modelName string, messages []anthropic.MessageParam, systemPrompt string, maxTokens int64, thinkingCfg *anthropic.ThinkingConfigParamUnion, config *genai.GenerateContentConfig) anthropic.MessageNewParams {
+	params := anthropic.MessageNewParams{
+		Model:     modelName,
+		Messages:  messages,
+		MaxTokens: maxTokens,
+	}
 
-		if req.Config != nil && len(req.Config.Tools) > 0 {
-			params.Tools = antGenaiToolsToAnthropic(req.Config.Tools)
-		}
+	if thinkingCfg != nil {
+		params.Thinking = *thinkingCfg
+	}
 
-		// Stamp cache_control markers on the request unless the user opted
-		// out. This is the last wire step so all sections are final.
-		if !m.disablePromptCaching {
-			applyAnthropicCacheControl(&params)
-		}
-
-		if stream {
-			retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-				antRunStreaming(ctx, &m.client, params, y)
-			})
-		} else {
-			antRunNonStreaming(ctx, &m.client, params, yield)
+	if systemPrompt != "" {
+		params.System = []anthropic.TextBlockParam{
+			{Text: systemPrompt},
 		}
 	}
+
+	if config != nil && len(config.Tools) > 0 {
+		params.Tools = antGenaiToolsToAnthropic(config.Tools)
+	}
+
+	// Stamp cache_control markers on the request unless the user opted
+	// out. This is the last wire step so all sections are final.
+	if !m.disablePromptCaching {
+		applyAnthropicCacheControl(&params)
+	}
+
+	return params
 }
 
 // buildBetaParams constructs BetaMessageNewParams for advisor tool support.
@@ -257,41 +277,82 @@ func convertContentBlockToBeta(c anthropic.ContentBlockParamUnion) anthropic.Bet
 	return anthropic.NewBetaTextBlock("")
 }
 
-// antGenaiToolsToBetaAnthropic converts genai tools to Anthropic beta tool format.
-func antGenaiToolsToBetaAnthropic(tools []*genai.Tool) []anthropic.BetaToolUnionParam {
-	var out []anthropic.BetaToolUnionParam
+// antToolSchema is one genai function declaration reduced to the fields both
+// the standard and the beta Anthropic tool formats are built from. The two
+// formats emit byte-identical JSON; only the Go wrapper types differ, so the
+// flattening and schema-reading below is shared and each converter is a thin
+// adapter over it.
+type antToolSchema struct {
+	name        string
+	description string
+	properties  map[string]any
+	required    []string
+}
+
+// antToolSchemas flattens genai tools into one entry per usable function
+// declaration, skipping nil tools and nil declarations. A tool with no
+// declarations needs no guard: ranging a nil slice yields nothing.
+func antToolSchemas(tools []*genai.Tool) []antToolSchema {
+	var out []antToolSchema
 	for _, t := range tools {
-		if t == nil || t.FunctionDeclarations == nil {
+		if t == nil {
 			continue
 		}
 		for _, fd := range t.FunctionDeclarations {
 			if fd == nil {
 				continue
 			}
-			inputSchema := anthropic.BetaToolInputSchemaParam{
-				Properties: make(map[string]any),
-			}
-			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
-				if props, ok := m["properties"].(map[string]any); ok {
-					inputSchema.Properties = props
-				}
-				if required, ok := m["required"].([]any); ok {
-					reqStrings := make([]string, 0, len(required))
-					for _, r := range required {
-						if s, ok := r.(string); ok {
-							reqStrings = append(reqStrings, s)
-						}
-					}
-					inputSchema.Required = reqStrings
-				}
-			}
-			tool := anthropic.BetaToolParam{
-				Name:        fd.Name,
-				Description: anthropic.String(fd.Description),
-				InputSchema: inputSchema,
-			}
-			out = append(out, anthropic.BetaToolUnionParam{OfTool: &tool})
+			properties, required := antSchemaFields(fd.ParametersJsonSchema)
+			out = append(out, antToolSchema{
+				name:        fd.Name,
+				description: fd.Description,
+				properties:  properties,
+				required:    required,
+			})
 		}
+	}
+	return out
+}
+
+// antSchemaFields reads the "properties" and "required" members out of a genai
+// parameter schema.
+//
+// Properties defaults to an empty (never nil) map so a tool with no parameters
+// still advertises an object schema; Anthropic passes the property map through
+// verbatim, which is why this half is not shared with the Ollama converter —
+// that one flattens each property into a typed ollamaapi.ToolProperty.
+//
+// Required comes from jsonSchemaRequiredNames, shared with the Ollama
+// converter. Its nil-versus-empty distinction is load bearing here:
+// ToolInputSchemaParam.Required is tagged `omitzero`, so nil omits the key
+// while a non-nil empty slice emits "required": []. A schema whose required
+// list is absent or is not a JSON array omits the key; one that is an array
+// with no usable string entries emits an empty array.
+func antSchemaFields(parametersJSONSchema any) (map[string]any, []string) {
+	properties := make(map[string]any)
+	schema := schemaToMap(parametersJSONSchema)
+	if schema == nil {
+		return properties, nil
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		properties = props
+	}
+	return properties, jsonSchemaRequiredNames(schema["required"])
+}
+
+// antGenaiToolsToBetaAnthropic converts genai tools to Anthropic beta tool format.
+func antGenaiToolsToBetaAnthropic(tools []*genai.Tool) []anthropic.BetaToolUnionParam {
+	var out []anthropic.BetaToolUnionParam
+	for _, s := range antToolSchemas(tools) {
+		tool := anthropic.BetaToolParam{
+			Name:        s.name,
+			Description: anthropic.String(s.description),
+			InputSchema: anthropic.BetaToolInputSchemaParam{
+				Properties: s.properties,
+				Required:   s.required,
+			},
+		}
+		out = append(out, anthropic.BetaToolUnionParam{OfTool: &tool})
 	}
 	return out
 }
@@ -397,40 +458,20 @@ func antTextMessage(role, text string) anthropic.MessageParam {
 	}
 }
 
+// antGenaiToolsToAnthropic converts genai tools to the standard Anthropic tool
+// format. Same shared core as antGenaiToolsToBetaAnthropic, different wrapper.
 func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
 	var out []anthropic.ToolUnionParam
-	for _, t := range tools {
-		if t == nil || t.FunctionDeclarations == nil {
-			continue
+	for _, s := range antToolSchemas(tools) {
+		tool := anthropic.ToolParam{
+			Name:        s.name,
+			Description: anthropic.String(s.description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: s.properties,
+				Required:   s.required,
+			},
 		}
-		for _, fd := range t.FunctionDeclarations {
-			if fd == nil {
-				continue
-			}
-			inputSchema := anthropic.ToolInputSchemaParam{
-				Properties: make(map[string]any),
-			}
-			if m := schemaToMap(fd.ParametersJsonSchema); m != nil {
-				if props, ok := m["properties"].(map[string]any); ok {
-					inputSchema.Properties = props
-				}
-				if required, ok := m["required"].([]any); ok {
-					reqStrings := make([]string, 0, len(required))
-					for _, r := range required {
-						if s, ok := r.(string); ok {
-							reqStrings = append(reqStrings, s)
-						}
-					}
-					inputSchema.Required = reqStrings
-				}
-			}
-			tool := anthropic.ToolParam{
-				Name:        fd.Name,
-				Description: anthropic.String(fd.Description),
-				InputSchema: inputSchema,
-			}
-			out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
-		}
+		out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
 	}
 	return out
 }
@@ -567,32 +608,34 @@ func antHandleContentBlockDelta(e anthropic.ContentBlockDeltaEvent, state *antSt
 	delta := e.Delta
 	switch delta.Type {
 	case "text_delta":
-		if textDelta, ok := delta.AsAny().(anthropic.TextDelta); ok {
-			state.text += textDelta.Text
-			if !yield(&model.LLMResponse{
-				Partial:      true,
-				TurnComplete: false,
-				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
-			}, nil) {
-				return false
-			}
+		textDelta, ok := delta.AsAny().(anthropic.TextDelta)
+		if !ok {
+			return true
 		}
+		state.text += textDelta.Text
+		return yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
+		}, nil)
 	case "thinking_delta":
-		if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
-			if !yield(&model.LLMResponse{
-				Partial:      true,
-				TurnComplete: false,
-				Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
-			}, nil) {
-				return false
-			}
+		thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta)
+		if !ok {
+			return true
 		}
+		return yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
+		}, nil)
 	case "input_json_delta":
-		if jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta); ok {
-			if block, exists := state.toolUse[idx]; exists {
-				block.inputJSON += jsonDelta.PartialJSON
-				state.toolUse[idx] = block
-			}
+		jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta)
+		if !ok {
+			return true
+		}
+		if block, exists := state.toolUse[idx]; exists {
+			block.inputJSON += jsonDelta.PartialJSON
+			state.toolUse[idx] = block
 		}
 	}
 	return true
@@ -786,34 +829,8 @@ func antRunNonStreamingBeta(ctx context.Context, client *anthropic.BetaService, 
 
 	parts := make([]*genai.Part, 0, len(message.Content))
 	for _, block := range message.Content {
-		switch block.Type {
-		case "text":
-			textBlock := block.Text
-			if textBlock != "" {
-				parts = append(parts, &genai.Part{Text: textBlock})
-			}
-		case "thinking":
-			thinkingBlock := block.Thinking
-			if thinkingBlock != "" {
-				parts = append(parts, &genai.Part{Text: thinkingBlock})
-			}
-		case "tool_use":
-			id := block.ID
-			name := block.Name
-			var args map[string]any
-			if block.Input != nil {
-				_ = json.Unmarshal(block.Input, &args)
-			}
-			if name != "" || id != "" {
-				p := genai.NewPartFromFunctionCall(name, args)
-				p.FunctionCall.ID = id
-				parts = append(parts, p)
-			}
-		case "advisor_tool_result":
-			advText := extractBetaAdvisorResultText(block)
-			if advText != "" {
-				parts = append(parts, &genai.Part{Text: advText})
-			}
+		if p := antBetaBlockToPart(block); p != nil {
+			parts = append(parts, p)
 		}
 	}
 
@@ -832,6 +849,45 @@ func antRunNonStreamingBeta(ctx context.Context, client *anthropic.BetaService, 
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: parts},
 	}, nil)
+}
+
+// antBetaBlockToPart converts one non-streaming beta content block into the
+// genai part it contributes, or nil when the block carries nothing to emit —
+// an empty text/thinking/advisor payload, or a block type this path ignores.
+func antBetaBlockToPart(block anthropic.BetaContentBlockUnion) *genai.Part {
+	switch block.Type {
+	case "text":
+		if block.Text != "" {
+			return &genai.Part{Text: block.Text}
+		}
+	case "thinking":
+		if block.Thinking != "" {
+			return &genai.Part{Text: block.Thinking}
+		}
+	case "tool_use":
+		return antBetaToolUsePart(block)
+	case "advisor_tool_result":
+		if advText := extractBetaAdvisorResultText(block); advText != "" {
+			return &genai.Part{Text: advText}
+		}
+	}
+	return nil
+}
+
+// antBetaToolUsePart renders a beta tool_use block as a function-call part.
+// A block that identifies no tool at all is dropped; absent input leaves the
+// arguments nil rather than an empty map.
+func antBetaToolUsePart(block anthropic.BetaContentBlockUnion) *genai.Part {
+	if block.Name == "" && block.ID == "" {
+		return nil
+	}
+	var args map[string]any
+	if block.Input != nil {
+		_ = json.Unmarshal(block.Input, &args)
+	}
+	p := genai.NewPartFromFunctionCall(block.Name, args)
+	p.FunctionCall.ID = block.ID
+	return p
 }
 
 // extractAdvisorResultText extracts the advisor result text from an advisor_tool_result block.

@@ -87,22 +87,46 @@ func (g *Graph) Traverse(ctx context.Context, startRoom string, maxHops int) ([]
 	frontier := []string{startRoom}
 
 	for hop := 1; hop <= maxHops && len(frontier) > 0; hop++ {
-		var next []string
-		for _, room := range frontier {
-			node := nodes[room]
-			for wing := range node.wings {
-				for _, neighbor := range wingRooms(nodes, wing) {
-					if _, seen := visited[neighbor]; !seen {
-						visited[neighbor] = hop
-						next = append(next, neighbor)
-					}
-				}
-			}
-		}
-		frontier = next
+		frontier = expandFrontier(nodes, frontier, visited, hop)
 	}
 
-	// Build results (exclude start room itself).
+	results := traverseResults(nodes, visited, startRoom)
+
+	// Include start room info at position 0 for context.
+	startResult := TraverseResult{
+		Room:        startRoom,
+		Wings:       sortedKeys(start.wings),
+		DrawerCount: start.count,
+		Hops:        0,
+	}
+	return append([]TraverseResult{startResult}, results...), nil
+}
+
+// expandFrontier walks one BFS ring outward: every room sharing a wing with a
+// frontier room and not yet visited is recorded at this hop and becomes the
+// next frontier. A room already visited keeps the hop it was first given, so
+// the shortest path wins.
+func expandFrontier(nodes map[string]*graphNode, frontier []string, visited map[string]int, hop int) []string {
+	var next []string
+	for _, room := range frontier {
+		node := nodes[room]
+		for wing := range node.wings {
+			for _, neighbor := range wingRooms(nodes, wing) {
+				if _, seen := visited[neighbor]; seen {
+					continue
+				}
+				visited[neighbor] = hop
+				next = append(next, neighbor)
+			}
+		}
+	}
+	return next
+}
+
+// traverseResults turns the visited set into results sorted by
+// (hops ASC, drawer count DESC) and capped at 50. The start room is excluded;
+// the caller prepends it.
+func traverseResults(nodes map[string]*graphNode, visited map[string]int, startRoom string) []TraverseResult {
 	results := make([]TraverseResult, 0, len(visited)-1)
 	for room, hops := range visited {
 		if room == startRoom {
@@ -127,15 +151,7 @@ func (g *Graph) Traverse(ctx context.Context, startRoom string, maxHops int) ([]
 	if len(results) > 50 {
 		results = results[:50]
 	}
-
-	// Include start room info at position 0 for context.
-	startResult := TraverseResult{
-		Room:        startRoom,
-		Wings:       sortedKeys(start.wings),
-		DrawerCount: start.count,
-		Hops:        0,
-	}
-	return append([]TraverseResult{startResult}, results...), nil
+	return results
 }
 
 // suggestRooms returns approximate matches when startRoom is not found.

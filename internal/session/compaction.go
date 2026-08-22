@@ -164,43 +164,65 @@ const SummaryPrefix = "Another language model started to solve this problem and 
 // budget with no way to recover.
 func LLMSummarizer(ctx context.Context, llm llmmodel.LLM) Summarizer {
 	return func(events []*session.Event) (string, error) {
-		if llm == nil {
-			return SimpleSummarizer(events)
-		}
-		transcript := renderTranscript(events)
-		if strings.TrimSpace(transcript) == "" {
-			return SimpleSummarizer(events)
-		}
+		return summarizeWithLLM(ctx, llm, events)
+	}
+}
 
-		req := &llmmodel.LLMRequest{
-			Contents: []*genai.Content{
-				genai.NewContentFromText(transcript, genai.RoleUser),
-			},
-			Config: &genai.GenerateContentConfig{
-				SystemInstruction: genai.NewContentFromText(SummarizationPrompt, genai.RoleUser),
-			},
-		}
+// summarizeWithLLM is the body of the Summarizer LLMSummarizer returns. It
+// never fails: a model error or an empty answer degrades to a placeholder so
+// the caller still reclaims the context.
+func summarizeWithLLM(ctx context.Context, llm llmmodel.LLM, events []*session.Event) (string, error) {
+	if llm == nil {
+		return SimpleSummarizer(events)
+	}
+	transcript := renderTranscript(events)
+	if strings.TrimSpace(transcript) == "" {
+		return SimpleSummarizer(events)
+	}
 
-		var b strings.Builder
-		for resp, err := range llm.GenerateContent(ctx, req, false) {
-			if err != nil {
-				return degradedSummary(events, err), nil
-			}
-			if resp == nil || resp.Content == nil {
-				continue
-			}
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" {
-					b.WriteString(part.Text)
-				}
-			}
-		}
+	summary, err := generateSummaryText(ctx, llm, transcript)
+	if err != nil {
+		return degradedSummary(events, err), nil
+	}
+	if summary == "" {
+		return degradedSummary(events, nil), nil
+	}
+	return summary, nil
+}
 
-		out := strings.TrimSpace(b.String())
-		if out == "" {
-			return degradedSummary(events, nil), nil
+// generateSummaryText asks the model to summarize the transcript and joins the
+// text of every part it streams back. A partial answer interrupted by an error
+// is discarded rather than returned: half a handoff summary reads as complete
+// to the resuming model.
+func generateSummaryText(ctx context.Context, llm llmmodel.LLM, transcript string) (string, error) {
+	req := &llmmodel.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText(transcript, genai.RoleUser),
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: genai.NewContentFromText(SummarizationPrompt, genai.RoleUser),
+		},
+	}
+
+	var b strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			return "", err
 		}
-		return out, nil
+		if resp == nil || resp.Content == nil {
+			continue
+		}
+		appendPartText(&b, resp.Content.Parts)
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
+// appendPartText writes the text of every part to b, in order.
+func appendPartText(b *strings.Builder, parts []*genai.Part) {
+	for _, part := range parts {
+		if part.Text != "" {
+			b.WriteString(part.Text)
+		}
 	}
 }
 
@@ -272,22 +294,30 @@ func filesTouched(events []*session.Event) []string {
 			continue
 		}
 		for _, part := range ev.Content.Parts {
-			if part.FunctionCall == nil {
-				continue
-			}
-			for _, key := range []string{"file_path", "path", "filePath"} {
-				v, ok := part.FunctionCall.Args[key]
-				if !ok {
-					continue
-				}
-				s, isStr := v.(string)
-				if !isStr || s == "" || seen[s] {
-					continue
-				}
-				seen[s] = true
-				out = append(out, s)
-			}
+			out = appendCallFilePaths(out, seen, part)
 		}
+	}
+	return out
+}
+
+// filePathArgKeys are the tool-call argument names that name a file, in the
+// order they are collected.
+var filePathArgKeys = []string{"file_path", "path", "filePath"}
+
+// appendCallFilePaths appends the not-yet-seen paths named by part's
+// function-call arguments, marking each one in seen. Non-string and empty
+// values carry no trail, so they are skipped.
+func appendCallFilePaths(out []string, seen map[string]bool, part *genai.Part) []string {
+	if part.FunctionCall == nil {
+		return out
+	}
+	for _, key := range filePathArgKeys {
+		s, isStr := part.FunctionCall.Args[key].(string)
+		if !isStr || s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
 	}
 	return out
 }

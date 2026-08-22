@@ -27,40 +27,65 @@ const readImageToolName = "read_image"
 // forward InlineData (Gemini via ADK-native model) see the image; others simply
 // ignore it and fall back to the textual path.
 func BuildReadImageCallback(sb *tools.Sandbox) llmagent.BeforeModelCallback {
-	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		if req == nil || sb == nil {
-			return nil, nil
-		}
-		for _, content := range req.Contents {
-			if content == nil {
-				continue
-			}
-			// A read_image FunctionResponse is a user-turn part. We append the
-			// image part to the same Content after the FunctionResponse so the
-			// model sees path+metadata and the image together in one turn.
-			for _, part := range content.Parts {
-				if part == nil || part.FunctionResponse == nil {
-					continue
-				}
-				fr := part.FunctionResponse
-				if fr.Name != readImageToolName {
-					continue
-				}
-				path, ok := fr.Response["path"].(string)
-				if !ok || path == "" {
-					continue
-				}
-				data, err := sb.ReadFile(path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "pi-go: warning: read_image callback could not read %q: %v\n", path, err)
-					continue
-				}
-				mime := detectImageMIMEType(data, path)
-				content.Parts = append(content.Parts, genai.NewPartFromBytes(data, mime))
-			}
-		}
+	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		injectReadImageParts(sb, req)
 		return nil, nil
 	}
+}
+
+// injectReadImageParts appends the image bytes behind each read_image result
+// to the Content that carried the result. A nil request or sandbox is a no-op.
+func injectReadImageParts(sb *tools.Sandbox, req *model.LLMRequest) {
+	if req == nil || sb == nil {
+		return
+	}
+	for _, content := range req.Contents {
+		if content == nil {
+			continue
+		}
+		// A read_image FunctionResponse is a user-turn part. We append the
+		// image parts to the same Content after the FunctionResponse so the
+		// model sees path+metadata and the image together in one turn.
+		content.Parts = append(content.Parts, readImageParts(sb, content.Parts)...)
+	}
+}
+
+// readImageParts reads the file behind every read_image FunctionResponse in
+// parts and returns the inline image parts to append, in the order the
+// responses appear. A file that cannot be read is warned about and skipped —
+// the textual path result still stands on its own.
+func readImageParts(sb *tools.Sandbox, parts []*genai.Part) []*genai.Part {
+	var out []*genai.Part
+	for _, part := range parts {
+		path, ok := readImagePath(part)
+		if !ok {
+			continue
+		}
+		data, err := sb.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pi-go: warning: read_image callback could not read %q: %v\n", path, err)
+			continue
+		}
+		out = append(out, genai.NewPartFromBytes(data, detectImageMIMEType(data, path)))
+	}
+	return out
+}
+
+// readImagePath returns the path a read_image FunctionResponse reported, and
+// whether part is such a response at all.
+func readImagePath(part *genai.Part) (string, bool) {
+	if part == nil || part.FunctionResponse == nil {
+		return "", false
+	}
+	fr := part.FunctionResponse
+	if fr.Name != readImageToolName {
+		return "", false
+	}
+	path, ok := fr.Response["path"].(string)
+	if !ok || path == "" {
+		return "", false
+	}
+	return path, true
 }
 
 // detectImageMIMEType sniffs an image's MIME type from its bytes, falling back

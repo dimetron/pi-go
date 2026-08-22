@@ -44,44 +44,68 @@ func SanitizeSchema(raw json.RawMessage) (json.RawMessage, error) {
 // through every container the Gemini Schema field set can nest a schema in.
 func sanitizeSchemaNode(node map[string]any) {
 	delete(node, "additionalProperties")
-
-	if types, ok := node["type"].([]any); ok {
-		var nullable bool
-		var kept any
-		for _, t := range types {
-			if s, _ := t.(string); s == "null" {
-				nullable = true
-				continue
-			}
-			if kept == nil {
-				kept = t
-			}
-		}
-		if kept != nil {
-			node["type"] = kept
-		} else {
-			delete(node, "type")
-		}
-		if nullable {
-			node["nullable"] = true
-		}
-	}
+	collapseTypeUnion(node)
 
 	if props, ok := node["properties"].(map[string]any); ok {
-		for _, p := range props {
-			if sub, ok := p.(map[string]any); ok {
-				sanitizeSchemaNode(sub)
-			}
-		}
+		sanitizeSchemaMap(props)
 	}
 	if items, ok := node["items"].(map[string]any); ok {
 		sanitizeSchemaNode(items)
 	}
 	if anyOf, ok := node["anyOf"].([]any); ok {
-		for _, e := range anyOf {
-			if sub, ok := e.(map[string]any); ok {
-				sanitizeSchemaNode(sub)
-			}
+		sanitizeSchemaList(anyOf)
+	}
+}
+
+// collapseTypeUnion rewrites an array-valued "type" into the single enum
+// Gemini's Schema expects: the first non-null member wins, "null" becomes
+// "nullable": true, and a union with no non-null member drops "type" entirely.
+// A "type" that is not an array is left exactly as it is.
+func collapseTypeUnion(node map[string]any) {
+	types, ok := node["type"].([]any)
+	if !ok {
+		return
+	}
+
+	var nullable bool
+	var kept any
+	for _, t := range types {
+		if s, _ := t.(string); s == "null" {
+			nullable = true
+			continue
+		}
+		if kept == nil {
+			kept = t
+		}
+	}
+
+	if kept != nil {
+		node["type"] = kept
+	} else {
+		delete(node, "type")
+	}
+	if nullable {
+		node["nullable"] = true
+	}
+}
+
+// sanitizeSchemaMap sanitizes every value of m that is itself a schema object.
+// Values of any other shape are left untouched — the function strips only what
+// it knows about.
+func sanitizeSchemaMap(m map[string]any) {
+	for _, v := range m {
+		if sub, ok := v.(map[string]any); ok {
+			sanitizeSchemaNode(sub)
+		}
+	}
+}
+
+// sanitizeSchemaList sanitizes every element of l that is itself a schema
+// object, with the same pass-through rule as sanitizeSchemaMap.
+func sanitizeSchemaList(l []any) {
+	for _, v := range l {
+		if sub, ok := v.(map[string]any); ok {
+			sanitizeSchemaNode(sub)
 		}
 	}
 }
