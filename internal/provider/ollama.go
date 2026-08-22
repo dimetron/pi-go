@@ -316,29 +316,8 @@ func ollamaFinishReasonToGenai(reason string) genai.FinishReason {
 
 // ollamaContentsToMessages converts genai.Content to Ollama messages.
 func ollamaContentsToMessages(contents []*genai.Content, config *genai.GenerateContentConfig) ([]ollamaapi.Message, string) {
-	var systemBuilder strings.Builder
-	if config != nil && config.SystemInstruction != nil {
-		for _, p := range config.SystemInstruction.Parts {
-			if p != nil && p.Text != "" {
-				systemBuilder.WriteString(p.Text)
-				systemBuilder.WriteByte('\n')
-			}
-		}
-	}
-	systemPrompt := strings.TrimSpace(systemBuilder.String())
-
-	// Collect function responses for matching.
-	functionResponses := make(map[string]*genai.FunctionResponse)
-	for _, c := range contents {
-		if c == nil || c.Parts == nil {
-			continue
-		}
-		for _, p := range c.Parts {
-			if p != nil && p.FunctionResponse != nil {
-				functionResponses[p.FunctionResponse.ID] = p.FunctionResponse
-			}
-		}
-	}
+	systemPrompt := genaiSystemInstruction(config)
+	functionResponses := genaiFunctionResponses(contents)
 
 	var messages []ollamaapi.Message
 	for _, content := range contents {
@@ -350,67 +329,13 @@ func ollamaContentsToMessages(contents []*genai.Content, config *genai.GenerateC
 			continue
 		}
 
-		var textParts []string
-		var functionCalls []*genai.FunctionCall
+		textParts, functionCalls := genaiSplitParts(content.Parts)
 
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.Text != "" {
-				textParts = append(textParts, part.Text)
-			} else if part.FunctionCall != nil {
-				functionCalls = append(functionCalls, part.FunctionCall)
-			}
-		}
-
-		if len(functionCalls) > 0 && (role == "model" || role == "assistant") {
-			// Assistant message with tool calls.
-			toolCalls := make([]ollamaapi.ToolCall, 0, len(functionCalls))
-			for _, fc := range functionCalls {
-				args := ollamaapi.NewToolCallFunctionArguments()
-				for k, v := range fc.Args {
-					args.Set(k, v)
-				}
-				toolCalls = append(toolCalls, ollamaapi.ToolCall{
-					ID: fc.ID,
-					Function: ollamaapi.ToolCallFunction{
-						Name:      fc.Name,
-						Arguments: args,
-					},
-				})
-			}
-
-			msg := ollamaapi.Message{
-				Role:      "assistant",
-				ToolCalls: toolCalls,
-			}
-			if len(textParts) > 0 {
-				msg.Content = strings.Join(textParts, "\n")
-			}
-			messages = append(messages, msg)
-
-			// Tool results as separate messages.
-			for _, fc := range functionCalls {
-				contentStr := ""
-				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
-				}
-				messages = append(messages, ollamaapi.Message{
-					Role:       "tool",
-					Content:    contentStr,
-					ToolCallID: fc.ID,
-				})
-			}
-		} else if len(textParts) > 0 {
-			msgRole := "user"
-			if role == "model" || role == "assistant" {
-				msgRole = "assistant"
-			}
-			messages = append(messages, ollamaapi.Message{
-				Role:    msgRole,
-				Content: strings.Join(textParts, "\n"),
-			})
+		switch {
+		case len(functionCalls) > 0 && genaiIsAssistantRole(role):
+			messages = append(messages, ollamaToolCallMessages(textParts, functionCalls, functionResponses)...)
+		case len(textParts) > 0:
+			messages = append(messages, ollamaTextMessage(role, strings.Join(textParts, "\n")))
 		}
 	}
 
@@ -423,6 +348,68 @@ func ollamaContentsToMessages(contents []*genai.Content, config *genai.GenerateC
 	}
 
 	return messages, systemPrompt
+}
+
+// ollamaToolCallMessages renders one assistant turn that called tools: the
+// assistant message carrying the tool calls, then one "tool" message per call
+// holding its result.
+func ollamaToolCallMessages(
+	textParts []string,
+	functionCalls []*genai.FunctionCall,
+	functionResponses map[string]*genai.FunctionResponse,
+) []ollamaapi.Message {
+	// Assistant message with tool calls.
+	toolCalls := make([]ollamaapi.ToolCall, 0, len(functionCalls))
+	for _, fc := range functionCalls {
+		args := ollamaapi.NewToolCallFunctionArguments()
+		for k, v := range fc.Args {
+			args.Set(k, v)
+		}
+		toolCalls = append(toolCalls, ollamaapi.ToolCall{
+			ID: fc.ID,
+			Function: ollamaapi.ToolCallFunction{
+				Name:      fc.Name,
+				Arguments: args,
+			},
+		})
+	}
+
+	msg := ollamaapi.Message{
+		Role:      "assistant",
+		ToolCalls: toolCalls,
+	}
+	if len(textParts) > 0 {
+		msg.Content = strings.Join(textParts, "\n")
+	}
+	messages := make([]ollamaapi.Message, 0, 1+len(functionCalls))
+	messages = append(messages, msg)
+
+	// Tool results as separate messages.
+	for _, fc := range functionCalls {
+		contentStr := ""
+		if fr := functionResponses[fc.ID]; fr != nil {
+			contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
+		}
+		messages = append(messages, ollamaapi.Message{
+			Role:       "tool",
+			Content:    contentStr,
+			ToolCallID: fc.ID,
+		})
+	}
+	return messages
+}
+
+// ollamaTextMessage renders a text-only turn under the Ollama role its genai
+// role maps to.
+func ollamaTextMessage(role, text string) ollamaapi.Message {
+	msgRole := "user"
+	if genaiIsAssistantRole(role) {
+		msgRole = "assistant"
+	}
+	return ollamaapi.Message{
+		Role:    msgRole,
+		Content: text,
+	}
 }
 
 // ollamaGenaiToolsToOllama converts genai tools to Ollama native tool format.
@@ -515,103 +502,109 @@ func convertToToolProperty(raw any) ollamaapi.ToolProperty {
 	return prop
 }
 
-func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {
-	var aggregatedText string
-	var aggregatedThinking string
-	var toolCalls []ollamaapi.ToolCall
-	var doneReason string
-	var promptTokens, evalTokens int
-	var splitter thinkSplitter
+// ollamaStreamState accumulates the chunks of an Ollama chat stream while
+// yielding each one as a partial response, and builds the final response from
+// what it accumulated.
+type ollamaStreamState struct {
+	yield func(*model.LLMResponse, error) bool
 
-	emitThinking := func(text string) error {
-		if text == "" {
-			return nil
-		}
-		aggregatedThinking += text
-		if !yield(&model.LLMResponse{
-			Partial:      true,
-			TurnComplete: false,
-			Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: text}}},
-		}, nil) {
-			return fmt.Errorf("yield canceled")
-		}
+	aggregatedText     string
+	aggregatedThinking string
+	toolCalls          []ollamaapi.ToolCall
+	doneReason         string
+	promptTokens       int
+	evalTokens         int
+	splitter           thinkSplitter
+}
+
+// emitThinking yields reasoning text on the thinking stream.
+func (s *ollamaStreamState) emitThinking(text string) error {
+	if text == "" {
 		return nil
 	}
+	s.aggregatedThinking += text
+	if !s.yield(&model.LLMResponse{
+		Partial:      true,
+		TurnComplete: false,
+		Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: text}}},
+	}, nil) {
+		return fmt.Errorf("yield canceled")
+	}
+	return nil
+}
 
-	emitText := func(text string) error {
-		if text == "" {
-			return nil
-		}
-		aggregatedText += text
-		if !yield(&model.LLMResponse{
-			Partial:      true,
-			TurnComplete: false,
-			Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: text}}},
-		}, nil) {
-			return fmt.Errorf("yield canceled")
-		}
+// emitText yields answer text on the model stream.
+func (s *ollamaStreamState) emitText(text string) error {
+	if text == "" {
 		return nil
 	}
+	s.aggregatedText += text
+	if !s.yield(&model.LLMResponse{
+		Partial:      true,
+		TurnComplete: false,
+		Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: text}}},
+	}, nil) {
+		return fmt.Errorf("yield canceled")
+	}
+	return nil
+}
 
-	err := client.Chat(ctx, chatReq, func(resp ollamaapi.ChatResponse) error {
-		msg := resp.Message
+// emitSplit yields one thinkSplitter result: its reasoning half, then its
+// answer half.
+func (s *ollamaStreamState) emitSplit(thinking, text string) error {
+	if err := s.emitThinking(thinking); err != nil {
+		return err
+	}
+	return s.emitText(text)
+}
 
-		// Reasoning that Ollama already separated out.
-		if err := emitThinking(msg.Thinking); err != nil {
+// handleChunk folds one streamed chat response into the state.
+func (s *ollamaStreamState) handleChunk(resp ollamaapi.ChatResponse) error {
+	msg := resp.Message
+
+	// Reasoning that Ollama already separated out.
+	if err := s.emitThinking(msg.Thinking); err != nil {
+		return err
+	}
+
+	// Reasoning the model left inline as <think>...</think> is routed to
+	// the thinking stream instead of surfacing as the answer.
+	if msg.Content != "" {
+		inlineThinking, text := s.splitter.split(msg.Content)
+		if err := s.emitSplit(inlineThinking, text); err != nil {
 			return err
 		}
-
-		// Reasoning the model left inline as <think>...</think> is routed to
-		// the thinking stream instead of surfacing as the answer.
-		if msg.Content != "" {
-			inlineThinking, text := splitter.split(msg.Content)
-			if err := emitThinking(inlineThinking); err != nil {
-				return err
-			}
-			if err := emitText(text); err != nil {
-				return err
-			}
-		}
-
-		if resp.Done {
-			inlineThinking, text := splitter.flush()
-			if err := emitThinking(inlineThinking); err != nil {
-				return err
-			}
-			if err := emitText(text); err != nil {
-				return err
-			}
-		}
-
-		// Accumulate tool calls.
-		if len(msg.ToolCalls) > 0 {
-			toolCalls = append(toolCalls, msg.ToolCalls...)
-		}
-
-		// Capture metrics from final response.
-		if resp.Done {
-			doneReason = resp.DoneReason
-			promptTokens = resp.PromptEvalCount
-			evalTokens = resp.EvalCount
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		if ctx.Err() == context.Canceled {
-			_ = yield(canceledResponse(), nil)
-			return
-		}
-		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-		return
 	}
 
-	// Build final response.
-	finalParts := make([]*genai.Part, 0, 1+len(toolCalls))
-	if aggregatedText != "" {
-		finalParts = append(finalParts, &genai.Part{Text: aggregatedText})
-	} else if aggregatedThinking != "" && len(toolCalls) == 0 {
+	if resp.Done {
+		inlineThinking, text := s.splitter.flush()
+		if err := s.emitSplit(inlineThinking, text); err != nil {
+			return err
+		}
+	}
+
+	// Accumulate tool calls.
+	if len(msg.ToolCalls) > 0 {
+		s.toolCalls = append(s.toolCalls, msg.ToolCalls...)
+	}
+
+	// Capture metrics from final response.
+	if resp.Done {
+		s.doneReason = resp.DoneReason
+		s.promptTokens = resp.PromptEvalCount
+		s.evalTokens = resp.EvalCount
+	}
+
+	return nil
+}
+
+// finalParts assembles the parts of the completed turn: the answer text (or the
+// thinking fallback), then one part per tool call.
+func (s *ollamaStreamState) finalParts() []*genai.Part {
+	finalParts := make([]*genai.Part, 0, 1+len(s.toolCalls))
+	if s.aggregatedText != "" {
+		finalParts = append(finalParts, &genai.Part{Text: s.aggregatedText})
+	} else if s.aggregatedThinking != "" && len(s.toolCalls) == 0 {
 		// Fallback: model responded entirely via thinking tokens (e.g. thinking forced
 		// on a nothink model). Surface the thinking content rather than returning nothing.
 		//
@@ -620,29 +613,50 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 		// — and firing it there restates the reasoning as if it were the answer
 		// (seen with minimax-m3:cloud: "The user wants me to run a bash
 		// command..." printed above the real reply).
-		finalParts = append(finalParts, &genai.Part{Text: aggregatedThinking})
+		finalParts = append(finalParts, &genai.Part{Text: s.aggregatedThinking})
 	}
-	for _, tc := range toolCalls {
+	for _, tc := range s.toolCalls {
 		args := tc.Function.Arguments.ToMap()
 		p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
 		p.FunctionCall.ID = tc.ID
 		finalParts = append(finalParts, p)
 	}
+	return finalParts
+}
+
+// finalResponse builds the terminal response for the completed turn.
+func (s *ollamaStreamState) finalResponse() *model.LLMResponse {
+	finalParts := s.finalParts()
 
 	var usage *genai.GenerateContentResponseUsageMetadata
-	if promptTokens > 0 || evalTokens > 0 {
+	if s.promptTokens > 0 || s.evalTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     int32(promptTokens),
-			CandidatesTokenCount: int32(evalTokens),
+			PromptTokenCount:     int32(s.promptTokens),
+			CandidatesTokenCount: int32(s.evalTokens),
 		}
 	}
-	_ = yield(&model.LLMResponse{
+	return &model.LLMResponse{
 		Partial:       false,
 		TurnComplete:  true,
-		FinishReason:  ollamaFinishReasonToGenai(doneReason),
+		FinishReason:  ollamaFinishReasonToGenai(s.doneReason),
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
-	}, nil)
+	}
+}
+
+func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {
+	state := &ollamaStreamState{yield: yield}
+
+	if err := client.Chat(ctx, chatReq, state.handleChunk); err != nil {
+		if ctx.Err() == context.Canceled {
+			_ = yield(canceledResponse(), nil)
+			return
+		}
+		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+		return
+	}
+
+	_ = yield(state.finalResponse(), nil)
 }
 
 func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {

@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"sort"
@@ -651,27 +652,14 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m.handlePaste(msg)
 
 	case tea.KeyPressMsg:
-		// A resize can leave stray text fragments in the input queue.
-		if m.resizeDraining() && isResizeTextFragment(msg) {
-			return m, resizeDrainDoneCmd(m.resizeAt), true
-		}
-		model, cmd := m.handleKey(msg)
-		return model, cmd, true
+		return m.handleKeyPressMsg(msg)
 
 	case tea.MouseMsg:
 		model, cmd := m.handleMouse(msg)
 		return model, cmd, true
 
 	case InputSubmitMsg:
-		if strings.HasPrefix(msg.Text, "/") {
-			if m.running {
-				return m, nil, true
-			}
-			model, cmd := m.handleSlashCommand(msg.Text)
-			return model, cmd, true
-		}
-		model, cmd := m.enqueuePrompt(msg.Text, msg.Mentions)
-		return model, cmd, true
+		return m.handleInputSubmit(msg)
 
 	case resetCtrlCCountMsg:
 		model, cmd := m.handleResetCtrlCCount()
@@ -691,37 +679,71 @@ func (m *model) updateTerminal(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case loadingTickMsg:
-		// The loading-dots ticker was the engine behind TODO §30/§42: every
-		// 300 ms fire it mutated m.loadingDots and re-armed unconditionally,
-		// producing a 3.3 Hz full-history re-render for the life of the
-		// process. The dots only animate the deferred-init splash
-		// (m.loading is set at tui.go:455 and cleared at :1963/:1985), so
-		// the re-arm belongs to that lifecycle, not to process uptime.
-		// Re-arming only while m.loading is true stops the chain at init
-		// completion and removes the idle 3.3 Hz floor.
-		if !m.loading {
-			return m, nil, true
-		}
-		m.loadingDots = (m.loadingDots + 1) % 4
-		return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
+		return m.handleLoadingTick()
 
 	case matrixTickMsg:
-		if m.running {
-			m.matrix.tick(m.mainWidth())
-			// The pending-tool bullet blinks on a ~1s cycle. The phase advances
-			// here, in Update, so View stays a pure function of model state —
-			// the matrix tick (150ms while running) re-renders often enough to
-			// animate it.
-			now := time.Now()
-			m.chatModel.ToolDisplay.BlinkOn = now.UnixMilli()/500%2 == 0
-			// Same idea one level out: the tab title's prefix symbol rotates so
-			// a backgrounded session still shows it is working.
-			m.titleSpin = terminalTitleSpinIndex(now)
-			return m, matrixTickCmd(), true
-		}
-		return m, nil, true
+		return m.handleMatrixTick()
 	}
 	return nil, nil, false
+}
+
+// handleKeyPressMsg routes a keystroke, dropping the stray text fragments a
+// resize can leave in the input queue.
+func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.resizeDraining() && isResizeTextFragment(msg) {
+		return m, resizeDrainDoneCmd(m.resizeAt), true
+	}
+	model, cmd := m.handleKey(msg)
+	return model, cmd, true
+}
+
+// handleInputSubmit runs a submitted line: a slash command directly, anything
+// else queued as a prompt. Slash commands are ignored while a turn is running.
+func (m *model) handleInputSubmit(msg InputSubmitMsg) (tea.Model, tea.Cmd, bool) {
+	if strings.HasPrefix(msg.Text, "/") {
+		if m.running {
+			return m, nil, true
+		}
+		model, cmd := m.handleSlashCommand(msg.Text)
+		return model, cmd, true
+	}
+	model, cmd := m.enqueuePrompt(msg.Text, msg.Mentions)
+	return model, cmd, true
+}
+
+// handleLoadingTick advances the loading dots.
+//
+// The loading-dots ticker was the engine behind TODO §30/§42: every 300 ms fire
+// it mutated m.loadingDots and re-armed unconditionally, producing a 3.3 Hz
+// full-history re-render for the life of the process. The dots only animate the
+// deferred-init splash (m.loading is set at tui.go:455 and cleared at
+// :1963/:1985), so the re-arm belongs to that lifecycle, not to process uptime.
+// Re-arming only while m.loading is true stops the chain at init completion and
+// removes the idle 3.3 Hz floor.
+func (m *model) handleLoadingTick() (tea.Model, tea.Cmd, bool) {
+	if !m.loading {
+		return m, nil, true
+	}
+	m.loadingDots = (m.loadingDots + 1) % 4
+	return m, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg { return loadingTickMsg{} }), true
+}
+
+// handleMatrixTick advances the matrix rain and the animations that ride on it.
+func (m *model) handleMatrixTick() (tea.Model, tea.Cmd, bool) {
+	if !m.running {
+		return m, nil, true
+	}
+	m.matrix.tick(m.mainWidth())
+	// The pending-tool bullet blinks on a ~1s cycle. The phase advances
+	// here, in Update, so View stays a pure function of model state —
+	// the matrix tick (150ms while running) re-renders often enough to
+	// animate it.
+	now := time.Now()
+	m.chatModel.ToolDisplay.BlinkOn = now.UnixMilli()/500%2 == 0
+	// Same idea one level out: the tab title's prefix symbol rotates so
+	// a backgrounded session still shows it is working.
+	m.titleSpin = terminalTitleSpinIndex(now)
+	return m, matrixTickCmd(), true
 }
 
 // handleWindowSize re-lays out the frame, and keeps the agent listener alive
@@ -1323,68 +1345,28 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 
 	switch key.Code {
 	case tea.KeyUp:
-		if sp.selected > 0 {
-			sp.selected--
-		} else if len(sp.filtered) > 1 {
-			// Wrap to last item on Up from first.
-			sp.selected = len(sp.filtered) - 1
-		}
-		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		sp.selectPrev()
 		return true
 	case tea.KeyDown:
-		if sp.selected < len(sp.filtered)-1 {
-			sp.selected++
-		} else if len(sp.filtered) > 1 {
-			// Wrap to first item on Down from last.
-			sp.selected = 0
-		}
-		if sp.selected >= sp.scrollOff+sp.height {
-			sp.scrollOff = sp.selected - sp.height + 1
-		}
+		sp.selectNext()
 		return true
 	case tea.KeyTab:
-		if len(sp.filtered) == 0 {
-			return true
-		}
-		if key.Mod == tea.ModShift {
-			if sp.selected > 0 {
-				sp.selected--
-			} else {
-				// Wrap to last item on Shift+Tab from first.
-				sp.selected = len(sp.filtered) - 1
-			}
-		} else {
-			// Tab advances; stays at last item (no wrap).
-			if sp.selected < len(sp.filtered)-1 {
-				sp.selected++
-			}
-		}
-		sp.scrollOff = max(0, sp.selected-sp.height+1)
+		sp.selectByTab(key.Mod == tea.ModShift)
 		return true
 	case tea.KeyEnter:
-		if len(sp.filtered) > 0 && sp.selected < len(sp.filtered) {
-			item := sp.filtered[sp.selected]
-			switch sp.mode {
-			case searchModeCommands:
-				m.inputModel.SetText(item.Text + " ")
-				m.searchPopup = nil
-			case searchModeHistory:
-				m.inputModel.SetText(item.Text)
-				m.searchPopup = nil
-			}
-		}
+		m.acceptSearchPopupSelection()
 		return true
 	case tea.KeyEsc:
 		m.searchPopup = nil
 		return true
 	case tea.KeyBackspace:
-		if len(sp.search) > 0 {
-			sp.search = sp.search[:len(sp.search)-1]
-			sp.filterSearch()
-		} else {
+		if len(sp.search) == 0 {
 			// If search is empty, close popup on backspace
 			m.searchPopup = nil
+			return true
 		}
+		sp.search = sp.search[:len(sp.search)-1]
+		sp.filterSearch()
 		return true
 	default:
 		// Type to search (only for printable single characters).
@@ -1397,6 +1379,71 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 	}
 }
 
+// selectPrev moves the selection up one, wrapping to the last item from the
+// first, and scrolls to keep the selection visible.
+func (sp *searchPopupState) selectPrev() {
+	if sp.selected > 0 {
+		sp.selected--
+	} else if len(sp.filtered) > 1 {
+		// Wrap to last item on Up from first.
+		sp.selected = len(sp.filtered) - 1
+	}
+	sp.scrollOff = max(0, sp.selected-sp.height+1)
+}
+
+// selectNext moves the selection down one, wrapping to the first item from the
+// last, and scrolls only when the selection would fall past the visible window.
+func (sp *searchPopupState) selectNext() {
+	if sp.selected < len(sp.filtered)-1 {
+		sp.selected++
+	} else if len(sp.filtered) > 1 {
+		// Wrap to first item on Down from last.
+		sp.selected = 0
+	}
+	if sp.selected >= sp.scrollOff+sp.height {
+		sp.scrollOff = sp.selected - sp.height + 1
+	}
+}
+
+// selectByTab moves the selection for Tab / Shift+Tab. Shift+Tab wraps from the
+// first item to the last; Tab stops at the last item rather than wrapping.
+func (sp *searchPopupState) selectByTab(backwards bool) {
+	if len(sp.filtered) == 0 {
+		return
+	}
+	if backwards {
+		if sp.selected > 0 {
+			sp.selected--
+		} else {
+			// Wrap to last item on Shift+Tab from first.
+			sp.selected = len(sp.filtered) - 1
+		}
+	} else if sp.selected < len(sp.filtered)-1 {
+		// Tab advances; stays at last item (no wrap).
+		sp.selected++
+	}
+	sp.scrollOff = max(0, sp.selected-sp.height+1)
+}
+
+// acceptSearchPopupSelection puts the selected item into the prompt and closes
+// the popup. A command gets a trailing space so its arguments can be typed
+// straight on; a history entry is inserted verbatim.
+func (m *model) acceptSearchPopupSelection() {
+	sp := m.searchPopup
+	if len(sp.filtered) == 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	item := sp.filtered[sp.selected]
+	switch sp.mode {
+	case searchModeCommands:
+		m.inputModel.SetText(item.Text + " ")
+		m.searchPopup = nil
+	case searchModeHistory:
+		m.inputModel.SetText(item.Text)
+		m.searchPopup = nil
+	}
+}
+
 func (m *model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("Goodbye!\n")
@@ -1405,22 +1452,7 @@ func (m *model) View() tea.View {
 	m.syncPalette()
 
 	if m.width == 0 {
-		// Show matrix-style startup text before the first terminal size arrives.
-		matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal, m.palette)
-		if m.loadingItems != nil {
-			var lines []string
-			lines = append(lines, matrixLine)
-			for _, item := range sortedKeys(m.loadingItems) {
-				done := m.loadingItems[item]
-				mark := " "
-				if done {
-					mark = "✓"
-				}
-				lines = append(lines, "  "+mark+" "+item)
-			}
-			return tea.NewView(strings.Join(lines, "\n") + "\n")
-		}
-		return tea.NewView(matrixLine + "\n")
+		return m.startupView()
 	}
 
 	// Layout: messages + sidebar on top, status bar + input spanning the full
@@ -1449,30 +1481,8 @@ func (m *model) View() tea.View {
 	availableHeight := m.messageViewportHeight()
 
 	// Truncate messages to fit viewport.
-	msgLines := strings.Split(messagesView, "\n")
-	totalLines := len(msgLines)
-
-	startLine := totalLines - availableHeight - m.chatModel.Scroll
-	if startLine < 0 {
-		startLine = 0
-	}
-	endLine := startLine + availableHeight
-	if endLine > totalLines {
-		endLine = totalLines
-	}
-
-	visibleMessages := strings.Join(msgLines[startLine:endLine], "\n")
-
-	// Pad to fill the viewport. availableHeight is message rows only — the blank
-	// rows that inset the block from the rules are budgeted separately.
-	visibleLineCount := strings.Count(visibleMessages, "\n") + 1
-	for visibleLineCount < availableHeight {
-		// Keep the final padding row materialized. A trailing newline only
-		// terminates the preceding row; treating its trailing empty string as a
-		// row made the composed frame one line shorter than the terminal.
-		visibleMessages += "\n "
-		visibleLineCount++
-	}
+	visibleMessages, startLine, endLine := clipMessagesToViewport(
+		messagesView, availableHeight, m.chatModel.Scroll)
 	visibleMessages = m.overlaySearchPopup(visibleMessages, bodyWidth)
 
 	// Note: width constraint is handled by glamour's WithWordWrap(contentWidth) in chatModel.UpdateRenderer.
@@ -1542,45 +1552,7 @@ func (m *model) View() tea.View {
 
 	var topSection string
 	if showSidebar {
-		hostName := cachedHostname()
-		sidebarInput := SidebarRenderInput{
-			Width: sidebarWidth,
-			// Exactly as tall as the panel beside it. Sized to the terminal
-			// instead, the sidebar outran the panel — JoinHorizontal padded the
-			// panel with blank rows, leaving a gap below the prompt while the
-			// sidebar's filler dots carried on past it.
-			Height:       panelRows,
-			Mascot:       m.mascot(),
-			Mode:         m.mode,
-			ProviderName: m.providerDisplayName(),
-			ModelName:    m.cfg.ModelName,
-			GitBranch:    m.statusModel.GitBranch,
-			DiffAdded:    m.diffAdded,
-			DiffRemoved:  m.diffRemoved,
-			Running:      m.running,
-			TokenTracker: m.cfg.TokenTracker,
-			AppVersion:   m.cfg.AppVersion,
-			HostName:     hostName,
-			FolderName:   sidebarFolderName(m.cwd()),
-			Messages:     m.chatModel.Messages,
-			ActiveTool:   m.statusModel.ActiveTool,
-			LoadingItems: m.loadingItems,
-			MatrixLines:  "",
-			StatusLine:   "",
-			Orchestrator: m.cfg.Orchestrator,
-			MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
-			MemoryStatus: m.memoryStatus,
-			Artifacts:    m.artifactList(),
-			Palette:      m.palette,
-		}
-		if m.run != nil && m.run.phase != "" {
-			sidebarInput.RunChecklist = m.run.checklist
-			sidebarInput.RunPhase = m.run.phase
-			sidebarInput.RunSpec = m.run.specName
-			sidebarInput.RunCycle = m.run.retries + 1
-			sidebarInput.RunMaxCycle = m.run.maxRetries
-		}
-		sidebar := RenderSidebar(sidebarInput)
+		sidebar := RenderSidebar(m.sidebarRenderInput(sidebarWidth, panelRows))
 		topSection = joinPanelSidebar(leftPanel, sidebar, mainWidth, sidebarWidth)
 	} else {
 		topSection = padLinesTo(leftPanel, m.width)
@@ -1651,6 +1623,100 @@ func (m *model) View() tea.View {
 	v.AltScreen = false
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// startupView is the matrix-style startup text shown before the first terminal
+// size arrives, listing deferred-init progress once there is any to show.
+func (m *model) startupView() tea.View {
+	matrixLine := renderStartupMatrixLine(m.loadingDots, m.cfg.AppVersion, m.loadingItems, m.loadingTotal, m.palette)
+	if m.loadingItems == nil {
+		return tea.NewView(matrixLine + "\n")
+	}
+	var lines []string
+	lines = append(lines, matrixLine)
+	for _, item := range sortedKeys(m.loadingItems) {
+		done := m.loadingItems[item]
+		mark := " "
+		if done {
+			mark = "✓"
+		}
+		lines = append(lines, "  "+mark+" "+item)
+	}
+	return tea.NewView(strings.Join(lines, "\n") + "\n")
+}
+
+// clipMessagesToViewport takes the rendered message block down to the rows the
+// viewport can show, scrolled back by scroll rows, and pads it out when the
+// conversation is shorter than the viewport. It returns the visible block along
+// with the line range it covers, which the minimap needs to place its bar.
+func clipMessagesToViewport(messagesView string, availableHeight, scroll int) (visible string, startLine, endLine int) {
+	msgLines := strings.Split(messagesView, "\n")
+	totalLines := len(msgLines)
+
+	startLine = totalLines - availableHeight - scroll
+	if startLine < 0 {
+		startLine = 0
+	}
+	endLine = startLine + availableHeight
+	if endLine > totalLines {
+		endLine = totalLines
+	}
+
+	visible = strings.Join(msgLines[startLine:endLine], "\n")
+
+	// Pad to fill the viewport. availableHeight is message rows only — the blank
+	// rows that inset the block from the rules are budgeted separately.
+	visibleLineCount := strings.Count(visible, "\n") + 1
+	for visibleLineCount < availableHeight {
+		// Keep the final padding row materialized. A trailing newline only
+		// terminates the preceding row; treating its trailing empty string as a
+		// row made the composed frame one line shorter than the terminal.
+		visible += "\n "
+		visibleLineCount++
+	}
+	return visible, startLine, endLine
+}
+
+// sidebarRenderInput gathers everything the sidebar draws for this frame.
+func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInput {
+	in := SidebarRenderInput{
+		Width: sidebarWidth,
+		// Exactly as tall as the panel beside it. Sized to the terminal
+		// instead, the sidebar outran the panel — JoinHorizontal padded the
+		// panel with blank rows, leaving a gap below the prompt while the
+		// sidebar's filler dots carried on past it.
+		Height:       panelRows,
+		Mascot:       m.mascot(),
+		Mode:         m.mode,
+		ProviderName: m.providerDisplayName(),
+		ModelName:    m.cfg.ModelName,
+		GitBranch:    m.statusModel.GitBranch,
+		DiffAdded:    m.diffAdded,
+		DiffRemoved:  m.diffRemoved,
+		Running:      m.running,
+		TokenTracker: m.cfg.TokenTracker,
+		AppVersion:   m.cfg.AppVersion,
+		HostName:     cachedHostname(),
+		FolderName:   sidebarFolderName(m.cwd()),
+		Messages:     m.chatModel.Messages,
+		ActiveTool:   m.statusModel.ActiveTool,
+		LoadingItems: m.loadingItems,
+		MatrixLines:  "",
+		StatusLine:   "",
+		Orchestrator: m.cfg.Orchestrator,
+		MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+		MemoryStatus: m.memoryStatus,
+		Artifacts:    m.artifactList(),
+		Palette:      m.palette,
+	}
+	if m.run != nil && m.run.phase != "" {
+		in.RunChecklist = m.run.checklist
+		in.RunPhase = m.run.phase
+		in.RunSpec = m.run.specName
+		in.RunCycle = m.run.retries + 1
+		in.RunMaxCycle = m.run.maxRetries
+	}
+	return in
 }
 
 // drainTerminalResponses discards any pending terminal response sequences
@@ -2282,78 +2348,98 @@ func (m *model) renderSearchPopup(width int) string {
 	}
 
 	sp := m.searchPopup
-	bg := m.palette.Surface0
-
-	// Get colors based on mode.
-	popupStyle := lipgloss.NewStyle().Background(bg)
-	headerStyle := lipgloss.NewStyle().Background(bg).Bold(true)
-	searchStyle := lipgloss.NewStyle().Background(bg)
-	itemStyle := lipgloss.NewStyle().Background(bg)
-	// Each mode below sets its own selection background; this is just the
-	// starting point.
-	selectedItemStyle := lipgloss.NewStyle().Background(m.palette.Surface0)
-
-	var header string
-
-	switch sp.mode {
-	case searchModeCommands:
-		border := m.palette.Cyan // cyan for commands
-		popupStyle = popupStyle.
-			Foreground(m.palette.Subtext).
-			Border(lipgloss.RoundedBorder(), true, true, true, true).
-			BorderForeground(border).
-			Width(width)
-		headerStyle = headerStyle.Foreground(m.palette.Subtext).Width(width)
-		searchStyle = searchStyle.Foreground(m.palette.Dim)
-		itemStyle = itemStyle.Foreground(m.palette.Teal) // teal
-		selectedItemStyle = selectedItemStyle.Background(m.palette.Cyan)
-		header = "Commands"
-	case searchModeHistory:
-		border := m.palette.Peach // orange for history
-		popupStyle = popupStyle.
-			Foreground(m.palette.Subtext).
-			Border(lipgloss.RoundedBorder(), true, true, true, true).
-			BorderForeground(border).
-			Width(width)
-		headerStyle = headerStyle.Foreground(m.palette.Subtext).Width(width)
-		searchStyle = searchStyle.Foreground(m.palette.Dim)
-		itemStyle = itemStyle.Foreground(m.palette.Peach) // orange
-		selectedItemStyle = selectedItemStyle.Background(m.palette.Peach)
-		header = "History"
-	}
+	st := m.searchPopupStyles(sp.mode, width)
 
 	var b strings.Builder
 
 	// Header with count.
+	header := st.header
 	if len(sp.filtered) > 0 {
 		header = fmt.Sprintf("%s (%d)", header, len(sp.filtered))
 	}
-	b.WriteString(headerStyle.Render(header))
+	b.WriteString(st.headerStyle.Render(header))
 
 	// Search prompt line.
 	if sp.search != "" {
 		b.WriteString("\n")
 		searchLine := fmt.Sprintf("  Search: %s", sp.search)
-		b.WriteString(searchStyle.Width(width).Render(clipRunes(searchLine, width)))
+		b.WriteString(st.searchStyle.Width(width).Render(clipRunes(searchLine, width)))
 	} else {
 		b.WriteString("\n")
-		b.WriteString(searchStyle.Width(width).Render("  Search... (type to filter)"))
+		b.WriteString(st.searchStyle.Width(width).Render("  Search... (type to filter)"))
 	}
 
 	if len(sp.filtered) == 0 {
 		b.WriteString("\n")
 		if sp.mode == searchModeCommands {
-			b.WriteString(searchStyle.Width(width).Render("  No matching commands"))
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching commands"))
 		} else {
-			b.WriteString(searchStyle.Width(width).Render("  No matching history"))
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching history"))
 		}
-		return popupStyle.Render(b.String())
+		return st.popupStyle.Render(b.String())
 	}
 
-	// Item list. Both i and scrollOff+i are bounded by len(filtered) so a
-	// stale scrollOff from before a resize cannot index past the end and
-	// panic — refreshSearchPopupHeight is the primary guard, this is the
-	// belt to its braces.
+	writeSearchPopupItems(&b, sp, st, width)
+
+	return st.popupStyle.Render(b.String())
+}
+
+// searchPopupStyleSet is the per-mode palette of the search popup: the same
+// chrome with a different accent color and title for commands and for history.
+type searchPopupStyleSet struct {
+	header            string
+	popupStyle        lipgloss.Style
+	headerStyle       lipgloss.Style
+	searchStyle       lipgloss.Style
+	itemStyle         lipgloss.Style
+	selectedItemStyle lipgloss.Style
+}
+
+// searchPopupStyles builds the style set for a popup mode. Commands are cyan
+// and history is orange; an unknown mode gets the unaccented base styles.
+func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSet {
+	bg := m.palette.Surface0
+	st := searchPopupStyleSet{
+		popupStyle:  lipgloss.NewStyle().Background(bg),
+		headerStyle: lipgloss.NewStyle().Background(bg).Bold(true),
+		searchStyle: lipgloss.NewStyle().Background(bg),
+		itemStyle:   lipgloss.NewStyle().Background(bg),
+		// Each mode below sets its own selection background; this is just the
+		// starting point.
+		selectedItemStyle: lipgloss.NewStyle().Background(m.palette.Surface0),
+	}
+
+	var accent color.Color
+	switch mode {
+	case searchModeCommands:
+		accent = m.palette.Cyan                                // cyan for commands
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Teal) // teal
+		st.header = "Commands"
+	case searchModeHistory:
+		accent = m.palette.Peach                                // orange for history
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Peach) // orange
+		st.header = "History"
+	default:
+		return st
+	}
+
+	st.popupStyle = st.popupStyle.
+		Foreground(m.palette.Subtext).
+		Border(lipgloss.RoundedBorder(), true, true, true, true).
+		BorderForeground(accent).
+		Width(width)
+	st.headerStyle = st.headerStyle.Foreground(m.palette.Subtext).Width(width)
+	st.searchStyle = st.searchStyle.Foreground(m.palette.Dim)
+	st.selectedItemStyle = st.selectedItemStyle.Background(accent)
+	return st
+}
+
+// writeSearchPopupItems renders the visible slice of the item list.
+//
+// Both i and scrollOff+i are bounded by len(filtered) so a stale scrollOff from
+// before a resize cannot index past the end and panic —
+// refreshSearchPopupHeight is the primary guard, this is the belt to its braces.
+func writeSearchPopupItems(b *strings.Builder, sp *searchPopupState, st searchPopupStyleSet, width int) {
 	for i := 0; i < sp.height; i++ {
 		idx := sp.scrollOff + i
 		if idx < 0 || idx >= len(sp.filtered) {
@@ -2361,11 +2447,11 @@ func (m *model) renderSearchPopup(width int) string {
 		}
 		item := sp.filtered[idx]
 		prefix := "  "
-		currentItemStyle := itemStyle
+		currentItemStyle := st.itemStyle
 		if idx == sp.selected {
 			// Always highlight the selected item.
 			prefix = "> "
-			currentItemStyle = selectedItemStyle
+			currentItemStyle = st.selectedItemStyle
 		}
 
 		line := prefix + item.Text
@@ -2380,8 +2466,6 @@ func (m *model) renderSearchPopup(width int) string {
 		b.WriteString("\n")
 		b.WriteString(currentItemStyle.Width(width).Render(clipRunes(line, width)))
 	}
-
-	return popupStyle.Render(b.String())
 }
 
 func (m *model) slashCommandCandidates(prefix string) []CompletionCandidate {

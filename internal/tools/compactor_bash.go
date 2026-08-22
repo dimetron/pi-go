@@ -131,28 +131,33 @@ func isLinterCommand(cmd string) bool {
 		strings.Contains(cmd, "clippy")
 }
 
-// filterBuildOutput keeps only error/warning lines from build output.
-func filterBuildOutput(s string, cfg CompactorConfig) (string, bool) {
-	lines := strings.Split(s, "\n")
-	if len(lines) < 10 {
-		return s, false // not worth filtering short output
-	}
+// buildErrorMarkers mark a build output line as an error or warning worth keeping.
+var buildErrorMarkers = []string{"error", "warning:", "fatal", "cannot", "undefined"}
 
-	var filtered []string
-	errorCount := 0
+// buildSummaryMarkers mark a build output line as a run summary worth keeping.
+var buildSummaryMarkers = []string{"build failed", "exit status"}
+
+// containsAnyOf reports whether s contains any of the given substrings.
+func containsAnyOf(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// selectBuildErrorLines keeps each error line up to cfg.MaxBuildErrors, a bounded
+// run of context lines after each one, and any summary line. It returns the kept
+// lines and how many errors were kept.
+func selectBuildErrorLines(lines []string, cfg CompactorConfig) (filtered []string, errorCount int) {
 	linesInError := 0
 	inError := false
 
 	for _, line := range lines {
 		lower := strings.ToLower(line)
 
-		isErrorLine := strings.Contains(lower, "error") ||
-			strings.Contains(lower, "warning:") ||
-			strings.Contains(lower, "fatal") ||
-			strings.Contains(lower, "cannot") ||
-			strings.Contains(lower, "undefined")
-
-		if isErrorLine {
+		if containsAnyOf(lower, buildErrorMarkers) {
 			if errorCount < cfg.MaxBuildErrors {
 				inError = true
 				linesInError = 0
@@ -174,11 +179,21 @@ func filterBuildOutput(s string, cfg CompactorConfig) (string, bool) {
 
 		// Keep summary lines
 		if strings.HasPrefix(line, "FAIL") || strings.HasPrefix(line, "ok ") ||
-			strings.Contains(lower, "build failed") || strings.Contains(lower, "exit status") {
+			containsAnyOf(lower, buildSummaryMarkers) {
 			filtered = append(filtered, line)
 		}
 	}
+	return filtered, errorCount
+}
 
+// filterBuildOutput keeps only error/warning lines from build output.
+func filterBuildOutput(s string, cfg CompactorConfig) (string, bool) {
+	lines := strings.Split(s, "\n")
+	if len(lines) < 10 {
+		return s, false // not worth filtering short output
+	}
+
+	filtered, errorCount := selectBuildErrorLines(lines, cfg)
 	if len(filtered) >= len(lines) {
 		return s, false
 	}
@@ -196,47 +211,55 @@ var goTestResultPattern = regexp.MustCompile(`^(ok|FAIL)\s+\S+\s+[\d.]+s`)
 // goTestFailPattern matches Go test failure output headers.
 var goTestFailPattern = regexp.MustCompile(`^--- FAIL: (\S+)`)
 
-// aggregateTestOutput compacts test output into a summary with failure details.
-func aggregateTestOutput(s string, cfg CompactorConfig) (string, bool) {
-	lines := strings.Split(s, "\n")
-	if len(lines) < 20 {
-		return s, false // too short to benefit
-	}
+// testOutputSummary is the parsed shape of a test run: the per-status counts, the
+// failure details kept, and the per-package result lines.
+type testOutputSummary struct {
+	passCount, failCount, skipCount int
+	failedTests                     []string
+	failDetails                     []string
+	resultLines                     []string
+}
 
+// appendFailDetail flushes an in-progress failure detail if there is one and
+// there is still room for it under maxFailures.
+func appendFailDetail(details, current []string, maxFailures int) []string {
+	if len(current) > 0 && len(details) < maxFailures {
+		return append(details, strings.Join(current, "\n"))
+	}
+	return details
+}
+
+// parseTestOutput scans test output into counts, failure details and result lines.
+func parseTestOutput(lines []string, cfg CompactorConfig) testOutputSummary {
 	var (
-		passCount, failCount, skipCount int
-		failedTests                     []string
-		failDetails                     []string
-		resultLines                     []string
-		inFail                          bool
-		failLines                       int
-		currentFailDetail               []string
+		sum               testOutputSummary
+		inFail            bool
+		failLines         int
+		currentFailDetail []string
 	)
 
 	for _, line := range lines {
 		// Go test result lines
 		if goTestResultPattern.MatchString(line) {
-			resultLines = append(resultLines, line)
+			sum.resultLines = append(sum.resultLines, line)
 			if strings.HasPrefix(line, "FAIL") {
-				failCount++
+				sum.failCount++
 			} else {
-				passCount++
+				sum.passCount++
 			}
 			continue
 		}
 
 		if strings.Contains(line, "--- SKIP") {
-			skipCount++
+			sum.skipCount++
 			continue
 		}
 
 		// Capture failure details
 		if m := goTestFailPattern.FindStringSubmatch(line); m != nil {
 			// Flush previous fail
-			if len(currentFailDetail) > 0 && len(failDetails) < cfg.MaxTestFailures {
-				failDetails = append(failDetails, strings.Join(currentFailDetail, "\n"))
-			}
-			failedTests = append(failedTests, m[1])
+			sum.failDetails = appendFailDetail(sum.failDetails, currentFailDetail, cfg.MaxTestFailures)
+			sum.failedTests = append(sum.failedTests, m[1])
 			currentFailDetail = []string{line}
 			inFail = true
 			failLines = 0
@@ -253,37 +276,50 @@ func aggregateTestOutput(s string, cfg CompactorConfig) (string, bool) {
 	}
 
 	// Flush last failure
-	if len(currentFailDetail) > 0 && len(failDetails) < cfg.MaxTestFailures {
-		failDetails = append(failDetails, strings.Join(currentFailDetail, "\n"))
-	}
+	sum.failDetails = appendFailDetail(sum.failDetails, currentFailDetail, cfg.MaxTestFailures)
+	return sum
+}
 
-	if passCount == 0 && failCount == 0 {
-		return s, false // couldn't parse test output
-	}
-
+// renderTestSummary formats a parsed test run as the compacted summary text.
+func renderTestSummary(sum testOutputSummary, cfg CompactorConfig) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Test Summary: PASS=%d FAIL=%d SKIP=%d\n", passCount, failCount, skipCount)
+	fmt.Fprintf(&b, "Test Summary: PASS=%d FAIL=%d SKIP=%d\n", sum.passCount, sum.failCount, sum.skipCount)
 
-	if len(failDetails) > 0 {
+	if len(sum.failDetails) > 0 {
 		fmt.Fprintf(&b, "\nFailure Details:\n")
-		for _, d := range failDetails {
+		for _, d := range sum.failDetails {
 			b.WriteString(d)
 			b.WriteString("\n\n")
 		}
-		if len(failedTests) > cfg.MaxTestFailures {
-			fmt.Fprintf(&b, "... and %d more failures\n", len(failedTests)-cfg.MaxTestFailures)
+		if len(sum.failedTests) > cfg.MaxTestFailures {
+			fmt.Fprintf(&b, "... and %d more failures\n", len(sum.failedTests)-cfg.MaxTestFailures)
 		}
 	}
 
-	if len(resultLines) > 0 {
+	if len(sum.resultLines) > 0 {
 		fmt.Fprintf(&b, "\nPackage Results:\n")
-		for _, r := range resultLines {
+		for _, r := range sum.resultLines {
 			b.WriteString(r)
 			b.WriteString("\n")
 		}
 	}
 
-	result := b.String()
+	return b.String()
+}
+
+// aggregateTestOutput compacts test output into a summary with failure details.
+func aggregateTestOutput(s string, cfg CompactorConfig) (string, bool) {
+	lines := strings.Split(s, "\n")
+	if len(lines) < 20 {
+		return s, false // too short to benefit
+	}
+
+	sum := parseTestOutput(lines, cfg)
+	if sum.passCount == 0 && sum.failCount == 0 {
+		return s, false // couldn't parse test output
+	}
+
+	result := renderTestSummary(sum, cfg)
 	if len(result) >= len(s) {
 		return s, false
 	}
@@ -378,6 +414,99 @@ func aggregateLinterOutput(s string, cfg CompactorConfig) (string, bool) {
 	return result, true
 }
 
+// scoredLine pairs an output line with its smart-truncation priority.
+type scoredLine struct {
+	line  string
+	score int
+}
+
+// truncateErrorMarkers mark the highest-priority lines for smart truncation.
+var truncateErrorMarkers = []string{"error", "fail", "panic", "fatal"}
+
+// truncateDeclPrefixes mark source declarations, ranked above ordinary content.
+var truncateDeclPrefixes = []string{"import", "package", "func ", "type "}
+
+// hasAnyPrefix reports whether s starts with any of the given prefixes.
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// lineTruncationScore ranks a line for retention: errors and failures first, then
+// warnings, then declarations, then ordinary content, with blank lines last.
+func lineTruncationScore(line string) int {
+	lower := strings.ToLower(line)
+	switch {
+	case containsAnyOf(lower, truncateErrorMarkers):
+		return 10
+	case strings.Contains(lower, "warning"):
+		return 7
+	case hasAnyPrefix(line, truncateDeclPrefixes):
+		return 5
+	case strings.TrimSpace(line) == "":
+		return 0 // blank lines are lowest priority
+	default:
+		return 1 // default priority
+	}
+}
+
+// partitionByPriority splits the middle band into high- and low-priority lines,
+// dropping blank (score 0) lines entirely.
+func partitionByPriority(middle []scoredLine) (highPri, lowPri []string) {
+	for _, sl := range middle {
+		if sl.score >= 5 {
+			highPri = append(highPri, sl.line)
+		} else if sl.score > 0 {
+			lowPri = append(lowPri, sl.line)
+		}
+	}
+	return highPri, lowPri
+}
+
+// appendUpTo appends lines from src to dst while the budget allows, returning the
+// grown slice and the budget left.
+func appendUpTo(dst, src []string, remaining int) ([]string, int) {
+	for _, l := range src {
+		if remaining <= 0 {
+			break
+		}
+		dst = append(dst, l)
+		remaining--
+	}
+	return dst, remaining
+}
+
+// selectMiddleLines keeps at most middleSize lines from the middle band,
+// preferring high-priority ones, and appends an omission marker when it dropped
+// any.
+func selectMiddleLines(middle []scoredLine, middleSize int) []string {
+	var result []string
+	if len(middle) <= middleSize {
+		for _, sl := range middle {
+			result = append(result, sl.line)
+		}
+		return result
+	}
+
+	highPri, lowPri := partitionByPriority(middle)
+	remaining := middleSize
+	result, remaining = appendUpTo(result, highPri, remaining)
+	result, remaining = appendUpTo(result, lowPri, remaining)
+
+	// The original guard read `remaining < len(middle)-len(all)+headSize`, where
+	// `all` was the whole output so far — the head lines plus what was picked
+	// here. Substituting len(all) = headSize+len(result) cancels both headSize
+	// terms, leaving this.
+	if remaining < len(middle)-len(result) {
+		result = append(result, fmt.Sprintf("... (%d lines omitted)", len(middle)-middleSize))
+	}
+	return result
+}
+
 // smartTruncate applies priority-based line selection to keep the most important content.
 func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 	lines := strings.Split(s, "\n")
@@ -386,30 +515,9 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 	}
 
 	// Priority scoring: errors/failures > imports/declarations > other content
-	type scored struct {
-		line  string
-		score int
-	}
-
-	scoredLines := make([]scored, len(lines))
+	scoredLines := make([]scoredLine, len(lines))
 	for i, line := range lines {
-		score := 1 // default priority
-		lower := strings.ToLower(line)
-
-		// High priority: errors, failures, important markers
-		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
-			strings.Contains(lower, "panic") || strings.Contains(lower, "fatal") {
-			score = 10
-		} else if strings.Contains(lower, "warning") {
-			score = 7
-		} else if strings.HasPrefix(line, "import") || strings.HasPrefix(line, "package") ||
-			strings.HasPrefix(line, "func ") || strings.HasPrefix(line, "type ") {
-			score = 5
-		} else if strings.TrimSpace(line) == "" {
-			score = 0 // blank lines are lowest priority
-		}
-
-		scoredLines[i] = scored{line: line, score: score}
+		scoredLines[i] = scoredLine{line: line, score: lineTruncationScore(line)}
 	}
 
 	// Keep first and last 10% unconditionally for context
@@ -426,39 +534,7 @@ func smartTruncate(s string, cfg CompactorConfig) (string, bool) {
 
 	// Middle: select by priority
 	middle := scoredLines[headSize : len(scoredLines)-tailSize]
-	if len(middle) > middleSize {
-		// Collect high-priority lines first
-		var highPri, lowPri []string
-		for _, sl := range middle {
-			if sl.score >= 5 {
-				highPri = append(highPri, sl.line)
-			} else if sl.score > 0 {
-				lowPri = append(lowPri, sl.line)
-			}
-		}
-		remaining := middleSize
-		for _, l := range highPri {
-			if remaining <= 0 {
-				break
-			}
-			result = append(result, l)
-			remaining--
-		}
-		for _, l := range lowPri {
-			if remaining <= 0 {
-				break
-			}
-			result = append(result, l)
-			remaining--
-		}
-		if remaining < len(middle)-len(result)+headSize {
-			result = append(result, fmt.Sprintf("... (%d lines omitted)", len(middle)-middleSize))
-		}
-	} else {
-		for _, sl := range middle {
-			result = append(result, sl.line)
-		}
-	}
+	result = append(result, selectMiddleLines(middle, middleSize)...)
 
 	// Tail
 	for i := len(scoredLines) - tailSize; i < len(scoredLines); i++ {

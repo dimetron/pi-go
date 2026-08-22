@@ -50,6 +50,7 @@ import (
 
 	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/logger"
@@ -294,47 +295,64 @@ func (s *Server) runTurn(ctx context.Context, message string) {
 
 		dedup.BeginEvent(ev)
 		for _, part := range ev.Content.Parts {
-			switch {
-			case part.Text != "" && ev.Content.Role == "thinking":
-				s.emitDelta("thinking_delta", part.Text)
-				if s.log != nil {
-					s.log.Thinking(ev.Author, part.Text)
-				}
-			case part.Text != "":
-				if dedup.SkipText(ev) {
-					continue
-				}
-				s.emitDelta("text_delta", part.Text)
-				if s.log != nil {
-					s.log.LLMText(ev.Author, part.Text)
-				}
-			}
+			s.emitPart(ev, part, &dedup)
+		}
+	}
+}
 
-			if fc := part.FunctionCall; fc != nil {
-				s.emit(map[string]any{
-					"type":       "tool_execution_start",
-					"toolCallId": s.toolCallID(fc.ID, fc.Name),
-					"toolName":   fc.Name,
-					"args":       fc.Args,
-				})
-				if s.log != nil {
-					s.log.ToolCall(ev.Author, fc.Name, fc.Args)
-				}
-			}
+// emitPart streams one content part: thinking or assistant text, a tool call,
+// and a tool result. A part the dedup filter rejects is dropped whole, which
+// is what the inline `continue` did before.
+func (s *Server) emitPart(ev *session.Event, part *genai.Part, dedup *agent.StreamDedup) {
+	switch {
+	case part.Text != "" && ev.Content.Role == "thinking":
+		s.emitDelta("thinking_delta", part.Text)
+		if s.log != nil {
+			s.log.Thinking(ev.Author, part.Text)
+		}
+	case part.Text != "":
+		if dedup.SkipText(ev) {
+			return
+		}
+		s.emitDelta("text_delta", part.Text)
+		if s.log != nil {
+			s.log.LLMText(ev.Author, part.Text)
+		}
+	}
 
-			if fr := part.FunctionResponse; fr != nil {
-				s.emit(map[string]any{
-					"type":       "tool_execution_end",
-					"toolCallId": s.toolCallID(fr.ID, fr.Name),
-					"result":     fr.Response,
-					"isError":    false,
-				})
-				if s.log != nil {
-					if b, mErr := json.Marshal(fr.Response); mErr == nil {
-						s.log.ToolResult(ev.Author, fr.Name, string(b))
-					}
-				}
-			}
+	if fc := part.FunctionCall; fc != nil {
+		s.emitToolCall(ev.Author, fc)
+	}
+
+	if fr := part.FunctionResponse; fr != nil {
+		s.emitToolResult(ev.Author, fr)
+	}
+}
+
+// emitToolCall opens a tool card on the adapter side.
+func (s *Server) emitToolCall(author string, fc *genai.FunctionCall) {
+	s.emit(map[string]any{
+		"type":       "tool_execution_start",
+		"toolCallId": s.toolCallID(fc.ID, fc.Name),
+		"toolName":   fc.Name,
+		"args":       fc.Args,
+	})
+	if s.log != nil {
+		s.log.ToolCall(author, fc.Name, fc.Args)
+	}
+}
+
+// emitToolResult closes the tool card opened by emitToolCall.
+func (s *Server) emitToolResult(author string, fr *genai.FunctionResponse) {
+	s.emit(map[string]any{
+		"type":       "tool_execution_end",
+		"toolCallId": s.toolCallID(fr.ID, fr.Name),
+		"result":     fr.Response,
+		"isError":    false,
+	})
+	if s.log != nil {
+		if b, mErr := json.Marshal(fr.Response); mErr == nil {
+			s.log.ToolResult(author, fr.Name, string(b))
 		}
 	}
 }

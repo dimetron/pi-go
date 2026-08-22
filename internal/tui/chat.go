@@ -657,124 +657,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 			continue
 		}
 
-		var msgBuf strings.Builder
-		switch msg.role {
-		case "user":
-			if i > 0 {
-				msgBuf.WriteString(separator)
-				msgBuf.WriteString("\n")
-			}
-			label := lipgloss.NewStyle().
-				Foreground(p.Primary).
-				Bold(true).
-				Render("> ")
-			msgBuf.WriteString(label)
-			contentWidth := c.Width - 3 // "> " = 3 visible chars
-			if contentWidth < 20 {
-				contentWidth = 20
-			}
-			wrapped := wordWrap(msg.content, contentWidth)
-			for j, line := range wrapped {
-				if j > 0 {
-					msgBuf.WriteString("\n   ")
-				}
-				msgBuf.WriteString(line)
-			}
-			msgBuf.WriteString("\n")
-
-		case "tool":
-			msgBuf.WriteString("\n")
-			msgBuf.WriteString(c.ToolDisplay.RenderToolMessage(*msg))
-
-		case "thinking":
-			if msg.content != "" {
-				thinkStyle := lipgloss.NewStyle().Foreground(p.Faint).Italic(true)
-				thinkBullet := lipgloss.NewStyle().Foreground(p.Faint).Render("💭 ")
-				msgBuf.WriteString("\n")
-				msgBuf.WriteString(thinkBullet)
-				// Show last few lines of thinking to keep it compact.
-				lines := strings.Split(msg.content, "\n")
-				maxLines := 6
-				if len(lines) > maxLines {
-					lines = lines[len(lines)-maxLines:]
-				}
-				// Content width accounting for the bullet prefix.
-				contentWidth := c.Width - 3 // "💭 " = 3 visible chars
-				if contentWidth < 20 {
-					contentWidth = 20
-				}
-				for j, line := range lines {
-					if j > 0 {
-						msgBuf.WriteString("   ")
-					}
-					// Wrap each line to fit available width.
-					wrapped := wordWrap(line, contentWidth)
-					for k, wl := range wrapped {
-						if k > 0 {
-							msgBuf.WriteString("\n")
-						}
-						msgBuf.WriteString(thinkStyle.Render(wl))
-					}
-					if j < len(lines)-1 {
-						msgBuf.WriteString("\n")
-					}
-				}
-				msgBuf.WriteString("\n")
-			}
-
-		case "assistant":
-			content := msg.content
-			if content == "" && isLastAndStreaming {
-				content = "..."
-			}
-			if content != "" {
-				msgBuf.WriteString("\n")
-				if msg.isError {
-					errStyle := lipgloss.NewStyle().Foreground(p.Error).Bold(true)
-					msgBuf.WriteString(errStyle.Render("✖ "))
-					// Provider errors carry the raw JSON body, which is far
-					// wider than the pane. Wrap it like the user/thinking
-					// blocks do — an error truncated by the terminal is barely
-					// better than the silent failure this replaces.
-					contentWidth := c.Width - 3 // "✖ " plus the hanging indent
-					if contentWidth < 20 {
-						contentWidth = 20
-					}
-					for j, line := range wordWrap(content, contentWidth) {
-						if j > 0 {
-							msgBuf.WriteString("\n   ")
-						}
-						msgBuf.WriteString(errStyle.Render(line))
-					}
-				} else if msg.isWarning {
-					// Peach, not Warning: the warning role is a yellow, and
-					// yellow is the classic light-theme casualty — it washes
-					// out to nothing on white. Orange carries the same "look
-					// here, but nothing broke" weight and stays legible on both
-					// backgrounds.
-					warnStyle := lipgloss.NewStyle().Foreground(p.Peach).Bold(true)
-					warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
-					msgBuf.WriteString(warnBullet)
-					msgBuf.WriteString(warnStyle.Render(content))
-				} else if msg.isMeta {
-					// A dim "Σ" prefix marks the line as a per-turn tally rather
-					// than the model's own words — the reply uses "◉", so the
-					// two must never be confusable.
-					metaStyle := lipgloss.NewStyle().Foreground(p.Dim)
-					msgBuf.WriteString(metaStyle.Render("Σ " + content))
-				} else if msg.preRendered {
-					msgBuf.WriteString(bullet)
-					msgBuf.WriteString(content)
-				} else {
-					msgBuf.WriteString(bullet)
-					rendered := c.RenderMarkdown(content)
-					msgBuf.WriteString(rendered)
-				}
-				msgBuf.WriteString("\n")
-			}
-		}
-
-		rendered := msgBuf.String()
+		rendered := c.renderMessageBlock(msg, p, bullet, separator, i > 0, isLastAndStreaming)
 		b.WriteString(rendered)
 		kinds = appendKind(kinds, kindOf(msg), strings.Count(rendered, "\n"))
 
@@ -791,6 +674,158 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 	// lines between blocks — visually noisy when several subagents run in
 	// parallel. Collapse to at most one blank line between content.
 	return collapseBlankLines(b.String(), kinds)
+}
+
+// renderWrapWidth returns the width available to content indented by reserve
+// visible columns, with the floor of 20 every block in renderMessages applies
+// so a very narrow pane still wraps rather than collapsing.
+func renderWrapWidth(total, reserve int) int {
+	if w := total - reserve; w >= 20 {
+		return w
+	}
+	return 20
+}
+
+// renderMessageBlock renders one message's contribution to the chat, or "" for
+// a role that draws nothing (an unknown role, or an empty thinking/assistant
+// message).
+func (c *ChatModel) renderMessageBlock(msg *message, p Palette, bullet, separator string, afterFirst, isLastAndStreaming bool) string {
+	switch msg.role {
+	case "user":
+		return c.renderUserBlock(msg.content, p, separator, afterFirst)
+	case "tool":
+		return "\n" + c.ToolDisplay.RenderToolMessage(*msg)
+	case "thinking":
+		return c.renderThinkingBlock(msg.content, p)
+	case "assistant":
+		return c.renderAssistantBlock(msg, p, bullet, isLastAndStreaming)
+	}
+	return ""
+}
+
+// renderUserBlock renders a user turn: the separator that divides it from the
+// previous turn, the "> " prompt, and the wrapped prompt text.
+func (c *ChatModel) renderUserBlock(content string, p Palette, separator string, afterFirst bool) string {
+	var b strings.Builder
+	if afterFirst {
+		b.WriteString(separator)
+		b.WriteString("\n")
+	}
+	label := lipgloss.NewStyle().
+		Foreground(p.Primary).
+		Bold(true).
+		Render("> ")
+	b.WriteString(label)
+	for j, line := range wordWrap(content, renderWrapWidth(c.Width, 3)) { // "> " = 3 visible chars
+		if j > 0 {
+			b.WriteString("\n   ")
+		}
+		b.WriteString(line)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// maxThinkingLines is how much of a thinking block the chat shows; only the
+// most recent lines are kept, to stay compact.
+const maxThinkingLines = 6
+
+// renderThinkingBlock renders the 💭 block for the model's reasoning.
+func (c *ChatModel) renderThinkingBlock(content string, p Palette) string {
+	if content == "" {
+		return ""
+	}
+	thinkStyle := lipgloss.NewStyle().Foreground(p.Faint).Italic(true)
+	thinkBullet := lipgloss.NewStyle().Foreground(p.Faint).Render("💭 ")
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(thinkBullet)
+	// Show last few lines of thinking to keep it compact.
+	lines := strings.Split(content, "\n")
+	if len(lines) > maxThinkingLines {
+		lines = lines[len(lines)-maxThinkingLines:]
+	}
+	// Content width accounting for the bullet prefix.
+	contentWidth := renderWrapWidth(c.Width, 3) // "💭 " = 3 visible chars
+	for j, line := range lines {
+		if j > 0 {
+			b.WriteString("   ")
+		}
+		// Wrap each line to fit available width.
+		for k, wl := range wordWrap(line, contentWidth) {
+			if k > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(thinkStyle.Render(wl))
+		}
+		if j < len(lines)-1 {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// renderAssistantBlock renders an assistant turn, or "" when there is nothing
+// to show. A streaming turn with no content yet renders as "..." so the reply
+// has somewhere to appear.
+func (c *ChatModel) renderAssistantBlock(msg *message, p Palette, bullet string, isLastAndStreaming bool) string {
+	content := msg.content
+	if content == "" && isLastAndStreaming {
+		content = "..."
+	}
+	if content == "" {
+		return ""
+	}
+	return "\n" + c.assistantBody(msg, content, p, bullet) + "\n"
+}
+
+// assistantBody renders the assistant content itself, styled by which kind of
+// message it is. Only one of these applies, and the order is the precedence
+// they have always had: error, then warning, then meta, then the reply.
+func (c *ChatModel) assistantBody(msg *message, content string, p Palette, bullet string) string {
+	switch {
+	case msg.isError:
+		return c.assistantErrorBody(content, p)
+	case msg.isWarning:
+		// Peach, not Warning: the warning role is a yellow, and yellow is the
+		// classic light-theme casualty — it washes out to nothing on white.
+		// Orange carries the same "look here, but nothing broke" weight and
+		// stays legible on both backgrounds.
+		warnStyle := lipgloss.NewStyle().Foreground(p.Peach).Bold(true)
+		warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
+		return warnBullet + warnStyle.Render(content)
+	case msg.isMeta:
+		// A dim "Σ" prefix marks the line as a per-turn tally rather than the
+		// model's own words — the reply uses "◉", so the two must never be
+		// confusable.
+		metaStyle := lipgloss.NewStyle().Foreground(p.Dim)
+		return metaStyle.Render("Σ " + content)
+	case msg.preRendered:
+		return bullet + content
+	default:
+		return bullet + c.RenderMarkdown(content)
+	}
+}
+
+// assistantErrorBody renders an error reply. Provider errors carry the raw JSON
+// body, which is far wider than the pane. Wrap it like the user/thinking blocks
+// do — an error truncated by the terminal is barely better than the silent
+// failure this replaces.
+func (c *ChatModel) assistantErrorBody(content string, p Palette) string {
+	errStyle := lipgloss.NewStyle().Foreground(p.Error).Bold(true)
+
+	var b strings.Builder
+	b.WriteString(errStyle.Render("✖ "))
+	contentWidth := renderWrapWidth(c.Width, 3) // "✖ " plus the hanging indent
+	for j, line := range wordWrap(content, contentWidth) {
+		if j > 0 {
+			b.WriteString("\n   ")
+		}
+		b.WriteString(errStyle.Render(line))
+	}
+	return b.String()
 }
 
 // appendKind records that a message opened n lines of output.

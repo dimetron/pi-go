@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 )
 
 // AutoCompactOutcome reports what an auto-compaction pass did, so callers can
@@ -167,39 +168,11 @@ func callOrphansResponseOnTail(events []*session.Event, lastCompactedIdx, splitI
 	if lastCompactedIdx < 0 || lastCompactedIdx >= n {
 		return false
 	}
-	ev := events[lastCompactedIdx]
-	if ev == nil || ev.Content == nil {
-		return false
-	}
-	var callID string
-	for _, part := range ev.Content.Parts {
-		if part == nil || part.FunctionCall == nil {
-			continue
-		}
-		if part.FunctionCall.ID == "" {
-			continue
-		}
-		callID = part.FunctionCall.ID
-		break
-	}
+	callID := firstPartID(events[lastCompactedIdx], functionCallID)
 	if callID == "" {
 		return false
 	}
-	for j := splitIdx; j < n; j++ {
-		ev := events[j]
-		if ev == nil || ev.Content == nil {
-			continue
-		}
-		for _, part := range ev.Content.Parts {
-			if part == nil || part.FunctionResponse == nil {
-				continue
-			}
-			if part.FunctionResponse.ID == callID {
-				return true
-			}
-		}
-	}
-	return false
+	return rangeHasPartID(events, splitIdx, n, functionResponseID, callID)
 }
 
 // responseOrphansCallOnCompacted reports whether events[splitIdx] contains a
@@ -210,34 +183,61 @@ func responseOrphansCallOnCompacted(events []*session.Event, splitIdx int) bool 
 	if splitIdx >= len(events) {
 		return false
 	}
-	ev := events[splitIdx]
-	if ev == nil || ev.Content == nil {
-		return false
-	}
-	var respID string
-	for _, part := range ev.Content.Parts {
-		if part == nil || part.FunctionResponse == nil {
-			continue
-		}
-		if part.FunctionResponse.ID == "" {
-			continue
-		}
-		respID = part.FunctionResponse.ID
-		break
-	}
+	respID := firstPartID(events[splitIdx], functionResponseID)
 	if respID == "" {
 		return false
 	}
-	for j := 0; j < splitIdx; j++ {
+	return rangeHasPartID(events, 0, splitIdx, functionCallID, respID)
+}
+
+// partIDFunc reads the tool-pairing ID out of a single part, returning "" when
+// the part is nil, is not the kind being looked for, or carries no ID. The two
+// orphan checks above are mirror images of each other — same scan, opposite
+// direction and opposite part kind — so the kind is a parameter rather than
+// duplicated control flow.
+type partIDFunc func(part *genai.Part) string
+
+// functionCallID reads the ID of a FunctionCall part.
+func functionCallID(part *genai.Part) string {
+	if part == nil || part.FunctionCall == nil {
+		return ""
+	}
+	return part.FunctionCall.ID
+}
+
+// functionResponseID reads the ID of a FunctionResponse part.
+func functionResponseID(part *genai.Part) string {
+	if part == nil || part.FunctionResponse == nil {
+		return ""
+	}
+	return part.FunctionResponse.ID
+}
+
+// firstPartID returns the first non-empty ID that id reads out of ev's parts,
+// or "" when ev holds no part of that kind with an ID.
+func firstPartID(ev *session.Event, id partIDFunc) string {
+	if ev == nil || ev.Content == nil {
+		return ""
+	}
+	for _, part := range ev.Content.Parts {
+		if got := id(part); got != "" {
+			return got
+		}
+	}
+	return ""
+}
+
+// rangeHasPartID reports whether any event in events[lo:hi) carries a part
+// whose ID, as read by id, equals want. want must be non-empty: id returns ""
+// for parts of the wrong kind, so an empty want would match them.
+func rangeHasPartID(events []*session.Event, lo, hi int, id partIDFunc, want string) bool {
+	for j := lo; j < hi; j++ {
 		ev := events[j]
 		if ev == nil || ev.Content == nil {
 			continue
 		}
 		for _, part := range ev.Content.Parts {
-			if part == nil || part.FunctionCall == nil {
-				continue
-			}
-			if part.FunctionCall.ID == respID {
+			if id(part) == want {
 				return true
 			}
 		}

@@ -173,6 +173,13 @@ func abortDetail(msg string) string {
 
 // renderSweep writes the deep sections: failures, waste, and real token spend.
 func renderSweep(b *strings.Builder, totals *sweepTotals, sessions int) {
+	renderSweepFailures(b, totals)
+	renderSweepWaste(b, totals)
+	renderSweepSpend(b, totals, sessions)
+}
+
+// renderSweepFailures writes the aborted runs and the per-tool error rates.
+func renderSweepFailures(b *strings.Builder, totals *sweepTotals) {
 	b.WriteString("\n## Failures\n\n")
 	if len(totals.Aborts) == 0 {
 		b.WriteString("No aborted runs.\n")
@@ -184,19 +191,24 @@ func renderSweep(b *strings.Builder, totals *sweepTotals, sessions int) {
 	}
 
 	byErrors := totals.sortedTools(func(u *toolUsage) int { return u.Errors })
-	if len(byErrors) > 0 && byErrors[0].Errors > 0 {
-		b.WriteString("\nTool errors, as a rate — a busy tool with a few failures is not the problem:\n\n")
-		b.WriteString("| tool | errors | calls | rate |\n|---|---:|---:|---:|\n")
-		for _, u := range byErrors {
-			if u.Errors == 0 {
-				break
-			}
-			calls := max(u.Calls, 1)
-			fmt.Fprintf(b, "| %s | %d | %d | %d%% |\n", u.Name, u.Errors, calls, 100*u.Errors/calls)
-		}
-		b.WriteString("\n→ `pi-check-session-logs` dedupes these by pattern.\n")
+	if len(byErrors) == 0 || byErrors[0].Errors == 0 {
+		return
 	}
+	b.WriteString("\nTool errors, as a rate — a busy tool with a few failures is not the problem:\n\n")
+	b.WriteString("| tool | errors | calls | rate |\n|---|---:|---:|---:|\n")
+	for _, u := range byErrors {
+		if u.Errors == 0 {
+			break
+		}
+		calls := max(u.Calls, 1)
+		fmt.Fprintf(b, "| %s | %d | %d | %d%% |\n", u.Name, u.Errors, calls, 100*u.Errors/calls)
+	}
+	b.WriteString("\n→ `pi-check-session-logs` dedupes these by pattern.\n")
+}
 
+// renderSweepWaste writes what capping oversized results and dropping
+// duplicates would give back.
+func renderSweepWaste(b *strings.Builder, totals *sweepTotals) {
 	b.WriteString("\n## Token waste\n\n")
 	overTotal := 0
 	for _, u := range totals.Tools {
@@ -204,41 +216,45 @@ func renderSweep(b *strings.Builder, totals *sweepTotals, sessions int) {
 	}
 	if overTotal == 0 && totals.DupBytes == 0 {
 		b.WriteString("Nothing oversized or duplicated.\n")
-	} else {
-		reclaim := (overTotal + totals.DupBytes) / 4
-		pct := 0
-		if totals.ToolBytes > 0 {
-			pct = 100 * (overTotal + totals.DupBytes) / totals.ToolBytes
-		}
-		fmt.Fprintf(b, "Reclaimable: **~%s tokens** (%d%% of tool output)\n\n", thousands(reclaim), pct)
-		b.WriteString("| tool | excess over 24k | compactor covers it? |\n|---|---:|---|\n")
-		for _, u := range totals.sortedTools(func(u *toolUsage) int { return u.Oversized }) {
-			if u.Oversized == 0 {
-				break
-			}
-			covered := "**no — uncapped**"
-			if compactedTools[strings.ReplaceAll(u.Name, "-", "_")] {
-				covered = "yes"
-			}
-			fmt.Fprintf(b, "| %s | %s tok | %s |\n", u.Name, thousands(u.Oversized/4), covered)
-		}
-		if totals.DupBytes > 0 {
-			fmt.Fprintf(b, "\nDuplicate results re-sent inside one session: ~%s tokens.\n",
-				thousands(totals.DupBytes/4))
-		}
+		return
 	}
 
+	reclaim := (overTotal + totals.DupBytes) / 4
+	pct := 0
+	if totals.ToolBytes > 0 {
+		pct = 100 * (overTotal + totals.DupBytes) / totals.ToolBytes
+	}
+	fmt.Fprintf(b, "Reclaimable: **~%s tokens** (%d%% of tool output)\n\n", thousands(reclaim), pct)
+	b.WriteString("| tool | excess over 24k | compactor covers it? |\n|---|---:|---|\n")
+	for _, u := range totals.sortedTools(func(u *toolUsage) int { return u.Oversized }) {
+		if u.Oversized == 0 {
+			break
+		}
+		covered := "**no — uncapped**"
+		if compactedTools[strings.ReplaceAll(u.Name, "-", "_")] {
+			covered = "yes"
+		}
+		fmt.Fprintf(b, "| %s | %s tok | %s |\n", u.Name, thousands(u.Oversized/4), covered)
+	}
+	if totals.DupBytes > 0 {
+		fmt.Fprintf(b, "\nDuplicate results re-sent inside one session: ~%s tokens.\n",
+			thousands(totals.DupBytes/4))
+	}
+}
+
+// renderSweepSpend writes the provider-reported token totals.
+func renderSweepSpend(b *strings.Builder, totals *sweepTotals, sessions int) {
 	b.WriteString("\n## Token spend\n\n")
 	if totals.PromptTokens == 0 {
 		b.WriteString("No usage metadata — the provider did not report token counts.\n")
-	} else {
-		fmt.Fprintf(b, "Prompt %s · output %s (provider-reported, not estimated)\n",
-			thousands(totals.PromptTokens), thousands(totals.OutputTokens))
-		if sessions > 0 {
-			fmt.Fprintf(b, "\nPrompt tokens are re-sent every request, so this is dominated by the fixed\nblock — system prompt plus tool declarations — not by the work. "+
-				"Average %s prompt tokens per session across %d session(s).\n",
-				thousands(totals.PromptTokens/sessions), sessions)
-		}
+		return
+	}
+	fmt.Fprintf(b, "Prompt %s · output %s (provider-reported, not estimated)\n",
+		thousands(totals.PromptTokens), thousands(totals.OutputTokens))
+	if sessions > 0 {
+		fmt.Fprintf(b, "\nPrompt tokens are re-sent every request, so this is dominated by the fixed\nblock — system prompt plus tool declarations — not by the work. "+
+			"Average %s prompt tokens per session across %d session(s).\n",
+			thousands(totals.PromptTokens/sessions), sessions)
 	}
 }
 

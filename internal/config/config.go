@@ -430,63 +430,72 @@ func parseMCPServers(v any) []MCPServer {
 	}
 	switch x := v.(type) {
 	case map[string]any:
-		// Claude Desktop object format: mcpServers is a map keyed by server name.
-		// Each value is { "command": "...", "args": [...] } or { "url": "..." }.
-		servers := make([]MCPServer, 0, len(x))
-		for name, val := range x {
-			srv := MCPServer{Name: name}
-			if m, ok := val.(map[string]any); ok {
-				if cmd, ok := m["command"].(string); ok {
-					srv.Command = cmd
-				}
-				if args, ok := m["args"].([]any); ok {
-					srv.Args = toStringSlice(args)
-				}
-				if url, ok := m["url"].(string); ok {
-					srv.URL = url
-				}
-				if headers, ok := m["headers"].(map[string]any); ok {
-					srv.Headers = toStringMap(headers)
-				}
-			}
-			// Skip servers that have neither command nor URL (e.g., disabled servers).
-			if srv.Command == "" && srv.URL == "" {
-				continue
-			}
-			servers = append(servers, srv)
-		}
-		return servers
+		return parseMCPServerObject(x)
 	case []any:
-		// Legacy array format.
-		servers := make([]MCPServer, 0, len(x))
-		for _, item := range x {
-			if m, ok := item.(map[string]any); ok {
-				srv := MCPServer{}
-				if n, ok := m["name"].(string); ok {
-					srv.Name = n
-				}
-				if cmd, ok := m["command"].(string); ok {
-					srv.Command = cmd
-				}
-				if args, ok := m["args"].([]any); ok {
-					srv.Args = toStringSlice(args)
-				}
-				if url, ok := m["url"].(string); ok {
-					srv.URL = url
-				}
-				if headers, ok := m["headers"].(map[string]any); ok {
-					srv.Headers = toStringMap(headers)
-				}
-				// Skip servers that have neither command nor URL.
-				if srv.Command == "" && srv.URL == "" {
-					continue
-				}
-				servers = append(servers, srv)
-			}
-		}
-		return servers
+		return parseMCPServerArray(x)
 	default:
 		return nil
+	}
+}
+
+// parseMCPServerObject reads the Claude Desktop object format: mcpServers is a
+// map keyed by server name, and each value is { "command": "...", "args": [...] }
+// or { "url": "..." }.
+func parseMCPServerObject(x map[string]any) []MCPServer {
+	servers := make([]MCPServer, 0, len(x))
+	for name, val := range x {
+		srv := MCPServer{Name: name}
+		if m, ok := val.(map[string]any); ok {
+			applyMCPTransport(&srv, m)
+		}
+		// Skip servers that have neither command nor URL (e.g., disabled servers).
+		if srv.Command == "" && srv.URL == "" {
+			continue
+		}
+		servers = append(servers, srv)
+	}
+	return servers
+}
+
+// parseMCPServerArray reads the legacy array format, where the server name is a
+// field of each element rather than the key it is stored under.
+func parseMCPServerArray(x []any) []MCPServer {
+	servers := make([]MCPServer, 0, len(x))
+	for _, item := range x {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		srv := MCPServer{}
+		if n, ok := m["name"].(string); ok {
+			srv.Name = n
+		}
+		applyMCPTransport(&srv, m)
+		// Skip servers that have neither command nor URL.
+		if srv.Command == "" && srv.URL == "" {
+			continue
+		}
+		servers = append(servers, srv)
+	}
+	return servers
+}
+
+// applyMCPTransport fills the transport fields of srv — command, args, url and
+// headers — from one server object. Entries that are absent or hold the wrong
+// JSON type are left at their zero value, which is what makes a malformed entry
+// fall out as "neither command nor URL" and be skipped by the callers.
+func applyMCPTransport(srv *MCPServer, m map[string]any) {
+	if cmd, ok := m["command"].(string); ok {
+		srv.Command = cmd
+	}
+	if args, ok := m["args"].([]any); ok {
+		srv.Args = toStringSlice(args)
+	}
+	if url, ok := m["url"].(string); ok {
+		srv.URL = url
+	}
+	if headers, ok := m["headers"].(map[string]any); ok {
+		srv.Headers = toStringMap(headers)
 	}
 }
 

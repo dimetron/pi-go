@@ -21,28 +21,14 @@ func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions)
 	}
 
 	// Check for API key in env vars
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GOOGLE_API_KEY")
-	}
-	if apiKey != "" {
+	if apiKey := geminiAPIKey(); apiKey != "" {
 		cfg.APIKey = apiKey
 	}
 
-	httpOpts := genai.HTTPOptions{}
-	if baseURL != "" {
-		httpOpts.BaseURL = baseURL
-	}
-	if opts != nil && len(opts.ExtraHeaders) > 0 {
-		httpOpts.Headers = make(http.Header)
-		for k, v := range opts.ExtraHeaders {
-			httpOpts.Headers.Set(k, v)
-		}
-	}
-	if baseURL != "" || (opts != nil && len(opts.ExtraHeaders) > 0) {
+	if httpOpts, overridden := geminiHTTPOptions(baseURL, opts); overridden {
 		cfg.HTTPOptions = httpOpts
 	}
-	if opts != nil && (opts.InsecureSkipTLS || opts.CACertPath != "" || opts.ConnectTimeout > 0) {
+	if geminiNeedsHTTPClient(opts) {
 		httpClient, err := BuildHTTPClient(opts, 0)
 		if err != nil {
 			return nil, err
@@ -56,4 +42,40 @@ func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions)
 	}
 
 	return llm, nil
+}
+
+// geminiAPIKey reads the Gemini API key from the environment, preferring
+// GEMINI_API_KEY over GOOGLE_API_KEY. It returns "" when neither is set, in
+// which case the client falls back to Application Default Credentials.
+func geminiAPIKey() string {
+	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("GOOGLE_API_KEY")
+}
+
+// geminiHTTPOptions builds the endpoint and header overrides for the Gemini
+// client. The second result reports whether any override was requested — when
+// false the options are left at the SDK default rather than being overwritten
+// with an empty struct.
+func geminiHTTPOptions(baseURL string, opts *LLMOptions) (genai.HTTPOptions, bool) {
+	hasExtraHeaders := opts != nil && len(opts.ExtraHeaders) > 0
+
+	httpOpts := genai.HTTPOptions{}
+	if baseURL != "" {
+		httpOpts.BaseURL = baseURL
+	}
+	if hasExtraHeaders {
+		httpOpts.Headers = make(http.Header)
+		for k, v := range opts.ExtraHeaders {
+			httpOpts.Headers.Set(k, v)
+		}
+	}
+	return httpOpts, baseURL != "" || hasExtraHeaders
+}
+
+// geminiNeedsHTTPClient reports whether opts asks for transport settings that
+// only a custom *http.Client can carry.
+func geminiNeedsHTTPClient(opts *LLMOptions) bool {
+	return opts != nil && (opts.InsecureSkipTLS || opts.CACertPath != "" || opts.ConnectTimeout > 0)
 }

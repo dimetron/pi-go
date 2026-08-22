@@ -134,18 +134,8 @@ func readHandlerWithLedger(sb *Sandbox, input ReadInput, ledger *ReadLedger) (Re
 		}, nil
 	}
 
-	// Decide what the file is before reading any of it as text, so bytes that
-	// are not text never reach the transcript.
-	prefix, err := readPrefix(sb, path, sniffLen)
-	if err != nil {
-		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
-	}
-	kind := classifyContent(prefix, path)
-	if out := describeNonText(kind, path, prefix, info.Size()); out != nil {
-		return *out, nil
-	}
-	if kind == kindNotebook {
-		return readNotebook(sb, path)
+	if out, handled, err := readNonText(sb, path, info.Size()); handled {
+		return out, err
 	}
 
 	totalLines, err := countFileLines(sb, path)
@@ -175,10 +165,41 @@ func readHandlerWithLedger(sb *Sandbox, input ReadInput, ledger *ReadLedger) (Re
 		return ReadOutput{}, fmt.Errorf("reading file: %w", err)
 	}
 
-	content := stripBase64Images(win.content)
+	out := renderWindow(win, offset, totalLines)
 
+	// A window that stopped early, or one that started past line 1, is a
+	// partial view: overwriting on the strength of it would discard lines the
+	// agent never saw.
+	ledger.Record(path, info, win.stoppedEarly || offset > 1)
+
+	return out, nil
+}
+
+// readNonText decides what the file is before any of it is read as text, so
+// bytes that are not text never reach the transcript. It reports handled=true
+// once it has produced the output for the file — including on error — leaving
+// only plain text for the caller to window.
+func readNonText(sb *Sandbox, path string, size int64) (ReadOutput, bool, error) {
+	prefix, err := readPrefix(sb, path, sniffLen)
+	if err != nil {
+		return ReadOutput{}, true, fmt.Errorf("reading file: %w", err)
+	}
+	kind := classifyContent(prefix, path)
+	if out := describeNonText(kind, path, prefix, size); out != nil {
+		return *out, true, nil
+	}
+	if kind == kindNotebook {
+		out, err := readNotebook(sb, path)
+		return out, true, err
+	}
+	return ReadOutput{}, false, nil
+}
+
+// renderWindow turns one window into the tool output, including the notes that
+// tell the model what it did not see and how to ask for the rest.
+func renderWindow(win window, offset, totalLines int) ReadOutput {
 	out := ReadOutput{
-		Content:    content,
+		Content:    stripBase64Images(win.content),
 		TotalLines: totalLines,
 		Truncated:  win.stoppedEarly,
 	}
@@ -201,13 +222,7 @@ func readHandlerWithLedger(sb *Sandbox, input ReadInput, ledger *ReadLedger) (Re
 		out.Content += fmt.Sprintf("\n... (truncated: %s; continue with offset=%d)", reason, win.nextOffset)
 	}
 	out.Note = strings.Join(notes, " ")
-
-	// A window that stopped early, or one that started past line 1, is a
-	// partial view: overwriting on the strength of it would discard lines the
-	// agent never saw.
-	ledger.Record(path, info, win.stoppedEarly || offset > 1)
-
-	return out, nil
+	return out
 }
 
 // readPrefix reads up to n bytes from the start of a file for classification.
@@ -282,58 +297,90 @@ func readWindow(sb *Sandbox, path string, offset, limit int) (window, error) {
 	w.lastLine = offset - 1
 
 	for {
-		text, clipped, readErr := readLineClamped(r, maxReadLineChars)
-		atEOF := errors.Is(readErr, io.EOF)
-		if readErr != nil && !atEOF {
-			return window{}, readErr
+		src, err := readSrcLine(r)
+		if err != nil {
+			return window{}, err
 		}
-		if text == "" && clipped == 0 && atEOF && line >= 1 {
+		if src.endsFile(line) {
 			break
 		}
 		line++
 
 		if line == 1 {
-			text = strings.TrimPrefix(text, string(utf8BOM))
+			src.text = strings.TrimPrefix(src.text, string(utf8BOM))
 		}
 		// CRLF files are numbered like their LF equivalents; a stray \r would
 		// otherwise land inside every line and defeat exact-match editing.
-		text = strings.TrimSuffix(text, "\r")
+		src.text = strings.TrimSuffix(src.text, "\r")
 
-		if line >= offset {
-			if clipped > 0 {
-				text += fmt.Sprintf("… [%d more characters on this line, clipped]", clipped)
-				w.clampedLines++
-			}
-			// Check the byte budget before committing the line, so the budget
-			// is a ceiling rather than a target that is always overshot.
-			if b.Len() > 0 && b.Len()+len(text) > readByteBudget {
-				w.stoppedEarly = true
-				w.hitByteBudget = true
-				w.nextOffset = line // resume on the line that did not fit
-				return finishWindow(&b, w), nil
-			}
-			fmt.Fprintf(&b, "%6d\t%s\n", line, text)
-			w.lastLine = line
-
-			if line-offset+1 >= limit {
-				// Filling the window is not the same as there being more to
-				// read. A limit that lands exactly on the last line has not
-				// truncated anything, and saying otherwise sends the model
-				// after a page that does not exist.
-				if !atEOF && moreToRead(r) {
-					w.stoppedEarly = true
-					w.nextOffset = line + 1
-				}
-				return finishWindow(&b, w), nil
-			}
+		if line >= offset && w.emitLine(&b, r, src, line, offset, limit) {
+			return finishWindow(&b, w), nil
 		}
 
-		if atEOF {
+		if src.atEOF {
 			break
 		}
 	}
 
 	return finishWindow(&b, w), nil
+}
+
+// srcLine is one line as it came off the reader, before any window ceiling has
+// been applied to it.
+type srcLine struct {
+	text    string
+	clipped int  // bytes past the per-line clamp that were discarded
+	atEOF   bool // the read that produced this line also reached EOF
+}
+
+// readSrcLine reads the next line, treating EOF as an ordinary end rather than
+// an error so the caller can still use the bytes that came with it.
+func readSrcLine(r *bufio.Reader) (srcLine, error) {
+	text, clipped, err := readLineClamped(r, maxReadLineChars)
+	atEOF := errors.Is(err, io.EOF)
+	if err != nil && !atEOF {
+		return srcLine{}, err
+	}
+	return srcLine{text: text, clipped: clipped, atEOF: atEOF}, nil
+}
+
+// endsFile reports whether this is the phantom empty line that follows a
+// file's final newline rather than real content. line is the number of lines
+// consumed so far, so the very first read of an empty file is still content.
+func (s srcLine) endsFile(line int) bool {
+	return s.text == "" && s.clipped == 0 && s.atEOF && line >= 1
+}
+
+// emitLine appends one line to the window, applying the byte budget and the
+// line limit. It reports whether one of those ceilings closed the window.
+func (w *window) emitLine(b *strings.Builder, r *bufio.Reader, src srcLine, line, offset, limit int) bool {
+	text := src.text
+	if src.clipped > 0 {
+		text += fmt.Sprintf("… [%d more characters on this line, clipped]", src.clipped)
+		w.clampedLines++
+	}
+	// Check the byte budget before committing the line, so the budget is a
+	// ceiling rather than a target that is always overshot.
+	if b.Len() > 0 && b.Len()+len(text) > readByteBudget {
+		w.stoppedEarly = true
+		w.hitByteBudget = true
+		w.nextOffset = line // resume on the line that did not fit
+		return true
+	}
+	fmt.Fprintf(b, "%6d\t%s\n", line, text)
+	w.lastLine = line
+
+	if line-offset+1 < limit {
+		return false
+	}
+	// Filling the window is not the same as there being more to read. A limit
+	// that lands exactly on the last line has not truncated anything, and
+	// saying otherwise sends the model after a page that does not exist.
+	if !src.atEOF && moreToRead(r) {
+		w.stoppedEarly = true
+		w.nextOffset = line + 1
+	}
+	return true
 }
 
 func finishWindow(b *strings.Builder, w window) window {

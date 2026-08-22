@@ -123,66 +123,15 @@ func (e *Expander) expandRef(ref ParsedRef) (string, string) {
 // expandFile expands a file reference to its contents.
 func (e *Expander) expandFile(ref ParsedRef) (string, string) {
 	path := ref.Value
-	if path == "" {
-		return "", "file path is empty"
-	}
-
-	// Validate the file path.
-	if err := e.validator.ValidateFile(path); err != nil {
-		return "", fmt.Sprintf("file %s: %v", path, err)
-	}
-
-	// Resolve the full path.
-	fullPath := path
-	if !filepath.IsAbs(path) && e.workDir != "" {
-		fullPath = filepath.Join(e.workDir, path)
-	}
-
-	// Read the file.
-	data, err := readFile(fullPath)
-	if err != nil {
-		return "", fmt.Sprintf("file %s: %v", path, err)
-	}
-
-	// Check for binary content.
-	if e.validator.IsBinaryFile(data) {
-		return "", fmt.Sprintf("file %s: binary files are not supported", path)
+	data, warning := e.readRefFile(path)
+	if warning != "" {
+		return "", warning
 	}
 
 	// Split into lines for range selection and truncation.
 	lines := strings.Split(string(data), "\n")
 
-	// Apply line range if specified.
-	start, end := 0, len(lines)-1
-	if ref.LineRange != nil {
-		// Convert from 1-based to 0-based indexing.
-		start = ref.LineRange.Start - 1
-		end = ref.LineRange.End - 1
-		if start < 0 {
-			start = 0
-		}
-		if end >= len(lines) {
-			end = len(lines) - 1
-		}
-		if start > end {
-			start = end
-		}
-	}
-
-	// Apply truncation.
-	truncated := false
-	if end-start+1 > e.maxLines {
-		end = start + e.maxLines - 1
-		truncated = true
-	}
-
-	if end >= len(lines) {
-		end = len(lines) - 1
-	}
-	if start > end {
-		start = end
-	}
-
+	start, end, truncated := selectLines(lines, ref.LineRange, e.maxLines)
 	selectedLines := lines[start : end+1]
 	content := strings.Join(selectedLines, "\n")
 
@@ -205,6 +154,76 @@ func (e *Expander) expandFile(ref ParsedRef) (string, string) {
 	}
 
 	return sb.String(), ""
+}
+
+// readRefFile validates path, resolves it against the work directory and reads
+// it. Every rejection comes back as the warning string the caller shows the
+// user, with no content.
+func (e *Expander) readRefFile(path string) ([]byte, string) {
+	if path == "" {
+		return nil, "file path is empty"
+	}
+
+	// Validate the file path.
+	if err := e.validator.ValidateFile(path); err != nil {
+		return nil, fmt.Sprintf("file %s: %v", path, err)
+	}
+
+	// Resolve the full path.
+	fullPath := path
+	if !filepath.IsAbs(path) && e.workDir != "" {
+		fullPath = filepath.Join(e.workDir, path)
+	}
+
+	// Read the file.
+	data, err := readFile(fullPath)
+	if err != nil {
+		return nil, fmt.Sprintf("file %s: %v", path, err)
+	}
+
+	// Check for binary content.
+	if e.validator.IsBinaryFile(data) {
+		return nil, fmt.Sprintf("file %s: binary files are not supported", path)
+	}
+
+	return data, ""
+}
+
+// selectLines resolves a reference's optional line range against the file's
+// lines and applies the per-ref line cap. It returns inclusive 0-based bounds,
+// clamped to lines, and whether the cap cut the selection short.
+func selectLines(lines []string, lineRange *LineRange, maxLines int) (start, end int, truncated bool) {
+	// Apply line range if specified.
+	start, end = 0, len(lines)-1
+	if lineRange != nil {
+		// Convert from 1-based to 0-based indexing.
+		start = lineRange.Start - 1
+		end = lineRange.End - 1
+		if start < 0 {
+			start = 0
+		}
+		if end >= len(lines) {
+			end = len(lines) - 1
+		}
+		if start > end {
+			start = end
+		}
+	}
+
+	// Apply truncation.
+	if end-start+1 > maxLines {
+		end = start + maxLines - 1
+		truncated = true
+	}
+
+	if end >= len(lines) {
+		end = len(lines) - 1
+	}
+	if start > end {
+		start = end
+	}
+
+	return start, end, truncated
 }
 
 // expandFolder expands a folder reference to a directory tree.

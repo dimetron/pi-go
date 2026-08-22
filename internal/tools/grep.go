@@ -135,6 +135,118 @@ func newGrepTool(sb *Sandbox) (tool.Tool, error) {
 	})
 }
 
+// compileGrepPattern compiles the search pattern, reusing the shared regex cache.
+func compileGrepPattern(input GrepInput) (*regexp.Regexp, error) {
+	// Build cache key including case-insensitive flag
+	cacheKey := input.Pattern
+	if input.CaseInsensitive {
+		cacheKey = "(?i)" + cacheKey
+	}
+
+	// Try cache first
+	if re := grepRegexCache.get(cacheKey); re != nil {
+		return re, nil
+	}
+
+	flags := ""
+	if input.CaseInsensitive {
+		flags = "(?i)"
+	}
+	re, err := regexp.Compile(flags + input.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern: %w", err)
+	}
+	grepRegexCache.put(cacheKey, re)
+	return re, nil
+}
+
+// grepDirCollector accumulates matches while walking a directory tree.
+type grepDirCollector struct {
+	sb       *Sandbox
+	re       *regexp.Regexp
+	glob     string
+	patterns []GitignorePattern
+	matches  []GrepMatch
+	total    int
+}
+
+// walk is the fs.WalkDirFunc that prunes ignored directories, applies the glob
+// filter, and greps whatever is left.
+func (c *grepDirCollector) walk(path string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return nil // skip errors
+	}
+	if d.IsDir() {
+		if shouldSkipDir(d.Name()) {
+			return filepath.SkipDir
+		}
+		if shouldSkipPath(path, d, c.patterns) {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	if shouldSkipPath(path, d, c.patterns) {
+		return nil
+	}
+	if c.glob != "" {
+		matched, _ := filepath.Match(c.glob, d.Name())
+		if !matched {
+			return nil
+		}
+	}
+	c.collectFile(path)
+	return nil
+}
+
+// collectFile greps one file, counting every match but keeping at most
+// maxGrepMatches of them.
+func (c *grepDirCollector) collectFile(path string) {
+	fileMatches := grepFileSandbox(c.sb, c.re, path)
+	c.total += len(fileMatches)
+	if len(c.matches) >= maxGrepMatches {
+		return
+	}
+	remaining := maxGrepMatches - len(c.matches)
+	if len(fileMatches) > remaining {
+		fileMatches = fileMatches[:remaining]
+	}
+	c.matches = append(c.matches, fileMatches...)
+}
+
+// grepDir searches every file under searchPath.
+func grepDir(sb *Sandbox, re *regexp.Regexp, input GrepInput, searchPath string, patterns []GitignorePattern) (GrepOutput, error) {
+	// Use sandbox ReadDir recursively via fs.WalkDir on the Root's FS
+	fsys := sb.FS()
+	rel, resolveErr := sb.Resolve(searchPath)
+	if resolveErr != nil {
+		return GrepOutput{}, resolveErr
+	}
+
+	c := &grepDirCollector{sb: sb, re: re, glob: input.Glob, patterns: patterns}
+	_ = fs.WalkDir(fsys, rel, c.walk)
+
+	return GrepOutput{
+		Matches:      c.matches,
+		TotalMatches: c.total,
+		Truncated:    c.total > len(c.matches),
+	}, nil
+}
+
+// grepFile searches a single file target.
+func grepFile(sb *Sandbox, re *regexp.Regexp, searchPath string) GrepOutput {
+	matches := grepFileSandbox(sb, re, searchPath)
+	total := len(matches)
+	if len(matches) > maxGrepMatches {
+		matches = matches[:maxGrepMatches]
+	}
+
+	return GrepOutput{
+		Matches:      matches,
+		TotalMatches: total,
+		Truncated:    total > len(matches),
+	}
+}
+
 func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 	if input.Pattern == "" {
 		return GrepOutput{}, fmt.Errorf("pattern is required")
@@ -152,31 +264,15 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 
 	// Try ripgrep first if available
 	if rgAvailable && !grepRGDisabled {
-		if result, err := grepWithRG(sb, input, searchPath); err == nil {
+		if result, rgErr := grepWithRG(sb, input, searchPath); rgErr == nil {
 			return result, nil
 		}
 		// Fall back to Go implementation on error
 	}
 
-	// Build cache key including case-insensitive flag
-	cacheKey := input.Pattern
-	if input.CaseInsensitive {
-		cacheKey = "(?i)" + cacheKey
-	}
-
-	// Try cache first
-	re := grepRegexCache.get(cacheKey)
-	if re == nil {
-		flags := ""
-		if input.CaseInsensitive {
-			flags = "(?i)"
-		}
-		var err error
-		re, err = regexp.Compile(flags + input.Pattern)
-		if err != nil {
-			return GrepOutput{}, fmt.Errorf("invalid regex pattern: %w", err)
-		}
-		grepRegexCache.put(cacheKey, re)
+	re, err := compileGrepPattern(input)
+	if err != nil {
+		return GrepOutput{}, err
 	}
 
 	// Load .gitignore patterns
@@ -185,63 +281,10 @@ func grepHandler(sb *Sandbox, input GrepInput) (GrepOutput, error) {
 		patterns = nil
 	}
 
-	var matches []GrepMatch
-	total := 0
-
 	if info.IsDir() {
-		walkFn := func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip errors
-			}
-			if d.IsDir() {
-				if shouldSkipDir(d.Name()) {
-					return filepath.SkipDir
-				}
-				if shouldSkipPath(path, d, patterns) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if shouldSkipPath(path, d, patterns) {
-				return nil
-			}
-			if input.Glob != "" {
-				matched, _ := filepath.Match(input.Glob, d.Name())
-				if !matched {
-					return nil
-				}
-			}
-			fileMatches := grepFileSandbox(sb, re, path)
-			total += len(fileMatches)
-			if len(matches) < maxGrepMatches {
-				remaining := maxGrepMatches - len(matches)
-				if len(fileMatches) > remaining {
-					fileMatches = fileMatches[:remaining]
-				}
-				matches = append(matches, fileMatches...)
-			}
-			return nil
-		}
-		// Use sandbox ReadDir recursively via fs.WalkDir on the Root's FS
-		fsys := sb.FS()
-		rel, resolveErr := sb.Resolve(searchPath)
-		if resolveErr != nil {
-			return GrepOutput{}, resolveErr
-		}
-		_ = fs.WalkDir(fsys, rel, walkFn)
-	} else {
-		matches = grepFileSandbox(sb, re, searchPath)
-		total = len(matches)
-		if len(matches) > maxGrepMatches {
-			matches = matches[:maxGrepMatches]
-		}
+		return grepDir(sb, re, input, searchPath, patterns)
 	}
-
-	return GrepOutput{
-		Matches:      matches,
-		TotalMatches: total,
-		Truncated:    total > len(matches),
-	}, nil
+	return grepFile(sb, re, searchPath), nil
 }
 
 func grepFileSandbox(sb *Sandbox, re *regexp.Regexp, path string) []GrepMatch {

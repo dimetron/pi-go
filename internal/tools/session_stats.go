@@ -81,38 +81,56 @@ func SessionStats(input SessionStatsInput) (SessionStatsOutput, error) {
 	return sessionStatsHandler(input)
 }
 
-func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
+// sessionStatsOptions is SessionStatsInput with the defaults applied and the
+// lookback window turned into a cutoff time.
+type sessionStatsOptions struct {
+	sessionDir    string
+	highToolCalls int
+	highTurns     int
+	hours         int
+	cutoff        time.Time
+}
+
+func resolveSessionStatsOptions(input SessionStatsInput) (sessionStatsOptions, error) {
+	opts := sessionStatsOptions{
+		sessionDir:    input.SessionDir,
+		highToolCalls: input.HighToolCalls,
+		highTurns:     input.HighTurns,
+		hours:         input.Hours,
+	}
+
 	// Resolve session directory.
-	sessionDir := input.SessionDir
-	if sessionDir == "" {
+	if opts.sessionDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return SessionStatsOutput{}, fmt.Errorf("getting home dir: %w", err)
+			return sessionStatsOptions{}, fmt.Errorf("getting home dir: %w", err)
 		}
-		sessionDir = filepath.Join(home, ".pi-go", "sessions")
+		opts.sessionDir = filepath.Join(home, ".pi-go", "sessions")
 	}
 
 	// Resolve thresholds.
-	highToolCalls := input.HighToolCalls
-	if highToolCalls <= 0 {
-		highToolCalls = 20
+	if opts.highToolCalls <= 0 {
+		opts.highToolCalls = 20
 	}
-	highTurns := input.HighTurns
-	if highTurns <= 0 {
-		highTurns = 5
+	if opts.highTurns <= 0 {
+		opts.highTurns = 5
 	}
 
 	// Resolve lookback.
-	hours := input.Hours
-	if hours <= 0 {
-		hours = 24
+	if opts.hours <= 0 {
+		opts.hours = 24
 	}
-	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	opts.cutoff = time.Now().Add(-time.Duration(opts.hours) * time.Hour)
+	return opts, nil
+}
 
-	// Scan session directories.
-	entries, err := os.ReadDir(sessionDir)
+// scanSessions analyzes every session directory whose events file was touched
+// since the cutoff, returning the per-session stats and the cross-session
+// aggregate the deep sections are built from.
+func scanSessions(opts sessionStatsOptions) ([]sessionStat, *sweepTotals, error) {
+	entries, err := os.ReadDir(opts.sessionDir)
 	if err != nil {
-		return SessionStatsOutput{}, fmt.Errorf("reading sessions dir: %w", err)
+		return nil, nil, fmt.Errorf("reading sessions dir: %w", err)
 	}
 
 	var stats []sessionStat
@@ -125,19 +143,31 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 		if entry.Name() == "archive" {
 			continue
 		}
-		eventsPath := filepath.Join(sessionDir, entry.Name(), "events.jsonl")
+		eventsPath := filepath.Join(opts.sessionDir, entry.Name(), "events.jsonl")
 		info, err := os.Stat(eventsPath)
 		if err != nil {
 			continue
 		}
 		// Skip sessions older than cutoff.
-		if info.ModTime().Before(cutoff) {
+		if info.ModTime().Before(opts.cutoff) {
 			continue
 		}
 
-		stat := analyzeSessionFile(entry.Name(), eventsPath, highToolCalls, highTurns)
-		stats = append(stats, stat)
+		stats = append(stats, analyzeSessionFile(entry.Name(), eventsPath, opts.highToolCalls, opts.highTurns))
 		accumulateSweepFile(totals, eventsPath)
+	}
+	return stats, totals, nil
+}
+
+func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
+	opts, err := resolveSessionStatsOptions(input)
+	if err != nil {
+		return SessionStatsOutput{}, err
+	}
+
+	stats, totals, err := scanSessions(opts)
+	if err != nil {
+		return SessionStatsOutput{}, err
 	}
 
 	// Sort by time (newest first).
@@ -154,7 +184,7 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 		}
 	}
 
-	fmt.Fprintf(&b, "## Session Stats (last %d hours)\n\n", hours)
+	fmt.Fprintf(&b, "## Session Stats (last %d hours)\n\n", opts.hours)
 	fmt.Fprintf(&b, "Scanned %d sessions, %d with anomalies.\n\n", len(stats), totalAnomalous)
 
 	if len(stats) == 0 {
@@ -166,50 +196,14 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 		}, nil
 	}
 
-	// Summary table.
-	b.WriteString("| Session | Lines | Tool Calls | Turns | Errors | Duration | Anomalies |\n")
-	b.WriteString("|---------|-------|------------|-------|--------|----------|-----------|\n")
-	for _, s := range stats {
-		if !input.All && len(s.Anomalies) == 0 {
-			continue
-		}
-		dur := s.Duration.Truncate(time.Second)
-		anomalyStr := strings.Join(s.Anomalies, ", ")
-		if anomalyStr == "" {
-			anomalyStr = "—"
-		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s | %s |\n",
-			s.ID, s.Lines, s.ToolCalls, s.Turns, s.Errors, dur, anomalyStr)
-	}
-
-	// Detailed breakdown for anomalous sessions.
-	hasAnomalies := false
-	for _, s := range stats {
-		if len(s.Anomalies) == 0 {
-			continue
-		}
-		hasAnomalies = true
-		break
-	}
-	if hasAnomalies {
-		b.WriteString("\n### Anomaly Details\n\n")
-		for _, s := range stats {
-			if len(s.Anomalies) == 0 {
-				continue
-			}
-			fmt.Fprintf(&b, "**%s**\n", s.ID)
-			fmt.Fprintf(&b, "- Lines: %d, Tool calls: %d, Turns: %d, Errors: %d\n",
-				s.Lines, s.ToolCalls, s.Turns, s.Errors)
-			fmt.Fprintf(&b, "- Duration: %s\n", s.Duration.Truncate(time.Second))
-			fmt.Fprintf(&b, "- Anomalies: %s\n\n", strings.Join(s.Anomalies, "; "))
-		}
-	}
+	renderSessionTable(&b, stats, input.All)
+	renderAnomalyDetails(&b, stats)
 
 	// The per-session table above says which runs look odd. These sections say
 	// what went wrong across all of them, what it cost, and whether the
 	// recording pipelines are alive — the questions a nightly check exists for.
 	renderSweep(&b, totals, len(stats))
-	renderPipelineHealth(&b, len(stats), cutoff)
+	renderPipelineHealth(&b, len(stats), opts.cutoff)
 
 	return SessionStatsOutput{
 		Content:           b.String(),
@@ -221,6 +215,52 @@ func sessionStatsHandler(input SessionStatsInput) (SessionStatsOutput, error) {
 	}, nil
 }
 
+// renderSessionTable writes the summary table. Unless all is set, only sessions
+// with anomalies get a row.
+func renderSessionTable(b *strings.Builder, stats []sessionStat, all bool) {
+	b.WriteString("| Session | Lines | Tool Calls | Turns | Errors | Duration | Anomalies |\n")
+	b.WriteString("|---------|-------|------------|-------|--------|----------|-----------|\n")
+	for _, s := range stats {
+		if !all && len(s.Anomalies) == 0 {
+			continue
+		}
+		dur := s.Duration.Truncate(time.Second)
+		anomalyStr := strings.Join(s.Anomalies, ", ")
+		if anomalyStr == "" {
+			anomalyStr = "—"
+		}
+		fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %s | %s |\n",
+			s.ID, s.Lines, s.ToolCalls, s.Turns, s.Errors, dur, anomalyStr)
+	}
+}
+
+// renderAnomalyDetails writes the detailed breakdown for anomalous sessions,
+// and nothing at all when no session has an anomaly.
+func renderAnomalyDetails(b *strings.Builder, stats []sessionStat) {
+	hasAnomalies := false
+	for _, s := range stats {
+		if len(s.Anomalies) == 0 {
+			continue
+		}
+		hasAnomalies = true
+		break
+	}
+	if !hasAnomalies {
+		return
+	}
+	b.WriteString("\n### Anomaly Details\n\n")
+	for _, s := range stats {
+		if len(s.Anomalies) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "**%s**\n", s.ID)
+		fmt.Fprintf(b, "- Lines: %d, Tool calls: %d, Turns: %d, Errors: %d\n",
+			s.Lines, s.ToolCalls, s.Turns, s.Errors)
+		fmt.Fprintf(b, "- Duration: %s\n", s.Duration.Truncate(time.Second))
+		fmt.Fprintf(b, "- Anomalies: %s\n\n", strings.Join(s.Anomalies, "; "))
+	}
+}
+
 // analyzeSessionFile reads a single events.jsonl and computes stats.
 func analyzeSessionFile(sessionID, path string, highToolCalls, highTurns int) sessionStat {
 	f, err := os.Open(path)
@@ -229,117 +269,153 @@ func analyzeSessionFile(sessionID, path string, highToolCalls, highTurns int) se
 	}
 	defer f.Close()
 
-	stat := sessionStat{ID: sessionID}
 	scanner := bufio.NewScanner(f)
 	// Increase scan buffer for potentially large JSON lines.
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
-	var firstTS, lastTS time.Time
-	var toolCallCount, toolResultCount, turnCount, errorCount, gitOpCount int
-	var lineCount int
-
+	var counts sessionCounters
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		lineCount++
+		counts.lines++
 
-		// Parse the event.
-		var ev struct {
-			Content      any    `json:"Content"`
-			Partial      bool   `json:"Partial"`
-			TurnComplete bool   `json:"TurnComplete"`
-			Interrupted  bool   `json:"Interrupted"`
-			ErrorCode    string `json:"ErrorCode"`
-			ErrorMessage string `json:"ErrorMessage"`
-			FinishReason string `json:"FinishReason"`
-			ID           string `json:"ID"`
-			Timestamp    string `json:"Timestamp"`
-			Author       string `json:"Author"`
-		}
-
-		if err := json.Unmarshal(line, &ev); err != nil {
+		var ev sessionEvent
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
 			continue
 		}
-
-		// Track time range.
-		if ev.Timestamp != "" {
-			ts, err := time.Parse(time.RFC3339Nano, ev.Timestamp)
-			if err == nil {
-				if firstTS.IsZero() || ts.Before(firstTS) {
-					firstTS = ts
-				}
-				if ts.After(lastTS) {
-					lastTS = ts
-				}
-			}
-		}
-
-		// Count tool calls: events with FunctionCall parts in Content.
-		if ev.Content != nil {
-			contentMap, ok := ev.Content.(map[string]any)
-			if ok {
-				if parts, ok := contentMap["parts"].([]any); ok {
-					for _, p := range parts {
-						pm, ok := p.(map[string]any)
-						if !ok {
-							continue
-						}
-						if fc, ok := pm["functionCall"].(map[string]any); ok {
-							toolCallCount++
-							if isGitOperation(fc) {
-								gitOpCount++
-							}
-						}
-						if _, ok := pm["functionResponse"]; ok {
-							toolResultCount++
-						}
-					}
-				}
-			}
-		}
-
-		// Count turns: TurnComplete events from the model.
-		if ev.TurnComplete && ev.Author != "user" {
-			turnCount++
-		}
-
-		// Count errors: a single event is at most one error, even if both
-		// ErrorCode/ErrorMessage and Interrupted are set.
-		if ev.ErrorCode != "" || ev.ErrorMessage != "" || ev.Interrupted {
-			errorCount++
-		}
+		counts.observe(&ev)
 	}
 
-	stat.Lines = lineCount
-	stat.ToolCalls = toolCallCount
-	stat.ToolResults = toolResultCount
-	stat.Turns = turnCount
-	stat.Errors = errorCount
-	stat.GitOps = gitOpCount
-	stat.FirstTime = firstTS
-	stat.LastTime = lastTS
-
-	if !firstTS.IsZero() && !lastTS.IsZero() {
-		stat.Duration = lastTS.Sub(firstTS)
-	}
-
-	// Detect anomalies.
-	if toolCallCount > highToolCalls {
-		stat.Anomalies = append(stat.Anomalies, fmt.Sprintf("high tool calls (%d)", toolCallCount))
-	}
-	if turnCount > highTurns {
-		stat.Anomalies = append(stat.Anomalies, fmt.Sprintf("excessive turns (%d)", turnCount))
-	}
-	if errorCount > 0 {
-		stat.Anomalies = append(stat.Anomalies, fmt.Sprintf("errors (%d)", errorCount))
-	}
-	if gitOpCount > defaultHighGitOps {
-		stat.Anomalies = append(stat.Anomalies, fmt.Sprintf("many git operations (%d)", gitOpCount))
-	}
-	if stat.Duration > 30*time.Minute && toolCallCount < 5 {
-		stat.Anomalies = append(stat.Anomalies, "long idle session")
-	}
-
+	stat := counts.stat(sessionID)
+	stat.Anomalies = sessionAnomalies(stat, highToolCalls, highTurns)
 	return stat
+}
+
+// sessionEvent is the subset of an events.jsonl record the stats read.
+type sessionEvent struct {
+	Content      any    `json:"Content"`
+	Partial      bool   `json:"Partial"`
+	TurnComplete bool   `json:"TurnComplete"`
+	Interrupted  bool   `json:"Interrupted"`
+	ErrorCode    string `json:"ErrorCode"`
+	ErrorMessage string `json:"ErrorMessage"`
+	FinishReason string `json:"FinishReason"`
+	ID           string `json:"ID"`
+	Timestamp    string `json:"Timestamp"`
+	Author       string `json:"Author"`
+}
+
+// sessionCounters accumulates the per-event tallies for one session file.
+type sessionCounters struct {
+	lines       int
+	toolCalls   int
+	toolResults int
+	turns       int
+	errors      int
+	gitOps      int
+	firstTS     time.Time
+	lastTS      time.Time
+}
+
+// observe folds one decoded event into the counters.
+func (c *sessionCounters) observe(ev *sessionEvent) {
+	c.observeTimestamp(ev.Timestamp)
+	c.observeContent(ev.Content)
+
+	// Count turns: TurnComplete events from the model.
+	if ev.TurnComplete && ev.Author != "user" {
+		c.turns++
+	}
+
+	// Count errors: a single event is at most one error, even if both
+	// ErrorCode/ErrorMessage and Interrupted are set.
+	if ev.ErrorCode != "" || ev.ErrorMessage != "" || ev.Interrupted {
+		c.errors++
+	}
+}
+
+// observeTimestamp widens the session's time range. An absent or unparseable
+// timestamp is ignored rather than treated as the zero time.
+func (c *sessionCounters) observeTimestamp(timestamp string) {
+	if timestamp == "" {
+		return
+	}
+	ts, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return
+	}
+	if c.firstTS.IsZero() || ts.Before(c.firstTS) {
+		c.firstTS = ts
+	}
+	if ts.After(c.lastTS) {
+		c.lastTS = ts
+	}
+}
+
+// observeContent counts tool calls and results: events with FunctionCall or
+// FunctionResponse parts in Content, which is decoded untyped.
+func (c *sessionCounters) observeContent(content any) {
+	contentMap, ok := content.(map[string]any)
+	if !ok {
+		return
+	}
+	parts, ok := contentMap["parts"].([]any)
+	if !ok {
+		return
+	}
+	for _, p := range parts {
+		pm, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fc, ok := pm["functionCall"].(map[string]any); ok {
+			c.toolCalls++
+			if isGitOperation(fc) {
+				c.gitOps++
+			}
+		}
+		if _, ok := pm["functionResponse"]; ok {
+			c.toolResults++
+		}
+	}
+}
+
+// stat converts the accumulated counters into the stat for one session.
+func (c *sessionCounters) stat(sessionID string) sessionStat {
+	stat := sessionStat{
+		ID:          sessionID,
+		Lines:       c.lines,
+		ToolCalls:   c.toolCalls,
+		ToolResults: c.toolResults,
+		Turns:       c.turns,
+		Errors:      c.errors,
+		GitOps:      c.gitOps,
+		FirstTime:   c.firstTS,
+		LastTime:    c.lastTS,
+	}
+	if !c.firstTS.IsZero() && !c.lastTS.IsZero() {
+		stat.Duration = c.lastTS.Sub(c.firstTS)
+	}
+	return stat
+}
+
+// sessionAnomalies lists what looks wrong about one session's totals.
+func sessionAnomalies(stat sessionStat, highToolCalls, highTurns int) []string {
+	var anomalies []string
+	if stat.ToolCalls > highToolCalls {
+		anomalies = append(anomalies, fmt.Sprintf("high tool calls (%d)", stat.ToolCalls))
+	}
+	if stat.Turns > highTurns {
+		anomalies = append(anomalies, fmt.Sprintf("excessive turns (%d)", stat.Turns))
+	}
+	if stat.Errors > 0 {
+		anomalies = append(anomalies, fmt.Sprintf("errors (%d)", stat.Errors))
+	}
+	if stat.GitOps > defaultHighGitOps {
+		anomalies = append(anomalies, fmt.Sprintf("many git operations (%d)", stat.GitOps))
+	}
+	if stat.Duration > 30*time.Minute && stat.ToolCalls < 5 {
+		anomalies = append(anomalies, "long idle session")
+	}
+	return anomalies
 }
 
 // isGitOperation reports whether a functionCall part represents a git

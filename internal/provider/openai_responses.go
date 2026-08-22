@@ -38,101 +38,18 @@ func modelNeedsResponses(modelName string) bool {
 // supports reasoning effort, stateful multi-turn via previous_response_id).
 func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMRequest, modelName string, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		m.mu.Lock()
-		state := m.responseState
-		m.mu.Unlock()
-
-		input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
+		params, sentPreviousResponseID, err := m.buildResponsesParams(req, modelName)
 		if err != nil {
 			_ = yield(nil, fmt.Errorf("responses input: %w", err))
 			return
 		}
 
-		params := responses.ResponseNewParams{
-			Model: modelName,
-			Input: input,
-			// Default to store=false so we never persist LLM responses
-			// server-side without an explicit opt-in. Multi-turn continues
-			// to work on the platform Responses API via full conversation
-			// replay (params.Input carries the whole thread).
-			Store: param.NewOpt(false),
-		}
-		if instructions != "" {
-			params.Instructions = param.NewOpt(instructions)
-		}
-
-		// The ChatGPT codex backend is stateless — it rejects requests that
-		// expect server-side persistence and requires clients to opt in to
-		// encrypted reasoning echo so multi-turn context can round-trip on
-		// the client side. Matches pi-mono's openai-codex-responses body.
-		if m.codexBackend {
-			params.Include = []responses.ResponseIncludable{
-				responses.ResponseIncludableReasoningEncryptedContent,
-			}
-		}
-
-		// previous_response_id requires OpenAI to retain responses
-		// server-side, which conflicts with store=false. Skip threading
-		// the pointer; the full conversation in params.Input is sufficient.
-		sentPreviousResponseID := shouldSendPreviousResponseID(params.Store.Value, m.codexBackend, state)
-		if sentPreviousResponseID {
-			params.PreviousResponseID = param.NewOpt(state.previousResponseID)
-		}
-
-		if req.Config != nil && len(req.Config.Tools) > 0 {
-			params.Tools = oaiGenaiToolsToResponses(req.Config.Tools)
-		}
-
-		// Apply reasoning effort if configured via ThinkingConfig.BudgetTokens.
-		// Low tokens (100-500) → low effort; medium (2000-4000) → medium; high (8000+) → high.
-		if req.Config != nil && req.Config.ThinkingConfig != nil && req.Config.ThinkingConfig.ThinkingBudget != nil {
-			bt := *req.Config.ThinkingConfig.ThinkingBudget
-			switch {
-			case bt >= 8000:
-				params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffortHigh}
-			case bt >= 2000:
-				params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffortMedium}
-			case bt > 0:
-				params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffortLow}
-			}
-		}
-
 		// send performs the request once, including the previous_response_id
-		// recovery below. It takes its own yield so retryStream can re-run it.
+		// recovery in sendResponses. It takes its own yield so retryStream can
+		// re-run it; params is shared across attempts, as before, so a pointer
+		// cleared on one attempt stays cleared on the next.
 		send := func(y func(*model.LLMResponse, error) bool) {
-			runOnce := func(p responses.ResponseNewParams) (bool, error) {
-				if stream {
-					return m.runResponsesStreaming(ctx, p, y)
-				}
-				return m.runResponsesNonStreaming(ctx, p, y)
-			}
-
-			emitted, err := runOnce(params)
-
-			// A stored previous_response_id can stop resolving upstream at any
-			// point: a proxy or load balancer routing the next turn to a different
-			// deployment, `store=false` (zero-data-retention accounts), expiry, or
-			// a model switch. The full conversation is already in params.Input —
-			// previous_response_id is only an optimisation here — so retrying
-			// without it is lossless. Only retry when nothing was streamed yet,
-			// otherwise the caller would see the turn's text twice.
-			if err != nil && sentPreviousResponseID && !emitted && isPreviousResponseNotFound(err) {
-				m.clearPreviousResponseID()
-				params.PreviousResponseID = param.Opt[string]{}
-				// The retry is the last attempt, so its emitted flag is moot.
-				_, err = runOnce(params)
-			}
-
-			if err != nil {
-				// Clear the stale pointer so the next turn starts fresh rather
-				// than replaying the same rejected id.
-				m.clearPreviousResponseID()
-				if stream {
-					_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-					return
-				}
-				_ = y(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
-			}
+			m.sendResponses(ctx, params, sentPreviousResponseID, stream, y)
 		}
 
 		if stream {
@@ -140,6 +57,124 @@ func (m *openaiModel) generateResponses(ctx context.Context, req *model.LLMReque
 		} else {
 			send(yield)
 		}
+	}
+}
+
+// buildResponsesParams assembles the Responses request for one turn. It also
+// reports whether the request carries a previous_response_id, which decides
+// whether a failure is worth retrying without it.
+func (m *openaiModel) buildResponsesParams(req *model.LLMRequest, modelName string) (*responses.ResponseNewParams, bool, error) {
+	m.mu.Lock()
+	state := m.responseState
+	m.mu.Unlock()
+
+	input, instructions, err := oaiContentsToResponsesInput(req.Contents, req.Config)
+	if err != nil {
+		return nil, false, err
+	}
+
+	params := &responses.ResponseNewParams{
+		Model: modelName,
+		Input: input,
+		// Default to store=false so we never persist LLM responses
+		// server-side without an explicit opt-in. Multi-turn continues
+		// to work on the platform Responses API via full conversation
+		// replay (params.Input carries the whole thread).
+		Store: param.NewOpt(false),
+	}
+	if instructions != "" {
+		params.Instructions = param.NewOpt(instructions)
+	}
+
+	// The ChatGPT codex backend is stateless — it rejects requests that
+	// expect server-side persistence and requires clients to opt in to
+	// encrypted reasoning echo so multi-turn context can round-trip on
+	// the client side. Matches pi-mono's openai-codex-responses body.
+	if m.codexBackend {
+		params.Include = []responses.ResponseIncludable{
+			responses.ResponseIncludableReasoningEncryptedContent,
+		}
+	}
+
+	// previous_response_id requires OpenAI to retain responses
+	// server-side, which conflicts with store=false. Skip threading
+	// the pointer; the full conversation in params.Input is sufficient.
+	sentPreviousResponseID := shouldSendPreviousResponseID(params.Store.Value, m.codexBackend, state)
+	if sentPreviousResponseID {
+		params.PreviousResponseID = param.NewOpt(state.previousResponseID)
+	}
+
+	if req.Config != nil && len(req.Config.Tools) > 0 {
+		params.Tools = oaiGenaiToolsToResponses(req.Config.Tools)
+	}
+
+	if reasoning, ok := oaiResponsesReasoning(req.Config); ok {
+		params.Reasoning = reasoning
+	}
+
+	return params, sentPreviousResponseID, nil
+}
+
+// oaiResponsesReasoning maps a configured thinking budget onto a Responses
+// reasoning effort. Low tokens (100-500) → low effort; medium (2000-4000) →
+// medium; high (8000+) → high. The second result is false when no budget is
+// configured, or when the budget is not positive.
+func oaiResponsesReasoning(config *genai.GenerateContentConfig) (shared.ReasoningParam, bool) {
+	if config == nil || config.ThinkingConfig == nil || config.ThinkingConfig.ThinkingBudget == nil {
+		return shared.ReasoningParam{}, false
+	}
+	switch bt := *config.ThinkingConfig.ThinkingBudget; {
+	case bt >= 8000:
+		return shared.ReasoningParam{Effort: shared.ReasoningEffortHigh}, true
+	case bt >= 2000:
+		return shared.ReasoningParam{Effort: shared.ReasoningEffortMedium}, true
+	case bt > 0:
+		return shared.ReasoningParam{Effort: shared.ReasoningEffortLow}, true
+	}
+	return shared.ReasoningParam{}, false
+}
+
+// sendResponses performs one Responses request, recovering from a
+// previous_response_id the upstream can no longer resolve, and surfaces any
+// remaining error to the caller in the shape the streaming mode expects.
+func (m *openaiModel) sendResponses(
+	ctx context.Context,
+	params *responses.ResponseNewParams,
+	sentPreviousResponseID, stream bool,
+	y func(*model.LLMResponse, error) bool,
+) {
+	runOnce := func() (bool, error) {
+		if stream {
+			return m.runResponsesStreaming(ctx, *params, y)
+		}
+		return m.runResponsesNonStreaming(ctx, *params, y)
+	}
+
+	emitted, err := runOnce()
+
+	// A stored previous_response_id can stop resolving upstream at any
+	// point: a proxy or load balancer routing the next turn to a different
+	// deployment, `store=false` (zero-data-retention accounts), expiry, or
+	// a model switch. The full conversation is already in params.Input —
+	// previous_response_id is only an optimisation here — so retrying
+	// without it is lossless. Only retry when nothing was streamed yet,
+	// otherwise the caller would see the turn's text twice.
+	if err != nil && sentPreviousResponseID && !emitted && isPreviousResponseNotFound(err) {
+		m.clearPreviousResponseID()
+		params.PreviousResponseID = param.Opt[string]{}
+		// The retry is the last attempt, so its emitted flag is moot.
+		_, err = runOnce()
+	}
+
+	if err != nil {
+		// Clear the stale pointer so the next turn starts fresh rather
+		// than replaying the same rejected id.
+		m.clearPreviousResponseID()
+		if stream {
+			_ = y(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
+			return
+		}
+		_ = y(nil, fmt.Errorf("OpenAI Responses API failed: %w", err))
 	}
 }
 
@@ -186,42 +221,9 @@ func (m *openaiModel) clearPreviousResponseID() {
 // `{"detail":"Input must be a list"}`, and the platform Responses API accepts lists too.
 func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.GenerateContentConfig) (responses.ResponseNewParamsInputUnion, string, error) {
 	// Extract system instruction.
-	var systemBuilder strings.Builder
-	if config != nil && config.SystemInstruction != nil {
-		for _, p := range config.SystemInstruction.Parts {
-			if p != nil && p.Text != "" {
-				systemBuilder.WriteString(p.Text)
-				systemBuilder.WriteByte('\n')
-			}
-		}
-	}
-	instructions := strings.TrimSpace(systemBuilder.String())
+	instructions := genaiSystemInstruction(config)
 
-	// A canceled turn can persist a function call before its tool result is
-	// emitted. Responses requires calls and outputs to be paired, so omit either
-	// half of an incomplete pair when replaying conversation history.
-	callIDs := make(map[string]struct{})
-	responseIDs := make(map[string]struct{})
-	for _, content := range contents {
-		if content == nil {
-			continue
-		}
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.FunctionCall != nil {
-				if id := strings.TrimSpace(part.FunctionCall.ID); id != "" {
-					callIDs[id] = struct{}{}
-				}
-			}
-			if part.FunctionResponse != nil {
-				if id := strings.TrimSpace(part.FunctionResponse.ID); id != "" {
-					responseIDs[id] = struct{}{}
-				}
-			}
-		}
-	}
+	callIDs, responseIDs := oaiResponsesPairedIDs(contents)
 
 	// Always build a list of input items. The ChatGPT codex backend
 	// (/backend-api/codex/responses) rejects a bare string with
@@ -233,50 +235,99 @@ func oaiContentsToResponsesInput(contents []*genai.Content, config *genai.Genera
 		if content == nil || strings.TrimSpace(content.Role) == "system" {
 			continue
 		}
-		role := oaiResponsesRole(content.Role)
-		var textParts []string
-		flushText := func() {
-			if len(textParts) == 0 {
-				return
-			}
-			items = append(items, responses.ResponseInputItemParamOfMessage(strings.Join(textParts, "\n"), role))
-			textParts = nil
-		}
+		items = oaiAppendResponsesItems(items, content, callIDs, responseIDs)
+	}
 
+	return responses.ResponseNewParamsInputUnion{OfInputItemList: items}, instructions, nil
+}
+
+// oaiResponsesPairedIDs collects the function call IDs and function response IDs
+// present in the conversation.
+//
+// A canceled turn can persist a function call before its tool result is
+// emitted. Responses requires calls and outputs to be paired, so the two sets
+// let the caller omit either half of an incomplete pair when replaying
+// conversation history.
+func oaiResponsesPairedIDs(contents []*genai.Content) (callIDs, responseIDs map[string]struct{}) {
+	callIDs = make(map[string]struct{})
+	responseIDs = make(map[string]struct{})
+	for _, content := range contents {
+		if content == nil {
+			continue
+		}
 		for _, part := range content.Parts {
 			if part == nil {
 				continue
 			}
-			switch {
-			case part.Text != "":
-				textParts = append(textParts, part.Text)
-			case part.FunctionCall != nil:
-				flushText()
-				fc := part.FunctionCall
-				if strings.TrimSpace(fc.ID) == "" {
-					continue
-				}
-				if _, ok := responseIDs[fc.ID]; !ok {
-					continue
-				}
-				argsJSON, _ := json.Marshal(fc.Args)
-				items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(argsJSON), fc.ID, fc.Name))
-			case part.FunctionResponse != nil:
-				flushText()
-				fr := part.FunctionResponse
-				if strings.TrimSpace(fr.ID) == "" {
-					continue
-				}
-				if _, ok := callIDs[fr.ID]; !ok {
-					continue
-				}
-				items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
+			if part.FunctionCall != nil {
+				addTrimmedID(callIDs, part.FunctionCall.ID)
+			}
+			if part.FunctionResponse != nil {
+				addTrimmedID(responseIDs, part.FunctionResponse.ID)
 			}
 		}
-		flushText()
+	}
+	return callIDs, responseIDs
+}
+
+// addTrimmedID records the trimmed id in set, ignoring blank IDs.
+func addTrimmedID(set map[string]struct{}, id string) {
+	if trimmed := strings.TrimSpace(id); trimmed != "" {
+		set[trimmed] = struct{}{}
+	}
+}
+
+// oaiAppendResponsesItems appends the input items for one content to items.
+// Consecutive text parts coalesce into a single message, which is flushed
+// before each function call or output so the items keep their original order.
+// Function calls and outputs whose counterpart is missing are dropped.
+func oaiAppendResponsesItems(
+	items responses.ResponseInputParam,
+	content *genai.Content,
+	callIDs, responseIDs map[string]struct{},
+) responses.ResponseInputParam {
+	role := oaiResponsesRole(content.Role)
+	var textParts []string
+	flushText := func() {
+		if len(textParts) == 0 {
+			return
+		}
+		items = append(items, responses.ResponseInputItemParamOfMessage(strings.Join(textParts, "\n"), role))
+		textParts = nil
 	}
 
-	return responses.ResponseNewParamsInputUnion{OfInputItemList: items}, instructions, nil
+	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
+		switch {
+		case part.Text != "":
+			textParts = append(textParts, part.Text)
+		case part.FunctionCall != nil:
+			flushText()
+			fc := part.FunctionCall
+			if strings.TrimSpace(fc.ID) == "" {
+				continue
+			}
+			if _, ok := responseIDs[fc.ID]; !ok {
+				continue
+			}
+			argsJSON, _ := json.Marshal(fc.Args)
+			items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(argsJSON), fc.ID, fc.Name))
+		case part.FunctionResponse != nil:
+			flushText()
+			fr := part.FunctionResponse
+			if strings.TrimSpace(fr.ID) == "" {
+				continue
+			}
+			if _, ok := callIDs[fr.ID]; !ok {
+				continue
+			}
+			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
+		}
+	}
+	flushText()
+	return items
 }
 
 func oaiResponsesRole(role string) responses.EasyInputMessageRole {
@@ -376,19 +427,7 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		// response.completed — capture final response with usage and status.
 		if evtType == "response.completed" {
 			finalResp = &evt.Response
-			if evt.Response.ID != "" {
-				state.responseID = evt.Response.ID
-			}
-			if evt.Response.Usage.InputTokens > 0 {
-				state.promptTokens = evt.Response.Usage.InputTokens
-			}
-			if evt.Response.Usage.OutputTokens > 0 {
-				state.completionTokens = evt.Response.Usage.OutputTokens
-			}
-			if c := evt.Response.Usage.InputTokensDetails.CachedTokens; c > 0 {
-				state.cachedTokens = c
-			}
-			state.finishReason = string(evt.Response.Status)
+			applyResponsesCompleted(state, finalResp)
 			continue
 		}
 
@@ -424,33 +463,7 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 			}
 		}
 
-		// response.function_call_arguments.delta — streaming function call args.
-		// response.output_item.* carries the function call header (id, name),
-		// and may carry the final arguments depending on backend/SDK mapping.
-		// The per-chunk argument text is in evt.Delta; evt.Arguments is only set
-		// on the `.done` event (as the full summary string).
-		if evtType == "response.function_call_arguments.delta" {
-			updateResponsesToolCall(state, evt.OutputIndex, "", "", evt.Delta, true)
-		}
-		// response.function_call_arguments.done — final full arguments string.
-		// Use it as a safety net: if deltas were missed, overwrite with the
-		// authoritative complete arguments payload.
-		if evtType == "response.function_call_arguments.done" {
-			updateResponsesToolCall(state, evt.OutputIndex, "", evt.Name, evt.Arguments, false)
-		}
-
-		// response.output_item.added — function call item header.
-		if evtType == "response.output_item.added" {
-			fc := evt.Item.AsFunctionCall()
-			updateResponsesToolCall(state, evt.OutputIndex, fc.CallID, fc.Name, "", false)
-		}
-
-		// response.output_item.done — final fallback arguments. Some Responses
-		// streams only populate arguments here.
-		if evtType == "response.output_item.done" {
-			fc := evt.Item.AsFunctionCall()
-			updateResponsesToolCall(state, evt.OutputIndex, fc.CallID, fc.Name, fc.Arguments, false)
-		}
+		applyResponsesToolCallEvent(state, evt)
 	}
 
 	if err := stream.Err(); err != nil {
@@ -463,6 +476,62 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		return emitted, err
 	}
 
+	m.finishResponsesStream(state, finalResp, yield)
+	return true, nil
+}
+
+// applyResponsesCompleted records the usage and status the response.completed
+// event carries.
+func applyResponsesCompleted(state *responsesStreamState, resp *responses.Response) {
+	if resp.ID != "" {
+		state.responseID = resp.ID
+	}
+	if resp.Usage.InputTokens > 0 {
+		state.promptTokens = resp.Usage.InputTokens
+	}
+	if resp.Usage.OutputTokens > 0 {
+		state.completionTokens = resp.Usage.OutputTokens
+	}
+	if c := resp.Usage.InputTokensDetails.CachedTokens; c > 0 {
+		state.cachedTokens = c
+	}
+	state.finishReason = string(resp.Status)
+}
+
+// applyResponsesToolCallEvent folds the function-call events into the tool call
+// accumulator. Events of any other type are ignored.
+func applyResponsesToolCallEvent(state *responsesStreamState, evt responses.ResponseStreamEventUnion) {
+	switch evt.Type {
+	// response.function_call_arguments.delta — streaming function call args.
+	// response.output_item.* carries the function call header (id, name),
+	// and may carry the final arguments depending on backend/SDK mapping.
+	// The per-chunk argument text is in evt.Delta; evt.Arguments is only set
+	// on the `.done` event (as the full summary string).
+	case "response.function_call_arguments.delta":
+		updateResponsesToolCall(state, evt.OutputIndex, "", "", evt.Delta, true)
+
+	// response.function_call_arguments.done — final full arguments string.
+	// Use it as a safety net: if deltas were missed, overwrite with the
+	// authoritative complete arguments payload.
+	case "response.function_call_arguments.done":
+		updateResponsesToolCall(state, evt.OutputIndex, "", evt.Name, evt.Arguments, false)
+
+	// response.output_item.added — function call item header.
+	case "response.output_item.added":
+		fc := evt.Item.AsFunctionCall()
+		updateResponsesToolCall(state, evt.OutputIndex, fc.CallID, fc.Name, "", false)
+
+	// response.output_item.done — final fallback arguments. Some Responses
+	// streams only populate arguments here.
+	case "response.output_item.done":
+		fc := evt.Item.AsFunctionCall()
+		updateResponsesToolCall(state, evt.OutputIndex, fc.CallID, fc.Name, fc.Arguments, false)
+	}
+}
+
+// finishResponsesStream yields the terminal response for a stream that ran to
+// completion, and remembers the response ID for multi-turn continuation.
+func (m *openaiModel) finishResponsesStream(state *responsesStreamState, finalResp *responses.Response, yield func(*model.LLMResponse, error) bool) {
 	// Build final response parts.
 	finalParts := buildResponsesFinalParts(state)
 	var usage *genai.GenerateContentResponseUsageMetadata
@@ -491,7 +560,6 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
 	}, nil)
-	return true, nil
 }
 
 // buildResponsesFinalParts assembles the final parts from streaming state.

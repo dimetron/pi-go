@@ -131,6 +131,82 @@ var diffFileHeader = regexp.MustCompile(`^diff --git a/(.+) b/(.+)$`)
 // diffHunkHeader matches hunk headers like "@@ -1,5 +1,7 @@".
 var diffHunkHeader = regexp.MustCompile(`^@@.*@@`)
 
+// diffTextCompactor accumulates the compacted form of a unified diff as a caller
+// feeds it one line at a time.
+type diffTextCompactor struct {
+	cfg         CompactorConfig
+	b           strings.Builder
+	totalLines  int
+	hunkLines   int
+	inHunk      bool
+	currentFile string
+	additions   int
+	deletions   int
+}
+
+// emit passes one line through to the output and counts it against MaxDiffLines.
+func (c *diffTextCompactor) emit(line string) {
+	c.b.WriteString(line)
+	c.b.WriteString("\n")
+	c.totalLines++
+}
+
+// flushFile writes the "(+n -m)" tally for the file being read, if it changed.
+func (c *diffTextCompactor) flushFile() {
+	if c.currentFile != "" && (c.additions > 0 || c.deletions > 0) {
+		fmt.Fprintf(&c.b, "  (+%d -%d)\n", c.additions, c.deletions)
+	}
+}
+
+// startFile closes off the previous file's tally and begins a new file.
+func (c *diffTextCompactor) startFile(name, header string) {
+	c.flushFile()
+	c.currentFile = name
+	c.emit(header)
+	c.additions = 0
+	c.deletions = 0
+	c.inHunk = false
+	c.hunkLines = 0
+}
+
+// consumeHunkLine keeps the first MaxDiffHunkLines lines of a hunk while counting
+// additions and deletions across the whole hunk.
+func (c *diffTextCompactor) consumeHunkLine(line string) {
+	c.hunkLines++
+	if c.hunkLines <= c.cfg.MaxDiffHunkLines {
+		c.emit(line)
+	}
+	if strings.HasPrefix(line, "+") {
+		c.additions++
+	} else if strings.HasPrefix(line, "-") {
+		c.deletions++
+	}
+}
+
+// consume routes one diff line to the file-header, hunk-header, hunk-body or
+// passthrough case.
+func (c *diffTextCompactor) consume(line string) {
+	if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+		c.startFile(m[2], line)
+		return
+	}
+
+	if diffHunkHeader.MatchString(line) {
+		c.inHunk = true
+		c.hunkLines = 0
+		c.emit(line)
+		return
+	}
+
+	if c.inHunk {
+		c.consumeHunkLine(line)
+		return
+	}
+
+	// Non-hunk content (--- +++ headers, etc.)
+	c.emit(line)
+}
+
 // compactGitDiffText summarizes a unified diff to file-level changes with limited hunks.
 func compactGitDiffText(s string, cfg CompactorConfig) (string, bool) {
 	lines := strings.Split(s, "\n")
@@ -138,75 +214,22 @@ func compactGitDiffText(s string, cfg CompactorConfig) (string, bool) {
 		return s, false
 	}
 
-	var b strings.Builder
-	totalLines := 0
-	hunkLines := 0
-	inHunk := false
-	currentFile := ""
-	additions := 0
-	deletions := 0
-
+	c := &diffTextCompactor{cfg: cfg}
 	for _, line := range lines {
-		if totalLines >= cfg.MaxDiffLines {
+		if c.totalLines >= cfg.MaxDiffLines {
 			break
 		}
-
-		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			// Emit previous file summary if needed
-			if currentFile != "" && (additions > 0 || deletions > 0) {
-				fmt.Fprintf(&b, "  (+%d -%d)\n", additions, deletions)
-			}
-			currentFile = m[2]
-			b.WriteString(line)
-			b.WriteString("\n")
-			totalLines++
-			additions = 0
-			deletions = 0
-			inHunk = false
-			hunkLines = 0
-			continue
-		}
-
-		if diffHunkHeader.MatchString(line) {
-			inHunk = true
-			hunkLines = 0
-			b.WriteString(line)
-			b.WriteString("\n")
-			totalLines++
-			continue
-		}
-
-		if inHunk {
-			hunkLines++
-			if hunkLines <= cfg.MaxDiffHunkLines {
-				b.WriteString(line)
-				b.WriteString("\n")
-				totalLines++
-			}
-			if strings.HasPrefix(line, "+") {
-				additions++
-			} else if strings.HasPrefix(line, "-") {
-				deletions++
-			}
-			continue
-		}
-
-		// Non-hunk content (--- +++ headers, etc.)
-		b.WriteString(line)
-		b.WriteString("\n")
-		totalLines++
+		c.consume(line)
 	}
 
 	// Final file summary
-	if currentFile != "" && (additions > 0 || deletions > 0) {
-		fmt.Fprintf(&b, "  (+%d -%d)\n", additions, deletions)
+	c.flushFile()
+
+	if c.totalLines < len(lines) {
+		fmt.Fprintf(&c.b, "\n... (%d lines omitted from diff)\n", len(lines)-c.totalLines)
 	}
 
-	if totalLines < len(lines) {
-		fmt.Fprintf(&b, "\n... (%d lines omitted from diff)\n", len(lines)-totalLines)
-	}
-
-	result := b.String()
+	result := c.b.String()
 	if len(result) >= len(s) {
 		return s, false
 	}

@@ -54,6 +54,70 @@ func newGitOverviewTool(sb *Sandbox) (tool.Tool, error) {
 	})
 }
 
+// includeOrDefault reports whether an optional include flag is on. Unset means
+// include everything.
+func includeOrDefault(flag *bool) bool {
+	return flag == nil || *flag
+}
+
+// collectGitHead fills in the branch name and recent commits. Either may be
+// unavailable — an empty repo has no HEAD — in which case it is left unset.
+func collectGitHead(ctx agent.Context, dir string, out *GitOverviewOutput) {
+	// Branch name
+	if branch, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		out.Branch = strings.TrimSpace(branch)
+	}
+
+	// Recent commits (may fail in empty repo)
+	if log, err := runGit(ctx, dir, "log", "--oneline", "-10"); err == nil {
+		trimmed := strings.TrimSpace(log)
+		if trimmed != "" {
+			out.RecentCommits = strings.Split(trimmed, "\n")
+		}
+	}
+}
+
+// collectGitStatusFiles parses porcelain status into the file lists the caller
+// asked for. Defaults: include everything unless explicitly set to false.
+func collectGitStatusFiles(ctx agent.Context, dir string, input GitOverviewInput, out *GitOverviewOutput) {
+	status, err := runGit(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return
+	}
+
+	staged, unstaged, untracked := parsePorcelain(status)
+	if includeOrDefault(input.IncludeStaged) {
+		out.StagedFiles = staged
+	}
+	if includeOrDefault(input.IncludeUnstaged) {
+		out.UnstagedFiles = unstaged
+	}
+	if includeOrDefault(input.IncludeUntracked) {
+		out.UntrackedFiles = untracked
+	}
+}
+
+// collectGitUpstream fills in the tracking branch and its ahead/behind counts,
+// leaving them unset when the branch tracks nothing.
+func collectGitUpstream(ctx agent.Context, dir string, out *GitOverviewOutput) {
+	upstream, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "@{upstream}")
+	if err != nil {
+		return
+	}
+	out.Upstream = strings.TrimSpace(upstream)
+
+	// Ahead/behind counts
+	counts, err := runGit(ctx, dir, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+	if err != nil {
+		return
+	}
+	parts := strings.Fields(strings.TrimSpace(counts))
+	if len(parts) == 2 {
+		out.Behind, _ = strconv.Atoi(parts[0])
+		out.Ahead, _ = strconv.Atoi(parts[1])
+	}
+}
+
 func gitOverviewHandler(sb *Sandbox, ctx agent.Context, input GitOverviewInput) (GitOverviewOutput, error) {
 	dir := sb.Dir()
 
@@ -73,52 +137,9 @@ func gitOverviewHandler(sb *Sandbox, ctx agent.Context, input GitOverviewInput) 
 	}
 
 	var out GitOverviewOutput
-
-	// Branch name
-	if branch, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		out.Branch = strings.TrimSpace(branch)
-	}
-
-	// Recent commits (may fail in empty repo)
-	if log, err := runGit(ctx, dir, "log", "--oneline", "-10"); err == nil {
-		trimmed := strings.TrimSpace(log)
-		if trimmed != "" {
-			out.RecentCommits = strings.Split(trimmed, "\n")
-		}
-	}
-
-	// Defaults: include everything unless explicitly set to false
-	includeStaged := input.IncludeStaged == nil || *input.IncludeStaged
-	includeUnstaged := input.IncludeUnstaged == nil || *input.IncludeUnstaged
-	includeUntracked := input.IncludeUntracked == nil || *input.IncludeUntracked
-
-	// Parse porcelain status
-	if status, err := runGit(ctx, dir, "status", "--porcelain"); err == nil {
-		staged, unstaged, untracked := parsePorcelain(status)
-		if includeStaged {
-			out.StagedFiles = staged
-		}
-		if includeUnstaged {
-			out.UnstagedFiles = unstaged
-		}
-		if includeUntracked {
-			out.UntrackedFiles = untracked
-		}
-	}
-
-	// Upstream tracking info
-	if upstream, err := runGit(ctx, dir, "rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
-		out.Upstream = strings.TrimSpace(upstream)
-
-		// Ahead/behind counts
-		if counts, err := runGit(ctx, dir, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
-			parts := strings.Fields(strings.TrimSpace(counts))
-			if len(parts) == 2 {
-				out.Behind, _ = strconv.Atoi(parts[0])
-				out.Ahead, _ = strconv.Atoi(parts[1])
-			}
-		}
-	}
+	collectGitHead(ctx, dir, &out)
+	collectGitStatusFiles(ctx, dir, input, &out)
+	collectGitUpstream(ctx, dir, &out)
 
 	span.SetAttributes(
 		attribute.String("git.branch", out.Branch),

@@ -413,31 +413,46 @@ func (s *Session) handleNotification(notif JSONRPCNotification, text *strings.Bu
 func (s *Session) handleItem(item Item, completed bool, text *strings.Builder) {
 	switch item.Type {
 	case ItemAgentMessage:
-		if strings.TrimSpace(item.Text) == "" {
-			return
-		}
-		s.emit(Event{Type: EventTypeMessage, Content: item.Text, SessionID: s.threadID})
-		if completed {
-			text.WriteString(item.Text)
-		}
+		s.emitMessageItem(item.Text, completed, text)
 
 	case ItemExitedReviewMode:
-		if strings.TrimSpace(item.Review) == "" {
-			return
-		}
-		s.emit(Event{Type: EventTypeMessage, Content: item.Review, SessionID: s.threadID})
-		if completed {
-			text.WriteString(item.Review)
-		}
+		s.emitMessageItem(item.Review, completed, text)
 
 	case ItemReasoning:
-		if !completed {
-			return
-		}
-		if summary := strings.TrimSpace(strings.Join(item.Summary, "\n")); summary != "" {
-			s.emit(Event{Type: EventTypeProgress, Content: summary, SessionID: s.threadID})
-		}
+		s.emitReasoningItem(item, completed)
 
+	case ItemCommandExecution, ItemFileChange, ItemMCPToolCall, ItemDynamicToolCall, ItemWebSearch:
+		s.emitToolItem(item, completed)
+	}
+}
+
+// emitMessageItem emits one text-bearing item and, on completion, accumulates
+// it into the run result. Blank content is dropped rather than emitted.
+func (s *Session) emitMessageItem(content string, completed bool, text *strings.Builder) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	s.emit(Event{Type: EventTypeMessage, Content: content, SessionID: s.threadID})
+	if completed {
+		text.WriteString(content)
+	}
+}
+
+// emitReasoningItem emits a reasoning summary. Only the completed item carries
+// one worth showing, and an all-blank summary is dropped.
+func (s *Session) emitReasoningItem(item Item, completed bool) {
+	if !completed {
+		return
+	}
+	if summary := strings.TrimSpace(strings.Join(item.Summary, "\n")); summary != "" {
+		s.emit(Event{Type: EventTypeProgress, Content: summary, SessionID: s.threadID})
+	}
+}
+
+// emitToolItem emits the progress line for one tool-shaped item, phrased for
+// whether the item has started or finished.
+func (s *Session) emitToolItem(item Item, completed bool) {
+	switch item.Type {
 	case ItemCommandExecution:
 		if !completed {
 			s.emitTool("Running: " + item.Command)

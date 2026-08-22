@@ -77,10 +77,8 @@ func runMemoryRecent(project string, limit int, obsType string, asJSON bool) err
 	ctx := context.Background()
 
 	// Validate type filter if provided.
-	if obsType != "" {
-		if !memory.ValidObservationTypes[memory.ObservationType(obsType)] {
-			return fmt.Errorf("invalid type %q, valid types: decision, bugfix, feature, refactor, discovery, change", obsType)
-		}
+	if obsType != "" && !memory.ValidObservationTypes[memory.ObservationType(obsType)] {
+		return fmt.Errorf("invalid type %q, valid types: decision, bugfix, feature, refactor, discovery, change", obsType)
 	}
 
 	// Fetch recent observations.
@@ -88,22 +86,7 @@ func runMemoryRecent(project string, limit int, obsType string, asJSON bool) err
 	if err != nil {
 		return fmt.Errorf("fetching recent observations: %w", err)
 	}
-
-	// Filter by type if specified.
-	if obsType != "" {
-		filtered := make([]*memory.Observation, 0, len(observations))
-		for _, obs := range observations {
-			if string(obs.Type) == obsType {
-				filtered = append(filtered, obs)
-				if len(filtered) >= limit {
-					break
-				}
-			}
-		}
-		observations = filtered
-	} else if len(observations) > limit {
-		observations = observations[:limit]
-	}
+	observations = limitRecentObservations(observations, obsType, limit)
 
 	// Also fetch session summaries.
 	summaries, err := store.RecentSummaries(ctx, project, limit)
@@ -114,11 +97,39 @@ func runMemoryRecent(project string, limit int, obsType string, asJSON bool) err
 	if asJSON {
 		return printRecentJSON(observations, summaries, limit)
 	}
+	printRecentReport(project, observations, summaries)
+	return nil
+}
 
+// limitRecentObservations applies the --type filter and caps the result at
+// limit. The caller over-fetches so that filtering still has enough rows left.
+func limitRecentObservations(observations []*memory.Observation, obsType string, limit int) []*memory.Observation {
+	if obsType == "" {
+		if len(observations) > limit {
+			return observations[:limit]
+		}
+		return observations
+	}
+
+	filtered := make([]*memory.Observation, 0, len(observations))
+	for _, obs := range observations {
+		if string(obs.Type) != obsType {
+			continue
+		}
+		filtered = append(filtered, obs)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	return filtered
+}
+
+// printRecentReport renders the human-readable listing.
+func printRecentReport(project string, observations []*memory.Observation, summaries []*memory.SessionSummary) {
 	if len(observations) == 0 && len(summaries) == 0 {
 		fmt.Println("No observations found.")
 		fmt.Printf("Project: %s\n", project)
-		return nil
+		return
 	}
 
 	fmt.Printf("Recent Memory — %s\n", project)
@@ -148,8 +159,6 @@ func runMemoryRecent(project string, limit int, obsType string, asJSON bool) err
 			fmt.Printf("[%s] %s\n", age, request)
 		}
 	}
-
-	return nil
 }
 
 // findMemoryDB locates the memory database, checking project-specific and global locations.

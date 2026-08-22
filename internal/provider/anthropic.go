@@ -309,29 +309,8 @@ func antStopReasonToGenai(reason anthropic.StopReason) genai.FinishReason {
 }
 
 func antContentsToMessages(contents []*genai.Content, config *genai.GenerateContentConfig) ([]anthropic.MessageParam, string) {
-	var systemBuilder strings.Builder
-	if config != nil && config.SystemInstruction != nil {
-		for _, p := range config.SystemInstruction.Parts {
-			if p != nil && p.Text != "" {
-				systemBuilder.WriteString(p.Text)
-				systemBuilder.WriteByte('\n')
-			}
-		}
-	}
-	systemPrompt := strings.TrimSpace(systemBuilder.String())
-
-	// Collect function responses for matching
-	functionResponses := make(map[string]*genai.FunctionResponse)
-	for _, c := range contents {
-		if c == nil || c.Parts == nil {
-			continue
-		}
-		for _, p := range c.Parts {
-			if p != nil && p.FunctionResponse != nil {
-				functionResponses[p.FunctionResponse.ID] = p.FunctionResponse
-			}
-		}
-	}
+	systemPrompt := genaiSystemInstruction(config)
+	functionResponses := genaiFunctionResponses(contents)
 
 	var messages []anthropic.MessageParam
 	for _, content := range contents {
@@ -343,64 +322,13 @@ func antContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 			continue
 		}
 
-		var textParts []string
-		var functionCalls []*genai.FunctionCall
+		textParts, functionCalls := genaiSplitParts(content.Parts)
 
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.Text != "" {
-				textParts = append(textParts, part.Text)
-			} else if part.FunctionCall != nil {
-				functionCalls = append(functionCalls, part.FunctionCall)
-			}
-		}
-
-		if len(functionCalls) > 0 && (role == "model" || role == "assistant") {
-			// Assistant message with tool use blocks
-			var contentBlocks []anthropic.ContentBlockParamUnion
-			if len(textParts) > 0 {
-				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(strings.Join(textParts, "\n")))
-			}
-			for _, fc := range functionCalls {
-				argsJSON, _ := json.Marshal(fc.Args)
-				var inputMap map[string]any
-				_ = json.Unmarshal(argsJSON, &inputMap)
-				if inputMap == nil {
-					inputMap = make(map[string]any)
-				}
-				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(fc.ID, inputMap, fc.Name))
-			}
-			messages = append(messages, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleAssistant,
-				Content: contentBlocks,
-			})
-
-			// Tool results as user message
-			var toolResultBlocks []anthropic.ContentBlockParamUnion
-			for _, fc := range functionCalls {
-				contentStr := "No response available for this function call."
-				if fr := functionResponses[fc.ID]; fr != nil {
-					contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
-				}
-				toolResultBlocks = append(toolResultBlocks, anthropic.NewToolResultBlock(fc.ID, contentStr, false))
-			}
-			messages = append(messages, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleUser,
-				Content: toolResultBlocks,
-			})
-		} else if len(textParts) > 0 {
-			msgRole := anthropic.MessageParamRoleUser
-			if role == "model" || role == "assistant" {
-				msgRole = anthropic.MessageParamRoleAssistant
-			}
-			var contentBlocks []anthropic.ContentBlockParamUnion
-			contentBlocks = append(contentBlocks, anthropic.NewTextBlock(strings.Join(textParts, "\n")))
-			messages = append(messages, anthropic.MessageParam{
-				Role:    msgRole,
-				Content: contentBlocks,
-			})
+		switch {
+		case len(functionCalls) > 0 && genaiIsAssistantRole(role):
+			messages = append(messages, antToolUseMessages(textParts, functionCalls, functionResponses)...)
+		case len(textParts) > 0:
+			messages = append(messages, antTextMessage(role, strings.Join(textParts, "\n")))
 		}
 	}
 
@@ -415,6 +343,58 @@ func antContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 	}
 
 	return messages, systemPrompt
+}
+
+// antToolUseMessages renders one assistant turn that called tools as the pair
+// Anthropic expects: an assistant message of tool_use blocks, then a user
+// message of the matching tool_result blocks.
+func antToolUseMessages(
+	textParts []string,
+	functionCalls []*genai.FunctionCall,
+	functionResponses map[string]*genai.FunctionResponse,
+) []anthropic.MessageParam {
+	// Assistant message with tool use blocks
+	var contentBlocks []anthropic.ContentBlockParamUnion
+	if len(textParts) > 0 {
+		contentBlocks = append(contentBlocks, anthropic.NewTextBlock(strings.Join(textParts, "\n")))
+	}
+	for _, fc := range functionCalls {
+		argsJSON, _ := json.Marshal(fc.Args)
+		var inputMap map[string]any
+		_ = json.Unmarshal(argsJSON, &inputMap)
+		if inputMap == nil {
+			inputMap = make(map[string]any)
+		}
+		contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(fc.ID, inputMap, fc.Name))
+	}
+
+	// Tool results as user message
+	var toolResultBlocks []anthropic.ContentBlockParamUnion
+	for _, fc := range functionCalls {
+		contentStr := "No response available for this function call."
+		if fr := functionResponses[fc.ID]; fr != nil {
+			contentStr = oaiFunctionResponseContent(fr.Response) // reuse helper
+		}
+		toolResultBlocks = append(toolResultBlocks, anthropic.NewToolResultBlock(fc.ID, contentStr, false))
+	}
+
+	return []anthropic.MessageParam{
+		{Role: anthropic.MessageParamRoleAssistant, Content: contentBlocks},
+		{Role: anthropic.MessageParamRoleUser, Content: toolResultBlocks},
+	}
+}
+
+// antTextMessage renders a text-only turn as a single-block message under the
+// Anthropic role its genai role maps to.
+func antTextMessage(role, text string) anthropic.MessageParam {
+	msgRole := anthropic.MessageParamRoleUser
+	if genaiIsAssistantRole(role) {
+		msgRole = anthropic.MessageParamRoleAssistant
+	}
+	return anthropic.MessageParam{
+		Role:    msgRole,
+		Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(text)},
+	}
 }
 
 func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
@@ -568,54 +548,76 @@ func antRunStreaming(ctx context.Context, client *anthropic.Client, params anthr
 				}
 			}
 		case anthropic.ContentBlockDeltaEvent:
-			idx := int(e.Index)
-			delta := e.Delta
-			switch delta.Type {
-			case "text_delta":
-				if textDelta, ok := delta.AsAny().(anthropic.TextDelta); ok {
-					state.text += textDelta.Text
-					if !yield(&model.LLMResponse{
-						Partial:      true,
-						TurnComplete: false,
-						Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
-					}, nil) {
-						return
-					}
-				}
-			case "thinking_delta":
-				if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
-					if !yield(&model.LLMResponse{
-						Partial:      true,
-						TurnComplete: false,
-						Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
-					}, nil) {
-						return
-					}
-				}
-			case "input_json_delta":
-				if jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta); ok {
-					if block, exists := state.toolUse[idx]; exists {
-						block.inputJSON += jsonDelta.PartialJSON
-						state.toolUse[idx] = block
-					}
-				}
+			if !antHandleContentBlockDelta(e, state, yield) {
+				return
 			}
 		case anthropic.MessageDeltaEvent:
-			state.stopReason = e.Delta.StopReason
-			state.outputTokens = e.Usage.OutputTokens
-			// Anthropic may also surface cache deltas in message_delta;
-			// take the last reported value (it's monotonically increasing
-			// across a single response).
-			if v := e.Usage.CacheReadInputTokens; v > state.cacheReadTokens {
-				state.cacheReadTokens = v
-			}
-			if v := e.Usage.CacheCreationInputTokens; v > state.cacheCreationTokens {
-				state.cacheCreationTokens = v
-			}
+			antApplyMessageDelta(e, state)
 		}
 	}
 
-	if err := stream.Err(); err != nil {
+	antFinishStream(ctx, stream.Err(), state, yield)
+}
+
+// antHandleContentBlockDelta folds one content_block_delta event into state,
+// yielding the partial response it carries. It reports whether streaming should
+// continue — false once the consumer has stopped reading.
+func antHandleContentBlockDelta(e anthropic.ContentBlockDeltaEvent, state *antStreamState, yield func(*model.LLMResponse, error) bool) bool {
+	idx := int(e.Index)
+	delta := e.Delta
+	switch delta.Type {
+	case "text_delta":
+		if textDelta, ok := delta.AsAny().(anthropic.TextDelta); ok {
+			state.text += textDelta.Text
+			if !yield(&model.LLMResponse{
+				Partial:      true,
+				TurnComplete: false,
+				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
+			}, nil) {
+				return false
+			}
+		}
+	case "thinking_delta":
+		if thinkingDelta, ok := delta.AsAny().(anthropic.ThinkingDelta); ok {
+			if !yield(&model.LLMResponse{
+				Partial:      true,
+				TurnComplete: false,
+				Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
+			}, nil) {
+				return false
+			}
+		}
+	case "input_json_delta":
+		if jsonDelta, ok := delta.AsAny().(anthropic.InputJSONDelta); ok {
+			if block, exists := state.toolUse[idx]; exists {
+				block.inputJSON += jsonDelta.PartialJSON
+				state.toolUse[idx] = block
+			}
+		}
+	}
+	return true
+}
+
+// antApplyMessageDelta records the stop reason and usage a message_delta event
+// reports.
+func antApplyMessageDelta(e anthropic.MessageDeltaEvent, state *antStreamState) {
+	state.stopReason = e.Delta.StopReason
+	state.outputTokens = e.Usage.OutputTokens
+	// Anthropic may also surface cache deltas in message_delta;
+	// take the last reported value (it's monotonically increasing
+	// across a single response).
+	if v := e.Usage.CacheReadInputTokens; v > state.cacheReadTokens {
+		state.cacheReadTokens = v
+	}
+	if v := e.Usage.CacheCreationInputTokens; v > state.cacheCreationTokens {
+		state.cacheCreationTokens = v
+	}
+}
+
+// antFinishStream emits the terminal response for a finished Anthropic stream:
+// the cancellation marker, a stream error, or the accumulated final message.
+func antFinishStream(ctx context.Context, err error, state *antStreamState, yield func(*model.LLMResponse, error) bool) {
+	if err != nil {
 		if ctx.Err() == context.Canceled {
 			_ = yield(canceledResponse(), nil)
 			return
@@ -692,58 +694,12 @@ func antRunStreamingBeta(ctx context.Context, client *anthropic.BetaService, par
 		case anthropic.BetaRawMessageStartEvent:
 			state.inputTokens = e.Message.Usage.InputTokens
 		case anthropic.BetaRawContentBlockStartEvent:
-			idx := int(e.Index)
-			switch e.ContentBlock.Type {
-			case "tool_use":
-				if toolUse, ok := e.ContentBlock.AsAny().(anthropic.BetaToolUseBlock); ok {
-					state.toolUse[idx] = antToolUseAcc{id: toolUse.ID, name: toolUse.Name}
-				}
-			case "advisor_tool_result":
-				// Advisor result arrives fully formed in a single event.
-				// Yield it as a text part so the executor sees the advice.
-				if advResult, ok := e.ContentBlock.AsAny().(anthropic.BetaAdvisorToolResultBlock); ok {
-					advText := extractAdvisorResultText(advResult)
-					if advText != "" {
-						// Yield as a special "advisor" role to distinguish from regular text.
-						if !yield(&model.LLMResponse{
-							Partial:      true,
-							TurnComplete: false,
-							Content:      &genai.Content{Role: "advisor", Parts: []*genai.Part{{Text: advText}}},
-						}, nil) {
-							return
-						}
-					}
-				}
+			if !antHandleBetaContentBlockStart(e, state, yield) {
+				return
 			}
 		case anthropic.BetaRawContentBlockDeltaEvent:
-			idx := int(e.Index)
-			delta := e.Delta
-			switch delta.Type {
-			case "text_delta":
-				textDelta := delta.AsTextDelta()
-				state.text += textDelta.Text
-				if !yield(&model.LLMResponse{
-					Partial:      true,
-					TurnComplete: false,
-					Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
-				}, nil) {
-					return
-				}
-			case "thinking_delta":
-				thinkingDelta := delta.AsThinkingDelta()
-				if !yield(&model.LLMResponse{
-					Partial:      true,
-					TurnComplete: false,
-					Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
-				}, nil) {
-					return
-				}
-			case "input_json_delta":
-				jsonDelta := delta.AsInputJSONDelta()
-				if block, exists := state.toolUse[idx]; exists {
-					block.inputJSON += jsonDelta.PartialJSON
-					state.toolUse[idx] = block
-				}
+			if !antHandleBetaContentBlockDelta(e, state, yield) {
+				return
 			}
 		case anthropic.BetaRawMessageDeltaEvent:
 			state.stopReason = anthropic.StopReason(e.Delta.StopReason)
@@ -751,16 +707,73 @@ func antRunStreamingBeta(ctx context.Context, client *anthropic.BetaService, par
 		}
 	}
 
-	if err := stream.Err(); err != nil {
-		if ctx.Err() == context.Canceled {
-			_ = yield(canceledResponse(), nil)
-			return
-		}
-		_ = yield(&model.LLMResponse{ErrorCode: "STREAM_ERROR", ErrorMessage: err.Error()}, nil)
-		return
-	}
+	antFinishStream(ctx, stream.Err(), state, yield)
+}
 
-	_ = yield(buildAntFinalResponse(state), nil)
+// antHandleBetaContentBlockStart opens a streamed beta content block: it records
+// a tool_use header, or yields an advisor result that arrives complete. It
+// reports whether streaming should continue.
+func antHandleBetaContentBlockStart(e anthropic.BetaRawContentBlockStartEvent, state *antStreamState, yield func(*model.LLMResponse, error) bool) bool {
+	idx := int(e.Index)
+	switch e.ContentBlock.Type {
+	case "tool_use":
+		if toolUse, ok := e.ContentBlock.AsAny().(anthropic.BetaToolUseBlock); ok {
+			state.toolUse[idx] = antToolUseAcc{id: toolUse.ID, name: toolUse.Name}
+		}
+	case "advisor_tool_result":
+		// Advisor result arrives fully formed in a single event.
+		// Yield it as a text part so the executor sees the advice.
+		if advResult, ok := e.ContentBlock.AsAny().(anthropic.BetaAdvisorToolResultBlock); ok {
+			advText := extractAdvisorResultText(advResult)
+			if advText != "" {
+				// Yield as a special "advisor" role to distinguish from regular text.
+				if !yield(&model.LLMResponse{
+					Partial:      true,
+					TurnComplete: false,
+					Content:      &genai.Content{Role: "advisor", Parts: []*genai.Part{{Text: advText}}},
+				}, nil) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// antHandleBetaContentBlockDelta folds one beta content_block_delta event into
+// state, yielding the partial response it carries. It reports whether streaming
+// should continue.
+func antHandleBetaContentBlockDelta(e anthropic.BetaRawContentBlockDeltaEvent, state *antStreamState, yield func(*model.LLMResponse, error) bool) bool {
+	idx := int(e.Index)
+	delta := e.Delta
+	switch delta.Type {
+	case "text_delta":
+		textDelta := delta.AsTextDelta()
+		state.text += textDelta.Text
+		if !yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: textDelta.Text}}},
+		}, nil) {
+			return false
+		}
+	case "thinking_delta":
+		thinkingDelta := delta.AsThinkingDelta()
+		if !yield(&model.LLMResponse{
+			Partial:      true,
+			TurnComplete: false,
+			Content:      &genai.Content{Role: "thinking", Parts: []*genai.Part{{Text: thinkingDelta.Thinking}}},
+		}, nil) {
+			return false
+		}
+	case "input_json_delta":
+		jsonDelta := delta.AsInputJSONDelta()
+		if block, exists := state.toolUse[idx]; exists {
+			block.inputJSON += jsonDelta.PartialJSON
+			state.toolUse[idx] = block
+		}
+	}
+	return true
 }
 
 // antRunNonStreamingBeta handles non-streaming with the beta API (advisor tool support).

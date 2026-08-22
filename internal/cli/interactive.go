@@ -11,6 +11,7 @@ import (
 	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
 	adkmodel "google.golang.org/adk/v2/model"
 	adktool "google.golang.org/adk/v2/tool"
 
@@ -151,10 +152,200 @@ func deferredInit(
 	// --- Phase 1: Core tools (fast, needed by everything) ---
 	send("tools", false)
 
+	coreTools, err := deferredInitCoreTools(sandboxRoot, worktreeDir, res)
+	if err != nil {
+		fail(err)
+		return
+	}
+	sandbox, bashSup := res.sandbox, res.bashSup
+
+	send("tools", true)
+
+	// --- Phase 2: Parallel subsystems ---
+	ps := runDeferredInitPhase2(ctx, cfg, cwd, send)
+
+	// --- Phase 3: Sequential finalization ---
+	send("agent", false)
+
+	// Store cleanup resources.
+	res.lspMgr = ps.lspMgr
+
+	// Build orchestrator (needs git results).
+	orch := subagent.NewOrchestrator(&cfg, ps.repoRoot, ps.agentConfigs)
+	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
+	res.orch = orch
+
+	// Build agent event channel and tools.
+	agentEventCh := make(chan tui.AgentSubEvent, 128)
+	agentEventCB := func(agentID, eventType, content string) {
+		select {
+		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
+		default:
+		}
+	}
+	agentTools, _ := tools.AgentTools(orch, agentEventCB)
+	coreTools = append(coreTools, agentTools...)
+
+	// Stream live shell output to the same channel the subagent cards use. The
+	// prefix keeps the two streams apart; the non-blocking send in agentEventCB
+	// is what keeps a slow UI from stalling a running command.
+	bashSup.SetSink(func(execID, kind, content string) {
+		agentEventCB(execID, tui.BashEventKind(kind), content)
+	})
+
+	// Append LSP tools.
+	if ps.lspTools != nil {
+		coreTools = append(coreTools, ps.lspTools...)
+	}
+
+	coreTools, memStore, memRecorder := appendDeferredMemoryTools(cfg, cwd, coreTools)
+
+	// Build system instruction. The parts are kept so the context gauge can
+	// attribute overhead to each section; composing them here is what keeps the
+	// breakdown honest — instruction is literally parts.String().
+	instructionParts := buildDeferredInstructionParts()
+	instruction := instructionParts.String()
+
+	cbs := buildDeferredCallbacks(cfg, providerName, sandbox, ps.lspMgr, memRecorder)
+
+	// Session service.
+	sessionsPath, sessionSvc, err := openSessionService()
+	if err != nil {
+		fail(err)
+		return
+	}
+
+	mcpToolsets := ps.mcpToolsets
+	// Gemini search grounding (see agent.GeminiGroundingTool doc).
+	//
+	// APPEND — never replace. Assigning coreTools = []adktool.Tool{gTool} here
+	// leaves the agent with *no* tools at all: bash, read, write, edit, grep,
+	// ls, subagent, LSP and memory all vanish, and the model, given no function
+	// declarations, invents names like "execute_command" and gets back
+	// "tool not found. Available tools: " with an empty list.
+	//
+	// The built-in search coexists with function declarations: geminitool's
+	// ProcessRequest appends to req.Config.Tools rather than overwriting it, and
+	// a single Gemini turn will happily call `read` and `google_search` both.
+	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
+		coreTools = append(coreTools, gTool)
+	}
+
+	// Session logger. Created before the agent so it can capture the agent's
+	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
+	// session log instead of leaking them to stderr and corrupting the TUI.
+	// SessionStart is deferred until the session ID is resolved below.
+	sessionLog, logErr := logger.New()
+	if logErr == nil {
+		res.sessionLog = sessionLog
+		// --trace-http entries are dropped until the log file exists; the
+		// transport is built before this point. See the matching note in
+		// cli.go. Detached on shutdown where sessionLog is closed.
+		httplog.SetSink(logger.HTTPSink(sessionLog))
+	}
+
+	// Create agent.
+	ag, err := agent.New(agent.Config{
+		Model:                llm,
+		Tools:                coreTools,
+		Toolsets:             mcpToolsets,
+		Instruction:          instruction,
+		SessionService:       sessionSvc,
+		BeforeToolCallbacks:  cbs.beforeTool,
+		AfterToolCallbacks:   cbs.afterTool,
+		BeforeModelCallbacks: cbs.beforeModel,
+		AfterModelCallbacks:  cbs.afterModel,
+		Logger:               sessionLog,
+	})
+	if err != nil {
+		fail(fmt.Errorf("creating agent: %w", err))
+		return
+	}
+
+	sessionID, defaultTitle, resumed, err := resolveDeferredSession(ctx, ag, sessionSvc, llm, providerName, baseURL)
+	if err != nil {
+		fail(err)
+		return
+	}
+
+	// Store session ID for resume hint on exit.
+	res.sessionID = sessionID
+
+	// Two-stage auto-compaction, installed as a pre-turn hook so history is
+	// only ever rewritten between turns. Buffered so a compaction notice never
+	// blocks the turn if the TUI is momentarily busy.
+	noticeCh := make(chan string, 8)
+	if hook := buildAutoCompactHook(autoCompactDeps{
+		SessionSvc:    sessionSvc,
+		Tracker:       tokenTracker,
+		Deduper:       cbs.deduper,
+		Cfg:           autoCompactConfigFrom(cfg),
+		Log:           sessionLog,
+		SummarizerLLM: llm,
+		Notify: func(msg string) {
+			select {
+			case noticeCh <- msg:
+			default:
+			}
+		},
+	}); hook != nil {
+		ag.SetPreTurnHook(hook)
+	}
+
+	// Capture ACP subagent events (claude, gemini) under the session dir.
+	res.orch.SetACPLogPath(filepath.Join(sessionsPath, sessionID, "acp.jsonl"))
+
+	// Session logger was created above; record the session start now that the
+	// session ID is known.
+	if logErr == nil {
+		sessionLog.SessionStart(sessionID, llm.Name(), "interactive")
+	}
+
+	// Commit message function.
+	commitMsgFn := buildCommitMsgFunc(ctx, cfg)
+
+	send("agent", true)
+
+	// Send final result.
+	ch <- tui.InitEvent{
+		Done: true,
+		Result: &tui.InitResult{
+			Agent:             ag,
+			SessionID:         sessionID,
+			SessionTitle:      defaultTitle,
+			Resumed:           resumed,
+			SessionService:    sessionSvc,
+			Orchestrator:      orch,
+			Logger:            sessionLog,
+			Skills:            ps.skills,
+			SkillDirs:         ps.skillDirs,
+			GenerateCommitMsg: commitMsgFn,
+			AgentEventCh:      agentEventCh,
+			SystemNoticeCh:    noticeCh,
+			ContextBreakdown: buildContextBreakdown(
+				instructionParts, coreTools, mcpToolsets, ps.skills, ps.agentConfigs),
+			TokenTracker:   tokenTracker,
+			CompactMetrics: cbs.compactMetrics,
+			GitBranch:      ps.gitBranch,
+			DiffAdded:      ps.diffAdded,
+			DiffRemoved:    ps.diffRemoved,
+			MCPToolsets:    ps.mcpToolsets,
+			MCPServers:     buildMCPServerConfigs(cfg),
+		},
+	}
+
+	if memStore != nil {
+		initMemoryAfterUI(ctx, cfg, cwd, sessionID, orch, memStore, memRecorder, res)
+	}
+}
+
+// deferredInitCoreTools builds the sandbox, the bash supervisor and the core
+// tool set. Both the sandbox and the supervisor are recorded on res as soon as
+// they exist, so a later failure here still leaves them for cleanup to close.
+func deferredInitCoreTools(sandboxRoot, worktreeDir string, res *initResources) ([]adktool.Tool, error) {
 	sandbox, err := tools.NewSandbox(sandboxRoot, worktreeDir)
 	if err != nil {
-		fail(fmt.Errorf("creating sandbox: %w", err))
-		return
+		return nil, fmt.Errorf("creating sandbox: %w", err)
 	}
 	res.sandbox = sandbox
 
@@ -171,41 +362,43 @@ func deferredInit(
 
 	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
 	if err != nil {
-		fail(fmt.Errorf("creating core tools: %w", err))
-		return
+		return nil, fmt.Errorf("creating core tools: %w", err)
 	}
 	bashCtlTools, err := tools.BashControlTools(bashSup)
 	if err != nil {
-		fail(fmt.Errorf("creating bash control tools: %w", err))
-		return
+		return nil, fmt.Errorf("creating bash control tools: %w", err)
 	}
-	coreTools = append(coreTools, bashCtlTools...)
+	return append(coreTools, bashCtlTools...), nil
+}
 
-	send("tools", true)
+// deferredParallelState collects what the phase-2 goroutines discover. Fields
+// written by more than one goroutine are guarded by mu.
+type deferredParallelState struct {
+	mu sync.Mutex
 
-	// --- Phase 2: Parallel subsystems ---
-	type parallelState struct {
-		mu sync.Mutex
+	// Git + subagents
+	repoRoot     string
+	agentConfigs []subagent.AgentConfig
+	gitBranch    string
+	diffAdded    int
+	diffRemoved  int
 
-		// Git + subagents
-		repoRoot     string
-		agentConfigs []subagent.AgentConfig
-		gitBranch    string
-		diffAdded    int
-		diffRemoved  int
+	// LSP
+	lspMgr   *lsp.Manager
+	lspTools []adktool.Tool
 
-		// LSP
-		lspMgr   *lsp.Manager
-		lspTools []adktool.Tool
+	// MCP
+	mcpToolsets []adktool.Toolset
 
-		// MCP
-		mcpToolsets []adktool.Toolset
+	// Skills
+	skills    []extension.Skill
+	skillDirs []string
+}
 
-		// Skills
-		skills    []extension.Skill
-		skillDirs []string
-	}
-	var ps parallelState
+// runDeferredInitPhase2 discovers git state, LSP servers, MCP toolsets and
+// skills concurrently and returns once all four are done.
+func runDeferredInitPhase2(ctx context.Context, cfg config.Config, cwd string, send func(item string, done bool)) *deferredParallelState {
+	var ps deferredParallelState
 	var wg sync.WaitGroup
 
 	// Git + subagent discovery
@@ -273,67 +466,53 @@ func deferredInit(
 	}()
 
 	wg.Wait()
+	return &ps
+}
 
-	// --- Phase 3: Sequential finalization ---
-	send("agent", false)
-
-	// Store cleanup resources.
-	res.lspMgr = ps.lspMgr
-
-	// Build orchestrator (needs git results).
-	orch := subagent.NewOrchestrator(&cfg, ps.repoRoot, ps.agentConfigs)
-	orch.SetProviderOptions(flagURL, flagInsecure, flagHeaders)
-	res.orch = orch
-
-	// Build agent event channel and tools.
-	agentEventCh := make(chan tui.AgentSubEvent, 128)
-	agentEventCB := func(agentID, eventType, content string) {
-		select {
-		case agentEventCh <- tui.AgentSubEvent{AgentID: agentID, Kind: eventType, Content: content}:
-		default:
-		}
+// appendDeferredMemoryTools adds the memory tools when memory is enabled and
+// returns the lazy store and observation recorder they run against. Both are
+// nil when memory is off, which is what gates the post-UI memory init.
+func appendDeferredMemoryTools(cfg config.Config, cwd string, coreTools []adktool.Tool) ([]adktool.Tool, *lazyMemoryStore, *deferredMemoryRecorder) {
+	if !deferredMemoryEnabled(cfg) {
+		return coreTools, nil, nil
 	}
-	agentTools, _ := tools.AgentTools(orch, agentEventCB)
-	coreTools = append(coreTools, agentTools...)
-
-	// Stream live shell output to the same channel the subagent cards use. The
-	// prefix keeps the two streams apart; the non-blocking send in agentEventCB
-	// is what keeps a slow UI from stalling a running command.
-	bashSup.SetSink(func(execID, kind, content string) {
-		agentEventCB(execID, tui.BashEventKind(kind), content)
-	})
-
-	// Append LSP tools.
-	if ps.lspTools != nil {
-		coreTools = append(coreTools, ps.lspTools...)
+	memStore := newLazyMemoryStore()
+	if memTools, memErr := tools.MemoryTools(memStore); memErr == nil {
+		coreTools = append(coreTools, memTools...)
 	}
+	return coreTools, memStore, newDeferredMemoryRecorder(cfg, cwd)
+}
 
-	memEnabled := deferredMemoryEnabled(cfg)
-	var memStore *lazyMemoryStore
-	var memRecorder *deferredMemoryRecorder
-	if memEnabled {
-		memStore = newLazyMemoryStore()
-		if memTools, memErr := tools.MemoryTools(memStore); memErr == nil {
-			coreTools = append(coreTools, memTools...)
-		}
-		memRecorder = newDeferredMemoryRecorder(cfg, cwd)
-	}
-
-	// Build system instruction. The parts are kept so the context gauge can
-	// attribute overhead to each section; composing them here is what keeps the
-	// breakdown honest — instruction is literally parts.String().
-	var (
-		instruction      string
-		instructionParts agent.InstructionParts
-	)
+// buildDeferredInstructionParts returns the system instruction as its parts:
+// --system replaces the base outright, otherwise the built-in set is loaded.
+func buildDeferredInstructionParts() agent.InstructionParts {
 	if flagSystem != "" {
-		instructionParts = agent.InstructionParts{Base: flagSystem}
-	} else {
-		instructionParts = agent.LoadInstructionParts(agent.SystemInstruction)
+		return agent.InstructionParts{Base: flagSystem}
 	}
-	instruction = instructionParts.String()
+	return agent.LoadInstructionParts(agent.SystemInstruction)
+}
 
-	// Build callbacks.
+// deferredCallbacks is the callback wiring for the interactive agent, plus the
+// two objects the caller still needs a handle on: the deduper the auto-compact
+// hook shares, and the metrics the context gauge reads.
+type deferredCallbacks struct {
+	beforeTool     []llmagent.BeforeToolCallback
+	afterTool      []llmagent.AfterToolCallback
+	beforeModel    []llmagent.BeforeModelCallback
+	afterModel     []llmagent.AfterModelCallback
+	deduper        *tools.ResultDeduper
+	compactMetrics *tools.CompactMetrics
+}
+
+// buildDeferredCallbacks assembles the tool and model callback chains in the
+// order they must run.
+func buildDeferredCallbacks(
+	cfg config.Config,
+	providerName string,
+	sandbox *tools.Sandbox,
+	lspMgr *lsp.Manager,
+	memRecorder *deferredMemoryRecorder,
+) deferredCallbacks {
 	compactorCfg := compactorConfigFrom(cfg)
 	compactMetrics := tools.NewCompactMetrics()
 	compactorCB := tools.BuildCompactorCallback(compactorCfg, compactMetrics)
@@ -347,8 +526,8 @@ func deferredInit(
 	tracingBefore, tracingAfter := extension.BuildTracingCallbacks()
 	beforeCBs = append(beforeCBs, tracingBefore...)
 	afterCBs = append(afterCBs, tracingAfter...)
-	if ps.lspMgr != nil {
-		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(ps.lspMgr))
+	if lspMgr != nil {
+		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 	}
 	// Dedup runs after the compactor so both calls are compared in their final,
 	// post-compaction form.
@@ -364,74 +543,33 @@ func deferredInit(
 		afterCBs = append(afterCBs, memRecorder.afterTool)
 	}
 
-	// Session service.
-	sessionsPath, err := sessionsDir()
-	if err != nil {
-		fail(err)
-		return
+	return deferredCallbacks{
+		beforeTool:     beforeCBs,
+		afterTool:      afterCBs,
+		beforeModel:    llmBefore,
+		afterModel:     llmAfter,
+		deduper:        resultDeduper,
+		compactMetrics: compactMetrics,
 	}
-	sessionSvc, err := pisession.NewFileService(sessionsPath)
-	if err != nil {
-		fail(fmt.Errorf("creating session service: %w", err))
-		return
-	}
+}
 
-	mcpToolsets := ps.mcpToolsets
-	// Gemini search grounding (see agent.GeminiGroundingTool doc).
-	//
-	// APPEND — never replace. Assigning coreTools = []adktool.Tool{gTool} here
-	// leaves the agent with *no* tools at all: bash, read, write, edit, grep,
-	// ls, subagent, LSP and memory all vanish, and the model, given no function
-	// declarations, invents names like "execute_command" and gets back
-	// "tool not found. Available tools: " with an empty list.
-	//
-	// The built-in search coexists with function declarations: geminitool's
-	// ProcessRequest appends to req.Config.Tools rather than overwriting it, and
-	// a single Gemini turn will happily call `read` and `google_search` both.
-	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
-		coreTools = append(coreTools, gTool)
-	}
-
-	// Session logger. Created before the agent so it can capture the agent's
-	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
-	// session log instead of leaking them to stderr and corrupting the TUI.
-	// SessionStart is deferred until the session ID is resolved below.
-	sessionLog, logErr := logger.New()
-	if logErr == nil {
-		res.sessionLog = sessionLog
-		// --trace-http entries are dropped until the log file exists; the
-		// transport is built before this point. See the matching note in
-		// cli.go. Detached on shutdown where sessionLog is closed.
-		httplog.SetSink(logger.HTTPSink(sessionLog))
-	}
-
-	// Create agent.
-	ag, err := agent.New(agent.Config{
-		Model:                llm,
-		Tools:                coreTools,
-		Toolsets:             mcpToolsets,
-		Instruction:          instruction,
-		SessionService:       sessionSvc,
-		BeforeToolCallbacks:  beforeCBs,
-		AfterToolCallbacks:   afterCBs,
-		BeforeModelCallbacks: llmBefore,
-		AfterModelCallbacks:  llmAfter,
-		Logger:               sessionLog,
-	})
-	if err != nil {
-		fail(fmt.Errorf("creating agent: %w", err))
-		return
-	}
-
-	// Resolve session (--continue is resolved in fast path, flagSession is set).
-	sessionID := flagSession
-	resumed := sessionID != ""
-	var defaultTitle string
+// resolveDeferredSession returns the session to run in — the one named by
+// --continue/--session if there is one, otherwise a fresh one — and records the
+// model and backend it is running under.
+func resolveDeferredSession(
+	ctx context.Context,
+	ag *agent.Agent,
+	sessionSvc *pisession.FileService,
+	llm adkmodel.LLM,
+	providerName, baseURL string,
+) (sessionID, defaultTitle string, resumed bool, err error) {
+	// --continue is resolved in the fast path, which sets flagSession.
+	sessionID = flagSession
+	resumed = sessionID != ""
 	if sessionID == "" {
 		sessionID, defaultTitle, err = ag.CreateSession(ctx)
 		if err != nil {
-			fail(fmt.Errorf("creating session: %w", err))
-			return
+			return "", "", false, fmt.Errorf("creating session: %w", err)
 		}
 	}
 
@@ -447,75 +585,7 @@ func deferredInit(
 	// first thing anyone needs when reading a transcript back.
 	_ = sessionSvc.SetSessionProvider(sessionID, providerName, baseURL) // best-effort metadata
 
-	// Store session ID for resume hint on exit.
-	res.sessionID = sessionID
-
-	// Two-stage auto-compaction, installed as a pre-turn hook so history is
-	// only ever rewritten between turns. Buffered so a compaction notice never
-	// blocks the turn if the TUI is momentarily busy.
-	noticeCh := make(chan string, 8)
-	if hook := buildAutoCompactHook(autoCompactDeps{
-		SessionSvc:    sessionSvc,
-		Tracker:       tokenTracker,
-		Deduper:       resultDeduper,
-		Cfg:           autoCompactConfigFrom(cfg),
-		Log:           sessionLog,
-		SummarizerLLM: llm,
-		Notify: func(msg string) {
-			select {
-			case noticeCh <- msg:
-			default:
-			}
-		},
-	}); hook != nil {
-		ag.SetPreTurnHook(hook)
-	}
-
-	// Capture ACP subagent events (claude, gemini) under the session dir.
-	res.orch.SetACPLogPath(filepath.Join(sessionsPath, sessionID, "acp.jsonl"))
-
-	// Session logger was created above; record the session start now that the
-	// session ID is known.
-	if logErr == nil {
-		sessionLog.SessionStart(sessionID, llm.Name(), "interactive")
-	}
-
-	// Commit message function.
-	commitMsgFn := buildCommitMsgFunc(ctx, cfg)
-
-	send("agent", true)
-
-	// Send final result.
-	ch <- tui.InitEvent{
-		Done: true,
-		Result: &tui.InitResult{
-			Agent:             ag,
-			SessionID:         sessionID,
-			SessionTitle:      defaultTitle,
-			Resumed:           resumed,
-			SessionService:    sessionSvc,
-			Orchestrator:      orch,
-			Logger:            sessionLog,
-			Skills:            ps.skills,
-			SkillDirs:         ps.skillDirs,
-			GenerateCommitMsg: commitMsgFn,
-			AgentEventCh:      agentEventCh,
-			SystemNoticeCh:    noticeCh,
-			ContextBreakdown: buildContextBreakdown(
-				instructionParts, coreTools, mcpToolsets, ps.skills, ps.agentConfigs),
-			TokenTracker:   tokenTracker,
-			CompactMetrics: compactMetrics,
-			GitBranch:      ps.gitBranch,
-			DiffAdded:      ps.diffAdded,
-			DiffRemoved:    ps.diffRemoved,
-			MCPToolsets:    ps.mcpToolsets,
-			MCPServers:     buildMCPServerConfigs(cfg),
-		},
-	}
-
-	if memEnabled {
-		initMemoryAfterUI(ctx, cfg, cwd, sessionID, orch, memStore, memRecorder, res)
-	}
+	return sessionID, defaultTitle, resumed, nil
 }
 
 type lazyMemoryStore struct {

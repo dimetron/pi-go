@@ -141,25 +141,7 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 
 	// If no embedder, return FTS5 results only.
 	if ds.embedder == nil {
-		// Ensure FTS5 results have proper similarity scores.
-		maxRank := 1
-		for _, r := range ftsResults {
-			if r.Rank > maxRank {
-				maxRank = r.Rank
-			}
-		}
-		if maxRank == 0 {
-			maxRank = 1
-		}
-		for i := range ftsResults {
-			if ftsResults[i].Rank != 0 {
-				ftsResults[i].Similarity = float32(0.5 + (0.5 * float64(maxRank-ftsResults[i].Rank) / float64(maxRank)))
-			}
-		}
-		if len(ftsResults) > q.Limit {
-			ftsResults = ftsResults[:q.Limit]
-		}
-		return ftsResults, nil
+		return keywordOnlyResults(ftsResults, q.Limit), nil
 	}
 
 	// Semantic search.
@@ -178,8 +160,57 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 	}
 
 	ranked := RankBySimilarity(vecs[0], candidates, q.Limit*3)
+	semanticMap := ds.resolveRanked(ctx, ranked)
 
-	// Build a map of semantic results keyed by drawer ID.
+	return mergeSearchResults(ranked, semanticMap, ftsResults, q.Limit), nil
+}
+
+// maxFTSRank returns the largest FTS5 rank in results, floored at 1 so it is
+// always a safe divisor for the score normalization.
+func maxFTSRank(results []SearchResult) int {
+	maxRank := 1
+	for _, r := range results {
+		if r.Rank > maxRank {
+			maxRank = r.Rank
+		}
+	}
+	if maxRank == 0 {
+		maxRank = 1
+	}
+	return maxRank
+}
+
+// ftsRelevance converts an FTS5 rank to a relevance score (higher = better).
+// FTS5 rank is negative (more negative = more relevant), so we normalize:
+// 0.5 + (0.5 * normalizedRank), which keeps exact keyword matches high while
+// leaving room above them for true semantic similarity.
+func ftsRelevance(rank, maxRank int) float64 {
+	if maxRank <= 0 {
+		return 0.5
+	}
+	return 0.5 + (0.5 * float64(maxRank-rank) / float64(maxRank))
+}
+
+// keywordOnlyResults scores and trims FTS5 results for the no-embedder path,
+// where there is nothing to merge them with.
+func keywordOnlyResults(ftsResults []SearchResult, limit int) []SearchResult {
+	// Ensure FTS5 results have proper similarity scores.
+	maxRank := maxFTSRank(ftsResults)
+	for i := range ftsResults {
+		if ftsResults[i].Rank != 0 {
+			ftsResults[i].Similarity = float32(ftsRelevance(ftsResults[i].Rank, maxRank))
+		}
+	}
+	if len(ftsResults) > limit {
+		ftsResults = ftsResults[:limit]
+	}
+	return ftsResults
+}
+
+// resolveRanked loads the drawer behind each ranked embedding, keyed by drawer
+// ID. Rows whose drawer can no longer be loaded are dropped silently: a stale
+// embedding is not a reason to fail the whole search.
+func (ds *DrawerService) resolveRanked(ctx context.Context, ranked []ScoredResult) map[string]SearchResult {
 	semanticMap := make(map[string]SearchResult)
 	for _, sr := range ranked {
 		drawer, err := ds.store.GetDrawer(ctx, sr.DrawerID)
@@ -191,19 +222,20 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 			Similarity: sr.Similarity,
 		}
 	}
+	return semanticMap
+}
 
-	// Merge FTS5 results into semantic map.
-	// FTS5 results get a boosted score: 0.5 + (0.5 * normalizedRank)
-	// This ensures exact keyword matches rank high but semantic still matters.
-	maxRank := 1
-	for _, r := range ftsResults {
-		if r.Rank > maxRank {
-			maxRank = r.Rank
-		}
-	}
-	if maxRank == 0 {
-		maxRank = 1
-	}
+// mergeSearchResults merges FTS5 results into the semantic ranking. Semantic
+// results come first (they have true similarity scores); FTS5 results not
+// already present are appended with a normalized relevance score. The result
+// is trimmed to limit.
+func mergeSearchResults(
+	ranked []ScoredResult,
+	semanticMap map[string]SearchResult,
+	ftsResults []SearchResult,
+	limit int,
+) []SearchResult {
+	maxRank := maxFTSRank(ftsResults)
 
 	merged := make([]SearchResult, 0, len(semanticMap)+len(ftsResults))
 	seen := make(map[string]bool)
@@ -221,29 +253,20 @@ func (ds *DrawerService) Search(ctx context.Context, q SearchQuery) ([]SearchRes
 		if seen[fts.Drawer.ID] {
 			continue
 		}
-		// Convert FTS5 rank to a relevance score (higher = better).
-		// FTS5 rank is negative (more negative = more relevant), so we normalize.
-		var ftsScore float64
-		if maxRank > 0 {
-			// Normalize: most negative = highest score
-			ftsScore = 0.5 + (0.5 * float64(maxRank-fts.Rank) / float64(maxRank))
-		} else {
-			ftsScore = 0.5
-		}
 		merged = append(merged, SearchResult{
 			Drawer:     fts.Drawer,
-			Similarity: float32(ftsScore),
+			Similarity: float32(ftsRelevance(fts.Rank, maxRank)),
 			Rank:       fts.Rank,
 		})
 		seen[fts.Drawer.ID] = true
 	}
 
 	// Trim to requested limit.
-	if len(merged) > q.Limit {
-		merged = merged[:q.Limit]
+	if len(merged) > limit {
+		merged = merged[:limit]
 	}
 
-	return merged, nil
+	return merged
 }
 
 // DeleteDrawer removes a drawer by ID.

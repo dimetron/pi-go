@@ -111,7 +111,7 @@ func palaceKGExtractHandler(_ context.Context, _ *Palace, input KGExtractToolInp
 // appropriate confidence based on whether the chunk has a source file.
 // Stdlib paths are filtered out: they are noise in a project knowledge
 // graph.
-func emitImport(text, path, sourceFile string, add func(subj, pred, obj, reason string, conf float64)) {
+func emitImport(text, path, sourceFile string, add tripleAdder) {
 	if path == "" || isStdlibImport(path) {
 		return
 	}
@@ -166,6 +166,59 @@ var (
 	filePathRe = regexp.MustCompile(`(?:^|[\s"'(\[])([a-zA-Z0-9_./-]+/[a-zA-Z0-9_.-]+\.[a-z]{1,8})(?:\b|["')])`)
 )
 
+// declHeuristics are the declaration patterns that yield a "defined_in"
+// triple, in the order they are applied. Order is significant: the sink
+// dedupes by (subject, predicate, object), so the first pattern to match an
+// identifier is the one whose reason is recorded.
+var declHeuristics = []struct {
+	re *regexp.Regexp
+	// reason is the note attached to triples this pattern produces.
+	reason string
+	// skipCommonWords drops English noise words that look like identifiers.
+	// Only the generic (Python/JS) pattern needs it: its identifiers are not
+	// required to start with a capital, so `const result = ...` matches.
+	skipCommonWords bool
+}{
+	{goFuncDeclRe, "Go func declaration in source file", false},
+	{goTypeDeclRe, "Go type declaration in source file", false},
+	{genericDeclRe, "declaration in source file", true},
+}
+
+// tripleAdder records one candidate triple. Implemented by tripleSink.add.
+type tripleAdder func(subj, pred, obj, reason string, conf float64)
+
+// tripleSink accumulates candidate triples, dropping blanks, self-referential
+// pairs (subject equal to object), and case-insensitive duplicates.
+type tripleSink struct {
+	out  []ExtractedTriple
+	seen map[string]bool // dedupe by (subj|pred|obj)
+}
+
+func newTripleSink() *tripleSink {
+	return &tripleSink{seen: make(map[string]bool)}
+}
+
+func (ts *tripleSink) add(subj, pred, obj, reason string, conf float64) {
+	s := strings.TrimSpace(subj)
+	p := strings.TrimSpace(pred)
+	o := strings.TrimSpace(obj)
+	if s == "" || p == "" || o == "" || strings.EqualFold(s, o) {
+		return
+	}
+	key := strings.ToLower(s) + "|" + strings.ToLower(p) + "|" + strings.ToLower(o)
+	if ts.seen[key] {
+		return
+	}
+	ts.seen[key] = true
+	ts.out = append(ts.out, ExtractedTriple{
+		Subject:    s,
+		Predicate:  normalizePredicate(p),
+		Object:     o,
+		Confidence: conf,
+		Reason:     reason,
+	})
+}
+
 // extractTriples runs the heuristic pass over text and returns candidate
 // triples. The result is unsorted; the caller sorts and truncates.
 //
@@ -176,42 +229,26 @@ var (
 //	0.50 — heuristic pair from free-form identifiers
 //	0.30 — bare identifier pair with no anchor
 func extractTriples(text, sourceFile string) []ExtractedTriple {
-	var out []ExtractedTriple
-	seen := make(map[string]bool) // dedupe by (subj|pred|obj)
+	sink := newTripleSink()
+	extractImportTriples(text, sourceFile, sink.add)
+	extractDeclarationTriples(text, sourceFile, sink.add)
+	extractPathTriples(text, sourceFile, sink.add)
+	return sink.out
+}
 
-	add := func(subj, pred, obj, reason string, conf float64) {
-		s := strings.TrimSpace(subj)
-		p := strings.TrimSpace(pred)
-		o := strings.TrimSpace(obj)
-		if s == "" || p == "" || o == "" || strings.EqualFold(s, o) {
-			return
-		}
-		key := strings.ToLower(s) + "|" + strings.ToLower(p) + "|" + strings.ToLower(o)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, ExtractedTriple{
-			Subject:    s,
-			Predicate:  normalizePredicate(p),
-			Object:     o,
-			Confidence: conf,
-			Reason:     reason,
-		})
-	}
-
-	// Code-level extraction: imports.
-	//
-	// Two passes. The first catches imports written on a single line —
-	// `import "path"`, `from "path"`, `require("path")`, with the keyword
-	// and the literal on the same line. The second catches Go's
-	// parenthesized form: `import ( ... "path" ... )` where the keyword
-	// is on one line and the literal is on a later line. The single-line
-	// regex cannot match that form because the quote is not on the same
-	// line as the `import` keyword, and tightening the alternation to
-	// allow a `( )` block just shifts the problem: the `import (` would
-	// then have to be followed by a quote on the same line, which it
-	// never is.
+// extractImportTriples emits an "imports" triple for each import path in text.
+//
+// Two passes. The first catches imports written on a single line —
+// `import "path"`, `from "path"`, `require("path")`, with the keyword
+// and the literal on the same line. The second catches Go's
+// parenthesized form: `import ( ... "path" ... )` where the keyword
+// is on one line and the literal is on a later line. The single-line
+// regex cannot match that form because the quote is not on the same
+// line as the `import` keyword, and tightening the alternation to
+// allow a `( )` block just shifts the problem: the `import (` would
+// then have to be followed by a quote on the same line, which it
+// never is.
+func extractImportTriples(text, sourceFile string, add tripleAdder) {
 	seenInImport := make(map[string]bool)
 	for _, m := range importPathRe.FindAllStringSubmatch(text, -1) {
 		seenInImport[m[1]] = true
@@ -223,16 +260,7 @@ func extractTriples(text, sourceFile string) []ExtractedTriple {
 	// paren is found by line — Go does not allow nested parens in an
 	// import block, so the first `)` at column 0 is reliable.
 	for _, openIdx := range importBlockOpenRe.FindAllStringIndex(text, -1) {
-		blockStart := openIdx[1] // just after the `(`
-		rest := text[blockStart:]
-		closeRel := strings.Index(rest, "\n)")
-		var blockEnd int
-		if closeRel < 0 {
-			blockEnd = len(rest)
-		} else {
-			blockEnd = closeRel
-		}
-		block := text[blockStart : blockStart+blockEnd]
+		block := importBlockBody(text, openIdx[1]) // openIdx[1] is just after the `(`
 		for _, m := range quotedStringRe.FindAllStringSubmatch(block, -1) {
 			if seenInImport[m[1]] {
 				continue
@@ -241,56 +269,55 @@ func extractTriples(text, sourceFile string) []ExtractedTriple {
 			emitImport(text, m[1], sourceFile, add)
 		}
 	}
+}
 
-	// Code-level extraction: Go function declarations.
-	for _, m := range goFuncDeclRe.FindAllStringSubmatch(text, -1) {
-		name := m[1]
-		if name == "" {
-			continue
-		}
-		if sourceFile != "" {
-			add(name, "defined_in", sourceFile, "Go func declaration in source file", 0.95)
-		}
+// importBlockBody returns the text of a parenthesized import block starting at
+// blockStart, up to the first `)` at column 0. An unterminated block runs to
+// the end of the chunk rather than being dropped: chunked input routinely cuts
+// a file mid-block, and the paths before the cut are still real imports.
+func importBlockBody(text string, blockStart int) string {
+	rest := text[blockStart:]
+	closeRel := strings.Index(rest, "\n)")
+	if closeRel < 0 {
+		return rest
 	}
+	return rest[:closeRel]
+}
 
-	// Code-level extraction: Go type declarations.
-	for _, m := range goTypeDeclRe.FindAllStringSubmatch(text, -1) {
-		name := m[1]
-		if name == "" {
-			continue
-		}
-		if sourceFile != "" {
-			add(name, "defined_in", sourceFile, "Go type declaration in source file", 0.95)
-		}
+// extractDeclarationTriples emits a "defined_in" triple for each declaration
+// in text. Nothing is emitted without a source file: a declaration with no
+// file to anchor it to has no object to point at.
+func extractDeclarationTriples(text, sourceFile string, add tripleAdder) {
+	if sourceFile == "" {
+		return
 	}
-
-	// Code-level extraction: generic declarations (Python, JS, etc).
-	for _, m := range genericDeclRe.FindAllStringSubmatch(text, -1) {
-		name := m[1]
-		if name == "" || isCommonWord(name) {
-			continue
-		}
-		if sourceFile != "" {
-			add(name, "defined_in", sourceFile, "declaration in source file", 0.95)
-		}
-	}
-
-	// Path-aware: every path mentioned alongside a source file gets a
-	// "part_of" candidate if it shares a directory.
-	if sourceFile != "" {
-		srcDir := pathDir(sourceFile)
-		for _, m := range filePathRe.FindAllStringSubmatch(text, -1) {
-			p := m[1]
-			if p == "" || p == sourceFile {
+	for _, h := range declHeuristics {
+		for _, m := range h.re.FindAllStringSubmatch(text, -1) {
+			name := m[1]
+			if name == "" || (h.skipCommonWords && isCommonWord(name)) {
 				continue
 			}
-			if pathDir(p) == srcDir {
-				add(p, "part_of", fileBase(sourceFile), "shares directory with source file", 0.70)
-			}
+			add(name, "defined_in", sourceFile, h.reason, 0.95)
 		}
 	}
+}
 
-	return out
+// extractPathTriples emits a "part_of" triple for every path mentioned
+// alongside the source file that shares its directory.
+func extractPathTriples(text, sourceFile string, add tripleAdder) {
+	if sourceFile == "" {
+		return
+	}
+	srcDir := pathDir(sourceFile)
+	for _, m := range filePathRe.FindAllStringSubmatch(text, -1) {
+		p := m[1]
+		if p == "" || p == sourceFile {
+			continue
+		}
+		if pathDir(p) == srcDir {
+			add(p, "part_of", fileBase(sourceFile), "shares directory with source file", 0.70)
+		}
+	}
 }
 
 // formatExtractedTriples renders the candidates as a markdown block the agent

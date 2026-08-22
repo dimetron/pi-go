@@ -302,85 +302,22 @@ func isLineEndKey(key tea.Key) bool {
 // slashCommands is the list of available slash commands for autocomplete.
 // Skill subcommands (/skill-list, /skill-load, /skill-create) are handled
 // as args to /skills and omitted from the top-level list to keep it concise.
-var slashCommands = []string{
-	"/help",
-	"/clear",
-	"/copy",
-	"/model",
-	"/session",
-	"/context",
-	"/branch",
-	"/compact",
-	"/subagents",
-	"/history",
-	"/login",
-	"/commit",
-	"/plan",
-	"/run",
-	"/skills",
-	"/theme",
-	"/ping",
-	"/rtk",
-	"/mcp",
-	"/restart",
-	"/exit",
-	"/quit",
-}
+// It is derived from slashCommandSpecs (commands.go), which is the single
+// source of truth for name, description and handler.
+var slashCommands = func() []string {
+	names := make([]string, 0, len(slashCommandSpecs))
+	for _, spec := range slashCommandSpecs {
+		if spec.hidden {
+			continue
+		}
+		names = append(names, spec.name)
+	}
+	return names
+}()
 
 // slashCommandDesc returns the description for a slash command.
 func slashCommandDesc(cmd string) string {
-	switch cmd {
-	case "/help":
-		return "Show help"
-	case "/clear":
-		return "Clear conversation"
-	case "/copy":
-		return "Copy conversation to clipboard"
-	case "/model":
-		return "Show or switch model"
-	case "/session":
-		return "Show session info"
-	case "/context":
-		return "Show context usage"
-	case "/branch":
-		return "Manage branches"
-	case "/compact":
-		return "Compact context"
-	case "/subagents":
-		return "Show subagents"
-	case "/rtk":
-		return "Output compaction stats"
-	case "/mcp":
-		return "List MCP servers and tool status"
-	case "/history":
-		return "Command history"
-	case "/login":
-		return "Configure API keys (codex, openai, anthropic, gemini)"
-	case "/commit":
-		return "Create commit from staged changes"
-	case "/plan":
-		return "Start PDD planning session"
-	case "/run":
-		return "Execute a spec with task agent (verifies subagent exit status before merging)"
-	case "/theme":
-		return "Switch theme or list themes"
-	case "/skills":
-		return "List skills (create, load)"
-	case "/skill-list":
-		return "List all loaded skills"
-	case "/skill-load":
-		return "Reload skills from disk"
-	case "/skill-create":
-		return "Create a new skill"
-	case "/ping":
-		return "Test LLM connectivity"
-	case "/restart":
-		return "Restart pi process"
-	case "/exit", "/quit":
-		return "Exit"
-	default:
-		return ""
-	}
+	return slashCommandByName[cmd].desc
 }
 
 // completeSlashCommand returns the best matching slash command for the current input.
