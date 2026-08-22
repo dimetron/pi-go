@@ -15,6 +15,10 @@ func newLedgerToolPair(t *testing.T, dir string) (readTool, writeTool any) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The sandbox holds an os.Root on dir. Leaving it open makes t.TempDir's
+	// own cleanup fail on Windows, which refuses to remove a directory that
+	// something still has a handle to.
+	t.Cleanup(func() { _ = sb.Close() })
 	ledger := NewReadLedger()
 	rt, err := newReadTool(sb, ledger)
 	if err != nil {

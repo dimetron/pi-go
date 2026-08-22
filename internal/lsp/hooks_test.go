@@ -133,7 +133,10 @@ func TestCollectDiagnostics_FiltersToErrorsAndWarnings(t *testing.T) {
 	}
 
 	// Pre-populate diagnostics cache.
-	testURI := pathToURI("/tmp/test.go")
+	// fileURI, not pathToURI: the code under test keys its cache by fileURI,
+	// which makes the path absolute first. On Windows "/tmp/x.go" is
+	// drive-relative, so the two spellings would not match.
+	testURI := fileURI("/tmp/test.go")
 	mgr.diagnostics[testURI] = []Diagnostic{
 		{Range: Range{Start: Position{Line: 5, Character: 0}}, Severity: SeverityError, Message: "undefined: foo"},
 		{Range: Range{Start: Position{Line: 10, Character: 3}}, Severity: SeverityWarning, Message: "unused variable"},
@@ -446,7 +449,7 @@ func TestCollectDiagnosticsImmediate_OnlyErrors(t *testing.T) {
 		available:   make(map[string]bool),
 	}
 
-	testURI := pathToURI("/tmp/errors_only.go")
+	testURI := fileURI("/tmp/errors_only.go")
 	mgr.diagnostics[testURI] = []Diagnostic{
 		{Range: Range{Start: Position{Line: 0, Character: 0}}, Severity: SeverityError, Message: "syntax error"},
 	}
@@ -469,7 +472,7 @@ func TestCollectDiagnosticsImmediate_AllHintsFiltered(t *testing.T) {
 		available:   make(map[string]bool),
 	}
 
-	testURI := pathToURI("/tmp/hints_only.go")
+	testURI := fileURI("/tmp/hints_only.go")
 	mgr.diagnostics[testURI] = []Diagnostic{
 		{Range: Range{Start: Position{Line: 0, Character: 0}}, Severity: SeverityHint, Message: "consider using X"},
 		{Range: Range{Start: Position{Line: 1, Character: 0}}, Severity: SeverityInformation, Message: "info about Y"},
@@ -489,7 +492,7 @@ func TestCollectDiagnosticsImmediate_DiagnosticLineFormat(t *testing.T) {
 		available:   make(map[string]bool),
 	}
 
-	testURI := pathToURI("/tmp/format_test.go")
+	testURI := fileURI("/tmp/format_test.go")
 	mgr.diagnostics[testURI] = []Diagnostic{
 		{
 			Range:    Range{Start: Position{Line: 4, Character: 7}},
@@ -710,7 +713,7 @@ func TestBuildLSPAfterToolCallback_FullEditPath(t *testing.T) {
 	srv.opened[uri] = 1
 	srv.mu.Unlock()
 
-	testURI := pathToURI(tmpFile)
+	testURI := fileURI(tmpFile)
 	serverKey := "fakego:" + tmpDir
 	mgr := &Manager{
 		languages: map[string]*LanguageConfig{
@@ -783,7 +786,7 @@ func TestBuildLSPAfterToolCallback_EditTool_WithCachedServer(t *testing.T) {
 	serverKey := "fakego2:" + tmpDir
 
 	// Pre-populate diagnostics for the file.
-	testURI := pathToURI(tmpFile)
+	testURI := fileURI(tmpFile)
 	mgr := &Manager{
 		languages: map[string]*LanguageConfig{
 			"fakego2": {
@@ -825,7 +828,7 @@ func TestCollectDiagnostics_WaitForDiagnostics(t *testing.T) {
 	}
 
 	// Pre-populate diagnostics cache
-	testURI := pathToURI("/tmp/test.go")
+	testURI := fileURI("/tmp/test.go")
 	mgr.diagnostics[testURI] = []Diagnostic{
 		{Range: Range{Start: Position{Line: 5, Character: 0}}, Severity: SeverityError, Message: "error message"},
 	}

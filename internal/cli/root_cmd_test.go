@@ -11,12 +11,13 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestLoadRootConfig_ModelOverride(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	flagModel = "gpt-5.4-mini"
 	cfg, err := loadRootConfig()
@@ -31,7 +32,7 @@ func TestLoadRootConfig_ModelOverride(t *testing.T) {
 func TestLoadRootConfig_NoOverride(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	flagModel = ""
 	cfg, err := loadRootConfig()
@@ -45,7 +46,7 @@ func TestLoadRootConfig_NoOverride(t *testing.T) {
 func TestBuildRootRuntime_InvalidModel(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	// Set all known provider keys so we cover the key lookup.
 	t.Setenv("OPENAI_API_KEY", "key")
 	t.Setenv("ANTHROPIC_API_KEY", "key")
@@ -64,7 +65,7 @@ func TestBuildRootRuntime_InvalidModel(t *testing.T) {
 func TestBuildRootRuntime_ContinueNoSession(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	flagContinue = true
@@ -83,7 +84,7 @@ func TestBuildRootRuntime_ContinueNoSession(t *testing.T) {
 func TestBuildRootRuntime_HappyPath(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "key-ok")
 
 	flagModel = "gpt-5.4"
@@ -107,7 +108,7 @@ func TestBuildRootRuntime_HappyPath(t *testing.T) {
 func TestInitNonInteractiveRuntime_Basic(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	testenv.SetHome(t, tmpHome)
 
 	cfg := &config.Config{}
 	cwd := tmpHome
@@ -139,7 +140,7 @@ func TestInitNonInteractiveRuntime_CloseNil(t *testing.T) {
 func TestRunRoot_WithPprofFlag(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	// Use a weird port to avoid listen conflicts; even if it fails, we want
@@ -156,7 +157,7 @@ func TestRunRoot_WithPprofFlag(t *testing.T) {
 func TestRunRoot_WithPprofTrace(t *testing.T) {
 	resetGlobalFlags(t)
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("OPENAI_API_KEY", "k")
 
 	flagPprof = "trace"
@@ -180,7 +181,7 @@ func TestGitHelpersSkippableWithoutGit(t *testing.T) {
 
 func TestPalaceConfigFromCLI_Defaults(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 
 	cfg := palaceConfigFromCLI(&config.Config{})
 	if cfg.DBPath == "" {
@@ -208,7 +209,7 @@ func TestRunRoot_InvalidDotEnv(t *testing.T) {
 	// Write invalid .env (should not crash loadDotEnv).
 	os.WriteFile(filepath.Join(piDir, ".env"), []byte("invalid yaml: ["), 0644)
 
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
 	cmd := newRootCmd()
@@ -220,7 +221,7 @@ func TestRunRoot_InvalidDotEnv(t *testing.T) {
 
 func TestRunRoot_NoAPIKeyWithOllamaModel(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{"roles":{"default":{"model":"llama3:8b","provider":"ollama"}}}`), 0644)

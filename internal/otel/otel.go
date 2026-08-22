@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -296,15 +297,18 @@ func normalizeEndpointURL(endpoint, protocol string) string {
 // absolute it is used as-is; otherwise it is resolved as a filename within
 // ~/.pi-go/ (e.g. ".env" → ~/.pi-go/.env).
 func loadEnvFromDotEnv(dotEnvPath, key string) string {
+	// filepath.IsAbs, not a leading-slash check: a Windows absolute path starts
+	// with a drive letter, and treating it as relative resolved it under
+	// ~/.pi-go/ and silently read nothing.
 	var path string
-	if strings.HasPrefix(dotEnvPath, "/") {
+	if filepath.IsAbs(dotEnvPath) {
 		path = dotEnvPath
 	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return ""
 		}
-		path = home + "/.pi-go/" + dotEnvPath
+		path = filepath.Join(home, ".pi-go", dotEnvPath)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

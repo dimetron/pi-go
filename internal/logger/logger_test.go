@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestNew(t *testing.T) {
@@ -15,11 +17,7 @@ func TestNew(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Set HOME env var to use temp dir
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	// Now New() will use our temp dir as home
 	log, err := New()
@@ -47,12 +45,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewHomeDirError(t *testing.T) {
-	// Set HOME to a non-existent path
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", "/nonexistent/path/that/does/not/exist"); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetUnwritableHome(t)
 
 	_, err := New()
 	if err == nil {
@@ -62,11 +55,7 @@ func TestNewHomeDirError(t *testing.T) {
 
 func TestPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -85,11 +74,7 @@ func TestPath(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -115,11 +100,7 @@ func TestCloseNil(t *testing.T) {
 
 func TestLog(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -137,11 +118,7 @@ func TestLog(t *testing.T) {
 
 func TestInfo(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -154,11 +131,7 @@ func TestInfo(t *testing.T) {
 
 func TestError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -171,11 +144,7 @@ func TestError(t *testing.T) {
 
 func TestErrorf(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -200,11 +169,7 @@ func TestErrorf(t *testing.T) {
 
 func TestUserMessage(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -217,11 +182,7 @@ func TestUserMessage(t *testing.T) {
 
 func TestLLMText(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -234,11 +195,7 @@ func TestLLMText(t *testing.T) {
 
 func TestLLMTextCoalescesContiguousChunks(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -277,11 +234,7 @@ func TestLLMTextCoalescesContiguousChunks(t *testing.T) {
 
 func TestLLMTextFlushesOnNonLLMEntry(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -311,11 +264,7 @@ func TestLLMTextFlushesOnNonLLMEntry(t *testing.T) {
 
 func TestLLMTextFlushesWhenAgentChanges(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -344,11 +293,7 @@ func TestLLMTextFlushesWhenAgentChanges(t *testing.T) {
 
 func TestLLMTextFlushesAfterWindow(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -461,11 +406,7 @@ func TestThinkingSurvivesTurnWithNoReply(t *testing.T) {
 
 func TestToolCall(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -478,11 +419,7 @@ func TestToolCall(t *testing.T) {
 
 func TestToolResult(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -495,11 +432,7 @@ func TestToolResult(t *testing.T) {
 
 func TestSessionStart(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("Failed to set HOME: %v", err)
-	}
-	defer func() { os.Setenv("HOME", origHome) }() //nolint:errcheck
+	testenv.SetHome(t, tmpDir)
 
 	log, err := New()
 	if err != nil {
@@ -516,7 +449,7 @@ func TestSessionStart(t *testing.T) {
 func newTestLogger(t *testing.T) *Logger {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := New()
 	if err != nil {

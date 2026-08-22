@@ -24,6 +24,10 @@ func initRunTestRepo(t *testing.T) string {
 		{"git", "config", "user.name", "Test"},
 		{"git", "config", "commit.gpgsign", "false"},
 		{"git", "config", "tag.gpgsign", "false"},
+		// Git for Windows defaults core.autocrlf to true, which would rewrite
+		// every LF these tests write into CRLF on checkout and break the
+		// byte-for-byte content assertions.
+		{"git", "config", "core.autocrlf", "false"},
 		{"git", "commit", "--allow-empty", "-m", "initial commit"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)

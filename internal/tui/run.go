@@ -1818,7 +1818,10 @@ func listAvailableSpecs(workDir string) ([]string, error) {
 		promptPath := filepath.Join(path, "PROMPT.md")
 		if _, statErr := os.Stat(promptPath); statErr == nil {
 			rel, _ := filepath.Rel(specsDir, path)
-			specs = append(specs, rel)
+			// A spec name is an identifier the user types back into
+			// "/run <spec-name>", not a path to display: keep it slash-form on
+			// every OS. filepath.Join accepts it either way.
+			specs = append(specs, filepath.ToSlash(rel))
 		}
 		return nil
 	})

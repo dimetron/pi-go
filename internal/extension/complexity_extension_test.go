@@ -3,6 +3,7 @@ package extension
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -267,9 +268,22 @@ func TestAppendDirSkillsMissingDir(t *testing.T) {
 	}
 }
 
+// skipIfReadDirOnFileIsNotAnError skips tests that stand a regular file in for
+// an unreadable directory. On Unix os.ReadDir fails on it with ENOTDIR, which
+// is not os.IsNotExist, so it exercises the fatal branch; on Windows the same
+// call does not produce such an error, so there is no way to reach that branch
+// from the filesystem.
+func skipIfReadDirOnFileIsNotAnError(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("os.ReadDir on a regular file is not a non-IsNotExist error on Windows")
+	}
+}
+
 // TestAppendDirSkillsUnreadableDir keeps the other half of that rule: a read
 // failure that is not "not exist" is fatal, and carries the directory name.
 func TestAppendDirSkillsUnreadableDir(t *testing.T) {
+	skipIfReadDirOnFileIsNotAnError(t)
 	// A regular file where a directory was expected: ReadDir fails with
 	// ENOTDIR, which is not os.IsNotExist.
 	notADir := filepath.Join(t.TempDir(), "file.txt")
@@ -466,6 +480,7 @@ func TestLoadSkillsWithOptionsUserOverridesBundled(t *testing.T) {
 // TestLoadSkillsWithOptionsMultipleDirsStopAtFirstError checks the error from
 // a later directory still aborts the whole load, as the inline loop did.
 func TestLoadSkillsWithOptionsMultipleDirsStopAtFirstError(t *testing.T) {
+	skipIfReadDirOnFileIsNotAnError(t)
 	good := t.TempDir()
 	setupSkillWithContent(t, good, "fine", "---\nname: fine\ndescription: d\n---\nB")
 

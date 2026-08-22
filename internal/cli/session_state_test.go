@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestWriteLastSession_CreatesFile(t *testing.T) {
@@ -32,7 +34,7 @@ func TestWriteLastSession_CreatesFile(t *testing.T) {
 
 func TestLastLoggedError_CorruptedLogLine(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	dateDir := filepath.Join(tmpDir, ".pi-go", "log", "2024-07-01")
 	if err := os.MkdirAll(dateDir, 0o755); err != nil {
@@ -181,8 +183,14 @@ func TestCheckForRapidRestartAndWarn_OlderThan3Seconds(t *testing.T) {
 
 func TestWriteLastSession_MkdirAllError(t *testing.T) {
 	orig := lastSessionFile
-	// Point to a path that cannot be created.
-	lastSessionFile = "/sys/fake/last-session.json"
+	// Point to a path that cannot be created: a file below a regular file. A
+	// literal "/sys/fake/..." only fails on Linux; on Windows the leading slash
+	// is drive-relative and MkdirAll creates C:\sys\fake.
+	notADir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lastSessionFile = filepath.Join(notADir, "last-session.json")
 	defer func() { lastSessionFile = orig }()
 
 	err := writeLastSession("/fake", "provider", "model")

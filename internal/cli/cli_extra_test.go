@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // -----------------------------------------------------------------------
@@ -15,7 +17,7 @@ import (
 
 func TestLastLoggedError_NoLogDir(t *testing.T) {
 	// Fresh HOME with no ~/.pi-go/log directory => returns "", "", nil.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	path, msg, err := lastLoggedError()
 	if err != nil {
 		t.Fatalf("lastLoggedError: %v", err)
@@ -29,15 +31,13 @@ func TestLastLoggedError_HomeError(t *testing.T) {
 	// Unset HOME so os.UserHomeDir fails. On Darwin/Linux this typically
 	// falls back to /etc/passwd, which may still succeed. Skip the error
 	// assertion and only verify no panic.
-	orig := os.Getenv("HOME")
-	defer func() { _ = os.Setenv("HOME", orig) }()
-	_ = os.Unsetenv("HOME")
+	testenv.UnsetHome(t)
 	_, _, _ = lastLoggedError() // Should not panic.
 }
 
 func TestLastLoggedError_EmptyLogDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	// Create empty log dir.
 	logDir := filepath.Join(tmpDir, ".pi-go", "log")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
@@ -55,7 +55,7 @@ func TestLastLoggedError_EmptyLogDir(t *testing.T) {
 
 func TestLastLoggedError_WithErrorEntry(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	// Create a dated log directory with a session file.
 	dateDir := filepath.Join(tmpDir, ".pi-go", "log", "2024-01-15")
@@ -85,7 +85,7 @@ func TestLastLoggedError_WithErrorEntry(t *testing.T) {
 
 func TestLastLoggedError_NoErrorEntries(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	dateDir := filepath.Join(tmpDir, ".pi-go", "log", "2024-01-15")
 	if err := os.MkdirAll(dateDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestLastLoggedError_NoErrorEntries(t *testing.T) {
 
 func TestLastLoggedError_SkipsNonSessionFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	dateDir := filepath.Join(tmpDir, ".pi-go", "log", "2024-02-20")
 	if err := os.MkdirAll(dateDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestLastLoggedError_SkipsNonSessionFiles(t *testing.T) {
 
 func TestLastLoggedError_MultipleDateDirsUsesLast(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	logRoot := filepath.Join(tmpDir, ".pi-go", "log")
 
 	// Older directory with an error.
@@ -172,14 +172,32 @@ func TestLastLoggedError_MultipleDateDirsUsesLast(t *testing.T) {
 // checkForRapidRestartAndWarn — exercise the lastLoggedError branch.
 // -----------------------------------------------------------------------
 
+// lastSessionJSON renders a last-session.json record for workDir stamped
+// "now". It goes through the encoder rather than string concatenation because
+// a Windows temp dir holds backslashes, which an unescaped `"work_dir":"C:\Users\..."`
+// turns into invalid JSON -- readLastSession then fails and the warning under
+// test is never printed.
+func lastSessionJSON(t *testing.T, workDir string) string {
+	t.Helper()
+	blob, err := json.Marshal(map[string]string{
+		"timestamp":  nowTimeStr(),
+		"session_id": "s1",
+		"work_dir":   workDir,
+		"model":      "gpt",
+	})
+	if err != nil {
+		t.Fatalf("marshal last-session: %v", err)
+	}
+	return string(blob)
+}
+
 func TestCheckForRapidRestartAndWarn_WithLoggedError(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	// Set up a recent last-session.json for the same workdir.
 	f := filepath.Join(tmpDir, "last-session.json")
-	content := `{"timestamp":"` + nowTimeStr() + `","session_id":"s1","work_dir":"` + tmpDir + `","model":"gpt"}`
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(f, []byte(lastSessionJSON(t, tmpDir)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	orig := lastSessionFile
@@ -205,11 +223,10 @@ func TestCheckForRapidRestartAndWarn_WithLoggedError(t *testing.T) {
 
 func TestCheckForRapidRestartAndWarn_NoLoggedError(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	f := filepath.Join(tmpDir, "last-session.json")
-	content := `{"timestamp":"` + nowTimeStr() + `","session_id":"s1","work_dir":"` + tmpDir + `","model":"gpt"}`
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(f, []byte(lastSessionJSON(t, tmpDir)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	orig := lastSessionFile

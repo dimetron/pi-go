@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/httplog"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestHTTPSinkNilLogger(t *testing.T) {
@@ -15,7 +16,7 @@ func TestHTTPSinkNilLogger(t *testing.T) {
 }
 
 func TestHTTPSinkWritesRequestAndResponse(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	l, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -84,7 +85,7 @@ func TestHTTPSinkWritesRequestAndResponse(t *testing.T) {
 }
 
 func TestHTTPSinkTransportError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	l, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -117,7 +118,7 @@ func TestHTTPSinkTransportError(t *testing.T) {
 // coalescer: only llm_text and thinking merge, so a run of HTTP entries must
 // stay one record each.
 func TestHTTPEntriesAreNotCoalesced(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	l, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)

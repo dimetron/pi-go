@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -678,11 +679,14 @@ func (c *mockReadonlyContext) WithDelta(*agent.CommonContextDelta) agent.Context
 var _ agent.Context = (*mockReadonlyContext)(nil)
 
 func TestRunLifecycleHook(t *testing.T) {
-	dir := t.TempDir()
+	// Hooks run through "sh -c", which on Windows is Git Bash: a path with
+	// backslashes would be swallowed as escape sequences. Forward slashes are
+	// understood by both the shell and Go's file APIs.
+	dir := filepath.ToSlash(t.TempDir())
 	out := dir + "/out.json"
 	hook := HookConfig{
 		Event:   "turn_complete",
-		Command: "cat > " + out,
+		Command: `cat > "` + out + `"`,
 		Timeout: 5,
 	}
 	ctx := context.Background()
@@ -725,14 +729,17 @@ func TestRunLifecycleHookTimeout(t *testing.T) {
 // tool runs the command, a non-matching tool is skipped, and a failing command
 // is reported rather than propagated (a broken hook must not fail the tool).
 func TestBuildBeforeToolCallbacks_Invoke(t *testing.T) {
-	dir := t.TempDir()
+	// Hooks run through "sh -c", which on Windows is Git Bash: a path with
+	// backslashes would be swallowed as escape sequences. Forward slashes are
+	// understood by both the shell and Go's file APIs.
+	dir := filepath.ToSlash(t.TempDir())
 	ran := dir + "/ran"
 	var logged []string
 	SetHookLogger(func(msg string) { logged = append(logged, msg) })
 	t.Cleanup(func() { SetHookLogger(nil) })
 
 	cbs := BuildBeforeToolCallbacks([]HookConfig{
-		{Event: "before_tool", Tools: []string{"read"}, Command: "echo ran > " + ran, Timeout: 5},
+		{Event: "before_tool", Tools: []string{"read"}, Command: `echo ran > "` + ran + `"`, Timeout: 5},
 		{Event: "before_tool", Tools: []string{"read"}, Command: "exit 3", Timeout: 5},
 	})
 	if len(cbs) != 2 {
@@ -774,14 +781,17 @@ func TestBuildBeforeToolCallbacks_Invoke(t *testing.T) {
 // TestBuildAfterToolCallbacks_Invoke mirrors the before_tool case, and pins
 // that the tool's result passes through the callback unchanged.
 func TestBuildAfterToolCallbacks_Invoke(t *testing.T) {
-	dir := t.TempDir()
+	// Hooks run through "sh -c", which on Windows is Git Bash: a path with
+	// backslashes would be swallowed as escape sequences. Forward slashes are
+	// understood by both the shell and Go's file APIs.
+	dir := filepath.ToSlash(t.TempDir())
 	payload := dir + "/payload.json"
 	var logged []string
 	SetHookLogger(func(msg string) { logged = append(logged, msg) })
 	t.Cleanup(func() { SetHookLogger(nil) })
 
 	cbs := BuildAfterToolCallbacks([]HookConfig{
-		{Event: "after_tool", Tools: []string{"bash"}, Command: "cat > " + payload, Timeout: 5},
+		{Event: "after_tool", Tools: []string{"bash"}, Command: `cat > "` + payload + `"`, Timeout: 5},
 		{Event: "after_tool", Tools: []string{"bash"}, Command: "exit 3", Timeout: 5},
 	})
 	if len(cbs) != 2 {
