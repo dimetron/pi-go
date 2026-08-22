@@ -21,6 +21,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -94,40 +95,45 @@ func (m *cliToolCallingLLM) GenerateContent(_ context.Context, _ *model.LLMReque
 // captureStdout captures os.Stdout during fn execution.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	origStdout := os.Stdout
-	os.Stdout = w
-
-	fn()
-
-	w.Close()
-	os.Stdout = origStdout
-
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
-	return buf.String()
+	return captureFD(t, &os.Stdout, fn)
 }
 
 // captureStderr captures os.Stderr during fn execution.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
+	return captureFD(t, &os.Stderr, fn)
+}
+
+// captureFD swaps *fd for the write end of a pipe while fn runs and returns
+// everything fn wrote to it.
+//
+// The read end is drained concurrently, not after fn returns: a pipe has a
+// fixed buffer (64 KiB on Linux, only 4 KiB on Windows), and a writer that
+// fills it blocks until someone reads. Draining afterwards therefore deadlocks
+// any fn whose output exceeds the buffer -- the rpc server's
+// get_available_models reply already does on Windows.
+func captureFD(t *testing.T, fd **os.File, fn func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	origStderr := os.Stderr
-	os.Stderr = w
+	orig := *fd
+	*fd = w
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = buf.ReadFrom(r)
+	}()
 
 	fn()
 
-	w.Close()
-	os.Stderr = origStderr
-
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_ = w.Close()
+	*fd = orig
+	<-done
+	_ = r.Close()
 	return buf.String()
 }
 
@@ -198,7 +204,7 @@ func TestCLI_SmolFlag(t *testing.T) {
 			"smol": {"model": "gpt-5.4-mini", "provider": "openai"}
 		}
 	}`), 0o644)
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	cmd := newRootCmd()
@@ -226,7 +232,7 @@ func TestCLI_RoleFlagsMutuallyExclusive(t *testing.T) {
 	// When multiple role flags are set, the switch statement picks one (smol wins due to order).
 	// This just verifies no crash occurs.
 	// Isolate HOME so loadDotEnv and config.Load don't pick up real machine credentials.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	// Set all provider keys so whichever role resolves has a key available.
 	t.Setenv("ANTHROPIC_API_KEY", "test-key-anthropic")
@@ -264,7 +270,7 @@ func TestRootCmdMissingAPIKey(t *testing.T) {
 	// (or, worse, a codex OAuth token) and the test's "no key set" intent
 	// never reaches buildRootRuntime.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	// Ensure no provider API keys are set.
@@ -316,9 +322,7 @@ func TestContinueNoSessionError(t *testing.T) {
 	defer os.Unsetenv("OPENAI_API_KEY")
 
 	// Use a temp dir so there are no existing sessions.
-	tmpDir := t.TempDir()
-	os.Setenv("HOME", tmpDir)
-	defer os.Unsetenv("HOME")
+	testenv.SetHome(t, t.TempDir())
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--model", "gpt-5.6-sol", "--continue", "hello"})
@@ -702,12 +706,7 @@ func TestLoadDotEnv(t *testing.T) {
 			}
 
 			// Override home dir
-			origHome := os.Getenv("HOME")
-			if err := os.Setenv("HOME", tmpDir); err != nil {
-				t.Fatalf("failed to set HOME: %v", err)
-			}
-			// Use Setenv in cleanup but ignore error (cleanup shouldn't fail test)
-			t.Cleanup(func() { _ = os.Setenv("HOME", origHome) })
+			testenv.SetHome(t, tmpDir)
 
 			if tt.setEnv != "" {
 				if err := os.Setenv("TEST_KEY", tt.setEnv); err != nil {
@@ -728,12 +727,7 @@ func TestLoadDotEnv(t *testing.T) {
 
 func TestLoadDotEnvNoFile(t *testing.T) {
 	// Should not panic when .env doesn't exist
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	if err := os.Setenv("HOME", tmpDir); err != nil {
-		t.Fatalf("failed to set HOME: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("HOME", origHome) })
+	testenv.SetHome(t, t.TempDir())
 
 	loadDotEnv() // Should not panic
 }
@@ -1048,7 +1042,7 @@ func TestLoadDotEnvQuotedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Cleanup(func() { _ = os.Unsetenv("TEST_QUOTED_KEY") })
 
 	loadDotEnv()
@@ -1069,7 +1063,7 @@ func TestLoadDotEnvMultipleKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Cleanup(func() {
 		_ = os.Unsetenv("TEST_MULTI_A")
 		_ = os.Unsetenv("TEST_MULTI_B")
@@ -1106,7 +1100,7 @@ func TestLoadDotEnvProjectOverridesGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", homeDir)
+	testenv.SetHome(t, homeDir)
 	t.Setenv("TEST_PROJECT_ENV", "shell")
 	t.Cleanup(func() { _ = os.Unsetenv("TEST_GLOBAL_ONLY") })
 	oldWD, err := os.Getwd()
@@ -1142,7 +1136,7 @@ func TestLoadDotEnvFileWinsOverShellEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	t.Setenv("TEST_EXISTING", "from-env")
 
 	loadDotEnv()
@@ -1155,7 +1149,7 @@ func TestLoadDotEnvFileWinsOverShellEnv(t *testing.T) {
 func TestBuildCommitMsgFuncNoDefaultRole(t *testing.T) {
 	// Config with no roles: buildCommitMsgFunc should return nil (no model available).
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{"roles":{}}`), 0o644)
@@ -1177,7 +1171,7 @@ func TestBuildCommitMsgFuncNoDefaultRole(t *testing.T) {
 func TestBuildCommitMsgFuncWithDefaultRole(t *testing.T) {
 	// Config with default role that has no valid API key: should return nil or a func that errors.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
@@ -1204,7 +1198,7 @@ func TestBuildCommitMsgFuncWithDefaultRole(t *testing.T) {
 func TestBuildCommitMsgFuncCommitRoleFallback(t *testing.T) {
 	// Config with a "commit" role: buildCommitMsgFunc should use it.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{
@@ -1305,7 +1299,7 @@ func TestRunJSONThinkingDelta(t *testing.T) {
 // Ollama is not reachable, the function should return nil gracefully.
 func TestBuildCommitMsgFuncOllama(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	// Use an Ollama model (qwen2.5 resolves to ollama provider).
@@ -1332,7 +1326,7 @@ func TestBuildCommitMsgFuncOllama(t *testing.T) {
 // Ollama models inside buildCommitMsgFunc (info.Ollama == true, baseURL == "").
 func TestBuildCommitMsgFuncOllamaWithBaseURL(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 	cfgDir := filepath.Join(tmpDir, ".pi-go")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(`{

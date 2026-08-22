@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	gopath "path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -419,7 +420,12 @@ func (p GitignorePattern) matches(path string) bool {
 		return false
 	}
 
-	matched, _ := filepath.Match(p.pattern, name)
+	// path.Match, not filepath.Match: .gitignore syntax escapes with a
+	// backslash ("\#literal" names a file starting with '#'), and so does
+	// path.Match on every OS. filepath.Match on Windows treats '\' as an
+	// ordinary character instead, so such a pattern never matched there. The
+	// operand is a bare name with no separator, so the two agree otherwise.
+	matched, _ := gopath.Match(p.pattern, name)
 	if matched && p.isDir {
 		// Directory pattern: only match if path is a directory
 		// (handled by caller checking d.IsDir())

@@ -8,6 +8,7 @@ import (
 	"io"
 	stdlog "log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1407,7 +1408,10 @@ func TestAgentToolResultMsg_ClearsActiveTool(t *testing.T) {
 }
 
 func TestAgentDoneMsg_FiresLifecycleHooks(t *testing.T) {
-	dir := t.TempDir()
+	// Lifecycle hooks run through "sh -c", which is Git Bash on Windows and
+	// would eat the backslashes in a native path. Forward slashes work for both
+	// the shell and Go's file APIs.
+	dir := filepath.ToSlash(t.TempDir())
 	turnOut := dir + "/turn.json"
 	inputOut := dir + "/input.json"
 	m := &model{
@@ -1417,8 +1421,8 @@ func TestAgentDoneMsg_FiresLifecycleHooks(t *testing.T) {
 		agentCh:   make(chan agentMsg, 64),
 		cfg: Config{
 			LifecycleHooks: []extension.HookConfig{
-				{Event: "turn_complete", Command: "cat > " + turnOut, Timeout: 5},
-				{Event: "user_input_required", Command: "cat > " + inputOut, Timeout: 5},
+				{Event: "turn_complete", Command: `cat > "` + turnOut + `"`, Timeout: 5},
+				{Event: "user_input_required", Command: `cat > "` + inputOut + `"`, Timeout: 5},
 			},
 		},
 	}
@@ -1463,7 +1467,7 @@ func waitForHookOutput(t *testing.T, path string) []byte {
 // user_input_required — so a consumer that maps them onto an external status
 // would settle on the wrong final state if the two ran concurrently.
 func TestLifecycleHooks_RunInOrder(t *testing.T) {
-	out := t.TempDir() + "/order.txt"
+	out := filepath.ToSlash(t.TempDir()) + "/order.txt"
 	m := &model{
 		ctx:       context.Background(),
 		chatModel: ChatModel{Messages: []message{{role: "assistant"}}},
@@ -1473,8 +1477,8 @@ func TestLifecycleHooks_RunInOrder(t *testing.T) {
 			LifecycleHooks: []extension.HookConfig{
 				// The first hook sleeps, so an unserialized implementation
 				// would let the second one finish first.
-				{Event: "turn_complete", Command: "sleep 0.3; echo turn >> " + out, Timeout: 5},
-				{Event: "user_input_required", Command: "echo input >> " + out, Timeout: 5},
+				{Event: "turn_complete", Command: `sleep 0.3; echo turn >> "` + out + `"`, Timeout: 5},
+				{Event: "user_input_required", Command: `echo input >> "` + out + `"`, Timeout: 5},
 			},
 		},
 	}
@@ -1502,7 +1506,7 @@ func TestLifecycleHooks_RunInOrder(t *testing.T) {
 // Tea renderer owns the alternate screen, and anything written to stderr is
 // painted over it without the renderer knowing those cells were dirtied.
 func TestLifecycleHooks_DoNotWriteToStderr(t *testing.T) {
-	done := t.TempDir() + "/done"
+	done := filepath.ToSlash(t.TempDir()) + "/done"
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
@@ -1525,7 +1529,7 @@ func TestLifecycleHooks_DoNotWriteToStderr(t *testing.T) {
 			LifecycleHooks: []extension.HookConfig{
 				// Fails, and is noisy on both streams while doing so.
 				{Event: "turn_complete", Command: "echo noise; echo boom >&2; exit 1", Timeout: 5},
-				{Event: "user_input_required", Command: "echo done > " + done, Timeout: 5},
+				{Event: "user_input_required", Command: `echo done > "` + done + `"`, Timeout: 5},
 			},
 		},
 	}
@@ -1550,7 +1554,10 @@ func TestLifecycleHooks_DoNotWriteToStderr(t *testing.T) {
 }
 
 func TestAgentDoneMsg_ErrorDoesNotFireUserInputHook(t *testing.T) {
-	dir := t.TempDir()
+	// Lifecycle hooks run through "sh -c", which is Git Bash on Windows and
+	// would eat the backslashes in a native path. Forward slashes work for both
+	// the shell and Go's file APIs.
+	dir := filepath.ToSlash(t.TempDir())
 	turnOut := dir + "/turn.json"
 	inputOut := dir + "/input.json"
 	m := &model{
@@ -1559,8 +1566,8 @@ func TestAgentDoneMsg_ErrorDoesNotFireUserInputHook(t *testing.T) {
 		running:   true,
 		agentCh:   make(chan agentMsg, 64),
 		cfg: Config{LifecycleHooks: []extension.HookConfig{
-			{Event: "turn_complete", Command: "cat > " + turnOut, Timeout: 5},
-			{Event: "user_input_required", Command: "cat > " + inputOut, Timeout: 5},
+			{Event: "turn_complete", Command: `cat > "` + turnOut + `"`, Timeout: 5},
+			{Event: "user_input_required", Command: `cat > "` + inputOut + `"`, Timeout: 5},
 		}},
 	}
 

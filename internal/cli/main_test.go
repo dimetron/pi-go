@@ -20,7 +20,19 @@ import (
 //
 // Tests that need their own HOME can still override it; t.Setenv restores this
 // value rather than the developer's when they finish.
+// testBrowserStubEnv switches this binary into stand-in-browser mode. A test
+// that needs $BROWSER to point at something runnable sets it and points BROWSER
+// at os.Args[0]: the child exits here, before m.Run, so no tests are re-run and
+// no real browser is launched. A literal path like /usr/bin/true does not
+// travel -- on Windows it fails exec.LookPath, and Open falls through to
+// "cmd /c start", which opens the runner's actual browser.
+const testBrowserStubEnv = "PI_TEST_BROWSER_STUB"
+
 func TestMain(m *testing.M) {
+	if os.Getenv(testBrowserStubEnv) != "" {
+		os.Exit(0)
+	}
+
 	dir, err := os.MkdirTemp("", "pi-go-test-home-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "isolating HOME: %v\n", err)

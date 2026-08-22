@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // writeGlobalConfig points HOME at a temp dir holding the given config, so
@@ -14,7 +16,7 @@ import (
 func writeGlobalConfig(t *testing.T, cfg map[string]any) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	dir := filepath.Join(home, ".pi-go")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

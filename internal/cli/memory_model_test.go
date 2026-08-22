@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestRunMemoryModelDownload_AutoDetectPlatformBranch(t *testing.T) {
@@ -42,9 +44,7 @@ func TestNewMemoryModelStatusCmd_RunE(t *testing.T) {
 
 func TestRunMemoryModelDownload_HomeDirError(t *testing.T) {
 	// Test when os.UserHomeDir returns an error (non-existent HOME).
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", "/nonexistent/user/dir")
-	defer os.Setenv("HOME", origHome)
+	testenv.SetUnwritableHome(t)
 
 	// With empty dest and non-existent HOME, should fail.
 	err := runMemoryModelDownload("", "")
@@ -137,6 +137,15 @@ func TestRunMemoryModelDownload_ExplicitOnnxPath(t *testing.T) {
 }
 
 func TestRunMemoryModelDownload_DefaultDest(t *testing.T) {
+	// This downloads the real embedding model from Hugging Face into the
+	// package's shared test HOME. It only ever appeared to pass: an earlier
+	// test used to leave HOME unset, so runMemoryModelDownload failed before
+	// reaching the network. With HOME isolated properly the download runs, and
+	// two things break under -race: go-huggingface's parallel download has a
+	// data race, and every later palace-backed test in this package then finds
+	// the weights and runs real inference, where gomlx's AVX2 matmul kernel
+	// trips checkptr. Skip it like its siblings above.
+	t.Skip("skipping: downloads a real model over the network; go-huggingface races under -race and the weights poison later palace tests")
 	err := runMemoryModelDownload("", "")
 	if err != nil {
 		t.Logf("expected error: %v", err)

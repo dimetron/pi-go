@@ -6,6 +6,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/logger"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // drainAgentCh collects everything queued on the model's agent channel without
@@ -118,7 +119,7 @@ func TestEmitGroundingEventsIgnoresUngroundedResponses(t *testing.T) {
 // With a logger attached the search is also traced. The log gets the
 // full-fidelity sources (URIs included); the chat still gets labels only.
 func TestEmitGroundingEventsTracesToLog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {

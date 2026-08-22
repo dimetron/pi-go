@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,17 @@ import (
 // mockPiScript creates a temporary shell script that mimics pi --mode json output.
 func mockPiScript(t *testing.T, script string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The stand-in agent is a #!/bin/bash script, and Spawner takes a single
+		// binary path with nowhere to name an interpreter. Go's os/exec on
+		// Windows starts either a real executable or a .bat/.cmd through
+		// cmd.exe; wrapping the script in a .bat would cover the simple cases
+		// but would put cmd.exe between the spawner and bash, so a kill would
+		// land on the wrapper rather than the agent -- which is precisely what
+		// the cancel and inactivity tests measure. Only the fixture is
+		// POSIX-bound here; Spawner itself execs whatever path it is given.
+		t.Skip("stand-in pi agent is a bash script; Windows cannot exec it directly")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mock-pi")
 	err := os.WriteFile(path, []byte("#!/bin/bash\n"+script), 0o755)

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -59,13 +58,11 @@ func TestRunnerCompletesPromptTurn(t *testing.T) {
 }
 
 func TestRunningSessionCancel(t *testing.T) {
-	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "sleep.sh")
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", scriptPath)
+	// Any process that stays alive until it is killed will do. Re-exec the test
+	// binary as the ACP helper agent rather than a #!/bin/sh script, which
+	// Windows cannot run: the helper blocks reading stdio just the same.
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	cmd := exec.Command(os.Args[0], "-test.run=TestACPClientHelperProcess", "--")
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatalf("stderr pipe: %v", err)

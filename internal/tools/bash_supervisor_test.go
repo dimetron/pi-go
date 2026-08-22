@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -20,10 +21,28 @@ func fastSupervisor(t *testing.T) *BashSupervisor {
 	return sup
 }
 
+// bashWorkDir returns a working directory for a backgrounded shell command.
+//
+// It deliberately does not use t.TempDir. A killed `bash -c` leaves its
+// grandchildren running on Windows -- procs.setGroup is a Unix-only job/process
+// group facility, see internal/procs/procs_other.go -- and Windows will not
+// remove a directory that a live process has as its working directory. That
+// would fail t.TempDir's own cleanup and, with it, tests that otherwise passed.
+// Removal here is best effort.
+func bashWorkDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pi-bash-cwd-")
+	if err != nil {
+		t.Fatalf("creating shell working directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func run(t *testing.T, sup *BashSupervisor, command string, timeout time.Duration) BashOutput {
 	t.Helper()
 	out, err := sup.Run(context.Background(), runRequest{
-		dir:     t.TempDir(),
+		dir:     bashWorkDir(t),
 		command: command,
 		timeout: timeout,
 	})
@@ -190,7 +209,7 @@ func TestSupervisor_ForegroundCancellationKillsCommand(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err := sup.Run(ctx, runRequest{dir: t.TempDir(), command: "sleep 30 | cat", timeout: time.Hour})
+	_, err := sup.Run(ctx, runRequest{dir: bashWorkDir(t), command: "sleep 30 | cat", timeout: time.Hour})
 	if err == nil {
 		t.Fatal("expected a cancellation error")
 	}

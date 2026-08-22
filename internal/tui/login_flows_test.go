@@ -11,6 +11,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/logger"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // newMockCodexDeviceServer stands in for auth.openai.com's device endpoints.
@@ -63,7 +64,7 @@ func codexDeviceProvider(srvURL string) auth.Provider {
 // record of what a failed authentication did.
 func loggedModel(t *testing.T) (*model, func() string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {
@@ -585,7 +586,7 @@ func TestLoginStart_RoutesManualCode(t *testing.T) {
 // Login events are the only trace a failed authentication leaves, so they have
 // to reach the session log when one is configured.
 func TestLogLogin_WritesToTheSessionLog(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	log, err := logger.New()
 	if err != nil {

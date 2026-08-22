@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // TestMain globally disables real browser opens and process restart for every
@@ -217,9 +218,7 @@ func TestHandleLoginSave(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	testenv.SetHome(t, tmpDir)
 
 	// codex is the only provider registered since the Anthropic/OpenAI/Gemini
 	// OAuth flows were disabled; handleLoginSave looks up the provider via
@@ -284,9 +283,7 @@ func TestHandleLoginCancel_DevicePhase(t *testing.T) {
 
 func TestHandleLoginSSOResult_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	testenv.SetHome(t, tmpDir)
 
 	m := &model{
 		login: &loginState{phase: "sso", provider: "anthropic"},
@@ -391,9 +388,7 @@ func TestHandleLoginSSOResult_EmptyKey(t *testing.T) {
 
 func TestHandleLoginSSOResult_SaveError(t *testing.T) {
 	// Use an invalid HOME to trigger SaveKey error.
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", "/dev/null/nonexistent")
-	defer os.Setenv("HOME", origHome)
+	testenv.SetUnwritableHome(t)
 
 	m := &model{
 		login: &loginState{phase: "sso", provider: "anthropic"},
@@ -436,9 +431,7 @@ func TestHandleLoginSave_UnknownProvider(t *testing.T) {
 }
 
 func TestHandleLoginSave_SaveError(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", "/dev/null/nonexistent")
-	defer os.Setenv("HOME", origHome)
+	testenv.SetUnwritableHome(t)
 
 	// codex is the currently registered provider; HOME points at an invalid
 	// path so SaveKey's MkdirAll must fail, surfacing "Error saving key".

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -463,7 +464,7 @@ func TestRunStreaming(t *testing.T) {
 }
 
 func TestLoadInstructionInjectsRuntimeEnvironment(t *testing.T) {
-	t.Setenv("HOME", "/tmp/test-home")
+	testenv.SetHome(t, "/tmp/test-home")
 	t.Setenv("USER", "test-user")
 	t.Setenv("PWD", "/tmp/test-project")
 
@@ -475,7 +476,7 @@ func TestLoadInstructionInjectsRuntimeEnvironment(t *testing.T) {
 }
 
 func TestLoadInstructionInjectsWorkingDirectoryWhenPWDUnset(t *testing.T) {
-	t.Setenv("HOME", "/tmp/test-home")
+	testenv.SetHome(t, "/tmp/test-home")
 	t.Setenv("USER", "test-user")
 	t.Setenv("PWD", "")
 

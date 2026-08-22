@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -477,6 +478,9 @@ func TestMineConversations_ReportsProgressForEmptyParse(t *testing.T) {
 // unreadable subdirectory is tallied and the walk continues, rather than
 // abandoning the rest of the tree.
 func TestMineConversations_CountsWalkErrors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod(0o000) does not make a directory unreadable on Windows")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("running as root: permission bits do not make a directory unreadable")
 	}

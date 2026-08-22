@@ -26,6 +26,7 @@ import (
 	"github.com/dimetron/pi-go/internal/eval"
 	"github.com/dimetron/pi-go/internal/provider"
 	"github.com/dimetron/pi-go/internal/subagent"
+	"github.com/dimetron/pi-go/internal/testenv"
 
 	tea "charm.land/bubbletea/v2"
 	llmmodel "google.golang.org/adk/v2/model"
@@ -64,7 +65,7 @@ func TestEvalRun(t *testing.T) {
 	// that reports FAIL for a run it measured fine is worse than one that
 	// leaves a temp dir behind. Clean it up permissively instead.
 	home := evalHomeDir(t)
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	// Isolating HOME breaks git commit signing: the repo signs commits/tags
 	// with the user's real key (GPG via 1Password), which is not reachable
 	// from the temp HOME, so the run's `git merge --no-ff` fails at

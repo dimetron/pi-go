@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
@@ -37,6 +38,11 @@ func (r *cogRunner) fn() runner {
 		r.calls++
 		r.lastSess, r.lastMsg = sessionID, message
 		return func(yield func(*session.Event, error) bool) {
+			// observeTurn asserts Duration > 0. Yielding canned pairs takes
+			// well under one tick of Windows' monotonic clock, which would
+			// time the turn at exactly zero; a Sleep advances that clock by
+			// at least the requested amount on every OS.
+			time.Sleep(time.Millisecond)
 			for _, p := range r.pairs {
 				if !yield(p.ev, p.err) {
 					return
