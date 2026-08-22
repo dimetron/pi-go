@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +34,12 @@ func newTestRenderer(t *testing.T) *glamour.TermRenderer {
 }
 
 func TestUpdateRendererDoesNotQueryTerminalBackground(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// creack/pty has no Windows implementation (pty.Open returns
+		// ErrUnsupported), and the behavior under test is a terminal
+		// OSC-11 background query that only a pty can observe.
+		t.Skip("no pty on Windows")
+	}
 	t.Setenv("TERM", "xterm-256color")
 	ptyMaster, ptySlave, err := pty.Open()
 	if err != nil {

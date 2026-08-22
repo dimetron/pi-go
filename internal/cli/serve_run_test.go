@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,6 +18,14 @@ import (
 // -----------------------------------------------------------------------
 
 func TestRunServe_CleanShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The shutdown path under test is driven by SIGINT, and a process
+		// cannot deliver one to itself on Windows: os.Process.Signal supports
+		// only Kill there, so proc.Signal(syscall.SIGINT) returns an error and
+		// runServe would be left serving for the rest of the package run.
+		t.Skip("cannot raise SIGINT against our own process on Windows")
+	}
+
 	// Use an ephemeral port (:0) so we don't collide with other tests.
 	tmpDir := t.TempDir()
 
@@ -87,31 +96,27 @@ func TestRunServe_CleanShutdown(t *testing.T) {
 }
 
 func TestRunServe_LogFileOpenError(t *testing.T) {
-	// If the CWD is not writable, os.OpenFile("serve.log", ...) should fail.
-	// We simulate by pointing to a path that cannot be written.
-	// On most systems, we can create a read-only directory and chdir into it.
-	tmpDir := t.TempDir()
-	readOnly := filepath.Join(tmpDir, "ro")
-	if err := os.MkdirAll(readOnly, 0o555); err != nil {
+	// runServe opens ./serve.log before it does anything else, so a directory
+	// sitting at that name makes the open fail on every OS. The previous
+	// spelling -- chdir into a 0555 directory -- was a no-op on Windows, where
+	// mode bits do not restrict a directory: the open would succeed and
+	// runServe would go on to serve until it was signaled, hanging the test
+	// until the package timeout. It was also a no-op for root on Unix.
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "serve.log"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(readOnly, 0o755)
-
-	origCwd, _ := os.Getwd()
-	if err := os.Chdir(readOnly); err != nil {
-		t.Skip("could not chdir into read-only dir:", err)
-	}
-	defer func() { _ = os.Chdir(origCwd) }()
+	t.Chdir(dir)
 
 	origProject := flagServeProject
-	flagServeProject = readOnly
+	flagServeProject = dir
 	defer func() { flagServeProject = origProject }()
 
-	cmd := &cobra.Command{}
-	err := runServe(cmd, nil)
-	// Should fail to open serve.log (CWD is read-only) — but only if running
-	// as a non-root user. Root users can still write to 0555 dirs.
-	if err != nil && !strings.Contains(err.Error(), "serve.log") {
-		t.Logf("runServe error: %v", err)
+	err := runServe(&cobra.Command{}, nil)
+	if err == nil {
+		t.Fatal("runServe() = nil, want the serve.log open to fail")
+	}
+	if !strings.Contains(err.Error(), "serve.log") {
+		t.Errorf("runServe() = %v, want an error naming serve.log", err)
 	}
 }

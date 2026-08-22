@@ -94,7 +94,7 @@ func TestSupervisor_CanceledForegroundRunsLeakNoGoroutines(t *testing.T) {
 			cancel()
 		}()
 		defer cancel()
-		_, err := sup.Run(ctx, runRequest{dir: t.TempDir(), command: "sleep 30", timeout: 10 * time.Second})
+		_, err := sup.Run(ctx, runRequest{dir: bashWorkDir(t), command: "sleep 30", timeout: 10 * time.Second})
 		if err == nil {
 			t.Error("a canceled run returned no error")
 		}
@@ -116,6 +116,14 @@ func TestSupervisor_CanceledForegroundRunsLeakNoGoroutines(t *testing.T) {
 // TestSupervisor_KillAllReleasesEverything checks the session-teardown path
 // leaves nothing behind: no tracked handles, no lingering goroutines.
 func TestSupervisor_KillAllReleasesEverything(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// KillAll signals the shell, not a process group: procs.setGroup is a
+		// no-op off Unix (internal/procs/procs_other.go), so `sleep` outlives
+		// the `bash -c` that started it and its reaping goroutine stays parked
+		// on Wait. This asserts a teardown guarantee the code does not claim to
+		// offer on Windows; the Unix run still guards it.
+		t.Skip("process-group teardown is Unix-only; see internal/procs/procs_other.go")
+	}
 	sup := NewBashSupervisor()
 	sup.idleTimeout = 80 * time.Millisecond
 	sup.heartbeat = 20 * time.Millisecond

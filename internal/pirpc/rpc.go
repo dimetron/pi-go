@@ -199,10 +199,21 @@ func (s *Server) dispatch(ctx context.Context, cmd command) {
 		s.mu.Lock()
 		cancel := s.cancel
 		s.mu.Unlock()
+		// Acknowledge before canceling. The turn goroutine emits agent_end and
+		// agent_settled as soon as its context is canceled, so replying
+		// afterwards races it: the response could land after agent_settled and
+		// a client that resolves the turn on agent_settled would then see a
+		// stray reply, and the turn's event stream would no longer end with
+		// its terminator. emit serializes writers, so once reply has returned
+		// the response is on the wire ahead of anything this cancel triggers.
+		// A turn that finishes on its own in this same instant can still
+		// settle first, but that is an abort of a turn that was already over
+		// -- the same shape as an abort with nothing running -- so the reply
+		// trailing its terminator is correct there.
+		s.reply(response{ID: cmd.ID, Command: cmd.Type, Success: true})
 		if cancel != nil {
 			cancel()
 		}
-		s.reply(response{ID: cmd.ID, Command: cmd.Type, Success: true})
 
 	case "get_state":
 		s.reply(response{ID: cmd.ID, Command: cmd.Type, Success: true, Data: s.state()})

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // writeSessionMeta creates a session directory whose meta.json records model.
@@ -31,7 +32,7 @@ func withFlags(t *testing.T, session, model string) {
 
 func TestApplyResumedModel(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	writeSessionMeta(t, home, "sess-gpt", "gpt-5.6-luna")
 	writeSessionMeta(t, home, "sess-unknown", "unknown")
 
@@ -70,7 +71,7 @@ func TestApplyResumedModel(t *testing.T) {
 // would route the restored model to the wrong API.
 func TestApplyResumedModel_ClearsStaleProvider(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	writeSessionMeta(t, home, "sess-gpt", "gpt-5.6-luna")
 	withFlags(t, "sess-gpt", "")
 
@@ -89,7 +90,7 @@ func TestApplyResumedModel_ClearsStaleProvider(t *testing.T) {
 // rewritten, or an explicitly configured provider would be dropped for nothing.
 func TestApplyResumedModel_KeepsProviderWhenModelMatches(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	writeSessionMeta(t, home, "sess-same", "claude-sonnet-4-6")
 	withFlags(t, "sess-same", "")
 

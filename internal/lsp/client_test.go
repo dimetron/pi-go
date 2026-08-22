@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -415,7 +416,7 @@ func TestNewClient(t *testing.T) {
 		clientConn.Close()
 	}()
 
-	c, err := NewClient("/bin/cat")
+	c, err := newStdioStubClient(t)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -490,10 +491,9 @@ func TestNewClient_NonExistentCommand(t *testing.T) {
 }
 
 func TestNewClient_ValidCommand(t *testing.T) {
-	// /bin/cat is a valid command that can be started.
-	c, err := NewClient("/bin/cat")
+	c, err := newStdioStubClient(t)
 	if err != nil {
-		t.Fatalf("NewClient(/bin/cat) failed: %v", err)
+		t.Fatalf("NewClient(stdio stub) failed: %v", err)
 	}
 	if c != nil {
 		// Force close without LSP handshake to avoid blocking.
@@ -634,4 +634,29 @@ func TestProtocol_DiagnosticSeverity(t *testing.T) {
 			t.Errorf("severity %d: got %q, want %q", tt.severity, got, tt.want)
 		}
 	}
+}
+
+// stdioStubEnv switches the re-executed test binary into stdio-stub mode.
+const stdioStubEnv = "PI_TEST_LSP_STDIO_STUB"
+
+// newStdioStubClient starts a client over a process that just holds its stdio
+// open, which is all these tests need from a "language server".
+//
+// It re-executes the test binary rather than running /bin/cat: Windows has no
+// such path, and no guaranteed equivalent on PATH.
+func newStdioStubClient(t *testing.T) (*Client, error) {
+	t.Helper()
+	t.Setenv(stdioStubEnv, "1")
+	return NewClient(os.Args[0], "-test.run=TestLSPStdioStub")
+}
+
+// TestLSPStdioStub is the stub process newStdioStubClient starts, not a test of
+// its own: it copies stdin to stdout and exits when the pipe closes. os.Exit
+// keeps the testing framework's own "PASS" output off the stub's stdout.
+func TestLSPStdioStub(t *testing.T) {
+	if os.Getenv(stdioStubEnv) != "1" {
+		return
+	}
+	_, _ = io.Copy(os.Stdout, os.Stdin)
+	os.Exit(0)
 }

@@ -249,7 +249,9 @@ func TestListAvailableSpecs_Nested(t *testing.T) {
 	if specs[0] != "flat-spec" {
 		t.Errorf("specs[0] = %q, want %q", specs[0], "flat-spec")
 	}
-	expected := filepath.Join("skills", "skills-audit")
+	// Spec names are slash-form on every OS: they are identifiers the user
+	// types back into "/run <spec-name>", not paths to display.
+	expected := "skills/skills-audit"
 	if specs[1] != expected {
 		t.Errorf("specs[1] = %q, want %q", specs[1], expected)
 	}

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dimetron/pi-go/internal/config"
@@ -442,7 +443,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	}
 
 	// Generate agent ID.
-	agentID := fmt.Sprintf("%s-%d", agent.Name, time.Now().UnixNano())
+	agentID := fmt.Sprintf("%s-%d", agent.Name, uniqueNano())
 
 	// Determine if worktree is needed.
 	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir)
@@ -863,4 +864,28 @@ func (o *Orchestrator) SpawnWithInput(ctx context.Context, input AgentInput) (<-
 		return nil, "", err
 	}
 	return o.Spawn(ctx, spawnInput)
+}
+
+// lastAgentNano is the timestamp the previous agent ID was minted from.
+var lastAgentNano atomic.Int64
+
+// uniqueNano returns a strictly increasing nanosecond timestamp for agent IDs.
+//
+// The ID is "<name>-<nanos>", and the orchestrator keys its agent table on it,
+// so two spawns minted from the same clock reading collide and the second
+// silently replaces the first. On Linux that needs two spawns inside the same
+// nanosecond; on Windows the monotonic clock ticks in 100ns steps -- and
+// coarser still on older kernels -- so a retry after an instant crash, as
+// SpawnWithRetry performs, reproduced it.
+func uniqueNano() int64 {
+	for {
+		now := time.Now().UnixNano()
+		last := lastAgentNano.Load()
+		if now <= last {
+			now = last + 1
+		}
+		if lastAgentNano.CompareAndSwap(last, now) {
+			return now
+		}
+	}
 }

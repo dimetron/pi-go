@@ -10,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestTracerReturnsTracer(t *testing.T) {
@@ -348,7 +350,7 @@ func TestIsAvailable_ProbesTheConfiguredHost(t *testing.T) {
 
 	// envOr consults ~/.pi-go/.env before the process environment, so an
 	// empty HOME is what makes t.Setenv authoritative here.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
 
@@ -373,7 +375,7 @@ func TestDialAddress_InvalidEndpoint(t *testing.T) {
 }
 
 func TestIsAvailable_InvalidEndpoint_ReturnsFalse(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "%")

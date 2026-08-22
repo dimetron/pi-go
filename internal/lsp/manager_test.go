@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -542,10 +543,17 @@ func TestFileURIAbsoluteConversion(t *testing.T) {
 		t.Errorf("fileURI returned unexpected value: %s", uri)
 	}
 
-	// Absolute path should work normally.
-	uri2 := fileURI("/tmp/absolute.go")
-	if uri2 != "file:///tmp/absolute.go" {
-		t.Errorf("fileURI(/tmp/absolute.go) = %q, want file:///tmp/absolute.go", uri2)
+	// Absolute path should work normally. What counts as absolute is
+	// platform-dependent -- "/tmp/absolute.go" is drive-relative on Windows and
+	// resolves to C:\tmp\absolute.go -- so derive the expectation the same way
+	// fileURI does rather than hardcoding the Unix answer.
+	abs, err := filepath.Abs("/tmp/absolute.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "file:///" + strings.TrimPrefix(filepath.ToSlash(abs), "/")
+	if uri2 := fileURI("/tmp/absolute.go"); uri2 != want {
+		t.Errorf("fileURI(/tmp/absolute.go) = %q, want %q", uri2, want)
 	}
 }
 

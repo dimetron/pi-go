@@ -645,7 +645,7 @@ var cogPAGoldens = map[string]string{
   }
 ]`,
 	"TestCogPAXAIInputConversionError": `[
-  "xAI Responses API failed: Post \"http://127.0.0.1:1/responses\": dial tcp 127.0.0.1:1: connect: connection refused"
+  "xAI Responses API failed: Post \"nodial://127.0.0.1:1/responses\": unsupported protocol scheme \"nodial\""
 ]`,
 	"TestCogPAXAINilRequest": `[
   "xAI responses: nil LLM request"
@@ -1508,8 +1508,13 @@ func TestCogPAXAINilRequest(t *testing.T) {
 
 // TestCogPAXAIInputConversionError pins the wrapping of an input-conversion
 // failure, which happens before any request is built.
+//
+// The base URL carries a scheme net/http refuses, so the failure is reported
+// by the client itself rather than by the OS's dialer: a refused TCP connect
+// reads "connect: connection refused" on Linux but "connectex: No connection
+// could be made ..." on Windows, and a golden cannot hold both.
 func TestCogPAXAIInputConversionError(t *testing.T) {
-	llm, err := NewXAI(context.Background(), "grok-4.6", "k", "http://127.0.0.1:1", "", nil)
+	llm, err := NewXAI(context.Background(), "grok-4.6", "k", "nodial://127.0.0.1:1", "", nil)
 	if err != nil {
 		t.Fatalf("NewXAI: %v", err)
 	}

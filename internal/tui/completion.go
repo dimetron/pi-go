@@ -288,7 +288,11 @@ func matchingFiles(prefix string, workDir string) []CompletionCandidate {
 		return nil
 	}
 
-	lowerPrefix := strings.ToLower(prefix)
+	// @mentions are written with forward slashes -- that is what a user types
+	// and what the model emits -- so both sides of the comparison are
+	// normalized to them. Matching raw OS paths meant "src/" found nothing on
+	// Windows, where the walk yields "src\main.go".
+	lowerPrefix := strings.ToLower(filepath.ToSlash(prefix))
 	var candidates []CompletionCandidate
 
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
@@ -299,6 +303,7 @@ func matchingFiles(prefix string, workDir string) []CompletionCandidate {
 		if rel == "." {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
 
 		base := d.Name()
 		if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" {

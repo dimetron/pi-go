@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestGeneratePKCE(t *testing.T) {
@@ -524,9 +526,7 @@ func TestFindProvider(t *testing.T) {
 
 func TestSaveKey(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	_ = os.Setenv("HOME", tmpDir)
-	defer func() { _ = os.Setenv("HOME", origHome) }()
+	testenv.SetHome(t, tmpDir)
 
 	if err := SaveKey("TEST_KEY", "test-value-123"); err != nil {
 		t.Fatalf("SaveKey error: %v", err)
@@ -988,9 +988,7 @@ func TestPollDeviceToken_SlowDown(t *testing.T) {
 
 func TestSaveKey_ExistingFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	_ = os.Setenv("HOME", tmpDir)
-	defer func() { _ = os.Setenv("HOME", origHome) }()
+	testenv.SetHome(t, tmpDir)
 
 	piDir := filepath.Join(tmpDir, ".pi-go")
 	_ = os.MkdirAll(piDir, 0700)
@@ -1169,12 +1167,10 @@ func TestPollDeviceToken_FatalError(t *testing.T) {
 }
 
 func TestSaveKey_MkdirAllError(t *testing.T) {
-	origHome := os.Getenv("HOME")
 	// Point HOME to a file (not directory) to make MkdirAll fail.
 	tmpFile := filepath.Join(t.TempDir(), "fakefile")
 	_ = os.WriteFile(tmpFile, []byte("x"), 0600)
-	os.Setenv("HOME", tmpFile) // .pi-go will be tmpFile/.pi-go which can't be created
-	defer func() { _ = os.Setenv("HOME", origHome) }()
+	testenv.SetHome(t, tmpFile)
 
 	err := SaveKey("TEST_KEY", "test")
 	if err == nil {
@@ -1187,9 +1183,7 @@ func TestSaveKey_MkdirAllError(t *testing.T) {
 
 func TestSaveKey_WriteFileError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	_ = os.Setenv("HOME", tmpDir)
-	defer func() { _ = os.Setenv("HOME", origHome) }()
+	testenv.SetHome(t, tmpDir)
 
 	// Create .pi-go/.env as a directory to make WriteFile fail.
 	envDir := filepath.Join(tmpDir, ".pi-go", ".env")
