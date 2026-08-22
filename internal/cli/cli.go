@@ -356,6 +356,11 @@ func resolveRuntimeContextWindow(ctx context.Context, cfg config.Config, info pr
 			ctxWindowSize = n
 		}
 	}
+	if info.Provider == "openrouter" {
+		if n := provider.OpenRouterContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
 	// An explicit config value wins: the embedded catalog does not cover every
 	// provider's models, and auto-compaction needs a real window to work from.
 	if cfg.ContextWindow > 0 {

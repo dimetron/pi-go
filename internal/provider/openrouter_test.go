@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -272,4 +273,124 @@ func TestOpenRouterFinishReasonMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// openrouterResetWindowCache empties the shared /models cache between tests so
+// each one starts with a cold lookup.
+func openrouterResetWindowCache() {
+	openrouterWindowCacheMu.Lock()
+	openrouterWindowCache = map[string]openrouterWindowEntry{}
+	openrouterWindowCacheMu.Unlock()
+}
+
+func TestOpenRouterContextWindowSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		json  string
+		model string
+		want  int64
+	}{
+		{
+			name:  "top_provider context length wins",
+			json:  `{"data":[{"id":"a/model","context_length":1000000,"top_provider":{"context_length":200000}}]}`,
+			model: "a/model",
+			want:  200000,
+		},
+		{
+			name:  "falls back to model-level context length",
+			json:  `{"data":[{"id":"a/model","context_length":262144}]}`,
+			model: "a/model",
+			want:  262144,
+		},
+		{
+			name:  "lookup is case-insensitive",
+			json:  `{"data":[{"id":"A/Model","context_length":4096}]}`,
+			model: "A/Model",
+			want:  4096,
+		},
+		{
+			name:  "zero or negative lengths are not answers",
+			json:  `{"data":[{"id":"a/model","context_length":0,"top_provider":{"context_length":-5}}]}`,
+			model: "a/model",
+			want:  0,
+		},
+		{
+			name:  "unknown model yields zero",
+			json:  `{"data":[{"id":"other/model","context_length":8192}]}`,
+			model: "a/model",
+			want:  0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			openrouterResetWindowCache()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.json))
+			}))
+			t.Cleanup(srv.Close)
+
+			if got := OpenRouterContextWindowSize(context.Background(), srv.URL, tc.model); got != tc.want {
+				t.Errorf("OpenRouterContextWindowSize = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenRouterContextWindowSizeFailures(t *testing.T) {
+	t.Run("empty model name", func(t *testing.T) {
+		if got := OpenRouterContextWindowSize(context.Background(), "http://example.invalid", ""); got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+	t.Run("openrouter/auto has no window of its own", func(t *testing.T) {
+		if got := OpenRouterContextWindowSize(context.Background(), "http://example.invalid", "auto"); got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+	t.Run("unparseable base URL", func(t *testing.T) {
+		openrouterResetWindowCache()
+		if got := OpenRouterContextWindowSize(context.Background(), "http://[::1", "m"); got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+	t.Run("server error", func(t *testing.T) {
+		openrouterResetWindowCache()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		if got := OpenRouterContextWindowSize(context.Background(), srv.URL, "m"); got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+	t.Run("malformed JSON body", func(t *testing.T) {
+		openrouterResetWindowCache()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("<html>not json</html>"))
+		}))
+		t.Cleanup(srv.Close)
+		if got := OpenRouterContextWindowSize(context.Background(), srv.URL, "m"); got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+	t.Run("repeat lookups are served from the cache", func(t *testing.T) {
+		openrouterResetWindowCache()
+		var fetches int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&fetches, 1)
+			_, _ = w.Write([]byte(`{"data":[{"id":"m","context_length":1234}]}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		for range 3 {
+			if got := OpenRouterContextWindowSize(context.Background(), srv.URL, "m"); got != 1234 {
+				t.Fatalf("OpenRouterContextWindowSize = %d, want 1234", got)
+			}
+		}
+		if n := atomic.LoadInt32(&fetches); n != 1 {
+			t.Errorf("server handled %d requests, want 1 (cache miss only)", n)
+		}
+	})
 }

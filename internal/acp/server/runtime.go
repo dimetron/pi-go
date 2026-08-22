@@ -322,10 +322,16 @@ func resolveSessionProvider(cfg config.Config, flagBaseURL, modelName, providerN
 }
 
 // sessionContextWindow returns the model's context window, preferring the size
-// a running Ollama reports over the static table.
+// a running Ollama reports or the OpenRouter listing publishes over the static
+// table.
 func sessionContextWindow(ctx context.Context, info provider.Info, baseURL string) int64 {
 	if info.Ollama {
 		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			return n
+		}
+	}
+	if info.Provider == "openrouter" {
+		if n := provider.OpenRouterContextWindowSize(ctx, baseURL, info.Model); n > 0 {
 			return n
 		}
 	}
