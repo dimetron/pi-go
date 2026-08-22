@@ -49,7 +49,7 @@ are intentional omissions in TS ("build it as an extension").
 
 | Dimension | TypeScript pi | Go pi |
 |---|---|---|
-| Language / runtime | TypeScript on Node.js (Bun binary builds supported) | Go 1.26, single static binary |
+| Language / runtime | TypeScript on Node.js (Bun binary builds supported) | Go 1.27, single static binary |
 | Agent core | Custom (`@mariozechner/pi-agent-core`) | Google ADK for Go (`google.golang.org/adk`) — agent, runner, `model.LLM`, `tool.Tool`, `session.Service` |
 | LLM abstraction | `@mariozechner/pi-ai` (20+ providers, unified streaming API) | `internal/provider` adapters implementing ADK `model.LLM` (5 providers) |
 | TUI | `@mariozechner/pi-tui` (custom differential renderer) | Bubble Tea v2 + Glamour (`internal/tui`) |

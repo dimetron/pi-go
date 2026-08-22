@@ -20,13 +20,13 @@
     // Keep in sync with the `go` directive in go.mod — CI resolves the
     // toolchain with `go-version-file: go.mod`.
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.26.5",
-      // ci.yml asks the action for "v2.11", which resolves to the newest
-      // v2.11.x — so pin the patch here rather than v2.11.0, or the container
+      "version": "1.27.0",
+      // ci.yml asks the action for "v2.13", which resolves to the newest
+      // v2.13.x — so pin the patch here rather than v2.13.0, or the container
       // lints with an older ruleset than CI does. The feature has no way to
       // skip this install: "latest" and "" mean latest, and anything else is
       // used verbatim as the tag "v${value}" (so "none" 404s on "vnone").
-      "golangciLintVersion": "2.11.4"
+      "golangciLintVersion": "2.13.1"
     },
     // Node, Python and Rust are deliberately absent. They exist only to run
     // real language servers for internal/lsp, and every test that needs one

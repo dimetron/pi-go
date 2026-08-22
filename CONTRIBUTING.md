@@ -5,7 +5,7 @@ First off, thank you for considering contributing to pi-go! It's a complex proje
 ## Getting Started
 
 ### Prerequisites
-- **Go 1.26+**: Ensure you have the latest stable Go version installed.
+- **Go 1.27+**: Ensure you have the latest stable Go version installed.
 - **LLM API Keys**: You'll need at least one API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`) to test the agent's functionality.
 - **Git**: For version control.
 

@@ -214,7 +214,7 @@ gh pr create --fill --web        # --web opens the PR page in the browser
 
 ## Build, test, lint
 
-Go 1.26.5. Use the Makefile rather than raw `go` invocations where a target
+Go 1.27.0. Use the Makefile rather than raw `go` invocations where a target
 exists:
 
 ```bash
