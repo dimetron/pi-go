@@ -2,10 +2,15 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/config"
 )
@@ -41,6 +46,15 @@ func withLLMSClient(t *testing.T, c *http.Client) {
 	t.Cleanup(func() { llmsClientOverride = prev })
 }
 
+// adkToolset returns a toolset configured with a single adk.dev source.
+func adkToolset() *LLMSToolset {
+	return NewLLMSToolset(&config.LLMSConfig{
+		Sources: []config.LLMSSource{
+			{Name: "adk", URL: "https://adk.dev/llms.txt"},
+		},
+	})
+}
+
 func TestLLMSFetchDocs(t *testing.T) {
 	srv, ts := newLLMSTestServer(t, "# Test Docs\n\nSome content")
 	out, err := ts.fetchDocs(context.Background(), srv.URL+"/page.md")
@@ -55,12 +69,80 @@ func TestLLMSFetchDocs(t *testing.T) {
 	}
 }
 
-func TestLLMSHostAllowed(t *testing.T) {
+func TestLLMSFetchDocsEmptyURL(t *testing.T) {
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "   ")
+	if !strings.Contains(out.Error, "url is required") {
+		t.Fatalf("expected 'url is required', got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsParseError(t *testing.T) {
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "://bad")
+	if !strings.Contains(out.Error, "parse url") {
+		t.Fatalf("expected 'parse url', got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsNoHost(t *testing.T) {
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "https:///path")
+	if !strings.Contains(out.Error, "url has no host") {
+		t.Fatalf("expected 'url has no host', got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsRejectsPrivateHost(t *testing.T) {
+	// No withAllowedTestHosts here: 127.0.0.1 must be rejected by the SSRF guard.
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "https://127.0.0.1/page.md")
+	if !strings.Contains(out.Error, "url rejected") {
+		t.Fatalf("expected 'url rejected', got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsDisallowedHost(t *testing.T) {
+	// Use a host that resolves to a public IP so the SSRF guard passes and the
+	// host allow-list check is what rejects it. localhost is private, so use a
+	// clearly-public-but-unreachable host; the allow-list check runs before any
+	// network dial.
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "https://example.com/page.md")
+	if !strings.Contains(out.Error, "not an allowed documentation source") {
+		t.Fatalf("expected host rejection, got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsHTTPError(t *testing.T) {
+	// A client whose Do always fails exercises the "fetch failed" branch.
+	withLLMSClient(t, &http.Client{Transport: errorTransport{}})
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "https://adk.dev/page.md")
+	if !strings.Contains(out.Error, "fetch failed") {
+		t.Fatalf("expected 'fetch failed', got %q", out.Error)
+	}
+}
+
+func TestLLMSFetchDocsNon200(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	withAllowedTestHosts(t, "127.0.0.1", "::1")
+	withLLMSClient(t, srv.Client())
+
 	ts := NewLLMSToolset(&config.LLMSConfig{
-		Sources: []config.LLMSSource{
-			{Name: "adk", URL: "https://adk.dev/llms.txt"},
-		},
+		Sources: []config.LLMSSource{{Name: "test", URL: srv.URL + "/llms.txt"}},
 	})
+	out, _ := ts.fetchDocs(context.Background(), srv.URL+"/page.md")
+	if !strings.Contains(out.Error, "unexpected status 500") {
+		t.Fatalf("expected 'unexpected status 500', got %q", out.Error)
+	}
+}
+
+func TestLLMSHostAllowed(t *testing.T) {
+	ts := adkToolset()
 	if !ts.hostAllowed("adk.dev") {
 		t.Fatal("expected adk.dev to be allowed")
 	}
@@ -69,14 +151,116 @@ func TestLLMSHostAllowed(t *testing.T) {
 	}
 }
 
-func TestLLMSRejectsNonHTTPS(t *testing.T) {
+func TestLLMSHostAllowedSkipsInvalidSource(t *testing.T) {
+	// A source with an unparseable URL must be skipped, not panic.
 	ts := NewLLMSToolset(&config.LLMSConfig{
 		Sources: []config.LLMSSource{
+			{Name: "bad", URL: "://not-a-url"},
 			{Name: "adk", URL: "https://adk.dev/llms.txt"},
 		},
 	})
+	if !ts.hostAllowed("adk.dev") {
+		t.Fatal("expected adk.dev to be allowed despite invalid source")
+	}
+}
+
+func TestLLMSRejectsNonHTTPS(t *testing.T) {
+	ts := adkToolset()
 	out, _ := ts.fetchDocs(context.Background(), "http://adk.dev/page.md")
 	if !strings.Contains(out.Error, "https") {
 		t.Fatalf("expected https rejection, got %q", out.Error)
 	}
 }
+
+func TestLLMSBuildDescription(t *testing.T) {
+	withSources := buildLLMSDescription([]config.LLMSSource{
+		{Name: "adk", URL: "https://adk.dev/llms.txt"},
+		{Name: "langchain", URL: "https://python.langchain.com/llms.txt"},
+	})
+	if !strings.Contains(withSources, "adk") || !strings.Contains(withSources, "langchain") {
+		t.Fatalf("expected both source names in description, got %q", withSources)
+	}
+
+	without := buildLLMSDescription(nil)
+	if !strings.Contains(without, "No llms.txt sources configured") {
+		t.Fatalf("expected 'No llms.txt sources configured', got %q", without)
+	}
+}
+
+func TestLLMSToolsetName(t *testing.T) {
+	ts := NewLLMSToolset(nil)
+	if ts.Name() != "llms" {
+		t.Fatalf("Name() = %q, want 'llms'", ts.Name())
+	}
+}
+
+func TestLLMSToolsetTools(t *testing.T) {
+	ts := adkToolset()
+	ctx := &mockReadonlyContext{Context: context.Background()}
+	tools, err := ts.Tools(ctx)
+	if err != nil {
+		t.Fatalf("Tools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("Tools() returned %d tools, want 1", len(tools))
+	}
+}
+
+func TestLLMSToolInvoke(t *testing.T) {
+	// Exercise the full tool.Tool Run path (functiontool factory closure),
+	// not just the direct handler.
+	srv, ts := newLLMSTestServer(t, "# Invoked Docs")
+	ctx := &mockReadonlyContext{Context: context.Background()}
+	tools, err := ts.Tools(ctx)
+	if err != nil {
+		t.Fatalf("Tools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("Tools() returned %d tools, want 1", len(tools))
+	}
+
+	// The tool is a coercingTool wrapping the functiontool; runTool invokes it
+	// through the Run interface, covering the factory closure.
+	m := runTool(t, tools[0], map[string]any{"url": srv.URL + "/page.md"})
+	content, _ := m["content"].(string)
+	if !strings.Contains(content, "Invoked Docs") {
+		t.Fatalf("expected content to contain 'Invoked Docs', got %q", content)
+	}
+}
+
+// errorTransport is a RoundTripper that always fails, to exercise the
+// "fetch failed" branch without a real network.
+type errorTransport struct{}
+
+func (errorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
+}
+
+// errorBodyTransport returns a 200 response whose body fails on read, to
+// exercise the "read body" error branch.
+type errorBodyTransport struct{}
+
+func (errorBodyTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(errReader{}),
+		Header:     make(http.Header),
+	}, nil
+}
+
+// errReader is an io.Reader that always fails.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+func TestLLMSFetchDocsBodyReadError(t *testing.T) {
+	withLLMSClient(t, &http.Client{Transport: errorBodyTransport{}})
+	ts := adkToolset()
+	out, _ := ts.fetchDocs(context.Background(), "https://adk.dev/page.md")
+	if !strings.Contains(out.Error, "read body") {
+		t.Fatalf("expected 'read body', got %q", out.Error)
+	}
+}
+
+var _ tool.Tool = (*coercingTool)(nil)
+var _ agent.Context = mockToolCtx{}
