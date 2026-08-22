@@ -36,6 +36,7 @@ import (
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/pirpc"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/retry"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -112,6 +113,7 @@ routing you need:
   gemini-*                 Google Gemini   GEMINI_API_KEY (or GOOGLE_API_KEY)
   mistral-*, magistral-*   Mistral         MISTRAL_API_KEY
   grok-*                   xAI             XAI_API_KEY
+  openrouter/<model>       OpenRouter      OPENROUTER_API_KEY
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
   azure/<deployment>       Azure OpenAI    AZURE_OPENAI_API_KEY
@@ -136,6 +138,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 
   # xAI
   pi --model grok-4.6 "trace where this request handler blocks"
+
+  # OpenRouter — any model in the OpenRouter catalog, vendor-prefixed ID
+  pi --model openrouter/google/gemini-3.7-flash "compare these two APIs"
 
   # Ollama against a local daemon — no API key needed
   pi --model ollama/gemma4:e4b "rename this symbol everywhere"
@@ -276,6 +281,94 @@ func loadRootConfig() (config.Config, error) {
 	return cfg, nil
 }
 
+// resolveRuntimeModel turns the role's model and provider names into a
+// validated provider.Info plus the base URL actually used to reach it. An
+// explicit --url wins; otherwise the config's per-provider base URL is
+// consulted, first under the role's provider name and then under the provider
+// the model itself resolved to.
+func resolveRuntimeModel(cfg config.Config, modelName, providerName string) (provider.Info, string, error) {
+	baseURL := flagURL
+	if baseURL == "" && providerName != "" {
+		baseURLs := cfg.ResolveBaseURLs()
+		baseURL = baseURLs[providerName]
+	}
+	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
+	if err != nil {
+		return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+	}
+	if providerName != "" {
+		info.Provider = providerName
+		info.Custom = baseURL != ""
+	}
+	if baseURL == "" {
+		baseURLs := cfg.ResolveBaseURLs()
+		baseURL = baseURLs[info.Provider]
+		if baseURL != "" {
+			info.Custom = true
+		}
+	}
+	if err := provider.ValidateModel(info); err != nil {
+		return provider.Info{}, "", fmt.Errorf("model validation: %w", err)
+	}
+	return info, baseURL, nil
+}
+
+// requireRuntimeAPIKey rejects a provider that needs a key when none is
+// available. A custom base URL, or a provider that authenticates some other
+// way, is exempt.
+func requireRuntimeAPIKey(info provider.Info, apiKey, baseURL string) error {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+		envVar := providerEnvVar(info.Provider)
+		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
+	}
+	return nil
+}
+
+// applyRuntimeOllamaEndpoint picks the Ollama daemon for the model, records it
+// on info, and health-checks a local daemon before anything depends on it. It
+// returns the base URL to use; non-Ollama models pass through untouched.
+func applyRuntimeOllamaEndpoint(info *provider.Info, apiKey, baseURL string) (string, error) {
+	if info.Ollama {
+		// The model's tag decides the daemon, not whether OLLAMA_API_KEY
+		// happens to be exported: a key set for some :cloud model used to send
+		// locally pulled names like qwen3.8:27b-mlx to api.ollama.com, which
+		// answers 404 for a model only this machine has.
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		// Record the endpoint actually chosen so session metadata names the
+		// backend instead of leaving the model name to be interpreted.
+		info.BaseURL = baseURL
+	}
+	if info.Ollama && apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
+		if err := provider.CheckOllama(baseURL); err != nil {
+			return "", fmt.Errorf("ollama health check: %w", err)
+		}
+	}
+	return baseURL, nil
+}
+
+// resolveRuntimeContextWindow picks the context window to budget against: the
+// catalog size, overridden by what a live Ollama daemon reports, overridden in
+// turn by an explicit config value.
+func resolveRuntimeContextWindow(ctx context.Context, cfg config.Config, info provider.Info, baseURL string) int64 {
+	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
+	if info.Ollama {
+		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
+	if info.Provider == "openrouter" {
+		if n := provider.OpenRouterContextWindowSize(ctx, baseURL, info.Model); n > 0 {
+			ctxWindowSize = n
+		}
+	}
+	// An explicit config value wins: the embedded catalog does not cover every
+	// provider's models, and auto-compaction needs a real window to work from.
+	if cfg.ContextWindow > 0 {
+		ctxWindowSize = cfg.ContextWindow
+	}
+	return ctxWindowSize
+}
+
 func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	cfg, err := loadRootConfig()
 	if err != nil {
@@ -298,48 +391,20 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	mode := resolveMode()
-	baseURL := flagURL
-	if baseURL == "" && providerName != "" {
-		baseURLs := cfg.ResolveBaseURLs()
-		baseURL = baseURLs[providerName]
-	}
-	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
+	info, baseURL, err := resolveRuntimeModel(cfg, modelName, providerName)
 	if err != nil {
-		return rootRuntime{}, fmt.Errorf("resolving model: %w", err)
-	}
-	if providerName != "" {
-		info.Provider = providerName
-		info.Custom = baseURL != ""
-	}
-	if baseURL == "" {
-		baseURLs := cfg.ResolveBaseURLs()
-		baseURL = baseURLs[info.Provider]
-		if baseURL != "" {
-			info.Custom = true
-		}
-	}
-	if err := provider.ValidateModel(info); err != nil {
-		return rootRuntime{}, fmt.Errorf("model validation: %w", err)
+		return rootRuntime{}, err
 	}
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
-	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
-		envVar := providerEnvVar(info.Provider)
-		return rootRuntime{}, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
+	if err := requireRuntimeAPIKey(info, apiKey, baseURL); err != nil {
+		return rootRuntime{}, err
 	}
 
-	if baseURL == "" && info.Ollama {
-		if apiKey != "" {
-			baseURL = "https://api.ollama.com"
-		} else {
-			baseURL = "http://localhost:11434"
-		}
-	}
-	if info.Ollama && apiKey == "" {
-		if err := provider.CheckOllama(baseURL); err != nil {
-			return rootRuntime{}, fmt.Errorf("ollama health check: %w", err)
-		}
+	baseURL, err = applyRuntimeOllamaEndpoint(&info, apiKey, baseURL)
+	if err != nil {
+		return rootRuntime{}, err
 	}
 
 	llmOpts := &provider.LLMOptions{
@@ -355,18 +420,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
-	if info.Ollama {
-		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			ctxWindowSize = n
-		}
-	}
-	// An explicit config value wins: the embedded catalog does not cover every
-	// provider's models, and auto-compaction needs a real window to work from.
-	if cfg.ContextWindow > 0 {
-		ctxWindowSize = cfg.ContextWindow
-	}
-	tokenTracker.SetContextWindowSize(ctxWindowSize)
+	tokenTracker.SetContextWindowSize(resolveRuntimeContextWindow(ctx, cfg, info, baseURL))
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	cwd, err := os.Getwd()
@@ -581,26 +635,13 @@ func runNonInteractive(
 	memStore, memWorker, closeMemory := setupMemory(parentCtx, cfg, orch)
 	defer closeMemory()
 
-	if memStore != nil {
-		memTools, memErr := tools.MemoryTools(memStore)
-		if memErr != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: memory tools disabled: %v\n", memErr)
-		} else if memTools != nil {
-			coreTools = append(coreTools, memTools...)
-		}
-	}
+	coreTools = appendNonInteractiveMemoryTools(coreTools, memStore)
 
 	palaceTools, palaceContext, closePalace := setupPalace(cfg, memWorker)
 	defer closePalace()
 	coreTools = append(coreTools, palaceTools...)
 
-	instruction := agent.LoadInstruction(agent.SystemInstruction)
-	if flagSystem != "" {
-		instruction = flagSystem
-	}
-	if palaceContext != "" {
-		instruction += "\n\n## Palace Memory Context\n\n" + palaceContext
-	}
+	instruction := buildNonInteractiveInstruction(palaceContext)
 
 	hooks := convertHooks(cfg.Hooks)
 	beforeCBs := extension.BuildBeforeToolCallbacks(hooks)
@@ -634,12 +675,9 @@ func runNonInteractive(
 	// capability it cannot use. Gate on a server existing, then advertise only
 	// as much surface as the mode asks for. The after-tool callback stays wired
 	// either way; it is free when no server starts.
-	if lspMgr.AnyAvailable() {
-		lspTools, lspErr := tools.LSPToolsFor(lspMgr, resolveLSPMode())
-		if lspErr != nil {
-			return fmt.Errorf("creating LSP tools: %w", lspErr)
-		}
-		coreTools = append(coreTools, lspTools...)
+	coreTools, err = appendNonInteractiveLSPTools(coreTools, lspMgr)
+	if err != nil {
+		return err
 	}
 
 	allToolsets := buildToolsets(cfg)
@@ -647,13 +685,9 @@ func runNonInteractive(
 	loadNonInteractiveSkills(mode)
 	instruction += memoryInstructionContext(parentCtx, memStore, cfg, cwd)
 
-	sessionsPath, err := sessionsDir()
+	sessionsPath, sessionSvc, err := openSessionService()
 	if err != nil {
 		return err
-	}
-	sessionSvc, err := pisession.NewFileService(sessionsPath)
-	if err != nil {
-		return fmt.Errorf("creating session service: %w", err)
 	}
 
 	// Gemini search grounding. Always on for the Gemini provider; kill
@@ -727,19 +761,90 @@ func runNonInteractive(
 	// Capture ACP subagent events (claude, gemini) under the session dir.
 	orch.SetACPLogPath(filepath.Join(sessionsPath, sessionID, "acp.jsonl"))
 
-	if memStore != nil {
-		// Arms the observation callback wired above.
-		memSessionID = sessionID
-		_ = memStore.CreateSession(ctx, &memory.Session{
-			SessionID: sessionID,
-			Project:   cwd,
-			StartedAt: time.Now(),
-			Status:    "active",
-		})
-	}
+	armMemoryObservationSession(ctx, memStore, sessionID, cwd, &memSessionID)
 
 	sessionLog.SessionStart(sessionID, llm.Name(), mode)
 	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker)
+}
+
+// appendNonInteractiveMemoryTools adds the memory tools when a store is
+// configured. Memory is optional: a tool-construction failure is a warning and
+// the run continues without them.
+func appendNonInteractiveMemoryTools(coreTools []adktool.Tool, memStore memory.Store) []adktool.Tool {
+	if memStore == nil {
+		return coreTools
+	}
+	memTools, memErr := tools.MemoryTools(memStore)
+	if memErr != nil {
+		fmt.Fprintf(os.Stderr, "pi-go: warning: memory tools disabled: %v\n", memErr)
+		return coreTools
+	}
+	if memTools != nil {
+		coreTools = append(coreTools, memTools...)
+	}
+	return coreTools
+}
+
+// buildNonInteractiveInstruction assembles the system instruction: the built-in
+// one unless --system replaces it, with the palace memory context appended.
+func buildNonInteractiveInstruction(palaceContext string) string {
+	instruction := agent.LoadInstruction(agent.SystemInstruction)
+	if flagSystem != "" {
+		instruction = flagSystem
+	}
+	if palaceContext != "" {
+		instruction += "\n\n## Palace Memory Context\n\n" + palaceContext
+	}
+	return instruction
+}
+
+// appendNonInteractiveLSPTools adds LSP tools only when a language server is
+// actually installed.
+//
+// LSP tool declarations are billed on every request, and with no server
+// installed every call they enable fails — so the model pays tokens for
+// capability it cannot use. Gate on a server existing, then advertise only
+// as much surface as the mode asks for. The after-tool callback stays wired
+// either way; it is free when no server starts.
+func appendNonInteractiveLSPTools(coreTools []adktool.Tool, lspMgr *lsp.Manager) ([]adktool.Tool, error) {
+	if !lspMgr.AnyAvailable() {
+		return coreTools, nil
+	}
+	lspTools, lspErr := tools.LSPToolsFor(lspMgr, resolveLSPMode())
+	if lspErr != nil {
+		return nil, fmt.Errorf("creating LSP tools: %w", lspErr)
+	}
+	return append(coreTools, lspTools...), nil
+}
+
+// openSessionService opens the on-disk session store, returning both the
+// directory it lives in and the service over it.
+func openSessionService() (string, *pisession.FileService, error) {
+	sessionsPath, err := sessionsDir()
+	if err != nil {
+		return "", nil, err
+	}
+	sessionSvc, err := pisession.NewFileService(sessionsPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("creating session service: %w", err)
+	}
+	return sessionsPath, sessionSvc, nil
+}
+
+// armMemoryObservationSession opens the memory session row and publishes the
+// session ID the observation callback records under. Until memSessionID is set
+// the callback is inert, so this is what arms it.
+func armMemoryObservationSession(ctx context.Context, memStore memory.Store, sessionID, project string, memSessionID *string) {
+	if memStore == nil {
+		return
+	}
+	*memSessionID = sessionID
+	_ = memStore.CreateSession(ctx, &memory.Session{
+		SessionID: sessionID,
+		Project:   project,
+		StartedAt: time.Now(),
+		Status:    "active",
+	})
 }
 
 // loadNonInteractiveSkills loads the skill set and reports what it found.
@@ -1156,6 +1261,9 @@ func buildToolsets(cfg config.Config) []adktool.Toolset {
 	if cfg.A2A != nil && len(cfg.A2A.Agents) > 0 {
 		toolsets = append(toolsets, tools.NewA2AToolset(cfg.A2A))
 	}
+	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
+		toolsets = append(toolsets, tools.NewLLMSToolset(cfg.LLMS))
+	}
 	return toolsets
 }
 
@@ -1249,43 +1357,64 @@ func lastLoggedError() (path, msg string, err error) {
 		}
 		return "", "", err
 	}
+	// Log directories sort ascending by date, so walking backwards reaches the
+	// most recent one first.
 	for i := len(dateDirs) - 1; i >= 0; i-- {
 		d := dateDirs[i]
 		if !d.IsDir() {
 			continue
 		}
-		datePath := filepath.Join(logRoot, d.Name())
-		files, listErr := os.ReadDir(datePath)
-		if listErr != nil {
-			continue
-		}
-		for j := len(files) - 1; j >= 0; j-- {
-			f := files[j]
-			if f.IsDir() || !strings.HasPrefix(f.Name(), "session-") || !strings.HasSuffix(f.Name(), ".log") {
-				continue
-			}
-			p := filepath.Join(datePath, f.Name())
-			blob, readErr := os.ReadFile(p)
-			if readErr != nil {
-				continue
-			}
-			lines := strings.Split(string(blob), "\n")
-			for k := len(lines) - 1; k >= 0; k-- {
-				line := strings.TrimSpace(lines[k])
-				if line == "" {
-					continue
-				}
-				var entry logger.Entry
-				if err := json.Unmarshal([]byte(line), &entry); err != nil {
-					continue
-				}
-				if entry.Type == "error" && entry.Content != "" {
-					return p, entry.Content, nil
-				}
-			}
+		if p, m := lastLoggedErrorInDateDir(filepath.Join(logRoot, d.Name())); m != "" {
+			return p, m, nil
 		}
 	}
 	return "", "", nil
+}
+
+// lastLoggedErrorInDateDir scans one date directory's session logs newest-first
+// and returns the path and message of the first error entry found. A directory
+// that cannot be listed yields no result rather than an error: this whole path
+// is a best-effort diagnostic hint.
+func lastLoggedErrorInDateDir(datePath string) (path, msg string) {
+	files, listErr := os.ReadDir(datePath)
+	if listErr != nil {
+		return "", ""
+	}
+	for j := len(files) - 1; j >= 0; j-- {
+		f := files[j]
+		if f.IsDir() || !strings.HasPrefix(f.Name(), "session-") || !strings.HasSuffix(f.Name(), ".log") {
+			continue
+		}
+		p := filepath.Join(datePath, f.Name())
+		if m := lastLoggedErrorInLogFile(p); m != "" {
+			return p, m
+		}
+	}
+	return "", ""
+}
+
+// lastLoggedErrorInLogFile returns the content of the last non-empty "error"
+// entry in one session log, or "" when it holds none or cannot be read.
+func lastLoggedErrorInLogFile(logPath string) string {
+	blob, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		return ""
+	}
+	lines := strings.Split(string(blob), "\n")
+	for k := len(lines) - 1; k >= 0; k-- {
+		line := strings.TrimSpace(lines[k])
+		if line == "" {
+			continue
+		}
+		var entry logger.Entry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Type == "error" && entry.Content != "" {
+			return entry.Content
+		}
+	}
+	return ""
 }
 
 func toolArgsPreview(args map[string]any) string {
@@ -1364,13 +1493,18 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 		_ = ag.SetSessionTitle(sessionID, title)
 	}
 	retryCfg := agent.DefaultRetryConfig()
+	// Say when a request is being re-sent, so a backoff pause is not mistaken
+	// for a hung run. stderr keeps it out of the captured reply.
+	ctx = retry.WithNotifier(ctx, func(a retry.Attempt) {
+		fmt.Fprintln(os.Stderr, a.String())
+	})
 	// GroundingMetadata repeats on every chunk of the response it grounds;
 	// report each search once.
 	groundedSeen := map[string]bool{}
 	// SSE delivers the reply as deltas and then once more as an aggregate;
 	// without this the whole answer prints twice.
 	var dedup agent.StreamDedup
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetryContext(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
@@ -1384,22 +1518,7 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 		if ev == nil {
 			continue
 		}
-		// Gemini grounding runs server-side and emits no FunctionCall, so it
-		// would otherwise be invisible. Report it like any other tool call.
-		if gm := ev.GroundingMetadata; gm != nil && len(gm.WebSearchQueries) > 0 {
-			key := agent.GroundingQueryKey(gm.WebSearchQueries)
-			if !groundedSeen[key] {
-				groundedSeen[key] = true
-				args := map[string]any{"query": agent.GroundingQuery(gm)}
-				fmt.Fprint(os.Stderr, formatPrintToolCall(agent.GroundingToolName, args))
-				log.ToolCall("grounding", agent.GroundingToolName, args)
-				for _, src := range strings.Split(agent.GroundingSummary(gm), "\n") {
-					fmt.Fprintf(os.Stderr, "%s   %s%s\n", printToolDimColor, src, printToolReset)
-				}
-				fmt.Fprint(os.Stderr, formatPrintToolDone(agent.GroundingToolName))
-				log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
-			}
-		}
+		printGroundingEvent(ev, groundedSeen, log)
 		// Without this, a provider failure exits 0 having printed nothing.
 		// See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
@@ -1410,31 +1529,62 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 			continue
 		}
 		dedup.BeginEvent(ev)
-		for _, part := range ev.Content.Parts {
-			if part.Text != "" && ev.Content.Role == "thinking" {
-				fmt.Fprintf(os.Stderr, "\033[2m%s\033[0m", part.Text)
-				log.Thinking(ev.Author, part.Text)
-				continue
-			}
-			if part.Text != "" {
-				if dedup.SkipText(ev) {
-					continue
-				}
-				fmt.Print(part.Text)
-				log.LLMText(ev.Author, part.Text)
-			}
-			if part.FunctionCall != nil {
-				fmt.Fprint(os.Stderr, formatPrintToolCall(part.FunctionCall.Name, part.FunctionCall.Args))
-				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
-			}
-			if part.FunctionResponse != nil {
-				fmt.Fprint(os.Stderr, formatPrintToolDone(part.FunctionResponse.Name))
-				log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
-			}
-		}
+		printEventParts(ev, &dedup, log)
 	}
 	fmt.Println()
 	return nil
+}
+
+// printGroundingEvent reports a server-side Gemini search as a tool call.
+//
+// Gemini grounding runs server-side and emits no FunctionCall, so it would
+// otherwise be invisible. GroundingMetadata repeats on every chunk of the
+// response it grounds, so groundedSeen keeps each search to one report.
+func printGroundingEvent(ev *session.Event, groundedSeen map[string]bool, log *logger.Logger) {
+	gm := ev.GroundingMetadata
+	if gm == nil || len(gm.WebSearchQueries) == 0 {
+		return
+	}
+	key := agent.GroundingQueryKey(gm.WebSearchQueries)
+	if groundedSeen[key] {
+		return
+	}
+	groundedSeen[key] = true
+	args := map[string]any{"query": agent.GroundingQuery(gm)}
+	fmt.Fprint(os.Stderr, formatPrintToolCall(agent.GroundingToolName, args))
+	log.ToolCall("grounding", agent.GroundingToolName, args)
+	for _, src := range strings.Split(agent.GroundingSummary(gm), "\n") {
+		fmt.Fprintf(os.Stderr, "%s   %s%s\n", printToolDimColor, src, printToolReset)
+	}
+	fmt.Fprint(os.Stderr, formatPrintToolDone(agent.GroundingToolName))
+	log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
+}
+
+// printEventParts writes one event's parts: reply text to stdout, thinking and
+// tool activity to stderr. The caller must have called dedup.BeginEvent for ev.
+func printEventParts(ev *session.Event, dedup *agent.StreamDedup, log *logger.Logger) {
+	for _, part := range ev.Content.Parts {
+		if part.Text != "" && ev.Content.Role == "thinking" {
+			fmt.Fprintf(os.Stderr, "\033[2m%s\033[0m", part.Text)
+			log.Thinking(ev.Author, part.Text)
+			continue
+		}
+		if part.Text != "" {
+			if dedup.SkipText(ev) {
+				continue
+			}
+			fmt.Print(part.Text)
+			log.LLMText(ev.Author, part.Text)
+		}
+		if part.FunctionCall != nil {
+			fmt.Fprint(os.Stderr, formatPrintToolCall(part.FunctionCall.Name, part.FunctionCall.Args))
+			log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
+		}
+		if part.FunctionResponse != nil {
+			fmt.Fprint(os.Stderr, formatPrintToolDone(part.FunctionResponse.Name))
+			log.ToolResult(ev.Author, part.FunctionResponse.Name, fmt.Sprintf("%v", part.FunctionResponse.Response))
+		}
+	}
 }
 
 // jsonEvent represents a JSONL event for JSON output mode.
@@ -1468,7 +1618,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	var dedup agent.StreamDedup
 
 	retryCfg := agent.DefaultRetryConfig()
-	for ev, err := range agent.WithRetry(retryCfg, func() iter.Seq2[*session.Event, error] {
+	for ev, err := range agent.WithRetryContext(ctx, retryCfg, func() iter.Seq2[*session.Event, error] {
 		return ag.RunStreaming(ctx, sessionID, prompt)
 	}) {
 		if err != nil {
@@ -1505,50 +1655,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		}
 
 		dedup.BeginEvent(ev)
-		for _, part := range ev.Content.Parts {
-			if part.Text != "" && ev.Content.Role == "thinking" {
-				_ = enc.Encode(jsonEvent{
-					Type:  "thinking_delta",
-					Agent: ev.Author,
-					Delta: part.Text,
-				})
-				log.Thinking(ev.Author, part.Text)
-				continue
-			}
-			if part.Text != "" {
-				if dedup.SkipText(ev) {
-					continue
-				}
-				_ = enc.Encode(jsonEvent{
-					Type:  "text_delta",
-					Agent: ev.Author,
-					Delta: part.Text,
-				})
-				log.LLMText(ev.Author, part.Text)
-			}
-			if part.FunctionCall != nil {
-				_ = enc.Encode(jsonEvent{
-					Type:      "tool_call",
-					Agent:     ev.Author,
-					ToolName:  part.FunctionCall.Name,
-					ToolInput: part.FunctionCall.Args,
-				})
-				log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
-			}
-			if part.FunctionResponse != nil {
-				respJSON, err := json.Marshal(part.FunctionResponse.Response)
-				if err != nil {
-					respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
-				}
-				_ = enc.Encode(jsonEvent{
-					Type:     "tool_result",
-					Agent:    ev.Author,
-					ToolName: part.FunctionResponse.Name,
-					Content:  string(respJSON),
-				})
-				log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
-			}
-		}
+		encodeEventParts(enc, ev, &dedup, log)
 	}
 	if !started {
 		const warn = "pi-go: warning: no assistant events received before message_end"
@@ -1557,6 +1664,56 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	}
 	_ = enc.Encode(jsonEvent{Type: "message_end"})
 	return nil
+}
+
+// encodeEventParts emits one event's parts as JSONL: thinking_delta,
+// text_delta, tool_call and tool_result. The caller must have called
+// dedup.BeginEvent for ev.
+func encodeEventParts(enc *json.Encoder, ev *session.Event, dedup *agent.StreamDedup, log *logger.Logger) {
+	for _, part := range ev.Content.Parts {
+		if part.Text != "" && ev.Content.Role == "thinking" {
+			_ = enc.Encode(jsonEvent{
+				Type:  "thinking_delta",
+				Agent: ev.Author,
+				Delta: part.Text,
+			})
+			log.Thinking(ev.Author, part.Text)
+			continue
+		}
+		if part.Text != "" {
+			if dedup.SkipText(ev) {
+				continue
+			}
+			_ = enc.Encode(jsonEvent{
+				Type:  "text_delta",
+				Agent: ev.Author,
+				Delta: part.Text,
+			})
+			log.LLMText(ev.Author, part.Text)
+		}
+		if part.FunctionCall != nil {
+			_ = enc.Encode(jsonEvent{
+				Type:      "tool_call",
+				Agent:     ev.Author,
+				ToolName:  part.FunctionCall.Name,
+				ToolInput: part.FunctionCall.Args,
+			})
+			log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
+		}
+		if part.FunctionResponse != nil {
+			respJSON, err := json.Marshal(part.FunctionResponse.Response)
+			if err != nil {
+				respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
+			}
+			_ = enc.Encode(jsonEvent{
+				Type:     "tool_result",
+				Agent:    ev.Author,
+				ToolName: part.FunctionResponse.Name,
+				Content:  string(respJSON),
+			})
+			log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
+		}
+	}
 }
 
 // buildCommitMsgFunc creates the GenerateCommitMsg callback for /commit.
@@ -1590,11 +1747,11 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[info.Provider]
 	}
-	if baseURL == "" && info.Ollama {
-		baseURL = "http://localhost:11434"
+	if info.Ollama {
+		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
 	}
 
-	if info.Ollama {
+	if info.Ollama && !provider.IsOllamaCloudEndpoint(baseURL) {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return nil
 		}

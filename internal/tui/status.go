@@ -82,6 +82,11 @@ func renderContextBar(pct float64, bg color.Color, p Palette) string {
 }
 
 // Render renders the status bar string.
+//
+// The bar is a list of fields joined by a separator, and each statusXxxField
+// helper below owns exactly one of them. A helper returns nil when its field is
+// not shown this frame, so appending with "..." keeps the separator bookkeeping
+// here and out of every field.
 func (s *StatusModel) Render(in StatusRenderInput) string {
 	p := paletteOrDark(in.Palette)
 
@@ -91,16 +96,33 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	sepStyle := lipgloss.NewStyle().Foreground(p.Surface)
 	sep := sepStyle.Render("  │  ")
 
-	var parts []string
+	parts := []string{s.statusBracketField(in, p)}
 
-	// The bracketed field: [chat], [plan], the spinner verb while running — and a
-	// flash when there is one.
-	//
-	// A flash takes this slot over rather than adding a segment of its own. It is
-	// already the fixed-width, bracketed field the eye returns to, so a notice
-	// lands where the user is looking and the bar's geometry does not shift. The
-	// mode is not lost by borrowing it for three seconds: it has not changed, and
-	// it comes straight back.
+	// Loading progress (replaces normal status content during init).
+	if in.LoadingItems != nil {
+		parts = append(parts, statusLoadingField(in.LoadingItems, dim, p))
+		return bar.Render(strings.Join(parts, sep))
+	}
+
+	parts = append(parts, statusQueuedField(in, p)...)
+	parts = append(parts, statusContextField(in, dim, p))
+	parts = append(parts, statusTokenField(in, dim, p)...)
+	parts = append(parts, statusLocationField(in, dim, p)...)
+	parts = append(parts, s.statusToolField(p)...)
+	parts = append(parts, statusRunCycleField(in, p)...)
+
+	return bar.Render(strings.Join(parts, sep))
+}
+
+// statusBracketField renders the bracketed field: [chat], [plan], the spinner
+// verb while running — and a flash when there is one.
+//
+// A flash takes this slot over rather than adding a segment of its own. It is
+// already the fixed-width, bracketed field the eye returns to, so a notice
+// lands where the user is looking and the bar's geometry does not shift. The
+// mode is not lost by borrowing it for three seconds: it has not changed, and
+// it comes straight back.
+func (s *StatusModel) statusBracketField(in StatusRenderInput, p Palette) string {
 	mode := in.Mode
 	if mode == "" {
 		mode = "chat"
@@ -108,96 +130,111 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	switch {
 	case in.Flash != "":
 		flashStyle := lipgloss.NewStyle().Foreground(p.Green).Bold(true)
-		parts = append(parts, flashStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(in.Flash))))
+		return flashStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(in.Flash)))
 	case mode == "plan":
 		modeStyle := lipgloss.NewStyle().Foreground(p.Peach)
-		parts = append(parts, modeStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
+		return modeStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode)))
 	case in.Running && s.ActiveTool == "":
 		verbStyle := lipgloss.NewStyle().Foreground(p.Blue)
-		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb())))
+		return verbStyle.Render(fmt.Sprintf(" [%s]", spinnerVerb()))
 	default:
 		verbStyle := lipgloss.NewStyle().Foreground(p.Blue)
-		parts = append(parts, verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode))))
+		return verbStyle.Render(fmt.Sprintf(" [%s]", paddedStatusMode(mode)))
 	}
+}
 
-	// Loading progress (replaces normal status content during init).
-	if in.LoadingItems != nil {
-		var items []string
-		for _, name := range sortedKeys(in.LoadingItems) {
-			if in.LoadingItems[name] {
-				okStyle := lipgloss.NewStyle().Foreground(p.Green)
-				items = append(items, okStyle.Render(name+" \u2713"))
-			} else {
-				loadStyle := lipgloss.NewStyle().Foreground(p.Peach)
-				items = append(items, loadStyle.Render(name+"..."))
-			}
+// statusLoadingField renders the init progress list: each item green with a
+// tick once done, orange with an ellipsis while still loading.
+func statusLoadingField(loading map[string]bool, dim lipgloss.Style, p Palette) string {
+	var items []string
+	for _, name := range sortedKeys(loading) {
+		if loading[name] {
+			okStyle := lipgloss.NewStyle().Foreground(p.Green)
+			items = append(items, okStyle.Render(name+" \u2713"))
+		} else {
+			loadStyle := lipgloss.NewStyle().Foreground(p.Peach)
+			items = append(items, loadStyle.Render(name+"..."))
 		}
-		parts = append(parts, dim.Render("load: ")+strings.Join(items, dim.Render(" ")))
-		return bar.Render(strings.Join(parts, sep))
 	}
+	return dim.Render("load: ") + strings.Join(items, dim.Render(" "))
+}
 
-	// Pending prompts are shown even while the active response is streaming,
-	// so the user can see that Enter was accepted without waiting for it.
-	if in.Pending > 0 {
-		queueStyle := lipgloss.NewStyle().Foreground(p.Peach)
-		parts = append(parts, queueStyle.Render(fmt.Sprintf("queued: %d", in.Pending)))
+// statusQueuedField renders the queued-prompt count. Pending prompts are shown
+// even while the active response is streaming, so the user can see that Enter
+// was accepted without waiting for it.
+func statusQueuedField(in StatusRenderInput, p Palette) []string {
+	if in.Pending <= 0 {
+		return nil
 	}
+	queueStyle := lipgloss.NewStyle().Foreground(p.Peach)
+	return []string{queueStyle.Render(fmt.Sprintf("queued: %d", in.Pending))}
+}
 
-	// Context % bar (visual bar with color coding).
-	noBg := p.Transparent
+// statusContextField renders the context % bar (visual bar with color coding),
+// or — with no tracker limit to scale against — the same rough estimate
+// /context shows, so the two cannot disagree about the same conversation.
+func statusContextField(in StatusRenderInput, dim lipgloss.Style, p Palette) string {
 	if tt := in.TokenTracker; tt != nil && tt.Limit() > 0 {
-		pct := tt.PercentUsed()
-		parts = append(parts, renderContextBar(pct, noBg, p))
-	} else {
-		// Fallback: the same rough estimate /context shows, so the two cannot
-		// disagree about the same conversation.
-		ctxTokens := estimateContextTokenCount(in.Messages)
-		switch {
-		case ctxTokens >= 1000:
-			parts = append(parts, dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000)))
-		default:
-			parts = append(parts, dim.Render(fmt.Sprintf("ctx: %d", ctxTokens)))
+		noBg := p.Transparent
+		return renderContextBar(tt.PercentUsed(), noBg, p)
+	}
+	ctxTokens := estimateContextTokenCount(in.Messages)
+	if ctxTokens >= 1000 {
+		return dim.Render(fmt.Sprintf("ctx: %.1fk", float64(ctxTokens)/1000))
+	}
+	return dim.Render(fmt.Sprintf("ctx: %d", ctxTokens))
+}
+
+// statusTokenField renders the numeric token tally, colored by how close the
+// session is to its limit.
+func statusTokenField(in StatusRenderInput, dim lipgloss.Style, p Palette) []string {
+	tt := in.TokenTracker
+	if tt == nil {
+		return nil
+	}
+	total := tt.TotalUsed()
+	limit := tt.Limit()
+	if limit <= 0 {
+		if total <= 0 {
+			return nil
 		}
+		return []string{dim.Render(fmt.Sprintf("tkn: %s", formatTokenCount(total)))}
 	}
 
-	// Token usage (numeric).
-	if tt := in.TokenTracker; tt != nil {
-		total := tt.TotalUsed()
-		limit := tt.Limit()
-		if limit > 0 {
-			pct := tt.PercentUsed()
-			var tokenStyle lipgloss.Style
-			switch {
-			case pct >= 100:
-				tokenStyle = lipgloss.NewStyle().Foreground(p.Red)
-			case pct >= 80:
-				tokenStyle = lipgloss.NewStyle().Foreground(p.Peach)
-			default:
-				tokenStyle = dim
-			}
-			parts = append(parts, tokenStyle.Render(fmt.Sprintf("tkn: %s/%s",
-				formatTokenCount(total), formatTokenCount(limit))))
-		} else if total > 0 {
-			parts = append(parts, dim.Render(fmt.Sprintf("tkn: %s", formatTokenCount(total))))
-		}
+	var tokenStyle lipgloss.Style
+	switch pct := tt.PercentUsed(); {
+	case pct >= 100:
+		tokenStyle = lipgloss.NewStyle().Foreground(p.Red)
+	case pct >= 80:
+		tokenStyle = lipgloss.NewStyle().Foreground(p.Peach)
+	default:
+		tokenStyle = dim
 	}
+	return []string{tokenStyle.Render(fmt.Sprintf("tkn: %s/%s",
+		formatTokenCount(total), formatTokenCount(limit)))}
+}
 
-	// Directory | host.
-	if in.FolderName != "" || in.HostName != "" {
-		dirStyle := lipgloss.NewStyle().Foreground(p.Mauve)
-		hostStyle := lipgloss.NewStyle().Foreground(p.Sky)
-
-		var locationParts []string
-		if in.FolderName != "" {
-			locationParts = append(locationParts, dirStyle.Render(in.FolderName))
-		}
-		if in.HostName != "" {
-			locationParts = append(locationParts, hostStyle.Render(in.HostName))
-		}
-		parts = append(parts, strings.Join(locationParts, dim.Render(" | ")))
+// statusLocationField renders "directory | host".
+func statusLocationField(in StatusRenderInput, dim lipgloss.Style, p Palette) []string {
+	if in.FolderName == "" && in.HostName == "" {
+		return nil
 	}
+	dirStyle := lipgloss.NewStyle().Foreground(p.Mauve)
+	hostStyle := lipgloss.NewStyle().Foreground(p.Sky)
 
-	// Active tools or thinking status.
+	var locationParts []string
+	if in.FolderName != "" {
+		locationParts = append(locationParts, dirStyle.Render(in.FolderName))
+	}
+	if in.HostName != "" {
+		locationParts = append(locationParts, hostStyle.Render(in.HostName))
+	}
+	return []string{strings.Join(locationParts, dim.Render(" | "))}
+}
+
+// statusToolField renders the parallel-tool list, or the single active tool
+// with how long it has been running.
+func (s *StatusModel) statusToolField(p Palette) []string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Sapphire)
 	if len(s.ActiveTools) > 1 {
 		var toolNames []string
@@ -205,21 +242,25 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 			toolNames = append(toolNames, name)
 		}
 		sort.Strings(toolNames)
-		parts = append(parts, toolStyle.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", "))))
-	} else if s.ActiveTool != "" {
+		return []string{toolStyle.Render(fmt.Sprintf("tools[%d]: %s", len(toolNames), strings.Join(toolNames, ", ")))}
+	}
+	if s.ActiveTool != "" {
 		elapsed := time.Since(s.ToolStart).Truncate(time.Millisecond)
-		parts = append(parts, toolStyle.Render(fmt.Sprintf("tool: %s (%s)", s.ActiveTool, elapsed)))
+		return []string{toolStyle.Render(fmt.Sprintf("tool: %s (%s)", s.ActiveTool, elapsed))}
 	}
+	return nil
+}
 
-	// /run cycle indicator. The spec name is omitted: it is long enough to wrap
-	// the status bar onto a second line, and it is already shown in the sidebar.
-	if in.RunCycle != nil {
-		runStyle := lipgloss.NewStyle().Foreground(p.Peach)
-		parts = append(parts, runStyle.Render(fmt.Sprintf("cycle %d/%d",
-			in.RunCycle.Cycle, in.RunCycle.MaxRetries)))
+// statusRunCycleField renders the /run cycle indicator. The spec name is
+// omitted: it is long enough to wrap the status bar onto a second line, and it
+// is already shown in the sidebar.
+func statusRunCycleField(in StatusRenderInput, p Palette) []string {
+	if in.RunCycle == nil {
+		return nil
 	}
-
-	return bar.Render(strings.Join(parts, sep))
+	runStyle := lipgloss.NewStyle().Foreground(p.Peach)
+	return []string{runStyle.Render(fmt.Sprintf("cycle %d/%d",
+		in.RunCycle.Cycle, in.RunCycle.MaxRetries))}
 }
 
 // sortedKeys returns map keys in sorted order.

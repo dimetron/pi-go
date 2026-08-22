@@ -31,8 +31,13 @@ func writeWorktreeArtifacts(t *testing.T, wtPath, specName string, names ...stri
 // task agent ever commits. So the backup ref pointed at a commit holding none
 // of the work, the merge took nothing, and `worktree remove --force` deleted
 // the only copy.
+//
+// The repo is created with the real repo's ignore rules (**/specs/ and
+// .pi-go/), because those are exactly what made a plain `git add -A` stage
+// nothing for the artifacts. Without them this test passed on machines whose
+// global gitignore didn't match, while the real checkout still lost everything.
 func TestCommitAll_PreservesUncommittedWork(t *testing.T) {
-	repo := initTestRepo(t)
+	repo := initTestRepoWithIgnores(t)
 	mgr := NewWorktreeManager(repo)
 
 	const agentID = "plan-features/001-demo"

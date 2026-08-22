@@ -104,6 +104,8 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"opencode/kimi-k3", "opencode"},
 		{"opencode/minimax-m3", "opencode"},
 		{"opencode/gpt-5.6-luna", "opencode"},
+		{"openrouter/google/gemini-3.7-flash", "openrouter"},
+		{"openrouter/auto", "openrouter"},
 	}
 
 	for _, tt := range tests {
@@ -219,6 +221,7 @@ func TestAPIKeys(t *testing.T) {
 	t.Setenv("AZUREOPENAI_API_KEY", "azure-test-key")
 	t.Setenv("AZURE_API_KEY", "")
 	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
@@ -230,6 +233,9 @@ func TestAPIKeys(t *testing.T) {
 	if keys["opencode"] != "opencode-test-key" {
 		t.Errorf("expected opencode key, got %q", keys["opencode"])
 	}
+	if keys["openrouter"] != "openrouter-test-key" {
+		t.Errorf("expected openrouter key, got %q", keys["openrouter"])
+	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")
 	}
@@ -240,6 +246,7 @@ func TestBaseURLs(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("GEMINI_BASE_URL", "http://localhost:8080")
 	t.Setenv("OPENCODE_BASE_URL", "http://localhost:9999")
+	t.Setenv("OPENROUTER_BASE_URL", "https://custom.example")
 
 	urls := BaseURLs()
 	if urls["anthropic"] != "http://localhost:11434" {
@@ -250,6 +257,9 @@ func TestBaseURLs(t *testing.T) {
 	}
 	if urls["opencode"] != "http://localhost:9999" {
 		t.Errorf("expected opencode base URL, got %q", urls["opencode"])
+	}
+	if urls["openrouter"] != "https://custom.example" {
+		t.Errorf("expected openrouter base URL, got %q", urls["openrouter"])
 	}
 	if _, ok := urls["openai"]; ok {
 		t.Error("expected no openai base URL for empty env var")
@@ -980,6 +990,47 @@ func TestParseMCPServers_Headers_ArrayFormat(t *testing.T) {
 	}
 	if got := servers[0].Headers["X-Api-Key"]; got != "abc-123" {
 		t.Errorf("expected X-Api-Key=abc-123, got %q", got)
+	}
+}
+
+// TestParseMCPServers_OAuth_ObjectFormat verifies that the oauth flag is
+// parsed for the Claude Desktop object format.
+func TestParseMCPServers_OAuth_ObjectFormat(t *testing.T) {
+	objJSON := `{"mcpServers": {"openrouter": {
+		"url": "https://mcp.openrouter.ai/mcp",
+		"oauth": true
+	}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if !servers[0].OAuth {
+		t.Error("expected OAuth=true, got false")
+	}
+}
+
+// TestParseMCPServers_OAuth_DefaultFalse verifies that a server without the
+// oauth flag defaults to false.
+func TestParseMCPServers_OAuth_DefaultFalse(t *testing.T) {
+	objJSON := `{"mcpServers": {"plain": {"url": "https://example.com/mcp"}}}`
+
+	var f mcpServerFile
+	if err := json.Unmarshal([]byte(objJSON), &f); err != nil {
+		t.Fatal(err)
+	}
+	servers := parseMCPServers(f.MCPServers)
+
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(servers))
+	}
+	if servers[0].OAuth {
+		t.Error("expected OAuth=false by default, got true")
 	}
 }
 

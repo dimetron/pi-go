@@ -3,6 +3,7 @@ package extension
 import (
 	"embed"
 	"io/fs"
+	"strings"
 )
 
 // bundledSkillsFS embeds all skills in the bundled_skills directory.
@@ -25,46 +26,58 @@ func LoadBundledSkills() (map[string][]BundledSkillFile, error) {
 	skillFiles := make(map[string]map[string][]byte) // skillName → relPath → content
 
 	err := fs.WalkDir(bundledSkillsFS, "bundled_skills", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil //nolint:nilerr // skip inaccessible entries — embedded fs may have restricted files
-		}
-		if d.IsDir() {
-			return nil
-		}
-		// path is like "bundled_skills/agents-md/SKILL.md"
-		// Extract skill name: "bundled_skills/" = 15 chars
-		if len(path) <= 15 {
-			return nil
-		}
-		rest := path[15:] // "agents-md/SKILL.md"
-		slashIdx := -1
-		for i := 0; i < len(rest); i++ {
-			if rest[i] == '/' {
-				slashIdx = i
-				break
-			}
-		}
-		if slashIdx < 0 {
-			return nil // no subdir, skip
-		}
-		skillName := rest[:slashIdx]
-
-		content, err := fs.ReadFile(bundledSkillsFS, path)
-		if err != nil {
-			return nil //nolint:nilerr // skip files that fail to read — not fatal
-		}
-
-		if skillFiles[skillName] == nil {
-			skillFiles[skillName] = make(map[string][]byte)
-		}
-		skillFiles[skillName][path] = content
+		collectBundledSkillFile(skillFiles, path, d, err)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to the result type.
+	return groupBundledSkillFiles(skillFiles), nil
+}
+
+// collectBundledSkillFile records one walked entry under its skill name.
+// Everything that is not a readable file inside a skill subdirectory is
+// skipped rather than reported: an inaccessible entry, a directory, a path
+// with no skill subdirectory, and a file that fails to read are all
+// non-fatal — a single bad entry must not cost the binary every other skill.
+func collectBundledSkillFile(skillFiles map[string]map[string][]byte, path string, d fs.DirEntry, err error) {
+	if err != nil || d.IsDir() {
+		return
+	}
+	skillName, ok := bundledSkillName(path)
+	if !ok {
+		return
+	}
+	content, readErr := fs.ReadFile(bundledSkillsFS, path)
+	if readErr != nil {
+		return
+	}
+	if skillFiles[skillName] == nil {
+		skillFiles[skillName] = make(map[string][]byte)
+	}
+	skillFiles[skillName][path] = content
+}
+
+// bundledSkillName extracts the skill directory name from an embedded path
+// like "bundled_skills/agents-md/SKILL.md". A path with nothing after the
+// prefix, or with no subdirectory under it, belongs to no skill.
+func bundledSkillName(path string) (string, bool) {
+	const prefix = "bundled_skills/"
+	if len(path) <= len(prefix) {
+		return "", false
+	}
+	rest := path[len(prefix):] // "agents-md/SKILL.md"
+	slashIdx := strings.IndexByte(rest, '/')
+	if slashIdx < 0 {
+		return "", false // no subdir, skip
+	}
+	return rest[:slashIdx], true
+}
+
+// groupBundledSkillFiles flattens the per-skill path→content map into the
+// public result type.
+func groupBundledSkillFiles(skillFiles map[string]map[string][]byte) map[string][]BundledSkillFile {
 	result := make(map[string][]BundledSkillFile)
 	for skillName, files := range skillFiles {
 		var sorted []BundledSkillFile
@@ -77,5 +90,5 @@ func LoadBundledSkills() (map[string][]BundledSkillFile, error) {
 		}
 		result[skillName] = sorted
 	}
-	return result, nil
+	return result
 }

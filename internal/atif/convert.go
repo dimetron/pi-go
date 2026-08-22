@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 )
 
 // ConvertEvent converts a session.Event into zero or more ATIF Steps.
@@ -26,33 +27,8 @@ func ConvertEvent(event *session.Event, stepID int) []Step {
 		if part.Text != "" && !part.Thought {
 			texts = append(texts, part.Text)
 		}
-
-		if part.FunctionCall != nil {
-			tc := ToolCall{
-				ToolCallID:   part.FunctionCall.ID,
-				FunctionName: part.FunctionCall.Name,
-				Arguments:    part.FunctionCall.Args,
-			}
-			if tc.Arguments == nil {
-				tc.Arguments = make(map[string]any)
-			}
-			step.ToolCalls = append(step.ToolCalls, tc)
-		}
-
-		if part.FunctionResponse != nil {
-			if step.Observation == nil {
-				step.Observation = &Observation{}
-			}
-			result := ObservationResult{
-				SourceCallID: part.FunctionResponse.ID,
-				Content:      part.FunctionResponse.Response,
-			}
-			// Fall back to Name if ID is empty.
-			if result.SourceCallID == "" {
-				result.SourceCallID = part.FunctionResponse.Name
-			}
-			step.Observation.Results = append(step.Observation.Results, result)
-		}
+		appendToolCall(&step, part.FunctionCall)
+		appendObservation(&step, part.FunctionResponse)
 	}
 
 	step.Message = buildMessage(texts)
@@ -63,6 +39,45 @@ func ConvertEvent(event *session.Event, stepID int) []Step {
 	}
 
 	return []Step{step}
+}
+
+// appendToolCall records a function call on the step. Nil calls are ignored,
+// and nil arguments become an empty map so the emitted JSON always carries an
+// object rather than null.
+func appendToolCall(step *Step, call *genai.FunctionCall) {
+	if call == nil {
+		return
+	}
+	tc := ToolCall{
+		ToolCallID:   call.ID,
+		FunctionName: call.Name,
+		Arguments:    call.Args,
+	}
+	if tc.Arguments == nil {
+		tc.Arguments = make(map[string]any)
+	}
+	step.ToolCalls = append(step.ToolCalls, tc)
+}
+
+// appendObservation records a function response on the step, creating the
+// observation on first use so steps without results keep it nil. Nil responses
+// are ignored.
+func appendObservation(step *Step, resp *genai.FunctionResponse) {
+	if resp == nil {
+		return
+	}
+	if step.Observation == nil {
+		step.Observation = &Observation{}
+	}
+	result := ObservationResult{
+		SourceCallID: resp.ID,
+		Content:      resp.Response,
+	}
+	// Fall back to Name if ID is empty.
+	if result.SourceCallID == "" {
+		result.SourceCallID = resp.Name
+	}
+	step.Observation.Results = append(step.Observation.Results, result)
 }
 
 // mapSource converts session event author to ATIF source.

@@ -14,9 +14,12 @@ import (
 type streamAttempt func(yield func(*model.LLMResponse, error) bool)
 
 // streamRetry is the budget for re-sending a request that died before it
-// produced anything. It is deliberately smaller than the agent-level budget:
-// this retries a single HTTP request, so it runs inside whatever timeout the
-// caller already set for the turn.
+// produced anything: three retries, paced 3s, 5s, 7s. It is deliberately
+// smaller than the agent-level budget — this retries a single HTTP request, so
+// it runs inside whatever timeout the caller already set for the turn — and it
+// is paced linearly rather than exponentially because the faults it is meant
+// to ride out (a dropped socket, a reset stream, a 5xx blip) clear in seconds,
+// not minutes. A server-supplied rate-limit window still overrides the pace.
 //
 // It is a package variable so the provider tests, which drive real error
 // responses through httptest servers, can shrink the pauses instead of paying
@@ -26,6 +29,7 @@ var streamRetry = defaultStreamRetry()
 func defaultStreamRetry() retry.Config {
 	cfg := retry.DefaultConfig()
 	cfg.MaxRetries = 3
+	cfg.Delays = []time.Duration{3 * time.Second, 5 * time.Second, 7 * time.Second}
 	return cfg
 }
 
@@ -89,7 +93,14 @@ func retryStream(ctx context.Context, cfg retry.Config, yield func(*model.LLMRes
 			return
 		}
 
-		if !sleepCtx(ctx, retry.Delay(cfg, attempt, cause)) {
+		delay := retry.Delay(cfg, attempt, cause)
+		retry.Notify(ctx, retry.Attempt{
+			Attempt:    attempt + 1,
+			MaxRetries: cfg.MaxRetries,
+			Delay:      delay,
+			Err:        cause,
+		})
+		if !sleepCtx(ctx, delay) {
 			// Canceled while waiting: same reasoning as above.
 			_ = yield(canceledResponse(), nil)
 			return

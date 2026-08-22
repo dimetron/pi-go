@@ -51,12 +51,9 @@ func executePing(ctx context.Context, llm llmmodel.LLM, providerName, modelName,
 
 	isPingPong := prompt == ""
 	testPrompt := prompt
-	if isPingPong {
-		testPrompt = "prompt-prompt"
-	}
-
 	systemMsg := "You are a connectivity test. Reply briefly and concisely."
 	if isPingPong {
+		testPrompt = "prompt-prompt"
 		systemMsg = `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
 	}
 
@@ -70,41 +67,15 @@ func executePing(ctx context.Context, llm llmmodel.LLM, providerName, modelName,
 	}
 
 	// Non-streaming test.
-	var reply strings.Builder
-	var totalIn int32
-	var totalOut int32
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
-		if err != nil {
-			w("**✗ Error:** %v", err)
-			return buf.String(), "", err
-		}
-		if resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" {
-					reply.WriteString(part.Text)
-				}
-			}
-		}
-		if resp.UsageMetadata != nil {
-			totalIn = resp.UsageMetadata.PromptTokenCount
-			totalOut = resp.UsageMetadata.CandidatesTokenCount
-		}
+	res, err := collectPingReply(ctx, llm, req)
+	if err != nil {
+		w("**✗ Error:** %v", err)
+		return buf.String(), "", err
 	}
 
-	replyText := strings.TrimSpace(reply.String())
+	replyText := strings.TrimSpace(res.text)
 	if replyText == "" {
 		return buf.String(), "", fmt.Errorf("model returned empty response")
-	}
-
-	// Format the reply for display - truncate if too long
-	displayReply := replyText
-	if len(displayReply) > 80 {
-		displayReply = displayReply[:80] + "..."
-	}
-
-	truncPrompt := testPrompt
-	if len(truncPrompt) > 40 {
-		truncPrompt = truncPrompt[:40] + "..."
 	}
 
 	w("**Provider:** %s  \n", providerName)
@@ -112,11 +83,62 @@ func executePing(ctx context.Context, llm llmmodel.LLM, providerName, modelName,
 	if isPingPong {
 		w("**Test:** prompt-prompt  \n")
 	} else {
-		w("**Prompt:** %s  \n", truncPrompt)
+		w("**Prompt:** %s  \n", truncatePingText(testPrompt, 40))
 	}
-	w("**Tokens:** %din / %dout  \n", totalIn, totalOut)
-	w("**Reply:** %s  \n\n", displayReply)
+	w("**Tokens:** %din / %dout  \n", res.inTokens, res.outTokens)
+	w("**Reply:** %s  \n\n", truncatePingText(replyText, 80))
 	w("✓ Model **%s** is ALIVE", modelName)
 
 	return buf.String(), replyText, nil
+}
+
+// pingReply is what one non-streaming ping exchange produced: the model's text
+// with every chunk and part concatenated, and the token counts from the last
+// chunk that carried usage metadata.
+type pingReply struct {
+	text      string
+	inTokens  int32
+	outTokens int32
+}
+
+// collectPingReply drains the response iterator. An error from any chunk ends
+// the exchange immediately, discarding whatever text came before it.
+func collectPingReply(ctx context.Context, llm llmmodel.LLM, req *llmmodel.LLMRequest) (pingReply, error) {
+	var res pingReply
+	var reply strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			return pingReply{}, err
+		}
+		appendPingText(&reply, resp.Content)
+		if resp.UsageMetadata != nil {
+			res.inTokens = resp.UsageMetadata.PromptTokenCount
+			res.outTokens = resp.UsageMetadata.CandidatesTokenCount
+		}
+	}
+	res.text = reply.String()
+	return res, nil
+}
+
+// appendPingText writes every non-empty text part of content to dst. A nil
+// content contributes nothing — providers send chunks that carry only usage.
+func appendPingText(dst *strings.Builder, content *genai.Content) {
+	if content == nil {
+		return
+	}
+	for _, part := range content.Parts {
+		if part.Text != "" {
+			dst.WriteString(part.Text)
+		}
+	}
+}
+
+// truncatePingText shortens s to max characters plus an ellipsis, for the
+// one-line prompt and reply previews in the ping report. Length is counted in
+// bytes, as it always has been, so a cut can land inside a multi-byte rune.
+func truncatePingText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

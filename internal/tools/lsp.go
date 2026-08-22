@@ -572,39 +572,30 @@ func flattenSymbols(symbols []lsp.DocumentSymbol, out []SymbolEntry) []SymbolEnt
 	return out
 }
 
+// symbolKindNames maps the LSP SymbolKind numbers this package recognizes to
+// their display names. The kinds are distinct integers, so the table is the
+// same dispatch the switch it replaced performed.
+var symbolKindNames = map[int]string{
+	lsp.SymbolKindFile:        "file",
+	lsp.SymbolKindModule:      "module",
+	lsp.SymbolKindNamespace:   "namespace",
+	lsp.SymbolKindPackage:     "package",
+	lsp.SymbolKindClass:       "class",
+	lsp.SymbolKindMethod:      "method",
+	lsp.SymbolKindProperty:    "property",
+	lsp.SymbolKindField:       "field",
+	lsp.SymbolKindConstructor: "constructor",
+	lsp.SymbolKindEnum:        "enum",
+	lsp.SymbolKindInterface:   "interface",
+	lsp.SymbolKindFunction:    "function",
+	lsp.SymbolKindVariable:    "variable",
+	lsp.SymbolKindConstant:    "constant",
+	lsp.SymbolKindStruct:      "struct",
+}
+
 func symbolKindName(kind int) string {
-	switch kind {
-	case lsp.SymbolKindFile:
-		return "file"
-	case lsp.SymbolKindModule:
-		return "module"
-	case lsp.SymbolKindNamespace:
-		return "namespace"
-	case lsp.SymbolKindPackage:
-		return "package"
-	case lsp.SymbolKindClass:
-		return "class"
-	case lsp.SymbolKindMethod:
-		return "method"
-	case lsp.SymbolKindProperty:
-		return "property"
-	case lsp.SymbolKindField:
-		return "field"
-	case lsp.SymbolKindConstructor:
-		return "constructor"
-	case lsp.SymbolKindEnum:
-		return "enum"
-	case lsp.SymbolKindInterface:
-		return "interface"
-	case lsp.SymbolKindFunction:
-		return "function"
-	case lsp.SymbolKindVariable:
-		return "variable"
-	case lsp.SymbolKindConstant:
-		return "constant"
-	case lsp.SymbolKindStruct:
-		return "struct"
-	default:
-		return fmt.Sprintf("kind(%d)", kind)
+	if name, ok := symbolKindNames[kind]; ok {
+		return name
 	}
+	return fmt.Sprintf("kind(%d)", kind)
 }

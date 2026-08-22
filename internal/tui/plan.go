@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -214,9 +216,29 @@ func (m *model) finishPlanWorktree() error {
 		return nil
 	}
 
+	// Merge the worktree branch into the invoking branch. This brings the spec
+	// files into <workDir>/specs/<task>/ as tracked files.
 	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
+		// Preserve the finished spec by copying it out even though the merge
+		// failed, so /run still finds PROMPT.md. Overwrite whatever stale or
+		// conflicting files sit in the invoking checkout.
+		_ = copyDir(filepath.Join(m.planWorktreePath, "specs", m.planTaskName),
+			filepath.Join(m.cfg.WorkDir, "specs", m.planTaskName), true)
 		return err
 	}
+
+	// Belt-and-suspenders: after the merge, copy the finished spec into the
+	// invoking checkout's specs/ tree too. /run reads <workDir>/specs/<task>/
+	// from disk, so this guarantees the spec is present even if the merge was
+	// somehow a no-op. Copying the whole spec dir mirrors everything the
+	// planner wrote, so research/ and supporting files survive too. (This runs
+	// after the merge, not before: writing untracked copies first would make
+	// the merge abort on files it is about to bring in.)
+	if err := copyDir(filepath.Join(m.planWorktreePath, "specs", m.planTaskName),
+		filepath.Join(m.cfg.WorkDir, "specs", m.planTaskName), false); err != nil {
+		return fmt.Errorf("copying finished spec into invoking checkout: %w", err)
+	}
+
 	if err := m.planWorktree.Cleanup(m.planWorktreeAgentID); err != nil {
 		return err
 	}
@@ -225,6 +247,41 @@ func (m *model) finishPlanWorktree() error {
 	// a directory that no longer exists.
 	m.planWorktreePath = ""
 	return nil
+}
+
+// copyDir recursively copies the contents of src into dst. dst is created if
+// missing. It mirrors the worktree's spec directory into the invoking checkout
+// so /run can consume it independently of any git merge.
+//
+// When overwrite is false, existing files in dst are left as-is: after a
+// successful merge the merged copies are already present and identical, so
+// overwriting would be wasted work (CopyFS reports those as fs.ErrExist, which
+// we treat as success). When overwrite is true — the merge-failure fallback —
+// stale or conflicting files are replaced with the worktree's fresh copy.
+func copyDir(src, dst string, overwrite bool) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	if overwrite {
+		return copyOverwrite(src, dst)
+	}
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
+}
+
+// copyOverwrite copies src into dst, replacing any existing files, by copying
+// into a temp sibling dir and swapping. It recursively mirrors a directory with
+// overwrite semantics that os.CopyFS does not provide.
+func copyOverwrite(src, dst string) error {
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.CopyFS(dst, os.DirFS(src))
 }
 
 // handlePlanCommand processes "/plan <rough idea>" input.

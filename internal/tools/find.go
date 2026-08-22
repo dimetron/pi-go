@@ -68,59 +68,84 @@ func findHandler(sb *Sandbox, input FindInput) (FindOutput, error) {
 	// Normalize doublestar patterns: since WalkDir already recurses,
 	// strip "**/" prefixes so gopath.Match can handle the rest.
 	// e.g. "**/*.go" → "*.go", "src/**/*.go" → "src/**/*.go" (handled below)
-	pattern := input.Pattern
-	filePattern := normalizeGlobPattern(pattern)
+	w := &findWalk{
+		root:        root,
+		pattern:     input.Pattern,
+		filePattern: normalizeGlobPattern(input.Pattern),
+		patterns:    patterns,
+	}
 
-	var files []string
-	total := 0
-
-	_ = fs.WalkDir(fsys, root, func(walked string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if shouldSkipDir(d.Name()) {
-				return fs.SkipDir
-			}
-			// Apply .gitignore: if any pattern says skip this directory, skip it
-			if shouldSkipPath(walked, d, patterns) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-
-		// Apply .gitignore file filters
-		if shouldSkipPath(walked, d, patterns) {
-			return nil
-		}
-
-		// Match against the filename using the normalized pattern
-		name := d.Name()
-		matched, _ := gopath.Match(filePattern, name)
-		if !matched {
-			// Try matching against relative path for patterns like "src/*.go"
-			relPath := relativeFSPath(root, walked)
-			matched, _ = gopath.Match(filePattern, relPath)
-			if !matched {
-				// For patterns like "src/**/*.go", match each path segment
-				matched = matchDoublestar(pattern, relPath)
-			}
-		}
-
-		if matched {
-			total++
-			if len(files) < maxFindResults {
-				files = append(files, walked)
-			}
-		}
-		return nil
-	})
+	_ = fs.WalkDir(fsys, root, w.visit)
 
 	return FindOutput{
-		Files:      files,
-		TotalFiles: total,
-		Truncated:  total > len(files),
+		Files:      w.files,
+		TotalFiles: w.total,
+		Truncated:  w.total > len(w.files),
 	}, nil
+}
+
+// findWalk carries the state one find walk accumulates. Holding it here keeps
+// the WalkDir callback a named method at nesting depth zero instead of a
+// closure buried inside findHandler.
+type findWalk struct {
+	root        string // walk root, relative to the sandbox
+	pattern     string // the caller's pattern, as given
+	filePattern string // pattern with leading "**/" stripped
+	patterns    []GitignorePattern
+	files       []string
+	total       int
+}
+
+// visit is the fs.WalkDir callback: it prunes skipped directories, drops
+// gitignored and non-matching files, and records the rest.
+func (w *findWalk) visit(path string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return nil
+	}
+	if d.IsDir() {
+		// Skip always-ignored directories, and any the .gitignore prunes.
+		if shouldSkipDir(d.Name()) || shouldSkipPath(path, d, w.patterns) {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+
+	// Apply .gitignore file filters
+	if shouldSkipPath(path, d, w.patterns) {
+		return nil
+	}
+	if !w.matches(path, d.Name()) {
+		return nil
+	}
+
+	w.total++
+	if len(w.files) < maxFindResults {
+		w.files = append(w.files, path)
+	}
+	return nil
+}
+
+// matches reports whether a file is a hit: by filename first, then by path
+// relative to the walk root, then by doublestar expansion of that path.
+// matches works entirely in io/fs path space: w.root and path are both
+// slash-separated, and the caller's pattern is written that way too. filepath
+// here would take "\" as the separator on Windows and treat "/" as an ordinary
+// character, so a pattern would silently stop matching; filepath.Rel would also
+// hand back a backslash path to compare against a slash pattern.
+func (w *findWalk) matches(path, name string) bool {
+	// Match against the filename using the normalized pattern
+	if matched, _ := gopath.Match(w.filePattern, name); matched {
+		return true
+	}
+
+	// Try matching against relative path for patterns like "src/*.go"
+	relPath := relativeFSPath(w.root, path)
+	if matched, _ := gopath.Match(w.filePattern, relPath); matched {
+		return true
+	}
+
+	// For patterns like "src/**/*.go", match each path segment
+	return matchDoublestar(w.pattern, relPath)
 }
 
 // shouldSkipDir returns true for directories that should always be skipped.

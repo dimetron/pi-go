@@ -207,9 +207,37 @@ func (t *ToolDisplayModel) renderCompactTool(msg message, dim lipgloss.Style, p 
 	return b.String()
 }
 
+// writeGutterLines writes each already-styled line under the card's "  │ "
+// content gutter, one output row per line — no soft-wrapping.
+func writeGutterLines(b *strings.Builder, dim lipgloss.Style, lines ...string) {
+	gutter := dim.Render("│ ")
+	for _, l := range lines {
+		b.WriteString("  ")
+		b.WriteString(gutter)
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+}
+
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
 func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Palette) string {
+	var b strings.Builder
+	b.WriteString(t.agentCardHeader(msg, p))
+
+	cw := t.contentWidth()
+	if len(msg.agentEvents) > 0 {
+		b.WriteString(agentEventWindow(msg, dim, p, cw))
+	}
+	if msg.content != "" {
+		b.WriteString(agentResultSummary(msg.content, dim, cw))
+	}
+	return b.String()
+}
+
+// agentCardHeader renders the card's first row: bullet, "agent", the bracketed
+// agent label, and the title.
+func (t *ToolDisplayModel) agentCardHeader(msg message, p Palette) string {
 	agentBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Mauve).Bold(true), msg.content == "")
 	typeStyle := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
 	titleStyle := lipgloss.NewStyle().Foreground(p.Text)
@@ -225,86 +253,90 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Pa
 		b.WriteString(titleStyle.Render(msg.agentTitle))
 	}
 	b.WriteString("\n")
+	return b.String()
+}
 
-	cw := t.contentWidth()
+// agentEventWindow renders the card's live event stream, newest activity last,
+// preceded by a note whenever output was withheld.
+func agentEventWindow(msg message, dim lipgloss.Style, p Palette, cw int) string {
+	evStyle := lipgloss.NewStyle().Foreground(p.Dim)
+	evToolStyle := lipgloss.NewStyle().Foreground(agentToolColor(msg.agentType, p))
 
-	// Show event stream. Structural events (message_start/end/done/spawn) are
-	// filtered out first so they never crowd the visible window; from the
-	// renderable remainder, keep the newest maxAgentOutputLines so the user
-	// always sees the latest activity — not a stream truncated into silence.
-	if len(msg.agentEvents) > 0 {
-		evStyle := lipgloss.NewStyle().Foreground(p.Dim)
-		evToolStyle := lipgloss.NewStyle().Foreground(agentToolColor(msg.agentType, p))
+	renderable := renderableAgentEvents(msg.agentEvents)
+	lines, note := agentWindowLines(renderable, evStyle, evToolStyle, cw)
 
-		renderable := make([]agentEv, 0, len(msg.agentEvents))
-		for _, ev := range msg.agentEvents {
-			switch ev.kind {
-			case "message_start", "message_end", "done", "spawn":
+	var b strings.Builder
+	if note != "" {
+		writeGutterLines(&b, dim, dim.Render(note))
+	}
+	writeGutterLines(&b, dim, lines...)
+	return b.String()
+}
+
+// renderableAgentEvents drops the events that carry no content for the card.
+// Structural events (message_start/end/done/spawn) are filtered out so they
+// never crowd the visible window, as is whitespace-only message text.
+func renderableAgentEvents(evs []agentEv) []agentEv {
+	renderable := make([]agentEv, 0, len(evs))
+	for _, ev := range evs {
+		switch ev.kind {
+		case "message_start", "message_end", "done", "spawn":
+			continue
+		case "text", "text_delta":
+			if strings.TrimSpace(ev.content) == "" {
 				continue
-			case "text", "text_delta":
-				if strings.TrimSpace(ev.content) == "" {
-					continue
-				}
 			}
-			renderable = append(renderable, ev)
 		}
+		renderable = append(renderable, ev)
+	}
+	return renderable
+}
 
-		// Budget in rendered lines, not events. A single event carries an
-		// unbounded amount of text — a subagent's final analysis is one "text"
-		// event — so an event count caps nothing: five of them still soft-wrap
-		// into a screenful. Walk newest-first and stop once the window is full.
-		var lines []string
-		used := 0
-		for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
-			lines = append(agentEventLines(renderable[i], evStyle, evToolStyle, cw), lines...)
-			used++
-		}
-		skipped := len(renderable) - used
-		clipped := len(lines) > maxAgentOutputLines
-		if clipped {
-			// The oldest event still in the window overflows it; show its tail,
-			// which is the part nearest the newer output below it.
-			lines = lines[len(lines)-maxAgentOutputLines:]
-		}
-
-		// Say so whenever output was withheld. A single huge event is clipped
-		// without any whole event being dropped, and hiding 60-odd lines with no
-		// mark would read as if that were all the agent said.
-		note := ""
-		switch {
-		case skipped > 0:
-			note = fmt.Sprintf("... %d earlier events", skipped)
-		case clipped:
-			note = "... earlier output"
-		}
-		if note != "" {
-			b.WriteString("  ")
-			b.WriteString(dim.Render("│ "))
-			b.WriteString(dim.Render(note))
-			b.WriteString("\n")
-		}
-		for _, sl := range lines {
-			b.WriteString("  ")
-			b.WriteString(dim.Render("│ "))
-			b.WriteString(sl)
-			b.WriteString("\n")
-		}
+// agentWindowLines renders the newest maxAgentOutputLines lines of the event
+// stream, so the user always sees the latest activity — not a stream truncated
+// into silence — plus the note describing what was withheld.
+//
+// The budget is in rendered lines, not events. A single event carries an
+// unbounded amount of text — a subagent's final analysis is one "text" event —
+// so an event count caps nothing: five of them still soft-wrap into a
+// screenful. Walk newest-first and stop once the window is full.
+//
+// The note is written whenever output was withheld. A single huge event is
+// clipped without any whole event being dropped, and hiding 60-odd lines with
+// no mark would read as if that were all the agent said.
+func agentWindowLines(renderable []agentEv, evStyle, evToolStyle lipgloss.Style, cw int) (lines []string, note string) {
+	used := 0
+	for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
+		lines = append(agentEventLines(renderable[i], evStyle, evToolStyle, cw), lines...)
+		used++
+	}
+	skipped := len(renderable) - used
+	clipped := len(lines) > maxAgentOutputLines
+	if clipped {
+		// The oldest event still in the window overflows it; show its tail,
+		// which is the part nearest the newer output below it.
+		lines = lines[len(lines)-maxAgentOutputLines:]
 	}
 
-	// Show result summary when done. Collapse newlines so multiline JSON
-	// results render as a single wrapped line under the "│ " gutter.
-	if msg.content != "" {
-		summary := collapseToSingleLine(msg.content)
-		if len(summary) > 160 {
-			summary = summary[:157] + "..."
-		}
-		for _, sl := range softWrap(dim.Render("→ "+summary), cw) {
-			b.WriteString("  ")
-			b.WriteString(dim.Render("│ "))
-			b.WriteString(sl)
-			b.WriteString("\n")
-		}
+	switch {
+	case skipped > 0:
+		note = fmt.Sprintf("... %d earlier events", skipped)
+	case clipped:
+		note = "... earlier output"
 	}
+	return lines, note
+}
+
+// agentResultSummary renders the card's result summary once the subagent is
+// done. Newlines are collapsed so multiline JSON results render as a single
+// wrapped line under the "│ " gutter.
+func agentResultSummary(content string, dim lipgloss.Style, cw int) string {
+	summary := collapseToSingleLine(content)
+	if len(summary) > 160 {
+		summary = summary[:157] + "..."
+	}
+	var b strings.Builder
+	writeGutterLines(&b, dim, softWrap(dim.Render("→ "+summary), cw)...)
 	return b.String()
 }
 
@@ -473,6 +505,22 @@ func softWrap(s string, width int) []string {
 // renderRegularTool renders a standard tool message with name, args, and
 // syntax-highlighted output.
 func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p Palette) string {
+	var b strings.Builder
+	b.WriteString(t.regularToolHeader(msg, dim, p))
+	if msg.content == "" && len(msg.agentEvents) > 0 {
+		// Still running: show the live tail instead of an empty card. Once the
+		// result arrives, msg.content takes over and the final output replaces
+		// this window — the stream is a progress indicator, not a transcript.
+		b.WriteString(t.renderLiveOutput(msg, dim, p))
+	}
+	if msg.content != "" {
+		b.WriteString(t.regularToolOutput(msg, dim, p))
+	}
+	return b.String()
+}
+
+// regularToolHeader renders the card's first row: "◉ tool(args) ×N".
+func (t *ToolDisplayModel) regularToolHeader(msg message, dim lipgloss.Style, p Palette) string {
 	toolStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
 	argStyle := lipgloss.NewStyle().Foreground(p.Dim)
 	toolBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Tool).Bold(true), msg.toolPending())
@@ -488,146 +536,155 @@ func (t *ToolDisplayModel) renderRegularTool(msg message, dim lipgloss.Style, p 
 	}
 	b.WriteString(pollTally(msg, dim))
 	b.WriteString("\n")
-	if msg.content == "" && len(msg.agentEvents) > 0 {
-		// Still running: show the live tail instead of an empty card. Once the
-		// result arrives, msg.content takes over and the final output replaces
-		// this window — the stream is a progress indicator, not a transcript.
-		b.WriteString(t.renderLiveOutput(msg, dim, p))
+	return b.String()
+}
+
+// maxRegularToolLines bounds how much of a finished tool result the card shows
+// before it starts counting the rest.
+const maxRegularToolLines = 15
+
+// regularToolOutput renders a finished tool result: clipped, syntax
+// highlighted, and laid under the content gutter.
+func (t *ToolDisplayModel) regularToolOutput(msg message, dim lipgloss.Style, p Palette) string {
+	lines := strings.Split(msg.content, "\n")
+
+	// Clip first, and keep the "N more lines" marker OUT of the clipped set.
+	// It used to be styled and appended to lines before they were handed to
+	// the syntax highlighter, so chroma re-tokenized a string that already
+	// held ANSI escapes and shredded them — that is what printed a literal
+	// "[38;5;240m... (81 more lines)[m" into the chat. A half-eaten escape
+	// also makes the terminal swallow columns, which knocked the rail out of
+	// its column.
+	hidden := 0
+	if len(lines) > maxRegularToolLines {
+		hidden = len(lines) - maxRegularToolLines
+		lines = lines[:maxRegularToolLines]
 	}
-	if msg.content != "" {
-		lines := strings.Split(msg.content, "\n")
 
-		// Clip first, and keep the "N more lines" marker OUT of the clipped set.
-		// It used to be styled and appended to lines before they were handed to
-		// the syntax highlighter, so chroma re-tokenized a string that already
-		// held ANSI escapes and shredded them — that is what printed a literal
-		// "[38;5;240m... (81 more lines)[m" into the chat. A half-eaten escape
-		// also makes the terminal swallow columns, which knocked the rail out of
-		// its column.
-		const maxLines = 15
-		hidden := 0
-		if len(lines) > maxLines {
-			hidden = len(lines) - maxLines
-			lines = lines[:maxLines]
-		}
+	styled := highlightToolOutput(msg, lines, dim, p)
 
-		var styled []string
-		switch {
-		case msg.tool == "read" && msg.toolIn != "":
-			styled = highlightReadOutput(lines, msg.toolIn, p)
-		case msg.tool == "bash" || isBashControl(msg.tool):
-			// Bash output is plain text most of the time but frequently contains
-			// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
-			// through chroma's content-sniffing lexer so it gets at least some
-			// coloring; if chroma cannot place it the fallback lexer still gives
-			// a non-gray foreground. Without this branch the output is dim (240)
-			// and reads as an afterthought next to the brightly-highlighted
-			// read/grep/find blocks above it.
-			styled = highlightBashOutput(lines, p)
-		// The grep tool registers itself as "ripgrep" whenever rg is installed
-		// (internal/tools/grep.go), which is the common case — so matching only
-		// "grep" here meant grep output was never highlighted in practice and
-		// fell through to the dim default.
-		case msg.tool == "grep" || msg.tool == "ripgrep":
-			styled = highlightGrepOutput(lines, p)
-		case msg.tool == "find":
-			styled = highlightFindOutput(lines, p)
-		default:
-			styled = make([]string, len(lines))
-			for i, line := range lines {
-				styled[i] = dim.Render(line)
-			}
-		}
+	// Style the marker only now that highlighting is done.
+	if hidden > 0 {
+		styled = append(styled, dim.Render(fmt.Sprintf("... (%d more lines)", hidden)))
+	}
 
-		// Style the marker only now that highlighting is done.
-		if hidden > 0 {
-			styled = append(styled, dim.Render(fmt.Sprintf("... (%d more lines)", hidden)))
-		}
-
-		cw := t.contentWidth()
-		for _, line := range styled {
-			for _, sl := range softWrap(line, cw) {
-				b.WriteString("  ")
-				b.WriteString(dim.Render("│ "))
-				b.WriteString(sl)
-				b.WriteString("\n")
-			}
-		}
+	cw := t.contentWidth()
+	var b strings.Builder
+	for _, line := range styled {
+		writeGutterLines(&b, dim, softWrap(line, cw)...)
 	}
 	return b.String()
 }
 
+// highlightToolOutput syntax-highlights a tool's output lines according to
+// which tool produced them, falling back to a dim render.
+func highlightToolOutput(msg message, lines []string, dim lipgloss.Style, p Palette) []string {
+	switch {
+	case msg.tool == "read" && msg.toolIn != "":
+		return highlightReadOutput(lines, msg.toolIn, p)
+	case msg.tool == "bash" || isBashControl(msg.tool):
+		// Bash output is plain text most of the time but frequently contains
+		// runnable snippets (`cat file`, `curl ...`, `go test` output). Run it
+		// through chroma's content-sniffing lexer so it gets at least some
+		// coloring; if chroma cannot place it the fallback lexer still gives
+		// a non-gray foreground. Without this branch the output is dim (240)
+		// and reads as an afterthought next to the brightly-highlighted
+		// read/grep/find blocks above it.
+		return highlightBashOutput(lines, p)
+	// The grep tool registers itself as "ripgrep" whenever rg is installed
+	// (internal/tools/grep.go), which is the common case — so matching only
+	// "grep" here meant grep output was never highlighted in practice and
+	// fell through to the dim default.
+	case msg.tool == "grep" || msg.tool == "ripgrep":
+		return highlightGrepOutput(lines, p)
+	case msg.tool == "find":
+		return highlightFindOutput(lines, p)
+	default:
+		styled := make([]string, len(lines))
+		for i, line := range lines {
+			styled[i] = dim.Render(line)
+		}
+		return styled
+	}
+}
+
+// toolSummaryArgKey maps a tool to the single argument that stands in for its
+// call in a one-line summary. A tool whose summary needs more than one argument
+// — or a default when the argument is missing — is handled in the switch in
+// toolCallSummary instead.
+//
+// "ripgrep" is the name the grep tool registers under when rg is installed.
+// groundingToolName is Gemini's server-side search, surfaced as a synthetic
+// tool call so a grounded answer shows the query it searched for.
+var toolSummaryArgKey = map[string]string{
+	"read":            "file_path",
+	"write":           "file_path",
+	"edit":            "file_path",
+	"bash":            "command",
+	"bash_wait":       "handle",
+	"bash_output":     "handle",
+	"bash_kill":       "handle",
+	"grep":            "pattern",
+	"ripgrep":         "pattern",
+	"find":            "pattern",
+	groundingToolName: "query",
+}
+
 // toolCallSummary returns a short one-line summary of tool arguments.
 func toolCallSummary(name string, args map[string]any) string {
+	if key, ok := toolSummaryArgKey[name]; ok {
+		// A missing key, or one holding a non-string, summarizes as "" — the
+		// same fallthrough the per-tool type assertions used.
+		s, _ := args[key].(string)
+		return s
+	}
 	switch name {
-	case "read":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "write":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "edit":
-		if fp, ok := args["file_path"].(string); ok {
-			return fp
-		}
-	case "bash":
-		if cmd, ok := args["command"].(string); ok {
-			return cmd
-		}
-	case "bash_wait", "bash_output", "bash_kill":
-		if h, ok := args["handle"].(string); ok {
-			return h
-		}
-	// "ripgrep" is the name the grep tool registers under when rg is installed.
-	case "grep", "ripgrep":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	// Gemini's server-side search, surfaced as a synthetic tool call so a
-	// grounded answer shows the query it searched for.
-	case groundingToolName:
-		if q, ok := args["query"].(string); ok {
-			return q
-		}
-	case "find":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
 	case "ls":
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
 		return "."
 	case "tree":
-		p, _ := args["path"].(string)
-		if p == "" {
-			p = "."
-		}
-		if d, ok := args["depth"].(float64); ok && d > 0 {
-			return fmt.Sprintf("%s (depth %d)", p, int(d))
-		}
-		return p
+		return treeCallSummary(args)
 	case "agent":
-		typ, _ := args["type"].(string)
-		prompt, _ := args["prompt"].(string)
-		// Truncate prompt to first line, max 60 chars.
-		if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
-			prompt = prompt[:idx]
-		}
-		if len(prompt) > 60 {
-			prompt = prompt[:57] + "..."
-		}
-		if typ != "" && prompt != "" {
-			return fmt.Sprintf("%s: %s", typ, prompt)
-		}
-		if typ != "" {
-			return typ
-		}
-		return prompt
+		return agentCallSummary(args)
 	}
 	return ""
+}
+
+// treeCallSummary summarizes a tree call as its path, with the depth appended
+// when one was requested.
+func treeCallSummary(args map[string]any) string {
+	p, _ := args["path"].(string)
+	if p == "" {
+		p = "."
+	}
+	if d, ok := args["depth"].(float64); ok && d > 0 {
+		return fmt.Sprintf("%s (depth %d)", p, int(d))
+	}
+	return p
+}
+
+// agentCallSummary summarizes a subagent call as "type: prompt", dropping
+// whichever half is absent.
+func agentCallSummary(args map[string]any) string {
+	typ, _ := args["type"].(string)
+	prompt, _ := args["prompt"].(string)
+	// Truncate prompt to first line, max 60 chars.
+	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+		prompt = prompt[:idx]
+	}
+	if len(prompt) > 60 {
+		prompt = prompt[:57] + "..."
+	}
+	switch {
+	case typ != "" && prompt != "":
+		return fmt.Sprintf("%s: %s", typ, prompt)
+	case typ != "":
+		return typ
+	default:
+		return prompt
+	}
 }
 
 // toolResultSummary returns a short one-line summary of a tool result.
@@ -645,135 +702,240 @@ func toolResultSummary(content string) string {
 	return content
 }
 
-// formatToolResult extracts a readable summary from a parsed tool result.
-func formatToolResult(data map[string]any) string {
-	// ls tool: show file/dir names
-	if entries, ok := data["entries"].([]any); ok {
-		var names []string
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				name, _ := m["name"].(string)
-				if isDir, ok := m["is_dir"].(bool); ok && isDir {
-					name += "/"
-				}
-				names = append(names, name)
-			}
-		}
-		result := strings.Join(names, "  ")
-		if len(result) > 120 {
-			return result[:117] + "..."
-		}
-		return result
-	}
-	// tree tool: show dirs/files count
-	if _, ok := data["tree"].(string); ok {
-		d, _ := data["dirs"].(float64)
-		f, _ := data["files"].(float64)
-		return fmt.Sprintf("%d dirs, %d files", int(d), int(f))
-	}
-	// grep tool: show matches with file:line: content
-	if matchList, ok := data["matches"].([]any); ok {
-		total, _ := data["total_matches"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, m := range matchList {
-			if entry, ok := m.(map[string]any); ok {
-				file, _ := entry["file"].(string)
-				line, _ := entry["line"].(float64)
-				content, _ := entry["content"].(string)
-				fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if matches, ok := data["total_matches"].(float64); ok {
-		return fmt.Sprintf("%d matches", int(matches))
-	}
-	// find tool: show file list
-	if fileList, ok := data["files"].([]any); ok {
-		total, _ := data["total_files"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		var sb strings.Builder
-		for _, f := range fileList {
-			if name, ok := f.(string); ok {
-				sb.WriteString(name)
-				sb.WriteByte('\n')
-			}
-		}
-		if trunc {
-			fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-	if total, ok := data["total_files"].(float64); ok {
-		return fmt.Sprintf("%d files", int(total))
-	}
-	// read tool: show actual content with line numbers
-	if content, ok := data["content"].(string); ok {
-		total, _ := data["total_lines"].(float64)
-		trunc, _ := data["truncated"].(bool)
-		if trunc {
-			content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
-		}
-		return content
-	}
-	if total, ok := data["total_lines"].(float64); ok {
-		trunc := ""
-		if t, ok := data["truncated"].(bool); ok && t {
-			trunc = " (truncated)"
-		}
-		return fmt.Sprintf("%d lines%s", int(total), trunc)
-	}
-	// write tool: show bytes written
-	if bw, ok := data["bytes_written"].(float64); ok {
-		if p, ok := data["path"].(string); ok {
-			return fmt.Sprintf("%s (%d bytes)", p, int(bw))
-		}
-	}
-	// edit tool: show replacements
-	if r, ok := data["replacements"].(float64); ok {
-		return fmt.Sprintf("%d replacements", int(r))
-	}
-	// lsp_diagnostics: show diagnostics (already prefixed with ⚠ by formatDiagnosticsForDisplay)
-	if diag, ok := data["lsp_diagnostics"].(string); ok && diag != "" {
-		return diag
-	}
-	// A backgrounded command, either at the moment of handoff (the bash tool) or
-	// on any later poll of it (bash_wait, bash_kill). Both carry a handle, and
-	// both have to be taken before the exit-code branch below.
-	//
-	// While such a command is still running it has no exit status: the bash tool
-	// reports the -1 placeholder, which the exit-code branch renders as
-	// "exit -1: <first line of output>" — a live lint run reading as a crashed
-	// one. A poll is worse: BashStatus omits exit_code entirely while running, so
-	// it missed the branch altogether and fell through to the raw-JSON fallback,
-	// printing &-escaped argument soup instead of the command's output.
-	if handle, ok := data["handle"].(string); ok && handle != "" {
-		return formatBashWindow(handle, data)
-	}
-	// bash tool: show exit code + first 2 and last 2 output lines (preserve newlines for better visibility)
-	if code, ok := data["exit_code"].(float64); ok {
-		stdout, _ := data["stdout"].(string)
-		stderr, _ := data["stderr"].(string)
-		result := bashOutputPreview(stdout, stderr)
-		if result == "" {
-			result = "(No output)"
-		}
-		if int(code) != 0 {
-			return fmt.Sprintf("exit %d: %s", int(code), result)
-		}
-		return result
-	}
-	// Fallback: compact JSON
-	b, _ := json.Marshal(data)
-	s := string(b)
+// clipToolSummary clips s to 120 bytes, marking the cut — the byte-wise limit
+// every one-line tool summary is held to.
+func clipToolSummary(s string) string {
 	if len(s) > 120 {
 		return s[:117] + "..."
 	}
 	return s
+}
+
+// toolResultShape formats one recognized tool-result shape, reporting false
+// when data is not that shape and the next shape should be tried.
+type toolResultShape func(data map[string]any) (string, bool)
+
+// toolResultShapes are the shapes formatToolResult recognizes, in the order it
+// tries them. The order is behavior, not taste: results carry overlapping keys
+// (a grep result has both "matches" and "total_matches"; a backgrounded bash
+// poll has both "handle" and "exit_code"), and the first shape that matches
+// wins.
+var toolResultShapes = []toolResultShape{
+	lsResultSummary,
+	treeResultSummary,
+	grepResultSummary,
+	grepCountSummary,
+	findResultSummary,
+	findCountSummary,
+	readResultSummary,
+	readCountSummary,
+	writeResultSummary,
+	editResultSummary,
+	diagnosticsResultSummary,
+	bashWindowResultSummary,
+	bashExitResultSummary,
+}
+
+// formatToolResult extracts a readable summary from a parsed tool result.
+func formatToolResult(data map[string]any) string {
+	for _, shape := range toolResultShapes {
+		if s, ok := shape(data); ok {
+			return s
+		}
+	}
+	// Fallback: compact JSON
+	b, _ := json.Marshal(data)
+	return clipToolSummary(string(b))
+}
+
+// lsResultSummary formats an ls result as its file/dir names.
+func lsResultSummary(data map[string]any) (string, bool) {
+	entries, ok := data["entries"].([]any)
+	if !ok {
+		return "", false
+	}
+	var names []string
+	for _, e := range entries {
+		if m, ok := e.(map[string]any); ok {
+			name, _ := m["name"].(string)
+			if isDir, ok := m["is_dir"].(bool); ok && isDir {
+				name += "/"
+			}
+			names = append(names, name)
+		}
+	}
+	return clipToolSummary(strings.Join(names, "  ")), true
+}
+
+// treeResultSummary formats a tree result as its dirs/files counts.
+func treeResultSummary(data map[string]any) (string, bool) {
+	if _, ok := data["tree"].(string); !ok {
+		return "", false
+	}
+	d, _ := data["dirs"].(float64)
+	f, _ := data["files"].(float64)
+	return fmt.Sprintf("%d dirs, %d files", int(d), int(f)), true
+}
+
+// grepResultSummary formats a grep result as "file:line: content" per match.
+func grepResultSummary(data map[string]any) (string, bool) {
+	matchList, ok := data["matches"].([]any)
+	if !ok {
+		return "", false
+	}
+	total, _ := data["total_matches"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, m := range matchList {
+		if entry, ok := m.(map[string]any); ok {
+			file, _ := entry["file"].(string)
+			line, _ := entry["line"].(float64)
+			content, _ := entry["content"].(string)
+			fmt.Fprintf(&sb, "%s:%d: %s\n", file, int(line), content)
+		}
+	}
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total matches, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n"), true
+}
+
+// grepCountSummary formats a grep result that carries only a match count.
+func grepCountSummary(data map[string]any) (string, bool) {
+	matches, ok := data["total_matches"].(float64)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%d matches", int(matches)), true
+}
+
+// findResultSummary formats a find result as its file list.
+func findResultSummary(data map[string]any) (string, bool) {
+	fileList, ok := data["files"].([]any)
+	if !ok {
+		return "", false
+	}
+	total, _ := data["total_files"].(float64)
+	trunc, _ := data["truncated"].(bool)
+	var sb strings.Builder
+	for _, f := range fileList {
+		if name, ok := f.(string); ok {
+			sb.WriteString(name)
+			sb.WriteByte('\n')
+		}
+	}
+	if trunc {
+		fmt.Fprintf(&sb, "... (%d total files, truncated)", int(total))
+	}
+	return strings.TrimRight(sb.String(), "\n"), true
+}
+
+// findCountSummary formats a find result that carries only a file count.
+func findCountSummary(data map[string]any) (string, bool) {
+	total, ok := data["total_files"].(float64)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%d files", int(total)), true
+}
+
+// readResultSummary formats a read result as its actual content.
+func readResultSummary(data map[string]any) (string, bool) {
+	content, ok := data["content"].(string)
+	if !ok {
+		return "", false
+	}
+	total, _ := data["total_lines"].(float64)
+	if trunc, _ := data["truncated"].(bool); trunc {
+		content += fmt.Sprintf("\n... (%d total lines, truncated)", int(total))
+	}
+	return content, true
+}
+
+// readCountSummary formats a read result that carries only a line count.
+func readCountSummary(data map[string]any) (string, bool) {
+	total, ok := data["total_lines"].(float64)
+	if !ok {
+		return "", false
+	}
+	trunc := ""
+	if t, ok := data["truncated"].(bool); ok && t {
+		trunc = " (truncated)"
+	}
+	return fmt.Sprintf("%d lines%s", int(total), trunc), true
+}
+
+// writeResultSummary formats a write result as its path and byte count. A
+// byte count with no path is not this shape: it falls through to the shapes
+// below, as it always has.
+func writeResultSummary(data map[string]any) (string, bool) {
+	bw, ok := data["bytes_written"].(float64)
+	if !ok {
+		return "", false
+	}
+	p, ok := data["path"].(string)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%s (%d bytes)", p, int(bw)), true
+}
+
+// editResultSummary formats an edit result as its replacement count.
+func editResultSummary(data map[string]any) (string, bool) {
+	r, ok := data["replacements"].(float64)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%d replacements", int(r)), true
+}
+
+// diagnosticsResultSummary returns lsp_diagnostics verbatim (already prefixed
+// with ⚠ by formatDiagnosticsForDisplay). An empty string is not a summary, so
+// it falls through.
+func diagnosticsResultSummary(data map[string]any) (string, bool) {
+	diag, ok := data["lsp_diagnostics"].(string)
+	if !ok || diag == "" {
+		return "", false
+	}
+	return diag, true
+}
+
+// bashWindowResultSummary formats a backgrounded command, either at the moment
+// of handoff (the bash tool) or on any later poll of it (bash_wait, bash_kill).
+// Both carry a handle, and both have to be taken before the exit-code shape
+// below.
+//
+// While such a command is still running it has no exit status: the bash tool
+// reports the -1 placeholder, which the exit-code shape renders as
+// "exit -1: <first line of output>" — a live lint run reading as a crashed one.
+// A poll is worse: BashStatus omits exit_code entirely while running, so it
+// missed the branch altogether and fell through to the raw-JSON fallback,
+// printing &-escaped argument soup instead of the command's output.
+func bashWindowResultSummary(data map[string]any) (string, bool) {
+	handle, ok := data["handle"].(string)
+	if !ok || handle == "" {
+		return "", false
+	}
+	return formatBashWindow(handle, data), true
+}
+
+// bashExitResultSummary formats a finished command as its exit code plus the
+// first 2 and last 2 output lines (newlines preserved for better visibility).
+func bashExitResultSummary(data map[string]any) (string, bool) {
+	code, ok := data["exit_code"].(float64)
+	if !ok {
+		return "", false
+	}
+	stdout, _ := data["stdout"].(string)
+	stderr, _ := data["stderr"].(string)
+	result := bashOutputPreview(stdout, stderr)
+	if result == "" {
+		result = "(No output)"
+	}
+	if int(code) != 0 {
+		return fmt.Sprintf("exit %d: %s", int(code), result), true
+	}
+	return result, true
 }
 
 // formatBashWindow renders the card for a backgrounded command: what state it

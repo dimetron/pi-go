@@ -269,38 +269,59 @@ func formatArgsForDisplay(args map[string]any) string {
 	if args == nil {
 		return ""
 	}
+	if s := priorityArgValue(args); s != "" {
+		return s
+	}
+	return summarizeArgs(args)
+}
+
+// priorityArgValue returns the value of the first display-worthy key present
+// in args, truncated for display. Keys are tried in the order listed — the
+// most tool-identifying first — and a missing, non-string or empty value falls
+// through to the next key. Returns "" when no priority key yields a value.
+func priorityArgValue(args map[string]any) string {
 	// Keys to prioritize for display (most useful for tool visibility)
 	priorityKeys := []string{"path", "file_path", "command", "cmd", "prompt", "query", "pattern", "name", "url", "description"}
 
-	// First try to find a relevant key
 	for _, key := range priorityKeys {
-		if v, ok := args[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				// Truncate long values
-				if len(s) > 50 {
-					s = s[:47] + "..."
-				}
-				return s
-			}
+		s, ok := args[key].(string)
+		if !ok || s == "" {
+			continue
 		}
+		// Truncate long values
+		return clipArg(s, 50, 47)
 	}
+	return ""
+}
 
-	// Fall back to first few keys from args
+// summarizeArgs is the fallback for arguments carrying no priority key: it
+// joins up to three "key=value" pairs. Map iteration order is random, so which
+// three entries are visited is not defined — and the budget is spent on every
+// entry visited, including non-string ones that contribute nothing.
+func summarizeArgs(args map[string]any) string {
 	var parts []string
 	i := 0
 	for k, v := range args {
 		if i >= 3 {
 			break
 		}
-		if s, ok := v.(string); ok && s != "" {
-			if len(s) > 30 {
-				s = s[:27] + "..."
-			}
-			parts = append(parts, fmt.Sprintf("%s=%s", k, s))
-		}
 		i++
+		s, ok := v.(string)
+		if !ok || s == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", k, clipArg(s, 30, 27)))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// clipArg shortens s to keep bytes plus an ellipsis when it is longer than
+// limit bytes, and returns it unchanged otherwise.
+func clipArg(s string, limit, keep int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:keep] + "..."
 }
 
 // appendToParentLocked records line as nested content on the sub-agent parent

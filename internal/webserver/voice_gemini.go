@@ -65,27 +65,9 @@ const maxVoiceCloseText = 400
 // handleGeminiVoiceWS relays one live session between the browser and the
 // Gemini Live API.
 func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
-	// The session id is already a single-use secret only an authorized caller
-	// could hold, but the relay is the socket that reaches the coding agent, so
-	// it re-checks the pairing rather than inheriting trust from a POST that
-	// happened minutes ago.
-	if !s.voiceAuthorized(w, r) {
-		return
-	}
-	if !s.voiceEnabled() {
-		voiceHTTPError(w, http.StatusServiceUnavailable,
-			fmt.Errorf("voice is not configured — set GEMINI_API_KEY and run `pi serve --voice`"))
-		return
-	}
-	sessionID := r.URL.Query().Get("session")
-	vs, ok := s.voiceStore.get(sessionID)
+	vs, ok := s.voiceRelayTarget(w, r)
 	if !ok {
-		voiceHTTPError(w, http.StatusNotFound, fmt.Errorf("unknown or expired voice session"))
-		return
-	}
-	if vs.claimed() {
-		voiceHTTPError(w, http.StatusConflict, fmt.Errorf("this voice session already has a relay"))
-		return
+		return // voiceRelayTarget already wrote the response
 	}
 
 	up := &websocket.Upgrader{CheckOrigin: s.voiceOriginOK}
@@ -159,38 +141,77 @@ func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// browser → provider: mic audio.
-	go func() {
-		// A vanished browser has to end the WHOLE relay. Canceling the context
-		// cannot do it on its own — the loop below sits in provider.ReadJSON,
-		// which blocks outside any context — so closing the provider socket is
-		// what unblocks it and frees the slot in milliseconds instead of at the
-		// TTL.
-		//
-		// This needs the dead peer to actually surface as a read error (a close
-		// frame, FIN or RST). A half-open TCP connection — a phone that locks
-		// and never sends anything again — is only noticed when the provider
-		// itself times out. Add a read deadline plus a ping ticker here if that
-		// idle window ever needs to be bounded.
-		defer func() {
-			cancel()
-			_ = provider.Close()
-		}()
-		for {
-			kind, data, err := browser.ReadMessage()
-			if err != nil {
-				return
-			}
-			if kind != websocket.BinaryMessage || len(data) == 0 {
-				continue
-			}
-			msg := voicegemini.RealtimeAudioMessage(base64.StdEncoding.EncodeToString(data))
-			if err := pw.writeJSON(msg); err != nil {
-				return
-			}
-		}
-	}()
+	go pumpBrowserAudio(browser, provider, pw, cancel)
 
 	// provider → browser: audio, transcripts, tool calls.
+	s.relayProviderMessages(ctx, provider, pw, bw, vs, creator.Model)
+}
+
+// voiceRelayTarget resolves and claims the voice session this upgrade is for,
+// writing the HTTP error itself and reporting false when it cannot.
+//
+// The session id is already a single-use secret only an authorized caller could
+// hold, but the relay is the socket that reaches the coding agent, so it
+// re-checks the pairing rather than inheriting trust from a POST that happened
+// minutes ago.
+func (s *ServerV2) voiceRelayTarget(w http.ResponseWriter, r *http.Request) (*voiceSession, bool) {
+	if !s.voiceAuthorized(w, r) {
+		return nil, false
+	}
+	if !s.voiceEnabled() {
+		voiceHTTPError(w, http.StatusServiceUnavailable,
+			fmt.Errorf("voice is not configured — set GEMINI_API_KEY and run `pi serve --voice`"))
+		return nil, false
+	}
+	sessionID := r.URL.Query().Get("session")
+	vs, ok := s.voiceStore.get(sessionID)
+	if !ok {
+		voiceHTTPError(w, http.StatusNotFound, fmt.Errorf("unknown or expired voice session"))
+		return nil, false
+	}
+	if vs.claimed() {
+		voiceHTTPError(w, http.StatusConflict, fmt.Errorf("this voice session already has a relay"))
+		return nil, false
+	}
+	return vs, true
+}
+
+// pumpBrowserAudio forwards mic frames from the browser to the provider until
+// the browser socket ends.
+//
+// A vanished browser has to end the WHOLE relay. Canceling the context cannot
+// do it on its own — the provider read loop sits in provider.ReadJSON, which
+// blocks outside any context — so closing the provider socket is what unblocks
+// it and frees the slot in milliseconds instead of at the TTL.
+//
+// This needs the dead peer to actually surface as a read error (a close frame,
+// FIN or RST). A half-open TCP connection — a phone that locks and never sends
+// anything again — is only noticed when the provider itself times out. Add a
+// read deadline plus a ping ticker here if that idle window ever needs to be
+// bounded.
+func pumpBrowserAudio(browser, provider *websocket.Conn, pw *wsWriter, cancel context.CancelFunc) {
+	defer func() {
+		cancel()
+		_ = provider.Close()
+	}()
+	for {
+		kind, data, err := browser.ReadMessage()
+		if err != nil {
+			return
+		}
+		if kind != websocket.BinaryMessage || len(data) == 0 {
+			continue
+		}
+		msg := voicegemini.RealtimeAudioMessage(base64.StdEncoding.EncodeToString(data))
+		if err := pw.writeJSON(msg); err != nil {
+			return
+		}
+	}
+}
+
+// relayProviderMessages reads the provider until the relay ends, forwarding
+// audio, transcripts and tool calls to the browser.
+func (s *ServerV2) relayProviderMessages(ctx context.Context, provider *websocket.Conn, pw, bw *wsWriter, vs *voiceSession, model string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -206,7 +227,7 @@ func (s *ServerV2) handleGeminiVoiceWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case sm.SetupComplete != nil:
-			s.log.Info("voice setup complete", "session", vs.ID, "model", creator.Model)
+			s.log.Info("voice setup complete", "session", vs.ID, "model", model)
 			_ = bw.writeJSON(map[string]any{"type": "ready"})
 		case sm.ServerContent != nil:
 			relayGeminiContent(bw, sm.ServerContent)

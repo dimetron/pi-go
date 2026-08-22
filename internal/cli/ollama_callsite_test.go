@@ -1,0 +1,149 @@
+package cli
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/guardrail"
+)
+
+// The endpoint decision has to be the same one in every place that builds an
+// Ollama client, not just in the main run path. These two callers each used to
+// decide for themselves — buildSwitchedLLM read the API key as a destination,
+// buildCommitMsgFunc hard-coded localhost — so both are pinned here against a
+// :cloud model, which is the direction each of them used to get wrong.
+
+func TestBuildSwitchedLLM_OllamaRoutesByTag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+	t.Setenv("OLLAMA_HOST", "")
+
+	origURL := flagURL
+	t.Cleanup(func() { flagURL = origURL })
+	flagURL = ""
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"default": {Model: "deepseek-v4-flash:0731-cloud", Provider: "ollama"},
+		},
+	}
+
+	// A cloud-tagged model must reach the cloud endpoint without a health
+	// check against a local daemon that need not be running.
+	llm, modelName, providerName, err := buildSwitchedLLM(
+		context.Background(), cfg, guardrail.New(0), "deepseek-v4-flash:0731-cloud")
+	if err != nil {
+		t.Fatalf("buildSwitchedLLM: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("nil LLM")
+	}
+	if providerName != "ollama" {
+		t.Errorf("provider = %q, want ollama", providerName)
+	}
+	if modelName != "deepseek-v4-flash:0731-cloud" {
+		t.Errorf("model = %q, want the name unchanged", modelName)
+	}
+}
+
+// buildCommitMsgFunc used to default every Ollama model to localhost, so a
+// :cloud commit model was sent to a daemon that does not serve it. It returns
+// nil rather than an error when the model cannot be reached, so the assertion
+// is that a cloud tag yields a usable callback with no local daemon present.
+func TestBuildCommitMsgFunc_OllamaCloudTagSkipsLocalDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+	t.Setenv("OLLAMA_HOST", "")
+
+	origURL := flagURL
+	t.Cleanup(func() { flagURL = origURL })
+	flagURL = ""
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"commit": {Model: "deepseek-v4-flash:0731-cloud", Provider: "ollama"},
+		},
+	}
+
+	if fn := buildCommitMsgFunc(context.Background(), cfg); fn == nil {
+		t.Fatal("buildCommitMsgFunc returned nil for a cloud-tagged model; " +
+			"the local-daemon health check should not run against api.ollama.com")
+	}
+}
+
+// ping resolved its own endpoint too, and defaulted every Ollama model to
+// localhost — so `pi ping` against a :cloud model probed a daemon that does
+// not serve it. It now asks the same resolver as everything else.
+func TestResolvePingTarget_OllamaRoutesByTag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+	t.Setenv("OLLAMA_HOST", "")
+
+	origURL, origModel := flagURL, flagModel
+	t.Cleanup(func() { flagURL, flagModel = origURL, origModel })
+	flagURL, flagModel = "", ""
+
+	tests := []struct {
+		name, model, want string
+	}{
+		{"cloud tag reaches the cloud", "deepseek-v4-flash:0731-cloud", "https://api.ollama.com"},
+		{"local tag stays local", "ollama/qwen3.8:27b-mlx", "http://localhost:11434"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				Roles: map[string]config.RoleConfig{
+					"default": {Model: tt.model, Provider: "ollama"},
+				},
+			}
+			target, err := resolvePingTarget(cfg)
+			if err != nil {
+				t.Fatalf("resolvePingTarget: %v", err)
+			}
+			if target.baseURL != tt.want {
+				t.Errorf("baseURL = %q, want %q", target.baseURL, tt.want)
+			}
+		})
+	}
+}
+
+// With no key and a local endpoint the daemon has to actually answer, and the
+// failure has to say so. Pointing OLLAMA_HOST at a closed port makes that
+// deterministic without depending on whether a daemon happens to be running.
+func TestBuildRootRuntime_OllamaHealthCheckFailureIsReported(t *testing.T) {
+	resetGlobalFlags(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "")
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+
+	flagModel = "ollama/qwen3.8:27b-mlx"
+	flagMode = "print"
+
+	_, err := buildRootRuntime(context.Background(), []string{"hi"})
+	if err == nil {
+		t.Fatal("expected an error when the daemon is unreachable")
+	}
+	if !strings.Contains(err.Error(), "ollama health check") {
+		t.Errorf("err = %v, want it to name the health check", err)
+	}
+}
+
+// buildCommitMsgFunc reports the same condition by returning nil, which is how
+// /commit degrades to no generated message rather than failing the session.
+func TestBuildCommitMsgFunc_OllamaUnreachableDaemonYieldsNil(t *testing.T) {
+	resetGlobalFlags(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "")
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"commit": {Model: "ollama/qwen3.8:27b-mlx", Provider: "ollama"},
+		},
+	}
+	if fn := buildCommitMsgFunc(context.Background(), cfg); fn != nil {
+		t.Error("expected nil when the local daemon is unreachable")
+	}
+}

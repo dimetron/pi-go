@@ -16,6 +16,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	adksession "google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
 )
@@ -76,39 +77,67 @@ func (s *Stream) OnEvent(ctx context.Context, ev *adksession.Event) error {
 		return nil
 	}
 
-	type pending struct {
-		thought bool
-		text    string
-	}
-	var batch []pending
+	batch, updater := s.collectChunks(ev)
+	return s.emitChunks(ctx, updater, batch)
+}
 
+// pendingChunk is one text fragment collected under mu and emitted once the
+// lock is released: either a thought chunk or an assistant message chunk.
+type pendingChunk struct {
+	thought bool
+	text    string
+}
+
+// collectChunks walks ev's parts under mu, accumulating assistant text into
+// finalText, and returns the chunks to emit together with the updater to emit
+// them through — read under the same lock so emission needs none.
+func (s *Stream) collectChunks(ev *adksession.Event) ([]pendingChunk, SessionUpdater) {
 	s.mu.Lock()
-	s.dedup.BeginEvent(ev)
-	for _, part := range ev.Content.Parts {
-		if part == nil {
-			continue
-		}
-		if part.FunctionCall != nil || part.FunctionResponse != nil {
-			continue
-		}
-		if part.Thought {
-			if part.Text != "" {
-				batch = append(batch, pending{thought: true, text: part.Text})
-			}
-			continue
-		}
-		if part.Text == "" {
-			continue
-		}
-		if s.dedup.SkipText(ev) {
-			continue
-		}
-		s.finalText.WriteString(part.Text)
-		batch = append(batch, pending{text: part.Text})
-	}
-	updater := s.updater
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
+	s.dedup.BeginEvent(ev)
+	var batch []pendingChunk
+	for _, part := range ev.Content.Parts {
+		chunk, ok := s.chunkForPart(ev, part)
+		if !ok {
+			continue
+		}
+		batch = append(batch, chunk)
+	}
+	return batch, s.updater
+}
+
+// chunkForPart classifies one part of ev, reporting false for everything
+// OnEvent drops: nil parts, tool-call plumbing, empty text, and the aggregate
+// re-send of text already streamed as deltas. Assistant text is accumulated
+// into finalText here. The caller must hold mu.
+func (s *Stream) chunkForPart(ev *adksession.Event, part *genai.Part) (pendingChunk, bool) {
+	if part == nil {
+		return pendingChunk{}, false
+	}
+	if part.FunctionCall != nil || part.FunctionResponse != nil {
+		return pendingChunk{}, false
+	}
+	if part.Thought {
+		if part.Text == "" {
+			return pendingChunk{}, false
+		}
+		return pendingChunk{thought: true, text: part.Text}, true
+	}
+	if part.Text == "" {
+		return pendingChunk{}, false
+	}
+	if s.dedup.SkipText(ev) {
+		return pendingChunk{}, false
+	}
+	s.finalText.WriteString(part.Text)
+	return pendingChunk{text: part.Text}, true
+}
+
+// emitChunks forwards the collected chunks to the peer in order, stopping at
+// the first update error. A nil updater discards message chunks; thought
+// chunks go through emitThought, which handles nil itself.
+func (s *Stream) emitChunks(ctx context.Context, updater SessionUpdater, batch []pendingChunk) error {
 	for _, p := range batch {
 		if p.thought {
 			if err := s.emitThought(ctx, p.text); err != nil {

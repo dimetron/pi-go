@@ -179,40 +179,90 @@ func (s *screenBuf) csi(b []byte) (int, bool) {
 	final := b[i]
 	i++
 
-	switch final {
-	case 'A': // CUU — the move an inline renderer makes to redraw its frame
-		s.row = max(s.row-csiNum(params, 0, 1), 0)
-	case 'B', 'e': // CUD
-		s.row += csiNum(params, 0, 1)
-		s.ensureRow()
-	case 'C', 'a': // CUF — how a differential repaint skips an unchanged prefix
-		s.col = min(s.col+csiNum(params, 0, 1), maxScreenCols)
-	case 'D': // CUB
-		s.col = max(s.col-csiNum(params, 0, 1), 0)
-	case 'G', '`': // CHA — absolute column, the other half of a partial repaint
-		s.col = clampCol(csiNum(params, 0, 1) - 1)
-	case 'E': // CNL
-		s.row += csiNum(params, 0, 1)
-		s.col = 0
-		s.ensureRow()
-	case 'F': // CPL
-		s.row = max(s.row-csiNum(params, 0, 1), 0)
-		s.col = 0
-	case 'K': // EL
-		s.eraseLine(csiNum(params, 0, 0))
-	case 'J': // ED
-		s.eraseDisplay(csiNum(params, 0, 0))
-	case 'H', 'f': // CUP
-		// The row is absolute against the window, which an inline renderer does
-		// not have — it never emits CUP for that reason. The column is still
-		// meaningful, so honor it and leave the row alone.
-		s.col = clampCol(csiNum(params, 1, 1) - 1)
-	case 'P': // DCH — delete characters, shifting the rest of the line left
-		s.deleteChars(csiNum(params, 0, 1))
-	case 'X': // ECH — blank characters in place
-		s.blank(s.col, s.col+csiNum(params, 0, 1))
+	// A final byte with no entry is a sequence that does not change what the
+	// screen holds (SGR color, cursor visibility, bracketed-paste mode); it is
+	// consumed and dropped.
+	if op, ok := csiOps[final]; ok {
+		op(s, params)
 	}
 	return i, true
+}
+
+// csiOps maps a CSI final byte to the edit it makes. Only the sequences that
+// change what a line holds appear here; everything else is dropped by csi.
+var csiOps = map[byte]func(s *screenBuf, params string){
+	// CUU — the move an inline renderer makes to redraw its frame.
+	'A': func(s *screenBuf, params string) {
+		s.row = max(s.row-csiNum(params, 0, 1), 0)
+	},
+	// CUD.
+	'B': csiCursorDown,
+	'e': csiCursorDown,
+	// CUF — how a differential repaint skips an unchanged prefix.
+	'C': csiCursorForward,
+	'a': csiCursorForward,
+	// CUB.
+	'D': func(s *screenBuf, params string) {
+		s.col = max(s.col-csiNum(params, 0, 1), 0)
+	},
+	// CHA — absolute column, the other half of a partial repaint.
+	'G': csiCursorColumn,
+	'`': csiCursorColumn,
+	// CNL.
+	'E': func(s *screenBuf, params string) {
+		s.row += csiNum(params, 0, 1)
+		s.col = 0
+		s.ensureRow()
+	},
+	// CPL.
+	'F': func(s *screenBuf, params string) {
+		s.row = max(s.row-csiNum(params, 0, 1), 0)
+		s.col = 0
+	},
+	// EL.
+	'K': func(s *screenBuf, params string) {
+		s.eraseLine(csiNum(params, 0, 0))
+	},
+	// ED.
+	'J': func(s *screenBuf, params string) {
+		s.eraseDisplay(csiNum(params, 0, 0))
+	},
+	// CUP.
+	'H': csiCursorPosition,
+	'f': csiCursorPosition,
+	// DCH — delete characters, shifting the rest of the line left.
+	'P': func(s *screenBuf, params string) {
+		s.deleteChars(csiNum(params, 0, 1))
+	},
+	// ECH — blank characters in place.
+	'X': func(s *screenBuf, params string) {
+		s.blank(s.col, s.col+csiNum(params, 0, 1))
+	},
+}
+
+// csiCursorDown applies CUD, the 'B' and 'e' finals.
+func csiCursorDown(s *screenBuf, params string) {
+	s.row += csiNum(params, 0, 1)
+	s.ensureRow()
+}
+
+// csiCursorForward applies CUF, the 'C' and 'a' finals.
+func csiCursorForward(s *screenBuf, params string) {
+	s.col = min(s.col+csiNum(params, 0, 1), maxScreenCols)
+}
+
+// csiCursorColumn applies CHA, the 'G' and '`' finals.
+func csiCursorColumn(s *screenBuf, params string) {
+	s.col = clampCol(csiNum(params, 0, 1) - 1)
+}
+
+// csiCursorPosition applies CUP, the 'H' and 'f' finals.
+//
+// The row is absolute against the window, which an inline renderer does not
+// have — it never emits CUP for that reason. The column is still meaningful, so
+// honor it and leave the row alone.
+func csiCursorPosition(s *screenBuf, params string) {
+	s.col = clampCol(csiNum(params, 1, 1) - 1)
 }
 
 // eraseLine applies EL with the given mode.

@@ -32,6 +32,12 @@ type Config struct {
 	// MaxDelay caps the exponential backoff, and also caps any delay the
 	// server itself asked for.
 	MaxDelay time.Duration
+
+	// Delays, when set, is an explicit pause schedule that replaces the
+	// exponential backoff: retry attempt n waits Delays[n], and attempts past
+	// the end of the slice reuse its last entry. A server-supplied hint still
+	// wins, and MaxDelay still caps the result.
+	Delays []time.Duration
 }
 
 // DefaultConfig returns the shared defaults.
@@ -111,6 +117,18 @@ var transientPatterns = []string{
 	"timeout",
 	"timed out",
 	"deadline exceeded",
+
+	// The local socket or route went away under an open connection. macOS
+	// reports EADDRNOTAVAIL as "read tcp 10.5.50.62:58742->104.18.2.115:443:
+	// read: can't assign requested address" when the interface a stream was
+	// bound to drops (VPN reconnect, Wi-Fi roam, sleep); Linux spells it
+	// "cannot assign requested address". A fresh dial picks a live address.
+	"can't assign requested address",
+	"cannot assign requested address",
+	"network is unreachable",
+	"no route to host",
+	"broken pipe",
+	"connection aborted",
 
 	// A stream that died mid-flight. An HTTP/2 reset arrives as
 	// "stream error: stream ID 9; INTERNAL_ERROR; received from peer", and a
@@ -237,8 +255,9 @@ func ServerDelay(err error) (time.Duration, bool) {
 
 // Delay returns how long to wait before the given retry attempt (0-based).
 //
-// A server-supplied hint wins over the computed backoff, since the server knows
-// when its window reopens and we do not. Both are clamped to cfg.MaxDelay so a
+// A server-supplied hint wins over the configured schedule, since the server
+// knows when its window reopens and we do not. An explicit cfg.Delays schedule
+// wins over the exponential backoff. All three are clamped to cfg.MaxDelay so a
 // provider cannot park a turn indefinitely.
 func Delay(cfg Config, attempt int, err error) time.Duration {
 	maxDelay := cfg.MaxDelay
@@ -248,6 +267,11 @@ func Delay(cfg Config, attempt int, err error) time.Duration {
 
 	if hinted, ok := ServerDelay(err); ok {
 		return min(hinted, maxDelay)
+	}
+
+	if n := len(cfg.Delays); n > 0 {
+		idx := max(0, min(attempt, n-1))
+		return min(cfg.Delays[idx], maxDelay)
 	}
 
 	initial := cfg.InitialDelay

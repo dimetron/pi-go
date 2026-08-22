@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,5 +289,85 @@ func TestStreamFailure(t *testing.T) {
 	got := streamFailure(&model.LLMResponse{ErrorCode: "DAILY_LIMIT_EXCEEDED", ErrorMessage: "over budget"}, nil)
 	if got == nil || got.Error() != "DAILY_LIMIT_EXCEEDED: over budget" {
 		t.Errorf("want code and message, got %v", got)
+	}
+}
+
+// The production budget: three retries before the failure is surfaced, paced
+// 3s, 5s, 7s. Pinned here because the schedule is the user-visible contract —
+// "it retries three times, a few seconds apart" — and TestMain hides it from
+// every other test in the package.
+func TestDefaultStreamRetrySchedule(t *testing.T) {
+	cfg := defaultStreamRetry()
+	if cfg.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
+	}
+	want := []time.Duration{3 * time.Second, 5 * time.Second, 7 * time.Second}
+	for i, d := range want {
+		if got := retry.Delay(cfg, i, errors.New("503")); got != d {
+			t.Errorf("retry %d waits %v, want %v", i+1, got, d)
+		}
+	}
+}
+
+// The failure that motivated the schedule: the local socket under an open
+// stream went away. It must be re-sent, and each re-send must be announced to
+// the notifier on the context so the TUI can say what it is waiting on.
+func TestRetryStreamRetriesAddrNotAvailAndNotifies(t *testing.T) {
+	const sockErr = "read tcp 10.5.50.62:58742->104.18.2.115:443: read: can't assign requested address"
+
+	var notices []retry.Attempt
+	ctx := retry.WithNotifier(context.Background(), func(a retry.Attempt) { notices = append(notices, a) })
+
+	calls := 0
+	got := collectStream(ctx, t, fastRetry(3), func(y func(*model.LLMResponse, error) bool) {
+		calls++
+		if calls < 4 {
+			y(streamError(sockErr), nil)
+			return
+		}
+		y(textResponse("recovered"), nil)
+	})
+
+	if calls != 4 {
+		t.Errorf("attempts = %d, want 4 (1 + 3 retries)", calls)
+	}
+	if len(got) != 1 || got[0].ErrorCode != "" {
+		t.Fatalf("want the recovered response only, got %+v", got)
+	}
+	if len(notices) != 3 {
+		t.Fatalf("notifier called %d times, want 3", len(notices))
+	}
+	for i, n := range notices {
+		if n.Attempt != i+1 || n.MaxRetries != 3 {
+			t.Errorf("notice %d = %d/%d, want %d/3", i, n.Attempt, n.MaxRetries, i+1)
+		}
+		if n.Err == nil || !strings.Contains(n.Err.Error(), "can't assign requested address") {
+			t.Errorf("notice %d carries %v, want the socket error", i, n.Err)
+		}
+	}
+}
+
+// Once the budget is spent the original failure is surfaced, after exactly
+// MaxRetries notices — the fourth failure is reported, not announced.
+func TestRetryStreamExhaustedAfterThreeRetries(t *testing.T) {
+	const sockErr = "read tcp 10.5.50.62:58742->104.18.2.115:443: read: can't assign requested address"
+
+	notices := 0
+	ctx := retry.WithNotifier(context.Background(), func(retry.Attempt) { notices++ })
+
+	calls := 0
+	got := collectStream(ctx, t, fastRetry(3), func(y func(*model.LLMResponse, error) bool) {
+		calls++
+		y(streamError(sockErr), nil)
+	})
+
+	if calls != 4 {
+		t.Errorf("attempts = %d, want 4", calls)
+	}
+	if notices != 3 {
+		t.Errorf("notices = %d, want 3", notices)
+	}
+	if len(got) != 1 || got[0].ErrorMessage != sockErr {
+		t.Errorf("want the original error forwarded once, got %+v", got)
 	}
 }

@@ -491,38 +491,9 @@ func DeviceFlow(ctx context.Context, prov Provider) (*DeviceCodeResponse, error)
 		return nil, fmt.Errorf("provider %s does not support device code flow", prov.Name)
 	}
 
-	var resp *http.Response
-	var err error
-	if prov.DeviceJSONBody {
-		payload := map[string]string{"client_id": prov.ClientID}
-		if scope := strings.Join(prov.Scopes, " "); scope != "" {
-			payload["scope"] = scope
-		}
-		for k, v := range prov.ExtraParams {
-			payload[k] = v
-		}
-		body, merr := json.Marshal(payload)
-		if merr != nil {
-			return nil, fmt.Errorf("device code request: %w", merr)
-		}
-		req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, prov.DeviceURL, bytes.NewReader(body))
-		if rerr != nil {
-			return nil, fmt.Errorf("device code request: %w", rerr)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err = http.DefaultClient.Do(req)
-	} else {
-		data := url.Values{
-			"client_id": {prov.ClientID},
-			"scope":     {strings.Join(prov.Scopes, " ")},
-		}
-		for k, v := range prov.ExtraParams {
-			data.Set(k, v)
-		}
-		resp, err = http.PostForm(prov.DeviceURL, data)
-	}
+	resp, err := postDeviceCodeRequest(ctx, prov)
 	if err != nil {
-		return nil, fmt.Errorf("device code request: %w", err)
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -538,17 +509,73 @@ func DeviceFlow(ctx context.Context, prov Provider) (*DeviceCodeResponse, error)
 	if dcr.Interval == 0 {
 		dcr.Interval = 5
 	}
-	// opencode's console returns verification_uri_complete as a path relative
-	// to the console origin; resolve it against the device endpoint so callers
-	// can open the one-click URL directly.
-	if dcr.VerificationURIComplete != "" &&
-		!strings.HasPrefix(dcr.VerificationURIComplete, "http://") &&
-		!strings.HasPrefix(dcr.VerificationURIComplete, "https://") {
-		if u, perr := url.Parse(prov.DeviceURL); perr == nil && u.Scheme != "" && u.Host != "" {
-			dcr.VerificationURIComplete = u.Scheme + "://" + u.Host + dcr.VerificationURIComplete
-		}
-	}
+	dcr.VerificationURIComplete = absoluteVerificationURI(prov.DeviceURL, dcr.VerificationURIComplete)
 	return &dcr, nil
+}
+
+// postDeviceCodeRequest issues the device authorization request, as a JSON
+// body or as form encoding depending on the provider, and wraps every failure
+// on the way with the same "device code request" context.
+func postDeviceCodeRequest(ctx context.Context, prov Provider) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	if prov.DeviceJSONBody {
+		resp, err = postDeviceCodeJSON(ctx, prov)
+	} else {
+		data := url.Values{
+			"client_id": {prov.ClientID},
+			"scope":     {strings.Join(prov.Scopes, " ")},
+		}
+		for k, v := range prov.ExtraParams {
+			data.Set(k, v)
+		}
+		resp, err = http.PostForm(prov.DeviceURL, data)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("device code request: %w", err)
+	}
+	return resp, nil
+}
+
+// postDeviceCodeJSON sends the device authorization request with a JSON body,
+// which some providers require in place of form encoding. Errors are returned
+// unwrapped; postDeviceCodeRequest adds the shared context.
+func postDeviceCodeJSON(ctx context.Context, prov Provider) (*http.Response, error) {
+	payload := map[string]string{"client_id": prov.ClientID}
+	if scope := strings.Join(prov.Scopes, " "); scope != "" {
+		payload["scope"] = scope
+	}
+	for k, v := range prov.ExtraParams {
+		payload[k] = v
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prov.DeviceURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
+
+// absoluteVerificationURI resolves a relative verification_uri_complete
+// against the device endpoint's origin. opencode's console returns it as a
+// path relative to the console origin; resolving it lets callers open the
+// one-click URL directly. Already-absolute, empty, or unresolvable values are
+// returned unchanged.
+func absoluteVerificationURI(deviceURL, uri string) string {
+	if uri == "" ||
+		strings.HasPrefix(uri, "http://") ||
+		strings.HasPrefix(uri, "https://") {
+		return uri
+	}
+	u, err := url.Parse(deviceURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return uri
+	}
+	return u.Scheme + "://" + u.Host + uri
 }
 
 // PollDeviceToken polls for the device code token until authorized or expired.
@@ -559,51 +586,90 @@ func PollDeviceToken(ctx context.Context, prov Provider, device *DeviceCodeRespo
 	if device == nil {
 		return nil, fmt.Errorf("nil device code response")
 	}
-	interval := device.Interval
-	if interval < 1 {
-		interval = 5
-	}
+	interval := deviceTokenInterval(device)
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
-	var deadline time.Time
-	if device.ExpiresIn > 0 {
-		deadline = time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
-	}
+	deadline := deviceTokenDeadline(device)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return &Result{Provider: prov.Name, Err: ctx.Err()}, nil
 		case <-ticker.C:
-			if !deadline.IsZero() && time.Now().After(deadline) {
-				return &Result{Provider: prov.Name, Err: fmt.Errorf("device authorization timed out: device code expired")}, nil
+			res, slowDown := pollDeviceTokenOnce(ctx, prov, device, deadline)
+			if res != nil {
+				return res, nil
 			}
-			tok, err := requestDeviceToken(ctx, prov, device.DeviceCode)
-			if err != nil {
-				// Check for "authorization_pending" — keep polling.
-				if strings.Contains(err.Error(), "authorization_pending") {
-					continue
-				}
-				// "slow_down" — increase the interval (RFC 8628 §3.5) and keep
-				// polling; the bump is cumulative across repeated slow_down
-				// responses.
-				if strings.Contains(err.Error(), "slow_down") {
-					interval += 5
-					ticker.Reset(time.Duration(interval) * time.Second)
-					continue
-				}
-				return &Result{Provider: prov.Name, Err: err}, nil
+			if slowDown {
+				interval = slowDownInterval(interval, ticker)
 			}
-
-			apiKey := prov.TokenToKey(tok)
-			return &Result{
-				Provider: prov.Name,
-				APIKey:   apiKey,
-				EnvVar:   prov.EnvVar,
-			}, nil
 		}
 	}
+}
+
+// deviceTokenInterval is the polling period the device response asks for, in
+// seconds. RFC 8628 §3.2 makes interval optional; 5 seconds is the default the
+// spec prescribes, and it also guards against a server asking for zero.
+func deviceTokenInterval(device *DeviceCodeResponse) int {
+	if device.Interval < 1 {
+		return 5
+	}
+	return device.Interval
+}
+
+// deviceTokenDeadline is the instant the device code expires. A zero
+// expires_in means the code carries no expiry of its own, and the returned
+// zero time tells the poll loop to run until the context is done.
+func deviceTokenDeadline(device *DeviceCodeResponse) time.Time {
+	if device.ExpiresIn <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
+}
+
+// pollTicker is the part of *time.Ticker the backoff needs. Naming it keeps
+// the interval arithmetic exercisable without waiting on a real tick.
+type pollTicker interface {
+	Reset(d time.Duration)
+}
+
+// slowDownInterval applies the RFC 8628 §3.5 backoff: each slow_down response
+// adds 5 seconds to the polling interval and retimes the ticker to match. The
+// bump is cumulative — repeated slow_down responses keep widening the gap.
+func slowDownInterval(interval int, ticker pollTicker) int {
+	interval += 5
+	ticker.Reset(time.Duration(interval) * time.Second)
+	return interval
+}
+
+// pollDeviceTokenOnce performs one token request. A non-nil Result ends the
+// poll — with the token on success, or with the reason in Result.Err. A nil
+// Result means keep polling, and slowDown reports whether the server asked for
+// a longer interval first.
+func pollDeviceTokenOnce(ctx context.Context, prov Provider, device *DeviceCodeResponse, deadline time.Time) (res *Result, slowDown bool) {
+	if !deadline.IsZero() && time.Now().After(deadline) {
+		return &Result{Provider: prov.Name, Err: fmt.Errorf("device authorization timed out: device code expired")}, false
+	}
+
+	tok, err := requestDeviceToken(ctx, prov, device.DeviceCode)
+	if err == nil {
+		return &Result{
+			Provider: prov.Name,
+			APIKey:   prov.TokenToKey(tok),
+			EnvVar:   prov.EnvVar,
+		}, false
+	}
+
+	// "authorization_pending" — keep polling.
+	if strings.Contains(err.Error(), "authorization_pending") {
+		return nil, false
+	}
+	// "slow_down" — keep polling on a longer interval (RFC 8628 §3.5).
+	if strings.Contains(err.Error(), "slow_down") {
+		return nil, true
+	}
+	return &Result{Provider: prov.Name, Err: err}, false
 }
 
 // --- Helpers ---

@@ -214,46 +214,59 @@ func writeVerifyText(out io.Writer, reports []verifyReport) {
 		if i > 0 {
 			fmt.Fprintln(out)
 		}
-		fmt.Fprintf(out, "%s\n", r.Path)
-		if r.Digest != "" {
-			fmt.Fprintf(out, "  %s\n", r.Digest)
-		}
+		writeVerifyReport(out, r)
+	}
+}
 
-		if !r.Verified {
-			fmt.Fprintf(out, "\n  ✗ unverified: %s\n", r.Error)
-			if r.noAttestation {
-				fmt.Fprintf(out, "\n    %s holds no attestation for these bytes. A binary you\n", r.Repo)
-				fmt.Fprintf(out, "    built yourself never has one, and neither does one from a\n")
-				fmt.Fprintf(out, "    release made before the workflow started attesting.\n")
-			}
-			continue
-		}
+// writeVerifyReport prints one target: its path and digest, then either the
+// reason it is unverified or the attestations that checked out.
+func writeVerifyReport(out io.Writer, r verifyReport) {
+	fmt.Fprintf(out, "%s\n", r.Path)
+	if r.Digest != "" {
+		fmt.Fprintf(out, "  %s\n", r.Digest)
+	}
 
-		for _, res := range r.Results {
-			switch {
-			case res.Provenance != nil:
-				p := res.Provenance
-				fmt.Fprintf(out, "\n  ✓ build provenance\n")
-				writeField(out, "repository", p.Repository)
-				writeField(out, "workflow", joinRef(p.Workflow, p.Ref))
-				writeField(out, "commit", p.Commit)
-				writeField(out, "run", p.RunURL)
-			case res.SBOM != nil:
-				s := res.SBOM
-				fmt.Fprintf(out, "\n  ✓ SBOM\n")
-				writeField(out, "format", strings.TrimSpace(s.Format+" "+s.Version))
-				writeField(out, "packages", fmt.Sprintf("%d", s.Packages))
-				if eco := s.EcosystemsSorted(); len(eco) > 0 {
-					writeField(out, "ecosystems", strings.Join(eco, ", "))
-				}
-			default:
-				fmt.Fprintf(out, "\n  ✓ %s\n", res.PredicateType)
-			}
-			writeField(out, "signer", res.SignerIdentity)
-			if !res.SignedAt.IsZero() {
-				writeField(out, "signed", res.SignedAt.UTC().Format(time.RFC3339))
-			}
+	if !r.Verified {
+		fmt.Fprintf(out, "\n  ✗ unverified: %s\n", r.Error)
+		if r.noAttestation {
+			fmt.Fprintf(out, "\n    %s holds no attestation for these bytes. A binary you\n", r.Repo)
+			fmt.Fprintf(out, "    built yourself never has one, and neither does one from a\n")
+			fmt.Fprintf(out, "    release made before the workflow started attesting.\n")
 		}
+		return
+	}
+
+	for _, res := range r.Results {
+		writeAttestation(out, res)
+	}
+}
+
+// writeAttestation prints one verified attestation: the detail block its
+// predicate type calls for, then the signer identity and signing time that
+// every predicate shares.
+func writeAttestation(out io.Writer, res *attest.Result) {
+	switch {
+	case res.Provenance != nil:
+		p := res.Provenance
+		fmt.Fprintf(out, "\n  ✓ build provenance\n")
+		writeField(out, "repository", p.Repository)
+		writeField(out, "workflow", joinRef(p.Workflow, p.Ref))
+		writeField(out, "commit", p.Commit)
+		writeField(out, "run", p.RunURL)
+	case res.SBOM != nil:
+		s := res.SBOM
+		fmt.Fprintf(out, "\n  ✓ SBOM\n")
+		writeField(out, "format", strings.TrimSpace(s.Format+" "+s.Version))
+		writeField(out, "packages", fmt.Sprintf("%d", s.Packages))
+		if eco := s.EcosystemsSorted(); len(eco) > 0 {
+			writeField(out, "ecosystems", strings.Join(eco, ", "))
+		}
+	default:
+		fmt.Fprintf(out, "\n  ✓ %s\n", res.PredicateType)
+	}
+	writeField(out, "signer", res.SignerIdentity)
+	if !res.SignedAt.IsZero() {
+		writeField(out, "signed", res.SignedAt.UTC().Format(time.RFC3339))
 	}
 }
 
@@ -284,24 +297,37 @@ func writeSBOMDocuments(out io.Writer, reports []verifyReport) error {
 		if !r.Verified {
 			return fmt.Errorf("%s: %s", r.Path, r.Error)
 		}
-		for _, res := range r.Results {
-			if res.SBOM == nil || len(res.Predicate) == 0 {
-				continue
-			}
-			buf, err := json.MarshalIndent(res.Predicate, "", "  ")
-			if err != nil {
-				return fmt.Errorf("formatting SBOM: %w", err)
-			}
-			if _, err := out.Write(append(buf, '\n')); err != nil {
-				return err
-			}
-			found = true
+		wrote, err := writeSBOMPredicates(out, r.Results)
+		if err != nil {
+			return err
 		}
+		found = found || wrote
 	}
 	if !found {
 		return errors.New("no SBOM attestation found for the given artifacts")
 	}
 	return nil
+}
+
+// writeSBOMPredicates writes the raw SBOM predicate of every SBOM attestation
+// in results, and reports whether it wrote any. Attestations that are not
+// SBOMs, and SBOM results whose raw predicate was not retained, are skipped.
+func writeSBOMPredicates(out io.Writer, results []*attest.Result) (bool, error) {
+	found := false
+	for _, res := range results {
+		if res.SBOM == nil || len(res.Predicate) == 0 {
+			continue
+		}
+		buf, err := json.MarshalIndent(res.Predicate, "", "  ")
+		if err != nil {
+			return found, fmt.Errorf("formatting SBOM: %w", err)
+		}
+		if _, err := out.Write(append(buf, '\n')); err != nil {
+			return found, err
+		}
+		found = true
+	}
+	return found, nil
 }
 
 // githubTokenFromEnv returns a token if one is around. The attestations

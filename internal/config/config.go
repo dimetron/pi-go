@@ -88,6 +88,7 @@ type Config struct {
 	Memory        *MemoryConfig      `json:"memory,omitempty"`
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
+	LLMS          *LLMSConfig        `json:"llms,omitempty"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -144,6 +145,7 @@ type MCPServer struct {
 	Args    []string          `json:"args,omitempty"`
 	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
+	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -155,6 +157,17 @@ type A2AAgentConfig struct {
 // A2AConfig holds configuration for A2A agent connections.
 type A2AConfig struct {
 	Agents []A2AAgentConfig `json:"agents,omitempty"`
+}
+
+// LLMSSource defines a single llms.txt documentation source.
+type LLMSSource struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// LLMSConfig holds configuration for llms.txt documentation sources.
+type LLMSConfig struct {
+	Sources []LLMSSource `json:"sources,omitempty"`
 }
 
 // Defaults returns a Config with default values.
@@ -225,6 +238,10 @@ func autoDetectProvider(modelName string) string {
 	// opencode/ prefix → OpenCode Go provider.
 	if strings.HasPrefix(lower, "opencode/") {
 		return "opencode"
+	}
+	// openrouter/ prefix → OpenRouter provider.
+	if strings.HasPrefix(lower, "openrouter/") {
+		return "openrouter"
 	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
@@ -430,63 +447,75 @@ func parseMCPServers(v any) []MCPServer {
 	}
 	switch x := v.(type) {
 	case map[string]any:
-		// Claude Desktop object format: mcpServers is a map keyed by server name.
-		// Each value is { "command": "...", "args": [...] } or { "url": "..." }.
-		servers := make([]MCPServer, 0, len(x))
-		for name, val := range x {
-			srv := MCPServer{Name: name}
-			if m, ok := val.(map[string]any); ok {
-				if cmd, ok := m["command"].(string); ok {
-					srv.Command = cmd
-				}
-				if args, ok := m["args"].([]any); ok {
-					srv.Args = toStringSlice(args)
-				}
-				if url, ok := m["url"].(string); ok {
-					srv.URL = url
-				}
-				if headers, ok := m["headers"].(map[string]any); ok {
-					srv.Headers = toStringMap(headers)
-				}
-			}
-			// Skip servers that have neither command nor URL (e.g., disabled servers).
-			if srv.Command == "" && srv.URL == "" {
-				continue
-			}
-			servers = append(servers, srv)
-		}
-		return servers
+		return parseMCPServerObject(x)
 	case []any:
-		// Legacy array format.
-		servers := make([]MCPServer, 0, len(x))
-		for _, item := range x {
-			if m, ok := item.(map[string]any); ok {
-				srv := MCPServer{}
-				if n, ok := m["name"].(string); ok {
-					srv.Name = n
-				}
-				if cmd, ok := m["command"].(string); ok {
-					srv.Command = cmd
-				}
-				if args, ok := m["args"].([]any); ok {
-					srv.Args = toStringSlice(args)
-				}
-				if url, ok := m["url"].(string); ok {
-					srv.URL = url
-				}
-				if headers, ok := m["headers"].(map[string]any); ok {
-					srv.Headers = toStringMap(headers)
-				}
-				// Skip servers that have neither command nor URL.
-				if srv.Command == "" && srv.URL == "" {
-					continue
-				}
-				servers = append(servers, srv)
-			}
-		}
-		return servers
+		return parseMCPServerArray(x)
 	default:
 		return nil
+	}
+}
+
+// parseMCPServerObject reads the Claude Desktop object format: mcpServers is a
+// map keyed by server name, and each value is { "command": "...", "args": [...] }
+// or { "url": "..." }.
+func parseMCPServerObject(x map[string]any) []MCPServer {
+	servers := make([]MCPServer, 0, len(x))
+	for name, val := range x {
+		srv := MCPServer{Name: name}
+		if m, ok := val.(map[string]any); ok {
+			applyMCPTransport(&srv, m)
+		}
+		// Skip servers that have neither command nor URL (e.g., disabled servers).
+		if srv.Command == "" && srv.URL == "" {
+			continue
+		}
+		servers = append(servers, srv)
+	}
+	return servers
+}
+
+// parseMCPServerArray reads the legacy array format, where the server name is a
+// field of each element rather than the key it is stored under.
+func parseMCPServerArray(x []any) []MCPServer {
+	servers := make([]MCPServer, 0, len(x))
+	for _, item := range x {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		srv := MCPServer{}
+		if n, ok := m["name"].(string); ok {
+			srv.Name = n
+		}
+		applyMCPTransport(&srv, m)
+		// Skip servers that have neither command nor URL.
+		if srv.Command == "" && srv.URL == "" {
+			continue
+		}
+		servers = append(servers, srv)
+	}
+	return servers
+}
+
+// applyMCPTransport fills the transport fields of srv — command, args, url and
+// headers — from one server object. Entries that are absent or hold the wrong
+// JSON type are left at their zero value, which is what makes a malformed entry
+// fall out as "neither command nor URL" and be skipped by the callers.
+func applyMCPTransport(srv *MCPServer, m map[string]any) {
+	if cmd, ok := m["command"].(string); ok {
+		srv.Command = cmd
+	}
+	if args, ok := m["args"].([]any); ok {
+		srv.Args = toStringSlice(args)
+	}
+	if url, ok := m["url"].(string); ok {
+		srv.URL = url
+	}
+	if headers, ok := m["headers"].(map[string]any); ok {
+		srv.Headers = toStringMap(headers)
+	}
+	if oauth, ok := m["oauth"].(bool); ok {
+		srv.OAuth = oauth
 	}
 }
 
@@ -535,14 +564,15 @@ func loadFile(path string, cfg *Config) error {
 func APIKeys() map[string]string {
 	keys := make(map[string]string)
 	envVars := map[string][]string{
-		"anthropic": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
-		"openai":    {"OPENAI_API_KEY"},
-		"azure":     {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
-		"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		"mistral":   {"MISTRAL_API_KEY"},
-		"xai":       {"XAI_API_KEY"},
-		"ollama":    {"OLLAMA_API_KEY"},
-		"opencode":  {"OPENCODE_API_KEY"},
+		"anthropic":  {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+		"openai":     {"OPENAI_API_KEY"},
+		"azure":      {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
+		"gemini":     {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+		"mistral":    {"MISTRAL_API_KEY"},
+		"xai":        {"XAI_API_KEY"},
+		"openrouter": {"OPENROUTER_API_KEY"},
+		"ollama":     {"OLLAMA_API_KEY"},
+		"opencode":   {"OPENCODE_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -561,13 +591,14 @@ func APIKeys() map[string]string {
 func BaseURLs() map[string]string {
 	urls := make(map[string]string)
 	envVars := map[string]string{
-		"anthropic": "ANTHROPIC_BASE_URL",
-		"openai":    "OPENAI_BASE_URL",
-		"gemini":    "GEMINI_BASE_URL",
-		"mistral":   "MISTRAL_BASE_URL",
-		"xai":       "XAI_BASE_URL",
-		"ollama":    "OLLAMA_HOST",
-		"opencode":  "OPENCODE_BASE_URL",
+		"anthropic":  "ANTHROPIC_BASE_URL",
+		"openai":     "OPENAI_BASE_URL",
+		"gemini":     "GEMINI_BASE_URL",
+		"mistral":    "MISTRAL_BASE_URL",
+		"xai":        "XAI_BASE_URL",
+		"openrouter": "OPENROUTER_BASE_URL",
+		"ollama":     "OLLAMA_HOST",
+		"opencode":   "OPENCODE_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {

@@ -3,10 +3,10 @@ package cli
 import (
 	"fmt"
 	"io"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 // roleFlags lists the roles pi can run as, in the order the footer prints them,
@@ -82,7 +82,7 @@ func writeRoleSummary(w io.Writer) {
 // reporting a missing OLLAMA_API_KEY there would be a false alarm — the key is
 // only required once a :cloud tag routes the request to api.ollama.com.
 func credentialStatus(prov, model string, keys map[string]string) string {
-	if prov == "ollama" && !isOllamaCloudModel(model) {
+	if prov == "ollama" && !provider.IsOllamaCloudModel(model) {
 		return "none (local daemon)"
 	}
 
@@ -91,10 +91,4 @@ func credentialStatus(prov, model string, keys map[string]string) string {
 		return envVar + " (set)"
 	}
 	return envVar + " (MISSING)"
-}
-
-// isOllamaCloudModel reports whether the model tag routes to Ollama Cloud
-// rather than a local daemon. Mirrors provider.Resolve.
-func isOllamaCloudModel(model string) bool {
-	return strings.HasSuffix(model, ":cloud") || strings.HasSuffix(model, "-cloud")
 }

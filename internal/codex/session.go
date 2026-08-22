@@ -256,20 +256,14 @@ func (s *Session) loop(ctx context.Context, started <-chan startResult) {
 	stderrLines := s.client.stderrLines()
 
 	for {
+		var (
+			done   bool
+			result RunResult
+		)
+
 		select {
 		case sr := <-started:
-			// turn/start failed — nothing will ever complete this turn.
-			if sr.err != nil {
-				s.finish(RunResult{Status: StatusError, Error: sr.err.Error(), Result: text.String()})
-				return
-			}
-			// The start response may already report a terminal status (the
-			// app-server protocol allows this); if so, no turn/completed
-			// notification will follow and we must not wait for one.
-			if sr.turn != nil && isTerminalTurnStatus(sr.turn.Status) {
-				s.finish(s.completedResult(*sr.turn, text.String(), lastErr))
-				return
-			}
+			done, result = s.startedResult(sr, text.String(), lastErr)
 
 		case line, ok := <-stderrLines:
 			if !ok {
@@ -287,46 +281,65 @@ func (s *Session) loop(ctx context.Context, started <-chan startResult) {
 				notifs = nil
 				continue
 			}
-			done, result := s.handleNotification(notif, &text, &lastErr)
-			if done {
-				s.finish(result)
-				return
-			}
+			done, result = s.handleNotification(notif, &text, &lastErr)
 
 		case <-s.client.closing:
 			// Cancel. Don't wait for the killed subprocess to hit EOF — the
 			// caller wants the session gone now.
-			s.finish(RunResult{
+			done, result = true, RunResult{
 				Status:     StatusError,
 				Error:      "codex turn canceled",
 				Result:     text.String(),
 				SessionID:  s.threadID,
 				StopReason: TurnInterrupted,
-			})
-			return
+			}
 
 		case <-s.client.exited:
-			// The subprocess is gone. Drain what is still buffered before
-			// concluding it crashed: a turn/completed (or the error that
-			// explains the exit) may already be queued behind this signal.
-			if done, result := s.drainRemaining(&text, &lastErr); done {
-				s.finish(result)
-				return
-			}
-			s.finish(s.crashResult(text.String(), lastErr))
-			return
+			done, result = true, s.exitedResult(&text, &lastErr)
 
 		case <-ctx.Done():
-			s.finish(RunResult{
+			done, result = true, RunResult{
 				Status:    StatusError,
 				Error:     ctx.Err().Error(),
 				Result:    text.String(),
 				SessionID: s.threadID,
 				Stderr:    s.client.stderrText(),
-			})
+			}
+		}
+
+		if done {
+			s.finish(result)
 			return
 		}
 	}
+}
+
+// startedResult translates the turn/start response into a terminal result. It
+// reports done=false while the turn is still running and a turn/completed
+// notification is still expected.
+func (s *Session) startedResult(sr startResult, text, lastErr string) (bool, RunResult) {
+	// turn/start failed — nothing will ever complete this turn.
+	if sr.err != nil {
+		return true, RunResult{Status: StatusError, Error: sr.err.Error(), Result: text}
+	}
+	// The start response may already report a terminal status (the app-server
+	// protocol allows this); if so, no turn/completed notification will follow
+	// and we must not wait for one.
+	if sr.turn != nil && isTerminalTurnStatus(sr.turn.Status) {
+		return true, s.completedResult(*sr.turn, text, lastErr)
+	}
+	return false, RunResult{}
+}
+
+// exitedResult concludes a turn whose subprocess is gone. What is still
+// buffered is drained first: a turn/completed (or the error that explains the
+// exit) may already be queued behind the exited signal, and only when nothing
+// terminal turns up is this reported as a crash.
+func (s *Session) exitedResult(text *strings.Builder, lastErr *string) RunResult {
+	if done, result := s.drainRemaining(text, lastErr); done {
+		return result
+	}
+	return s.crashResult(text.String(), *lastErr)
 }
 
 // drainRemaining consumes what is still buffered on the notification and
@@ -413,31 +426,46 @@ func (s *Session) handleNotification(notif JSONRPCNotification, text *strings.Bu
 func (s *Session) handleItem(item Item, completed bool, text *strings.Builder) {
 	switch item.Type {
 	case ItemAgentMessage:
-		if strings.TrimSpace(item.Text) == "" {
-			return
-		}
-		s.emit(Event{Type: EventTypeMessage, Content: item.Text, SessionID: s.threadID})
-		if completed {
-			text.WriteString(item.Text)
-		}
+		s.emitMessageItem(item.Text, completed, text)
 
 	case ItemExitedReviewMode:
-		if strings.TrimSpace(item.Review) == "" {
-			return
-		}
-		s.emit(Event{Type: EventTypeMessage, Content: item.Review, SessionID: s.threadID})
-		if completed {
-			text.WriteString(item.Review)
-		}
+		s.emitMessageItem(item.Review, completed, text)
 
 	case ItemReasoning:
-		if !completed {
-			return
-		}
-		if summary := strings.TrimSpace(strings.Join(item.Summary, "\n")); summary != "" {
-			s.emit(Event{Type: EventTypeProgress, Content: summary, SessionID: s.threadID})
-		}
+		s.emitReasoningItem(item, completed)
 
+	case ItemCommandExecution, ItemFileChange, ItemMCPToolCall, ItemDynamicToolCall, ItemWebSearch:
+		s.emitToolItem(item, completed)
+	}
+}
+
+// emitMessageItem emits one text-bearing item and, on completion, accumulates
+// it into the run result. Blank content is dropped rather than emitted.
+func (s *Session) emitMessageItem(content string, completed bool, text *strings.Builder) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	s.emit(Event{Type: EventTypeMessage, Content: content, SessionID: s.threadID})
+	if completed {
+		text.WriteString(content)
+	}
+}
+
+// emitReasoningItem emits a reasoning summary. Only the completed item carries
+// one worth showing, and an all-blank summary is dropped.
+func (s *Session) emitReasoningItem(item Item, completed bool) {
+	if !completed {
+		return
+	}
+	if summary := strings.TrimSpace(strings.Join(item.Summary, "\n")); summary != "" {
+		s.emit(Event{Type: EventTypeProgress, Content: summary, SessionID: s.threadID})
+	}
+}
+
+// emitToolItem emits the progress line for one tool-shaped item, phrased for
+// whether the item has started or finished.
+func (s *Session) emitToolItem(item Item, completed bool) {
+	switch item.Type {
 	case ItemCommandExecution:
 		if !completed {
 			s.emitTool("Running: " + item.Command)

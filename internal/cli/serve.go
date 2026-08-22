@@ -55,19 +55,13 @@ Each browser tab gets its own isolated agent session.`,
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	for _, h := range flagServeHeaders {
-		if !strings.Contains(h, "=") {
-			return fmt.Errorf("invalid --header %q: expected key=value", h)
-		}
+	if err := validateServeHeaders(); err != nil {
+		return err
 	}
 
-	project := flagServeProject
-	if project == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getting current directory: %w", err)
-		}
-		project = cwd
+	project, err := resolveServeProject()
+	if err != nil {
+		return err
 	}
 
 	// Open serve.log for streaming structured logs.
@@ -117,27 +111,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating initial pair code: %w", err)
 	}
 
-	fmt.Printf("Pi-Go web server started at http://%s\n", browsableAddr(server.Addr()))
-	fmt.Printf("Project: %s\n", project)
-	if flagServeModel != "" {
-		fmt.Printf("Model: %s\n", flagServeModel)
-	}
-	if flagServeURL != "" {
-		fmt.Printf("URL: %s\n", flagServeURL)
-	}
-	for _, h := range flagServeHeaders {
-		fmt.Printf("Header: %s\n", h)
-	}
-	if flagServeInsecure {
-		fmt.Println("TLS verification: disabled (--insecure)")
-	}
-	if flagServeVoice {
-		fmt.Printf("Voice: enabled (%s) — speech drives the pi session in this project\n", serveVoiceModel())
-	}
-	fmt.Printf("Pairing timeout: %s\n", flagServePairingTimeout)
-	fmt.Printf("Pair code: %s\n", code)
-	fmt.Println("Open /pair in your browser, then enter this pair code in mobile app.")
-	fmt.Println("\nPress Ctrl+C to stop the server")
+	printServeBanner(os.Stdout, server.Addr(), project, code)
 
 	// Wait for shutdown signal
 	<-sigChan
@@ -152,6 +126,57 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Server stopped")
 	return nil
+}
+
+// validateServeHeaders rejects a --header that is not key=value, before the
+// listener opens.
+func validateServeHeaders() error {
+	for _, h := range flagServeHeaders {
+		if !strings.Contains(h, "=") {
+			return fmt.Errorf("invalid --header %q: expected key=value", h)
+		}
+	}
+	return nil
+}
+
+// resolveServeProject is the project directory to serve: --project, or the
+// current directory when the flag is unset.
+func resolveServeProject() (string, error) {
+	if flagServeProject != "" {
+		return flagServeProject, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting current directory: %w", err)
+	}
+	return cwd, nil
+}
+
+// printServeBanner writes the startup summary: where to reach the server, what
+// it is serving, and the pair code needed to get in. Optional lines are printed
+// only for the options actually in effect.
+func printServeBanner(w io.Writer, addr, project, code string) {
+	fmt.Fprintf(w, "Pi-Go web server started at http://%s\n", browsableAddr(addr))
+	fmt.Fprintf(w, "Project: %s\n", project)
+	if flagServeModel != "" {
+		fmt.Fprintf(w, "Model: %s\n", flagServeModel)
+	}
+	if flagServeURL != "" {
+		fmt.Fprintf(w, "URL: %s\n", flagServeURL)
+	}
+	for _, h := range flagServeHeaders {
+		fmt.Fprintf(w, "Header: %s\n", h)
+	}
+	if flagServeInsecure {
+		fmt.Fprintln(w, "TLS verification: disabled (--insecure)")
+	}
+	if flagServeVoice {
+		fmt.Fprintf(w, "Voice: enabled (%s) — speech drives the pi session in this project\n", serveVoiceModel())
+	}
+	fmt.Fprintf(w, "Pairing timeout: %s\n", flagServePairingTimeout)
+	fmt.Fprintf(w, "Pair code: %s\n", code)
+	fmt.Fprintln(w, "Open /pair in your browser, then enter this pair code in mobile app.")
+	fmt.Fprintln(w, "\nPress Ctrl+C to stop the server")
 }
 
 // browsableAddr turns a listen address into one a browser can open. Wildcard

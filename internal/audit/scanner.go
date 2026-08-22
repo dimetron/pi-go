@@ -69,18 +69,27 @@ func isASCII(s string) bool {
 	return true
 }
 
+// emojiRanges lists the common emoji code point blocks, each bound inclusive.
+var emojiRanges = [...]struct{ lo, hi rune }{
+	{0x1F600, 0x1F64F}, // Emoticons
+	{0x1F300, 0x1F5FF}, // Misc Symbols and Pictographs
+	{0x1F680, 0x1F6FF}, // Transport and Map
+	{0x1F1E0, 0x1F1FF}, // Flags
+	{0x2600, 0x26FF},   // Misc symbols
+	{0x2700, 0x27BF},   // Dingbats
+	{0x1F900, 0x1F9FF}, // Supplemental Symbols
+	{0x1FA00, 0x1FA6F}, // Chess Symbols
+	{0x1FA70, 0x1FAFF}, // Symbols and Pictographs Extended-A
+}
+
 // isEmoji returns true if the rune is likely an emoji base character.
 func isEmoji(r rune) bool {
-	// Common emoji ranges.
-	return (r >= 0x1F600 && r <= 0x1F64F) || // Emoticons
-		(r >= 0x1F300 && r <= 0x1F5FF) || // Misc Symbols and Pictographs
-		(r >= 0x1F680 && r <= 0x1F6FF) || // Transport and Map
-		(r >= 0x1F1E0 && r <= 0x1F1FF) || // Flags
-		(r >= 0x2600 && r <= 0x26FF) || // Misc symbols
-		(r >= 0x2700 && r <= 0x27BF) || // Dingbats
-		(r >= 0x1F900 && r <= 0x1F9FF) || // Supplemental Symbols
-		(r >= 0x1FA00 && r <= 0x1FA6F) || // Chess Symbols
-		(r >= 0x1FA70 && r <= 0x1FAFF) // Symbols and Pictographs Extended-A
+	for _, rg := range emojiRanges {
+		if r >= rg.lo && r <= rg.hi {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanText scans content for hidden Unicode characters.

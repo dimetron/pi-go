@@ -33,23 +33,11 @@ func blankFast(line string) bool {
 	for i := 0; i < len(line); {
 		c := line[i]
 		if c == 0x1b { // ESC
-			if i+1 >= len(line) || line[i+1] != '[' {
-				return slowBlank(line) // not CSI: defer to the parser
+			next := skipFastCSI(line, i)
+			if next < 0 {
+				return slowBlank(line) // not the fast-path grammar: defer to the parser
 			}
-			// Fast-path ONLY the exact CSI grammar lipgloss/glamour emit:
-			//   ESC [ <param bytes 0x30-0x3f> <final byte 0x40-0x7e>
-			// Intermediate bytes (0x20-0x2f) are deliberately excluded: they are
-			// legal CSI but order-sensitive, and ansi.Strip aborts on bad order
-			// (FuzzBlankFast: "\x1b[ 0A"). C0 controls abort too ("\x1b[\x1c").
-			// Every deviation defers to the parser instead of guessing.
-			j := i + 2
-			for j < len(line) && line[j] >= 0x30 && line[j] <= 0x3f {
-				j++
-			}
-			if j >= len(line) || line[j] < 0x40 || line[j] > 0x7e {
-				return slowBlank(line)
-			}
-			i = j + 1 // consume final byte
+			i = next
 			continue
 		}
 		if c < utf8.RuneSelf { // ASCII fast path — the overwhelmingly common case
@@ -73,6 +61,32 @@ func blankFast(line string) bool {
 		i += size
 	}
 	return true
+}
+
+// skipFastCSI reports the index just past the CSI sequence that starts at the
+// ESC byte line[i], or -1 when line[i:] is not the exact grammar the fast path
+// handles and the caller must defer to the parser.
+//
+// It fast-paths ONLY the exact CSI grammar lipgloss/glamour emit:
+//
+//	ESC [ <param bytes 0x30-0x3f> <final byte 0x40-0x7e>
+//
+// Intermediate bytes (0x20-0x2f) are deliberately excluded: they are legal CSI
+// but order-sensitive, and ansi.Strip aborts on bad order (FuzzBlankFast:
+// "\x1b[ 0A"). C0 controls abort too ("\x1b[\x1c"). Every deviation defers to
+// the parser instead of guessing.
+func skipFastCSI(line string, i int) int {
+	if i+1 >= len(line) || line[i+1] != '[' {
+		return -1
+	}
+	j := i + 2
+	for j < len(line) && line[j] >= 0x30 && line[j] <= 0x3f {
+		j++
+	}
+	if j >= len(line) || line[j] < 0x40 || line[j] > 0x7e {
+		return -1
+	}
+	return j + 1 // consume final byte
 }
 
 // slowBlank is the reference implementation blankFast must agree with, and the

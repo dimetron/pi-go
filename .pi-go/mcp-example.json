@@ -17,13 +17,6 @@
     "tavily": {
       "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
     },
-    "jira": {
-      "url": "https://atlassian.example.corp/api/v1/mcp/jira/mcp/",
-      "headers": {
-        "X-Username": "dimetron",
-        "X-Api-Key": "${JIRA_API_KEY}"
-      }
-    },
     "exa": {
       "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
     },
@@ -31,16 +24,12 @@
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
     "adk-docs-mcp": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "mcpdoc",
-        "mcpdoc",
-        "--urls",
-        "AgentDevelopmentKit:https://adk.dev/llms.txt",
-        "--transport",
-        "stdio"
-      ]
+      "url": "https://adk.dev/llms.txt"
+    },
+    "openrouter": {
+      "type": "remote",
+      "url": "https://mcp.openrouter.ai/mcp",
+      "enabled": true
     }
   }
 }

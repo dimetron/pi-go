@@ -35,6 +35,28 @@ func initTestRepo(t *testing.T) string {
 	return dir
 }
 
+// initTestRepoWithIgnores is initTestRepo plus the ignore rules that hide spec
+// artifacts in the real repo: the global **/specs/ pattern and the project's
+// .pi-go/ rule. These are what let a plain `git add -A` silently stage nothing
+// for planner output, and they must be present for CommitAll's regression guard
+// to reproduce the loss in any environment, not just one whose ~/.gitignore
+// happens to match. Installed via core.excludesFile so the test stays hermetic
+// (independent of the machine's own global ignore file).
+func initTestRepoWithIgnores(t *testing.T) string {
+	t.Helper()
+	dir := initTestRepo(t)
+
+	ignore := filepath.Join(t.TempDir(), "global-gitignore")
+	content := "**/specs/\n.pi-go/\n"
+	if err := os.WriteFile(ignore, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing ignore file: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "core.excludesFile", ignore).CombinedOutput(); err != nil {
+		t.Fatalf("setting core.excludesFile: %v: %s", err, out)
+	}
+	return dir
+}
+
 func TestWorktree_CreateAndCleanup(t *testing.T) {
 	repo := initTestRepo(t)
 	mgr := NewWorktreeManager(repo)
@@ -712,7 +734,7 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 	mgr := NewWorktreeManager(repo)
 
 	// No stash present.
-	if _, found := mgr.findStashByMessage("anything"); found {
+	if _, _, found := mgr.findStashByMessage("anything"); found {
 		t.Error("findStashByMessage returned true with empty stash list")
 	}
 
@@ -726,7 +748,7 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 		t.Fatalf("stash push: %v: %s", err, out)
 	}
 
-	ref, found := mgr.findStashByMessage("unique-msg-12345")
+	ref, _, found := mgr.findStashByMessage("unique-msg-12345")
 	if !found {
 		t.Fatal("findStashByMessage did not find existing entry")
 	}
@@ -735,11 +757,11 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 	}
 
 	// Wrong message — not found.
-	if _, found := mgr.findStashByMessage("wrong-msg"); found {
+	if _, _, found := mgr.findStashByMessage("wrong-msg"); found {
 		t.Error("findStashByMessage returned true for non-matching message")
 	}
 	// Empty message — not found.
-	if _, found := mgr.findStashByMessage(""); found {
+	if _, _, found := mgr.findStashByMessage(""); found {
 		t.Error("findStashByMessage returned true for empty message")
 	}
 }

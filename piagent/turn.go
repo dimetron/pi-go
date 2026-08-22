@@ -73,14 +73,12 @@ func (a *Agent) observeTurn(ctx context.Context, sessionID, message string, run 
 	}
 
 	return func(yield func(*session.Event, error) bool) {
-		for _, fn := range a.beforeTurn {
-			if err := fn(ctx, sessionID, message); err != nil {
-				// Matches how internal/agent reports a pre-turn failure: as
-				// the sole element of the sequence, so a caller's existing
-				// error branch handles it without a second code path.
-				yield(nil, fmt.Errorf("piagent: before-turn hook: %w", err))
-				return
-			}
+		if err := a.runBeforeTurn(ctx, sessionID, message); err != nil {
+			// Matches how internal/agent reports a pre-turn failure: as the
+			// sole element of the sequence, so a caller's existing error
+			// branch handles it without a second code path.
+			yield(nil, err)
+			return
 		}
 
 		info := TurnInfo{SessionID: sessionID, Message: message, Abandoned: true}
@@ -89,32 +87,59 @@ func (a *Agent) observeTurn(ctx context.Context, sessionID, message string, run 
 		// range loop, which is the case an explicit call at the end misses.
 		defer func() {
 			info.Duration = time.Since(started)
-			for _, fn := range a.afterTurn {
-				fn(ctx, info)
-			}
+			a.runAfterTurn(ctx, info)
 		}()
 
 		for ev, err := range run(ctx, sessionID, message) {
-			if err != nil {
-				info.Err = err
-			}
-			if ev != nil {
-				info.Events++
-				if evErr := agent.EventError(ev); evErr != nil && info.Err == nil {
-					info.Err = evErr
-				}
-				if ev.Content != nil {
-					for _, part := range ev.Content.Parts {
-						if part.FunctionCall != nil {
-							info.ToolCalls++
-						}
-					}
-				}
-			}
+			info.record(ev, err)
 			if !yield(ev, err) {
 				return // abandoned; the defer above still reports it
 			}
 		}
 		info.Abandoned = false
+	}
+}
+
+// runBeforeTurn runs the admission-control hooks in order, stopping at the
+// first failure. The returned error is already wrapped for the caller to
+// yield as-is.
+func (a *Agent) runBeforeTurn(ctx context.Context, sessionID, message string) error {
+	for _, fn := range a.beforeTurn {
+		if err := fn(ctx, sessionID, message); err != nil {
+			return fmt.Errorf("piagent: before-turn hook: %w", err)
+		}
+	}
+	return nil
+}
+
+// runAfterTurn reports a finished turn to every after-turn hook. Hooks cannot
+// change the outcome, so none of them can stop the others from running.
+func (a *Agent) runAfterTurn(ctx context.Context, info TurnInfo) {
+	for _, fn := range a.afterTurn {
+		fn(ctx, info)
+	}
+}
+
+// record folds one (event, error) pair from the turn into the running counts.
+// The first error seen wins, whether it arrived on the iteration channel or
+// inside an ordinary event.
+func (info *TurnInfo) record(ev *session.Event, err error) {
+	if err != nil {
+		info.Err = err
+	}
+	if ev == nil {
+		return
+	}
+	info.Events++
+	if evErr := agent.EventError(ev); evErr != nil && info.Err == nil {
+		info.Err = evErr
+	}
+	if ev.Content == nil {
+		return
+	}
+	for _, part := range ev.Content.Parts {
+		if part.FunctionCall != nil {
+			info.ToolCalls++
+		}
 	}
 }

@@ -122,6 +122,38 @@ branch never touched (currently 10 `SA1019` deprecation errors in
 `hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
 the unrelated lint failure or to have the user decide, not to bypass the hook.
 
+## Review with codex before opening a PR
+
+**Always run a `codex` review of the changes before opening a pull request.**
+Not after, not instead of the other gates — before, so findings are fixed in the
+branch rather than in review comments.
+
+```bash
+cd <the worktree holding the branch>
+codex review --base main --title "<short description>"
+```
+
+`--base <BRANCH>` and a custom `[PROMPT]` are mutually exclusive: passing both
+fails with `the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Use
+`--base` alone for branch review; use `--commit <SHA>` or `--uncommitted` for the
+other scopes.
+
+Treat the output as a real reviewer, not a formality:
+
+- Act on findings before pushing. Verify each one against the code yourself
+  before accepting or dismissing it — a finding is a claim, not a verdict.
+- If a finding is wrong, say why in the PR description rather than silently
+  ignoring it.
+- Codex prints a long execution trace; the findings are at the end of the output.
+- A CLI usage error is not a clean review. `exit 0` with an argument-parsing
+  message means the review never ran — re-run it properly.
+
+This has already paid for itself: a codex review of the worktree stash fix found
+a time-of-check/time-of-use race that the tests, `-race`, and `golangci-lint` all
+passed over — `git stash list` returns positional `stash@{N}` refs, so an
+external push or drop between lookup and use renumbers the list and a positional
+drop deletes a stranger's work.
+
 ## Creating a pull request
 
 When the user asks to create a PR, open the browser link to the PR after it is

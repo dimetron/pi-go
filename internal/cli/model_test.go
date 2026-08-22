@@ -58,6 +58,7 @@ func isolateRunModelListEnv(t *testing.T) {
 		"XAI_BASE_URL",
 		"OLLAMA_HOST",
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
+		"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
 	} {
 		t.Setenv(k, "")
 	}
@@ -112,6 +113,25 @@ func TestRunModelList_Anthropic(t *testing.T) {
 	}
 	if !strings.Contains(out, "claude-sonnet-5") {
 		t.Errorf("output missing claude-sonnet-5: %s", out)
+	}
+}
+
+func TestRunModelList_OpenRouter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "google/gemini-3.7-flash", "owned_by": "openrouter"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	out, err := runModelListCapture(t, "openrouter", "--url", srv.URL)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "google/gemini-3.7-flash") {
+		t.Errorf("output missing google/gemini-3.7-flash: %s", out)
 	}
 }
 
