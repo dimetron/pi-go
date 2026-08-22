@@ -37,6 +37,7 @@ func settleGoroutines(t *testing.T) int {
 // in a long session is thousands.
 func TestSupervisor_ForegroundRunsLeakNoGoroutines(t *testing.T) {
 	sup := fastSupervisor(t)
+	allowSlowShellStartup(sup)
 
 	// Warm up so one-time initialization is not counted as growth.
 	run(t, sup, "echo warmup", 5*time.Second)
