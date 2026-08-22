@@ -38,8 +38,7 @@ func scanFiles(dir string, convos bool) ([]string, error) {
 		}
 
 		if d.IsDir() {
-			name := d.Name()
-			if (name[0] == '.' && name != ".") || skipDirNames[name] {
+			if skipMineDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -54,36 +53,50 @@ func scanFiles(dir string, convos bool) ([]string, error) {
 			return nil
 		}
 
-		if convos {
-			ext := strings.ToLower(filepath.Ext(path))
-			if ext == ".jsonl" || ext == ".txt" || ext == ".md" {
-				files = append(files, relPath)
-			}
-		} else {
-			ext := strings.ToLower(filepath.Ext(path))
-			if !supportedExtensions[ext] {
-				return nil
-			}
-
-			info, err := d.Info()
-			if err != nil {
-				return nil
-			}
-			if info.Size() > 512*1024 {
-				return nil
-			}
-
-			data, err := os.ReadFile(path)
-			if err != nil || strings.TrimSpace(string(data)) == "" {
-				return nil
-			}
-
+		if mineFileEligible(path, d, convos) {
 			files = append(files, relPath)
 		}
 		return nil
 	})
 
 	return files, err
+}
+
+// skipMineDir reports whether a directory is excluded from the walk: any dotted
+// directory, plus the well-known dependency and build trees.
+func skipMineDir(name string) bool {
+	return (name[0] == '.' && name != ".") || skipDirNames[name]
+}
+
+// mineFileEligible reports whether a walked file should be mined.
+//
+// A --convos run takes any transcript extension as-is. A project run is
+// stricter: the extension has to be a supported source type, the file has to be
+// small enough to embed usefully, and it has to have content — an unreadable or
+// blank file yields a drawer with nothing in it.
+func mineFileEligible(path string, d os.DirEntry, convos bool) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if convos {
+		return ext == ".jsonl" || ext == ".txt" || ext == ".md"
+	}
+
+	if !supportedExtensions[ext] {
+		return false
+	}
+
+	info, err := d.Info()
+	if err != nil {
+		return false
+	}
+	if info.Size() > 512*1024 {
+		return false
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return false
+	}
+	return true
 }
 
 // loadGitignore loads .gitignore patterns from the given directory.
@@ -222,12 +235,7 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return nil
 	}
 
-	// Print file list.
-	fmt.Printf("\nFiles (%d total):\n", len(files))
-	for i, f := range files {
-		fmt.Printf("  [%2d] %s\n", i+1, f)
-	}
-	fmt.Println()
+	printMineFileList(files)
 
 	// Phase 2: Mine files with live visual progress.
 	totalFiles := len(files)
@@ -283,20 +291,7 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	dbPath := filepath.Join(absDir, ".pi-go", "palace.db")
 	modelPath := defaultPalaceModelPath()
 
-	palaceCfg := palace.DefaultConfig()
-	palaceCfg.DBPath = dbPath
-	palaceCfg.ModelPath = modelPath
-	if userCfg, err := config.Load(); err == nil && userCfg.Palace != nil {
-		if userCfg.Palace.OllamaURL != "" {
-			palaceCfg.OllamaURL = userCfg.Palace.OllamaURL
-		}
-		if userCfg.Palace.OllamaModel != "" {
-			palaceCfg.OllamaModel = userCfg.Palace.OllamaModel
-		}
-		if userCfg.Palace.LocalEmbedder {
-			palaceCfg.UseOllama = false
-		}
-	}
+	palaceCfg := minePalaceConfig(dbPath, modelPath)
 
 	// Mining without an embedder produces drawers with no vectors, which look
 	// fine until every semantic search silently returns nothing. Refuse up front
@@ -305,52 +300,13 @@ func runMemoryMine(dir, wing string, convos bool) error {
 		return ollamaSetupError(palaceCfg, err)
 	}
 
-	// Name the database and model up front. Mining writes to a per-project DB and
-	// loads a model from a shared cache, and neither location is obvious from the
-	// command line — so a run that appeared to do nothing (or that re-embedded
-	// everything) gave no clue which store it had actually touched.
-	fmt.Printf("Palace DB: %s\n", dbPath)
-	if palaceCfg.UseOllama {
-		fmt.Printf("Embedder:  ollama %s (%s)\n", palaceCfg.OllamaModel, palaceCfg.OllamaURL)
-	} else {
-		fmt.Printf("Embedder:  in-process %s\n", modelPath)
-	}
-	fmt.Printf("Wing:      %s\n\n", wing)
+	printMineBanner(palaceCfg, dbPath, modelPath, wing)
 
-	// Auto-init: create the palace directory and fetch the model if needed, so
-	// `pi memory mine` works on a fresh checkout without a separate `memory init`
-	// / `memory model download` step.
-	//
-	// ModelReady checks for the fp32 weights specifically, not just for the
-	// directory. That matters for repair as much as for first use: installs made
-	// before the fp32 switch hold only model_qint8_arm64.onnx, which loads fine
-	// but runs ~3x slower on the pure-Go backend, so a directory-exists check
-	// would leave them on the slow model indefinitely.
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return fmt.Errorf("creating palace directory: %w", err)
-	}
-	if !palace.ModelReady(modelPath) {
-		fmt.Printf("Embedding model not found (or is the older quantized build) — downloading %s ...\n",
-			palace.DetectPlatformOnnxFile())
-		dest := filepath.Dir(modelPath)
-		if err := os.MkdirAll(dest, 0o755); err != nil {
-			return fmt.Errorf("creating model directory: %w", err)
-		}
-		if _, err := palace.DownloadModel(dest, palace.DetectPlatformOnnxFile()); err != nil {
-			return fmt.Errorf("downloading embedding model: %w", err)
-		}
-		fmt.Printf("Model ready: %s\n\n", modelPath)
+	if err := ensureMineModel(dbPath, modelPath); err != nil {
+		return err
 	}
 
-	palaceOpts := []palace.Option{
-		palace.WithDBPath(dbPath),
-		palace.WithModelPath(modelPath),
-	}
-	if palaceCfg.UseOllama {
-		palaceOpts = append(palaceOpts, palace.WithOllamaEmbedder(palaceCfg.OllamaURL, palaceCfg.OllamaModel))
-	} else {
-		palaceOpts = append(palaceOpts, palace.WithLocalEmbedder())
-	}
+	palaceOpts := minePalaceOptions(palaceCfg, dbPath, modelPath)
 	// Opening the palace loads the embedding model and runs any schema
 	// migrations, which on a cold start is seconds of silence right after the
 	// banner — the exact point the run looked wedged.
@@ -400,6 +356,93 @@ func runMemoryMine(dir, wing string, convos bool) error {
 	}
 
 	return nil
+}
+
+// printMineFileList shows every file the run is about to mine, numbered.
+func printMineFileList(files []string) {
+	fmt.Printf("\nFiles (%d total):\n", len(files))
+	for i, f := range files {
+		fmt.Printf("  [%2d] %s\n", i+1, f)
+	}
+	fmt.Println()
+}
+
+// minePalaceConfig builds the palace config for a mining run, letting the user
+// config override the embedder defaults. A broken config is not fatal here: the
+// defaults are the same ones mining used before the config existed.
+func minePalaceConfig(dbPath, modelPath string) palace.PalaceConfig {
+	palaceCfg := palace.DefaultConfig()
+	palaceCfg.DBPath = dbPath
+	palaceCfg.ModelPath = modelPath
+	userCfg, err := config.Load()
+	if err != nil || userCfg.Palace == nil {
+		return palaceCfg
+	}
+	if userCfg.Palace.OllamaURL != "" {
+		palaceCfg.OllamaURL = userCfg.Palace.OllamaURL
+	}
+	if userCfg.Palace.OllamaModel != "" {
+		palaceCfg.OllamaModel = userCfg.Palace.OllamaModel
+	}
+	if userCfg.Palace.LocalEmbedder {
+		palaceCfg.UseOllama = false
+	}
+	return palaceCfg
+}
+
+// printMineBanner names the database and model up front. Mining writes to a
+// per-project DB and loads a model from a shared cache, and neither location is
+// obvious from the command line — so a run that appeared to do nothing (or that
+// re-embedded everything) gave no clue which store it had actually touched.
+func printMineBanner(palaceCfg palace.PalaceConfig, dbPath, modelPath, wing string) {
+	fmt.Printf("Palace DB: %s\n", dbPath)
+	if palaceCfg.UseOllama {
+		fmt.Printf("Embedder:  ollama %s (%s)\n", palaceCfg.OllamaModel, palaceCfg.OllamaURL)
+	} else {
+		fmt.Printf("Embedder:  in-process %s\n", modelPath)
+	}
+	fmt.Printf("Wing:      %s\n\n", wing)
+}
+
+// ensureMineModel auto-inits: it creates the palace directory and fetches the
+// model if needed, so `pi memory mine` works on a fresh checkout without a
+// separate `memory init` / `memory model download` step.
+//
+// ModelReady checks for the fp32 weights specifically, not just for the
+// directory. That matters for repair as much as for first use: installs made
+// before the fp32 switch hold only model_qint8_arm64.onnx, which loads fine
+// but runs ~3x slower on the pure-Go backend, so a directory-exists check
+// would leave them on the slow model indefinitely.
+func ensureMineModel(dbPath, modelPath string) error {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return fmt.Errorf("creating palace directory: %w", err)
+	}
+	if palace.ModelReady(modelPath) {
+		return nil
+	}
+	fmt.Printf("Embedding model not found (or is the older quantized build) — downloading %s ...\n",
+		palace.DetectPlatformOnnxFile())
+	dest := filepath.Dir(modelPath)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return fmt.Errorf("creating model directory: %w", err)
+	}
+	if _, err := palace.DownloadModel(dest, palace.DetectPlatformOnnxFile()); err != nil {
+		return fmt.Errorf("downloading embedding model: %w", err)
+	}
+	fmt.Printf("Model ready: %s\n\n", modelPath)
+	return nil
+}
+
+// minePalaceOptions turns the resolved config into the options palace.New takes.
+func minePalaceOptions(palaceCfg palace.PalaceConfig, dbPath, modelPath string) []palace.Option {
+	palaceOpts := []palace.Option{
+		palace.WithDBPath(dbPath),
+		palace.WithModelPath(modelPath),
+	}
+	if palaceCfg.UseOllama {
+		return append(palaceOpts, palace.WithOllamaEmbedder(palaceCfg.OllamaURL, palaceCfg.OllamaModel))
+	}
+	return append(palaceOpts, palace.WithLocalEmbedder())
 }
 
 // ollamaSetupError turns an embedder-availability failure into instructions.

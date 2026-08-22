@@ -105,43 +105,8 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 		}
 
 		if inFrontmatter {
-			key, value, ok := parseAgentFrontmatterLine(line)
-			if !ok {
-				continue
-			}
-			switch key {
-			case "name":
-				cfg.Name = value
-			case "description":
-				cfg.Description = value
-			case "role":
-				cfg.Role = value
-			case "worktree":
-				cfg.Worktree = strings.ToLower(value) == "true"
-			case "timeout":
-				if ms, err := strconv.Atoi(value); err == nil && ms > 0 {
-					// The unit is milliseconds, which reads as seconds at a
-					// glance — a bundled agent shipped `timeout: 30` and was
-					// SIGKILLed 30ms in, every time, unable to emit a single
-					// token. Anything under a second cannot be deliberate, so
-					// treat it as the unit mistake it is rather than honoring a
-					// value that guarantees the agent never runs.
-					if ms < minAgentTimeoutMs {
-						slog.Warn("subagent: implausibly small timeout ignored; the unit is milliseconds",
-							"agent", cfg.Name, "timeout_ms", ms, "using", "default")
-					} else {
-						cfg.Timeout = ms
-					}
-				}
-			case "lsp":
-				cfg.LSP = strings.ToLower(strings.TrimSpace(value))
-			case "tools":
-				for _, t := range strings.Split(value, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						cfg.Tools = append(cfg.Tools, t)
-					}
-				}
+			if key, value, ok := parseAgentFrontmatterLine(line); ok {
+				applyAgentFrontmatterKey(&cfg, key, value)
 			}
 		} else {
 			body.WriteString(line)
@@ -155,6 +120,62 @@ func parseAgentContent(content, path string) (AgentConfig, error) {
 
 	cfg.Instruction = strings.TrimSpace(body.String())
 	return cfg, nil
+}
+
+// applyAgentFrontmatterKey sets the field of cfg named by a frontmatter key.
+// Unknown keys are ignored.
+func applyAgentFrontmatterKey(cfg *AgentConfig, key, value string) {
+	switch key {
+	case "name":
+		cfg.Name = value
+	case "description":
+		cfg.Description = value
+	case "role":
+		cfg.Role = value
+	case "worktree":
+		cfg.Worktree = strings.ToLower(value) == "true"
+	case "timeout":
+		if ms, ok := parseAgentTimeout(cfg.Name, value); ok {
+			cfg.Timeout = ms
+		}
+	case "lsp":
+		cfg.LSP = strings.ToLower(strings.TrimSpace(value))
+	case "tools":
+		cfg.Tools = append(cfg.Tools, parseAgentToolList(value)...)
+	}
+}
+
+// parseAgentTimeout reads a frontmatter `timeout:` value, reporting ok=false
+// when it is unusable and the default should stand instead.
+//
+// The unit is milliseconds, which reads as seconds at a glance — a bundled
+// agent shipped `timeout: 30` and was SIGKILLed 30ms in, every time, unable to
+// emit a single token. Anything under a second cannot be deliberate, so treat
+// it as the unit mistake it is rather than honoring a value that guarantees the
+// agent never runs.
+func parseAgentTimeout(agentName, value string) (int, bool) {
+	ms, err := strconv.Atoi(value)
+	if err != nil || ms <= 0 {
+		return 0, false
+	}
+	if ms < minAgentTimeoutMs {
+		slog.Warn("subagent: implausibly small timeout ignored; the unit is milliseconds",
+			"agent", agentName, "timeout_ms", ms, "using", "default")
+		return 0, false
+	}
+	return ms, true
+}
+
+// parseAgentToolList splits a comma-separated frontmatter `tools:` value,
+// dropping empty entries.
+func parseAgentToolList(value string) []string {
+	var tools []string
+	for _, t := range strings.Split(value, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			tools = append(tools, t)
+		}
+	}
+	return tools
 }
 
 // parseAgentFrontmatterLine parses "key: value" from a frontmatter line.
@@ -209,6 +230,34 @@ func findNearestProjectAgentsDir(cwd string) (string, error) {
 	return "", os.ErrNotExist
 }
 
+// loadAgentsWithSource loads a directory of agent files and stamps each one
+// with the source it came from ("user" or "project").
+func loadAgentsWithSource(dir, source string) ([]AgentConfig, error) {
+	agents, err := LoadAgentsFromDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for i := range agents {
+		agents[i].Source = source
+	}
+	return agents, nil
+}
+
+// mergeAgentsByName appends agents to all, replacing in place any entry already
+// present under the same name. seen maps agent name → index in all and is
+// updated as entries are appended, so successive calls override earlier ones.
+func mergeAgentsByName(all []AgentConfig, seen map[string]int, agents []AgentConfig) []AgentConfig {
+	for _, agent := range agents {
+		if idx, ok := seen[agent.Name]; ok {
+			all[idx] = agent
+			continue
+		}
+		seen[agent.Name] = len(all)
+		all = append(all, agent)
+	}
+	return all
+}
+
 // DiscoverAgents loads agents from bundled, user, and project directories.
 // Priority: project > user > bundled (later sources override earlier ones by name).
 func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error) {
@@ -222,58 +271,29 @@ func DiscoverAgents(cwd string, scope AgentScope) (*AgentDiscoveryResult, error)
 	result.Bundled = bundledAgents
 
 	// Load user agents (~/.pi-go/agents/)
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		userDir := filepath.Join(homeDir, ".pi-go", "agents")
-		userAgents, err := LoadAgentsFromDir(userDir)
+	if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+		userAgents, err := loadAgentsWithSource(filepath.Join(homeDir, ".pi-go", "agents"), "user")
 		if err != nil {
 			return nil, fmt.Errorf("loading user agents: %w", err)
-		}
-		for i := range userAgents {
-			userAgents[i].Source = "user"
 		}
 		result.User = userAgents
 	}
 
 	// Load project agents (.pi-go/agents/ in nearest ancestor)
-	projectDir, err := findNearestProjectAgentsDir(cwd)
-	if err == nil {
-		projectAgents, err := LoadAgentsFromDir(projectDir)
+	if projectDir, findErr := findNearestProjectAgentsDir(cwd); findErr == nil {
+		projectAgents, err := loadAgentsWithSource(projectDir, "project")
 		if err != nil {
 			return nil, fmt.Errorf("loading project agents: %w", err)
-		}
-		for i := range projectAgents {
-			projectAgents[i].Source = "project"
 		}
 		result.Project = projectAgents
 	}
 
-	// Merge all agents with priority: project > user > bundled
+	// Merge all agents with priority: project > user > bundled — each pass
+	// overrides same-named entries left by the passes before it.
 	seen := make(map[string]int) // name → index in All
-	for _, agent := range result.Bundled {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // bundled is lowest priority
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
-	}
-	for _, agent := range result.User {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // user overrides bundled
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
-	}
-	for _, agent := range result.Project {
-		if idx, ok := seen[agent.Name]; ok {
-			result.All[idx] = agent // project overrides user
-		} else {
-			seen[agent.Name] = len(result.All)
-			result.All = append(result.All, agent)
-		}
-	}
+	result.All = mergeAgentsByName(result.All, seen, result.Bundled)
+	result.All = mergeAgentsByName(result.All, seen, result.User)
+	result.All = mergeAgentsByName(result.All, seen, result.Project)
 
 	// Filter based on scope
 	switch scope {

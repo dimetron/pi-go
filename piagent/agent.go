@@ -23,6 +23,7 @@ import (
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -92,6 +93,90 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		afterTurn:  o.afterTurn,
 	}
 
+	rt, err := a.buildRuntime(ctx, o, &cfg, providerName)
+	if err != nil {
+		return nil, err
+	}
+	a.tools = rt.tools
+
+	instruction := buildInstruction(o, workDir)
+	if rt.palaceContext != "" {
+		instruction += "\n\n## Palace Memory Context\n\n" + rt.palaceContext
+	}
+	instruction += memoryContext(ctx, a.memStore, cfg, workDir)
+
+	sessionSvc, err := pisession.NewFileService(sessionDir)
+	if err != nil {
+		return nil, a.abort(fmt.Errorf("creating session service: %w", err))
+	}
+
+	// Created before the agent so it captures the agent's own non-fatal
+	// diagnostics (unresolved instruction placeholders, say) instead of
+	// letting them reach stderr.
+	sessionLog, err := logger.New()
+	if err != nil {
+		slog.Warn("piagent: session log unavailable", "error", err)
+	}
+	a.push(sessionLog.Close)
+
+	// memSessionID is only known once a session exists; the memory callback
+	// reads it through the pointer, so recording starts from that point.
+	var memSessionID string
+	before, after := buildCallbacks(callbackDeps{
+		cfg:       cfg,
+		sandbox:   rt.sandbox,
+		lspMgr:    rt.lspMgr,
+		provider:  providerName,
+		worker:    rt.memWorker,
+		project:   workDir,
+		sessionID: &memSessionID,
+		opts:      o,
+	})
+
+	inner, err := agent.New(agent.Config{
+		Model:                llm,
+		Tools:                rt.tools,
+		Toolsets:             append(buildToolsets(cfg), o.toolsets...),
+		Instruction:          instruction,
+		SessionService:       sessionSvc,
+		WorkingDir:           workDir,
+		BeforeToolCallbacks:  before.tool,
+		AfterToolCallbacks:   after.tool,
+		BeforeModelCallbacks: before.model,
+		AfterModelCallbacks:  after.model,
+		Logger:               sessionLog,
+	})
+	if err != nil {
+		return nil, a.abort(fmt.Errorf("creating agent: %w", err))
+	}
+	a.inner = inner
+	a.onNewSession = func(sessionID string) {
+		memSessionID = sessionID
+		rt.orch.SetACPLogPath(filepath.Join(sessionDir, sessionID, "acp.jsonl"))
+	}
+	a.sessionLog = sessionLog
+	return a, nil
+}
+
+// runtimeParts are the subsystems [New] assembles before the inner agent
+// exists. tools is the finished tool list; the rest is what callback wiring
+// and session bookkeeping still need afterwards.
+type runtimeParts struct {
+	sandbox       *tools.Sandbox
+	orch          *subagent.Orchestrator
+	lspMgr        *lsp.Manager
+	memWorker     *memory.Worker
+	palaceContext string
+	tools         []adktool.Tool
+}
+
+// buildRuntime assembles the sandbox, bash supervisor, tools, subagents,
+// memory, palace and LSP subsystems. Every acquisition registers its cleanup
+// on a first, so a failure partway through releases what already succeeded.
+// It also sets a.memStore, which the memory tools and instruction need.
+func (a *Agent) buildRuntime(ctx context.Context, o options, cfg *config.Config, providerName string) (*runtimeParts, error) {
+	workDir := a.workDir
+
 	sandbox, err := buildSandbox(workDir, o.extraSandbox)
 	if err != nil {
 		return nil, err
@@ -119,7 +204,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	}
 	bashSup.SetSink(func(execID, kind, content string) { onEvent(execID, kind, content) })
 
-	orch := buildSubagents(ctx, &cfg, workDir)
+	orch := buildSubagents(ctx, cfg, workDir)
 	a.push(func() error { orch.Shutdown(); return nil })
 	if o.subagentEnabled {
 		agentTools, aErr := tools.AgentTools(orch, tools.AgentEventCallback(onEvent))
@@ -129,7 +214,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		coreTools = append(coreTools, agentTools...)
 	}
 
-	memStore, memWorker, closeMemory := setupMemory(ctx, o, cfg, orch)
+	memStore, memWorker, closeMemory := setupMemory(ctx, o, *cfg, orch)
 	a.push(func() error { closeMemory(); return nil })
 	a.memStore = memStore
 	if memStore != nil {
@@ -141,7 +226,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		}
 	}
 
-	palaceTools, palaceContext, closePalace := setupPalace(o, cfg, memWorker)
+	palaceTools, palaceContext, closePalace := setupPalace(o, *cfg, memWorker)
 	a.push(func() error { closePalace(); return nil })
 	coreTools = append(coreTools, palaceTools...)
 
@@ -160,65 +245,15 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		coreTools = append(coreTools, gTool)
 	}
 	coreTools = append(coreTools, o.tools...)
-	a.tools = coreTools
 
-	instruction := buildInstruction(o, workDir)
-	if palaceContext != "" {
-		instruction += "\n\n## Palace Memory Context\n\n" + palaceContext
-	}
-	instruction += memoryContext(ctx, memStore, cfg, workDir)
-
-	sessionSvc, err := pisession.NewFileService(sessionDir)
-	if err != nil {
-		return nil, a.abort(fmt.Errorf("creating session service: %w", err))
-	}
-
-	// Created before the agent so it captures the agent's own non-fatal
-	// diagnostics (unresolved instruction placeholders, say) instead of
-	// letting them reach stderr.
-	sessionLog, err := logger.New()
-	if err != nil {
-		slog.Warn("piagent: session log unavailable", "error", err)
-	}
-	a.push(sessionLog.Close)
-
-	// memSessionID is only known once a session exists; the memory callback
-	// reads it through the pointer, so recording starts from that point.
-	var memSessionID string
-	before, after := buildCallbacks(callbackDeps{
-		cfg:       cfg,
-		sandbox:   sandbox,
-		lspMgr:    lspMgr,
-		provider:  providerName,
-		worker:    memWorker,
-		project:   workDir,
-		sessionID: &memSessionID,
-		opts:      o,
-	})
-
-	inner, err := agent.New(agent.Config{
-		Model:                llm,
-		Tools:                coreTools,
-		Toolsets:             append(buildToolsets(cfg), o.toolsets...),
-		Instruction:          instruction,
-		SessionService:       sessionSvc,
-		WorkingDir:           workDir,
-		BeforeToolCallbacks:  before.tool,
-		AfterToolCallbacks:   after.tool,
-		BeforeModelCallbacks: before.model,
-		AfterModelCallbacks:  after.model,
-		Logger:               sessionLog,
-	})
-	if err != nil {
-		return nil, a.abort(fmt.Errorf("creating agent: %w", err))
-	}
-	a.inner = inner
-	a.onNewSession = func(sessionID string) {
-		memSessionID = sessionID
-		orch.SetACPLogPath(filepath.Join(sessionDir, sessionID, "acp.jsonl"))
-	}
-	a.sessionLog = sessionLog
-	return a, nil
+	return &runtimeParts{
+		sandbox:       sandbox,
+		orch:          orch,
+		lspMgr:        lspMgr,
+		memWorker:     memWorker,
+		palaceContext: palaceContext,
+		tools:         coreTools,
+	}, nil
 }
 
 // push registers a cleanup function, to be run in reverse order by Close.

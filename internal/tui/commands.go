@@ -38,78 +38,131 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.setSessionTitle(input)
 	}
 
-	switch cmd {
-	case "/help":
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: m.formatHelp(),
-		})
-	case "/clear":
-		m.clearConversation()
-	case "/copy":
-		return m.handleCopyCommand()
-	case "/model":
-		return m.handleModelCommand(parts[1:])
-	case "/session":
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Session: `%s`", m.cfg.SessionID),
-		})
-	case "/context":
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: m.formatContextUsage(),
-		})
-	case "/branch":
-		m.handleBranchCommand(parts[1:])
-	case "/compact":
-		m.handleCompactCommand()
-	case "/subagents":
-		m.handleAgentsCommand()
-	case "/history":
-		m.handleHistoryCommand(parts[1:])
-	case "/commit":
-		return m.handleCommitCommand()
-	case "/plan":
-		return m.handlePlanCommand(parts[1:])
-	case "/run":
-		return m.handleRunCommand(parts[1:])
-	case "/login":
-		return m.handleLoginCommand(parts[1:])
-	case "/skills":
-		return m.handleSkillsCommand(parts[1:])
-	case "/skill-create":
-		return m.handleSkillCreateCommand(parts[1:])
-	case "/skill-load":
-		return m.handleSkillLoadCommand()
-	case "/skill-list":
-		return m.handleSkillListCommand()
-	case "/theme":
-		return m.handleThemeCommand(parts[1:])
-	case "/rtk":
-		m.handleRTKCommand(parts[1:])
-	case "/ping":
-		return m.handlePingCommand(parts[1:])
-	case "/restart":
-		return m.handleRestartCommand()
-	case "/mcp":
-		m.handleMCPCommand()
-	case "/exit", "/quit":
-		m.quitting = true
-		return m, tea.Quit
-	default:
-		// Check if it's a dynamic skill command.
-		skillName := strings.TrimPrefix(cmd, "/")
-		if skill, ok := extension.FindSkill(m.cfg.Skills, skillName); ok {
-			return m.handleSkillCommand(skill, parts[1:])
-		}
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: `%s`. Type `/help` for available commands.", cmd),
-		})
+	if spec, ok := slashCommandByName[cmd]; ok {
+		return spec.run(m, parts[1:])
 	}
 
+	// Check if it's a dynamic skill command.
+	skillName := strings.TrimPrefix(cmd, "/")
+	if skill, ok := extension.FindSkill(m.cfg.Skills, skillName); ok {
+		return m.handleSkillCommand(skill, parts[1:])
+	}
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Unknown command: `%s`. Type `/help` for available commands.", cmd),
+	})
+
 	return m, nil
+}
+
+// slashCommandSpec is one built-in slash command: how it is advertised in the
+// command list and autocomplete, and what typing it does. Keeping the name,
+// the description and the handler in one row is what stops the dispatch switch
+// and the description switch from drifting apart.
+type slashCommandSpec struct {
+	name string
+	desc string
+	// hidden keeps a command out of slashCommands — the autocomplete and
+	// /help listing — while it still dispatches and still has a description.
+	hidden bool
+	run    func(m *model, args []string) (tea.Model, tea.Cmd)
+}
+
+// slashCmdArgs adapts a handler that mutates the model and returns nothing.
+func slashCmdArgs(f func(*model, []string)) func(*model, []string) (tea.Model, tea.Cmd) {
+	return func(m *model, args []string) (tea.Model, tea.Cmd) {
+		f(m, args)
+		return m, nil
+	}
+}
+
+// slashCmdBare adapts a handler that takes no args and returns a command.
+func slashCmdBare(f func(*model) (tea.Model, tea.Cmd)) func(*model, []string) (tea.Model, tea.Cmd) {
+	return func(m *model, _ []string) (tea.Model, tea.Cmd) {
+		return f(m)
+	}
+}
+
+// slashCmdVoid adapts a handler that takes no args and returns nothing.
+func slashCmdVoid(f func(*model)) func(*model, []string) (tea.Model, tea.Cmd) {
+	return func(m *model, _ []string) (tea.Model, tea.Cmd) {
+		f(m)
+		return m, nil
+	}
+}
+
+// slashCommandSpecs is the single source of truth for the built-in slash
+// commands. Order matters: slashCommands is derived from it, and autocomplete
+// returns the first prefix match.
+var slashCommandSpecs = []slashCommandSpec{
+	{name: "/help", desc: "Show help", run: slashCmdVoid((*model).showHelpMessage)},
+	{name: "/clear", desc: "Clear conversation", run: slashCmdVoid((*model).clearConversation)},
+	{name: "/copy", desc: "Copy conversation to clipboard", run: slashCmdBare((*model).handleCopyCommand)},
+	{name: "/model", desc: "Show or switch model", run: (*model).handleModelCommand},
+	{name: "/session", desc: "Show session info", run: slashCmdVoid((*model).showSessionMessage)},
+	{name: "/context", desc: "Show context usage", run: slashCmdVoid((*model).showContextMessage)},
+	{name: "/branch", desc: "Manage branches", run: slashCmdArgs((*model).handleBranchCommand)},
+	{name: "/compact", desc: "Compact context", run: slashCmdVoid((*model).handleCompactCommand)},
+	{name: "/subagents", desc: "Show subagents", run: slashCmdVoid((*model).handleAgentsCommand)},
+	{name: "/history", desc: "Command history", run: slashCmdArgs((*model).handleHistoryCommand)},
+	{name: "/login", desc: "Configure API keys (codex, openai, anthropic, gemini)", run: (*model).handleLoginCommand},
+	{name: "/commit", desc: "Create commit from staged changes", run: slashCmdBare((*model).handleCommitCommand)},
+	{name: "/plan", desc: "Start PDD planning session", run: (*model).handlePlanCommand},
+	{
+		name: "/run",
+		desc: "Execute a spec with task agent (verifies subagent exit status before merging)",
+		run:  (*model).handleRunCommand,
+	},
+	{name: "/skills", desc: "List skills (create, load)", run: (*model).handleSkillsCommand},
+	{name: "/skill-list", desc: "List all loaded skills", hidden: true, run: slashCmdBare((*model).handleSkillListCommand)},
+	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
+	{name: "/skill-create", desc: "Create a new skill", hidden: true, run: (*model).handleSkillCreateCommand},
+	{name: "/theme", desc: "Switch theme or list themes", run: (*model).handleThemeCommand},
+	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
+	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
+	{name: "/mcp", desc: "List MCP servers and tool status", run: slashCmdVoid((*model).handleMCPCommand)},
+	{name: "/restart", desc: "Restart pi process", run: slashCmdBare((*model).handleRestartCommand)},
+	{name: "/exit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
+	{name: "/quit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
+}
+
+// slashCommandByName indexes slashCommandSpecs for dispatch and descriptions.
+var slashCommandByName = func() map[string]slashCommandSpec {
+	byName := make(map[string]slashCommandSpec, len(slashCommandSpecs))
+	for _, spec := range slashCommandSpecs {
+		byName[spec.name] = spec
+	}
+	return byName
+}()
+
+// showHelpMessage appends the help text as an assistant message.
+func (m *model) showHelpMessage() {
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: m.formatHelp(),
+	})
+}
+
+// showSessionMessage appends the current session ID as an assistant message.
+func (m *model) showSessionMessage() {
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: fmt.Sprintf("Session: `%s`", m.cfg.SessionID),
+	})
+}
+
+// showContextMessage appends the context usage breakdown as an assistant message.
+func (m *model) showContextMessage() {
+	m.chatModel.Messages = append(m.chatModel.Messages, message{
+		role:    "assistant",
+		content: m.formatContextUsage(),
+	})
+}
+
+// handleQuitCommand tears the program down.
+func (m *model) handleQuitCommand() (tea.Model, tea.Cmd) {
+	m.quitting = true
+	return m, tea.Quit
 }
 
 func (m *model) handleCopyCommand() (tea.Model, tea.Cmd) {
@@ -542,28 +595,70 @@ func saveModelToConfig(modelName, provider string) {
 func (m *model) formatContextUsage() string {
 	var b strings.Builder
 
-	// The breakdown answers "what is filling the window", which is the question
-	// a user asks before deciding what to trim. Lead with it.
-	if bd := m.cfg.ContextBreakdown; bd != nil {
-		used := int64(0)
-		window := int64(0)
-		if tt := m.cfg.TokenTracker; tt != nil {
-			used = tt.LastPromptTokens()
-			window = tt.ContextWindowSize()
+	m.writeCtxBreakdownSection(&b)
+
+	est := m.estimateCtxRoleTokens()
+
+	// Header.
+	b.WriteString("**Context Usage**\n\n")
+
+	m.writeCtxModelLine(&b, est.total)
+	m.writeCtxCategorySection(&b, est)
+	m.writeCtxDailySection(&b)
+	m.writeCtxWindowSection(&b)
+	m.writeCtxSkillsSection(&b)
+	m.writeCtxSubagentSection(&b)
+
+	// Compaction stats.
+	if cm := m.cfg.CompactMetrics; cm != nil {
+		stats := cm.FormatStats()
+		if stats != "" {
+			b.WriteString("\n*Output compaction*\n")
+			b.WriteString(stats)
 		}
-		if used == 0 {
-			used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
-		}
-		if window <= 0 {
-			window = autoRangeWindow(used)
-		}
-		b.WriteString("*Context usage*\n\n")
-		b.WriteString(RenderContextBreakdown(
-			bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64), m.palette))
-		b.WriteString("\n\n")
 	}
 
-	// Same estimate as the status bar's, split by role.
+	return b.String()
+}
+
+// writeCtxBreakdownSection writes the "what is filling the window" breakdown.
+// It answers the question a user asks before deciding what to trim, so it
+// leads the /context output.
+func (m *model) writeCtxBreakdownSection(b *strings.Builder) {
+	bd := m.cfg.ContextBreakdown
+	if bd == nil {
+		return
+	}
+	used := int64(0)
+	window := int64(0)
+	if tt := m.cfg.TokenTracker; tt != nil {
+		used = tt.LastPromptTokens()
+		window = tt.ContextWindowSize()
+	}
+	if used == 0 {
+		used = estimateContextTokenCount(m.chatModel.Messages) + bd.FixedTotal()
+	}
+	if window <= 0 {
+		window = autoRangeWindow(used)
+	}
+	b.WriteString("*Context usage*\n\n")
+	b.WriteString(RenderContextBreakdown(
+		bd.withConversationFrom(used), window, min(m.chatWidth()-4, 64), m.palette))
+	b.WriteString("\n\n")
+}
+
+// ctxRoleTokens is the per-role token estimate behind the /context category
+// breakdown. total is estimated over the summed characters, not as the sum of
+// the per-role estimates, so it can differ from user+assistant+tool by rounding.
+type ctxRoleTokens struct {
+	user      int64
+	assistant int64
+	tool      int64
+	total     int64
+}
+
+// estimateCtxRoleTokens splits the same estimate the status bar shows by role.
+func (m *model) estimateCtxRoleTokens() ctxRoleTokens {
 	userChars, assistantChars, toolChars := 0, 0, 0
 	for _, msg := range m.chatModel.Messages {
 		size := messageChars(msg)
@@ -576,15 +671,16 @@ func (m *model) formatContextUsage() string {
 			toolChars += size
 		}
 	}
-	totalTokens := estimateTokens(userChars + assistantChars + toolChars)
-	userTokens := estimateTokens(userChars)
-	assistantTokens := estimateTokens(assistantChars)
-	toolTokens := estimateTokens(toolChars)
+	return ctxRoleTokens{
+		user:      estimateTokens(userChars),
+		assistant: estimateTokens(assistantChars),
+		tool:      estimateTokens(toolChars),
+		total:     estimateTokens(userChars + assistantChars + toolChars),
+	}
+}
 
-	// Header.
-	b.WriteString("**Context Usage**\n\n")
-
-	// Progress bar (20 blocks).
+// writeCtxModelLine writes the 20-block usage bar and the model label beside it.
+func (m *model) writeCtxModelLine(b *strings.Builder, totalTokens int64) {
 	const barLen = 20
 	var usedBlocks int
 	var limitTokens int64
@@ -602,155 +698,168 @@ func (m *model) formatContextUsage() string {
 	}
 	bar := barGlyphs(usedBlocks, barLen)
 
-	// Model line with bar.
 	modelLabel := m.cfg.ModelName
 	if m.cfg.ProviderName != "" {
 		modelLabel = m.cfg.ProviderName + " | " + modelLabel
 	}
 	if limitTokens > 0 {
 		tt := m.cfg.TokenTracker
-		fmt.Fprintf(&b, "`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
+		fmt.Fprintf(b, "`%s`  %s · %s/%s tokens (%.0f%%)\n\n",
 			bar, modelLabel,
 			formatTokenCount(tt.TotalUsed()), formatTokenCount(limitTokens), tt.PercentUsed())
-	} else {
-		fmt.Fprintf(&b, "`%s`  %s · ctx ~%s tokens\n\n",
-			bar, modelLabel, formatTokenCount(totalTokens))
+		return
 	}
+	fmt.Fprintf(b, "`%s`  %s · ctx ~%s tokens\n\n",
+		bar, modelLabel, formatTokenCount(totalTokens))
+}
 
-	// Category breakdown.
+// writeCtxCategorySection writes the estimated per-role usage list.
+func (m *model) writeCtxCategorySection(b *strings.Builder, est ctxRoleTokens) {
 	b.WriteString("*Estimated usage by category*\n")
-	fmt.Fprintf(&b, "- **User messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(userTokens), countByRole(m.chatModel.Messages, "user"))
-	fmt.Fprintf(&b, "- **Assistant messages**: ~%s tokens (%d msgs)\n",
-		formatTokenCount(assistantTokens), countByRole(m.chatModel.Messages, "assistant"))
-	fmt.Fprintf(&b, "- **Tool calls**: ~%s tokens (%d calls)\n",
-		formatTokenCount(toolTokens), countByRole(m.chatModel.Messages, "tool"))
-	fmt.Fprintf(&b, "- **Total context**: ~%s tokens (%d messages)\n",
-		formatTokenCount(totalTokens), len(m.chatModel.Messages))
+	fmt.Fprintf(b, "- **User messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(est.user), countByRole(m.chatModel.Messages, "user"))
+	fmt.Fprintf(b, "- **Assistant messages**: ~%s tokens (%d msgs)\n",
+		formatTokenCount(est.assistant), countByRole(m.chatModel.Messages, "assistant"))
+	fmt.Fprintf(b, "- **Tool calls**: ~%s tokens (%d calls)\n",
+		formatTokenCount(est.tool), countByRole(m.chatModel.Messages, "tool"))
+	fmt.Fprintf(b, "- **Total context**: ~%s tokens (%d messages)\n",
+		formatTokenCount(est.total), len(m.chatModel.Messages))
+}
 
-	// Daily token usage (actual, not estimated).
-	if tt := m.cfg.TokenTracker; tt != nil {
-		total := tt.TotalUsed()
-		if total > 0 {
-			b.WriteString("\n*Daily token usage*\n")
-			fmt.Fprintf(&b, "- **Consumed today**: %s tokens\n", formatTokenCount(total))
-			if tt.Limit() > 0 {
-				fmt.Fprintf(&b, "- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining()))
-			}
+// writeCtxDailySection writes actual (not estimated) daily token consumption.
+func (m *model) writeCtxDailySection(b *strings.Builder) {
+	tt := m.cfg.TokenTracker
+	if tt == nil {
+		return
+	}
+	total := tt.TotalUsed()
+	if total == 0 {
+		return
+	}
+	b.WriteString("\n*Daily token usage*\n")
+	fmt.Fprintf(b, "- **Consumed today**: %s tokens\n", formatTokenCount(total))
+	if tt.Limit() > 0 {
+		fmt.Fprintf(b, "- **Remaining**: %s tokens\n", formatTokenCount(tt.Remaining()))
+	}
+}
+
+// writeCtxWindowSection writes context window occupancy from the last LLM
+// response, followed by the prompt cache section.
+func (m *model) writeCtxWindowSection(b *strings.Builder) {
+	tt := m.cfg.TokenTracker
+	if tt == nil || tt.LastPromptTokens() <= 0 {
+		return
+	}
+	promptTokens := tt.LastPromptTokens()
+	ctxWindow := tt.ContextWindowSize()
+
+	b.WriteString("\n*Context window*\n")
+	if ctxWindow > 0 {
+		pct := tt.ContextPercentUsed()
+		freeTokens := ctxWindow - promptTokens
+		if freeTokens < 0 {
+			freeTokens = 0
 		}
+
+		const ctxBarLen = 20
+		ctxBar := barGlyphs(barFill(pct/100, ctxBarLen), ctxBarLen)
+
+		fmt.Fprintf(b, "`%s`  %s / %s (%.0f%%)\n",
+			ctxBar,
+			formatTokenCount(promptTokens), formatTokenCount(ctxWindow), pct)
+		fmt.Fprintf(b, "- **Used**: %s tokens\n", formatTokenCount(promptTokens))
+		fmt.Fprintf(b, "- **Free**: %s tokens (%.0f%%)\n",
+			formatTokenCount(freeTokens), 100-pct)
+	} else {
+		fmt.Fprintf(b, "- **Last prompt**: %s tokens (window size unknown)\n",
+			formatTokenCount(promptTokens))
 	}
 
-	// Context window usage (from last LLM response).
-	if tt := m.cfg.TokenTracker; tt != nil && tt.LastPromptTokens() > 0 {
-		promptTokens := tt.LastPromptTokens()
-		ctxWindow := tt.ContextWindowSize()
+	m.writeCtxCacheSection(b, promptTokens)
+}
 
-		b.WriteString("\n*Context window*\n")
-		if ctxWindow > 0 {
-			pct := tt.ContextPercentUsed()
-			freeTokens := ctxWindow - promptTokens
-			if freeTokens < 0 {
-				freeTokens = 0
-			}
+// writeCtxCacheSection writes prompt cache statistics. Reported explicitly even
+// at zero hits — a silent section reads the same whether caching works or is
+// entirely absent.
+func (m *model) writeCtxCacheSection(b *strings.Builder, promptTokens int64) {
+	tt := m.cfg.TokenTracker
+	b.WriteString("\n*Prompt cache*\n")
+	cached := tt.LastCachedTokens()
+	if cached > 0 {
+		fmt.Fprintf(b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
+			formatTokenCount(cached), formatTokenCount(promptTokens),
+			float64(cached)/float64(promptTokens)*100)
+	} else {
+		b.WriteString("- **Last request**: no cache hit\n")
+	}
+	if today := tt.CachedTokensToday(); today > 0 {
+		fmt.Fprintf(b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
+			formatTokenCount(today), tt.CacheHitRateToday())
+	}
+	if prefix := tt.CachePrefixTokens(); prefix > 0 {
+		fmt.Fprintf(b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
+			formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
+	}
+}
 
-			const ctxBarLen = 20
-			ctxBar := barGlyphs(barFill(pct/100, ctxBarLen), ctxBarLen)
-
-			fmt.Fprintf(&b, "`%s`  %s / %s (%.0f%%)\n",
-				ctxBar,
-				formatTokenCount(promptTokens), formatTokenCount(ctxWindow), pct)
-			fmt.Fprintf(&b, "- **Used**: %s tokens\n", formatTokenCount(promptTokens))
-			fmt.Fprintf(&b, "- **Free**: %s tokens (%.0f%%)\n",
-				formatTokenCount(freeTokens), 100-pct)
+// writeCtxSkillsSection lists loaded skills alphabetically, for predictable
+// /context output.
+func (m *model) writeCtxSkillsSection(b *strings.Builder) {
+	if len(m.cfg.Skills) == 0 {
+		return
+	}
+	b.WriteString("\n*Skills* ")
+	fmt.Fprintf(b, "(%d loaded)\n", len(m.cfg.Skills))
+	names := make([]string, 0, len(m.cfg.Skills))
+	byName := make(map[string]extension.Skill, len(m.cfg.Skills))
+	for _, s := range m.cfg.Skills {
+		names = append(names, s.Name)
+		byName[s.Name] = s
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s := byName[name]
+		source := s.Source
+		if source == "" {
+			source = "user"
+		}
+		var bodyDesc string
+		if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
+			bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
 		} else {
-			fmt.Fprintf(&b, "- **Last prompt**: %s tokens (window size unknown)\n",
-				formatTokenCount(promptTokens))
+			bodyDesc = "body: not loaded"
 		}
+		desc := s.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
+	}
+}
 
-		// Prompt cache. Reported explicitly even at zero hits — a silent
-		// section reads the same whether caching works or is entirely absent.
-		b.WriteString("\n*Prompt cache*\n")
-		cached := tt.LastCachedTokens()
-		if cached > 0 {
-			fmt.Fprintf(&b, "- **Last request**: %s of %s prompt tokens cached (%.0f%%)\n",
-				formatTokenCount(cached), formatTokenCount(promptTokens),
-				float64(cached)/float64(promptTokens)*100)
-		} else {
-			b.WriteString("- **Last request**: no cache hit\n")
-		}
-		if today := tt.CachedTokensToday(); today > 0 {
-			fmt.Fprintf(&b, "- **Today**: %s tokens read from cache (%.0f%% of input)\n",
-				formatTokenCount(today), tt.CacheHitRateToday())
-		}
-		if prefix := tt.CachePrefixTokens(); prefix > 0 {
-			fmt.Fprintf(&b, "- **Stable prefix**: %s tokens · **body since**: %s tokens\n",
-				formatTokenCount(prefix), formatTokenCount(tt.BodyTokens()))
+// writeCtxSubagentSection writes the running/done/failed subagent tally.
+func (m *model) writeCtxSubagentSection(b *strings.Builder) {
+	if m.cfg.Orchestrator == nil {
+		return
+	}
+	agents := m.cfg.Orchestrator.List()
+	if len(agents) == 0 {
+		return
+	}
+	running, done, failed := 0, 0, 0
+	for _, a := range agents {
+		switch a.Status {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		default:
+			done++
 		}
 	}
-
-	// Skills.
-	if len(m.cfg.Skills) > 0 {
-		b.WriteString("\n*Skills* ")
-		fmt.Fprintf(&b, "(%d loaded)\n", len(m.cfg.Skills))
-		// Stable, alphabetical listing for predictable /context output.
-		names := make([]string, 0, len(m.cfg.Skills))
-		byName := make(map[string]extension.Skill, len(m.cfg.Skills))
-		for _, s := range m.cfg.Skills {
-			names = append(names, s.Name)
-			byName[s.Name] = s
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			s := byName[name]
-			source := s.Source
-			if source == "" {
-				source = "user"
-			}
-			var bodyDesc string
-			if size, ok := extension.SkillBodySize(m.cfg.Skills, s.Name); ok {
-				bodyDesc = fmt.Sprintf("body: %s", formatTokenCount(int64(size)))
-			} else {
-				bodyDesc = "body: not loaded"
-			}
-			desc := s.Description
-			if desc == "" {
-				desc = "(no description)"
-			}
-			fmt.Fprintf(&b, "- /%s — %s [%s]  %s\n", s.Name, desc, source, bodyDesc)
-		}
-	}
-
-	// Subagents.
-	if m.cfg.Orchestrator != nil {
-		agents := m.cfg.Orchestrator.List()
-		if len(agents) > 0 {
-			running, done, failed := 0, 0, 0
-			for _, a := range agents {
-				switch a.Status {
-				case "running":
-					running++
-				case "failed":
-					failed++
-				default:
-					done++
-				}
-			}
-			b.WriteString("\n*Subagents*\n")
-			fmt.Fprintf(&b, "- **Total**: %d (running: %d, done: %d, failed: %d)\n",
-				len(agents), running, done, failed)
-		}
-	}
-
-	// Compaction stats.
-	if cm := m.cfg.CompactMetrics; cm != nil {
-		stats := cm.FormatStats()
-		if stats != "" {
-			b.WriteString("\n*Output compaction*\n")
-			b.WriteString(stats)
-		}
-	}
-
-	return b.String()
+	b.WriteString("\n*Subagents*\n")
+	fmt.Fprintf(b, "- **Total**: %d (running: %d, done: %d, failed: %d)\n",
+		len(agents), running, done, failed)
 }
 
 // showCommandList displays available slash commands as an assistant message.

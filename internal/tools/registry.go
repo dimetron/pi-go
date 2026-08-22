@@ -168,34 +168,13 @@ func collectFromSchema(schema *jsonschema.Schema, prefix string, intProps, boolP
 		if prefix != "" {
 			fullName = prefix + "." + name
 		}
-		// Resolve effective type. The jsonschema library uses Type for single types
-		// and Types for multi-types (e.g., ["null", "array"] for nullable arrays).
-		effectiveType := prop.Type
-		if effectiveType == "" && len(prop.Types) > 0 {
-			for _, t := range prop.Types {
-				if t != "null" {
-					effectiveType = t
-					break
-				}
-			}
-		}
-		switch effectiveType {
+		switch effectiveSchemaType(prop) {
 		case "integer", "number":
-			intProps[fullName] = true
-			// Also register the base name for array item matching flexibility
-			if prefix != "" {
-				intProps[name] = true
-			}
+			markCoerceProp(intProps, prefix, name, fullName)
 		case "boolean":
-			boolProps[fullName] = true
-			if prefix != "" {
-				boolProps[name] = true
-			}
+			markCoerceProp(boolProps, prefix, name, fullName)
 		case "array", "object":
-			jsonProps[fullName] = true
-			if prefix != "" {
-				jsonProps[name] = true
-			}
+			markCoerceProp(jsonProps, prefix, name, fullName)
 		}
 		// Recurse into nested objects
 		if len(prop.Properties) > 0 {
@@ -205,6 +184,31 @@ func collectFromSchema(schema *jsonschema.Schema, prefix string, intProps, boolP
 		if prop.Items != nil {
 			collectFromSchema(prop.Items, fullName+".$", intProps, boolProps, jsonProps)
 		}
+	}
+}
+
+// effectiveSchemaType resolves the type a property coerces as. The jsonschema
+// library uses Type for single types and Types for multi-types (e.g.,
+// ["null", "array"] for nullable arrays), where the first non-null entry wins.
+func effectiveSchemaType(prop *jsonschema.Schema) string {
+	if prop.Type != "" {
+		return prop.Type
+	}
+	for _, t := range prop.Types {
+		if t != "null" {
+			return t
+		}
+	}
+	return ""
+}
+
+// markCoerceProp registers a property in one of the coercion sets under its
+// full dot-notation path, and for a nested property under its bare name as
+// well, so array item matching can find it.
+func markCoerceProp(props map[string]bool, prefix, name, fullName string) {
+	props[fullName] = true
+	if prefix != "" {
+		props[name] = true
 	}
 }
 
@@ -388,33 +392,8 @@ func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
 	switch vv := item.(type) {
 	case map[string]any:
 		// Array of objects - check each property against parent.$ paths
-		for nestedK, nestedV := range vv {
-			// Check both the nested key itself and parent.$ nestedK
-			nestedPath := parentPath + "." + nestedK
-			parentItemPath := parentPath + ".$." + nestedK
-
-			// Try to coerce using the full nested path
-			if c.intProps[nestedPath] || c.boolProps[nestedPath] || c.jsonProps[nestedPath] {
-				if coerced := c.tryCoerce(nestedV, nestedPath); coerced != nil {
-					vv[nestedK] = coerced
-				}
-			}
-			// Also check parent.$ paths (for array item properties)
-			if c.intProps[parentItemPath] || c.boolProps[parentItemPath] || c.jsonProps[parentItemPath] {
-				if coerced := c.tryCoerce(nestedV, parentItemPath); coerced != nil {
-					vv[nestedK] = coerced
-				}
-			}
-
-			// Recurse into nested objects/arrays
-			switch nv := vv[nestedK].(type) {
-			case map[string]any:
-				c.coerceValueAtKey(nv, nestedK)
-			case []any:
-				for i := range nv {
-					c.coerceArrayItem(nv, i, nestedPath)
-				}
-			}
+		for nestedK := range vv {
+			c.coerceArrayItemProp(vv, nestedK, parentPath)
 		}
 	case []any:
 		// Nested array
@@ -424,50 +403,52 @@ func (c *coercingTool) coerceArrayItem(arr []any, idx int, parentPath string) {
 	}
 }
 
+// coerceArrayItemProp coerces one property of an object that is itself an
+// array item, then recurses into whatever that property holds.
+func (c *coercingTool) coerceArrayItemProp(obj map[string]any, key, parentPath string) {
+	// Check both the nested key itself and parent.$ key
+	nestedV := obj[key]
+	nestedPath := parentPath + "." + key
+	c.coerceAtPath(obj, key, nestedPath, nestedV)
+	// Also check parent.$ paths (for array item properties)
+	c.coerceAtPath(obj, key, parentPath+".$."+key, nestedV)
+
+	// Recurse into nested objects/arrays
+	switch nv := obj[key].(type) {
+	case map[string]any:
+		c.coerceValueAtKey(nv, key)
+	case []any:
+		for i := range nv {
+			c.coerceArrayItem(nv, i, nestedPath)
+		}
+	}
+}
+
+// coerceAtPath stores the coercion of val at obj[key], if path is a registered
+// coercion target. val is passed in rather than read back from obj so that two
+// paths checked in sequence both see the value the caller started with.
+func (c *coercingTool) coerceAtPath(obj map[string]any, key, path string, val any) {
+	if !c.intProps[path] && !c.boolProps[path] && !c.jsonProps[path] {
+		return
+	}
+	if coerced := c.tryCoerce(val, path); coerced != nil {
+		obj[key] = coerced
+	}
+}
+
 // tryCoerce attempts to coerce a value based on the property path.
 // Returns the coerced value or nil if coercion was not applied.
 func (c *coercingTool) tryCoerce(val any, path string) any {
 	switch v := val.(type) {
 	case string:
-		if c.intProps[path] {
-			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
-				return float64(i) // JSON numbers are float64 in Go maps
-			} else if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f
-			}
-		} else if c.boolProps[path] {
-			if b, err := strconv.ParseBool(v); err == nil {
-				return b
-			}
-		} else if c.jsonProps[path] {
-			// LLMs sometimes stringify JSON arrays/objects. Parse them back.
-			v = strings.TrimSpace(v)
-			if (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) ||
-				(strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) {
-				var parsed any
-				if err := json.Unmarshal([]byte(v), &parsed); err == nil {
-					return parsed
-				}
-			}
-		}
+		return c.coerceStringValue(v, path)
 	case float64:
 		// Already float64 from JSON
 		return nil
 	case float32, int, int64, int32:
 		// Numbers - keep as-is for intProps, convert to float64
 		if c.intProps[path] {
-			switch n := v.(type) {
-			case float64:
-				return n
-			case float32:
-				return float64(n)
-			case int:
-				return float64(n)
-			case int64:
-				return float64(n)
-			case int32:
-				return float64(n)
-			}
+			return numberAsFloat64(v)
 		}
 	case json.Number:
 		if c.intProps[path] {
@@ -475,6 +456,59 @@ func (c *coercingTool) tryCoerce(val any, path string) any {
 				return f
 			}
 		}
+	}
+	return nil
+}
+
+// coerceStringValue coerces a string the model sent where the schema asked for
+// a number, a boolean, or a nested JSON document.
+func (c *coercingTool) coerceStringValue(v, path string) any {
+	switch {
+	case c.intProps[path]:
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return float64(i) // JSON numbers are float64 in Go maps
+		} else if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	case c.boolProps[path]:
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	case c.jsonProps[path]:
+		// LLMs sometimes stringify JSON arrays/objects. Parse them back.
+		return parseStringifiedJSON(v)
+	}
+	return nil
+}
+
+// parseStringifiedJSON parses a JSON array or object that arrived as a string,
+// returning nil if the string is not one or does not parse.
+func parseStringifiedJSON(v string) any {
+	v = strings.TrimSpace(v)
+	if (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) ||
+		(strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) {
+		var parsed any
+		if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+			return parsed
+		}
+	}
+	return nil
+}
+
+// numberAsFloat64 normalizes a Go numeric value to the float64 that JSON
+// decoding would have produced. It returns nil for anything else.
+func numberAsFloat64(v any) any {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int32:
+		return float64(n)
 	}
 	return nil
 }

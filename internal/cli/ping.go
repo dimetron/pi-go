@@ -213,19 +213,56 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 		cfg.Roles["default"] = config.RoleConfig{Model: flagModel}
 	}
 
-	activeRole := "default"
-	switch {
-	case flagSmol:
-		activeRole = "smol"
-	case flagSlow:
-		activeRole = "slow"
-	case flagPlan:
-		activeRole = "plan"
+	info, baseURL, explicitBaseURL, err := resolvePingModelInfo(cfg, pingRoleFromFlags())
+	if err != nil {
+		return nil, err
 	}
 
+	baseURL, apiKey, codexBackend := resolvePingCredentials(info, baseURL, explicitBaseURL)
+	endpoint, fallbacks := pingProbePaths(info, baseURL, codexBackend)
+
+	opts := &provider.LLMOptions{
+		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+	}
+	applyTransportOptions(opts, cfg)
+
+	trimmed := strings.TrimRight(baseURL, "/")
+	fallbackURLs := make([]string, 0, len(fallbacks))
+	for _, p := range fallbacks {
+		fallbackURLs = append(fallbackURLs, trimmed+p)
+	}
+	return &pingTarget{
+		info:         info,
+		apiKey:       apiKey,
+		baseURL:      baseURL,
+		targetURL:    trimmed + endpoint,
+		fallbackURLs: fallbackURLs,
+		codexBackend: codexBackend,
+		opts:         opts,
+	}, nil
+}
+
+// pingRoleFromFlags returns the role the --smol/--slow/--plan flags select.
+func pingRoleFromFlags() string {
+	switch {
+	case flagSmol:
+		return "smol"
+	case flagSlow:
+		return "slow"
+	case flagPlan:
+		return "plan"
+	default:
+		return "default"
+	}
+}
+
+// resolvePingModelInfo resolves the role's model into provider info. It also
+// returns the base URL the resolution used and whether that URL was configured
+// rather than defaulted — the codex-token check needs to tell those apart.
+func resolvePingModelInfo(cfg config.Config, activeRole string) (provider.Info, string, bool, error) {
 	modelName, providerName, _, _, _, err := cfg.ResolveRole(activeRole)
 	if err != nil {
-		return nil, fmt.Errorf("resolving model role: %w", err)
+		return provider.Info{}, "", false, fmt.Errorf("resolving model role: %w", err)
 	}
 
 	baseURL := flagURL
@@ -237,16 +274,21 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("resolving model: %w", err)
+		return provider.Info{}, "", false, fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
 		info.Custom = baseURL != ""
 	}
 	if err := provider.ValidateModel(info); err != nil {
-		return nil, fmt.Errorf("model validation: %w", err)
+		return provider.Info{}, "", false, fmt.Errorf("model validation: %w", err)
 	}
+	return info, baseURL, explicitBaseURL, nil
+}
 
+// resolvePingCredentials settles the base URL and API key the probe uses, and
+// reports whether the run has to go through the ChatGPT codex backend.
+func resolvePingCredentials(info provider.Info, baseURL string, explicitBaseURL bool) (string, string, bool) {
 	apiKey := config.APIKeys()[info.Provider]
 	if info.Ollama {
 		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
@@ -274,44 +316,26 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	if codexBackend {
 		baseURL = codexPingBaseURL
 	}
+	return baseURL, apiKey, codexBackend
+}
 
-	var endpoint string
-	var fallbacks []string
+// pingProbePaths returns the health-check path to probe, plus any paths to try
+// when the first one does not answer 2xx.
+func pingProbePaths(info provider.Info, baseURL string, codexBackend bool) (string, []string) {
+	if codexBackend {
+		// The codex backend only exposes POST /responses — use it as a
+		// reachability target (it will 405 for GET, which we treat as
+		// "server alive, endpoint requires POST").
+		return "/responses", nil
+	}
 	if info.Provider == "azure" {
 		// Same rules NewAzureOpenAI applies to real traffic: api-version on a
 		// native resource, /models on a compat gateway. The first candidate is
 		// the probe; the rest are tried only if it does not answer 2xx.
 		paths := provider.AzureProbePaths(info.Model, "", baseURL)
-		endpoint, fallbacks = paths[0], paths[1:]
-	} else {
-		endpoint = pingEndpointForBaseURL(info.Provider, baseURL)
+		return paths[0], paths[1:]
 	}
-	if codexBackend {
-		// The codex backend only exposes POST /responses — use it as a
-		// reachability target (it will 405 for GET, which we treat as
-		// "server alive, endpoint requires POST").
-		endpoint = "/responses"
-	}
-
-	opts := &provider.LLMOptions{
-		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-	}
-	applyTransportOptions(opts, cfg)
-
-	trimmed := strings.TrimRight(baseURL, "/")
-	fallbackURLs := make([]string, 0, len(fallbacks))
-	for _, p := range fallbacks {
-		fallbackURLs = append(fallbackURLs, trimmed+p)
-	}
-	return &pingTarget{
-		info:         info,
-		apiKey:       apiKey,
-		baseURL:      baseURL,
-		targetURL:    trimmed + endpoint,
-		fallbackURLs: fallbackURLs,
-		codexBackend: codexBackend,
-		opts:         opts,
-	}, nil
+	return pingEndpointForBaseURL(info.Provider, baseURL), nil
 }
 
 // printHeader summarizes the resolved target before the phases begin.
@@ -610,34 +634,13 @@ func (t *pingTarget) reportHTTPVerdict(w pingWriter, resp *http.Response) bool {
 
 	switch code := resp.StatusCode; {
 	case code >= 200 && code < 300:
-		w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, t.info.Provider, colorReset)
-		w("* Status: %s\n", resp.Status)
-		if t.info.Provider == "openai" {
-			if resolved, ok := resolveOpenAIModelFromList(resp, t.info.Model, w); ok {
-				t.info.Model = resolved
-			}
-		}
-		return true
+		return t.verdictReachable(w, resp)
 
 	case code == 401 || code == 403:
-		if customAzure {
-			w("* %s⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)%s\n", colorYellow, code, colorReset)
-			return true
-		}
-		w("* %s✗ Authentication failed (HTTP %d)%s\n", colorYellow, code, colorReset)
-		w("* The API endpoint is reachable but the API key is invalid or missing.\n")
-		w("* Check %s\n", providerEnvVar(t.info.Provider))
-		return false
+		return t.verdictUnauthorized(w, code, customAzure)
 
 	case code == 404:
-		if t.info.Provider == "azure" {
-			w("* %s⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)%s\n", colorYellow, colorReset)
-			return true
-		}
-		w("* %s✗ Endpoint not found (HTTP %d)%s\n", colorYellow, code, colorReset)
-		w("* The server is reachable but the model endpoint was not found.\n")
-		w("* Base URL: %s\n", t.baseURL)
-		return false
+		return t.verdictNotFound(w, code)
 
 	case code == 405:
 		// Method Not Allowed is fine for POST-only endpoints — server is alive.
@@ -646,12 +649,7 @@ func (t *pingTarget) reportHTTPVerdict(w pingWriter, resp *http.Response) bool {
 		return true
 
 	case code == 422:
-		if customAzure {
-			w("* %s⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)%s\n", colorYellow, colorReset)
-			return true
-		}
-		w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
-		return false
+		return t.verdictUnprocessable(w, resp, customAzure)
 
 	case code == 429:
 		w("* %s⚠ Rate limited (HTTP %d) — endpoint reachable but throttled%s\n", colorYellow, code, colorReset)
@@ -665,6 +663,56 @@ func (t *pingTarget) reportHTTPVerdict(w pingWriter, resp *http.Response) bool {
 		w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
 		return false
 	}
+}
+
+// verdictReachable reports a 2xx health check. For OpenAI the body is the model
+// list, so it doubles as the place a model alias gets resolved to a real ID.
+func (t *pingTarget) verdictReachable(w pingWriter, resp *http.Response) bool {
+	w("* %s✓ Endpoint reachable via %s%s\n", colorGreen, t.info.Provider, colorReset)
+	w("* Status: %s\n", resp.Status)
+	if t.info.Provider == "openai" {
+		if resolved, ok := resolveOpenAIModelFromList(resp, t.info.Model, w); ok {
+			t.info.Model = resolved
+		}
+	}
+	return true
+}
+
+// verdictUnauthorized reports a 401/403. A custom Azure or proxy endpoint is
+// allowed to reject the GET probe and still be worth pinging.
+func (t *pingTarget) verdictUnauthorized(w pingWriter, code int, customAzure bool) bool {
+	if customAzure {
+		w("* %s⚠ Received HTTP %d on health check, continuing with model ping (custom Azure/proxy setups may reject GET checks)%s\n", colorYellow, code, colorReset)
+		return true
+	}
+	w("* %s✗ Authentication failed (HTTP %d)%s\n", colorYellow, code, colorReset)
+	w("* The API endpoint is reachable but the API key is invalid or missing.\n")
+	w("* Check %s\n", providerEnvVar(t.info.Provider))
+	return false
+}
+
+// verdictNotFound reports a 404. Azure deployments routinely serve no GET
+// health route at all, which says nothing about whether the model answers.
+func (t *pingTarget) verdictNotFound(w pingWriter, code int) bool {
+	if t.info.Provider == "azure" {
+		w("* %s⚠ Endpoint returned 404 for health path, continuing with model ping (Azure/proxy endpoints often disable GET health routes)%s\n", colorYellow, colorReset)
+		return true
+	}
+	w("* %s✗ Endpoint not found (HTTP %d)%s\n", colorYellow, code, colorReset)
+	w("* The server is reachable but the model endpoint was not found.\n")
+	w("* Base URL: %s\n", t.baseURL)
+	return false
+}
+
+// verdictUnprocessable reports a 422, which on a proxy means the route exists
+// but wants a structured POST rather than the bare GET probe.
+func (t *pingTarget) verdictUnprocessable(w pingWriter, resp *http.Response, customAzure bool) bool {
+	if customAzure {
+		w("* %s⚠ Received HTTP 422 on health check, continuing with model ping (proxy endpoint expects structured POST requests)%s\n", colorYellow, colorReset)
+		return true
+	}
+	w("* %s? Unexpected status: %s%s\n", colorYellow, resp.Status, colorReset)
+	return false
 }
 
 // pingModel sends the prompt to the model and reports the reply. With no
@@ -799,64 +847,14 @@ func allowSoftNonStreamFailure(provider string) bool {
 // For Azure, a non-stream failure is soft: ping continues with stream=true,
 // matching the path interactive chat actually exercises.
 func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong bool, provider string) (string, error) {
-	w := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
+	w := pingWriter(func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) })
 
-	systemMsg := "You are a connectivity test. Reply briefly and concisely."
-	if isPingPong {
-		systemMsg = `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
-	}
-
-	req := &llmmodel.LLMRequest{
-		Contents: []*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		Config: &genai.GenerateContentConfig{
-			SystemInstruction: genai.NewContentFromText(systemMsg, genai.RoleUser),
-		},
-	}
+	req := newPingRequest(prompt, isPingPong)
 
 	// --- Non-streaming test ---
 	w("*   %s[non-stream]%s Calling GenerateContent(stream=false)...\n", colorGray, colorReset)
 	nsStart := time.Now()
-	var nsResult strings.Builder
-	nsEvents := 0
-	var nsErr error
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
-		nsEvents++
-		if err != nil {
-			w("*   %s[non-stream]%s ERROR at event %d: %v\n", colorGray, colorReset, nsEvents, err)
-			nsErr = fmt.Errorf("non-streaming LLM error: %w", err)
-			break
-		}
-		w("*   %s[non-stream]%s event %d: partial=%v turnComplete=%v finish=%v",
-			colorGray, colorReset, nsEvents, resp.Partial, resp.TurnComplete, resp.FinishReason)
-		if resp.ErrorCode != "" {
-			w(" errorCode=%s errorMsg=%s", resp.ErrorCode, resp.ErrorMessage)
-		}
-		if resp.UsageMetadata != nil {
-			w(" tokens(in=%d out=%d)", resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
-		}
-		w("\n")
-		if resp.Content != nil {
-			w("*   %s[non-stream]%s   role=%s parts=%d\n", colorGray, colorReset, resp.Content.Role, len(resp.Content.Parts))
-			for i, part := range resp.Content.Parts {
-				if part.Text != "" {
-					preview := part.Text
-					if len(preview) > 120 {
-						preview = preview[:120] + "..."
-					}
-					w("*   %s[non-stream]%s   part[%d] text(%d chars): %s\n", colorGray, colorReset, i, len(part.Text), preview)
-					nsResult.WriteString(part.Text)
-				}
-				if part.FunctionCall != nil {
-					w("*   %s[non-stream]%s   part[%d] tool_call: %s\n", colorGray, colorReset, i, part.FunctionCall.Name)
-				}
-				if part.Thought {
-					w("*   %s[non-stream]%s   part[%d] thought=true\n", colorGray, colorReset, i)
-				}
-			}
-		}
-	}
+	nsText, nsEvents, nsErr := modelPingNonStream(ctx, llm, req, w)
 	if nsErr != nil {
 		if !allowSoftNonStreamFailure(provider) {
 			return "", nsErr
@@ -870,59 +868,15 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 
 	// --- Streaming test ---
 	w("*   %s[stream]%s Calling GenerateContent(stream=true)...\n", colorGray, colorReset)
-	sStart := time.Now()
-	var sResult strings.Builder
-	sEvents := 0
-	sThinkingChunks := 0
-	sTextChunks := 0
-	for resp, err := range llm.GenerateContent(ctx, req, true) {
-		sEvents++
-		if err != nil {
-			w("*   %s[stream]%s ERROR at event %d: %v\n", colorGray, colorReset, sEvents, err)
-			return nsResult.String(), fmt.Errorf("streaming LLM error: %w", err)
-		}
-		if resp.ErrorCode != "" {
-			w("*   %s[stream]%s event %d: errorCode=%s errorMsg=%s\n", colorGray, colorReset, sEvents, resp.ErrorCode, resp.ErrorMessage)
-			continue
-		}
-		if resp.Content != nil {
-			role := resp.Content.Role
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" {
-					if role == "thinking" {
-						sThinkingChunks++
-					} else {
-						sTextChunks++
-						sResult.WriteString(part.Text)
-					}
-				}
-			}
-		}
-		// Print summary for non-partial final event.
-		if !resp.Partial {
-			w("*   %s[stream]%s final event %d: turnComplete=%v finish=%v", colorGray, colorReset, sEvents, resp.TurnComplete, resp.FinishReason)
-			if resp.UsageMetadata != nil {
-				w(" tokens(in=%d out=%d)", resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
-			}
-			w("\n")
-		}
-	}
-	sDur := time.Since(sStart)
-	w("*   %s[stream]%s Done: %d events (%d thinking, %d text chunks), %s%s%s\n",
-		colorGray, colorReset, sEvents, sThinkingChunks, sTextChunks, colorGray, sDur.Round(time.Millisecond), colorReset)
-
-	if sResult.Len() > 0 {
-		preview := sResult.String()
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		w("*   %s[stream]%s Reply: %s\n", colorGray, colorReset, preview)
+	sText, sErr := modelPingStream(ctx, llm, req, w)
+	if sErr != nil {
+		return nsText, sErr
 	}
 
 	// Return non-streaming result (or streaming if non-streaming was empty).
-	reply := strings.TrimSpace(nsResult.String())
+	reply := strings.TrimSpace(nsText)
 	if reply == "" {
-		reply = strings.TrimSpace(sResult.String())
+		reply = strings.TrimSpace(sText)
 	}
 	if reply == "" {
 		return "", fmt.Errorf("model returned empty response in both streaming and non-streaming modes")
@@ -930,30 +884,154 @@ func modelPing(ctx context.Context, llm llmmodel.LLM, prompt string, isPingPong 
 	return reply, nil
 }
 
+// pingSystemMessage is the system instruction a connectivity probe sends. The
+// Prompt:Prompt variant pins the expected reply so the check can be exact.
+func pingSystemMessage(isPingPong bool) string {
+	if isPingPong {
+		return `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
+	}
+	return "You are a connectivity test. Reply briefly and concisely."
+}
+
+// newPingRequest builds the single-turn request both the cloud and the Ollama
+// ping paths send.
+func newPingRequest(prompt string, isPingPong bool) *llmmodel.LLMRequest {
+	return &llmmodel.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText(prompt, genai.RoleUser),
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: genai.NewContentFromText(pingSystemMessage(isPingPong), genai.RoleUser),
+		},
+	}
+}
+
+// modelPingNonStream runs the stream=false probe, tracing every event, and
+// returns the text collected so far plus the number of events seen. The text is
+// meaningful even when err is non-nil: a soft failure keeps what arrived before
+// the error.
+func modelPingNonStream(ctx context.Context, llm llmmodel.LLM, req *llmmodel.LLMRequest, w pingWriter) (string, int, error) {
+	var result strings.Builder
+	events := 0
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		events++
+		if err != nil {
+			w("*   %s[non-stream]%s ERROR at event %d: %v\n", colorGray, colorReset, events, err)
+			return result.String(), events, fmt.Errorf("non-streaming LLM error: %w", err)
+		}
+		logPingNonStreamEvent(w, resp, events)
+		logPingNonStreamContent(w, resp, &result)
+	}
+	return result.String(), events, nil
+}
+
+// logPingNonStreamEvent prints the one-line header for a non-streamed event.
+func logPingNonStreamEvent(w pingWriter, resp *llmmodel.LLMResponse, event int) {
+	w("*   %s[non-stream]%s event %d: partial=%v turnComplete=%v finish=%v",
+		colorGray, colorReset, event, resp.Partial, resp.TurnComplete, resp.FinishReason)
+	if resp.ErrorCode != "" {
+		w(" errorCode=%s errorMsg=%s", resp.ErrorCode, resp.ErrorMessage)
+	}
+	if resp.UsageMetadata != nil {
+		w(" tokens(in=%d out=%d)", resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
+	}
+	w("\n")
+}
+
+// logPingNonStreamContent prints each part of a non-streamed event and appends
+// its text to out.
+func logPingNonStreamContent(w pingWriter, resp *llmmodel.LLMResponse, out *strings.Builder) {
+	if resp.Content == nil {
+		return
+	}
+	w("*   %s[non-stream]%s   role=%s parts=%d\n", colorGray, colorReset, resp.Content.Role, len(resp.Content.Parts))
+	for i, part := range resp.Content.Parts {
+		if part.Text != "" {
+			w("*   %s[non-stream]%s   part[%d] text(%d chars): %s\n", colorGray, colorReset, i, len(part.Text), truncate(part.Text, 120))
+			out.WriteString(part.Text)
+		}
+		if part.FunctionCall != nil {
+			w("*   %s[non-stream]%s   part[%d] tool_call: %s\n", colorGray, colorReset, i, part.FunctionCall.Name)
+		}
+		if part.Thought {
+			w("*   %s[non-stream]%s   part[%d] thought=true\n", colorGray, colorReset, i)
+		}
+	}
+}
+
+// modelPingStream runs the stream=true probe and returns the model text it
+// accumulated. Thinking chunks are counted but never join the reply.
+func modelPingStream(ctx context.Context, llm llmmodel.LLM, req *llmmodel.LLMRequest, w pingWriter) (string, error) {
+	sStart := time.Now()
+	var result strings.Builder
+	events, thinkingChunks, textChunks := 0, 0, 0
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
+		events++
+		if err != nil {
+			w("*   %s[stream]%s ERROR at event %d: %v\n", colorGray, colorReset, events, err)
+			return result.String(), fmt.Errorf("streaming LLM error: %w", err)
+		}
+		if resp.ErrorCode != "" {
+			w("*   %s[stream]%s event %d: errorCode=%s errorMsg=%s\n", colorGray, colorReset, events, resp.ErrorCode, resp.ErrorMessage)
+			continue
+		}
+		thinking, text := accumulatePingStreamParts(resp, &result)
+		thinkingChunks += thinking
+		textChunks += text
+		// Print summary for non-partial final event.
+		if !resp.Partial {
+			logPingStreamFinalEvent(w, resp, events)
+		}
+	}
+	sDur := time.Since(sStart)
+	w("*   %s[stream]%s Done: %d events (%d thinking, %d text chunks), %s%s%s\n",
+		colorGray, colorReset, events, thinkingChunks, textChunks, colorGray, sDur.Round(time.Millisecond), colorReset)
+
+	reply := result.String()
+	if reply != "" {
+		w("*   %s[stream]%s Reply: %s\n", colorGray, colorReset, truncate(reply, 200))
+	}
+	return reply, nil
+}
+
+// accumulatePingStreamParts appends the model text of one streamed event to out
+// and reports how many thinking and text chunks the event carried.
+func accumulatePingStreamParts(resp *llmmodel.LLMResponse, out *strings.Builder) (thinking, text int) {
+	if resp.Content == nil {
+		return 0, 0
+	}
+	role := resp.Content.Role
+	for _, part := range resp.Content.Parts {
+		if part.Text == "" {
+			continue
+		}
+		if role == "thinking" {
+			thinking++
+			continue
+		}
+		text++
+		out.WriteString(part.Text)
+	}
+	return thinking, text
+}
+
+// logPingStreamFinalEvent prints the summary line for a non-partial event.
+func logPingStreamFinalEvent(w pingWriter, resp *llmmodel.LLMResponse, event int) {
+	w("*   %s[stream]%s final event %d: turnComplete=%v finish=%v", colorGray, colorReset, event, resp.TurnComplete, resp.FinishReason)
+	if resp.UsageMetadata != nil {
+		w(" tokens(in=%d out=%d)", resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
+	}
+	w("\n")
+}
+
 // ollamaPingFull performs a complete Ollama ping: lists models, checks availability,
 // then runs non-streaming and streaming tests using the native Ollama provider.
 // No artificial timeout — local models can be slow (thinking, model loading).
 func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPingPong bool, w func(string, ...any)) (string, error) {
-	// Step 1: List available models.
-	models, err := provider.OllamaListModels(ctx, baseURL)
-	if err != nil {
-		return "", fmt.Errorf("list models: %w", err)
+	// Step 1: List available models and confirm ours is one of them.
+	if err := ollamaEnsureModel(ctx, baseURL, modelName, w); err != nil {
+		return "", err
 	}
-	w("*   Available models: %s\n", strings.Join(models, ", "))
-
-	// Check if our model is available.
-	modelBase := strings.Split(modelName, ":")[0]
-	found := false
-	for _, m := range models {
-		if m == modelName || strings.HasPrefix(m, modelBase) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return "", fmt.Errorf("model %q not found in available models", modelName)
-	}
-	w("*   Model %s: %sfound ✓%s\n", modelName, colorGreen, colorReset)
 
 	// Step 2: Create native Ollama LLM.
 	llm, err := provider.NewOllama(ctx, modelName, "", baseURL, "none", nil)
@@ -961,75 +1039,25 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 		return "", fmt.Errorf("create client: %w", err)
 	}
 
-	systemMsg := "You are a connectivity test. Reply briefly and concisely."
-	if isPingPong {
-		systemMsg = `You are a connectivity test. When the user says "prompt-prompt", reply with exactly "prompt-prompt" and nothing else.`
-	}
-
-	req := &llmmodel.LLMRequest{
-		Contents: []*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		Config: &genai.GenerateContentConfig{
-			SystemInstruction: genai.NewContentFromText(systemMsg, genai.RoleUser),
-		},
-	}
+	req := newPingRequest(prompt, isPingPong)
 
 	// Step 3: Non-streaming test.
-	w("*   %s[non-stream]%s Calling Ollama chat (stream=false)...\n", colorGray, colorReset)
-	nsStart := time.Now()
-	var nsResult strings.Builder
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
-		if err != nil {
-			w("*   %s[non-stream]%s ERROR: %v\n", colorGray, colorReset, err)
-			return "", fmt.Errorf("non-streaming: %w", err)
-		}
-		if resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" {
-					nsResult.WriteString(part.Text)
-				}
-			}
-		}
-		if resp.UsageMetadata != nil {
-			w("*   %s[non-stream]%s tokens(in=%d out=%d)\n",
-				colorGray, colorReset, resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
-		}
+	nsText, err := ollamaPingNonStream(ctx, llm, req, w)
+	if err != nil {
+		return "", err
 	}
-	nsDur := time.Since(nsStart)
-	nsText := strings.TrimSpace(nsResult.String())
-	w("*   %s[non-stream]%s Done %s(%s)%s: %s\n", colorGray, colorReset, colorGray, nsDur.Round(time.Millisecond), colorReset, truncate(nsText, 120))
 
 	// Step 4: Streaming test.
-	w("*   %s[stream]%s Calling Ollama chat (stream=true)...\n", colorGray, colorReset)
-	sStart := time.Now()
-	var sResult strings.Builder
-	sChunks := 0
-	for resp, err := range llm.GenerateContent(ctx, req, true) {
-		if err != nil {
-			w("*   %s[stream]%s ERROR: %v\n", colorGray, colorReset, err)
-			if nsText != "" {
-				w("*   %s[stream]%s Falling back to non-streaming result\n", colorGray, colorReset)
-				return nsText, nil
-			}
-			return "", fmt.Errorf("streaming: %w", err)
+	sText, err := ollamaPingStream(ctx, llm, req, w)
+	if err != nil {
+		// A stream failure after a usable non-streaming reply still proves the
+		// model answered, so report that rather than the transport error.
+		if nsText != "" {
+			w("*   %s[stream]%s Falling back to non-streaming result\n", colorGray, colorReset)
+			return nsText, nil
 		}
-		if resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" && resp.Content.Role != "thinking" {
-					sResult.WriteString(part.Text)
-					sChunks++
-				}
-			}
-		}
-		if resp.UsageMetadata != nil {
-			w("*   %s[stream]%s tokens(in=%d out=%d)\n",
-				colorGray, colorReset, resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
-		}
+		return "", err
 	}
-	sDur := time.Since(sStart)
-	sText := strings.TrimSpace(sResult.String())
-	w("*   %s[stream]%s Done %s(%s)%s, %d chunks: %s\n", colorGray, colorReset, colorGray, sDur.Round(time.Millisecond), colorReset, sChunks, truncate(sText, 120))
 
 	// Return non-streaming result (preferred) or streaming fallback.
 	reply := nsText
@@ -1040,6 +1068,98 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 		return "", fmt.Errorf("model returned empty response in both modes")
 	}
 	return reply, nil
+}
+
+// ollamaEnsureModel reports the daemon's model list and fails when modelName is
+// not served by it. A tag-less prefix match counts as a hit, because a model
+// pulled as "llama3:8b" is routinely asked for as "llama3".
+func ollamaEnsureModel(ctx context.Context, baseURL, modelName string, w pingWriter) error {
+	models, err := provider.OllamaListModels(ctx, baseURL)
+	if err != nil {
+		return fmt.Errorf("list models: %w", err)
+	}
+	w("*   Available models: %s\n", strings.Join(models, ", "))
+
+	modelBase := strings.Split(modelName, ":")[0]
+	for _, m := range models {
+		if m == modelName || strings.HasPrefix(m, modelBase) {
+			w("*   Model %s: %sfound ✓%s\n", modelName, colorGreen, colorReset)
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q not found in available models", modelName)
+}
+
+// ollamaPingNonStream runs the stream=false Ollama probe and returns the
+// trimmed reply.
+func ollamaPingNonStream(ctx context.Context, llm llmmodel.LLM, req *llmmodel.LLMRequest, w pingWriter) (string, error) {
+	w("*   %s[non-stream]%s Calling Ollama chat (stream=false)...\n", colorGray, colorReset)
+	nsStart := time.Now()
+	var nsResult strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			w("*   %s[non-stream]%s ERROR: %v\n", colorGray, colorReset, err)
+			return "", fmt.Errorf("non-streaming: %w", err)
+		}
+		appendOllamaPingText(resp, &nsResult, false)
+		logOllamaPingUsage(w, "non-stream", resp)
+	}
+	nsDur := time.Since(nsStart)
+	nsText := strings.TrimSpace(nsResult.String())
+	w("*   %s[non-stream]%s Done %s(%s)%s: %s\n", colorGray, colorReset, colorGray, nsDur.Round(time.Millisecond), colorReset, truncate(nsText, 120))
+	return nsText, nil
+}
+
+// ollamaPingStream runs the stream=true Ollama probe and returns the trimmed
+// reply, excluding thinking chunks.
+func ollamaPingStream(ctx context.Context, llm llmmodel.LLM, req *llmmodel.LLMRequest, w pingWriter) (string, error) {
+	w("*   %s[stream]%s Calling Ollama chat (stream=true)...\n", colorGray, colorReset)
+	sStart := time.Now()
+	var sResult strings.Builder
+	sChunks := 0
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
+		if err != nil {
+			w("*   %s[stream]%s ERROR: %v\n", colorGray, colorReset, err)
+			return "", fmt.Errorf("streaming: %w", err)
+		}
+		sChunks += appendOllamaPingText(resp, &sResult, true)
+		logOllamaPingUsage(w, "stream", resp)
+	}
+	sDur := time.Since(sStart)
+	sText := strings.TrimSpace(sResult.String())
+	w("*   %s[stream]%s Done %s(%s)%s, %d chunks: %s\n", colorGray, colorReset, colorGray, sDur.Round(time.Millisecond), colorReset, sChunks, truncate(sText, 120))
+	return sText, nil
+}
+
+// appendOllamaPingText appends the text parts of one event to out and returns
+// how many chunks it contributed.
+//
+// skipThinking drops thinking-role output. Only the streaming probe sets it:
+// the non-streaming call returns one assembled message and has always taken
+// every text part it carries, so filtering there would change what a reasoning
+// model reports as its reply.
+func appendOllamaPingText(resp *llmmodel.LLMResponse, out *strings.Builder, skipThinking bool) int {
+	if resp.Content == nil {
+		return 0
+	}
+	chunks := 0
+	for _, part := range resp.Content.Parts {
+		if part.Text == "" || (skipThinking && resp.Content.Role == "thinking") {
+			continue
+		}
+		out.WriteString(part.Text)
+		chunks++
+	}
+	return chunks
+}
+
+// logOllamaPingUsage prints the token counts an event carried, if any.
+func logOllamaPingUsage(w pingWriter, label string, resp *llmmodel.LLMResponse) {
+	if resp.UsageMetadata == nil {
+		return
+	}
+	w("*   %s[%s]%s tokens(in=%d out=%d)\n",
+		colorGray, label, colorReset, resp.UsageMetadata.PromptTokenCount, resp.UsageMetadata.CandidatesTokenCount)
 }
 
 func truncate(s string, n int) string {

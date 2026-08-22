@@ -21,6 +21,37 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 		return nil, fmt.Errorf("mine-convo: resolve dir: %w", err)
 	}
 
+	cfg = resolveMineConfig(absDir, cfg)
+
+	// Try git first for accurate .gitignore handling (nested files, ** globs,
+	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
+	ignoredSet := gitIgnoredSet(absDir)
+	var gitignorePatterns []string
+	if ignoredSet == nil {
+		gitignorePatterns = loadGitignore(absDir)
+	}
+
+	m := &convoMiner{
+		ctx:               ctx,
+		palace:            palace,
+		cfg:               cfg,
+		absDir:            absDir,
+		ignoredSet:        ignoredSet,
+		gitignorePatterns: gitignorePatterns,
+		result:            &MineResult{},
+	}
+
+	if err := filepath.WalkDir(absDir, m.visit); err != nil {
+		return m.result, fmt.Errorf("mine-convo: walk: %w", err)
+	}
+
+	return m.result, nil
+}
+
+// resolveMineConfig fills in the config for a mining run: a nil config is
+// loaded from .mempalace.yaml, falling back to a wing named after the
+// directory, and an unset wing gets the same default.
+func resolveMineConfig(absDir string, cfg *MineConfig) *MineConfig {
 	if cfg == nil {
 		loaded, loadErr := readMempalaceYAML(absDir)
 		if loadErr != nil {
@@ -33,99 +64,124 @@ func MineConversations(ctx context.Context, palace *Palace, dir string, cfg *Min
 	if cfg.Wing == "" {
 		cfg.Wing = filepath.Base(absDir)
 	}
+	return cfg
+}
 
-	// Try git first for accurate .gitignore handling (nested files, ** globs,
-	// negation, parent .gitignore). Fall back to manual parsing if not a repo.
-	ignoredSet := gitIgnoredSet(absDir)
-	var gitignorePatterns []string
-	if ignoredSet == nil {
-		gitignorePatterns = loadGitignore(absDir)
-	}
+// convoMiner carries the state shared by every step of a MineConversations
+// directory walk, so the per-entry work can be split into named steps instead
+// of one large closure.
+type convoMiner struct {
+	ctx               context.Context
+	palace            *Palace
+	cfg               *MineConfig
+	absDir            string
+	ignoredSet        map[string]bool
+	gitignorePatterns []string
+	result            *MineResult
+}
 
-	result := &MineResult{}
-
-	err = filepath.WalkDir(absDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			result.Errors++
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if name[0] == '.' && name != "." || skipDirNames[name] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		ext := strings.ToLower(filepath.Ext(path))
-		relPath, _ := filepath.Rel(absDir, path)
-
-		if isGitIgnoredSet(relPath, ignoredSet) || (ignoredSet == nil && isGitignored(relPath, gitignorePatterns)) {
-			return nil
-		}
-
-		var exchanges []exchange
-
-		switch ext {
-		case ".jsonl":
-			exchanges, err = parseJSONL(path)
-			if err != nil {
-				result.Errors++
-				slog.Warn("mine-convo: parse jsonl", "path", relPath, "error", err)
-				return nil
-			}
-		case ".txt", ".md":
-			exchanges, err = parsePlainText(path)
-			if err != nil {
-				result.Errors++
-				slog.Warn("mine-convo: parse text", "path", relPath, "error", err)
-				return nil
-			}
-		default:
-			return nil
-		}
-
-		fileAdded, fileSkipped, fileErrors := 0, 0, 0
-		for i, ex := range exchanges {
-			result.Processed++
-
-			room := detectRoomFromContent(ex.content, cfg.Rooms)
-
-			_, addErr := palace.AddDrawer(ctx, DrawerInput{
-				Wing:       cfg.Wing,
-				Room:       room,
-				Content:    ex.content,
-				SourceFile: relPath,
-				ChunkIndex: i,
-				AddedBy:    "miner:convo",
-				Importance: 4,
-			})
-			if addErr != nil {
-				if _, ok := errors.AsType[*DuplicateError](addErr); ok {
-					result.Skipped++
-					fileSkipped++
-				} else {
-					result.Errors++
-					fileErrors++
-					slog.Warn("mine-convo: add drawer", "file", relPath, "exchange", i, "error", addErr)
-				}
-				continue
-			}
-			result.Added++
-			fileAdded++
-		}
-
-		if cfg.Progress != nil {
-			cfg.Progress(relPath, fileAdded, fileSkipped, fileErrors)
-		}
+// visit is the filepath.WalkDir callback. Errors are counted, never returned:
+// one unreadable file must not abandon the rest of the tree.
+func (m *convoMiner) visit(path string, d os.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		m.result.Errors++
 		return nil
-	})
-
-	if err != nil {
-		return result, fmt.Errorf("mine-convo: walk: %w", err)
+	}
+	if d.IsDir() {
+		return visitMineDir(d)
 	}
 
-	return result, nil
+	relPath, _ := filepath.Rel(m.absDir, path)
+	if m.isIgnored(relPath) {
+		return nil
+	}
+
+	exchanges, parsed := m.parseFile(path, relPath)
+	if !parsed {
+		return nil
+	}
+	m.addExchanges(relPath, exchanges)
+	return nil
+}
+
+// visitMineDir reports whether a directory should be descended into.
+func visitMineDir(d os.DirEntry) error {
+	name := d.Name()
+	if name[0] == '.' && name != "." || skipDirNames[name] {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// isIgnored applies the git-derived ignore set, falling back to manually
+// parsed .gitignore patterns when the directory is not a repo.
+func (m *convoMiner) isIgnored(relPath string) bool {
+	return isGitIgnoredSet(relPath, m.ignoredSet) ||
+		(m.ignoredSet == nil && isGitignored(relPath, m.gitignorePatterns))
+}
+
+// parseFile dispatches on extension. The second return distinguishes "parsed,
+// possibly to zero exchanges" from "skipped or failed" — only the former
+// reports progress for the file.
+func (m *convoMiner) parseFile(path, relPath string) ([]exchange, bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jsonl":
+		exchanges, err := parseJSONL(path)
+		if err != nil {
+			m.result.Errors++
+			slog.Warn("mine-convo: parse jsonl", "path", relPath, "error", err)
+			return nil, false
+		}
+		return exchanges, true
+	case ".txt", ".md":
+		exchanges, err := parsePlainText(path)
+		if err != nil {
+			m.result.Errors++
+			slog.Warn("mine-convo: parse text", "path", relPath, "error", err)
+			return nil, false
+		}
+		return exchanges, true
+	default:
+		return nil, false
+	}
+}
+
+// addExchanges inserts one file's exchanges as drawers, tallying per-file
+// counts for the progress callback alongside the run totals.
+func (m *convoMiner) addExchanges(relPath string, exchanges []exchange) {
+	fileAdded, fileSkipped, fileErrors := 0, 0, 0
+	for i, ex := range exchanges {
+		m.result.Processed++
+
+		room := detectRoomFromContent(ex.content, m.cfg.Rooms)
+
+		_, addErr := m.palace.AddDrawer(m.ctx, DrawerInput{
+			Wing:       m.cfg.Wing,
+			Room:       room,
+			Content:    ex.content,
+			SourceFile: relPath,
+			ChunkIndex: i,
+			AddedBy:    "miner:convo",
+			Importance: 4,
+		})
+		if addErr != nil {
+			if _, ok := errors.AsType[*DuplicateError](addErr); ok {
+				m.result.Skipped++
+				fileSkipped++
+			} else {
+				m.result.Errors++
+				fileErrors++
+				slog.Warn("mine-convo: add drawer", "file", relPath, "exchange", i, "error", addErr)
+			}
+			continue
+		}
+		m.result.Added++
+		fileAdded++
+	}
+
+	if m.cfg.Progress != nil {
+		m.cfg.Progress(relPath, fileAdded, fileSkipped, fileErrors)
+	}
 }
 
 // exchange represents a user-assistant exchange pair.

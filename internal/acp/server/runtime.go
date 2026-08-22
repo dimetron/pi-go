@@ -240,20 +240,13 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
-	// Providers that authenticate some other way — a local Ollama, an Azure
-	// deployment URL, gemini's ADC — are allowed through without a key.
-	if apiKey == "" && baseURL == "" && !info.Ollama &&
-		info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" {
-		return nil, fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, providerEnvVar(info.Provider))
+	if err := checkProviderCredentials(info, apiKey, baseURL); err != nil {
+		return nil, err
 	}
 
-	if info.Ollama {
-		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
-	}
-	if info.Ollama && apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
-		if err := provider.CheckOllama(baseURL); err != nil {
-			return nil, fmt.Errorf("ollama health check: %w", err)
-		}
+	baseURL, err = resolveOllamaBaseURL(info, apiKey, baseURL)
+	if err != nil {
+		return nil, err
 	}
 
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, &provider.LLMOptions{
@@ -270,6 +263,32 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
 	tokenTracker.SetContextWindowSize(sessionContextWindow(ctx, info, baseURL))
 	return guardrail.WrapModel(llm, tokenTracker), nil
+}
+
+// checkProviderCredentials rejects a provider that needs an API key and has
+// none. Providers that authenticate some other way — a local Ollama, an Azure
+// deployment URL, gemini's ADC — are allowed through without a key.
+func checkProviderCredentials(info provider.Info, apiKey, baseURL string) error {
+	if apiKey == "" && baseURL == "" && !info.Ollama &&
+		info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" {
+		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, providerEnvVar(info.Provider))
+	}
+	return nil
+}
+
+// resolveOllamaBaseURL settles an Ollama model's endpoint and health-checks a
+// local one. Non-Ollama providers keep the base URL they came with.
+func resolveOllamaBaseURL(info provider.Info, apiKey, baseURL string) (string, error) {
+	if !info.Ollama {
+		return baseURL, nil
+	}
+	baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+	if apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
+		if err := provider.CheckOllama(baseURL); err != nil {
+			return "", fmt.Errorf("ollama health check: %w", err)
+		}
+	}
+	return baseURL, nil
 }
 
 // resolveSessionProvider resolves the model to a provider, and settles on the

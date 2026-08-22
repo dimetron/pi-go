@@ -208,91 +208,13 @@ func (s *ServerV2) executeVoiceTool(ctx context.Context, vs *voiceSession, fc vo
 
 	switch fc.Name {
 	case voiceToolSendPrompt:
-		var args struct {
-			Prompt string `json:"prompt"`
-		}
-		if err := decodeVoiceArgs(fc.Args, &args); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		if err := bridge.SendPrompt(args.Prompt); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		sent := sanitizePromptText(args.Prompt)
-		return voiceToolResult{
-			Response: map[string]any{
-				"sent":   sent,
-				"status": "The prompt was typed into the pi session and submitted. It is working now; wait, then read the screen.",
-			},
-			Summary: "→ pi: " + sent,
-		}
-
+		return voiceSendPrompt(bridge, fc)
 	case voiceToolReadScreen:
-		var args struct {
-			Lines int `json:"lines"`
-		}
-		if err := decodeVoiceArgs(fc.Args, &args); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		n := args.Lines
-		if n <= 0 {
-			n = voiceScreenDefaultLines
-		}
-		if n > voiceScreenMaxLines {
-			n = voiceScreenMaxLines
-		}
-		screen := bridge.Screen(n)
-		if strings.TrimSpace(screen) == "" {
-			return voiceToolResult{
-				Response: map[string]any{"screen": "", "note": "pi's terminal has not drawn anything yet."},
-				Summary:  "read screen (empty)",
-			}
-		}
-		return voiceToolResult{
-			Response: map[string]any{"screen": screen, "running": bridge.Alive()},
-			Summary:  fmt.Sprintf("read screen (%d lines)", strings.Count(screen, "\n")+1),
-		}
-
+		return voiceReadScreen(bridge, fc)
 	case voiceToolWait:
-		var args struct {
-			Seconds int `json:"seconds"`
-		}
-		if err := decodeVoiceArgs(fc.Args, &args); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		secs := args.Seconds
-		if secs <= 0 {
-			secs = voiceWaitDefaultSeconds
-		}
-		if secs > voiceWaitMaxSeconds {
-			secs = voiceWaitMaxSeconds
-		}
-		idle := bridge.WaitForIdle(ctx, voiceWaitQuiet, time.Duration(secs)*time.Second)
-		if idle {
-			return voiceToolResult{
-				Response: map[string]any{"idle": true, "status": "The agent has stopped producing output. Read the screen to see what it did."},
-				Summary:  "waited — agent idle",
-			}
-		}
-		return voiceToolResult{
-			Response: map[string]any{"idle": false, "status": fmt.Sprintf("Still working after %ds. Tell the user it is still going, then wait again.", secs)},
-			Summary:  fmt.Sprintf("waited %ds — still working", secs),
-		}
-
+		return voiceWaitForAgent(ctx, bridge, fc)
 	case voiceToolSendKey:
-		var args struct {
-			Key string `json:"key"`
-		}
-		if err := decodeVoiceArgs(fc.Args, &args); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		if err := bridge.SendKey(args.Key); err != nil {
-			return voiceToolFailure(fc.Name, err)
-		}
-		return voiceToolResult{
-			Response: map[string]any{"sent": args.Key, "status": "Key sent. Read the screen to see what changed."},
-			Summary:  "key: " + args.Key,
-		}
-
+		return voiceSendKey(bridge, fc)
 	default:
 		// The model invented a name. Saying so is better than silence, which
 		// would leave the turn hanging.
@@ -300,6 +222,102 @@ func (s *ServerV2) executeVoiceTool(ctx context.Context, vs *voiceSession, fc vo
 			Response: map[string]any{"error": fmt.Sprintf("%q is not a tool this session exposes", fc.Name)},
 			Summary:  "unknown tool: " + fc.Name,
 		}
+	}
+}
+
+// voiceSendPrompt types a prompt into the pi session and submits it.
+func voiceSendPrompt(bridge *PtyBridge, fc voicegemini.FunctionCall) voiceToolResult {
+	var args struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := decodeVoiceArgs(fc.Args, &args); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	if err := bridge.SendPrompt(args.Prompt); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	sent := sanitizePromptText(args.Prompt)
+	return voiceToolResult{
+		Response: map[string]any{
+			"sent":   sent,
+			"status": "The prompt was typed into the pi session and submitted. It is working now; wait, then read the screen.",
+		},
+		Summary: "→ pi: " + sent,
+	}
+}
+
+// voiceReadScreen returns the tail of pi's terminal, clamped to the line budget
+// a spoken answer can carry.
+func voiceReadScreen(bridge *PtyBridge, fc voicegemini.FunctionCall) voiceToolResult {
+	var args struct {
+		Lines int `json:"lines"`
+	}
+	if err := decodeVoiceArgs(fc.Args, &args); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	n := args.Lines
+	if n <= 0 {
+		n = voiceScreenDefaultLines
+	}
+	if n > voiceScreenMaxLines {
+		n = voiceScreenMaxLines
+	}
+	screen := bridge.Screen(n)
+	if strings.TrimSpace(screen) == "" {
+		return voiceToolResult{
+			Response: map[string]any{"screen": "", "note": "pi's terminal has not drawn anything yet."},
+			Summary:  "read screen (empty)",
+		}
+	}
+	return voiceToolResult{
+		Response: map[string]any{"screen": screen, "running": bridge.Alive()},
+		Summary:  fmt.Sprintf("read screen (%d lines)", strings.Count(screen, "\n")+1),
+	}
+}
+
+// voiceWaitForAgent blocks until pi's terminal goes quiet or the requested
+// budget runs out, clamped so one call cannot hold the turn open indefinitely.
+func voiceWaitForAgent(ctx context.Context, bridge *PtyBridge, fc voicegemini.FunctionCall) voiceToolResult {
+	var args struct {
+		Seconds int `json:"seconds"`
+	}
+	if err := decodeVoiceArgs(fc.Args, &args); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	secs := args.Seconds
+	if secs <= 0 {
+		secs = voiceWaitDefaultSeconds
+	}
+	if secs > voiceWaitMaxSeconds {
+		secs = voiceWaitMaxSeconds
+	}
+	idle := bridge.WaitForIdle(ctx, voiceWaitQuiet, time.Duration(secs)*time.Second)
+	if idle {
+		return voiceToolResult{
+			Response: map[string]any{"idle": true, "status": "The agent has stopped producing output. Read the screen to see what it did."},
+			Summary:  "waited — agent idle",
+		}
+	}
+	return voiceToolResult{
+		Response: map[string]any{"idle": false, "status": fmt.Sprintf("Still working after %ds. Tell the user it is still going, then wait again.", secs)},
+		Summary:  fmt.Sprintf("waited %ds — still working", secs),
+	}
+}
+
+// voiceSendKey sends one key to pi's terminal.
+func voiceSendKey(bridge *PtyBridge, fc voicegemini.FunctionCall) voiceToolResult {
+	var args struct {
+		Key string `json:"key"`
+	}
+	if err := decodeVoiceArgs(fc.Args, &args); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	if err := bridge.SendKey(args.Key); err != nil {
+		return voiceToolFailure(fc.Name, err)
+	}
+	return voiceToolResult{
+		Response: map[string]any{"sent": args.Key, "status": "Key sent. Read the screen to see what changed."},
+		Summary:  "key: " + args.Key,
 	}
 }
 
