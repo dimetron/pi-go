@@ -171,7 +171,7 @@ button:disabled {
 /* The bar and the transcript share one offset so the panel always stacks
    above the buttons; change it here, not in either rule. */
 :root {
-    --voice-bar-bottom: 48px;
+    --voice-bar-bottom: 96px;
 }
 
 .voice-bar {
@@ -184,39 +184,48 @@ button:disabled {
     z-index: 10;
 }
 
-/* Talk | Mute | End as three pills. Each does one thing: Talk starts, End
-   stops, and Mute gates the mic without touching the session. */
+/* Talk | Mute | End grouped on a single rounded panel. The panel is the
+   circle/rounded capsule the buttons sit inside; each button only carries the
+   icon, so the group reads as one small control. */
 .voice-controls {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    border: 1px solid #3a3a3a;
+    background: #161616;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
 
 .voice-button {
     font: inherit;
-    font-size: 14px;
-    padding: 8px 14px;
+    font-size: 12px;
+    padding: 5px 9px;
     border-radius: 999px;
-    border: 1px solid #3a3a3a;
-    background: #1e1e1e;
+    border: none;
+    background: transparent;
     color: #e6e6e6;
     cursor: pointer;
+    white-space: nowrap;
+}
+
+.voice-button + .voice-button {
+    border-left: 1px solid #3a3a3a;
 }
 
 .voice-button:hover {
-    border-color: #5a5a5a;
+    background: #2a2a2a;
 }
 
 .voice-button:disabled {
     opacity: 0.45;
     cursor: not-allowed;
     box-shadow: none;
-    border-color: #3a3a3a;
 }
 
 .voice-button.active {
     background: #7d2020;
-    border-color: #a83232;
     animation: pulse 1.6s ease-in-out infinite;
 }
 
@@ -229,7 +238,6 @@ button:disabled {
 
 .voice-button.muted {
     background: #3d2e0a;
-    border-color: #d19a2a;
     color: #f3d58a;
 }
 
