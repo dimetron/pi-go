@@ -222,8 +222,12 @@ func grepDir(sb *Sandbox, re *regexp.Regexp, input GrepInput, searchPath string,
 		return GrepOutput{}, resolveErr
 	}
 
+	// fs.FS walk roots are always slash-separated, whatever the host OS, but
+	// Resolve hands back an OS path. Walking "sub\\dir" finds nothing on Windows
+	// and the error is discarded, so grep would quietly return no matches for
+	// every subdirectory rather than failing.
 	c := &grepDirCollector{sb: sb, re: re, glob: input.Glob, patterns: patterns}
-	_ = fs.WalkDir(fsys, rel, c.walk)
+	_ = fs.WalkDir(fsys, filepath.ToSlash(rel), c.walk)
 
 	return GrepOutput{
 		Matches:      c.matches,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestMemoryRecent_NoDB(t *testing.T) {
@@ -160,7 +161,7 @@ func TestMemoryRecent_TypeFilter(t *testing.T) {
 func TestNewMemoryRecentCmd_NoArgExecute(t *testing.T) {
 	resetGlobalFlags(t)
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 
 	origCwd, _ := os.Getwd()
 	workDir := filepath.Join(tmp, "work")
@@ -180,7 +181,7 @@ func TestNewMemoryRecentCmd_NoArgExecute(t *testing.T) {
 func TestNewMemoryRecentCmd_WithArgExecute(t *testing.T) {
 	resetGlobalFlags(t)
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 
 	cmd := newMemoryRecentCmd()
 	cmd.SetArgs([]string{tmp})
@@ -210,7 +211,7 @@ func TestNewMemoryRecentCmd_Flags(t *testing.T) {
 func TestRunMemoryRecent_CurrentDir(t *testing.T) {
 	// Use current directory with no DB.
 	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
+	testenv.SetHome(t, tmpDir)
 
 	// Create a memory DB in project-specific location.
 	memDir := filepath.Join(tmpDir, "proj", ".pi-go", "memory")

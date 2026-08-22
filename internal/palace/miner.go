@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	gopath "path"
 	"path/filepath"
 	"strings"
 
@@ -200,13 +201,18 @@ func detectRoom(filePath string, rooms []RoomDef) string {
 	// Check glob patterns.
 	for _, room := range rooms {
 		for _, pattern := range room.Patterns {
-			matched, err := filepath.Match(pattern, rel)
+			// rel is slash-normalized above, so match with slash semantics.
+			// filepath.Match takes "\" as the separator on Windows, which lets a
+			// "*" run straight across the "/" boundaries and reach nested paths
+			// the pattern never meant to cover. filepath.Dir would likewise hand
+			// back a backslash path, producing a mixed "a\b/" to match against.
+			matched, err := gopath.Match(pattern, rel)
 			if err == nil && matched {
 				return room.Name
 			}
 			// Also try matching against just the directory prefix.
-			dir := filepath.Dir(rel)
-			if matched, err := filepath.Match(pattern, dir+"/"); err == nil && matched {
+			dir := gopath.Dir(rel)
+			if matched, err := gopath.Match(pattern, dir+"/"); err == nil && matched {
 				return room.Name
 			}
 		}
@@ -270,17 +276,23 @@ func loadGitignore(dir string) []string {
 // isGitignored checks whether a relative path matches any of the gitignore patterns.
 // This is a simplified check — not a full gitignore implementation.
 func isGitignored(relPath string, patterns []string) bool {
+	// .gitignore patterns are always slash-separated, so compare against a
+	// slash-separated path. Splitting on filepath.Separator instead left every
+	// pattern unmatched on Windows, where a backslash is also filepath.Match's
+	// escape character.
+	rel := filepath.ToSlash(relPath)
 	for _, p := range patterns {
 		p = strings.TrimSuffix(p, "/")
 		// Check if any path component matches the pattern.
-		parts := strings.Split(relPath, string(filepath.Separator))
-		for _, part := range parts {
-			if matched, _ := filepath.Match(p, part); matched {
+		for _, part := range strings.Split(rel, "/") {
+			if matched, _ := gopath.Match(p, part); matched {
 				return true
 			}
 		}
-		// Also check the full relative path.
-		if matched, _ := filepath.Match(p, relPath); matched {
+		// Also check the full relative path, again with slash semantics: under
+		// filepath.Match on Windows a pattern like "generated/*.go" would also
+		// match "generated/deep/file.go", because "/" is not a separator there.
+		if matched, _ := gopath.Match(p, rel); matched {
 			return true
 		}
 	}

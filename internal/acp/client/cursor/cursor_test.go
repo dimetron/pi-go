@@ -10,6 +10,7 @@ import (
 	"time"
 
 	shared "github.com/dimetron/pi-go/internal/acp"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestRunnerStartRejectsEmptyPrompt(t *testing.T) {
@@ -122,8 +123,10 @@ func TestDefaultBinaryPathsPrefersAgent(t *testing.T) {
 	if !slices.Contains(DefaultBinaryPaths, "cursor-agent") {
 		t.Errorf("DefaultBinaryPaths should keep 'cursor-agent' as legacy fallback; got %v", DefaultBinaryPaths)
 	}
-	// The Cursor installer's canonical path is $HOME/.local/bin/agent.
-	homeAgent := filepath.Join(".local", "bin", "agent")
+	// The Cursor installer's canonical path is $HOME/.local/bin/agent. This is
+	// a fixed entry in a literal list, not a path built for the running OS, so
+	// it is spelled with a forward slash on every platform.
+	const homeAgent = ".local/bin/agent"
 	if !slices.Contains(DefaultBinaryPaths, homeAgent) {
 		t.Errorf("DefaultBinaryPaths should include %q (Cursor install location); got %v", homeAgent, DefaultBinaryPaths)
 	}
@@ -143,8 +146,10 @@ exit 0
 
 	runner := Runner{}
 	req := RunRequest{
-		Prompt:  "test",
-		Command: []string{"/bin/bash", scriptPath},
+		Prompt: "test",
+		// Invoke the shell explicitly rather than relying on the script's
+		// shebang, which Windows does not honor.
+		Command: []string{testenv.RequireShell(t), filepath.ToSlash(scriptPath)},
 	}
 	session, err := runner.Start(context.Background(), req)
 	if err != nil {
@@ -408,12 +413,18 @@ func TestFindBinaryEdgeCases(t *testing.T) {
 	})
 
 	t.Run("absolute path exists", func(t *testing.T) {
-		got, err := findBinary([]string{"/bin/ls"})
-		if err != nil {
-			t.Fatalf("findBinary(/bin/ls) error: %v", err)
+		// A real file under t.TempDir() stands in for a hardcoded /bin/ls, which
+		// does not exist on Windows.
+		abs := filepath.Join(t.TempDir(), "agent")
+		if err := os.WriteFile(abs, nil, 0o700); err != nil {
+			t.Fatal(err)
 		}
-		if got != "/bin/ls" {
-			t.Errorf("findBinary(/bin/ls) = %q, want /bin/ls", got)
+		got, err := findBinary([]string{abs})
+		if err != nil {
+			t.Fatalf("findBinary(%s) error: %v", abs, err)
+		}
+		if got != abs {
+			t.Errorf("findBinary(%s) = %q, want %s", abs, got, abs)
 		}
 	})
 

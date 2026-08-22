@@ -61,6 +61,10 @@ func newRunTestAgent(t *testing.T, llm llmmodel.LLM) (*agent.Agent, string) {
 	if err != nil {
 		t.Fatalf("NewSandbox: %v", err)
 	}
+	// The sandbox keeps an os.Root open on that directory. Windows will not
+	// remove a directory anything still holds a handle to, so leaving it open
+	// fails t.TempDir's own cleanup.
+	t.Cleanup(func() { _ = sb.Close() })
 	coreTools, err := tools.CoreTools(sb)
 	if err != nil {
 		t.Fatalf("CoreTools: %v", err)

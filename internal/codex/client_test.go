@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // fakeServer is an in-process stand-in for `codex app-server`: it reads JSONL
@@ -413,10 +415,5 @@ func TestFindBinary_AbsolutePath(t *testing.T) {
 // returns its path.
 func writeFakeBinary(t *testing.T, name string) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
-	return path
+	return testenv.FakeBinary(t, t.TempDir(), name)
 }

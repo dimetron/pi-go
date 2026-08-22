@@ -21,6 +21,7 @@ import (
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // These tests pin the branch structure that the complexity refactor extracted
@@ -788,7 +789,7 @@ func TestResolvePingCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			testenv.SetHome(t, t.TempDir())
 			t.Setenv("OLLAMA_HOST", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
@@ -868,7 +869,7 @@ func TestResolvePingModelInfo(t *testing.T) {
 	origURL, origModel := flagURL, flagModel
 	t.Cleanup(func() { flagURL, flagModel = origURL, origModel })
 	flagURL, flagModel = "", ""
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 
 	t.Run("a configured provider wins over inference", func(t *testing.T) {
 		cfg := config.Config{Roles: map[string]config.RoleConfig{
@@ -1374,7 +1375,7 @@ func TestPrintMineFileList(t *testing.T) {
 }
 
 func TestMinePalaceConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	cfg := minePalaceConfig("/tmp/db.sqlite", "/tmp/model")
 	if cfg.DBPath != "/tmp/db.sqlite" || cfg.ModelPath != "/tmp/model" {
 		t.Errorf("paths not carried through: %+v", cfg)

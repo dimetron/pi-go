@@ -334,7 +334,7 @@ func TestSupervisor_IdleTimeoutClampedToTimeout(t *testing.T) {
 
 	start := time.Now()
 	out, err := sup.Run(t.Context(), runRequest{
-		dir:         t.TempDir(),
+		dir:         bashWorkDir(t),
 		command:     "sleep 30",
 		timeout:     200 * time.Millisecond,
 		idleTimeout: time.Hour, // longer than the timeout; must be clamped
@@ -564,7 +564,7 @@ func TestBashWait_EndsWhenTheChildExits(t *testing.T) {
 	sup.heartbeat = 20 * time.Millisecond
 
 	out, err := sup.Run(t.Context(), runRequest{
-		dir:     t.TempDir(),
+		dir:     bashWorkDir(t),
 		command: `sleep 2 > out.log 2>&1`,
 		timeout: 300 * time.Millisecond,
 	})
@@ -608,7 +608,7 @@ func TestBashWait_LingeringGrandchildCostsTheExitStatus(t *testing.T) {
 	sup.heartbeat = 20 * time.Millisecond
 
 	out, err := sup.Run(t.Context(), runRequest{
-		dir:     t.TempDir(),
+		dir:     bashWorkDir(t),
 		command: `sleep 30 & echo started > out.log 2>&1; exit 0`,
 		timeout: 300 * time.Millisecond,
 	})

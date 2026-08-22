@@ -10,6 +10,24 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// recordEnv names the file the test binary writes the URL it was handed to
+// when it is re-executed as a stand-in browser. See TestMain.
+const recordEnv = "PI_TEST_BROWSER_RECORD"
+
+// TestMain doubles as the fake browser. Open resolves handlers through
+// exec.LookPath and runs them, so the stand-in has to be a real executable:
+// a #!/bin/sh script is neither executable nor even findable on Windows, where
+// LookPath only accepts the PATHEXT suffixes. Re-executing the test binary
+// works everywhere.
+func TestMain(m *testing.M) {
+	if record := os.Getenv(recordEnv); record != "" {
+		// Acting as the browser: the URL is the last argument we were given.
+		_ = os.WriteFile(record, []byte(os.Args[len(os.Args)-1]), 0o600)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func TestHandlers(t *testing.T) {
 	t.Parallel()
 
@@ -112,16 +130,9 @@ func TestOpen_NoHandler(t *testing.T) {
 // The stand-in handler is a script that records its arguments, which also pins
 // that Open passes the URL through unmangled.
 func TestOpen_UsesBrowserEnv(t *testing.T) {
-	dir := t.TempDir()
-	record := filepath.Join(dir, "opened.txt")
-	handler := filepath.Join(dir, "fake-browser")
-
-	script := "#!/bin/sh\nprintf '%s' \"$1\" > " + record + "\n"
-	if err := os.WriteFile(handler, []byte(script), 0o700); err != nil {
-		t.Fatalf("writing fake browser: %v", err)
-	}
-
-	t.Setenv("BROWSER", handler)
+	record := filepath.Join(t.TempDir(), "opened.txt")
+	t.Setenv(recordEnv, record)
+	t.Setenv("BROWSER", os.Args[0])
 
 	const url = "https://auth.openai.com/codex/device"
 	if err := Open(url); err != nil {
@@ -147,16 +158,12 @@ func TestOpen_UsesBrowserEnv(t *testing.T) {
 // An entry that is not on PATH must be skipped rather than aborting the whole
 // search — that fallthrough is what makes the per-platform handler list useful.
 func TestOpen_SkipsMissingHandlers(t *testing.T) {
-	dir := t.TempDir()
-	handler := filepath.Join(dir, "fallback-browser")
-	if err := os.WriteFile(handler, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatalf("writing fake browser: %v", err)
-	}
+	t.Setenv(recordEnv, filepath.Join(t.TempDir(), "opened.txt"))
 
 	// An empty PATH means every platform default fails LookPath; only the
 	// absolute $BROWSER path can resolve.
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("BROWSER", handler)
+	t.Setenv("BROWSER", os.Args[0])
 
 	if err := Open("https://example.invalid/"); err != nil {
 		t.Errorf("Open() = %v, want nil; the reachable handler was skipped", err)

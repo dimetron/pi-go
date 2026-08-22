@@ -168,7 +168,11 @@ var supportedExtensions = map[string]bool{
 // isGitignored returns true if the path matches any gitignore pattern.
 // This is a simplified check for common patterns.
 func isGitignored(relPath string, patterns map[string]bool) bool {
-	parts := strings.Split(relPath, string(filepath.Separator))
+	// Callers pass filepath.Rel output, which is backslash-separated on
+	// Windows, while .gitignore patterns (and the "*/" prefix form below) are
+	// always slash-form. Normalise before splitting so a directory pattern
+	// matches the same path components on every OS.
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
 	for _, part := range parts {
 		if patterns[part] {
 			return true

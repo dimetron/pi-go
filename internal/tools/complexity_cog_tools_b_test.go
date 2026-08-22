@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -575,6 +576,9 @@ func TestCogBLoadGitignoreGolden(t *testing.T) {
 }
 
 func TestCogBLoadGitignoreUnreadableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod(0o000) does not make a file unreadable on Windows")
+	}
 	// A .gitignore that cannot be read contributes no patterns and does not
 	// abort the walk: the sibling directory's file is still collected.
 	dir := cogBWriteTree(t, map[string]string{

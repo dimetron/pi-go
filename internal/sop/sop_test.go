@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestLoadPDD_EmbeddedDefault(t *testing.T) {
@@ -60,7 +62,7 @@ func TestLoadPDD_GlobalOverrideFromHome(t *testing.T) {
 	// Point HOME at a temp dir so os.UserHomeDir resolves there, then place a
 	// global override and confirm it is loaded when no project override exists.
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	globalSOPDir := filepath.Join(home, ".pi-go", "sops")
 	if err := os.MkdirAll(globalSOPDir, 0o755); err != nil {

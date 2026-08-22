@@ -9,6 +9,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // mockNamedTool is a minimal adktool.Tool used to drive afterTool.
@@ -157,7 +158,7 @@ func TestDeferredMemoryDBPath(t *testing.T) {
 		t.Errorf("explicit DBPath = %q, want /x/y.db", got)
 	}
 	// Without an explicit path it derives from HOME.
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	if got := deferredMemoryDBPath(config.MemoryConfig{}); got == "" {
 		t.Error("expected non-empty derived DB path")
 	}

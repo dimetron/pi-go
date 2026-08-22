@@ -17,6 +17,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // fakeLLM is the seam that makes an embed testable without a network: it
@@ -82,7 +83,7 @@ func (f *fakeLLM) systemPrompt() string {
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home) // windows
 	return home
 }

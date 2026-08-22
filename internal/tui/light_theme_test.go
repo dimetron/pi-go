@@ -8,6 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // Before this, every renderer test passed darkPalette, so a hardcoded ANSI
@@ -527,7 +529,7 @@ func TestNewModelBuildsTheRendererFromTheConfiguredTheme(t *testing.T) {
 	t.Run("no saved history", func(t *testing.T) {
 		// A home directory with no history file: loadHistory returns nil and
 		// the model must still start with a usable empty slice.
-		t.Setenv("HOME", t.TempDir())
+		testenv.SetHome(t, t.TempDir())
 		m := newModel(ctx, cancel, Config{WorkDir: t.TempDir()})
 		if m.inputModel.History == nil {
 			t.Error("history should be an empty slice, not nil")

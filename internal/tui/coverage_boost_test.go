@@ -14,6 +14,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 // -----------------------------------------------------------------------------
@@ -590,7 +591,7 @@ func TestFormatContextUsage_NoLimit(t *testing.T) {
 
 func TestHistoryDir_NoHome(t *testing.T) {
 	// Override HOME for this test.
-	t.Setenv("HOME", "")
+	testenv.SetHome(t, "")
 	t.Setenv("USERPROFILE", "") // windows
 	// On darwin/linux UserHomeDir returns error when HOME is empty.
 	dir := historyDir()
@@ -600,7 +601,7 @@ func TestHistoryDir_NoHome(t *testing.T) {
 
 func TestHistoryPathJSON_WithHome(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	p := historyPathJSON()
 	if p == "" {
 		t.Error("expected non-empty path")
@@ -612,7 +613,7 @@ func TestHistoryPathJSON_WithHome(t *testing.T) {
 
 func TestHistoryPathPlain_WithHome(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	p := historyPathPlain()
 	if p == "" {
 		t.Error("expected non-empty path")
@@ -621,7 +622,7 @@ func TestHistoryPathPlain_WithHome(t *testing.T) {
 
 func TestAppendHistory_WritesFile(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	appendHistory(HistoryEntry{Text: "hello"})
 	// File should exist.
 	p := filepath.Join(tmp, ".pi-go", "history.jsonl")
@@ -636,7 +637,7 @@ func TestAppendHistory_WritesFile(t *testing.T) {
 
 func TestLoadHistory_MigratePlainToJSON(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	piDir := filepath.Join(tmp, ".pi-go")
 	_ = os.MkdirAll(piDir, 0o700)
 	// Write legacy plain history.
@@ -654,7 +655,7 @@ func TestLoadHistory_MigratePlainToJSON(t *testing.T) {
 
 func TestLoadHistory_NoHistory(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	entries := loadHistory()
 	if entries != nil {
 		t.Errorf("expected nil for no history, got %v", entries)
@@ -685,7 +686,7 @@ func TestNewThemeManagerFromJSON_Invalid(t *testing.T) {
 
 func TestSaveThemeToConfig_WritesConfig(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	saveThemeToConfig("tokyo-night")
 	data, err := os.ReadFile(filepath.Join(tmp, ".pi-go", "config.json"))
 	if err != nil {
@@ -698,7 +699,7 @@ func TestSaveThemeToConfig_WritesConfig(t *testing.T) {
 
 func TestSaveThemeToConfig_UpdatesExisting(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	testenv.SetHome(t, tmp)
 	configDir := filepath.Join(tmp, ".pi-go")
 	_ = os.MkdirAll(configDir, 0o755)
 	// Pre-write config.

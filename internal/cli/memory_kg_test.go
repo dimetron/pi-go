@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -178,8 +179,14 @@ func TestNewMemoryKGCmd_Subcommands(t *testing.T) {
 }
 
 func TestOpenPalaceDB_InvalidPath(t *testing.T) {
-	// Non-existent directory with no parent creation should fail.
-	_, err := openPalaceDB("/nonexistent/dir/that/does/not/exist/palace.db")
+	// A database below a regular file cannot be created on any OS. A literal
+	// "/nonexistent/..." only fails on Unix: on Windows the leading slash is
+	// drive-relative and the parent directories get created on C:\.
+	notADir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := openPalaceDB(filepath.Join(notADir, "palace.db"))
 	if err == nil {
 		t.Error("expected error for invalid path")
 	}
