@@ -1136,3 +1136,31 @@ func TestLLMSCacheEvictToleratesUnremovableEntries(t *testing.T) {
 		t.Fatalf("%d entries after eviction in a read-only dir, want all %d untouched", n, llmsCacheMaxEntries+1)
 	}
 }
+
+func TestLLMSCacheWriteFailedWriteLeavesNoTempFile(t *testing.T) {
+	// If writing the temp file fails, it is removed and no entry appears.
+	// The seam hands cacheWrite a read-only handle so the write errors.
+	prev := llmsCacheCreateTemp
+	t.Cleanup(func() { llmsCacheCreateTemp = prev })
+	llmsCacheCreateTemp = func(dir, pattern string) (*os.File, error) {
+		f, err := os.CreateTemp(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		name := f.Name()
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+		return os.Open(name) // O_RDONLY: Write fails, Close succeeds
+	}
+	dir := filepath.Join(t.TempDir(), "llms-cache")
+	ts := NewLLMSToolsetWithCache(nil, dir)
+	u, _ := url.Parse("https://adk.dev/page.md")
+	ts.cacheWrite(&llmsCacheEntry{URL: u.String(), Body: "x", FetchedAt: time.Now().Unix()})
+	if n := countLLMSCacheFiles(t, dir); n != 0 {
+		t.Fatalf("%d files left after a failed temp-file write, want 0 (no temp file, no entry)", n)
+	}
+	if ts.cacheRead(u) != nil {
+		t.Fatal("cacheRead returned an entry after a failed write")
+	}
+}
