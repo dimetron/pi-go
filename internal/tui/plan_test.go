@@ -452,6 +452,69 @@ func TestCopyDir_ReturnsErrorOnMissingSrc(t *testing.T) {
 	}
 }
 
+// TestCopyDir_OverwriteReplacesExistingFiles covers the overwrite=true path
+// used when the merge fails: stale files in dst must be replaced by the
+// source's copy.
+func TestCopyDir_OverwriteReplacesExistingFiles(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "PROMPT.md"), []byte("fresh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a stale dst with different content.
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "PROMPT.md"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst, true); err != nil {
+		t.Fatalf("copyDir overwrite: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "PROMPT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh\n" {
+		t.Errorf("overwrite did not replace stale content: got %q, want %q", got, "fresh\n")
+	}
+}
+
+// TestCopyDir_ReturnsErrorOnMkdirAllFailure covers the dst-creation error path
+// in copyDir: a dst whose parent cannot be created must surface an error.
+func TestCopyDir_ReturnsErrorOnMkdirAllFailure(t *testing.T) {
+	// Use a path whose parent is a file, so MkdirAll fails.
+	parent := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.md"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(parent, "sub")
+	if err := copyDir(src, dst, false); err == nil {
+		t.Fatal("copyDir should error when dst cannot be created")
+	}
+}
+
+// TestCopyOverwrite_ReturnsErrorOnMissingSrc ensures copyOverwrite surfaces an
+// error when the source directory does not exist.
+func TestCopyOverwrite_ReturnsErrorOnMissingSrc(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "missing-src")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyOverwrite(src, dst); err == nil {
+		t.Fatal("copyOverwrite should error when the source directory does not exist")
+	}
+}
+
 // TestFinishPlanWorktree_MergeFailureStillCopiesSpec covers the defensive path
 // in finishPlanWorktree where MergeBack fails (here: an untracked collision in
 // the invoking checkout makes the merge abort). Even then the finished spec
