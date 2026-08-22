@@ -336,6 +336,38 @@ func TestResolveWithBaseURLKeepsExplicitOllamaPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveOpenRouter(t *testing.T) {
+	info, err := Resolve("openrouter/google/gemini-3.7-flash")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "openrouter" || info.Model != "google/gemini-3.7-flash" {
+		t.Fatalf("info = %+v, want openrouter/google/gemini-3.7-flash", info)
+	}
+	if info.Ollama || info.Custom {
+		t.Fatalf("info = %+v, expected Ollama and Custom to be false", info)
+	}
+
+	info, err = Resolve("openrouter/auto")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "openrouter" || info.Model != "auto" {
+		t.Fatalf("info = %+v, want openrouter/auto", info)
+	}
+
+	info, err = ResolveWithBaseURL("openrouter/auto", "https://custom.example")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "openrouter" || info.Model != "auto" {
+		t.Fatalf("info = %+v, want provider openrouter with model auto", info)
+	}
+	if info.Custom {
+		t.Fatalf("info = %+v, expected Custom to be false for openrouter", info)
+	}
+}
+
 func TestResolveKnownProviders(t *testing.T) {
 	tests := []struct {
 		model    string

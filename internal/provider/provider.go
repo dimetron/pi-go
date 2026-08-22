@@ -305,6 +305,9 @@ func ResolveWithBaseURL(modelName, baseURL string) (Info, error) {
 		if strings.HasPrefix(lower, "ollama/") || strings.HasPrefix(lower, "azure/") {
 			return Resolve(modelName)
 		}
+		if strings.HasPrefix(lower, "openrouter/") {
+			return Resolve(modelName)
+		}
 		if strings.HasPrefix(lower, "openai/") {
 			modelName = modelName[len("openai/"):]
 			return Info{Provider: "openai", Model: modelName, Custom: true}, nil
@@ -345,6 +348,12 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "opencode", Model: modelName[len("opencode/"):]}, nil
 	}
 
+	// Detect openrouter/ prefix → OpenRouter provider.
+	// The prefix is stripped; the remainder is the bare model ID.
+	if strings.HasPrefix(strings.ToLower(modelName), "openrouter/") {
+		return Info{Provider: "openrouter", Model: modelName[len("openrouter/"):]}, nil
+	}
+
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
 	if isOllamaCloudModel(modelName) {
@@ -369,7 +378,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -479,6 +488,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "mistral":
 		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
+	case "openrouter":
+		return NewOpenRouter(ctx, info.Model, apiKey, baseURL, opts)
 	case "xai":
 		// xAI server-side tools, including x_search, are enabled for the
 		// xAI provider by default. PI_NO_XAI_TOOLS remains the kill switch.

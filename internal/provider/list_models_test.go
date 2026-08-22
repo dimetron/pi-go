@@ -23,6 +23,7 @@ func TestProviderDefaultBaseURL(t *testing.T) {
 		// carries: listBearerModels appends it, and a versioned value here
 		// would produce /v1/v1/models.
 		{"xai", "https://api.x.ai"},
+		{"openrouter", "https://openrouter.ai/api/v1"},
 		{"unknown", ""},
 	}
 	for _, tt := range tests {
@@ -129,6 +130,40 @@ func TestListMistralModels(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].ID != "mistral-large" {
 		t.Errorf("models = %+v", models)
+	}
+}
+
+func TestListOpenRouterModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer orkey" {
+			t.Errorf("missing bearer token, got %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "google/gemini-3.7-flash", "owned_by": "openrouter"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	models, err := listOpenRouterModels(context.Background(), ListModelsOptions{
+		APIKey:  "orkey",
+		BaseURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("listOpenRouterModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	if models[0].ID != "google/gemini-3.7-flash" {
+		t.Errorf("models[0].ID = %q, want google/gemini-3.7-flash", models[0].ID)
+	}
+	if models[0].OwnedBy != "openrouter" {
+		t.Errorf("models[0].OwnedBy = %q, want openrouter", models[0].OwnedBy)
 	}
 }
 
