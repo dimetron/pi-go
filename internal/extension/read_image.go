@@ -1,14 +1,12 @@
 package extension
 
 import (
-	"fmt"
-	"os"
-
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/dimetron/pi-go/internal/notice"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -63,7 +61,7 @@ func readImageParts(sb *tools.Sandbox, parts []*genai.Part) []*genai.Part {
 		}
 		data, err := sb.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: read_image callback could not read %q: %v\n", path, err)
+			notice.Notifyf("warning: read_image callback could not read %q: %v", path, err)
 			continue
 		}
 		out = append(out, genai.NewPartFromBytes(data, detectImageMIMEType(data, path)))

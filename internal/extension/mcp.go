@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +21,8 @@ import (
 
 	piauth "github.com/dimetron/pi-go/internal/auth" // SDK auth pkg is imported above
 	"github.com/dimetron/pi-go/internal/browser"
+	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 var mcpConnectTimeout = 30 * time.Second
@@ -48,9 +50,20 @@ type MCPServerConfig struct {
 func BuildMCPToolsets(servers []MCPServerConfig) ([]tool.Toolset, error) {
 	var toolsets []tool.Toolset
 	for _, srv := range servers {
+		// An llms.txt index is a documentation file, not an MCP endpoint: it
+		// answers the "initialize" POST with 405 and can never yield tools.
+		// config.LoadFrom already reroutes these to the fetch_docs sources,
+		// but server lists are also assembled by hand (evals, embedded
+		// agents), so refuse to dial one here rather than emit a 405 warning
+		// on every startup.
+		if srv.URL != "" && config.IsLLMSDocsURL(srv.URL) {
+			notice.Notifyf("MCP server %q points at an llms.txt index, not an MCP endpoint — "+
+				"configure it under \"llms\": {\"sources\": [...]} and read it with the fetch_docs tool.", srv.Name)
+			continue
+		}
 		ts, err := buildMCPToolset(srv)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q skipped: %v\n", srv.Name, err)
+			notice.Notifyf("warning: MCP server %q skipped: %v", srv.Name, err)
 			continue
 		}
 		toolsets = append(toolsets, ts)
@@ -122,8 +135,14 @@ func (t *connTrackingTransport) closeConn() {
 type resilientToolset struct {
 	inner     tool.Toolset
 	name      string
+	srv       MCPServerConfig
 	transport *connTrackingTransport
 	timeout   time.Duration
+
+	// reconnect builds a second connection for the OAuth retry. It defaults
+	// to newMCPToolset; tests replace it so the retry path can be exercised
+	// without an authorization server to talk to.
+	reconnect func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error)
 
 	once   sync.Once
 	tools  []tool.Tool
@@ -134,56 +153,152 @@ func (r *resilientToolset) Name() string { return r.name }
 
 func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	r.once.Do(func() {
-		type result struct {
-			tools []tool.Tool
-			err   error
+		tools, err := r.listTools(ctx, r.inner, r.transport, r.timeout)
+		// A remote server answering 401/403 is not broken, it is
+		// unauthenticated — the one recoverable failure here. Re-authorize
+		// and retry once before writing the server off.
+		if err != nil && r.canReauthorize(err) {
+			tools, err = r.reauthorize(ctx)
 		}
-		ch := make(chan result, 1)
-		// Use a separate cancel channel so we can time out the inner
-		// Tools() call without wrapping ctx (which would lose the
-		// ReadonlyContext interface). The inner goroutine respects the
-		// original ctx; we simply abandon it on timeout and mark the
-		// toolset as failed.
-		timeout := r.timeout
-		if timeout == 0 {
-			timeout = mcpConnectTimeout
-		}
-		timeoutCh := time.After(timeout)
-		go func() {
-			tools, err := r.inner.Tools(ctx)
-			ch <- result{tools, err}
-		}()
-
-		select {
-		case res := <-ch:
-			if res.err != nil {
-				fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q unavailable: %v\n", r.name, res.err)
-				r.failed = true
-				return
-			}
-			r.tools = r.deduplicateTools(res.tools)
-		case <-timeoutCh:
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, timeout)
+		if err != nil {
+			notice.Notifyf("warning: MCP server %q unavailable: %v", r.name, err)
 			r.failed = true
-			// Close the underlying MCP connection to kill any hung
-			// subprocess and free the blocked goroutine.
-			if r.transport != nil {
-				r.transport.closeConn()
-			}
-			// Drain the result in the background so the inner goroutine
-			// can exit after the connection is closed.
-			go func() {
-				select {
-				case <-ch:
-				case <-time.After(2 * time.Second):
-				}
-			}()
+			return
 		}
+		r.tools = r.deduplicateTools(tools)
 	})
 	if r.failed {
 		return nil, nil
 	}
 	return r.tools, nil
+}
+
+// listTools runs one Tools() attempt under a timeout, so a server that accepts
+// the connection but never answers "initialize" cannot stall the turn.
+//
+// The timeout is a separate timer rather than a derived context because the
+// inner toolset needs the caller's agent.ReadonlyContext, and wrapping it in
+// context.WithTimeout would erase that interface. The inner goroutine still
+// honours the original ctx; on timeout we abandon it, close the connection
+// underneath it so it can unblock, and drain it in the background.
+func (r *resilientToolset) listTools(
+	ctx agent.ReadonlyContext,
+	inner tool.Toolset,
+	transport *connTrackingTransport,
+	timeout time.Duration,
+) ([]tool.Tool, error) {
+	type result struct {
+		tools []tool.Tool
+		err   error
+	}
+	if timeout == 0 {
+		timeout = mcpConnectTimeout
+	}
+	ch := make(chan result, 1)
+	timeoutCh := time.After(timeout)
+	go func() {
+		tools, err := inner.Tools(ctx)
+		ch <- result{tools, err}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.tools, res.err
+	case <-timeoutCh:
+		// Close the underlying MCP connection to kill any hung subprocess
+		// and free the blocked goroutine.
+		if transport != nil {
+			transport.closeConn()
+		}
+		go func() {
+			select {
+			case <-ch:
+			case <-time.After(2 * time.Second):
+			}
+		}()
+		return nil, fmt.Errorf("timed out after %v, skipping", timeout)
+	}
+}
+
+// canReauthorize reports whether err is worth answering with a fresh OAuth
+// login. Only remote servers qualify — a stdio subprocess has no bearer token
+// to renew — and only genuine authorization failures, so a 404 or a DNS error
+// never opens a browser window.
+func (r *resilientToolset) canReauthorize(err error) bool {
+	return r.srv.URL != "" && isMCPAuthError(err)
+}
+
+// reauthorize answers a 401/403 by running the OAuth authorization-code flow
+// and retrying the tool listing once.
+//
+// Two cases land here and both need the same treatment. A server configured
+// without OAuth has no handler at all, so the SDK cannot recover on its own:
+// it only re-authorizes when a handler is installed, and otherwise returns the
+// 401 verbatim — which is what produced the bare "Unauthorized" warning. A
+// server configured with OAuth may be replaying a cached token the provider
+// has since revoked; the SDK would re-run the flow, but only after presenting
+// those dead credentials again. Discarding the cached token first makes this a
+// real re-login rather than a replay.
+//
+// The retry runs under mcpOAuthConnectTimeout because it contains a browser
+// round-trip — open the URL, wait for approval, wait for the redirect. The
+// normal 30s connect budget would abort mid-approval.
+func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
+	notice.Notifyf("MCP server %q rejected the connection as unauthorized — re-running OAuth login.", r.name)
+
+	// Drop cached credentials first so the flow re-authorizes instead of
+	// replaying the token that was just refused. A cache that cannot be
+	// cleared is not fatal: the flow still runs, it may just reuse the token.
+	if err := removeMCPOAuthToken(r.srv.Name, r.srv.URL); err != nil {
+		notice.Notifyf("warning: could not clear cached OAuth token for MCP server %q: %v", r.name, err)
+	}
+
+	srv := r.srv
+	srv.OAuth = true
+	connect := r.reconnect
+	if connect == nil {
+		connect = newMCPToolset
+	}
+	inner, transport, err := connect(srv)
+	if err != nil {
+		return nil, fmt.Errorf("re-authorizing: %w", err)
+	}
+
+	tools, err := r.listTools(ctx, inner, transport, mcpOAuthConnectTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("after re-authorizing: %w", err)
+	}
+	// Adopt the authorized connection so later callers — and the timeout path
+	// that closes a hung transport — act on the live one, not the connection
+	// it replaced.
+	r.inner, r.transport = inner, transport
+	return tools, nil
+}
+
+// isMCPAuthError reports whether err is the MCP transport's rendering of an
+// HTTP 401 or 403.
+//
+// The test is textual because the SDK reports a non-2xx status by formatting
+// http.StatusText into an error string rather than returning a typed error or
+// exposing the status code, so there is nothing for errors.As to match. The
+// OAuth error codes are matched too: a provider that returns a JSON body
+// ({"error":"invalid_token"}) alongside the status puts both in one string.
+func isMCPAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		strings.ToLower(http.StatusText(http.StatusUnauthorized)), // "unauthorized"
+		strings.ToLower(http.StatusText(http.StatusForbidden)),    // "forbidden"
+		"invalid_token",
+		"invalid_grant",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // deduplicateTools returns tools with their original names. When multiple
@@ -282,6 +397,29 @@ func ToolsetStatuses(toolsets []tool.Toolset) []MCPServerStatus {
 }
 
 func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
+	inner, tracked, err := newMCPToolset(srv)
+	if err != nil {
+		return nil, err
+	}
+	timeout := mcpConnectTimeout
+	if srv.OAuth {
+		timeout = mcpOAuthConnectTimeout
+	}
+	return &resilientToolset{
+		inner:     inner,
+		name:      srv.Name,
+		srv:       srv,
+		transport: tracked,
+		timeout:   timeout,
+	}, nil
+}
+
+// newMCPToolset builds one MCP connection: the transport for the configured
+// endpoint, wrapped in connection tracking so a hung one can be closed. It is
+// separate from buildMCPToolset so the OAuth retry can construct a second,
+// authorized connection for a server whose first attempt was refused, without
+// rebuilding the resilient wrapper that owns the once-only listing state.
+func newMCPToolset(srv MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
 	var transport mcp.Transport
 	switch {
 	case srv.URL != "":
@@ -294,7 +432,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		if srv.OAuth {
 			handler, err := newMCPOAuthHandler(srv.Name, srv.URL)
 			if err != nil {
-				return nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
+				return nil, nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
 			}
 			t.OAuthHandler = handler
 		}
@@ -305,7 +443,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 			args:    srv.Args,
 		}
 	default:
-		return nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
+		return nil, nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
 	}
 
 	// Wrap with connection tracking so we can close the connection on timeout.
@@ -315,13 +453,9 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		Transport: tracked,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating MCP toolset: %w", err)
+		return nil, nil, fmt.Errorf("creating MCP toolset: %w", err)
 	}
-	timeout := mcpConnectTimeout
-	if srv.OAuth {
-		timeout = mcpOAuthConnectTimeout
-	}
-	return &resilientToolset{inner: ts, name: srv.Name, transport: tracked, timeout: timeout}, nil
+	return ts, tracked, nil
 }
 
 // newMCPOAuthHandler builds an OAuth authorization-code handler for a remote
@@ -452,9 +586,9 @@ func mcpOAuthCodeFetcher(
 		case <-resultChan: // drop stale outcome from a previous flow
 		default:
 		}
-		fmt.Fprintf(os.Stderr, "pi-go: MCP server %q requires authorization. Opening browser...\n", name)
+		notice.Notifyf("MCP server %q requires authorization. Opening browser...", name)
 		if err := openURL(args.URL); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: could not open browser for %q; visit this URL manually:\n%s\n", name, args.URL)
+			notice.Notifyf("could not open browser for %q; visit this URL manually:\n%s", name, args.URL)
 		}
 		select {
 		case r := <-resultChan:
@@ -473,7 +607,7 @@ func mcpOAuthCodeFetcher(
 func mcpOAuthNewTokenSource(name, serverURL string) func(context.Context, *oauth2.Config, *oauth2.Token) (oauth2.TokenSource, error) {
 	return func(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token) (oauth2.TokenSource, error) {
 		if err := saveMCPOAuthToken(name, serverURL, cfg, tok); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: could not cache OAuth token for MCP server %q: %v\n", name, err)
+			notice.Notifyf("could not cache OAuth token for MCP server %q: %v", name, err)
 		}
 		return newPersistingTokenSource(cfg.TokenSource(ctx, tok), nil, func(t *oauth2.Token) error {
 			return saveMCPOAuthToken(name, serverURL, cfg, t)

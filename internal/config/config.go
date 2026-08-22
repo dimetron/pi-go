@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 // HookConfig defines a shell command hook for tool call events.
@@ -289,6 +294,14 @@ func LoadFrom(cwd string) (Config, error) {
 		if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
 			cfg.MCP = &MCPConfig{Servers: mcpServers}
 		}
+	}
+
+	// An llms.txt index configured as an MCP server is rerouted to the
+	// fetch_docs sources; the notice tells the user their entry moved.
+	if moved := routeLLMSDocsServers(&cfg); len(moved) > 0 {
+		notice.Notifyf("MCP server(s) %s point at an llms.txt index, not an MCP endpoint — "+
+			"served by the fetch_docs tool instead. Move them to \"llms\": {\"sources\": [...]} to silence this.",
+			strings.Join(quoteAll(moved), ", "))
 	}
 
 	// Migrate deprecated DefaultModel to roles if roles not set.
@@ -671,4 +684,82 @@ func SaveDefaultRole(model, provider string) error {
 	cfg.Roles["default"] = role
 
 	return cfg.Save()
+}
+
+// IsLLMSDocsURL reports whether u points at an llms.txt documentation index
+// rather than an MCP endpoint. Such a URL serves plain text over GET and
+// answers the MCP "initialize" POST with 405 Method Not Allowed, so treating
+// it as an MCP server can only ever fail.
+//
+// The convention (llmstxt.org) fixes the file name, not the host or path, so
+// the base name is the whole test: "llms.txt" and the expanded "llms-full.txt".
+func IsLLMSDocsURL(u string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(u))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(path.Base(parsed.Path)) {
+	case "llms.txt", "llms-full.txt":
+		return true
+	}
+	return false
+}
+
+// routeLLMSDocsServers moves MCP server entries that actually point at an
+// llms.txt index out of the MCP list and into the llms.txt sources, where the
+// fetch_docs tool serves them. Configuring a docs index under "mcpServers" is
+// a common mix-up — both are "a URL a model reads from" — and left alone it
+// produces a 405 warning on every startup and no documentation tool.
+//
+// Rerouting rather than dropping keeps the user's intent: the docs stay
+// reachable, just through the tool that can actually read them. An entry whose
+// URL is already configured as a source is dropped as a duplicate.
+func routeLLMSDocsServers(cfg *Config) []string {
+	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool)
+	if cfg.LLMS != nil {
+		for _, s := range cfg.LLMS.Sources {
+			existing[s.URL] = true
+		}
+	}
+
+	kept := make([]MCPServer, 0, len(cfg.MCP.Servers))
+	var moved []string
+	var added []LLMSSource
+	for _, srv := range cfg.MCP.Servers {
+		if srv.URL == "" || !IsLLMSDocsURL(srv.URL) {
+			kept = append(kept, srv)
+			continue
+		}
+		moved = append(moved, srv.Name)
+		if existing[srv.URL] {
+			continue
+		}
+		existing[srv.URL] = true
+		added = append(added, LLMSSource{Name: srv.Name, URL: srv.URL})
+	}
+	if len(moved) == 0 {
+		return nil
+	}
+
+	cfg.MCP.Servers = kept
+	if len(added) > 0 {
+		if cfg.LLMS == nil {
+			cfg.LLMS = &LLMSConfig{}
+		}
+		cfg.LLMS.Sources = append(cfg.LLMS.Sources, added...)
+	}
+	return moved
+}
+
+// quoteAll returns the names quoted, for embedding a list in a notice without
+// leaving a name like "adk docs" ambiguous against the separator.
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strconv.Quote(n)
+	}
+	return out
 }

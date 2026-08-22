@@ -3,7 +3,6 @@ package subagent
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
@@ -11,6 +10,7 @@ import (
 	"github.com/dimetron/pi-go/internal/acp/client/copilot"
 	"github.com/dimetron/pi-go/internal/acp/client/cursor"
 	"github.com/dimetron/pi-go/internal/acp/client/gemini"
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 // acpSession is the shared interface implemented by every per-runner
@@ -259,8 +259,11 @@ func sendProcEvent(p *Process, ev Event) {
 	select {
 	case p.events <- ev:
 	default:
-		// Log dropped events to stderr for debugging. This helps identify
-		// when the event consumer (TUI/orchestrator) falls behind the producer.
-		fmt.Fprintf(os.Stderr, "pi-go: dropped event type=%s session=%s\n", ev.Type, ev.SessionID)
+		// Report dropped events so a consumer (TUI/orchestrator) that has
+		// fallen behind the producer is visible rather than silent. It goes
+		// through the notice sink, not os.Stderr: this fires mid-turn, while
+		// the TUI owns the terminal, and a direct write lands inside the
+		// painted frame.
+		notice.Notifyf("dropped event type=%s session=%s", ev.Type, ev.SessionID)
 	}
 }

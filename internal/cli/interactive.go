@@ -23,6 +23,7 @@ import (
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/notice"
 	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -86,6 +87,26 @@ func runInteractive(
 ) error {
 	initCh := make(chan tui.InitEvent, 32)
 
+	// Extension notices — a skipped MCP server, a rerouted docs source, an
+	// OAuth re-login — must land in the chat, not on the terminal. The TUI
+	// paints its frame with direct cursor control, so a stderr write from a
+	// background init goroutine lands inside the layout and stays there until
+	// the next full repaint. The channel is buffered and the send is
+	// non-blocking: a notice raised while the TUI is busy is dropped rather
+	// than stalling the agent turn behind it.
+	noticeCh := make(chan string, 16)
+	prevSink := notice.SetSink(func(msg string) {
+		select {
+		case noticeCh <- msg:
+		default:
+		}
+	})
+	defer notice.SetSink(prevSink)
+
+	// Started only now that notices are routed to the TUI: an update banner
+	// written to os.Stderr would land inside the painted frame.
+	go checkForUpdate(ctx, Version)
+
 	var res initResources
 	initDone := make(chan struct{})
 
@@ -95,7 +116,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, noticeCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -139,6 +160,7 @@ func deferredInit(
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
+	noticeCh chan string,
 	res *initResources,
 ) {
 	initTotal := deferredInitTotal(cfg)
@@ -283,9 +305,9 @@ func deferredInit(
 	res.sessionID = sessionID
 
 	// Two-stage auto-compaction, installed as a pre-turn hook so history is
-	// only ever rewritten between turns. Buffered so a compaction notice never
-	// blocks the turn if the TUI is momentarily busy.
-	noticeCh := make(chan string, 8)
+	// only ever rewritten between turns. It shares the caller's notice channel
+	// — a buffered, non-blocking send, so a compaction notice never blocks the
+	// turn if the TUI is momentarily busy.
 	if hook := buildAutoCompactHook(autoCompactDeps{
 		SessionSvc:    sessionSvc,
 		Tracker:       tokenTracker,
