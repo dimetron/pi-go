@@ -20,6 +20,9 @@
     "exa": {
       "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
     },
+    "parallel-search": {
+      "url": "https://search.parallel.ai/mcp"
+    },
     "docs-acp": {
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
