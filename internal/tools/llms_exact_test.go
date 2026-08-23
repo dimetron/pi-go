@@ -51,6 +51,8 @@ func TestURLAllowedInferredSourceGrantsOnlyItsURL(t *testing.T) {
 		"https://internal.corp/",
 		"https://internal.corp:8443/llms.txt",
 		"http://internal.corp/llms.txt",
+		// A query can select a different document entirely.
+		"https://internal.corp/llms.txt?resource=other",
 	} {
 		if ts.urlAllowed(mustURL(t, raw)) {
 			t.Errorf("urlAllowed(%q) = true; an inference must not widen host access", raw)
@@ -75,3 +77,14 @@ func TestURLAllowedConfiguredWinsOverInferredOnSameHost(t *testing.T) {
 // exercised here: checkRedirectURL first calls rejectPrivateHost, which
 // resolves the host, and any fixture host either needs DNS or fails for the
 // wrong reason. The rule itself is covered by the urlAllowed tests above.
+
+// A bare trailing "?" carries no parameters, so it addresses the same resource
+// and is not a widening.
+func TestURLAllowedInferredSourceAllowsEmptyQuery(t *testing.T) {
+	ts := NewLLMSToolset(&config.LLMSConfig{Sources: []config.LLMSSource{
+		{Name: "guessed", URL: "https://internal.corp/llms.txt", ExactURLOnly: true},
+	}})
+	if !ts.urlAllowed(mustURL(t, "https://internal.corp/llms.txt?")) {
+		t.Error("refused the same resource spelled with an empty query")
+	}
+}
