@@ -178,6 +178,13 @@ type A2AConfig struct {
 type LLMSSource struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// ExactURLOnly restricts fetch_docs to this exact URL rather than any
+	// page on the same host. It is set on sources pi-go inferred rather than
+	// ones the user wrote, and is not serialized: configuring a source is a
+	// deliberate grant of the whole host, whereas an inference drawn from a
+	// file name is a guess, and a guess must not quietly widen what the model
+	// can reach.
+	ExactURLOnly bool `json:"-"`
 }
 
 // LLMSConfig holds configuration for llms.txt documentation sources.
@@ -811,7 +818,7 @@ func registerLLMSDocsSources(cfg *Config) []string {
 			continue
 		}
 		existing[url] = true
-		added = append(added, LLMSSource{Name: srv.Name, URL: url})
+		added = append(added, LLMSSource{Name: srv.Name, URL: url, ExactURLOnly: true})
 	}
 	cfg.InferredLLMS = append(cfg.InferredLLMS, added...)
 	return registered

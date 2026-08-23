@@ -164,7 +164,9 @@ func (t *LLMSToolset) checkRedirectURL(u *url.URL, via []*http.Request) error {
 	if err := rejectPrivateHost(u.Hostname()); err != nil {
 		return fmt.Errorf("url rejected: %w", err)
 	}
-	if !t.hostAllowed(u.Hostname()) {
+	// Redirects are held to the same rule as the original request, so a source
+	// restricted to one URL cannot be widened by a hop the server chooses.
+	if !t.urlAllowed(u) {
 		return fmt.Errorf("host %q is not an allowed documentation source", u.Hostname())
 	}
 	return nil
@@ -239,8 +241,9 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		return LLMSOutput{Error: fmt.Sprintf("url rejected: %v", err)}, nil
 	}
 
-	// Restrict to hosts that host a configured llms.txt source.
-	if !t.hostAllowed(u.Hostname()) {
+	// Restrict to configured llms.txt sources: a whole host for one the user
+	// configured, the exact URL for one pi-go inferred.
+	if !t.urlAllowed(u) {
 		return LLMSOutput{Error: fmt.Sprintf("host %q is not an allowed documentation source", u.Hostname())}, nil
 	}
 
@@ -465,11 +468,39 @@ func (t *LLMSToolset) cacheEvict() {
 // configured as https://adk.dev/llms.txt allows fetching any page on adk.dev.
 func (t *LLMSToolset) hostAllowed(hostname string) bool {
 	for _, s := range t.sources {
+		if s.ExactURLOnly {
+			continue // widened access is not what such a source grants
+		}
 		u, err := url.Parse(s.URL)
 		if err != nil {
 			continue
 		}
 		if strings.EqualFold(u.Hostname(), hostname) {
+			return true
+		}
+	}
+	return false
+}
+
+// urlAllowed reports whether target may be fetched. A configured source grants
+// its whole host, which is what makes an llms.txt index useful — the index
+// exists to be followed to the pages it links. A source pi-go inferred from a
+// URL's file name grants only that one URL: the name is a guess, and a wrong
+// guess must not hand the model a whole host it was never configured to reach.
+func (t *LLMSToolset) urlAllowed(target *url.URL) bool {
+	if t.hostAllowed(target.Hostname()) {
+		return true
+	}
+	for _, s := range t.sources {
+		if !s.ExactURLOnly {
+			continue
+		}
+		u, err := url.Parse(s.URL)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(u.Hostname(), target.Hostname()) &&
+			u.Scheme == target.Scheme && u.Port() == target.Port() && u.Path == target.Path {
 			return true
 		}
 	}
