@@ -479,6 +479,11 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	// upgraded it. Install the handler from the start so those credentials are
 	// presented on the first request; without this the connection would go out
 	// unauthenticated, be refused, and re-run the browser flow every launch.
+	//
+	// This applies in headless runs too, so a cached token still gets used
+	// there. It cannot turn into a browser prompt: mcpOAuthCodeFetcher refuses
+	// when no user is present, so a revoked token fails fast rather than
+	// stalling the run on an approval nobody will see.
 	if !srv.OAuth && srv.URL != "" && hasCachedMCPOAuthToken(srv.Name, srv.URL) {
 		srv.OAuth = true
 	}
@@ -486,8 +491,12 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The OAuth budget covers a browser round-trip — open, approve, redirect —
+	// so it applies only when that round-trip can happen. A headless run never
+	// waits on one (mcpOAuthCodeFetcher refuses immediately), so it keeps the
+	// normal connect timeout and fails fast.
 	timeout := mcpConnectTimeout
-	if srv.OAuth {
+	if srv.OAuth && interactiveOAuth.Load() {
 		timeout = mcpOAuthConnectTimeout
 	}
 	return &resilientToolset{
@@ -678,6 +687,15 @@ func mcpOAuthCodeFetcher(
 	openURL func(string) error,
 ) func(context.Context, *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		// The SDK calls this itself whenever a request comes back 401/403, so
+		// it is the last place that can stop a browser opening with nobody to
+		// see it. A handler is installed in headless runs too — cached
+		// credentials are worth presenting there — but the flow that needs a
+		// human must fail fast instead of blocking the run.
+		if !interactiveOAuth.Load() {
+			return nil, fmt.Errorf("MCP server %q needs authorization, and there is no user to grant it; "+
+				"run pi interactively once to authorize it", name)
+		}
 		select {
 		case <-resultChan: // drop stale outcome from a previous flow
 		default:

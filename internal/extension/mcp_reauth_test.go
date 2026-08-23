@@ -624,6 +624,7 @@ func (c *closeCountingConn) closes() int {
 // unauthenticated, is refused, and the browser flow runs on every launch.
 func TestBuildMCPToolset_UpgradesServerWithCachedToken(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 
 	const (
 		name = "openrouter"
@@ -697,5 +698,35 @@ func TestResilientToolset_ReauthorizeKeepsUnusedCachedToken(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("discarded a cached token the refused connection never sent: %v", err)
+	}
+}
+
+// A headless run still presents cached credentials — that is the point of the
+// upgrade — but must not adopt the browser budget, since no browser opens.
+func TestBuildMCPToolset_CachedTokenKeepsFastTimeoutWhenHeadless(t *testing.T) {
+	setTestHome(t)
+	// Deliberately no allowInteractiveOAuth.
+
+	const (
+		name = "openrouter"
+		url  = "https://mcp.example.com/mcp"
+	)
+	cfg := &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{TokenURL: "https://as.example.com/token"}}
+	tok := &oauth2.Token{AccessToken: "cached", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
+	if err := saveMCPOAuthToken(name, url, cfg, tok); err != nil {
+		t.Fatalf("seeding the token cache: %v", err)
+	}
+
+	ts, err := buildMCPToolset(MCPServerConfig{Name: name, URL: url})
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	rt := ts.(*resilientToolset)
+	if !rt.srv.OAuth {
+		t.Error("cached credentials were not presented in a headless run")
+	}
+	if rt.timeout != mcpConnectTimeout {
+		t.Errorf("timeout = %v, want the fast budget %v; nothing waits on a browser here",
+			rt.timeout, mcpConnectTimeout)
 	}
 }

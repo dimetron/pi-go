@@ -561,11 +561,20 @@ func (m *model) Init() tea.Cmd {
 	if m.initCh != nil {
 		// Deferred init: start listening for init events.
 		// Heavy initialization runs in a background goroutine (started by cli).
-		return tea.Batch(
+		cmds := []tea.Cmd{
 			requestBg,
 			waitForInitEvent(m.initCh),
 			tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} }),
-		)
+		}
+		// Drain notices from the first frame. Deferred init is exactly when
+		// they are raised — skipped MCP servers, blocked skills, an OAuth
+		// re-login — and it finishes long after they start arriving, so a
+		// reader armed only from the InitResult would leave the whole startup
+		// run buffered.
+		if m.cfg.SystemNoticeCh != nil {
+			cmds = append(cmds, waitForSystemNotice(m.cfg.SystemNoticeCh))
+		}
+		return tea.Batch(cmds...)
 	}
 
 	// Synchronous init (non-deferred path, used by tests and non-interactive modes).
