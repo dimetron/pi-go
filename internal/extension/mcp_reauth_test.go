@@ -36,6 +36,15 @@ func captureNotices(t *testing.T) func() []string {
 	}
 }
 
+// allowInteractiveOAuth enables the browser re-login for the duration of a
+// test. It is off by default so headless runs are never blocked on an approval
+// nobody will see, which means every test of the retry path must opt in.
+func allowInteractiveOAuth(t *testing.T) {
+	t.Helper()
+	SetInteractiveOAuth(true)
+	t.Cleanup(func() { SetInteractiveOAuth(false) })
+}
+
 func TestIsMCPAuthError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -76,6 +85,7 @@ func (u *unauthorizedToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) 
 
 func TestResilientToolset_ReauthorizesOn401(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	notices := captureNotices(t)
 
 	authorized := &successToolset{tools: []tool.Tool{&namedTool{nameVal: "list-benchmarks"}}}
@@ -119,6 +129,7 @@ func TestResilientToolset_ReauthorizesOn401(t *testing.T) {
 // "re-login" replays the same dead credentials.
 func TestResilientToolset_ReauthorizeClearsCachedToken(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	captureNotices(t)
 
 	const (
@@ -159,6 +170,7 @@ func TestResilientToolset_ReauthorizeClearsCachedToken(t *testing.T) {
 // one must never open a browser.
 func TestResilientToolset_NoReauthorizeForCommandServer(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	notices := captureNotices(t)
 
 	reconnected := false
@@ -188,6 +200,7 @@ func TestResilientToolset_NoReauthorizeForCommandServer(t *testing.T) {
 // A non-auth failure must be reported as-is, without a browser round-trip.
 func TestResilientToolset_NoReauthorizeForOtherErrors(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	notices := captureNotices(t)
 
 	reconnected := false
@@ -215,6 +228,7 @@ func TestResilientToolset_NoReauthorizeForOtherErrors(t *testing.T) {
 // rather than looping through the authorization flow again.
 func TestResilientToolset_ReauthorizeFailureIsTerminal(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	notices := captureNotices(t)
 
 	second := &unauthorizedToolset{}
@@ -249,6 +263,7 @@ func TestResilientToolset_ReauthorizeFailureIsTerminal(t *testing.T) {
 
 func TestResilientToolset_ReconnectErrorIsReported(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	notices := captureNotices(t)
 
 	rt := &resilientToolset{
@@ -412,6 +427,7 @@ func TestWithoutAuthorizationDoesNotMutateInput(t *testing.T) {
 // retry would be rejected exactly like the first attempt.
 func TestResilientToolset_ReauthorizeDropsStaleAuthorizationHeader(t *testing.T) {
 	setTestHome(t)
+	allowInteractiveOAuth(t)
 	captureNotices(t)
 
 	var gotSrv MCPServerConfig
@@ -441,5 +457,62 @@ func TestResilientToolset_ReauthorizeDropsStaleAuthorizationHeader(t *testing.T)
 	// The loaded config must be left intact for anything else reading it.
 	if rt.srv.Headers["Authorization"] != "Bearer revoked" {
 		t.Error("re-authorization mutated the server's configured headers")
+	}
+}
+
+// Print, JSON, RPC, socket and ACP runs have no user at a browser. A 401 there
+// must be reported and skipped after the normal connect timeout, exactly as it
+// was before automatic re-login existed — never met with a browser window and
+// a ten-minute wait that would stall a headless pipeline.
+func TestResilientToolset_NoReauthorizeWhenNonInteractive(t *testing.T) {
+	setTestHome(t)
+	notices := captureNotices(t)
+	// Deliberately no allowInteractiveOAuth: this is the default state.
+
+	reconnected := false
+	rt := &resilientToolset{
+		inner: &unauthorizedToolset{},
+		name:  "openrouter",
+		srv:   MCPServerConfig{Name: "openrouter", URL: "https://mcp.example.com/mcp"},
+		reconnect: func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
+			reconnected = true
+			return nil, nil, nil
+		},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if reconnected {
+		t.Error("opened a browser re-login in a headless run")
+	}
+	if !rt.failed {
+		t.Error("expected the server to be marked failed")
+	}
+	if hasNoticeContaining(notices(), "re-running OAuth login") {
+		t.Errorf("announced an OAuth re-login with no user present; notices: %v", notices())
+	}
+	if !hasNoticeContaining(notices(), "Unauthorized") {
+		t.Errorf("failure was not reported; notices: %v", notices())
+	}
+}
+
+// An entry that declares configuration only a real MCP endpoint needs is
+// dialled whatever its URL looks like, so the llms.txt name heuristic can
+// never silently remove a working server.
+func TestBuildMCPToolsets_KeepsConfiguredServerAtLLMSPath(t *testing.T) {
+	notices := captureNotices(t)
+
+	toolsets, err := BuildMCPToolsets([]MCPServerConfig{
+		{Name: "authed", URL: "https://example.com/llms.txt", Headers: map[string]string{"Authorization": "Bearer k"}},
+		{Name: "oauthed", URL: "https://example.com/llms-full.txt", OAuth: true},
+	})
+	if err != nil {
+		t.Fatalf("BuildMCPToolsets: %v", err)
+	}
+	if len(toolsets) != 2 {
+		t.Fatalf("built %d toolsets, want 2; a configured MCP endpoint was rerouted on its path alone", len(toolsets))
+	}
+	if hasNoticeContaining(notices(), "fetch_docs") {
+		t.Errorf("rerouted a server that declares MCP-only config; notices: %v", notices())
 	}
 }

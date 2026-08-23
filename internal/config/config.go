@@ -709,6 +709,24 @@ func IsLLMSDocsURL(u string) bool {
 	return false
 }
 
+// isLLMSDocsServer reports whether an MCP entry is really a documentation
+// index that was filed under the wrong key.
+//
+// The URL's base name is the primary signal, and it is a strong one: llms.txt
+// is a reserved file name in an established convention (llmstxt.org) for a
+// plain-text index fetched with GET, not a JSON-RPC endpoint. But the name
+// alone is a heuristic, and rerouting is destructive — the server stops being
+// dialled — so an entry that carries configuration only a real MCP endpoint
+// needs is left alone. A public docs index has no bearer token, no custom
+// headers and no authorization server; anything that declares those is taken
+// at its word.
+func isLLMSDocsServer(srv MCPServer) bool {
+	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
+		return false
+	}
+	return IsLLMSDocsURL(srv.URL)
+}
+
 // routeLLMSDocsServers moves MCP server entries that actually point at an
 // llms.txt index out of the MCP list and into the llms.txt sources, where the
 // fetch_docs tool serves them. Configuring a docs index under "mcpServers" is
@@ -733,7 +751,7 @@ func routeLLMSDocsServers(cfg *Config) []string {
 	var moved []string
 	var added []LLMSSource
 	for _, srv := range cfg.MCP.Servers {
-		if srv.URL == "" || !IsLLMSDocsURL(srv.URL) {
+		if !isLLMSDocsServer(srv) {
 			kept = append(kept, srv)
 			continue
 		}

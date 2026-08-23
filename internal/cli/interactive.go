@@ -112,6 +112,13 @@ func runInteractive(
 	// erased a message written then.
 	config.NotifyReroutedLLMS(cfg)
 
+	// A user is present and a browser is reachable, so an MCP server that
+	// answers 401 can be re-authorized interactively. Headless modes leave
+	// this off and skip the server instead of blocking on an approval nobody
+	// will see.
+	extension.SetInteractiveOAuth(true)
+	defer extension.SetInteractiveOAuth(false)
+
 	var res initResources
 	initDone := make(chan struct{})
 

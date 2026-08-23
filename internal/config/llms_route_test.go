@@ -168,3 +168,28 @@ func writeProjectMCPFile(t *testing.T, dir, body string) {
 		t.Fatalf("writing mcp.json: %v", err)
 	}
 }
+
+// The base name is a heuristic and rerouting is destructive, so an entry that
+// declares configuration only a real MCP endpoint needs must be left alone.
+func TestRouteLLMSDocsServersKeepsConfiguredEndpoints(t *testing.T) {
+	tests := []struct {
+		name string
+		srv  MCPServer
+	}{
+		{"custom headers", MCPServer{Name: "a", URL: "https://x.example/llms.txt", Headers: map[string]string{"Authorization": "Bearer k"}}},
+		{"oauth", MCPServer{Name: "b", URL: "https://x.example/llms.txt", OAuth: true}},
+		{"command wins over url", MCPServer{Name: "c", URL: "https://x.example/llms.txt", Command: "srv"}},
+	}
+	for _, tc := range tests {
+		cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{tc.srv}}}
+		if moved := routeLLMSDocsServers(&cfg); moved != nil {
+			t.Errorf("%s: rerouted %v, want the server kept", tc.name, moved)
+		}
+		if len(cfg.MCP.Servers) != 1 {
+			t.Errorf("%s: server removed from the MCP list", tc.name)
+		}
+		if cfg.LLMS != nil {
+			t.Errorf("%s: registered a docs source for a configured MCP endpoint", tc.name)
+		}
+	}
+}

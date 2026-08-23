@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -26,6 +27,22 @@ import (
 )
 
 var mcpConnectTimeout = 30 * time.Second
+
+// interactiveOAuth gates the automatic re-login that answers a 401 from a
+// remote MCP server. That flow opens a browser and waits up to
+// mcpOAuthConnectTimeout for a human to approve it, which is only ever
+// appropriate when a human is sitting in front of the process.
+//
+// It defaults to off, so print, JSON, RPC, socket and ACP runs keep the
+// behaviour they had: a rejected server is reported and skipped after the
+// normal connect timeout, and nothing stalls a headless pipeline for ten
+// minutes waiting on a browser nobody will see. runInteractive turns it on.
+var interactiveOAuth atomic.Bool
+
+// SetInteractiveOAuth enables or disables the automatic OAuth re-login for
+// MCP servers that answer 401/403. Only a front end with a user and a browser
+// in reach should enable it.
+func SetInteractiveOAuth(enabled bool) { interactiveOAuth.Store(enabled) }
 
 // mcpOAuthConnectTimeout is used for servers that run the OAuth
 // authorization-code flow on first connect. The browser round-trip (open URL,
@@ -56,7 +73,7 @@ func BuildMCPToolsets(servers []MCPServerConfig) ([]tool.Toolset, error) {
 		// but server lists are also assembled by hand (evals, embedded
 		// agents), so refuse to dial one here rather than emit a 405 warning
 		// on every startup.
-		if srv.URL != "" && config.IsLLMSDocsURL(srv.URL) {
+		if isLLMSDocsServer(srv) {
 			notice.Notifyf("MCP server %q points at an llms.txt index, not an MCP endpoint — "+
 				"configure it under \"llms\": {\"sources\": [...]} and read it with the fetch_docs tool.", srv.Name)
 			continue
@@ -221,11 +238,15 @@ func (r *resilientToolset) listTools(
 }
 
 // canReauthorize reports whether err is worth answering with a fresh OAuth
-// login. Only remote servers qualify — a stdio subprocess has no bearer token
-// to renew — and only genuine authorization failures, so a 404 or a DNS error
-// never opens a browser window.
+// login.
+//
+// Three conditions must hold. A human must be present, since the flow blocks
+// on a browser approval — see interactiveOAuth. Only remote servers qualify,
+// because a stdio subprocess has no bearer token to renew. And the failure
+// must be a genuine authorization failure, so a 404 or a DNS error never opens
+// a browser window.
 func (r *resilientToolset) canReauthorize(err error) bool {
-	return r.srv.URL != "" && isMCPAuthError(err)
+	return interactiveOAuth.Load() && r.srv.URL != "" && isMCPAuthError(err)
 }
 
 // reauthorize answers a 401/403 by running the OAuth authorization-code flow
@@ -442,6 +463,17 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		transport: tracked,
 		timeout:   timeout,
 	}, nil
+}
+
+// isLLMSDocsServer mirrors the config-load test, so a server list assembled by
+// hand gets the same treatment as one that came from a config file: an entry
+// that declares MCP-only configuration — a command, OAuth, custom headers — is
+// taken at its word and dialled, whatever its URL looks like.
+func isLLMSDocsServer(srv MCPServerConfig) bool {
+	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
+		return false
+	}
+	return config.IsLLMSDocsURL(srv.URL)
 }
 
 // newMCPToolset builds one MCP connection: the transport for the configured
