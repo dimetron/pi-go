@@ -190,3 +190,35 @@ func TestRegisterLLMSDocsSourcesKeepsConfiguredEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// IsLLMSDocsURL tolerates surrounding whitespace, so the registered source
+// must be trimmed too: fetch_docs parses the stored value to check the host,
+// and an untrimmed URL fails that parse and yields an unusable source.
+func TestRegisterLLMSDocsSourcesTrimsURL(t *testing.T) {
+	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
+		{Name: "adk-docs-mcp", URL: "  https://adk.dev/llms.txt\n"},
+	}}}
+
+	if moved := registerLLMSDocsSources(&cfg); len(moved) != 1 {
+		t.Fatalf("moved = %v, want the whitespace-padded entry recognized", moved)
+	}
+	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
+		t.Fatalf("LLMS = %+v, want one source", cfg.LLMS)
+	}
+	if got := cfg.LLMS.Sources[0].URL; got != "https://adk.dev/llms.txt" {
+		t.Errorf("stored URL = %q, want it trimmed", got)
+	}
+}
+
+// The same URL padded differently must not register twice.
+func TestRegisterLLMSDocsSourcesDedupesAcrossWhitespace(t *testing.T) {
+	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
+		{Name: "a", URL: "https://adk.dev/llms.txt"},
+		{Name: "b", URL: " https://adk.dev/llms.txt "},
+	}}}
+
+	registerLLMSDocsSources(&cfg)
+	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
+		t.Errorf("LLMS sources = %+v, want one entry", cfg.LLMS)
+	}
+}

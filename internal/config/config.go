@@ -758,11 +758,16 @@ func registerLLMSDocsSources(cfg *Config) []string {
 			continue
 		}
 		registered = append(registered, srv.Name)
-		if existing[srv.URL] {
+		// Store the trimmed URL. IsLLMSDocsURL deliberately tolerates
+		// surrounding whitespace, but fetch_docs parses the stored value to
+		// check the host against its sources — an untrimmed URL fails that
+		// parse, so the source it advertises would be unusable.
+		url := strings.TrimSpace(srv.URL)
+		if existing[url] {
 			continue
 		}
-		existing[srv.URL] = true
-		added = append(added, LLMSSource{Name: srv.Name, URL: srv.URL})
+		existing[url] = true
+		added = append(added, LLMSSource{Name: srv.Name, URL: url})
 	}
 	if len(added) > 0 {
 		if cfg.LLMS == nil {
