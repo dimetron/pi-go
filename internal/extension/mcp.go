@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -21,9 +22,35 @@ import (
 
 	piauth "github.com/dimetron/pi-go/internal/auth" // SDK auth pkg is imported above
 	"github.com/dimetron/pi-go/internal/browser"
+	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 var mcpConnectTimeout = 30 * time.Second
+
+// interactiveOAuth gates the automatic re-login that answers a 401 from a
+// remote MCP server. That flow opens a browser and waits up to
+// mcpOAuthConnectTimeout for a human to approve it, which is only ever
+// appropriate when a human is sitting in front of the process.
+//
+// It defaults to off, so print, JSON, RPC, socket and ACP runs keep the
+// behavior they had: a rejected server is reported and skipped after the
+// normal connect timeout, and nothing stalls a headless pipeline for ten
+// minutes waiting on a browser nobody will see. runInteractive turns it on.
+var interactiveOAuth atomic.Bool
+
+// mcpOAuthListen binds the loopback callback server for the interactive
+// authorization flow. It is a variable so tests can make binding fail and
+// check that a headless run does not depend on it — a sandbox or container
+// that forbids loopback listeners is exactly the case that matters.
+var mcpOAuthListen = func() (net.Listener, error) {
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+// SetInteractiveOAuth enables or disables the automatic OAuth re-login for
+// MCP servers that answer 401/403. Only a front end with a user and a browser
+// in reach should enable it.
+func SetInteractiveOAuth(enabled bool) { interactiveOAuth.Store(enabled) }
 
 // mcpOAuthConnectTimeout is used for servers that run the OAuth
 // authorization-code flow on first connect. The browser round-trip (open URL,
@@ -50,7 +77,7 @@ func BuildMCPToolsets(servers []MCPServerConfig) ([]tool.Toolset, error) {
 	for _, srv := range servers {
 		ts, err := buildMCPToolset(srv)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q skipped: %v\n", srv.Name, err)
+			notice.Notifyf("warning: MCP server %q skipped: %v", srv.Name, err)
 			continue
 		}
 		toolsets = append(toolsets, ts)
@@ -122,8 +149,14 @@ func (t *connTrackingTransport) closeConn() {
 type resilientToolset struct {
 	inner     tool.Toolset
 	name      string
+	srv       MCPServerConfig
 	transport *connTrackingTransport
 	timeout   time.Duration
+
+	// reconnect builds a second connection for the OAuth retry. It defaults
+	// to newMCPToolset; tests replace it so the retry path can be exercised
+	// without an authorization server to talk to.
+	reconnect func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error)
 
 	once   sync.Once
 	tools  []tool.Tool
@@ -134,56 +167,235 @@ func (r *resilientToolset) Name() string { return r.name }
 
 func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	r.once.Do(func() {
-		type result struct {
-			tools []tool.Tool
-			err   error
+		tools, err := r.listTools(ctx, r.inner, r.transport, r.timeout)
+		// A remote server answering 401/403 is not broken, it is
+		// unauthenticated — the one recoverable failure here. Re-authorize
+		// and retry once before writing the server off.
+		if err != nil && r.canReauthorize(err) {
+			tools, err = r.reauthorize(ctx)
 		}
-		ch := make(chan result, 1)
-		// Use a separate cancel channel so we can time out the inner
-		// Tools() call without wrapping ctx (which would lose the
-		// ReadonlyContext interface). The inner goroutine respects the
-		// original ctx; we simply abandon it on timeout and mark the
-		// toolset as failed.
-		timeout := r.timeout
-		if timeout == 0 {
-			timeout = mcpConnectTimeout
-		}
-		timeoutCh := time.After(timeout)
-		go func() {
-			tools, err := r.inner.Tools(ctx)
-			ch <- result{tools, err}
-		}()
-
-		select {
-		case res := <-ch:
-			if res.err != nil {
-				fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q unavailable: %v\n", r.name, res.err)
-				r.failed = true
-				return
-			}
-			r.tools = r.deduplicateTools(res.tools)
-		case <-timeoutCh:
-			fmt.Fprintf(os.Stderr, "pi-go: warning: MCP server %q timed out after %v, skipping\n", r.name, timeout)
+		if err != nil {
+			notice.Notifyf("%s", r.failureNotice(err))
 			r.failed = true
-			// Close the underlying MCP connection to kill any hung
-			// subprocess and free the blocked goroutine.
-			if r.transport != nil {
-				r.transport.closeConn()
-			}
-			// Drain the result in the background so the inner goroutine
-			// can exit after the connection is closed.
-			go func() {
-				select {
-				case <-ch:
-				case <-time.After(2 * time.Second):
-				}
-			}()
+			return
 		}
+		r.tools = r.deduplicateTools(tools)
 	})
 	if r.failed {
 		return nil, nil
 	}
 	return r.tools, nil
+}
+
+// failureNotice renders the message shown when a server cannot be used.
+//
+// A URL whose base name is llms.txt gets a different message from the raw
+// transport error. That name is a reserved convention (llmstxt.org) for a
+// plain-text documentation index served over GET, so an entry pointing at one
+// is almost certainly a docs source filed under the wrong config key — and the
+// bare "Method Not Allowed" it produces says nothing about how to fix that.
+// The diagnosis is only offered once the connection has actually failed, so a
+// real MCP server that happens to live at such a path is never second-guessed.
+func (r *resilientToolset) failureNotice(err error) string {
+	if isLLMSDocsServer(r.srv) {
+		return fmt.Sprintf("MCP server %q could not be reached (%v). That URL is an llms.txt "+
+			"documentation index, not an MCP endpoint — it is already served by the fetch_docs "+
+			"tool, so the entry can be removed from \"mcpServers\" and kept under "+
+			"\"llms\": {\"sources\": [...]}.", r.name, err)
+	}
+	return fmt.Sprintf("warning: MCP server %q unavailable: %v", r.name, err)
+}
+
+// listTools runs one Tools() attempt under a timeout, so a server that accepts
+// the connection but never answers "initialize" cannot stall the turn.
+//
+// The timeout is a separate timer rather than a derived context because the
+// inner toolset needs the caller's agent.ReadonlyContext, and wrapping it in
+// context.WithTimeout would erase that interface. The inner goroutine still
+// honors the original ctx; on timeout we abandon it, close the connection
+// underneath it so it can unblock, and drain it in the background.
+func (r *resilientToolset) listTools(
+	ctx agent.ReadonlyContext,
+	inner tool.Toolset,
+	transport *connTrackingTransport,
+	timeout time.Duration,
+) ([]tool.Tool, error) {
+	type result struct {
+		tools []tool.Tool
+		err   error
+	}
+	if timeout == 0 {
+		timeout = mcpConnectTimeout
+	}
+	ch := make(chan result, 1)
+	timeoutCh := time.After(timeout)
+	go func() {
+		tools, err := inner.Tools(ctx)
+		ch <- result{tools, err}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.tools, res.err
+	case <-timeoutCh:
+		// Close the underlying MCP connection to kill any hung subprocess
+		// and free the blocked goroutine.
+		if transport != nil {
+			transport.closeConn()
+		}
+		go func() {
+			select {
+			case <-ch:
+			case <-time.After(2 * time.Second):
+			}
+		}()
+		return nil, fmt.Errorf("timed out after %v, skipping", timeout)
+	}
+}
+
+// canReauthorize reports whether err is worth answering with a fresh OAuth
+// login.
+//
+// Three conditions must hold. A human must be present, since the flow blocks
+// on a browser approval — see interactiveOAuth. Only remote servers qualify,
+// because a stdio subprocess has no bearer token to renew. And the failure
+// must be a genuine authorization failure, so a 404 or a DNS error never opens
+// a browser window.
+func (r *resilientToolset) canReauthorize(err error) bool {
+	return interactiveOAuth.Load() && r.srv.URL != "" && isMCPAuthError(err)
+}
+
+// reauthorize answers a 401/403 by running the OAuth authorization-code flow
+// and retrying the tool listing once.
+//
+// Two cases land here and both need the same treatment. A server configured
+// without OAuth has no handler at all, so the SDK cannot recover on its own:
+// it only re-authorizes when a handler is installed, and otherwise returns the
+// 401 verbatim — which is what produced the bare "Unauthorized" warning. A
+// server configured with OAuth may be replaying a cached token the provider
+// has since revoked; the SDK would re-run the flow, but only after presenting
+// those dead credentials again. Discarding the cached token first makes this a
+// real re-login rather than a replay.
+//
+// The retry runs under mcpOAuthConnectTimeout because it contains a browser
+// round-trip — open the URL, wait for approval, wait for the redirect. The
+// normal 30s connect budget would abort mid-approval.
+func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
+	notice.Notifyf("MCP server %q rejected the connection as unauthorized — re-running OAuth login.", r.name)
+
+	// Drop cached credentials only when this connection actually presented
+	// them — r.srv.OAuth is set for a configured server and for one buildMCPToolset
+	// upgraded from the cache. Otherwise the refusal says nothing about the
+	// stored token, and discarding it would throw away a working credential
+	// and force a browser round-trip that was not needed. A cache that cannot
+	// be cleared is not fatal: the flow still runs, it may just reuse the token.
+	if r.srv.OAuth {
+		if err := removeMCPOAuthToken(r.srv.Name, r.srv.URL); err != nil {
+			notice.Notifyf("warning: could not clear cached OAuth token for MCP server %q: %v", r.name, err)
+		}
+	}
+
+	// The refused connection is finished with either way — whether the
+	// replacement connects, fails to list, or cannot be built at all. Close it
+	// first, so no error path below can leave its HTTP/SSE session and the
+	// goroutine draining it alive for the rest of the process.
+	if r.transport != nil {
+		r.transport.closeConn()
+	}
+	r.transport = nil
+
+	srv := r.srv
+	srv.OAuth = true
+	srv.Headers = withoutAuthorization(srv.Headers)
+	connect := r.reconnect
+	if connect == nil {
+		connect = newMCPToolset
+	}
+	inner, transport, err := connect(srv)
+	if err != nil {
+		return nil, fmt.Errorf("re-authorizing: %w", err)
+	}
+
+	tools, err := r.listTools(ctx, inner, transport, mcpOAuthConnectTimeout)
+	if err != nil {
+		// The replacement connected but could not list; it is abandoned here,
+		// so it must be closed too.
+		if transport != nil {
+			transport.closeConn()
+		}
+		return nil, fmt.Errorf("after re-authorizing: %w", err)
+	}
+	// Adopt the authorized connection so later callers — and the timeout path
+	// that closes a hung transport — act on the live one, not the connection
+	// it replaced.
+	r.inner, r.transport = inner, transport
+	return tools, nil
+}
+
+// hasAuthorizationHeader reports whether an Authorization header is configured,
+// canonicalizing because HTTP header names are case-insensitive.
+func hasAuthorizationHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(k) == "Authorization" && v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutAuthorization copies headers without any Authorization entry.
+//
+// The OAuth retry must not carry the static credential that was just refused.
+// headerRoundTripper is the client's outermost transport, so it runs after the
+// SDK has set "Authorization: Bearer <fresh token>" on the request and would
+// overwrite that token with the stale configured value — the retry would be
+// rejected exactly like the first attempt. Every other header is kept: they
+// carry routing and API metadata the server still needs.
+//
+// The comparison is canonicalized because HTTP header names are
+// case-insensitive and http.Header.Set canonicalizes on the way out, so a
+// config that spells the key "authorization" collides all the same.
+func withoutAuthorization(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(k) == "Authorization" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// isMCPAuthError reports whether err is the MCP transport's rendering of an
+// HTTP 401 or 403.
+//
+// The test is textual because the SDK reports a non-2xx status by formatting
+// http.StatusText into an error string rather than returning a typed error or
+// exposing the status code, so there is nothing for errors.As to match. The
+// OAuth error codes are matched too: a provider that returns a JSON body
+// ({"error":"invalid_token"}) alongside the status puts both in one string.
+func isMCPAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		strings.ToLower(http.StatusText(http.StatusUnauthorized)), // "unauthorized"
+		strings.ToLower(http.StatusText(http.StatusForbidden)),    // "forbidden"
+		"invalid_token",
+		"invalid_grant",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // deduplicateTools returns tools with their original names. When multiple
@@ -282,6 +494,63 @@ func ToolsetStatuses(toolsets []tool.Toolset) []MCPServerStatus {
 }
 
 func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
+	// Credentials cached for this identity mean a previous run authorized this
+	// server, whether the user asked for OAuth or an automatic re-login
+	// upgraded it. Install the handler from the start so those credentials are
+	// presented on the first request; without this the connection would go out
+	// unauthenticated, be refused, and re-run the browser flow every launch.
+	//
+	// This applies in headless runs too, so a cached token still gets used
+	// there. It cannot turn into a browser prompt: mcpOAuthCodeFetcher refuses
+	// when no user is present, so a revoked token fails fast rather than
+	// stalling the run on an approval nobody will see.
+	// An explicit Authorization header is the user's current instruction and
+	// outranks a token cached from an earlier run: replacing a rejected API key
+	// with a working one must take effect now, not after the cache's 24-hour
+	// window. If that credential is refused too, the interactive retry path
+	// clears it and re-authorizes.
+	if !srv.OAuth && srv.URL != "" && !hasAuthorizationHeader(srv.Headers) &&
+		hasCachedMCPOAuthToken(srv.Name, srv.URL) {
+		srv.OAuth = true
+	}
+	inner, tracked, err := newMCPToolset(srv)
+	if err != nil {
+		return nil, err
+	}
+	// The OAuth budget covers a browser round-trip — open, approve, redirect —
+	// so it applies only when that round-trip can happen. A headless run never
+	// waits on one (mcpOAuthCodeFetcher refuses immediately), so it keeps the
+	// normal connect timeout and fails fast.
+	timeout := mcpConnectTimeout
+	if srv.OAuth && interactiveOAuth.Load() {
+		timeout = mcpOAuthConnectTimeout
+	}
+	return &resilientToolset{
+		inner:     inner,
+		name:      srv.Name,
+		srv:       srv,
+		transport: tracked,
+		timeout:   timeout,
+	}, nil
+}
+
+// isLLMSDocsServer mirrors the config-load test, so a server list assembled by
+// hand gets the same treatment as one that came from a config file: an entry
+// that declares MCP-only configuration — a command, OAuth, custom headers — is
+// taken at its word and dialed, whatever its URL looks like.
+func isLLMSDocsServer(srv MCPServerConfig) bool {
+	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
+		return false
+	}
+	return config.IsLLMSDocsURL(srv.URL)
+}
+
+// newMCPToolset builds one MCP connection: the transport for the configured
+// endpoint, wrapped in connection tracking so a hung one can be closed. It is
+// separate from buildMCPToolset so the OAuth retry can construct a second,
+// authorized connection for a server whose first attempt was refused, without
+// rebuilding the resilient wrapper that owns the once-only listing state.
+func newMCPToolset(srv MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
 	var transport mcp.Transport
 	switch {
 	case srv.URL != "":
@@ -294,7 +563,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		if srv.OAuth {
 			handler, err := newMCPOAuthHandler(srv.Name, srv.URL)
 			if err != nil {
-				return nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
+				return nil, nil, fmt.Errorf("MCP server %q: %w", srv.Name, err)
 			}
 			t.OAuthHandler = handler
 		}
@@ -305,7 +574,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 			args:    srv.Args,
 		}
 	default:
-		return nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
+		return nil, nil, fmt.Errorf("MCP server %q has neither command nor URL", srv.Name)
 	}
 
 	// Wrap with connection tracking so we can close the connection on timeout.
@@ -315,13 +584,9 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 		Transport: tracked,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating MCP toolset: %w", err)
+		return nil, nil, fmt.Errorf("creating MCP toolset: %w", err)
 	}
-	timeout := mcpConnectTimeout
-	if srv.OAuth {
-		timeout = mcpOAuthConnectTimeout
-	}
-	return &resilientToolset{inner: ts, name: srv.Name, transport: tracked, timeout: timeout}, nil
+	return ts, tracked, nil
 }
 
 // newMCPOAuthHandler builds an OAuth authorization-code handler for a remote
@@ -333,8 +598,18 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 // and reused for the lifetime of the connection, so the flow runs only on the
 // first connect (or after the token expires).
 func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
+	// A headless run never completes an authorization flow — mcpOAuthCodeFetcher
+	// refuses before a browser opens — so it needs no callback server. Binding
+	// one anyway would make a sandbox or container that forbids loopback
+	// listeners fail handler construction, and the server would be skipped
+	// without its cached token ever being presented. That token is the whole
+	// reason a handler is installed there.
+	if !interactiveOAuth.Load() {
+		return &mcpTokenOnlyHandler{name: name, ts: loadMCPOAuthTokenSource(name, serverURL)}, nil
+	}
+
 	// Pick a free loopback port for the callback server.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := mcpOAuthListen()
 	if err != nil {
 		return nil, fmt.Errorf("starting OAuth callback listener: %w", err)
 	}
@@ -363,19 +638,11 @@ func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
 	cachedTS := loadMCPOAuthTokenSource(name, serverURL)
 
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		RedirectURL: redirectURL,
-		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{
-			Metadata: &oauthex.ClientRegistrationMetadata{
-				ClientName:              "pi-go",
-				RedirectURIs:            []string{redirectURL},
-				GrantTypes:              []string{"authorization_code"},
-				ResponseTypes:           []string{"code"},
-				TokenEndpointAuthMethod: "none",
-			},
-		},
-		AuthorizationCodeFetcher: fetcher,
-		RequestRefreshToken:      true,
-		InitialTokenSource:       cachedTS,
+		RedirectURL:                     redirectURL,
+		DynamicClientRegistrationConfig: mcpDynamicClientRegistration(redirectURL),
+		AuthorizationCodeFetcher:        fetcher,
+		RequestRefreshToken:             true,
+		InitialTokenSource:              cachedTS,
 		// Persist each freshly authorized token along with the OAuth config
 		// needed to refresh it next session.
 		NewTokenSource: mcpOAuthNewTokenSource(name, serverURL),
@@ -386,6 +653,54 @@ func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
 	}
 	return handler, nil
 }
+
+// mcpDynamicClientRegistration describes pi-go to an authorization server for
+// RFC 7591 dynamic client registration, so no client ID has to be pre-shared.
+func mcpDynamicClientRegistration(redirectURL string) *auth.DynamicClientRegistrationConfig {
+	return &auth.DynamicClientRegistrationConfig{
+		Metadata: &oauthex.ClientRegistrationMetadata{
+			ClientName:              "pi-go",
+			RedirectURIs:            []string{redirectURL},
+			GrantTypes:              []string{"authorization_code"},
+			ResponseTypes:           []string{"code"},
+			TokenEndpointAuthMethod: "none",
+		},
+	}
+}
+
+// mcpTokenOnlyHandler presents stored credentials and never obtains new ones.
+//
+// It is what a headless run gets. Wrapping the SDK's authorization-code
+// handler would not do: its Authorize runs protected-resource discovery,
+// authorization-server metadata retrieval and dynamic client registration
+// before it ever reaches the code fetcher, so a missing or revoked token would
+// still produce a round of network calls against the server — and block the
+// run while they happen — before anything could refuse. Implementing the
+// two-method interface directly means the refusal is the first thing that
+// happens.
+type mcpTokenOnlyHandler struct {
+	name string
+	ts   oauth2.TokenSource // nil when nothing usable is cached
+}
+
+// TokenSource hands back the cached credentials, which is the whole point of
+// installing a handler with no user present. A nil source is valid: the
+// transport then sends no authorization header.
+func (h *mcpTokenOnlyHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
+	return h.ts, nil
+}
+
+// Authorize refuses immediately. The interface makes the caller responsible
+// for closing the response body.
+func (h *mcpTokenOnlyHandler) Authorize(_ context.Context, _ *http.Request, resp *http.Response) error {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return fmt.Errorf("MCP server %q needs authorization, and there is no user to grant it; "+
+		"run pi interactively once to authorize it", h.name)
+}
+
+var _ auth.OAuthHandler = (*mcpTokenOnlyHandler)(nil)
 
 // mcpOAuthCallbackResult is what the loopback callback hands to the waiting
 // fetcher: either the authorization result or the error the authorization
@@ -448,13 +763,20 @@ func mcpOAuthCodeFetcher(
 	openURL func(string) error,
 ) func(context.Context, *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		// A headless run gets mcpTokenOnlyHandler and never reaches here, so
+		// this is a backstop: it keeps the browser shut if a future change
+		// installs the full handler without a user present.
+		if !interactiveOAuth.Load() {
+			return nil, fmt.Errorf("MCP server %q needs authorization, and there is no user to grant it; "+
+				"run pi interactively once to authorize it", name)
+		}
 		select {
 		case <-resultChan: // drop stale outcome from a previous flow
 		default:
 		}
-		fmt.Fprintf(os.Stderr, "pi-go: MCP server %q requires authorization. Opening browser...\n", name)
+		notice.Notifyf("MCP server %q requires authorization. Opening browser...", name)
 		if err := openURL(args.URL); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: could not open browser for %q; visit this URL manually:\n%s\n", name, args.URL)
+			notice.Notifyf("could not open browser for %q; visit this URL manually:\n%s", name, args.URL)
 		}
 		select {
 		case r := <-resultChan:
@@ -473,7 +795,7 @@ func mcpOAuthCodeFetcher(
 func mcpOAuthNewTokenSource(name, serverURL string) func(context.Context, *oauth2.Config, *oauth2.Token) (oauth2.TokenSource, error) {
 	return func(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token) (oauth2.TokenSource, error) {
 		if err := saveMCPOAuthToken(name, serverURL, cfg, tok); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: could not cache OAuth token for MCP server %q: %v\n", name, err)
+			notice.Notifyf("could not cache OAuth token for MCP server %q: %v", name, err)
 		}
 		return newPersistingTokenSource(cfg.TokenSource(ctx, tok), nil, func(t *oauth2.Token) error {
 			return saveMCPOAuthToken(name, serverURL, cfg, t)

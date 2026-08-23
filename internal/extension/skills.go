@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/dimetron/pi-go/internal/audit"
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 // Skill represents a loaded skill from a SKILL.md file.
@@ -74,7 +75,7 @@ func LoadSkillsWithOptions(opts LoadOptions, dirs ...string) ([]Skill, error) {
 	}
 
 	if len(blocked) > 0 {
-		fmt.Fprintf(os.Stderr, "pi-go: %d skill(s) blocked due to security audit. Run 'pi audit' for details.\n", len(blocked))
+		notice.Notifyf("%d skill(s) blocked due to security audit. Run 'pi audit' for details.", len(blocked))
 	}
 
 	return skills, nil
@@ -214,7 +215,7 @@ func auditRejects(opts LoadOptions, skillInfo skillCandidate, blocked *[]string)
 	}
 	scanResult, scanErr := audit.ScanFile(skillInfo.path)
 	if scanErr != nil {
-		fmt.Fprintf(os.Stderr, "pi-go: warning: audit scan failed for %s: %v\n", skillInfo.path, scanErr)
+		notice.Notifyf("warning: audit scan failed for %s: %v", skillInfo.path, scanErr)
 		return false
 	}
 	if !scanResult.HasCritical() {
@@ -222,11 +223,11 @@ func auditRejects(opts LoadOptions, skillInfo skillCandidate, blocked *[]string)
 	}
 	if opts.AuditMode == AuditBlock {
 		*blocked = append(*blocked, skillInfo.path)
-		fmt.Fprintf(os.Stderr, "pi-go: BLOCKED skill %s — critical hidden characters detected\n", skillInfo.defaultName)
+		notice.Notifyf("BLOCKED skill %s — critical hidden characters detected", skillInfo.defaultName)
 		return true
 	}
 	// AuditWarn: log but continue loading.
-	fmt.Fprintf(os.Stderr, "pi-go: WARNING: skill %s has critical hidden characters\n", skillInfo.defaultName)
+	notice.Notifyf("WARNING: skill %s has critical hidden characters", skillInfo.defaultName)
 	return false
 }
 

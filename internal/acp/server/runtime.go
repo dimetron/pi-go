@@ -180,7 +180,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	ag, err := piagent.New(piagent.Config{
 		Model:                llm,
 		Tools:                res.coreTools,
-		Toolsets:             buildMCPToolsetsFromCfg(cfg),
+		Toolsets:             buildToolsetsFromCfg(cfg),
 		Instruction:          instruction,
 		BeforeToolCallbacks:  res.beforeCBs,
 		AfterToolCallbacks:   res.afterCBs,
@@ -525,6 +525,22 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 		}
 	}
 	return hooks
+}
+
+// buildToolsetsFromCfg assembles the toolsets an ACP session exposes: the
+// configured MCP servers, plus the llms.txt documentation sources that back
+// fetch_docs.
+//
+// The documentation sources belong here for the same reason they do in the
+// interactive, one-shot and piagent paths. Without them an ACP session would
+// dial an llms.txt entry as MCP, fail on the 405, and never offer the tool
+// that can actually read it. A nil return means nothing is configured.
+func buildToolsetsFromCfg(cfg config.Config) []adktool.Toolset {
+	toolsets := buildMCPToolsetsFromCfg(cfg)
+	if llms := cfg.LLMSSources(); llms != nil {
+		toolsets = append(toolsets, tools.NewLLMSCachedToolset(llms))
+	}
+	return toolsets
 }
 
 // buildMCPToolsetsFromCfg converts cfg.MCP servers into resilient ADK toolsets

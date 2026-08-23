@@ -561,11 +561,20 @@ func (m *model) Init() tea.Cmd {
 	if m.initCh != nil {
 		// Deferred init: start listening for init events.
 		// Heavy initialization runs in a background goroutine (started by cli).
-		return tea.Batch(
+		cmds := []tea.Cmd{
 			requestBg,
 			waitForInitEvent(m.initCh),
 			tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg { return loadingTickMsg{} }),
-		)
+		}
+		// Drain notices from the first frame. Deferred init is exactly when
+		// they are raised — skipped MCP servers, blocked skills, an OAuth
+		// re-login — and it finishes long after they start arriving, so a
+		// reader armed only from the InitResult would leave the whole startup
+		// run buffered.
+		if m.cfg.SystemNoticeCh != nil {
+			cmds = append(cmds, waitForSystemNotice(m.cfg.SystemNoticeCh))
+		}
+		return tea.Batch(cmds...)
 	}
 
 	// Synchronous init (non-deferred path, used by tests and non-interactive modes).
@@ -2239,6 +2248,11 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg
 		m.cfg.AgentEventCh = r.AgentEventCh
+		// Remembered before the assignment: a front end that handed the same
+		// channel to the initial config already has a reader waiting on it,
+		// and arming a second would leave two goroutines blocked on one
+		// channel for the rest of the session.
+		prevNoticeCh := m.cfg.SystemNoticeCh
 		m.cfg.SystemNoticeCh = r.SystemNoticeCh
 		m.cfg.ContextBreakdown = r.ContextBreakdown
 		m.cfg.TokenTracker = r.TokenTracker
@@ -2263,7 +2277,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
 		}
-		if r.SystemNoticeCh != nil {
+		if r.SystemNoticeCh != nil && r.SystemNoticeCh != prevNoticeCh {
 			cmds = append(cmds, waitForSystemNotice(r.SystemNoticeCh))
 		}
 		cmds = append(cmds, memoryTickCmd(m.cwd()))

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 const upgradeScriptURL = "https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install.sh"
@@ -36,7 +38,7 @@ func checkForUpdate(ctx context.Context, currentVersion string) {
 		return
 	}
 	if isNewerVersion(currentVersion, latest) {
-		fmt.Fprintf(os.Stderr, "pi-go: update available: %s -> %s (run `pi upgrade`)\n", currentVersion, latest)
+		notice.Notifyf("update available: %s -> %s (run `pi upgrade`)", currentVersion, latest)
 	}
 }
 

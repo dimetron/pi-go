@@ -117,6 +117,8 @@ func TestMCPOAuthCallbackHandler(t *testing.T) {
 }
 
 func TestMCPOAuthCodeFetcher(t *testing.T) {
+	allowInteractiveOAuth(t)
+
 	t.Run("returns callback result and opens browser", func(t *testing.T) {
 		ch := make(chan mcpOAuthCallbackResult, 1)
 		var opened string
@@ -229,6 +231,9 @@ func TestMCPOAuthNewTokenSource_CacheFailureIsNonFatal(t *testing.T) {
 }
 
 func TestNewMCPOAuthHandler_UsesCachedToken(t *testing.T) {
+	// The full authorization-code handler is the interactive one; a headless
+	// run gets mcpTokenOnlyHandler instead.
+	allowInteractiveOAuth(t)
 	setTestHome(t)
 	const server, url = "cached-srv", "https://c.example.com/mcp"
 
@@ -263,6 +268,9 @@ func TestNewMCPOAuthHandler_UsesCachedToken(t *testing.T) {
 }
 
 func TestNewMCPOAuthHandler_NoCacheStartsUnauthorized(t *testing.T) {
+	// The full authorization-code handler is the interactive one; a headless
+	// run gets mcpTokenOnlyHandler instead.
+	allowInteractiveOAuth(t)
 	setTestHome(t)
 	h, err := newMCPOAuthHandler("fresh-srv", "https://f.example.com/mcp")
 	if err != nil {
@@ -278,5 +286,29 @@ func TestNewMCPOAuthHandler_NoCacheStartsUnauthorized(t *testing.T) {
 	}
 	if ts != nil {
 		t.Errorf("expected no token source before authorization, got %T", ts)
+	}
+}
+
+// The SDK calls the fetcher itself on any 401/403, so it is the last place
+// that can stop a browser opening in a print, JSON, RPC, socket or ACP run.
+// A cached token is still worth presenting there, which is why the handler is
+// installed at all — but the flow that needs a human must fail immediately
+// rather than block the run for the browser timeout.
+func TestMCPOAuthCodeFetcherRefusesWhenNonInteractive(t *testing.T) {
+	opened := false
+	fetcher := mcpOAuthCodeFetcher("srv", make(chan mcpOAuthCallbackResult, 1), func(string) error {
+		opened = true
+		return nil
+	})
+
+	res, err := fetcher(context.Background(), &auth.AuthorizationArgs{URL: "https://as.example.com/authorize"})
+	if err == nil {
+		t.Fatalf("got res=%v, want a refusal", res)
+	}
+	if opened {
+		t.Error("opened a browser with no user present")
+	}
+	if !strings.Contains(err.Error(), "no user to grant it") {
+		t.Errorf("error %q does not explain why", err)
 	}
 }

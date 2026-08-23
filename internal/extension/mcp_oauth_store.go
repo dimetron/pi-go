@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 // mcpOAuthTokenTTL bounds how long a persisted MCP OAuth token is reused.
@@ -144,7 +146,7 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 
 	if changed {
 		if err := p.saveFn(tok); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-go: could not update cached MCP OAuth token: %v\n", err)
+			notice.Notifyf("could not update cached MCP OAuth token: %v", err)
 		}
 	}
 	return tok, nil
@@ -208,6 +210,35 @@ func saveMCPOAuthToken(server, serverURL string, cfg *oauth2.Config, tok *oauth2
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("installing MCP OAuth cache: %w", err)
+	}
+	return nil
+}
+
+// hasCachedMCPOAuthToken reports whether usable credentials are already stored
+// for a server identity.
+//
+// It is what lets an automatic OAuth upgrade survive a restart. A server the
+// user configured without oauth: true, that was authorized after answering 401
+// once, would otherwise be rebuilt with no OAuth handler on the next launch:
+// it would send an unauthenticated request, be refused, and run the whole
+// browser flow again every time. Seeing a cached token here means the previous
+// upgrade succeeded, so the handler is installed from the start and the stored
+// credentials are presented instead.
+func hasCachedMCPOAuthToken(server, serverURL string) bool {
+	return loadMCPOAuthTokenSource(server, serverURL) != nil
+}
+
+// removeMCPOAuthToken discards the cached credentials for a server identity,
+// so the next connect runs the authorization flow instead of replaying a token
+// the provider has refused. A missing file is success: the goal is that no
+// cached token remains, not that one was deleted.
+func removeMCPOAuthToken(server, serverURL string) error {
+	path, err := mcpOAuthTokenFile(server, serverURL)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

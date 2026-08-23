@@ -313,3 +313,39 @@ func TestDetectGitRootSuccess(t *testing.T) {
 		t.Errorf("detectGitRoot(%q) returned empty, expected a path", dir)
 	}
 }
+
+// An ACP session must expose fetch_docs for configured llms.txt sources, the
+// same as the interactive, one-shot and piagent paths. Without it a session
+// would dial such an entry as MCP, fail on the 405, and offer nothing that can
+// read the documentation.
+func TestBuildToolsetsFromCfgIncludesLLMSSources(t *testing.T) {
+	cfg := config.Config{
+		LLMS: &config.LLMSConfig{Sources: []config.LLMSSource{
+			{Name: "adk", URL: "https://adk.dev/llms.txt"},
+		}},
+	}
+	ts := buildToolsetsFromCfg(cfg)
+	if len(ts) != 1 {
+		t.Fatalf("got %d toolsets, want 1", len(ts))
+	}
+	if ts[0].Name() != "llms" {
+		t.Errorf("toolset = %q, want the llms toolset", ts[0].Name())
+	}
+}
+
+// Sources inferred from an llms.txt MCP entry reach ACP too — they are not
+// stored in the serialized LLMS field, so only LLMSSources sees them.
+func TestBuildToolsetsFromCfgIncludesInferredSources(t *testing.T) {
+	cfg := config.Config{
+		InferredLLMS: []config.LLMSSource{{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"}},
+	}
+	if ts := buildToolsetsFromCfg(cfg); len(ts) != 1 {
+		t.Fatalf("got %d toolsets, want the inferred source served", len(ts))
+	}
+}
+
+func TestBuildToolsetsFromCfgEmpty(t *testing.T) {
+	if ts := buildToolsetsFromCfg(config.Config{}); ts != nil {
+		t.Errorf("got %v, want nil for an empty config", ts)
+	}
+}

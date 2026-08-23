@@ -454,6 +454,9 @@ func TestBuildAfterToolCallbacks_WithMatchingTool(t *testing.T) {
 // oauth flag gets an OAuth authorization-code handler attached to its
 // transport, and that the toolset uses the longer OAuth connect timeout.
 func TestBuildMCPToolset_OAuthHandler(t *testing.T) {
+	// The browser budget applies only where a browser can open.
+	allowInteractiveOAuth(t)
+
 	ts, err := buildMCPToolset(MCPServerConfig{
 		Name:  "oauth-server",
 		URL:   "https://mcp.example.com/mcp",

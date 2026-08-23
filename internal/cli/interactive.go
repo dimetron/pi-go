@@ -23,6 +23,7 @@ import (
 	"github.com/dimetron/pi-go/internal/logger"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
+	"github.com/dimetron/pi-go/internal/notice"
 	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -86,6 +87,41 @@ func runInteractive(
 ) error {
 	initCh := make(chan tui.InitEvent, 32)
 
+	// Extension notices — a skipped MCP server, a rerouted docs source, an
+	// OAuth re-login, a blocked skill — must land in the chat, not on the
+	// terminal. The TUI paints its frame with direct cursor control, so a
+	// stderr write from a background init goroutine lands inside the layout
+	// and stays there until the next full repaint. The send is non-blocking:
+	// a notice raised while the TUI is busy is dropped rather than stalling
+	// the agent turn behind it. The channel is handed to the TUI below as
+	// well as in the InitResult, so it is drained from the first frame and
+	// the buffer does not have to hold every startup notice — a run that
+	// blocks a large number of skills would otherwise lose the tail.
+	noticeCh := make(chan string, 64)
+	prevSink := notice.SetSink(func(msg string) {
+		select {
+		case noticeCh <- msg:
+		default:
+		}
+	})
+	defer func() { notice.SetSink(prevSink) }()
+
+	// Started only now that notices are routed to the TUI: an update banner
+	// written to os.Stderr would land inside the painted frame.
+	go checkForUpdate(ctx, Version)
+
+	// Likewise for anything config load decided: it ran before the sink
+	// existed, and the terminal reset before the first frame would have
+	// erased a message written then.
+	config.NotifyReroutedLLMS(cfg)
+
+	// A user is present and a browser is reachable, so an MCP server that
+	// answers 401 can be re-authorized interactively. Headless modes leave
+	// this off and skip the server instead of blocking on an approval nobody
+	// will see.
+	extension.SetInteractiveOAuth(true)
+	defer extension.SetInteractiveOAuth(false)
+
 	var res initResources
 	initDone := make(chan struct{})
 
@@ -95,7 +131,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, noticeCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -111,6 +147,7 @@ func runInteractive(
 		TokenTracker:   tokenTracker,
 		LifecycleHooks: convertHooks(cfg.Hooks),
 		DeferredInit:   initCh,
+		SystemNoticeCh: noticeCh,
 		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
 			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
 		},
@@ -139,6 +176,7 @@ func deferredInit(
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
 	ch chan<- tui.InitEvent,
+	noticeCh chan string,
 	res *initResources,
 ) {
 	initTotal := deferredInitTotal(cfg)
@@ -224,8 +262,8 @@ func deferredInit(
 	// counts *extension.resilientToolset entries, so a local toolset there
 	// would be live for the model yet invisible in the breakdown, and the MCP
 	// panel would list a non-MCP source.
-	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSCachedToolset(cfg.LLMS))...)
+	if llms := cfg.LLMSSources(); llms != nil {
+		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSCachedToolset(llms))...)
 	}
 	// Gemini search grounding (see agent.GeminiGroundingTool doc).
 	//
@@ -283,9 +321,9 @@ func deferredInit(
 	res.sessionID = sessionID
 
 	// Two-stage auto-compaction, installed as a pre-turn hook so history is
-	// only ever rewritten between turns. Buffered so a compaction notice never
-	// blocks the turn if the TUI is momentarily busy.
-	noticeCh := make(chan string, 8)
+	// only ever rewritten between turns. It shares the caller's notice channel
+	// — a buffered, non-blocking send, so a compaction notice never blocks the
+	// turn if the TUI is momentarily busy.
 	if hook := buildAutoCompactHook(autoCompactDeps{
 		SessionSvc:    sessionSvc,
 		Tracker:       tokenTracker,

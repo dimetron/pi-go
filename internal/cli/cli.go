@@ -487,14 +487,16 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	// Normally started by the root's PersistentPreRun; harmless if already up.
 	startPprofServer()
 
-	go checkForUpdate(cmd.Context(), Version)
-
 	runtime, err := buildRootRuntime(cmd.Context(), args)
 	if err != nil {
 		return err
 	}
 
 	if runtime.mode == "interactive" {
+		// The update check runs inside runInteractive so its notice is
+		// delivered after the TUI has claimed the notice sink. Started out
+		// here it would race the sink installation and could still land on
+		// os.Stderr, in the middle of the painted frame.
 		return runInteractive(
 			cmd.Context(),
 			runtime.cfg,
@@ -507,6 +509,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			runtime.worktreeDir,
 		)
 	}
+
+	go checkForUpdate(cmd.Context(), Version)
+	config.NotifyReroutedLLMS(runtime.cfg)
 
 	return runNonInteractive(
 		cmd.Context(),
@@ -1261,8 +1266,8 @@ func buildToolsets(cfg config.Config) []adktool.Toolset {
 	if cfg.A2A != nil && len(cfg.A2A.Agents) > 0 {
 		toolsets = append(toolsets, tools.NewA2AToolset(cfg.A2A))
 	}
-	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		toolsets = append(toolsets, tools.NewLLMSCachedToolset(cfg.LLMS))
+	if llms := cfg.LLMSSources(); llms != nil {
+		toolsets = append(toolsets, tools.NewLLMSCachedToolset(llms))
 	}
 	return toolsets
 }

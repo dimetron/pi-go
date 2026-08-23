@@ -4,9 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 // HookConfig defines a shell command hook for tool call events.
@@ -89,6 +95,15 @@ type Config struct {
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
 	LLMS          *LLMSConfig        `json:"llms,omitempty"`
+	// ReroutedLLMS names the MCP servers whose URL is an llms.txt index and
+	// which were therefore given a fetch_docs source during load.
+	ReroutedLLMS []string `json:"-"`
+	// InferredLLMS holds those generated sources. They are deliberately kept
+	// out of LLMS, which is serialized: Save marshals the whole config, so an
+	// inference drawn from a project's mcp.json would otherwise be written
+	// into the global config file by an unrelated operation such as
+	// SaveDefaultRole. Read both together with LLMSSources.
+	InferredLLMS []LLMSSource `json:"-"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -163,6 +178,13 @@ type A2AConfig struct {
 type LLMSSource struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// ExactURLOnly restricts fetch_docs to this exact URL rather than any
+	// page on the same host. It is set on sources pi-go inferred rather than
+	// ones the user wrote, and is not serialized: configuring a source is a
+	// deliberate grant of the whole host, whereas an inference drawn from a
+	// file name is a guess, and a guess must not quietly widen what the model
+	// can reach.
+	ExactURLOnly bool `json:"-"`
 }
 
 // LLMSConfig holds configuration for llms.txt documentation sources.
@@ -290,6 +312,15 @@ func LoadFrom(cwd string) (Config, error) {
 			cfg.MCP = &MCPConfig{Servers: mcpServers}
 		}
 	}
+
+	// An llms.txt index configured as an MCP server is also registered as a
+	// fetch_docs source, so the documentation is readable straight away. The
+	// names are recorded rather than announced here: config loads before any
+	// front end exists, and the TUI's first act is a full terminal reset that
+	// clears the screen and scrollback, so a notice raised now would be wiped
+	// before it could be read. NotifyReroutedLLMS delivers it once the caller
+	// knows where output goes.
+	cfg.ReroutedLLMS = registerLLMSDocsSources(&cfg)
 
 	// Migrate deprecated DefaultModel to roles if roles not set.
 	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
@@ -671,4 +702,171 @@ func SaveDefaultRole(model, provider string) error {
 	cfg.Roles["default"] = role
 
 	return cfg.Save()
+}
+
+// IsLLMSDocsURL reports whether u points at an llms.txt documentation index
+// rather than an MCP endpoint. Such a URL serves plain text over GET and
+// answers the MCP "initialize" POST with 405 Method Not Allowed, so treating
+// it as an MCP server can only ever fail.
+//
+// The convention (llmstxt.org) fixes the file name, not the host or path, so
+// the base name is the deciding test: "llms.txt" and the expanded
+// "llms-full.txt". The URL must also be one fetch_docs could actually read —
+// https with a host — since that is the only tool that would serve it.
+func IsLLMSDocsURL(u string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(u))
+	if err != nil {
+		return false
+	}
+	// fetch_docs serves only https URLs and matches sources by host, so
+	// anything else could never be read through it. Classifying such a URL as
+	// a docs source would advertise a source that rejects every fetch.
+	if parsed.Scheme != "https" || parsed.Hostname() == "" {
+		return false
+	}
+	if isPrivateHostLiteral(parsed.Hostname()) {
+		return false
+	}
+	// Never infer from a URL that carries credentials. A source's full URL is
+	// written into the fetch_docs tool description and sent to the model
+	// provider, so inferring one from userinfo or a query string would turn
+	// transport configuration the user kept in mcp.json into something the
+	// model — and its provider — can read. A docs index needs neither; anyone
+	// who genuinely has one can configure it under "llms" deliberately.
+	if parsed.User != nil || parsed.RawQuery != "" {
+		return false
+	}
+	switch strings.ToLower(path.Base(parsed.Path)) {
+	case "llms.txt", "llms-full.txt":
+		return true
+	}
+	return false
+}
+
+// isPrivateHostLiteral reports whether a host is a literal IP that fetch_docs
+// refuses as private, so a source it could never fetch is not advertised.
+//
+// Only literal addresses are tested. fetch_docs also resolves host names and
+// rejects those landing on a private address, but doing that here would put a
+// DNS lookup — and its latency and failure modes — inside config loading. The
+// cost of missing that case is one source entry whose fetches are refused with
+// a clear message; the cost of the lookup is paid on every start.
+func isPrivateHostLiteral(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast()
+}
+
+// isLLMSDocsServer reports whether an MCP entry looks like a documentation
+// index filed under the wrong key.
+//
+// The URL's base name is the signal: llms.txt is a reserved file name in an
+// established convention (llmstxt.org) for a plain-text index fetched with
+// GET. It is only a signal, never proof — MCP endpoint paths are arbitrary —
+// so nothing destructive hangs off it. An entry that carries configuration a
+// public docs index would never need (a command, OAuth, custom headers) is not
+// a docs index at all and is excluded outright.
+func isLLMSDocsServer(srv MCPServer) bool {
+	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
+		return false
+	}
+	return IsLLMSDocsURL(srv.URL)
+}
+
+// registerLLMSDocsSources makes an MCP entry that points at an llms.txt index
+// readable by the fetch_docs tool. Configuring a docs index under "mcpServers"
+// is a common mix-up — both are "a URL a model reads from" — and left alone it
+// yields a 405 on every startup and no documentation tool.
+//
+// The entry is left in the MCP list. Endpoint paths are arbitrary in MCP, so
+// the base name cannot prove the URL is not a real server, and removing one on
+// a guess would silently strip its tools. Adding a source is additive and
+// reversible: a genuine MCP server keeps every tool it had and merely gains an
+// inert docs source, while a genuine docs index becomes readable immediately
+// and reports its own failure through resilientToolset, which explains what
+// the entry really is once the connection has actually failed.
+//
+// An entry whose URL is already configured as a source is not added twice.
+func registerLLMSDocsSources(cfg *Config) []string {
+	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool)
+	if cfg.LLMS != nil {
+		for _, s := range cfg.LLMS.Sources {
+			existing[s.URL] = true
+		}
+	}
+
+	var registered []string
+	var added []LLMSSource
+	for _, srv := range cfg.MCP.Servers {
+		if !isLLMSDocsServer(srv) {
+			continue
+		}
+		registered = append(registered, srv.Name)
+		// Store the trimmed URL. IsLLMSDocsURL deliberately tolerates
+		// surrounding whitespace, but fetch_docs parses the stored value to
+		// check the host against its sources — an untrimmed URL fails that
+		// parse, so the source it advertises would be unusable.
+		url := strings.TrimSpace(srv.URL)
+		if existing[url] {
+			continue
+		}
+		existing[url] = true
+		added = append(added, LLMSSource{Name: srv.Name, URL: url, ExactURLOnly: true})
+	}
+	cfg.InferredLLMS = append(cfg.InferredLLMS, added...)
+	return registered
+}
+
+// LLMSSources returns the llms.txt sources to serve, both those the user
+// configured and those inferred from MCP entries during load. It returns nil
+// when there are none, so callers can test it directly to decide whether to
+// register the fetch_docs tool at all.
+//
+// The two are kept apart in the struct and joined only here, so nothing that
+// marshals a Config can persist an inference.
+func (c *Config) LLMSSources() *LLMSConfig {
+	var sources []LLMSSource
+	if c.LLMS != nil {
+		sources = append(sources, c.LLMS.Sources...)
+	}
+	sources = append(sources, c.InferredLLMS...)
+	if len(sources) == 0 {
+		return nil
+	}
+	return &LLMSConfig{Sources: sources}
+}
+
+// quoteAll returns the names quoted, for embedding a list in a notice without
+// leaving a name like "adk docs" ambiguous against the separator.
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strconv.Quote(n)
+	}
+	return out
+}
+
+// NotifyReroutedLLMS announces the MCP servers that load-time rerouting moved
+// to the llms.txt sources. It is separate from LoadFrom so the message is
+// raised only once a front end has claimed the notice sink — in the TUI that
+// means after runInteractive installs it, since anything written before the
+// first frame is erased by the terminal reset.
+//
+// It is safe to call more than once only if the caller intends to repeat the
+// message; each call emits.
+func NotifyReroutedLLMS(cfg Config) {
+	if len(cfg.ReroutedLLMS) == 0 {
+		return
+	}
+	notice.Notifyf("MCP server(s) %s point at an llms.txt index and are now readable with the "+
+		"fetch_docs tool. If they are not MCP endpoints, move them to \"llms\": {\"sources\": [...]} "+
+		"so they are not dialed on every startup.",
+		strings.Join(quoteAll(cfg.ReroutedLLMS), ", "))
 }
