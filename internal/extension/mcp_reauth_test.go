@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -831,10 +832,10 @@ func TestResilientToolset_ReauthorizeClosesRefusedConnectionOnSetupFailure(t *te
 	}
 }
 
-// A server upgraded from a static credential must not carry that credential
-// forward on the next launch: headerRoundTripper runs last and would overwrite
-// the cached bearer token, producing another 401 every time.
-func TestBuildMCPToolset_CachedUpgradeDropsStaticAuthorization(t *testing.T) {
+// An explicit Authorization header is the user's current instruction and must
+// outrank a token cached from an earlier run — otherwise replacing a rejected
+// API key with a working one has no effect until the cache expires.
+func TestBuildMCPToolset_ExplicitHeaderBeatsCachedToken(t *testing.T) {
 	setTestHome(t)
 	allowInteractiveOAuth(t)
 
@@ -848,26 +849,85 @@ func TestBuildMCPToolset_CachedUpgradeDropsStaticAuthorization(t *testing.T) {
 		t.Fatalf("seeding the token cache: %v", err)
 	}
 
-	srv := MCPServerConfig{
+	ts, err := buildMCPToolset(MCPServerConfig{
 		Name:    name,
 		URL:     url,
-		Headers: map[string]string{"Authorization": "Bearer refused", "X-Title": "pi"},
-	}
-	ts, err := buildMCPToolset(srv)
+		Headers: map[string]string{"Authorization": "Bearer freshly-configured", "X-Title": "pi"},
+	})
 	if err != nil {
 		t.Fatalf("buildMCPToolset: %v", err)
 	}
 	rt := ts.(*resilientToolset)
-	if !rt.srv.OAuth {
-		t.Fatal("cached credentials did not enable OAuth")
+	if rt.srv.OAuth {
+		t.Error("cached token overrode an explicitly configured credential")
 	}
-	if _, ok := rt.srv.Headers["Authorization"]; ok {
-		t.Error("carried the refused Authorization header; it would overwrite the cached token")
-	}
-	if rt.srv.Headers["X-Title"] != "pi" {
-		t.Errorf("dropped an unrelated header: %v", rt.srv.Headers)
-	}
-	if srv.Headers["Authorization"] != "Bearer refused" {
-		t.Error("mutated the caller's configured headers")
+	if rt.srv.Headers["Authorization"] != "Bearer freshly-configured" {
+		t.Errorf("configured credential not sent: %v", rt.srv.Headers)
 	}
 }
+
+func TestHasAuthorizationHeader(t *testing.T) {
+	tests := []struct {
+		in   map[string]string
+		want bool
+	}{
+		{nil, false},
+		{map[string]string{}, false},
+		{map[string]string{"X-Title": "pi"}, false},
+		{map[string]string{"Authorization": "Bearer k"}, true},
+		{map[string]string{"authorization": "Bearer k"}, true},
+		{map[string]string{"Authorization": ""}, false},
+	}
+	for _, tc := range tests {
+		if got := hasAuthorizationHeader(tc.in); got != tc.want {
+			t.Errorf("hasAuthorizationHeader(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The headless handler must refuse before the SDK can run discovery,
+// authorization-server metadata retrieval or dynamic client registration —
+// those are network calls against the server, and they block the run.
+func TestMCPTokenOnlyHandler(t *testing.T) {
+	h := &mcpTokenOnlyHandler{name: "openrouter"}
+
+	ts, err := h.TokenSource(context.Background())
+	if err != nil {
+		t.Fatalf("TokenSource: %v", err)
+	}
+	if ts != nil {
+		t.Errorf("TokenSource = %v, want nil when nothing is cached", ts)
+	}
+
+	body := &closeTrackingBody{}
+	resp := &http.Response{StatusCode: http.StatusUnauthorized, Body: body}
+	err = h.Authorize(context.Background(), nil, resp)
+	if err == nil {
+		t.Fatal("Authorize succeeded; it must refuse with no user present")
+	}
+	if !strings.Contains(err.Error(), "no user to grant it") {
+		t.Errorf("error %q does not explain why", err)
+	}
+	// The interface makes the handler responsible for the response body.
+	if !body.closed {
+		t.Error("Authorize did not close the response body")
+	}
+}
+
+func TestMCPTokenOnlyHandlerReturnsCachedSource(t *testing.T) {
+	want := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "cached"})
+	h := &mcpTokenOnlyHandler{name: "srv", ts: want}
+
+	got, err := h.TokenSource(context.Background())
+	if err != nil {
+		t.Fatalf("TokenSource: %v", err)
+	}
+	if got != want {
+		t.Error("cached credentials were not presented")
+	}
+}
+
+type closeTrackingBody struct{ closed bool }
+
+func (b *closeTrackingBody) Read([]byte) (int, error) { return 0, io.EOF }
+func (b *closeTrackingBody) Close() error             { b.closed = true; return nil }

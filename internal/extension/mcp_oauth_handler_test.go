@@ -231,6 +231,9 @@ func TestMCPOAuthNewTokenSource_CacheFailureIsNonFatal(t *testing.T) {
 }
 
 func TestNewMCPOAuthHandler_UsesCachedToken(t *testing.T) {
+	// The full authorization-code handler is the interactive one; a headless
+	// run gets mcpTokenOnlyHandler instead.
+	allowInteractiveOAuth(t)
 	setTestHome(t)
 	const server, url = "cached-srv", "https://c.example.com/mcp"
 
@@ -265,6 +268,9 @@ func TestNewMCPOAuthHandler_UsesCachedToken(t *testing.T) {
 }
 
 func TestNewMCPOAuthHandler_NoCacheStartsUnauthorized(t *testing.T) {
+	// The full authorization-code handler is the interactive one; a headless
+	// run gets mcpTokenOnlyHandler instead.
+	allowInteractiveOAuth(t)
 	setTestHome(t)
 	h, err := newMCPOAuthHandler("fresh-srv", "https://f.example.com/mcp")
 	if err != nil {

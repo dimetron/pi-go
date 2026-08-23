@@ -332,6 +332,17 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 	return tools, nil
 }
 
+// hasAuthorizationHeader reports whether an Authorization header is configured,
+// canonicalizing because HTTP header names are case-insensitive.
+func hasAuthorizationHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(k) == "Authorization" && v != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // withoutAuthorization copies headers without any Authorization entry.
 //
 // The OAuth retry must not carry the static credential that was just refused.
@@ -493,14 +504,14 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	// there. It cannot turn into a browser prompt: mcpOAuthCodeFetcher refuses
 	// when no user is present, so a revoked token fails fast rather than
 	// stalling the run on an approval nobody will see.
-	if !srv.OAuth && srv.URL != "" && hasCachedMCPOAuthToken(srv.Name, srv.URL) {
+	// An explicit Authorization header is the user's current instruction and
+	// outranks a token cached from an earlier run: replacing a rejected API key
+	// with a working one must take effect now, not after the cache's 24-hour
+	// window. If that credential is refused too, the interactive retry path
+	// clears it and re-authorizes.
+	if !srv.OAuth && srv.URL != "" && !hasAuthorizationHeader(srv.Headers) &&
+		hasCachedMCPOAuthToken(srv.Name, srv.URL) {
 		srv.OAuth = true
-		// The static credential is what was refused when this server was
-		// upgraded, and headerRoundTripper is the outermost transport, so
-		// leaving it in place would overwrite the cached bearer token with the
-		// refused value and produce another 401 — a browser flow every launch
-		// interactively, and no connection at all headlessly.
-		srv.Headers = withoutAuthorization(srv.Headers)
 	}
 	inner, tracked, err := newMCPToolset(srv)
 	if err != nil {
@@ -594,7 +605,7 @@ func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
 	// without its cached token ever being presented. That token is the whole
 	// reason a handler is installed there.
 	if !interactiveOAuth.Load() {
-		return newMCPOAuthTokenOnlyHandler(name, serverURL)
+		return &mcpTokenOnlyHandler{name: name, ts: loadMCPOAuthTokenSource(name, serverURL)}, nil
 	}
 
 	// Pick a free loopback port for the callback server.
@@ -657,31 +668,39 @@ func mcpDynamicClientRegistration(redirectURL string) *auth.DynamicClientRegistr
 	}
 }
 
-// newMCPOAuthTokenOnlyHandler builds a handler that can present and refresh
-// stored credentials but can never obtain new ones.
+// mcpTokenOnlyHandler presents stored credentials and never obtains new ones.
 //
-// It binds nothing and opens nothing. The redirect URL is a placeholder that is
-// never reached, because the fetcher refuses before any authorization request
-// is made — which is the correct behavior with no user present: a valid cached
-// token still authenticates the connection, and a revoked one fails fast with a
-// message saying to run pi interactively once.
-func newMCPOAuthTokenOnlyHandler(name, serverURL string) (auth.OAuthHandler, error) {
-	const redirectURL = "http://127.0.0.1/callback"
-	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		RedirectURL: redirectURL,
-		// Required by the constructor even though no flow can run here: the
-		// fetcher refuses before registration would ever be attempted.
-		DynamicClientRegistrationConfig: mcpDynamicClientRegistration(redirectURL),
-		AuthorizationCodeFetcher:        mcpOAuthCodeFetcher(name, nil, browser.Open),
-		RequestRefreshToken:             true,
-		InitialTokenSource:              loadMCPOAuthTokenSource(name, serverURL),
-		NewTokenSource:                  mcpOAuthNewTokenSource(name, serverURL),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating OAuth handler: %w", err)
-	}
-	return handler, nil
+// It is what a headless run gets. Wrapping the SDK's authorization-code
+// handler would not do: its Authorize runs protected-resource discovery,
+// authorization-server metadata retrieval and dynamic client registration
+// before it ever reaches the code fetcher, so a missing or revoked token would
+// still produce a round of network calls against the server — and block the
+// run while they happen — before anything could refuse. Implementing the
+// two-method interface directly means the refusal is the first thing that
+// happens.
+type mcpTokenOnlyHandler struct {
+	name string
+	ts   oauth2.TokenSource // nil when nothing usable is cached
 }
+
+// TokenSource hands back the cached credentials, which is the whole point of
+// installing a handler with no user present. A nil source is valid: the
+// transport then sends no authorization header.
+func (h *mcpTokenOnlyHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
+	return h.ts, nil
+}
+
+// Authorize refuses immediately. The interface makes the caller responsible
+// for closing the response body.
+func (h *mcpTokenOnlyHandler) Authorize(_ context.Context, _ *http.Request, resp *http.Response) error {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return fmt.Errorf("MCP server %q needs authorization, and there is no user to grant it; "+
+		"run pi interactively once to authorize it", h.name)
+}
+
+var _ auth.OAuthHandler = (*mcpTokenOnlyHandler)(nil)
 
 // mcpOAuthCallbackResult is what the loopback callback hands to the waiting
 // fetcher: either the authorization result or the error the authorization
@@ -744,11 +763,9 @@ func mcpOAuthCodeFetcher(
 	openURL func(string) error,
 ) func(context.Context, *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
-		// The SDK calls this itself whenever a request comes back 401/403, so
-		// it is the last place that can stop a browser opening with nobody to
-		// see it. A handler is installed in headless runs too — cached
-		// credentials are worth presenting there — but the flow that needs a
-		// human must fail fast instead of blocking the run.
+		// A headless run gets mcpTokenOnlyHandler and never reaches here, so
+		// this is a backstop: it keeps the browser shut if a future change
+		// installs the full handler without a user present.
 		if !interactiveOAuth.Load() {
 			return nil, fmt.Errorf("MCP server %q needs authorization, and there is no user to grant it; "+
 				"run pi interactively once to authorize it", name)
