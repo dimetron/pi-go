@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -728,5 +729,104 @@ func TestBuildMCPToolset_CachedTokenKeepsFastTimeoutWhenHeadless(t *testing.T) {
 	if rt.timeout != mcpConnectTimeout {
 		t.Errorf("timeout = %v, want the fast budget %v; nothing waits on a browser here",
 			rt.timeout, mcpConnectTimeout)
+	}
+}
+
+// A headless run must not depend on binding a loopback listener. A sandbox or
+// container that forbids one would otherwise fail handler construction and
+// skip the server without ever presenting the cached token that is the only
+// reason a handler is installed there at all.
+func TestNewMCPOAuthHandler_HeadlessNeedsNoListener(t *testing.T) {
+	setTestHome(t)
+	// Deliberately no allowInteractiveOAuth.
+	refuseLoopbackListen(t)
+
+	h, err := newMCPOAuthHandler("srv", "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatalf("newMCPOAuthHandler: %v", err)
+	}
+	if h == nil {
+		t.Fatal("no handler returned; a cached token could never be presented")
+	}
+}
+
+// The interactive handler does need one — it has to receive the redirect — so
+// a bind failure there is a real error rather than something to paper over.
+func TestNewMCPOAuthHandler_InteractiveRequiresListener(t *testing.T) {
+	setTestHome(t)
+	allowInteractiveOAuth(t)
+	refuseLoopbackListen(t)
+
+	if _, err := newMCPOAuthHandler("srv", "https://mcp.example.com/mcp"); err == nil {
+		t.Fatal("expected an error when the callback listener cannot bind")
+	} else if !strings.Contains(err.Error(), "callback listener") {
+		t.Errorf("error %q does not name the listener", err)
+	}
+}
+
+// A server whose cached token is presented headlessly still builds when
+// loopback binding is impossible.
+func TestBuildMCPToolset_HeadlessCachedTokenSurvivesNoListener(t *testing.T) {
+	setTestHome(t)
+	refuseLoopbackListen(t)
+
+	const (
+		name = "openrouter"
+		url  = "https://mcp.example.com/mcp"
+	)
+	cfg := &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{TokenURL: "https://as.example.com/token"}}
+	tok := &oauth2.Token{AccessToken: "cached", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
+	if err := saveMCPOAuthToken(name, url, cfg, tok); err != nil {
+		t.Fatalf("seeding the token cache: %v", err)
+	}
+
+	ts, err := buildMCPToolset(MCPServerConfig{Name: name, URL: url})
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v; the cached token would never be presented", err)
+	}
+	if !ts.(*resilientToolset).srv.OAuth {
+		t.Error("cached credentials were not presented")
+	}
+}
+
+// refuseLoopbackListen makes the callback listener fail to bind, standing in
+// for a sandbox that forbids loopback servers.
+func refuseLoopbackListen(t *testing.T) {
+	t.Helper()
+	prev := mcpOAuthListen
+	mcpOAuthListen = func() (net.Listener, error) {
+		return nil, fmt.Errorf("operation not permitted")
+	}
+	t.Cleanup(func() { mcpOAuthListen = prev })
+}
+
+// The refused connection must be closed even when the replacement cannot be
+// built at all, not only when it connects and then fails.
+func TestResilientToolset_ReauthorizeClosesRefusedConnectionOnSetupFailure(t *testing.T) {
+	setTestHome(t)
+	allowInteractiveOAuth(t)
+	captureNotices(t)
+
+	old := &connTrackingTransport{}
+	old.conn = &closeCountingConn{}
+	oldConn := old.conn.(*closeCountingConn)
+
+	rt := &resilientToolset{
+		inner:     &unauthorizedToolset{},
+		name:      "openrouter",
+		srv:       MCPServerConfig{Name: "openrouter", URL: "https://mcp.example.com/mcp"},
+		transport: old,
+		reconnect: func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
+			return nil, nil, fmt.Errorf("starting OAuth callback listener: permission denied")
+		},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if !rt.failed {
+		t.Error("expected the server to be marked failed")
+	}
+	if oldConn.closes() == 0 {
+		t.Error("refused connection leaked when the replacement could not be built")
 	}
 }

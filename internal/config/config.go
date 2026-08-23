@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -711,11 +712,32 @@ func IsLLMSDocsURL(u string) bool {
 	if parsed.Scheme != "https" || parsed.Hostname() == "" {
 		return false
 	}
+	if isPrivateHostLiteral(parsed.Hostname()) {
+		return false
+	}
 	switch strings.ToLower(path.Base(parsed.Path)) {
 	case "llms.txt", "llms-full.txt":
 		return true
 	}
 	return false
+}
+
+// isPrivateHostLiteral reports whether a host is a literal IP that fetch_docs
+// refuses as private, so a source it could never fetch is not advertised.
+//
+// Only literal addresses are tested. fetch_docs also resolves host names and
+// rejects those landing on a private address, but doing that here would put a
+// DNS lookup — and its latency and failure modes — inside config loading. The
+// cost of missing that case is one source entry whose fetches are refused with
+// a clear message; the cost of the lookup is paid on every start.
+func isPrivateHostLiteral(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast()
 }
 
 // isLLMSDocsServer reports whether an MCP entry looks like a documentation

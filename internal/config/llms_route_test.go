@@ -228,3 +228,25 @@ func TestRegisterLLMSDocsSourcesDedupesAcrossWhitespace(t *testing.T) {
 		t.Errorf("LLMS sources = %+v, want one entry", cfg.LLMS)
 	}
 }
+
+// fetch_docs refuses private and loopback hosts, so registering one would
+// advertise a source whose every fetch is rejected.
+func TestIsLLMSDocsURLRejectsPrivateLiteralHosts(t *testing.T) {
+	for _, u := range []string{
+		"https://127.0.0.1/llms.txt",
+		"https://[::1]/llms.txt",
+		"https://10.0.0.5/llms.txt",
+		"https://192.168.1.10/llms-full.txt",
+		"https://172.16.0.1/llms.txt",
+		"https://169.254.1.1/llms.txt",
+		"https://0.0.0.0/llms.txt",
+	} {
+		if IsLLMSDocsURL(u) {
+			t.Errorf("IsLLMSDocsURL(%q) = true; fetch_docs would reject that host", u)
+		}
+	}
+	// A public literal address is still fine.
+	if !IsLLMSDocsURL("https://93.184.216.34/llms.txt") {
+		t.Error("rejected a public literal address")
+	}
+}

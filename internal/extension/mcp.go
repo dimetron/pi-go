@@ -39,6 +39,14 @@ var mcpConnectTimeout = 30 * time.Second
 // minutes waiting on a browser nobody will see. runInteractive turns it on.
 var interactiveOAuth atomic.Bool
 
+// mcpOAuthListen binds the loopback callback server for the interactive
+// authorization flow. It is a variable so tests can make binding fail and
+// check that a headless run does not depend on it — a sandbox or container
+// that forbids loopback listeners is exactly the case that matters.
+var mcpOAuthListen = func() (net.Listener, error) {
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
 // SetInteractiveOAuth enables or disables the automatic OAuth re-login for
 // MCP servers that answer 401/403. Only a front end with a user and a browser
 // in reach should enable it.
@@ -287,6 +295,15 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 		}
 	}
 
+	// The refused connection is finished with either way — whether the
+	// replacement connects, fails to list, or cannot be built at all. Close it
+	// first, so no error path below can leave its HTTP/SSE session and the
+	// goroutine draining it alive for the rest of the process.
+	if r.transport != nil {
+		r.transport.closeConn()
+	}
+	r.transport = nil
+
 	srv := r.srv
 	srv.OAuth = true
 	srv.Headers = withoutAuthorization(srv.Headers)
@@ -298,14 +315,6 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 	if err != nil {
 		return nil, fmt.Errorf("re-authorizing: %w", err)
 	}
-
-	// The refused connection is finished with either way. Close it before the
-	// replacement takes over, or its HTTP/SSE session and the goroutine
-	// draining it stay alive for the rest of the process.
-	if r.transport != nil {
-		r.transport.closeConn()
-	}
-	r.transport = nil
 
 	tools, err := r.listTools(ctx, inner, transport, mcpOAuthConnectTimeout)
 	if err != nil {
@@ -572,8 +581,18 @@ func newMCPToolset(srv MCPServerConfig) (tool.Toolset, *connTrackingTransport, e
 // and reused for the lifetime of the connection, so the flow runs only on the
 // first connect (or after the token expires).
 func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
+	// A headless run never completes an authorization flow — mcpOAuthCodeFetcher
+	// refuses before a browser opens — so it needs no callback server. Binding
+	// one anyway would make a sandbox or container that forbids loopback
+	// listeners fail handler construction, and the server would be skipped
+	// without its cached token ever being presented. That token is the whole
+	// reason a handler is installed there.
+	if !interactiveOAuth.Load() {
+		return newMCPOAuthTokenOnlyHandler(name, serverURL)
+	}
+
 	// Pick a free loopback port for the callback server.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := mcpOAuthListen()
 	if err != nil {
 		return nil, fmt.Errorf("starting OAuth callback listener: %w", err)
 	}
@@ -602,25 +621,57 @@ func newMCPOAuthHandler(name, serverURL string) (auth.OAuthHandler, error) {
 	cachedTS := loadMCPOAuthTokenSource(name, serverURL)
 
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		RedirectURL: redirectURL,
-		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{
-			Metadata: &oauthex.ClientRegistrationMetadata{
-				ClientName:              "pi-go",
-				RedirectURIs:            []string{redirectURL},
-				GrantTypes:              []string{"authorization_code"},
-				ResponseTypes:           []string{"code"},
-				TokenEndpointAuthMethod: "none",
-			},
-		},
-		AuthorizationCodeFetcher: fetcher,
-		RequestRefreshToken:      true,
-		InitialTokenSource:       cachedTS,
+		RedirectURL:                     redirectURL,
+		DynamicClientRegistrationConfig: mcpDynamicClientRegistration(redirectURL),
+		AuthorizationCodeFetcher:        fetcher,
+		RequestRefreshToken:             true,
+		InitialTokenSource:              cachedTS,
 		// Persist each freshly authorized token along with the OAuth config
 		// needed to refresh it next session.
 		NewTokenSource: mcpOAuthNewTokenSource(name, serverURL),
 	})
 	if err != nil {
 		_ = srv.Close()
+		return nil, fmt.Errorf("creating OAuth handler: %w", err)
+	}
+	return handler, nil
+}
+
+// mcpDynamicClientRegistration describes pi-go to an authorization server for
+// RFC 7591 dynamic client registration, so no client ID has to be pre-shared.
+func mcpDynamicClientRegistration(redirectURL string) *auth.DynamicClientRegistrationConfig {
+	return &auth.DynamicClientRegistrationConfig{
+		Metadata: &oauthex.ClientRegistrationMetadata{
+			ClientName:              "pi-go",
+			RedirectURIs:            []string{redirectURL},
+			GrantTypes:              []string{"authorization_code"},
+			ResponseTypes:           []string{"code"},
+			TokenEndpointAuthMethod: "none",
+		},
+	}
+}
+
+// newMCPOAuthTokenOnlyHandler builds a handler that can present and refresh
+// stored credentials but can never obtain new ones.
+//
+// It binds nothing and opens nothing. The redirect URL is a placeholder that is
+// never reached, because the fetcher refuses before any authorization request
+// is made — which is the correct behavior with no user present: a valid cached
+// token still authenticates the connection, and a revoked one fails fast with a
+// message saying to run pi interactively once.
+func newMCPOAuthTokenOnlyHandler(name, serverURL string) (auth.OAuthHandler, error) {
+	const redirectURL = "http://127.0.0.1/callback"
+	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
+		RedirectURL: redirectURL,
+		// Required by the constructor even though no flow can run here: the
+		// fetcher refuses before registration would ever be attempted.
+		DynamicClientRegistrationConfig: mcpDynamicClientRegistration(redirectURL),
+		AuthorizationCodeFetcher:        mcpOAuthCodeFetcher(name, nil, browser.Open),
+		RequestRefreshToken:             true,
+		InitialTokenSource:              loadMCPOAuthTokenSource(name, serverURL),
+		NewTokenSource:                  mcpOAuthNewTokenSource(name, serverURL),
+	})
+	if err != nil {
 		return nil, fmt.Errorf("creating OAuth handler: %w", err)
 	}
 	return handler, nil
