@@ -499,14 +499,18 @@ func (t *LLMSToolset) urlAllowed(target *url.URL) bool {
 		if err != nil {
 			continue
 		}
-		// The query is part of the identity: ?resource=other can select a
+		// EscapedPath, not Path: url.Parse decodes %2F to "/" in Path, so
+		// /a%2Fb/llms.txt and /a/b/llms.txt compare equal there while being
+		// different resources on the wire.
+		//
+		// The query is part of the identity too: ?resource=other can select a
 		// different document entirely, so ignoring it would let any variant
 		// of the path through. An inferred source never carries one —
 		// config.IsLLMSDocsURL refuses query-bearing URLs — so in practice
 		// this requires the request to have none either.
 		if strings.EqualFold(u.Hostname(), target.Hostname()) &&
 			u.Scheme == target.Scheme && u.Port() == target.Port() &&
-			u.Path == target.Path && u.RawQuery == target.RawQuery {
+			u.EscapedPath() == target.EscapedPath() && u.RawQuery == target.RawQuery {
 			return true
 		}
 	}

@@ -88,3 +88,26 @@ func TestURLAllowedInferredSourceAllowsEmptyQuery(t *testing.T) {
 		t.Error("refused the same resource spelled with an empty query")
 	}
 }
+
+// url.Parse decodes %2F to "/" in Path, so an encoded separator would compare
+// equal to a real one while addressing a different resource on the wire.
+func TestURLAllowedInferredSourceComparesEscapedPath(t *testing.T) {
+	ts := NewLLMSToolset(&config.LLMSConfig{Sources: []config.LLMSSource{
+		{Name: "guessed", URL: "https://internal.corp/a%2Fb/llms.txt", ExactURLOnly: true},
+	}})
+	if ts.urlAllowed(mustURL(t, "https://internal.corp/a/b/llms.txt")) {
+		t.Error("a decoded separator matched an encoded one; they are different resources")
+	}
+	if !ts.urlAllowed(mustURL(t, "https://internal.corp/a%2Fb/llms.txt")) {
+		t.Error("the source's own URL was refused")
+	}
+
+	// And the other direction: a source with a real separator must not admit
+	// the encoded spelling.
+	ts = NewLLMSToolset(&config.LLMSConfig{Sources: []config.LLMSSource{
+		{Name: "guessed", URL: "https://internal.corp/a/b/llms.txt", ExactURLOnly: true},
+	}})
+	if ts.urlAllowed(mustURL(t, "https://internal.corp/a%2Fb/llms.txt")) {
+		t.Error("an encoded separator matched a real one")
+	}
+}
