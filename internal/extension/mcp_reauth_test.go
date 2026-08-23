@@ -157,7 +157,9 @@ func TestResilientToolset_ReauthorizeClearsCachedToken(t *testing.T) {
 	rt := &resilientToolset{
 		inner: &unauthorizedToolset{},
 		name:  name,
-		srv:   MCPServerConfig{Name: name, URL: url},
+		// OAuth is on because buildMCPToolset upgrades a server with cached
+		// credentials, so this connection presented the revoked token.
+		srv: MCPServerConfig{Name: name, URL: url, OAuth: true},
 		reconnect: func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
 			return &successToolset{tools: []tool.Tool{&namedTool{nameVal: "t"}}}, nil, nil
 		},
@@ -290,7 +292,7 @@ func TestResilientToolset_ReconnectErrorIsReported(t *testing.T) {
 	}
 }
 
-// A docs index configured as an MCP server is still dialled — the base name
+// A docs index configured as an MCP server is still dialed — the base name
 // cannot prove it is not a real endpoint — but when the connection fails the
 // message must explain what the entry actually is, not just relay a 405.
 func TestResilientToolset_DiagnosesLLMSDocsIndexOnFailure(t *testing.T) {
@@ -343,7 +345,7 @@ func TestResilientToolset_NoLLMSDiagnosisForConfiguredEndpoint(t *testing.T) {
 	}
 }
 
-// A docs index is dialled like any other server; nothing is skipped on a name.
+// A docs index is dialed like any other server; nothing is skipped on a name.
 func TestBuildMCPToolsets_DialsLLMSDocsIndex(t *testing.T) {
 	toolsets, err := BuildMCPToolsets([]MCPServerConfig{
 		{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"},
@@ -534,7 +536,7 @@ func TestResilientToolset_NoReauthorizeWhenNonInteractive(t *testing.T) {
 }
 
 // An entry that declares configuration only a real MCP endpoint needs is
-// dialled whatever its URL looks like, so the llms.txt name heuristic can
+// dialed whatever its URL looks like, so the llms.txt name heuristic can
 // never silently remove a working server.
 func TestBuildMCPToolsets_KeepsConfiguredServerAtLLMSPath(t *testing.T) {
 	notices := captureNotices(t)
@@ -615,4 +617,85 @@ func (c *closeCountingConn) closes() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.n
+}
+
+// A cached token means a previous run authorized this server, so the handler
+// must be installed from the start. Without that the connection goes out
+// unauthenticated, is refused, and the browser flow runs on every launch.
+func TestBuildMCPToolset_UpgradesServerWithCachedToken(t *testing.T) {
+	setTestHome(t)
+
+	const (
+		name = "openrouter"
+		url  = "https://mcp.example.com/mcp"
+	)
+	srv := MCPServerConfig{Name: name, URL: url}
+
+	ts, err := buildMCPToolset(srv)
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	if rt := ts.(*resilientToolset); rt.srv.OAuth {
+		t.Fatal("enabled OAuth for a server with no cached credentials")
+	}
+
+	cfg := &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{TokenURL: "https://as.example.com/token"}}
+	tok := &oauth2.Token{AccessToken: "cached", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
+	if err := saveMCPOAuthToken(name, url, cfg, tok); err != nil {
+		t.Fatalf("seeding the token cache: %v", err)
+	}
+
+	ts, err = buildMCPToolset(srv)
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	rt := ts.(*resilientToolset)
+	if !rt.srv.OAuth {
+		t.Error("cached credentials did not enable OAuth; the browser flow would repeat every launch")
+	}
+	// The browser round-trip budget applies to any OAuth connection, including
+	// one upgraded implicitly, or an approval would be cut off at 30s.
+	if rt.timeout != mcpOAuthConnectTimeout {
+		t.Errorf("timeout = %v, want the OAuth budget %v", rt.timeout, mcpOAuthConnectTimeout)
+	}
+	// The caller's config must not be mutated by the upgrade.
+	if srv.OAuth {
+		t.Error("buildMCPToolset mutated the caller's server config")
+	}
+}
+
+// A server that never presented a cached token learns nothing from a 401 about
+// that token, so a credential stored for it must survive the re-login.
+func TestResilientToolset_ReauthorizeKeepsUnusedCachedToken(t *testing.T) {
+	setTestHome(t)
+	allowInteractiveOAuth(t)
+	captureNotices(t)
+
+	const (
+		name = "openrouter"
+		url  = "https://mcp.example.com/mcp"
+	)
+	cfg := &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{TokenURL: "https://as.example.com/token"}}
+	if err := saveMCPOAuthToken(name, url, cfg, &oauth2.Token{AccessToken: "unused"}); err != nil {
+		t.Fatalf("seeding the token cache: %v", err)
+	}
+	path, err := mcpOAuthTokenFile(name, url)
+	if err != nil {
+		t.Fatalf("mcpOAuthTokenFile: %v", err)
+	}
+
+	rt := &resilientToolset{
+		inner: &unauthorizedToolset{},
+		name:  name,
+		srv:   MCPServerConfig{Name: name, URL: url}, // OAuth off: nothing was presented
+		reconnect: func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
+			return &successToolset{tools: []tool.Tool{&namedTool{nameVal: "t"}}}, nil, nil
+		},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("discarded a cached token the refused connection never sent: %v", err)
+	}
 }

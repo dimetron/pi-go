@@ -2233,6 +2233,11 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.SkillDirs = r.SkillDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg
 		m.cfg.AgentEventCh = r.AgentEventCh
+		// Remembered before the assignment: a front end that handed the same
+		// channel to the initial config already has a reader waiting on it,
+		// and arming a second would leave two goroutines blocked on one
+		// channel for the rest of the session.
+		prevNoticeCh := m.cfg.SystemNoticeCh
 		m.cfg.SystemNoticeCh = r.SystemNoticeCh
 		m.cfg.ContextBreakdown = r.ContextBreakdown
 		m.cfg.TokenTracker = r.TokenTracker
@@ -2257,7 +2262,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		if r.AgentEventCh != nil {
 			cmds = append(cmds, waitForSubEvent(r.AgentEventCh))
 		}
-		if r.SystemNoticeCh != nil {
+		if r.SystemNoticeCh != nil && r.SystemNoticeCh != prevNoticeCh {
 			cmds = append(cmds, waitForSystemNotice(r.SystemNoticeCh))
 		}
 		cmds = append(cmds, memoryTickCmd(m.cwd()))

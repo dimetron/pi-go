@@ -88,20 +88,23 @@ func runInteractive(
 	initCh := make(chan tui.InitEvent, 32)
 
 	// Extension notices — a skipped MCP server, a rerouted docs source, an
-	// OAuth re-login — must land in the chat, not on the terminal. The TUI
-	// paints its frame with direct cursor control, so a stderr write from a
-	// background init goroutine lands inside the layout and stays there until
-	// the next full repaint. The channel is buffered and the send is
-	// non-blocking: a notice raised while the TUI is busy is dropped rather
-	// than stalling the agent turn behind it.
-	noticeCh := make(chan string, 16)
+	// OAuth re-login, a blocked skill — must land in the chat, not on the
+	// terminal. The TUI paints its frame with direct cursor control, so a
+	// stderr write from a background init goroutine lands inside the layout
+	// and stays there until the next full repaint. The send is non-blocking:
+	// a notice raised while the TUI is busy is dropped rather than stalling
+	// the agent turn behind it. The channel is handed to the TUI below as
+	// well as in the InitResult, so it is drained from the first frame and
+	// the buffer does not have to hold every startup notice — a run that
+	// blocks a large number of skills would otherwise lose the tail.
+	noticeCh := make(chan string, 64)
 	prevSink := notice.SetSink(func(msg string) {
 		select {
 		case noticeCh <- msg:
 		default:
 		}
 	})
-	defer notice.SetSink(prevSink)
+	defer func() { notice.SetSink(prevSink) }()
 
 	// Started only now that notices are routed to the TUI: an update banner
 	// written to os.Stderr would land inside the painted frame.
@@ -144,6 +147,7 @@ func runInteractive(
 		TokenTracker:   tokenTracker,
 		LifecycleHooks: convertHooks(cfg.Hooks),
 		DeferredInit:   initCh,
+		SystemNoticeCh: noticeCh,
 		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
 			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
 		},

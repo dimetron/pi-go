@@ -697,10 +697,18 @@ func SaveDefaultRole(model, provider string) error {
 // it as an MCP server can only ever fail.
 //
 // The convention (llmstxt.org) fixes the file name, not the host or path, so
-// the base name is the whole test: "llms.txt" and the expanded "llms-full.txt".
+// the base name is the deciding test: "llms.txt" and the expanded
+// "llms-full.txt". The URL must also be one fetch_docs could actually read —
+// https with a host — since that is the only tool that would serve it.
 func IsLLMSDocsURL(u string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(u))
 	if err != nil {
+		return false
+	}
+	// fetch_docs serves only https URLs and matches sources by host, so
+	// anything else could never be read through it. Classifying such a URL as
+	// a docs source would advertise a source that rejects every fetch.
+	if parsed.Scheme != "https" || parsed.Hostname() == "" {
 		return false
 	}
 	switch strings.ToLower(path.Base(parsed.Path)) {
@@ -802,6 +810,6 @@ func NotifyReroutedLLMS(cfg Config) {
 	}
 	notice.Notifyf("MCP server(s) %s point at an llms.txt index and are now readable with the "+
 		"fetch_docs tool. If they are not MCP endpoints, move them to \"llms\": {\"sources\": [...]} "+
-		"so they are not dialled on every startup.",
+		"so they are not dialed on every startup.",
 		strings.Join(quoteAll(cfg.ReroutedLLMS), ", "))
 }

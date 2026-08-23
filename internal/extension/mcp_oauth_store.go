@@ -214,6 +214,20 @@ func saveMCPOAuthToken(server, serverURL string, cfg *oauth2.Config, tok *oauth2
 	return nil
 }
 
+// hasCachedMCPOAuthToken reports whether usable credentials are already stored
+// for a server identity.
+//
+// It is what lets an automatic OAuth upgrade survive a restart. A server the
+// user configured without oauth: true, that was authorized after answering 401
+// once, would otherwise be rebuilt with no OAuth handler on the next launch:
+// it would send an unauthenticated request, be refused, and run the whole
+// browser flow again every time. Seeing a cached token here means the previous
+// upgrade succeeded, so the handler is installed from the start and the stored
+// credentials are presented instead.
+func hasCachedMCPOAuthToken(server, serverURL string) bool {
+	return loadMCPOAuthTokenSource(server, serverURL) != nil
+}
+
 // removeMCPOAuthToken discards the cached credentials for a server identity,
 // so the next connect runs the authorization flow instead of replaying a token
 // the provider has refused. A missing file is success: the goal is that no

@@ -34,7 +34,7 @@ var mcpConnectTimeout = 30 * time.Second
 // appropriate when a human is sitting in front of the process.
 //
 // It defaults to off, so print, JSON, RPC, socket and ACP runs keep the
-// behaviour they had: a rejected server is reported and skipped after the
+// behavior they had: a rejected server is reported and skipped after the
 // normal connect timeout, and nothing stalls a headless pipeline for ten
 // minutes waiting on a browser nobody will see. runInteractive turns it on.
 var interactiveOAuth atomic.Bool
@@ -204,7 +204,7 @@ func (r *resilientToolset) failureNotice(err error) string {
 // The timeout is a separate timer rather than a derived context because the
 // inner toolset needs the caller's agent.ReadonlyContext, and wrapping it in
 // context.WithTimeout would erase that interface. The inner goroutine still
-// honours the original ctx; on timeout we abandon it, close the connection
+// honors the original ctx; on timeout we abandon it, close the connection
 // underneath it so it can unblock, and drain it in the background.
 func (r *resilientToolset) listTools(
 	ctx agent.ReadonlyContext,
@@ -275,11 +275,16 @@ func (r *resilientToolset) canReauthorize(err error) bool {
 func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	notice.Notifyf("MCP server %q rejected the connection as unauthorized — re-running OAuth login.", r.name)
 
-	// Drop cached credentials first so the flow re-authorizes instead of
-	// replaying the token that was just refused. A cache that cannot be
-	// cleared is not fatal: the flow still runs, it may just reuse the token.
-	if err := removeMCPOAuthToken(r.srv.Name, r.srv.URL); err != nil {
-		notice.Notifyf("warning: could not clear cached OAuth token for MCP server %q: %v", r.name, err)
+	// Drop cached credentials only when this connection actually presented
+	// them — r.srv.OAuth is set for a configured server and for one buildMCPToolset
+	// upgraded from the cache. Otherwise the refusal says nothing about the
+	// stored token, and discarding it would throw away a working credential
+	// and force a browser round-trip that was not needed. A cache that cannot
+	// be cleared is not fatal: the flow still runs, it may just reuse the token.
+	if r.srv.OAuth {
+		if err := removeMCPOAuthToken(r.srv.Name, r.srv.URL); err != nil {
+			notice.Notifyf("warning: could not clear cached OAuth token for MCP server %q: %v", r.name, err)
+		}
 	}
 
 	srv := r.srv
@@ -469,6 +474,14 @@ func ToolsetStatuses(toolsets []tool.Toolset) []MCPServerStatus {
 }
 
 func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
+	// Credentials cached for this identity mean a previous run authorized this
+	// server, whether the user asked for OAuth or an automatic re-login
+	// upgraded it. Install the handler from the start so those credentials are
+	// presented on the first request; without this the connection would go out
+	// unauthenticated, be refused, and re-run the browser flow every launch.
+	if !srv.OAuth && srv.URL != "" && hasCachedMCPOAuthToken(srv.Name, srv.URL) {
+		srv.OAuth = true
+	}
 	inner, tracked, err := newMCPToolset(srv)
 	if err != nil {
 		return nil, err
@@ -489,7 +502,7 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 // isLLMSDocsServer mirrors the config-load test, so a server list assembled by
 // hand gets the same treatment as one that came from a config file: an entry
 // that declares MCP-only configuration — a command, OAuth, custom headers — is
-// taken at its word and dialled, whatever its URL looks like.
+// taken at its word and dialed, whatever its URL looks like.
 func isLLMSDocsServer(srv MCPServerConfig) bool {
 	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
 		return false

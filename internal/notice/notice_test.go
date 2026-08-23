@@ -9,7 +9,7 @@ import (
 func TestNotifyfUsesInstalledSink(t *testing.T) {
 	var got []string
 	prev := SetSink(func(msg string) { got = append(got, msg) })
-	defer SetSink(prev)
+	defer func() { SetSink(prev) }()
 
 	Notifyf("MCP server %q unavailable: %v", "openrouter", "Unauthorized")
 
@@ -30,7 +30,7 @@ func TestNotifyfUsesInstalledSink(t *testing.T) {
 func TestSetSinkReturnsPreviousSink(t *testing.T) {
 	first := func(string) {}
 	prev := SetSink(first)
-	defer SetSink(prev)
+	defer func() { SetSink(prev) }()
 
 	restored := SetSink(nil)
 	if restored == nil {
@@ -50,7 +50,7 @@ func TestNotifyfConcurrent(t *testing.T) {
 		count++
 		mu.Unlock()
 	})
-	defer SetSink(prev)
+	defer func() { SetSink(prev) }()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {

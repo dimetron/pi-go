@@ -19,6 +19,12 @@ func TestIsLLMSDocsURL(t *testing.T) {
 		{"https://example.com/docs/LLMS.TXT", true},
 		{"  https://adk.dev/llms.txt  ", true},
 		{"https://mcp.openrouter.ai/mcp", false},
+		// fetch_docs serves only https URLs matched by host, so anything it
+		// could not read is not a docs source however it is named.
+		{"http://docs.example.com/llms.txt", false},
+		{"llms.txt", false},
+		{"file:///tmp/llms.txt", false},
+		{"https:///llms.txt", false},
 		{"https://example.com/llms.txt.json", false},
 		{"https://example.com/allms.txt", false},
 		{"", false},
@@ -120,7 +126,7 @@ func TestLoadDefersReroutedLLMSNotice(t *testing.T) {
 
 	var raised []string
 	prev := notice.SetSink(func(msg string) { raised = append(raised, msg) })
-	defer notice.SetSink(prev)
+	defer func() { notice.SetSink(prev) }()
 
 	cfg, err := LoadFrom(dir)
 	if err != nil {
@@ -147,7 +153,7 @@ func TestLoadDefersReroutedLLMSNotice(t *testing.T) {
 func TestNotifyReroutedLLMSSilentWhenNothingMoved(t *testing.T) {
 	var raised []string
 	prev := notice.SetSink(func(msg string) { raised = append(raised, msg) })
-	defer notice.SetSink(prev)
+	defer func() { notice.SetSink(prev) }()
 
 	NotifyReroutedLLMS(Config{})
 	if len(raised) != 0 {
