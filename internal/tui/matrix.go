@@ -201,6 +201,28 @@ func (ms *matrixState) feed(tokenText string, width int) {
 	}
 }
 
+// visible reports whether render would return a non-empty bar, without building
+// it. View reserves the three matrix rows (rule, bar, rule) only when render is
+// non-empty, so messageViewportHeight has to agree with render exactly — testing
+// ms.active alone over-reserves in the window between activation and the first
+// feed, when the grid is still empty. TestMatrixVisibleMatchesRender pins the
+// two together.
+func (ms *matrixState) visible() bool {
+	if !ms.active {
+		return false
+	}
+	// render prefixes every row with pad spaces; a pad of zero adds nothing.
+	if ms.fullWidth > ms.width && (ms.fullWidth-ms.width)/2 > 0 {
+		return true
+	}
+	for row := range ms.grid {
+		if len(ms.grid[row]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // render returns the matrix rain string centered at 60% width, or empty if inactive.
 func (ms *matrixState) render() string {
 	if !ms.active {

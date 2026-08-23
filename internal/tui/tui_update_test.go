@@ -322,22 +322,29 @@ func TestUpdateRestartMsg(t *testing.T) {
 	_ = mm // model state doesn't change for restart
 }
 
-func TestUpdateAgentListenerAlive(t *testing.T) {
+// TestUpdateUnknownMsgLeavesListenerUntouched replaces TestUpdateAgentListenerAlive,
+// which asserted that an unknown message re-armed the agent listener. That was the
+// bug, not the contract: nothing was consumed from m.agentCh, so the re-arm added a
+// reader that never went away. The listener stays alive because every type carried
+// on m.agentCh is claimed by updateAgentStream and re-armed there exactly once.
+func TestUpdateUnknownMsgLeavesListenerUntouched(t *testing.T) {
 	m := &model{
 		running:   true,
 		agentCh:   make(chan agentMsg, 1),
 		chatModel: ChatModel{Messages: make([]message, 0)},
 	}
 
-	// Unknown message type while running should keep listener alive
 	newM, cmd := m.Update("unknown message type")
 	mm := newM.(*model)
 
 	if mm != m {
 		t.Error("unknown message should return the same model")
 	}
-	if cmd == nil {
-		t.Error("should return command to keep agent listener alive")
+	if cmd != nil {
+		t.Errorf("unknown message armed a listener (%T), want nil", cmd)
+	}
+	if m.agentCh == nil {
+		t.Error("unknown message must not clear the agent channel")
 	}
 }
 

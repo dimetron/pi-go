@@ -630,10 +630,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Keep the agent listener alive for any unhandled message types.
-	if m.running {
-		return m, waitForAgent(m.agentCh)
-	}
+	// Deliberately no waitForAgent re-arm here. Every message that arrives on
+	// m.agentCh is claimed by updateAgentStream, and each of those handlers
+	// re-arms exactly once, so a single reader is always parked on the channel.
+	// Re-arming for messages that did *not* come from the channel adds a reader
+	// without consuming one: the readers then accumulate for the whole turn, and
+	// on close(agentCh) every one of them delivers its own agentDoneMsg, running
+	// handleAgentDone — lifecycle hooks, startNextPrompt — once per surplus
+	// reader. See TestAgentListenerStaysSingle.
 	return m, nil
 }
 
@@ -746,23 +750,20 @@ func (m *model) handleMatrixTick() (tea.Model, tea.Cmd, bool) {
 	return m, matrixTickCmd(), true
 }
 
-// handleWindowSize re-lays out the frame, and keeps the agent listener alive
-// so a resize mid-turn does not drop the stream.
+// handleWindowSize re-lays out the frame. It does not touch the agent listener:
+// a tea.WindowSizeMsg never came off m.agentCh, so re-arming here would leave an
+// extra reader parked on the channel for every resize taken mid-turn.
 func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
 	m.resizeAt = time.Now()
 	m.width, m.height = msg.Width, msg.Height
 	m.applyResize()
 
-	cmd := resizeDrainDoneCmd(m.resizeAt)
-	if m.running {
-		return m, tea.Batch(cmd, waitForAgent(m.agentCh)), true
-	}
-	return m, cmd, true
+	return m, resizeDrainDoneCmd(m.resizeAt), true
 }
 
 // handlePaste inserts pasted text into the prompt, ignoring pastes that arrive
 // while the agent runs or that are really resize noise. Outside a resize drain
-// the message is left unhandled so the agent listener stays alive.
+// the message is left unhandled so later handler groups still get a look at it.
 func (m *model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd, bool) {
 	if !m.resizeDraining() && isUserPaste(msg.Content) {
 		m.inputModel.InsertText(msg.Content)
@@ -1666,13 +1667,15 @@ func clipMessagesToViewport(messagesView string, availableHeight, scroll int) (v
 
 	// Pad to fill the viewport. availableHeight is message rows only — the blank
 	// rows that inset the block from the rules are budgeted separately.
-	visibleLineCount := strings.Count(visible, "\n") + 1
-	for visibleLineCount < availableHeight {
-		// Keep the final padding row materialized. A trailing newline only
-		// terminates the preceding row; treating its trailing empty string as a
-		// row made the composed frame one line shorter than the terminal.
-		visible += "\n "
-		visibleLineCount++
+	// Keep the final padding row materialized. A trailing newline only
+	// terminates the preceding row; treating its trailing empty string as a row
+	// made the composed frame one line shorter than the terminal.
+	//
+	// Built in one allocation: `visible += "\n "` in a loop recopies the whole
+	// viewport per padding row, which on a tall terminal with a short
+	// conversation made this the second-largest allocation site in the process.
+	if visibleLineCount := strings.Count(visible, "\n") + 1; visibleLineCount < availableHeight {
+		visible += strings.Repeat("\n ", availableHeight-visibleLineCount)
 	}
 	return visible, startLine, endLine
 }
@@ -1893,8 +1896,11 @@ func (m *model) messageViewportHeight() int {
 	// the panel one row taller than the terminal, so the terminal scrolled the
 	// frame and tore the panel away from the sidebar.
 	availableHeight := m.height - statusLines - inputLines - 3 - 2
-	if m.matrix.render() != "" {
+	if m.matrix.visible() {
 		// The matrix bar adds three rows above the messages (rule, bar, rule).
+		// visible() answers the same question as render() != "" without building
+		// the bar: render() assembled the whole animation purely for this check,
+		// and View renders it again a few lines later.
 		availableHeight -= 3
 	}
 	if m.branchPopup != nil {

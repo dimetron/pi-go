@@ -1532,13 +1532,17 @@ func TestUpdate_UnknownMsg_NotRunning(t *testing.T) {
 	}
 }
 
+// TestUpdate_UnknownMsg_Running asserts an unknown message arms nothing, even
+// mid-turn. This test previously required the opposite — a waitForAgent cmd —
+// which is what let surplus readers pile up on m.agentCh for a whole turn. See
+// TestUnclaimedMessageDoesNotArmAgentListener for the reasoning.
 func TestUpdate_UnknownMsg_Running(t *testing.T) {
 	m := newTestModelFull(t)
 	m.running = true
 	m.agentCh = make(chan agentMsg, 1)
 	_, cmd := m.Update(unknownMsgType{})
-	if cmd == nil {
-		t.Error("expected waitForAgent cmd when running")
+	if cmd != nil {
+		t.Errorf("unknown msg while running armed a listener (%T), want nil", cmd)
 	}
 }
 
