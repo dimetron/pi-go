@@ -1,13 +1,18 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"golang.org/x/oauth2"
 	"google.golang.org/adk/v2/agent"
@@ -285,11 +290,61 @@ func TestResilientToolset_ReconnectErrorIsReported(t *testing.T) {
 	}
 }
 
-// An llms.txt index answers "initialize" with 405 and can never yield tools;
-// dialing it produces a warning on every startup and nothing else.
-func TestBuildMCPToolsets_SkipsLLMSDocsIndex(t *testing.T) {
+// A docs index configured as an MCP server is still dialled — the base name
+// cannot prove it is not a real endpoint — but when the connection fails the
+// message must explain what the entry actually is, not just relay a 405.
+func TestResilientToolset_DiagnosesLLMSDocsIndexOnFailure(t *testing.T) {
 	notices := captureNotices(t)
 
+	rt := &resilientToolset{
+		inner: &methodNotAllowedToolset{},
+		name:  "adk-docs-mcp",
+		srv:   MCPServerConfig{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if !rt.failed {
+		t.Error("expected the server to be marked failed")
+	}
+	msgs := notices()
+	if len(msgs) != 1 {
+		t.Fatalf("notices = %v, want exactly one", msgs)
+	}
+	for _, want := range []string{"adk-docs-mcp", "fetch_docs", "llms", "sources", "Method Not Allowed"} {
+		if !strings.Contains(msgs[0], want) {
+			t.Errorf("notice %q does not mention %q", msgs[0], want)
+		}
+	}
+}
+
+// A server that declares MCP-only configuration gets the plain failure
+// message, never the docs-index diagnosis.
+func TestResilientToolset_NoLLMSDiagnosisForConfiguredEndpoint(t *testing.T) {
+	notices := captureNotices(t)
+
+	rt := &resilientToolset{
+		inner: &methodNotAllowedToolset{},
+		name:  "authed",
+		srv: MCPServerConfig{
+			Name:    "authed",
+			URL:     "https://example.com/llms.txt",
+			Headers: map[string]string{"Authorization": "Bearer k"},
+		},
+	}
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if hasNoticeContaining(notices(), "fetch_docs") {
+		t.Errorf("diagnosed a configured MCP endpoint as a docs index; notices: %v", notices())
+	}
+	if !hasNoticeContaining(notices(), "unavailable") {
+		t.Errorf("failure was not reported; notices: %v", notices())
+	}
+}
+
+// A docs index is dialled like any other server; nothing is skipped on a name.
+func TestBuildMCPToolsets_DialsLLMSDocsIndex(t *testing.T) {
 	toolsets, err := BuildMCPToolsets([]MCPServerConfig{
 		{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"},
 		{Name: "openrouter", URL: "https://mcp.example.com/mcp"},
@@ -297,36 +352,18 @@ func TestBuildMCPToolsets_SkipsLLMSDocsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildMCPToolsets: %v", err)
 	}
-	if len(toolsets) != 1 {
-		t.Fatalf("built %d toolsets, want 1 (the docs index skipped)", len(toolsets))
-	}
-	if toolsets[0].Name() != "openrouter" {
-		t.Errorf("kept %q, want the real MCP server", toolsets[0].Name())
-	}
-	if !hasNoticeContaining(notices(), "fetch_docs") {
-		t.Errorf("user was not pointed at fetch_docs; notices: %v", notices())
+	if len(toolsets) != 2 {
+		t.Fatalf("built %d toolsets, want 2; nothing may be dropped on a URL base name", len(toolsets))
 	}
 }
 
-// The notice must name the tool and the config key the user has to edit,
-// otherwise it is just another warning with no way to act on it.
-func TestBuildMCPToolsets_LLMSNoticeIsActionable(t *testing.T) {
-	notices := captureNotices(t)
+// methodNotAllowedToolset fails the way an llms.txt index does when something
+// POSTs "initialize" at it.
+type methodNotAllowedToolset struct{}
 
-	if _, err := BuildMCPToolsets([]MCPServerConfig{
-		{Name: "adk-docs-mcp", URL: "https://adk.dev/llms-full.txt"},
-	}); err != nil {
-		t.Fatalf("BuildMCPToolsets: %v", err)
-	}
-	msgs := notices()
-	if len(msgs) != 1 {
-		t.Fatalf("notices = %v, want exactly one", msgs)
-	}
-	for _, want := range []string{"adk-docs-mcp", "llms", "sources", "fetch_docs"} {
-		if !strings.Contains(msgs[0], want) {
-			t.Errorf("notice %q does not mention %q", msgs[0], want)
-		}
-	}
+func (m *methodNotAllowedToolset) Name() string { return "405" }
+func (m *methodNotAllowedToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) {
+	return nil, fmt.Errorf(`failed to init MCP session: calling "initialize": Method Not Allowed`)
 }
 
 func hasNoticeContaining(msgs []string, want string) bool {
@@ -515,4 +552,67 @@ func TestBuildMCPToolsets_KeepsConfiguredServerAtLLMSPath(t *testing.T) {
 	if hasNoticeContaining(notices(), "fetch_docs") {
 		t.Errorf("rerouted a server that declares MCP-only config; notices: %v", notices())
 	}
+}
+
+// A connection that is replaced or abandoned must be closed, or its HTTP/SSE
+// session and the goroutine draining it stay alive for the process lifetime.
+func TestResilientToolset_ReauthorizeClosesReplacedConnection(t *testing.T) {
+	setTestHome(t)
+	allowInteractiveOAuth(t)
+	captureNotices(t)
+
+	old := &connTrackingTransport{inner: &countingTransport{}}
+	old.conn = &closeCountingConn{}
+	replacement := &connTrackingTransport{inner: &countingTransport{}}
+	replacement.conn = &closeCountingConn{}
+
+	rt := &resilientToolset{
+		inner:     &unauthorizedToolset{},
+		name:      "openrouter",
+		srv:       MCPServerConfig{Name: "openrouter", URL: "https://mcp.example.com/mcp"},
+		transport: old,
+		reconnect: func(MCPServerConfig) (tool.Toolset, *connTrackingTransport, error) {
+			// The retry also fails, so its connection is abandoned too.
+			return &unauthorizedToolset{}, replacement, nil
+		},
+	}
+	oldConn := old.conn.(*closeCountingConn)
+	newConn := replacement.conn.(*closeCountingConn)
+
+	if _, err := rt.Tools(nil); err != nil {
+		t.Fatalf("Tools() returned an error: %v", err)
+	}
+	if oldConn.closes() == 0 {
+		t.Error("the refused connection was replaced without being closed")
+	}
+	if newConn.closes() == 0 {
+		t.Error("the abandoned retry connection was not closed")
+	}
+}
+
+type countingTransport struct{}
+
+func (c *countingTransport) Connect(context.Context) (mcp.Connection, error) {
+	return &closeCountingConn{}, nil
+}
+
+// closeCountingConn is a minimal mcp.Connection that records Close calls.
+type closeCountingConn struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *closeCountingConn) Read(context.Context) (jsonrpc.Message, error) { return nil, io.EOF }
+func (c *closeCountingConn) Write(context.Context, jsonrpc.Message) error  { return io.EOF }
+func (c *closeCountingConn) SessionID() string                             { return "" }
+func (c *closeCountingConn) Close() error {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return nil
+}
+func (c *closeCountingConn) closes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }

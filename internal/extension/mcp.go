@@ -67,17 +67,6 @@ type MCPServerConfig struct {
 func BuildMCPToolsets(servers []MCPServerConfig) ([]tool.Toolset, error) {
 	var toolsets []tool.Toolset
 	for _, srv := range servers {
-		// An llms.txt index is a documentation file, not an MCP endpoint: it
-		// answers the "initialize" POST with 405 and can never yield tools.
-		// config.LoadFrom already reroutes these to the fetch_docs sources,
-		// but server lists are also assembled by hand (evals, embedded
-		// agents), so refuse to dial one here rather than emit a 405 warning
-		// on every startup.
-		if isLLMSDocsServer(srv) {
-			notice.Notifyf("MCP server %q points at an llms.txt index, not an MCP endpoint — "+
-				"configure it under \"llms\": {\"sources\": [...]} and read it with the fetch_docs tool.", srv.Name)
-			continue
-		}
 		ts, err := buildMCPToolset(srv)
 		if err != nil {
 			notice.Notifyf("warning: MCP server %q skipped: %v", srv.Name, err)
@@ -178,7 +167,7 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			tools, err = r.reauthorize(ctx)
 		}
 		if err != nil {
-			notice.Notifyf("warning: MCP server %q unavailable: %v", r.name, err)
+			notice.Notifyf("%s", r.failureNotice(err))
 			r.failed = true
 			return
 		}
@@ -188,6 +177,25 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 		return nil, nil
 	}
 	return r.tools, nil
+}
+
+// failureNotice renders the message shown when a server cannot be used.
+//
+// A URL whose base name is llms.txt gets a different message from the raw
+// transport error. That name is a reserved convention (llmstxt.org) for a
+// plain-text documentation index served over GET, so an entry pointing at one
+// is almost certainly a docs source filed under the wrong config key — and the
+// bare "Method Not Allowed" it produces says nothing about how to fix that.
+// The diagnosis is only offered once the connection has actually failed, so a
+// real MCP server that happens to live at such a path is never second-guessed.
+func (r *resilientToolset) failureNotice(err error) string {
+	if isLLMSDocsServer(r.srv) {
+		return fmt.Sprintf("MCP server %q could not be reached (%v). That URL is an llms.txt "+
+			"documentation index, not an MCP endpoint — it is already served by the fetch_docs "+
+			"tool, so the entry can be removed from \"mcpServers\" and kept under "+
+			"\"llms\": {\"sources\": [...]}.", r.name, err)
+	}
+	return fmt.Sprintf("warning: MCP server %q unavailable: %v", r.name, err)
 }
 
 // listTools runs one Tools() attempt under a timeout, so a server that accepts
@@ -286,8 +294,21 @@ func (r *resilientToolset) reauthorize(ctx agent.ReadonlyContext) ([]tool.Tool, 
 		return nil, fmt.Errorf("re-authorizing: %w", err)
 	}
 
+	// The refused connection is finished with either way. Close it before the
+	// replacement takes over, or its HTTP/SSE session and the goroutine
+	// draining it stay alive for the rest of the process.
+	if r.transport != nil {
+		r.transport.closeConn()
+	}
+	r.transport = nil
+
 	tools, err := r.listTools(ctx, inner, transport, mcpOAuthConnectTimeout)
 	if err != nil {
+		// The replacement connected but could not list; it is abandoned here,
+		// so it must be closed too.
+		if transport != nil {
+			transport.closeConn()
+		}
 		return nil, fmt.Errorf("after re-authorizing: %w", err)
 	}
 	// Adopt the authorized connection so later callers — and the timeout path

@@ -31,25 +31,22 @@ func TestIsLLMSDocsURL(t *testing.T) {
 	}
 }
 
-func TestRouteLLMSDocsServersMovesDocsIndexToSources(t *testing.T) {
+func TestRegisterLLMSDocsSourcesRegistersDocsIndex(t *testing.T) {
 	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
 		{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"},
 		{Name: "openrouter", URL: "https://mcp.openrouter.ai/mcp"},
 		{Name: "local", Command: "some-server"},
 	}}}
 
-	moved := routeLLMSDocsServers(&cfg)
+	moved := registerLLMSDocsSources(&cfg)
 
 	if len(moved) != 1 || moved[0] != "adk-docs-mcp" {
 		t.Fatalf("moved = %v, want [adk-docs-mcp]", moved)
 	}
-	if len(cfg.MCP.Servers) != 2 {
-		t.Fatalf("MCP servers = %d, want 2 (docs index removed)", len(cfg.MCP.Servers))
-	}
-	for _, srv := range cfg.MCP.Servers {
-		if srv.Name == "adk-docs-mcp" {
-			t.Error("docs index left in the MCP server list; it would 405 on every connect")
-		}
+	// The entry stays: a base name cannot prove the URL is not a real MCP
+	// endpoint, and removing one on a guess would silently strip its tools.
+	if len(cfg.MCP.Servers) != 3 {
+		t.Fatalf("MCP servers = %d, want all 3 kept", len(cfg.MCP.Servers))
 	}
 	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
 		t.Fatalf("LLMS sources = %+v, want one entry", cfg.LLMS)
@@ -62,19 +59,19 @@ func TestRouteLLMSDocsServersMovesDocsIndexToSources(t *testing.T) {
 
 // The same index configured both ways must not register twice: fetch_docs
 // would then list one source under two names.
-func TestRouteLLMSDocsServersSkipsDuplicateSource(t *testing.T) {
+func TestRegisterLLMSDocsSourcesSkipsDuplicateSource(t *testing.T) {
 	cfg := Config{
 		MCP:  &MCPConfig{Servers: []MCPServer{{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"}}},
 		LLMS: &LLMSConfig{Sources: []LLMSSource{{Name: "AgentDevelopmentKit", URL: "https://adk.dev/llms.txt"}}},
 	}
 
-	moved := routeLLMSDocsServers(&cfg)
+	moved := registerLLMSDocsSources(&cfg)
 
 	if len(moved) != 1 {
 		t.Fatalf("moved = %v, want the server reported as rerouted", moved)
 	}
-	if len(cfg.MCP.Servers) != 0 {
-		t.Errorf("MCP servers = %d, want 0", len(cfg.MCP.Servers))
+	if len(cfg.MCP.Servers) != 1 {
+		t.Errorf("MCP servers = %d, want the entry kept", len(cfg.MCP.Servers))
 	}
 	if len(cfg.LLMS.Sources) != 1 {
 		t.Errorf("LLMS sources = %d, want 1 (no duplicate)", len(cfg.LLMS.Sources))
@@ -84,12 +81,12 @@ func TestRouteLLMSDocsServersSkipsDuplicateSource(t *testing.T) {
 	}
 }
 
-func TestRouteLLMSDocsServersLeavesRealServersAlone(t *testing.T) {
+func TestRegisterLLMSDocsSourcesLeavesRealServersAlone(t *testing.T) {
 	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
 		{Name: "openrouter", URL: "https://mcp.openrouter.ai/mcp"},
 	}}}
 
-	if moved := routeLLMSDocsServers(&cfg); moved != nil {
+	if moved := registerLLMSDocsSources(&cfg); moved != nil {
 		t.Errorf("moved = %v, want nil", moved)
 	}
 	if len(cfg.MCP.Servers) != 1 {
@@ -100,13 +97,13 @@ func TestRouteLLMSDocsServersLeavesRealServersAlone(t *testing.T) {
 	}
 }
 
-func TestRouteLLMSDocsServersHandlesEmptyConfig(t *testing.T) {
+func TestRegisterLLMSDocsSourcesHandlesEmptyConfig(t *testing.T) {
 	var cfg Config
-	if moved := routeLLMSDocsServers(&cfg); moved != nil {
+	if moved := registerLLMSDocsSources(&cfg); moved != nil {
 		t.Errorf("moved = %v, want nil for a config with no MCP section", moved)
 	}
 	cfg.MCP = &MCPConfig{}
-	if moved := routeLLMSDocsServers(&cfg); moved != nil {
+	if moved := registerLLMSDocsSources(&cfg); moved != nil {
 		t.Errorf("moved = %v, want nil for an empty server list", moved)
 	}
 }
@@ -171,7 +168,7 @@ func writeProjectMCPFile(t *testing.T, dir, body string) {
 
 // The base name is a heuristic and rerouting is destructive, so an entry that
 // declares configuration only a real MCP endpoint needs must be left alone.
-func TestRouteLLMSDocsServersKeepsConfiguredEndpoints(t *testing.T) {
+func TestRegisterLLMSDocsSourcesKeepsConfiguredEndpoints(t *testing.T) {
 	tests := []struct {
 		name string
 		srv  MCPServer
@@ -182,7 +179,7 @@ func TestRouteLLMSDocsServersKeepsConfiguredEndpoints(t *testing.T) {
 	}
 	for _, tc := range tests {
 		cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{tc.srv}}}
-		if moved := routeLLMSDocsServers(&cfg); moved != nil {
+		if moved := registerLLMSDocsSources(&cfg); moved != nil {
 			t.Errorf("%s: rerouted %v, want the server kept", tc.name, moved)
 		}
 		if len(cfg.MCP.Servers) != 1 {

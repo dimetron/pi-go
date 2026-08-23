@@ -94,9 +94,9 @@ type Config struct {
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
 	LLMS          *LLMSConfig        `json:"llms,omitempty"`
-	// ReroutedLLMS names the MCP servers that were moved to LLMS.Sources
-	// during load because their URL is an llms.txt index. Not serialized: it
-	// describes what this load did, not what the file said.
+	// ReroutedLLMS names the MCP servers that were also registered under
+	// LLMS.Sources during load because their URL is an llms.txt index. Not
+	// serialized: it describes what this load did, not what the file said.
 	ReroutedLLMS []string `json:"-"`
 }
 
@@ -300,13 +300,14 @@ func LoadFrom(cwd string) (Config, error) {
 		}
 	}
 
-	// An llms.txt index configured as an MCP server is rerouted to the
-	// fetch_docs sources. The names are recorded rather than announced here:
-	// config loads before any front end exists, and the TUI's first act is a
-	// full terminal reset that clears the screen and scrollback, so a notice
-	// raised now would be wiped before it could be read. NotifyReroutedLLMS
-	// delivers it once the caller knows where output goes.
-	cfg.ReroutedLLMS = routeLLMSDocsServers(&cfg)
+	// An llms.txt index configured as an MCP server is also registered as a
+	// fetch_docs source, so the documentation is readable straight away. The
+	// names are recorded rather than announced here: config loads before any
+	// front end exists, and the TUI's first act is a full terminal reset that
+	// clears the screen and scrollback, so a notice raised now would be wiped
+	// before it could be read. NotifyReroutedLLMS delivers it once the caller
+	// knows where output goes.
+	cfg.ReroutedLLMS = registerLLMSDocsSources(&cfg)
 
 	// Migrate deprecated DefaultModel to roles if roles not set.
 	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
@@ -709,17 +710,15 @@ func IsLLMSDocsURL(u string) bool {
 	return false
 }
 
-// isLLMSDocsServer reports whether an MCP entry is really a documentation
-// index that was filed under the wrong key.
+// isLLMSDocsServer reports whether an MCP entry looks like a documentation
+// index filed under the wrong key.
 //
-// The URL's base name is the primary signal, and it is a strong one: llms.txt
-// is a reserved file name in an established convention (llmstxt.org) for a
-// plain-text index fetched with GET, not a JSON-RPC endpoint. But the name
-// alone is a heuristic, and rerouting is destructive — the server stops being
-// dialled — so an entry that carries configuration only a real MCP endpoint
-// needs is left alone. A public docs index has no bearer token, no custom
-// headers and no authorization server; anything that declares those is taken
-// at its word.
+// The URL's base name is the signal: llms.txt is a reserved file name in an
+// established convention (llmstxt.org) for a plain-text index fetched with
+// GET. It is only a signal, never proof — MCP endpoint paths are arbitrary —
+// so nothing destructive hangs off it. An entry that carries configuration a
+// public docs index would never need (a command, OAuth, custom headers) is not
+// a docs index at all and is excluded outright.
 func isLLMSDocsServer(srv MCPServer) bool {
 	if srv.URL == "" || srv.Command != "" || srv.OAuth || len(srv.Headers) > 0 {
 		return false
@@ -727,16 +726,21 @@ func isLLMSDocsServer(srv MCPServer) bool {
 	return IsLLMSDocsURL(srv.URL)
 }
 
-// routeLLMSDocsServers moves MCP server entries that actually point at an
-// llms.txt index out of the MCP list and into the llms.txt sources, where the
-// fetch_docs tool serves them. Configuring a docs index under "mcpServers" is
-// a common mix-up — both are "a URL a model reads from" — and left alone it
-// produces a 405 warning on every startup and no documentation tool.
+// registerLLMSDocsSources makes an MCP entry that points at an llms.txt index
+// readable by the fetch_docs tool. Configuring a docs index under "mcpServers"
+// is a common mix-up — both are "a URL a model reads from" — and left alone it
+// yields a 405 on every startup and no documentation tool.
 //
-// Rerouting rather than dropping keeps the user's intent: the docs stay
-// reachable, just through the tool that can actually read them. An entry whose
-// URL is already configured as a source is dropped as a duplicate.
-func routeLLMSDocsServers(cfg *Config) []string {
+// The entry is left in the MCP list. Endpoint paths are arbitrary in MCP, so
+// the base name cannot prove the URL is not a real server, and removing one on
+// a guess would silently strip its tools. Adding a source is additive and
+// reversible: a genuine MCP server keeps every tool it had and merely gains an
+// inert docs source, while a genuine docs index becomes readable immediately
+// and reports its own failure through resilientToolset, which explains what
+// the entry really is once the connection has actually failed.
+//
+// An entry whose URL is already configured as a source is not added twice.
+func registerLLMSDocsSources(cfg *Config) []string {
 	if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
 		return nil
 	}
@@ -747,33 +751,26 @@ func routeLLMSDocsServers(cfg *Config) []string {
 		}
 	}
 
-	kept := make([]MCPServer, 0, len(cfg.MCP.Servers))
-	var moved []string
+	var registered []string
 	var added []LLMSSource
 	for _, srv := range cfg.MCP.Servers {
 		if !isLLMSDocsServer(srv) {
-			kept = append(kept, srv)
 			continue
 		}
-		moved = append(moved, srv.Name)
+		registered = append(registered, srv.Name)
 		if existing[srv.URL] {
 			continue
 		}
 		existing[srv.URL] = true
 		added = append(added, LLMSSource{Name: srv.Name, URL: srv.URL})
 	}
-	if len(moved) == 0 {
-		return nil
-	}
-
-	cfg.MCP.Servers = kept
 	if len(added) > 0 {
 		if cfg.LLMS == nil {
 			cfg.LLMS = &LLMSConfig{}
 		}
 		cfg.LLMS.Sources = append(cfg.LLMS.Sources, added...)
 	}
-	return moved
+	return registered
 }
 
 // quoteAll returns the names quoted, for embedding a list in a notice without
@@ -798,7 +795,8 @@ func NotifyReroutedLLMS(cfg Config) {
 	if len(cfg.ReroutedLLMS) == 0 {
 		return
 	}
-	notice.Notifyf("MCP server(s) %s point at an llms.txt index, not an MCP endpoint — "+
-		"served by the fetch_docs tool instead. Move them to \"llms\": {\"sources\": [...]} to silence this.",
+	notice.Notifyf("MCP server(s) %s point at an llms.txt index and are now readable with the "+
+		"fetch_docs tool. If they are not MCP endpoints, move them to \"llms\": {\"sources\": [...]} "+
+		"so they are not dialled on every startup.",
 		strings.Join(quoteAll(cfg.ReroutedLLMS), ", "))
 }
