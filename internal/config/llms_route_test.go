@@ -302,3 +302,36 @@ func TestLLMSSourcesJoinsConfiguredAndInferred(t *testing.T) {
 		t.Error("empty config should yield nil so callers can skip registering fetch_docs")
 	}
 }
+
+// A source's full URL is written into the fetch_docs tool description and sent
+// to the model provider, so inferring one from a URL carrying credentials
+// would leak transport configuration to the model.
+func TestIsLLMSDocsURLRejectsCredentialBearingURLs(t *testing.T) {
+	for _, u := range []string{
+		"https://user:secret@docs.example.com/llms.txt",
+		"https://token@docs.example.com/llms.txt",
+		"https://docs.example.com/llms.txt?api_key=secret",
+		"https://docs.example.com/llms-full.txt?token=abc",
+	} {
+		if IsLLMSDocsURL(u) {
+			t.Errorf("IsLLMSDocsURL(%q) = true; its URL would be sent to the model provider", u)
+		}
+	}
+	// A fragment carries nothing to the server and is not a credential.
+	if !IsLLMSDocsURL("https://docs.example.com/llms.txt#section") {
+		t.Error("rejected a URL whose only extra is a fragment")
+	}
+}
+
+// End to end: a credential-bearing entry must not become an inferred source.
+func TestRegisterLLMSDocsSourcesSkipsCredentialBearingURLs(t *testing.T) {
+	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
+		{Name: "secret-docs", URL: "https://user:pw@docs.example.com/llms.txt"},
+	}}}
+	if moved := registerLLMSDocsSources(&cfg); moved != nil {
+		t.Errorf("registered %v", moved)
+	}
+	if len(cfg.InferredLLMS) != 0 {
+		t.Errorf("inferred %+v", cfg.InferredLLMS)
+	}
+}

@@ -720,6 +720,15 @@ func IsLLMSDocsURL(u string) bool {
 	if isPrivateHostLiteral(parsed.Hostname()) {
 		return false
 	}
+	// Never infer from a URL that carries credentials. A source's full URL is
+	// written into the fetch_docs tool description and sent to the model
+	// provider, so inferring one from userinfo or a query string would turn
+	// transport configuration the user kept in mcp.json into something the
+	// model — and its provider — can read. A docs index needs neither; anyone
+	// who genuinely has one can configure it under "llms" deliberately.
+	if parsed.User != nil || parsed.RawQuery != "" {
+		return false
+	}
 	switch strings.ToLower(path.Base(parsed.Path)) {
 	case "llms.txt", "llms-full.txt":
 		return true
