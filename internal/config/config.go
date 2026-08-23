@@ -95,10 +95,15 @@ type Config struct {
 	Palace        *PalaceConfig      `json:"palace,omitempty"`
 	A2A           *A2AConfig         `json:"a2a,omitempty"`
 	LLMS          *LLMSConfig        `json:"llms,omitempty"`
-	// ReroutedLLMS names the MCP servers that were also registered under
-	// LLMS.Sources during load because their URL is an llms.txt index. Not
-	// serialized: it describes what this load did, not what the file said.
+	// ReroutedLLMS names the MCP servers whose URL is an llms.txt index and
+	// which were therefore given a fetch_docs source during load.
 	ReroutedLLMS []string `json:"-"`
+	// InferredLLMS holds those generated sources. They are deliberately kept
+	// out of LLMS, which is serialized: Save marshals the whole config, so an
+	// inference drawn from a project's mcp.json would otherwise be written
+	// into the global config file by an unrelated operation such as
+	// SaveDefaultRole. Read both together with LLMSSources.
+	InferredLLMS []LLMSSource `json:"-"`
 }
 
 // PalaceConfig holds settings for the MemPalace memory system.
@@ -799,13 +804,27 @@ func registerLLMSDocsSources(cfg *Config) []string {
 		existing[url] = true
 		added = append(added, LLMSSource{Name: srv.Name, URL: url})
 	}
-	if len(added) > 0 {
-		if cfg.LLMS == nil {
-			cfg.LLMS = &LLMSConfig{}
-		}
-		cfg.LLMS.Sources = append(cfg.LLMS.Sources, added...)
-	}
+	cfg.InferredLLMS = append(cfg.InferredLLMS, added...)
 	return registered
+}
+
+// LLMSSources returns the llms.txt sources to serve, both those the user
+// configured and those inferred from MCP entries during load. It returns nil
+// when there are none, so callers can test it directly to decide whether to
+// register the fetch_docs tool at all.
+//
+// The two are kept apart in the struct and joined only here, so nothing that
+// marshals a Config can persist an inference.
+func (c *Config) LLMSSources() *LLMSConfig {
+	var sources []LLMSSource
+	if c.LLMS != nil {
+		sources = append(sources, c.LLMS.Sources...)
+	}
+	sources = append(sources, c.InferredLLMS...)
+	if len(sources) == 0 {
+		return nil
+	}
+	return &LLMSConfig{Sources: sources}
 }
 
 // quoteAll returns the names quoted, for embedding a list in a notice without

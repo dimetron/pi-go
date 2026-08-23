@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,10 +55,10 @@ func TestRegisterLLMSDocsSourcesRegistersDocsIndex(t *testing.T) {
 	if len(cfg.MCP.Servers) != 3 {
 		t.Fatalf("MCP servers = %d, want all 3 kept", len(cfg.MCP.Servers))
 	}
-	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
-		t.Fatalf("LLMS sources = %+v, want one entry", cfg.LLMS)
+	if len(cfg.InferredLLMS) != 1 {
+		t.Fatalf("inferred sources = %+v, want one entry", cfg.InferredLLMS)
 	}
-	src := cfg.LLMS.Sources[0]
+	src := cfg.InferredLLMS[0]
 	if src.Name != "adk-docs-mcp" || src.URL != "https://adk.dev/llms.txt" {
 		t.Errorf("source = %+v, want the rerouted server name and URL", src)
 	}
@@ -208,10 +209,10 @@ func TestRegisterLLMSDocsSourcesTrimsURL(t *testing.T) {
 	if moved := registerLLMSDocsSources(&cfg); len(moved) != 1 {
 		t.Fatalf("moved = %v, want the whitespace-padded entry recognized", moved)
 	}
-	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
-		t.Fatalf("LLMS = %+v, want one source", cfg.LLMS)
+	if len(cfg.InferredLLMS) != 1 {
+		t.Fatalf("inferred sources = %+v, want one", cfg.InferredLLMS)
 	}
-	if got := cfg.LLMS.Sources[0].URL; got != "https://adk.dev/llms.txt" {
+	if got := cfg.InferredLLMS[0].URL; got != "https://adk.dev/llms.txt" {
 		t.Errorf("stored URL = %q, want it trimmed", got)
 	}
 }
@@ -224,8 +225,8 @@ func TestRegisterLLMSDocsSourcesDedupesAcrossWhitespace(t *testing.T) {
 	}}}
 
 	registerLLMSDocsSources(&cfg)
-	if cfg.LLMS == nil || len(cfg.LLMS.Sources) != 1 {
-		t.Errorf("LLMS sources = %+v, want one entry", cfg.LLMS)
+	if len(cfg.InferredLLMS) != 1 {
+		t.Errorf("inferred sources = %+v, want one entry", cfg.InferredLLMS)
 	}
 }
 
@@ -248,5 +249,56 @@ func TestIsLLMSDocsURLRejectsPrivateLiteralHosts(t *testing.T) {
 	// A public literal address is still fine.
 	if !IsLLMSDocsURL("https://93.184.216.34/llms.txt") {
 		t.Error("rejected a public literal address")
+	}
+}
+
+// Save marshals the whole config, so an inference drawn from a project's
+// mcp.json must never reach the serialized LLMS field — SaveDefaultRole would
+// otherwise write it into the global config file.
+func TestInferredLLMSSourcesAreNotSerialized(t *testing.T) {
+	cfg := Config{MCP: &MCPConfig{Servers: []MCPServer{
+		{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"},
+	}}}
+	registerLLMSDocsSources(&cfg)
+
+	if cfg.LLMS != nil {
+		t.Errorf("inference landed in the serialized field: %+v", cfg.LLMS)
+	}
+	if len(cfg.InferredLLMS) != 1 {
+		t.Fatalf("InferredLLMS = %+v, want one entry", cfg.InferredLLMS)
+	}
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	// The MCP entry itself legitimately carries the URL; what must not appear
+	// is an "llms" section conjured by the load.
+	if strings.Contains(string(data), `"llms"`) {
+		t.Errorf("marshaled config grew an llms section: %s", data)
+	}
+
+	// It is still served: LLMSSources joins both halves.
+	llms := cfg.LLMSSources()
+	if llms == nil || len(llms.Sources) != 1 || llms.Sources[0].URL != "https://adk.dev/llms.txt" {
+		t.Errorf("LLMSSources() = %+v, want the inferred source served", llms)
+	}
+}
+
+func TestLLMSSourcesJoinsConfiguredAndInferred(t *testing.T) {
+	cfg := Config{
+		LLMS:         &LLMSConfig{Sources: []LLMSSource{{Name: "configured", URL: "https://a.example/llms.txt"}}},
+		InferredLLMS: []LLMSSource{{Name: "inferred", URL: "https://b.example/llms.txt"}},
+	}
+	llms := cfg.LLMSSources()
+	if llms == nil || len(llms.Sources) != 2 {
+		t.Fatalf("LLMSSources() = %+v, want both", llms)
+	}
+	if cfg.LLMS.Sources[0].Name != "configured" || len(cfg.LLMS.Sources) != 1 {
+		t.Error("LLMSSources mutated the configured sources")
+	}
+	empty := Config{}
+	if empty.LLMSSources() != nil {
+		t.Error("empty config should yield nil so callers can skip registering fetch_docs")
 	}
 }

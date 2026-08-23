@@ -830,3 +830,44 @@ func TestResilientToolset_ReauthorizeClosesRefusedConnectionOnSetupFailure(t *te
 		t.Error("refused connection leaked when the replacement could not be built")
 	}
 }
+
+// A server upgraded from a static credential must not carry that credential
+// forward on the next launch: headerRoundTripper runs last and would overwrite
+// the cached bearer token, producing another 401 every time.
+func TestBuildMCPToolset_CachedUpgradeDropsStaticAuthorization(t *testing.T) {
+	setTestHome(t)
+	allowInteractiveOAuth(t)
+
+	const (
+		name = "openrouter"
+		url  = "https://mcp.example.com/mcp"
+	)
+	cfg := &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{TokenURL: "https://as.example.com/token"}}
+	tok := &oauth2.Token{AccessToken: "cached", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
+	if err := saveMCPOAuthToken(name, url, cfg, tok); err != nil {
+		t.Fatalf("seeding the token cache: %v", err)
+	}
+
+	srv := MCPServerConfig{
+		Name:    name,
+		URL:     url,
+		Headers: map[string]string{"Authorization": "Bearer refused", "X-Title": "pi"},
+	}
+	ts, err := buildMCPToolset(srv)
+	if err != nil {
+		t.Fatalf("buildMCPToolset: %v", err)
+	}
+	rt := ts.(*resilientToolset)
+	if !rt.srv.OAuth {
+		t.Fatal("cached credentials did not enable OAuth")
+	}
+	if _, ok := rt.srv.Headers["Authorization"]; ok {
+		t.Error("carried the refused Authorization header; it would overwrite the cached token")
+	}
+	if rt.srv.Headers["X-Title"] != "pi" {
+		t.Errorf("dropped an unrelated header: %v", rt.srv.Headers)
+	}
+	if srv.Headers["Authorization"] != "Bearer refused" {
+		t.Error("mutated the caller's configured headers")
+	}
+}

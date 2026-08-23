@@ -262,8 +262,8 @@ func deferredInit(
 	// counts *extension.resilientToolset entries, so a local toolset there
 	// would be live for the model yet invisible in the breakdown, and the MCP
 	// panel would list a non-MCP source.
-	if cfg.LLMS != nil && len(cfg.LLMS.Sources) > 0 {
-		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSCachedToolset(cfg.LLMS))...)
+	if llms := cfg.LLMSSources(); llms != nil {
+		coreTools = append(coreTools, tools.LLMSTools(tools.NewLLMSCachedToolset(llms))...)
 	}
 	// Gemini search grounding (see agent.GeminiGroundingTool doc).
 	//

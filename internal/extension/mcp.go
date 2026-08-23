@@ -495,6 +495,12 @@ func buildMCPToolset(srv MCPServerConfig) (tool.Toolset, error) {
 	// stalling the run on an approval nobody will see.
 	if !srv.OAuth && srv.URL != "" && hasCachedMCPOAuthToken(srv.Name, srv.URL) {
 		srv.OAuth = true
+		// The static credential is what was refused when this server was
+		// upgraded, and headerRoundTripper is the outermost transport, so
+		// leaving it in place would overwrite the cached bearer token with the
+		// refused value and produce another 401 — a browser flow every launch
+		// interactively, and no connection at all headlessly.
+		srv.Headers = withoutAuthorization(srv.Headers)
 	}
 	inner, tracked, err := newMCPToolset(srv)
 	if err != nil {
