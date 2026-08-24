@@ -13,10 +13,18 @@
 
 $ErrorActionPreference = "Stop"
 
-# Windows PowerShell 5.1 defaults to TLS 1.0/1.1, which GitHub rejects; without
-# this the download can hang or fail with "The underlying connection was
-# closed". Harmless on PowerShell 7+, which already uses TLS 1.2+.
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Older Windows PowerShell 5.1 images default to TLS 1.0/1.1, which GitHub
+# rejects: the download then hangs or fails with "The underlying connection was
+# closed".
+#
+# Only force TLS 1.2 when the process is pinned to something older. A current
+# build reports SystemDefault, meaning "let the OS negotiate", which already
+# reaches TLS 1.2 and can reach 1.3 — and `SystemDefault -bor Tls12` would
+# replace that with a hard TLS 1.2 pin, giving up 1.3 to fix a problem the
+# machine does not have.
+if ([Net.ServicePointManager]::SecurityProtocol -ne [Net.SecurityProtocolType]::SystemDefault) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
 
 $repo = "dimetron/pi-go"
 $installDir = Join-Path $env:LOCALAPPDATA "Programs"

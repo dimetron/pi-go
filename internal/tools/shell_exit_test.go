@@ -80,6 +80,26 @@ var shellExitCases = []shellExitCase{
 		want: 0,
 	},
 	{
+		// A command the machine does not have -- a missing `git` or `go`, or a
+		// typo -- is the shape a user actually hits, and the old wrapper
+		// reported it as success with the error text only on stderr. bash
+		// answers 127; the number is not the point, being non-zero is.
+		name: "command not found",
+		bash: `this-command-does-not-exist-pi-go`,
+		ps:   `This-Command-Does-Not-Exist-PiGo`,
+		want: anyNonZero,
+	},
+	{
+		// Bash reports the LAST command, so a failure followed by a success is
+		// a success. Worth stating outright: it looks like a missed failure,
+		// but matching bash is the whole contract, and a wrapper that reported
+		// non-zero here would be the one that is wrong.
+		name: "failure followed by success is success",
+		bash: `ls /definitely-does-not-exist-pi-go 2>/dev/null; true`,
+		ps:   `Get-ChildItem C:\definitely-does-not-exist-pi-go 2>$null; cmd /c exit 0`,
+		want: 0,
+	},
+	{
 		// A script that exits on its own must win: the epilogue is appended
 		// after it and must never run.
 		name: "explicit exit wins",
