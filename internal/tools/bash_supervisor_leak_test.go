@@ -87,6 +87,7 @@ func TestSupervisor_BackgroundAndKillLeakNoGoroutines(t *testing.T) {
 // branch of supervise, which kills the group and waits for the reaper.
 func TestSupervisor_CanceledForegroundRunsLeakNoGoroutines(t *testing.T) {
 	sup := fastSupervisor(t)
+	allowSlowShellStartup(sup)
 
 	cancelOnce := func() {
 		ctx, cancel := context.WithCancel(context.Background())
