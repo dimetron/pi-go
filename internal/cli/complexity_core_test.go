@@ -238,7 +238,9 @@ func TestApplyRuntimeOllamaEndpoint(t *testing.T) {
 	t.Run("cloud endpoint skips the local health check", func(t *testing.T) {
 		t.Parallel()
 		info := provider.Info{Provider: "ollama", Model: "gpt-oss:120b-cloud", Ollama: true}
-		got, err := applyRuntimeOllamaEndpoint(&info, "", "")
+		// The key is what sends a :cloud model to api.ollama.com; without one
+		// it falls back to the local daemon and the probe does run.
+		got, err := applyRuntimeOllamaEndpoint(&info, "sk-ollama-test", "")
 		if err != nil {
 			t.Fatalf("applyRuntimeOllamaEndpoint: %v", err)
 		}

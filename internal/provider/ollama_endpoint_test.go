@@ -7,14 +7,19 @@ import "testing"
 // api.ollama.com — where a private name like muse-glimmer:30b-mlx does not
 // exist, so the run failed with a model-not-found from a server the user never
 // meant to talk to.
+//
+// The key is read in exactly one direction: its absence keeps a cloud-tagged
+// model on the local daemon, which proxies cloud models on the user's
+// `ollama signin` identity. Its presence never promotes an untagged model.
 func TestResolveOllamaEndpoint(t *testing.T) {
 	const key = "sk-ollama-test"
 
 	tests := []struct {
 		name         string
 		model        string
-		apiKey       string // recorded to document the scenario; routing must not consult it
+		apiKey       string
 		baseURL      string
+		forceLocal   bool
 		wantEndpoint string
 	}{
 		{
@@ -40,6 +45,36 @@ func TestResolveOllamaEndpoint(t *testing.T) {
 			model:        "deepseek-v4-flash:0731-cloud",
 			apiKey:       key,
 			wantEndpoint: ollamaCloudURL,
+		},
+		{
+			// Without a credential api.ollama.com answers 401 before it looks
+			// at the model, so the cloud is not an option — the local daemon
+			// is, and it serves cloud models on the signed-in identity.
+			name:         "cloud tag without a key falls back to the local daemon",
+			model:        "minimax-m3:cloud",
+			wantEndpoint: ollamaLocalURL,
+		},
+		{
+			name:         "sized cloud tag without a key falls back to the local daemon",
+			model:        "deepseek-v4-flash:0731-cloud",
+			wantEndpoint: ollamaLocalURL,
+		},
+		{
+			// ollama/ is the one way to name the destination outright, so a
+			// tag on the name cannot overrule it.
+			name:         "ollama/ prefix keeps a cloud-tagged model local",
+			model:        "deepseek-v4-flash:0731-cloud",
+			apiKey:       key,
+			forceLocal:   true,
+			wantEndpoint: ollamaLocalURL,
+		},
+		{
+			name:         "explicit host still wins over the ollama/ prefix",
+			model:        "deepseek-v4-flash:0731-cloud",
+			apiKey:       key,
+			baseURL:      "http://gpu-box.lan:11434",
+			forceLocal:   true,
+			wantEndpoint: "http://gpu-box.lan:11434",
 		},
 		{
 			name:         "explicit host wins over the cloud tag",
@@ -80,9 +115,14 @@ func TestResolveOllamaEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if endpoint := ResolveOllamaEndpoint(tt.model, tt.baseURL); endpoint != tt.wantEndpoint {
-				t.Errorf("ResolveOllamaEndpoint(%q, %q) = %q, want %q",
-					tt.model, tt.baseURL, endpoint, tt.wantEndpoint)
+			r := OllamaRouting{
+				Model:      tt.model,
+				BaseURL:    tt.baseURL,
+				APIKey:     tt.apiKey,
+				ForceLocal: tt.forceLocal,
+			}
+			if endpoint := ResolveOllamaEndpoint(r); endpoint != tt.wantEndpoint {
+				t.Errorf("ResolveOllamaEndpoint(%+v) = %q, want %q", r, endpoint, tt.wantEndpoint)
 			}
 		})
 	}
@@ -114,7 +154,7 @@ func TestIsOllamaCloudModel(t *testing.T) {
 // NewOllama is the real entry point, so pin that it honors the routing rather
 // than only testing the helper underneath it.
 func TestNewOllamaAcceptsLocalTaggedModel(t *testing.T) {
-	llm, err := NewOllama(t.Context(), "muse-glimmer:30b-mlx", "sk-ollama-test", "", "none", nil)
+	llm, err := NewOllama(t.Context(), OllamaRouting{Model: "muse-glimmer:30b-mlx", APIKey: "sk-ollama-test", BaseURL: ""}, "none", nil)
 	if err != nil {
 		t.Fatalf("NewOllama: %v", err)
 	}

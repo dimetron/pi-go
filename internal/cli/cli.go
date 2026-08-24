@@ -116,6 +116,7 @@ routing you need:
   openrouter/<model>       OpenRouter      OPENROUTER_API_KEY
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
+                                           without a key: the local daemon
   azure/<deployment>       Azure OpenAI    AZURE_OPENAI_API_KEY
   opencode/<model>         OpenCode        OPENCODE_API_KEY
 
@@ -145,7 +146,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
   # Ollama against a local daemon — no API key needed
   pi --model ollama/gemma4:e4b "rename this symbol everywhere"
 
-  # Ollama Cloud — the :cloud tag routes to api.ollama.com, needs OLLAMA_API_KEY
+  # Ollama Cloud — the :cloud tag routes to api.ollama.com with OLLAMA_API_KEY
+  # set; without one it falls back to the local daemon, which serves cloud
+  # models on your "ollama signin" identity. The ollama/ prefix forces local.
   pi --model minimax-m3:cloud "port this module to generics"
 
   # Azure OpenAI — the deployment name follows azure/
@@ -333,7 +336,12 @@ func applyRuntimeOllamaEndpoint(info *provider.Info, apiKey, baseURL string) (st
 		// happens to be exported: a key set for some :cloud model used to send
 		// locally pulled names like qwen3.8:27b-mlx to api.ollama.com, which
 		// answers 404 for a model only this machine has.
-		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+			Model:      info.Model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			ForceLocal: info.LocalOllama,
+		})
 		// Record the endpoint actually chosen so session metadata names the
 		// backend instead of leaving the model name to be interpreted.
 		info.BaseURL = baseURL
@@ -1753,7 +1761,12 @@ func buildCommitMsgFunc(ctx context.Context, cfg config.Config) func(context.Con
 		baseURL = baseURLs[info.Provider]
 	}
 	if info.Ollama {
-		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+			Model:      info.Model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			ForceLocal: info.LocalOllama,
+		})
 	}
 
 	if info.Ollama && !provider.IsOllamaCloudEndpoint(baseURL) {

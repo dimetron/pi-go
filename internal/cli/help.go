@@ -81,6 +81,10 @@ func writeRoleSummary(w io.Writer) {
 // A local Ollama daemon is the one provider that needs no credential, so
 // reporting a missing OLLAMA_API_KEY there would be a false alarm — the key is
 // only required once a :cloud tag routes the request to api.ollama.com.
+//
+// A cloud tag with no key is not a missing credential either: the request falls
+// back to the local daemon, which proxies cloud models on the signed-in
+// identity. Calling that MISSING would report a failure that does not happen.
 func credentialStatus(prov, model string, keys map[string]string) string {
 	if prov == "ollama" && !provider.IsOllamaCloudModel(model) {
 		return "none (local daemon)"
@@ -89,6 +93,9 @@ func credentialStatus(prov, model string, keys map[string]string) string {
 	envVar := providerEnvVar(prov)
 	if _, ok := keys[prov]; ok {
 		return envVar + " (set)"
+	}
+	if prov == "ollama" {
+		return envVar + " (unset — using local daemon)"
 	}
 	return envVar + " (MISSING)"
 }

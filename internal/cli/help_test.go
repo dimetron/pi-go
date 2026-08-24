@@ -83,8 +83,11 @@ func TestWriteRoleSummaryFlagsMissingCredential(t *testing.T) {
 	}
 }
 
-// A local Ollama daemon needs no key, so demanding one would be a false alarm;
-// a :cloud tag reaches api.ollama.com and does.
+// A local Ollama daemon needs no key, so demanding one would be a false alarm.
+// Neither does a :cloud tag on its own: without a key that request falls back
+// to the local daemon rather than failing, so reporting MISSING would announce
+// a breakage that does not happen. The key is reported as what it is — the way
+// to reach api.ollama.com directly.
 func TestWriteRoleSummaryOllamaCredential(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -92,7 +95,7 @@ func TestWriteRoleSummaryOllamaCredential(t *testing.T) {
 		want  string
 	}{
 		{"local daemon needs no key", "ollama/gemma4:e4b", "none (local daemon)"},
-		{"cloud tag needs a key", "minimax-m3:cloud", "OLLAMA_API_KEY (MISSING)"},
+		{"cloud tag without a key falls back to the daemon", "minimax-m3:cloud", "OLLAMA_API_KEY (unset — using local daemon)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

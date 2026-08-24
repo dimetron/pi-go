@@ -149,7 +149,11 @@ type Info struct {
 	Provider string
 	Model    string
 	Ollama   bool // true when model is served by Ollama
-	Custom   bool // true when using an explicit custom OpenAI-compatible endpoint
+	// LocalOllama records that the model was named with the explicit ollama/
+	// prefix, which the CLI help documents as "Ollama, local". It keeps a
+	// cloud-looking tag on such a name from routing to api.ollama.com.
+	LocalOllama bool
+	Custom      bool // true when using an explicit custom OpenAI-compatible endpoint
 	// BaseURL is the endpoint finally selected for this model, recorded so a
 	// session transcript identifies the backend and not just the model name.
 	// The same name served by ollama, by a gateway, and by a vendor API behaves
@@ -333,7 +337,7 @@ func Resolve(modelName string) (Info, error) {
 	// Detect ollama/ prefix → native Ollama provider.
 	// The prefix is stripped; the remainder is the Ollama model name.
 	if strings.HasPrefix(strings.ToLower(modelName), "ollama/") {
-		return Info{Provider: "ollama", Model: modelName[len("ollama/"):], Ollama: true}, nil
+		return Info{Provider: "ollama", Model: modelName[len("ollama/"):], Ollama: true, LocalOllama: true}, nil
 	}
 
 	// Detect azure/ prefix → Azure OpenAI provider.
@@ -475,7 +479,12 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	}
 	switch info.Provider {
 	case "ollama":
-		return NewOllama(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
+		return NewOllama(ctx, OllamaRouting{
+			Model:      info.Model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			ForceLocal: info.LocalOllama,
+		}, thinkingLevel, opts)
 	case "gemini":
 		return NewGemini(ctx, info.Model, baseURL, opts)
 	case "openai":
