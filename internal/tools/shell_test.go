@@ -38,6 +38,26 @@ func wantsBash(t *testing.T, path string) {
 	}
 }
 
+// TestResolveShellKind_PowerShellWhenBashIsMissing covers the one line the
+// whole branch exists for: the decision to fall back.
+//
+// Nothing else reaches it. shell_exit_test.go injects the shell kind rather
+// than resolving it, precisely because Windows CI ships a git-bash on PATH --
+// so on that runner LookPath succeeds and the PowerShell return is
+// unreachable. Emptying PATH reproduces the actual defect condition (a Windows
+// machine with no bash), and exec.LookPath re-reads PATH on every call, so no
+// production seam is needed to get there.
+func TestResolveShellKind_PowerShellWhenBashIsMissing(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the PowerShell fallback only exists on Windows")
+	}
+	t.Setenv("PATH", "")
+
+	if got := resolveShellKind(); got != shellKindPowerShell {
+		t.Errorf("resolveShellKind() with no bash on PATH = %q, want %q", got, shellKindPowerShell)
+	}
+}
+
 func TestBuildShellCommand_Bash(t *testing.T) {
 	cmd := buildShellCommand(context.Background(), shellKindBash, "echo hi")
 
@@ -159,28 +179,28 @@ func TestPSExitEpilogue_ReadsBothFailureSignalsInOrder(t *testing.T) {
 			" $LASTEXITCODE alone cannot see a cmdlet failure", joined)
 	}
 
-	// A false $? exits with the real code where there is one and 1 where there
-	// is not — the `true; ls /missing` shape, where a native success has
-	// already pinned $LASTEXITCODE to 0 and the cmdlet failure cannot move it.
-	var failure string
-	for _, s := range branches {
-		if strings.Contains(s, "-not $__piOK") {
-			failure = s
-		}
+	// `$?` decides and `$LASTEXITCODE` only supplies the number, so the very
+	// first branch has to be the success branch and it has to exit 0.
+	//
+	// Reversing these two is a real bug, not a style point: a cmdlet does not
+	// reset $LASTEXITCODE, so after `cmd /c exit 3; Write-Output recovered` it
+	// still reads 3 while $? is true. Consulting the code first reports 3 for
+	// a script whose last statement succeeded, where bash reports 0.
+	if !strings.Contains(branches[0], "$__piOK") {
+		t.Errorf("first branch = %q, want $? to decide before the exit code is"+
+			" consulted", branches[0])
 	}
-	if failure == "" {
-		t.Fatalf("epilogue = %q, want a branch on a false $?", psExitEpilogue)
+	if !strings.Contains(branches[0], "exit 0") {
+		t.Errorf("first branch = %q, want a true $? to exit 0", branches[0])
 	}
+	// The code is only reachable once $? is false, and a failure with no code
+	// of its own still has to be non-zero — the `Get-ChildItem C:\missing`
+	// shape, where no native command ever ran to set one.
+	rest := strings.Join(branches[1:], "\n")
 	for _, want := range []string{"exit $__piCode", "exit 1"} {
-		if !strings.Contains(failure, want) {
-			t.Errorf("failure branch = %q, want %q", failure, want)
+		if !strings.Contains(rest, want) {
+			t.Errorf("failure path = %q, want %q", rest, want)
 		}
-	}
-	// And the success path still reports a native command's code rather than
-	// flattening every run to 0.
-	if !strings.Contains(joined, "exit $__piCode") || !strings.Contains(joined, "exit 0") {
-		t.Errorf("epilogue branches = %q, want a native exit code to survive a"+
-			" successful $?, and a clean run to exit 0", joined)
 	}
 }
 

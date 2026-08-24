@@ -100,6 +100,16 @@ var shellExitCases = []shellExitCase{
 		want: 0,
 	},
 	{
+		// A cmdlet does not reset $LASTEXITCODE, so a failing native command
+		// leaves its code sitting there while a later statement succeeds.
+		// bash reports the last command, so this is a success -- reading the
+		// stale code instead of $? would report 3 for a script that worked.
+		name: "native failure recovered by a later success",
+		bash: `(exit 3); echo recovered`,
+		ps:   `cmd /c exit 3; Write-Output recovered`,
+		want: 0,
+	},
+	{
 		// A script that exits on its own must win: the epilogue is appended
 		// after it and must never run.
 		name: "explicit exit wins",
