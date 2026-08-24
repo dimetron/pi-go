@@ -75,6 +75,28 @@ func TestLimitsHint(t *testing.T) {
 			want:    []string{"idle_timeout 1m30s", "timeout 5m0s"},
 			notWant: []string{"rather than polling the handle"},
 		},
+		{
+			// The hint tells the caller which knob to turn, so it has to name
+			// the unit the tool actually takes. Left saying milliseconds, it
+			// sends a caller who wanted five minutes to write 300000 — which
+			// is now eighty-three hours and comes straight back as the cap.
+			name:    "the hint names the unit the tool takes",
+			timeout: 2 * time.Minute,
+			idle:    time.Second,
+			want:    []string{"both are seconds"},
+			notWant: []string{"millisecond"},
+		},
+		{
+			// shortIdleTimeout is a `<` boundary. An idle limit exactly at the
+			// default foreground budget is an ordinary choice, not a hair
+			// trigger, and lecturing about it would put the warning on every
+			// default-shaped call.
+			name:    "an idle limit exactly at the threshold is not called out",
+			timeout: 5 * time.Minute,
+			idle:    shortIdleTimeout,
+			want:    []string{"idle_timeout 1m0s"},
+			notWant: []string{"rather than polling the handle"},
+		},
 	}
 
 	for _, tt := range tests {

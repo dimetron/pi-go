@@ -34,12 +34,12 @@ const (
 	// shortIdleTimeout is the threshold below which an idle limit is treated as
 	// self-defeating and called out in the result.
 	//
-	// It tracks minBashTimeout, the floor the bash tool applies to both
-	// caller-supplied limits. A value under it cannot arrive through the tool
-	// at all, so what this catches is the other route in: a caller building a
-	// runRequest directly, where nothing clamps anything. Nothing is
-	// overridden on that path — the hint is all the supervisor owes it.
-	shortIdleTimeout = minBashTimeout
+	// It tracks the bash tool's default foreground budget. Now that the tool's
+	// limits are seconds, a small value is a deliberate choice rather than a
+	// unit slip, so nothing clamps it away: `idle_timeout: 1` reaches the
+	// supervisor as one second and backgrounds the first build that pauses to
+	// think. Naming the limit in the result is all the supervisor owes it.
+	shortIdleTimeout = defaultBashTimeout
 
 	// heartbeatInterval is how often a running command reports that it is still
 	// alive. It drives the "45s, no output" line in the UI, which is the whole
@@ -259,7 +259,7 @@ func (s *BashSupervisor) start(ctx context.Context, req runRequest) (*bashProc, 
 		done:        make(chan struct{}),
 	}
 
-	cmd := exec.CommandContext(runCtx, "bash", "-c", req.command)
+	cmd := shellCommand(runCtx, req.command)
 	cmd.Dir = req.dir
 	cmd.Stdout = &sinkWriter{proc: p, stream: p.stdout, kind: "output"}
 	cmd.Stderr = &sinkWriter{proc: p, stream: p.stderr, kind: "stderr"}
@@ -426,7 +426,7 @@ func limitsHint(timeout, idle time.Duration) string {
 	if idle < shortIdleTimeout {
 		hint += fmt.Sprintf(" An idle limit under %s backgrounds ordinary builds and"+
 			" test runs the moment they go quiet. idle_timeout is clamped to"+
-			" timeout, so raise timeout (both are milliseconds) rather than"+
+			" timeout, so raise timeout (both are seconds) rather than"+
 			" polling the handle.", roundDur(shortIdleTimeout))
 	}
 	return hint

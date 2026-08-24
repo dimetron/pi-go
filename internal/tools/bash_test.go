@@ -47,7 +47,7 @@ func TestBashHandler_TimeoutCappedAtTenMinutes(t *testing.T) {
 
 	// Timeout of 20 minutes should be capped at 10 minutes.
 	// The command itself completes in a fraction of a second.
-	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo capped", Timeout: 20 * 60 * 1000})
+	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: "echo capped", Timeout: 20 * 60})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
@@ -147,10 +147,10 @@ func TestBashHandler_RunsInSandboxDir(t *testing.T) {
 // Killing it would discard whatever it had produced and tell the model nothing
 // about why it stopped.
 //
-// The handoff is driven by the idle limit on the supervisor rather than a small
-// `timeout` in the input, because minBashTimeout floors anything the caller
-// passes at a minute — which is the whole point of the floor, but leaves the
-// supervisor field as the only way to reach this path inside a test's patience.
+// The handoff is driven by the sub-second idle limit on the supervisor rather
+// than a small `timeout` in the input: the tool's limits are whole seconds, so
+// the shortest budget a caller can express is a second, and the supervisor
+// field is the only way to reach this path inside a test's patience.
 func TestBashHandler_TimeoutHandsOffToBackground(t *testing.T) {
 	dir := t.TempDir()
 	sb := testSandbox(t, dir)

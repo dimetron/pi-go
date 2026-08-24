@@ -65,11 +65,43 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.
 
 ### Quick install (recommended)
 
+**macOS / Linux**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install.sh | bash
 ```
 
 This script detects your OS/arch, downloads the latest release binary, and installs it to `/usr/local/bin` (or `~/.local/bin` if needed).
+
+**Windows**
+
+```powershell
+powershell -NoProfile -Command "iwr https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install.ps1 -UseBasicParsing | iex"
+```
+
+Or, from a checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1
+```
+
+Installs `pi.exe` to `%LOCALAPPDATA%\Programs` and adds that directory to your
+user `PATH`. Restart the terminal afterwards so the new `PATH` is picked up.
+Runs on Windows PowerShell 5.1 (built into Windows 10/11) and PowerShell 7+;
+`windows/amd64` only. Set `GITHUB_TOKEN` if you hit the GitHub API rate limit
+while it resolves the latest release.
+
+The installer checks the download against the release's `checksums.txt` and
+refuses to install on a mismatch. That catches a corrupted or swapped archive,
+but not a substituted release — `checksums.txt` travels the same path as the
+archive. Run `pi verify` afterwards for the provenance check that does answer
+that question — see [Verifying a release](#verifying-a-release).
+
+Windows machines without `bash.exe` on `PATH` — a stock Windows install has
+none — run agent commands through `powershell.exe` instead, so write PowerShell
+syntax in prompts: `;` or a newline rather than `&&`. Installing
+[Git for Windows](https://git-scm.com/download/win) puts a `bash` on `PATH` and
+restores the bash behaviour.
 
 ### go install
 

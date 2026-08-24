@@ -163,11 +163,11 @@ func bashBackground() eval.Scenario {
 		Files:       map[string]string{"README.md": "# demo\n"},
 		Timeout:     8 * time.Minute,
 		Prompt: "Two tasks, strictly in this order, using the bash tool and its companions bash_wait and bash_kill. " +
-			"(1) Run the command `sleep 70; echo FINISHED-OK` with timeout 60000 (the minimum). It will exceed the " +
+			"(1) Run the command `sleep 70; echo FINISHED-OK` with timeout 60 (the minimum). It will exceed the " +
 			"timeout and be moved to the background; the result carries running=true and a handle. Then call bash_wait " +
-			"with that handle and wait_ms 30000, repeating if needed, until it reports running=false and the output " +
+			"with that handle and wait_sec 30, repeating if needed, until it reports running=false and the output " +
 			"contains FINISHED-OK. " +
-			"(2) Run the command `sleep 600` with timeout 60000. Once it has been moved to the background, stop it with " +
+			"(2) Run the command `sleep 600` with timeout 60. Once it has been moved to the background, stop it with " +
 			"bash_kill using its handle. " +
 			"Finally report the outcome of both tasks.",
 		Checks: []eval.Check{
