@@ -282,7 +282,12 @@ func resolveOllamaBaseURL(info provider.Info, apiKey, baseURL string) (string, e
 	if !info.Ollama {
 		return baseURL, nil
 	}
-	baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+	baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+		Model:      info.Model,
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		ForceLocal: info.LocalOllama,
+	})
 	if apiKey == "" && !provider.IsOllamaCloudEndpoint(baseURL) {
 		if err := provider.CheckOllama(baseURL); err != nil {
 			return "", fmt.Errorf("ollama health check: %w", err)

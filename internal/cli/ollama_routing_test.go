@@ -10,21 +10,40 @@ import (
 // The bug this pins: OLLAMA_API_KEY exported for a :cloud model used to be read
 // as a destination, so a locally pulled name like qwen3.8:27b-mlx was posted to
 // api.ollama.com and came back "model not found" from a server the user never
-// meant to talk to. Routing follows the model's tag; the key is a credential.
+// meant to talk to. A key never promotes a model to the cloud.
+//
+// The second bug this pins: ollama/ is documented as "Ollama, local", but a
+// cloud-looking tag on the name used to override the prefix, so
+// ollama/deepseek-v4-flash:0731-cloud went to api.ollama.com — and answered 401
+// whenever no key was set, though the local daemon serves that model.
+//
+// Every case here exports a key, because buildRootRuntime health-checks a local
+// daemon only when none is set and CI has no daemon to answer. The no-key
+// fallback is pinned where the decision is actually made, in
+// provider.TestResolveOllamaEndpoint.
 func TestBuildRootRuntime_OllamaKeyDoesNotForceCloud(t *testing.T) {
 	tests := []struct {
 		name    string
 		model   string
+		apiKey  string
 		wantURL string
 	}{
 		{
 			name:    "mlx tag stays on the local daemon",
 			model:   "ollama/qwen3.8:27b-mlx",
+			apiKey:  "sk-ollama-test",
 			wantURL: "http://localhost:11434",
 		},
 		{
-			name:    "cloud tag still routes to the cloud",
+			name:    "ollama/ prefix keeps a cloud-tagged model local",
 			model:   "ollama/deepseek-v4-flash:0731-cloud",
+			apiKey:  "sk-ollama-test",
+			wantURL: "http://localhost:11434",
+		},
+		{
+			name:    "an unprefixed cloud tag with a key routes to the cloud",
+			model:   "deepseek-v4-flash:0731-cloud",
+			apiKey:  "sk-ollama-test",
 			wantURL: "https://api.ollama.com",
 		},
 	}
@@ -33,9 +52,7 @@ func TestBuildRootRuntime_OllamaKeyDoesNotForceCloud(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resetGlobalFlags(t)
 			testenv.SetHome(t, t.TempDir())
-			// Set, as it must be for any cloud model — and irrelevant to where
-			// a local model goes.
-			t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+			t.Setenv("OLLAMA_API_KEY", tt.apiKey)
 			t.Setenv("OLLAMA_HOST", "")
 
 			flagModel = tt.model

@@ -1026,7 +1026,12 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	apiKey := keys[info.Provider]
 
 	if info.Ollama {
-		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+			Model:      info.Model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			ForceLocal: info.LocalOllama,
+		})
 	}
 
 	// Record the endpoint actually chosen, after every fallback above has had
@@ -1063,5 +1068,16 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	tokenTracker.SetContextWindowSize(ctxWindowSize)
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
-	return llm, info.Model, info.Provider, nil
+	// Hand back a name that re-resolves to the same endpoint. Resolve strips
+	// the ollama/ prefix from info.Model, and this answer is what the TUI
+	// stores as the current model and re-resolves on the next switch — so
+	// returning the bare name would drop the one part of the spelling that
+	// says "local", and a cloud-tagged model would move to api.ollama.com
+	// behind the user's back the moment a key was set.
+	switchedName := info.Model
+	if info.LocalOllama {
+		switchedName = "ollama/" + info.Model
+	}
+
+	return llm, switchedName, info.Provider, nil
 }

@@ -225,7 +225,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
 | OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
 | Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
-| Ollama Cloud | `<model>:cloud` | `OLLAMA_API_KEY` | `https://api.ollama.com` |
+| Ollama Cloud | `<model>:cloud` | `OLLAMA_API_KEY` | `https://api.ollama.com`, or the local daemon when no key is set |
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -235,10 +235,17 @@ export MISTRAL_API_KEY="..."     # optional — only if you use Mistral models
 export XAI_API_KEY="..."         # optional — only if you use Grok models
 export OPENROUTER_API_KEY="..."  # optional — only if you use OpenRouter models
 export OPENCODE_API_KEY="..."
-export OLLAMA_API_KEY="..."   # only for Ollama Cloud (:cloud suffix)
+export OLLAMA_API_KEY="..."   # optional — only to reach Ollama Cloud directly
 ```
 
 A name with no recognized prefix is rejected rather than guessed at — reach for the `ollama/` prefix or the `:cloud` suffix to name an Ollama model explicitly.
+
+A `:cloud` tag names a model, not a destination. With `OLLAMA_API_KEY` set the
+request goes straight to `api.ollama.com`; without one it goes to the local
+daemon, which has served cloud models on your `ollama signin` identity since
+Ollama 0.12 — so `pi --model deepseek-v3.1:671b-cloud` works with no key at all.
+The `ollama/` prefix always means the local daemon, tag notwithstanding, and an
+explicit `OLLAMA_HOST` overrides both.
 
 ## Build
 

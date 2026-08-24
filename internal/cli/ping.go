@@ -291,7 +291,12 @@ func resolvePingModelInfo(cfg config.Config, activeRole string) (provider.Info, 
 func resolvePingCredentials(info provider.Info, baseURL string, explicitBaseURL bool) (string, string, bool) {
 	apiKey := config.APIKeys()[info.Provider]
 	if info.Ollama {
-		baseURL = provider.ResolveOllamaEndpoint(info.Model, baseURL)
+		baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+			Model:      info.Model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			ForceLocal: info.LocalOllama,
+		})
 	}
 	// Azure resolves its endpoint and credential through the same helpers a
 	// real run uses, so a passing ping means the settings a real run would pick
@@ -1034,7 +1039,12 @@ func ollamaPingFull(ctx context.Context, baseURL, modelName, prompt string, isPi
 	}
 
 	// Step 2: Create native Ollama LLM.
-	llm, err := provider.NewOllama(ctx, modelName, "", baseURL, "none", nil)
+	// baseURL is already settled by the caller, so it decides the endpoint on
+	// its own — see rule 1 in ResolveOllamaEndpoint.
+	llm, err := provider.NewOllama(ctx, provider.OllamaRouting{
+		Model:   modelName,
+		BaseURL: baseURL,
+	}, "none", nil)
 	if err != nil {
 		return "", fmt.Errorf("create client: %w", err)
 	}

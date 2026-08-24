@@ -1269,7 +1269,7 @@ func TestCogPAOllamaChatRequestGoldens(t *testing.T) {
 			}
 			var body map[string]any
 			srv := cogPAOllamaCapture(t, &body)
-			llm, err := NewOllama(context.Background(), tc.model, "", srv.URL, tc.thinking, nil)
+			llm, err := NewOllama(context.Background(), OllamaRouting{Model: tc.model, APIKey: "", BaseURL: srv.URL}, tc.thinking, nil)
 			if err != nil {
 				t.Fatalf("NewOllama: %v", err)
 			}
@@ -1290,7 +1290,7 @@ func TestCogPAOllamaStreamingRequestGolden(t *testing.T) {
 	cogPAClearOllamaEnv(t)
 	var body map[string]any
 	srv := cogPAOllamaCapture(t, &body)
-	llm, err := NewOllama(context.Background(), "llama3", "", srv.URL, "low", nil)
+	llm, err := NewOllama(context.Background(), OllamaRouting{Model: "llama3", APIKey: "", BaseURL: srv.URL}, "low", nil)
 	if err != nil {
 		t.Fatalf("NewOllama: %v", err)
 	}

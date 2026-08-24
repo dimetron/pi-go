@@ -31,31 +31,64 @@ const (
 	ollamaCloudURL = "https://api.ollama.com"
 )
 
-// ResolveOllamaEndpoint picks the server a model should be sent to. It is
-// exported because every caller that builds an Ollama client — the CLI, the
-// TUI's /model switch, the ACP server, ping — has to reach the same answer;
-// each one deciding for itself is how the key-as-destination bug survived in
-// three places after this function stopped making that mistake.
+// OllamaRouting carries the facts that decide which Ollama server a model
+// reaches. They travel together because every caller that builds an Ollama
+// client — the CLI, the TUI's /model switch, the ACP server, ping — has to
+// reach the same answer; each one deciding for itself is how the
+// key-as-destination bug survived in three places after ResolveOllamaEndpoint
+// stopped making that mistake.
+type OllamaRouting struct {
+	// Model is the Ollama model name, tag included.
+	Model string
+	// BaseURL is an explicit endpoint (OLLAMA_HOST or --url), empty if unset.
+	BaseURL string
+	// APIKey is OLLAMA_API_KEY, empty if unset.
+	APIKey string
+	// ForceLocal records that the caller named the model with the explicit
+	// ollama/ prefix, which the CLI help documents as "Ollama, local".
+	ForceLocal bool
+}
+
+// ResolveOllamaEndpoint picks the server a model should be sent to.
 //
-// Routing follows the model's cloud tag, which is the rule the CLI help and
-// every other routing check in the tree already state. It used to follow the
-// presence of an API key instead, and that made OLLAMA_API_KEY a global switch:
-// exporting it once for a :cloud model silently sent every *local* model to
-// api.ollama.com too, where a privately pulled name like qwen3.8:27b-mlx does
-// not exist. The key is a credential, not a destination.
+// The order is:
 //
-// An explicit baseURL (OLLAMA_HOST) always wins — that is how someone points at
-// another machine, a container, or an authenticated proxy.
+//  1. An explicit BaseURL (OLLAMA_HOST, --url) always wins — that is how
+//     someone points at another machine, a container, or an authenticated proxy.
+//  2. The ollama/ prefix means the local daemon. The prefix is the one way a
+//     user states the destination outright, so a tag cannot overrule it:
+//     ollama/deepseek-v4-flash:0731-cloud is a request for the model of that
+//     name on localhost, and answering it with api.ollama.com ignores what was
+//     asked for.
+//  3. A cloud-tagged model with a key goes to api.ollama.com.
+//  4. A cloud-tagged model with no key goes to the local daemon, which has
+//     proxied cloud models on the user's `ollama signin` identity since 0.12.
+//     api.ollama.com rejects an unauthenticated request with 401 before it
+//     looks at the model, so the alternative is not a different result but a
+//     guaranteed failure.
+//  5. Everything else is local.
+//
+// Rule 4 is the only one that reads the key, and it only ever routes *away*
+// from the cloud. That is deliberate, and it is not the bug this function was
+// written to kill: routing used to follow the presence of a key in the other
+// direction, which made OLLAMA_API_KEY a global switch — exporting it once for
+// a :cloud model silently sent every *local* model to api.ollama.com too, where
+// a privately pulled name like qwen3.8:27b-mlx does not exist. A key still
+// never promotes an untagged model to the cloud; its absence only declines to
+// send a request that cannot be served.
 //
 // Who receives the key is deliberately not decided here. It still goes to
 // whatever endpoint is chosen whenever one is set, unchanged, because an
 // authenticated daemon may be reached over loopback as easily as over the
 // network and this function cannot tell the two apart.
-func ResolveOllamaEndpoint(modelName, baseURL string) string {
-	if endpoint := normalizeBaseURL(baseURL); endpoint != "" {
+func ResolveOllamaEndpoint(r OllamaRouting) string {
+	if endpoint := normalizeBaseURL(r.BaseURL); endpoint != "" {
 		return endpoint
 	}
-	if IsOllamaCloudModel(modelName) {
+	if r.ForceLocal {
+		return ollamaLocalURL
+	}
+	if IsOllamaCloudModel(r.Model) && r.APIKey != "" {
 		return ollamaCloudURL
 	}
 	return ollamaLocalURL
@@ -81,15 +114,15 @@ func IsOllamaCloudEndpoint(baseURL string) bool {
 }
 
 // NewOllama creates an Ollama model.LLM using the native Ollama Go client.
-// The server is chosen by ResolveOllamaEndpoint: an explicit baseURL if given,
-// otherwise api.ollama.com for a :cloud/-cloud tagged model and localhost for
-// everything else.
+// The server is chosen by ResolveOllamaEndpoint from the routing facts in r.
 // thinkingLevel controls extended thinking: "none", "low", "medium", "high".
-func NewOllama(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
+func NewOllama(_ context.Context, r OllamaRouting, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
+	modelName := r.Model
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
-	baseURL = ResolveOllamaEndpoint(modelName, baseURL)
+	apiKey := r.APIKey
+	baseURL := ResolveOllamaEndpoint(r)
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama URL %q: %w", baseURL, err)

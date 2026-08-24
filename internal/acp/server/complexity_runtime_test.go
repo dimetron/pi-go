@@ -90,11 +90,15 @@ func TestResolveOllamaBaseURL_NonOllamaPassesThrough(t *testing.T) {
 	}
 }
 
-// A cloud-tagged model with no explicit endpoint resolves to ollama.com, and
-// the local-daemon health check must not run against it.
+// A cloud-tagged model with a key and no explicit endpoint resolves to
+// ollama.com, and the local-daemon health check must not run against it.
+//
+// The key matters to the destination here: without one the same model falls
+// back to the local daemon, because api.ollama.com answers an unauthenticated
+// request with 401 before it looks at the model.
 func TestResolveOllamaBaseURL_CloudModelSkipsHealthCheck(t *testing.T) {
 	info := provider.Info{Provider: "ollama", Model: "deepseek-v4-flash:0731-cloud", Ollama: true}
-	got, err := resolveOllamaBaseURL(info, "", "")
+	got, err := resolveOllamaBaseURL(info, "sk-ollama-test", "")
 	if err != nil {
 		t.Fatalf("resolveOllamaBaseURL: %v", err)
 	}
