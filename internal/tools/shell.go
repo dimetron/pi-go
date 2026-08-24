@@ -52,12 +52,17 @@ func shellCommand(ctx context.Context, script string) *exec.Cmd {
 //
 // Both are captured on the first line, before any statement here can overwrite
 // them — `$?` in particular reflects only the immediately preceding statement.
-// A real exit code wins when there is one; otherwise a false `$?` becomes 1.
+//
+// `$?` decides, and `$LASTEXITCODE` only supplies the number. That order
+// matters: a cmdlet does not reset `$LASTEXITCODE`, so after
+// `cmd /c exit 3; Write-Output recovered` it still reads 3 while `$?` is true.
+// Consulting the code first would report 3 for a script whose last statement
+// succeeded, where bash reports 0 — `(exit 3); echo recovered` is a success.
 const psExitEpilogue = `
 $__piOK = $?; $__piCode = $LASTEXITCODE
-if (-not $__piOK) { if ($__piCode) { exit $__piCode }; exit 1 }
-if ($null -ne $__piCode) { exit $__piCode }
-exit 0`
+if ($__piOK) { exit 0 }
+if ($__piCode) { exit $__piCode }
+exit 1`
 
 // buildShellCommand is shellCommand with the shell named explicitly, so the
 // PowerShell wrapper can be exercised from any platform.
