@@ -822,13 +822,15 @@ func TestAgentToolCallMsg_SetsAgentFields(t *testing.T) {
 	}
 }
 
-func TestAgentToolCallMsg_TruncatesLongTitle(t *testing.T) {
+func TestAgentToolCallMsg_StoresTitleWithinCap(t *testing.T) {
 	m := &model{
 		chatModel: ChatModel{Messages: make([]message, 0)},
 		running:   true,
 		agentCh:   make(chan agentMsg, 64),
 	}
 
+	// 100 runes is within the storage cap, so it is kept whole — the visible
+	// length is decided at render time against the terminal width.
 	longPrompt := strings.Repeat("a", 100)
 	newM, _ := m.Update(agentToolCallMsg{
 		name: "agent",
@@ -839,8 +841,30 @@ func TestAgentToolCallMsg_TruncatesLongTitle(t *testing.T) {
 	})
 	mm := newM.(*model)
 
-	if len(mm.chatModel.Messages[0].agentTitle) > 60 {
-		t.Errorf("expected title <= 60 chars, got %d", len(mm.chatModel.Messages[0].agentTitle))
+	if mm.chatModel.Messages[0].agentTitle != longPrompt {
+		t.Errorf("expected title kept whole within the cap, got %q", mm.chatModel.Messages[0].agentTitle)
+	}
+}
+
+func TestAgentToolCallMsg_TruncatesOverCapTitle(t *testing.T) {
+	m := &model{
+		chatModel: ChatModel{Messages: make([]message, 0)},
+		running:   true,
+		agentCh:   make(chan agentMsg, 64),
+	}
+
+	overCap := strings.Repeat("a", maxStoredAgentTitle+50)
+	newM, _ := m.Update(agentToolCallMsg{
+		name: "agent",
+		args: map[string]any{
+			"type":   "explore",
+			"prompt": overCap,
+		},
+	})
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages[0].agentTitle) > maxStoredAgentTitle {
+		t.Errorf("expected title <= %d chars, got %d", maxStoredAgentTitle, len(mm.chatModel.Messages[0].agentTitle))
 	}
 	if !strings.HasSuffix(mm.chatModel.Messages[0].agentTitle, "...") {
 		t.Error("expected '...' suffix for truncated title")

@@ -1285,14 +1285,23 @@ func findUnassignedAgentCard(messages []message, agentID string) int {
 	return fallback
 }
 
-// truncatePrompt shortens a prompt to a single-line 60-char preview for the
-// agent card header.
+// maxStoredAgentTitle bounds the prompt preview stored on an agent card. It is
+// deliberately generous so a wide terminal can show a longer title — the actual
+// visible length is decided at render time by agentCardHeader against the
+// terminal width. This is only a storage cap, so a pathological prompt cannot
+// bloat the message.
+const maxStoredAgentTitle = 200
+
+// truncatePrompt shortens a prompt to a single-line preview for the agent card
+// header. It strips the prompt to its first line and bounds its length; the
+// precise visible length is fixed at render time so a wide terminal gets a
+// longer line.
 func truncatePrompt(prompt string) string {
 	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
 		prompt = prompt[:idx]
 	}
-	if len(prompt) > 60 {
-		prompt = prompt[:57] + "..."
+	if len(prompt) > maxStoredAgentTitle {
+		prompt = prompt[:maxStoredAgentTitle-3] + "..."
 	}
 	return prompt
 }

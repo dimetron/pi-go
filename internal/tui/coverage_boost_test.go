@@ -1100,13 +1100,22 @@ func TestFindUnassignedAgentCard_None(t *testing.T) {
 }
 
 func TestTruncatePrompt_Long(t *testing.T) {
-	in := strings.Repeat("a", 100)
+	in := strings.Repeat("a", maxStoredAgentTitle+100)
 	got := truncatePrompt(in)
-	if len(got) > 60 {
-		t.Errorf("expected <=60, got %d", len(got))
+	if len(got) > maxStoredAgentTitle {
+		t.Errorf("expected <=%d, got %d", maxStoredAgentTitle, len(got))
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Errorf("expected ellipsis, got %q", got)
+	}
+}
+
+func TestTruncatePrompt_PassesThruWithinCap(t *testing.T) {
+	// A prompt within the storage cap is kept whole — the visible length is
+	// decided at render time, not here.
+	in := strings.Repeat("a", 100)
+	if got := truncatePrompt(in); got != in {
+		t.Errorf("expected the prompt kept whole within the cap, got %d runes", len(got))
 	}
 }
 

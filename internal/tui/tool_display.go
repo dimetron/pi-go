@@ -236,7 +236,9 @@ func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Pa
 }
 
 // agentCardHeader renders the card's first row: bullet, "agent", the bracketed
-// agent label, and the title.
+// agent label, and the title. The title is truncated against the available
+// terminal width so a wide terminal shows a longer prompt, with a 60-runer
+// floor for narrow terminals.
 func (t *ToolDisplayModel) agentCardHeader(msg message, p Palette) string {
 	agentBullet := t.toolBullet(lipgloss.NewStyle().Foreground(p.Mauve).Bold(true), msg.content == "")
 	typeStyle := lipgloss.NewStyle().Foreground(p.Mauve).Bold(true)
@@ -245,15 +247,48 @@ func (t *ToolDisplayModel) agentCardHeader(msg message, p Palette) string {
 	var b strings.Builder
 	b.WriteString(agentBullet)
 	b.WriteString(typeStyle.Render("agent"))
-	if label := agentBracketLabel(msg.agentType); label != "" {
+	label := agentBracketLabel(msg.agentType)
+	if label != "" {
 		b.WriteString(typeStyle.Render("[" + label + "]"))
 	}
 	if msg.agentTitle != "" {
 		b.WriteString(" ")
-		b.WriteString(titleStyle.Render(msg.agentTitle))
+		b.WriteString(titleStyle.Render(agentTitleFit(msg.agentTitle, t.titleWidth(label))))
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// titleWidth returns the max runes for the agent card title given the terminal
+// width and the bracketed label that precedes it. The label is counted so a
+// compound "[claude+pi+gemini]" leaves less room for the title than a bare
+// "[pi]", keeping the header within one line. A floor of 60 keeps narrow
+// terminals readable, and the storage cap (maxStoredAgentTitle) bounds what a
+// wide terminal can ever show.
+func (t ToolDisplayModel) titleWidth(label string) int {
+	w := t.Width
+	if w < 40 {
+		w = 80 // sensible default when width unknown
+	}
+	// Reserve the bullet (2), "agent" (5), the bracketed label ("[...]" is
+	// len(label)+2), and the separator space (1).
+	used := 2 + len("agent") + len(label) + 2 + 1
+	if w-used < 60 {
+		return 60
+	}
+	return w - used
+}
+
+// agentTitleFit clips a title to n runes, marking the cut with an ellipsis.
+func agentTitleFit(title string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(title)
+	if len(r) <= n {
+		return title
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // agentEventWindow renders the card's live event stream, newest activity last,

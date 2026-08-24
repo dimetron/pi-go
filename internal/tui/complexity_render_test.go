@@ -1171,6 +1171,44 @@ func TestAgentCardHeaderRender(t *testing.T) {
 	}
 }
 
+// TestAgentTitleFitPinsTruncation pins the rune-wise title clip: the cut is
+// marked with a single ellipsis rune and the result is never wider than the
+// budget.
+func TestAgentTitleFitPinsTruncation(t *testing.T) {
+	title := strings.Repeat("a", 100)
+	got := agentTitleFit(title, 60)
+	if n := len([]rune(got)); n != 60 {
+		t.Errorf("got %d runes, want 60", n)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis suffix, got %q", got)
+	}
+
+	// A title that fits is returned whole.
+	if got := agentTitleFit("short", 60); got != "short" {
+		t.Errorf("got %q, want 'short'", got)
+	}
+}
+
+// TestAgentCardHeaderWideTruncatesLess pins that a wider terminal shows a
+// longer agent title: the render budget grows with the width, so the same
+// stored title is clipped harder on a narrow card than a wide one.
+func TestAgentCardHeaderWideTruncatesLess(t *testing.T) {
+	title := strings.Repeat("x", 300) // beyond even the wide budget
+	msg := message{agentType: "claude", agentTitle: title, content: "done"}
+
+	narrow := ansi.Strip((&ToolDisplayModel{Width: 80}).agentCardHeader(msg, paletteOrDark(Palette{})))
+	wide := ansi.Strip((&ToolDisplayModel{Width: 200}).agentCardHeader(msg, paletteOrDark(Palette{})))
+
+	if len([]rune(narrow)) >= len([]rune(wide)) {
+		t.Errorf("expected the wider terminal to render a longer header; narrow=%d wide=%d",
+			len([]rune(narrow)), len([]rune(wide)))
+	}
+	if !strings.Contains(narrow, "…") || !strings.Contains(wide, "…") {
+		t.Errorf("a title beyond both budgets must be clipped on both, got narrow=%q wide=%q", narrow, wide)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Status bar fields
 // ---------------------------------------------------------------------------
