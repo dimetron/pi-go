@@ -7,6 +7,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/provider"
 	"github.com/dimetron/pi-go/internal/testenv"
 )
 
@@ -146,5 +147,49 @@ func TestBuildCommitMsgFunc_OllamaUnreachableDaemonYieldsNil(t *testing.T) {
 	}
 	if fn := buildCommitMsgFunc(context.Background(), cfg); fn != nil {
 		t.Error("expected nil when the local daemon is unreachable")
+	}
+}
+
+// The model name buildSwitchedLLM returns is what the TUI stores and feeds
+// back into the next resolve, so it has to survive a round trip. Resolve
+// strips the ollama/ prefix from info.Model, and that prefix is the only part
+// of the spelling that pins a cloud-tagged model to the local daemon — hand
+// back the bare name and the next switch sends it to api.ollama.com instead.
+func TestBuildSwitchedLLM_OllamaPrefixSurvivesRoundTrip(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+	t.Setenv("OLLAMA_HOST", "")
+
+	origURL := flagURL
+	t.Cleanup(func() { flagURL = origURL })
+	flagURL = ""
+
+	cfg := config.Config{
+		Roles: map[string]config.RoleConfig{
+			"default": {Model: "ollama/deepseek-v4-flash:0731-cloud", Provider: "ollama"},
+		},
+	}
+
+	const requested = "ollama/deepseek-v4-flash:0731-cloud"
+	_, modelName, _, err := buildSwitchedLLM(context.Background(), cfg, guardrail.New(0), requested)
+	if err != nil {
+		t.Fatalf("buildSwitchedLLM: %v", err)
+	}
+	if modelName != requested {
+		t.Fatalf("model = %q, want %q — the prefix must survive to be re-resolved", modelName, requested)
+	}
+
+	// The returned name, resolved again, must still route to the daemon.
+	info, err := provider.Resolve(modelName)
+	if err != nil {
+		t.Fatalf("Resolve(%q): %v", modelName, err)
+	}
+	got := provider.ResolveOllamaEndpoint(provider.OllamaRouting{
+		Model:      info.Model,
+		APIKey:     "sk-ollama-test",
+		ForceLocal: info.LocalOllama,
+	})
+	if provider.IsOllamaCloudEndpoint(got) {
+		t.Errorf("re-resolved endpoint = %q, want the local daemon", got)
 	}
 }
