@@ -53,8 +53,16 @@ func TestBuildShellCommand_PowerShellPropagatesExitCode(t *testing.T) {
 	if !strings.HasPrefix(script, "go test ./...") {
 		t.Errorf("script = %q, want the caller's command first", script)
 	}
-	if !strings.Contains(script, "exit $LASTEXITCODE") {
-		t.Errorf("script = %q, want the exit-code propagation suffix", script)
+	if !strings.HasSuffix(script, psExitEpilogue) {
+		t.Errorf("script = %q, want the exit-code epilogue appended", script)
+	}
+	// Both failure signals have to be read, and read before anything here can
+	// overwrite them: `$LASTEXITCODE` is $null until a native command runs, and
+	// `$?` reflects only the immediately preceding statement.
+	for _, want := range []string{"$__piOK = $?", "$__piCode = $LASTEXITCODE"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script = %q, want it to capture %q", script, want)
+		}
 	}
 }
 
@@ -78,8 +86,8 @@ func TestShellCommand_FollowsTheResolvedShell(t *testing.T) {
 	if !strings.Contains(cmd.Path, "powershell") {
 		t.Errorf("Path = %q on a PowerShell machine, want powershell.exe", cmd.Path)
 	}
-	if !strings.Contains(strings.Join(cmd.Args, " "), "exit $LASTEXITCODE") {
-		t.Errorf("args = %v, want the exit-code propagation suffix", cmd.Args)
+	if !strings.HasSuffix(strings.Join(cmd.Args, " "), psExitEpilogue) {
+		t.Errorf("args = %v, want the exit-code epilogue appended", cmd.Args)
 	}
 
 	withShellKind(t, shellKindBash)
