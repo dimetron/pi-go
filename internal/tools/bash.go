@@ -143,14 +143,35 @@ type BashKillInput struct {
 
 const maxBashWait = 60 * time.Second
 
+// bashDescription and powershellDescription describe the execute tool for the
+// model. The bash wording is the default; the PowerShell variant is used on
+// Windows machines without bash so the model writes commands the actual shell
+// can parse instead of failing on bash syntax like `&&` (Windows PowerShell
+// 5.1 rejects it).
 const bashDescription = `Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.
 
 A command that runs past its timeout (1m by default), or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Pass a larger timeout for work you already know is long — a full test suite, an image build — rather than letting the default hand it off. Use bash_wait to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.
 
 timeout and idle_timeout are in MILLISECONDS and are floored at 60000 (1 minute): a command that takes less than a minute always finishes in the foreground. Write 300000 for five minutes, not 300.`
 
+const powershellDescription = `Execute a Windows PowerShell command and return its output. Commands run via powershell.exe -NoProfile -Command; this machine has no bash. Use PowerShell syntax: separate statements with ; or newlines (not &&), use Write-Output/echo for printing, Test-Path instead of test -f, Get-ChildItem instead of ls -la. Native tools (git, go, curl.exe) work as usual.
+
+A command that runs past its timeout (1m by default), or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Pass a larger timeout for work you already know is long — a full test suite, an image build — rather than letting the default hand it off. Use bash_wait to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.
+
+timeout and idle_timeout are in MILLISECONDS and are floored at 60000 (1 minute): a command that takes less than a minute always finishes in the foreground. Write 300000 for five minutes, not 300.`
+
+func executeDescription() string {
+	if CurrentShellKind() == "powershell" {
+		return powershellDescription
+	}
+	return bashDescription
+}
+
 func newBashTool(sb *Sandbox, sup *BashSupervisor) (tool.Tool, error) {
-	return newTool("bash", bashDescription, func(ctx agent.Context, input BashInput) (BashOutput, error) {
+	// The tool keeps the well-known "bash" name across platforms so sessions,
+	// configs and muscle memory referencing it stay valid; only the
+	// description tells the model which syntax to write.
+	return newTool("bash", executeDescription(), func(ctx agent.Context, input BashInput) (BashOutput, error) {
 		return bashHandler(sb, sup, ctx, input)
 	})
 }
