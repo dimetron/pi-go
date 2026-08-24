@@ -36,9 +36,14 @@ func CurrentShellKind() string {
 // shellCommand builds the exec command that runs script in the platform shell:
 // `bash -c` normally, or `powershell -NoProfile -Command` on Windows when no
 // bash is available (see specs/defect/windows-tools.md).
+//
+// The PowerShell wrapper propagates the last native command's exit code:
+// powershell.exe otherwise exits 0 for a pipeline whose native commands
+// failed, so a failing `go test` would look successful to the agent.
 func shellCommand(ctx context.Context, script string) *exec.Cmd {
 	if CurrentShellKind() == "powershell" {
-		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", script)
+		wrapped := script + "\n; exit $LASTEXITCODE"
+		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", wrapped)
 	}
 	return exec.CommandContext(ctx, "bash", "-c", script)
 }

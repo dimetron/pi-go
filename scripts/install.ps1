@@ -66,8 +66,14 @@ Remove-Item -Recurse -Force $extractDir
 Remove-Item -Force $zipPath
 
 # --- Add install dir to the user PATH when missing ------------------------------
+# Compare complete entries (not substrings) so e.g. an existing
+# "...\Programs\Microsoft VS Code\bin" does not hide the missing
+# "...\Programs" entry itself.
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$installDir*") {
+$entries = $userPath -split ";" | ForEach-Object { $_.Trim().TrimEnd("\") } | Where-Object { $_ }
+$want = $installDir.TrimEnd("\")
+$present = $entries | Where-Object { $_ -ieq $want }
+if (-not $present) {
     Write-Host "Adding $installDir to user PATH..."
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
     $env:PATH = "$env:PATH;$installDir"
