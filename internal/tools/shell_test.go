@@ -38,6 +38,26 @@ func wantsBash(t *testing.T, path string) {
 	}
 }
 
+// TestResolveShellKind_PowerShellWhenBashIsMissing covers the one line the
+// whole branch exists for: the decision to fall back.
+//
+// Nothing else reaches it. shell_exit_test.go injects the shell kind rather
+// than resolving it, precisely because Windows CI ships a git-bash on PATH --
+// so on that runner LookPath succeeds and the PowerShell return is
+// unreachable. Emptying PATH reproduces the actual defect condition (a Windows
+// machine with no bash), and exec.LookPath re-reads PATH on every call, so no
+// production seam is needed to get there.
+func TestResolveShellKind_PowerShellWhenBashIsMissing(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the PowerShell fallback only exists on Windows")
+	}
+	t.Setenv("PATH", "")
+
+	if got := resolveShellKind(); got != shellKindPowerShell {
+		t.Errorf("resolveShellKind() with no bash on PATH = %q, want %q", got, shellKindPowerShell)
+	}
+}
+
 func TestBuildShellCommand_Bash(t *testing.T) {
 	cmd := buildShellCommand(context.Background(), shellKindBash, "echo hi")
 
