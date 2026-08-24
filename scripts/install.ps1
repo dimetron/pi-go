@@ -44,13 +44,62 @@ if (-not $asset) {
     throw "No windows_amd64 zip found in release $tag"
 }
 
-# --- Download and extract ------------------------------------------------------
+# --- Download ------------------------------------------------------------------
 $zipPath = Join-Path $env:TEMP $asset.name
 $extractDir = Join-Path $env:TEMP ("pi-go-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 
 Write-Host "Downloading $($asset.name)..."
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing
 
+# --- Verify the download against the release checksums -------------------------
+# checksums.txt is a GoReleaser artifact listing "<sha256>  <filename>" for every
+# archive in the release. Checking it catches a truncated or corrupted download
+# and a swapped asset, which is what an installer can check on its own.
+#
+# It is not proof of origin: checksums.txt travels the same path as the archive,
+# so anyone who could substitute one could substitute both. `pi verify` is the
+# check that answers that — it looks the binary's digest up in GitHub's
+# attestations API and verifies the Sigstore bundle against this repo's release
+# workflow. The last line of this script points at it.
+#
+# Missing or unlisted checksums are a hard failure rather than a warning. A
+# release without them is a broken release, and an installer that shrugs and
+# continues is an installer whose verification means nothing.
+$sumAsset = $release.assets | Where-Object { $_.name -eq "checksums.txt" } | Select-Object -First 1
+if (-not $sumAsset) {
+    Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+    throw "Release $tag publishes no checksums.txt; refusing to install an unverifiable download."
+}
+
+Write-Host "Verifying checksum..."
+$sumsPath = Join-Path $env:TEMP "pi-go-checksums-$tag.txt"
+Invoke-WebRequest -Uri $sumAsset.browser_download_url -OutFile $sumsPath -UseBasicParsing
+
+# Lines are "<hex>  <name>"; split on whitespace rather than a fixed width so a
+# one- or two-space variant both parse.
+$expected = $null
+foreach ($line in Get-Content $sumsPath) {
+    $parts = $line.Trim() -split "\s+", 2
+    if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $asset.name) {
+        $expected = $parts[0].Trim()
+        break
+    }
+}
+Remove-Item -Force $sumsPath -ErrorAction SilentlyContinue
+
+if (-not $expected) {
+    Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+    throw "checksums.txt for $tag does not list $($asset.name); refusing to install."
+}
+
+$actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+if ($actual -ine $expected) {
+    Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+    throw "Checksum mismatch for $($asset.name): expected $expected, got $actual. The download was discarded."
+}
+Write-Host "  sha256 $($actual.ToLower())"
+
+# --- Extract -------------------------------------------------------------------
 Write-Host "Extracting..."
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
@@ -75,7 +124,12 @@ $want = $installDir.TrimEnd("\")
 $present = $entries | Where-Object { $_ -ieq $want }
 if (-not $present) {
     Write-Host "Adding $installDir to user PATH..."
-    [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
+    # A fresh account can have no user PATH at all, and "$null;$installDir"
+    # would write a leading separator — an empty entry that some tools read as
+    # the current directory.
+    if ([string]::IsNullOrWhiteSpace($userPath)) { $newPath = $installDir }
+    else { $newPath = $userPath.TrimEnd(";") + ";" + $installDir }
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
     $env:PATH = "$env:PATH;$installDir"
     Write-Host "PATH updated. Restart your terminal for it to take effect everywhere."
 } else {
@@ -86,3 +140,4 @@ if (-not $present) {
 Write-Host ""
 Write-Host (& $dest --version)
 Write-Host "Installed to $dest" -ForegroundColor Green
+Write-Host "Run 'pi verify' to check this binary against its build provenance."

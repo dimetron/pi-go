@@ -57,3 +57,34 @@ func TestBuildShellCommand_PowerShellPropagatesExitCode(t *testing.T) {
 		t.Errorf("script = %q, want the exit-code propagation suffix", script)
 	}
 }
+
+// withShellKind pins the process-wide shell kind for one test. It is not safe
+// in a parallel test: the kind is a package-level cache that every command the
+// package builds reads, so a test that swaps it must be the only one running.
+func withShellKind(t *testing.T, kind string) {
+	t.Helper()
+	prev := currentShellKind
+	currentShellKind = func() string { return kind }
+	t.Cleanup(func() { currentShellKind = prev })
+}
+
+// shellCommand is the one place the supervisor turns a script into a process,
+// so it is where the Windows fallback either takes effect or quietly does not:
+// a hardcoded "bash" here would leave resolveShellKind reporting the right
+// answer while every command on the machine still died with "bash not found".
+func TestShellCommand_FollowsTheResolvedShell(t *testing.T) {
+	withShellKind(t, shellKindPowerShell)
+	cmd := shellCommand(context.Background(), "echo hi")
+	if !strings.Contains(cmd.Path, "powershell") {
+		t.Errorf("Path = %q on a PowerShell machine, want powershell.exe", cmd.Path)
+	}
+	if !strings.Contains(strings.Join(cmd.Args, " "), "exit $LASTEXITCODE") {
+		t.Errorf("args = %v, want the exit-code propagation suffix", cmd.Args)
+	}
+
+	withShellKind(t, shellKindBash)
+	cmd = shellCommand(context.Background(), "echo hi")
+	if !strings.HasSuffix(cmd.Path, "bash") {
+		t.Errorf("Path = %q on a bash machine, want bash", cmd.Path)
+	}
+}

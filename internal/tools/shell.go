@@ -39,15 +39,31 @@ func shellCommand(ctx context.Context, script string) *exec.Cmd {
 	return buildShellCommand(ctx, CurrentShellKind(), script)
 }
 
+// psExitEpilogue makes powershell.exe report failure the way bash does.
+//
+// Two separate things can fail and only one of them sets an exit code.
+// `$LASTEXITCODE` is written by native executables and is $null until one
+// runs, so a script of pure cmdlets leaves it unset. `$?` covers both, but a
+// non-terminating cmdlet error — the ordinary kind, `Get-ChildItem` on a
+// missing path — sets `$?` false while leaving `$LASTEXITCODE` untouched.
+// Reading either one alone reports a failed command as a success: without this
+// a failing `go test` (native, exit 1) or a failing `Test-Path` chain (cmdlet,
+// no exit code) both come back green and the agent believes them.
+//
+// Both are captured on the first line, before any statement here can overwrite
+// them — `$?` in particular reflects only the immediately preceding statement.
+// A real exit code wins when there is one; otherwise a false `$?` becomes 1.
+const psExitEpilogue = `
+$__piOK = $?; $__piCode = $LASTEXITCODE
+if (-not $__piOK) { if ($__piCode) { exit $__piCode }; exit 1 }
+if ($null -ne $__piCode) { exit $__piCode }
+exit 0`
+
 // buildShellCommand is shellCommand with the shell named explicitly, so the
 // PowerShell wrapper can be exercised from any platform.
-//
-// The PowerShell wrapper propagates the last native command's exit code:
-// powershell.exe otherwise exits 0 for a pipeline whose native commands
-// failed, so a failing `go test` would look successful to the agent.
 func buildShellCommand(ctx context.Context, kind, script string) *exec.Cmd {
 	if kind == shellKindPowerShell {
-		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", script+"\n; exit $LASTEXITCODE")
+		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", script+psExitEpilogue)
 	}
 	return exec.CommandContext(ctx, "bash", "-c", script)
 }

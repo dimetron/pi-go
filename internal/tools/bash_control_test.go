@@ -480,6 +480,18 @@ func TestClampDuration(t *testing.T) {
 	if got := clampDuration(1, fallback, 0, maxDur); got != time.Second {
 		t.Errorf("1s with no floor = %v, want 1s", got)
 	}
+	// Both bounds are inclusive. A `<=` where the code has `<` would move a
+	// value the caller is entitled to, and the cap boundary is the one the
+	// description advertises: "capped at 600" has to mean 600 is accepted.
+	if got := clampDuration(int(minDur/time.Second), fallback, minDur, maxDur); got != minDur {
+		t.Errorf("input exactly at the floor = %v, want it left alone at %v", got, minDur)
+	}
+	if got := clampDuration(int(maxDur/time.Second), fallback, minDur, maxDur); got != maxDur {
+		t.Errorf("input exactly at the cap = %v, want it left alone at %v", got, maxDur)
+	}
+	if got := clampDuration(600, defaultBashTimeout, 0, maxBashTimeout); got != maxBashTimeout {
+		t.Errorf("timeout: 600 = %v, want the advertised %v ceiling", got, maxBashTimeout)
+	}
 }
 
 // TestNewStream_DefaultsWhenLimitUnset guards against a zero limit silently
@@ -639,5 +651,40 @@ func TestExecuteDescription_SharesTheLimitsTail(t *testing.T) {
 	}
 	if strings.Contains(bashLead, "powershell") {
 		t.Error("bash lead should not mention powershell")
+	}
+}
+
+// The tool keeps the name "bash" on every platform, so its description is the
+// only thing telling the model which shell it is writing for. On a Windows
+// machine with no bash the commands go through powershell.exe, which rejects
+// `&&`; if the registered tool carried the bash lead there, every compound
+// command the model wrote would fail at the shell rather than in the code.
+func TestNewBashTool_DescriptionFollowsTheResolvedShell(t *testing.T) {
+	for _, tt := range []struct {
+		kind string
+		lead string
+	}{
+		{shellKindBash, bashLead},
+		{shellKindPowerShell, powershellLead},
+	} {
+		t.Run(tt.kind, func(t *testing.T) {
+			withShellKind(t, tt.kind)
+
+			if got, want := executeDescription(), tt.lead+bashLimits; got != want {
+				t.Fatalf("executeDescription() = %q, want the %s lead", got, tt.kind)
+			}
+			bt, err := newBashTool(testSandbox(t, t.TempDir()), testSupervisor(t))
+			if err != nil {
+				t.Fatalf("newBashTool: %v", err)
+			}
+			if bt.Name() != "bash" {
+				t.Errorf("Name() = %q, want the tool to keep the bash name on every platform", bt.Name())
+			}
+			// The description the model actually receives has to be the
+			// resolved one, not the constant it was built from.
+			if got := bt.Description(); got != tt.lead+bashLimits {
+				t.Errorf("registered description = %q, want the %s lead", got, tt.kind)
+			}
+		})
 	}
 }

@@ -91,9 +91,11 @@ Runs on Windows PowerShell 5.1 (built into Windows 10/11) and PowerShell 7+;
 `windows/amd64` only. Set `GITHUB_TOKEN` if you hit the GitHub API rate limit
 while it resolves the latest release.
 
-The installer does not verify the download itself. Run `pi verify` afterwards
-to check the installed binary against its build provenance — see
-[Verifying a release](#verifying-a-release).
+The installer checks the download against the release's `checksums.txt` and
+refuses to install on a mismatch. That catches a corrupted or swapped archive,
+but not a substituted release — `checksums.txt` travels the same path as the
+archive. Run `pi verify` afterwards for the provenance check that does answer
+that question — see [Verifying a release](#verifying-a-release).
 
 Windows machines without `bash.exe` on `PATH` — a stock Windows install has
 none — run agent commands through `powershell.exe` instead, so write PowerShell
