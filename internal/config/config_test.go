@@ -327,6 +327,9 @@ func TestLoad_MergesDefaultModelWithExistingRoles(t *testing.T) {
 }
 
 func TestExtraHeadersFromConfig(t *testing.T) {
+	// Load() merges ~/.pi-go/config.json under the project config, so without
+	// a scratch HOME the developer's own settings leak into the assertions.
+	testenv.SetHome(t, t.TempDir())
 	tmp := t.TempDir()
 	origDir, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -374,6 +377,7 @@ func TestExtraHeadersAbsentByDefault(t *testing.T) {
 }
 
 func TestInsecureSkipTLSFromConfig(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
 	tmp := t.TempDir()
 	origDir, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -412,6 +416,7 @@ func TestInsecureSkipTLSFalseByDefault(t *testing.T) {
 }
 
 func TestCACertFromConfig(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
 	tmp := t.TempDir()
 	origDir, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -470,6 +475,7 @@ func TestMemoryDefaults(t *testing.T) {
 }
 
 func TestMemoryConfigFromJSON(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
 	tmp := t.TempDir()
 	origDir, _ := os.Getwd()
 	if err := os.Chdir(tmp); err != nil {
@@ -1281,6 +1287,7 @@ func TestResolveBaseURLs_NilConfigMapFallsBackToEnv(t *testing.T) {
 }
 
 func TestLoad_BaseURLsFromJSON(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
 	dir := t.TempDir()
 	projectDir := filepath.Join(dir, ".pi-go")
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
