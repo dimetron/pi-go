@@ -32,9 +32,7 @@ type EditOutput struct {
 func newEditTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("edit", `Edit a file by replacing an exact string match.
 
-Required: file_path (absolute path), old_string (text to find).
-Optional: new_string (replacement, default "" = delete old_string), replace_all (bool, default false).
-old_string must be unique unless replace_all is true.`, func(_ agent.Context, input EditInput) (EditOutput, error) {
+old_string must be unique unless replace_all is true. Omitting new_string deletes old_string.`, func(_ agent.Context, input EditInput) (EditOutput, error) {
 		return editHandlerWithLedger(sb, input, ledger)
 	})
 }

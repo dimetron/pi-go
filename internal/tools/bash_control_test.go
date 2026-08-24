@@ -36,7 +36,7 @@ func TestBashControlTools_Registered(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing tool %q; got %v", want, names)
 		}
-		if !strings.Contains(bashDescription, want) {
+		if !strings.Contains(executeDescription(), want) {
 			t.Errorf("bash description should point the model at %q", want)
 		}
 	}
@@ -80,7 +80,7 @@ func TestBashControlTools_DefaultWaitsForOutput(t *testing.T) {
 		t.Fatalf("expected a backgrounded command, got %+v", out)
 	}
 
-	// An omitted wait_ms must use the same blocking-by-default behavior exposed
+	// An omitted wait_sec must use the same blocking-by-default behavior exposed
 	// by bash_wait, rather than immediately returning an empty poll result.
 	res, err := runNamedTool(t, ts, "bash_wait", map[string]any{"handle": out.Handle})
 	if err != nil {
@@ -114,10 +114,10 @@ func TestBashControlTools_RoundTrip(t *testing.T) {
 		t.Fatalf("expected a backgrounded command, got %+v", out)
 	}
 
-	// wait_ms means one call, not a polling loop — the whole reason it exists.
+	// wait_sec means one call, not a polling loop — the whole reason it exists.
 	res, err := runNamedTool(t, ts, "bash_wait", map[string]any{
-		"handle":  out.Handle,
-		"wait_ms": 3000,
+		"handle":   out.Handle,
+		"wait_sec": 3,
 	})
 	if err != nil {
 		t.Fatalf("bash_wait: %v", err)
@@ -238,75 +238,53 @@ func TestBashHandler_EmptyCommandRejected(t *testing.T) {
 	}
 }
 
-// TestBashHandler_SubMinuteLimitsAreFloored is the regression for a real
+// TestBashHandler_SubMinuteLimitsAreHonored is the regression for a real
 // session: `timeout: 300` meant five minutes, arrived as 300ms, and handed
 // `make test-coverage` to the background 312ms in — before make had printed a
 // line. The command then took two extra round trips to recover work that would
 // have finished in the foreground.
 //
-// A limit under a minute is now raised to one, so the command runs to
-// completion, and the result says what was raised and why.
-func TestBashHandler_SubMinuteLimitsAreFloored(t *testing.T) {
+// The tool now takes seconds, so `timeout: 300` is five minutes and a small
+// value is honored as written rather than raised to a floor.
+func TestBashHandler_SubMinuteLimitsAreHonored(t *testing.T) {
 	sb := testSandbox(t, t.TempDir())
 	sup := testSupervisor(t)
 	sup.heartbeat = 20 * time.Millisecond
 
 	out, err := bashHandler(sb, sup, nil, BashInput{
 		Command:     "sleep 0.4 && echo done",
-		Timeout:     300, // ms — the caller meant 300 seconds
+		Timeout:     300, // seconds — five minutes
 		IdleTimeout: 150,
 	})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
 	if out.Running {
-		t.Fatalf("a sub-second limit was honored and backgrounded the command: %+v", out)
+		t.Fatalf("a 5-minute limit backgrounded a 0.4s command: %+v", out)
 	}
 	if !strings.Contains(out.Stdout, "done") {
 		t.Errorf("command should have run to completion, got stdout %q", out.Stdout)
 	}
-	// The note has to teach the unit, or the caller repeats the mistake.
-	for _, want := range []string{"timeout=300ms", "300000", "idle_timeout=150ms", "millisecond"} {
-		if !strings.Contains(out.Note, want) {
-			t.Errorf("Note = %q, want it to contain %q", out.Note, want)
-		}
+	// No unit lecture: the value means what it says.
+	if out.Note != "" {
+		t.Errorf("Note = %q, want none for a seconds value that means what it says", out.Note)
 	}
 }
 
-// A number too large to be a plausible seconds value gets no "you meant
-// seconds" correction. `idle_timeout: 5000` is a deliberate five seconds, and
-// answering it with "write 5000000 for 1h23m20s" would be worse than silence.
-func TestFlooredNote_WithholdsImplausibleSuggestions(t *testing.T) {
-	note := flooredNote(BashInput{IdleTimeout: 5000})
-
-	if !strings.Contains(note, "idle_timeout=5s") {
-		t.Errorf("note = %q, want it to name the raised limit", note)
-	}
-	for _, unwanted := range []string{"write ", "seconds written"} {
-		if strings.Contains(note, unwanted) {
-			t.Errorf("note = %q, should not contain %q", note, unwanted)
-		}
-	}
-	// A small number keeps the correction, so the two paths stay distinct.
-	if got := flooredNote(BashInput{Timeout: 300}); !strings.Contains(got, "write 300000 for 5m0s") {
-		t.Errorf("note = %q, want the seconds correction", got)
-	}
-}
-
-// A limit the caller meant is left alone: the floor is a unit-mistake guard,
-// not a policy on how long commands may hold the foreground.
+// A limit the caller meant is left alone: the tool takes seconds, so there is
+// no unit-mistake guard to trip on a deliberate value.
 func TestBashHandler_SaneLimitsAreNotAnnotated(t *testing.T) {
 	sb := testSandbox(t, t.TempDir())
 
 	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
 		Command: "echo hi",
-		Timeout: 120000, // 2m, comfortably above the floor
+		Timeout: 120, // 2m
 	})
 	if err != nil {
 		t.Fatalf("bashHandler: %v", err)
 	}
 	if out.Note != "" {
-		t.Errorf("Note = %q, want none for a limit above the floor", out.Note)
+		t.Errorf("Note = %q, want none for a limit above the default", out.Note)
 	}
 }
 
@@ -484,13 +462,13 @@ func TestClampDuration(t *testing.T) {
 	if got := clampDuration(-5, fallback, minDur, maxDur); got != fallback {
 		t.Errorf("negative input = %v, want the fallback %v", got, fallback)
 	}
-	if got := clampDuration(3000, fallback, minDur, maxDur); got != 3*time.Second {
-		t.Errorf("3000ms = %v, want 3s", got)
+	if got := clampDuration(3, fallback, minDur, maxDur); got != 3*time.Second {
+		t.Errorf("3s = %v, want 3s", got)
 	}
-	if got := clampDuration(50, fallback, minDur, maxDur); got != minDur {
+	if got := clampDuration(1, fallback, minDur, maxDur); got != minDur {
 		t.Errorf("undersized input = %v, want the floor %v", got, minDur)
 	}
-	if got := clampDuration(999999, fallback, minDur, maxDur); got != maxDur {
+	if got := clampDuration(999, fallback, minDur, maxDur); got != maxDur {
 		t.Errorf("oversized input = %v, want the cap %v", got, maxDur)
 	}
 	// The floor catches a caller's mistake; it must not bend a default that
@@ -499,8 +477,8 @@ func TestClampDuration(t *testing.T) {
 		t.Errorf("unset input = %v, want the fallback unbent by the floor", got)
 	}
 	// A zero floor means no floor — bash_wait needs short waits.
-	if got := clampDuration(50, fallback, 0, maxDur); got != 50*time.Millisecond {
-		t.Errorf("50ms with no floor = %v, want 50ms", got)
+	if got := clampDuration(1, fallback, 0, maxDur); got != time.Second {
+		t.Errorf("1s with no floor = %v, want 1s", got)
 	}
 }
 
@@ -535,13 +513,6 @@ func TestSupervisorDefaults(t *testing.T) {
 func TestBashDefaultTimeout_IsTheForegroundBudget(t *testing.T) {
 	if defaultBashTimeout != time.Minute {
 		t.Errorf("defaultBashTimeout = %s, want 1m", defaultBashTimeout)
-	}
-	// The default cannot sit below the floor: a caller that passes nothing
-	// would then get a shorter budget than one that asks for the smallest
-	// value the tool accepts, which is indefensible in either direction.
-	if defaultBashTimeout < minBashTimeout {
-		t.Errorf("defaultBashTimeout %s is below the %s floor",
-			defaultBashTimeout, minBashTimeout)
 	}
 	// The idle check only earns its keep while it can fire before the hard
 	// limit, which under defaults it cannot — it exists for callers that raise
@@ -635,5 +606,38 @@ func TestBashWait_LingeringGrandchildCostsTheExitStatus(t *testing.T) {
 	if elapsed > 15*time.Second {
 		t.Errorf("wait took %s; expected it to end when the wait delay (%s) fires",
 			elapsed, procs.DefaultWaitDelay)
+	}
+}
+
+// TestExecuteDescription_SharesTheLimitsTail pins the split that keeps the two
+// platform descriptions from drifting: only the lead differs, and the
+// backgrounding contract and the units are stated once for both.
+//
+// The units matter more than the wording. They are seconds, and the tool has
+// no way to tell a caller that meant milliseconds — a schema property carries
+// no description of its own — so the description is the only place the model
+// can learn them.
+func TestExecuteDescription_SharesTheLimitsTail(t *testing.T) {
+	for name, desc := range map[string]string{
+		"bash":       bashLead + bashLimits,
+		"powershell": powershellLead + bashLimits,
+	} {
+		for _, want := range []string{"SECONDS", "bash_wait", "bash_kill", "600"} {
+			if !strings.Contains(desc, want) {
+				t.Errorf("%s description is missing %q", name, want)
+			}
+		}
+		if strings.Contains(desc, "MILLISECONDS") {
+			t.Errorf("%s description still claims milliseconds", name)
+		}
+	}
+
+	// The PowerShell lead has to name the syntax difference that actually
+	// breaks commands, or the model writes `&&` and the shell rejects it.
+	if !strings.Contains(powershellLead, "&&") {
+		t.Error("powershell lead should warn that && is not PowerShell syntax")
+	}
+	if strings.Contains(bashLead, "powershell") {
+		t.Error("bash lead should not mention powershell")
 	}
 }

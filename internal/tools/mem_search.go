@@ -34,7 +34,7 @@ type MemSearchOutput struct {
 
 func newMemSearchTool(store memory.Store) (tool.Tool, error) {
 	return newTool("mem-search",
-		"Search past observations using full-text search. Returns a compact table with IDs, titles, and types. Use mem-get to fetch full details for specific IDs.",
+		"Search past observations using full-text search. Returns a compact table with IDs, titles, and types. Use mem-get to fetch full details.",
 		func(ctx agent.Context, input MemSearchInput) (MemSearchOutput, error) {
 			return memSearchHandler(ctx, store, input)
 		})
@@ -100,7 +100,7 @@ type MemTimelineOutput struct {
 
 func newMemTimelineTool(store memory.Store) (tool.Tool, error) {
 	return newTool("mem-timeline",
-		"Show observations around an anchor observation in chronological order. Useful for understanding the context of a specific observation.",
+		"Show observations around an anchor observation in chronological order.",
 		func(ctx agent.Context, input MemTimelineInput) (MemTimelineOutput, error) {
 			return memTimelineHandler(ctx, store, input)
 		})
@@ -161,7 +161,7 @@ type MemGetOutput struct {
 
 func newMemGetTool(store memory.Store) (tool.Tool, error) {
 	return newTool("mem-get",
-		"Fetch full details for specific observations by ID. Use after mem-search or mem-timeline to get complete observation text.",
+		"Fetch full details for specific observations by ID. Use after mem-search or mem-timeline.",
 		func(ctx agent.Context, input MemGetInput) (MemGetOutput, error) {
 			return memGetHandler(ctx, store, input)
 		})

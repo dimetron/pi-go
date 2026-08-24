@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -22,36 +21,14 @@ const (
 	// One minute is chosen so the common case stays whole — the vast majority
 	// of commands in this repo (git, go vet, a package test run, a warm build)
 	// finish well inside it — while anything genuinely long says so a minute in
-	// rather than running the turn out. It is also minBashTimeout: a caller
-	// that passes nothing and one that passes the smallest accepted value get
-	// the same budget, which is the only defensible relationship between a
-	// default and a floor. A caller that knows its command is long should raise
-	// `timeout` rather than discover this limit; the idle check then does the
-	// real work, firing well before the raised hard limit.
+	// rather than running the turn out. A caller that knows its command is long
+	// should raise `timeout` rather than discover this limit; the idle check
+	// then does the real work, firing well before the raised hard limit.
 	defaultBashTimeout = time.Minute
 
-	// minBashTimeout is the floor under both caller-supplied limits.
-	//
-	// It exists because `timeout` and `idle_timeout` are milliseconds, which is
-	// invisible at the call site: a caller writing `timeout: 300` means five
-	// minutes and gets 300ms. Nothing that small can succeed — `make` has not
-	// printed its first line by then — so the command is handed off before it
-	// has done anything, and the caller is left polling a handle to recover
-	// work that would have finished in the foreground.
-	//
-	// Flooring at a minute costs a caller that genuinely wanted a sub-second
-	// budget nothing it can use, since a handoff is not a kill: the command
-	// keeps running either way. What it buys is that every command shorter than
-	// a minute now completes in the foreground, whatever units the caller
-	// thought it was passing.
-	//
-	// Subagent frontmatter had the same bug and took the same view — see
-	// minAgentTimeoutMs in internal/subagent/agents.go, where `timeout: 30`
-	// meant thirty seconds and SIGKILLed the agent 30ms in. That one ignores
-	// the value and falls back to the default; this one floors, because a
-	// handoff is recoverable where a kill is not, and the floor and the default
-	// are the same minute anyway.
-	minBashTimeout = time.Minute
+	// maxBashTimeout caps a caller-supplied limit. Past ten minutes the caller
+	// should be backgrounding deliberately and polling with bash_wait rather
+	// than holding the foreground.
 	maxBashTimeout = 10 * time.Minute
 )
 
@@ -59,18 +36,13 @@ const (
 type BashInput struct {
 	// The shell command to execute.
 	Command string `json:"command"`
-	// Optional timeout in MILLISECONDS. Default: 60000 (1 minute).
-	// Min: 60000 (1 minute). Max: 600000 (10 minutes).
-	// On expiry the command is moved to the background, not killed. Raise it for
-	// work you already know is long (a full test suite, an image build) so it
-	// finishes in the foreground instead of costing a round trip. Values below
-	// the minute floor are raised to it, because they are nearly always seconds
-	// written where milliseconds were expected.
+	// Optional timeout in SECONDS. Default 60, max 600. On expiry the command
+	// is moved to the background, not killed. Raise it for work you already
+	// know is long so it finishes in the foreground instead of costing a round
+	// trip.
 	Timeout int `json:"timeout,omitempty"`
-	// Optional idle timeout in MILLISECONDS. A command that produces no output
-	// at all for this long is moved to the background. Default: 90000.
-	// Min: 60000 (1 minute). Set it higher for commands that are legitimately
-	// quiet for a long time.
+	// Optional idle timeout in SECONDS. A command that produces no output at
+	// all for this long is moved to the background. Default 90.
 	IdleTimeout int `json:"idle_timeout,omitempty"`
 }
 
@@ -129,10 +101,10 @@ type BashStatus struct {
 type BashWaitInput struct {
 	// Handle returned by a previous bash call.
 	Handle string `json:"handle"`
-	// WaitMs blocks up to this long for new output or for the command to exit,
-	// Defaults to 60000. Prefer waiting over polling
-	// in a loop.
-	WaitMs int `json:"wait_ms,omitempty"`
+	// WaitSec blocks up to this long, in SECONDS, for new output or for the
+	// command to exit. Defaults to 60. Prefer one long wait over polling in a
+	// loop.
+	WaitSec int `json:"wait_sec,omitempty"`
 }
 
 // BashKillInput identifies a backgrounded command to stop.
@@ -143,28 +115,26 @@ type BashKillInput struct {
 
 const maxBashWait = 60 * time.Second
 
-// bashDescription and powershellDescription describe the execute tool for the
-// model. The bash wording is the default; the PowerShell variant is used on
-// Windows machines without bash so the model writes commands the actual shell
-// can parse instead of failing on bash syntax like `&&` (Windows PowerShell
-// 5.1 rejects it).
-const bashDescription = `Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, running tests, building code, git operations, etc.
+// The bash tool's description is a lead plus a shared tail. Only the lead
+// differs by platform: on Windows without bash the command runs through
+// PowerShell, which rejects bash syntax like `&&`, so the model has to be told
+// which shell it is writing for. The backgrounding contract and the units are
+// the same either way, so they are stated once.
+const bashLead = `Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, tests, builds, git, etc.`
 
-A command that runs past its timeout (1m by default), or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Pass a larger timeout for work you already know is long — a full test suite, an image build — rather than letting the default hand it off. Use bash_wait to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.
+const powershellLead = `Execute a shell command and return its output. Commands run through powershell.exe -NoProfile -Command; this machine has no bash. Write PowerShell syntax: ; or a newline instead of &&, Test-Path instead of test -f, Get-ChildItem instead of ls. Native tools (git, go, curl.exe) work as usual.`
 
-timeout and idle_timeout are in MILLISECONDS and are floored at 60000 (1 minute): a command that takes less than a minute always finishes in the foreground. Write 300000 for five minutes, not 300.`
+const bashLimits = `
 
-const powershellDescription = `Execute a Windows PowerShell command and return its output. Commands run via powershell.exe -NoProfile -Command; this machine has no bash. Use PowerShell syntax: separate statements with ; or newlines (not &&), use Write-Output/echo for printing, Test-Path instead of test -f, Get-ChildItem instead of ls -la. Native tools (git, go, curl.exe) work as usual.
+A command that outlives its timeout (60s), or goes 90s with no output, is backgrounded rather than killed: the result carries running=true and a handle. Raise timeout for work you already know is long — a full test suite, an image build. Use bash_wait to read more output and bash_kill to stop it; a handle with no output at all means the command is too broad.
 
-A command that runs past its timeout (1m by default), or that produces no output at all for 90s, is not killed: it keeps running in the background and the result carries running=true and a handle. Pass a larger timeout for work you already know is long — a full test suite, an image build — rather than letting the default hand it off. Use bash_wait to collect more of its output and bash_kill to stop it. A handle with no output at all usually means the command is far too broad — narrow it or kill it rather than waiting on it.
-
-timeout and idle_timeout are in MILLISECONDS and are floored at 60000 (1 minute): a command that takes less than a minute always finishes in the foreground. Write 300000 for five minutes, not 300.`
+timeout, idle_timeout and wait_sec are in SECONDS, capped at 600. Write 300 for five minutes, not 300000.`
 
 func executeDescription() string {
 	if CurrentShellKind() == "powershell" {
-		return powershellDescription
+		return powershellLead + bashLimits
 	}
-	return bashDescription
+	return bashLead + bashLimits
 }
 
 func newBashTool(sb *Sandbox, sup *BashSupervisor) (tool.Tool, error) {
@@ -199,8 +169,8 @@ func bashHandler(sb *Sandbox, sup *BashSupervisor, ctx agent.Context, input Bash
 	out, err := sup.Run(parentCtx, runRequest{
 		dir:         sb.Dir(),
 		command:     input.Command,
-		timeout:     clampDuration(input.Timeout, defaultBashTimeout, minBashTimeout, maxBashTimeout),
-		idleTimeout: clampDuration(input.IdleTimeout, 0, minBashTimeout, maxBashTimeout),
+		timeout:     clampDuration(input.Timeout, defaultBashTimeout, 0, maxBashTimeout),
+		idleTimeout: clampDuration(input.IdleTimeout, 0, 0, maxBashTimeout),
 	})
 	if err != nil {
 		span.RecordError(err)
@@ -214,73 +184,22 @@ func bashHandler(sb *Sandbox, sup *BashSupervisor, ctx agent.Context, input Bash
 		attribute.Bool("bash.backgrounded", out.Running),
 	)
 
-	if n := flooredNote(input); n != "" {
-		out.Note = strings.TrimSpace(out.Note + " " + n)
-	}
 	return out, nil
 }
 
-// flooredNote reports a limit that was raised to minBashTimeout.
+// clampDuration converts a seconds input to a duration, substituting fallback
+// when unset and holding the result within [minDur, maxDur].
 //
-// Silently correcting the value would fix this call and leave the caller
-// repeating the mistake on the next one, so the note names the unit and gives
-// the number that would have meant what the caller wrote. It is deliberately
-// emitted whether or not the command was backgrounded: a caller that wrote
-// `timeout: 300` and got a clean result still asked for something it did not
-// get, and that is the cheapest moment to say so.
-func flooredNote(input BashInput) string {
-	var raised []string
-	var suggested bool
-	for _, f := range []struct {
-		name string
-		ms   int
-	}{{"timeout", input.Timeout}, {"idle_timeout", input.IdleTimeout}} {
-		if f.ms <= 0 || time.Duration(f.ms)*time.Millisecond >= minBashTimeout {
-			continue
-		}
-		desc, ok := describeFloored(f.name, f.ms)
-		raised = append(raised, desc)
-		suggested = suggested || ok
-	}
-	if len(raised) == 0 {
-		return ""
-	}
-	note := fmt.Sprintf("Raised to the %s floor: %s. These limits are in"+
-		" milliseconds.", minBashTimeout, strings.Join(raised, ", "))
-	if suggested {
-		note += " A value this far under the floor is nearly always seconds" +
-			" written where milliseconds were expected."
-	}
-	return note
-}
-
-// describeFloored renders one raised limit, and — where the number reads as a
-// plausible seconds value — what to write instead.
-//
-// The suggestion is withheld once the seconds reading exceeds maxBashTimeout,
-// because past that point it stops being a diagnosis and starts being noise:
-// `idle_timeout: 5000` is a deliberate five seconds, and answering it with
-// "write 5000000 for 1h23m20s" is worse than saying nothing.
-func describeFloored(field string, ms int) (desc string, suggested bool) {
-	asked := time.Duration(ms) * time.Millisecond
-	if meant := time.Duration(ms) * time.Second; meant <= maxBashTimeout {
-		return fmt.Sprintf("%s=%s (write %d for %s)", field, asked, ms*1000, meant), true
-	}
-	return fmt.Sprintf("%s=%s", field, asked), false
-}
-
-// clampDuration converts a millisecond input to a duration, substituting
-// fallback when unset and holding the result within [minDur, maxDur].
-//
-// The floor applies only to a value the caller actually supplied. An unset
-// input takes fallback unchanged, so a caller that passes nothing gets the
-// default that was chosen for it rather than one bent by a floor meant to
-// catch a unit mistake. Pass minDur = 0 where no floor applies.
-func clampDuration(ms int, fallback, minDur, maxDur time.Duration) time.Duration {
-	if ms <= 0 {
+// A floor applies only to a value the caller actually supplied: an unset input
+// takes fallback unchanged, so a caller that passes nothing gets the default
+// chosen for it rather than one bent by a floor. Pass minDur = 0 where no
+// floor applies, which is every current caller — the units are seconds now, so
+// there is no unit mistake left to guard against.
+func clampDuration(sec int, fallback, minDur, maxDur time.Duration) time.Duration {
+	if sec <= 0 {
 		return fallback
 	}
-	d := time.Duration(ms) * time.Millisecond
+	d := time.Duration(sec) * time.Second
 	if d < minDur {
 		return minDur
 	}
@@ -298,12 +217,12 @@ func clampDuration(ms int, fallback, minDur, maxDur time.Duration) time.Duration
 // builds its own supervisor and never streams need not carry the extra schema.
 func BashControlTools(sup *BashSupervisor) ([]tool.Tool, error) {
 	waitTool, err := newTool("bash_wait",
-		"Wait on a backgrounded shell command and return whatever it produced since the last wait. Blocks up to 60 seconds for new output or for the command to exit; use wait_ms for a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent. Wait once with a generous wait_ms rather than calling this in a loop — each call is a round trip, and an empty result means nothing new since the last one, not that the command is stuck.",
+		"Wait on a backgrounded shell command and return whatever it produced since the last wait. Blocks up to 60 seconds for new output or for the command to exit; use wait_sec for a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent. Wait once with a generous wait_sec rather than calling this in a loop — each call is a round trip, and an empty result means nothing new since the last one, not that the command is stuck.",
 		func(_ agent.Context, input BashWaitInput) (BashStatus, error) {
 			if input.Handle == "" {
 				return BashStatus{}, fmt.Errorf("handle is required (running: %v)", sup.Handles())
 			}
-			return sup.readOutput(input.Handle, clampDuration(input.WaitMs, maxBashWait, 0, maxBashWait))
+			return sup.readOutput(input.Handle, clampDuration(input.WaitSec, maxBashWait, 0, maxBashWait))
 		})
 	if err != nil {
 		return nil, err

@@ -65,10 +65,7 @@ const defaultHighGitOps = 50
 
 func newSessionStatsTool() (tool.Tool, error) {
 	return newTool("session-stats",
-		`Analyze session logs for anomalies: high tool call counts, excessive turns/cycles, errors, and git issues. Scans session directories and reports findings without LLM calls.
-
-Required: none.
-Optional: hours (lookback period, default 24), high_tool_calls (threshold, default 20), high_turns (threshold, default 5), all (show all sessions, default false), session_dir (override path).`,
+		`Analyze session logs for anomalies: high tool call counts, excessive turns/cycles, errors, and git issues. Scans session directories and reports findings without LLM calls.`,
 		func(_ agent.Context, input SessionStatsInput) (SessionStatsOutput, error) {
 			return sessionStatsHandler(input)
 		})

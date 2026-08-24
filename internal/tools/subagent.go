@@ -124,8 +124,7 @@ Modes:
 - Chain: {chain: [{agent: "<name>", task: "<prompt>"}, ...]} — run agents sequentially, passing results forward
 
 Worktree agents:
-- Agents marked [worktree] edit an isolated git worktree. Normal subagent calls return only the agent output; those edits are not applied to the current tree unless the caller keeps and merges that worktree.
-- If changes need to land in the current tree, ask the worktree agent for an exact patch/file list to apply, or choose a non-worktree editing agent.
+- Agents marked [worktree] edit an isolated git worktree; their edits are not applied to the current tree. Ask for an exact patch/file list to apply, or use a non-worktree editing agent.
 
 `)
 

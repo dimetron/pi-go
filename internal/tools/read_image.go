@@ -102,7 +102,7 @@ type ReadImageOutput struct {
 func newReadImageTool(sb *Sandbox) (tool.Tool, error) {
 	return newTool("read_image", `Read an image and make it visible to the model (vision).
 
-Use this after a screenshot has been saved to disk (for example by the playwright browser_take_screenshot tool), or to inspect a remote image by URL, so the agent can actually see the image contents and describe what it shows.
+Use this after a screenshot has been saved to disk, or to inspect a remote image by URL.
 
 Required: file_path — either an absolute/sandbox-relative path to a local image, or an https:// URL to a remote image.
 

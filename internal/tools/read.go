@@ -78,10 +78,7 @@ type ReadOutput struct {
 func newReadTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("read", `Read a file's contents. Returns the content with line numbers.
 
-Required: file_path (absolute path to the file).
-Optional: offset (start line, 1-based), limit (max lines to read).
-
-Large files come back a window at a time; next_offset is the exact offset to pass to continue.`,
+offset is 1-based. Large files come back a window at a time; next_offset is the exact offset to pass to continue.`,
 		func(_ agent.Context, input ReadInput) (ReadOutput, error) {
 			// The ledger must be threaded through here, not dropped: write
 			// gates on it, so a read that does not record leaves every

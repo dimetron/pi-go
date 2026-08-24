@@ -114,7 +114,7 @@ func TestStuckDetector_Observe_StreakThreshold(t *testing.T) {
 // outlives maxRepeatToolCalls.
 func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
 	s := &stuckDetector{}
-	args := map[string]any{"handle": "bg_16", "wait_ms": 1000}
+	args := map[string]any{"handle": "bg_16", "wait_sec": 1}
 	for i := 0; i < maxRepeatToolCalls*3; i++ {
 		stuck, detail := s.observe("bash_wait", args)
 		if stuck {

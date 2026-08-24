@@ -26,9 +26,7 @@ type WriteOutput struct {
 func newWriteTool(sb *Sandbox, ledger *ReadLedger) (tool.Tool, error) {
 	return newTool("write", `Write content to a file. Creates parent directories if needed. Overwrites existing files.
 
-An existing file must have been read in full first, so the content being replaced is known.
-
-Required: file_path (absolute path), content (file content to write).`, func(_ agent.Context, input WriteInput) (WriteOutput, error) {
+An existing file must have been read in full first, so the content being replaced is known.`, func(_ agent.Context, input WriteInput) (WriteOutput, error) {
 		return writeHandlerWithLedger(sb, input, ledger)
 	})
 }
