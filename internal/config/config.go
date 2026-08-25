@@ -298,18 +298,8 @@ func Load() (Config, error) {
 func LoadFrom(cwd string) (Config, error) {
 	cfg := Defaults()
 
-	home, err := os.UserHomeDir()
-	if err == nil {
-		globalPath := filepath.Join(home, ".pi-go", "config.json")
-		if err := loadFile(globalPath, &cfg); err != nil && !os.IsNotExist(err) {
-			return cfg, err
-		}
-	}
-
-	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "config.json")); projectPath != "" {
-		if err := loadFile(projectPath, &cfg); err != nil && !os.IsNotExist(err) {
-			return cfg, err
-		}
+	if err := loadConfigFiles(&cfg, cwd); err != nil {
+		return cfg, err
 	}
 
 	// Load MCP config from separate mcp.json files if present and merge with
@@ -317,45 +307,73 @@ func LoadFrom(cwd string) (Config, error) {
 	// config.json; mcp.json-only servers are appended so a project can add
 	// servers without redefining the global set. Appended entries keep the
 	// standalone marker so Save never copies them into config.json.
-	mcpServers := LoadMCPServersFrom(cwd)
-	if len(mcpServers) > 0 {
-		if cfg.MCP == nil {
-			cfg.MCP = &MCPConfig{}
-		}
-		known := make(map[string]bool, len(cfg.MCP.Servers))
-		for _, s := range cfg.MCP.Servers {
-			known[s.Name] = true
-		}
-		for _, s := range mcpServers {
-			if !known[s.Name] {
-				s.fromStandaloneFile = true
-				cfg.MCP.Servers = append(cfg.MCP.Servers, s)
-			}
-		}
-	}
+	mergeStandaloneMCPServers(&cfg, LoadMCPServersFrom(cwd))
 
 	// An llms.txt index configured as an MCP server is also registered as a
-	// fetch_docs source, so the documentation is readable straight away. The
-	// names are recorded rather than announced here: config loads before any
-	// front end exists, and the TUI's first act is a full terminal reset that
-	// clears the screen and scrollback, so a notice raised now would be wiped
-	// before it could be read. NotifyReroutedLLMS delivers it once the caller
-	// knows where output goes.
+	// fetch_docs source, so the documentation is readable straight away.
 	cfg.ReroutedLLMS = registerLLMSDocsSources(&cfg)
 
-	// Migrate deprecated DefaultModel to roles if roles not set.
-	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
+	migrateDefaultModelRoles(&cfg)
+
+	return cfg, nil
+}
+
+// loadConfigFiles overlays the nearest project .pi-go/config.json onto the
+// global ~/.pi-go/config.json on top of cfg. A missing file is not an error;
+// any other read or parse failure is.
+func loadConfigFiles(cfg *Config, cwd string) error {
+	if home, err := os.UserHomeDir(); err == nil {
+		globalPath := filepath.Join(home, ".pi-go", "config.json")
+		if err := loadFile(globalPath, cfg); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "config.json")); projectPath != "" {
+		if err := loadFile(projectPath, cfg); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// mergeStandaloneMCPServers appends standalone mcp.json servers that config.json
+// does not already declare. Existing names win; appended entries keep the
+// standalone marker so Save never copies them into config.json.
+func mergeStandaloneMCPServers(cfg *Config, mcpServers []MCPServer) {
+	if len(mcpServers) == 0 {
+		return
+	}
+	if cfg.MCP == nil {
+		cfg.MCP = &MCPConfig{}
+	}
+	known := make(map[string]bool, len(cfg.MCP.Servers))
+	for _, s := range cfg.MCP.Servers {
+		known[s.Name] = true
+	}
+	for _, s := range mcpServers {
+		if !known[s.Name] {
+			s.fromStandaloneFile = true
+			cfg.MCP.Servers = append(cfg.MCP.Servers, s)
+		}
+	}
+}
+
+// migrateDefaultModelRoles migrates the deprecated DefaultModel field into
+// Roles: as the default role when none exist, otherwise filling in just the
+// default role if roles are set but leave it unset.
+func migrateDefaultModelRoles(cfg *Config) {
+	if cfg.DefaultModel == "" {
+		return
+	}
+	if len(cfg.Roles) == 0 {
 		cfg.Roles = map[string]RoleConfig{
 			"default": {Model: cfg.DefaultModel},
 		}
-	} else if cfg.DefaultModel != "" && cfg.Roles != nil {
-		// If DefaultModel is set alongside roles, update the default role if not already set.
+	} else if cfg.Roles != nil {
 		if _, ok := cfg.Roles["default"]; !ok {
 			cfg.Roles["default"] = RoleConfig{Model: cfg.DefaultModel}
 		}
 	}
-
-	return cfg, nil
 }
 
 // mcpServerFile represents the JSON structure of a standalone mcp.json file.
