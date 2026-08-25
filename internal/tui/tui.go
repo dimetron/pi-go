@@ -869,6 +869,9 @@ func (m *model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case loginSSOResultMsg:
 		model, cmd := m.handleLoginSSOResult(msg)
 		return model, cmd, true
+	case loginMCPResultMsg:
+		model, cmd := m.handleLoginMCPResult(msg)
+		return model, cmd, true
 	case commitGeneratedMsg:
 		model, cmd := m.handleCommitGenerated(msg)
 		return model, cmd, true

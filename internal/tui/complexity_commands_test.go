@@ -86,7 +86,7 @@ func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
 		"/skills", "/skill-list", "/skill-load", "/skill-create", "/theme", "/ping",
-		"/rtk", "/mcp", "/restart", "/exit", "/quit",
+		"/rtk", "/mcp", "/login-mcp", "/restart", "/exit", "/quit",
 	}
 	if len(slashCommandSpecs) != len(want) {
 		t.Fatalf("slashCommandSpecs has %d entries, want %d", len(slashCommandSpecs), len(want))
@@ -112,7 +112,7 @@ func TestCplxSlashCommands_DerivedOrder(t *testing.T) {
 	want := []string{
 		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
-		"/skills", "/theme", "/ping", "/rtk", "/mcp", "/restart", "/exit", "/quit",
+		"/skills", "/theme", "/ping", "/rtk", "/mcp", "/login-mcp", "/restart", "/exit", "/quit",
 	}
 	if len(slashCommands) != len(want) {
 		t.Fatalf("slashCommands = %v (%d), want %d entries", slashCommands, len(slashCommands), len(want))

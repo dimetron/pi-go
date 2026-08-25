@@ -465,6 +465,36 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	return nil
 }
 
+// RebuildWithToolsets recreates the agent's internal runner with a new set of
+// external toolsets (e.g. MCP toolsets) while preserving all other
+// configuration (model, tools, callbacks, instruction, session). The session
+// service is reused so existing sessions remain accessible.
+//
+// This is how a live MCP toolset is swapped in after a manual re-authorization:
+// the runner holds the toolsets it was built with, so replacing them requires
+// rebuilding it. Callers must not invoke this while a turn is in flight.
+func (a *Agent) RebuildWithToolsets(toolsets []tool.Toolset) error {
+	cfg := a.config
+	cfg.Toolsets = toolsets
+
+	instruction := cfg.Instruction
+	if instruction == "" {
+		instruction = SystemInstruction
+	}
+	if cwd := cfg.workingDir(); cwd != "" {
+		instruction += fmt.Sprintf("\nCurrent working directory: %s\n", cwd)
+	}
+
+	r, err := buildRunner(cfg, instruction, a.sessionService)
+	if err != nil {
+		return fmt.Errorf("rebuilding runner: %w", err)
+	}
+
+	a.runner = r
+	a.config = cfg
+	return nil
+}
+
 // RebuildWithModel recreates the agent's internal runner with a new LLM while
 // preserving all other configuration (tools, callbacks, instruction, session).
 // The session service is reused so existing sessions remain accessible.

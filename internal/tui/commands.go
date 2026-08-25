@@ -121,6 +121,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
 	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
 	{name: "/mcp", desc: "List MCP servers and tool status", run: slashCmdVoid((*model).handleMCPCommand)},
+	{name: "/login-mcp", desc: "Re-run OAuth login for an MCP server", run: (*model).handleLoginMCPCommand},
 	{name: "/restart", desc: "Restart pi process", run: slashCmdBare((*model).handleRestartCommand)},
 	{name: "/exit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
 	{name: "/quit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
@@ -927,6 +928,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/subagents` | Show running subagents |\n")
 	b.WriteString("| `/rtk` | Output compaction stats |\n")
 	b.WriteString("| `/mcp` | List MCP servers and tool status |\n")
+	b.WriteString("| `/login-mcp <name>` | Re-run OAuth login for an MCP server |\n")
 	b.WriteString("| `/login <provider>` | Configure API keys |\n")
 	b.WriteString("| `/restart` | Restart pi process |\n")
 
