@@ -124,22 +124,34 @@ the unrelated lint failure or to have the user decide, not to bypass the hook.
 
 ## Review with the `codex-review` subagent before opening a PR
 
-**Always run the `codex-review` subagent on the changes before opening a pull
-request.** Not after, not instead of the other gates — before, so findings are
-fixed in the branch rather than in review comments.
+**Always run the codex review on the changes before opening a pull request.**
+Not after, not instead of the other gates — before, so findings are fixed in
+the branch rather than in review comments.
 
-From the agent, delegate the review with the `codex-review` subagent and ask it
-to review the current branch against `main`. The subagent is read-only; it must
-not modify files, commit, push, or open a PR.
+Run it with the `codex-review` subagent, asking it to review the current
+branch against `main`. The subagent is read-only; it must not modify files,
+commit, push, or open a PR.
 
-Treat the output as a real reviewer, not a formality:
+**Fallback: if the `codex-review` subagent is unavailable or fails, run Codex
+CLI directly instead.** A failed subagent invocation is not a clean review —
+fall back rather than skipping:
+
+```bash
+codex exec "Read-only code review of the branch $(git rev-parse --abbrev-ref HEAD) \
+against main. Run 'git diff main...HEAD' to scope it. Do not modify any files. \
+Report findings with file:line references." --sandbox read-only
+```
+
+(Adjust flags to the installed CLI version; the contract is: read-only
+sandbox, diff scoped to `main...HEAD`, findings with file:line references.)
+
+Treat the output as a real reviewer, not a formality — regardless of which
+path produced it:
 
 - Act on findings before pushing. Verify each one against the code yourself
   before accepting or dismissing it — a finding is a claim, not a verdict.
 - If a finding is wrong, say why in the PR description rather than silently
   ignoring it.
-- A failed subagent invocation is not a clean review; retry it or report the
-  review as incomplete.
 - Keep the review scoped to the branch diff against `main`, including staged,
   unstaged, and untracked changes that will be included in the PR.
 
