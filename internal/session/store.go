@@ -873,6 +873,19 @@ func writeMeta(sessionDir string, meta *Meta) error {
 	return os.WriteFile(filepath.Join(sessionDir, "meta.json"), data, 0o644)
 }
 
+// SessionBackend returns the provider and endpoint recorded for a session.
+// It returns false when the session metadata is unavailable or predates backend
+// recording.
+func SessionBackend(baseDir, sessionID string) (provider, baseURL string, ok bool) {
+	meta, err := readMeta(filepath.Join(baseDir, sessionID))
+	if err != nil || meta == nil {
+		return "", "", false
+	}
+	provider = strings.TrimSpace(meta.Provider)
+	baseURL = strings.TrimSpace(meta.BaseURL)
+	return provider, baseURL, provider != "" || baseURL != ""
+}
+
 // SessionModel returns the model recorded in a session's metadata, or an empty
 // string when the session is unknown or its model was never recorded.
 //
