@@ -22,12 +22,58 @@ func writeSessionMeta(t *testing.T, dir, sessionID, model string) {
 	}
 }
 
-// withFlags restores the package-level flag state the CLI resolves through.
+func writeSessionBackendMeta(t *testing.T, dir, sessionID, model, provider, baseURL string) {
+	t.Helper()
+	sessionDir := filepath.Join(dir, ".pi-go", "sessions", sessionID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"id":"` + sessionID + `","appName":"pi-go","userID":"local","model":"` + model + `","provider":"` + provider + `","baseURL":"` + baseURL + `"}`
+	if err := os.WriteFile(filepath.Join(sessionDir, "meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func withFlags(t *testing.T, session, model string) {
 	t.Helper()
 	origSession, origModel := flagSession, flagModel
 	t.Cleanup(func() { flagSession, flagModel = origSession, origModel })
 	flagSession, flagModel = session, model
+}
+
+func TestResolveRuntimeModel_RestoresSessionBackend(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	writeSessionBackendMeta(t, home, "sess-ollama", "qwen3:8b", "ollama", "http://session-host:11434")
+	origSession, origModel, origURL := flagSession, flagModel, flagURL
+	t.Cleanup(func() { flagSession, flagModel, flagURL = origSession, origModel, origURL })
+	flagSession, flagModel, flagURL = "sess-ollama", "", ""
+
+	cfg := config.Config{Roles: map[string]config.RoleConfig{"default": {Model: "qwen3:8b", Provider: "openai"}}}
+	info, baseURL, err := resolveRuntimeModelForRole(cfg, "qwen3:8b", "openai", "default")
+	if err != nil {
+		t.Fatalf("resolveRuntimeModelForRole: %v", err)
+	}
+	if info.Provider != "ollama" || baseURL != "http://session-host:11434" {
+		t.Fatalf("resolved backend = %q/%q, want ollama/session endpoint", info.Provider, baseURL)
+	}
+}
+
+func TestResolveRuntimeModel_ExplicitURLWinsResume(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	writeSessionBackendMeta(t, home, "sess", "gpt-5.6-luna", "openai", "https://session.example/v1")
+	origSession, origModel, origURL := flagSession, flagModel, flagURL
+	t.Cleanup(func() { flagSession, flagModel, flagURL = origSession, origModel, origURL })
+	flagSession, flagModel, flagURL = "sess", "", "https://flag.example/v1"
+
+	_, baseURL, err := resolveRuntimeModelForRole(config.Config{}, "gpt-5.6-luna", "openai", "default")
+	if err != nil {
+		t.Fatalf("resolveRuntimeModelForRole: %v", err)
+	}
+	if baseURL != "https://flag.example/v1" {
+		t.Fatalf("baseURL = %q, want explicit URL", baseURL)
+	}
 }
 
 func TestApplyResumedModel(t *testing.T) {

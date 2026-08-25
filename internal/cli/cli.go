@@ -290,7 +290,21 @@ func loadRootConfig() (config.Config, error) {
 // consulted, first under the role's provider name and then under the provider
 // the model itself resolved to.
 func resolveRuntimeModel(cfg config.Config, modelName, providerName string) (provider.Info, string, error) {
+	return resolveRuntimeModelForRole(cfg, modelName, providerName, "")
+}
+
+func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, activeRole string) (provider.Info, string, error) {
 	baseURL := flagURL
+	if baseURL == "" && flagSession != "" && flagModel == "" && activeRole == "default" {
+		if dir, err := sessionsDir(); err == nil {
+			if resumedProvider, resumedURL, ok := pisession.SessionBackend(dir, flagSession); ok {
+				if resumedProvider != "" {
+					providerName = resumedProvider
+				}
+				baseURL = resumedURL
+			}
+		}
+	}
 	if baseURL == "" && providerName != "" {
 		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[providerName]
@@ -399,7 +413,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	mode := resolveMode()
-	info, baseURL, err := resolveRuntimeModel(cfg, modelName, providerName)
+	info, baseURL, err := resolveRuntimeModelForRole(cfg, modelName, providerName, activeRole)
 	if err != nil {
 		return rootRuntime{}, err
 	}
