@@ -380,8 +380,8 @@ func (s *BashSupervisor) background(p *bashProc, reason string) BashOutput {
 
 	note := fmt.Sprintf(
 		"Command %s and was moved to the background; it is still running. "+
-			"Read more with bash_wait(handle=%q) or stop it with bash_kill(handle=%q). "+
-			"Output above is everything produced so far.",
+			"Call the bash_wait tool with handle %q to read more output, or the bash_kill tool with handle %q to stop it. "+
+			"Do not type these as shell commands — they are tool names, not shell syntax.",
 		reason, p.id, p.id)
 	if strings.TrimSpace(stdout) == "" && strings.TrimSpace(stderr) == "" {
 		note += " It has produced no output at all — if that is unexpected, the command is probably too broad (a filesystem-wide scan, or a prompt waiting for input) and should be killed and narrowed."

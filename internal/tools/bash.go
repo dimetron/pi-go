@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/adk/v2/agent"
@@ -150,6 +152,11 @@ func bashHandler(sb *Sandbox, sup *BashSupervisor, ctx agent.Context, input Bash
 	if input.Command == "" {
 		return BashOutput{}, fmt.Errorf("command is required")
 	}
+	if name := controlToolName(input.Command); name != "" {
+		return BashOutput{}, fmt.Errorf(
+			"%q is a tool name, not a shell command — call the %s tool directly instead of typing it into the bash tool",
+			name, name)
+	}
 
 	// Use background context if agent.Context is nil (e.g. in unit tests)
 	var parentCtx context.Context
@@ -207,6 +214,25 @@ func clampDuration(sec int, fallback, minDur, maxDur time.Duration) time.Duratio
 		return maxDur
 	}
 	return d
+}
+
+// controlToolName reports which bash control tool (bash_wait, bash_kill) a
+// command string is trying to invoke, or "" when the command does not look
+// like one. It exists because backgrounding results embed the control tools'
+// names, and models occasionally paste the suggested call — e.g.
+// bash_wait(handle="bg_1") — into the bash tool as shell text, where it fails
+// with an unhelpful bash syntax error. Matching only at the start of the
+// command keeps ordinary shell lines that merely mention these names working.
+func controlToolName(command string) string {
+	for _, name := range []string{"bash_wait", "bash_kill"} {
+		if rest, ok := strings.CutPrefix(command, name); ok {
+			trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
+			if strings.HasPrefix(trimmed, "(") {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // BashControlTools returns the tools for inspecting and stopping commands that
