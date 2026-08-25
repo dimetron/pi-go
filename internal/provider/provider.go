@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dimetron/pi-go/internal/auth"
+
 	"google.golang.org/adk/v2/model"
 )
 
@@ -142,6 +144,21 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set(k, v)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// BackendName returns a safe description of the selected request backend.
+// It intentionally exposes no credential material.
+func BackendName(info Info, apiKey, baseURL string) string {
+	if baseURL != "" {
+		return info.Provider + "-custom"
+	}
+	if info.Provider == "openai" {
+		if auth.IsCodexOAuthToken(apiKey) {
+			return "openai-codex-chatgpt"
+		}
+		return "openai-platform"
+	}
+	return info.Provider
 }
 
 // Info describes a provider and the model to use.

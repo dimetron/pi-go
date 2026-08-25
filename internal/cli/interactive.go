@@ -347,7 +347,7 @@ func deferredInit(
 	// Session logger was created above; record the session start now that the
 	// session ID is known.
 	if logErr == nil {
-		sessionLog.SessionStart(sessionID, llm.Name(), "interactive")
+		sessionLog.SessionStart(sessionID, llm.Name(), providerName, provider.BackendName(provider.Info{Provider: providerName}, config.APIKeys()[providerName], baseURL), baseURL, "interactive")
 	}
 
 	// Commit message function.
