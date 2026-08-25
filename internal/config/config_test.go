@@ -847,6 +847,58 @@ func TestLoadFrom_UsesProvidedCWDForProjectMCPJSON(t *testing.T) {
 	}
 }
 
+// TestLoadFrom_MergesMCPJSONWithConfigServers verifies that mcp.json servers
+// are appended to servers declared in config.json instead of being discarded.
+// A project must be able to add a server without redefining the global set;
+// names already declared in config.json keep their config.json definition.
+func TestLoadFrom_MergesMCPJSONWithConfigServers(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// config.json declares tavily; mcp.json redefines it and adds openrouter.
+	configJSON := `{"mcp": {"servers": [{"name": "tavily", "url": "https://mcp.tavily.example"}]}}`
+	if err := os.WriteFile(filepath.Join(globalDir, "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"mcpServers": {"tavily": {"url": "https://should-not-win.example"}, "openrouter": {"url": "https://mcp.openrouter.example"}}}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	testenv.SetHome(t, home)
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	cfg, err := LoadFrom(tmp)
+	if err != nil {
+		t.Fatalf("LoadFrom() error: %v", err)
+	}
+	if cfg.MCP == nil {
+		t.Fatal("expected MCP config, got nil")
+	}
+	names := make(map[string]string, len(cfg.MCP.Servers))
+	for _, s := range cfg.MCP.Servers {
+		names[s.Name] = s.URL
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected 2 merged servers, got %d: %v", len(names), names)
+	}
+	if url := names["tavily"]; url != "https://mcp.tavily.example" {
+		t.Errorf("tavily should keep its config.json URL, got %q", url)
+	}
+	if url := names["openrouter"]; url != "https://mcp.openrouter.example" {
+		t.Errorf("openrouter should come from mcp.json, got %q", url)
+	}
+}
+
 func TestLoadMCPServers_ObjectFormat(t *testing.T) {
 	// Claude Desktop format: mcpServers is an object keyed by server name.
 	tmp := t.TempDir()

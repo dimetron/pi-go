@@ -304,12 +304,23 @@ func LoadFrom(cwd string) (Config, error) {
 		}
 	}
 
-	// Load MCP config from separate mcp.json files if present.
+	// Load MCP config from separate mcp.json files if present and merge with
+	// servers declared in config.json. A server name already present wins from
+	// config.json; mcp.json-only servers are appended so a project can add
+	// servers without redefining the global set.
 	mcpServers := LoadMCPServersFrom(cwd)
 	if len(mcpServers) > 0 {
-		// Merge: mcp.json servers take precedence if none in config.json.
-		if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
-			cfg.MCP = &MCPConfig{Servers: mcpServers}
+		if cfg.MCP == nil {
+			cfg.MCP = &MCPConfig{}
+		}
+		known := make(map[string]bool, len(cfg.MCP.Servers))
+		for _, s := range cfg.MCP.Servers {
+			known[s.Name] = true
+		}
+		for _, s := range mcpServers {
+			if !known[s.Name] {
+				cfg.MCP.Servers = append(cfg.MCP.Servers, s)
+			}
 		}
 	}
 
