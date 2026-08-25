@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"image/color"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -49,6 +50,7 @@ type SidebarRenderInput struct {
 	RunSpec      string                   // spec name during /run
 	RunCycle     int                      // current retry cycle
 	RunMaxCycle  int                      // max retries
+	PlanPhases   []PlanPhase              // PDD phase checklist shown in plan mode; nil/empty = hidden
 	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
 	StatusLine   string                   // status text shown above matrix
 	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
@@ -68,6 +70,38 @@ type ArtifactEntry struct {
 	Filename string
 	Size     int64
 	Mime     string
+}
+
+// PlanPhase is one PDD phase in the plan-mode sidebar checklist.
+type PlanPhase struct {
+	Name string // short label, e.g. "Requirements"
+	Done bool   // artifact file exists
+}
+
+// phaseArtifacts maps each PDD phase to the spec artifact that marks it complete.
+var phaseArtifacts = []struct {
+	Name     string
+	Artifact string // file or dir name under specDir
+}{
+	{"Idea", "rough-idea.md"},
+	{"Requirements", "requirements.md"},
+	{"Research", "research"}, // directory
+	{"Design", "design.md"},
+	{"Outline", "outline.md"},
+	{"Plan", "plan.md"},
+	{"Prompt", "PROMPT.md"},
+}
+
+// detectPlanPhases stats each PDD phase artifact under specDir and returns the
+// phases in order with Done set when the artifact exists. A missing or unreadable
+// specDir degrades gracefully to all-incomplete (no crash).
+func detectPlanPhases(specDir string) []PlanPhase {
+	phases := make([]PlanPhase, 0, len(phaseArtifacts))
+	for _, pa := range phaseArtifacts {
+		_, err := os.Stat(filepath.Join(specDir, pa.Artifact))
+		phases = append(phases, PlanPhase{Name: pa.Name, Done: err == nil})
+	}
+	return phases
 }
 
 // sidebarStyles bundles the resolved styles the sidebar draws with, derived
@@ -218,6 +252,9 @@ func sidebarModeLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 		lines = append(lines, st.dim.Render("  ["+mode+"]"))
 	}
 	lines = append(lines, sidebarActivityLines(in, st)...)
+	if len(in.PlanPhases) > 0 {
+		lines = append(lines, sidebarPlanLines(in, innerW, st)...)
+	}
 	return append(lines, "")
 }
 
@@ -247,6 +284,31 @@ func sidebarRunLines(in SidebarRenderInput, innerW int, st sidebarStyles) []stri
 		lines = append(lines, sidebarActivityLines(in, st)...)
 	}
 	return lines
+}
+
+// sidebarPlanLines renders the PDD phase checklist for plan mode. It returns nil
+// (hidden) when no PlanPhases are present. The current phase is the first with
+// Done == false and is marked with ▶; done phases show [x] in green, future
+// phases show [ ] in overlay.
+func sidebarPlanLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if len(in.PlanPhases) == 0 {
+		return nil
+	}
+	lines := []string{st.heading.Render("  Plan")}
+	current := true
+	for _, p := range in.PlanPhases {
+		title := truncateLabel(p.Name, max(innerW-5, 10)) // room for "  [x] " prefix
+		switch {
+		case p.Done:
+			lines = append(lines, st.green.Render("  [x] "+title))
+		case current:
+			lines = append(lines, st.peach.Render("  ▶ "+title))
+			current = false
+		default:
+			lines = append(lines, st.overlay.Render("  [ ] "+title))
+		}
+	}
+	return append(lines, "")
 }
 
 // sidebarActivityLines shows the running tool, or a thinking indicator when the

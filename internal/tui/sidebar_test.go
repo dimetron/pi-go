@@ -618,3 +618,44 @@ func TestRenderSidebar_Artifacts_Populated(t *testing.T) {
 		t.Error("did not expect untruncated 'screenshot.png' — sidebar too narrow")
 	}
 }
+
+func TestRenderSidebar_PlanChecklist(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		Mode:   "plan",
+		PlanPhases: []PlanPhase{
+			{Name: "Idea", Done: true},
+			{Name: "Requirements", Done: false},
+			{Name: "Research", Done: false},
+			{Name: "Design", Done: false},
+			{Name: "Outline", Done: false},
+			{Name: "Plan", Done: false},
+			{Name: "Prompt", Done: false},
+		},
+	})
+	stripped := ansi.Strip(result)
+	for _, want := range []string{"Plan", "[x] Idea", "▶ Requirements", "[ ] Research"} {
+		if !strings.Contains(stripped, want) {
+			t.Errorf("expected %q in rendered output:\n%s", want, stripped)
+		}
+	}
+	if strings.Contains(stripped, "[chat]") {
+		t.Error("did not expect [chat] mode in plan-mode sidebar")
+	}
+}
+
+func TestRenderSidebar_NoPlanSection(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 20,
+		Mode:   "chat",
+	})
+	stripped := ansi.Strip(result)
+	if strings.Contains(stripped, "▶ ") {
+		t.Error("did not expect a current-phase marker when no PlanPhases are present")
+	}
+	if strings.Contains(stripped, "[x] Idea") {
+		t.Error("did not expect a plan checklist row when no PlanPhases are present")
+	}
+}
