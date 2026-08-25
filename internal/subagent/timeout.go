@@ -15,8 +15,11 @@ const (
 	// from a slow one, so this can afford to be generous. It was briefly 5
 	// minutes, which killed productive agents mid-answer: a review across a
 	// day's commits legitimately runs longer than that, and cutting it off
-	// discards everything it had produced.
-	DefaultAbsoluteTimeout = 10 * time.Minute
+	// discards everything it had produced. It was then 10 minutes, which was
+	// still too tight in practice: in an 8-agent parallel review of one day's
+	// PRs (2026-08-25), the slowest successful reviewer ran 14m44s and another
+	// was killed at the cap. 20 minutes covers that worst case with headroom.
+	DefaultAbsoluteTimeout = 20 * time.Minute
 
 	// DefaultInactivityTimeout is how long a subagent can go without producing output.
 	//
