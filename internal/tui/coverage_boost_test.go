@@ -188,7 +188,9 @@ func TestFindExistingSpec_Found(t *testing.T) {
 	base := filepath.Join(tmp, "specs", "tools")
 	_ = os.MkdirAll(filepath.Join(base, "003-my-feature"), 0o755)
 	got := findExistingSpec(tmp, "tools", "my-feature")
-	want := filepath.Join("tools", "003-my-feature")
+	// findExistingSpec returns slash-separated paths so the name is safe in
+	// git refs (a Windows filepath.Join result would break branch creation).
+	want := "tools/003-my-feature"
 	if got != want {
 		t.Errorf("expected %q, got %q", want, got)
 	}
