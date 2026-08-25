@@ -35,6 +35,8 @@ type openrouterModel struct {
 // If baseURL is empty, the default OpenRouter API endpoint is used.
 // thinkingLevel maps to OpenRouter's unified `reasoning.effort` request
 // parameter; empty or "none" leaves reasoning at the model's default.
+// See https://openrouter.ai/docs/app-attribution for the attribution headers
+// sent on every request.
 func NewOpenRouter(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("openrouter API key is required (set OPENROUTER_API_KEY)")
@@ -45,6 +47,13 @@ func NewOpenRouter(_ context.Context, modelName, apiKey, baseURL, thinkingLevel 
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
+		// App attribution: OpenRouter uses these to rank and report usage
+		// under Pi-Go; HTTP-Referer is the required primary identifier.
+		// "cli-agent" categorizes pi-go as a CLI coding agent per the
+		// taxonomy at https://openrouter.ai/docs/app-attribution.
+		option.WithHeader("HTTP-Referer", openrouterHTTPReferer),
+		option.WithHeader("X-OpenRouter-Title", openrouterAppTitle),
+		option.WithHeader("X-OpenRouter-Categories", openrouterAppCategories),
 	}
 	if llmOpts != nil {
 		for k, v := range llmOpts.ExtraHeaders {
@@ -282,6 +291,7 @@ func openrouterFetchModelContextLengths(ctx context.Context, baseURL string) map
 	if err != nil {
 		return nil
 	}
+	openrouterAppAttribution(req.Header)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

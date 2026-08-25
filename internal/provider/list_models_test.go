@@ -141,6 +141,15 @@ func TestListOpenRouterModels(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer orkey" {
 			t.Errorf("missing bearer token, got %q", r.Header.Get("Authorization"))
 		}
+		for h, want := range map[string]string{
+			"HTTP-Referer":            openrouterHTTPReferer,
+			"X-OpenRouter-Title":      openrouterAppTitle,
+			"X-OpenRouter-Categories": openrouterAppCategories,
+		} {
+			if got := r.Header.Get(h); got != want {
+				t.Errorf("app attribution %s = %q, want %q", h, got, want)
+			}
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
 				{"id": "google/gemini-3.7-flash", "owned_by": "openrouter"},
