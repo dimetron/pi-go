@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# pre-push: hard-fail when any commit about to be pushed is unsigned or lacks
+# a Signed-off-by trailer.
+#
+# The post-commit hook only warns — it cannot stop an unsigned commit, and
+# AGENTS.md records commits (0714568, a8b243b, bcb6d26) that reached the
+# remote that way. Signature *verification* via %G? is unusable here because
+# gpg.ssh.allowedSignersFile is unset (see AGENTS.md), so this inspects the
+# raw commit object for a gpgsig header instead: presence of the header means
+# signing was attempted and produced a signature; verification happens on the
+# server side.
+#
+# Skipped worktrees (prunable entries) are ignored. Merge commits created by
+# git itself are checked like any other commit.
+set -euo pipefail
+
+remote="$1"
+zero=0000000000000000000000000000000000000000
+
+unsigned=()
+missing_sob=()
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Branch deletion or remote already has the ref with no new commits.
+  [ "$local_sha" = "$zero" ] && continue
+
+  # Determine the range of new commits being pushed.
+  if [ "$remote_sha" = "$zero" ]; then
+    # New ref: everything not reachable from any existing remote branch,
+    # limited to what this push would add. Fall back to the full history
+    # behind local_sha minus existing remotes to avoid re-checking history.
+    range="$(git rev-list "$local_sha" --not --remotes="$remote")"
+  else
+    range="$(git rev-list "$remote_sha..$local_sha")"
+  fi
+
+  for sha in $range; do
+    if ! git cat-file commit "$sha" | grep -q '^gpgsig'; then
+      unsigned+=("$sha")
+    fi
+    trailers="$(git log --format='%(trailers:key=Signed-off-by,valueonly)' -1 "$sha")"
+    committer_email="$(git log --format='%ce' -1 "$sha")"
+    if [ -z "$(echo "$trailers" | tr -d '[:space:]')" ]; then
+      missing_sob+=("$sha")
+    elif ! echo "$trailers" | grep -qi "$committer_email"; then
+      missing_sob+=("$sha")
+    fi
+  done
+done
+
+fail=0
+if [ "${#unsigned[@]}" -gt 0 ]; then
+  echo "pre-push: UNSIGNED commits cannot be pushed:" >&2
+  printf '  %s\n' "${unsigned[@]}" >&2
+  echo "  Re-sign each with:  git rebase --exec 'git commit --amend --no-edit -S' origin/main" >&2
+  fail=1
+fi
+if [ "${#missing_sob[@]}" -gt 0 ]; then
+  echo "pre-push: commits missing a matching Signed-off-by trailer:" >&2
+  printf '  %s\n' "${missing_sob[@]}" >&2
+  echo "  Fix with:          git rebase --exec 'git commit --amend --no-edit -sS' origin/main" >&2
+  fail=1
+fi
+exit $fail
