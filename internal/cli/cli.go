@@ -403,6 +403,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	if err != nil {
 		return rootRuntime{}, err
 	}
+	info.BaseURL = baseURL
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
@@ -776,7 +777,7 @@ func runNonInteractive(
 
 	armMemoryObservationSession(ctx, memStore, sessionID, cwd, &memSessionID)
 
-	sessionLog.SessionStart(sessionID, llm.Name(), mode)
+	sessionLog.SessionStart(sessionID, llm.Name(), info.Provider, provider.BackendName(info, config.APIKeys()[info.Provider], info.BaseURL), info.BaseURL, mode)
 	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker)
 }
 

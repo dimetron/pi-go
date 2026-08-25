@@ -37,6 +37,7 @@ type Agent struct {
 	inner     *agent.Agent
 	workDir   string
 	modelName string
+	provider  string
 	tools     []adktool.Tool
 	memStore  memory.Store
 	// sessionLog is nil-safe: every method tolerates a nil receiver, so a
@@ -89,6 +90,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	a := &Agent{
 		workDir:    workDir,
 		modelName:  llm.Name(),
+		provider:   providerName,
 		beforeTurn: o.beforeTurn,
 		afterTurn:  o.afterTurn,
 	}
@@ -299,7 +301,7 @@ func (a *Agent) NewSession(ctx context.Context) (string, error) {
 			Status:    "active",
 		})
 	}
-	a.sessionLog.SessionStart(sessionID, a.modelName, "embedded")
+	a.sessionLog.SessionStart(sessionID, a.modelName, a.provider, "embedded", "", "embedded")
 	return sessionID, nil
 }
 

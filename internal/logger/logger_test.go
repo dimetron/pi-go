@@ -438,9 +438,24 @@ func TestSessionStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer func() { log.Close() }() //nolint:errcheck
 
-	log.SessionStart("session-123", "claude-3", "print")
+	log.SessionStart("session-123", "claude-3", "anthropic", "anthropic-custom", "https://user:secret@gateway.example/v1?api_key=secret#fragment", "print")
+	path := log.Path()
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries := readEntries(t, path)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want one", len(entries))
+	}
+	entry := entries[0]
+	if entry.Provider != "anthropic" || entry.Backend != "anthropic-custom" {
+		t.Fatalf("session backend = %q/%q, want anthropic/anthropic-custom", entry.Provider, entry.Backend)
+	}
+	if entry.BaseURL != "https://gateway.example/v1" {
+		t.Errorf("base URL = %q, want sanitized endpoint", entry.BaseURL)
+	}
 }
 
 // newTestLogger returns a logger writing under a temp HOME. The caller closes

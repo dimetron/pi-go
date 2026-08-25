@@ -5,6 +5,7 @@ package logger
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,14 +26,17 @@ type Logger struct {
 
 // Entry represents a single log entry.
 type Entry struct {
-	Time    string `json:"time"`
-	Type    string `json:"type"`              // "user", "llm_text", "thinking", "tool_call", "tool_result", "error", "info", "http_request", "http_response"
-	Agent   string `json:"agent,omitempty"`   // agent name (for subagents)
-	Tool    string `json:"tool,omitempty"`    // tool name
-	Content string `json:"content,omitempty"` // text content, error message, or HTTP body
-	Args    any    `json:"args,omitempty"`    // tool call arguments
-	Session string `json:"session,omitempty"` // session ID (logged once at start)
-	Model   string `json:"model,omitempty"`   // model name (logged once at start)
+	Time     string `json:"time"`
+	Type     string `json:"type"`               // "user", "llm_text", "thinking", "tool_call", "tool_result", "error", "info", "http_request", "http_response"
+	Agent    string `json:"agent,omitempty"`    // agent name (for subagents)
+	Tool     string `json:"tool,omitempty"`     // tool name
+	Content  string `json:"content,omitempty"`  // text content, error message, or HTTP body
+	Args     any    `json:"args,omitempty"`     // tool call arguments
+	Session  string `json:"session,omitempty"`  // session ID (logged once at start)
+	Model    string `json:"model,omitempty"`    // model name (logged once at start)
+	Provider string `json:"provider,omitempty"` // provider name (logged once at start)
+	Backend  string `json:"backend,omitempty"`  // selected backend (logged once at start)
+	BaseURL  string `json:"base_url,omitempty"` // selected endpoint, without credentials
 
 	// HTTP trace fields, set only on "http_request"/"http_response" entries
 	// written under --trace-http. They are part of Entry rather than a
@@ -215,9 +219,25 @@ func (l *Logger) ToolResult(agent, tool, content string) {
 	l.Log(Entry{Type: "tool_result", Agent: agent, Tool: tool, Content: content})
 }
 
+// SafeBaseURL removes credentials and query/fragment data before an endpoint is
+// persisted in a session log.
+func SafeBaseURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 // SessionStart logs session metadata at the beginning.
-func (l *Logger) SessionStart(sessionID, model, mode string) {
-	l.Log(Entry{Type: "session_start", Session: sessionID, Model: model, Content: mode})
+func (l *Logger) SessionStart(sessionID, model, provider, backend, baseURL, mode string) {
+	l.Log(Entry{
+		Type: "session_start", Session: sessionID, Model: model,
+		Provider: provider, Backend: backend, BaseURL: SafeBaseURL(baseURL), Content: mode,
+	})
 }
 
 func (l *Logger) flushPendingStreamLocked() {
