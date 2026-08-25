@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -1727,6 +1728,10 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 		in.RunSpec = m.run.specName
 		in.RunCycle = m.run.retries + 1
 		in.RunMaxCycle = m.run.maxRetries
+	}
+	if m.mode == "plan" && m.planWorktreePath != "" && m.planTaskName != "" {
+		specDir := filepath.Join(m.planWorktreePath, "specs", m.planTaskName)
+		in.PlanPhases = detectPlanPhases(specDir)
 	}
 	return in
 }
