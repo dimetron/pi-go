@@ -45,6 +45,12 @@ linters:
     # Built-in exclusion presets (e.g. test helpers, generated code).
     presets:
       - std-error-handling
+    # tmp/ is a scratch area for vendored third-party repos (SDK copies,
+    # claude-mem, …) kept for reference. Not our code — never lint it.
+    # Unanchored on purpose: golangci-lint cache entries can carry paths from
+    # sibling worktrees (same caveat as the hack/ exclusion below).
+    paths:
+      - tmp/
     rules:
       # Test files: relax errcheck, bodyclose, nilerr, unusedwrite, SA5011.
       - path: _test\.go
