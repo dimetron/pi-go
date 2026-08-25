@@ -343,14 +343,18 @@ func TestBashHandler_RejectsControlToolCall(t *testing.T) {
 		}
 	}
 
-	// Shell that merely mentions the tools still runs normally.
-	out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{
-		Command: `echo "use bash_wait to poll"`,
-	})
-	if err != nil {
-		t.Fatalf("echo mentioning bash_wait: %v", err)
-	}
-	if !strings.Contains(out.Stdout, "bash_wait") {
-		t.Errorf("Stdout = %q, want mention of bash_wait", out.Stdout)
+	// Shell that merely mentions the tools still runs normally, and so does a
+	// valid function definition that shares the name prefix.
+	for _, cmd := range []string{
+		`echo "use bash_wait to poll"`,
+		`bash_wait() { echo ok; }; bash_wait`,
+	} {
+		out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: cmd})
+		if err != nil {
+			t.Fatalf("valid shell %q should not be rejected: %v", cmd, err)
+		}
+		if out.ExitCode != 0 {
+			t.Errorf("command %q ExitCode = %d, want 0 (Stdout %q, Stderr %q)", cmd, out.ExitCode, out.Stdout, out.Stderr)
+		}
 	}
 }

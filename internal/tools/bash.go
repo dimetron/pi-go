@@ -227,9 +227,15 @@ func controlToolName(command string) string {
 	for _, name := range []string{"bash_wait", "bash_kill"} {
 		if rest, ok := strings.CutPrefix(command, name); ok {
 			trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
-			if strings.HasPrefix(trimmed, "(") {
-				return name
+			if !strings.HasPrefix(trimmed, "(") {
+				continue
 			}
+			// `name(...)` is also valid shell function-definition syntax
+			// (`bash_wait() { ... }`); a pasted tool call has no space there.
+			if strings.HasPrefix(trimmed, "()") {
+				continue
+			}
+			return name
 		}
 	}
 	return ""
