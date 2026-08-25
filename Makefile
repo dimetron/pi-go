@@ -1,12 +1,10 @@
 .PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks
 
-# Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
-# (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
-# `//go:build amd64 && goexperiment.simd`, so this speeds up `pi memory mine` on
-# amd64 and does nothing on arm64 — upstream ships no NEON path. Measured on an
-# M2 Max: 6.4 vs 6.6 chunks/sec, i.e. noise. Exported so every recipe below
-# (build, install, test) compiles the same way.
-export GOEXPERIMENT := simd
+# No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
+# gomlx/compute's amd64 matmul kernels (gated on
+# `//go:build amd64 && goexperiment.simd`) do not compile against it yet.
+# The kernels' measured benefit was noise anyway (6.4 vs 6.6 chunks/sec on an
+# M2 Max), so we drop the experiment until gomlx updates for the new API.
 
 # Build verbosity. `-v` is on by default: it names each package as it compiles,
 # which is the difference between "the build is working through a cold module

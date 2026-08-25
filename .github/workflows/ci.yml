@@ -9,13 +9,10 @@ on:
 permissions:
   contents: read
 
-# gomlx's Go backend takes its matmul kernels from Go 1.26's simd/archsimd, gated
-# on `//go:build amd64 && goexperiment.simd`. CI runs on amd64 runners, so this is
-# where it actually applies; it is inert on the arm64 matrix entries because
-# upstream ships no NEON kernels. Set workflow-wide so every job builds the same
-# way and the build cache is shared rather than split per-job.
-env:
-  GOEXPERIMENT: simd
+# No workflow-wide GOEXPERIMENT: Go 1.27 changed the simd/archsimd intrinsics
+# API, which gomlx/compute's amd64 kernels (gated on goexperiment.simd) do not
+# compile against yet. The measured benefit of those kernels was noise anyway
+# (see Makefile history), so builds now use the default experiment set.
 
 jobs:
   lint:
