@@ -245,6 +245,9 @@ func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, 
 		if opts.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 		}
+		if providerName == "openrouter" {
+			openrouterAppAttribution(req.Header)
+		}
 	}
 
 	resp, err := opts.httpClient().Do(req)
