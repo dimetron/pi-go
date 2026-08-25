@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks
 
 # Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
 # (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
@@ -30,6 +30,16 @@ build:
 install:
 	go install $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
 	go install $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
+
+# hooks: point core.hooksPath at the versioned .githooks/ directory.
+#
+# The hooks enforce AGENTS.md's signing rules: commit-msg adds a missing
+# Signed-off-by, post-commit warns on unsigned commits, and pre-push
+# HARD-FAILS any push containing unsigned or unsigned-off commits.
+# Run once per clone: `make hooks`.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "hooks installed: commit-msg, post-commit, pre-push (.githooks/)"
 
 # Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
 #

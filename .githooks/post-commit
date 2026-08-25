@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# post-commit: warn loudly when a commit lands without a signature.
+#
+# commit.gpgsign is true, so this should be unreachable — but op-ssh-sign needs
+# the 1Password agent, which is not reachable from inside the sandbox, and
+# CLAUDE.md records three commits (0714568, a8b243b, bcb6d26) that landed
+# unsigned that way. A full-history scan found 281 unsigned commits; signing
+# only became consistent on 2026-07-29.
+#
+# This runs after the signature would have been applied, so it is the first
+# point at which the outcome is actually knowable. It cannot fail the commit —
+# post-commit's exit code is ignored — so it prints the repair command instead.
+set -euo pipefail
+
+if git cat-file commit HEAD | grep -q '^gpgsig'; then
+  exit 0
+fi
+
+SHA="$(git rev-parse --short HEAD)"
+cat >&2 <<EOF
+
+  ⚠  UNSIGNED COMMIT: $SHA
+
+  commit.gpgsign is set, so signing was attempted and failed — most likely
+  because op-ssh-sign could not reach the 1Password agent from a sandbox.
+
+  Re-sign it before pushing:
+
+      git commit --amend --no-edit -S
+
+  Run that with the sandbox disabled. Do not reach for --no-verify: it skips
+  the signing path too, which is how the unsigned commits already in this
+  history got there.
+
+EOF

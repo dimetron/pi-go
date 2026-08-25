@@ -126,7 +126,7 @@ func findExistingSpec(workDir, category, baseName string) string {
 		}
 		stripped := numPrefix.ReplaceAllString(e.Name(), "")
 		if stripped == baseName {
-			return filepath.Join(category, e.Name())
+			return filepath.ToSlash(filepath.Join(category, e.Name()))
 		}
 	}
 	return ""
@@ -166,14 +166,46 @@ func createSpecSkeleton(workDir, taskName, roughIdea string) (string, error) {
 	return specDir, nil
 }
 
+// shortTaskName derives a compact identifier from a task name for use in
+// worktree paths, branch names, and agent IDs. It drops the category prefix
+// ("features/TOO/001-my-long-feature-name" -> "001-my-long-feature") and
+// truncates to maxShortTaskLen characters at a hyphen boundary. The full
+// task name stays in use for spec directories and the backup branch.
+func shortTaskName(taskName string) string {
+	const maxLen = 40
+	name := taskName
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if len(name) <= maxLen {
+		return name
+	}
+	if i := strings.LastIndex(name[:maxLen+1], "-"); i > maxLen/2 {
+		name = name[:i]
+	} else {
+		// No useful hyphen boundary in range: keep a meaningful prefix by
+		// dropping any leading NNN- number instead of cutting mid-word.
+		if j := strings.Index(name, "-"); j >= 0 && j < 4 && j+1 < maxLen {
+			name = name[j+1:]
+			if len(name) > maxLen {
+				name = name[:maxLen]
+			}
+			return strings.Trim(name, "-")
+		}
+		name = name[:maxLen]
+	}
+	return strings.Trim(name, "-")
+}
+
 // startPlanWorktree creates the isolated branch used by /plan.
 func (m *model) startPlanWorktree(taskName string) (string, error) {
 	if m.cfg.Orchestrator == nil || m.cfg.Orchestrator.Worktree() == nil {
 		return "", fmt.Errorf("/plan requires a git worktree manager")
 	}
 	wm := m.cfg.Orchestrator.Worktree()
-	agentID := "plan-" + taskName
-	wtPath, err := wm.Create(agentID, "pdd-"+taskName)
+	short := shortTaskName(taskName)
+	agentID := "plan-" + short
+	wtPath, err := wm.Create(agentID, short)
 	if err != nil {
 		return "", fmt.Errorf("create PDD worktree: %w", err)
 	}
@@ -284,6 +316,13 @@ func copyOverwrite(src, dst string) error {
 	return os.CopyFS(dst, os.DirFS(src))
 }
 
+// newTaskName builds the spec task name "<category>/<NNN>-<base>".
+// It always uses forward slashes: the name flows into git refs (backup
+// branch) and agent IDs, where a backslash is invalid (exit 128 on Windows).
+func newTaskName(category, num, base string) string {
+	return filepath.ToSlash(filepath.Join(category, num+"-"+base))
+}
+
 // handlePlanCommand processes "/plan <rough idea>" input.
 // Creates the spec skeleton in an isolated worktree, loads the PDD SOP,
 // injects it as the system instruction, clears the conversation, and sends
@@ -308,7 +347,7 @@ func (m *model) handlePlanCommand(parts []string) (tea.Model, tea.Cmd) {
 		taskName = existing
 	} else {
 		num := nextSpecNumber(workDir, category)
-		taskName = filepath.Join(category, num+"-"+baseName)
+		taskName = newTaskName(category, num, baseName)
 	}
 
 	if m.planWorktree == nil {

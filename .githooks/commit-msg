@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# commit-msg: guarantee every commit carries a Signed-off-by trailer.
+#
+# CLAUDE.md mandates `git commit -s -S`, but -s is easy to forget and nothing
+# caught it: 5 of the last 20 commits reached main without the trailer. This
+# adds it when missing rather than rejecting the commit, so the invariant holds
+# without turning a forgotten flag into a lost commit message.
+#
+# interpret-trailers is idempotent — --if-exists doNothing means an explicit
+# `-s` is left exactly as the author wrote it, including a trailer naming
+# someone other than the committer.
+set -euo pipefail
+
+MSG_FILE="$1"
+
+# Skip squash/fixup messages: the trailer belongs on the commit they fold into,
+# and rebase would otherwise duplicate it.
+if head -1 "$MSG_FILE" | grep -qE '^(fixup|squash)!'; then
+  exit 0
+fi
+
+if grep -qi '^Signed-off-by:' "$MSG_FILE"; then
+  exit 0
+fi
+
+NAME="$(git config user.name)"
+EMAIL="$(git config user.email)"
+if [ -z "$NAME" ] || [ -z "$EMAIL" ]; then
+  echo "commit-msg: user.name or user.email unset; cannot add Signed-off-by." >&2
+  exit 1
+fi
+
+git interpret-trailers --in-place --if-exists doNothing \
+  --trailer "Signed-off-by: $NAME <$EMAIL>" "$MSG_FILE"
+
+echo "commit-msg: added missing Signed-off-by: $NAME <$EMAIL>" >&2
