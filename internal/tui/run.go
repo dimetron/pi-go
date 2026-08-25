@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/procs"
+	"github.com/dimetron/pi-go/internal/retry"
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
@@ -971,6 +972,19 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 			role:    "assistant",
 			content: fmt.Sprintf("Failed to spawn retry agent (retry %d/%d): %v", m.run.retries, m.run.maxRetries, err),
 		})
+		if retry.IsTransient(err) && m.run.retries < m.run.maxRetries {
+			delay := retry.Delay(retry.DefaultConfig(), m.run.retries-1, err)
+			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Transient spawn error; retrying in %s...", delay.Round(time.Millisecond))})
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-m.ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil
+			}
+		}
 	}
 	if !spawned {
 		return nil
