@@ -573,3 +573,32 @@ func TestFinishPlanWorktree_MergeFailureStillCopiesSpec(t *testing.T) {
 		t.Errorf("spec content = %q, want the worktree's copy %q", got, "# Prompt\n")
 	}
 }
+
+func TestShortTaskName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Category prefix dropped.
+		{"features/TOO/001-my-feature", "001-my-feature"},
+		{"memory/002-remember-things", "002-remember-things"},
+		// No category.
+		{"003-bare-name", "003-bare-name"},
+		// Long name truncated at a hyphen boundary, under 40 chars.
+		{
+			"features/TOO/001-create-new-screen-with-summary-of-the-ride-at-the",
+			"001-create-new-screen-with-summary-of",
+		},
+		// No hyphen in range: hard cut at 40.
+		{
+			"features/TOO/001-" + strings.Repeat("x", 60),
+			strings.Repeat("x", 40),
+		},
+	}
+	for _, c := range cases {
+		got := shortTaskName(c.in)
+		if got != c.want {
+			t.Errorf("shortTaskName(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if len(got) > 40 {
+			t.Errorf("shortTaskName(%q) = %q, longer than 40 chars", c.in, got)
+		}
+	}
+}
