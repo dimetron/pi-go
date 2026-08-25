@@ -9,10 +9,9 @@ builds:
     binary: pi
     env:
       - CGO_ENABLED=0
-      # Enables gomlx's SIMD matmul kernels (Go 1.26 simd/archsimd), which are
-      # gated on `amd64 && goexperiment.simd`. Speeds up `pi memory mine` in the
-      # released amd64 binaries; inert on the arm64 ones, which have no NEON path.
-      - GOEXPERIMENT=simd
+      # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API
+      # and gomlx/compute's amd64 kernels (gated on goexperiment.simd) do not
+      # compile against it yet. The kernels' benefit was noise anyway.
     ldflags:
       - -s -w
       - -X github.com/dimetron/pi-go/internal/cli.Version={{.Version}}
