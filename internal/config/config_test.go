@@ -1367,3 +1367,43 @@ func clearBaseURLEnv(t *testing.T) {
 		t.Setenv(v, "")
 	}
 }
+
+// TestSave_DoesNotPersistMCPJSONServers verifies that servers merged from
+// .pi-go/mcp.json are stripped on Save, so SaveDefaultRole (Load → mutate →
+// Save) cannot copy project-scoped servers into the global config.json.
+func TestSave_DoesNotPersistMCPJSONServers(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	testenv.SetHome(t, home)
+
+	cfg := Defaults()
+	cfg.MCP = &MCPConfig{Servers: []MCPServer{
+		{Name: "declared", URL: "https://declared.example"},
+		{Name: "from-mcp-json", URL: "https://project.example", fromStandaloneFile: true},
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".pi-go", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Config
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.MCP == nil {
+		t.Fatal("expected saved config to keep MCP servers")
+	}
+	for _, s := range saved.MCP.Servers {
+		if s.Name == "from-mcp-json" {
+			t.Errorf("standalone mcp.json server %q leaked into global config", s.Name)
+		}
+	}
+	if len(saved.MCP.Servers) != 1 || saved.MCP.Servers[0].Name != "declared" {
+		t.Errorf("expected only declared server to survive, got %+v", saved.MCP.Servers)
+	}
+}

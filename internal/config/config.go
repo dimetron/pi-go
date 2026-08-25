@@ -161,6 +161,14 @@ type MCPServer struct {
 	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
 	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
+
+	// fromStandaloneFile marks a server that was loaded from a .pi-go/mcp.json
+	// file rather than declared in config.json. Such servers live in memory
+	// only: Save serializes the whole Config, so without this marker a merged
+	// project server would be copied into ~/.pi-go/config.json on the next
+	// save and leak into every other project. Unexported, so json.Marshal
+	// skips it.
+	fromStandaloneFile bool
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -307,7 +315,8 @@ func LoadFrom(cwd string) (Config, error) {
 	// Load MCP config from separate mcp.json files if present and merge with
 	// servers declared in config.json. A server name already present wins from
 	// config.json; mcp.json-only servers are appended so a project can add
-	// servers without redefining the global set.
+	// servers without redefining the global set. Appended entries keep the
+	// standalone marker so Save never copies them into config.json.
 	mcpServers := LoadMCPServersFrom(cwd)
 	if len(mcpServers) > 0 {
 		if cfg.MCP == nil {
@@ -319,6 +328,7 @@ func LoadFrom(cwd string) (Config, error) {
 		}
 		for _, s := range mcpServers {
 			if !known[s.Name] {
+				s.fromStandaloneFile = true
 				cfg.MCP.Servers = append(cfg.MCP.Servers, s)
 			}
 		}
@@ -677,7 +687,21 @@ func (c *Config) Save() error {
 	}
 	path := filepath.Join(home, ".pi-go", "config.json")
 
-	data, err := json.MarshalIndent(c, "", "  ")
+	// Servers merged in from .pi-go/mcp.json are project-scoped and live in
+	// memory only; strip them before serializing so a save (e.g. from
+	// SaveDefaultRole) does not copy them into the global config.
+	snapshot := *c
+	if snapshot.MCP != nil && len(snapshot.MCP.Servers) > 0 {
+		kept := make([]MCPServer, 0, len(snapshot.MCP.Servers))
+		for _, s := range snapshot.MCP.Servers {
+			if !s.fromStandaloneFile {
+				kept = append(kept, s)
+			}
+		}
+		snapshot.MCP = &MCPConfig{Servers: kept}
+	}
+
+	data, err := json.MarshalIndent(&snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
