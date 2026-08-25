@@ -268,8 +268,8 @@ func TestE2E_GateFailTriggersRetry(t *testing.T) {
 	m.handleRunGateResult(msg)
 
 	// Should attempt retry (retry count incremented).
-	if m.run.retries != 1 {
-		t.Errorf("retries = %d, want 1", m.run.retries)
+	if m.run.retries != 3 {
+		t.Errorf("retries = %d, want 3 (spawn failures should consume the retry budget)", m.run.retries)
 	}
 
 	// Gate output should be captured.

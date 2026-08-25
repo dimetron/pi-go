@@ -935,32 +935,44 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 		return nil
 	}
 
-	m.run.retries++
-	m.run.phase = "retrying"
-
 	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
-
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role: "assistant",
-		content: fmt.Sprintf("**%s** — cycle %d/%d (retry %d) in worktree `%s`...",
-			reason, m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
-	})
-
 	prompt := buildResumePrompt(m.run.specName, m.run.promptMD, reason, extraContext)
 
-	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt,
-		WorkDir:     wtPath,
-		SkipCleanup: true,
-		Timeout:     int((60 * time.Minute) / time.Millisecond),
-	})
-	if err != nil {
-		m.run.phase = "failed"
+	// A provider or process error while starting a retry is itself transient.
+	// Keep consuming the configured retry budget instead of leaving the run in
+	// retrying with no command to drive it forward. Spawn failures are setup
+	// errors, so retrying here does not block the event stream or recurse through
+	// the Bubble Tea update loop.
+	var events <-chan subagent.Event
+	var agentID string
+	spawned := false
+	for m.run.retries < m.run.maxRetries {
+		m.run.retries++
+		m.run.phase = "retrying"
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role: "assistant",
+			content: fmt.Sprintf("**%s** — cycle %d/%d (retry %d) in worktree `%s`...",
+				reason, m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
+		})
+
+		var err error
+		events, agentID, err = m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
+			Type:        "task",
+			Prompt:      prompt,
+			WorkDir:     wtPath,
+			SkipCleanup: true,
+			Timeout:     int((60 * time.Minute) / time.Millisecond),
+		})
+		if err == nil {
+			spawned = true
+			break
+		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
+			content: fmt.Sprintf("Failed to spawn retry agent (retry %d/%d): %v", m.run.retries, m.run.maxRetries, err),
 		})
+	}
+	if !spawned {
 		return nil
 	}
 
