@@ -83,5 +83,40 @@ the card surface to consume.
   auto-detected provider for a `mistral/...` name (or must auto-detect with the
   same rules).
 
-### Q5: pending
+### Q5 (model list enrichment): Mistral-only richer display.
 
+**Answer (user):** B
+
+**Implication:** add a dedicated Mistral model-card parse + print path:
+- `pi model list mistral` parses the documented `GET /v1/models` card shape
+  (capabilities, max_context_length, aliases, owned_by, root) instead of the
+  generic OpenAI envelope.
+- Output shows context window and (at least) chat/vision capabilities for Mistral
+  models, without changing the print layout for other providers.
+- Implementation may add optional fields to `provider.ModelInfo` (e.g.,
+  `ContextWindow int64`, `Capabilities []string`) as long as other providers'
+  output stays unchanged, or use a separate Mistral-only struct + printer.
+
+### Q6 (chat-side Mistral-specific fields): wire in reasoning effort + prompt caching.
+
+**Answer (user):** A
+
+**Implication:** wire the Mistral-specific chat fields using the openrouter-style
+raw-JSON injection (`params.SetExtraFields`):
+- **reasoning_effort / prompt_mode:** `NewMistral` currently takes no
+  `thinkingLevel` (provider.go:516 calls `NewMistral(ctx, info.Model, apiKey,
+  baseURL, opts)`), unlike NewOpenRouter/NewXAI/NewAnthropic. Add the parameter
+  and map pi's thinking level ("none"|"low"|"medium"|"high"|"max") onto
+  Mistral's `reasoning_effort` ("none"|"minimal"|"low"|"medium"|"high"|"xhigh")
+  and `prompt_mode: "reasoning"` where applicable.
+- **prompt_cache_key:** Mistral bills cached tokens at 10% of input price and
+  keys cache on this string. The session ID is not plumbed into the provider
+  layer; the xAI precedent (xai.go:59-62) is a per-instance UUID generated in the
+  constructor — "one id per model instance, which is one id per pi session".
+  Apply the same pattern for Mistral's `prompt_cache_key`, injected via
+  `params.SetExtraFields`.
+- Response side: check whether Mistral reasoning models emit thinking content on
+  chunks (delta.reasoning / reasoning_content) and surface it as thinking-role
+  partials like openrouter does — research item for Phase 3.
+
+### Q7: pending
