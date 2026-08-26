@@ -134,36 +134,43 @@ The flow:
 1. **Finish the branch and open the PR** (rules below). All gates — build,
    tests, lint, vet — still run *before* pushing; opening early does not skip
    them.
-2. **Have Codex review and post to the PR itself.** Codex CLI can reach GitHub,
-   but only with full network access: the `codex-review` subagent and any
-   sandboxed invocation will fail at `api.github.com` ("credential rejected",
-   browser fallback denied). The working invocation:
+2. **Have Codex review and post to the PR itself.** In the environment tested on
+   PR #237, the `codex-review` subagent and restricted sandbox modes could not
+   reach `api.github.com` ("credential rejected", browser fallback denied).
+   Run this from a clean, dedicated PR worktree because the required
+   `danger-full-access` mode removes the filesystem boundary as well as the
+   network restriction:
 
    ```bash
    cd <pr-worktree>
    codex exec --sandbox danger-full-access "Read-only code review of GitHub PR <N> \
    (repo dimetron/pi-go; current dir is the PR worktree, branch <branch>). Scope: \
    'git diff main...HEAD'. Then POST one formal GitHub review yourself using gh: \
-   build inline comments anchored to file+line as a JSON payload file in /tmp, \
+   build inline comments for actionable findings, anchored to file+line, as a \
+   JSON payload file in /tmp, \
    submit with 'gh api --input' against /repos/dimetron/pi-go/pulls/<N>/reviews \
    with event=COMMENT. Sign the body '— Codex review'. Do not modify tracked files. \
    Do not commit or push." > /tmp/codex-pr-review.log 2>&1
    ```
 
    Contract: read-only over tracked files (the `/tmp` payload file is fine),
-   diff scoped to `main...HEAD`, one formal review with inline file:line
-   comments, signed "— Codex review". Budget ~5 minutes; run it with a generous
-   timeout and expect the shell tool to background it.
+   diff scoped to `main...HEAD`, one formal review signed "— Codex review", with
+   inline file:line comments for every actionable finding. A no-findings review
+   has no inline comments. Budget ~5 minutes; run the foreground command with a
+   generous timeout, then verify `git status --short` is still empty.
 
-   The `gh` credential inside Codex's own sandbox may still be rejected even
-   with network open. If Codex reports it cannot post, fall back: have it emit
-   findings as text (`FILE:` / `VERDICT:` / explanation per finding) and post
-   them yourself with `gh pr comment` or a review payload.
+   The `gh` credential inside Codex's process may still be rejected even with
+   network open. If Codex cannot post, have it emit findings as text (`FILE:` /
+   `VERDICT:` / explanation per finding). The caller must convert those findings
+   into the same formal review payload and submit it to
+   `/repos/dimetron/pi-go/pulls/<N>/reviews`; a top-level `gh pr comment` is not
+   a substitute for the review.
 
-3. **Resolve findings on the PR**: fix accepted ones in normal signed commits
-   pushed to the branch, and comment on the PR linking each finding to its
-   resolving commit. Dismissed findings get a comment saying why — never a
-   silent ignore.
+3. **Resolve findings in their review threads**: fix accepted ones in normal
+   signed commits pushed to the branch, reply to each inline thread with its
+   resolving commit, and resolve the thread after verification. For a dismissed
+   finding, reply in that thread with the reason before resolving it — never use
+   an unrelated top-level comment or silently ignore a finding.
 
 A finding is a claim, not a verdict: verify each against the code before
 accepting or dismissing it. The review is an independent gate from tests, lint,
