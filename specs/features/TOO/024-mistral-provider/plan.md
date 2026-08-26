@@ -271,7 +271,7 @@ with the new signature.
 
 ---
 
-## Slice 5: Mistral model-list enrichment (card parser + richer print)
+## Slice 5: Mistral model-list enrichment (card parser + richer print + `-o json`)
 
 **Files:**
 - `internal/provider/list_models.go`
@@ -280,13 +280,14 @@ with the new signature.
 - `internal/cli/model_test.go`
 
 **What to implement:**
-1. Extend `ModelInfo` (list_models.go:16-19):
+1. Extend `ModelInfo` (list_models.go:16-19) with display fields that are ALSO
+   part of the JSON output (so `pi model list -o json` can serialize them):
    ```go
    type ModelInfo struct {
        ID            string   `json:"id"`
        OwnedBy       string   `json:"owned_by,omitempty"`
-       ContextWindow int64    `json:"-"` // max_context_length, when known
-       Capabilities  []string `json:"-"` // e.g. completion_chat, vision
+       ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
+       Capabilities  []string `json:"capabilities,omitempty"`   // e.g. completion_chat, vision
    }
    ```
 2. Replace `listMistralModels` (list_models.go:102-105) with a dedicated card
@@ -299,14 +300,15 @@ with the new signature.
    //   "fine_tuning":bool,"vision":bool,"classification":bool}}]}
    // Only completion_chat-capable models are returned (like the reference
    // TS generator's tool_call filter). Context length and capabilities are
-   // copied through for display.
+   // copied through for display and JSON output.
    func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error)
    ```
    Reuse the endpoint construction from `listBearerModels` (trim trailing `/`,
    `/v1/models` unless base ends in `/v1`) and `fetchJSON`.
-3. CLI display (`internal/cli/model.go` `printProviderModels`, lines 173-188):
-   when `providerName == "mistral"` and a model has `ContextWindow > 0`, print
-   the extra columns; otherwise keep the existing layout byte-for-byte:
+3. CLI human display (`internal/cli/model.go` `printProviderModels`, lines
+   173-188): when `providerName == "mistral"` and a model has
+   `ContextWindow > 0`, print the extra columns; otherwise keep the existing
+   layout byte-for-byte:
    ```go
    if providerName == "mistral" && m.ContextWindow > 0 {
        fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
@@ -316,15 +318,35 @@ with the new signature.
        fmt.Printf("  %s\n", m.ID)
    }
    ```
+4. **`-o json` output mode** on `pi model list` (this is the fetch-to-repo
+   mechanism the Makefile will use):
+   - Add `--output json` flag (short `-o`) to `newModelListCmd`.
+   - In `runModelList`, when the flag is set, emit one JSON document per
+     provider to stdout (streamed, one line each, or one document when a single
+     provider is selected — decide: one JSON object per provider line is
+     simplest and matches the per-provider repo files):
+     ```json
+     {"provider":"mistral","fetched_at":"2026-08-27T00:00:00Z","models":[...]}
+     ```
+   - `fetched_at` stamped at request time (`time.Now().UTC().Format(time.RFC3339)`).
+   - On provider error: print to stderr (as today), skip that provider's JSON
+     document; exit code stays 1 if any failed.
+   - When `-o json` is used with NO provider arg (all providers), emit one
+     document per provider on separate lines (easy to split in the Makefile).
+   - Human display (`printProviderModels`) is skipped entirely in JSON mode.
 
 **Tests:**
 - `list_models_test.go`: update `TestListMistralModels` to serve the documented
   card shape (`max_context_length`, `capabilities`); assert ContextWindow and
   Capabilities populate; assert a non-completion_chat model is filtered out.
 - `cli/model_test.go`: `TestRunModelList_Mistral` — server returns card data;
-  assert output contains the context window and capability text.
+  assert human output contains the context window and capability text.
+- NEW `TestRunModelList_MistralJSON` — `pi model list mistral -o json` returns a
+  JSON document with `"provider":"mistral"`, `fetched_at`, and the models array
+  including `context_window`/`capabilities`.
 - Regression: existing `TestRunModelList_OpenAI`-style tests assert unchanged
-  output for other providers.
+  output for other providers in human mode; JSON mode for other providers emits
+  their (sparse) ModelInfo with the new omitempty fields.
 
 **Verification:** `go test ./internal/provider ./internal/cli`
 
@@ -334,14 +356,16 @@ with the new signature.
 
 ---
 
-## Slice 6: Refreshable catalog manager (CatalogFor / RefreshCatalog / FetchCatalogToRepo)
+## Slice 6: Refreshable catalog manager (CatalogFor / RefreshCatalog)
 
 **Files:**
 - `internal/provider/catalog.go` (new)
 - `internal/provider/catalog_test.go` (new)
 
 **What to implement:**
-1. New file `catalog.go` with the cache + refresh machinery:
+1. New file `catalog.go` with the cache + refresh machinery. The fetch-to-repo
+   path lives in the CLI (`pi model list -o json`, Slice 5), NOT in this
+   package — this file covers the runtime cache only:
    ```go
    // modelsCacheDir returns os.UserCacheDir()/pi-go/models. Falls back to
    // "" when UserCacheDir errors (then caching is disabled, embedded only).
@@ -359,13 +383,10 @@ with the new signature.
    // Returns the fetched []ModelInfo. On fetch error returns the error
    // (caller falls back to cache/embedded).
    func RefreshCatalog(ctx context.Context, providerName string, opts ListModelsOptions) ([]ModelInfo, error)
-
-   // FetchCatalogToRepo fetches provider catalogs and writes them into
-   // internal/provider/modeldata/ as <provider>.json — the `make fetch-models`
-   // backend. Missing keys skip that provider (no error, logged note).
-   func FetchCatalogToRepo(ctx context.Context, providers []string) error
    ```
-2. Cache file JSON shape (same as the repo file, minus git metadata):
+2. Cache file JSON shape (matches `pi model list -o json` output shape, minus
+   the provider/fetched_at envelope duplication — RefreshCatalog writes the
+   same catalogFile shape so the files are interchangeable):
    ```go
    type catalogFile struct {
        Provider   string      `json:"provider"`
@@ -391,14 +412,12 @@ with the new signature.
     `CatalogFor`.
   - Atomic write: cache file valid JSON after refresh; a pre-existing cache
     with an invalid file falls back to embedded (no panic).
-- `FetchCatalogToRepo`: with `MISTRAL_API_KEY`/etc unset, skips providers and
-  writes nothing (no error).
+  - `RefreshCatalog` on fetch error returns the error and leaves the prior
+    cache file intact.
 
 **Verification:** `go test ./internal/provider`
 
-**Dependencies:** Slice 1 (ModelInfo already extended by Slice 5 — if Slices
-5 and 6 run in parallel, Slice 6 must use `ID`/`OwnedBy` only and NOT reference
-the new fields; safer: depend on Slice 5).
+**Dependencies:** Slice 5 (uses ModelInfo with the new JSON tags).
 
 **Parallel-safe:** yes (after Slice 5; new file only).
 
@@ -487,45 +506,49 @@ after 1 and 6).
 
 **Files:**
 - `Makefile`
-- `internal/provider/modeldata/models-<provider>.json` (new per-provider files,
-  generated)
+- `internal/provider/modeldata/models-<provider>.json` (new per-provider files, generated)
 - `internal/provider/modeldata/README.md`
 - `scripts/fetch-models.sh` (new, small)
 
 **What to implement:**
-1. Add a Makefile target:
+1. Add a Makefile target that shells out to the CLI's new `-o json` mode
+   (Slice 5) — no separate Go fetch code needed:
    ```make
    .PHONY: fetch-models
    fetch-models:            ## Fetch per-provider model catalogs into internal/provider/modeldata/
    	@bash scripts/fetch-models.sh
    ```
-2. `scripts/fetch-models.sh` (or a small Go helper via `go run`):
-   - For each provider in `anthropic openai gemini mistral xai openrouter`
-     (ollama has no cloud list; skip):
-     - If the provider's API key env var is set, call the provider's live
-       `/v1/models` (reuse `provider.ListModels` via a tiny `go run` program, or
-       curl + jq — prefer the Go path to reuse `fetchJSON`/card parsing).
-     - Write `internal/provider/modeldata/models-<provider>.json` in the
-       `catalogFile` shape with `fetched_at`.
-   - Missing keys → skip with a note (do not fail the target).
+2. `scripts/fetch-models.sh`:
+   - Build the CLI first: `go build -o pi ./cmd/pi` (or use the installed `pi`;
+     prefer building the local binary so the target works from a fresh clone).
+   - For each provider in `anthropic openai gemini mistral xai openrouter`:
+     - If the provider's API key env var is set (or `--url`-less default is
+       reachable), run `./pi model list <provider> -o json` and write stdout to
+       `internal/provider/modeldata/models-<provider>.json`.
+     - Missing key → skip with a note (do not fail the target).
+   - Validate each written file with `jq empty` if jq is available; report
+     non-JSON output.
 3. Update `modeldata/README.md`: document the new files, the `make fetch-models`
-   workflow, and the "run before opening a PR" rule (requirements Q10).
-4. `internal/provider/model_catalog.go` / `catalog.go`: `CatalogFor` should
-   prefer the embedded `modeldata/models-<provider>.json` when present
-   (checked in), falling back to the hard-coded lists / llm-prices files. Keep
-   the existing `KnownModels` behavior for providers without a new file.
-   (If this requires touching catalog.go, keep it minimal — a lookup that
-   reads `modeldata/models-<provider>.json` from the embed FS, memoized.)
+   workflow (which regenerates them from live APIs via `pi model list -o json`),
+   and the "run before opening a PR" rule (requirements Q10).
+4. `internal/provider/catalog.go`: `CatalogFor` prefers the embedded
+   `modeldata/models-<provider>.json` when present (checked in), falling back to
+   the hard-coded lists / llm-prices files. Keep the existing `KnownModels`
+   behavior for providers without a new file. Implementation: a lookup that
+   reads `modeldata/models-<provider>.json` from the embed FS
+   (`modelCatalogFS`), memoized at first use.
 
 **Tests / verification:**
 - `make fetch-models` runs without error (skips providers without keys).
 - `go build ./...` succeeds with the regenerated embedded JSON (valid files).
-- `go test ./internal/provider` — CatalogFor prefers the new embedded file.
+- `go test ./internal/provider` — CatalogFor prefers the new embedded file
+  (add a test asserting CatalogFor("mistral") returns IDs present in the
+  regenerated file when it exists).
 
-**Dependencies:** Slice 6 (catalogFile shape).
+**Dependencies:** Slice 5 (`-o json`), Slice 6 (catalogFile shape).
 
-**Parallel-safe:** yes (after Slice 6; touches Makefile/scripts/modeldata JSON —
-no Go source overlap with 7).
+**Parallel-safe:** yes (after Slices 5-6; touches Makefile/scripts/modeldata JSON —
+no Go source overlap with Slice 7).
 
 ---
 
