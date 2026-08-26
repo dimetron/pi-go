@@ -187,12 +187,12 @@ scope minimal, body key only, matching what the Chat Completions docs name.
 ### 3.3 Mistral model list enrichment (`internal/provider/list_models.go`, `internal/cli/model.go`)
 
 ```go
-// ModelInfo gains optional card fields used only by Mistral's printer.
+// ModelInfo gains optional card fields used for display AND JSON output.
 type ModelInfo struct {
     ID            string   `json:"id"`
     OwnedBy       string   `json:"owned_by,omitempty"`
-    ContextWindow int64    `json:"-"` // max_context_length, when known
-    Capabilities  []string `json:"-"`  // chat/vision/etc, when known
+    ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
+    Capabilities  []string `json:"capabilities,omitempty"`  // chat/vision/etc
 }
 
 // New dedicated Mistral parser replacing listBearerModels for mistral.
@@ -204,28 +204,34 @@ func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo
 // tool_call filter); context length and capabilities copied through.
 ```
 
-CLI (`internal/cli/model.go`): in `printProviderModels`, when the provider is
-`mistral` and a model has `ContextWindow > 0`, print an extra column:
-`  %-45s  %-10s  %s\n` (ID, humanTokens(ContextWindow), capabilities summary).
-Other providers' output is byte-identical (fields empty → old layout).
+CLI (`internal/cli/model.go`):
+- `printProviderModels` — when the provider is `mistral` and a model has
+  `ContextWindow > 0`, print an extra column:
+  `  %-45s  %-10s  %s\n` (ID, humanTokens(ContextWindow), capabilities summary).
+  Other providers' output is byte-identical (fields empty → old layout).
+- **NEW `-o json` / `--output json` flag** on `pi model list`: emits one JSON
+  document per provider to stdout (`{"provider","fetched_at","models":[...]}`,
+  `fetched_at` = RFC3339 UTC). This is the fetch mechanism `make fetch-models`
+  uses; provider errors go to stderr (exit 1), successful providers still emit.
 
 ### 3.4 Refreshable catalog (`internal/provider/model_catalog.go`, new `catalog.go`)
 
 Design decisions (from requirements Q8b/Q9/Q9b/Q10):
 
 - **Embedded baseline stays** (`//go:embed modeldata/*.json`) — now including a
-  new `modeldata/models-<provider>.json` per provider, produced by the Makefile
-  fetch task and committed to the repo before the PR.
+  new `modeldata/models-<provider>.json` per provider, produced by `make
+  fetch-models` and committed to the repo before the PR.
 - **Runtime refresh:** when `ValidateModel` misses AND the provider has an API
   key, call `GET /v1/models` and persist to the XDG cache. On later startups
   the XDG cache is loaded in preference to the embedded snapshot.
 - **Cache location:** `os.UserCacheDir()/pi-go/models/<provider>.json` — new
   pattern for this project (research confirmed no os.UserCacheDir usage
   anywhere); documented in the design and README.
-- **Makefile task:** `make fetch-models` calls the same ListModels/fetch logic
-  (via a small internal helper or script) for every provider and writes the
-  per-provider JSON under `internal/provider/modeldata/`. It does NOT require
-  keys for every provider — missing keys skip that provider with a note.
+- **Makefile task:** `make fetch-models` runs `scripts/fetch-models.sh`, which
+  shells out to the CLI's new `pi model list <provider> -o json` mode (Slice 5)
+  and writes the per-provider JSON under `internal/provider/modeldata/`. It does
+  NOT require keys for every provider — missing keys skip that provider with a
+  note.
 
 New files/interfaces:
 
@@ -238,11 +244,13 @@ func CatalogFor(provider string) []string
 // RefreshCatalog pulls fresh models for a provider into the XDG cache,
 // falling back to the embedded snapshot on error.
 func RefreshCatalog(ctx context.Context, providerName string, opts ListModelsOptions) error
-
-// FetchCatalogToRepo fetches provider catalogs and writes them into
-// internal/provider/modeldata/ as <provider>.json — used by `make fetch-models`.
-func FetchCatalogToRepo(ctx context.Context, providers []string) error
 ```
+
+The fetch-to-repo path lives in the CLI, not the provider package:
+`pi model list [provider] -o json` emits one JSON document per provider
+(`{"provider","fetched_at","models":[...]}`) to stdout; `make fetch-models`
+redirects each into `modeldata/models-<provider>.json`. There is no
+`FetchCatalogToRepo` Go API — the CLI JSON output is the fetch mechanism.
 
 `ValidateModel` (provider.go:301-317) becomes:
 
