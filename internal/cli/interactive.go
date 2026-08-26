@@ -991,12 +991,36 @@ func buildMCPServerConfigs(cfg config.Config) []extension.MCPServerConfig {
 // the model, creates the LLM, updates the token tracker's context window size,
 // and wraps it with the guardrail. Used by the TUI /model <name> command.
 func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guardrail.Tracker, modelName string) (adkmodel.LLM, string, string, error) {
-	// Try to auto-detect provider from config's default role.
 	providerName := ""
 	if rc, ok := cfg.Roles["default"]; ok && rc.Provider != "" {
 		providerName = rc.Provider
 	}
 
+	info, baseURL, apiKey, err := resolveSwitchedModel(cfg, modelName, providerName)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	llmOpts := &provider.LLMOptions{
+		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
+	}
+	applyTransportOptions(llmOpts, cfg)
+	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("creating LLM: %w", err)
+	}
+
+	tokenTracker.SetContextWindowSize(switchContextWindowSize(ctx, cfg, info, baseURL))
+	llm = guardrail.WrapModel(llm, tokenTracker)
+
+	return llm, switchedModelName(info), info.Provider, nil
+}
+
+// resolveSwitchedModel resolves modelName to a validated model info plus the
+// endpoint and API key to reach it: provider auto-detection from config's
+// default role, base URL resolution, model validation, and Ollama endpoint
+// fallback all happen here.
+func resolveSwitchedModel(cfg config.Config, modelName, providerName string) (provider.Info, string, string, error) {
 	baseURL := flagURL
 	if baseURL == "" && providerName != "" {
 		baseURLs := cfg.ResolveBaseURLs()
@@ -1005,7 +1029,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("resolving model: %w", err)
+		return provider.Info{}, "", "", fmt.Errorf("resolving model: %w", err)
 	}
 	if providerName != "" {
 		info.Provider = providerName
@@ -1019,11 +1043,10 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 		}
 	}
 	if err := provider.ValidateModel(info); err != nil {
-		return nil, "", "", fmt.Errorf("model validation: %w", err)
+		return provider.Info{}, "", "", fmt.Errorf("model validation: %w", err)
 	}
 
-	keys := config.APIKeys()
-	apiKey := keys[info.Provider]
+	apiKey := config.APIKeys()[info.Provider]
 
 	if info.Ollama {
 		baseURL = provider.ResolveOllamaEndpoint(provider.OllamaRouting{
@@ -1038,17 +1061,13 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	// its say, so session metadata names the backend rather than leaving the
 	// model name to be interpreted.
 	info.BaseURL = baseURL
+	return info, baseURL, apiKey, nil
+}
 
-	llmOpts := &provider.LLMOptions{
-		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
-	}
-	applyTransportOptions(llmOpts, cfg)
-	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("creating LLM: %w", err)
-	}
-
-	// Update context window size on the existing token tracker.
+// switchContextWindowSize determines the context window for the switched
+// model: embedded catalog first, then live queries for Ollama and OpenRouter,
+// then an explicit config value wins over both.
+func switchContextWindowSize(ctx context.Context, cfg config.Config, info provider.Info, baseURL string) int64 {
 	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
 	if info.Ollama {
 		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
@@ -1065,19 +1084,18 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	if cfg.ContextWindow > 0 {
 		ctxWindowSize = cfg.ContextWindow
 	}
-	tokenTracker.SetContextWindowSize(ctxWindowSize)
-	llm = guardrail.WrapModel(llm, tokenTracker)
+	return ctxWindowSize
+}
 
-	// Hand back a name that re-resolves to the same endpoint. Resolve strips
-	// the ollama/ prefix from info.Model, and this answer is what the TUI
-	// stores as the current model and re-resolves on the next switch — so
-	// returning the bare name would drop the one part of the spelling that
-	// says "local", and a cloud-tagged model would move to api.ollama.com
-	// behind the user's back the moment a key was set.
-	switchedName := info.Model
+// switchedModelName hands back a name that re-resolves to the same endpoint.
+// Resolve strips the ollama/ prefix from info.Model, and this answer is what
+// the TUI stores as the current model and re-resolves on the next switch — so
+// returning the bare name would drop the one part of the spelling that says
+// "local", and a cloud-tagged model would move to api.ollama.com behind the
+// user's back the moment a key was set.
+func switchedModelName(info provider.Info) string {
 	if info.LocalOllama {
-		switchedName = "ollama/" + info.Model
+		return "ollama/" + info.Model
 	}
-
-	return llm, switchedName, info.Provider, nil
+	return info.Model
 }

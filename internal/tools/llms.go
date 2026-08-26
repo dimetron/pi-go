@@ -207,68 +207,59 @@ func NewLLMSToolFromSet(ts *LLMSToolset) (tool.Tool, error) {
 	)
 }
 
-// FetchDocs fetches a documentation URL, restricted to hosts that host one of
-// the configured llms.txt sources. The response is returned as-is (llms.txt
-// and its linked pages are markdown, so no HTML conversion is needed).
-//
-// It is exported so the voice agent can drive the same allow-list and SSRF
-// guards for its own fetch_docs tool rather than reimplementing them; it is
-// otherwise the body behind the ADK fetch_docs tool.
-func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput, error) {
+// parseLLMSURL validates and normalizes a fetch_docs URL: https only, must
+// have a host, and the fragment (#section) is dropped — it is never sent on
+// the wire, so page.md#a and page.md#b are the same resource and should share
+// one cache entry instead of each downloading a copy.
+func parseLLMSURL(rawURL string) (*url.URL, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return LLMSOutput{Error: "url is required"}, nil
+		return nil, errors.New("url is required")
 	}
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return LLMSOutput{Error: fmt.Sprintf("parse url: %v", err)}, nil
+		return nil, fmt.Errorf("parse url: %w", err)
 	}
 	if u.Scheme != "https" {
-		return LLMSOutput{Error: "only https:// URLs are allowed"}, nil
+		return nil, errors.New("only https:// URLs are allowed")
 	}
 	if u.Host == "" {
-		return LLMSOutput{Error: "url has no host"}, nil
+		return nil, errors.New("url has no host")
 	}
-	// A fragment (#section) is never sent on the wire, so page.md#a and
-	// page.md#b are the same resource: drop it before the cache lookup and the
-	// request so they share one entry instead of each downloading a copy.
 	u.Fragment, u.RawFragment = "", ""
+	return u, nil
+}
 
-	// SSRF guard: reject loopback, private, link-local, multicast, and
-	// unspecified destinations before dialing.
-	if err := rejectPrivateHost(u.Hostname()); err != nil {
-		return LLMSOutput{Error: fmt.Sprintf("url rejected: %v", err)}, nil
+// conditionalHeaders sets revalidation headers on req for entry: the server
+// answers 304 and we reuse the cached body, saving the full download.
+func conditionalHeaders(req *http.Request, entry *llmsCacheEntry) {
+	if entry == nil {
+		return
 	}
-
-	// Restrict to configured llms.txt sources: a whole host for one the user
-	// configured, the exact URL for one pi-go inferred.
-	if !t.urlAllowed(u) {
-		return LLMSOutput{Error: fmt.Sprintf("host %q is not an allowed documentation source", u.Hostname())}, nil
+	if entry.ETag != "" {
+		req.Header.Set("If-None-Match", entry.ETag)
 	}
-
-	// A cached copy younger than llmsCacheTTL is served straight from disk —
-	// no network, no revalidation.
-	entry := t.cacheRead(u)
-	if entry != nil && entry.age() < llmsCacheTTL {
-		return LLMSOutput{Content: entry.Body}, nil
+	if entry.LastModified != "" {
+		req.Header.Set("If-Modified-Since", entry.LastModified)
 	}
+}
 
+// fetchLLMSURL builds, sends, and converts the response of a documentation fetch
+// cached entry for revalidation (304) and stale-while-error fallback.
+//
+// A cached copy younger than llmsCacheMaxAge is served on network failure or
+// an upstream 5xx: both are transient. A 4xx (401/403/404/410, …) is the
+// origin's verdict on the page itself — removed, moved, or access revoked —
+// so the cached body must not be passed off as current; only the status is
+// reported.
+func (t *LLMSToolset) fetchLLMSURL(ctx context.Context, u *url.URL, entry *llmsCacheEntry) (LLMSOutput, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return LLMSOutput{Error: fmt.Sprintf("build request: %v", err)}, nil
 	}
 	req.Header.Set("User-Agent", llmsUserAgent)
-	// Revalidate an existing entry with a conditional request: the server
-	// answers 304 and we reuse the cached body, saving the full download.
-	if entry != nil {
-		if entry.ETag != "" {
-			req.Header.Set("If-None-Match", entry.ETag)
-		}
-		if entry.LastModified != "" {
-			req.Header.Set("If-Modified-Since", entry.LastModified)
-		}
-	}
+	conditionalHeaders(req, entry)
 
 	client := t.client
 	if llmsClientOverride != nil {
@@ -282,9 +273,6 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// Network failure: fall back to a reasonably fresh cached copy rather
-		// than failing the whole call. An entry older than llmsCacheMaxAge is
-		// not served, so a permanently dead page is not resurrected forever.
 		if entry != nil && entry.age() < llmsCacheMaxAge {
 			return LLMSOutput{Content: entry.Body}, nil
 		}
@@ -325,16 +313,44 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		return LLMSOutput{Content: string(body)}, nil
 
 	default:
-		// An upstream 5xx is transient; prefer a reasonably fresh cached copy
-		// to the error being surfaced to the model. A 4xx (401/403/404/410,
-		// …) is the origin's verdict on the page itself — removed, moved, or
-		// access revoked — so the cached body must not be passed off as
-		// current; only the status is reported.
 		if resp.StatusCode >= 500 && entry != nil && entry.age() < llmsCacheMaxAge {
 			return LLMSOutput{Content: entry.Body}, nil
 		}
 		return LLMSOutput{Error: fmt.Sprintf("unexpected status %d", resp.StatusCode)}, nil
 	}
+}
+
+// FetchDocs fetches a documentation URL, restricted to hosts that host one of
+// the configured llms.txt sources. The response is returned as-is (llms.txt
+// and its linked pages are markdown, so no HTML conversion is needed).
+//
+// It is exported so the voice agent can drive the same allow-list and SSRF
+// guards for its own fetch_docs tool rather than reimplementing them; it is
+// otherwise the body behind the ADK fetch_docs tool.
+func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput, error) {
+	u, err := parseLLMSURL(rawURL)
+	if err != nil {
+		return LLMSOutput{Error: err.Error()}, nil
+	}
+
+	// SSRF guard: reject loopback, private, link-local, multicast, and
+	// unspecified destinations before dialing.
+	if err := rejectPrivateHost(u.Hostname()); err != nil {
+		return LLMSOutput{Error: fmt.Sprintf("url rejected: %v", err)}, nil
+	}
+
+	// Restrict to configured llms.txt sources: a whole host for one the user
+	// configured, the exact URL for one pi-go inferred.
+	if !t.urlAllowed(u) {
+		return LLMSOutput{Error: fmt.Sprintf("host %q is not an allowed documentation source", u.Hostname())}, nil
+	}
+
+	entry := t.cacheRead(u)
+	if entry != nil && entry.age() < llmsCacheTTL {
+		return LLMSOutput{Content: entry.Body}, nil
+	}
+
+	return t.fetchLLMSURL(ctx, u, entry)
 }
 
 // cachePath maps a documentation URL to its on-disk cache file. The key is a
