@@ -245,7 +245,7 @@ func conditionalHeaders(req *http.Request, entry *llmsCacheEntry) {
 	}
 }
 
-// handleLLMSResponse converts an HTTP response into a tool output, using the
+// fetchLLMSURL builds, sends, and converts the response of a documentation fetch
 // cached entry for revalidation (304) and stale-while-error fallback.
 //
 // A cached copy younger than llmsCacheMaxAge is served on network failure or
@@ -253,7 +253,7 @@ func conditionalHeaders(req *http.Request, entry *llmsCacheEntry) {
 // origin's verdict on the page itself — removed, moved, or access revoked —
 // so the cached body must not be passed off as current; only the status is
 // reported.
-func (t *LLMSToolset) handleLLMSResponse(ctx context.Context, u *url.URL, entry *llmsCacheEntry) (LLMSOutput, error) {
+func (t *LLMSToolset) fetchLLMSURL(ctx context.Context, u *url.URL, entry *llmsCacheEntry) (LLMSOutput, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return LLMSOutput{Error: fmt.Sprintf("build request: %v", err)}, nil
@@ -350,7 +350,7 @@ func (t *LLMSToolset) FetchDocs(ctx context.Context, rawURL string) (LLMSOutput,
 		return LLMSOutput{Content: entry.Body}, nil
 	}
 
-	return t.handleLLMSResponse(ctx, u, entry)
+	return t.fetchLLMSURL(ctx, u, entry)
 }
 
 // cachePath maps a documentation URL to its on-disk cache file. The key is a
