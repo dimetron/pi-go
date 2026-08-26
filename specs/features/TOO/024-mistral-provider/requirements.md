@@ -149,14 +149,70 @@ snapshot:
   5. How capabilities/context-window from the live card merge into validation
      and the `pi model list` display (ties into Q5).
 
-### Q7 (chat fields scope) + Q8b (tests): pending
+### Q7 (other documented chat fields) + Q8b (tests): resolved.
 
-**User input so far:**
-- Q7 (chat fields scope): user selected (a) for Q6 — reasoning + cache. Remaining
-  documented chat fields (response_format, parallel_tool_calls, random_seed,
-  safe_prompt, service_tier, guardrails) are NOT requested; keep the openai-go
-  defaults for everything else unless research shows a gap that breaks tool use.
-- Q8b (tests): not yet answered — the existing e2e suite is `//go:build e2e`
-  gated with `MISTRAL_API_KEY` skip. Plan should add httptest unit coverage for
-  the new injection/catalog logic and extend e2e for reasoning + caching when
-  key is present (mirroring `mistral_e2e_test.go` style).
+- Q7 chat fields: scope is Q6a's set (reasoning_effort/prompt_mode + prompt_cache_key)
+  only. Other documented fields (response_format, parallel_tool_calls, random_seed,
+  safe_prompt, service_tier, guardrails) are out of scope; openai-go defaults stay.
+- Tests: **e2e tests added** for the new Mistral behavior — gated `//go:build e2e`
+  with `MISTRAL_API_KEY` skip, mirroring `mistral_e2e_test.go`, plus httptest unit
+  coverage for injection and catalog logic.
+
+### Q9 (catalog refresh mechanics): Lazy on validation miss (a).
+
+**Answer (user):** Q9 a
+
+**Implication:** keep the embedded list for startup; call `GET /v1/models` only
+when `ValidateModel` misses (or at `pi model list` time). Minimal network cost,
+no startup latency.
+
+### Q8b (provider coverage): All providers (b).
+
+**Answer (user):** Q8 b
+
+**Implication:** the load/save/pull mechanism lands for **all** providers
+(anthropic, openai, gemini, mistral, xai, openrouter, ollama), not Mistral only.
+Mistral is the reference implementation; the mechanism is generic.
+
+### Q9b (cache location): XDG cache dir (b).
+
+**Answer (user):** Q9 b
+
+**Implication:** per-provider fetched catalogs live in
+`os.UserCacheDir()/pi-go/models/<provider>.json` (XDG cache), a new pattern for
+this project — established in this spec.
+
+### Q10 (build-time cache): initial cache fetched at build time, stored in repo.
+
+**Answer (user):** Initial cache should be fetched in build time (makefile task to
+fetch models) and store in repo updated before PR.
+
+**Implication:**
+- Add a Makefile task (e.g., `make models` / `make fetch-models`) that queries each
+  provider's `/v1/models` (or equivalent) and writes the per-provider JSON catalog
+  into the repo (likely `internal/provider/modeldata/` or a new checked-in
+  location) — this becomes the embedded baseline committed with the PR.
+- The embedded JSON remains the offline fallback; the runtime pulls fresh into
+  the XDG cache when a key is available (validation miss).
+- CI/PR workflow: run the fetch task and commit the refreshed catalog before
+  opening the PR.
+
+### Requirements summary (consolidated)
+
+**Scope:**
+1. Fix `unknown openai model "mistral/codestral-2508"` — the validation/routing bug.
+2. `mistral/` prefix = auto-detect + strip (like azure/, ollama/).
+3. `internal/config` `autoDetectProvider` gains `mistral`/`magistral` prefixes.
+4. Dedicated Mistral model-list parse/print with more card fields (Q5b).
+5. Mistral chat: `reasoning_effort`/`prompt_mode` from thinking level +
+   `prompt_cache_key` (per-instance UUID) injected via `params.SetExtraFields`.
+6. Refreshable per-provider model catalog: embedded JSON fallback + runtime pull
+   on validation miss + XDG-cache persistence + Makefile fetch task + repo
+   commit before PR.
+7. e2e tests for new behavior; httptest unit coverage.
+
+**Constraints / non-goals:** no direct HTTP client for chat (keep openai-go SDK),
+no third-party Mistral SDK, other documented chat fields out of scope, other
+providers' `pi model list` output unchanged.
+
+
