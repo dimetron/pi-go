@@ -122,41 +122,61 @@ branch never touched (currently 10 `SA1019` deprecation errors in
 `hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
 the unrelated lint failure or to have the user decide, not to bypass the hook.
 
-## Review with the `codex-review` subagent before opening a PR
+## Review with Codex: open the PR first, review on GitHub
 
-**Always run the codex review on the changes before opening a pull request.**
-Not after, not instead of the other gates — before, so findings are fixed in
-the branch rather than in review comments.
+**The PR is the review track.** Open it first, then have Codex post its review
+directly to the PR as a formal GitHub review, then resolve findings in-thread.
+This keeps every finding, fix, and resolution permanently linked in one place —
+a local terminal dump of findings is lost context; PR comments are not.
 
-Run it with the `codex-review` subagent, asking it to review the current
-branch against `main`. The subagent is read-only; it must not modify files,
-commit, push, or open a PR.
+The flow:
 
-**Fallback: if the `codex-review` subagent is unavailable or fails, run Codex
-CLI directly instead.** A failed subagent invocation is not a clean review —
-fall back rather than skipping:
+1. **Finish the branch and open the PR** (rules below). All gates — build,
+   tests, lint, vet — still run *before* pushing; opening early does not skip
+   them.
+2. **Have Codex review and post to the PR itself.** Codex CLI can reach GitHub,
+   but only with full network access: the `codex-review` subagent and any
+   sandboxed invocation will fail at `api.github.com` ("credential rejected",
+   browser fallback denied). The working invocation:
 
-```bash
-codex exec "Read-only code review of the branch $(git rev-parse --abbrev-ref HEAD) \
-against main. Run 'git diff main...HEAD' to scope it. Do not modify any files. \
-Report findings with file:line references." --sandbox read-only
-```
+   ```bash
+   cd <pr-worktree>
+   codex exec --sandbox danger-full-access "Read-only code review of GitHub PR <N> \
+   (repo dimetron/pi-go; current dir is the PR worktree, branch <branch>). Scope: \
+   'git diff main...HEAD'. Then POST one formal GitHub review yourself using gh: \
+   build inline comments anchored to file+line as a JSON payload file in /tmp, \
+   submit with 'gh api --input' against /repos/dimetron/pi-go/pulls/<N>/reviews \
+   with event=COMMENT. Sign the body '— Codex review'. Do not modify tracked files. \
+   Do not commit or push." > /tmp/codex-pr-review.log 2>&1
+   ```
 
-(Adjust flags to the installed CLI version; the contract is: read-only
-sandbox, diff scoped to `main...HEAD`, findings with file:line references.)
+   Contract: read-only over tracked files (the `/tmp` payload file is fine),
+   diff scoped to `main...HEAD`, one formal review with inline file:line
+   comments, signed "— Codex review". Budget ~5 minutes; run it with a generous
+   timeout and expect the shell tool to background it.
 
-Treat the output as a real reviewer, not a formality — regardless of which
-path produced it:
+   The `gh` credential inside Codex's own sandbox may still be rejected even
+   with network open. If Codex reports it cannot post, fall back: have it emit
+   findings as text (`FILE:` / `VERDICT:` / explanation per finding) and post
+   them yourself with `gh pr comment` or a review payload.
 
-- Act on findings before pushing. Verify each one against the code yourself
-  before accepting or dismissing it — a finding is a claim, not a verdict.
-- If a finding is wrong, say why in the PR description rather than silently
-  ignoring it.
-- Keep the review scoped to the branch diff against `main`, including staged,
-  unstaged, and untracked changes that will be included in the PR.
+3. **Resolve findings on the PR**: fix accepted ones in normal signed commits
+   pushed to the branch, and comment on the PR linking each finding to its
+   resolving commit. Dismissed findings get a comment saying why — never a
+   silent ignore.
 
-The review is an independent gate from tests, lint, vet, and build; it does not
-replace any of them.
+A finding is a claim, not a verdict: verify each against the code before
+accepting or dismissing it. The review is an independent gate from tests, lint,
+vet, and build; it does not replace any of them.
+
+### Local vs GitHub review — when to use which
+
+- **GitHub review (default)** for anything that becomes a PR: permanent track,
+  inline line comments, resolvable threads, visible to humans later.
+- **Local `codex exec` output (no posting)** for pre-PR sanity checks on
+  uncommitted work-in-progress, or quick second opinions on a spec/design doc
+  where there is nothing to anchor comments to yet. Do not let local-only
+  reviews substitute for the on-PR review before merge.
 
 ## Creating a pull request
 
