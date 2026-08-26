@@ -119,4 +119,44 @@ raw-JSON injection (`params.SetExtraFields`):
   chunks (delta.reasoning / reasoning_content) and surface it as thinking-role
   partials like openrouter does — research item for Phase 3.
 
-### Q7: pending
+### Q7 (other documented chat fields): pending — see Q8 follow-up.
+
+### Q8 (catalog): load and save per provider; embed JSON; pull fresh when API key available.
+
+**Answer (user):** model catalog - load and save now per provider embed json - when API KEY available pull fresh
+
+**Implication:** the model catalog becomes refreshable instead of a compile-time
+snapshot:
+- **Embedded JSON stays** as the offline fallback (today: `modeldata/llm-prices-*.json`
+  for openai/anthropic, `model_catalog.go` hard-coded maps for gemini/mistral/xai,
+  plus `modeldata/context-windows.json`).
+- **Pull fresh:** when a provider API key is available, fetch `GET /v1/models`
+  (the documented Mistral Models endpoint, and the equivalent for other
+  providers) and use the live list for validation.
+- **Load and save:** the fetched catalog is persisted per provider (JSON on disk)
+  and loaded on startup, so a key-less restart still validates against the last
+  known-good list instead of only the embedded snapshot.
+- Open design questions (Phase 3 research + Phase 4 design):
+  1. Where the per-provider cache lives (config dir vs cache dir — pi-go has
+     `~/.pi-go` config and a session base dir; pick the established pattern).
+  2. When a refresh is triggered (startup, validation miss, `pi model list`,
+     TTL) and how staleness is handled.
+  3. Whether this replaces `KnownModels`' init-time loading with a
+     lazily-refreshed lookup, and how `ValidateModel` uses it.
+  4. Whether this applies to all providers or starts with Mistral (the task's
+     focus) — the user said "per provider", so design for the general mechanism,
+     land it for Mistral first.
+  5. How capabilities/context-window from the live card merge into validation
+     and the `pi model list` display (ties into Q5).
+
+### Q7 (chat fields scope) + Q8b (tests): pending
+
+**User input so far:**
+- Q7 (chat fields scope): user selected (a) for Q6 — reasoning + cache. Remaining
+  documented chat fields (response_format, parallel_tool_calls, random_seed,
+  safe_prompt, service_tier, guardrails) are NOT requested; keep the openai-go
+  defaults for everything else unless research shows a gap that breaks tool use.
+- Q8b (tests): not yet answered — the existing e2e suite is `//go:build e2e`
+  gated with `MISTRAL_API_KEY` skip. Plan should add httptest unit coverage for
+  the new injection/catalog logic and extend e2e for reasoning + caching when
+  key is present (mirroring `mistral_e2e_test.go` style).
