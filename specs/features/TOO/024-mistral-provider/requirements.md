@@ -66,5 +66,22 @@ the card surface to consume.
   `listBearerModels`, which discards capabilities/context length, and
   `provider.ModelInfo` only carries `ID` + `OwnedBy`.
 
-### Q4: pending
+### Q4 (mistral/ prefix semantics): Auto-detect + strip.
+
+**Answer (user):** A
+
+**Implication:** `mistral/` is a routing prefix like `azure/` and `ollama/`:
+- `Resolve("mistral/codestral-2508")` → `Info{Provider: "mistral", Model:
+  "codestral-2508"}` (prefix stripped, case-insensitive detection).
+- The bare model id is then validated against `KnownModels["mistral"]`.
+  Validation is prefix-based, so `codestral-2508` already passes via the
+  existing `codestral` entry (model_catalog.go:104) — no catalog change strictly
+  required for this example, though dated variants may be added if desired.
+- `internal/config`'s `autoDetectProvider` must gain `mistral` and `magistral`
+  prefixes so config-resolved roles no longer fall back to `DefaultProvider`.
+- Callers that force a resolved role provider must not overwrite a correct
+  auto-detected provider for a `mistral/...` name (or must auto-detect with the
+  same rules).
+
+### Q5: pending
 
