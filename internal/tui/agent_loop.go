@@ -127,15 +127,35 @@ func extractAgentType(args map[string]any) string {
 
 // stuckDetector tracks recent tool calls and detects repetition loops.
 type stuckDetector struct {
-	recent      []string // ring of fingerprints (len <= recentWindowSize)
-	lastPrint   string   // fingerprint of last tool call
-	lastName    string   // tool name behind lastPrint
-	lastResult  string   // fingerprint of the streak's previous result ("" = none yet)
-	streak      int      // consecutive identical tool calls with identical results
-	lastErrTool string   // name of last tool that errored
-	errStreak   int      // consecutive errors for that tool
-	outBuf      string   // rolling tail of the model's own output
-	outSince    int      // bytes of output since the last repetition scan
+	recent     []string // ring of fingerprints (len <= recentWindowSize)
+	lastPrint  string   // fingerprint of last tool call
+	lastName   string   // tool name behind lastPrint
+	lastResult string   // fingerprint of the streak's previous result ("" = none yet)
+	streak     int      // consecutive identical tool calls with identical results
+	// Two error detectors run in parallel. The args-aware streak keys on the
+	// call fingerprint, so only the same tool call failing repeatedly counts;
+	// the name-only streak keys on the tool name and compounds only across
+	// distinct model messages, so a batch of different calls in one message is
+	// a single attempt rather than a streak. See observeError.
+	callInfo       map[string]callRecord // call ID -> fingerprint + message, for response correlation
+	lastCallByName map[string]callRecord // name -> most recent call, fallback when a response carries no/unknown ID
+	msgSeq         int                   // per-event counter; calls in the same event share it
+	lastErrFP      string                // fingerprint of the previous error (args-aware streak)
+	errFPStreak    int                   // consecutive errors of the same call fingerprint
+	lastErrTool    string                // name of last tool that errored
+	errStreak      int                   // consecutive errors of that tool across distinct messages
+	lastErrBatch   int                   // message sequence of the call the last error answered
+	outBuf         string                // rolling tail of the model's own output
+	outSince       int                   // bytes of output since the last repetition scan
+}
+
+// callRecord is what the detector remembers about an observed tool call so a
+// later response can be correlated back to it: the call's fingerprint (for the
+// args-aware error streak) and the message it appeared in (for the name-only
+// cross-batch streak).
+type callRecord struct {
+	fp  string
+	msg int
 }
 
 // volatileToolArgs address a slice of a target rather than the target itself.
@@ -175,9 +195,31 @@ func stableToolArgs(args map[string]any) map[string]any {
 	return stable
 }
 
+// beginEvent advances the message counter so calls in one model event share a
+// batch identity. Responses later use it to tell a single batch of calls from
+// repeated attempts spread across turns.
+func (s *stuckDetector) beginEvent() {
+	s.msgSeq++
+}
+
 // observe records a tool call and returns true if the loop appears stuck.
-func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, detail string) {
+// id correlates the call to its later response (FunctionCall.ID). Calls with
+// an empty id cannot be correlated by ID, so they are remembered only by name
+// (see lastCallByName); observeError uses that fallback so a batch of ID-less
+// calls still reads as one message.
+func (s *stuckDetector) observe(id, name string, args map[string]any) (stuck bool, detail string) {
 	fp := toolFingerprint(name, args)
+	rec := callRecord{fp: fp, msg: s.msgSeq}
+	if id != "" {
+		if s.callInfo == nil {
+			s.callInfo = make(map[string]callRecord)
+		}
+		s.callInfo[id] = rec
+	}
+	if s.lastCallByName == nil {
+		s.lastCallByName = make(map[string]callRecord)
+	}
+	s.lastCallByName[name] = rec
 
 	// Consecutive identical call detection.
 	if fp == s.lastPrint {
@@ -240,20 +282,77 @@ func (s *stuckDetector) observeResult(name string, response map[string]any) {
 	s.lastResult = fp
 }
 
-// observeError records the outcome of a tool call by name. Consecutive errors
-// of the same tool name — regardless of args — trip the detector once the
-// streak reaches maxToolErrorStreak. A success (isError == false) or a switch
-// to a different tool name resets the streak.
-func (s *stuckDetector) observeError(name string, isError bool) (stuck bool, detail string) {
-	if isError && name == s.lastErrTool {
-		s.errStreak++
-	} else {
-		s.errStreak = 1
-		s.lastErrTool = name
+// observeError records the outcome of a tool call and reports whether the loop
+// is stuck. Two streaks run in parallel, catching different loop shapes:
+//
+//  1. Args-aware (errFPStreak): the same call — same tool and same argument
+//     fingerprint — failing maxToolErrorStreak times. A model stuck re-issuing
+//     one call trips here no matter how many messages pass.
+//
+//  2. Name-only, cross-batch (errStreak): consecutive failures of the same
+//     tool name that come from calls in *different* model messages. A batch of
+//     distinct calls sent in one message (e.g. fetching pricing for ten
+//     models in a single turn) is one attempt, not ten, so it does not
+//     compound; the same tool failing once per message across ten messages is
+//     the flailing pattern and does.
+//
+// A success (isError == false) resets both streaks. id is the FunctionResponse
+// ID, used to look up which call — and therefore which message — this result
+// answers.
+func (s *stuckDetector) observeError(id, name string, isError bool) (stuck bool, detail string) {
+	// Correlate this response to the call it answers. By ID first: a matched
+	// record gives the call's fingerprint and message, and is consumed so the
+	// map stays bounded by outstanding (unanswered) calls. When the response
+	// carries no usable ID, fall back to the most recent call of that name —
+	// responses trail their calls in order, so this is the call being answered.
+	// Only the batch is trusted from the name fallback: without an ID we cannot
+	// pair a response to a specific call's arguments, so the args-aware streak
+	// must not see a fingerprint — a batch of distinct ID-less calls would all
+	// collapse onto the last call's fingerprint and false-abort.
+	fp := ""
+	batch := 0
+	if rec, ok := s.callInfo[id]; ok {
+		fp, batch = rec.fp, rec.msg
+		delete(s.callInfo, id)
+	} else if rec, ok := s.lastCallByName[name]; ok {
+		batch = rec.msg
 	}
-	if s.errStreak >= maxToolErrorStreak {
-		return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
+
+	if isError {
+		if fp != "" && fp == s.lastErrFP {
+			s.errFPStreak++
+		} else {
+			s.errFPStreak = 1
+			s.lastErrFP = fp
+		}
+		if s.errFPStreak >= maxToolErrorStreak {
+			return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errFPStreak)
+		}
+
+		// Name-only streak. Compound only when this failure answers a call
+		// from a different message than the previous one (or from an
+		// unknown message — treat unobserved calls as new attempts).
+		if name == s.lastErrTool {
+			if s.lastErrBatch == 0 || batch != s.lastErrBatch {
+				s.errStreak++
+				s.lastErrBatch = batch
+			}
+		} else {
+			s.errStreak = 1
+			s.lastErrTool = name
+			s.lastErrBatch = batch
+		}
+		if s.errStreak >= maxToolErrorStreak {
+			return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
+		}
+		return false, ""
 	}
+
+	s.errFPStreak = 0
+	s.lastErrFP = ""
+	s.errStreak = 0
+	s.lastErrTool = ""
+	s.lastErrBatch = 0
 	return false, ""
 }
 
@@ -940,6 +1039,10 @@ func (m *model) emitEventParts(
 	detector *stuckDetector,
 	log *logger.Logger,
 ) error {
+	// Each event is one model message. Calls in the same event share a batch
+	// identity so the error detector treats a batch of distinct calls as one
+	// attempt rather than a streak (see observeError).
+	detector.beginEvent()
 	for _, part := range ev.Content.Parts {
 		if err := m.emitEventPart(ch, ev, dedup, detector, log, part); err != nil {
 			return err
@@ -976,7 +1079,7 @@ func (m *model) emitEventPart(
 		log.ToolCall(ev.Author, fc.Name, fc.Args)
 		ch <- agentToolCallMsg{id: fc.ID, name: fc.Name, args: fc.Args}
 
-		if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
+		if err := stuckErr(detector.observe(fc.ID, fc.Name, fc.Args)); err != nil {
 			return err
 		}
 	}
@@ -1033,7 +1136,7 @@ func (m *model) emitPartResponse(
 	// map[string]any{"error": ...}. Anything else (including a
 	// missing key) is treated as success and resets the streak.
 	_, isErr := fr.Response["error"]
-	return stuckErr(detector.observeError(fr.Name, isErr))
+	return stuckErr(detector.observeError(fr.ID, fr.Name, isErr))
 }
 
 // stuckError is a loop abort the run can recover from. It is distinguished

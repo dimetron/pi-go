@@ -71,7 +71,7 @@ func TestStuckDetector_Observe_TripsOnPagedRereads(t *testing.T) {
 	s := &stuckDetector{}
 	var stuck bool
 	for i := range maxRepeatToolCalls {
-		stuck, _ = s.observe("read", map[string]any{"file_path": "/repo/chat.go", "offset": i * 40})
+		stuck, _ = s.observe("c", "read", map[string]any{"file_path": "/repo/chat.go", "offset": i * 40})
 	}
 	if !stuck {
 		t.Fatalf("re-reading one file %d times must trip the detector", maxRepeatToolCalls)
