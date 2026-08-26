@@ -321,10 +321,9 @@ with the new signature.
 4. **`-o json` output mode** on `pi model list` (this is the fetch-to-repo
    mechanism the Makefile will use):
    - Add `--output json` flag (short `-o`) to `newModelListCmd`.
-   - In `runModelList`, when the flag is set, emit one JSON document per
-     provider to stdout (streamed, one line each, or one document when a single
-     provider is selected — decide: one JSON object per provider line is
-     simplest and matches the per-provider repo files):
+   - In `runModelList`, when the flag is set, emit **one JSON document per
+     provider, one per line** to stdout (confirmed decision — the Makefile calls
+     `pi model list <provider> -o json` per provider and redirects each line):
      ```json
      {"provider":"mistral","fetched_at":"2026-08-27T00:00:00Z","models":[...]}
      ```
