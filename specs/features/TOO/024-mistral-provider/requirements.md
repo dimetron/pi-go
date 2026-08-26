@@ -28,5 +28,43 @@ vision, classification), `max_context_length`, `aliases`, `root`, `created`,
 `archived`, and fine-tuned (`ft:...`) variants. The spec must decide how much of
 the card surface to consume.
 
-### Q2: pending
+### Q2 + Q3 (approach + models endpoint): keep openai SDK, fix model validation, enrich model list.
+
+**Answer (user):** keep openai sdk but fix model validation: unknown openai model
+"mistral/codestral-2508" show model list with more fields if possible
+
+**Implication:**
+- **Implementation approach (Q2):** keep the openai-go SDK as the transport for
+  Mistral chat (no direct HTTP client, no third-party SDK). Any Mistral-specific
+  request fields that openai-go cannot express would use the raw-JSON injection
+  pattern (as openrouter.go does) — if in scope.
+- **Concrete bug (Q3):** `pi` rejects `mistral/codestral-2508` with
+  `unknown openai model "mistral/codestral-2508"`. Root-cause chain (confirmed by
+  reading code):
+  1. `internal/config`'s `autoDetectProvider` has **no `mistral`/`magistral`
+     prefixes**, so a `mistral/...` (or bare `mistral-...`) model resolves to
+     `""` and falls back to `DefaultProvider` = `"openai"` (config.go:250,
+     config.go:212). Verified: `mistral/codestral-2508` → "openai".
+  2. Callers that resolve the role's provider first (`buildSwitchedLLM` via
+     `cfg.ResolveRole`, `cli.go:1766` commit path) pass that wrong "openai"
+     provider into `resolveSwitchedModel` / `ResolveWithBaseURL`, which then
+     **overwrites** the correct auto-detected provider (`info.Provider =
+     providerName`, interactive.go:1032 / cli.go:315).
+  3. Even with the right provider, `provider.Resolve` maps the `mistral` prefix
+     to the mistral provider but does **not strip** the `mistral/` prefix from
+     `info.Model` (unlike `azure/`, `ollama/`, `opencode/`, `openrouter/`, and
+     `openai/`, which all strip). So the literal `mistral/codestral-2508` id is
+     sent to `ValidateModel`, where prefix-checking against
+     `KnownModels["mistral"]` (contains `codestral`, `mistral-*`, ...) fails.
+  4. `ValidateModel` (provider.go:315) then reports
+     `unknown openai model "mistral/codestral-2508"` — the provider in the error
+     is whatever `info.Provider` got overwritten to.
+- **Model list (Q3b):** `pi model list mistral` should show more fields "if
+  possible" — parse the documented model-card shape (capabilities,
+  max_context_length, aliases, owned_by) instead of only the OpenAI envelope
+  (id, owned_by). Today `listMistralModels` reuses the generic
+  `listBearerModels`, which discards capabilities/context length, and
+  `provider.ModelInfo` only carries `ID` + `OwnedBy`.
+
+### Q4: pending
 
