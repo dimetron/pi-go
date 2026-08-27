@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -53,11 +54,22 @@ Examples:
 
 	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the provider API endpoint")
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification")
+	cmd.Flags().StringVarP(&flagModelListOutput, "output", "o", "", "Output format: \"json\" emits one JSON document per provider (default: human table)")
 	return cmd
 }
 
 // allProviders is the fixed list of providers supporting model listing.
 var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter"}
+
+// flagModelListOutput is the --output flag value for `pi model list`.
+var flagModelListOutput string
+
+// modelListJSONDoc is the per-provider JSON document emitted by `-o json`.
+type modelListJSONDoc struct {
+	Provider  string               `json:"provider"`
+	FetchedAt string               `json:"fetched_at"`
+	Models    []provider.ModelInfo `json:"models"`
+}
 
 func runModelList(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
@@ -96,6 +108,20 @@ func runModelList(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
 			exitCode = 1
+			continue
+		}
+
+		if flagModelListOutput == "json" {
+			doc := modelListJSONDoc{
+				Provider:  p,
+				FetchedAt: time.Now().UTC().Format(time.RFC3339),
+				Models:    models,
+			}
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(doc); err != nil {
+				fmt.Fprintf(os.Stderr, "%s: encoding JSON: %v\n", p, err)
+				exitCode = 1
+				continue
+			}
 			continue
 		}
 
@@ -178,7 +204,9 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 
 	fmt.Printf("%s (%d models):\n", providerName, len(models))
 	for _, m := range models {
-		if m.OwnedBy != "" {
+		if providerName == "mistral" && m.ContextWindow > 0 {
+			fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
+		} else if m.OwnedBy != "" {
 			fmt.Printf("  %-45s  %s\n", m.ID, m.OwnedBy)
 		} else {
 			fmt.Printf("  %s\n", m.ID)

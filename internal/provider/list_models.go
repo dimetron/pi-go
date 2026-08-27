@@ -14,8 +14,10 @@ import (
 // ModelInfo holds a model ID and optional metadata returned by a provider's
 // model listing API.
 type ModelInfo struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by,omitempty"`
+	ID            string   `json:"id"`
+	OwnedBy       string   `json:"owned_by,omitempty"`
+	ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
+	Capabilities  []string `json:"capabilities,omitempty"`   // e.g. completion_chat, vision
 }
 
 // ListModelsOptions controls how models are fetched from a provider.
@@ -99,9 +101,77 @@ func listOpenAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo,
 	return listBearerModels(ctx, opts, "openai", "OpenAI")
 }
 
-// listMistralModels fetches models from GET /v1/models.
+// listMistralModels fetches models from GET <base>/v1/models and parses the
+// documented Mistral model-card shape:
+//
+//	{"data":[{"id","owned_by","max_context_length","capabilities":{
+//	  "completion_chat":bool,"completion_fim":bool,"function_calling":bool,
+//	  "fine_tuning":bool,"vision":bool,"classification":bool}}]}
+//
+// Only completion_chat-capable models are returned (like the reference TS
+// generator's tool_call filter). Context length and capabilities are copied
+// through for display and JSON output.
 func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
-	return listBearerModels(ctx, opts, "mistral", "Mistral")
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = providerDefaultBaseURL("mistral")
+	}
+	trimmed := strings.TrimRight(baseURL, "/")
+	endpoint := trimmed + "/v1/models"
+	if strings.HasSuffix(trimmed, "/v1") {
+		endpoint = trimmed + "/models"
+	}
+
+	var payload struct {
+		Data []struct {
+			ID               string `json:"id"`
+			OwnedBy          string `json:"owned_by"`
+			MaxContextLength int64  `json:"max_context_length"`
+			Capabilities     struct {
+				CompletionChat bool `json:"completion_chat"`
+				CompletionFIM  bool `json:"completion_fim"`
+				FunctionCall   bool `json:"function_calling"`
+				FineTuning     bool `json:"fine_tuning"`
+				Vision         bool `json:"vision"`
+				Classification bool `json:"classification"`
+			} `json:"capabilities"`
+		} `json:"data"`
+	}
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "mistral", &payload); err != nil {
+		return nil, fmt.Errorf("listing Mistral models: %w", err)
+	}
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		if !m.Capabilities.CompletionChat {
+			continue
+		}
+		caps := make([]string, 0, 6)
+		if m.Capabilities.CompletionChat {
+			caps = append(caps, "completion_chat")
+		}
+		if m.Capabilities.CompletionFIM {
+			caps = append(caps, "completion_fim")
+		}
+		if m.Capabilities.FunctionCall {
+			caps = append(caps, "function_calling")
+		}
+		if m.Capabilities.FineTuning {
+			caps = append(caps, "fine_tuning")
+		}
+		if m.Capabilities.Vision {
+			caps = append(caps, "vision")
+		}
+		if m.Capabilities.Classification {
+			caps = append(caps, "classification")
+		}
+		models = append(models, ModelInfo{
+			ID:            m.ID,
+			OwnedBy:       m.OwnedBy,
+			ContextWindow: m.MaxContextLength,
+			Capabilities:  caps,
+		})
+	}
+	return models, nil
 }
 
 // listXAIModels fetches models from GET /v1/models.

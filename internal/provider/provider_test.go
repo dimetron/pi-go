@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
@@ -260,6 +261,17 @@ func TestResolveOllamaRequiresExplicitPrefix(t *testing.T) {
 }
 
 func TestValidateModel(t *testing.T) {
+	// Isolate from the real user cache so CatalogFor falls back to the
+	// embedded snapshot.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	tests := []struct {
 		info    Info
 		wantErr bool
@@ -298,6 +310,80 @@ func TestValidateModel(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateModel_CacheHit(t *testing.T) {
+	// A model not in the embedded snapshot passes when the XDG cache contains it.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	dir := modelsCacheDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cf := catalogFile{
+		Provider:  "mistral",
+		FetchedAt: "2026-08-27T00:00:00Z",
+		Models:    []ModelInfo{{ID: "codestral-2508"}},
+	}
+	b, _ := json.Marshal(cf)
+	if err := os.WriteFile(cachePath("mistral"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateModel(Info{Provider: "mistral", Model: "codestral-2508"}); err != nil {
+		t.Errorf("ValidateModel with cached model: %v", err)
+	}
+}
+
+func TestValidateModel_NoKeyNoNetwork(t *testing.T) {
+	// A model in neither list and no key → error; no network call (no server hit).
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	err := ValidateModel(Info{Provider: "mistral", Model: "llama-3"})
+	if err == nil {
+		t.Fatal("expected error for unknown model with no key")
+	}
+	if !strings.Contains(err.Error(), "mistral") || !strings.Contains(err.Error(), "llama-3") {
+		t.Errorf("error should mention provider and model: %v", err)
+	}
+}
+
+func TestValidateModel_RefreshOnMiss(t *testing.T) {
+	// A model in neither list WITH MISTRAL_API_KEY set and an httptest server
+	// returning the model → passes after refresh.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                 "codestral-2508",
+					"owned_by":           "mistral",
+					"max_context_length": 256000,
+					"capabilities": map[string]any{
+						"completion_chat": true,
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: "codestral-2508"}); err != nil {
+		t.Errorf("ValidateModel after refresh: %v", err)
+	}
+}
+
+func TestValidateModel_UnknownProvider(t *testing.T) {
+	if err := ValidateModel(Info{Provider: "nope", Model: "whatever"}); err != nil {
+		t.Errorf("unknown provider should skip validation, got: %v", err)
 	}
 }
 

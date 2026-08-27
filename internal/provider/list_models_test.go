@@ -115,7 +115,23 @@ func TestListMistralModels(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"id": "mistral-large", "owned_by": "mistral"},
+				{
+					"id":                 "mistral-large-latest",
+					"owned_by":           "mistral",
+					"max_context_length": 128000,
+					"capabilities": map[string]any{
+						"completion_chat": true,
+						"vision":          true,
+					},
+				},
+				{
+					"id":                 "embedding-model",
+					"owned_by":           "mistral",
+					"max_context_length": 8192,
+					"capabilities": map[string]any{
+						"completion_chat": false,
+					},
+				},
 			},
 		})
 	}))
@@ -128,8 +144,17 @@ func TestListMistralModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listMistralModels: %v", err)
 	}
-	if len(models) != 1 || models[0].ID != "mistral-large" {
-		t.Errorf("models = %+v", models)
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1 (non-completion_chat filtered)", len(models))
+	}
+	if models[0].ID != "mistral-large-latest" {
+		t.Errorf("models[0].ID = %q, want mistral-large-latest", models[0].ID)
+	}
+	if models[0].ContextWindow != 128000 {
+		t.Errorf("models[0].ContextWindow = %d, want 128000", models[0].ContextWindow)
+	}
+	if len(models[0].Capabilities) != 2 || models[0].Capabilities[0] != "completion_chat" || models[0].Capabilities[1] != "vision" {
+		t.Errorf("models[0].Capabilities = %v, want [completion_chat vision]", models[0].Capabilities)
 	}
 }
 
@@ -376,8 +401,13 @@ func TestListModels_Dispatch(t *testing.T) {
 		t.Run(tc.providerName, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Return a payload that matches any of the expected shapes.
+				// Mistral's parser filters on capabilities.completion_chat, so
+				// include it for the mistral case.
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"data":   []map[string]any{{"id": tc.wantID, "owned_by": tc.providerName, "type": "model"}},
+					"data": []map[string]any{{
+						"id": tc.wantID, "owned_by": tc.providerName, "type": "model",
+						"capabilities": map[string]any{"completion_chat": true},
+					}},
 					"models": []map[string]any{{"name": "models/" + tc.wantID, "displayName": tc.wantID}},
 				})
 			}))

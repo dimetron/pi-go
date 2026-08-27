@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks
+.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -163,3 +163,11 @@ ifeq ($(shell uname),Darwin)
 else
 	@echo "sandbox-log is only available on macOS"
 endif
+
+# fetch-models: regenerate the embedded per-provider model catalogs under
+# internal/provider/modeldata/ from live provider APIs. Providers without an
+# API key are skipped with a note. Run before opening a PR that touches the
+# model catalog (requirements Q10 of features/TOO/024-mistral-provider).
+.PHONY: fetch-models
+fetch-models:
+	@bash scripts/fetch-models.sh

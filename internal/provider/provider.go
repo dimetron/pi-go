@@ -302,18 +302,56 @@ func ValidateModel(info Info) error {
 	if info.Ollama || info.Custom {
 		return nil
 	}
-	known, ok := KnownModels[info.Provider]
-	if !ok {
+	known := CatalogFor(info.Provider)
+	if len(known) == 0 {
 		return nil // unknown provider, skip validation
 	}
 	lower := strings.ToLower(info.Model)
-	for _, prefix := range known {
-		if strings.HasPrefix(lower, prefix) {
-			return nil
+	if matchPrefix(known, lower) {
+		return nil
+	}
+	// Validation miss: refresh once when an API key is available, then
+	// re-check against the fresh catalog. Network errors are non-fatal.
+	if key := apiKeyForProvider(info.Provider); key != "" {
+		if _, err := RefreshCatalog(context.Background(), info.Provider, ListModelsOptions{APIKey: key}); err == nil {
+			if matchPrefix(CatalogFor(info.Provider), lower) {
+				return nil
+			}
 		}
 	}
 	return fmt.Errorf("unknown %s model %q; known models: %s",
 		info.Provider, info.Model, strings.Join(known, ", "))
+}
+
+// matchPrefix reports whether lower starts with any of the given prefixes.
+func matchPrefix(prefixes []string, lower string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// apiKeyForProvider returns the API key for a provider from the conventional
+// env var, without importing internal/config (which would risk an import
+// cycle). Only providers that support /v1/models are listed.
+func apiKeyForProvider(p string) string {
+	switch p {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY")
+	case "mistral":
+		return os.Getenv("MISTRAL_API_KEY")
+	case "xai":
+		return os.Getenv("XAI_API_KEY")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_API_KEY")
+	}
+	return ""
 }
 
 // ResolveWithBaseURL determines the provider from a model name.
