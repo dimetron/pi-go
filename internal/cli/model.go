@@ -170,9 +170,10 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 	}
 	// Azure is not in allProviders because it has nothing to query, but a
 	// configured Azure user asking for "every provider" should still see
-	// their deployments rather than have them silently omitted.
+	// their deployments rather than have them silently omitted. In JSON
+	// mode the human table would corrupt the JSONL stream, so it is skipped.
 	azureConfigured := keys["azure"] != "" || os.Getenv("AZURE_OPENAI_ENDPOINT") != ""
-	if azureConfigured {
+	if azureConfigured && flagModelListOutput != "json" {
 		printAzureDeployments(out)
 	}
 	if len(providers) == 0 && !azureConfigured {
