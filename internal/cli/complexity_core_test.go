@@ -51,8 +51,12 @@ func clearBaseURLEnv(t *testing.T) {
 //     "unknown model" cases into live HTTP calls taking tens of seconds.
 func isolateModelCatalog(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	home := t.TempDir()
+	// os.UserCacheDir consults exactly one variable per platform: $HOME on
+	// macOS, $XDG_CACHE_HOME on Linux, %LocalAppData% on Windows.
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
 	for _, v := range []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
 		"MISTRAL_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY",

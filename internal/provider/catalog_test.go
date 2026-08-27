@@ -13,13 +13,20 @@ import (
 
 // withTempCacheDir points the user cache dir at a temp dir for the duration of
 // the test and returns the pi-go models cache path.
+//
+// os.UserCacheDir reads a different variable on each platform and consults no
+// other, so all three must be set for this to isolate anywhere: $HOME on macOS
+// (which appends Library/Caches), $XDG_CACHE_HOME on Linux, and %LocalAppData%
+// on Windows. Missing the Windows one is not a no-op: TestRefreshCatalogWrites-
+// Cache then writes its one-model catalog into the runner's real cache, and
+// every later CatalogFor("mistral") in the package reads that instead of the
+// embedded snapshot.
 func withTempCacheDir(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// os.UserCacheDir on macOS is $HOME/Library/Caches; on Linux it honors
-	// XDG_CACHE_HOME. Point both at the temp home so the test is portable.
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
 	return modelsCacheDir()
 }
 
@@ -172,4 +179,136 @@ func contains(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// withUnresolvableCacheDir empties every variable os.UserCacheDir consults, on
+// every platform, so it returns an error and modelsCacheDir reports "".
+func withUnresolvableCacheDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("LocalAppData", "")
+}
+
+func TestModelsCacheDirUnresolvable(t *testing.T) {
+	withUnresolvableCacheDir(t)
+	if dir := modelsCacheDir(); dir != "" {
+		t.Errorf("modelsCacheDir() = %q, want \"\" when os.UserCacheDir fails", dir)
+	}
+}
+
+// TestRefreshCatalogCachingDisabled covers the branch where there is nowhere to
+// cache: RefreshCatalog must still return the fetched models rather than fail,
+// so a machine without a resolvable cache dir keeps working off live fetches.
+func TestRefreshCatalogCachingDisabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+	withUnresolvableCacheDir(t)
+
+	models, err := RefreshCatalog(context.Background(), "mistral", ListModelsOptions{APIKey: "k", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("RefreshCatalog: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "mistral-large-latest" {
+		t.Errorf("models = %+v, want the fetched list", models)
+	}
+}
+
+// TestRefreshCatalogMkdirFailure covers the write-side error path: the fetch
+// succeeded, so the models are returned alongside the error and the caller can
+// still use them.
+func TestRefreshCatalogMkdirFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	cacheDir := withTempCacheDir(t)
+	// Occupy the models directory's own path with a regular file, so MkdirAll
+	// cannot create it.
+	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := RefreshCatalog(context.Background(), "mistral", ListModelsOptions{APIKey: "k", BaseURL: srv.URL})
+	if err == nil {
+		t.Fatal("RefreshCatalog: want an error when the cache dir cannot be created")
+	}
+	if len(models) != 1 {
+		t.Errorf("models = %+v, want the fetched list returned alongside the error", models)
+	}
+}
+
+// TestRefreshCatalogWriteFailure covers the same contract one step later: the
+// directory exists but is not writable.
+func TestRefreshCatalogWriteFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	cacheDir := withTempCacheDir(t)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cacheDir, 0o755) })
+	// root ignores the mode bits, and Windows does not map them to a write
+	// denial at all, so confirm the denial is real before asserting on it.
+	probe := filepath.Join(cacheDir, "probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err == nil {
+		_ = os.Remove(probe)
+		t.Skip("cache dir is writable despite mode 0555; cannot exercise the write failure here")
+	}
+
+	models, err := RefreshCatalog(context.Background(), "mistral", ListModelsOptions{APIKey: "k", BaseURL: srv.URL})
+	if err == nil {
+		t.Fatal("RefreshCatalog: want an error when the catalog cannot be written")
+	}
+	if len(models) != 1 {
+		t.Errorf("models = %+v, want the fetched list returned alongside the error", models)
+	}
+}
+
+// TestAPIKeyForProvider pins the env var each provider's catalog refresh reads,
+// and that an unlisted provider yields "" so ValidateModel skips the refresh
+// instead of firing a keyless request.
+func TestAPIKeyForProvider(t *testing.T) {
+	for _, tc := range []struct{ provider, env string }{
+		{"anthropic", "ANTHROPIC_API_KEY"},
+		{"openai", "OPENAI_API_KEY"},
+		{"gemini", "GEMINI_API_KEY"},
+		{"mistral", "MISTRAL_API_KEY"},
+		{"xai", "XAI_API_KEY"},
+		{"openrouter", "OPENROUTER_API_KEY"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Setenv(tc.env, "key-"+tc.provider)
+			if got := apiKeyForProvider(tc.provider); got != "key-"+tc.provider {
+				t.Errorf("apiKeyForProvider(%q) = %q, want the value of %s", tc.provider, got, tc.env)
+			}
+		})
+	}
+	if got := apiKeyForProvider("ollama"); got != "" {
+		t.Errorf("apiKeyForProvider(ollama) = %q, want \"\"", got)
+	}
 }

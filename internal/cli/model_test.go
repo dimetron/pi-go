@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -216,6 +217,44 @@ func TestRunModelList_MistralJSON(t *testing.T) {
 	}
 	if len(doc.Models[0].Capabilities) != 2 {
 		t.Errorf("capabilities = %v, want 2 entries", doc.Models[0].Capabilities)
+	}
+}
+
+// TestRunModelList_JSONSortsByID pins the ordering guarantee the checked-in
+// modeldata/ snapshots rely on: `make fetch-models` writes this output straight
+// to disk, so an API that returns models in call order would otherwise produce
+// a fresh diff on every fetch.
+func TestRunModelList_JSONSortsByID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-small-latest", "capabilities": map[string]any{"completion_chat": true}},
+				{"id": "codestral-latest", "capabilities": map[string]any{"completion_chat": true}},
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	out, err := runModelListCapture(t, "mistral", "--url", srv.URL, "-o", "json")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var doc struct {
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("output is not a JSON document: %v\n%s", err, out)
+	}
+	got := make([]string, len(doc.Models))
+	for i, m := range doc.Models {
+		got[i] = m.ID
+	}
+	want := []string{"codestral-latest", "mistral-large-latest", "mistral-small-latest"}
+	if !slices.Equal(got, want) {
+		t.Errorf("model order = %v, want %v", got, want)
 	}
 }
 
