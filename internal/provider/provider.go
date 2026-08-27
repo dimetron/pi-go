@@ -375,6 +375,12 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "openrouter", Model: modelName[len("openrouter/"):]}, nil
 	}
 
+	// Detect mistral/ prefix → native Mistral provider.
+	// The prefix is stripped; the remainder is the Mistral model name.
+	if strings.HasPrefix(strings.ToLower(modelName), "mistral/") {
+		return Info{Provider: "mistral", Model: modelName[len("mistral/"):]}, nil
+	}
+
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
 	if IsOllamaCloudModel(modelName) {

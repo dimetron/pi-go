@@ -217,11 +217,13 @@ func Defaults() Config {
 
 // Known model prefixes for auto-detecting provider.
 var modelPrefixes = map[string]string{
-	"claude": "anthropic",
-	"gpt":    "openai",
-	"gpt-5":  "openai",
-	"gemini": "gemini",
-	"grok":   "xai",
+	"claude":    "anthropic",
+	"gpt":       "openai",
+	"gpt-5":     "openai",
+	"gemini":    "gemini",
+	"mistral":   "mistral",
+	"magistral": "mistral",
+	"grok":      "xai",
 }
 
 // ResolveRole returns the model name, provider, and advisor settings for a given role.
