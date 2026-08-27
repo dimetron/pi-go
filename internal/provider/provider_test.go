@@ -128,6 +128,36 @@ func TestResolveWithAzurePrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestResolveMistralPrefixStripped(t *testing.T) {
+	tests := []struct {
+		model     string
+		wantProv  string
+		wantModel string
+	}{
+		{"mistral/codestral-2508", "mistral", "codestral-2508"},
+		{"mistral/mistral-small-latest", "mistral", "mistral-small-latest"},
+		{"MISTRAL/large", "mistral", "large"},
+		// Bare mistral-* names auto-route via the modelPrefixes map with the
+		// full model name preserved.
+		{"mistral-large-latest", "mistral", "mistral-large-latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			info, err := Resolve(tt.model)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Provider != tt.wantProv {
+				t.Errorf("provider = %q, want %q", info.Provider, tt.wantProv)
+			}
+			if info.Model != tt.wantModel {
+				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+			}
+		})
+	}
+}
+
 func TestCheckOllamaUnreachable(t *testing.T) {
 	// Port 19 (chargen) is almost certainly not running Ollama.
 	err := CheckOllama("http://localhost:19")
