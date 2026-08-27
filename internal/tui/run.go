@@ -370,16 +370,25 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	specName, parallel := parseRunArgs(args)
+	specName, parallel, force := parseRunArgs(args)
 	if specName == "" {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: "Missing spec name."})
 		return m, nil
 	}
 
-	// Read PROMPT.md.
+	// Read PROMPT.md. A spec that is absent entirely gets the "not found"
+	// message and the list of specs that do exist — a more useful answer than
+	// a validation report about a directory the user mistyped.
 	promptMD, err := readPromptMD(m.cfg.WorkDir, specName)
 	if err != nil {
 		m.showRunSpecError(err)
+		return m, nil
+	}
+
+	// Preflight: a spec that cannot succeed should fail here, in a second,
+	// rather than as a worker with an unrunnable verify command forty minutes
+	// in. --force keeps the decision the user's.
+	if !m.preflightAllows(specName, force) {
 		return m, nil
 	}
 
@@ -414,7 +423,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 // available to run when there are any.
 func (m *model) showRunUsage() {
 	specs, _ := listAvailableSpecs(m.cfg.WorkDir)
-	msg := "Usage: `/run <spec-name> [--parallel]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents."
+	msg := "Usage: `/run <spec-name> [--parallel] [--force]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents.\nUse `--force` to start despite preflight validation errors."
 	if len(specs) > 0 {
 		msg += "\n\n" + formatAvailableRunSpecsTable(specs)
 	}
@@ -434,18 +443,20 @@ func (m *model) showRunSpecError(err error) {
 
 // parseRunArgs splits /run arguments into the spec name and the parallel flag.
 // The first non-flag argument wins; later ones are ignored.
-func parseRunArgs(args []string) (specName string, parallel bool) {
+func parseRunArgs(args []string) (specName string, parallel, force bool) {
 	for _, arg := range args {
 		switch arg {
 		case "--parallel", "-p":
 			parallel = true
+		case "--force", "-f":
+			force = true
 		default:
 			if specName == "" {
 				specName = arg
 			}
 		}
 	}
-	return specName, parallel
+	return specName, parallel, force
 }
 
 // formatRunGateInfo renders gate names for the spawn announcement.

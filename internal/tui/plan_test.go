@@ -341,18 +341,9 @@ func TestFinishPlanWorktree_CopiesSpecIntoInvokingCheckout(t *testing.T) {
 		t.Fatalf("creating plan worktree: %v", err)
 	}
 	wtSpec := filepath.Join(wtPath, "specs", taskName)
-	if err := os.MkdirAll(filepath.Join(wtSpec, "research"), 0o755); err != nil {
-		t.Fatalf("mkdir research: %v", err)
-	}
-	for name, content := range map[string]string{
-		"PROMPT.md":         "# Feature\n\n## Objective\nDo it.\n",
-		"requirements.md":   "# Requirements\n",
-		"research/notes.md": "notes\n",
-	} {
-		if err := os.WriteFile(filepath.Join(wtSpec, name), []byte(content), 0o644); err != nil {
-			t.Fatalf("writing %s: %v", name, err)
-		}
-	}
+	// The spec must satisfy the PDD contract: finishPlanWorktree validates
+	// before it merges, so a stub spec would be held back rather than copied.
+	writeValidPlanSpec(t, wtSpec)
 
 	m := &model{
 		cfg:                 Config{WorkDir: repo, Orchestrator: orch},
@@ -532,10 +523,11 @@ func TestFinishPlanWorktree_MergeFailureStillCopiesSpec(t *testing.T) {
 		t.Fatalf("creating plan worktree: %v", err)
 	}
 	wtSpec := filepath.Join(wtPath, "specs", taskName)
-	if err := os.MkdirAll(wtSpec, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(wtSpec, "PROMPT.md"), []byte("# Prompt\n"), 0o644); err != nil {
+	// A contract-conforming spec: validation must pass so the merge is
+	// attempted at all, which is what this test is about.
+	writeValidPlanSpec(t, wtSpec)
+	promptWant, err := os.ReadFile(filepath.Join(wtSpec, "PROMPT.md"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -569,8 +561,8 @@ func TestFinishPlanWorktree_MergeFailureStillCopiesSpec(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("spec not preserved on merge failure: %v", readErr)
 	}
-	if string(got) != "# Prompt\n" {
-		t.Errorf("spec content = %q, want the worktree's copy %q", got, "# Prompt\n")
+	if string(got) != string(promptWant) {
+		t.Errorf("spec content = %q, want the worktree's copy %q", got, promptWant)
 	}
 }
 

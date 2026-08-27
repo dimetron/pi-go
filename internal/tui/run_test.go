@@ -1474,8 +1474,9 @@ func TestHandleRunCommand_ParallelFlag(t *testing.T) {
 	}
 
 	// With --parallel flag, spawn will fail (no task agent config) but
-	// we can verify the parallel path was taken.
-	m.handleRunCommand([]string{"test-spec", "--parallel"})
+	// we can verify the parallel path was taken. --force gets the minimal
+	// fixture past preflight, which is not what this test is about.
+	m.handleRunCommand([]string{"test-spec", "--parallel", "--force"})
 
 	found := false
 	for _, msg := range m.chatModel.Messages {
