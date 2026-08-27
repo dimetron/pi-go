@@ -19,6 +19,7 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -57,6 +58,7 @@ type model struct {
 	// planner completes, then the branch is merged and the backup ref retained.
 	planWorktreeAgentID string
 	planWorktreePath    string
+	sopGraphs           map[string]*sop.Compiled // compiled SOPs for the sidebar diagram, per name
 	planBackupBranch    string
 	planTaskName        string
 	planWorktree        *subagent.WorktreeManager
@@ -1732,8 +1734,48 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 	if m.mode == "plan" && m.planWorktreePath != "" && m.planTaskName != "" {
 		specDir := filepath.Join(m.planWorktreePath, "specs", m.planTaskName)
 		in.PlanPhases = detectPlanPhases(specDir)
+		if g := m.sopGraph("plan"); g != nil {
+			in.Graph = &SOPGraph{
+				Order:  g.Order,
+				Edges:  g.GraphEdges(),
+				Status: planStageStatus(in.PlanPhases),
+			}
+		}
+	}
+	if in.Graph == nil && in.RunPhase != "" {
+		if g := m.sopGraph("run"); g != nil {
+			in.Graph = &SOPGraph{
+				Order:  g.Order,
+				Edges:  g.GraphEdges(),
+				Status: runStageStatus(g.Order, in.RunPhase),
+			}
+		}
 	}
 	return in
+}
+
+// sopGraph returns the compiled SOP named name, compiling it once per session.
+//
+// Compiling parses and lints the embedded YAML, which is far too much work for
+// a function the render path calls on every keystroke — hence the cache. A SOP
+// that fails to compile caches nothing and simply hides the diagram; the stage
+// list still renders.
+func (m *model) sopGraph(name string) *sop.Compiled {
+	if m.sopGraphs == nil {
+		m.sopGraphs = map[string]*sop.Compiled{}
+	}
+	if g, ok := m.sopGraphs[name]; ok {
+		return g
+	}
+
+	var compiled *sop.Compiled
+	if def, err := sop.LoadEmbeddedDefinition(name); err == nil {
+		if c, err := sop.Compile(def, sop.DescribeFactory{}); err == nil {
+			compiled = c
+		}
+	}
+	m.sopGraphs[name] = compiled // nil is cached too: do not retry every frame
+	return compiled
 }
 
 // drainTerminalResponses discards any pending terminal response sequences

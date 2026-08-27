@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"bufio"
 	"cmp"
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -51,6 +54,7 @@ type SidebarRenderInput struct {
 	RunCycle     int                      // current retry cycle
 	RunMaxCycle  int                      // max retries
 	PlanPhases   []PlanPhase              // PDD phase checklist shown in plan mode; nil/empty = hidden
+	Graph        *SOPGraph                // compiled SOP drawn under the stage list; nil = hidden
 	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
 	StatusLine   string                   // status text shown above matrix
 	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
@@ -72,10 +76,19 @@ type ArtifactEntry struct {
 	Mime     string
 }
 
+// SOPGraph is the compiled SOP the sidebar draws underneath the stage list:
+// the stages in order, the edges between them, and each stage's status. Nil
+// hides the diagram.
+type SOPGraph struct {
+	Order  []string
+	Edges  []sop.GraphEdge
+	Status map[string]stageStatus
+}
+
 // PlanPhase is one PDD phase in the plan-mode sidebar checklist.
 type PlanPhase struct {
 	Name string // short label, e.g. "Requirements"
-	Done bool   // artifact file exists
+	Done bool   // the artifact carries real content, not just a skeleton
 }
 
 // phaseArtifacts maps each PDD phase to the spec artifact that marks it complete.
@@ -92,16 +105,71 @@ var phaseArtifacts = []struct {
 	{"Prompt", "PROMPT.md"},
 }
 
-// detectPlanPhases stats each PDD phase artifact under specDir and returns the
-// phases in order with Done set when the artifact exists. A missing or unreadable
-// specDir degrades gracefully to all-incomplete (no crash).
+// detectPlanPhases inspects each PDD phase artifact under specDir and returns
+// the phases in order, with Done set when the artifact carries real content. A
+// missing or unreadable specDir degrades gracefully to all-incomplete (no
+// crash).
+//
+// Existence is not enough. createSpecSkeleton writes the skeleton up front — an
+// empty research/ directory and a requirements.md holding only its two headings
+// — so a "does the file exist" test ticked Requirements and Research before a
+// single question had been asked.
 func detectPlanPhases(specDir string) []PlanPhase {
 	phases := make([]PlanPhase, 0, len(phaseArtifacts))
 	for _, pa := range phaseArtifacts {
-		_, err := os.Stat(filepath.Join(specDir, pa.Artifact))
-		phases = append(phases, PlanPhase{Name: pa.Name, Done: err == nil})
+		phases = append(phases, PlanPhase{
+			Name: pa.Name,
+			Done: hasSubstance(filepath.Join(specDir, pa.Artifact)),
+		})
 	}
 	return phases
+}
+
+// artifactScanLimit bounds how far hasSubstance reads looking for a body line.
+// This runs on every frame, so it must not grow with the size of plan.md; a
+// real document says something well inside the first few KB.
+const artifactScanLimit = 4 << 10
+
+// hasSubstance reports whether a phase artifact holds more than its skeleton: a
+// directory with at least one non-empty file in it, or a file with at least one
+// line that is neither blank nor a markdown heading.
+func hasSubstance(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if fi, err := e.Info(); err == nil && fi.Size() > 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(io.LimitReader(f, artifactScanLimit))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // sidebarStyles bundles the resolved styles the sidebar draws with, derived
@@ -148,23 +216,70 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	st := newSidebarStyles(paletteOrDark(in.Palette))
 
-	var lines []string
+	var head []string
 	for _, section := range [][]string{
 		sidebarMoodLines(in, st),
 		sidebarModelLines(in, innerW, st),
 		sidebarArtifactLines(in, innerW, st),
 		sidebarGitLines(in, innerW, st),
 		sidebarModeLines(in, innerW, st),
+	} {
+		head = append(head, section...)
+	}
+
+	var tail []string
+	for _, section := range [][]string{
 		sidebarAgentLines(in, innerW, st),
 		sidebarSkillLines(in, st),
 		sidebarMemoryLines(in, st),
 		sidebarMCPLines(in, innerW, st),
 		sidebarLoadingLines(in, st),
 	} {
-		lines = append(lines, section...)
+		tail = append(tail, section...)
 	}
 
+	// The diagram belongs directly under the stage list it annotates, so it is
+	// spliced between the two rather than appended after everything else.
+	lines := append(head, graphSection(in, len(head)+len(tail), innerW, st)...)
+	lines = append(lines, tail...)
+
 	return sidebarFrame(in, lines, w, st)
+}
+
+// graphSection renders the SOP diagram, or nothing when it will not fit.
+//
+// All or nothing, on purpose: sidebarFrame clips from the bottom, so a diagram
+// that overruns the panel would be cut mid-branch — half a graph, with no sign
+// that the rest exists. Dropping it whole leaves the stage list, which always
+// fits.
+func graphSection(in SidebarRenderInput, used, innerW int, st sidebarStyles) []string {
+	if in.Graph == nil {
+		return nil
+	}
+	graph := sidebarGraphLines(in.Graph.Order, in.Graph.Edges, in.Graph.Status, innerW, st)
+	if len(graph) == 0 {
+		return nil
+	}
+	if used+len(graph)+1 > sidebarContentHeight(in) {
+		return nil
+	}
+	return append(graph, "")
+}
+
+// sidebarContentHeight is how many rows sidebarFrame keeps before it clips. It
+// mirrors the frame's own reservation; the two must agree or the fit test above
+// is a guess.
+func sidebarContentHeight(in SidebarRenderInput) int {
+	matrixH, statusH := 0, 0
+	if in.MatrixLines != "" {
+		matrixH = matrixLines
+		statusH = 1
+	}
+	ruleH := 0
+	if in.Height > 0 {
+		ruleH = 1
+	}
+	return max(0, in.Height-matrixH-statusH-ruleH)
 }
 
 // sidebarMoodLines renders the mascot face or the eyes at the top of the
@@ -253,7 +368,11 @@ func sidebarModeLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 	}
 	lines = append(lines, sidebarActivityLines(in, st)...)
 	if len(in.PlanPhases) > 0 {
-		lines = append(lines, sidebarPlanLines(in, innerW, st)...)
+		// Every other section is separated by a blank row; the plan checklist
+		// read as part of the Mode block without one. sidebarPlanLines already
+		// closes with its own blank, so this section ends there.
+		lines = append(lines, "")
+		return append(lines, sidebarPlanLines(in, innerW, st)...)
 	}
 	return append(lines, "")
 }

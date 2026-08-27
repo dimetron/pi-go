@@ -93,3 +93,65 @@ func TestSidebarGraphLines_EmptyIsHidden(t *testing.T) {
 		t.Errorf("expected no lines for an empty graph, got %d", len(got))
 	}
 }
+
+// The diagram has to actually reach the panel: it was implemented and tested in
+// isolation for a while without being wired into RenderSidebar at all.
+func TestRenderSidebar_DrawsTheGraphUnderThePlanList(t *testing.T) {
+	c := compileEmbedded(t, "plan")
+	phases := []PlanPhase{
+		{"Idea", true}, {"Requirements", true}, {"Research", false},
+		{"Design", false}, {"Outline", false}, {"Plan", false}, {"Prompt", false},
+	}
+	in := SidebarRenderInput{
+		Width: SidebarWidth, Height: 44, Mode: "plan", PlanPhases: phases,
+		Graph: &SOPGraph{Order: c.Order, Edges: c.GraphEdges(), Status: planStageStatus(phases)},
+	}
+
+	got := ansi.Strip(RenderSidebar(in))
+	for _, want := range []string{
+		"[x] Requirements", // the list
+		"▶ Research",       // the list's current phase
+		"✔ clarify",        // the diagram, projected from the same phases
+		"▶ research",
+		"└─✓→ prompt", // a routed edge only the diagram can show
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sidebar missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// A short panel keeps the list and drops the diagram whole. sidebarFrame clips
+// from the bottom, so the alternative is half a tree with no sign of the rest.
+func TestRenderSidebar_DropsTheGraphWhenItCannotFit(t *testing.T) {
+	c := compileEmbedded(t, "plan")
+	phases := []PlanPhase{{"Idea", true}, {"Requirements", false}}
+	in := SidebarRenderInput{
+		Width: SidebarWidth, Height: 20, Mode: "plan", PlanPhases: phases,
+		Graph: &SOPGraph{Order: c.Order, Edges: c.GraphEdges(), Status: planStageStatus(phases)},
+	}
+
+	got := ansi.Strip(RenderSidebar(in))
+	if !strings.Contains(got, "[x] Idea") {
+		t.Errorf("the stage list must survive a short panel:\n%s", got)
+	}
+	if strings.Contains(got, "clarify") {
+		t.Errorf("the diagram should have been dropped whole:\n%s", got)
+	}
+}
+
+// The run diagram follows the imperative phase until the engine drives it.
+func TestRunStageStatusProjectsThePhase(t *testing.T) {
+	c := compileEmbedded(t, "run")
+	got := runStageStatus(c.Order, "gating")
+
+	if got["validate_spec"] != stageCompleted || got["slices"] != stageCompleted {
+		t.Errorf("stages before the current one should be complete: %v", got)
+	}
+	if got["gates"] != stageRunning {
+		t.Errorf("gates status = %v, want running", got["gates"])
+	}
+	if _, set := got["merge"]; set {
+		t.Errorf("a later stage should be untouched: %v", got)
+	}
+}
