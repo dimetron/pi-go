@@ -117,12 +117,28 @@ func RefreshCatalog(ctx context.Context, providerName string, opts ListModelsOpt
 	if err != nil {
 		return models, fmt.Errorf("encoding catalog: %w", err)
 	}
+	// Unique temp file in the target directory, not a shared "<path>.tmp":
+	// two validation misses for the same provider can refresh concurrently,
+	// and a shared name lets one install the other's bytes or leaves the temp
+	// behind when a rename fails.
 	path := cachePath(providerName)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, providerName+".*.json.tmp")
+	if err != nil {
+		return models, fmt.Errorf("creating catalog temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
 		return models, fmt.Errorf("writing catalog: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := tmp.Close(); err != nil {
+		return models, fmt.Errorf("writing catalog: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return models, fmt.Errorf("writing catalog: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return models, fmt.Errorf("renaming catalog: %w", err)
 	}
 	return models, nil

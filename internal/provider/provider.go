@@ -311,10 +311,23 @@ func ValidateModel(info Info) error {
 		return nil
 	}
 	// Validation miss: refresh once when an API key is available, then
-	// re-check against the fresh catalog. Network errors are non-fatal.
+	// re-check against what the provider just returned. Network errors are
+	// non-fatal.
+	//
+	// Match against the returned slice rather than re-reading CatalogFor:
+	// RefreshCatalog deliberately returns the fetched models even when it
+	// could not persist them (no resolvable cache dir, a read-only or full
+	// cache), and re-reading would then see only the embedded snapshot. A
+	// model the provider just confirmed must not be rejected because caching
+	// failed.
 	if key := apiKeyForProvider(info.Provider); key != "" {
-		if _, err := RefreshCatalog(context.Background(), info.Provider, ListModelsOptions{APIKey: key}); err == nil {
-			if matchPrefix(CatalogFor(info.Provider), lower) {
+		opts := ListModelsOptions{APIKey: key, BaseURL: baseURLForProvider(info.Provider)}
+		if fresh, err := RefreshCatalog(context.Background(), info.Provider, opts); err == nil || len(fresh) > 0 {
+			ids := make([]string, 0, len(fresh))
+			for _, m := range fresh {
+				ids = append(ids, strings.ToLower(m.ID))
+			}
+			if matchPrefix(ids, lower) {
 				return nil
 			}
 		}
@@ -350,6 +363,30 @@ func apiKeyForProvider(p string) string {
 		return os.Getenv("XAI_API_KEY")
 	case "openrouter":
 		return os.Getenv("OPENROUTER_API_KEY")
+	}
+	return ""
+}
+
+// baseURLForProvider returns the configured endpoint override for a provider,
+// from the same env vars config.BaseURLs reads. Without it a validation refresh
+// would go to the vendor's public API even for a user who has pointed pi at a
+// gateway, which answers 401 and turns a valid model into "unknown". Empty
+// means "use the provider default"; internal/config is not imported here
+// because that would be an import cycle.
+func baseURLForProvider(p string) string {
+	switch p {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_BASE_URL")
+	case "openai":
+		return os.Getenv("OPENAI_BASE_URL")
+	case "gemini":
+		return os.Getenv("GEMINI_BASE_URL")
+	case "mistral":
+		return os.Getenv("MISTRAL_BASE_URL")
+	case "xai":
+		return os.Getenv("XAI_BASE_URL")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_BASE_URL")
 	}
 	return ""
 }

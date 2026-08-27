@@ -56,8 +56,14 @@ if project_env=$(nearest_dotenv "$PWD"); then
   load_dotenv "$project_env"
 fi
 
+# Scratch space for the binary and per-provider staging files, removed on any
+# exit so a failed run leaves nothing behind.
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+PI_BIN="$WORK/pi-fetch-models"
+
 echo "Building pi..."
-go build -o /tmp/pi-fetch-models ./cmd/pi
+go build -o "$PI_BIN" ./cmd/pi
 
 PROVIDERS="anthropic openai gemini mistral xai openrouter"
 OUT_DIR="internal/provider/modeldata"
@@ -79,9 +85,14 @@ for p in $PROVIDERS; do
   fi
 
   echo "fetching $p..."
-  if ! /tmp/pi-fetch-models model list "$p" -o json > "$OUT_DIR/models-$p.json" 2> /tmp/pi-fetch-models-$p.err; then
-    echo "  FAILED: $(cat /tmp/pi-fetch-models-$p.err)"
-    rm -f "$OUT_DIR/models-$p.json"
+  # Fetch, normalize and validate in a scratch file, and only move it over the
+  # committed catalog once the whole thing succeeded. Redirecting straight into
+  # the destination would truncate it before the CLI even starts, so a
+  # transient outage or a rejected key would destroy the checked-in fallback
+  # this feature exists to keep.
+  STAGE="$WORK/models-$p.json"
+  if ! "$PI_BIN" model list "$p" -o json > "$STAGE" 2> "$WORK/$p.err"; then
+    echo "  FAILED (keeping existing $OUT_DIR/models-$p.json): $(cat "$WORK/$p.err")"
     continue
   fi
 
@@ -89,16 +100,24 @@ for p in $PROVIDERS; do
     # Normalize for git-friendliness: sort models by id (safety net), dedupe,
     # and pin fetched_at to the fetch date at midnight UTC so a re-fetch with
     # unchanged models produces no diff.
-    jq '.fetched_at = (now | strftime("%Y-%m-%dT00:00:00Z")) |
+    if ! jq '.fetched_at = (now | strftime("%Y-%m-%dT00:00:00Z")) |
         .models |= (sort_by(.id) | unique_by(.id))' \
-      "$OUT_DIR/models-$p.json" > "$OUT_DIR/models-$p.json.tmp"
-    mv "$OUT_DIR/models-$p.json.tmp" "$OUT_DIR/models-$p.json"
-    if ! jq empty "$OUT_DIR/models-$p.json" 2> /dev/null; then
-      echo "  WARNING: $OUT_DIR/models-$p.json is not valid JSON"
+      "$STAGE" > "$STAGE.norm"; then
+      echo "  FAILED (keeping existing $OUT_DIR/models-$p.json): output is not valid JSON"
+      continue
     fi
+    mv "$STAGE.norm" "$STAGE"
   fi
+
+  # An empty model list is a successful request that tells us nothing; treat it
+  # as a failure rather than replacing a good catalog with one.
+  if command -v jq > /dev/null 2>&1 && [ "$(jq '.models | length' "$STAGE")" -eq 0 ]; then
+    echo "  FAILED (keeping existing $OUT_DIR/models-$p.json): provider returned no models"
+    continue
+  fi
+
+  mv "$STAGE" "$OUT_DIR/models-$p.json"
   echo "  wrote $OUT_DIR/models-$p.json"
 done
 
-rm -f /tmp/pi-fetch-models /tmp/pi-fetch-models-*.err
 echo "done."

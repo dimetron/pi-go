@@ -312,3 +312,29 @@ func TestAPIKeyForProvider(t *testing.T) {
 		t.Errorf("apiKeyForProvider(ollama) = %q, want \"\"", got)
 	}
 }
+
+// TestBaseURLForProvider pins the endpoint override each provider's validation
+// refresh honors. These are the same variables config.BaseURLs reads: without
+// them the refresh goes to the vendor's public API even for a user who has
+// pointed pi at a gateway, which answers 401 and turns a valid model into
+// "unknown".
+func TestBaseURLForProvider(t *testing.T) {
+	for _, tc := range []struct{ provider, env string }{
+		{"anthropic", "ANTHROPIC_BASE_URL"},
+		{"openai", "OPENAI_BASE_URL"},
+		{"gemini", "GEMINI_BASE_URL"},
+		{"mistral", "MISTRAL_BASE_URL"},
+		{"xai", "XAI_BASE_URL"},
+		{"openrouter", "OPENROUTER_BASE_URL"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Setenv(tc.env, "http://gateway.invalid/"+tc.provider)
+			if got := baseURLForProvider(tc.provider); got != "http://gateway.invalid/"+tc.provider {
+				t.Errorf("baseURLForProvider(%q) = %q, want the value of %s", tc.provider, got, tc.env)
+			}
+		})
+	}
+	if got := baseURLForProvider("ollama"); got != "" {
+		t.Errorf("baseURLForProvider(ollama) = %q, want \"\" (use the provider default)", got)
+	}
+}

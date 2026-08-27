@@ -352,32 +352,82 @@ func TestValidateModel_NoKeyNoNetwork(t *testing.T) {
 	}
 }
 
-func TestValidateModel_RefreshOnMiss(t *testing.T) {
-	// A model in neither list WITH MISTRAL_API_KEY set and an httptest server
-	// returning the model → passes after refresh.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+// refreshOnMissServer serves a single Mistral model and reports whether it was
+// ever asked. The ID must be absent from both the embedded snapshot and the
+// hard-coded KnownModels list, or ValidateModel matches before the refresh and
+// the test proves nothing.
+func refreshOnMissServer(t *testing.T, id string) (*httptest.Server, *bool) {
+	t.Helper()
+	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
 				{
-					"id":                 "codestral-2508",
+					"id":                 id,
 					"owned_by":           "mistral",
 					"max_context_length": 256000,
-					"capabilities": map[string]any{
-						"completion_chat": true,
-					},
+					"capabilities":       map[string]any{"completion_chat": true},
 				},
 			},
 		})
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv, &called
+}
+
+const refreshOnMissModel = "zz-not-in-any-catalog-2599"
+
+func TestValidateModel_RefreshOnMiss(t *testing.T) {
+	withTempCacheDir(t)
+	// Guard the premise: if the ID ever lands in a catalog, this test would
+	// pass without the refresh running at all.
+	if matchPrefix(CatalogFor("mistral"), refreshOnMissModel) {
+		t.Fatalf("%q is now a known mistral model; pick another sentinel", refreshOnMissModel)
+	}
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
 	t.Setenv("MISTRAL_API_KEY", "testkey")
 	t.Setenv("MISTRAL_BASE_URL", srv.URL)
 
-	if err := ValidateModel(Info{Provider: "mistral", Model: "codestral-2508"}); err != nil {
+	if err := ValidateModel(Info{Provider: "mistral", Model: refreshOnMissModel}); err != nil {
 		t.Errorf("ValidateModel after refresh: %v", err)
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
+	}
+}
+
+// TestValidateModel_RefreshOnMissWithoutCache pins that validation depends on
+// what the provider returned, not on whether it could be cached. RefreshCatalog
+// hands back the fetched models even when there is nowhere to persist them, and
+// re-reading CatalogFor at that point would see only the embedded snapshot.
+func TestValidateModel_RefreshOnMissWithoutCache(t *testing.T) {
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
+	withUnresolvableCacheDir(t)
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: refreshOnMissModel}); err != nil {
+		t.Errorf("ValidateModel with no usable cache: %v", err)
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
+	}
+}
+
+// TestValidateModel_RefreshOnMissStillRejectsUnknown keeps the refresh from
+// becoming a blanket pass: a model the provider does not list stays rejected.
+func TestValidateModel_RefreshOnMissStillRejectsUnknown(t *testing.T) {
+	withTempCacheDir(t)
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: "zz-something-else-entirely"}); err == nil {
+		t.Error("ValidateModel: want an error for a model the refresh did not return")
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
 	}
 }
 
