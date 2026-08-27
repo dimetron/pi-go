@@ -55,10 +55,14 @@ Agents marked `[worktree]` edit an isolated tree. Their edits do **not** land in
 the caller's tree — ask for an explicit patch or file list to apply, or use a
 non-worktree editing agent (`internal/tools/subagent.go:127-128`).
 
-## Commits: always sign off and sign
+## Commits: all commits must be signed
 
-Every commit must carry both a `Signed-off-by` trailer and a cryptographic
-signature:
+**Rule: every commit must be cryptographically signed and carry a
+`Signed-off-by` trailer.** There is no exception — not for merge commits, not
+for reverts, not for WIP or "just this once". An unsigned commit is a broken
+commit; fix it before pushing (see the pre-push hook below).
+
+The signing command:
 
 ```bash
 git commit -s -S -m "..."     # -s = Signed-off-by trailer, -S = sign
@@ -66,7 +70,9 @@ git commit -s -S -m "..."     # -s = Signed-off-by trailer, -S = sign
 
 `-S` is redundant when config is honoured (`commit.gpgsign` and `tag.gpgsign`
 are already `true`), but pass it explicitly so a commit fails loudly rather than
-landing unsigned when config is missing or overridden.
+landing unsigned when config is missing or overridden. The `pre-push` hook
+hard-fails any push containing an unsigned commit or one missing a matching
+`Signed-off-by` trailer, so an unsigned commit cannot reach the remote.
 
 Signing here is SSH-format, not GPG, through 1Password:
 

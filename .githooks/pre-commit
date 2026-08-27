@@ -19,6 +19,9 @@ find . -name '*.go' \
 # Stage any formatting changes
 git add -u
 
-# Run linters
+# Run linters. Scoped to repo packages: a bare `./...` also typechecks the
+# gitignored tmp/ scratch area (vendored third-party repos), whose samples
+# never compile standalone and would hard-fail every commit, including the
+# amends made by `git rebase --exec`.
 echo "Running golangci-lint..."
-golangci-lint run ./...
+golangci-lint run ./cmd/... ./internal/... ./hack/...
