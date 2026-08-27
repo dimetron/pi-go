@@ -19,10 +19,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: sopcheck <repo-root> [spec-name]")
+		fmt.Fprintln(os.Stderr, "usage: sopcheck <repo-root> [spec-name | sop:<plan|run>]")
 		os.Exit(2)
 	}
 	root := os.Args[1]
+
+	// `sopcheck <root> sop:<name>` prints the compiled shape of a built-in SOP.
+	if len(os.Args) > 2 && len(os.Args[2]) > 4 && os.Args[2][:4] == "sop:" {
+		os.Exit(describeSOP(root, os.Args[2][4:]))
+	}
 
 	if len(os.Args) > 2 {
 		os.Exit(reportOne(root, os.Args[2]))

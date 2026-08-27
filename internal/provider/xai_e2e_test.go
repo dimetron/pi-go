@@ -16,7 +16,7 @@ import (
 
 // e2eXAIModel is the tier these tests bill against. grok-4.6 is xAI's current
 // flagship and the one whose reasoning_effort tiers are documented, so it is
-// the model whose behaviour these tests are actually meant to pin.
+// the model whose behavior these tests are actually meant to pin.
 const e2eXAIModel = "grok-4.6"
 
 func testGetXAIAPIKey(t *testing.T) string {

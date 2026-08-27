@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -593,4 +594,54 @@ func ruleNoSolutionLanguage(t Target, _ Args) Findings {
 		}
 	}
 	return out
+}
+
+// --- manifest ---
+
+// manifestShape is the subset of the SOP manifest this package reads. The
+// manifest is written by package sop, which imports this one, so the rule
+// decodes the file directly rather than importing back.
+type manifestShape struct {
+	SOPVersion int    `json:"sopVersion"`
+	Contract   string `json:"contract"`
+	Valid      bool   `json:"valid"`
+}
+
+// ManifestName duplicates sop.ManifestName for the same reason.
+const ManifestName = ".sop-manifest.json"
+
+func init() { Register("sop_manifest_valid", ruleManifestValid) }
+
+// ruleManifestValid checks the spec carries a validation record this build can
+// rely on. A missing manifest is a warning, not a block: specs written by hand
+// or planned before manifests existed are still runnable, and the preflight
+// rules re-derive what matters. A manifest that records a failed validation, or
+// one from a newer SOP version, does block.
+func ruleManifestValid(t Target, a Args) Findings {
+	if t.Spec == nil || t.Spec.Dir == "" {
+		return nil
+	}
+	maxVersion := a.Int("max_version", 0)
+
+	b, err := os.ReadFile(filepath.Join(t.Spec.Dir, ManifestName))
+	if err != nil {
+		return warn("spec has no "+ManifestName+" — it has not been validated by /plan",
+			"run the preflight rules directly, or re-plan the spec to produce a manifest")
+	}
+	var m manifestShape
+	if err := json.Unmarshal(b, &m); err != nil {
+		return finding(ManifestName+" is unreadable: "+err.Error(),
+			"delete it; the spec is revalidated from its artifacts")
+	}
+	if maxVersion > 0 && m.SOPVersion > maxVersion {
+		return finding(
+			fmt.Sprintf("%s records SOP version %d, newer than this build's %d", ManifestName, m.SOPVersion, maxVersion),
+			"a spec planned under a newer SOP may rely on rules this build does not implement")
+	}
+	if !m.Valid {
+		return finding(
+			fmt.Sprintf("%s records a failed validation (contract %q)", ManifestName, m.Contract),
+			"the spec did not satisfy its contract when it was planned; fix the findings or re-plan it")
+	}
+	return nil
 }
