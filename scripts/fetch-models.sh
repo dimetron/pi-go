@@ -10,6 +10,52 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Load dotenv files the same way the CLI's loadDotEnv does, so the per-provider
+# skip check below sees exactly the keys the binary will see. Order matters:
+# $HOME/.pi-go/.env first, then the nearest .pi-go/.env walking up from the
+# working directory, which wins. That second file is the one that matters in a
+# worktree - .pi-go/.env is gitignored and lives only in the primary checkout,
+# so a worktree finds it by walking up rather than by having its own copy.
+#
+# Parsed rather than sourced: `.` would execute the file, and the CLI treats it
+# as plain KEY=VALUE lines (blank lines and # comments skipped, empty values
+# ignored). Matching that parser keeps the two in agreement.
+load_dotenv() {
+  [ -f "$1" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    [ -n "$key" ] && [ -n "$val" ] || continue
+    export "$key=$val"
+  done < "$1"
+}
+
+# nearest_dotenv walks up from $1 looking for .pi-go/.env, mirroring the CLI's
+# findNearestDotEnv.
+nearest_dotenv() {
+  local dir=$1 parent
+  while :; do
+    if [ -f "$dir/.pi-go/.env" ]; then
+      printf '%s\n' "$dir/.pi-go/.env"
+      return 0
+    fi
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && return 1
+    dir=$parent
+  done
+}
+
+load_dotenv "$HOME/.pi-go/.env"
+if project_env=$(nearest_dotenv "$PWD"); then
+  load_dotenv "$project_env"
+fi
+
 echo "Building pi..."
 go build -o /tmp/pi-fetch-models ./cmd/pi
 
