@@ -117,11 +117,18 @@ func runModelList(cmd *cobra.Command, args []string) error {
 				FetchedAt: time.Now().UTC().Format(time.RFC3339),
 				Models:    models,
 			}
-			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(doc); err != nil {
+			// Sort by ID and pretty-print so the checked-in snapshots are
+			// stable and diff-friendly across fetches.
+			sort.Slice(doc.Models, func(i, j int) bool {
+				return doc.Models[i].ID < doc.Models[j].ID
+			})
+			b, err := json.MarshalIndent(doc, "", "  ")
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s: encoding JSON: %v\n", p, err)
 				exitCode = 1
 				continue
 			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(b))
 			continue
 		}
 

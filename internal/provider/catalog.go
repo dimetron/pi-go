@@ -36,16 +36,23 @@ func cachePath(provider string) string {
 }
 
 // CatalogFor returns known model prefixes for a provider: XDG cache first (if
-// present), else the embedded modeldata/models-<provider>.json snapshot (if
-// present), else the hard-coded KnownModels list.
+// present), else the embedded modeldata/models-<provider>.json snapshot merged
+// with the hard-coded KnownModels list, else the hard-coded list alone.
+//
+// The merge is a union: the hard-coded list carries curated compatibility
+// entries (e.g. bare "codestral", "pixtral", "ministral") that the live
+// catalog does not, and the live catalog adds dated models the hard-coded
+// list predates. A union is a superset, so nothing that validated before
+// stops validating.
 func CatalogFor(provider string) []string {
 	if ids, ok := loadCatalogIDs(cachePath(provider)); ok {
 		return ids
 	}
-	if ids, ok := loadEmbeddedCatalogIDs(provider); ok {
-		return ids
+	embedded, ok := loadEmbeddedCatalogIDs(provider)
+	if !ok {
+		return KnownModels[provider]
 	}
-	return KnownModels[provider]
+	return uniqueSorted(append(embedded, KnownModels[provider]...))
 }
 
 // loadEmbeddedCatalogIDs reads the checked-in modeldata/models-<provider>.json

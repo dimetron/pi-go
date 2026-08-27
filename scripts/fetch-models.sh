@@ -35,10 +35,18 @@ for p in $PROVIDERS; do
   echo "fetching $p..."
   if ! /tmp/pi-fetch-models model list "$p" -o json > "$OUT_DIR/models-$p.json" 2> /tmp/pi-fetch-models-$p.err; then
     echo "  FAILED: $(cat /tmp/pi-fetch-models-$p.err)"
+    rm -f "$OUT_DIR/models-$p.json"
     continue
   fi
 
   if command -v jq > /dev/null 2>&1; then
+    # Normalize for git-friendliness: sort models by id (safety net), dedupe,
+    # and pin fetched_at to the fetch date at midnight UTC so a re-fetch with
+    # unchanged models produces no diff.
+    jq '.fetched_at = (now | strftime("%Y-%m-%dT00:00:00Z")) |
+        .models |= (sort_by(.id) | unique_by(.id))' \
+      "$OUT_DIR/models-$p.json" > "$OUT_DIR/models-$p.json.tmp"
+    mv "$OUT_DIR/models-$p.json.tmp" "$OUT_DIR/models-$p.json"
     if ! jq empty "$OUT_DIR/models-$p.json" 2> /dev/null; then
       echo "  WARNING: $OUT_DIR/models-$p.json is not valid JSON"
     fi
