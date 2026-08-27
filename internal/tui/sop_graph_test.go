@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -153,5 +155,44 @@ func TestRunStageStatusProjectsThePhase(t *testing.T) {
 	}
 	if _, set := got["merge"]; set {
 		t.Errorf("a later stage should be untouched: %v", got)
+	}
+}
+
+// The checklist is cached between agent events, so the cache must not be able
+// to go stale silently — that would reproduce the frozen checklist the content
+// check was meant to fix.
+func TestPlanPhasesRefreshOnEvents(t *testing.T) {
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "demo")
+	if err := os.MkdirAll(specDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(specDir, "rough-idea.md"),
+		[]byte("# Rough Idea\n\nbuild it\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	m := &model{mode: "plan", planWorktreePath: dir, planTaskName: "demo"}
+
+	before := m.currentPlanPhases()
+	if !before[0].Done {
+		t.Fatal("Idea should be done")
+	}
+	if before[3].Done {
+		t.Fatal("Design should not be done yet")
+	}
+
+	// The agent writes design.md. Without an event the cache still answers.
+	if err := os.WriteFile(filepath.Join(specDir, "design.md"),
+		[]byte("# Design\n\nthe shape of it\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if m.currentPlanPhases()[3].Done {
+		t.Error("cache should hold until an event invalidates it")
+	}
+
+	m.invalidatePlanPhases()
+	if !m.currentPlanPhases()[3].Done {
+		t.Error("Design should be done once the cache is invalidated")
 	}
 }

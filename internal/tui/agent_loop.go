@@ -1411,6 +1411,7 @@ func truncatePrompt(prompt string) string {
 
 // handleAgentToolResult processes an agentToolResultMsg.
 func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	if m.face != nil {
 		m.face.SetMood(MoodProcessing)
 	}
@@ -1675,6 +1676,7 @@ func findUnassignedBashCard(messages []message, command string) int {
 
 // handleAgentSubEvent processes an agentSubEventMsg.
 func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	if strings.HasPrefix(msg.kind, bashEventPrefix) {
 		return m.handleBashEvent(msg)
 	}
@@ -1721,6 +1723,7 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 
 // handleAgentDone processes an agentDoneMsg.
 func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	m.running = false
 	m.agentCancel = nil
 	m.matrix.clear()
