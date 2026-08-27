@@ -40,11 +40,16 @@ func TestSidebarGraphLines_Run(t *testing.T) {
 		"○ gates",         // not started
 		"✗→ repair",       // FAIL branch
 		"✓→ merge",        // PASS branch
-		"│",               // spine connector
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("graph missing %q:\n%s", want, got)
 		}
+	}
+
+	// The waterfall carries the order: each stage starts one column right of
+	// the one before it, which is what replaced the drawn spine.
+	if !strings.Contains(got, "  ✔ validate_spec") || !strings.Contains(got, "   ▶ slices") {
+		t.Errorf("stages are not staggered:\n%s", got)
 	}
 }
 
@@ -111,14 +116,23 @@ func TestRenderSidebar_DrawsTheGraphUnderThePlanList(t *testing.T) {
 
 	got := ansi.Strip(RenderSidebar(in))
 	for _, want := range []string{
-		"[x] Requirements", // the list
-		"▶ Research",       // the list's current phase
-		"✔ clarify",        // the diagram, projected from the same phases
+		"Plan",      // the section heading
+		"2/7",       // the progress the checklist used to carry
+		"✔ clarify", // the stages themselves
 		"▶ research",
-		"└─✓→ prompt", // a routed edge only the diagram can show
+		"└ ✔ review", // a checkpoint, drawn under the stage it guards
+		"✓→ prompt",  // a routed edge only the diagram can show
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("sidebar missing %q:\n%s", want, got)
+		}
+	}
+
+	// The checklist and the diagram were two vocabularies for one thing. When
+	// the diagram fits, it replaces the checklist rather than sitting under it.
+	for _, gone := range []string{"[x] Requirements", "[ ] Outline"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the phase checklist should have been replaced by the diagram, found %q:\n%s", gone, got)
 		}
 	}
 }
@@ -135,7 +149,7 @@ func TestRenderSidebar_DropsTheGraphWhenItCannotFit(t *testing.T) {
 
 	got := ansi.Strip(RenderSidebar(in))
 	if !strings.Contains(got, "[x] Idea") {
-		t.Errorf("the stage list must survive a short panel:\n%s", got)
+		t.Errorf("the checklist must survive a short panel:\n%s", got)
 	}
 	if strings.Contains(got, "clarify") {
 		t.Errorf("the diagram should have been dropped whole:\n%s", got)

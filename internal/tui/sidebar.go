@@ -48,21 +48,25 @@ type SidebarRenderInput struct {
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep          // steps from plan.md during /run
-	RunPhase     string                   // current /run phase (empty if not running)
-	RunSpec      string                   // spec name during /run
-	RunCycle     int                      // current retry cycle
-	RunMaxCycle  int                      // max retries
-	PlanPhases   []PlanPhase              // PDD phase checklist shown in plan mode; nil/empty = hidden
-	Graph        *SOPGraph                // compiled SOP drawn under the stage list; nil = hidden
-	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
-	StatusLine   string                   // status text shown above matrix
-	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
-	Skills       []extension.Skill        // skills section; nil = hidden
-	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
-	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
-	Artifacts    []ArtifactEntry          // artifacts section; nil/empty = hidden
-	Palette      Palette                  // resolved theme palette; zero = dark default
+	RunChecklist []ChecklistStep // steps from plan.md during /run
+	RunPhase     string          // current /run phase (empty if not running)
+	RunSpec      string          // spec name during /run
+	RunCycle     int             // current retry cycle
+	RunMaxCycle  int             // max retries
+	PlanPhases   []PlanPhase     // PDD phase checklist shown in plan mode; nil/empty = hidden
+	Graph        *SOPGraph       // compiled SOP drawn under the stage list; nil = hidden
+	// mergePlanGraph draws the plan section as the graph alone rather than as a
+	// checklist plus a graph saying the same thing twice. Set by RenderSidebar
+	// once it knows the graph will fit.
+	mergePlanGraph bool
+	MatrixLines    string                   // pre-rendered matrix rain (2 lines)
+	StatusLine     string                   // status text shown above matrix
+	Orchestrator   *subagent.Orchestrator   // may be nil — for agents section
+	Skills         []extension.Skill        // skills section; nil = hidden
+	MCPTools       []extension.MCPToolEntry // MCP tools section; nil = hidden
+	MemoryStatus   *palace.PalaceStatus     // memory palace status; nil = hidden
+	Artifacts      []ArtifactEntry          // artifacts section; nil/empty = hidden
+	Palette        Palette                  // resolved theme palette; zero = dark default
 }
 
 // ArtifactEntry is one row in the Artifacts sidebar section.
@@ -216,7 +220,34 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	st := newSidebarStyles(paletteOrDark(in.Palette))
 
-	var head []string
+	tail := sidebarTailLines(in, innerW, st)
+
+	// Prefer the merged plan view: one section carrying both the progress and
+	// the shape. It is tried first and kept only if the whole thing fits, since
+	// the checklist alone is what a short panel can still show usefully.
+	if in.Graph != nil && len(in.PlanPhases) > 0 {
+		merged := in
+		merged.mergePlanGraph = true
+		head := sidebarHeadLines(merged, innerW, st)
+		if len(head)+len(tail) <= sidebarContentHeight(in) {
+			return sidebarFrame(in, append(head, tail...), w, st)
+		}
+	}
+
+	head := sidebarHeadLines(in, innerW, st)
+
+	// Outside plan mode the diagram annotates the list above it rather than
+	// replacing it — a /run slice checklist is per-slice progress, which the
+	// stage graph does not duplicate — so it is spliced between head and tail.
+	lines := append(head, graphSection(in, len(head)+len(tail), innerW, st)...)
+	lines = append(lines, tail...)
+
+	return sidebarFrame(in, lines, w, st)
+}
+
+// sidebarHeadLines renders the sections above the SOP diagram.
+func sidebarHeadLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	var out []string
 	for _, section := range [][]string{
 		sidebarMoodLines(in, st),
 		sidebarModelLines(in, innerW, st),
@@ -224,10 +255,14 @@ func RenderSidebar(in SidebarRenderInput) string {
 		sidebarGitLines(in, innerW, st),
 		sidebarModeLines(in, innerW, st),
 	} {
-		head = append(head, section...)
+		out = append(out, section...)
 	}
+	return out
+}
 
-	var tail []string
+// sidebarTailLines renders the sections below the SOP diagram.
+func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	var out []string
 	for _, section := range [][]string{
 		sidebarAgentLines(in, innerW, st),
 		sidebarSkillLines(in, st),
@@ -235,15 +270,9 @@ func RenderSidebar(in SidebarRenderInput) string {
 		sidebarMCPLines(in, innerW, st),
 		sidebarLoadingLines(in, st),
 	} {
-		tail = append(tail, section...)
+		out = append(out, section...)
 	}
-
-	// The diagram belongs directly under the stage list it annotates, so it is
-	// spliced between the two rather than appended after everything else.
-	lines := append(head, graphSection(in, len(head)+len(tail), innerW, st)...)
-	lines = append(lines, tail...)
-
-	return sidebarFrame(in, lines, w, st)
+	return out
 }
 
 // graphSection renders the SOP diagram, or nothing when it will not fit.
@@ -253,8 +282,8 @@ func RenderSidebar(in SidebarRenderInput) string {
 // that the rest exists. Dropping it whole leaves the stage list, which always
 // fits.
 func graphSection(in SidebarRenderInput, used, innerW int, st sidebarStyles) []string {
-	if in.Graph == nil {
-		return nil
+	if in.Graph == nil || len(in.PlanPhases) > 0 {
+		return nil // plan mode draws the graph inside its own section, or not at all
 	}
 	graph := sidebarGraphLines(in.Graph.Order, in.Graph.Edges, in.Graph.Status, innerW, st)
 	if len(graph) == 0 {
@@ -368,10 +397,13 @@ func sidebarModeLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 	}
 	lines = append(lines, sidebarActivityLines(in, st)...)
 	if len(in.PlanPhases) > 0 {
-		// Every other section is separated by a blank row; the plan checklist
-		// read as part of the Mode block without one. sidebarPlanLines already
-		// closes with its own blank, so this section ends there.
+		// Every other section is separated by a blank row; the plan section
+		// read as part of the Mode block without one. Both plan renderers close
+		// with their own blank, so the section ends there.
 		lines = append(lines, "")
+		if in.mergePlanGraph && in.Graph != nil {
+			return append(lines, sidebarPlanGraphLines(in, innerW, st)...)
+		}
 		return append(lines, sidebarPlanLines(in, innerW, st)...)
 	}
 	return append(lines, "")
@@ -403,6 +435,35 @@ func sidebarRunLines(in SidebarRenderInput, innerW int, st sidebarStyles) []stri
 		lines = append(lines, sidebarActivityLines(in, st)...)
 	}
 	return lines
+}
+
+// sidebarPlanGraphLines renders the plan section as a single view: the compiled
+// SOP with each stage's status, headed by the progress the checklist used to
+// carry.
+//
+// The checklist and the diagram were two vocabularies for one thing —
+// "Requirements" and "clarify" are the same stage — stacked on top of each
+// other, which cost about twenty of the sidebar's rows to say everything twice.
+func sidebarPlanGraphLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	graph := sidebarGraphLines(in.Graph.Order, in.Graph.Edges, in.Graph.Status, innerW, st)
+	if len(graph) == 0 {
+		return nil
+	}
+
+	done := 0
+	for _, p := range in.PlanPhases {
+		if p.Done {
+			done++
+		}
+	}
+	progress := fmt.Sprintf("%d/%d", done, len(in.PlanPhases))
+	pad := max(1, innerW-len("Plan")-len(progress))
+	head := st.heading.Render("  Plan") + strings.Repeat(" ", pad) + st.dim.Render(progress)
+
+	lines := make([]string, 0, len(graph)+3)
+	lines = append(lines, head, "")
+	lines = append(lines, graph...)
+	return append(lines, "")
 }
 
 // sidebarPlanLines renders the PDD phase checklist for plan mode. It returns nil

@@ -21,6 +21,19 @@ const (
 	stageWaiting // parked on a human approval
 )
 
+// Layout of one stage group. The diagram is a waterfall: each stage starts one
+// column right of the one before it, so the order of the flow is legible from
+// the shape alone, without a drawn spine.
+const (
+	graphBaseIndent  = 2 // first stage
+	graphStagePitch  = 1 // added per stage down the waterfall
+	graphChildIndent = 2 // a review under its stage, an edge under its owner
+	// graphMaxIndent stops the waterfall walking off a 23-column sidebar. A SOP
+	// long enough to reach it keeps its remaining stages in one column, which
+	// still reads in order.
+	graphMaxIndent = 8
+)
+
 // routeMark renders an edge's condition. The graph is 20 columns wide, so the
 // condition has to be a glyph rather than the word.
 func routeMark(route string) string {
@@ -36,13 +49,22 @@ func routeMark(route string) string {
 	}
 }
 
-// sidebarGraphLines draws the compiled SOP as a vertical diagram: one line per
-// stage down the spine, with conditional edges hanging off it.
+// sidebarGraphLines draws the compiled SOP as a waterfall of stage groups: the
+// stage, the review checkpoint that guards it, and the conditional edges that
+// leave either, with a blank row between groups.
 //
-//	✔ validate_spec
-//	│
-//	▶ slices
-//	├─✗→ repair
+//	✔ clarify
+//	  └ ✔ review
+//
+//	 ▶ research
+//
+//	  ○ design
+//	    └ ○ review
+//
+// Sequence is carried by the stagger and the spacing, not by a drawn spine. An
+// earlier version put a │ between every pair of stages, which doubled the
+// height of a diagram sharing 23 columns with everything else and read as noise
+// once the groups were spaced apart.
 //
 // It returns nil when there is nothing to draw, so the caller can drop the
 // whole section rather than emit an empty box.
@@ -54,8 +76,8 @@ func sidebarGraphLines(
 		return nil
 	}
 
-	// Conditional edges only. An unconditional or default edge is the spine
-	// itself, drawn as the connector between consecutive stages.
+	// Conditional edges only. An unconditional or default edge is the forward
+	// path, which the waterfall already shows.
 	branches := map[string][]sop.GraphEdge{}
 	for _, e := range edges {
 		if e.From == sop.StartNodeName || e.Route == "" {
@@ -64,40 +86,70 @@ func sidebarGraphLines(
 		branches[e.From] = append(branches[e.From], e)
 	}
 
-	lines := make([]string, 0, len(order)*2)
+	var lines []string
+	depth := 0
 	for i, id := range order {
-		lines = append(lines, stageLine(id, status[id], innerW, st))
-
-		outgoing := branches[id]
-		for j, e := range outgoing {
-			connector := "├─"
-			if j == len(outgoing)-1 {
-				connector = "└─"
-			}
-			label := truncateLabel(e.To, max(innerW-8, 6))
-			lines = append(lines, st.overlay.Render(
-				"  "+connector+routeMark(e.Route)+"→ "+label))
+		if isReview(id) {
+			continue // drawn as part of its stage's group
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
 		}
 
-		// No connector between a stage and its own review: the review hangs
-		// off the stage, it is not the next step down the spine.
-		if i < len(order)-1 && order[i+1] != id+".review" {
-			lines = append(lines, st.overlay.Render("  │"))
+		indent := stageIndent(depth)
+		depth++
+
+		lines = append(lines, nodeLine(id, status[id], indent, innerW, st))
+
+		// A review checkpoint always immediately follows its stage in Order.
+		owner, ownerIndent := id, indent
+		if review := id + ".review"; i+1 < len(order) && order[i+1] == review {
+			lines = append(lines, branchLines(branches[id], indent+graphChildIndent, innerW, st)...)
+			ownerIndent = indent + graphChildIndent
+			lines = append(lines, nodeLine(review, status[review], ownerIndent, innerW, st))
+			owner = review
 		}
+		lines = append(lines, branchLines(branches[owner], ownerIndent+graphChildIndent, innerW, st)...)
 	}
 	return lines
 }
 
-// stageLine renders one node. A review checkpoint is drawn as a child of the
-// stage it belongs to — that is how the compiler keys it ("<id>.review"), and
-// showing it inline would read as a stage of its own.
-func stageLine(id string, s stageStatus, innerW int, st sidebarStyles) string {
-	if _, ok := strings.CutSuffix(id, ".review"); ok {
-		label := truncateLabel("review", max(innerW-6, 6))
-		return statusStyle(s, st).Render("  └ " + statusGlyph(s) + " " + label)
+// stageIndent returns the left offset of the nth stage in the waterfall.
+func stageIndent(n int) int {
+	return graphBaseIndent + min(n*graphStagePitch, graphMaxIndent)
+}
+
+// isReview reports whether id names a stage's review checkpoint, which the
+// compiler keys as "<stage>.review".
+func isReview(id string) bool {
+	return strings.HasSuffix(id, ".review")
+}
+
+// nodeLine renders one node of the graph. A review checkpoint is drawn as a
+// child of the stage it guards — that is how the compiler keys it, and giving
+// it a step of its own in the waterfall would overstate it.
+func nodeLine(id string, s stageStatus, indent, innerW int, st sidebarStyles) string {
+	label := id
+	prefix := ""
+	if isReview(id) {
+		label, prefix = "review", "└ "
 	}
-	label := truncateLabel(id, max(innerW-4, 8))
-	return statusStyle(s, st).Render("  " + statusGlyph(s) + " " + label)
+	room := max(innerW-indent-len(prefix)-2, 6)
+	return statusStyle(s, st).Render(
+		strings.Repeat(" ", indent) + prefix + statusGlyph(s) + " " + truncateLabel(label, room))
+}
+
+// branchLines renders the conditional edges leaving one node, indented under
+// the node they belong to so they read as its outcomes rather than as steps of
+// their own.
+func branchLines(edges []sop.GraphEdge, indent, innerW int, st sidebarStyles) []string {
+	lines := make([]string, 0, len(edges))
+	pad := strings.Repeat(" ", indent)
+	for _, e := range edges {
+		label := truncateLabel(e.To, max(innerW-indent-4, 6))
+		lines = append(lines, st.overlay.Render(pad+routeMark(e.Route)+"→ "+label))
+	}
+	return lines
 }
 
 func statusGlyph(s stageStatus) string {
