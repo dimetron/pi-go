@@ -77,7 +77,7 @@ stages:
       max_concurrency: 2
       output_schema: SliceResult
     loop_back: verify
-    max_cycles: 3
+    max_cycles: 10
 
   - id: merge
     description: Merge the run worktree into the invoking branch

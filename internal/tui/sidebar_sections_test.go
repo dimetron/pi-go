@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -349,4 +351,156 @@ func TestSidebarLoadingLinesEmptyMapStillShowsHeading(t *testing.T) {
 // hasExact reports whether names contains an exact match for want.
 func hasExact(names []string, want string) bool {
 	return slices.Contains(names, want)
+}
+
+func TestDetectPlanPhases(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"rough-idea.md", "requirements.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "research"), 0o755); err != nil {
+		t.Fatalf("creating research dir: %v", err)
+	}
+	// A research phase is done when it has produced something; the plan flow
+	// creates the directory itself, up front.
+	if err := os.WriteFile(filepath.Join(dir, "research", "angle.md"), []byte("findings"), 0o644); err != nil {
+		t.Fatalf("writing research file: %v", err)
+	}
+
+	phases := detectPlanPhases(dir)
+	if len(phases) != 7 {
+		t.Fatalf("expected 7 phases, got %d", len(phases))
+	}
+	wantNames := []string{"Idea", "Requirements", "Research", "Design", "Outline", "Plan", "Prompt"}
+	for i, want := range wantNames {
+		if phases[i].Name != want {
+			t.Errorf("phase %d name = %q, want %q", i, phases[i].Name, want)
+		}
+	}
+	wantDone := []bool{true, true, true, false, false, false, false}
+	for i, want := range wantDone {
+		if phases[i].Done != want {
+			t.Errorf("phase %q Done = %v, want %v", phases[i].Name, phases[i].Done, want)
+		}
+	}
+}
+
+func TestDetectPlanPhases_AllDone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"rough-idea.md", "requirements.md", "design.md", "outline.md", "plan.md", "PROMPT.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "research"), 0o755); err != nil {
+		t.Fatalf("creating research dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "research", "angle.md"), []byte("findings"), 0o644); err != nil {
+		t.Fatalf("writing research file: %v", err)
+	}
+
+	phases := detectPlanPhases(dir)
+	if len(phases) != 7 {
+		t.Fatalf("expected 7 phases, got %d", len(phases))
+	}
+	for _, p := range phases {
+		if !p.Done {
+			t.Errorf("phase %q should be Done, got Done=%v", p.Name, p.Done)
+		}
+	}
+}
+
+// The skeleton /plan writes up front must not tick a single checkbox beyond
+// Idea: requirements.md holds only its headings and research/ is empty, so
+// marking them done claimed work that had not happened yet.
+func TestDetectPlanPhases_SkeletonIsNotProgress(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Exactly what createSpecSkeleton produces.
+	if err := os.WriteFile(filepath.Join(dir, "rough-idea.md"),
+		[]byte("# Rough Idea\n\nmake the thing\n"), 0o644); err != nil {
+		t.Fatalf("writing rough-idea.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.md"),
+		[]byte("# Requirements\n\n## Questions & Answers\n\n"), 0o644); err != nil {
+		t.Fatalf("writing requirements.md: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "research"), 0o755); err != nil {
+		t.Fatalf("creating research dir: %v", err)
+	}
+
+	phases := detectPlanPhases(dir)
+	done := map[string]bool{}
+	for _, p := range phases {
+		done[p.Name] = p.Done
+	}
+
+	if !done["Idea"] {
+		t.Error("Idea should be done: rough-idea.md carries the user's idea")
+	}
+	if done["Requirements"] {
+		t.Error("Requirements ticked on a headings-only skeleton file")
+	}
+	if done["Research"] {
+		t.Error("Research ticked on an empty research directory")
+	}
+}
+
+// Once the agent actually records a Q&A, Requirements is done.
+func TestDetectPlanPhases_RequirementsDoneOnceAnswered(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	body := "# Requirements\n\n## Questions & Answers\n\n### Q1. Scope?\n**A.** The sidebar only.\n"
+	if err := os.WriteFile(filepath.Join(dir, "requirements.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("writing requirements.md: %v", err)
+	}
+
+	for _, p := range detectPlanPhases(dir) {
+		if p.Name == "Requirements" && !p.Done {
+			t.Error("Requirements should be done once a Q&A has been recorded")
+		}
+	}
+}
+
+func TestDetectPlanPhases_None(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	phases := detectPlanPhases(dir)
+	if len(phases) != 7 {
+		t.Fatalf("expected 7 phases, got %d", len(phases))
+	}
+	for _, p := range phases {
+		if p.Done {
+			t.Errorf("phase %q should not be Done in an empty dir, got Done=%v", p.Name, p.Done)
+		}
+	}
+}
+
+func TestSidebarPlanLines(t *testing.T) {
+	t.Parallel()
+	in := SidebarRenderInput{PlanPhases: []PlanPhase{
+		{Name: "Idea", Done: true},
+		{Name: "Requirements", Done: false},
+		{Name: "Research", Done: false},
+	}}
+	out := plain(sidebarPlanLines(in, 27, testSidebarStyles()))
+	for _, want := range []string{"Plan", "[x] Idea", "▶ Requirements", "[ ] Research"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestSidebarPlanLines_Hidden(t *testing.T) {
+	t.Parallel()
+	got := sidebarPlanLines(SidebarRenderInput{}, 27, testSidebarStyles())
+	if len(got) != 0 {
+		t.Errorf("expected 0 lines when no PlanPhases, got %d: %q", len(got), plain(got))
+	}
 }

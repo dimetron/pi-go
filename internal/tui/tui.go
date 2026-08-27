@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -56,6 +58,9 @@ type model struct {
 	// planner completes, then the branch is merged and the backup ref retained.
 	planWorktreeAgentID string
 	planWorktreePath    string
+	sopGraphs           map[string]*sop.Compiled // compiled SOPs for the sidebar diagram, per name
+	planPhases          []PlanPhase              // cached phase checklist; recomputed when planPhasesStale
+	planPhasesStale     bool                     // an agent event may have changed the spec artifacts
 	planBackupBranch    string
 	planTaskName        string
 	planWorktree        *subagent.WorktreeManager
@@ -1728,7 +1733,74 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 		in.RunCycle = m.run.retries + 1
 		in.RunMaxCycle = m.run.maxRetries
 	}
+	if m.mode == "plan" && m.planWorktreePath != "" && m.planTaskName != "" {
+		in.PlanPhases = m.currentPlanPhases()
+		if g := m.sopGraph("plan"); g != nil {
+			in.Graph = &SOPGraph{
+				Order:  g.Order,
+				Edges:  g.GraphEdges(),
+				Status: planStageStatus(in.PlanPhases),
+			}
+		}
+	}
+	if in.Graph == nil && in.RunPhase != "" {
+		if g := m.sopGraph("run"); g != nil {
+			in.Graph = &SOPGraph{
+				Order:  g.Order,
+				Edges:  g.GraphEdges(),
+				Status: runStageStatus(g.Order, in.RunPhase),
+			}
+		}
+	}
 	return in
+}
+
+// currentPlanPhases returns the phase checklist, re-reading the spec artifacts
+// only when an agent event may have changed them.
+//
+// The artifacts on disk stay the source of truth — they survive a resumed plan
+// and a restarted TUI, which an event log alone would not — but stat-ing seven
+// paths and reading their opening bytes on every keystroke is work the render
+// path should not do. Events decide *when* to look, not *what* is true.
+func (m *model) currentPlanPhases() []PlanPhase {
+	if m.planPhasesStale || m.planPhases == nil {
+		specDir := filepath.Join(m.planWorktreePath, "specs", m.planTaskName)
+		m.planPhases = detectPlanPhases(specDir)
+		m.planPhasesStale = false
+	}
+	return m.planPhases
+}
+
+// invalidatePlanPhases marks the checklist for recomputation. It is called from
+// every event that can precede an artifact write — a tool result, a subagent
+// event, the end of a turn — because missing one would freeze the checklist,
+// which is the bug this whole area just came from.
+func (m *model) invalidatePlanPhases() {
+	m.planPhasesStale = true
+}
+
+// sopGraph returns the compiled SOP named name, compiling it once per session.
+//
+// Compiling parses and lints the embedded YAML, which is far too much work for
+// a function the render path calls on every keystroke — hence the cache. A SOP
+// that fails to compile caches nothing and simply hides the diagram; the stage
+// list still renders.
+func (m *model) sopGraph(name string) *sop.Compiled {
+	if m.sopGraphs == nil {
+		m.sopGraphs = map[string]*sop.Compiled{}
+	}
+	if g, ok := m.sopGraphs[name]; ok {
+		return g
+	}
+
+	var compiled *sop.Compiled
+	if def, err := sop.LoadEmbeddedDefinition(name); err == nil {
+		if c, err := sop.Compile(def, sop.DescribeFactory{}); err == nil {
+			compiled = c
+		}
+	}
+	m.sopGraphs[name] = compiled // nil is cached too: do not retry every frame
+	return compiled
 }
 
 // drainTerminalResponses discards any pending terminal response sequences

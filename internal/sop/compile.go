@@ -117,6 +117,14 @@ func (c *Compiled) wire(stages []Stage, def *Definition) error {
 			from = r
 		}
 
+		// A stage that can fail over needs its forward edge to be conditional.
+		// The engine fires every unconditional edge regardless of routing
+		// ("Edges with no Route always fire" — workflow.findSuccessors), so an
+		// unconditional next alongside a FAIL route would schedule the
+		// successor AND the repair stage on a failure. Default fires only when
+		// no concrete route matched, which is exactly "next unless it failed".
+		failsOver := failoverTarget(s) != ""
+
 		switch {
 		case len(s.Routes) > 0:
 			routes := make(map[string]workflow.Node, len(s.Routes))
@@ -143,12 +151,16 @@ func (c *Compiled) wire(stages []Stage, def *Definition) error {
 			if !ok {
 				return fmt.Errorf("stage %q advances to unknown stage %q", s.ID, s.Next)
 			}
-			b.Add(from, to)
+			if failsOver {
+				b.AddRoute(from, to, workflow.Default)
+			} else {
+				b.Add(from, to)
+			}
 		}
 
 		// A failure path that names a stage is an edge too: it is how a gate
 		// failure reaches the repair stage without the coordinator deciding to.
-		if target := s.OnFail; target != "" && target != "abort" && target != "retry" {
+		if target := failoverTarget(s); target != "" {
 			to, ok := c.Nodes[target]
 			if !ok {
 				return fmt.Errorf("stage %q fails over to unknown stage %q", s.ID, target)
@@ -162,6 +174,15 @@ func (c *Compiled) wire(stages []Stage, def *Definition) error {
 		return fmt.Errorf("SOP %q compiled to no edges: no stage declares next, routes or loop_back", def.SOP)
 	}
 	return nil
+}
+
+// failoverTarget returns the stage a failure routes to, or "" when the stage
+// aborts, retries in place, or declares no failure path.
+func failoverTarget(s Stage) string {
+	if s.OnFail == "" || s.OnFail == "abort" || s.OnFail == "retry" {
+		return ""
+	}
+	return s.OnFail
 }
 
 // NodeConfigFor derives a node's runtime configuration from its stage and the
@@ -187,6 +208,13 @@ func NodeConfigFor(s Stage, defaults Defaults) workflow.NodeConfig {
 		cfg.RetryConfig = retryConfig(*retry)
 	}
 
+	// NOTE: as of adk v2.2.0 the scheduler never reads cfg.ParallelWorker — the
+	// field is declared in workflow.NodeConfig and consumed only by the YAML
+	// plumbing in internal/configurable. Setting it records the stage's intent
+	// and costs nothing, but it does NOT make the stage run in parallel. Real
+	// parallelism needs a workflow.NewParallelWorker node wrapping the body,
+	// and that constructor rejects a wrapped node carrying a RetryConfig — so a
+	// factory building one must move the retry policy onto the parent.
 	if s.FanOut != nil {
 		cfg.ParallelWorker = true
 	}

@@ -123,3 +123,10 @@ After all slices:
 - `go test ./internal/tui/...`
 - `go vet ./internal/tui/...`
 - `golangci-lint run ./internal/tui/...`
+
+## Progress
+
+- [x] Step 1: Add `PlanPhase` type + `detectPlanPhases`
+- [x] Step 2: Add `sidebarPlanLines` renderer
+- [x] Step 3: Wire into `SidebarRenderInput` + `sidebarRenderInput`
+- [x] Step 4: Add tests
