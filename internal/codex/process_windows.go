@@ -7,5 +7,5 @@ import "os/exec"
 func setPlatformAttrs(cmd *exec.Cmd) {
 	// On Windows there is no process-group signal mechanism equivalent
 	// to Unix Setpgid + Kill(-pgid). The default CommandContext
-	// behaviour (TerminateProcess) is sufficient.
+	// behavior (TerminateProcess) is sufficient.
 }

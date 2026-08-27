@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"iter"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	piagent "github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/otel"
@@ -570,12 +570,9 @@ func buildMCPToolsetsFromCfg(cfg config.Config) []adktool.Toolset {
 	return ts
 }
 
+// detectGitRoot returns the repository root containing dir. Inside a linked
+// worktree it resolves the main checkout so the subagent sandbox covers the
+// whole repository. See internal/gitroot.
 func detectGitRoot(dir string) string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return gitroot.Detect(context.Background(), dir)
 }

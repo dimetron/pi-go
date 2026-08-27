@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/session"
 )
 
 // DefaultPoolSize is the default maximum number of concurrent subagents.
@@ -469,7 +470,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 		Prompt:      input.Prompt,
 		Instruction: agent.Instruction,
 		Timeout:     timeout,
-		Env:         o.spawnEnv(input.Env, workDir),
+		Env:         o.spawnEnv(input.Env, workDir, attributionFor(input, agentID, workDir)),
 		BaseURL:     o.BaseURL,
 		Insecure:    o.Insecure,
 		Headers:     o.Headers,
@@ -530,15 +531,40 @@ func (o *Orchestrator) resolveWorkDir(agentID string, input SpawnInput, useWorkt
 // spawnEnv extends the caller's env with the roots the subagent needs: the repo
 // root so its sandbox covers the full repo and not just the worktree directory,
 // and the worktree path so it can normalize relative paths.
-func (o *Orchestrator) spawnEnv(env []string, workDir string) []string {
-	if o.worktree == nil {
-		return env
+// attributionFor fills in the fields the orchestrator knows — the agent's ID,
+// its type, and the worktree it was given — over whatever the caller supplied.
+// The caller owns the run-level fields (run ID, spec, slice, cycle) because
+// only it knows them.
+func attributionFor(input SpawnInput, agentID, workDir string) *session.AgentContext {
+	var ctx session.AgentContext
+	if input.Attribution != nil {
+		ctx = *input.Attribution
 	}
-	env = append(append([]string(nil), env...), "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
-	if workDir != "" {
-		env = append(env, "PI_WORKTREE_ROOT="+workDir)
+	if ctx.AgentID == "" {
+		ctx.AgentID = agentID
 	}
-	return env
+	if ctx.AgentType == "" {
+		ctx.AgentType = input.Agent.Name
+	}
+	if ctx.Worktree == "" {
+		ctx.Worktree = workDir
+	}
+	return &ctx
+}
+
+func (o *Orchestrator) spawnEnv(env []string, workDir string, attribution *session.AgentContext) []string {
+	out := append([]string(nil), env...)
+	if o.worktree != nil {
+		out = append(out, "PI_SANDBOX_ROOT="+o.worktree.RepoRoot())
+		if workDir != "" {
+			out = append(out, "PI_WORKTREE_ROOT="+workDir)
+		}
+	}
+	// Attribution rides the same channel. The child records it on its own
+	// session so the run tree is recoverable from meta.json rather than by
+	// grouping sessions by working directory and guessing at roles.
+	out = append(out, attribution.Env()...)
+	return out
 }
 
 // dispatchSpawn launches the agent through the right runner. ACP-bundled agents

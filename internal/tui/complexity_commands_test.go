@@ -736,23 +736,27 @@ func TestCplxParseRunArgs(t *testing.T) {
 		args         []string
 		wantSpec     string
 		wantParallel bool
+		wantForce    bool
 	}{
-		{"empty", nil, "", false},
-		{"spec only", []string{"my-spec"}, "my-spec", false},
-		{"long flag", []string{"my-spec", "--parallel"}, "my-spec", true},
-		{"short flag", []string{"my-spec", "-p"}, "my-spec", true},
-		{"flag first", []string{"-p", "my-spec"}, "my-spec", true},
+		{"empty", nil, "", false, false},
+		{"spec only", []string{"my-spec"}, "my-spec", false, false},
+		{"long flag", []string{"my-spec", "--parallel"}, "my-spec", true, false},
+		{"short flag", []string{"my-spec", "-p"}, "my-spec", true, false},
+		{"flag first", []string{"-p", "my-spec"}, "my-spec", true, false},
 		// The first non-flag argument wins; later ones are ignored.
-		{"extra positional ignored", []string{"first", "second"}, "first", false},
-		{"flag only", []string{"--parallel"}, "", true},
-		{"repeated flags", []string{"-p", "--parallel", "spec"}, "spec", true},
+		{"extra positional ignored", []string{"first", "second"}, "first", false, false},
+		{"flag only", []string{"--parallel"}, "", true, false},
+		{"repeated flags", []string{"-p", "--parallel", "spec"}, "spec", true, false},
+		{"force long", []string{"my-spec", "--force"}, "my-spec", false, true},
+		{"force short", []string{"my-spec", "-f"}, "my-spec", false, true},
+		{"force and parallel", []string{"-f", "-p", "my-spec"}, "my-spec", true, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spec, parallel := parseRunArgs(tt.args)
-			if spec != tt.wantSpec || parallel != tt.wantParallel {
-				t.Errorf("parseRunArgs(%v) = (%q, %v), want (%q, %v)",
-					tt.args, spec, parallel, tt.wantSpec, tt.wantParallel)
+			spec, parallel, force := parseRunArgs(tt.args)
+			if spec != tt.wantSpec || parallel != tt.wantParallel || force != tt.wantForce {
+				t.Errorf("parseRunArgs(%v) = (%q, %v, %v), want (%q, %v, %v)",
+					tt.args, spec, parallel, force, tt.wantSpec, tt.wantParallel, tt.wantForce)
 			}
 		})
 	}
@@ -784,7 +788,7 @@ func TestCplxHandleRunCommand_NoArgsShowsUsage(t *testing.T) {
 	if len(m.chatModel.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(m.chatModel.Messages))
 	}
-	if !strings.Contains(m.chatModel.Messages[0].content, "Usage: `/run <spec-name> [--parallel]`") {
+	if !strings.Contains(m.chatModel.Messages[0].content, "Usage: `/run <spec-name> [--parallel] [--force]`") {
 		t.Errorf("usage message = %q", m.chatModel.Messages[0].content)
 	}
 }

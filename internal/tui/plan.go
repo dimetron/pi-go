@@ -12,6 +12,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
+	"github.com/dimetron/pi-go/internal/sop/validate"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -248,6 +249,14 @@ func (m *model) finishPlanWorktree() error {
 		return nil
 	}
 
+	// PROMPT.md existing is not the same as the plan being sound. Validate the
+	// whole artifact set against the PDD contract before merging: a spec that
+	// fails here is one /run could not have executed, and the worktree is kept
+	// so the next planning turn can fix it in place.
+	if !m.validatePlanArtifacts() {
+		return nil
+	}
+
 	// Merge the worktree branch into the invoking branch. This brings the spec
 	// files into <workDir>/specs/<task>/ as tracked files.
 	if _, err := m.planWorktree.MergeBack(m.planWorktreeAgentID); err != nil {
@@ -396,7 +405,8 @@ func (m *model) startPlanSession(taskName, roughIdea, specDir string) (tea.Model
 		return m, nil
 	}
 
-	instruction := sopText + "\n\n## Current Task\n" +
+	instruction := sopText + "\n\n" + validate.PlanContract().Describe() +
+		"\n## Current Task\n" +
 		"- Task name: " + taskName + "\n" +
 		"- Spec directory: " + specDir + "/\n" +
 		"- Rough idea: " + roughIdea + "\n\n" +

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -26,6 +25,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/jsonrpc"
@@ -1864,16 +1864,13 @@ const gitCmdTimeout = 5 * time.Second
 
 // detectGitRoot returns the git repository root for the given directory,
 // or empty string if not inside a git repo.
+//
+// Inside a linked worktree this resolves the *main* checkout, not the worktree
+// — the value becomes PI_SANDBOX_ROOT for spawned subagents, and rooting that
+// at a worktree makes every file-tool access to the rest of the repo fail.
+// See internal/gitroot.
 func detectGitRoot(ctx context.Context, dir string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return gitroot.Detect(ctx, dir)
 }
 
 // LoadDotEnv loads environment variables from ~/.pi-go/.env and the nearest

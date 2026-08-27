@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/procs"
+	"github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
@@ -63,6 +66,22 @@ type runState struct {
 	// it, retrying a parallel run silently drops every worktree but the one
 	// the retry resumed in.
 	carried []mergeTarget
+
+	// runID groups every session this run spawns, at any depth. Without it the
+	// only way to reconstruct a run tree is to group sessions by working
+	// directory and infer roles from title prefixes — which cannot attribute
+	// an agent that ran in a numerically-named worktree at all.
+	runID string
+
+	// transcript accumulates the coordinator's streamed text for this cycle so
+	// the Verifier's verdict can be read out of it. Without this the verdict
+	// is only ever displayed, never acted on — which is why the corpus holds
+	// nine PASS verdicts and no FAIL.
+	transcript strings.Builder
+
+	// verdict is the review result parsed from transcript at the end of a
+	// cycle. An unstated verdict is not a pass.
+	verdict sop.Verdict
 
 	// ownerBackup is the backup branch the worktree owner was given at spawn
 	// time. It is recorded on collapse because the owner keeps its parallel
@@ -149,18 +168,50 @@ type runAgentDoneMsg struct {
 	status  string // authoritative terminal status from the subagent
 }
 
+// GateStatus is the outcome of one gate command. It is three-valued on
+// purpose: a gate that never returns is not a gate that passed.
+//
+// pi-go has a documented case of this — tests that bind a local listener hang
+// under the sandbox (CLAUDE.md, "Two environment traps"). Session trajectories
+// show coordinators backgrounding such a run, killing it, and reporting
+// success. Collapsing "hang" into either "pass" or "fail" is what let that
+// happen: reported as a pass it merges unverified work, reported as a fail it
+// burns the retry budget re-running something that will hang again.
+type GateStatus string
+
+const (
+	GatePass GateStatus = "pass"
+	GateFail GateStatus = "fail"
+	GateHang GateStatus = "hang"
+)
+
 // GateResult holds the result of running a single gate command.
 type GateResult struct {
 	Name    string
 	Command string
-	Passed  bool
+	Passed  bool // true only for GatePass; kept as the summary predicate
+	Status  GateStatus
 	Output  string
+	Elapsed time.Duration
+}
+
+// status reports the gate's status, defaulting to the Passed field for results
+// built before Status existed (tests, persisted eval fixtures).
+func (r GateResult) status() GateStatus {
+	if r.Status != "" {
+		return r.Status
+	}
+	if r.Passed {
+		return GatePass
+	}
+	return GateFail
 }
 
 // runGateResultMsg carries the result of running all gate commands.
 type runGateResultMsg struct {
 	results []GateResult
 	passed  bool // true if all gates passed
+	hung    bool // a gate exceeded its timeout — distinct from failing
 }
 
 // runMergeResultMsg carries the result of merging the worktree branch.
@@ -225,6 +276,23 @@ Spawn the Verifier and act on its verdict:
   Repeat up to 10 cycles.
 - **VERDICT: PASS** — report the changed files and stop. Do not commit or merge;
   /run handles gates and the merge.
+
+### Ending the cycle
+
+The last line of your own reply must repeat the Verifier's verdict verbatim:
+
+    VERDICT: PASS
+
+or
+
+    VERDICT: FAIL
+
+/run reads that line and acts on it: PASS is what permits the merge, FAIL sends
+the run into another cycle with the NOT MET items as its brief. **A cycle that
+ends with no VERDICT line does not merge** — it is treated as an incomplete
+review, because a verdict nobody can read is the same as no review at all. Do
+not write the line before the Verifier has returned, and do not write PASS when
+it returned FAIL.
 `
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
@@ -337,16 +405,25 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	specName, parallel := parseRunArgs(args)
+	specName, parallel, force := parseRunArgs(args)
 	if specName == "" {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: "Missing spec name."})
 		return m, nil
 	}
 
-	// Read PROMPT.md.
+	// Read PROMPT.md. A spec that is absent entirely gets the "not found"
+	// message and the list of specs that do exist — a more useful answer than
+	// a validation report about a directory the user mistyped.
 	promptMD, err := readPromptMD(m.cfg.WorkDir, specName)
 	if err != nil {
 		m.showRunSpecError(err)
+		return m, nil
+	}
+
+	// Preflight: a spec that cannot succeed should fail here, in a second,
+	// rather than as a worker with an unrunnable verify command forty minutes
+	// in. --force keeps the decision the user's.
+	if !m.preflightAllows(specName, force) {
 		return m, nil
 	}
 
@@ -381,7 +458,7 @@ func (m *model) handleRunCommand(args []string) (tea.Model, tea.Cmd) {
 // available to run when there are any.
 func (m *model) showRunUsage() {
 	specs, _ := listAvailableSpecs(m.cfg.WorkDir)
-	msg := "Usage: `/run <spec-name> [--parallel]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents."
+	msg := "Usage: `/run <spec-name> [--parallel] [--force]`\n\nExecutes a spec's PROMPT.md using an isolated task agent.\nUse `--parallel` to split independent slices across 2 agents.\nUse `--force` to start despite preflight validation errors."
 	if len(specs) > 0 {
 		msg += "\n\n" + formatAvailableRunSpecsTable(specs)
 	}
@@ -401,18 +478,20 @@ func (m *model) showRunSpecError(err error) {
 
 // parseRunArgs splits /run arguments into the spec name and the parallel flag.
 // The first non-flag argument wins; later ones are ignored.
-func parseRunArgs(args []string) (specName string, parallel bool) {
+func parseRunArgs(args []string) (specName string, parallel, force bool) {
 	for _, arg := range args {
 		switch arg {
 		case "--parallel", "-p":
 			parallel = true
+		case "--force", "-f":
+			force = true
 		default:
 			if specName == "" {
 				specName = arg
 			}
 		}
 	}
-	return specName, parallel
+	return specName, parallel, force
 }
 
 // formatRunGateInfo renders gate names for the spawn announcement.
@@ -433,6 +512,7 @@ func (m *model) startRunAgent(
 	specName, promptMD string, gates []Gate, checklist []ChecklistStep, gateInfo string,
 ) (tea.Model, tea.Cmd) {
 	prompt := buildRunPrompt(specName, promptMD, checklist)
+	runID := newRunID(specName)
 
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 		Type:         "task",
@@ -441,6 +521,7 @@ func (m *model) startRunAgent(
 		WorktreeName: runWorktreeName(specName, ""),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, 0, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -460,6 +541,7 @@ func (m *model) startRunAgent(
 		promptMD: promptMD,
 		gates:    gates,
 		agentID:  agentID,
+		runID:    runID,
 		// The spawning agent owns the worktree; retries resume inside it.
 		worktreeAgentID: agentID,
 		phase:           "running",
@@ -494,6 +576,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 	prompt2 := buildParallelPrompt(specName, promptMD, checklist, mid, len(checklist))
 
 	useWorktree := true
+	runID := newRunID(specName)
 
 	// Spawn agent 1.
 	events1, agentID1, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
@@ -503,6 +586,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		WorktreeName: runWorktreeName(specName, "part-1"),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, 1, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -520,6 +604,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		WorktreeName: runWorktreeName(specName, "part-2"),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, mid+1, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -552,6 +637,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		specName: specName,
 		promptMD: promptMD,
 		gates:    gates,
+		runID:    runID,
 		agentID:  agentID1, // primary agent for fallback
 		// Gates and verification run in the first agent's worktree.
 		worktreeAgentID: agentID1,
@@ -669,6 +755,9 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 // folds it into the trailing LLM trace entry.
 func (m *model) applyRunTextDelta(ev subagent.Event) {
 	m.chatModel.Streaming += ev.Content
+	if m.run != nil {
+		m.run.transcript.WriteString(ev.Content)
+	}
 	// Update the last assistant message with accumulated text.
 	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
 		if m.chatModel.Messages[i].role == "assistant" {
@@ -867,38 +956,46 @@ func (m *model) unfinishedSlicesContext() string {
 func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
 	m.run.phase = "verifying"
 	m.refreshRunChecklist()
+	m.run.verdict = sop.ParseVerdict(m.run.transcript.String())
 
 	pending := m.run.unfinishedSlices()
-	if len(pending) == 0 {
+
+	// Two independent signals must agree before a merge. The checklist says
+	// the coordinator believes every slice landed; the verdict says a reviewer
+	// checked the diff against the Done Criteria. Ticking a box is cheap and
+	// the corpus shows it done without verification, so the checklist alone is
+	// not enough — and a verdict that was never stated is not a pass.
+	if len(pending) == 0 && m.run.verdict.Passed() {
 		done := len(m.run.checklist)
-		msg := "**Verifier: PASS** — no plan checklist to verify."
+		msg := "**Verifier: PASS** — reviewer confirmed the Done Criteria."
 		if done > 0 {
-			msg = fmt.Sprintf("**Verifier: PASS** — all %d slices complete.", done)
+			msg = fmt.Sprintf("**Verifier: PASS** — all %d slices complete and the reviewer confirmed the Done Criteria.", done)
 		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
 		m.run.phase = "merging"
 		return m, m.mergeWorktreeCmd()
 	}
 
+	reason, detail := m.verificationFailure(pending)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role: "assistant",
-		content: fmt.Sprintf("**Verifier: FAIL** — %d of %d slices still unchecked in plan.md.",
-			len(pending), len(m.run.checklist)),
+		role:    "assistant",
+		content: "**Verifier: FAIL** — " + detail,
 	})
 
-	if cmd := m.retryRun("plan incomplete", m.unfinishedSlicesContext()); cmd != nil {
+	if cmd := m.retryRun(reason, m.verificationContext(pending)); cmd != nil {
 		return m, cmd
 	}
 
 	// Cycles exhausted with work still outstanding — do not merge.
 	m.run.phase = "failed"
 	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
+	_, detail = m.verificationFailure(pending)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
-			"**Verification failed** for spec `%s` after %d retries — %d slices never completed.\n"+
+			"**Verification failed** for spec `%s` after %d retries — %s\n"+
 				"Not merging. Worktree preserved at: `%s`",
-			m.run.specName, m.run.maxRetries, len(pending), wtPath),
+			m.run.specName, m.run.maxRetries, detail, wtPath),
 	})
 	if report, err := m.writeRunSummary("verify_failed"); err == nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -954,6 +1051,7 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 		WorkDir:     wtPath,
 		SkipCleanup: true,
 		Timeout:     int((60 * time.Minute) / time.Millisecond),
+		Attribution: runAttribution(m.run.runID, m.run.specName, m.cfg.SessionID, 0, m.run.retries),
 	})
 	if err != nil {
 		m.run.phase = "failed"
@@ -972,6 +1070,10 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 	m.run.events = events
 	m.run.status = ""
 	m.run.phase = "running"
+	// Each cycle gets its own transcript. Carrying the previous cycle's text
+	// forward would let a stale PASS satisfy the next verification.
+	m.run.transcript.Reset()
+	m.run.verdict = sop.Verdict{}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.chatModel.Streaming = ""
@@ -1101,44 +1203,86 @@ func (m *model) runGatesCmd() tea.Cmd {
 	}
 }
 
-// runGates executes gate commands sequentially in the given directory.
+// defaultGateTimeout bounds a single gate command. A gate is a build, test or
+// vet run; anything still going after this is hung, not slow.
+const defaultGateTimeout = 10 * time.Minute
+
+// runGates executes gate commands sequentially in the given directory, each
+// bounded by defaultGateTimeout.
 func runGates(ctx context.Context, workDir string, gates []Gate) runGateResultMsg {
+	return runGatesTimeout(ctx, workDir, gates, defaultGateTimeout)
+}
+
+// runGatesTimeout is runGates with an explicit per-gate bound, so tests need
+// not wait out the production timeout.
+func runGatesTimeout(ctx context.Context, workDir string, gates []Gate, timeout time.Duration) runGateResultMsg {
 	var results []GateResult
 	allPassed := true
+	hung := false
 
 	for _, gate := range gates {
-		cmd := procs.CommandContext(ctx, "sh", "-c", gate.Command)
-		cmd.Dir = workDir
+		res := runOneGate(ctx, workDir, gate, timeout)
+		results = append(results, res)
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-		passed := err == nil
-
-		output := stdout.String()
-		if stderr.Len() > 0 {
-			if output != "" {
-				output += "\n"
-			}
-			output += stderr.String()
-		}
-
-		results = append(results, GateResult{
-			Name:    gate.Name,
-			Command: gate.Command,
-			Passed:  passed,
-			Output:  output,
-		})
-
-		if !passed {
+		if res.Status != GatePass {
 			allPassed = false
-			break // Stop at first failure.
+			hung = res.Status == GateHang
+			break // Stop at the first gate that does not pass.
 		}
 	}
 
-	return runGateResultMsg{results: results, passed: allPassed}
+	return runGateResultMsg{results: results, passed: allPassed, hung: hung}
+}
+
+// runOneGate runs a single gate under its own deadline and classifies the
+// outcome. A gate whose own deadline fired is GateHang; one the caller
+// canceled is GateFail, because the run is being torn down rather than the
+// command misbehaving.
+func runOneGate(ctx context.Context, workDir string, gate Gate, timeout time.Duration) GateResult {
+	gctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := procs.CommandContext(gctx, "sh", "-c", gate.Command)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	err := cmd.Run()
+	elapsed := time.Since(start)
+
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+
+	status := GatePass
+	switch {
+	case err == nil:
+		// passed
+	case errors.Is(gctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
+		status = GateHang
+		if output != "" {
+			output += "\n"
+		}
+		output += fmt.Sprintf("gate did not return within %s and was killed", timeout)
+	default:
+		status = GateFail
+	}
+
+	return GateResult{
+		Name:    gate.Name,
+		Command: gate.Command,
+		Passed:  status == GatePass,
+		Status:  status,
+		Output:  output,
+		Elapsed: elapsed,
+	}
 }
 
 // handleRunGateResult processes gate validation results.
@@ -1154,10 +1298,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	var summary strings.Builder
 	summary.WriteString("**Gate Results:**\n")
 	for _, r := range msg.results {
-		status := "PASS"
-		if !r.Passed {
-			status = "FAIL"
-		}
+		status := strings.ToUpper(string(r.status()))
 		fmt.Fprintf(&summary, "- **%s** (`%s`): %s\n", r.Name, r.Command, status)
 		if !r.Passed && r.Output != "" {
 			// Include truncated output for failed gates.
@@ -1181,6 +1322,14 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 			content: "All gates passed — verifying plan completeness...",
 		})
 		return m.verifyRunComplete()
+	}
+
+	// A hung gate is not a failed gate. Retrying it re-runs a command that
+	// already proved it does not return, which spends the whole retry budget
+	// on the same hang; and merging over it would ship unverified work. Stop
+	// and say what to re-run by hand instead.
+	if msg.hung {
+		return m.reportGateHang(msg.results)
 	}
 
 	// Gates failed — attempt retry or give up.
@@ -1209,6 +1358,43 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		})
 	}
 
+	return m, nil
+}
+
+// reportGateHang ends the run on a gate that never returned, naming the gate
+// and the worktree so the command can be re-run by hand. pi-go's own test
+// suite hangs under the sandbox (CLAUDE.md), so "re-run outside the sandbox"
+// is the usual resolution rather than a code fix.
+func (m *model) reportGateHang(results []GateResult) (tea.Model, tea.Cmd) {
+	m.run.phase = "failed"
+
+	var hung []GateResult
+	for _, r := range results {
+		if r.status() == GateHang {
+			hung = append(hung, r)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("**Gate hung** — not merging, and not retrying.\n\n")
+	for _, r := range hung {
+		fmt.Fprintf(&b, "- **%s** (`%s`) did not return within %s.\n", r.Name, r.Command, r.Elapsed.Round(time.Second))
+	}
+	if wt := m.runWorktreePath(m.run.worktreeAgentID); wt != "" {
+		fmt.Fprintf(&b, "\nWorktree preserved at: `%s`\n", wt)
+	}
+	b.WriteString("\nA hang is not a failure the agent can fix by re-running it. " +
+		"Run the gate yourself — outside the sandbox if it binds a local listener — " +
+		"then `/run` the spec again.")
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: b.String()})
+
+	if report, err := m.writeRunSummary("gate_hang"); err == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Summary report: `%s`", report),
+		})
+	}
 	return m, nil
 }
 
@@ -1393,6 +1579,7 @@ func writeRunSummaryMetadata(b *strings.Builder, rs *runState, outcome string) {
 	b.WriteString("| Field | Value |\n")
 	b.WriteString("|-------|-------|\n")
 	fmt.Fprintf(b, "| Spec | `%s` |\n", rs.specName)
+	b.WriteString(rs.attributionSummary())
 	fmt.Fprintf(b, "| Agent | `%s` |\n", rs.agentID)
 	fmt.Fprintf(b, "| Outcome | **%s** |\n", outcome)
 	fmt.Fprintf(b, "| Retries | %d / %d |\n", rs.retries, rs.maxRetries)
@@ -1423,28 +1610,40 @@ func writeRunSummaryGates(b *strings.Builder, rs *runState) {
 		return
 	}
 	allPassed := true
+	anyHung := false
 	for _, r := range rs.gateResults {
-		if !r.Passed {
+		switch r.status() {
+		case GatePass:
+		case GateHang:
+			allPassed = false
+			anyHung = true
+		default:
 			allPassed = false
 		}
 		writeRunSummaryGateResult(b, r)
 	}
 	b.WriteString("\n")
-	if allPassed {
+	switch {
+	case allPassed:
 		b.WriteString("All gates **passed**.\n\n")
-		return
+	case anyHung:
+		b.WriteString("A gate **hung** — it never returned and was killed. " +
+			"This is not a failure the run can retry away; re-run the gate by hand, " +
+			"outside the sandbox if it binds a local listener.\n\n")
+	default:
+		b.WriteString("Some gates **failed**.\n\n")
 	}
-	b.WriteString("Some gates **failed**.\n\n")
 }
 
 // writeRunSummaryGateResult writes one gate's verdict, with its output block
 // when it failed and produced any.
 func writeRunSummaryGateResult(b *strings.Builder, r GateResult) {
-	status := "PASS"
-	if !r.Passed {
-		status = "FAIL"
+	status := strings.ToUpper(string(r.status()))
+	if r.Elapsed > 0 {
+		fmt.Fprintf(b, "- **%s** (`%s`): **%s** (%s)\n", r.Name, r.Command, status, r.Elapsed.Round(time.Second))
+	} else {
+		fmt.Fprintf(b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
 	}
-	fmt.Fprintf(b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
 	if r.Passed || r.Output == "" {
 		return
 	}
@@ -1459,6 +1658,10 @@ func writeRunSummaryGateResult(b *strings.Builder, r GateResult) {
 func writeRunSummaryResult(b *strings.Builder, rs *runState, outcome string) {
 	b.WriteString("## Result\n\n")
 	switch outcome {
+	case "gate_hang":
+		b.WriteString("A gate command never returned and was killed at its timeout. " +
+			"Nothing was merged. A hang carries no information about whether the code is correct, " +
+			"so it is reported rather than retried or treated as a pass.\n")
 	case "completed":
 		b.WriteString("All gates passed, the plan checklist was complete, and changes were merged successfully.\n")
 	case "gate_failed":
@@ -1831,4 +2034,81 @@ func listAvailableSpecs(workDir string) ([]string, error) {
 
 	sort.Strings(specs)
 	return specs, nil
+}
+
+// verificationFailure explains why the run may not merge, distinguishing the
+// two signals so the retry briefing addresses the right one.
+//
+// The distinction matters: unchecked slices mean work is outstanding, while a
+// FAIL verdict over a fully-ticked checklist means the work is claimed done
+// but does not satisfy the Done Criteria. Sending "finish the remaining
+// slices" for the second case is what makes a retry cycle repeat itself.
+func (m *model) verificationFailure(pending []string) (reason, detail string) {
+	total := len(m.run.checklist)
+	switch {
+	case len(pending) > 0 && !m.run.verdict.Passed():
+		return "plan incomplete and review not passed",
+			fmt.Sprintf("%d of %d slices still unchecked in plan.md, and %s.",
+				len(pending), total, m.run.verdict.Reason())
+	case len(pending) > 0:
+		return "plan incomplete",
+			fmt.Sprintf("%d of %d slices still unchecked in plan.md.", len(pending), total)
+	case !m.run.verdict.Stated:
+		return "review did not complete",
+			"every slice is ticked, but the Verifier produced no VERDICT line. " +
+				"A checked box is a claim; without a review it is unverified."
+	default:
+		return "review failed", "every slice is ticked, but " + m.run.verdict.Reason()
+	}
+}
+
+// verificationContext renders the state the next cycle needs: which slices are
+// outstanding, and which Done Criteria the reviewer rejected.
+func (m *model) verificationContext(pending []string) string {
+	var b strings.Builder
+	if len(pending) > 0 {
+		b.WriteString(m.unfinishedSlicesContext())
+	}
+	if m.run.verdict.Passed() {
+		return b.String()
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString("## Review\n")
+	b.WriteString(m.run.verdict.Reason())
+	b.WriteString("\n\nAddress these before ticking anything further. ")
+	b.WriteString("End the cycle with the Verifier's `VERDICT:` line — a cycle with no verdict cannot merge.\n")
+	return b.String()
+}
+
+// newRunID returns an identifier that groups every session of one /run.
+func newRunID(specName string) string {
+	return fmt.Sprintf("run-%s-%d", runWorktreeName(specName, ""), time.Now().UnixMilli())
+}
+
+// runAttribution builds the attribution handed to a spawned agent. The
+// orchestrator fills in the agent's own ID, type and worktree; the run-level
+// fields are ours because only we know them.
+//
+// It takes the run identity as arguments rather than reading m.run, because the
+// first agent of a run is spawned before the run state exists.
+func runAttribution(runID, specName, parentSession string, slice, cycle int) *session.AgentContext {
+	return &session.AgentContext{
+		AgentType: "task",
+		RunID:     runID,
+		SpecName:  specName,
+		Slice:     slice,
+		Cycle:     cycle,
+		ParentID:  parentSession,
+	}
+}
+
+// runAttributionSummary renders the run's identity for the summary report, so
+// a spec's SUMMARY.md names the sessions and worktrees that produced it.
+func (rs *runState) attributionSummary() string {
+	if rs.runID == "" {
+		return ""
+	}
+	return fmt.Sprintf("| Run ID | `%s` |\n", rs.runID)
 }

@@ -19,12 +19,14 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
+
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/util/instructionutil"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 // re-export callback types for use by CLI without importing llmagent directly.
@@ -507,6 +509,13 @@ type titleNamer interface {
 	SetSessionTitle(sessionID, title string) error
 }
 
+// agentContextRecorder is implemented by session services that can persist a
+// session's place in an agent tree. Declared here for the same reason as
+// titleNamer: the agent takes the capability, not the concrete service.
+type agentContextRecorder interface {
+	UpdateAgentContext(sessionID string, ctx *pisession.AgentContext) error
+}
+
 // CreateSession creates a new session and returns its ID together with the
 // default title that was applied (git repo name, or CWD basename) — or "" if
 // no title was set. The title is metadata only; the TUI seeds its terminal
@@ -521,6 +530,15 @@ func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle stri
 		return "", "", fmt.Errorf("creating session: %w", err)
 	}
 	sid := resp.Session.ID()
+	// Record this process's place in an agent tree, if it has one. A spawned
+	// worker knows its coordinator, spec, slice and cycle only through the
+	// environment; writing them here is what makes a run tree a field lookup
+	// instead of an inference from workDir and title prefixes.
+	if ac, ok := a.sessionService.(agentContextRecorder); ok {
+		if actx := pisession.AgentContextFromEnv(); actx != nil {
+			_ = ac.UpdateAgentContext(sid, actx) // best-effort metadata
+		}
+	}
 	if mn, ok := a.sessionService.(modelNamer); ok {
 		modelName := ""
 		if a.config.Model != nil {

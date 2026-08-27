@@ -70,6 +70,31 @@ type Meta struct {
 	Host *HostEnv `json:"host,omitempty"`
 
 	PlanContext *PlanContext `json:"planContext,omitempty"`
+
+	// Agent records this session's place in a /run or /plan agent tree. It is
+	// absent for ordinary interactive sessions.
+	Agent *AgentContext `json:"agentContext,omitempty"`
+}
+
+// AgentContext records where a session sits in an agent tree.
+//
+// Reconstructing a run previously meant grouping sessions by workDir and
+// inferring roles from title prefixes; sessions in numerically-named worktrees
+// (.pi-go/tasks/763098722000) could not be attributed to a spec by any recorded
+// field at all, and three such worktrees are still on disk with nothing to say
+// what they were for. Every question that investigation had to answer by
+// inference is a field here.
+type AgentContext struct {
+	AgentID   string `json:"agentID,omitempty"`   // the orchestrator's ID for this agent
+	AgentType string `json:"agentType,omitempty"` // task | worker | quick-task | code-reviewer | explore
+	ParentID  string `json:"parentSessionID,omitempty"`
+	RunID     string `json:"runID,omitempty"` // groups every session of one /run
+	SpecName  string `json:"specName,omitempty"`
+	Slice     int    `json:"slice,omitempty"`
+	Cycle     int    `json:"cycle,omitempty"` // /run retry index
+	Worktree  string `json:"worktree,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Status    string `json:"status,omitempty"` // terminal status, written when the run ends
 }
 
 // maxCachedSessions is the maximum number of sessions kept in the in-memory
@@ -700,6 +725,37 @@ func (s *FileService) UpdatePlanContext(sessionID string, ctx *PlanContext) erro
 	sess.meta.PlanContext = ctx
 	sessionDir := filepath.Join(s.baseDir, sessionID)
 	return writeMeta(sessionDir, &sess.meta)
+}
+
+// UpdateAgentContext records a session's place in an agent tree.
+// Pass nil to clear it.
+func (s *FileService) UpdateAgentContext(sessionID string, ctx *AgentContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Agent = ctx
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	return writeMeta(sessionDir, &sess.meta)
+}
+
+// GetAgentContext returns the agent context for a session, or nil if unset.
+func (s *FileService) GetAgentContext(sessionID string) (*AgentContext, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	return sess.meta.Agent, nil
 }
 
 // GetPlanContext returns the plan context for the given session, or nil if not found.
