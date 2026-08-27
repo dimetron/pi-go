@@ -104,7 +104,10 @@ func (c *Compiled) Describe() string {
 	lines := make([]string, 0, len(c.Edges))
 	for _, e := range c.Edges {
 		label := ""
-		if e.Route != nil {
+		switch {
+		case e.Route == workflow.Default:
+			label = " [default]"
+		case e.Route != nil:
 			label = fmt.Sprintf(" [%v]", e.Route)
 		}
 		lines = append(lines, fmt.Sprintf("  %s -> %s%s", e.From.Name(), e.To.Name(), label))

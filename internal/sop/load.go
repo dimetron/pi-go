@@ -35,6 +35,26 @@ func LoadDefinition(workDir, name string) (*Definition, error) {
 	return def, nil
 }
 
+// LoadEmbeddedDefinition returns the SOP built into the binary, ignoring project
+// and global overrides.
+//
+// The graph is compiled to be shown and executed, and an override describes a
+// pipeline that the engine is not running yet — drawing it would be drawing a
+// lie. Overrides are honored again once the compiled graph is the only
+// executor; that is a one-line change at the call site, back to
+// LoadDefinition.
+func LoadEmbeddedDefinition(name string) (*Definition, error) {
+	data, source := embeddedDefinition(name)
+	def, err := ParseDefinition(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", source, err)
+	}
+	if findings := LintDefinition(def); !findings.OK() {
+		return nil, fmt.Errorf("%s is not a valid SOP:\n%s", source, findings.Format())
+	}
+	return def, nil
+}
+
 // LintDefinitionFile parses and lints a SOP file without installing it, so a
 // user editing an override can check it.
 func LintDefinitionFile(path string) (validate.Findings, error) {
@@ -62,6 +82,11 @@ func resolveDefinition(workDir, name string) (data []byte, source string) {
 			return b, globalPath
 		}
 	}
+	return embeddedDefinition(name)
+}
+
+// embeddedDefinition returns the SOP compiled into the binary.
+func embeddedDefinition(name string) (data []byte, source string) {
 	switch name {
 	case "run":
 		return defaultRunSOP, "embedded run.sop.yaml"

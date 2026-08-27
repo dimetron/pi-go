@@ -252,7 +252,7 @@ func TestNodeConfigInheritsDefaults(t *testing.T) {
 func TestFanOutStageIsParallelWorker(t *testing.T) {
 	cfg := NodeConfigFor(Stage{ID: "slices", FanOut: &FanOut{Over: "plan.slices"}}, Defaults{})
 	if !cfg.ParallelWorker {
-		t.Error("a fan_out stage did not compile to a ParallelWorker node")
+		t.Error("a fan_out stage did not set NodeConfig.ParallelWorker")
 	}
 }
 

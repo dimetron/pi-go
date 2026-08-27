@@ -84,7 +84,14 @@ In `sop`'s `wire` (compile.go:103-165):
 
 ### plan.sop.yaml
 Stages: `clarify`, `research`, `design`, `outline`, `plan`, `prompt`, `manifest`.
-Review checkpoints on `clarify`, `design`, `outline`, `plan`.
+Review checkpoints on `clarify`, `design`, `outline`, `plan` — **`clarify`, `design`
+and `outline` are `kind: human`** ("Approve to continue to research?", "Approve the
+design?", "Approve the outline before expanding it into the plan?"); only
+`plan.review` is `kind: agent` (`spec-reviewer`, `verdict_schema: Verdict`).
+
+`research` is a fan-out stage (`over: research_angles`, `agent: explore`,
+`max_concurrency: 4`, `isolation: sub_branch`, `join: research_summary`) — the only
+plan stage that is not a single `plan`-agent turn.
 
 Edges (verified via `Compiled.Describe()`):
 ```

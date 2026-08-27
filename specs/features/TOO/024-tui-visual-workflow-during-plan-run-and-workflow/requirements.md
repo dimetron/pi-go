@@ -59,3 +59,63 @@
 - Given a SOP with a loop-back (e.g. run `repair → verify`), when rendered, then the compact graph shows the loop with connector glyphs.
 - Given a terminal too narrow for the graph, when rendering, then the compact graph is hidden without breaking the layout.
 - Given a SOP that cannot be compiled, when rendering, then the sidebar degrades to the linear stage list without crashing.
+
+---
+
+# Post-Research Revisions
+
+Research (Phase 3) disproved the assumption behind Q5 and changed Q3, Q4 and Q6.
+The answers above are the original record; these supersede them.
+
+### Q5 (revised). Does this include migrating /run and /plan to the compiled workflow?
+**Yes — that is now the feature.** The compiled graph is never executed: the
+only `NodeFactory` is the non-executing `DescribeFactory` and
+`Compiled.Workflow()` has no production caller. `/plan` and `/run` are to run as
+ADK 2.x workflow agents with the missing executable factory supplied.
+
+### Q4 (revised). How does the TUI determine the active stage?
+**From the run itself, via the engine's event stream** — `NodeInfo.Path`,
+`Output`/`OutputFor`, `RequestedInput`. Not an LLM-emitted marker, and not the
+imperative `phase` field. Note that live `RunState` is *not* readable and node
+start is *not* an event; see `research/adk-workflow-agent.md`.
+
+### Q6 (revised). How does the TUI receive stage transitions?
+**On the workflow agent's own event stream.** `/run` and `/plan` converge on one
+`iter.Seq2[*session.Event, error]`. The earlier plan — new `stage_start` /
+`stage_end` types on the subagent channel — is dropped: it was unimplementable,
+since the child `pi --mode json` emitter writes a closed set of event types and
+`/plan` has no subagent channel at all.
+
+### Q3 (revised). Derived from the compiled graph, or hand-authored?
+**Derived, from the EMBEDDED SOP only.** Overrides stay disabled until the engine
+is the only executor. Added `sop.LoadEmbeddedDefinition` for this.
+
+### Q2 / Q7 (confirmed)
+Vertical layout in the 23-column sidebar: the stage list on top, a text workflow
+diagram underneath, for both commands. For `/plan` the list becomes the real
+stage ids from `Compiled.Order`, replacing the seven hardcoded PDD artifact
+phases in `phaseArtifacts`.
+
+## Scope (revised)
+
+- **In scope:** an executable `NodeFactory`; hosting the compiled graph as a
+  workflow agent behind `PI_SOP_ENGINE=1`; closing the declared-but-inert gaps
+  (fan-out width/grouping/isolation, `max_cycles` enforcement, artifact
+  validators, typed outputs, workspace ownership); human-in-the-loop review
+  checkpoints; the sidebar list + diagram; tests including a both-paths parity
+  test covering all six terminal outcomes.
+- **Out of scope:** SOP overrides; per-node token accounting.
+
+## Constraints (revised)
+
+- Sidebar fixed at 23 columns; the diagram is dropped whole when rows are short,
+  never clipped — `sidebarFrame` clips from the bottom.
+- Stage status comes from the engine, never from parsed model output.
+- A stage reports failure as a **routed value**, never as a returned error: any
+  node error fails the entire workflow.
+- `max_cycles` must be enforced by the factory in invocation-scoped state.
+  `repair` is set to 10 cycles, matching today's `maxRetries`, so migrating the
+  loop bound is a port rather than a behaviour change.
+- One worktree per run, owned by the workspace rather than one per agent — see
+  the decision in `design.md`.
+- The imperative path stays until parity is demonstrated.
