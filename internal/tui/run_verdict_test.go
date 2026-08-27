@@ -147,3 +147,51 @@ func messageContents(m *model) []string {
 	}
 	return out
 }
+
+// A run must give every agent it spawns the same run ID, so the tree is
+// recoverable from meta.json rather than by grouping sessions by working
+// directory and guessing at roles.
+func TestRunAttributionCarriesRunIdentity(t *testing.T) {
+	got := runAttribution("run-1", "features/x", "sess-parent", 3, 2)
+	if got.RunID != "run-1" || got.SpecName != "features/x" || got.ParentID != "sess-parent" {
+		t.Errorf("attribution = %+v", got)
+	}
+	if got.Slice != 3 || got.Cycle != 2 {
+		t.Errorf("slice/cycle = %d/%d, want 3/2", got.Slice, got.Cycle)
+	}
+	if got.AgentType != "task" {
+		t.Errorf("AgentType = %q, want task", got.AgentType)
+	}
+	// The agent's own ID and worktree are the orchestrator's to fill in.
+	if got.AgentID != "" || got.Worktree != "" {
+		t.Errorf("run-level attribution should not guess the agent's id or worktree: %+v", got)
+	}
+}
+
+func TestNewRunIDIsSpecScopedAndUnique(t *testing.T) {
+	a := newRunID("features/TOO/024-mistral-provider")
+	if !strings.Contains(a, "features-TOO-024-mistral-provider") {
+		t.Errorf("run id %q does not name the spec", a)
+	}
+	if !strings.HasPrefix(a, "run-") {
+		t.Errorf("run id %q has no run- prefix", a)
+	}
+}
+
+func TestRunSummaryRecordsTheRunID(t *testing.T) {
+	rs := &runState{specName: "features/x", runID: "run-features-x-42", agentID: "a1"}
+	var b strings.Builder
+	writeRunSummaryMetadata(&b, rs, "completed")
+	if !strings.Contains(b.String(), "run-features-x-42") {
+		t.Errorf("summary omits the run id:\n%s", b.String())
+	}
+}
+
+func TestRunSummaryOmitsRunIDWhenAbsent(t *testing.T) {
+	rs := &runState{specName: "features/x", agentID: "a1"}
+	var b strings.Builder
+	writeRunSummaryMetadata(&b, rs, "completed")
+	if strings.Contains(b.String(), "Run ID") {
+		t.Errorf("summary shows an empty Run ID row:\n%s", b.String())
+	}
+}

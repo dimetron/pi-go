@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/procs"
+	"github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 
@@ -65,6 +66,12 @@ type runState struct {
 	// it, retrying a parallel run silently drops every worktree but the one
 	// the retry resumed in.
 	carried []mergeTarget
+
+	// runID groups every session this run spawns, at any depth. Without it the
+	// only way to reconstruct a run tree is to group sessions by working
+	// directory and infer roles from title prefixes — which cannot attribute
+	// an agent that ran in a numerically-named worktree at all.
+	runID string
 
 	// transcript accumulates the coordinator's streamed text for this cycle so
 	// the Verifier's verdict can be read out of it. Without this the verdict
@@ -505,6 +512,7 @@ func (m *model) startRunAgent(
 	specName, promptMD string, gates []Gate, checklist []ChecklistStep, gateInfo string,
 ) (tea.Model, tea.Cmd) {
 	prompt := buildRunPrompt(specName, promptMD, checklist)
+	runID := newRunID(specName)
 
 	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
 		Type:         "task",
@@ -513,6 +521,7 @@ func (m *model) startRunAgent(
 		WorktreeName: runWorktreeName(specName, ""),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, 0, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -532,6 +541,7 @@ func (m *model) startRunAgent(
 		promptMD: promptMD,
 		gates:    gates,
 		agentID:  agentID,
+		runID:    runID,
 		// The spawning agent owns the worktree; retries resume inside it.
 		worktreeAgentID: agentID,
 		phase:           "running",
@@ -566,6 +576,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 	prompt2 := buildParallelPrompt(specName, promptMD, checklist, mid, len(checklist))
 
 	useWorktree := true
+	runID := newRunID(specName)
 
 	// Spawn agent 1.
 	events1, agentID1, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
@@ -575,6 +586,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		WorktreeName: runWorktreeName(specName, "part-1"),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, 1, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -592,6 +604,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		WorktreeName: runWorktreeName(specName, "part-2"),
 		SkipCleanup:  true,
 		Timeout:      int((60 * time.Minute) / time.Millisecond),
+		Attribution:  runAttribution(runID, specName, m.cfg.SessionID, mid+1, 0),
 	})
 	if err != nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -624,6 +637,7 @@ func (m *model) handleRunParallel(specName, promptMD string, gates []Gate, check
 		specName: specName,
 		promptMD: promptMD,
 		gates:    gates,
+		runID:    runID,
 		agentID:  agentID1, // primary agent for fallback
 		// Gates and verification run in the first agent's worktree.
 		worktreeAgentID: agentID1,
@@ -1037,6 +1051,7 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 		WorkDir:     wtPath,
 		SkipCleanup: true,
 		Timeout:     int((60 * time.Minute) / time.Millisecond),
+		Attribution: runAttribution(m.run.runID, m.run.specName, m.cfg.SessionID, 0, m.run.retries),
 	})
 	if err != nil {
 		m.run.phase = "failed"
@@ -1564,6 +1579,7 @@ func writeRunSummaryMetadata(b *strings.Builder, rs *runState, outcome string) {
 	b.WriteString("| Field | Value |\n")
 	b.WriteString("|-------|-------|\n")
 	fmt.Fprintf(b, "| Spec | `%s` |\n", rs.specName)
+	b.WriteString(rs.attributionSummary())
 	fmt.Fprintf(b, "| Agent | `%s` |\n", rs.agentID)
 	fmt.Fprintf(b, "| Outcome | **%s** |\n", outcome)
 	fmt.Fprintf(b, "| Retries | %d / %d |\n", rs.retries, rs.maxRetries)
@@ -2064,4 +2080,35 @@ func (m *model) verificationContext(pending []string) string {
 	b.WriteString("\n\nAddress these before ticking anything further. ")
 	b.WriteString("End the cycle with the Verifier's `VERDICT:` line — a cycle with no verdict cannot merge.\n")
 	return b.String()
+}
+
+// newRunID returns an identifier that groups every session of one /run.
+func newRunID(specName string) string {
+	return fmt.Sprintf("run-%s-%d", runWorktreeName(specName, ""), time.Now().UnixMilli())
+}
+
+// runAttribution builds the attribution handed to a spawned agent. The
+// orchestrator fills in the agent's own ID, type and worktree; the run-level
+// fields are ours because only we know them.
+//
+// It takes the run identity as arguments rather than reading m.run, because the
+// first agent of a run is spawned before the run state exists.
+func runAttribution(runID, specName, parentSession string, slice, cycle int) *session.AgentContext {
+	return &session.AgentContext{
+		AgentType: "task",
+		RunID:     runID,
+		SpecName:  specName,
+		Slice:     slice,
+		Cycle:     cycle,
+		ParentID:  parentSession,
+	}
+}
+
+// runAttributionSummary renders the run's identity for the summary report, so
+// a spec's SUMMARY.md names the sessions and worktrees that produced it.
+func (rs *runState) attributionSummary() string {
+	if rs.runID == "" {
+		return ""
+	}
+	return fmt.Sprintf("| Run ID | `%s` |\n", rs.runID)
 }

@@ -21,6 +21,7 @@ import (
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/testenv"
 )
 
@@ -1045,7 +1046,7 @@ func TestSpawnEnv(t *testing.T) {
 	t.Run("no worktree manager leaves env untouched", func(t *testing.T) {
 		o := &Orchestrator{}
 		in := []string{"A=1"}
-		got := o.spawnEnv(in, "/some/dir")
+		got := o.spawnEnv(in, "/some/dir", nil)
 		if len(got) != 1 || got[0] != "A=1" {
 			t.Errorf("env = %v, want [A=1]", got)
 		}
@@ -1054,7 +1055,7 @@ func TestSpawnEnv(t *testing.T) {
 	t.Run("adds sandbox and worktree roots", func(t *testing.T) {
 		o := &Orchestrator{worktree: NewWorktreeManager("/repo")}
 		in := []string{"A=1"}
-		got := o.spawnEnv(in, "/repo/.pi-go/tasks/x")
+		got := o.spawnEnv(in, "/repo/.pi-go/tasks/x", nil)
 
 		want := []string{"A=1", "PI_SANDBOX_ROOT=/repo", "PI_WORKTREE_ROOT=/repo/.pi-go/tasks/x"}
 		if len(got) != len(want) {
@@ -1073,11 +1074,76 @@ func TestSpawnEnv(t *testing.T) {
 
 	t.Run("empty workDir omits the worktree root", func(t *testing.T) {
 		o := &Orchestrator{worktree: NewWorktreeManager("/repo")}
-		got := o.spawnEnv(nil, "")
+		got := o.spawnEnv(nil, "", nil)
 		if len(got) != 1 || got[0] != "PI_SANDBOX_ROOT=/repo" {
 			t.Errorf("env = %v, want [PI_SANDBOX_ROOT=/repo]", got)
 		}
 	})
+
+	t.Run("attribution is forwarded to the child", func(t *testing.T) {
+		o := &Orchestrator{worktree: NewWorktreeManager("/repo")}
+		got := o.spawnEnv(nil, "/repo/.pi-go/tasks/x", &session.AgentContext{
+			AgentID: "worker-3", AgentType: "worker", RunID: "run-1",
+			SpecName: "features/x", Slice: 3, Cycle: 2, ParentID: "sess-parent",
+		})
+		want := map[string]string{
+			"PI_AGENT_ID":       "worker-3",
+			"PI_AGENT_TYPE":     "worker",
+			"PI_RUN_ID":         "run-1",
+			"PI_SPEC_NAME":      "features/x",
+			"PI_RUN_SLICE":      "3",
+			"PI_RUN_CYCLE":      "2",
+			"PI_PARENT_SESSION": "sess-parent",
+		}
+		have := map[string]string{}
+		for _, kv := range got {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				have[k] = v
+			}
+		}
+		for k, v := range want {
+			if have[k] != v {
+				t.Errorf("%s = %q, want %q (env: %v)", k, have[k], v, got)
+			}
+		}
+	})
+
+	t.Run("no attribution adds no attribution vars", func(t *testing.T) {
+		o := &Orchestrator{worktree: NewWorktreeManager("/repo")}
+		for _, kv := range o.spawnEnv(nil, "/repo", nil) {
+			if strings.HasPrefix(kv, "PI_AGENT_ID=") || strings.HasPrefix(kv, "PI_RUN_ID=") {
+				t.Errorf("unattributed spawn got %q", kv)
+			}
+		}
+	})
+}
+
+// attributionFor must not let a caller's run-level fields be overwritten by the
+// orchestrator's defaults, and must fill in what only it knows.
+func TestAttributionFor(t *testing.T) {
+	in := SpawnInput{
+		Agent:       AgentConfig{Name: "worker"},
+		Attribution: &session.AgentContext{RunID: "run-1", SpecName: "features/x", Slice: 4},
+	}
+	got := attributionFor(in, "agent-77", "/repo/.pi-go/tasks/x")
+
+	if got.RunID != "run-1" || got.SpecName != "features/x" || got.Slice != 4 {
+		t.Errorf("caller fields were lost: %+v", got)
+	}
+	if got.AgentID != "agent-77" {
+		t.Errorf("AgentID = %q, want the orchestrator's id", got.AgentID)
+	}
+	if got.AgentType != "worker" {
+		t.Errorf("AgentType = %q, want worker", got.AgentType)
+	}
+	if got.Worktree != "/repo/.pi-go/tasks/x" {
+		t.Errorf("Worktree = %q", got.Worktree)
+	}
+
+	// The caller's struct must not be mutated in place.
+	if in.Attribution.AgentID != "" {
+		t.Error("attributionFor mutated the caller's AgentContext")
+	}
 }
 
 func TestResolveWorkDir(t *testing.T) {
