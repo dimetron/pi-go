@@ -21,17 +21,19 @@ const (
 	stageWaiting // parked on a human approval
 )
 
-// Layout of one stage group. The diagram is a waterfall: each stage starts one
-// column right of the one before it, so the order of the flow is legible from
-// the shape alone, without a drawn spine.
+// Layout of the diagram. Every stage after the first hangs off one vertical
+// line, so the flow reads as a single sequence at a glance.
+//
+// An earlier version stepped each stage one column right of the last. It looked
+// better on paper, but the panel is 20 columns wide, so the stagger had to stop
+// after four stages — and once it did, the remaining stages shared a column and
+// read as siblings of the stage above rather than as steps after it. A straight
+// spine says the true thing in fewer rows.
 const (
-	graphBaseIndent  = 2 // first stage
-	graphStagePitch  = 1 // added per stage down the waterfall
-	graphChildIndent = 2 // a review under its stage, an edge under its owner
-	// graphMaxIndent stops the waterfall walking off a 23-column sidebar. A SOP
-	// long enough to reach it keeps its remaining stages in one column, which
-	// still reads in order.
-	graphMaxIndent = 8
+	graphSpineCol   = 2 // the vertical line, and the first stage's glyph
+	graphStageCol   = 5 // every stage hanging off the line
+	graphReviewCol  = 5 // the elbow of a review checkpoint
+	graphEdgeIndent = 1 // an edge sits one column right of the node it leaves
 )
 
 // routeMark renders an edge's condition. The graph is 20 columns wide, so the
@@ -49,22 +51,21 @@ func routeMark(route string) string {
 	}
 }
 
-// sidebarGraphLines draws the compiled SOP as a waterfall of stage groups: the
-// stage, the review checkpoint that guards it, and the conditional edges that
-// leave either, with a blank row between groups.
+// sidebarGraphLines draws the compiled SOP as a single spine: the first stage
+// heads it, every later stage hangs off it, and each stage's review checkpoint
+// and conditional edges hang under the stage itself.
 //
-//	✔ clarify
-//	  └ ✔ review
+//	▶ clarify
+//	│  └ ✔ review
+//	├─ ○ research
+//	├─ ○ plan
+//	│  └ ○ review
+//	│     ✗→ plan
+//	│     ✓→ prompt
+//	└─ ○ manifest
 //
-//	 ▶ research
-//
-//	  ○ design
-//	    └ ○ review
-//
-// Sequence is carried by the stagger and the spacing, not by a drawn spine. An
-// earlier version put a │ between every pair of stages, which doubled the
-// height of a diagram sharing 23 columns with everything else and read as noise
-// once the groups were spaced apart.
+// The line closes with └ on the last stage, so the end of the flow is visible
+// rather than implied by running out of rows.
 //
 // It returns nil when there is nothing to draw, so the caller can drop the
 // whole section rather than emit an empty box.
@@ -77,7 +78,7 @@ func sidebarGraphLines(
 	}
 
 	// Conditional edges only. An unconditional or default edge is the forward
-	// path, which the waterfall already shows.
+	// path, which the spine itself shows.
 	branches := map[string][]sop.GraphEdge{}
 	for _, e := range edges {
 		if e.From == sop.StartNodeName || e.Route == "" {
@@ -86,37 +87,56 @@ func sidebarGraphLines(
 		branches[e.From] = append(branches[e.From], e)
 	}
 
+	var stages []string
+	for _, id := range order {
+		if !isReview(id) {
+			stages = append(stages, id)
+		}
+	}
+
+	hasReview := map[string]bool{}
+	for _, id := range order {
+		if stage, ok := strings.CutSuffix(id, ".review"); ok {
+			hasReview[stage] = true
+		}
+	}
+
 	var lines []string
-	depth := 0
-	for i, id := range order {
-		if isReview(id) {
-			continue // drawn as part of its stage's group
-		}
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
+	for i, id := range stages {
+		// The line carries on below this stage only while another follows it.
+		more := i < len(stages)-1
 
-		indent := stageIndent(depth)
-		depth++
+		lines = append(lines, stageLine(id, status[id], i == 0, more, innerW, st))
 
-		lines = append(lines, nodeLine(id, status[id], indent, innerW, st))
-
-		// A review checkpoint always immediately follows its stage in Order.
-		owner, ownerIndent := id, indent
-		if review := id + ".review"; i+1 < len(order) && order[i+1] == review {
-			lines = append(lines, branchLines(branches[id], indent+graphChildIndent, innerW, st)...)
-			ownerIndent = indent + graphChildIndent
-			lines = append(lines, nodeLine(review, status[review], ownerIndent, innerW, st))
-			owner = review
+		owner, ownerCol := id, stageGlyphCol(i == 0)
+		if hasReview[id] {
+			lines = append(lines, edgeLines(branches[id], ownerCol+graphEdgeIndent, more, innerW, st)...)
+			review := id + ".review"
+			lines = append(lines, reviewLine(status[review], more, innerW, st))
+			owner, ownerCol = review, graphReviewCol+2
 		}
-		lines = append(lines, branchLines(branches[owner], ownerIndent+graphChildIndent, innerW, st)...)
+		lines = append(lines, edgeLines(branches[owner], ownerCol+graphEdgeIndent, more, innerW, st)...)
 	}
 	return lines
 }
 
-// stageIndent returns the left offset of the nth stage in the waterfall.
-func stageIndent(n int) int {
-	return graphBaseIndent + min(n*graphStagePitch, graphMaxIndent)
+// stageGlyphCol is the column a stage's status glyph sits in: the first stage
+// heads the line, the rest hang off it.
+func stageGlyphCol(first bool) int {
+	if first {
+		return graphSpineCol
+	}
+	return graphStageCol
+}
+
+// spinePad returns width columns with the vertical line drawn at the spine when
+// the flow continues below this row.
+func spinePad(width int, more bool) string {
+	out := []rune(strings.Repeat(" ", max(width, 0)))
+	if more && graphSpineCol < len(out) {
+		out[graphSpineCol] = '│'
+	}
+	return string(out)
 }
 
 // isReview reports whether id names a stage's review checkpoint, which the
@@ -125,29 +145,37 @@ func isReview(id string) bool {
 	return strings.HasSuffix(id, ".review")
 }
 
-// nodeLine renders one node of the graph. A review checkpoint is drawn as a
-// child of the stage it guards — that is how the compiler keys it, and giving
-// it a step of its own in the waterfall would overstate it.
-func nodeLine(id string, s stageStatus, indent, innerW int, st sidebarStyles) string {
-	label := id
-	prefix := ""
-	if isReview(id) {
-		label, prefix = "review", "└ "
+// stageLine draws one stage: the first heads the line, the rest hang off it
+// with ├, and the last closes it with └.
+func stageLine(id string, s stageStatus, first, more bool, innerW int, st sidebarStyles) string {
+	col := stageGlyphCol(first)
+	room := max(innerW-col-2, 6)
+	body := statusStyle(s, st).Render(statusGlyph(s) + " " + truncateLabel(id, room))
+
+	if first {
+		return strings.Repeat(" ", graphSpineCol) + body
 	}
-	room := max(innerW-indent-len(prefix)-2, 6)
-	return statusStyle(s, st).Render(
-		strings.Repeat(" ", indent) + prefix + statusGlyph(s) + " " + truncateLabel(label, room))
+	elbow := "└─ "
+	if more {
+		elbow = "├─ "
+	}
+	return st.overlay.Render(strings.Repeat(" ", graphSpineCol)+elbow) + body
 }
 
-// branchLines renders the conditional edges leaving one node, indented under
-// the node they belong to so they read as its outcomes rather than as steps of
-// their own.
-func branchLines(edges []sop.GraphEdge, indent, innerW int, st sidebarStyles) []string {
+// reviewLine draws a stage's review checkpoint under it.
+func reviewLine(s stageStatus, more bool, innerW int, st sidebarStyles) string {
+	room := max(innerW-graphReviewCol-4, 6)
+	return st.overlay.Render(spinePad(graphReviewCol, more)+"└ ") +
+		statusStyle(s, st).Render(statusGlyph(s)+" "+truncateLabel("review", room))
+}
+
+// edgeLines renders the conditional edges leaving one node, indented under it
+// so they read as its outcomes rather than as steps of their own.
+func edgeLines(edges []sop.GraphEdge, indent int, more bool, innerW int, st sidebarStyles) []string {
 	lines := make([]string, 0, len(edges))
-	pad := strings.Repeat(" ", indent)
 	for _, e := range edges {
 		label := truncateLabel(e.To, max(innerW-indent-4, 6))
-		lines = append(lines, st.overlay.Render(pad+routeMark(e.Route)+"→ "+label))
+		lines = append(lines, st.overlay.Render(spinePad(indent, more)+routeMark(e.Route)+"→ "+label))
 	}
 	return lines
 }

@@ -46,10 +46,17 @@ func TestSidebarGraphLines_Run(t *testing.T) {
 		}
 	}
 
-	// The waterfall carries the order: each stage starts one column right of
-	// the one before it, which is what replaced the drawn spine.
-	if !strings.Contains(got, "  ✔ validate_spec") || !strings.Contains(got, "   ▶ slices") {
-		t.Errorf("stages are not staggered:\n%s", got)
+	// One vertical line carries the whole flow: the first stage heads it, the
+	// rest hang off it, and the last closes it so the end is visible rather
+	// than implied by running out of rows.
+	if !strings.Contains(got, "  ✔ validate_spec") {
+		t.Errorf("the first stage should head the line:\n%s", got)
+	}
+	if !strings.Contains(got, "├─ ▶ slices") {
+		t.Errorf("later stages should hang off the line:\n%s", got)
+	}
+	if !strings.Contains(got, "└─ ○ summary") {
+		t.Errorf("the last stage should close the line:\n%s", got)
 	}
 }
 
