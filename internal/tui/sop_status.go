@@ -106,6 +106,14 @@ func planStageStatus(phases []PlanPhase) map[string]stageStatus {
 		switch {
 		case p.Done:
 			out[id] = stageCompleted
+			// A stage's review checkpoint is a node of its own in the graph.
+			// Artifact evidence cannot tell us a human approved anything, but a
+			// finished artifact means the flow moved past that checkpoint —
+			// whereas leaving it inactive draws a permanent ○ beside a ✔ stage.
+			// Only completion is inherited: a running stage has not reached its
+			// review yet. When the engine drives /plan, review nodes report
+			// their own status and none of this applies.
+			out[id+".review"] = stageCompleted
 		case current:
 			out[id] = stageRunning
 			current = false

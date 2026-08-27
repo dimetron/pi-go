@@ -196,3 +196,22 @@ func TestPlanPhasesRefreshOnEvents(t *testing.T) {
 		t.Error("Design should be done once the cache is invalidated")
 	}
 }
+
+// A finished stage should not sit beside a review checkpoint that still reads
+// as untouched, and a running stage has not reached its review yet.
+func TestPlanStageStatusCarriesReviewCheckpoints(t *testing.T) {
+	got := planStageStatus([]PlanPhase{
+		{"Idea", true}, {"Requirements", true}, {"Research", false},
+		{"Design", false}, {"Outline", false}, {"Plan", false}, {"Prompt", false},
+	})
+
+	if got["clarify"] != stageCompleted {
+		t.Errorf("clarify = %v, want completed", got["clarify"])
+	}
+	if got["clarify.review"] != stageCompleted {
+		t.Errorf("a completed stage's review = %v, want completed", got["clarify.review"])
+	}
+	if _, set := got["research.review"]; set {
+		t.Error("a running stage's review should not be marked; it has not been reached")
+	}
+}
