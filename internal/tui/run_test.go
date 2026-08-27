@@ -467,6 +467,7 @@ func TestHandleRunCommand_StreamingEvents(t *testing.T) {
 	}
 
 	// Process done — with no gates defined, it transitions to merging.
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{})
 	if m.running {
 		t.Error("model should not be running after done")
@@ -685,6 +686,7 @@ func TestHandleRunGateResult_AllPass(t *testing.T) {
 		passed: true,
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(msg)
 
 	if m.run.phase != "merging" {
@@ -839,6 +841,7 @@ func TestHandleRunAgentDone_NoGatesSkipsToMerge(t *testing.T) {
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{})
 
 	if m.run.phase != "merging" {
@@ -876,6 +879,7 @@ func TestHandleRunAgentDone_WithGatesTriggersGating(t *testing.T) {
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{})
 
 	if m.run.phase != "gating" {
@@ -1415,6 +1419,7 @@ func TestHandleRunAgentDone_ParallelAllDone(t *testing.T) {
 	}
 
 	// Agent 2 finishes — now all done.
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-2"})
 
 	if !m.run.allAgentsDone() {
@@ -1520,6 +1525,7 @@ func TestHandleRunAgentDone_CompletedStatus_ProceedsToGatesOrMerge(t *testing.T)
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1"})
 
 	if m.run.phase != "merging" {
@@ -1685,6 +1691,7 @@ func TestHandleRunAgentDone_ParallelAllCompleted_ProceedsToGates(t *testing.T) {
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{agentID: "a-2"})
 
 	if m.run.phase != "gating" {
@@ -1707,6 +1714,7 @@ func TestHandleRunAgentDone_UsesTerminalStatusAfterOrchestratorEviction(t *testi
 
 	// The terminal event is authoritative even though the bounded orchestrator
 	// status map no longer contains the completed agent.
+	seedPassVerdict(m.run)
 	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-evicted", status: "completed"})
 
 	if m.run.phase != "merging" {
@@ -1782,6 +1790,7 @@ func TestVerifier_CompletePlanProceedsToMerge(t *testing.T) {
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(runGateResultMsg{
 		results: []GateResult{{Name: "build", Command: "go build ./...", Passed: true}},
 		passed:  true,
@@ -1809,6 +1818,7 @@ func TestVerifier_NoChecklistProceedsToMerge(t *testing.T) {
 		},
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(runGateResultMsg{passed: true})
 
 	if m.run.phase != "merging" {
@@ -2552,4 +2562,15 @@ func TestMergeTargets_NeverParallelUsesBareBackup(t *testing.T) {
 	if want := runBackupBranchName("spec", ""); got[0].backup != want {
 		t.Errorf("backup = %q, want %q", got[0].backup, want)
 	}
+}
+
+// seedPassVerdict writes the Verifier's PASS line into a run's transcript.
+//
+// verifyRunComplete requires two agreeing signals before a merge: a fully
+// ticked checklist and a stated PASS verdict. Fixtures below that mean to reach
+// the merge therefore have to state one; tests that exercise the verification
+// gate itself set the transcript explicitly instead.
+func seedPassVerdict(rs *runState) {
+	rs.transcript.Reset()
+	rs.transcript.WriteString("All Done Criteria met.\n\nVERDICT: PASS\n")
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/procs"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 
 	tea "charm.land/bubbletea/v2"
@@ -64,6 +65,16 @@ type runState struct {
 	// it, retrying a parallel run silently drops every worktree but the one
 	// the retry resumed in.
 	carried []mergeTarget
+
+	// transcript accumulates the coordinator's streamed text for this cycle so
+	// the Verifier's verdict can be read out of it. Without this the verdict
+	// is only ever displayed, never acted on — which is why the corpus holds
+	// nine PASS verdicts and no FAIL.
+	transcript strings.Builder
+
+	// verdict is the review result parsed from transcript at the end of a
+	// cycle. An unstated verdict is not a pass.
+	verdict sop.Verdict
 
 	// ownerBackup is the backup branch the worktree owner was given at spawn
 	// time. It is recorded on collapse because the owner keeps its parallel
@@ -258,6 +269,23 @@ Spawn the Verifier and act on its verdict:
   Repeat up to 10 cycles.
 - **VERDICT: PASS** — report the changed files and stop. Do not commit or merge;
   /run handles gates and the merge.
+
+### Ending the cycle
+
+The last line of your own reply must repeat the Verifier's verdict verbatim:
+
+    VERDICT: PASS
+
+or
+
+    VERDICT: FAIL
+
+/run reads that line and acts on it: PASS is what permits the merge, FAIL sends
+the run into another cycle with the NOT MET items as its brief. **A cycle that
+ends with no VERDICT line does not merge** — it is treated as an incomplete
+review, because a verdict nobody can read is the same as no review at all. Do
+not write the line before the Verifier has returned, and do not write PASS when
+it returned FAIL.
 `
 
 // buildRunPrompt constructs the augmented prompt for the task subagent.
@@ -713,6 +741,9 @@ func (m *model) handleRunAgentEvent(msg runAgentEventMsg) (tea.Model, tea.Cmd) {
 // folds it into the trailing LLM trace entry.
 func (m *model) applyRunTextDelta(ev subagent.Event) {
 	m.chatModel.Streaming += ev.Content
+	if m.run != nil {
+		m.run.transcript.WriteString(ev.Content)
+	}
 	// Update the last assistant message with accumulated text.
 	for i := len(m.chatModel.Messages) - 1; i >= 0; i-- {
 		if m.chatModel.Messages[i].role == "assistant" {
@@ -911,38 +942,46 @@ func (m *model) unfinishedSlicesContext() string {
 func (m *model) verifyRunComplete() (tea.Model, tea.Cmd) {
 	m.run.phase = "verifying"
 	m.refreshRunChecklist()
+	m.run.verdict = sop.ParseVerdict(m.run.transcript.String())
 
 	pending := m.run.unfinishedSlices()
-	if len(pending) == 0 {
+
+	// Two independent signals must agree before a merge. The checklist says
+	// the coordinator believes every slice landed; the verdict says a reviewer
+	// checked the diff against the Done Criteria. Ticking a box is cheap and
+	// the corpus shows it done without verification, so the checklist alone is
+	// not enough — and a verdict that was never stated is not a pass.
+	if len(pending) == 0 && m.run.verdict.Passed() {
 		done := len(m.run.checklist)
-		msg := "**Verifier: PASS** — no plan checklist to verify."
+		msg := "**Verifier: PASS** — reviewer confirmed the Done Criteria."
 		if done > 0 {
-			msg = fmt.Sprintf("**Verifier: PASS** — all %d slices complete.", done)
+			msg = fmt.Sprintf("**Verifier: PASS** — all %d slices complete and the reviewer confirmed the Done Criteria.", done)
 		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: msg})
 		m.run.phase = "merging"
 		return m, m.mergeWorktreeCmd()
 	}
 
+	reason, detail := m.verificationFailure(pending)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role: "assistant",
-		content: fmt.Sprintf("**Verifier: FAIL** — %d of %d slices still unchecked in plan.md.",
-			len(pending), len(m.run.checklist)),
+		role:    "assistant",
+		content: "**Verifier: FAIL** — " + detail,
 	})
 
-	if cmd := m.retryRun("plan incomplete", m.unfinishedSlicesContext()); cmd != nil {
+	if cmd := m.retryRun(reason, m.verificationContext(pending)); cmd != nil {
 		return m, cmd
 	}
 
 	// Cycles exhausted with work still outstanding — do not merge.
 	m.run.phase = "failed"
 	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
+	_, detail = m.verificationFailure(pending)
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role: "assistant",
 		content: fmt.Sprintf(
-			"**Verification failed** for spec `%s` after %d retries — %d slices never completed.\n"+
+			"**Verification failed** for spec `%s` after %d retries — %s\n"+
 				"Not merging. Worktree preserved at: `%s`",
-			m.run.specName, m.run.maxRetries, len(pending), wtPath),
+			m.run.specName, m.run.maxRetries, detail, wtPath),
 	})
 	if report, err := m.writeRunSummary("verify_failed"); err == nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -1016,6 +1055,10 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 	m.run.events = events
 	m.run.status = ""
 	m.run.phase = "running"
+	// Each cycle gets its own transcript. Carrying the previous cycle's text
+	// forward would let a stale PASS satisfy the next verification.
+	m.run.transcript.Reset()
+	m.run.verdict = sop.Verdict{}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
 	m.chatModel.Streaming = ""
@@ -1975,4 +2018,50 @@ func listAvailableSpecs(workDir string) ([]string, error) {
 
 	sort.Strings(specs)
 	return specs, nil
+}
+
+// verificationFailure explains why the run may not merge, distinguishing the
+// two signals so the retry briefing addresses the right one.
+//
+// The distinction matters: unchecked slices mean work is outstanding, while a
+// FAIL verdict over a fully-ticked checklist means the work is claimed done
+// but does not satisfy the Done Criteria. Sending "finish the remaining
+// slices" for the second case is what makes a retry cycle repeat itself.
+func (m *model) verificationFailure(pending []string) (reason, detail string) {
+	total := len(m.run.checklist)
+	switch {
+	case len(pending) > 0 && !m.run.verdict.Passed():
+		return "plan incomplete and review not passed",
+			fmt.Sprintf("%d of %d slices still unchecked in plan.md, and %s.",
+				len(pending), total, m.run.verdict.Reason())
+	case len(pending) > 0:
+		return "plan incomplete",
+			fmt.Sprintf("%d of %d slices still unchecked in plan.md.", len(pending), total)
+	case !m.run.verdict.Stated:
+		return "review did not complete",
+			"every slice is ticked, but the Verifier produced no VERDICT line. " +
+				"A checked box is a claim; without a review it is unverified."
+	default:
+		return "review failed", "every slice is ticked, but " + m.run.verdict.Reason()
+	}
+}
+
+// verificationContext renders the state the next cycle needs: which slices are
+// outstanding, and which Done Criteria the reviewer rejected.
+func (m *model) verificationContext(pending []string) string {
+	var b strings.Builder
+	if len(pending) > 0 {
+		b.WriteString(m.unfinishedSlicesContext())
+	}
+	if m.run.verdict.Passed() {
+		return b.String()
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString("## Review\n")
+	b.WriteString(m.run.verdict.Reason())
+	b.WriteString("\n\nAddress these before ticking anything further. ")
+	b.WriteString("End the cycle with the Verifier's `VERDICT:` line — a cycle with no verdict cannot merge.\n")
+	return b.String()
 }
