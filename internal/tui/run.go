@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -149,18 +150,50 @@ type runAgentDoneMsg struct {
 	status  string // authoritative terminal status from the subagent
 }
 
+// GateStatus is the outcome of one gate command. It is three-valued on
+// purpose: a gate that never returns is not a gate that passed.
+//
+// pi-go has a documented case of this — tests that bind a local listener hang
+// under the sandbox (CLAUDE.md, "Two environment traps"). Session trajectories
+// show coordinators backgrounding such a run, killing it, and reporting
+// success. Collapsing "hang" into either "pass" or "fail" is what let that
+// happen: reported as a pass it merges unverified work, reported as a fail it
+// burns the retry budget re-running something that will hang again.
+type GateStatus string
+
+const (
+	GatePass GateStatus = "pass"
+	GateFail GateStatus = "fail"
+	GateHang GateStatus = "hang"
+)
+
 // GateResult holds the result of running a single gate command.
 type GateResult struct {
 	Name    string
 	Command string
-	Passed  bool
+	Passed  bool // true only for GatePass; kept as the summary predicate
+	Status  GateStatus
 	Output  string
+	Elapsed time.Duration
+}
+
+// status reports the gate's status, defaulting to the Passed field for results
+// built before Status existed (tests, persisted eval fixtures).
+func (r GateResult) status() GateStatus {
+	if r.Status != "" {
+		return r.Status
+	}
+	if r.Passed {
+		return GatePass
+	}
+	return GateFail
 }
 
 // runGateResultMsg carries the result of running all gate commands.
 type runGateResultMsg struct {
 	results []GateResult
 	passed  bool // true if all gates passed
+	hung    bool // a gate exceeded its timeout — distinct from failing
 }
 
 // runMergeResultMsg carries the result of merging the worktree branch.
@@ -1101,44 +1134,86 @@ func (m *model) runGatesCmd() tea.Cmd {
 	}
 }
 
-// runGates executes gate commands sequentially in the given directory.
+// defaultGateTimeout bounds a single gate command. A gate is a build, test or
+// vet run; anything still going after this is hung, not slow.
+const defaultGateTimeout = 10 * time.Minute
+
+// runGates executes gate commands sequentially in the given directory, each
+// bounded by defaultGateTimeout.
 func runGates(ctx context.Context, workDir string, gates []Gate) runGateResultMsg {
+	return runGatesTimeout(ctx, workDir, gates, defaultGateTimeout)
+}
+
+// runGatesTimeout is runGates with an explicit per-gate bound, so tests need
+// not wait out the production timeout.
+func runGatesTimeout(ctx context.Context, workDir string, gates []Gate, timeout time.Duration) runGateResultMsg {
 	var results []GateResult
 	allPassed := true
+	hung := false
 
 	for _, gate := range gates {
-		cmd := procs.CommandContext(ctx, "sh", "-c", gate.Command)
-		cmd.Dir = workDir
+		res := runOneGate(ctx, workDir, gate, timeout)
+		results = append(results, res)
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-		passed := err == nil
-
-		output := stdout.String()
-		if stderr.Len() > 0 {
-			if output != "" {
-				output += "\n"
-			}
-			output += stderr.String()
-		}
-
-		results = append(results, GateResult{
-			Name:    gate.Name,
-			Command: gate.Command,
-			Passed:  passed,
-			Output:  output,
-		})
-
-		if !passed {
+		if res.Status != GatePass {
 			allPassed = false
-			break // Stop at first failure.
+			hung = res.Status == GateHang
+			break // Stop at the first gate that does not pass.
 		}
 	}
 
-	return runGateResultMsg{results: results, passed: allPassed}
+	return runGateResultMsg{results: results, passed: allPassed, hung: hung}
+}
+
+// runOneGate runs a single gate under its own deadline and classifies the
+// outcome. A gate whose own deadline fired is GateHang; one the caller
+// canceled is GateFail, because the run is being torn down rather than the
+// command misbehaving.
+func runOneGate(ctx context.Context, workDir string, gate Gate, timeout time.Duration) GateResult {
+	gctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := procs.CommandContext(gctx, "sh", "-c", gate.Command)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	err := cmd.Run()
+	elapsed := time.Since(start)
+
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+
+	status := GatePass
+	switch {
+	case err == nil:
+		// passed
+	case errors.Is(gctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
+		status = GateHang
+		if output != "" {
+			output += "\n"
+		}
+		output += fmt.Sprintf("gate did not return within %s and was killed", timeout)
+	default:
+		status = GateFail
+	}
+
+	return GateResult{
+		Name:    gate.Name,
+		Command: gate.Command,
+		Passed:  status == GatePass,
+		Status:  status,
+		Output:  output,
+		Elapsed: elapsed,
+	}
 }
 
 // handleRunGateResult processes gate validation results.
@@ -1154,10 +1229,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 	var summary strings.Builder
 	summary.WriteString("**Gate Results:**\n")
 	for _, r := range msg.results {
-		status := "PASS"
-		if !r.Passed {
-			status = "FAIL"
-		}
+		status := strings.ToUpper(string(r.status()))
 		fmt.Fprintf(&summary, "- **%s** (`%s`): %s\n", r.Name, r.Command, status)
 		if !r.Passed && r.Output != "" {
 			// Include truncated output for failed gates.
@@ -1181,6 +1253,14 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 			content: "All gates passed — verifying plan completeness...",
 		})
 		return m.verifyRunComplete()
+	}
+
+	// A hung gate is not a failed gate. Retrying it re-runs a command that
+	// already proved it does not return, which spends the whole retry budget
+	// on the same hang; and merging over it would ship unverified work. Stop
+	// and say what to re-run by hand instead.
+	if msg.hung {
+		return m.reportGateHang(msg.results)
 	}
 
 	// Gates failed — attempt retry or give up.
@@ -1209,6 +1289,43 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 		})
 	}
 
+	return m, nil
+}
+
+// reportGateHang ends the run on a gate that never returned, naming the gate
+// and the worktree so the command can be re-run by hand. pi-go's own test
+// suite hangs under the sandbox (CLAUDE.md), so "re-run outside the sandbox"
+// is the usual resolution rather than a code fix.
+func (m *model) reportGateHang(results []GateResult) (tea.Model, tea.Cmd) {
+	m.run.phase = "failed"
+
+	var hung []GateResult
+	for _, r := range results {
+		if r.status() == GateHang {
+			hung = append(hung, r)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("**Gate hung** — not merging, and not retrying.\n\n")
+	for _, r := range hung {
+		fmt.Fprintf(&b, "- **%s** (`%s`) did not return within %s.\n", r.Name, r.Command, r.Elapsed.Round(time.Second))
+	}
+	if wt := m.runWorktreePath(m.run.worktreeAgentID); wt != "" {
+		fmt.Fprintf(&b, "\nWorktree preserved at: `%s`\n", wt)
+	}
+	b.WriteString("\nA hang is not a failure the agent can fix by re-running it. " +
+		"Run the gate yourself — outside the sandbox if it binds a local listener — " +
+		"then `/run` the spec again.")
+
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: b.String()})
+
+	if report, err := m.writeRunSummary("gate_hang"); err == nil {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: fmt.Sprintf("Summary report: `%s`", report),
+		})
+	}
 	return m, nil
 }
 
@@ -1423,28 +1540,40 @@ func writeRunSummaryGates(b *strings.Builder, rs *runState) {
 		return
 	}
 	allPassed := true
+	anyHung := false
 	for _, r := range rs.gateResults {
-		if !r.Passed {
+		switch r.status() {
+		case GatePass:
+		case GateHang:
+			allPassed = false
+			anyHung = true
+		default:
 			allPassed = false
 		}
 		writeRunSummaryGateResult(b, r)
 	}
 	b.WriteString("\n")
-	if allPassed {
+	switch {
+	case allPassed:
 		b.WriteString("All gates **passed**.\n\n")
-		return
+	case anyHung:
+		b.WriteString("A gate **hung** — it never returned and was killed. " +
+			"This is not a failure the run can retry away; re-run the gate by hand, " +
+			"outside the sandbox if it binds a local listener.\n\n")
+	default:
+		b.WriteString("Some gates **failed**.\n\n")
 	}
-	b.WriteString("Some gates **failed**.\n\n")
 }
 
 // writeRunSummaryGateResult writes one gate's verdict, with its output block
 // when it failed and produced any.
 func writeRunSummaryGateResult(b *strings.Builder, r GateResult) {
-	status := "PASS"
-	if !r.Passed {
-		status = "FAIL"
+	status := strings.ToUpper(string(r.status()))
+	if r.Elapsed > 0 {
+		fmt.Fprintf(b, "- **%s** (`%s`): **%s** (%s)\n", r.Name, r.Command, status, r.Elapsed.Round(time.Second))
+	} else {
+		fmt.Fprintf(b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
 	}
-	fmt.Fprintf(b, "- **%s** (`%s`): **%s**\n", r.Name, r.Command, status)
 	if r.Passed || r.Output == "" {
 		return
 	}
@@ -1459,6 +1588,10 @@ func writeRunSummaryGateResult(b *strings.Builder, r GateResult) {
 func writeRunSummaryResult(b *strings.Builder, rs *runState, outcome string) {
 	b.WriteString("## Result\n\n")
 	switch outcome {
+	case "gate_hang":
+		b.WriteString("A gate command never returned and was killed at its timeout. " +
+			"Nothing was merged. A hang carries no information about whether the code is correct, " +
+			"so it is reported rather than retried or treated as a pass.\n")
 	case "completed":
 		b.WriteString("All gates passed, the plan checklist was complete, and changes were merged successfully.\n")
 	case "gate_failed":

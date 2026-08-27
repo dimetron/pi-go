@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	adktool "google.golang.org/adk/v2/tool"
@@ -15,6 +13,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/palace"
@@ -63,17 +62,11 @@ func resolveSessionDir(dir string) (string, error) {
 }
 
 // detectGitRoot returns the repository root containing dir, or "" when dir is
-// not in a repository. Subagent worktrees are created relative to it.
+// not in a repository. Subagent worktrees are created relative to it, and it
+// becomes the sandbox root, so inside a linked worktree this resolves the main
+// checkout rather than the worktree. See internal/gitroot.
 func detectGitRoot(ctx context.Context, dir string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return gitroot.Detect(ctx, dir)
 }
 
 // buildSandbox roots the file tools at workDir and grants the extra
