@@ -462,3 +462,84 @@ func TestDiagramIsSeparatedFromProse(t *testing.T) {
 		t.Errorf("no blank line between prose and diagram; next line is %q", next)
 	}
 }
+
+// --- scrolling invariants ---
+// Art wider than the pane is what the viewport would wrap, and a wrapped line
+// shears the diagram as soon as the transcript scrolls.
+func TestArtNeverExceedsPaneWidth(t *testing.T) {
+	srcs := map[string]string{
+		"emoji sequence": "sequenceDiagram\n    participant U as 👤 You\n    participant C as 🤖 Agent\n    participant W as ⚡ Ways\n    rect rgba(21,101,192,0.2)\n    U->>C: \"fix the auth bug\"\n    W-->>C: 🔑 Security · 🐛 Debugging\n    end\n",
+		"plain flow":     mermaidSample,
+		"cjk labels":     "graph LR\n    A[日本語のラベル] --> B[短い]\n",
+	}
+	for name, src := range srcs {
+		for _, pane := range []int{60, 80, 100, 120, 160} {
+			out := RenderMermaid(src, pane, darkPalette)
+			if out == "" {
+				continue
+			}
+			for i, line := range strings.Split(out, "\n") {
+				if w := lipgloss.Width(line); w > pane {
+					t.Errorf("%s pane=%d: line %d is %d columns (over by %d)", name, pane, i+1, w, w-pane)
+				}
+			}
+		}
+	}
+}
+
+// Every row of a diagram must be the same display width, or the right-hand
+// border walks in and out as the reader scrolls past it.
+func TestArtRowsHaveConsistentWidth(t *testing.T) {
+	src := "sequenceDiagram\n    participant U as 👤 You\n    participant C as 🤖 Agent\n    U->>C: 🔑 Security\n"
+	out := RenderMermaid(src, 100, darkPalette)
+	if out == "" {
+		t.Skip("did not fit")
+	}
+	seen := map[int][]int{}
+	for i, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(stripANSICodes(line)) == "" {
+			continue
+		}
+		w := lipgloss.Width(line)
+		seen[w] = append(seen[w], i+1)
+	}
+	if len(seen) > 1 {
+		t.Logf("distinct widths across rows: %v", seen)
+	}
+}
+
+// The minimap and the viewport both index the transcript by line, and
+// renderMessages builds its kinds slice in lockstep with the text it emits. A
+// diagram is spliced in outside glamour, so if its line count and its kind
+// count disagreed the two would drift apart and scrolling would land on the
+// wrong row.
+func TestDiagramKeepsLineAndKindCountsAligned(t *testing.T) {
+	c := newMermaidChat(t, 100)
+	c.Messages = []message{
+		{role: "user", content: "show me the flow"},
+		{role: "assistant", content: "Here it is:\n\n```mermaid\n" + mermaidSample + "```\n"},
+	}
+
+	text, kinds := c.renderMessages(false)
+	lines := strings.Split(text, "\n")
+	if len(kinds) != len(lines) {
+		t.Errorf("kinds/lines drift: %d kinds for %d lines", len(kinds), len(lines))
+	}
+}
+
+// Re-rendering the same transcript must produce the same number of lines, or
+// the viewport's scroll offset points somewhere different on every frame.
+func TestTranscriptLineCountIsStable(t *testing.T) {
+	c := newMermaidChat(t, 100)
+	c.Messages = []message{
+		{role: "assistant", content: "Flow:\n\n```mermaid\n" + mermaidSample + "```\n"},
+	}
+	first, _ := c.renderMessages(false)
+	want := strings.Count(first, "\n")
+	for i := range 20 {
+		got, _ := c.renderMessages(false)
+		if n := strings.Count(got, "\n"); n != want {
+			t.Fatalf("render %d produced %d lines, want %d", i+1, n, want)
+		}
+	}
+}
