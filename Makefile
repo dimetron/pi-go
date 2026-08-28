@@ -1,4 +1,4 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -125,6 +125,12 @@ test-coverage:
 
 test-ollama: build
 	@bash scripts/test-ollama-e2e.sh
+
+# Fails only on vulnerabilities that have a fix released; the rest are printed.
+# Same gate CI runs, so a red build reproduces here.
+vulncheck:
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck -format json ./... | go run ./hack/vulngate
 
 check-cve:
 	go mod tidy -v

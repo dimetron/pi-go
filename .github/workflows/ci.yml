@@ -28,6 +28,25 @@ jobs:
         with:
           version: v2.13
 
+  vulncheck:
+    name: Vulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # The gate fails only on findings that name a fixed version. A finding
+      # with no fix cannot be acted on here — there is nothing to upgrade to —
+      # so failing on it would leave this check red on every commit until an
+      # upstream maintainer cuts a release, and a check that is always red is a
+      # check nobody reads. Unfixed findings are printed, so a fix appearing
+      # later turns one into a build failure exactly when someone should look.
+      - name: govulncheck
+        run: govulncheck -format json ./... | go run ./hack/vulngate
+
   test:
     name: Test
     runs-on: ubuntu-latest
