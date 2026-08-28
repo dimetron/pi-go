@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/dimetron/pi-go/internal/mermaid/graph"
+	"github.com/dimetron/pi-go/internal/mermaid/textwidth"
 )
 
 const (
@@ -749,8 +750,8 @@ func computeSizes(
 
 		textWidth := 0
 		for _, l := range wrappedLines {
-			if len(l) > textWidth {
-				textWidth = len(l)
+			if n := textwidth.String(l); n > textWidth {
+				textWidth = n
 			}
 		}
 		textHeight := len(wrappedLines)

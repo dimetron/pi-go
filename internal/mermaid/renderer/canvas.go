@@ -2,6 +2,8 @@ package renderer
 
 import (
 	"strings"
+
+	"github.com/dimetron/pi-go/internal/mermaid/textwidth"
 )
 
 // boxChars is the set of all box-drawing characters that participate in
@@ -157,10 +159,39 @@ func (c *Canvas) Put(row, col int, ch rune, merge bool, style string) {
 	}
 }
 
+// wideContinuation marks the cell a double-width glyph spills into.
+//
+// The grid holds one rune per cell, but a wide glyph paints two terminal
+// columns. Without a marker the cell to its right is printed as a space, so
+// the line comes out one column too wide for every emoji it carries and the
+// box border no longer lines up. Output skips these cells; nothing else ever
+// writes one.
+const wideContinuation = '\uFFFF'
+
 // PutText places a string starting at (row, col) without junction merging.
+//
+// The column advances by each rune's display width, not by its index in the
+// string. Ranging a Go string yields byte offsets, so using that offset as a
+// column put the space after a four-byte emoji four cells along instead of
+// one — "👤 You" was drawn as "👤    You", and every glyph after a non-ASCII
+// one drifted right by its extra byte count.
+//
+// A double-width rune advances two cells so the glyph it draws over is not
+// written twice, and a zero-width one is skipped: the grid holds one rune per
+// cell and cannot compose a combining mark onto its neighbor, so placing it
+// would replace the character it was meant to decorate.
 func (c *Canvas) PutText(row, col int, text string, style string) {
-	for i, ch := range text {
-		c.Put(row, col+i, ch, false, style)
+	offset := 0
+	for _, ch := range text {
+		w := textwidth.Rune(ch)
+		if w == 0 {
+			continue
+		}
+		c.Put(row, col+offset, ch, false, style)
+		if w == 2 && col+offset+1 >= 0 && col+offset+1 < c.Width && row >= 0 && row < c.Height {
+			c.grid[row][col+offset+1] = wideContinuation
+		}
+		offset += w
 	}
 }
 
@@ -170,8 +201,15 @@ func (c *Canvas) PutStyledText(row, col int, segments []StyledSegment) {
 	offset := 0
 	for _, seg := range segments {
 		for _, ch := range seg.Text {
+			w := textwidth.Rune(ch)
+			if w == 0 {
+				continue
+			}
 			c.Put(row, col+offset, ch, false, seg.Style)
-			offset++
+			if w == 2 && col+offset+1 >= 0 && col+offset+1 < c.Width && row >= 0 && row < c.Height {
+				c.grid[row][col+offset+1] = wideContinuation
+			}
+			offset += w
 		}
 	}
 }
@@ -287,6 +325,9 @@ func (c *Canvas) ToString() string {
 	for y := range c.Height {
 		var b strings.Builder
 		for x := range c.Width {
+			if c.grid[y][x] == wideContinuation {
+				continue // the second column of the wide glyph to its left
+			}
 			b.WriteRune(c.grid[y][x])
 		}
 		lines[y] = strings.TrimRight(b.String(), " ")

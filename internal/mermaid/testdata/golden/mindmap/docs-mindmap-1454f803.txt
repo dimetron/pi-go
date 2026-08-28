@@ -2,7 +2,7 @@
                      ┼│ a second line │
                      │╰───────────────╯
 ╭──────────────────╮ │╭────────────────────────────╮  ╭───────────────────────────────────────────────────────────────────────────╮
-│ ["`**Root** with │──│ Unicode works too: 🤓   `"] │─┼│ "`The dog in **the** hog... a *very long text* that wraps to a new line`" │
+│ ["`**Root** with │──│ Unicode works too: 🤓`"]   │─┼│ "`The dog in **the** hog... a *very long text* that wraps to a new line`" │
 ╰──────────────────╯  ╰────────────────────────────╯ │╰───────────────────────────────────────────────────────────────────────────╯
                                                      │╭────────────────────────────╮
                                                      ┼│ Regular labels still works │
