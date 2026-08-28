@@ -89,3 +89,32 @@ open https://github.com/dimetron/pi-go
 - Add external runtime dependencies. The binary must be self-contained.
 - Skip error wrapping. Always provide context in error messages.
 - Use `init()` functions. Prefer explicit initialization.
+
+## Diagram style
+
+For diagrams of packages, modules, or folders, use an ASCII tree with
+category-grouped emojis — not Mermaid. Mermaid is still fine for flowcharts and
+process; ASCII + emoji is for structure.
+
+Rules:
+- Print the root directory with a leading emoji and a bucket label (e.g. `internal/`).
+- Group first-level children under a blank `├── <emoji> <category>` line, then
+  list the package(s) under it indented with `├──` / `└──`.
+- Use one emoji per category, reused consistently across diagrams.
+- Keep descriptions on the same line, terse.
+- Prefer `└──` for the last item in a group; use `├──` otherwise.
+
+Example:
+
+```
+internal/
+├── 🤖 agent runtime
+│   ├── agent/          Agent, run loop, callbacks, eventstream
+│   └── subagent/       Orchestrator, worktree mgmt, spawn/cancel
+├── 🧠 model pipeline
+│   ├── provider/       9 backends + modeldata/ + list_models
+│   └── (pimodels/)    public façade — at repo root
+└── 🧰 tools
+    ├── tools/          read·write·edit·bash·grep·find·git·lsp·mem
+    └── lsp/            Manager, language servers, protocol
+```

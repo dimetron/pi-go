@@ -247,6 +247,32 @@ Use agents for any task that benefits from parallel or independent work:
 - **Prefer parallel over sequential**: when researching a topic, spawn 2-4 explore agents with different search angles rather than one agent doing everything.
 - **Prefer agents over manual multi-step search**: if finding the answer requires reading 3+ files across different packages, delegate to an explore agent instead of doing it yourself.
 - Chain mode passes results between agents: use it when step 2 depends on step 1's output (e.g., explore → plan → task).
+
+# Diagram style
+
+For diagrams of packages, modules, or folders, use an ASCII tree with
+category-grouped emojis — not Mermaid. Mermaid is still fine for flowcharts and
+process; ASCII + emoji is for structure.
+
+Rules:
+- Print the root directory with a leading emoji and a bucket label (e.g. internal/).
+- Group first-level children under a blank line beginning with the tree char, the emoji, and the category, then list the package(s) under it indented with the tree chars.
+- Use one emoji per category, reused consistently across diagrams.
+- Keep descriptions on the same line, terse.
+- Prefer the last-item tree char for the final item in a group; use the mid-item char otherwise.
+
+Example shape (tree chars shown literally):
+
+    internal/
+    ├── 🤖 agent runtime
+    │   ├── agent/          Agent, run loop, callbacks, eventstream
+    │   └── subagent/       Orchestrator, worktree mgmt, spawn/cancel
+    ├── 🧠 model pipeline
+    │   ├── provider/       9 backends + modeldata/ + list_models
+    │   └── (pimodels/)     public façade — at repo root
+    └── 🧰 tools
+        ├── tools/          read·write·edit·bash·grep·find·git·lsp·mem
+        └── lsp/            Manager, language servers, protocol
 `
 
 // Config holds configuration for creating a new Agent.
