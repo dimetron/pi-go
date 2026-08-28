@@ -129,8 +129,6 @@ func TestHandleWebSocket_RejectsCrossOriginUpgrade(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(s.handleWebSocket))
 	defer ts.Close()
-	host := strings.TrimPrefix(ts.URL, "http://")
-
 	get := func(origin string) int {
 		req, err := http.NewRequestWithContext(t.Context(), "GET",
 			ts.URL+"/ws/sec-test?token="+url.QueryEscape(token), nil)
@@ -153,16 +151,21 @@ func TestHandleWebSocket_RejectsCrossOriginUpgrade(t *testing.T) {
 		return resp.StatusCode
 	}
 
+	// Only the rejection is exercised over a live handshake, and deliberately.
+	//
+	// A cross-origin upgrade is refused inside CheckOrigin, before the handler
+	// reaches anything else. An accepted one is not so cheap: the handler goes
+	// on to ptyPool.GetOrCreate, which runs exec.Command(os.Executable()) — and
+	// in a test os.Executable() is the test binary. Completing the handshake
+	// here spawned the suite as a child process on a PTY, which is how this
+	// test failed on the Linux runner while passing locally.
+	//
+	// The accepting side is covered by TestCheckSameOrigin, which calls
+	// checkSameOrigin directly across nine cases including same-origin, absent
+	// Origin and X-Forwarded-Host. That is the same decision this handler
+	// makes, tested without launching anything.
 	if got := get("http://evil.example.com"); got != http.StatusForbidden {
 		t.Errorf("cross-origin upgrade status = %d, want 403", got)
-	}
-	// Same-origin and no-Origin requests get past CheckOrigin; the handshake
-	// then succeeds (101) or the PTY fails, but it is never a 403.
-	if got := get("http://" + host); got == http.StatusForbidden {
-		t.Error("same-origin upgrade was rejected")
-	}
-	if got := get(""); got == http.StatusForbidden {
-		t.Error("upgrade with no Origin header was rejected")
 	}
 }
 
