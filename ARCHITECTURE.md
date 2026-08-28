@@ -4,29 +4,100 @@
 
 pi-go is a coding agent built on [Google ADK Go](https://google.golang.org/adk) with multi-provider LLM support, sandboxed tool execution, session persistence, an interactive terminal UI, LSP integration, and a subagent orchestration system.
 
-## Package Structure
+## Package map
 
 ```
 pi-go/
-├── cmd/pi/main.go                  # Entry point → cli.Execute()
+├── 🚀 entrypoints
+│   ├── cmd/pi/              main binary — the `pi` CLI / TUI
+│   ├── cmd/pi-sandbox/      sandbox runner (seatbelt/entitlements)
+│   ├── cmd/pi-mermaid/      standalone mermaid renderer
+│   └── cmd/pi-acp-mock/     mock ACP server for tests
+│
+├── 🧩 public façades (repo-root packages)
+│   ├── piagent/             Agent, Build, Turn, callbacks — the public SDK
+│   └── pimodels/            model list / metadata façade
+│
 └── internal/
-    ├── agent/                       # ADK agent setup, retry logic
-    ├── audit/                       # Hidden character scanner for skill audit
-    ├── auth/                        # OAuth PKCE/device-code login flows
-    ├── cli/                         # CLI flags, output modes, wiring
-    ├── config/                      # Config loading (global + project), model roles
-    ├── extension/                    # Hooks, skills, MCP integration
-    ├── guardrail/                    # Daily token usage tracking and limits
-    ├── lsp/                         # LSP integration (protocol, client, manager, languages, hooks)
-    ├── logger/                      # Session logging to ~/.pi-go/log/
-    ├── memory/                      # Persistent memory system (SQLite + AI compression)
-    ├── provider/                    # LLM providers (Anthropic, OpenAI, Gemini)
-    ├── rpc/                         # Unix socket JSON-RPC server
-    ├── session/                     # JSONL persistence, branching, compaction
-    ├── sop/                         # Standard Operating Procedures (PDD planning)
-    ├── subagent/                    # Subagent orchestration (pool, spawner, worktree, orchestrator)
-    ├── tools/                       # Sandboxed tools (read, write, edit, bash, grep, find, ls, tree, git, lsp, agent)
-    └── tui/                         # Bubble Tea v2 interactive UI
+    │
+    ├── 🤖 agent runtime
+    │   ├── agent/            run loop, retry, eventstream, grounding
+    │   ├── session/          store, compaction, autocompact, branches, hostenv
+    │   ├── subagent/         orchestrator, worktree mgmt, spawners (ACP/Codex), pool
+    │   └── atif/             Agent-Trace Interchange Format — convert/link/write
+    │
+    ├── 🧠 model pipeline
+    │   ├── provider/         9 backends (anthropic, openai, gemini, mistral,
+    │   │                    ollama, openrouter, xai, opencode, azure) + modeldata/
+    │   ├── guardrail/        loop-detection / safety wrapper
+    │   └── retry/            transport retry + notify
+    │
+    ├── 🧰 tools (internal/tools/)
+    │   │  registry.go is the hub; one file per tool
+    │   ├── read.go, write.go, edit.go       file I/O
+    │   ├── bash.go, shell.go, sandbox.go    command exec + sandboxing
+    │   ├── grep.go, find.go, tree.go, ls.go search & listing
+    │   ├── git_overview.go, git_diff.go, git_hunk.go   git inspection
+    │   ├── read_image.go                   vision input
+    │   ├── lsp.go                          language-server diagnostics/symbols
+    │   ├── llms.go                         fetch_docs (llms.txt)
+    │   ├── mem_search.go                   memory search tool
+    │   ├── session_stats.go, session_sweep.go   session tooling
+    │   ├── subagent.go, a2a.go             subagent + A2A dispatch
+    │   ├── compactor*.go                   output compaction (bash/git/read/search)
+    │   ├── ledger.go, dedup.go, redact.go, truncate.go   result post-processing
+    │   └── resolve.go, agent.go            tool resolution & agent binding
+    │
+    ├── 🖥️ TUI (internal/tui/)
+    │   ├── tui.go, run.go, agent_loop.go    model, run loop, agent loop
+    │   ├── chat.go, input.go, sidebar.go    chat view, input, sidebar
+    │   ├── commands.go, completion.go       slash commands, autocomplete
+    │   ├── plan.go, commit.go, ping.go      plan view, commit flow, ping
+    │   ├── mermaid.go, minimap.go           diagram rendering, minimap
+    │   ├── theme.go, themes.json, face.go   theming + fonts
+    │   └── tool_display.go, status.go       tool output + status bar
+    │
+    ├── 📡 protocols & servers
+    │   ├── acp/              Agent Client Protocol — client, server, toolcall
+    │   ├── codex/            Codex JSON-RPC client + session
+    │   ├── jsonrpc/          generic JSON-RPC
+    │   ├── pirpc/            pi's own RPC (turn replay)
+    │   ├── webserver/        HTTP serve mode
+    │   ├── voice/            voice I/O
+    │   ├── voicegemini/      Gemini voice backend
+    │   └── browser/          browser launch helper
+    │
+    ├── 🧠 memory & palace
+    │   ├── memory/           observations, compress, search, store, worker
+    │   └── palace/           MemPalace — miner, embedder, KG, graph, tools
+    │
+    ├── 🔌 extensions
+    │   └── extension/       skills loader, MCP client, hooks, read_image
+    │
+    ├── 📊 eval & audit
+    │   ├── eval/             scenario runner, judge, coverage, metrics
+    │   └── audit/            scanner, report, chars
+    │
+    ├── 📜 SOP
+    │   └── sop/              plan/run SOPs, schema, compile, graph, verdict
+    │
+    ├── 🔐 auth
+    │   └── auth/             login flows, Codex device auth, callback page
+    │
+    ├── 🛠️ cross-cutting infra
+    │   ├── config/           config + env lookup
+    │   ├── logger/           logger + HTTP sink
+    │   ├── httplog/          HTTP span events
+    │   ├── otel/             OpenTelemetry
+    │   ├── attest/           provenance predicates
+    │   ├── notice/           attribution notices
+    │   ├── gitroot/           repo-root resolution
+    │   ├── procs/             process listing (platform-specific)
+    │   ├── lsp/               LSP manager, client, protocol, languages
+    │   └── testenv/           shared test environment
+    │
+    └── 🎨 mermaid (internal/mermaid/)
+        └── parser/graph/layout/renderer/routing/textwidth   native Mermaid engine
 ```
 
 ## Dependency Graph

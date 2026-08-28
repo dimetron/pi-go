@@ -51,6 +51,12 @@ Thumbs.db
 sandbox-trace.log
 sandbox.log
 /pi-sandbox
+
+# Binaries built from the tools under hack/. `go build ./hack/<tool>` drops the
+# executable in the repo root, which is easy to commit by accident — it happened
+# once with vulngate.
+/vulngate
+/sopcheck
 /internal/cli/.cache/
 /.playwright-mcp/
 /.code-review-graph/

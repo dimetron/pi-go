@@ -1,0 +1,9 @@
+
+ ┌──────────────────────────────────────┐
+ │                Square                │
+ ├──────────────────────────────────────┤
+ │ -List~string~ messages               │
+ │ +setMessages(List~string~ messages)  │
+ │ +getMessages() List~string~          │
+ │ +getDistanceMatrix() List~List~int~~ │
+ └──────────────────────────────────────┘

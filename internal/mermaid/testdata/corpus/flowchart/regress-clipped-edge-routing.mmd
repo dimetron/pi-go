@@ -1,0 +1,71 @@
+graph LR
+    %% Entry
+    main["cmd/pi/main.go"] --> cli["internal/cli<br/>Flags, wiring, output modes"]
+
+    %% Core agent layer
+    cli --> agent["internal/agent<br/>ADK agent setup + retry"]
+    cli --> tui["internal/tui<br/>Bubble Tea v2 + Glamour"]
+    cli --> pirpc["internal/pirpc<br/>Unix-socket JSON-RPC"]
+
+    %% Provider layer
+    cli --> config["internal/config<br/>Global+project, model roles"]
+    config --> provider["internal/provider<br/>Resolve → LLM"]
+    provider --> |"claude*"| anthropic["Anthropic SDK"]
+    provider --> |"gpt*/o*/gpt-5*"| openai["OpenAI SDK"]
+    provider --> |"gemini*"| gemini["ADK Gemini"]
+    provider --> |"*:cloud"| ollama["Ollama (Anthropic API)"]
+
+    %% Agent runtime
+    agent --> adk["Google ADK Go<br/>runner + llmagent + session"]
+    adk --> provider
+    agent --> tools["internal/tools<br/>Sandboxed tool registry"]
+    agent --> session["internal/session<br/>JSONL persistence + branching"]
+    adk --> session
+
+    %% Tools
+    tools --> sandbox["os.Root Sandbox<br/>(cwd confinement)"]
+    tools --> git["git-overview/diff/hunk"]
+    tools --> lsp["internal/lsp<br/>gopls, ts-ls, ruff, rust-analyzer"]
+    tools --> subagent["internal/subagent<br/>Orchestrator + pool + worktree"]
+    subagent --> config
+    subagent --> provider
+
+    %% Extensions & intelligence
+    cli --> extension["internal/extension<br/>Hooks, Skills, MCP servers"]
+    extension --> mcp["MCP Go SDK"]
+    extension --> skills["~/.pi-go/skills/*.SKILL.md"]
+    agent --> sop["internal/sop<br/>PDD planning phases"]
+    agent --> memory["internal/memory<br/>SQLite + AI compression"]
+    memory --> sqlite["modernc.org/sqlite + FTS5"]
+    memory --> subagent
+
+    %% Observability & safety
+    cli --> guardrail["internal/guardrail<br/>Daily token limits"]
+    guardrail --> provider
+    cli --> audit["internal/audit<br/>Hidden char scanner"]
+    cli --> logger["internal/logger<br/>~/.pi-go/log/ JSONL"]
+    cli --> auth["internal/auth<br/>OAuth PKCE / device code"]
+    auth --> envfile["~/.pi-go/.env"]
+
+    %% External / support
+    cli --> browser["internal/browser"]
+    cli --> voice["internal/voice + voicegemini"]
+    cli --> otel["internal/otel"]
+    cli --> palace["internal/palace<br/>MemPalace semantic index"]
+
+    %% Styling
+    classDef entry fill:#2d5016,color:#fff,stroke:#fff,stroke-width:1px
+    classDef core fill:#1a3a5c,color:#fff
+    classDef provider fill:#5c1a3a,color:#fff
+    classDef tools fill:#3a5c1a,color:#fff
+    classDef intel fill:#3a1a5c,color:#fff
+    classDef obs fill:#5c5c1a,color:#fff
+    classDef storage fill:#1a5c5c,color:#fff
+
+    class main,cli entry
+    class agent,adk,session,tui,pirpc core
+    class anthropic,openai,gemini,ollama,provider provider
+    class tools,sandbox,git,lsp,subagent tools
+    class extension,mcp,skills,sop,memory,sqlite,palace intel
+    class guardrail,audit,logger,auth,envfile,browser,voice,otel obs
+    class config storage

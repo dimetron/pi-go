@@ -554,20 +554,80 @@ func expandLinks(text string) string {
 // RenderMarkdown renders text as markdown using the glamour renderer.
 // It first expands markdown links (like [text](url)) into inline format
 // when the link has both a display name and an actual file:// or http:// URL.
+//
+// Closed ```mermaid fences are drawn as terminal art instead of being printed
+// as source. The art is spliced in after glamour has run on the prose around
+// it: glamour treats escape bytes as literal text, so anything already
+// carrying ANSI has to bypass it.
 func (c *ChatModel) RenderMarkdown(text string) string {
 	if text == "" {
 		return ""
 	}
+	if c.Renderer == nil {
+		return expandLinks(text)
+	}
+
+	segments := splitMermaidFences(text)
+	if len(segments) == 1 && segments[0].diagram == "" {
+		return c.renderMarkdownSegment(text)
+	}
+
+	parts := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg.diagram != "" {
+			if art := RenderMermaid(seg.diagram, c.mermaidWidth(), c.Palette); art != "" {
+				// Blank lines around the art. Glamour spaces its own blocks
+				// apart, but the diagram bypasses glamour precisely because it
+				// already carries ANSI — so without this the first row of a
+				// box sits directly against the last line of the prose that
+				// introduces it, and the two read as one paragraph.
+				//
+				// Runs of blank lines are collapsed later by
+				// collapseBlankLines, so adding one here cannot stack up with
+				// the spacing glamour already emitted.
+				parts = append(parts, "\n"+art+"\n")
+				continue
+			}
+			// Not a diagram this renderer models, or too wide for the pane:
+			// fall through and show the fence as the model wrote it, but with
+			// a language Chroma knows so the block does not shimmer on every
+			// repaint (see stableFenceLang).
+			if rendered := c.renderMarkdownSegment(stableFenceLang(seg.raw)); rendered != "" {
+				parts = append(parts, rendered)
+			}
+			continue
+		}
+		if rendered := c.renderMarkdownSegment(seg.raw); rendered != "" {
+			parts = append(parts, rendered)
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// renderMarkdownSegment runs one stretch of markdown through glamour.
+func (c *ChatModel) renderMarkdownSegment(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
 	// Expand markdown links into inline format for better visibility in terminal.
 	text = expandLinks(text)
-	if c.Renderer == nil {
-		return text
-	}
 	rendered, err := c.Renderer.Render(text)
 	if err != nil {
 		return text
 	}
 	return hyperlinkRenderedURLs(strings.TrimRight(rendered, "\n"))
+}
+
+// mermaidWidth is the column budget a diagram has inside an assistant message.
+//
+// The reserve covers the "◉ " bullet the reply is prefixed with plus glamour's
+// own document margin, which the diagram does not get but must not collide
+// with. Guessing high here is the safe direction: RenderMermaid rejects
+// anything that does not fit, so an over-tight budget costs a diagram, while
+// an over-generous one would let art run past the pane edge.
+func (c *ChatModel) mermaidWidth() int {
+	return renderWrapWidth(c.Width, 6)
 }
 
 // PlainTranscript returns the conversation as copy-friendly plain text.

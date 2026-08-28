@@ -1,0 +1,11 @@
+
+ ┌──────────────┐            ┌───────────────┐
+ │<<interface>> │            │<<enumeration>>│
+ │    Shape     │            │     Color     │
+ ├──────────────┤            ├───────────────┤
+ │ noOfVertices │            │ RED           │
+ │ draw()       │            │ BLUE          │
+ └──────────────┘            │ GREEN         │
+                             │ WHITE         │
+                             │ BLACK         │
+                             └───────────────┘

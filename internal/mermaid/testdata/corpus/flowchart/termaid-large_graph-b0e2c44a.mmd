@@ -1,0 +1,17 @@
+graph TD
+    A[Start] --> B[Process 1]
+    A --> C[Process 2]
+    B --> D[Check 1]
+    B --> E[Check 2]
+    C --> F[Check 3]
+    C --> G[Check 4]
+    D --> H[Result 1]
+    E --> H
+    F --> I[Result 2]
+    G --> I
+    H --> J[Merge]
+    I --> J
+    J --> K[Output 1]
+    J --> L[Output 2]
+    K --> M[End]
+    L --> M

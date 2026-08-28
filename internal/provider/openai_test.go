@@ -1493,8 +1493,8 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 	if items[2].OfFunctionCallOutput == nil {
 		t.Fatal("expected function call output item")
 	}
-	if items[2].OfFunctionCallOutput.CallID != "call_123" {
-		t.Fatalf("function output CallID = %q, want %q", items[2].OfFunctionCallOutput.CallID, "call_123")
+	if got := items[2].OfFunctionCallOutput.CallID.Or(""); got != "call_123" {
+		t.Fatalf("function output CallID = %q, want %q", got, "call_123")
 	}
 }
 

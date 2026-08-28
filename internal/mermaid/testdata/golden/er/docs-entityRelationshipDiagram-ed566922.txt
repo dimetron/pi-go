@@ -1,0 +1,18 @@
+
+ ┌───────────────────┐
+ │     CUSTOMER      │
+ ├───────────────────┤
+ │ string name       │
+ │ string custNumber │
+ │ string sector     │
+ └───────────────────┘
+           │
+         places
+           └──┐
+              │0..*
+ ┌────────────┼───────────┐
+ │         ORDER          │
+ ├────────────────────────┤
+ │ int orderNumber        │
+ │ string deliveryAddress │
+ └────────────────────────┘

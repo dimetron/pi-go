@@ -1,0 +1,9 @@
+# Keep test fixtures byte-identical across platforms.
+#
+# The mermaid corpus pairs a .mmd input with the exact .txt art it renders to,
+# compared byte for byte. A Windows checkout defaults to core.autocrlf=true,
+# which rewrites both sides to CRLF: the input then parses with a stray CR in
+# every label, and the golden no longer matches what any platform produces.
+# That broke the whole golden suite on the Windows runner while every other
+# platform stayed green.
+internal/mermaid/testdata/** -text

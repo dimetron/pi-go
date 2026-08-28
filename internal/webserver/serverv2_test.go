@@ -68,10 +68,12 @@ type approvedResp struct {
 	Status   string `json:"status"`
 }
 
+// pairCreateResp deliberately keeps a Token field even though the wire type
+// no longer has one: /api/pair answers unauthenticated callers, so the tests
+// need to be able to see a token if one ever comes back.
 type pairCreateResp struct {
 	Code  string `json:"code"`
 	Token string `json:"token"`
-	QR    string `json:"qr"`
 }
 
 func TestParseSubmittedCode_JSON(t *testing.T) {
@@ -263,8 +265,14 @@ func TestServerV2_HandleCreatePair_POST(t *testing.T) {
 	if len(resp.Code) != 6 {
 		t.Errorf("expected 6 digit code, got %q", resp.Code)
 	}
-	if resp.Token == "" || resp.QR == "" {
-		t.Errorf("expected token and qr to be set")
+	if resp.Code == "" {
+		t.Error("expected qr to be set")
+	}
+	// The token is what turns a pair code into a shell. It reaches the
+	// operator through the startup banner and the browser through the cookie
+	// set on submit — never through this unauthenticated endpoint.
+	if resp.Token != "" {
+		t.Errorf("pair response leaked a token: %q", resp.Token)
 	}
 }
 
@@ -316,8 +324,11 @@ func TestServerV2_HandleCreatePair_ReusesActivePair(t *testing.T) {
 	}
 	resp2 := decodeBody[pairCreateResp](t, w2)
 
-	if resp1.Code != resp2.Code || resp1.Token != resp2.Token {
+	if resp1.Code != resp2.Code {
 		t.Fatalf("expected active pair reuse, got %+v vs %+v", resp1, resp2)
+	}
+	if resp1.Token != "" || resp2.Token != "" {
+		t.Fatalf("pair response leaked a token: %+v / %+v", resp1, resp2)
 	}
 }
 
@@ -534,7 +545,7 @@ func TestServerV2_HandleIndex_Root_Approved(t *testing.T) {
 	// Authenticated request (approved token in cookie) serves the index page.
 	s := newTestServerV2(t)
 	defer s.Shutdown(t.Context())
-	code, token, _, err := s.PairingManager().CreatePair("/tmp/x")
+	code, token, err := s.PairingManager().CreatePair("/tmp/x")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -845,7 +856,7 @@ func TestServer_HandlePair_NoToken(t *testing.T) {
 
 func TestServer_HandlePair_ApprovedRedirect(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -865,7 +876,7 @@ func TestServer_HandlePair_ApprovedRedirect(t *testing.T) {
 
 func TestServer_HandlePair_PendingNoRedirect(t *testing.T) {
 	s := NewServer(Config{})
-	_, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	_, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -935,7 +946,7 @@ func TestServer_HandleStatus_MissingToken(t *testing.T) {
 
 func TestServer_HandleStatus_Approved(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -1027,7 +1038,13 @@ func TestServerV2_FullPairingFlow(t *testing.T) {
 	}
 	pr := decodeBody[pairCreateResp](t, w)
 
-	statusReq := httptest.NewRequest("GET", "/api/status?token="+url.QueryEscape(pr.Token), nil)
+	// The HTTP response carries no token, so the test reads it the way the
+	// operator does: from the server's own record of the active pair.
+	s.mu.Lock()
+	activeToken := s.activePairToken
+	s.mu.Unlock()
+
+	statusReq := httptest.NewRequest("GET", "/api/status?token="+url.QueryEscape(activeToken), nil)
 	statusW := httptest.NewRecorder()
 	s.handleStatus(statusW, statusReq)
 	sr := decodeBody[approvedResp](t, statusW)
@@ -1048,7 +1065,7 @@ func TestServerV2_FullPairingFlow(t *testing.T) {
 		t.Errorf("expected approved, got %q", appr.Status)
 	}
 
-	pairReq := httptest.NewRequest("GET", "/pair?token="+url.QueryEscape(pr.Token), nil)
+	pairReq := httptest.NewRequest("GET", "/pair?token="+url.QueryEscape(activeToken), nil)
 	pairW := httptest.NewRecorder()
 	s.handlePair(pairW, pairReq)
 	if pairW.Code != http.StatusSeeOther {
@@ -1312,7 +1329,7 @@ func TestPtyPool_CloseAll_WithBridges(t *testing.T) {
 
 func TestServer_HandlePair_QueryToken_Approved(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -1329,7 +1346,7 @@ func TestServer_HandlePair_QueryToken_Approved(t *testing.T) {
 
 func TestServer_HandleIndex_QueryToken(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}

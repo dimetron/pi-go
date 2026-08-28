@@ -323,7 +323,10 @@ func oaiAppendResponsesItems(
 			if _, ok := callIDs[fr.ID]; !ok {
 				continue
 			}
-			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
+			// openai-go v3.54 dropped callID from the helper; set it on the param.
+			out := responses.ResponseInputItemParamOfFunctionCallOutput(oaiFunctionResponseContent(fr.Response))
+			out.OfFunctionCallOutput.CallID = param.NewOpt(fr.ID)
+			items = append(items, out)
 		}
 	}
 	flushText()

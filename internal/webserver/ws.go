@@ -17,11 +17,7 @@ type WebSocketHandler struct {
 func NewWebSocketHandler(sessionManager *SessionManager) *WebSocketHandler {
 	return &WebSocketHandler{
 		sessionManager: sessionManager,
-		upgrader: &websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow all origins for development
-			},
-		},
+		upgrader:       &websocket.Upgrader{CheckOrigin: checkSameOrigin},
 	}
 }
 

@@ -191,6 +191,32 @@ vet, and build; it does not replace any of them.
   where there is nothing to anchor comments to yet. Do not let local-only
   reviews substitute for the on-PR review before merge.
 
+### After the review: run govulncheck and post the result
+
+**Once the review is resolved and before the PR merges, run `govulncheck`
+against the branch and post the result as a PR comment.** It belongs after the
+review rather than before because it is about what the branch *depends on*
+rather than what it says, and a dependency added mid-review would otherwise go
+unscanned.
+
+```bash
+make vulncheck        # govulncheck -format json ./... | go run ./hack/vulngate
+```
+
+The gate fails only on findings that name a fixed version — those are the ones
+someone can act on. Findings with no released fix are printed and do not fail:
+there is nothing to upgrade to, so failing on them would leave every build red
+until an upstream maintainer cuts a release, and a permanently red check is one
+nobody reads.
+
+Post the scanner and DB versions along with the findings, because the answer is
+only true for the database on the day it ran. If a finding does have a fix,
+upgrade rather than explain it away — the gate is deliberately narrow so that a
+failure always means "there is something to do".
+
+Do not run `make check-cve` for this: it opens with `go mod tidy -v`, which
+rewrites tracked files, and a check should not mutate the tree it is checking.
+
 ## Creating a pull request
 
 When the user asks to create a PR, open the browser link to the PR after it is

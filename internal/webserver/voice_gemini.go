@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -321,21 +319,12 @@ func truncateVoice(s string, n int) string {
 }
 
 // voiceOriginOK accepts same-origin upgrades and, when the server is explicitly
-// running insecure, anything. A browser always sends Origin on a WebSocket
-// dial, so an absent one is a non-browser client and is allowed — the session
-// id is the credential that matters here.
+// running insecure, anything. The same-origin rule is checkSameOrigin, shared
+// with the terminal socket so both upgrades answer the same question the same
+// way; --insecure only widens it here, where it always has.
 func (s *ServerV2) voiceOriginOK(r *http.Request) bool {
 	if s.cfg.Insecure {
 		return true
 	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	_, host := requestOriginAndHost(r)
-	return strings.EqualFold(u.Host, host)
+	return checkSameOrigin(r)
 }

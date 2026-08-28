@@ -1,0 +1,10 @@
+                                          A Gantt Diagram
+
+                    Jan 01                                                                  Feb 20
+                    ──────────────────────────────────────────────────────────────────────────────
+ Section          │
+          A task  │                                                                               ▓
+    Another task  │                                                                               ▓
+ Another          │
+ Task in Another  │                                                                               ▓
+    another task  │ ▓
