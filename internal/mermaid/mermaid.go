@@ -258,6 +258,11 @@ func Parse(source string) *graph.Graph {
 type Cell struct {
 	Char  rune
 	Style string
+
+	// Fill is the background style key, empty for most cells. Subgraph
+	// interiors and chart bands carry one so a caller can tint the region
+	// behind the glyphs rather than only coloring the glyphs themselves.
+	Fill string
 }
 
 // RenderCells renders source and returns the diagram as rows of styled cells,
@@ -304,7 +309,7 @@ func RenderCells(source string, opts ...Option) (rows [][]Cell) {
 	for y, row := range pairs {
 		cells := make([]Cell, len(row))
 		for x, p := range row {
-			cells[x] = Cell{Char: safeCell(p.Char), Style: p.Style}
+			cells[x] = Cell{Char: safeCell(p.Char), Style: p.Style, Fill: p.Fill}
 		}
 		rows[y] = cells
 	}

@@ -391,6 +391,12 @@ func (c *Canvas) FlipHorizontal() {
 type StyledPair struct {
 	Char  rune
 	Style string
+
+	// Fill is the background style key for this cell, empty for most of them.
+	// Subgraph interiors, gantt bars and timeline sections already set one;
+	// it was simply never carried out of the canvas, so a caller drawing the
+	// cells itself had no way to paint the background the renderer intended.
+	Fill string
 }
 
 // ToStyledPairs returns the canvas content as a 2D slice of StyledPairs.
@@ -405,7 +411,11 @@ func (c *Canvas) ToStyledPairs() [][]StyledPair {
 			if c.grid[y][x] == wideContinuation {
 				continue
 			}
-			row = append(row, StyledPair{Char: c.grid[y][x], Style: c.styleGrid[y][x]})
+			row = append(row, StyledPair{
+				Char:  c.grid[y][x],
+				Style: c.styleGrid[y][x],
+				Fill:  c.fillGrid[y][x],
+			})
 		}
 		result[y] = row
 	}

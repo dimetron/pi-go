@@ -543,3 +543,51 @@ func TestTranscriptLineCountIsStable(t *testing.T) {
 		}
 	}
 }
+
+// TestSubgraphInteriorGetsBackground covers the fill plumbing. The renderer
+// already marked subgraph interiors, gantt bands and timeline sections with a
+// background, but the cells API dropped it, so the TUI could only color glyphs
+// and every grouped region read as a bare outline.
+//
+// Note the needle: lipgloss folds foreground and background into a single SGR
+// sequence, so a background appears as ";48;" inside a longer escape and never
+// as a standalone "\x1b[48;".
+func TestSubgraphInteriorGetsBackground(t *testing.T) {
+	src := "graph LR\n    subgraph S[\"A Group\"]\n        a[one] --> b[two]\n    end\n    b --> c[three]\n"
+
+	out := RenderMermaid(src, 90, darkPalette)
+	if out == "" {
+		t.Fatal("diagram did not render")
+	}
+	if !strings.Contains(out, ";48;") {
+		t.Error("no background emitted for the subgraph interior")
+	}
+}
+
+// TestNoBackgroundWithoutASubgraph is the other half: a diagram with nothing to
+// group must stay flat, so an unknown or absent fill never paints a region.
+func TestNoBackgroundWithoutASubgraph(t *testing.T) {
+	out := RenderMermaid("graph LR\n    a[one] --> b[two]\n", 90, darkPalette)
+	if out == "" {
+		t.Fatal("diagram did not render")
+	}
+	if strings.Contains(out, ";48;") {
+		t.Error("a diagram with no subgraph painted a background anyway")
+	}
+}
+
+// TestFillFollowsPalette guards the light theme, where a background chosen only
+// against a dark pane is the classic casualty.
+func TestFillFollowsPalette(t *testing.T) {
+	dark, okD := mermaidFillFor("subgraph_fill", darkPalette)
+	light, okL := mermaidFillFor("subgraph_fill", lightPalette)
+	if !okD || !okL {
+		t.Fatal("subgraph_fill has no color in one of the palettes")
+	}
+	if dark == light {
+		t.Error("the fill is identical in both palettes: it is not palette-driven")
+	}
+	if _, ok := mermaidFillFor("not-a-fill-key", darkPalette); ok {
+		t.Error("an unknown fill key returned a color instead of declining")
+	}
+}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"regexp"
 	"strings"
 
@@ -48,6 +49,26 @@ func mermaidStyleFor(key string, p Palette) lipgloss.Style {
 		return base.Foreground(p.Yellow)
 	default:
 		return base.Foreground(p.Subtext)
+	}
+}
+
+// mermaidFillFor maps a cell's background key onto the palette.
+//
+// The renderer marks the interior of a subgraph, a gantt band and a timeline
+// section with a fill, and those regions read as flat outlines without it: the
+// border says "these belong together" and nothing behind the contents agrees.
+// A background one step off the pane's own is enough to group them without
+// competing with the text sitting on it.
+//
+// An unknown key returns false rather than guessing a color, so a fill this
+// package does not know about leaves the cell transparent instead of painting
+// it something arbitrary.
+func mermaidFillFor(key string, p Palette) (color.Color, bool) {
+	switch key {
+	case "subgraph_fill":
+		return p.Surface0, true
+	default:
+		return nil, false
 	}
 }
 
@@ -184,12 +205,17 @@ func styleRow(row []mermaid.Cell, p Palette) string {
 	var b strings.Builder
 	var run strings.Builder
 	runKey := row[0].Style
+	runFill := row[0].Fill
 
 	flush := func() {
 		if run.Len() == 0 {
 			return
 		}
-		b.WriteString(mermaidStyleFor(runKey, p).Render(run.String()))
+		style := mermaidStyleFor(runKey, p)
+		if bg, ok := mermaidFillFor(runFill, p); ok {
+			style = style.Background(bg)
+		}
+		b.WriteString(style.Render(run.String()))
 		run.Reset()
 	}
 
@@ -198,9 +224,11 @@ func styleRow(row []mermaid.Cell, p Palette) string {
 		if ch == 0 {
 			ch = ' '
 		}
-		if cell.Style != runKey {
+		// A run is a stretch sharing both foreground and background: a fill
+		// changing mid-run would otherwise paint the wrong cells.
+		if cell.Style != runKey || cell.Fill != runFill {
 			flush()
-			runKey = cell.Style
+			runKey, runFill = cell.Style, cell.Fill
 		}
 		run.WriteRune(ch)
 	}
