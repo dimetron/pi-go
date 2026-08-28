@@ -394,7 +394,7 @@ func buildRunner(cfg Config, instruction string, sessionSvc session.Service) (*r
 		Model:                cfg.Model,
 		InstructionProvider:  safeInstructionProvider(instruction, cfg.Logger),
 		Tools:                cfg.Tools,
-		Toolsets:             cfg.Toolsets,
+		Toolsets:             dedupeToolsets(cfg.Tools, cfg.Toolsets),
 		BeforeToolCallbacks:  cfg.BeforeToolCallbacks,
 		AfterToolCallbacks:   cfg.AfterToolCallbacks,
 		BeforeModelCallbacks: cfg.BeforeModelCallbacks,

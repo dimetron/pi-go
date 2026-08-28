@@ -142,10 +142,10 @@ func (t *connTrackingTransport) closeConn() {
 // A timeout guards against hanging MCP servers that start but never respond
 // to the JSON-RPC "initialize" handshake.
 //
-// Duplicate tool names across MCP servers are deduplicated automatically.
-// When multiple servers expose a tool with the same name, only the first
-// occurrence (from the server that loads first) is kept to prevent the
-// "duplicate tool" error from the ADK runner.
+// Tool names are returned as the server reports them. Making them unique
+// against pi-go's built-in tools and against the other servers is the agent's
+// job, since only it can see every source at once — see dedupeToolsets in
+// internal/agent.
 type resilientToolset struct {
 	inner     tool.Toolset
 	name      string
@@ -179,7 +179,7 @@ func (r *resilientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			r.failed = true
 			return
 		}
-		r.tools = r.deduplicateTools(tools)
+		r.tools = tools
 	})
 	if r.failed {
 		return nil, nil
@@ -396,14 +396,6 @@ func isMCPAuthError(err error) bool {
 		}
 	}
 	return false
-}
-
-// deduplicateTools returns tools with their original names. When multiple
-// MCP servers expose tools with the same name, the LLM will see them all
-// as-is. The ADK runner handles tool call routing by matching the tool name
-// in the function call response against available tools.
-func (r *resilientToolset) deduplicateTools(tools []tool.Tool) []tool.Tool {
-	return tools
 }
 
 // MCPToolEntry is a single resolved tool from a named MCP server.
