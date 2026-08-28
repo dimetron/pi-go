@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +116,23 @@ func TestListMistralModels(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"id": "mistral-large", "owned_by": "mistral"},
+				{
+					"id":                 "mistral-large-latest",
+					"owned_by":           "mistral",
+					"max_context_length": 128000,
+					"capabilities": map[string]any{
+						"completion_chat": true,
+						"vision":          true,
+					},
+				},
+				{
+					"id":                 "embedding-model",
+					"owned_by":           "mistral",
+					"max_context_length": 8192,
+					"capabilities": map[string]any{
+						"completion_chat": false,
+					},
+				},
 			},
 		})
 	}))
@@ -128,8 +145,17 @@ func TestListMistralModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listMistralModels: %v", err)
 	}
-	if len(models) != 1 || models[0].ID != "mistral-large" {
-		t.Errorf("models = %+v", models)
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1 (non-completion_chat filtered)", len(models))
+	}
+	if models[0].ID != "mistral-large-latest" {
+		t.Errorf("models[0].ID = %q, want mistral-large-latest", models[0].ID)
+	}
+	if models[0].ContextWindow != 128000 {
+		t.Errorf("models[0].ContextWindow = %d, want 128000", models[0].ContextWindow)
+	}
+	if len(models[0].Capabilities) != 2 || models[0].Capabilities[0] != "completion_chat" || models[0].Capabilities[1] != "vision" {
+		t.Errorf("models[0].Capabilities = %v, want [completion_chat vision]", models[0].Capabilities)
 	}
 }
 
@@ -376,8 +402,13 @@ func TestListModels_Dispatch(t *testing.T) {
 		t.Run(tc.providerName, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Return a payload that matches any of the expected shapes.
+				// Mistral's parser filters on capabilities.completion_chat, so
+				// include it for the mistral case.
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"data":   []map[string]any{{"id": tc.wantID, "owned_by": tc.providerName, "type": "model"}},
+					"data": []map[string]any{{
+						"id": tc.wantID, "owned_by": tc.providerName, "type": "model",
+						"capabilities": map[string]any{"completion_chat": true},
+					}},
 					"models": []map[string]any{{"name": "models/" + tc.wantID, "displayName": tc.wantID}},
 				})
 			}))
@@ -443,5 +474,75 @@ func TestListAnthropicModels_APIError(t *testing.T) {
 	_, err := listAnthropicModels(context.Background(), ListModelsOptions{BaseURL: srv.URL})
 	if err == nil {
 		t.Fatal("expected error from non-200 status")
+	}
+}
+
+// TestListMistralModels_AllCapabilities pins the full capability mapping and
+// its order. The names are what `pi model list mistral` prints and what lands
+// in modeldata/models-mistral.json, so they are part of the output contract.
+func TestListMistralModels_AllCapabilities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                 "everything-latest",
+					"owned_by":           "mistral",
+					"max_context_length": 256000,
+					"capabilities": map[string]any{
+						"completion_chat":  true,
+						"completion_fim":   true,
+						"function_calling": true,
+						"fine_tuning":      true,
+						"vision":           true,
+						"classification":   true,
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	models, err := listMistralModels(context.Background(), ListModelsOptions{APIKey: "mkey", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("listMistralModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	want := []string{
+		"completion_chat", "completion_fim", "function_calling",
+		"fine_tuning", "vision", "classification",
+	}
+	if !slices.Equal(models[0].Capabilities, want) {
+		t.Errorf("capabilities = %v, want %v", models[0].Capabilities, want)
+	}
+	if models[0].ContextWindow != 256000 {
+		t.Errorf("ContextWindow = %d, want 256000", models[0].ContextWindow)
+	}
+}
+
+// TestListMistralModels_V1BaseURL covers the endpoint branch for a base URL
+// that already ends in /v1 — a gateway configured as https://host/v1 must not
+// be called at /v1/v1/models.
+func TestListMistralModels_V1BaseURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	if _, err := listMistralModels(context.Background(), ListModelsOptions{
+		APIKey:  "mkey",
+		BaseURL: srv.URL + "/v1",
+	}); err != nil {
+		t.Fatalf("listMistralModels: %v", err)
+	}
+	if gotPath != "/v1/models" {
+		t.Errorf("request path = %q, want /v1/models", gotPath)
 	}
 }

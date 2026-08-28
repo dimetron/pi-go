@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,7 +140,15 @@ func TestRunModelList_Mistral(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"id": "mistral-large", "owned_by": "mistral"},
+				{
+					"id":                 "mistral-large-latest",
+					"owned_by":           "mistral",
+					"max_context_length": 128000,
+					"capabilities": map[string]any{
+						"completion_chat": true,
+						"vision":          true,
+					},
+				},
 			},
 		})
 	}))
@@ -149,8 +158,103 @@ func TestRunModelList_Mistral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(out, "mistral-large") {
-		t.Errorf("output missing mistral-large: %s", out)
+	if !strings.Contains(out, "mistral-large-latest") {
+		t.Errorf("output missing mistral-large-latest: %s", out)
+	}
+	if !strings.Contains(out, "128K") {
+		t.Errorf("output missing context window 128K: %s", out)
+	}
+	if !strings.Contains(out, "completion_chat,vision") {
+		t.Errorf("output missing capabilities: %s", out)
+	}
+}
+
+func TestRunModelList_MistralJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                 "mistral-large-latest",
+					"owned_by":           "mistral",
+					"max_context_length": 128000,
+					"capabilities": map[string]any{
+						"completion_chat": true,
+						"vision":          true,
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	out, err := runModelListCapture(t, "mistral", "--url", srv.URL, "-o", "json")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var doc struct {
+		Provider  string `json:"provider"`
+		FetchedAt string `json:"fetched_at"`
+		Models    []struct {
+			ID            string   `json:"id"`
+			ContextWindow int64    `json:"context_window"`
+			Capabilities  []string `json:"capabilities"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("output is not a JSON document: %v\n%s", err, out)
+	}
+	if doc.Provider != "mistral" {
+		t.Errorf("provider = %q, want mistral", doc.Provider)
+	}
+	if doc.FetchedAt == "" {
+		t.Error("fetched_at is empty")
+	}
+	if len(doc.Models) != 1 || doc.Models[0].ID != "mistral-large-latest" {
+		t.Fatalf("models = %+v", doc.Models)
+	}
+	if doc.Models[0].ContextWindow != 128000 {
+		t.Errorf("context_window = %d, want 128000", doc.Models[0].ContextWindow)
+	}
+	if len(doc.Models[0].Capabilities) != 2 {
+		t.Errorf("capabilities = %v, want 2 entries", doc.Models[0].Capabilities)
+	}
+}
+
+// TestRunModelList_JSONSortsByID pins the ordering guarantee the checked-in
+// modeldata/ snapshots rely on: `make fetch-models` writes this output straight
+// to disk, so an API that returns models in call order would otherwise produce
+// a fresh diff on every fetch.
+func TestRunModelList_JSONSortsByID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "mistral-small-latest", "capabilities": map[string]any{"completion_chat": true}},
+				{"id": "codestral-latest", "capabilities": map[string]any{"completion_chat": true}},
+				{"id": "mistral-large-latest", "capabilities": map[string]any{"completion_chat": true}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	out, err := runModelListCapture(t, "mistral", "--url", srv.URL, "-o", "json")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var doc struct {
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("output is not a JSON document: %v\n%s", err, out)
+	}
+	got := make([]string, len(doc.Models))
+	for i, m := range doc.Models {
+		got[i] = m.ID
+	}
+	want := []string{"codestral-latest", "mistral-large-latest", "mistral-small-latest"}
+	if !slices.Equal(got, want) {
+		t.Errorf("model order = %v, want %v", got, want)
 	}
 }
 

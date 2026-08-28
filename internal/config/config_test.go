@@ -106,6 +106,9 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"opencode/gpt-5.6-luna", "opencode"},
 		{"openrouter/google/gemini-3.7-flash", "openrouter"},
 		{"openrouter/auto", "openrouter"},
+		{"mistral-large-latest", "mistral"},
+		{"mistral/codestral-2508", "mistral"},
+		{"magistral-medium-latest", "mistral"},
 	}
 
 	for _, tt := range tests {

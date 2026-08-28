@@ -302,6 +302,40 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 // the Anthropic and Ollama providers emit, which the TUI renders with 💭);
 // it is re-sent as turn content only when the model produced nothing else.
 func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawChunk string) string) {
+	oaiRunStreamingHooks(ctx, client, params, yield, oaiExtractHooks{deltaThinking: extractThinking})
+}
+
+// oaiExtractHooks collects the escape hatches a provider needs when it puts
+// data where the openai-go SDK has no field for it. Every hook is optional.
+type oaiExtractHooks struct {
+	// deltaThinking pulls reasoning text out of one streaming chunk's raw JSON.
+	deltaThinking func(rawChunk string) string
+	// messageThinking pulls reasoning text out of a non-streaming completion's
+	// raw JSON.
+	messageThinking func(rawResponse string) string
+	// answerText rewrites the content string the SDK decoded before it is
+	// treated as answer text. Mistral reasoning models send content as a JSON
+	// array, and the SDK's decoder leaves that array's raw text in the string
+	// field, so without this hook the transcript would show raw JSON. nil
+	// means the decoded string is already the answer.
+	answerText func(content string) string
+}
+
+// answer applies the answerText hook, or passes the content through when the
+// provider did not install one.
+func (h oaiExtractHooks) answer(content string) string {
+	if h.answerText == nil {
+		return content
+	}
+	return h.answerText(content)
+}
+
+// oaiRunStreamingHooks is oaiRunStreaming with the full set of provider hooks
+// (see oaiExtractHooks). Reasoning streams as "thinking"-role partials (the
+// same shape the Anthropic and Ollama providers emit, which the TUI renders
+// with 💭); it is re-sent as turn content only when the model produced nothing
+// else.
+func oaiRunStreamingHooks(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, hooks oaiExtractHooks) {
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 		IncludeUsage: param.NewOpt(true),
 	}
@@ -318,8 +352,8 @@ func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params o
 			state.completionTokens = chunk.Usage.CompletionTokens
 			state.cachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
-		if extractThinking != nil && len(chunk.Choices) > 0 {
-			if think := extractThinking(chunk.RawJSON()); think != "" {
+		if hooks.deltaThinking != nil && len(chunk.Choices) > 0 {
+			if think := hooks.deltaThinking(chunk.RawJSON()); think != "" {
 				state.thinking += think
 				if !yield(&model.LLMResponse{
 					Partial:      true,
@@ -335,12 +369,12 @@ func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params o
 		}
 		choice := chunk.Choices[0]
 		delta := choice.Delta
-		if delta.Content != "" {
-			state.text += delta.Content
+		if text := hooks.answer(delta.Content); text != "" {
+			state.text += text
 			if !yield(&model.LLMResponse{
 				Partial:      true,
 				TurnComplete: false,
-				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: delta.Content}}},
+				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: text}}},
 			}, nil) {
 				return
 			}
@@ -373,6 +407,12 @@ func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params opena
 // pulls reasoning text out of the completion's raw JSON (see
 // oaiRunStreamingExtract). The reasoning is prepended to the response parts.
 func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawResponse string) string) {
+	oaiRunNonStreamingHooks(ctx, client, params, yield, oaiExtractHooks{messageThinking: extractThinking})
+}
+
+// oaiRunNonStreamingHooks is oaiRunNonStreaming with the full set of provider
+// hooks (see oaiExtractHooks). The reasoning is prepended to the response parts.
+func oaiRunNonStreamingHooks(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, hooks oaiExtractHooks) {
 	completion, err := client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		yield(nil, fmt.Errorf("OpenAI chat completion failed: %w", err))
@@ -385,13 +425,13 @@ func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, param
 	choice := completion.Choices[0]
 	msg := choice.Message
 	parts := make([]*genai.Part, 0, 2+len(msg.ToolCalls))
-	if extractThinking != nil {
-		if thinking := extractThinking(completion.RawJSON()); thinking != "" {
+	if hooks.messageThinking != nil {
+		if thinking := hooks.messageThinking(completion.RawJSON()); thinking != "" {
 			parts = append(parts, &genai.Part{Text: thinking})
 		}
 	}
-	if msg.Content != "" {
-		parts = append(parts, &genai.Part{Text: msg.Content})
+	if text := hooks.answer(msg.Content); text != "" {
+		parts = append(parts, &genai.Part{Text: text})
 	}
 	for _, tc := range msg.ToolCalls {
 		if tc.Type == "function" && tc.Function.Name != "" {

@@ -1,0 +1,54 @@
+{
+  "provider": "xai",
+  "fetched_at": "2026-08-27T00:00:00Z",
+  "models": [
+    {
+      "id": "grok-4.20-0309-non-reasoning",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-4.20-multi-agent-0309",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-4.3",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-4.5",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-4.6",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-build-0.1",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-imagine-image",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-imagine-image-2.0",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-imagine-video",
+      "owned_by": "xai"
+    },
+    {
+      "id": "grok-imagine-video-1.5",
+      "owned_by": "xai"
+    }
+  ]
+}
