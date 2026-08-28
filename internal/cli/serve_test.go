@@ -272,3 +272,57 @@ func TestNewServeCmd_ShortAndLong(t *testing.T) {
 		t.Error("RunE is nil")
 	}
 }
+
+// -----------------------------------------------------------------------
+// Listen address: loopback by default, network exposure opt-in
+// -----------------------------------------------------------------------
+
+// `pi serve` hands whoever pairs with it a terminal running the agent, so the
+// default --addr must not answer on every interface.
+func TestServeAddrDefaultIsLoopback(t *testing.T) {
+	if !isLoopbackAddr(webserver.DefaultAddr) {
+		t.Errorf("default --addr %q is not loopback-only", webserver.DefaultAddr)
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{addr: "127.0.0.1:8765", want: true},
+		{addr: "localhost:8765", want: true},
+		{addr: "[::1]:8765", want: true},
+		{addr: "127.0.0.2:8765", want: true},
+		{addr: ":8765", want: false},
+		{addr: "0.0.0.0:8765", want: false},
+		{addr: "[::]:8765", want: false},
+		{addr: "192.168.1.10:8765", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			if got := isLoopbackAddr(tt.addr); got != tt.want {
+				t.Errorf("isLoopbackAddr(%q) = %v, want %v", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
+// The banner has to say the server is local-only, or the operator debugs a
+// phone that cannot load the pairing page.
+func TestPrintServeBanner_LoopbackNotice(t *testing.T) {
+	var buf strings.Builder
+	printServeBanner(&buf, "127.0.0.1:8765", "/proj", "123456")
+	if !strings.Contains(buf.String(), "Reachable from this machine only") {
+		t.Errorf("loopback banner missing the local-only notice:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "--addr 0.0.0.0:8765") {
+		t.Errorf("loopback banner does not say how to expose the server:\n%s", buf.String())
+	}
+
+	buf.Reset()
+	printServeBanner(&buf, "0.0.0.0:8765", "/proj", "123456")
+	if strings.Contains(buf.String(), "Reachable from this machine only") {
+		t.Errorf("wildcard bind should not claim to be local-only:\n%s", buf.String())
+	}
+}

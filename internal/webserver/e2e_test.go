@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -74,38 +75,47 @@ func TestServePairE2E_FullLifecycle(t *testing.T) {
 		t.Fatalf("POST /api/pair: expected 200, got %d", pairResp.StatusCode)
 	}
 
+	body, err := io.ReadAll(pairResp.Body)
+	if err != nil {
+		t.Fatalf("read /api/pair body: %v", err)
+	}
 	var pr PairResponse
-	if err := json.NewDecoder(pairResp.Body).Decode(&pr); err != nil {
+	if err := json.Unmarshal(body, &pr); err != nil {
 		t.Fatalf("decode PairResponse: %v", err)
 	}
 	if len(pr.Code) != 6 {
 		t.Errorf("expected 6-digit code, got %q", pr.Code)
 	}
-	if pr.Token == "" {
-		t.Fatal("token is empty")
-	}
 	if pr.QR == "" {
 		t.Error("QR data is empty")
 	}
+	// The endpoint is unauthenticated: the token must not be in this body.
+	if strings.Contains(string(body), `"token"`) {
+		t.Errorf("unauthenticated /api/pair leaked a token: %s", body)
+	}
+
+	// The operator learns the token from the startup banner; a same-package
+	// test reads it off the server instead.
+	token := activeToken(t, srv)
 
 	// --- Step 3: GET /api/status — should be pending ---
-	assertStatus(t, baseURL, pr.Token, PairStatusPending)
+	assertStatus(t, baseURL, token, PairStatusPending)
 
 	// --- Step 4: approve the code (simulates mobile app) ---
 	approvedToken, err := srv.PairingManager().Approve(pr.Code)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if approvedToken != pr.Token {
-		t.Errorf("Approve returned token %q, expected %q", approvedToken, pr.Token)
+	if approvedToken != token {
+		t.Errorf("Approve returned token %q, expected %q", approvedToken, token)
 	}
 
 	// --- Step 5: GET /api/status — should be approved ---
-	assertStatus(t, baseURL, pr.Token, PairStatusApproved)
+	assertStatus(t, baseURL, token, PairStatusApproved)
 
 	// --- Step 6: authenticated GET / should NOT redirect ---
 	req, _ := http.NewRequest("GET", baseURL+"/", nil)
-	req.AddCookie(&http.Cookie{Name: "pi_token", Value: pr.Token})
+	req.AddCookie(&http.Cookie{Name: "pi_token", Value: token})
 	resp, err = noRedirect.Do(req)
 	if err != nil {
 		t.Fatalf("authenticated GET /: %v", err)
@@ -127,7 +137,7 @@ func TestServePairE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// --- Step 8: WebSocket endpoint rejects missing session ID ---
-	wsResp, err = noRedirect.Get(baseURL + "/ws/?token=" + pr.Token)
+	wsResp, err = noRedirect.Get(baseURL + "/ws/?token=" + token)
 	if err != nil {
 		t.Fatalf("GET /ws/ empty session: %v", err)
 	}
@@ -167,12 +177,13 @@ func TestServePairE2E_PairingExpiry(t *testing.T) {
 
 	var pr PairResponse
 	json.NewDecoder(pairResp.Body).Decode(&pr)
+	token := activeToken(t, srv)
 
 	// Wait for expiry.
 	time.Sleep(5 * time.Millisecond)
 
 	// Status should be expired.
-	assertStatus(t, baseURL, pr.Token, PairStatusExpired)
+	assertStatus(t, baseURL, token, PairStatusExpired)
 
 	// Approve should fail.
 	_, err = srv.PairingManager().Approve(pr.Code)
@@ -203,26 +214,26 @@ func TestServePairE2E_MultiplePairs(t *testing.T) {
 	// Create the first pair and approve it. The server caches the "active
 	// pair" while it's pending, so a second POST /api/pair would otherwise
 	// return the same code/token instead of a fresh pair.
-	pr1 := createPair(t, baseURL, "/tmp/project-a")
+	pr1, token1 := createPair(t, srv, baseURL, "/tmp/project-a")
 	if _, err := srv.PairingManager().Approve(pr1.Code); err != nil {
 		t.Fatalf("Approve pr1: %v", err)
 	}
 
 	// Now create a second, independent pair.
-	pr2 := createPair(t, baseURL, "/tmp/project-b")
+	pr2, token2 := createPair(t, srv, baseURL, "/tmp/project-b")
 
 	if pr1.Code == pr2.Code {
 		t.Error("codes should be unique")
 	}
-	if pr1.Token == pr2.Token {
+	if token1 == token2 {
 		t.Error("tokens should be unique")
 	}
 
-	assertStatus(t, baseURL, pr1.Token, PairStatusApproved)
-	assertStatus(t, baseURL, pr2.Token, PairStatusPending)
+	assertStatus(t, baseURL, token1, PairStatusApproved)
+	assertStatus(t, baseURL, token2, PairStatusPending)
 
 	// Verify project isolation.
-	proj, err := srv.PairingManager().GetProject(pr1.Token)
+	proj, err := srv.PairingManager().GetProject(token1)
 	if err != nil {
 		t.Fatalf("GetProject: %v", err)
 	}
@@ -257,11 +268,11 @@ func TestServePairE2E_PairRedirectAfterApproval(t *testing.T) {
 	}
 
 	// Create and approve a pair.
-	pr := createPair(t, baseURL, "/tmp/redir-test")
+	pr, token := createPair(t, srv, baseURL, "/tmp/redir-test")
 	srv.PairingManager().Approve(pr.Code)
 
 	// GET /pair?token=<approved> should redirect to / with cookie.
-	resp, err := noRedirect.Get(baseURL + "/pair?token=" + pr.Token)
+	resp, err := noRedirect.Get(baseURL + "/pair?token=" + token)
 	if err != nil {
 		t.Fatalf("GET /pair?token: %v", err)
 	}
@@ -277,7 +288,7 @@ func TestServePairE2E_PairRedirectAfterApproval(t *testing.T) {
 	// Verify cookie was set.
 	var foundCookie bool
 	for _, c := range resp.Cookies() {
-		if c.Name == "pi_token" && c.Value == pr.Token {
+		if c.Name == "pi_token" && c.Value == token {
 			foundCookie = true
 			break
 		}
@@ -289,7 +300,9 @@ func TestServePairE2E_PairRedirectAfterApproval(t *testing.T) {
 
 // --- helpers ---
 
-func createPair(t *testing.T, baseURL, project string) PairResponse {
+// createPair posts /api/pair and returns the public response along with the
+// token the server kept to itself.
+func createPair(t *testing.T, srv *ServerV2, baseURL, project string) (PairResponse, string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"project":%q}`, project)
 	resp, err := http.Post(baseURL+"/api/pair", "application/json", strings.NewReader(body))
@@ -300,11 +313,31 @@ func createPair(t *testing.T, baseURL, project string) PairResponse {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/pair: expected 200, got %d", resp.StatusCode)
 	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /api/pair body: %v", err)
+	}
+	if strings.Contains(string(raw), `"token"`) {
+		t.Fatalf("unauthenticated /api/pair leaked a token: %s", raw)
+	}
 	var pr PairResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+	if err := json.Unmarshal(raw, &pr); err != nil {
 		t.Fatalf("decode PairResponse: %v", err)
 	}
-	return pr
+	return pr, activeToken(t, srv)
+}
+
+// activeToken reads the token the server holds for the pair currently on
+// offer. It never travels over HTTP any more, so the test takes the same route
+// the operator does — straight from the server.
+func activeToken(t *testing.T, srv *ServerV2) string {
+	t.Helper()
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.activePairToken == "" {
+		t.Fatal("server holds no active pair token")
+	}
+	return srv.activePairToken
 }
 
 func assertStatus(t *testing.T, baseURL, token string, expected PairStatus) {

@@ -186,7 +186,7 @@ func TestBootstrapPair_ReusesPending(t *testing.T) {
 // --- BuildPairQRCode / GenerateQRCode ---
 
 func TestBuildPairQRCode_Valid(t *testing.T) {
-	data, err := BuildPairQRCode("123456", "tok-xyz", "pi-go", "http://pi-go/pair")
+	data, err := BuildPairQRCode("123456", "pi-go", "http://pi-go/pair")
 	if err != nil {
 		t.Fatalf("BuildPairQRCode: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestBuildPairQRCode_Valid(t *testing.T) {
 }
 
 func TestBuildPairQRCode_MinimalArgs(t *testing.T) {
-	data, err := BuildPairQRCode("", "", "", "")
+	data, err := BuildPairQRCode("", "", "")
 	if err != nil {
 		t.Fatalf("BuildPairQRCode: %v", err)
 	}
@@ -250,6 +250,9 @@ func TestPtyPool_GetOrCreate_StartError(t *testing.T) {
 
 // --- WebSocketHandler: CheckOrigin callback ---
 
+// The handler must not accept an upgrade offered by a page on another origin:
+// that is the cross-site path to the terminal. A request with no Origin at all
+// is a non-browser client and stays allowed.
 func TestWebSocketHandler_CheckOrigin(t *testing.T) {
 	sm := NewSessionManager()
 	defer sm.Close()
@@ -258,10 +261,23 @@ func TestWebSocketHandler_CheckOrigin(t *testing.T) {
 	if h.upgrader.CheckOrigin == nil {
 		t.Fatal("expected non-nil CheckOrigin")
 	}
-	r := httptest.NewRequest("GET", "/ws/test", nil)
-	r.Header.Set("Origin", "http://evil.example.com")
-	if !h.upgrader.CheckOrigin(r) {
-		t.Error("expected CheckOrigin to return true for any origin")
+
+	cross := httptest.NewRequest("GET", "/ws/test", nil)
+	cross.Header.Set("Origin", "http://evil.example.com")
+	if h.upgrader.CheckOrigin(cross) {
+		t.Error("CheckOrigin accepted a cross-origin upgrade")
+	}
+
+	same := httptest.NewRequest("GET", "/ws/test", nil)
+	same.Host = "127.0.0.1:8765"
+	same.Header.Set("Origin", "http://127.0.0.1:8765")
+	if !h.upgrader.CheckOrigin(same) {
+		t.Error("CheckOrigin rejected a same-origin upgrade")
+	}
+
+	none := httptest.NewRequest("GET", "/ws/test", nil)
+	if !h.upgrader.CheckOrigin(none) {
+		t.Error("CheckOrigin rejected a request with no Origin header")
 	}
 }
 

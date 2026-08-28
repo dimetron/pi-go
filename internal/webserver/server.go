@@ -140,6 +140,7 @@ func (s *ServerV2) handlePair(w http.ResponseWriter, r *http.Request) {
 				Path:     "/",
 				MaxAge:   3600 * 24,
 				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
 			})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -176,13 +177,16 @@ func (s *ServerV2) handleCreatePair(w http.ResponseWriter, r *http.Request) {
 
 	origin, host := requestOriginAndHost(r)
 	pairURL := origin + "/pair"
-	resp, err := s.getOrCreateActivePair(project, host, pairURL)
+	pair, err := s.getOrCreateActivePair(project, host, pairURL)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create pair: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, resp)
+	// Only the wire fields: this endpoint answers unauthenticated callers, so
+	// pair.Token must not cross it. The caller proves it holds the code by
+	// posting it to /api/pair/submit, and gets the token back as a cookie.
+	writeJSON(w, PairResponse{Code: pair.Code, QR: pair.QR})
 }
 
 // handleStatus checks the status of a pairing token.
@@ -232,12 +236,16 @@ func (s *ServerV2) handleSubmitPairCode(w http.ResponseWriter, r *http.Request) 
 	}
 	s.log.Info("pair code approved", "code", code)
 
+	// SameSite=Strict: this cookie authenticates a terminal that runs arbitrary
+	// commands, so it must never ride along with a request some other site
+	// made.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "pi_token",
 		Value:    token,
 		Path:     "/",
 		MaxAge:   3600 * 24,
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	if isJSONRequest(r) {
@@ -314,11 +322,7 @@ func (s *ServerV2) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upgrade to WebSocket
-	upgrader := &websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
+	upgrader := &websocket.Upgrader{CheckOrigin: checkSameOrigin}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -385,18 +389,51 @@ func requestOriginAndHost(r *http.Request) (origin, host string) {
 	return scheme + "://" + host, host
 }
 
-func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (PairResponse, error) {
+// activePair is the server-side view of the pair currently on offer. It is
+// deliberately not PairResponse: the token belongs to the operator (printed in
+// the startup banner) and to the approved browser (as a cookie), never to an
+// unauthenticated HTTP caller.
+type activePair struct {
+	Code  string
+	Token string
+	QR    string // base64 encoded PNG image
+}
+
+// checkSameOrigin is the websocket.Upgrader CheckOrigin for every upgrade this
+// package performs. It accepts a request whose Origin names the same host the
+// request was addressed to, and a request with no Origin at all — curl, the
+// mobile app and other non-browser clients legitimately send none, and they
+// cannot be coerced by a web page the way a browser can. A browser on any other
+// origin is rejected: without this, any page the operator visits could open a
+// socket to the local terminal and drive it.
+func checkSameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	// "null" (sandboxed iframe, file://) parses cleanly but has no host, so it
+	// can never match and is rejected here.
+	_, host := requestOriginAndHost(r)
+	return strings.EqualFold(u.Host, host)
+}
+
+func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (activePair, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.activePairCode != "" && s.activePairToken != "" {
 		status, err := s.pairingMgr.CheckStatus(s.activePairToken)
 		if err == nil && status == PairStatusPending {
-			qrData, err := BuildPairQRCode(s.activePairCode, s.activePairToken, host, pairURL)
+			qrData, err := BuildPairQRCode(s.activePairCode, host, pairURL)
 			if err != nil {
-				return PairResponse{}, fmt.Errorf("building QR image: %w", err)
+				return activePair{}, fmt.Errorf("building QR image: %w", err)
 			}
-			return PairResponse{
+			return activePair{
 				Code:  s.activePairCode,
 				Token: s.activePairToken,
 				QR:    base64.StdEncoding.EncodeToString(qrData),
@@ -406,7 +443,7 @@ func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (PairRes
 
 	code, token, qrData, err := s.pairingMgr.CreatePairWithContext(project, host, pairURL)
 	if err != nil {
-		return PairResponse{}, err
+		return activePair{}, err
 	}
 	s.activePairCode = code
 	s.activePairToken = token
@@ -417,7 +454,7 @@ func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (PairRes
 	// has no way to learn the code the browser is now waiting on.
 	s.log.Info("pair code issued", "code", code, "project", project)
 
-	return PairResponse{
+	return activePair{
 		Code:  code,
 		Token: token,
 		QR:    base64.StdEncoding.EncodeToString(qrData),
@@ -445,11 +482,11 @@ func (s *ServerV2) BootstrapPair(project string) (string, string, error) {
 		project = "."
 	}
 
-	resp, err := s.getOrCreateActivePair(project, "pi-go", "")
+	pair, err := s.getOrCreateActivePair(project, "pi-go", "")
 	if err != nil {
 		return "", "", err
 	}
-	return resp.Code, resp.Token, nil
+	return pair.Code, pair.Token, nil
 }
 
 // Addr returns the actual listen address (reflects the bound port when using :0).

@@ -135,7 +135,9 @@
                 return r.json();
             })
             .then(data => {
-                currentToken = data.token;
+                // No token here: /api/pair is unauthenticated, so the response
+                // carries only the code and the QR. The cookie set by
+                // /api/pair/submit is what authenticates this browser.
                 codeInput.value = '';
                 setSubmitting(false);
 

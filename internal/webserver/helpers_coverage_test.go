@@ -78,7 +78,7 @@ func TestCreatePairWithContextDefaultsHost(t *testing.T) {
 }
 
 func TestBuildPairQRCode(t *testing.T) {
-	png, err := BuildPairQRCode("123456", "tok-1", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
+	png, err := BuildPairQRCode("123456", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
 	if err != nil {
 		t.Fatalf("BuildPairQRCode() error = %v", err)
 	}

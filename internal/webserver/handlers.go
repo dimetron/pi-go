@@ -34,11 +34,14 @@ type Config struct {
 	Logger         *slog.Logger // if nil, a no-op logger is used
 }
 
-// DefaultAddr is the listen address used when Config.Addr is empty. 8765 is
+// DefaultAddr is the listen address used when Config.Addr is empty. It binds
+// loopback only: this server hands whoever pairs with it a terminal running the
+// agent, so exposing it to the network is a decision an operator makes
+// explicitly with --addr (e.g. --addr 0.0.0.0:8765), never a default. 8765 is
 // picked to stay clear of the 8080/3000 range every other local dev server
 // squats on, so `pi serve` does not collide with whatever the project itself
 // is running.
-const DefaultAddr = ":8765"
+const DefaultAddr = "127.0.0.1:8765"
 
 // NewServer creates a new web server with the given configuration.
 func NewServer(cfg Config) *Server {
@@ -96,6 +99,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 				Path:     "/",
 				MaxAge:   3600 * 24, // 24 hours
 				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
 			})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
@@ -128,8 +132,9 @@ func (s *Server) handleCreatePair(w http.ResponseWriter, r *http.Request) {
 		req.Project = "."
 	}
 
-	// Create pairing
-	code, token, qrData, err := s.pairingManager.CreatePair(req.Project)
+	// Create pairing. The token is intentionally dropped: this endpoint has no
+	// authentication, so the response carries only the public code and QR.
+	code, _, qrData, err := s.pairingManager.CreatePair(req.Project)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create pair: %v", err), http.StatusInternalServerError)
 		return
@@ -139,9 +144,8 @@ func (s *Server) handleCreatePair(w http.ResponseWriter, r *http.Request) {
 	qrBase64 := base64.StdEncoding.EncodeToString(qrData)
 
 	resp := PairResponse{
-		Code:  code,
-		Token: token,
-		QR:    qrBase64,
+		Code: code,
+		QR:   qrBase64,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -244,11 +248,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upgrade to WebSocket
-	upgrader := &websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true // Allow all origins for development
-		},
-	}
+	upgrader := &websocket.Upgrader{CheckOrigin: checkSameOrigin}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		// Connection upgrade failed

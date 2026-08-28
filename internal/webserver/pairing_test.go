@@ -301,7 +301,7 @@ func TestGenerateQRCode(t *testing.T) {
 }
 
 func TestBuildQRPayload_IncludesHostAndURL(t *testing.T) {
-	payload, err := buildQRPayload("123456", "abc-token", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
+	payload, err := buildQRPayload("123456", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
 	if err != nil {
 		t.Fatalf("buildQRPayload failed: %v", err)
 	}
@@ -314,8 +314,10 @@ func TestBuildQRPayload_IncludesHostAndURL(t *testing.T) {
 	if decoded["code"] != "123456" {
 		t.Fatalf("unexpected code in payload: %q", decoded["code"])
 	}
-	if decoded["token"] != "abc-token" {
-		t.Fatalf("unexpected token in payload: %q", decoded["token"])
+	// The QR is rendered into the unauthenticated /api/pair response, so a
+	// token in the payload would leak exactly what the JSON no longer carries.
+	if _, ok := decoded["token"]; ok {
+		t.Fatalf("QR payload must not carry a token, got %q", decoded["token"])
 	}
 	if decoded["server"] != "127.0.0.1:8080" {
 		t.Fatalf("unexpected server in payload: %q", decoded["server"])
