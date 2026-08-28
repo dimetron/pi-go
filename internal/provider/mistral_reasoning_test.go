@@ -243,6 +243,48 @@ func TestMistralMessageThinking(t *testing.T) {
 	if got := mistralMessageThinking(`not json`); got != "" {
 		t.Errorf("mistralMessageThinking(malformed) = %q, want %q", got, "")
 	}
+	if got := mistralMessageThinking(`{"choices":[]}`); got != "" {
+		t.Errorf("mistralMessageThinking(no choices) = %q, want %q", got, "")
+	}
+}
+
+// TestMistralSystemInstruction pins that a system instruction is prepended as a
+// system message rather than dropped, and that it rides alongside the Mistral
+// extra fields.
+func TestMistralSystemInstruction(t *testing.T) {
+	c := newMistralCapture(t, mistralPlainCompletion)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", c.srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("NewMistral() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+		Config:   &genai.GenerateContentConfig{SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: "You are Misty."}}}},
+	}
+	for _, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+	}
+
+	if len(c.bodies) != 1 {
+		t.Fatalf("expected 1 captured request, got %d", len(c.bodies))
+	}
+	messages, _ := c.bodies[0]["messages"].([]any)
+	if len(messages) < 2 {
+		t.Fatalf("expected the system message plus the user message, got %d", len(messages))
+	}
+	first, _ := messages[0].(map[string]any)
+	if role, _ := first["role"].(string); role != "system" {
+		t.Errorf("first message role = %q, want %q", role, "system")
+	}
+	if content, _ := first["content"].(string); !strings.Contains(content, "You are Misty.") {
+		t.Errorf("system message = %q, want it to carry the instruction", content)
+	}
+	if _, ok := c.bodies[0]["prompt_cache_key"].(string); !ok {
+		t.Error("prompt_cache_key missing when a system instruction is present")
+	}
 }
 
 func TestMistralAnswerText(t *testing.T) {
