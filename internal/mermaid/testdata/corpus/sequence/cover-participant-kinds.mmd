@@ -1,0 +1,22 @@
+sequenceDiagram
+    actor User
+    participant Web
+    boundary API
+    control Scheduler
+    entity Record
+    queue Jobs
+    collections Workers
+    database Store
+    User->>Web: open page
+    Web->>API: POST /run
+    API->>Scheduler: enqueue
+    Scheduler->>Jobs: push job
+    Jobs->>Workers: dispatch
+    Workers->>Record: load
+    Record->>Store: read
+    Store-->>Record: row
+    Record-->>Workers: entity
+    Workers-->>Scheduler: done
+    Scheduler-->>API: ok
+    API-->>Web: 200
+    Web-->>User: rendered

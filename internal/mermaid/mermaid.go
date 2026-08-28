@@ -160,7 +160,7 @@ func Render(source string, opts ...Option) (result string) {
 		opt(&cfg)
 	}
 
-	source = stripFrontmatter(source)
+	source = normalizeNewlines(stripFrontmatter(source))
 	dtype := detectDiagramType(source)
 
 	// Get a canvas for any diagram type. The width scope pins the package
@@ -242,7 +242,7 @@ func getThemePtr(name string) *renderer.Theme {
 // It detects the diagram type and dispatches to the appropriate parser.
 // Currently only flowcharts are supported; other types return an empty graph.
 func Parse(source string) *graph.Graph {
-	source = stripFrontmatter(source)
+	source = normalizeNewlines(stripFrontmatter(source))
 	dtype := detectDiagramType(source)
 
 	switch dtype {
@@ -288,7 +288,7 @@ func RenderCells(source string, opts ...Option) (rows [][]Cell) {
 		opt(&cfg)
 	}
 
-	source = stripFrontmatter(source)
+	source = normalizeNewlines(stripFrontmatter(source))
 	dtype := detectDiagramType(source)
 
 	var canvas *renderer.Canvas
@@ -335,4 +335,21 @@ func safeCell(r rune) rune {
 		return ' '
 	}
 	return r
+}
+
+// normalizeNewlines folds CRLF and lone CR line endings to LF.
+//
+// Diagram source does not always arrive with Unix endings: a file authored on
+// Windows carries CRLF, and so does anything that took a round trip through a
+// tool that rewrote them. Only some of the seventeen parsers tolerate the
+// stray CR — the flowchart one does, because it trims each line — while
+// others carry it into a label and draw it as a spurious cell. Folding once at
+// the entry points means every parser downstream sees the endings it was
+// written against.
+func normalizeNewlines(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }

@@ -35,6 +35,16 @@ func widestLine(s string) int {
 	return widest
 }
 
+// foldCR folds CRLF and lone CR endings to LF, so a comparison is about the
+// rendered art rather than about how git checked the file out.
+func foldCR(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
 // corpusCase is one .mmd input paired with the golden it renders to.
 type corpusCase struct {
 	name   string // "flowchart/docs-flowchart-1a2b3c4d"
@@ -100,7 +110,12 @@ func TestGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("missing golden (run with -update to approve): %v", err)
 			}
-			if got != string(want) {
+			// Compare with line endings folded. A checkout on Windows converts
+			// these files to CRLF unless .gitattributes says otherwise, and a
+			// golden that differs only in its line endings is not a rendering
+			// difference — it is a checkout difference, and failing on it tells
+			// nobody anything useful.
+			if got != foldCR(string(want)) {
 				t.Errorf("output differs from approved golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
 			}
 		})

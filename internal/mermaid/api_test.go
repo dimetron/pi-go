@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dimetron/pi-go/internal/mermaid/diagram"
 	"github.com/dimetron/pi-go/internal/mermaid/graph"
 	"github.com/dimetron/pi-go/internal/mermaid/renderer"
 )
@@ -390,5 +391,63 @@ func TestEdgeRoutingIsNotClipped(t *testing.T) {
 		case '─', '━', '┄', '╌':
 			t.Errorf("line %d ends with an unterminated stroke in the final column: the edge was clipped", i)
 		}
+	}
+}
+
+// TestWithWidthOverrideIsScoped covers the width override and its scope
+// helper. The width is package state that fourteen renderers read directly,
+// so the scope must restore the previous value even when the body panics —
+// otherwise one bad render leaves every later diagram sized wrong.
+func TestWithWidthOverrideIsScoped(t *testing.T) {
+	diagram.SetWidthOverride(0)
+	defer diagram.SetWidthOverride(0)
+
+	diagram.SetWidthOverride(133)
+	if got := diagram.UsableWidth(); got != 133 {
+		t.Fatalf("UsableWidth = %d, want 133", got)
+	}
+
+	diagram.WithWidthScope(77, func() {
+		if got := diagram.UsableWidth(); got != 77 {
+			t.Errorf("inside scope UsableWidth = %d, want 77", got)
+		}
+	})
+	if got := diagram.UsableWidth(); got != 133 {
+		t.Errorf("after scope UsableWidth = %d, want the previous 133", got)
+	}
+
+	func() {
+		defer func() { _ = recover() }()
+		diagram.WithWidthScope(55, func() { panic("boom") })
+	}()
+	if got := diagram.UsableWidth(); got != 133 {
+		t.Errorf("after a panicking scope UsableWidth = %d, want the previous 133", got)
+	}
+}
+
+// TestSolidThemesColorTreemapRegions covers the depth-based region coloring
+// that only the solid-background themes carry. A treemap is the diagram that
+// uses it: each nested region takes a shade derived from its depth, so the
+// path is unreachable through the flowchart sample the other theme test uses.
+func TestSolidThemesColorTreemapRegions(t *testing.T) {
+	const src = `treemap-beta
+    "infra"
+        "compute"
+            "vm": 40
+            "container": 25
+        "storage"
+            "block": 20
+            "object": 15
+`
+	for _, theme := range []string{"blueprint", "slate", "sunset", "gruvbox", "monokai"} {
+		t.Run(theme, func(t *testing.T) {
+			got := Render(src, WithTheme(theme), WithWidth(goldenWidth))
+			if got == "" {
+				t.Fatal("themed treemap rendered empty")
+			}
+			if !strings.Contains(got, "\x1b[") {
+				t.Error("solid theme produced no color")
+			}
+		})
 	}
 }
