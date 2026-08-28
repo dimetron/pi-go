@@ -118,6 +118,25 @@ func (c *Canvas) Put(row, col int, ch rune, merge bool, style string) {
 	if row < 0 || row >= c.Height || col < 0 || col >= c.Width {
 		return
 	}
+	// Neutralize control characters at the one gate every glyph passes
+	// through. Diagram text is attacker-influenceable — it arrives in a model
+	// reply, and a model can be steered by a page it fetched or a file it was
+	// asked to summarize — and a label carrying OSC 52 writes the viewer's
+	// clipboard, OSC 0 rewrites the window title, and stray CSI corrupts the
+	// alternate screen.
+	//
+	// The parser has stripControlChars, but it reaches only the flowchart
+	// node-label path: edge labels leaked, and so did the other sixteen
+	// diagram types. Guarding per parser has already failed once inside the
+	// flowchart parser itself, so the check belongs here, where it covers
+	// every renderer and every output form — ToString, ToColorString and
+	// ToStyledPairs alike.
+	//
+	// A blank rather than a drop: the canvas is a fixed grid, so removing a
+	// cell would shift the rest of the row.
+	if ch < 0x20 || ch == 0x7f {
+		ch = ' '
+	}
 	if ch == ' ' {
 		return
 	}

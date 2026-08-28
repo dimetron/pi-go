@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dimetron/pi-go/internal/mermaid/graph"
 	"github.com/dimetron/pi-go/internal/mermaid/renderer"
@@ -243,5 +244,101 @@ func TestRenderASCIIAndPaddingOptions(t *testing.T) {
 	}
 	if tight == loose {
 		t.Error("WithPadding had no effect on the render")
+	}
+}
+
+// escapeProbes are diagram sources carrying terminal control sequences in
+// positions a model can reach. OSC 52 writes the viewer's clipboard on several
+// terminals and OSC 0 rewrites the window title, so neither may survive to a
+// caller. Cases span several diagram types because the parser-level guard
+// covered only flowchart node labels.
+var escapeProbes = map[string]string{
+	"flowchart node label": "graph LR\n    A[\x1b]0;PWNED\x07] --> B\n",
+	"flowchart edge label": "graph LR\n    A -->|\x1b]0;PWNED\x07| B\n",
+	"sequence message":     "sequenceDiagram\n    participant A\n    A->>A: \x1b]52;c;cHduZWQ=\x07\n",
+	"sequence participant": "sequenceDiagram\n    participant A as \x1b[31mRED\x1b[0m\n    A->>A: hi\n",
+	"pie label":            "pie\n    \"\x1b]0;PWNED\x07\" : 40\n    \"ok\" : 60\n",
+	"mindmap node":         "mindmap\n  root\n    \x1b]0;PWNED\x07\n",
+	"class name":           "classDiagram\n    class \x1b]0;X\x07\n",
+	"state label":          "stateDiagram-v2\n    [*] --> \x1b]0;X\x07\n",
+}
+
+// TestRenderCellsStripsControlCharacters is the regression test for diagram
+// labels smuggling terminal escapes to the screen. The TUI draws these cells
+// directly, deliberately bypassing the markdown renderer because the art
+// already carries its own styling — which is exactly why the cells themselves
+// must be clean.
+func TestRenderCellsStripsControlCharacters(t *testing.T) {
+	for name, src := range escapeProbes {
+		t.Run(name, func(t *testing.T) {
+			for y, row := range RenderCells(src, WithWidth(100)) {
+				for x, c := range row {
+					if c.Char != 0 && (c.Char < 0x20 || c.Char == 0x7f) {
+						t.Fatalf("cell (%d,%d) carries control character %q", y, x, c.Char)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestRenderStripsControlCharacters covers the string entry point too, so a
+// non-TUI caller is not left holding the escapes.
+func TestRenderStripsControlCharacters(t *testing.T) {
+	for name, src := range escapeProbes {
+		t.Run(name, func(t *testing.T) {
+			out := Render(src, WithWidth(100))
+			if strings.ContainsRune(out, 0x1b) || strings.ContainsRune(out, 0x07) {
+				t.Errorf("rendered output carries a terminal escape")
+			}
+		})
+	}
+}
+
+// TestRenderCellsSurvivesMalformedInput asserts RenderCells has its own panic
+// guard. The TUI calls only this function, from inside the View path, so a
+// panic here would unwind into the render loop and end the session — Render's
+// recover does not cover it.
+func TestRenderCellsSurvivesMalformedInput(t *testing.T) {
+	malformed := []string{
+		"graph TD\n    A[unclosed",
+		"graph TD\n    -->-->-->",
+		"packet-beta\n    0-4294967295: \"x\"\n",
+		"packet-beta\n    notanumber-9: \"x\"\n",
+		"sequenceDiagram\n    A->>",
+		"mindmap\n" + strings.Repeat("  ", 500) + "deep\n",
+		"graph TD\n" + strings.Repeat("subgraph S\n", 200) + strings.Repeat("end\n", 200),
+		"pie\n    \"x\" : notanumber\n",
+		"xychart-beta\n    bar [notanumber]\n",
+		"gantt\n    section\n    :::::\n",
+	}
+	for i, src := range malformed {
+		if got := RenderCells(src, WithWidth(80)); got == nil {
+			t.Logf("case %d returned nil (recovered or unrenderable), which is the contract", i)
+		}
+	}
+}
+
+// TestPacketBitRangeIsBounded pins the allocation cap. The renderer expands one
+// row per 32 bits across a field's range, so an unbounded bit index taken from
+// input is an allocation multiplier: `0-4294967295` allocated tens of
+// gigabytes and hung the session.
+func TestPacketBitRangeIsBounded(t *testing.T) {
+	for _, src := range []string{
+		"packet-beta\n    0-4294967295: \"x\"\n",
+		"packet-beta\n    0-2000000: \"x\"\n",
+		"packet-beta\n    +2000000000: \"x\"\n",
+		"packet-beta\n    -5--1: \"x\"\n",
+	} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			Render(src, WithWidth(80))
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("render did not finish within 5s for %q", src)
+		}
 	}
 }

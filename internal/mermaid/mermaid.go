@@ -271,7 +271,18 @@ type Cell struct {
 //
 // WithTheme is ignored here; the caller is the theme. A source the engine
 // cannot draw returns nil.
-func RenderCells(source string, opts ...Option) [][]Cell {
+func RenderCells(source string, opts ...Option) (rows [][]Cell) {
+	// Render recovers; this did not — and the TUI calls only this function,
+	// from inside the View path, where a panic anywhere in the adapted parsing
+	// code would unwind into the render loop and take the session down. The
+	// package doc promised panic safety for the package, so the guard was on
+	// the wrong function and the claim was wider than the cover.
+	defer func() {
+		if r := recover(); r != nil {
+			rows = nil
+		}
+	}()
+
 	cfg := defaultConfig()
 	for _, opt := range opts {
 		opt(&cfg)
@@ -289,13 +300,39 @@ func RenderCells(source string, opts ...Option) [][]Cell {
 	}
 
 	pairs := canvas.ToStyledPairs()
-	rows := make([][]Cell, len(pairs))
+	rows = make([][]Cell, len(pairs))
 	for y, row := range pairs {
 		cells := make([]Cell, len(row))
 		for x, p := range row {
-			cells[x] = Cell{Char: p.Char, Style: p.Style}
+			cells[x] = Cell{Char: safeCell(p.Char), Style: p.Style}
 		}
 		rows[y] = cells
 	}
 	return rows
+}
+
+// safeCell neutralizes any control character before it reaches a caller.
+//
+// Diagram source is attacker-influenceable: it arrives in a model reply, and a
+// model can be steered by a fetched page or a file it was asked to summarize.
+// A label carrying OSC 52 writes the viewer's clipboard, OSC 0 rewrites the
+// window title, and stray CSI corrupts the alternate screen — none of which a
+// diagram should be able to do.
+//
+// The parser has stripControlChars, but it reaches only the flowchart
+// node-label path: edge labels leak, and so do the other sixteen diagram
+// types, which have no equivalent. Filtering per parser has already failed
+// once inside the flowchart parser itself, so the guard belongs here, at the
+// single boundary every renderer's output crosses on its way to a caller.
+//
+// A blank is the right substitute rather than dropping the rune, because the
+// canvas is a fixed grid: removing a cell would shift the rest of the row.
+func safeCell(r rune) rune {
+	if r == 0 {
+		return r // an untouched cell; callers render it as a blank
+	}
+	if r < 0x20 || r == 0x7f {
+		return ' '
+	}
+	return r
 }

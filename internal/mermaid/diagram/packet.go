@@ -54,16 +54,25 @@ func parsePacket(source string) *packetData {
 		}
 
 		if m := rePacketRange.FindStringSubmatch(stripped); m != nil {
-			start, _ := strconv.Atoi(m[1])
-			end, _ := strconv.Atoi(m[2])
+			start, err1 := strconv.Atoi(m[1])
+			end, err2 := strconv.Atoi(m[2])
+			if err1 != nil || err2 != nil || !packetRangeOK(start, end) {
+				continue
+			}
 			pd.fields = append(pd.fields, packetField{start, end, strings.TrimSpace(m[3])})
 			nextBit = end + 1
 			continue
 		}
 		if m := rePacketAuto.FindStringSubmatch(stripped); m != nil {
-			count, _ := strconv.Atoi(m[1])
+			count, err := strconv.Atoi(m[1])
+			if err != nil || count <= 0 || count > maxPacketBits {
+				continue
+			}
 			start := nextBit
 			end := start + count - 1
+			if !packetRangeOK(start, end) {
+				continue
+			}
 			pd.fields = append(pd.fields, packetField{start, end, strings.TrimSpace(m[2])})
 			nextBit = end + 1
 			continue
@@ -87,6 +96,21 @@ type packetRowField struct {
 // RenderPacket parses and renders a Mermaid packet diagram: bit-aligned
 // field boxes that wrap every rowBits (32) bits, with boundary bit numbers
 // and a legend for labels too wide to fit their field.
+// maxPacketBits bounds how many bits a packet diagram may describe.
+//
+// The renderer expands one row per 32 bits across a field's range, so the bit
+// index is an allocation multiplier taken straight from the input. The Atoi
+// errors were discarded and no bound applied, which made `0-4294967295: "x"` —
+// three lines a model can emit unprompted — allocate tens of gigabytes and
+// hang the session. 4096 bits is 512 bytes, far beyond any protocol header
+// anyone draws; a field outside it is malformed input, not a big diagram.
+const maxPacketBits = 4096
+
+// packetRangeOK reports whether a bit range is well formed and within bounds.
+func packetRangeOK(start, end int) bool {
+	return start >= 0 && end >= start && end < maxPacketBits
+}
+
 func RenderPacket(source string, useASCII bool, theme *renderer.Theme) *renderer.Canvas {
 	pd := parsePacket(source)
 	if len(pd.fields) == 0 {
