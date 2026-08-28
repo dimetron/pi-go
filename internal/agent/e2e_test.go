@@ -7,12 +7,14 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
 	piSession "github.com/dimetron/pi-go/internal/session"
@@ -594,5 +596,125 @@ func TestE2ESessionBranchingWorkflow(t *testing.T) {
 	active := fileSvc.ActiveBranch(sessionID)
 	if active != "main" {
 		t.Errorf("active branch after switch = %q, want %q", active, "main")
+	}
+}
+
+// declRecordingLLM records the function declarations each request carries, so
+// a test can assert what the model was actually offered rather than inferring
+// it from behaviour.
+type declRecordingLLM struct {
+	*scenarioLLM
+
+	mu    sync.Mutex
+	decls []string
+}
+
+func (d *declRecordingLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	if req.Config != nil {
+		d.mu.Lock()
+		for _, gt := range req.Config.Tools {
+			for _, fd := range gt.FunctionDeclarations {
+				d.decls = append(d.decls, fd.Name)
+			}
+		}
+		d.mu.Unlock()
+	}
+	return d.scenarioLLM.GenerateContent(ctx, req, stream)
+}
+
+func (d *declRecordingLLM) declared() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.decls)
+}
+
+// TestE2EToolsetNameCollisionKeepsBothCallable covers the failure that made
+// every turn error out with `duplicate tool: "find"`: an MCP server exposing a
+// tool whose name a built-in already owns. The built-in must keep its name, the
+// server's tool must stay callable under a prefixed one, and neither may be
+// dropped.
+func TestE2EToolsetNameCollisionKeepsBothCallable(t *testing.T) {
+	dir := t.TempDir()
+	serverFind := &fakeTool{name: "find", desc: "find elements on the page"}
+
+	llm := &declRecordingLLM{scenarioLLM: &scenarioLLM{
+		name: "e2e-tool-name-collision",
+		steps: []scenarioStep{
+			// The built-in, under the name the system prompt uses.
+			{functionCall: &genai.FunctionCall{
+				ID:   "call-builtin-find",
+				Name: "find",
+				Args: map[string]any{"pattern": "*.go", "path": dir},
+			}},
+			// The MCP tool, under the name the rename handed it.
+			{functionCall: &genai.FunctionCall{
+				ID:   "call-server-find",
+				Name: "claude-chrome_find",
+				Args: map[string]any{"selector": "button"},
+			}},
+			{text: "Both find tools answered."},
+		},
+	}}
+
+	coreTools, err := tools.CoreTools(testSandbox(t, dir))
+	if err != nil {
+		t.Fatalf("CoreTools() error: %v", err)
+	}
+
+	a, err := New(Config{
+		Model:       llm,
+		Tools:       coreTools,
+		Toolsets:    []tool.Toolset{&fakeToolset{name: "claude-chrome", tools: []tool.Tool{serverFind}}},
+		Instruction: "You are a coding agent.",
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	ctx := context.Background()
+	sessionID, _, err := a.CreateSession(ctx)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	toolResponses := map[string]int{}
+	for event, err := range a.Run(ctx, sessionID, "Use both find tools") {
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		if event == nil || event.Content == nil {
+			continue
+		}
+		for _, p := range event.Content.Parts {
+			if p.FunctionResponse != nil {
+				toolResponses[p.FunctionResponse.Name]++
+			}
+		}
+	}
+
+	for _, name := range []string{"find", "claude-chrome_find"} {
+		if toolResponses[name] == 0 {
+			t.Errorf("no function response for %q; got %v", name, toolResponses)
+		}
+	}
+	if serverFind.ranWith == nil {
+		t.Error("the MCP tool was never invoked under its new name")
+	}
+
+	declared := llm.declared()
+	for _, name := range []string{"find", "claude-chrome_find"} {
+		if !slices.Contains(declared, name) {
+			t.Errorf("declaration %q missing from the request; got %v", name, declared)
+		}
+	}
+	// The renamed tool must not also be advertised under its original name.
+	count := 0
+	for _, d := range declared {
+		if d == "find" {
+			count++
+		}
+	}
+	if want := llm.callIdx; count != want {
+		t.Errorf("%q declared %d times across %d requests, want once per request", "find", count, want)
 	}
 }
