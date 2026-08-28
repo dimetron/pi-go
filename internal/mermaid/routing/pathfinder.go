@@ -39,6 +39,13 @@ type aStarNode struct {
 	index  int // index in the heap
 }
 
+// adjacentToRoute reports whether (col,row) sits directly beside a cell an
+// earlier edge already occupies.
+func adjacentToRoute(soft map[Point]bool, col, row int) bool {
+	return soft[Point{col - 1, row}] || soft[Point{col + 1, row}] ||
+		soft[Point{col, row - 1}] || soft[Point{col, row + 1}]
+}
+
 // nodeHeap implements heap.Interface for A* nodes, ordered by fCost.
 type nodeHeap []*aStarNode
 
@@ -127,6 +134,18 @@ func FindPath(startCol, startRow, endCol, endRow int, isFree func(col, row int) 
 			stepCost := 1.0
 			if soft != nil && soft[nkey] {
 				stepCost += 2.0
+			} else if soft != nil && adjacentToRoute(soft, nc, nr) {
+				// Running immediately alongside another edge was free, so
+				// parallel routes packed into neighboring columns and drew as
+				// a solid block of lines with nothing between them. A cell
+				// beside an existing route now costs a little more than open
+				// space, which spreads the lines apart wherever there is room
+				// and still lets them crowd together where there is not.
+				//
+				// The penalty is deliberately below the cost of stepping onto
+				// a route (2.0) and of turning a corner plus a detour, so it
+				// biases the choice without ever making a longer path win.
+				stepCost += 0.6
 			}
 
 			// Corner penalty: if direction changes from parent's direction
