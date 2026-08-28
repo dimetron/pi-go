@@ -576,7 +576,16 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 	for _, seg := range segments {
 		if seg.diagram != "" {
 			if art := RenderMermaid(seg.diagram, c.mermaidWidth(), c.Palette); art != "" {
-				parts = append(parts, art)
+				// Blank lines around the art. Glamour spaces its own blocks
+				// apart, but the diagram bypasses glamour precisely because it
+				// already carries ANSI — so without this the first row of a
+				// box sits directly against the last line of the prose that
+				// introduces it, and the two read as one paragraph.
+				//
+				// Runs of blank lines are collapsed later by
+				// collapseBlankLines, so adding one here cannot stack up with
+				// the spacing glamour already emitted.
+				parts = append(parts, "\n"+art+"\n")
 				continue
 			}
 			// Not a diagram this renderer models, or too wide for the pane:

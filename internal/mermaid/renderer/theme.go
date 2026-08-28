@@ -430,6 +430,9 @@ func (c *Canvas) ToColorString(theme Theme) string {
 		prevStyle := ""
 		for x := 0; x <= lastCol; x++ {
 			ch := c.grid[y][x]
+			if ch == wideContinuation {
+				continue // the second column of the wide glyph to its left
+			}
 			styleKey := c.styleGrid[y][x]
 			fillKey := c.fillGrid[y][x]
 

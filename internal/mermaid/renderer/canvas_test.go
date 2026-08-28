@@ -177,3 +177,28 @@ func TestStyle(t *testing.T) {
 		t.Errorf("expected myStyle, got %s", s)
 	}
 }
+
+// TestWideGlyphContinuationIsNotEmitted pins the fix for a stray marker after
+// every emoji. A double-width glyph reserves the cell it spills into so the
+// line width stays honest, and that reservation must never reach a caller:
+// ToStyledPairs handed it out as U+FFFF, which a terminal draws as a
+// replacement glyph, so "👤 You" came out as "👤◆ You" in the TUI while the
+// plain-string path looked fine.
+func TestWideGlyphContinuationIsNotEmitted(t *testing.T) {
+	c := NewCanvas(20, 1)
+	c.PutText(0, 0, "👤 You", "label")
+
+	for _, row := range c.ToStyledPairs() {
+		for x, p := range row {
+			if p.Char == wideContinuation {
+				t.Errorf("ToStyledPairs emitted the continuation sentinel at column %d", x)
+			}
+		}
+	}
+	if strings.ContainsRune(c.ToString(), wideContinuation) {
+		t.Error("ToString emitted the continuation sentinel")
+	}
+	if strings.ContainsRune(c.ToColorString(GetTheme("default")), wideContinuation) {
+		t.Error("ToColorString emitted the continuation sentinel")
+	}
+}

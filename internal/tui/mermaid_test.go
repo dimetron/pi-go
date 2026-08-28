@@ -439,3 +439,26 @@ func TestStableFenceLang(t *testing.T) {
 		})
 	}
 }
+
+// TestDiagramIsSeparatedFromProse pins the blank line between a diagram and
+// the text introducing it. The art bypasses glamour because it already carries
+// ANSI, so it gets none of glamour's block spacing for free.
+func TestDiagramIsSeparatedFromProse(t *testing.T) {
+	c := newMermaidChat(t, 100)
+	out := c.RenderMarkdown("Here is the flow:\n\n```mermaid\n" + mermaidSample + "```\n")
+
+	lines := strings.Split(out, "\n")
+	proseAt := -1
+	for i, l := range lines {
+		if strings.Contains(l, "Here is the flow") {
+			proseAt = i
+		}
+	}
+	if proseAt < 0 {
+		t.Fatal("prose line not found")
+	}
+	next := strings.TrimSpace(stripANSICodes(lines[proseAt+1]))
+	if next != "" {
+		t.Errorf("no blank line between prose and diagram; next line is %q", next)
+	}
+}

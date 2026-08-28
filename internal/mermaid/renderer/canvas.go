@@ -403,9 +403,15 @@ type StyledPair struct {
 func (c *Canvas) ToStyledPairs() [][]StyledPair {
 	result := make([][]StyledPair, c.Height)
 	for y := range c.Height {
-		row := make([]StyledPair, c.Width)
+		row := make([]StyledPair, 0, c.Width)
 		for x := range c.Width {
-			row[x] = StyledPair{Char: c.grid[y][x], Style: c.styleGrid[y][x]}
+			// Skip the cell a wide glyph spills into, exactly as ToString
+			// does. Emitting it hands the caller a U+FFFF, which a terminal
+			// draws as a replacement glyph — a stray marker after every emoji.
+			if c.grid[y][x] == wideContinuation {
+				continue
+			}
+			row = append(row, StyledPair{Char: c.grid[y][x], Style: c.styleGrid[y][x]})
 		}
 		result[y] = row
 	}
