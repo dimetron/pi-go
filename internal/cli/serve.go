@@ -36,7 +36,7 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start web server for remote terminal access",
 		Long: `Start a web server that exposes a terminal running the pi-go agent via a browser.
-Users authenticate by scanning a QR code or entering a pair code in the pi-go mobile app.
+Users authenticate by entering the pair code shown at startup.
 Each browser tab gets its own isolated agent session.`,
 		RunE: runServe,
 	}
@@ -113,9 +113,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	printServeBanner(os.Stdout, server.Addr(), project, code)
 
-	// Wait for shutdown signal
-	<-sigChan
-	fmt.Println("\nShutting down...")
+	// Wait for an interrupt, or for pairing to give up.
+	//
+	// Three wrong codes stop the server outright rather than opening a lockout
+	// window. A window would slow a guessing run without ending it, and an
+	// attacker could also trigger it deliberately to deny the operator their
+	// own pairing. Exiting means the only way back is a restart by whoever
+	// controls the machine.
+	select {
+	case <-sigChan:
+		fmt.Println("\nShutting down...")
+	case <-server.LockedOut():
+		fmt.Fprintln(os.Stderr, "\nToo many failed pairing attempts — shutting down.")
+		fmt.Fprintln(os.Stderr, "Restart pi serve to pair again.")
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

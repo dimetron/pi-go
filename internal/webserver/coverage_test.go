@@ -38,7 +38,7 @@ func TestServer_PairingManagerGetter(t *testing.T) {
 
 func TestServer_GetProject_Approved(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/gp-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/gp-project")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestServer_HandleWebSocket_ApprovedTokenUpgradeFails(t *testing.T) {
 	// Approved token passes auth; the upgrade then fails under the plain
 	// httptest.NewRecorder which is not hijackable. The handler must not panic.
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/ws-auth")
+	code, token, err := s.pairingManager.CreatePair("/tmp/ws-auth")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -183,53 +183,16 @@ func TestBootstrapPair_ReusesPending(t *testing.T) {
 	}
 }
 
-// --- BuildPairQRCode / GenerateQRCode ---
-
-func TestBuildPairQRCode_Valid(t *testing.T) {
-	data, err := BuildPairQRCode("123456", "pi-go", "http://pi-go/pair")
-	if err != nil {
-		t.Fatalf("BuildPairQRCode: %v", err)
-	}
-	if len(data) == 0 {
-		t.Fatal("BuildPairQRCode returned empty data")
-	}
-	if string(data[:8]) != "\x89PNG\r\n\x1a\n" {
-		t.Errorf("expected PNG signature")
-	}
-}
-
-func TestBuildPairQRCode_MinimalArgs(t *testing.T) {
-	data, err := BuildPairQRCode("", "", "")
-	if err != nil {
-		t.Fatalf("BuildPairQRCode: %v", err)
-	}
-	if len(data) == 0 {
-		t.Fatal("expected non-empty PNG")
-	}
-}
-
-func TestGenerateQRCode_EmptyError(t *testing.T) {
-	// The skip2/go-qrcode library rejects empty input — covers the
-	// error-wrapping branch in GenerateQRCode.
-	_, err := GenerateQRCode("")
-	if err == nil {
-		t.Fatal("expected error for empty input")
-	}
-	if !strings.Contains(err.Error(), "encode QR PNG") {
-		t.Errorf("expected wrap 'encode QR PNG', got %v", err)
-	}
-}
-
 // --- PairingManager.CreatePairWithContext: default host fallback ---
 
 func TestCreatePairWithContext_EmptyHostDefault(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
-	code, token, qr, err := pm.CreatePairWithContext("/tmp/proj", "   ", "")
+	code, token, err := pm.CreatePairWithContext("/tmp/proj")
 	if err != nil {
 		t.Fatalf("CreatePairWithContext: %v", err)
 	}
-	if len(code) != 6 || token == "" || len(qr) == 0 {
-		t.Fatalf("unexpected values: code=%q token=%q qrlen=%d", code, token, len(qr))
+	if len(code) != 6 || token == "" {
+		t.Fatalf("unexpected values: code=%q token=%q", code, token)
 	}
 }
 
@@ -570,11 +533,11 @@ func TestPtyBridge_Close_WithConn(t *testing.T) {
 
 func TestCreatePair_DefaultsHost(t *testing.T) {
 	pm := NewPairingManager(time.Minute)
-	code, token, qr, err := pm.CreatePair("/tmp/cp-def")
+	code, token, err := pm.CreatePair("/tmp/cp-def")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
-	if len(code) != 6 || token == "" || len(qr) == 0 {
+	if len(code) != 6 || token == "" {
 		t.Fatal("bad values")
 	}
 }

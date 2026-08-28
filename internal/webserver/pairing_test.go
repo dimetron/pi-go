@@ -2,7 +2,6 @@ package webserver
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -11,7 +10,7 @@ import (
 func TestPairing_CreatePair(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
-	code, token, qrData, err := pm.CreatePair("/tmp/test-project")
+	code, token, err := pm.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -32,15 +31,12 @@ func TestPairing_CreatePair(t *testing.T) {
 	}
 
 	// Verify QR data is not empty
-	if len(qrData) == 0 {
-		t.Error("QR data should not be empty")
-	}
 }
 
 func TestPairing_CheckStatus_Pending(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
-	code, token, _, err := pm.CreatePair("/tmp/test-project")
+	code, token, err := pm.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -60,7 +56,7 @@ func TestPairing_CheckStatus_Pending(t *testing.T) {
 func TestPairing_Approve(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
-	code, token, _, err := pm.CreatePair("/tmp/test-project")
+	code, token, err := pm.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -103,7 +99,7 @@ func TestPairing_Expired(t *testing.T) {
 	// Use very short timeout for testing
 	pm := NewPairingManager(1 * time.Millisecond)
 
-	code, token, _, err := pm.CreatePair("/tmp/test-project")
+	code, token, err := pm.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -130,7 +126,7 @@ func TestPairing_GetProject(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
 	project := "/tmp/test-project"
-	code, token, _, err := pm.CreatePair(project)
+	code, token, err := pm.CreatePair(project)
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -159,7 +155,7 @@ func TestPairing_GetProject(t *testing.T) {
 func TestPairing_CleanupExpired(t *testing.T) {
 	pm := NewPairingManager(1 * time.Millisecond)
 
-	_, token, _, err := pm.CreatePair("/tmp/test-project")
+	_, token, err := pm.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -187,12 +183,12 @@ func TestPairing_MultiplePairs(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
 	// Create multiple pairs
-	code1, token1, _, err := pm.CreatePair("/tmp/project1")
+	code1, token1, err := pm.CreatePair("/tmp/project1")
 	if err != nil {
 		t.Fatalf("CreatePair 1 failed: %v", err)
 	}
 
-	code2, token2, _, err := pm.CreatePair("/tmp/project2")
+	code2, token2, err := pm.CreatePair("/tmp/project2")
 	if err != nil {
 		t.Fatalf("CreatePair 2 failed: %v", err)
 	}
@@ -255,78 +251,6 @@ func TestValidateCode(t *testing.T) {
 	}
 }
 
-func TestParseQRData(t *testing.T) {
-	// Test JSON format
-	code, token, err := ParseQRData(`{"code":"123456","token":"abc-123"}`)
-	if err != nil {
-		t.Fatalf("ParseQRData JSON failed: %v", err)
-	}
-	if code != "123456" {
-		t.Errorf("expected code 123456, got %q", code)
-	}
-	if token != "abc-123" {
-		t.Errorf("expected token abc-123, got %q", token)
-	}
-
-	// Test colon-separated format
-	code, token, err = ParseQRData("654321:xyz-789")
-	if err != nil {
-		t.Fatalf("ParseQRData colon failed: %v", err)
-	}
-	if code != "654321" {
-		t.Errorf("expected code 654321, got %q", code)
-	}
-	if token != "xyz-789" {
-		t.Errorf("expected token xyz-789, got %q", token)
-	}
-
-	// Test invalid format
-	_, _, err = ParseQRData("invalid")
-	if err == nil {
-		t.Error("expected error for invalid format")
-	}
-}
-
-func TestGenerateQRCode(t *testing.T) {
-	png, err := GenerateQRCode(`{"code":"123456","token":"abc-123","server":"pi-go"}`)
-	if err != nil {
-		t.Fatalf("GenerateQRCode failed: %v", err)
-	}
-	if len(png) == 0 {
-		t.Fatal("GenerateQRCode returned empty PNG")
-	}
-	if !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
-		t.Fatalf("GenerateQRCode did not return PNG data")
-	}
-}
-
-func TestBuildQRPayload_IncludesHostAndURL(t *testing.T) {
-	payload, err := buildQRPayload("123456", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
-	if err != nil {
-		t.Fatalf("buildQRPayload failed: %v", err)
-	}
-
-	var decoded map[string]string
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
-	}
-
-	if decoded["code"] != "123456" {
-		t.Fatalf("unexpected code in payload: %q", decoded["code"])
-	}
-	// The QR is rendered into the unauthenticated /api/pair response, so a
-	// token in the payload would leak exactly what the JSON no longer carries.
-	if _, ok := decoded["token"]; ok {
-		t.Fatalf("QR payload must not carry a token, got %q", decoded["token"])
-	}
-	if decoded["server"] != "127.0.0.1:8080" {
-		t.Fatalf("unexpected server in payload: %q", decoded["server"])
-	}
-	if decoded["url"] != "http://127.0.0.1:8080/pair" {
-		t.Fatalf("unexpected url in payload: %q", decoded["url"])
-	}
-}
-
 // TestCreatePairWithContext_ExhaustsRetries covers the collision-retry
 // branch added when CreatePairWithContext grew a non-collision guarantee
 // (1,000,000 codes is small enough that tight test loops hit the rare-but-
@@ -360,12 +284,11 @@ func TestCreatePairWithContext_ExhaustsRetries(t *testing.T) {
 	var (
 		code      string
 		token     string
-		qrData    []byte
 		createErr error
 	)
 	go func() {
 		defer close(done)
-		code, token, qrData, createErr = pm.CreatePairWithContext("/tmp/exhaust", "pi-go", "")
+		code, token, createErr = pm.CreatePairWithContext("/tmp/exhaust")
 	}()
 
 	select {
@@ -375,7 +298,7 @@ func TestCreatePairWithContext_ExhaustsRetries(t *testing.T) {
 	}
 
 	if createErr == nil {
-		t.Fatalf("expected exhausted-retries error, got code=%q token=%q qr=%dB", code, token, len(qrData))
+		t.Fatalf("expected exhausted-retries error, got code=%q token=%q", code, token)
 	}
 	want := "exhausted 8 retries"
 	if !bytes.Contains([]byte(createErr.Error()), []byte(want)) {
@@ -402,7 +325,7 @@ func TestCreatePairWithContext_FirstSlotSucceedsOnRetry(t *testing.T) {
 
 	// 1,000,000 - 3 = 999,997 free codes, so the next pick lands in
 	// microseconds. No need to bound this with a timeout.
-	code, token, qrData, err := pm.CreatePairWithContext("/tmp/first-slot", "pi-go", "")
+	code, token, err := pm.CreatePairWithContext("/tmp/first-slot")
 	if err != nil {
 		t.Fatalf("CreatePairWithContext: %v", err)
 	}
@@ -411,9 +334,6 @@ func TestCreatePairWithContext_FirstSlotSucceedsOnRetry(t *testing.T) {
 	}
 	if token == "" {
 		t.Error("token should not be empty")
-	}
-	if len(qrData) == 0 {
-		t.Error("qr data should not be empty")
 	}
 }
 

@@ -86,7 +86,7 @@ func TestServePairE2E_FullLifecycle(t *testing.T) {
 	if len(pr.Code) != 6 {
 		t.Errorf("expected 6-digit code, got %q", pr.Code)
 	}
-	if pr.QR == "" {
+	if pr.Code == "" {
 		t.Error("QR data is empty")
 	}
 	// The endpoint is unauthenticated: the token must not be in this body.

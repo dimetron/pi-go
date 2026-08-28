@@ -1,7 +1,6 @@
 package webserver
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -72,39 +71,7 @@ func TestHandleCreatePair_NoTokenInResponse(t *testing.T) {
 			if strings.Contains(raw, token) {
 				t.Errorf("token %q appears in the response body", token)
 			}
-
-			// The QR is part of the same public response, so the payload it
-			// encodes must be clean too.
-			qr, _ := fields["qr"].(string)
-			if qr == "" {
-				t.Fatal("qr missing from response")
-			}
-			png, err := base64.StdEncoding.DecodeString(qr)
-			if err != nil {
-				t.Fatalf("qr is not base64: %v", err)
-			}
-			if strings.Contains(string(png), token) {
-				t.Error("token is embedded in the QR image payload")
-			}
 		})
-	}
-}
-
-// The QR payload itself, decoded rather than scanned: no token key at all.
-func TestBuildQRPayload_HasNoToken(t *testing.T) {
-	payload, err := buildQRPayload("123456", "127.0.0.1:8765", "http://127.0.0.1:8765/pair")
-	if err != nil {
-		t.Fatalf("buildQRPayload: %v", err)
-	}
-	var decoded map[string]string
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if _, ok := decoded["token"]; ok {
-		t.Errorf("QR payload carries a token: %v", decoded)
-	}
-	if decoded["code"] != "123456" {
-		t.Errorf("code = %q, want 123456", decoded["code"])
 	}
 }
 
@@ -257,7 +224,7 @@ func TestPairCookiesAreSameSiteStrict(t *testing.T) {
 // including the one that would have worked.
 func TestApprove_LocksOutAfterRepeatedBadCodes(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
-	code, _, _, err := pm.CreatePair("/tmp/lockout")
+	code, _, err := pm.CreatePair("/tmp/lockout")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -282,11 +249,12 @@ func TestApprove_LocksOutAfterRepeatedBadCodes(t *testing.T) {
 	}
 }
 
-// The lockout is a window, not a permanent brick: an operator who fat-fingers
-// the code gets another go.
-func TestApprove_LockoutExpires(t *testing.T) {
+// Spending the budget is terminal, not a pause. A timed window would only slow
+// a guessing run down, and an attacker could trigger it deliberately to deny
+// the operator their own pairing; stopping the server means the only way back
+// is a restart by whoever controls the machine.
+func TestApprove_LockoutIsTerminal(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
-	pm.lockout = 10 * time.Millisecond
 
 	for i := 0; i < pm.maxFailures; i++ {
 		if _, err := pm.Approve("000000"); err == nil {
@@ -294,27 +262,39 @@ func TestApprove_LockoutExpires(t *testing.T) {
 		}
 	}
 
-	code, token, _, err := pm.CreatePair("/tmp/after-lockout")
+	// A brand new pair, created after the budget is spent, is still refused —
+	// there is no window to wait out and no way to mint your way back in.
+	code, _, err := pm.CreatePair("/tmp/after-lockout")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
 	if _, err := pm.Approve(code); !errors.Is(err, ErrTooManyAttempts) {
-		t.Fatalf("still inside the window: err = %v, want ErrTooManyAttempts", err)
-	}
-
-	time.Sleep(20 * time.Millisecond)
-
-	got, err := pm.Approve(code)
-	if err != nil {
-		t.Fatalf("approve after lockout: %v", err)
-	}
-	if got != token {
-		t.Errorf("approved token = %q, want %q", got, token)
+		t.Fatalf("approve after lockout = %v, want ErrTooManyAttempts", err)
 	}
 }
 
-// A successful pairing clears the budget, so yesterday's typos cannot combine
-// with today's to lock a working session out.
+// TestLockedOutChannelCloses proves the signal the server shuts down on. Without
+// it three failures would refuse pairing while leaving the process running.
+func TestLockedOutChannelCloses(t *testing.T) {
+	pm := NewPairingManager(5 * time.Minute)
+
+	select {
+	case <-pm.LockedOut():
+		t.Fatal("lockout signaled before any failure")
+	default:
+	}
+
+	for i := 0; i < pm.maxFailures; i++ {
+		_, _ = pm.Approve("000000")
+	}
+
+	select {
+	case <-pm.LockedOut():
+	case <-time.After(time.Second):
+		t.Fatal("lockout channel never closed after the budget was spent")
+	}
+}
+
 func TestApprove_SuccessResetsFailureBudget(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 
@@ -324,7 +304,7 @@ func TestApprove_SuccessResetsFailureBudget(t *testing.T) {
 		}
 	}
 
-	code, _, _, err := pm.CreatePair("/tmp/reset")
+	code, _, err := pm.CreatePair("/tmp/reset")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -348,7 +328,7 @@ func TestApprove_NewPairDoesNotResetFailureBudget(t *testing.T) {
 			t.Fatalf("attempt %d: wrong code was approved", i)
 		}
 	}
-	if _, _, _, err := pm.CreatePair("/tmp/no-reset"); err != nil {
+	if _, _, err := pm.CreatePair("/tmp/no-reset"); err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
 	if _, err := pm.Approve("000000"); !errors.Is(err, ErrTooManyAttempts) {

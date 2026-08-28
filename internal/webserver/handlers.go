@@ -1,7 +1,6 @@
 package webserver
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -133,20 +132,14 @@ func (s *Server) handleCreatePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create pairing. The token is intentionally dropped: this endpoint has no
-	// authentication, so the response carries only the public code and QR.
-	code, _, qrData, err := s.pairingManager.CreatePair(req.Project)
+	// authentication, so the response carries only the public code.
+	code, _, err := s.pairingManager.CreatePair(req.Project)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create pair: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Encode QR data as base64 for transport
-	qrBase64 := base64.StdEncoding.EncodeToString(qrData)
-
-	resp := PairResponse{
-		Code: code,
-		QR:   qrBase64,
-	}
+	resp := PairResponse{Code: code}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

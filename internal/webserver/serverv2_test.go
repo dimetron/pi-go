@@ -74,7 +74,6 @@ type approvedResp struct {
 type pairCreateResp struct {
 	Code  string `json:"code"`
 	Token string `json:"token"`
-	QR    string `json:"qr"`
 }
 
 func TestParseSubmittedCode_JSON(t *testing.T) {
@@ -266,7 +265,7 @@ func TestServerV2_HandleCreatePair_POST(t *testing.T) {
 	if len(resp.Code) != 6 {
 		t.Errorf("expected 6 digit code, got %q", resp.Code)
 	}
-	if resp.QR == "" {
+	if resp.Code == "" {
 		t.Error("expected qr to be set")
 	}
 	// The token is what turns a pair code into a shell. It reaches the
@@ -546,7 +545,7 @@ func TestServerV2_HandleIndex_Root_Approved(t *testing.T) {
 	// Authenticated request (approved token in cookie) serves the index page.
 	s := newTestServerV2(t)
 	defer s.Shutdown(t.Context())
-	code, token, _, err := s.PairingManager().CreatePair("/tmp/x")
+	code, token, err := s.PairingManager().CreatePair("/tmp/x")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -857,7 +856,7 @@ func TestServer_HandlePair_NoToken(t *testing.T) {
 
 func TestServer_HandlePair_ApprovedRedirect(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -877,7 +876,7 @@ func TestServer_HandlePair_ApprovedRedirect(t *testing.T) {
 
 func TestServer_HandlePair_PendingNoRedirect(t *testing.T) {
 	s := NewServer(Config{})
-	_, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	_, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -947,7 +946,7 @@ func TestServer_HandleStatus_MissingToken(t *testing.T) {
 
 func TestServer_HandleStatus_Approved(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -1330,7 +1329,7 @@ func TestPtyPool_CloseAll_WithBridges(t *testing.T) {
 
 func TestServer_HandlePair_QueryToken_Approved(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -1347,7 +1346,7 @@ func TestServer_HandlePair_QueryToken_Approved(t *testing.T) {
 
 func TestServer_HandleIndex_QueryToken(t *testing.T) {
 	s := NewServer(Config{})
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}

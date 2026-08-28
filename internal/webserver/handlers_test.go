@@ -38,8 +38,8 @@ func TestHandler_HandleCreatePair(t *testing.T) {
 	if _, ok := resp["token"]; ok {
 		t.Errorf("pair response leaked a token: %v", resp["token"])
 	}
-	if qr, _ := resp["qr"].(string); qr == "" {
-		t.Error("qr should not be empty")
+	if _, present := resp["qr"]; present {
+		t.Error("response still carries a qr field")
 	}
 }
 
@@ -47,7 +47,7 @@ func TestHandler_HandleStatus(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create a pair first
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestHandler_HandleIndex_WithApprovedToken(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create and approve a pair
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestHandler_HandleIndex_WithQueryToken(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create and approve a pair
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}

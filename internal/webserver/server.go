@@ -3,7 +3,6 @@ package webserver
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -121,6 +120,14 @@ func (s *ServerV2) Start() error {
 	return nil
 }
 
+// LockedOut returns a channel closed once pairing has spent its failure budget.
+//
+// Serve selects on it alongside the interrupt signal: three wrong codes stop
+// the server rather than opening a window an attacker can wait out.
+func (s *ServerV2) LockedOut() <-chan struct{} {
+	return s.pairingMgr.LockedOut()
+}
+
 // Shutdown gracefully shuts down the server.
 func (s *ServerV2) Shutdown(ctx context.Context) error {
 	s.ptyPool.CloseAll()
@@ -186,7 +193,7 @@ func (s *ServerV2) handleCreatePair(w http.ResponseWriter, r *http.Request) {
 	// Only the wire fields: this endpoint answers unauthenticated callers, so
 	// pair.Token must not cross it. The caller proves it holds the code by
 	// posting it to /api/pair/submit, and gets the token back as a cookie.
-	writeJSON(w, PairResponse{Code: pair.Code, QR: pair.QR})
+	writeJSON(w, PairResponse{Code: pair.Code})
 }
 
 // handleStatus checks the status of a pairing token.
@@ -396,7 +403,6 @@ func requestOriginAndHost(r *http.Request) (origin, host string) {
 type activePair struct {
 	Code  string
 	Token string
-	QR    string // base64 encoded PNG image
 }
 
 // checkSameOrigin is the websocket.Upgrader CheckOrigin for every upgrade this
@@ -429,19 +435,14 @@ func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (activeP
 	if s.activePairCode != "" && s.activePairToken != "" {
 		status, err := s.pairingMgr.CheckStatus(s.activePairToken)
 		if err == nil && status == PairStatusPending {
-			qrData, err := BuildPairQRCode(s.activePairCode, host, pairURL)
-			if err != nil {
-				return activePair{}, fmt.Errorf("building QR image: %w", err)
-			}
 			return activePair{
 				Code:  s.activePairCode,
 				Token: s.activePairToken,
-				QR:    base64.StdEncoding.EncodeToString(qrData),
 			}, nil
 		}
 	}
 
-	code, token, qrData, err := s.pairingMgr.CreatePairWithContext(project, host, pairURL)
+	code, token, err := s.pairingMgr.CreatePairWithContext(project)
 	if err != nil {
 		return activePair{}, err
 	}
@@ -457,7 +458,6 @@ func (s *ServerV2) getOrCreateActivePair(project, host, pairURL string) (activeP
 	return activePair{
 		Code:  code,
 		Token: token,
-		QR:    base64.StdEncoding.EncodeToString(qrData),
 	}, nil
 }
 

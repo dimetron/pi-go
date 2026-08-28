@@ -88,7 +88,7 @@ func TestApproveActivePairCode_AllowsAnyPendingCode(t *testing.T) {
 		t.Fatalf("BootstrapPair: %v", err)
 	}
 
-	otherCode, otherToken, _, err := s.PairingManager().CreatePair("/tmp/other-project")
+	otherCode, otherToken, err := s.PairingManager().CreatePair("/tmp/other-project")
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}

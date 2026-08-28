@@ -51,18 +51,10 @@ func TestPtyBridgeChildArgs(t *testing.T) {
 	})
 }
 
-func TestGenerateQRCodeTooLongData(t *testing.T) {
-	// Data far exceeding QR byte capacity forces an encode error.
-	_, err := GenerateQRCode(strings.Repeat("a", 5000))
-	if err == nil {
-		t.Fatal("GenerateQRCode() error = nil, want error for oversized payload")
-	}
-}
-
 func TestCreatePairWithContextDefaultsHost(t *testing.T) {
 	pm := NewPairingManager(5 * time.Minute)
 	// Empty serverHost should fall back to the "pi-go" default without error.
-	code, token, qr, err := pm.CreatePairWithContext("/proj", "", "")
+	code, token, err := pm.CreatePairWithContext("/proj")
 	if err != nil {
 		t.Fatalf("CreatePairWithContext() error = %v", err)
 	}
@@ -71,19 +63,6 @@ func TestCreatePairWithContextDefaultsHost(t *testing.T) {
 	}
 	if token == "" {
 		t.Error("token should not be empty")
-	}
-	if len(qr) == 0 {
-		t.Error("QR data should not be empty")
-	}
-}
-
-func TestBuildPairQRCode(t *testing.T) {
-	png, err := BuildPairQRCode("123456", "127.0.0.1:8080", "http://127.0.0.1:8080/pair")
-	if err != nil {
-		t.Fatalf("BuildPairQRCode() error = %v", err)
-	}
-	if len(png) == 0 {
-		t.Fatal("BuildPairQRCode() returned empty PNG")
 	}
 }
 
@@ -227,7 +206,7 @@ func TestServerV2WebSocketEndToEnd(t *testing.T) {
 	}()
 
 	// Authenticate so the WS handler doesn't reject the upgrade.
-	code, token, _, err := s.PairingManager().CreatePair(dir)
+	code, token, err := s.PairingManager().CreatePair(dir)
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
