@@ -12,7 +12,6 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"google.golang.org/adk/v2/model"
-	"google.golang.org/genai"
 )
 
 const mistralDefaultBaseURL = "https://api.mistral.ai/v1"
@@ -38,7 +37,7 @@ type mistralModel struct {
 // If baseURL is empty, the default Mistral API endpoint is used.
 // thinkingLevel controls reasoning: "none", "low", "medium", "high", "max".
 // It reaches the wire as `reasoning_effort` on the models that accept it and
-// as `prompt_mode` on the magistral family; empty leaves the model's default.
+// is omitted everywhere else; empty leaves the model's default in force.
 func NewMistral(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, llmOpts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("mistral API key is required (set MISTRAL_API_KEY)")
@@ -99,8 +98,8 @@ func (m *mistralModel) GenerateContent(ctx context.Context, req *model.LLMReques
 			}
 		}
 
-		// openai-go has no fields for prompt_cache_key, reasoning_effort or
-		// prompt_mode, so they go on the wire as extra JSON fields. One call
+		// openai-go has no fields for prompt_cache_key or reasoning_effort, so
+		// they go on the wire as extra JSON fields. One call
 		// with one map: SetExtraFields replaces the whole map rather than
 		// merging into it (param.metadata.SetExtraFields).
 		params.SetExtraFields(mistralExtraFields(modelName, m.thinkingLevel, m.promptCacheKey))
@@ -125,41 +124,51 @@ var mistralHooks = oaiExtractHooks{
 }
 
 // mistralExtraFields builds the Mistral-specific request body fields for one
-// call: the prompt cache key always, plus whichever reasoning control this
-// model understands.
+// call: the prompt cache key always, plus reasoning_effort on the models that
+// accept it.
 func mistralExtraFields(modelName, thinkingLevel, promptCacheKey string) map[string]any {
 	extra := map[string]any{"prompt_cache_key": promptCacheKey}
-	switch {
-	case mistralUsesReasoningEffort(modelName):
+	if mistralUsesReasoningEffort(modelName) {
 		if effort := mistralReasoningEffort(thinkingLevel); effort != "" {
 			extra["reasoning_effort"] = effort
-		}
-	case mistralUsesPromptMode(modelName):
-		// prompt_mode has no "off" value — the field is simply omitted when
-		// thinking is not wanted, which leaves the model's default in force.
-		if level := strings.ToLower(strings.TrimSpace(thinkingLevel)); level != "" && level != "none" {
-			extra["prompt_mode"] = "reasoning"
 		}
 	}
 	return extra
 }
 
-// mistralUsesReasoningEffort reports whether a model id takes reasoning_effort
-// rather than prompt_mode. Mistral documents the parameter for the small and
-// medium reasoning models only.
-func mistralUsesReasoningEffort(modelName string) bool {
-	switch strings.ToLower(strings.TrimSpace(modelName)) {
-	case "mistral-small-2603", "mistral-small-latest", "mistral-medium-3.5":
-		return true
-	default:
-		return false
-	}
+// mistralReasoningEffortModels is the set of non-magistral model ids that
+// accept reasoning_effort, verified by probing the live API rather than read
+// off the docs.
+//
+// It is an exact-match set, deliberately. Prefix-matching "mistral-medium-"
+// looks tidier and is wrong: mistral-medium-2505 and mistral-medium-2508 both
+// answer 400 "reasoning_effort is not enabled for this model", so a prefix rule
+// would break those models outright. The two failure directions are not
+// symmetric — a missing entry costs the user thinking control on that model,
+// while a wrong entry makes every request to it fail — so an id is listed only
+// once it has been seen to work.
+var mistralReasoningEffortModels = map[string]bool{
+	"mistral-small-2603":    true,
+	"mistral-small-latest":  true,
+	"mistral-medium":        true,
+	"mistral-medium-2604":   true,
+	"mistral-medium-3":      true,
+	"mistral-medium-3-5":    true,
+	"mistral-medium-3.5":    true,
+	"mistral-medium-latest": true,
 }
 
-// mistralUsesPromptMode reports whether a model is a reasoning model that
-// controls thinking through prompt_mode:"reasoning" — the magistral family.
-func mistralUsesPromptMode(modelName string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "magistral")
+// mistralUsesReasoningEffort reports whether a model id accepts
+// reasoning_effort. The whole magistral family does; everything else must be
+// in mistralReasoningEffortModels.
+//
+// Note magistral takes reasoning_effort, NOT prompt_mode. prompt_mode belongs
+// to Mistral's conversations API; on chat completions it answers 400
+// "Reasoning prompt mode is not enabled for this model" for every model tried,
+// magistral included.
+func mistralUsesReasoningEffort(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(name, "magistral") || mistralReasoningEffortModels[name]
 }
 
 // mistralReasoningEffort maps pi's thinking level onto Mistral's
@@ -177,12 +186,6 @@ func mistralReasoningEffort(level string) string {
 	default:
 		return ""
 	}
-}
-
-// mistralFinishReasonToGenai maps Mistral finish_reason to genai.FinishReason.
-// Mistral uses the same finish reasons as OpenAI.
-func mistralFinishReasonToGenai(reason string) genai.FinishReason {
-	return oaiFinishReasonToGenai(reason)
 }
 
 // Mistral reasoning models do not use delta.reasoning the way OpenRouter does.

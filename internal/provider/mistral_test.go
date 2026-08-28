@@ -308,6 +308,11 @@ func TestMistralWithToolCalls(t *testing.T) {
 	}
 }
 
+// TestMistralFinishReasonMapping covers Mistral's finish_reason enum
+// (stop|length|model_length|error|tool_calls) against the mapper the request
+// path actually uses. The previous version of this test called a
+// mistralFinishReasonToGenai wrapper that nothing on the request path invoked,
+// so it passed while model_length and error were being mapped to Stop.
 func TestMistralFinishReasonMapping(t *testing.T) {
 	tests := []struct {
 		reason string
@@ -315,14 +320,18 @@ func TestMistralFinishReasonMapping(t *testing.T) {
 	}{
 		{"stop", genai.FinishReasonStop},
 		{"length", genai.FinishReasonMaxTokens},
+		{"model_length", genai.FinishReasonMaxTokens},
+		{"error", genai.FinishReasonOther},
 		{"content_filter", genai.FinishReasonSafety},
 		{"tool_calls", genai.FinishReasonStop},
+		{"", genai.FinishReasonStop},
+		{"something_new", genai.FinishReasonStop},
 	}
 	for _, tt := range tests {
 		t.Run(tt.reason, func(t *testing.T) {
-			got := mistralFinishReasonToGenai(tt.reason)
+			got := oaiFinishReasonToGenai(tt.reason)
 			if got != tt.want {
-				t.Errorf("mistralFinishReasonToGenai(%q) = %v, want %v", tt.reason, got, tt.want)
+				t.Errorf("oaiFinishReasonToGenai(%q) = %v, want %v", tt.reason, got, tt.want)
 			}
 		})
 	}

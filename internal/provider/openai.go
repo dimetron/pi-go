@@ -158,13 +158,30 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 }
 
 // oaiFinishReasonToGenai maps finish reasons to genai.FinishReason.
+// oaiFinishReasonToGenai maps a Chat Completions finish_reason onto
+// genai.FinishReason. It serves every provider on this path, so it carries the
+// union of their vocabularies: OpenAI's stop/length/content_filter/tool_calls
+// plus Mistral's model_length and error (its full enum is
+// stop|length|model_length|error|tool_calls — mistralai/client-python,
+// ChatCompletionChoiceFinishReason).
+//
+// model_length and error must not fall through to Stop. The TUI warns about a
+// truncated reply by watching for FinishReasonMaxTokens
+// (tui/agent_loop.go:1014), so a Mistral turn cut off at the context limit
+// would otherwise be presented as a complete one — a turn that just looks
+// short. error means generation failed partway; reporting that as a clean stop
+// claims a success the provider never gave.
 func oaiFinishReasonToGenai(reason string) genai.FinishReason {
 	switch reason {
-	case "length":
+	case "length", "model_length":
 		return genai.FinishReasonMaxTokens
 	case "content_filter":
 		return genai.FinishReasonSafety
+	case "error":
+		return genai.FinishReasonOther
 	default:
+		// stop and tool_calls both end the turn cleanly; an unrecognized
+		// value from an open enum is treated the same way.
 		return genai.FinishReasonStop
 	}
 }

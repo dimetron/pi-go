@@ -63,21 +63,33 @@ func mistralSend(t *testing.T, m model.LLM) {
 
 func TestMistralRequestReasoningFields(t *testing.T) {
 	tests := []struct {
-		name           string
-		modelName      string
-		thinkingLevel  string
-		wantEffort     string // "" means the field must be absent
-		wantPromptMode string
+		name          string
+		modelName     string
+		thinkingLevel string
+		wantEffort    string // "" means the field must be absent
 	}{
 		{name: "small latest high", modelName: "mistral-small-latest", thinkingLevel: "high", wantEffort: "high"},
 		{name: "medium 3.5 medium", modelName: "mistral-medium-3.5", thinkingLevel: "medium", wantEffort: "high"},
+		{name: "medium 3-5 hyphenated", modelName: "mistral-medium-3-5", thinkingLevel: "high", wantEffort: "high"},
+		{name: "medium latest alias", modelName: "mistral-medium-latest", thinkingLevel: "high", wantEffort: "high"},
+		{name: "medium 3", modelName: "mistral-medium-3", thinkingLevel: "high", wantEffort: "high"},
+		{name: "medium bare", modelName: "mistral-medium", thinkingLevel: "high", wantEffort: "high"},
+		{name: "medium 2604", modelName: "mistral-medium-2604", thinkingLevel: "high", wantEffort: "high"},
 		{name: "small 2603 max", modelName: "mistral-small-2603", thinkingLevel: "max", wantEffort: "high"},
 		{name: "small latest none", modelName: "mistral-small-latest", thinkingLevel: "none", wantEffort: "none"},
 		{name: "small latest unset", modelName: "mistral-small-latest", thinkingLevel: ""},
-		{name: "magistral high", modelName: "magistral-medium-latest", thinkingLevel: "high", wantPromptMode: "reasoning"},
-		{name: "magistral none", modelName: "magistral-medium-latest", thinkingLevel: "none"},
+		// magistral takes reasoning_effort like the rest; prompt_mode is a
+		// conversations-API field and is rejected here.
+		{name: "magistral high", modelName: "magistral-medium-latest", thinkingLevel: "high", wantEffort: "high"},
+		{name: "magistral small high", modelName: "magistral-small-latest", thinkingLevel: "high", wantEffort: "high"},
+		{name: "magistral none", modelName: "magistral-medium-latest", thinkingLevel: "none", wantEffort: "none"},
 		{name: "magistral unset", modelName: "magistral-medium-latest", thinkingLevel: ""},
-		{name: "non-reasoning model ignores the level", modelName: "mistral-large-latest", thinkingLevel: "high"},
+		// These answer 400 when reasoning_effort is present, so the field must
+		// stay off the wire for them.
+		{name: "medium 2505 rejects the field", modelName: "mistral-medium-2505", thinkingLevel: "high"},
+		{name: "medium 2508 rejects the field", modelName: "mistral-medium-2508", thinkingLevel: "high"},
+		{name: "large ignores the level", modelName: "mistral-large-latest", thinkingLevel: "high"},
+		{name: "codestral ignores the level", modelName: "codestral-2508", thinkingLevel: "high"},
 	}
 
 	for _, tt := range tests {
@@ -98,9 +110,19 @@ func TestMistralRequestReasoningFields(t *testing.T) {
 			if effort != tt.wantEffort {
 				t.Errorf("reasoning_effort = %q, want %q", effort, tt.wantEffort)
 			}
-			promptMode, _ := body["prompt_mode"].(string)
-			if promptMode != tt.wantPromptMode {
-				t.Errorf("prompt_mode = %q, want %q", promptMode, tt.wantPromptMode)
+			if _, present := body["prompt_mode"]; present {
+				t.Error("prompt_mode must never be sent: chat completions answers 400 for it on every model")
+			}
+			// Exclusivity, not just presence: SetExtraFields replaces the map
+			// rather than merging, and this pins that contract against an SDK
+			// upgrade that changed it to merge.
+			if _, ok := body["prompt_cache_key"].(string); !ok {
+				t.Error("prompt_cache_key missing from the request body")
+			}
+			if tt.wantEffort == "" {
+				if _, present := body["reasoning_effort"]; present {
+					t.Error("reasoning_effort present when no level should be sent")
+				}
 			}
 		})
 	}
@@ -166,8 +188,16 @@ func TestMistralReasoningEffort(t *testing.T) {
 }
 
 func TestMistralUsesReasoningEffort(t *testing.T) {
-	yes := []string{"mistral-small-2603", "mistral-small-latest", "mistral-medium-3.5", "MISTRAL-SMALL-LATEST"}
-	no := []string{"mistral-large-latest", "magistral-medium-latest", "codestral-2508", ""}
+	yes := []string{
+		"mistral-small-2603", "mistral-small-latest", "mistral-medium", "mistral-medium-2604",
+		"mistral-medium-3", "mistral-medium-3-5", "mistral-medium-3.5", "mistral-medium-latest",
+		"magistral-medium-latest", "magistral-small-latest", "MISTRAL-SMALL-LATEST",
+	}
+	no := []string{
+		"mistral-large-latest", "codestral-2508", "",
+		// Verified 400s: these must not be matched by a tempting prefix rule.
+		"mistral-medium-2505", "mistral-medium-2508",
+	}
 	for _, name := range yes {
 		if !mistralUsesReasoningEffort(name) {
 			t.Errorf("mistralUsesReasoningEffort(%q) = false, want true", name)
@@ -176,21 +206,6 @@ func TestMistralUsesReasoningEffort(t *testing.T) {
 	for _, name := range no {
 		if mistralUsesReasoningEffort(name) {
 			t.Errorf("mistralUsesReasoningEffort(%q) = true, want false", name)
-		}
-	}
-}
-
-func TestMistralUsesPromptMode(t *testing.T) {
-	yes := []string{"magistral-medium-latest", "magistral-small-2509", "Magistral-Medium"}
-	no := []string{"mistral-large-latest", "mistral-small-latest", ""}
-	for _, name := range yes {
-		if !mistralUsesPromptMode(name) {
-			t.Errorf("mistralUsesPromptMode(%q) = false, want true", name)
-		}
-	}
-	for _, name := range no {
-		if mistralUsesPromptMode(name) {
-			t.Errorf("mistralUsesPromptMode(%q) = true, want false", name)
 		}
 	}
 }
@@ -242,6 +257,48 @@ func TestMistralMessageThinking(t *testing.T) {
 	}
 	if got := mistralMessageThinking(`not json`); got != "" {
 		t.Errorf("mistralMessageThinking(malformed) = %q, want %q", got, "")
+	}
+	if got := mistralMessageThinking(`{"choices":[]}`); got != "" {
+		t.Errorf("mistralMessageThinking(no choices) = %q, want %q", got, "")
+	}
+}
+
+// TestMistralSystemInstruction pins that a system instruction is prepended as a
+// system message rather than dropped, and that it rides alongside the Mistral
+// extra fields.
+func TestMistralSystemInstruction(t *testing.T) {
+	c := newMistralCapture(t, mistralPlainCompletion)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", c.srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("NewMistral() error: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+		Config:   &genai.GenerateContentConfig{SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: "You are Misty."}}}},
+	}
+	for _, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+	}
+
+	if len(c.bodies) != 1 {
+		t.Fatalf("expected 1 captured request, got %d", len(c.bodies))
+	}
+	messages, _ := c.bodies[0]["messages"].([]any)
+	if len(messages) < 2 {
+		t.Fatalf("expected the system message plus the user message, got %d", len(messages))
+	}
+	first, _ := messages[0].(map[string]any)
+	if role, _ := first["role"].(string); role != "system" {
+		t.Errorf("first message role = %q, want %q", role, "system")
+	}
+	if content, _ := first["content"].(string); !strings.Contains(content, "You are Misty.") {
+		t.Errorf("system message = %q, want it to carry the instruction", content)
+	}
+	if _, ok := c.bodies[0]["prompt_cache_key"].(string); !ok {
+		t.Error("prompt_cache_key missing when a system instruction is present")
 	}
 }
 
