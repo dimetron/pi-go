@@ -57,8 +57,27 @@ func RenderGraphCanvas(g *graph.Graph, useASCII bool, paddingX, paddingY int, ro
 	// Route edges
 	routed := routing.RouteEdges(g, l)
 
-	// Create canvas with a small margin
-	canvas := NewCanvas(l.CanvasWidth+4, l.CanvasHeight+4)
+	// Create canvas with a small margin, sized to cover the routed edges as
+	// well as the nodes.
+	//
+	// The canvas used to be sized from the layout alone, but the router can
+	// take an edge outside the node bounding box — around the right of the
+	// last column, or below the last row — and Canvas.Put silently discards
+	// an out-of-bounds write. The stroke that fitted was drawn and the corner
+	// and arrowhead that did not were dropped, leaving a line running to the
+	// edge of the diagram and stopping in mid-air with nothing to connect it.
+	w, h := l.CanvasWidth, l.CanvasHeight
+	for _, re := range routed {
+		for _, pt := range re.DrawPath {
+			if pt.Col+1 > w {
+				w = pt.Col + 1
+			}
+			if pt.Row+1 > h {
+				h = pt.Row + 1
+			}
+		}
+	}
+	canvas := NewCanvas(w+4, h+4)
 
 	// Draw subgraph borders (background layer)
 	drawSubgraphBorders(canvas, l, cs)

@@ -1,10 +1,13 @@
 package mermaid
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dimetron/pi-go/internal/mermaid/graph"
 	"github.com/dimetron/pi-go/internal/mermaid/renderer"
@@ -339,6 +342,53 @@ func TestPacketBitRangeIsBounded(t *testing.T) {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Fatalf("render did not finish within 5s for %q", src)
+		}
+	}
+}
+
+// TestEdgeRoutingIsNotClipped is the regression test for edges running off the
+// right of the diagram and stopping in mid-air.
+//
+// The canvas used to be sized from the node layout alone, but the router can
+// take an edge outside the node bounding box — around the right of the last
+// column, or below the last row — and Canvas.Put silently discards an
+// out-of-bounds write. The part of the stroke that fitted was drawn and the
+// corner and arrowhead that did not were dropped, leaving a line that runs to
+// the edge of the diagram and connects to nothing.
+//
+// The fixture is a real model-generated architecture diagram; it produced two
+// such danglers before the canvas was sized to cover the routed paths. Natural
+// width matters: at the corpus width of 100 this diagram does not route far
+// enough right to clip, which is why the goldens never caught it.
+func TestEdgeRoutingIsNotClipped(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("testdata", "corpus", "flowchart", "regress-clipped-edge-routing.mmd"))
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(Render(string(src), WithWidth(1)), "\n"), "\n")
+
+	widest := 0
+	for _, l := range lines {
+		if n := utf8.RuneCountInString(l); n > widest {
+			widest = n
+		}
+	}
+	if widest == 0 {
+		t.Fatal("diagram rendered empty")
+	}
+
+	// A horizontal stroke occupying the final column is an edge whose
+	// terminator was clipped: the canvas carries a margin, so a correctly
+	// routed edge always turns or ends before the last column.
+	for i, l := range lines {
+		if utf8.RuneCountInString(l) != widest {
+			continue
+		}
+		r := []rune(l)
+		switch r[len(r)-1] {
+		case '─', '━', '┄', '╌':
+			t.Errorf("line %d ends with an unterminated stroke in the final column: the edge was clipped", i)
 		}
 	}
 }
