@@ -55,6 +55,16 @@ type NodePlacement struct {
 	DrawY      int
 	DrawWidth  int
 	DrawHeight int
+
+	// ContentWidth and ContentHeight are what this node's own label needs,
+	// before the grid rounds it up. A grid cell is sized to the largest node
+	// sharing its row and column, so drawing every box at cell size makes a
+	// one-word node as large as the three-line node beside it — the box reads
+	// as mostly empty. Keeping the node's own measurements lets the box be
+	// drawn at its true size and centered in the cell it was allotted, while
+	// the cell keeps its size so edge routing is unaffected.
+	ContentWidth  int
+	ContentHeight int
 }
 
 // SubgraphBounds stores the drawing bounds of a subgraph.
@@ -164,7 +174,8 @@ func ComputeLayout(g *graph.Graph, paddingX, paddingY, maxWidth int) *GridLayout
 	computeSizes(g, layout, paddingX, paddingY)
 
 	// Step 4b: Normalize sizes (per-layer, capped)
-	normalizeSizes(g, layout)
+	// Step 4b: sizes are deliberately NOT normalized per layer — see
+	// normalizeSizes' doc comment for why that was dropped.
 
 	// Step 5: Expand gaps for subgraph borders and labels
 	expandGapsForSubgraphs(g, layout, direction)
@@ -765,6 +776,9 @@ func computeSizes(
 			}
 		}
 
+		placement.ContentWidth = contentWidth
+		placement.ContentHeight = contentHeight
+
 		col := placement.Grid.Col
 		row := placement.Grid.Row
 
@@ -953,88 +967,23 @@ func expandGapsForEdgeLabels(g *graph.Graph, layout *GridLayout) {
 
 // normalizeSizes normalizes node dimensions within the same layer, capped at a maximum.
 // Nodes at the same flow level (same layer) are normalized to the same
-// perpendicular dimension so side-by-side nodes look consistent.
-func normalizeSizes(g *graph.Graph, layout *GridLayout) {
-	direction := g.Direction.Normalized()
-
-	// Group placements by layer
-	layerGroups := make(map[int][]*NodePlacement)
-	for _, p := range layout.Placements {
-		var layerKey int
-		if direction.IsVertical() {
-			layerKey = p.Grid.Row // same row = same layer in TD
-		} else {
-			layerKey = p.Grid.Col // same col = same layer in LR
-		}
-		layerGroups[layerKey] = append(layerGroups[layerKey], p)
-	}
-
-	for _, placements := range layerGroups {
-		if len(placements) < 2 {
-			continue // single node in layer, nothing to normalize
-		}
-
-		if direction.IsVertical() {
-			// TD: normalize column widths within same layer
-			cols := make(map[int]bool)
-			for _, p := range placements {
-				cols[p.Grid.Col] = true
-			}
-			maxW := 0
-			for c := range cols {
-				w := 1
-				if v, ok := layout.ColWidths[c]; ok {
-					w = v
-				}
-				if w > maxW {
-					maxW = w
-				}
-			}
-			target := maxW
-			if target > MaxNormalizedWidth {
-				target = MaxNormalizedWidth
-			}
-			for c := range cols {
-				cur := 1
-				if v, ok := layout.ColWidths[c]; ok {
-					cur = v
-				}
-				if target > cur {
-					layout.ColWidths[c] = target
-				}
-			}
-		} else {
-			// LR: normalize row heights within same layer
-			rows := make(map[int]bool)
-			for _, p := range placements {
-				rows[p.Grid.Row] = true
-			}
-			maxH := 0
-			for r := range rows {
-				h := 1
-				if v, ok := layout.RowHeights[r]; ok {
-					h = v
-				}
-				if h > maxH {
-					maxH = h
-				}
-			}
-			target := maxH
-			if target > MaxNormalizedHeight {
-				target = MaxNormalizedHeight
-			}
-			for r := range rows {
-				cur := 1
-				if v, ok := layout.RowHeights[r]; ok {
-					cur = v
-				}
-				if target > cur {
-					layout.RowHeights[r] = target
-				}
-			}
-		}
-	}
-}
+// Sizes are not normalized per layer.
+//
+// This package used to equalize every box within a layer, so a row of nodes
+// shared one width and one height. It reads as tidy on a diagram whose labels
+// are all about the same length, and as mostly-empty boxes on a real one: a
+// one-word node was drawn as large as the three-line node beside it, because
+// the layer's largest label set the size for all of them.
+//
+// Sizing each cell to its own content is the cheaper half of the fix. The box
+// still fills its grid cell, so every edge attachment stays exactly where the
+// router expects it — an earlier attempt that shrank the box inside its cell
+// instead left arrows starting in mid-air, disconnected from the box they came
+// from.
+//
+// What this does not fix: two nodes in different layers can still share a grid
+// row or column, and that cell is sized to the larger of them. Removing that
+// needs per-node geometry and a router that follows it.
 
 // expandGapsForSubgraphs expands gap cells to accommodate subgraph borders, labels, and nesting.
 func expandGapsForSubgraphs(
