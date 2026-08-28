@@ -891,7 +891,7 @@ func (p *flowchartParser) parseNode(text string) *graph.Node {
 
 	// Try each shape pattern
 	for _, sp := range shapePatterns {
-		idx := strings.Index(text, sp.open)
+		idx := indexOutsideQuotes(text, sp.open)
 		if idx <= 0 {
 			continue
 		}
@@ -1024,13 +1024,71 @@ func sanitizeLabel(text string) string {
 // authors use: <br>, <br/>, <br />, and any casing.
 var htmlBreakRe = regexp.MustCompile(`(?i)<br\s*/?>`)
 
-// foldHTMLBreaks replaces HTML line breaks with a space.
+// htmlInlineRe matches the inline formatting tags Mermaid accepts inside a
+// label. Only this fixed set is matched, never "<" and ">" generally, so a
+// label that genuinely reads "a < b" keeps its text.
+var htmlInlineRe = regexp.MustCompile(`(?i)</?(i|b|em|strong|u|s|sup|sub|code|span)\s*/?>`)
+
+// indexOutsideQuotes returns the first index of sub in text that does not fall
+// inside a double-quoted run, or -1.
+//
+// Shape delimiters are punctuation, and a quoted label may contain the same
+// punctuation as text. Matching anywhere meant a label decided the node's
+// shape: A["a > b"] matched the asymmetric ">"…"]" pattern on the ">" inside
+// the quotes, so the ID parsed as `A["a ` and the label as `b"`. The same
+// mechanism corrupted every label carrying <br/> or <i>, since each tag brings
+// its own ">".
+//
+// Mermaid quotes a label precisely to say "this part is text", so honoring the
+// quotes is what the syntax already promises.
+func indexOutsideQuotes(text, sub string) int {
+	// Quote tracking only works when the quotes balance. A markdown-string
+	// label may open on one source line and close on the next, and this parser
+	// sees one line at a time, so an odd count means the state would be
+	// inverted for the rest of the line — worse than not tracking at all.
+	// Fall back to a plain scan there.
+	if strings.Count(text, `"`)%2 != 0 {
+		return strings.Index(text, sub)
+	}
+
+	inQuotes := false
+	for i := 0; i < len(text); i++ {
+		if text[i] == '"' {
+			inQuotes = !inQuotes
+			continue
+		}
+		if inQuotes {
+			continue
+		}
+		if strings.HasPrefix(text[i:], sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// foldHTMLBreaks replaces HTML line breaks with a space and drops inline
+// formatting tags.
+//
+// The tags have to go before shape detection for the same reason <br/> does:
+// the shape patterns match on raw punctuation, and every tag carries a ">".
+// In n["a <i>x</i> b"] the asymmetric ">"…"]" pattern matched inside the tag,
+// so the node ID parsed as `n["a <i` and the box was drawn as a parallelogram
+// with half its label missing. Left alone they also print verbatim, and they
+// are not free: sixteen of them in one real diagram added over a hundred
+// characters of noise to labels that were already too wide.
+//
+// The formatting itself is dropped rather than honored. The canvas carries one
+// style per cell and the label styles it does have are chosen by the renderer,
+// so there is nowhere for "this word is italic" to go; the words are what the
+// author meant, and the markup is not.
 //
 // It runs in two places, and the earlier one matters most: parseNode calls it
 // before shape detection, because the `/` and `>` inside the tag otherwise
 // match the shape patterns and corrupt both the node ID and the box shape.
 func foldHTMLBreaks(text string) string {
-	return htmlBreakRe.ReplaceAllString(text, " ")
+	text = htmlBreakRe.ReplaceAllString(text, " ")
+	return htmlInlineRe.ReplaceAllString(text, "")
 }
 
 // ansiEscRe matches ANSI escape sequences: ESC followed by [ and parameters.

@@ -288,3 +288,58 @@ func TestParseSubgraphBracketLabel(t *testing.T) {
 		})
 	}
 }
+
+// TestParseNodeStripsInlineHTML pins the fix for inline formatting tags
+// corrupting a node, which is the same defect <br/> had and for the same
+// reason: the shape patterns match on raw punctuation and every tag carries a
+// ">", so the asymmetric ">"…"]" pattern matched inside the tag.
+//
+// Before the fix, `A["label with <i>italic</i> markup"]` parsed with the ID
+// `A["label with <i`, the label `italic</i> markup"`, and a parallelogram
+// where a rectangle belonged.
+func TestParseNodeStripsInlineHTML(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		src   string
+		label string
+	}{
+		{"italic", `graph TD` + "\n" + `A["label with <i>italic</i> markup"]`, "label with italic markup"},
+		{"bold", `graph TD` + "\n" + `A["a <b>bold</b> word"]`, "a bold word"},
+		{"code", `graph TD` + "\n" + `A["see <code>main.go</code>"]`, "see main.go"},
+		{"mixed with break", `graph TD` + "\n" + `A["<i>one</i><br/>two"]`, "one two"},
+		{"uppercase", `graph TD` + "\n" + `A["<I>up</I>"]`, "up"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := ParseFlowchart(tc.src)
+
+			if len(g.NodeOrder) != 1 {
+				t.Fatalf("got %d nodes, want 1: %v", len(g.NodeOrder), g.NodeOrder)
+			}
+			id := g.NodeOrder[0]
+			if id != "A" {
+				t.Errorf("node ID = %q, want \"A\": the tag corrupted it", id)
+			}
+			node := g.Nodes[id]
+			if node.Label != tc.label {
+				t.Errorf("label = %q, want %q", node.Label, tc.label)
+			}
+			if node.Shape != graph.ShapeRectangle {
+				t.Errorf("shape = %v, want ShapeRectangle: the tag changed it", node.Shape)
+			}
+		})
+	}
+}
+
+// TestParseNodeKeepsBareAngleBrackets is the other side: only the known tag
+// names are stripped, never "<" and ">" generally, so a label that genuinely
+// compares two things keeps its text.
+func TestParseNodeKeepsBareAngleBrackets(t *testing.T) {
+	g := ParseFlowchart(`graph TD` + "\n" + `A["a < b and c > d"]`)
+
+	if len(g.NodeOrder) != 1 {
+		t.Fatalf("got %d nodes, want 1", len(g.NodeOrder))
+	}
+	if got := g.Nodes[g.NodeOrder[0]].Label; got != "a < b and c > d" {
+		t.Errorf("label = %q, want the comparison preserved", got)
+	}
+}
