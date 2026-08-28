@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -44,12 +45,33 @@ func TestRenderMermaidFitsWidth(t *testing.T) {
 	}
 }
 
-// TestRenderMermaidRejectsOverflow pins the fallback contract. A three-column
-// fan-out cannot fit 20 columns, and the caller must get "" so it can print
-// the original fence instead of a mangled diagram.
+// unfittableSample has labels too long to fit a narrow pane in either
+// orientation, so it exercises the fallback rather than the retry.
+const unfittableSample = "graph LR\n" +
+	"    A[a very long descriptive label here] --> B[another long descriptive label]\n"
+
+// TestRenderMermaidRejectsOverflow pins the fallback contract: when a diagram
+// fits in neither orientation, the caller gets "" so it can print the original
+// fence instead of art running past the pane edge.
 func TestRenderMermaidRejectsOverflow(t *testing.T) {
-	if got := RenderMermaid(mermaidSample, 20, darkPalette); got != "" {
+	if got := RenderMermaid(unfittableSample, 20, darkPalette); got != "" {
 		t.Errorf("expected an empty result for an unfittable width, got %d columns", lipgloss.Width(got))
+	}
+}
+
+// TestRenderMermaidRetryRescuesNarrowPane is the other side of that contract:
+// a diagram too wide as written still renders when the perpendicular
+// orientation fits. mermaidSample is a graph LR that does not fit 20 columns
+// across but does once stacked vertically.
+func TestRenderMermaidRetryRescuesNarrowPane(t *testing.T) {
+	got := RenderMermaid(mermaidSample, 20, darkPalette)
+	if got == "" {
+		t.Fatal("expected the perpendicular retry to rescue this diagram")
+	}
+	for i, line := range strings.Split(got, "\n") {
+		if n := lipgloss.Width(line); n > 20 {
+			t.Errorf("line %d is %d columns wide, over the 20 budget", i+1, n)
+		}
 	}
 }
 
@@ -121,4 +143,225 @@ func stripANSICodes(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+// newMermaidChat returns a ChatModel with a live glamour renderer at width.
+func newMermaidChat(t *testing.T, width int) *ChatModel {
+	t.Helper()
+	c := NewChatModel(nil)
+	c.Palette = darkPalette
+	c.UpdateRenderer(width)
+	if c.Renderer == nil {
+		t.Fatal("UpdateRenderer left a nil renderer")
+	}
+	return &c
+}
+
+// TestRenderMarkdownDrawsMermaidFence is the end-to-end check that a ```mermaid
+// fence in an assistant reply reaches the screen as a diagram rather than as
+// its own source. Every other test in this file exercises RenderMermaid
+// directly; this one proves the chat pane actually calls it.
+func TestRenderMarkdownDrawsMermaidFence(t *testing.T) {
+	c := newMermaidChat(t, 120)
+
+	got := c.RenderMarkdown("Here is the architecture:\n\n```mermaid\n" + mermaidSample + "```\n")
+
+	if strings.Contains(got, "```mermaid") {
+		t.Error("the fence marker survived: the diagram was not rendered")
+	}
+	if !strings.ContainsAny(got, "┌└│─╭╰") {
+		t.Errorf("output carries no box-drawing characters:\n%s", got)
+	}
+	if !strings.Contains(got, "Here is the architecture") {
+		t.Error("prose before the diagram was dropped")
+	}
+	for _, label := range []string{"Start", "Check", "Done"} {
+		if !strings.Contains(got, label) {
+			t.Errorf("diagram is missing node label %q", label)
+		}
+	}
+}
+
+// TestRenderMarkdownKeepsUnclosedFence pins the streaming contract: a fence
+// still being written has no closing marker, and must stay markdown until it
+// arrives. Drawing it early would re-parse a growing fragment on every token.
+func TestRenderMarkdownKeepsUnclosedFence(t *testing.T) {
+	c := newMermaidChat(t, 120)
+
+	got := c.RenderMarkdown("Partial:\n\n```mermaid\ngraph LR\n    A[Start] -->")
+
+	if strings.ContainsAny(got, "┌└╭╰") {
+		t.Errorf("an unclosed fence was drawn as a diagram:\n%s", got)
+	}
+	if !strings.Contains(got, "graph LR") {
+		t.Error("the partial fence body was dropped instead of shown as text")
+	}
+}
+
+// TestRenderMarkdownFallsBackWhenTooNarrow asserts the pane shows the original
+// fence when the diagram cannot fit, rather than art running past the edge.
+func TestRenderMarkdownFallsBackWhenTooNarrow(t *testing.T) {
+	c := newMermaidChat(t, 24)
+
+	got := c.RenderMarkdown("```mermaid\n" + unfittableSample + "```\n")
+
+	if !strings.Contains(stripANSICodes(got), "graph LR") {
+		t.Errorf("expected the fence source as a fallback, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdownLeavesOtherFencesAlone asserts only mermaid fences are
+// intercepted; a go fence must still reach glamour for syntax highlighting.
+func TestRenderMarkdownLeavesOtherFencesAlone(t *testing.T) {
+	c := newMermaidChat(t, 100)
+
+	// Glamour syntax-highlights the block into per-token ANSI spans, so the
+	// content is only contiguous once the escapes are stripped.
+	got := stripANSICodes(c.RenderMarkdown("```go\nfunc main() {}\n```\n"))
+
+	if !strings.Contains(got, "func main() {}") {
+		t.Errorf("a go fence lost its content:\n%s", got)
+	}
+	if strings.ContainsAny(got, "┌└╭╰") {
+		t.Error("a go fence was drawn as a diagram")
+	}
+}
+
+// TestRenderMarkdownWithoutFenceIsUnchanged guards the common path: a message
+// with no diagram must render exactly as it did before this interception
+// existed, so ordinary replies are not reflowed by the new segment splitting.
+func TestRenderMarkdownWithoutFenceIsUnchanged(t *testing.T) {
+	c := newMermaidChat(t, 100)
+
+	text := "# Heading\n\nSome **bold** prose and a list:\n\n- one\n- two\n"
+	if got, want := c.RenderMarkdown(text), c.renderMarkdownSegment(text); got != want {
+		t.Errorf("fence-free markdown took the segmented path:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSplitMermaidFences(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in       string
+		segments int
+		diagrams int
+	}{
+		{"no fence", "just prose", 1, 0},
+		{"only fence", "```mermaid\ngraph LR\n A-->B\n```", 1, 1},
+		{"prose then fence", "intro\n\n```mermaid\ngraph LR\n A-->B\n```", 2, 1},
+		{"fence between prose", "a\n\n```mermaid\ngraph LR\n A-->B\n```\n\nb", 3, 1},
+		{"two fences", "```mermaid\ngraph LR\n A-->B\n```\n```mermaid\ngraph TD\n C-->D\n```", 2, 2},
+		{"unclosed fence", "```mermaid\ngraph LR\n A-->B", 1, 0},
+		{"other language", "```go\nx := 1\n```", 1, 0},
+		{"info attributes", "```mermaid {theme=dark}\ngraph LR\n A-->B\n```", 1, 1},
+		{"indented fence", "  ```mermaid\n  graph LR\n  A-->B\n  ```", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			segs := splitMermaidFences(tc.in)
+			if len(segs) != tc.segments {
+				t.Errorf("got %d segments, want %d: %#v", len(segs), tc.segments, segs)
+			}
+			diagrams := 0
+			for _, s := range segs {
+				if s.diagram != "" {
+					diagrams++
+				}
+			}
+			if diagrams != tc.diagrams {
+				t.Errorf("got %d diagrams, want %d", diagrams, tc.diagrams)
+			}
+		})
+	}
+}
+
+// TestSplitMermaidFencesPreservesText asserts the splitter loses nothing: the
+// raw segments rejoined must reproduce the input. A splitter that drops a line
+// would silently eat part of a reply.
+func TestSplitMermaidFencesPreservesText(t *testing.T) {
+	in := "intro\n\n```mermaid\ngraph LR\n    A-->B\n```\n\noutro\n"
+	var b strings.Builder
+	for i, s := range splitMermaidFences(in) {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(s.raw)
+	}
+	if got := b.String(); got != in {
+		t.Errorf("rejoined segments differ from input:\ngot:  %q\nwant: %q", got, in)
+	}
+}
+
+func TestSwapFlowchartDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{"TD to LR", "graph TD\n  A-->B", "graph LR\n  A-->B", true},
+		{"TB to LR", "graph TB\n  A-->B", "graph LR\n  A-->B", true},
+		{"LR to TB", "flowchart LR\n  A-->B", "flowchart TB\n  A-->B", true},
+		{"BT keeps polarity", "graph BT\n  A-->B", "graph RL\n  A-->B", true},
+		{"RL keeps polarity", "graph RL\n  A-->B", "graph BT\n  A-->B", true},
+		{"leading comment", "%% note\ngraph TD\n  A-->B", "%% note\ngraph LR\n  A-->B", true},
+		{"indented header", "  graph TD\n  A-->B", "  graph LR\n  A-->B", true},
+		{"no direction", "graph\n  A-->B", "", false},
+		{"not a flowchart", "sequenceDiagram\n  A->>B: hi", "", false},
+		{"empty", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := swapFlowchartDirection(tc.in)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			if ok && got != tc.want {
+				t.Errorf("got:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSwapFlowchartDirectionLeavesSubgraphDirectives asserts only the header is
+// rewritten. A `direction` statement inside a subgraph sets that subgraph's
+// internal flow; rewriting it would change the drawing, not reorient it.
+func TestSwapFlowchartDirectionLeavesSubgraphDirectives(t *testing.T) {
+	in := "graph TD\n  subgraph S\n    direction LR\n    A-->B\n  end"
+	got, ok := swapFlowchartDirection(in)
+	if !ok {
+		t.Fatal("expected the header to be swapped")
+	}
+	if !strings.Contains(got, "direction LR") {
+		t.Errorf("the subgraph directive was rewritten:\n%s", got)
+	}
+	if !strings.Contains(got, "graph LR\n") {
+		t.Errorf("the header was not swapped:\n%s", got)
+	}
+}
+
+// TestRenderMermaidRetriesPerpendicular pins the behavior that rescues wide
+// diagrams. A fan-out is far wider under TD than under LR, so a width that
+// cannot fit the declared orientation may still fit the perpendicular one.
+func TestRenderMermaidRetriesPerpendicular(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("graph TD\n")
+	for i := range 12 {
+		fmt.Fprintf(&b, "    root --> child%d[Child number %d]\n", i, i)
+	}
+	wide := b.String()
+
+	// Under TD these twelve children sit in one row and cannot fit; the retry
+	// stacks them in a column instead.
+	got := RenderMermaid(wide, 100, darkPalette)
+	if got == "" {
+		t.Skip("neither orientation fits at this width")
+	}
+	for i, line := range strings.Split(got, "\n") {
+		if n := lipgloss.Width(line); n > 100 {
+			t.Errorf("line %d is %d columns wide, over the 100 budget", i+1, n)
+		}
+	}
+	// A column of twelve children is necessarily taller than it is wide.
+	if rows := strings.Count(got, "\n") + 1; rows < 12 {
+		t.Errorf("expected a tall layout after the retry, got %d rows", rows)
+	}
 }

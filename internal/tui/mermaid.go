@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -59,9 +60,29 @@ func RenderMermaid(source string, width int, p Palette) string {
 		return ""
 	}
 
+	if art, ok := renderMermaidAt(source, width, p); ok {
+		return art
+	}
+
+	// Too wide as written. A flowchart's direction is the single biggest lever
+	// on its width — a fan-out of fifteen children puts them all in one row
+	// under TD and in one column under LR — so try the perpendicular
+	// orientation before giving up. It trades columns for rows, which is the
+	// right trade in a pane that scrolls vertically and not horizontally.
+	if swapped, ok := swapFlowchartDirection(source); ok {
+		if art, ok := renderMermaidAt(swapped, width, p); ok {
+			return art
+		}
+	}
+
+	return ""
+}
+
+// renderMermaidAt renders source at width and reports whether the result fits.
+func renderMermaidAt(source string, width int, p Palette) (string, bool) {
 	rows := mermaid.RenderCells(source, mermaid.WithWidth(width))
 	if len(rows) == 0 {
-		return ""
+		return "", false
 	}
 
 	pal := paletteOrDark(p)
@@ -79,10 +100,49 @@ func RenderMermaid(source string, width int, p Palette) string {
 		b.WriteString(line)
 	}
 
-	if widest > width {
-		return ""
+	if widest == 0 || widest > width {
+		return "", false
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), true
+}
+
+// flowchartHeaderRe matches a flowchart header and captures its direction, so
+// the direction alone can be rewritten without disturbing the rest of the line.
+var flowchartHeaderRe = regexp.MustCompile(`(?i)^(\s*(?:graph|flowchart)\s+)(TB|TD|BT|LR|RL)(\s*.*)$`)
+
+// perpendicular maps each flowchart direction to the one at right angles to it,
+// preserving the axis polarity so a reversed diagram stays reversed.
+var perpendicular = map[string]string{
+	"TB": "LR", "TD": "LR", "BT": "RL",
+	"LR": "TB", "RL": "BT",
+}
+
+// swapFlowchartDirection rewrites a flowchart's declared direction to the
+// perpendicular one, reporting whether it found a direction to swap.
+//
+// Only the header is touched. A `direction` statement inside a subgraph sets
+// that subgraph's internal flow, not the diagram's, and rewriting those would
+// change the drawing rather than merely reorient it.
+func swapFlowchartDirection(source string) (string, bool) {
+	lines := strings.Split(source, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "%%") {
+			continue
+		}
+
+		m := flowchartHeaderRe.FindStringSubmatch(line)
+		if m == nil {
+			return "", false // first real line is not a flowchart header
+		}
+		swapped, ok := perpendicular[strings.ToUpper(m[2])]
+		if !ok {
+			return "", false
+		}
+		lines[i] = m[1] + swapped + m[3]
+		return strings.Join(lines, "\n"), true
+	}
+	return "", false
 }
 
 // styleRow renders one row of cells, coalescing runs that share a style key
@@ -126,4 +186,86 @@ func styleRow(row []mermaid.Cell, p Palette) string {
 	flush()
 
 	return b.String()
+}
+
+// mermaidSegment is one piece of a message: either markdown to hand to
+// glamour, or the body of a closed ```mermaid fence to draw as a diagram.
+type mermaidSegment struct {
+	raw     string // the original text, fence markers included
+	diagram string // the fence body; empty when this segment is not a diagram
+}
+
+// splitMermaidFences splits text into markdown and mermaid-fence segments.
+//
+// Only *closed* fences become diagrams. While a reply is streaming, the last
+// fence has no closing marker yet, and treating it as a diagram would mean
+// re-parsing a growing fragment on every token and flashing half-drawn art at
+// the reader. An unterminated fence stays markdown until its closing line
+// arrives, at which point the message re-renders once as a diagram.
+func splitMermaidFences(text string) []mermaidSegment {
+	lines := strings.Split(text, "\n")
+
+	var (
+		segments []mermaidSegment
+		markdown []string
+		fence    []string
+		inFence  bool
+	)
+
+	flushMarkdown := func() {
+		if len(markdown) > 0 {
+			segments = append(segments, mermaidSegment{raw: strings.Join(markdown, "\n")})
+			markdown = nil
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !inFence {
+			if isMermaidFenceOpen(trimmed) {
+				inFence = true
+				fence = []string{line}
+				continue
+			}
+			markdown = append(markdown, line)
+			continue
+		}
+
+		fence = append(fence, line)
+		if trimmed == "```" {
+			flushMarkdown()
+			// The body excludes the opening and closing marker lines.
+			body := strings.Join(fence[1:len(fence)-1], "\n")
+			segments = append(segments, mermaidSegment{
+				raw:     strings.Join(fence, "\n"),
+				diagram: body,
+			})
+			inFence = false
+			fence = nil
+		}
+	}
+
+	// An unclosed fence is still streaming: hand it back as markdown.
+	if inFence {
+		markdown = append(markdown, fence...)
+	}
+	flushMarkdown()
+
+	return segments
+}
+
+// isMermaidFenceOpen reports whether a trimmed line opens a mermaid fence.
+// The info string may carry attributes after the language, as some authoring
+// tools emit (```mermaid {theme=dark}), so only the first word is compared.
+func isMermaidFenceOpen(trimmed string) bool {
+	if !strings.HasPrefix(trimmed, "```") {
+		return false
+	}
+	info := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+	if info == "" {
+		return false
+	}
+	lang, _, _ := strings.Cut(info, " ")
+	return strings.EqualFold(lang, "mermaid")
 }

@@ -842,6 +842,16 @@ func (p *flowchartParser) parseNode(text string) *graph.Node {
 
 	text = strings.TrimRight(strings.TrimSpace(text), ";")
 
+	// Fold HTML line breaks before any shape matching. sanitizeLabel replaces
+	// them too, but it only runs on the label once the shape is already
+	// decided — far too late. The shape patterns match on raw punctuation, and
+	// `<br/>` carries both a `/` and a `>`: in `n["a<br/>b"]` the asymmetric
+	// `>`…`]` pattern matches the `>` inside the tag, so the node ID comes out
+	// as `n["a<br/` and the box is drawn in the wrong shape. `<br>` in a label
+	// is ordinary GitHub-flavored Mermaid, so this is a common input, not an
+	// edge case.
+	text = foldHTMLBreaks(text)
+
 	// Handle :::className suffix
 	var styleClass string
 	if idx := strings.LastIndex(text, ":::"); idx >= 0 {
@@ -1002,10 +1012,21 @@ func stripQuotes(text string) string {
 //   - Control characters (including ANSI escapes) → stripped
 func sanitizeLabel(text string) string {
 	text = strings.ReplaceAll(text, `\n`, " ")
-	text = strings.ReplaceAll(text, "<br>", " ")
-	text = strings.ReplaceAll(text, "<br/>", " ")
-	text = strings.ReplaceAll(text, "<br />", " ")
+	text = foldHTMLBreaks(text)
 	return stripControlChars(text)
+}
+
+// htmlBreakRe matches the HTML line-break tag in all the spellings Mermaid
+// authors use: <br>, <br/>, <br />, and any casing.
+var htmlBreakRe = regexp.MustCompile(`(?i)<br\s*/?>`)
+
+// foldHTMLBreaks replaces HTML line breaks with a space.
+//
+// It runs in two places, and the earlier one matters most: parseNode calls it
+// before shape detection, because the `/` and `>` inside the tag otherwise
+// match the shape patterns and corrupt both the node ID and the box shape.
+func foldHTMLBreaks(text string) string {
+	return htmlBreakRe.ReplaceAllString(text, " ")
 }
 
 // ansiEscRe matches ANSI escape sequences: ESC followed by [ and parameters.

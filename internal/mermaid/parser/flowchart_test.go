@@ -216,3 +216,43 @@ func TestStripControlChars(t *testing.T) {
 		t.Errorf("stripControlChars(%q) = %q, want %q", input, got, want)
 	}
 }
+
+// TestParseNodeFoldsHTMLBreaks pins the fix for shape detection running before
+// HTML line breaks were folded.
+//
+// `<br/>` carries a `/` and a `>`, both of which the shape patterns match on.
+// In `b["with<br/>break"]` the asymmetric `>`…`]` pattern matched the `>`
+// inside the tag, so the node ID came out as `b["with<br/`, the label as
+// `break"`, and the box was drawn as a parallelogram. `<br>` in a label is
+// ordinary GitHub-flavored Mermaid, so this hit real diagrams.
+func TestParseNodeFoldsHTMLBreaks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		src   string
+		label string
+	}{
+		{"br slash", `graph TD` + "\n" + `b["with<br/>break"]`, "with break"},
+		{"br plain", `graph TD` + "\n" + `b["with<br>break"]`, "with break"},
+		{"br spaced", `graph TD` + "\n" + `b["with<br />break"]`, "with break"},
+		{"br upper", `graph TD` + "\n" + `b["with<BR/>break"]`, "with break"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := ParseFlowchart(tc.src)
+
+			if len(g.NodeOrder) != 1 {
+				t.Fatalf("got %d nodes, want 1: %v", len(g.NodeOrder), g.NodeOrder)
+			}
+			id := g.NodeOrder[0]
+			if id != "b" {
+				t.Errorf("node ID = %q, want \"b\": the break tag corrupted it", id)
+			}
+			node := g.Nodes[id]
+			if node.Label != tc.label {
+				t.Errorf("label = %q, want %q", node.Label, tc.label)
+			}
+			if node.Shape != graph.ShapeRectangle {
+				t.Errorf("shape = %v, want ShapeRectangle: the break tag changed it", node.Shape)
+			}
+		})
+	}
+}
