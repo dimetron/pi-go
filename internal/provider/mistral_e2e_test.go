@@ -418,3 +418,79 @@ func TestE2EMistralReasoningEffortAccepted(t *testing.T) {
 		})
 	}
 }
+
+// TestE2EMistralStreamingWithTools covers the path an interactive session
+// actually drives: streaming *and* tools together. The existing tool test is
+// non-streaming, so a tool call that survives a plain request but is lost or
+// mangled while being reassembled from stream deltas would not have been
+// caught. A tool call missing its id cannot be matched to its result, which
+// ends the turn early with no error — so each field is asserted, not just the
+// call's presence.
+func TestE2EMistralStreamingWithTools(t *testing.T) {
+	key := testGetMistralAPIKey(t)
+
+	llm, err := NewMistral(context.Background(), "mistral-small-latest", key, "", "", nil)
+	if err != nil {
+		t.Fatalf("NewMistral() error: %v", err)
+	}
+
+	tools := []*genai.Tool{{
+		FunctionDeclarations: []*genai.FunctionDeclaration{{
+			Name:        "read",
+			Description: "Read a file from the project",
+			ParametersJsonSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string"},
+				},
+				"required": []any{"file_path"},
+			},
+		}},
+	}}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Read the file README.md using the read tool."}}},
+		},
+		Config: &genai.GenerateContentConfig{Tools: tools},
+	}
+
+	var calls []*genai.FunctionCall
+	var final *model.LLMResponse
+	for resp, err := range llm.GenerateContent(context.Background(), req, true) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+		final = resp
+		if resp.Partial || resp.Content == nil {
+			continue
+		}
+		for _, p := range resp.Content.Parts {
+			if p.FunctionCall != nil {
+				calls = append(calls, p.FunctionCall)
+			}
+		}
+	}
+
+	if final == nil || !final.TurnComplete {
+		t.Fatal("expected a final TurnComplete response")
+	}
+	if len(calls) == 0 {
+		// Tool calling is the model's choice; the assertions below are what
+		// this test exists for, so an unused tool is logged, not failed.
+		t.Logf("model chose not to call a tool; finish reason %v", final.FinishReason)
+		return
+	}
+	for i, c := range calls {
+		if c.ID == "" {
+			t.Errorf("call %d: empty ID — the result could not be matched back to the call", i)
+		}
+		if c.Name != "read" {
+			t.Errorf("call %d: name = %q, want %q", i, c.Name, "read")
+		}
+		if len(c.Args) == 0 {
+			t.Errorf("call %d: arguments did not survive stream reassembly", i)
+		}
+		t.Logf("call %d: id=%q name=%q args=%v", i, c.ID, c.Name, c.Args)
+	}
+}

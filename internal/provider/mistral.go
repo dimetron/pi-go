@@ -12,7 +12,6 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"google.golang.org/adk/v2/model"
-	"google.golang.org/genai"
 )
 
 const mistralDefaultBaseURL = "https://api.mistral.ai/v1"
@@ -177,12 +176,6 @@ func mistralReasoningEffort(level string) string {
 	default:
 		return ""
 	}
-}
-
-// mistralFinishReasonToGenai maps Mistral finish_reason to genai.FinishReason.
-// Mistral uses the same finish reasons as OpenAI.
-func mistralFinishReasonToGenai(reason string) genai.FinishReason {
-	return oaiFinishReasonToGenai(reason)
 }
 
 // Mistral reasoning models do not use delta.reasoning the way OpenRouter does.
