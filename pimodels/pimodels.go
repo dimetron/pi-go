@@ -98,6 +98,11 @@ type Info struct {
 	BaseURL string
 	// Ollama reports whether the model is served by an Ollama daemon.
 	Ollama bool
+	// LocalOllama reports that an explicit ollama/ prefix selected the local
+	// daemon. It preserves that routing decision when the Info is passed to
+	// NewFromInfo, even if the stripped model name also looks like an Ollama
+	// cloud tag.
+	LocalOllama bool
 	// Custom reports whether an explicit OpenAI-compatible endpoint was used.
 	Custom bool
 }
@@ -201,19 +206,35 @@ func New(ctx context.Context, modelName string, opts ...Option) (Model, error) {
 		return nil, err
 	}
 
-	apiKey := o.apiKey
-	if apiKey == "" {
-		apiKey = provider.APIKeyFromEnv(info.Provider)
+	return newFromProviderInfo(ctx, info, o)
+}
+
+// NewFromInfo builds a client from the result of [Resolve], without reparsing
+// Info.Model as a fresh model name. Use it when startup code first inspects a
+// model with Resolve and later wants to construct exactly that resolved
+// provider/model pair.
+func NewFromInfo(ctx context.Context, info Info, opts ...Option) (Model, error) {
+	if info.Provider == "" {
+		return nil, fmt.Errorf("pimodels: provider must not be empty")
+	}
+	if info.Model == "" {
+		return nil, fmt.Errorf("pimodels: model name must not be empty")
 	}
 
-	llmOpts := o.llm
-	m, err := provider.NewLLM(ctx, info, apiKey, o.baseURL, o.thinkingLevel, &llmOpts)
-	if err != nil {
-		return nil, fmt.Errorf("pimodels: building %s model %q: %w", info.Provider, info.Model, err)
+	var o options
+	for _, opt := range opts {
+		opt(&o)
 	}
-	// Carry the resolved provider on the model itself, so a consumer never has
-	// to keep its own model-name prefix table to find out.
-	return providerModel{LLM: m, provider: info.Provider}, nil
+
+	providerInfo := provider.Info{
+		Provider:    info.Provider,
+		Model:       info.Model,
+		Ollama:      info.Ollama,
+		LocalOllama: info.LocalOllama,
+		Custom:      info.Custom,
+		BaseURL:     info.BaseURL,
+	}
+	return newFromProviderInfo(ctx, providerInfo, o)
 }
 
 // FromConfig builds the model a `pi` session would use for the given role,
@@ -255,11 +276,12 @@ func Resolve(modelName string, opts ...Option) (Info, error) {
 		return Info{}, err
 	}
 	return Info{
-		Provider: info.Provider,
-		Model:    info.Model,
-		BaseURL:  info.BaseURL,
-		Ollama:   info.Ollama,
-		Custom:   info.Custom,
+		Provider:    info.Provider,
+		Model:       info.Model,
+		BaseURL:     info.BaseURL,
+		Ollama:      info.Ollama,
+		LocalOllama: info.LocalOllama,
+		Custom:      info.Custom,
 	}, nil
 }
 
@@ -279,6 +301,27 @@ func ContextWindowFor(providerName, modelName string) int64 {
 // from, so an embedder can report a missing credential precisely.
 func APIKeyEnvVar(providerName string) string {
 	return provider.APIKeyEnvVar(providerName)
+}
+
+func newFromProviderInfo(ctx context.Context, info provider.Info, o options) (Model, error) {
+	apiKey := o.apiKey
+	if apiKey == "" {
+		apiKey = provider.APIKeyFromEnv(info.Provider)
+	}
+
+	baseURL := o.baseURL
+	if baseURL == "" {
+		baseURL = info.BaseURL
+	}
+
+	llmOpts := o.llm
+	m, err := provider.NewLLM(ctx, info, apiKey, baseURL, o.thinkingLevel, &llmOpts)
+	if err != nil {
+		return nil, fmt.Errorf("pimodels: building %s model %q: %w", info.Provider, info.Model, err)
+	}
+	// Carry the resolved provider on the model itself, so a consumer never has
+	// to keep its own model-name prefix table to find out.
+	return providerModel{LLM: m, provider: info.Provider}, nil
 }
 
 // resolveInfo picks the resolution path: an explicit base URL means the caller

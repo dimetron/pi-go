@@ -87,12 +87,17 @@ here that touches pi-go's configuration; `New` is self-contained.
 info, err := pimodels.Resolve("claude-sonnet-5")
 // info.Provider == "anthropic"
 
+m, err := pimodels.NewFromInfo(ctx, info) // build exactly that resolved pair
+
 pimodels.ContextWindow("gemini-3.7-flash")           // tokens, 0 if unknown
 pimodels.ContextWindowFor("azure", "my-deployment")  // provider-aware
 ```
 
 `Resolve` needs no credential and makes no request, so it is safe to run at
-startup to validate configuration.
+startup to validate configuration. If you want to build the inspected model
+later, pass the returned `Info` to `NewFromInfo`; `Info.Model` is the provider's
+stripped model/deployment name, so feeding it back to `New` reparses it as a new
+user-facing model name.
 
 ## Finding the provider from a model
 
