@@ -1,0 +1,6 @@
+stateDiagram-v2
+    state check <<choice>>
+    [*] --> First
+    First --> check
+    check --> Second : yes
+    check --> Third : no

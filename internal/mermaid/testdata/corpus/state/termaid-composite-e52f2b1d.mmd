@@ -1,0 +1,7 @@
+stateDiagram-v2
+    [*] --> Running
+    state "Running" {
+        Idle --> Processing
+        Processing --> Idle
+    }
+    Running --> [*]

@@ -1,0 +1,12 @@
+erDiagram
+    CUSTOMER {
+        int id PK
+        string name
+        string email UK
+    }
+    ORDER {
+        int id PK
+        int customer_id FK
+        date created
+    }
+    CUSTOMER ||--o{ ORDER : places

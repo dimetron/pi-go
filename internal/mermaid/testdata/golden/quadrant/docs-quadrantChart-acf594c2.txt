@@ -1,0 +1,24 @@
+                                Reach and engagement of campaigns
+
+ High Engagement│                                       ┆
+                │                                       ┆
+                │                                       ┆
+                │                                       ┆
+                │           Need to promote             ┆          We should expand
+                │                           ●─Campaign F┆
+                │                                       ┆    ●─Campaign C
+                │                                       ┆
+                │                       ●─Campaign A    ┆
+                │                                       ┆
+                │┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                │                                       ┆
+                │                                       ┆
+                │                               ●─Campaign E                 ●─Campaign D
+                │             Re-evaluate               ┆           May be improved
+                │                                   ●─Campaign B
+                │                                       ┆
+                │                                       ┆
+                │                                       ┆
+  Low Engagement│                                       ┆
+                 ───────────────────────────────────────────────────────────────────────────────
+                 Low Reach                                                            High Reach

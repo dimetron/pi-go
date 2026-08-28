@@ -1,0 +1,9 @@
+
+ ┌─────────────────────┐
+ │     BankAccount     │
+ ├─────────────────────┤
+ │ +String owner       │
+ │ +Bigdecimal balance │
+ │ +deposit(amount)    │
+ │ +withdrawal(amount) │
+ └─────────────────────┘
