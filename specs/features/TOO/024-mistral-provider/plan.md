@@ -582,3 +582,75 @@ already did this — verify none were missed).
 **Dependencies:** Slices 3-4 (thinking + cache behavior).
 
 **Parallel-safe:** yes (after Slice 4; e2e file only).
+
+---
+
+## Implementation notes — where the code deviates from this plan
+
+Recorded at implementation time, with the reason. The plan above is left as
+written so the deviation is visible rather than silently edited away.
+
+### Slice 3: `reasoning_effort` has two values, not five
+
+`mistralReasoningEffort` above maps `low→low`, `medium→medium`, `high→high`,
+`max→xhigh`. Mistral's reasoning docs
+(https://docs.mistral.ai/studio-api/conversations/reasoning) document exactly
+two values for the parameter: `"high"` (emit a full thinking chunk) and
+`"none"` (think minimally, omit the chunk). The reference TS implementation
+agrees — `mapReasoningEffort` collapses every active level onto `"high"`
+(research/reference-ts.md:32).
+
+Sending `low`/`medium`/`xhigh` would put values on the wire that the API does
+not define. The implemented mapping is therefore:
+
+- `none`, `off` → `"none"`
+- `low`, `medium`, `high`, `max`, `xhigh` → `"high"`
+- empty or unrecognized → `""` (field omitted, model default applies)
+
+`none → "none"` is kept from the plan rather than omitting the field: pi's
+default thinking level is `high` (config.go), so a user who asks for `none`
+wants thinking off, and only the explicit value turns it off. `prompt_mode` has
+no off value, so on the magistral path the field is omitted instead.
+
+### Slice 3: one `SetExtraFields` call, not two
+
+`param.metadata.SetExtraFields` **replaces** the extra-fields map rather than
+merging into it (openai-go v3.52.0, packages/param/param.go:157). The plan's two
+consecutive calls would have dropped `prompt_cache_key` on every reasoning
+request. `mistralExtraFields` builds one map and sets it once.
+
+### Slice 4: the answer text has to be recovered too, not just the thinking
+
+The plan assumed `oaiRunStreamingExtract` "already yields the text parts
+separately" once a thinking hook is installed. It does not. openai-go's decoder
+does not fail on an array in `content`: `newPrimitiveTypeDecoder` calls
+`v.SetString(n.String())` *before* reporting the type mismatch, and the struct
+decoder swallows per-field errors (internal/apijson/decoder.go:514, :475). The
+raw array JSON is therefore left sitting in `Delta.Content` / `Message.Content`,
+and the existing runners would have emitted it verbatim as the assistant's
+answer — visible as raw JSON in the transcript for exactly the turns that
+thinking was enabled for.
+
+So the extraction is two hooks, not one, and they are passed as a struct:
+
+```go
+type oaiExtractHooks struct {
+    deltaThinking   func(rawChunk string) string
+    messageThinking func(rawResponse string) string
+    answerText      func(content string) string
+}
+```
+
+`oaiRunStreamingHooks` / `oaiRunNonStreamingHooks` take it;
+`oaiRunStreamingExtract` / `oaiRunNonStreamingExtract` remain as thin wrappers
+so the OpenRouter call sites are untouched. `mistralAnswerText` reduces a chunk
+array to its `"text"` chunks and passes anything else through unchanged — an
+answer that merely looks like JSON (`"[see note 1]"`, `["a","b"]`, an array of
+chunk types this code does not know) is left exactly as it arrived.
+
+### Slice 9: one test more than planned
+
+Alongside the three planned e2e tests, `TestE2EMistralReasoningEffortAccepted`
+sends both documented `reasoning_effort` values against the live API. It is the
+gate that catches the mapping above drifting out of the documented vocabulary —
+a rejected value fails there rather than in a user's session.

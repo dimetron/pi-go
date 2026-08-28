@@ -12,14 +12,14 @@ import (
 )
 
 func TestNewMistralRequiresAPIKey(t *testing.T) {
-	_, err := NewMistral(context.Background(), "mistral-large-latest", "", "", nil)
+	_, err := NewMistral(context.Background(), "mistral-large-latest", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error when API key is empty")
 	}
 }
 
 func TestNewMistralDefaultBaseURL(t *testing.T) {
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestNewMistralDefaultBaseURL(t *testing.T) {
 }
 
 func TestNewMistralCustomBaseURL(t *testing.T) {
-	m, err := NewMistral(context.Background(), "mistral-small-latest", "test-key", "https://custom.example.com/v1", nil)
+	m, err := NewMistral(context.Background(), "mistral-small-latest", "test-key", "https://custom.example.com/v1", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestNewMistralWithExtraHeaders(t *testing.T) {
 	opts := &LLMOptions{
 		ExtraHeaders: map[string]string{"X-Custom": "value"},
 	}
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", opts)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestNewMistralWithExtraHeaders(t *testing.T) {
 
 func TestNewMistralWithInsecureTLS(t *testing.T) {
 	opts := &LLMOptions{InsecureSkipTLS: true}
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", opts)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestMistralNonStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestMistralStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestMistralWithToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}

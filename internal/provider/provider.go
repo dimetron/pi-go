@@ -594,7 +594,7 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	case "anthropic":
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "mistral":
-		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
+		return NewMistral(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "openrouter":
 		return NewOpenRouter(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "xai":
