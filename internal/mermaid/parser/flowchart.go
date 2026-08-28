@@ -126,7 +126,11 @@ var (
 	rePlainNode = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 	// Subgraph bracket pattern
-	reSubgraphBracket = regexp.MustCompile(`^(\S+)\s+\[(.+)\]`)
+	// The space between the id and its bracketed title is optional: Mermaid
+	// accepts both `subgraph SUB [Title]` and `subgraph SUB[Title]`, and models
+	// overwhelmingly emit the second. Requiring the space left the whole token
+	// as the title, so a group was captioned `SUB["Title"]` in raw source.
+	reSubgraphBracket = regexp.MustCompile(`^([^\s\[]+)\s*\[(.+)\]`)
 )
 
 // plainArrowDef defines a plain arrow pattern for matching.

@@ -365,3 +365,38 @@ func TestRenderMermaidRetriesPerpendicular(t *testing.T) {
 		t.Errorf("expected a tall layout after the retry, got %d rows", rows)
 	}
 }
+
+// TestMermaidStylesAreDistinct is the point of the palette mapping: the three
+// structural roles must not collapse into one color. A diagram where the box,
+// the connector and the group border share a grey is a texture, not a diagram.
+func TestMermaidStylesAreDistinct(t *testing.T) {
+	p := darkPalette
+	roles := map[string]string{
+		"box":        "node",
+		"box text":   "label",
+		"connector":  "edge",
+		"group":      "subgraph",
+		"edge label": "edge_label",
+	}
+
+	seen := map[string]string{}
+	for role, key := range roles {
+		rendered := mermaidStyleFor(key, p).Render("x")
+		if prev, dup := seen[rendered]; dup {
+			t.Errorf("%q and %q render identically — they must read apart", role, prev)
+		}
+		seen[rendered] = role
+	}
+}
+
+// TestMermaidStylesFollowBothPalettes guards the light theme, where a color
+// chosen only against a dark background is the classic casualty.
+func TestMermaidStylesFollowBothPalettes(t *testing.T) {
+	for _, key := range []string{"node", "label", "edge", "subgraph", "edge_label", "subgraph_label"} {
+		dark := mermaidStyleFor(key, darkPalette).Render("x")
+		light := mermaidStyleFor(key, lightPalette).Render("x")
+		if dark == light {
+			t.Errorf("style %q is identical in both palettes: it is not palette-driven", key)
+		}
+	}
+}

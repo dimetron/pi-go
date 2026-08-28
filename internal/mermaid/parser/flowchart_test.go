@@ -256,3 +256,35 @@ func TestParseNodeFoldsHTMLBreaks(t *testing.T) {
 		})
 	}
 }
+
+// TestParseSubgraphBracketLabel pins the fix for subgraph titles rendering as
+// raw source. Mermaid accepts both `subgraph SUB [Title]` and the far more
+// common `subgraph SUB[Title]`; the pattern required the space, so the second
+// form fell through and captioned the group `SUB["Title"]`.
+func TestParseSubgraphBracketLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		src   string
+		id    string
+		label string
+	}{
+		{"no space quoted", "graph TD\nsubgraph SUB[\"Group Title\"]\nA-->B\nend", "SUB", "Group Title"},
+		{"no space bare", "graph TD\nsubgraph SUB[Group Title]\nA-->B\nend", "SUB", "Group Title"},
+		{"with space", "graph TD\nsubgraph SUB [\"Group Title\"]\nA-->B\nend", "SUB", "Group Title"},
+		{"id only", "graph TD\nsubgraph SUB\nA-->B\nend", "SUB", "SUB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := ParseFlowchart(tc.src)
+			if len(g.Subgraphs) != 1 {
+				t.Fatalf("got %d subgraphs, want 1", len(g.Subgraphs))
+			}
+			sg := g.Subgraphs[0]
+			if sg.ID != tc.id {
+				t.Errorf("ID = %q, want %q", sg.ID, tc.id)
+			}
+			if sg.Label != tc.label {
+				t.Errorf("label = %q, want %q — raw source leaked into the caption", sg.Label, tc.label)
+			}
+		})
+	}
+}

@@ -11,17 +11,25 @@ import (
 
 // mermaidStyleFor maps a diagram's semantic style key onto the active palette.
 //
-// The mapping is chosen so a diagram reads like the rest of the pane rather
-// than like a picture pasted into it: node borders take the same Surface the
-// separators use, labels take Text, and edges take Dim so the arrows recede
-// behind the boxes they connect. Accent marks the subgraph title only — it is
-// the reply bullet's color, and spending it on every arrow would make a
-// diagram shout over the message it illustrates.
+// The goal is that the three structural roles read apart at a glance, because
+// a diagram where boxes, connectors and groups share one grey is just a texture:
+//
+//   - a box is chrome, so it takes the neutral Overlay grey and stays back;
+//   - its text is the content, so it takes the full-strength Text;
+//   - a connector is flow, so it takes Primary — a hue, not a grey, which is
+//     what lets the eye trace an edge across a crowded diagram;
+//   - a group is an enclosure, so its border and its title share Accent, which
+//     ties a caption to the box it names;
+//   - an edge label is an annotation on a connector, so it takes Peach: warm,
+//     and distinct from both the blue it sits on and the grey behind it.
+//
+// The renderer emits no "arrow" key — arrowheads are drawn as "edge" — so
+// arrowheads inherit the connector color, which is what we want anyway.
 func mermaidStyleFor(key string, p Palette) lipgloss.Style {
 	base := lipgloss.NewStyle()
 	switch key {
 	case "node":
-		return base.Foreground(p.Surface)
+		return base.Foreground(p.Overlay)
 	case "label":
 		return base.Foreground(p.Text)
 	case "bold_label":
@@ -29,15 +37,13 @@ func mermaidStyleFor(key string, p Palette) lipgloss.Style {
 	case "italic_label":
 		return base.Foreground(p.Text).Italic(true)
 	case "edge":
-		return base.Foreground(p.Dim)
-	case "arrow":
 		return base.Foreground(p.Primary)
 	case "edge_label":
-		return base.Foreground(p.Subtext)
+		return base.Foreground(p.Peach)
 	case "subgraph":
-		return base.Foreground(p.Overlay)
-	case "subgraph_label":
 		return base.Foreground(p.Accent)
+	case "subgraph_label":
+		return base.Foreground(p.Accent).Bold(true)
 	case "note":
 		return base.Foreground(p.Yellow)
 	default:
