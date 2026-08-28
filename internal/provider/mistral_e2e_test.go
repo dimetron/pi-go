@@ -395,7 +395,7 @@ func TestE2EMistralPromptCacheKeyStable(t *testing.T) {
 
 // TestE2EMistralReasoningEffortAccepted pins the wire vocabulary: Mistral
 // documents exactly "high" and "none" for reasoning_effort, so both must be
-// accepted by the live API. A 422 here means the mapping drifted.
+// accepted by the live API. A 400 here means the mapping drifted.
 func TestE2EMistralReasoningEffortAccepted(t *testing.T) {
 	key := testGetMistralAPIKey(t)
 
@@ -413,6 +413,55 @@ func TestE2EMistralReasoningEffortAccepted(t *testing.T) {
 			for _, err := range llm.GenerateContent(context.Background(), req, false) {
 				if err != nil {
 					t.Fatalf("thinking level %q rejected by Mistral: %v", level, err)
+				}
+			}
+		})
+	}
+}
+
+// TestE2EMistralThinkingLevelAcrossModels is the test that would have caught
+// prompt_mode: it drives one representative of every class through a live
+// request with pi's default thinking level.
+//
+// The classes matter because the failure directions differ. A reasoning model
+// wrongly treated as plain silently loses thinking control; a plain model
+// wrongly sent reasoning_effort answers 400 and the turn dies. Both are
+// invisible to a unit test, which only sees the body pi built, never Mistral's
+// verdict on it.
+func TestE2EMistralThinkingLevelAcrossModels(t *testing.T) {
+	key := testGetMistralAPIKey(t)
+
+	models := []struct {
+		name       string
+		wantEffort bool // does this model accept reasoning_effort?
+	}{
+		{name: "mistral-small-latest", wantEffort: true},
+		{name: "mistral-medium-latest", wantEffort: true},
+		{name: "magistral-medium-latest", wantEffort: true},
+		{name: "mistral-medium-2508"},
+		{name: "mistral-large-latest"},
+		{name: "codestral-2508"},
+	}
+
+	for _, m := range models {
+		t.Run(m.name, func(t *testing.T) {
+			if got := mistralUsesReasoningEffort(m.name); got != m.wantEffort {
+				t.Errorf("mistralUsesReasoningEffort(%q) = %v, want %v", m.name, got, m.wantEffort)
+			}
+			// "high" is pi's default level, so this is the request an ordinary
+			// session sends.
+			llm, err := NewMistral(context.Background(), m.name, key, "", "high", nil)
+			if err != nil {
+				t.Fatalf("NewMistral() error: %v", err)
+			}
+			req := &model.LLMRequest{
+				Contents: []*genai.Content{
+					{Role: "user", Parts: []*genai.Part{{Text: "Say OK."}}},
+				},
+			}
+			for _, err := range llm.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("%s rejected pi's default thinking level: %v", m.name, err)
 				}
 			}
 		})
