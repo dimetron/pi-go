@@ -182,11 +182,8 @@ const wideContinuation = '\uFFFF'
 // would replace the character it was meant to decorate.
 func (c *Canvas) PutText(row, col int, text string, style string) {
 	offset := 0
-	for _, ch := range text {
-		w := textwidth.Rune(ch)
-		if w == 0 {
-			continue
-		}
+	for _, cell := range textwidth.Split(text) {
+		ch, w := cell.Rune, cell.Width
 		c.Put(row, col+offset, ch, false, style)
 		if w == 2 && col+offset+1 >= 0 && col+offset+1 < c.Width && row >= 0 && row < c.Height {
 			c.grid[row][col+offset+1] = wideContinuation
@@ -200,11 +197,8 @@ func (c *Canvas) PutText(row, col int, text string, style string) {
 func (c *Canvas) PutStyledText(row, col int, segments []StyledSegment) {
 	offset := 0
 	for _, seg := range segments {
-		for _, ch := range seg.Text {
-			w := textwidth.Rune(ch)
-			if w == 0 {
-				continue
-			}
+		for _, cell := range textwidth.Split(seg.Text) {
+			ch, w := cell.Rune, cell.Width
 			c.Put(row, col+offset, ch, false, seg.Style)
 			if w == 2 && col+offset+1 >= 0 && col+offset+1 < c.Width && row >= 0 && row < c.Height {
 				c.grid[row][col+offset+1] = wideContinuation

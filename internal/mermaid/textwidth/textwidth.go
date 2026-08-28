@@ -20,10 +20,40 @@ import "unicode"
 // String returns the number of terminal columns s occupies.
 func String(s string) int {
 	w := 0
-	for _, r := range s {
-		w += Rune(r)
+	for _, e := range Split(s) {
+		w += e.Width
 	}
 	return w
+}
+
+// Cell is one rune together with the columns it occupies.
+type Cell struct {
+	Rune  rune
+	Width int
+}
+
+// Split walks s and reports each rune with the width it will actually render
+// at, resolving the one thing a per-rune answer cannot: a variation selector.
+//
+// U+FE0F asks for emoji presentation, which makes an otherwise narrow symbol
+// render two columns wide. It carries no width of its own, so measuring rune
+// by rune misses it — "🛠️" is two columns and "🛠" is one, and the only
+// difference between them is the selector that follows.
+func Split(s string) []Cell {
+	rs := []rune(s)
+	out := make([]Cell, 0, len(rs))
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		w := Rune(r)
+		if w == 0 {
+			continue
+		}
+		if w == 1 && i+1 < len(rs) && rs[i+1] == 0xFE0F {
+			w = 2 // emoji presentation requested
+		}
+		out = append(out, Cell{Rune: r, Width: w})
+	}
+	return out
 }
 
 // Max returns the width of the widest line in lines.
@@ -92,8 +122,40 @@ var wideRanges = [...][2]rune{
 	{0x30000, 0x3FFFD},
 }
 
+// textPresentation lists the codepoints inside the emoji blocks below that
+// Unicode gives Emoji_Presentation=No: they are symbols first and emoji only
+// when followed by U+FE0F, and a terminal draws them one column wide.
+//
+// Treating the emoji blocks as uniformly wide made these overcount, so a label
+// carrying one measured a column wider than it drew and its box centered a
+// column off — visible as a line of text sitting left of the box it is in
+// while its neighbors sit straight.
+func textPresentation(r rune) bool {
+	switch {
+	case r >= 0x1F321 && r <= 0x1F32C, r == 0x1F336, r == 0x1F37D,
+		r >= 0x1F396 && r <= 0x1F397, r >= 0x1F399 && r <= 0x1F39B,
+		r >= 0x1F39E && r <= 0x1F39F, r >= 0x1F3CB && r <= 0x1F3CE,
+		r >= 0x1F3D4 && r <= 0x1F3DF, r >= 0x1F3F3 && r <= 0x1F3F5,
+		r == 0x1F3F7, r == 0x1F43F, r == 0x1F441, r == 0x1F4FD,
+		r >= 0x1F549 && r <= 0x1F54A, r >= 0x1F56F && r <= 0x1F570,
+		r >= 0x1F573 && r <= 0x1F57A, r == 0x1F587,
+		r >= 0x1F58A && r <= 0x1F58D, r == 0x1F590, r == 0x1F5A5,
+		r == 0x1F5A8, r >= 0x1F5B1 && r <= 0x1F5B2, r == 0x1F5BC,
+		r >= 0x1F5C2 && r <= 0x1F5C4, r >= 0x1F5D1 && r <= 0x1F5D3,
+		r >= 0x1F5DC && r <= 0x1F5DE, r == 0x1F5E1, r == 0x1F5E3,
+		r == 0x1F5E8, r == 0x1F5EF, r == 0x1F5F3, r == 0x1F5FA,
+		r >= 0x1F6CB && r <= 0x1F6CF, r >= 0x1F6E0 && r <= 0x1F6E5,
+		r == 0x1F6E9, r == 0x1F6F0, r == 0x1F6F3:
+		return true
+	}
+	return false
+}
+
 // wide reports whether r renders two columns wide.
 func wide(r rune) bool {
+	if textPresentation(r) {
+		return false
+	}
 	// A handful of older symbols are emoji-presentation by default and sit
 	// outside the blocks above; they are the ones that show up in real
 	// diagram labels rather than an exhaustive list.
