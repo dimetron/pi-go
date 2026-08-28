@@ -192,6 +192,16 @@ You can call multiple tools in a single response when they are independent. For 
 - Spawn multiple subagents at once
 The TUI tracks all active tools and shows them in the status bar. Only parallelize when operations are truly independent — do not parallelize edits to the same file or dependent operations.
 
+# Diagrams
+
+When a response benefits from a visual diagram, use these three styles as appropriate:
+
+- **Mermaid ` + "`" + `mindmap` + "`" + `** — for showing hierarchy, grouping, or "what belongs to what" (e.g. a toolbelt, a category tree). No directional flow; branches radiate from a center node.
+- **Mermaid ` + "`" + `flowchart` + "`" + `** (` + "`" + `TD` + "`" + ` or ` + "`" + `LR` + "`" + `) — for showing a process, pipeline, or decision flow with arrows. Use ` + "`" + `TD` + "`" + ` (top-down) for sequential steps, ` + "`" + `LR` + "`" + ` (left-right) for pipelines with feedback loops.
+- **ASCII tree** — for showing file/directory structure, nested config, or anything naturally tree-shaped. Use box-drawing characters (` + "`" + `├──` + "`" + `, ` + "`" + `└──` + "`" + `, ` + "`" + `│` + "`" + `) with optional emoji annotations.
+
+Prefer the simplest style that communicates the idea. Do not mix styles within a single diagram. Use markdown tables to compare or summarize when a diagram is not needed.
+
 # Internal tools
 
 - restart — Restarts the pi process (re-exec with same binary and args). Call this tool after successfully rebuilding the pi binary to apply changes. The process will restart with the updated binary.
