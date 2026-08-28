@@ -400,3 +400,39 @@ func TestMermaidStylesFollowBothPalettes(t *testing.T) {
 		}
 	}
 }
+
+// TestFallbackFenceIsStable is the regression test for a transcript that
+// visibly shimmers. When a diagram is too wide the fence is shown instead, and
+// Chroma has no mermaid lexer, so it guessed the language from the content —
+// a guess decided by map order and therefore different on each repaint. The
+// pane re-renders on every blink tick, so the block quietly changed color a
+// couple of times a second.
+func TestFallbackFenceIsStable(t *testing.T) {
+	c := newMermaidChat(t, 60)
+	msg := "```mermaid\n" + unfittableSample + "```\n"
+
+	first := c.RenderMarkdown(msg)
+	if first == "" {
+		t.Fatal("fallback produced nothing")
+	}
+	for i := range 60 {
+		if got := c.RenderMarkdown(msg); got != first {
+			t.Fatalf("render %d differs from render 0: the fallback fence is not stable", i+1)
+		}
+	}
+}
+
+func TestStableFenceLang(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain", "```mermaid\ngraph LR\n```", "```text\ngraph LR\n```"},
+		{"indented", "  ```mermaid\n  graph LR\n  ```", "  ```text\n  graph LR\n  ```"},
+		{"attributes", "```mermaid {theme=dark}\ngraph LR\n```", "```text\ngraph LR\n```"},
+		{"no newline", "```mermaid", "```mermaid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stableFenceLang(tc.in); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

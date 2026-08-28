@@ -194,6 +194,29 @@ func styleRow(row []mermaid.Cell, p Palette) string {
 	return b.String()
 }
 
+// stableFenceLang rewrites a mermaid fence's info string to "text".
+//
+// Chroma ships no mermaid lexer, so glamour falls back to guessing the
+// language from the content — and that guess is not stable. Several lexers
+// score equally on a large diagram body and the winner is decided by map
+// iteration order, so the block is re-colored slightly differently on every
+// repaint. Measured on a real 171-line diagram: the ```mermaid fence differed
+// between renders 48 times out of 60, an untagged fence 10 times out of 60,
+// and a fence tagged with a language Chroma knows, zero.
+//
+// Since the pane re-renders on every blink tick, that shows up as a diagram
+// that quietly shimmers. Naming a lexer Chroma has stops the guessing. Nothing
+// is lost visually: glamour does not display the language name.
+func stableFenceLang(raw string) string {
+	nl := strings.IndexByte(raw, '\n')
+	if nl < 0 {
+		return raw
+	}
+	open := raw[:nl]
+	indent := open[:len(open)-len(strings.TrimLeft(open, " \t"))]
+	return indent + "```text" + raw[nl:]
+}
+
 // mermaidSegment is one piece of a message: either markdown to hand to
 // glamour, or the body of a closed ```mermaid fence to draw as a diagram.
 type mermaidSegment struct {

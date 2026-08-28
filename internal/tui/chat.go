@@ -580,7 +580,13 @@ func (c *ChatModel) RenderMarkdown(text string) string {
 				continue
 			}
 			// Not a diagram this renderer models, or too wide for the pane:
-			// fall through and show the fence as the model wrote it.
+			// fall through and show the fence as the model wrote it, but with
+			// a language Chroma knows so the block does not shimmer on every
+			// repaint (see stableFenceLang).
+			if rendered := c.renderMarkdownSegment(stableFenceLang(seg.raw)); rendered != "" {
+				parts = append(parts, rendered)
+			}
+			continue
 		}
 		if rendered := c.renderMarkdownSegment(seg.raw); rendered != "" {
 			parts = append(parts, rendered)
