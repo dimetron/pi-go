@@ -45,10 +45,13 @@ func TestRenderMermaidFitsWidth(t *testing.T) {
 	}
 }
 
-// unfittableSample has labels too long to fit a narrow pane in either
-// orientation, so it exercises the fallback rather than the retry.
+// unfittableSample cannot fit a narrow pane in either orientation, so it
+// exercises the fallback rather than the perpendicular retry. The labels are
+// single unbreakable words longer than the label wrap width, which is what
+// puts a hard floor under the box width: word wrapping cannot split them, so
+// no orientation and no padding makes the diagram narrower.
 const unfittableSample = "graph LR\n" +
-	"    A[a very long descriptive label here] --> B[another long descriptive label]\n"
+	"    A[supercalifragilisticexpialidocious] --> B[pneumonoultramicroscopicsilicovolcanoconiosis]\n"
 
 // TestRenderMermaidRejectsOverflow pins the fallback contract: when a diagram
 // fits in neither orientation, the caller gets "" so it can print the original

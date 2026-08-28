@@ -86,7 +86,22 @@ func RenderMermaid(source string, width int, p Palette) string {
 
 // renderMermaidAt renders source at width and reports whether the result fits.
 func renderMermaidAt(source string, width int, p Palette) (string, bool) {
-	rows := mermaid.RenderCells(source, mermaid.WithWidth(width))
+	// Tight padding. The engine's CLI defaults (4, 2) suit a diagram that owns
+	// the whole terminal; in a chat pane the same diagram reads as mostly empty
+	// boxes, and every blank row is a row of transcript the reader has to
+	// scroll past. (1, 0) keeps one column of breathing room either side of a
+	// label and drops the blank rows above and below it, which is about a fifth
+	// off the area for no loss of legibility.
+	//
+	// It is padding rather than the layout constants because those do not pay:
+	// MaxNormalizedHeight changes nothing measurable, and the one lever that
+	// would give a large win — cutting Stride from 4 to 3 — leaves too little
+	// room between node centers for subgraph borders and edge routing, so
+	// borders start cutting through boxes and labels.
+	rows := mermaid.RenderCells(source,
+		mermaid.WithWidth(width),
+		mermaid.WithPadding(1, 0),
+	)
 	if len(rows) == 0 {
 		return "", false
 	}
