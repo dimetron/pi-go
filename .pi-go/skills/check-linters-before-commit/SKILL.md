@@ -41,6 +41,11 @@ Verify tests pass:
 go test ./...
 ```
 
+Since Go 1.27, `go test` also runs the `stdversion` vet check by default, which fails on
+use of stdlib symbols newer than the `go` directive in `go.mod`. If a test fails that
+way, bump `go.mod` in the same change — do not `//nolint` around it. See the `go-127`
+skill.
+
 ### 4. Build Verification
 
 Ensure the code builds:

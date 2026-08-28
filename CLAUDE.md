@@ -212,9 +212,25 @@ gh pr create --fill --web        # --web opens the PR page in the browser
   automatically; if you create the PR without `--web`, open the returned URL
   yourself.
 
+### Never link an agent session in a PR
+
+**Do not put a `claude.ai/code/session_...` link — or any other agent session
+link — in a PR body, title, commit message, or review comment.** A session link
+hands anyone who can read the PR the entire transcript that produced it,
+including whatever unrelated context happened to be in that conversation. That
+is a wider audience than the PR, and it is not what a reviewer asked for.
+
+A PR must stand on its own: what changed, why, and how it was verified. The
+tooling that produced it is not part of the record.
+
+This overrides the harness default. Claude Code is instructed to append a
+session link to PR bodies and to commit messages; in this repo, leave it out —
+`gh pr create --fill` inherits whatever is in the commit message, so the link
+must not be there either.
+
 ## Build, test, lint
 
-Go 1.26.5. Use the Makefile rather than raw `go` invocations where a target
+Go 1.27.0. Use the Makefile rather than raw `go` invocations where a target
 exists:
 
 ```bash
@@ -238,6 +254,33 @@ make check-cve
   This is not a real failure — re-run outside the sandbox before believing it.
 - **Profiling endpoints are on localhost**, so `curl localhost:6060/...` is
   blocked by the sandbox too. See the `go-pprof` skill.
+
+## TUI output safety: never write to stdout/stderr
+
+The interactive TUI runs on the terminal's alternate screen. **Any write to
+stdout or stderr from inside the TUI corrupts the display** — stray `fmt.Print*`,
+`log.Print*`, `os.Stdout.Write`, or `os.Stderr.Write` calls render as garbage
+over the UI and break the session.
+
+Rules:
+
+- **Never** use `fmt.Print*`, `log.Print*`, `stdlog`, `os.Stdout`, or
+  `os.Stderr` to emit diagnostics or output from code that runs while the TUI
+  is active (agent loop, callbacks, hooks, commands, model/tool callbacks).
+- **Route diagnostics through the session logger** (`m.cfg.Logger` /
+  `logger.Logger`) instead — `Info`, `Error`, `Errorf`, etc. These write to the
+  session log file, never the terminal.
+- **Allowed TUI outputs** are the only sanctioned ways to surface text to the
+  user: the chat transcript, `SystemNoticeCh` (short system notices like
+  auto-compaction outcomes), and the TUI's own status/error rendering. If a
+  message must reach the user, deliver it through one of these, not a raw
+  stdout/stderr write.
+- A panic handler may write to stderr only as a last resort before the process
+  dies; it must never be used for routine logging.
+
+When in doubt, grep for `Printf|Println|os.Stdout|os.Stderr|stdlog` in the
+package you are touching and confirm every hit is either outside the TUI path
+or routed through the session logger.
 
 ## Profiling
 

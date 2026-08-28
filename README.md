@@ -207,7 +207,7 @@ Regenerate the aggregate SBOM locally with `make sbom` (requires
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.27+
 - At least one LLM provider API key or a running Ollama instance
 
 ## API keys
