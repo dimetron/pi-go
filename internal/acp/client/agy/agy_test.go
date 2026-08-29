@@ -3,6 +3,7 @@ package agy
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -191,5 +192,29 @@ func TestBinaryPaths(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("DefaultBinaryPaths %v should include ~/.pi-go/acp/agy", DefaultBinaryPaths)
+	}
+}
+
+// TestBinaryPathsPreferInstallDirOverPATH pins the search order: the bare name
+// resolves through exec.LookPath, so it must come last. If it came first, a
+// binary earlier on the caller's PATH would shadow the one the installer put
+// in ~/.pi-go/acp/agy, making the resolved server depend on the environment
+// rather than on what was installed.
+func TestBinaryPathsPreferInstallDirOverPATH(t *testing.T) {
+	if got := DefaultBinaryPaths[len(DefaultBinaryPaths)-1]; got != BinaryName {
+		t.Errorf("last search entry = %q, want the bare name %q so PATH is the last resort", got, BinaryName)
+	}
+	for i, path := range DefaultBinaryPaths[:len(DefaultBinaryPaths)-1] {
+		if !filepath.IsAbs(path) {
+			t.Errorf("entry %d = %q; every entry before the bare name must be an absolute path", i, path)
+		}
+	}
+	if strings.Contains(DefaultBinaryPaths[0], filepath.Join(".pi-go", "acp", "agy")) {
+		return
+	}
+	// Only a home directory that cannot be resolved should drop the install
+	// dir from the front, and then the list is the fixed system paths.
+	if home, err := os.UserHomeDir(); err == nil {
+		t.Errorf("first search entry = %q, want the install dir under %s", DefaultBinaryPaths[0], home)
 	}
 }

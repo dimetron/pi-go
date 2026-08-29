@@ -170,10 +170,15 @@ func defaultArgs() []string {
 
 // defaultBinaryPaths returns the search order for the ACP server binary: the
 // pi-go install directory first, then Antigravity's own directory, then the
-// usual bin directories and PATH.
+// usual bin directories, and a bare-name PATH lookup only as a last resort.
+//
+// The order matters. A bare name resolves through exec.LookPath, so putting it
+// first would let any agy_acp_server earlier on PATH win over the copy the
+// installer placed in ~/.pi-go/acp/agy — the resolved binary would depend on
+// the caller's PATH rather than on what was installed.
 func defaultBinaryPaths() []string {
 	name := binaryName()
-	paths := []string{name}
+	var paths []string
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths,
 			filepath.Join(home, ".pi-go", "acp", "agy", name),
@@ -181,7 +186,7 @@ func defaultBinaryPaths() []string {
 			filepath.Join(home, ".local", "bin", name),
 		)
 	}
-	return append(paths, filepath.Join("/usr/local/bin", name))
+	return append(paths, filepath.Join("/usr/local/bin", name), name)
 }
 
 // findBinary returns the first existing entry in paths, resolving bare names
