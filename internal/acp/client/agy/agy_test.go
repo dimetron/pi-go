@@ -246,19 +246,24 @@ func TestResolveCommandEnvOverride(t *testing.T) {
 func TestResolveCommandBlankEnvOverride(t *testing.T) {
 	t.Setenv(envACPAgyCmd, "   ")
 
+	// An absolute path is resolved by stat rather than by exec.LookPath, so
+	// the expected value is exact on every platform — a PATH lookup would
+	// come back as "ls.exe" on Windows.
+	installed := filepath.Join(t.TempDir(), binaryName())
+	if err := os.WriteFile(installed, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write stub binary: %v", err)
+	}
+
 	orig := DefaultBinaryPaths
 	t.Cleanup(func() { DefaultBinaryPaths = orig })
-	DefaultBinaryPaths = []string{"ls"}
+	DefaultBinaryPaths = []string{installed}
 
 	binary, _, err := (Runner{}).resolveCommand(RunRequest{Prompt: "hi"})
 	if err != nil {
 		t.Fatalf("resolveCommand error: %v", err)
 	}
-	if binary == "" {
-		t.Fatal("binary is empty; a blank override must fall back to the default search")
-	}
-	if !strings.HasSuffix(binary, "ls") {
-		t.Errorf("binary = %q, want the entry resolved from DefaultBinaryPaths", binary)
+	if binary != installed {
+		t.Errorf("binary = %q, want %q resolved from DefaultBinaryPaths", binary, installed)
 	}
 }
 
