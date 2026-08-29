@@ -31,6 +31,22 @@ const (
 	// make the repetition meaningless.
 	maxRepeatToolCalls = 10
 
+	// maxRunningPollRepeats is the identical-call threshold that replaces
+	// maxRepeatToolCalls while a bash poll's command is still running.
+	//
+	// A poll that returns byte-identical output is not evidence of a loop when
+	// the command behind it is alive: ffmpeg's palettegen pass, a linker, a
+	// test binary mid-run — all go quiet for tens of seconds while working, and
+	// at roughly three seconds per model round-trip ten identical polls is
+	// under half a minute of silence. Ten was a threshold set for tools whose
+	// target is static, and re-reading an unchanged file ten times really is a
+	// loop; waiting on a live process is not, so it gets its own budget.
+	//
+	// Deliberately large rather than unbounded: a model polling a hung handle
+	// forever should still be stopped eventually, and the poll's own wait_ms
+	// paces the spin in the meantime.
+	maxRunningPollRepeats = 500
+
 	// maxRepeatErrorCalls aliases maxRepeatToolCalls for callers that frame
 	// the threshold as an error-streak rather than a call-streak. The
 	// underlying detector is identical — identical fingerprint = stuck.
@@ -127,11 +143,16 @@ func extractAgentType(args map[string]any) string {
 
 // stuckDetector tracks recent tool calls and detects repetition loops.
 type stuckDetector struct {
-	recent     []string // ring of fingerprints (len <= recentWindowSize)
-	lastPrint  string   // fingerprint of last tool call
-	lastName   string   // tool name behind lastPrint
-	lastResult string   // fingerprint of the streak's previous result ("" = none yet)
-	streak     int      // consecutive identical tool calls with identical results
+	recent     []recentCall // ring of call+result pairs (len <= recentWindowSize)
+	recentSeq  int          // monotonic id handed to each entry in recent
+	lastPrint  string       // fingerprint of last tool call
+	lastName   string       // tool name behind lastPrint
+	lastResult string       // fingerprint of the streak's previous result ("" = none yet)
+	streak     int          // consecutive identical tool calls with identical results
+	// livePoll is set while the streak's tool is a bash poll whose last
+	// response reported the command still running. It swaps the identical-call
+	// threshold for maxRunningPollRepeats — see repeatLimit.
+	livePoll bool
 	// Two error detectors run in parallel. The args-aware streak keys on the
 	// call fingerprint, so only the same tool call failing repeatedly counts;
 	// the name-only streak keys on the tool name and compounds only across
@@ -151,11 +172,32 @@ type stuckDetector struct {
 
 // callRecord is what the detector remembers about an observed tool call so a
 // later response can be correlated back to it: the call's fingerprint (for the
-// args-aware error streak) and the message it appeared in (for the name-only
-// cross-batch streak).
+// args-aware error streak), the message it appeared in (for the name-only
+// cross-batch streak), and its slot in the repetition window (so the response
+// can be filed against the call it answers rather than against whichever call
+// happened to be observed last).
 type callRecord struct {
 	fp  string
 	msg int
+	seq int
+}
+
+// recentCall is one entry in the repetition window: a call, and what came back
+// from it. Both halves matter. Comparing calls alone cannot tell a model
+// spinning on a dead pattern from one driving several long-running jobs — the
+// fan-out of a parallel poll is a repeating sequence of fingerprints by
+// construction, and the only thing separating it from a genuine loop is that
+// its results keep changing. That is the rule observeResult already applies to
+// the identical-call streak; detectCycle applies it here.
+type recentCall struct {
+	call   string // call fingerprint
+	result string // result fingerprint; "" until the response arrives
+	seq    int    // matches the callRecord that produced it
+}
+
+// repeats reports whether c re-ran prev and got nothing new back.
+func (c recentCall) repeats(prev recentCall) bool {
+	return c.call == prev.call && c.result == prev.result
 }
 
 // volatileToolArgs address a slice of a target rather than the target itself.
@@ -209,7 +251,7 @@ func (s *stuckDetector) beginEvent() {
 // calls still reads as one message.
 func (s *stuckDetector) observe(id, name string, args map[string]any) (stuck bool, detail string) {
 	fp := toolFingerprint(name, args)
-	rec := callRecord{fp: fp, msg: s.msgSeq}
+	rec := callRecord{fp: fp, msg: s.msgSeq, seq: s.recentSeq}
 	if id != "" {
 		if s.callInfo == nil {
 			s.callInfo = make(map[string]callRecord)
@@ -229,24 +271,35 @@ func (s *stuckDetector) observe(id, name string, args map[string]any) (stuck boo
 		s.lastPrint = fp
 		s.lastName = name
 		s.lastResult = ""
+		s.livePoll = false
 	}
 
-	// Sliding window.
-	s.recent = append(s.recent, fp)
+	// Sliding window. The result half is filled in later, by observeResult.
+	s.recent = append(s.recent, recentCall{call: fp, seq: s.recentSeq})
+	s.recentSeq++
 	if len(s.recent) > recentWindowSize {
 		s.recent = s.recent[1:]
 	}
 
-	if s.streak >= maxRepeatToolCalls {
+	if limit := s.repeatLimit(); s.streak >= limit {
 		return true, fmt.Sprintf("identical tool call %q repeated %d times", name, s.streak)
 	}
 
-	// Detect short repeating cycles (AB AB AB) in the window.
-	if cycle := s.detectCycle(); cycle != "" {
-		return true, fmt.Sprintf("repeating tool cycle detected: %s", cycle)
-	}
-
+	// Cycle detection runs from observeResult instead: a cycle is only a cycle
+	// once the results are in, and at this point the call just observed has no
+	// result yet.
 	return false, ""
+}
+
+// repeatLimit is how many identical consecutive calls the current streak is
+// allowed before it counts as stuck. Waiting on a live command gets a much
+// larger budget than repeating a call against something static — see
+// maxRunningPollRepeats.
+func (s *stuckDetector) repeatLimit() int {
+	if s.livePoll {
+		return maxRunningPollRepeats
+	}
+	return maxRepeatToolCalls
 }
 
 // observeResult records a tool call's response. Polling tools repeat identical
@@ -257,13 +310,41 @@ func (s *stuckDetector) observe(id, name string, args map[string]any) (stuck boo
 // re-polling a finished command or re-reading an unchanged file is genuine
 // repetition. A stuck loop whose responses vary trivially (timestamps) escapes
 // this detector, but observeError and observeOutput still cover that shape.
-func (s *stuckDetector) observeResult(name string, response map[string]any) {
-	if name != s.lastName {
-		return
+//
+// It also closes the repetition window entry for the call it answers and runs
+// cycle detection, which is why it reports a verdict: a cycle is a claim about
+// calls *and* their results, so it cannot be decided when the call is observed.
+func (s *stuckDetector) observeResult(id, name string, response map[string]any) (stuck bool, detail string) {
+	fp := resultFingerprint(name, response)
+	rec, known := s.callFor(id, name)
+	if known {
+		s.fillResult(rec.seq, fp)
 	}
-	// bash_wait includes elapsed/idle fields that change on every poll even
-	// when the command produced no new output. Those fields are progress for the
-	// UI, not progress from the command, so exclude them from loop detection.
+
+	// The streak only tracks one call at a time, so a result belonging to some
+	// other call — another handle in the same parallel batch, or another tool
+	// entirely — must not be compared against it.
+	if name == s.lastName && (!known || rec.fp == s.lastPrint) {
+		if s.lastResult != "" && fp != s.lastResult {
+			s.streak = 0
+		}
+		s.lastResult = fp
+		s.livePoll = isLiveBashPoll(name, response)
+	}
+
+	if cycle := s.detectCycle(); cycle != "" {
+		return true, fmt.Sprintf("repeating tool cycle detected: %s", cycle)
+	}
+	return false, ""
+}
+
+// resultFingerprint hashes a tool response for comparison against the previous
+// response to the same call.
+//
+// bash_wait includes elapsed/idle fields that change on every poll even when
+// the command produced no new output. Those fields are progress for the UI, not
+// progress from the command, so exclude them from loop detection.
+func resultFingerprint(name string, response map[string]any) string {
 	stable := response
 	if isBashPoll(name) {
 		stable = make(map[string]any, len(response))
@@ -275,11 +356,42 @@ func (s *stuckDetector) observeResult(name string, response map[string]any) {
 	}
 	b, _ := json.Marshal(stable)
 	sum := sha256.Sum256(b)
-	fp := hex.EncodeToString(sum[:])[:16]
-	if s.lastResult != "" && fp != s.lastResult {
-		s.streak = 0
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// isLiveBashPoll reports whether response is a poll of a command that has not
+// finished yet.
+func isLiveBashPoll(name string, response map[string]any) bool {
+	if !isBashPoll(name) {
+		return false
 	}
-	s.lastResult = fp
+	running, _ := response["running"].(bool)
+	return running
+}
+
+// callFor resolves the call a response belongs to, by ID where the provider
+// supplies one and by tool name otherwise — the same fallback observeError
+// uses for ID-less calls.
+func (s *stuckDetector) callFor(id, name string) (callRecord, bool) {
+	if id != "" {
+		if rec, ok := s.callInfo[id]; ok {
+			return rec, true
+		}
+	}
+	rec, ok := s.lastCallByName[name]
+	return rec, ok
+}
+
+// fillResult attaches a result fingerprint to its call in the repetition
+// window. The entry is gone if the window has already slid past it, which is
+// not an error: a window that old cannot be part of a cycle being detected now.
+func (s *stuckDetector) fillResult(seq int, fp string) {
+	for i := range s.recent {
+		if s.recent[i].seq == seq {
+			s.recent[i].result = fp
+			return
+		}
+	}
 }
 
 // observeError records the outcome of a tool call and reports whether the loop
@@ -444,8 +556,18 @@ func isPeriodic(buf string, period, repeats int) bool {
 // A "cycle" requires that consecutive elements differ — a uniform window
 // like [a,a,a,a,a,a] is a streak, not a cycle, and the identical-call
 // detector above already handles that case at maxRepeatToolCalls.
+//
+// It also requires every repetition to have produced the same result as the
+// one before it. Distinct calls arranged in a repeating order are not on their
+// own evidence of anything: a model driving four background jobs polls them in
+// the same order every message, and a rotation of that fan-out is a perfect
+// length-3 cycle across message boundaries while every poll returns fresh
+// output. Without the result half, that shape aborts a working run in three
+// model messages — see session 260829-1537-6a139-71d65, which died eight
+// seconds after one of its four jobs finished and the fan-out fell to three.
 func (s *stuckDetector) detectCycle() string {
-	n := len(s.recent)
+	window := s.completedWindow()
+	n := len(window)
 	if n < 6 {
 		return ""
 	}
@@ -455,13 +577,13 @@ func (s *stuckDetector) detectCycle() string {
 		if n < need {
 			continue
 		}
-		tail := s.recent[n-need:]
+		tail := window[n-need:]
 		cycle := tail[:cycleLen]
 		// Require adjacent elements in the candidate cycle to differ —
 		// otherwise it's a uniform streak, not an alternating cycle.
 		cycleValid := true
 		for i := 1; i < cycleLen; i++ {
-			if cycle[i] == cycle[i-1] {
+			if cycle[i].call == cycle[i-1].call {
 				cycleValid = false
 				break
 			}
@@ -471,7 +593,7 @@ func (s *stuckDetector) detectCycle() string {
 		}
 		match := true
 		for i := cycleLen; i < need; i++ {
-			if tail[i] != cycle[i%cycleLen] {
+			if !tail[i].repeats(cycle[i%cycleLen]) {
 				match = false
 				break
 			}
@@ -481,6 +603,19 @@ func (s *stuckDetector) detectCycle() string {
 		}
 	}
 	return ""
+}
+
+// completedWindow is the leading run of the window whose responses have all
+// arrived. A call still in flight has no result to compare, and calls issued in
+// one batch are all observed before any of them answers, so the pending entries
+// are skipped rather than treated as matching anything.
+func (s *stuckDetector) completedWindow() []recentCall {
+	for i := range s.recent {
+		if s.recent[i].result == "" {
+			return s.recent[:i]
+		}
+	}
+	return s.recent
 }
 
 // agentMsg wraps messages coming from the agent goroutine via a channel.
@@ -1129,8 +1264,12 @@ func (m *model) emitPartResponse(
 
 	// A changed result on a repeated call is progress, not a loop
 	// (a poll returning fresh output) — let it reset the
-	// identical-call streak before the next call is observed.
-	detector.observeResult(fr.Name, fr.Response)
+	// identical-call streak before the next call is observed. This is
+	// also where cycle detection runs, since a cycle is only decidable
+	// once the calls in the window have their results.
+	if err := stuckErr(detector.observeResult(fr.ID, fr.Name, fr.Response)); err != nil {
+		return err
+	}
 
 	// Track per-tool error streaks: ADK wraps tool errors as
 	// map[string]any{"error": ...}. Anything else (including a

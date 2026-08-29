@@ -121,7 +121,7 @@ func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
 		if stuck {
 			t.Fatalf("poll %d flagged stuck: %s", i, detail)
 		}
-		s.observeResult("bash_wait", map[string]any{
+		s.observeResult("c", "bash_wait", map[string]any{
 			"handle":  "bg_16",
 			"elapsed": i,
 			"stdout":  fmt.Sprintf("line %d\n", i), // command progress: every response differs
@@ -130,21 +130,50 @@ func TestStuckDetector_ObserveResult_PollingNotStuck(t *testing.T) {
 	}
 }
 
+// TestStuckDetector_ObserveResult_ChangingTimingDoesNotReset pins that
+// elapsed/idle are not progress: a poll whose only changing fields are the
+// clock still accumulates a streak. The budget is maxRunningPollRepeats rather
+// than maxRepeatToolCalls because the command is still running — see
+// TestStuckDetector_ObserveResult_FinishedPollTripsAtNormalThreshold for the
+// other half.
 func TestStuckDetector_ObserveResult_ChangingTimingDoesNotReset(t *testing.T) {
 	s := &stuckDetector{}
 	args := map[string]any{"handle": "bg_16"}
-	for i := 0; i < maxRepeatToolCalls; i++ {
+	for i := 0; i < maxRunningPollRepeats; i++ {
 		stuck, _ := s.observe("c", "bash_wait", args)
-		if i == maxRepeatToolCalls-1 && !stuck {
-			t.Fatalf("timing-only polls should trip after %d repeats", maxRepeatToolCalls)
+		if i < maxRepeatToolCalls && stuck {
+			t.Fatalf("poll %d of a running command tripped at the static-tool threshold", i)
 		}
-		s.observeResult("bash_wait", map[string]any{
+		if i == maxRunningPollRepeats-1 && !stuck {
+			t.Fatalf("timing-only polls should trip after %d repeats", maxRunningPollRepeats)
+		}
+		s.observeResult("c", "bash_wait", map[string]any{
 			"handle":  "bg_16",
 			"elapsed": i,
 			"idle":    i + 1,
 			"running": true,
 			"stdout":  "",
 			"stderr":  "",
+		})
+	}
+}
+
+// TestStuckDetector_ObserveResult_FinishedPollTripsAtNormalThreshold pins the
+// boundary of the running-command budget: once the command has exited there is
+// nothing left to wait for, so re-polling it is an ordinary repeated call.
+func TestStuckDetector_ObserveResult_FinishedPollTripsAtNormalThreshold(t *testing.T) {
+	s := &stuckDetector{}
+	args := map[string]any{"handle": "bg_16"}
+	for i := 0; i < maxRepeatToolCalls; i++ {
+		stuck, _ := s.observe("c", "bash_wait", args)
+		if i == maxRepeatToolCalls-1 && !stuck {
+			t.Fatalf("polling a finished command should trip after %d repeats", maxRepeatToolCalls)
+		}
+		s.observeResult("c", "bash_wait", map[string]any{
+			"handle":  "bg_16",
+			"elapsed": i,
+			"running": false,
+			"stdout":  "done",
 		})
 	}
 }
@@ -157,7 +186,7 @@ func TestStuckDetector_ObserveResult_IdenticalResultsStillStuck(t *testing.T) {
 	for i := 0; i < maxRepeatToolCalls; i++ {
 		stuck, _ := s.observe("c", "bash_wait", args)
 		tripped = tripped || stuck
-		s.observeResult("bash_wait", resp)
+		s.observeResult("c", "bash_wait", resp)
 	}
 	if !tripped {
 		t.Errorf("identical calls with identical results should still trip after %d repeats", maxRepeatToolCalls)
@@ -168,8 +197,8 @@ func TestStuckDetector_ObserveResult_OtherToolDoesNotReset(t *testing.T) {
 	s := &stuckDetector{}
 	s.observe("c", "read", map[string]any{"path": "/foo"})
 	s.observe("c", "read", map[string]any{"path": "/foo"})
-	s.observeResult("write", map[string]any{"changed": 1})
-	s.observeResult("write", map[string]any{"changed": 2})
+	s.observeResult("", "write", map[string]any{"changed": 1})
+	s.observeResult("", "write", map[string]any{"changed": 2})
 	if s.streak != 2 {
 		t.Errorf("streak = %d, want 2: another tool's results must not reset it", s.streak)
 	}
@@ -178,7 +207,7 @@ func TestStuckDetector_ObserveResult_OtherToolDoesNotReset(t *testing.T) {
 func TestStuckDetector_ObserveResult_FirstResultOnlySetsBaseline(t *testing.T) {
 	s := &stuckDetector{}
 	s.observe("c", "read", map[string]any{"path": "/foo"})
-	s.observeResult("read", map[string]any{"content": "x"})
+	s.observeResult("c", "read", map[string]any{"content": "x"})
 	if s.streak != 1 {
 		t.Errorf("streak = %d, want 1: the first result has nothing to compare against", s.streak)
 	}
@@ -344,7 +373,7 @@ func TestDetectCycle_ShortWindow(t *testing.T) {
 		t.Errorf("detectCycle on empty = %q, want empty", cycle)
 	}
 
-	s.recent = make([]string, 5)
+	s.recent = staleWindow("a", "b", "c", "d", "e")
 	if cycle := s.detectCycle(); cycle != "" {
 		t.Errorf("detectCycle on len=5 = %q, want empty", cycle)
 	}
@@ -352,7 +381,7 @@ func TestDetectCycle_ShortWindow(t *testing.T) {
 
 func TestDetectCycle_NoRepeat(t *testing.T) {
 	s := &stuckDetector{}
-	s.recent = []string{"a", "b", "c", "d", "e", "f"}
+	s.recent = staleWindow("a", "b", "c", "d", "e", "f")
 	if cycle := s.detectCycle(); cycle != "" {
 		t.Errorf("detectCycle on non-repeating = %q, want empty", cycle)
 	}
@@ -361,7 +390,7 @@ func TestDetectCycle_NoRepeat(t *testing.T) {
 func TestDetectCycle_TwoRepeat(t *testing.T) {
 	s := &stuckDetector{}
 	// ABABAB pattern - 3 repetitions of length-2 cycle
-	s.recent = []string{"a", "b", "a", "b", "a", "b"}
+	s.recent = staleWindow("a", "b", "a", "b", "a", "b")
 	cycle := s.detectCycle()
 	if cycle == "" {
 		t.Error("expected cycle detected for ABABAB pattern")
@@ -371,7 +400,7 @@ func TestDetectCycle_TwoRepeat(t *testing.T) {
 func TestDetectCycle_ThreeRepeat(t *testing.T) {
 	s := &stuckDetector{}
 	// ABCABCABC pattern - 3 repetitions of length-3 cycle (need 9 elements)
-	s.recent = []string{"a", "b", "c", "a", "b", "c", "a", "b", "c"}
+	s.recent = staleWindow("a", "b", "c", "a", "b", "c", "a", "b", "c")
 	cycle := s.detectCycle()
 	if cycle == "" {
 		t.Error("expected cycle detected for ABCABCABC pattern")
@@ -381,7 +410,7 @@ func TestDetectCycle_ThreeRepeat(t *testing.T) {
 func TestDetectCycle_NoPatternAtBoundary(t *testing.T) {
 	s := &stuckDetector{}
 	// AAB pattern - not a valid cycle
-	s.recent = []string{"a", "a", "b", "a", "a", "b"}
+	s.recent = staleWindow("a", "a", "b", "a", "a", "b")
 	cycle := s.detectCycle()
 	if cycle != "" {
 		t.Logf("cycle detected (may be valid): %s", cycle)
@@ -404,4 +433,173 @@ func TestSubmitPrompt_NilCancel(t *testing.T) {
 		// We can't fully test without the full model, but we test the cancel path
 	}()
 	_ = prompt // use the variable
+}
+
+// staleWindow builds a repetition window in which every call returned exactly
+// what it returned last time — repetition with no progress, which is the shape
+// detectCycle is meant to catch.
+func staleWindow(calls ...string) []recentCall {
+	w := make([]recentCall, len(calls))
+	for i, c := range calls {
+		w[i] = recentCall{call: c, result: "result-of-" + c, seq: i}
+	}
+	return w
+}
+
+// TestDetectCycle_ChangingResultsIsNotACycle is the counterpart to
+// TestDetectCycle_ThreeRepeat: the same ABCABCABC call pattern, but every call
+// returned something new. A repeating order of calls is not a loop when the
+// calls keep producing fresh output.
+func TestDetectCycle_ChangingResultsIsNotACycle(t *testing.T) {
+	s := &stuckDetector{}
+	calls := []string{"a", "b", "c", "a", "b", "c", "a", "b", "c"}
+	s.recent = make([]recentCall, len(calls))
+	for i, c := range calls {
+		s.recent[i] = recentCall{call: c, result: fmt.Sprintf("r%d", i), seq: i}
+	}
+	if cycle := s.detectCycle(); cycle != "" {
+		t.Errorf("detectCycle on progressing results = %q, want empty", cycle)
+	}
+}
+
+// TestDetectCycle_SkipsPendingResults pins that calls still in flight are not
+// treated as matching anything. A batch of parallel calls is all observed
+// before any of them answers, so without this the window would be mostly
+// unresolved entries.
+func TestDetectCycle_SkipsPendingResults(t *testing.T) {
+	s := &stuckDetector{}
+	s.recent = staleWindow("a", "b", "a", "b", "a", "b")
+	s.recent[3].result = "" // in flight
+	if cycle := s.detectCycle(); cycle != "" {
+		t.Errorf("detectCycle across a pending call = %q, want empty", cycle)
+	}
+}
+
+// TestStuckDetector_ParallelPollFanOutIsNotALoop replays session
+// 260829-1537-6a139-71d65: four backgrounded ffmpeg jobs polled together, one
+// bash_output call per handle per model message, every response carrying a
+// fresh frame count. When one job finished and the fan-out fell from four to
+// three, the pre-fix cycle detector matched a rotation of the remaining three
+// handles — (bg_9, bg_12, bg_10), straddling message boundaries — and aborted
+// a working run eight seconds later.
+//
+// The loop runs every fan-out width, not just three: cycle lengths 2 and 3 were
+// the only widths that could ever trip, which is exactly why the bug looked
+// arbitrary from the outside.
+func TestStuckDetector_ParallelPollFanOutIsNotALoop(t *testing.T) {
+	for fanOut := 1; fanOut <= 5; fanOut++ {
+		t.Run(fmt.Sprintf("fanout%d", fanOut), func(t *testing.T) {
+			handles := make([]string, fanOut)
+			for i := range handles {
+				handles[i] = fmt.Sprintf("bg_%d", i)
+			}
+			s := &stuckDetector{}
+			poll := 0
+			for round := 0; round < 8; round++ {
+				s.beginEvent()
+				ids := make([]string, fanOut)
+				for i, h := range handles {
+					ids[i] = fmt.Sprintf("call-%d-%d", round, i)
+					stuck, detail := s.observe(ids[i], "bash_output", map[string]any{
+						"handle": h, "wait_ms": 1000,
+					})
+					if stuck {
+						t.Fatalf("round %d, %s: false loop detection on call: %s", round, h, detail)
+					}
+				}
+				// Responses arrive as their own message, after every call in
+				// the batch has been observed.
+				for i, h := range handles {
+					poll++
+					stuck, detail := s.observeResult(ids[i], "bash_output", map[string]any{
+						"handle":  h,
+						"running": true,
+						"elapsed": fmt.Sprintf("%ds", poll),
+						"stderr":  fmt.Sprintf("frame= %d", poll), // ffmpeg progress
+					})
+					if stuck {
+						t.Fatalf("round %d, %s: false loop detection on result: %s", round, h, detail)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestStuckDetector_AlternatingCallsWithStaleResultsStillStuck is the guard on
+// the other side: an A-B-A-B flail where neither call produces anything new
+// must still be caught, through the same observe/observeResult path a real run
+// takes.
+func TestStuckDetector_AlternatingCallsWithStaleResultsStillStuck(t *testing.T) {
+	s := &stuckDetector{}
+	responses := map[string]map[string]any{
+		"/a": {"error": "no such file"},
+		"/b": {"error": "no such file"},
+	}
+	for round := 0; round < 4; round++ {
+		s.beginEvent()
+		for _, path := range []string{"/a", "/b"} {
+			id := fmt.Sprintf("call-%d-%s", round, path)
+			if stuck, _ := s.observe(id, "read", map[string]any{"path": path}); stuck {
+				return // caught on the call side
+			}
+			if stuck, detail := s.observeResult(id, "read", responses[path]); stuck {
+				if !strings.Contains(detail, "cycle") {
+					t.Fatalf("detail = %q, want a cycle", detail)
+				}
+				return
+			}
+		}
+	}
+	t.Error("stale A-B-A-B alternation was never flagged")
+}
+
+// TestStuckDetector_ReplaysSession260829 replays the recorded call sequence of
+// session 260829-1537-6a139-71d65 exactly: twenty messages polling four
+// handles, then two polling three after bg_11 exited, then one polling two.
+//
+// The fan-out transition is the point. Twenty identical rounds at width four
+// passed, because detectCycle only ever looked for cycles of length 2 and 3;
+// the run died three messages after the width fell to three, on a cycle
+// (bg_9, bg_12, bg_10) that is a rotation of the batch rather than the batch
+// itself. Nothing about the model's behavior changed at that boundary.
+func TestStuckDetector_ReplaysSession260829(t *testing.T) {
+	var messages [][]string
+	for i := 0; i < 20; i++ {
+		messages = append(messages, []string{"bg_12", "bg_10", "bg_11", "bg_9"})
+	}
+	messages = append(messages,
+		[]string{"bg_12", "bg_10", "bg_9"},
+		[]string{"bg_12", "bg_10", "bg_9"},
+		[]string{"bg_12", "bg_10"},
+	)
+
+	s := &stuckDetector{}
+	frame := 0
+	for n, batch := range messages {
+		s.beginEvent()
+		ids := make([]string, len(batch))
+		for i, h := range batch {
+			ids[i] = fmt.Sprintf("call-%d-%d", n, i)
+			if stuck, detail := s.observe(ids[i], "bash_output", map[string]any{
+				"handle": h, "wait_ms": 1000,
+			}); stuck {
+				t.Fatalf("message %d, %s: %s", n+3, h, detail)
+			}
+		}
+		for i, h := range batch {
+			frame++
+			if stuck, detail := s.observeResult(ids[i], "bash_output", map[string]any{
+				"handle":  h,
+				"running": true,
+				"elapsed": fmt.Sprintf("%ds", frame*3),
+				"stderr":  fmt.Sprintf("frame= %d fps=12 q=-1.0 size= %dkB", frame, frame*47),
+			}); stuck {
+				t.Fatalf("message %d, %s: %s", n+3, h, detail)
+			}
+		}
+	}
+	if s.streak > maxRepeatToolCalls {
+		t.Errorf("identical-call streak reached %d; no call in this session repeated its own args", s.streak)
+	}
 }
