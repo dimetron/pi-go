@@ -1086,10 +1086,10 @@ func TestRenderableAgentEventsRender(t *testing.T) {
 // notes: whole events dropped reports a count, a single over-long event
 // reports that its head was cut.
 func TestAgentWindowLinesRender(t *testing.T) {
-	st := lipgloss.NewStyle()
+	st := newAgentEventStyles("", Palette{})
 
 	t.Run("empty stream has no lines and no note", func(t *testing.T) {
-		lines, note := agentWindowLines(nil, st, st, 60)
+		lines, note := agentWindowLines(nil, st, 60)
 		if len(lines) != 0 || note != "" {
 			t.Errorf("got %d lines, note %q", len(lines), note)
 		}
@@ -1097,7 +1097,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("under budget shows everything with no note", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: "a"}, {kind: "text", content: "b"}}
-		lines, note := agentWindowLines(evs, st, st, 60)
+		lines, note := agentWindowLines(evs, st, 60)
 		if len(lines) != 2 || note != "" {
 			t.Errorf("got %d lines %v, note %q", len(lines), lines, note)
 		}
@@ -1111,7 +1111,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 		for i := range evs {
 			evs[i] = agentEv{kind: "text", content: fmt.Sprintf("e%d", i)}
 		}
-		lines, note := agentWindowLines(evs, st, st, 60)
+		lines, note := agentWindowLines(evs, st, 60)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}
@@ -1125,7 +1125,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("one over-long event reports a clip", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: strings.Repeat("word ", 200)}}
-		lines, note := agentWindowLines(evs, st, st, 40)
+		lines, note := agentWindowLines(evs, st, 40)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}
