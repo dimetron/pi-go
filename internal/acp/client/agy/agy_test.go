@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -92,22 +93,105 @@ func TestResolveCommandDefaultArgs(t *testing.T) {
 }
 
 // TestPlatformDefaults verifies the binary name and argument list match the
-// antigravity-acp registry entry for the running platform.
+// antigravity-acp registry entry, for every platform the entry covers rather
+// than only the one running the test. The registry declares agy_acp_server.exe
+// on Windows and .par elsewhere, and --uid= on Linux alone.
 func TestPlatformDefaults(t *testing.T) {
-	wantName := "agy_acp_server.par"
-	if runtime.GOOS == "windows" {
-		wantName = "agy_acp_server.exe"
-	}
-	if got := binaryName(); got != wantName {
-		t.Errorf("binaryName() = %q, want %q", got, wantName)
+	tests := []struct {
+		goos     string
+		wantName string
+		wantArgs []string
+	}{
+		{goos: "darwin", wantName: "agy_acp_server.par"},
+		{goos: "linux", wantName: "agy_acp_server.par", wantArgs: []string{"--uid="}},
+		{goos: "windows", wantName: "agy_acp_server.exe"},
 	}
 
-	var wantArgs []string
-	if runtime.GOOS == "linux" {
-		wantArgs = []string{"--uid="}
+	for _, tt := range tests {
+		t.Run(tt.goos, func(t *testing.T) {
+			if got := binaryNameFor(tt.goos); got != tt.wantName {
+				t.Errorf("binaryNameFor(%q) = %q, want %q", tt.goos, got, tt.wantName)
+			}
+			if got := defaultArgsFor(tt.goos); fmt.Sprint(got) != fmt.Sprint(tt.wantArgs) {
+				t.Errorf("defaultArgsFor(%q) = %v, want %v", tt.goos, got, tt.wantArgs)
+			}
+		})
 	}
-	if fmt.Sprint(defaultArgs()) != fmt.Sprint(wantArgs) {
-		t.Errorf("defaultArgs() = %v, want %v", defaultArgs(), wantArgs)
+
+	// The running platform's values are what the package actually uses.
+	if got := binaryName(); got != binaryNameFor(runtime.GOOS) {
+		t.Errorf("binaryName() = %q, want %q", got, binaryNameFor(runtime.GOOS))
+	}
+	if got := defaultArgs(); fmt.Sprint(got) != fmt.Sprint(defaultArgsFor(runtime.GOOS)) {
+		t.Errorf("defaultArgs() = %v, want %v", got, defaultArgsFor(runtime.GOOS))
+	}
+}
+
+// TestDefaultBinaryPathsForPlatforms pins the search order on every platform:
+// the install directory first, the bare name (the only entry that reaches
+// exec.LookPath) last, and no Unix system path on Windows.
+func TestDefaultBinaryPathsForPlatforms(t *testing.T) {
+	const home = "/home/someone"
+
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			paths := defaultBinaryPathsFor(goos, home)
+			name := binaryNameFor(goos)
+
+			if want := filepath.Join(home, ".pi-go", "acp", "agy", name); paths[0] != want {
+				t.Errorf("first entry = %q, want the install dir %q", paths[0], want)
+			}
+			if last := paths[len(paths)-1]; last != name {
+				t.Errorf("last entry = %q, want the bare name %q", last, name)
+			}
+			for i, p := range paths[:len(paths)-1] {
+				if filepath.Dir(p) == "." {
+					t.Errorf("entry %d = %q; only the last entry may be a bare name", i, p)
+				}
+			}
+
+			hasUnixBin := slices.Contains(paths, filepath.Join("/usr/local/bin", name))
+			if goos == "windows" && hasUnixBin {
+				t.Errorf("windows search list %v should not carry a Unix system path", paths)
+			}
+			if goos != "windows" && !hasUnixBin {
+				t.Errorf("%s search list %v should carry /usr/local/bin", goos, paths)
+			}
+		})
+	}
+}
+
+// TestDefaultBinaryPathsForNoHome verifies an unresolvable home directory
+// drops only the entries derived from it, leaving a usable search list.
+func TestDefaultBinaryPathsForNoHome(t *testing.T) {
+	paths := defaultBinaryPathsFor("linux", "")
+	want := []string{filepath.Join("/usr/local/bin", "agy_acp_server.par"), "agy_acp_server.par"}
+	if fmt.Sprint(paths) != fmt.Sprint(want) {
+		t.Errorf("defaultBinaryPathsFor(linux, \"\") = %v, want %v", paths, want)
+	}
+}
+
+// TestStartReportsUnresolvedBinary verifies Start surfaces the resolution
+// error rather than spawning something unexpected.
+func TestStartReportsUnresolvedBinary(t *testing.T) {
+	orig := DefaultBinaryPaths
+	t.Cleanup(func() { DefaultBinaryPaths = orig })
+	DefaultBinaryPaths = []string{filepath.Join(t.TempDir(), "no-such-agy")}
+
+	if _, err := (Runner{}).Start(context.Background(), RunRequest{Prompt: "hi"}); err == nil {
+		t.Fatal("expected an error when the binary cannot be resolved")
+	}
+}
+
+// TestFindBinarySkipsEmptyEntries verifies an empty entry is skipped rather
+// than resolved, so a misconfigured list cannot spawn the wrong thing.
+func TestFindBinarySkipsEmptyEntries(t *testing.T) {
+	path, err := findBinary([]string{"", "ls"})
+	if err != nil {
+		t.Fatalf("findBinary: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected the non-empty entry to resolve")
 	}
 }
 
@@ -153,6 +237,29 @@ func TestResolveCommandEnvOverride(t *testing.T) {
 			t.Fatalf("binary=%q args=%v, want /bin/echo %v", binary, args, DefaultArgs)
 		}
 	})
+}
+
+// TestResolveCommandBlankEnvOverride verifies a whitespace-only
+// PI_ACP_AGY_CMD is treated as unset. Splitting it yields no fields, and
+// without this it would leave the binary empty and reach exec as a spawn
+// of "" — an error far from its cause.
+func TestResolveCommandBlankEnvOverride(t *testing.T) {
+	t.Setenv(envACPAgyCmd, "   ")
+
+	orig := DefaultBinaryPaths
+	t.Cleanup(func() { DefaultBinaryPaths = orig })
+	DefaultBinaryPaths = []string{"ls"}
+
+	binary, _, err := (Runner{}).resolveCommand(RunRequest{Prompt: "hi"})
+	if err != nil {
+		t.Fatalf("resolveCommand error: %v", err)
+	}
+	if binary == "" {
+		t.Fatal("binary is empty; a blank override must fall back to the default search")
+	}
+	if !strings.HasSuffix(binary, "ls") {
+		t.Errorf("binary = %q, want the entry resolved from DefaultBinaryPaths", binary)
+	}
 }
 
 // TestResolveCommandMissingBinary verifies a helpful error when no binary is
@@ -204,9 +311,13 @@ func TestBinaryPathsPreferInstallDirOverPATH(t *testing.T) {
 	if got := DefaultBinaryPaths[len(DefaultBinaryPaths)-1]; got != BinaryName {
 		t.Errorf("last search entry = %q, want the bare name %q so PATH is the last resort", got, BinaryName)
 	}
+	// Directory-qualified rather than absolute: on Windows an absolute path
+	// needs a drive letter, and the entries built from the home directory are
+	// the ones that matter here. What must not appear before the last entry is
+	// a second bare name, since that would reach exec.LookPath too.
 	for i, path := range DefaultBinaryPaths[:len(DefaultBinaryPaths)-1] {
-		if !filepath.IsAbs(path) {
-			t.Errorf("entry %d = %q; every entry before the bare name must be an absolute path", i, path)
+		if filepath.Dir(path) == "." {
+			t.Errorf("entry %d = %q; every entry before the bare name must name a directory", i, path)
 		}
 	}
 	if strings.Contains(DefaultBinaryPaths[0], filepath.Join(".pi-go", "acp", "agy")) {

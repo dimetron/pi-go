@@ -128,18 +128,18 @@ func (r Runner) resolveCommand(req RunRequest) (string, []string, error) {
 	}
 
 	if binary == "" {
-		if envCmd := os.Getenv(envACPAgyCmd); envCmd != "" {
-			// PI_ACP_AGY_CMD overrides the default binary. Parse
-			// "binary arg1 arg2 ..." from the env var; a bare binary
-			// falls back to the platform's default arguments.
-			parts := strings.Fields(envCmd)
-			if len(parts) > 0 {
-				binary = parts[0]
-				if len(parts) > 1 {
-					return binary, parts[1:], nil
-				}
-			}
-		} else {
+		// PI_ACP_AGY_CMD overrides the default binary. Parse
+		// "binary arg1 arg2 ..." from the env var; a bare binary falls back to
+		// the platform's default arguments. An override that is empty or only
+		// whitespace is treated as unset rather than as an empty command,
+		// which would otherwise reach exec as a spawn of "".
+		parts := strings.Fields(os.Getenv(envACPAgyCmd))
+		switch {
+		case len(parts) > 1:
+			return parts[0], parts[1:], nil
+		case len(parts) == 1:
+			binary = parts[0]
+		default:
 			found, err := findBinary(DefaultBinaryPaths)
 			if err != nil {
 				return "", nil, fmt.Errorf("finding %s: %w", BinaryName, err)
@@ -150,43 +150,63 @@ func (r Runner) resolveCommand(req RunRequest) (string, []string, error) {
 	return binary, append(cmdArgs, DefaultArgs...), nil
 }
 
-// binaryName returns the ACP server executable name for the running platform,
-// matching the "cmd" field of the registry entry.
-func binaryName() string {
-	if runtime.GOOS == "windows" {
+// binaryName returns the ACP server executable name for the running platform.
+func binaryName() string { return binaryNameFor(runtime.GOOS) }
+
+// binaryNameFor returns the executable name the registry entry declares for
+// goos. It takes the platform rather than reading runtime.GOOS so every
+// platform's answer is testable from whichever host the tests run on.
+func binaryNameFor(goos string) string {
+	if goos == "windows" {
 		return "agy_acp_server.exe"
 	}
 	return "agy_acp_server.par"
 }
 
-// defaultArgs returns the platform-specific argument list from the registry
+// defaultArgs returns the argument list for the running platform.
+func defaultArgs() []string { return defaultArgsFor(runtime.GOOS) }
+
+// defaultArgsFor returns the platform-specific argument list from the registry
 // entry. Only the Linux builds declare arguments.
-func defaultArgs() []string {
-	if runtime.GOOS == "linux" {
+func defaultArgsFor(goos string) []string {
+	if goos == "linux" {
 		return []string{"--uid="}
 	}
 	return nil
 }
 
-// defaultBinaryPaths returns the search order for the ACP server binary: the
-// pi-go install directory first, then Antigravity's own directory, then the
-// usual bin directories, and a bare-name PATH lookup only as a last resort.
+// defaultBinaryPaths returns the search order for the running platform.
+func defaultBinaryPaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return defaultBinaryPathsFor(runtime.GOOS, home)
+}
+
+// defaultBinaryPathsFor returns the search order for the ACP server binary:
+// the pi-go install directory first, then Antigravity's own directory, then
+// the usual bin directories, and a bare-name PATH lookup only as a last
+// resort. An empty home drops the entries derived from it.
 //
 // The order matters. A bare name resolves through exec.LookPath, so putting it
 // first would let any agy_acp_server earlier on PATH win over the copy the
 // installer placed in ~/.pi-go/acp/agy — the resolved binary would depend on
 // the caller's PATH rather than on what was installed.
-func defaultBinaryPaths() []string {
-	name := binaryName()
+func defaultBinaryPathsFor(goos, home string) []string {
+	name := binaryNameFor(goos)
 	var paths []string
-	if home, err := os.UserHomeDir(); err == nil {
+	if home != "" {
 		paths = append(paths,
 			filepath.Join(home, ".pi-go", "acp", "agy", name),
 			filepath.Join(home, ".antigravity", "acp", name),
 			filepath.Join(home, ".local", "bin", name),
 		)
 	}
-	return append(paths, filepath.Join("/usr/local/bin", name), name)
+	if goos != "windows" {
+		paths = append(paths, filepath.Join("/usr/local/bin", name))
+	}
+	return append(paths, name)
 }
 
 // findBinary returns the first existing entry in paths, resolving bare names
