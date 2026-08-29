@@ -136,6 +136,10 @@ type model struct {
 	// Run flow state (/run command).
 	run *runState
 
+	// prAutofix is the in-flight /pr-autofix run, or nil. Unlike run, it holds
+	// no copy of the workflow: the SOP is the workflow and the engine walks it.
+	prAutofix *prAutofixState
+
 	// Branch popup state (shown on status bar click).
 	branchPopup *branchPopupState
 
@@ -855,6 +859,9 @@ func (m *model) updateRunWorkflow(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	case runMergeResultMsg:
 		model, cmd := m.handleRunMergeResult(msg)
+		return model, cmd, true
+	case prAutofixChan:
+		model, cmd := m.handlePRAutofixMsg(msg)
 		return model, cmd, true
 	}
 	return nil, nil, false
@@ -1740,6 +1747,17 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 				Order:  g.Order,
 				Edges:  g.GraphEdges(),
 				Status: planStageStatus(in.PlanPhases),
+			}
+		}
+	}
+	if in.Graph == nil && m.prAutofix != nil {
+		// The engine drives this mode, so its statuses come from the event
+		// stream rather than from a projection of some parallel state.
+		if g := m.sopGraph("pr-autofix"); g != nil {
+			in.Graph = &SOPGraph{
+				Order:  g.Order,
+				Edges:  g.GraphEdges(),
+				Status: m.prAutofix.tracker.statuses(),
 			}
 		}
 	}

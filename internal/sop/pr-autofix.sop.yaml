@@ -1,0 +1,156 @@
+sop: pr-autofix
+version: 2
+description: Watch a GitHub PR's checks and fix them until the PR is green
+
+# The PR's own branch is the workspace. A per-run worktree would put the fixes
+# somewhere the PR cannot see: the whole point is to push to the branch under
+# review, so the run edits the checkout it was started from and never merges.
+workspace:
+  worktree: none
+  merge_on: never
+  cleanup: always
+
+defaults:
+  timeout: 30m
+  max_concurrency: 1
+  on_rate_limit: throttle
+
+preflight:
+  - id: resolve
+    description: Resolve the PR and refuse a run that cannot push to it
+    kind: function
+    run: |
+      set -euo pipefail
+      gh pr view "$PI_PR" --json number,state,headRefName,mergeStateStatus > "$PI_RUN_DIR/pr.json"
+      test "$(jq -r .state < "$PI_RUN_DIR/pr.json")" = OPEN
+      test "$(git rev-parse --abbrev-ref HEAD)" = "$(jq -r .headRefName < "$PI_RUN_DIR/pr.json")"
+    on_fail: abort
+    next: watch
+
+stages:
+  # Polling belongs to the engine, not to a loop inside a shell command: a stage
+  # that blocks for the length of a CI run reports nothing while it waits, and
+  # the sidebar would sit on one glyph for ten minutes. One poll per activation
+  # keeps the run observable and lets retry/backoff do the waiting.
+  - id: watch
+    description: Poll the PR's checks until they settle
+    kind: function
+    # Exit 75 is the engine's "not ready": it re-runs the stage under the retry
+    # policy below rather than taking a failure edge, which is how one poll per
+    # activation adds up to a wait without blocking a stage for the length of a
+    # CI run.
+    run: |
+      set -euo pipefail
+      gh pr view "$PI_PR" --json statusCheckRollup > "$PI_RUN_DIR/checks.json"
+      pending=$(jq '[.statusCheckRollup[] | select((.status // "COMPLETED") != "COMPLETED")] | length' \
+        < "$PI_RUN_DIR/checks.json")
+      test "$pending" -eq 0 || exit 75
+    retry:
+      max_attempts: 60
+      initial_delay: 20s
+      max_delay: 60s
+      backoff: 1.5
+      jitter: 0.2
+    next: triage
+
+  - id: triage
+    description: Separate a green PR from the checks that actually failed
+    kind: function
+    run: |
+      set -euo pipefail
+      jq -r '[.statusCheckRollup[]
+              | select((.conclusion // .state) as $c
+                       | $c != "SUCCESS" and $c != "NEUTRAL" and $c != "SKIPPED")]' \
+        < "$PI_RUN_DIR/checks.json" > "$PI_RUN_DIR/failing.json"
+      test "$(jq 'length' < "$PI_RUN_DIR/failing.json")" -eq 0
+    routes:
+      PASS: summary
+      FAIL: diagnose
+
+  - id: diagnose
+    description: Pull the failing jobs' logs so the fix has evidence, not guesses
+    kind: function
+    run: |
+      set -euo pipefail
+      : > "$PI_RUN_DIR/failures.log"
+      jq -r '.[] | (.name // .context) + "\t" + (.detailsUrl // "")' < "$PI_RUN_DIR/failing.json" |
+      while IFS=$'\t' read -r name url; do
+        printf '=== %s ===\n' "$name" >> "$PI_RUN_DIR/failures.log"
+        run_id=$(printf '%s' "$url" | grep -oE 'runs/[0-9]+' | cut -d/ -f2 || true)
+        job_id=$(printf '%s' "$url" | grep -oE 'job/[0-9]+' | cut -d/ -f2 || true)
+        if [ -n "$run_id" ] && [ -n "$job_id" ]; then
+          gh run view "$run_id" --job "$job_id" --log-failed 2>&1 | tail -n 200 >> "$PI_RUN_DIR/failures.log"
+        else
+          printf 'no job log available; check %s\n' "$url" >> "$PI_RUN_DIR/failures.log"
+        fi
+      done
+      test -s "$PI_RUN_DIR/failures.log"
+    next: fix
+    produces:
+      - path: failures.log
+        validate:
+          - non_empty
+
+  - id: fix
+    description: Fix the failing checks in the working tree
+    agent: worker
+    inputs: [failures.log, failing.json]
+    timeout: 20m
+    next: gates
+
+  # The local gates are what stop a blind push. A fix that does not build here
+  # would burn a full CI cycle to learn the same thing ten minutes later.
+  - id: gates
+    description: Prove the fix locally before it costs a CI run
+    kind: function
+    run: |
+      set -euo pipefail
+      go build ./...
+      go vet ./...
+      go test ./...
+      make lint
+    timeout: 20m
+    routes:
+      PASS: commit
+      FAIL: fix
+
+  # Signing is interactive here: gpg.ssh.program is 1Password's op-ssh-sign,
+  # which prompts. A run left unattended parks on this stage rather than
+  # failing, and the sidebar shows it as waiting, because the commit is one
+  # approval away rather than broken.
+  - id: commit
+    description: Commit the fix, signed and signed off
+    kind: function
+    run: |
+      set -euo pipefail
+      git add -A
+      git diff --cached --quiet && exit 0
+      git commit -s -S -m "$PI_FIX_MESSAGE"
+    timeout: 10m
+    on_fail: abort
+    next: push
+
+  - id: push
+    description: Push to the PR branch, which starts a fresh check run
+    kind: function
+    run: git push
+    on_fail: abort
+    loop_back: watch
+    max_cycles: 5
+
+  - id: summary
+    description: Report what was fixed and how many cycles it took
+    kind: function
+    run: |
+      set -euo pipefail
+      {
+        printf '# pr-autofix %s\n\n' "$PI_PR"
+        printf 'Cycles: %s\n\n' "$PI_CYCLE"
+        printf '## Final check status\n\n'
+        jq -r '.statusCheckRollup[] | "- " + (.name // .context) + ": " + (.conclusion // .state)' \
+          < "$PI_RUN_DIR/checks.json"
+      } > "$PI_RUN_DIR/summary.md"
+    produces:
+      - path: summary.md
+        validate:
+          - non_empty

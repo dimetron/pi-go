@@ -85,6 +85,7 @@ func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 	want := []string{
 		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
+		"/pr-autofix",
 		"/skills", "/skill-list", "/skill-load", "/skill-create", "/theme", "/ping",
 		"/rtk", "/mcp", "/restart", "/exit", "/quit",
 	}
@@ -112,6 +113,9 @@ func TestCplxSlashCommands_DerivedOrder(t *testing.T) {
 	want := []string{
 		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
+		// After /plan, so "/p" still completes to /plan and "/pr" is
+		// unambiguous: autocomplete returns the first prefix match.
+		"/pr-autofix",
 		"/skills", "/theme", "/ping", "/rtk", "/mcp", "/restart", "/exit", "/quit",
 	}
 	if len(slashCommands) != len(want) {

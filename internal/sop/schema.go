@@ -98,6 +98,12 @@ type Stage struct {
 	Timeout Duration `yaml:"timeout"`
 	Retry   *Retry   `yaml:"retry"`
 
+	// Run is the shell command that *is* a function stage's body. Gate runs
+	// after a body; Run is the body, which is what lets a SOP express a step
+	// like "poll the PR's checks" as data rather than as Go. Exit status is
+	// the stage's route: 0 is PASS, non-zero is FAIL.
+	Run string `yaml:"run"`
+
 	// Gate is a shell command the engine runs after the stage body. Running it
 	// here rather than asking the LLM to is what makes a "verified" slice
 	// verified.
