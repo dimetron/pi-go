@@ -80,6 +80,7 @@ var acpAgentNames = map[string]struct{}{
 	"gemini":  {},
 	"cursor":  {},
 	"copilot": {},
+	"agy":     {},
 }
 
 // isACPAgent reports whether the named agent is an ACP subprocess adapter.
