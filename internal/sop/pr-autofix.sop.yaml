@@ -133,9 +133,15 @@ stages:
   - id: push
     description: Push to the PR branch, which starts a fresh check run
     kind: function
-    run: git push
+    run: |
+      set -euo pipefail
+      git push
+      # A successful push starts a new CI run, so the run loops back to watch
+      # the checks settle. routes PASS takes the edge; loop_back would need
+      # RecheckSignal, which a shell stage cannot emit.
+    routes:
+      PASS: watch
     on_fail: abort
-    loop_back: watch
     max_cycles: 5
 
   - id: summary

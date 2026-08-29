@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/adk/v2/session"
+
 	"github.com/dimetron/pi-go/internal/sop"
+	sopexec "github.com/dimetron/pi-go/internal/sop/exec"
 )
 
 // TestPRTargetAccepted pins which forms name a pull request. gh accepts a URL,
@@ -140,5 +143,58 @@ func TestPRAutofixSOPDrawsInSidebar(t *testing.T) {
 		if !slices.Contains(compiled.Order, id) {
 			t.Errorf("compiled order %v is missing stage %q", compiled.Order, id)
 		}
+	}
+}
+
+// TestPRAutofixStageStartExtractsCycle verifies the lifecycle event parser
+// recovers both the stage id and the cycle number, so the narration can say
+// "cycle 2" when the graph loops back.
+func TestPRAutofixStageStartExtractsCycle(t *testing.T) {
+	tests := []struct {
+		name      string
+		branch    string
+		author    string
+		wantStage string
+		wantCycle int
+		wantOK    bool
+	}{
+		{"first activation", "push", sopexec.LifecycleAuthor, "push", 1, true},
+		{"second cycle", "watch#2", sopexec.LifecycleAuthor, "watch", 2, true},
+		{"third cycle", "watch#3", sopexec.LifecycleAuthor, "watch", 3, true},
+		{"not a lifecycle event", "push", "model", "", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := &session.Event{Author: tt.author, Branch: tt.branch}
+			stage, cycle, ok := prAutofixStageStart(ev)
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if stage != tt.wantStage {
+				t.Errorf("stage = %q, want %q", stage, tt.wantStage)
+			}
+			if cycle != tt.wantCycle {
+				t.Errorf("cycle = %d, want %d", cycle, tt.wantCycle)
+			}
+		})
+	}
+}
+
+// TestPRAutofixStartLineNarratesStage verifies the start line names the stage,
+// carries its description, and includes the cycle number on loops > 1.
+func TestPRAutofixStartLineNarratesStage(t *testing.T) {
+	if got := prAutofixStartLine("push", 1); !strings.Contains(got, "push") {
+		t.Errorf("first cycle: %q should name the stage", got)
+	}
+	if got := prAutofixStartLine("push", 1); !strings.Contains(got, "Pushing to the PR branch") {
+		t.Errorf("first cycle: %q should carry the stage's description", got)
+	}
+	if got := prAutofixStartLine("watch", 2); !strings.Contains(got, "cycle 2") {
+		t.Errorf("second cycle: %q should say which cycle it is", got)
+	}
+	// An unknown stage falls back to its id rather than empty text.
+	if got := prAutofixStartLine("unknown", 1); !strings.Contains(got, "unknown") {
+		t.Errorf("unknown stage: %q should fall back to its id", got)
 	}
 }
