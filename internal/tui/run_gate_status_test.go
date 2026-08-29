@@ -12,15 +12,18 @@ func TestRunGatesClassifiesPassFailHang(t *testing.T) {
 		name    string
 		command string
 		want    GateStatus
+		// timeout is per-case: pass/fail need headroom for `sh -c` spawn on a
+		// slow Windows runner, but hang must trip the deadline quickly.
+		timeout time.Duration
 	}{
-		{"pass", "true", GatePass},
-		{"fail", "exit 3", GateFail},
-		{"hang", "sleep 30", GateHang},
+		{"pass", "true", GatePass, 5 * time.Second},
+		{"fail", "exit 3", GateFail, 5 * time.Second},
+		{"hang", "sleep 30", GateHang, 150 * time.Millisecond},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := runGatesTimeout(t.Context(), t.TempDir(),
-				[]Gate{{Name: tt.name, Command: tt.command}}, 150*time.Millisecond)
+				[]Gate{{Name: tt.name, Command: tt.command}}, tt.timeout)
 
 			if len(msg.results) != 1 {
 				t.Fatalf("got %d results, want 1", len(msg.results))
