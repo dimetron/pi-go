@@ -13,17 +13,27 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wrap"
 
 	"charm.land/lipgloss/v2"
 )
 
-// acpBundledAgents lists agent names backed by ACP subprocess adapters; the
-// rest are regular pi-based subagents and render under the "pi" label.
+// acpBundledAgents lists bundled agent names that are NOT regular pi-based
+// subagents and so keep their own label in the "agent[...]" header instead of
+// collapsing to "pi". It mirrors the union of internal/subagent.acpAgentNames
+// (claude, gemini, cursor, copilot, agy) and codexAgentNames (codex,
+// codex-review): every name that has its own subprocess adapter renders under
+// its real name; built-in pi subagents (task, explore, worker, …) fall through
+// to "pi".
 var acpBundledAgents = map[string]struct{}{
-	"claude": {},
-	"gemini": {},
-	"cursor": {},
+	"claude":       {},
+	"gemini":       {},
+	"cursor":       {},
+	"copilot":      {},
+	"agy":          {},
+	"codex":        {},
+	"codex-review": {},
 }
 
 // agentToolColor returns the foreground color used for tool/command lines
@@ -52,7 +62,8 @@ func agentToolColor(agentType string, pal Palette) color.Color {
 }
 
 // agentBracketLabel returns the string rendered inside "agent[...]" for a
-// given subagent type. ACP-backed agents (claude, gemini) keep their name;
+// given subagent type. Bundled agents with their own subprocess adapter
+// (claude, gemini, cursor, copilot, agy, codex, codex-review) keep their name;
 // all other pi-based subagents collapse to "pi". Parallel/chain calls encode
 // multiple agents as "claude+gemini" — each component is mapped individually
 // and duplicates are deduped, so [claude+explore+task] becomes [claude+pi].
@@ -315,7 +326,13 @@ func renderableAgentEvents(evs []agentEv) []agentEv {
 	renderable := make([]agentEv, 0, len(evs))
 	for _, ev := range evs {
 		switch ev.kind {
-		case "message_start", "message_end", "done", "spawn":
+		case "message_start", "message_end", "done", "spawn", "stderr":
+			// stderr is dropped from the live card: subprocess diagnostics
+			// (Antigravity's raw WS frame dumps, "Stdin closed, cleaning
+			// up...", OAuth chatter) flood the TUI and corrupt the layout.
+			// The full stderr is still durably captured in RunResult.Stderr
+			// and surfaced on error via acpErrorText, so diagnostics on real
+			// failures are preserved — only the live cosmetic stream is gone.
 			continue
 		case "text", "text_delta":
 			if strings.TrimSpace(ev.content) == "" {
@@ -517,10 +534,17 @@ func (t ToolDisplayModel) argWidth() int {
 // collapseToSingleLine replaces newlines and tabs with spaces and collapses
 // runs of whitespace, so long multi-line content renders on a single wrapped
 // line under the agent tool's "│ " gutter rather than drifting to column 0.
+//
+// ANSI escape sequences are stripped first: subagent text (notably Antigravity)
+// can carry SGR color codes, cursor moves or OSC sequences that, if left in,
+// execute as terminal control codes when Bubble Tea paints the styled string
+// and shift the TUI layout. ansi.Strip removes CSI/OSC/other escapes before the
+// whitespace pass, so only plain text reaches the renderer.
 func collapseToSingleLine(s string) string {
 	if s == "" {
 		return ""
 	}
+	s = ansi.Strip(s)
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
