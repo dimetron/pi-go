@@ -452,7 +452,7 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 	afterTool = append(afterTool, tracingAfter...)
 
 	beforeModel, afterModel := extension.BuildLLMTracingCallbacks(d.provider)
-	beforeModel = append(beforeModel, extension.BuildReadImageCallback(d.sandbox))
+	beforeModel = append(beforeModel, extension.BuildReadImageCallback(d.sandbox, d.provider))
 
 	// Dedup runs after the compactor so both calls are compared in their
 	// final, post-compaction form.
