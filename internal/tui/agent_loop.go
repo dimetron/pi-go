@@ -1325,10 +1325,15 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 		m.face.SetMood(MoodThinking)
 	}
 	m.matrix.feed(msg.text, m.mainWidth())
-	m.chatModel.Thinking += msg.text
+	// Thinking buffers the open reasoning block only, for the same reason
+	// Streaming does in handleAgentText: a tool call between two reasoning
+	// blocks starts a new message, and a carried-over buffer would repeat the
+	// earlier block inside it.
 	if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+		m.chatModel.Thinking += msg.text
 		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = m.chatModel.Thinking
 	} else {
+		m.chatModel.Thinking = msg.text
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "thinking", content: m.chatModel.Thinking,
 		})
@@ -1361,17 +1366,29 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 	if m.chatModel.Thinking != "" {
 		m.chatModel.Thinking = ""
 		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+			// The reasoning block becomes the shell for the answer that follows
+			// it. That is a brand-new empty message, so the text accumulator has
+			// to restart here too — otherwise the block below appends to a
+			// buffer left over from the message before the last tool call.
 			m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: ""}
+			m.chatModel.Streaming = ""
 		}
 	}
 	m.matrix.feed(msg.text, m.mainWidth())
-	m.chatModel.Streaming += msg.text
 	// Keep chronology stable: only update a trailing assistant message.
 	// If the latest message is a tool event, append a new assistant message
 	// so rendered order matches event order.
+	//
+	// Streaming buffers the message currently being rendered, not the whole
+	// turn: a tool card closes the open message, so the next text delta starts
+	// a fresh block and the accumulator restarts with it. Carrying the buffer
+	// across a tool call made every later block re-render every earlier one,
+	// glued together without a separator ("...say hi." + "agy ran cleanly").
 	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" {
+		m.chatModel.Streaming += msg.text
 		m.chatModel.Messages[n-1].content = m.chatModel.Streaming
 	} else {
+		m.chatModel.Streaming = msg.text
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.chatModel.Streaming,
