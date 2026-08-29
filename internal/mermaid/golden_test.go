@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/dimetron/pi-go/internal/mermaid/diagram"
 )
 
 // update regenerates every golden file from the current renderer output. The
@@ -15,6 +18,22 @@ import (
 // once the new output has been looked at. A golden is an approval, not a
 // snapshot taken on trust.
 var update = flag.Bool("update", false, "regenerate golden files from current output")
+
+// goldenNow is the instant every golden renders at. A gantt chart reads the
+// clock for its today marker and for task starts it cannot resolve from the
+// source, so a golden rendered against the real clock bakes the day it was
+// approved into the axis labels and fails on the next date change — which is
+// how the corpus went red overnight with no code change behind it. Freezing
+// the clock makes the goldens a function of the input alone.
+var goldenNow = time.Date(2017, time.July, 25, 12, 0, 0, 0, time.UTC)
+
+// TestMain freezes the clock for every test in this package. It is set once
+// here rather than per-test because Render reaches the clock through package
+// state, and goldens must not depend on the order tests happen to run in.
+func TestMain(m *testing.M) {
+	diagram.Now = func() time.Time { return goldenNow }
+	os.Exit(m.Run())
+}
 
 // goldenWidth is the width every golden renders at. Fixed so goldens do not
 // change with the terminal the tests happen to run in — without it the
