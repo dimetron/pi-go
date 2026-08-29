@@ -305,11 +305,8 @@ func agentTitleFit(title string, n int) string {
 // agentEventWindow renders the card's live event stream, newest activity last,
 // preceded by a note whenever output was withheld.
 func agentEventWindow(msg message, dim lipgloss.Style, p Palette, cw int) string {
-	evStyle := lipgloss.NewStyle().Foreground(p.Dim)
-	evToolStyle := lipgloss.NewStyle().Foreground(agentToolColor(msg.agentType, p))
-
 	renderable := renderableAgentEvents(msg.agentEvents)
-	lines, note := agentWindowLines(renderable, evStyle, evToolStyle, cw)
+	lines, note := agentWindowLines(renderable, newAgentEventStyles(msg.agentType, p), cw)
 
 	var b strings.Builder
 	if note != "" {
@@ -356,10 +353,10 @@ func renderableAgentEvents(evs []agentEv) []agentEv {
 // The note is written whenever output was withheld. A single huge event is
 // clipped without any whole event being dropped, and hiding 60-odd lines with
 // no mark would read as if that were all the agent said.
-func agentWindowLines(renderable []agentEv, evStyle, evToolStyle lipgloss.Style, cw int) (lines []string, note string) {
+func agentWindowLines(renderable []agentEv, st agentEventStyles, cw int) (lines []string, note string) {
 	used := 0
 	for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
-		lines = append(agentEventLines(renderable[i], evStyle, evToolStyle, cw), lines...)
+		lines = append(agentEventLines(renderable[i], st, cw), lines...)
 		used++
 	}
 	skipped := len(renderable) - used
@@ -455,42 +452,100 @@ func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style, p P
 // enough to see what the agent is doing right now.
 const maxAgentOutputLines = 3
 
+// agentEventStyles is the per-kind stylesheet for a subagent card's event
+// window. The card mixes four different sorts of line — what the agent said,
+// what it ran, what came back, and lifecycle bookkeeping — and rendering them
+// all in one muted grey left the agent's actual answer no more prominent than a
+// "run_done" marker, and a failed run indistinguishable from a healthy one.
+//
+// The ranking is deliberate: speech reads brightest, then tool activity, then
+// results, with lifecycle noise faintest and errors pulled out in red.
+type agentEventStyles struct {
+	text      lipgloss.Style // what the agent said — the reason the card exists
+	tool      lipgloss.Style // tool calls, in the per-agent hue
+	result    lipgloss.Style // tool results that came back clean
+	thinking  lipgloss.Style // reasoning — deliberately backgrounded
+	failure   lipgloss.Style // error events and failed tool results
+	lifecycle lipgloss.Style // run_done and other bookkeeping
+}
+
+// newAgentEventStyles builds the card stylesheet. Only the tool hue varies by
+// agent: it is what lets a user pick one agent's calls out of several running
+// in parallel, so it stays keyed to agentType while every other role is
+// semantic and shared.
+func newAgentEventStyles(agentType string, p Palette) agentEventStyles {
+	p = paletteOrDark(p)
+	return agentEventStyles{
+		text:      lipgloss.NewStyle().Foreground(p.Text),
+		tool:      lipgloss.NewStyle().Foreground(agentToolColor(agentType, p)),
+		result:    lipgloss.NewStyle().Foreground(p.Success),
+		thinking:  lipgloss.NewStyle().Foreground(p.Dim),
+		failure:   lipgloss.NewStyle().Foreground(p.Error),
+		lifecycle: lipgloss.NewStyle().Foreground(p.Faint),
+	}
+}
+
 // agentEventLines renders one subagent event into the lines it occupies in the
 // card, already styled and soft-wrapped to width.
-func agentEventLines(ev agentEv, evStyle, evToolStyle lipgloss.Style, width int) []string {
+func agentEventLines(ev agentEv, st agentEventStyles, width int) []string {
 	var line string
 	switch ev.kind {
 	case "tool_call":
 		// Collapse embedded newlines so tool-call headers occupy one visual
 		// row — otherwise markdown prose inside a tool title (e.g. Gemini's
 		// "**Identifying...**\n\n\n...") drops blank rows into the card gutter.
-		line = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
+		line = st.tool.Render("⚙ " + collapseToSingleLine(ev.content))
 	case "tool_result":
-		line = evStyle.Render("  ✓ " + truncateRunes(toolResultSummary(ev.content), 80))
-	case "stderr":
-		// Subprocess stderr — diagnostic chatter. Color it with the per-agent
-		// hue (orange/gray/blue) so users can tell at a glance which subagent
-		// is writing what when several run in parallel. The thin "▎" marker
-		// still distinguishes stderr from real tool calls, which use "⚙".
-		line = evToolStyle.Render("▎ " + truncateRunes(collapseToSingleLine(ev.content), 120))
+		summary := truncateRunes(toolResultSummary(ev.content), 80)
+		if isFailedToolResult(ev.content) {
+			line = st.failure.Render("  ✗ " + summary)
+		} else {
+			line = st.result.Render("  ✓ " + summary)
+		}
 	case "text", "text_delta":
 		// Subagent message text — what the agent actually said. Collapse
 		// internal blank-line runs so paragraph spacing from streamed chunks
 		// doesn't produce wide gaps in the card.
-		line = evStyle.Render("» " + collapseToSingleLine(ev.content))
+		line = st.text.Render("» " + collapseToSingleLine(ev.content))
 	case "thinking_delta":
 		// Subagent reasoning — show it with the same 💭 marker the main
 		// chat uses for thinking, so it reads as thought, not speech.
-		line = evStyle.Render("💭 " + collapseToSingleLine(ev.content))
+		line = st.thinking.Render("💭 " + collapseToSingleLine(ev.content))
+	case "error":
+		// A failed spawn or a subprocess that died. This arrives as a normal
+		// event (forwardSingleModeEvents substitutes Event.Error into the
+		// content), so without its own branch it rendered as a grey
+		// "error: ..." line indistinguishable from lifecycle bookkeeping.
+		line = st.failure.Render("✗ " + truncateRunes(collapseToSingleLine(ev.content), 120))
 	default:
 		content := collapseToSingleLine(ev.content)
 		if content == "" {
-			line = evStyle.Render(ev.kind)
+			line = st.lifecycle.Render(ev.kind)
 		} else {
-			line = evStyle.Render(ev.kind + ": " + content)
+			line = st.lifecycle.Render(ev.kind + ": " + content)
 		}
 	}
 	return softWrap(line, width)
+}
+
+// isFailedToolResult reports whether a subagent tool result describes a
+// failure. The event carries only a content string — the shape a tool chose for
+// its own result — so this reads the two markers those results actually use: a
+// JSON "error" field, and a non-zero "exit_code". Anything else counts as
+// success, which keeps an unrecognized result looking normal rather than
+// painting every unfamiliar tool red.
+func isFailedToolResult(content string) bool {
+	var data map[string]any
+	if json.Unmarshal([]byte(content), &data) != nil {
+		return false
+	}
+	if s, ok := data["error"].(string); ok && strings.TrimSpace(s) != "" {
+		return true
+	}
+	if code, ok := data["exit_code"].(float64); ok && code != 0 {
+		return true
+	}
+	return false
 }
 
 // truncateRunes clips s to at most n runes, marking the cut. Slicing by byte
