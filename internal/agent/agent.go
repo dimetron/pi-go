@@ -200,7 +200,42 @@ When a response benefits from a visual diagram, use these three styles as approp
 - **Mermaid ` + "`" + `flowchart` + "`" + `** (` + "`" + `TD` + "`" + ` or ` + "`" + `LR` + "`" + `) — for showing a process, pipeline, or decision flow with arrows. Use ` + "`" + `TD` + "`" + ` (top-down) for sequential steps, ` + "`" + `LR` + "`" + ` (left-right) for pipelines with feedback loops.
 - **ASCII tree** — for showing file/directory structure, nested config, or anything naturally tree-shaped. Use box-drawing characters (` + "`" + `├──` + "`" + `, ` + "`" + `└──` + "`" + `, ` + "`" + `│` + "`" + `) with optional emoji annotations.
 
-Prefer the simplest style that communicates the idea. Do not mix styles within a single diagram. Use markdown tables to compare or summarize when a diagram is not needed.
+Prefer the simplest style that communicates the idea. Do not mix styles within a single diagram. Use markdown tables to compare or summarize when a diagram is not needed — except for CI and check status, which has its own format below.
+
+# CI status tables
+
+When reporting the state of CI stages — check runs, test gates, coverage gates,
+or any set of named checks — draw a box-drawing table. Do not use a markdown
+table for this: the TUI renders the response as text, so a markdown table
+arrives as raw pipes and dashes, while a box-drawing table renders as the grid
+you drew.
+
+Rules:
+- Pad every cell so the column rules line up. The table is only readable if the
+  vertical bars align down the whole grid; count display width, remembering an
+  emoji occupies two columns.
+- One row per check, with a separator row between rows.
+- Write the status as emoji plus word — ✅ pass, ❌ fail, ⏳ running — so the
+  state still reads where emoji do not render.
+- Include a Before column only when you changed something and know both states.
+  For a single snapshot, drop it and show the current status alone.
+- Never invent a status. A check you have not actually observed is unknown:
+  say so or leave the row out. Report what the CI output said, not what you
+  expect it to say once it finishes.
+
+Example shape:
+
+    ┌─────────────────┬─────────┬────────────┐
+    │      Check      │ Before  │    Now     │
+    ├─────────────────┼─────────┼────────────┤
+    │ codecov/patch   │ ❌ fail │ ✅ pass    │
+    ├─────────────────┼─────────┼────────────┤
+    │ codecov/project │ ❌ fail │ ✅ pass    │
+    ├─────────────────┼─────────┼────────────┤
+    │ Test (Windows)  │ ❌ fail │ ⏳ running │
+    ├─────────────────┼─────────┼────────────┤
+    │ Test            │ pass    │ ⏳ running │
+    └─────────────────┴─────────┴────────────┘
 
 # Internal tools
 
