@@ -54,9 +54,22 @@ func (r Runner) startCommand(ctx context.Context, cmd *exec.Cmd, req shared.RunR
 	session := newRunningSession(cmd, stdin, stderr)
 	client := &callbackClient{session: session}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
-	if r.Logger != nil {
-		conn.SetLogger(r.Logger)
-	}
+	// Always install a logger. With none set the SDK falls back to
+	// slog.Default(), which writes to stderr — the same terminal the TUI is
+	// drawing on. Its end-of-run line
+	//
+	//	INFO connection closed cause="peer connection closed"
+	//
+	// lands mid-frame and carries its own newline, which scrolls the terminal
+	// by a row. The TUI renders inline rather than on the alternate screen, so
+	// it repaints by moving the cursor up a counted number of rows: after that
+	// scroll every frame lands one row off, stranding the previous frame's
+	// status bar in the input line for the rest of the session.
+	//
+	// No caller sets Logger today, so defaulting here rather than at each call
+	// site is what makes the guarantee hold for every agent — and for the next
+	// one added.
+	conn.SetLogger(r.logger())
 	session.conn = conn
 
 	go session.run(req, r.clientInfo())
@@ -78,6 +91,15 @@ func (r Runner) Start(ctx context.Context, req shared.RunRequest) (*RunningSessi
 
 	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
 	return r.startCommand(ctx, cmd, req)
+}
+
+// logger returns the logger for SDK connection diagnostics. A nil Logger means
+// "discard", never "fall back to slog.Default()" — see startCommand.
+func (r Runner) logger() *slog.Logger {
+	if r.Logger != nil {
+		return r.Logger
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 func (r Runner) clientInfo() acp.Implementation {
