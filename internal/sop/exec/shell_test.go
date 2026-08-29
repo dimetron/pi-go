@@ -58,12 +58,15 @@ func TestShellRunnerExitStatusRoutes(t *testing.T) {
 // stage verified.
 func TestShellRunnerRunsGateAfterBody(t *testing.T) {
 	dir := t.TempDir()
-	order := filepath.Join(dir, "order")
 
+	// The script names the file relative to the runner's working directory.
+	// Interpolating the absolute path would embed a Windows path into a bash
+	// script, where the backslashes read as escapes and the redirect lands
+	// somewhere else entirely.
 	stage := sop.Stage{
 		ID:   "s",
-		Run:  "echo body >> " + order,
-		Gate: "echo gate >> " + order + "; exit 1",
+		Run:  "echo body >> order",
+		Gate: "echo gate >> order; exit 1",
 	}
 	out, err := runStage(t, ShellRunner{Dir: dir}, stage)
 	if err != nil {
@@ -73,7 +76,7 @@ func TestShellRunnerRunsGateAfterBody(t *testing.T) {
 		t.Errorf("route = %q, want %q — a failing gate fails the stage", out.Route, sop.VerdictFail)
 	}
 
-	got, err := os.ReadFile(order)
+	got, err := os.ReadFile(filepath.Join(dir, "order"))
 	if err != nil {
 		t.Fatalf("read order: %v", err)
 	}
@@ -86,13 +89,15 @@ func TestShellRunnerRunsGateAfterBody(t *testing.T) {
 // running the gate anyway would report on a stage that never happened.
 func TestShellRunnerSkipsGateWhenBodyFails(t *testing.T) {
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "gate-ran")
 
-	stage := sop.Stage{ID: "s", Run: "exit 1", Gate: "touch " + marker}
+	// Relative, so the gate would really write inside dir on every platform —
+	// an absolute Windows path in a bash script would make this pass whether
+	// or not the gate ran.
+	stage := sop.Stage{ID: "s", Run: "exit 1", Gate: "touch gate-ran"}
 	if _, err := runStage(t, ShellRunner{Dir: dir}, stage); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := os.Stat(marker); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "gate-ran")); err == nil {
 		t.Error("gate ran after a failed body")
 	}
 }
@@ -105,7 +110,7 @@ func TestShellRunnerExportsStageEnv(t *testing.T) {
 
 	stage := sop.Stage{
 		ID:  "watch",
-		Run: `printf '%s %s %s %s' "$PI_STAGE" "$PI_CYCLE" "$PI_RUN_DIR" "$PI_PR" > ` + filepath.Join(dir, "env"),
+		Run: `printf '%s %s %s %s' "$PI_STAGE" "$PI_CYCLE" "$PI_RUN_DIR" "$PI_PR" > env`,
 	}
 	r := ShellRunner{Dir: dir, RunDir: runDir, Env: []string{"PI_PR=https://example.test/pull/1"}}
 	if _, err := r.RunStage(context.Background(), StageRequest{Stage: stage, Cycle: 3}); err != nil {
