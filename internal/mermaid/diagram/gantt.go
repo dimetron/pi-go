@@ -25,6 +25,14 @@ type ganttData struct {
 	todayMarker bool // true by default, false if "todayMarker off"
 }
 
+// Now is the clock a gantt chart reads for the today marker and for task
+// starts it cannot resolve from the source. It is a variable so a test can
+// freeze it: a gantt golden that renders the real time.Now() bakes the day it
+// was approved into the axis labels and fails on the next date change.
+//
+// Production code never assigns it.
+var Now = time.Now
+
 var (
 	reGanttHeader       = regexp.MustCompile(`(?i)^\s*gantt\s*$`)
 	reGanttTitle        = regexp.MustCompile(`(?i)^\s*title\s+(.+)$`)
@@ -145,12 +153,12 @@ func parseGanttTask(line, dateFormat, section string, taskMap map[string]*ganttT
 			if ref, ok := taskMap[refID]; ok {
 				task.start = ref.end
 			} else {
-				task.start = time.Now()
+				task.start = Now()
 			}
 		} else {
 			t, err := time.Parse(goFmt, startStr)
 			if err != nil {
-				task.start = time.Now()
+				task.start = Now()
 			} else {
 				task.start = t
 			}
@@ -169,7 +177,7 @@ func parseGanttTask(line, dateFormat, section string, taskMap map[string]*ganttT
 			}
 			task.start = latest
 		} else {
-			task.start = time.Now()
+			task.start = Now()
 		}
 		task.end = task.start.Add(parseDuration(cleanParts[0]))
 	}
@@ -405,7 +413,7 @@ func RenderGantt(source string, useASCII bool, theme *renderer.Theme) *renderer.
 
 	// Today marker: vertical dashed line at current date
 	if gd.todayMarker {
-		now := time.Now()
+		now := Now()
 		if !now.Before(minTime) && !now.After(maxTime) {
 			todayOffset := now.Sub(minTime).Hours() / 24
 			todayCol := barStartCol + int(todayOffset/totalDays*float64(barW))
