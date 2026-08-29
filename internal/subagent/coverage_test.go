@@ -362,13 +362,13 @@ func TestToSpawnInput_KnownBundled(t *testing.T) {
 	}
 }
 
-// TestStartACPSession_KnownAgents verifies the claude/gemini/cursor branches
+// TestStartACPSession_KnownAgents verifies the claude/gemini/cursor/copilot/agy branches
 // are hit — but since we can't actually launch the CLI binaries in a sandbox,
 // we tolerate failure from session.Start and only assert the branch routes to
 // a specific runner (i.e. the error comes from the runner, not from "unknown
 // ACP agent").
 func TestStartACPSession_KnownAgents_RoutesToRunner(t *testing.T) {
-	for _, name := range []string{"claude", "gemini", "cursor", "copilot"} {
+	for _, name := range []string{"claude", "gemini", "cursor", "copilot", "agy"} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancel()

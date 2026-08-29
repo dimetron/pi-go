@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	sharedacp "github.com/dimetron/pi-go/internal/acp"
+	"github.com/dimetron/pi-go/internal/acp/client/agy"
 	"github.com/dimetron/pi-go/internal/acp/client/claudecode"
 	"github.com/dimetron/pi-go/internal/acp/client/copilot"
 	"github.com/dimetron/pi-go/internal/acp/client/cursor"
@@ -14,7 +15,7 @@ import (
 )
 
 // acpSession is the shared interface implemented by every per-runner
-// RunningSession (claudecode, gemini, cursor). It lets dispatchACP treat
+// RunningSession (claudecode, gemini, cursor, agy). It lets dispatchACP treat
 // them uniformly when pumping events back to the orchestrator.
 type acpSession interface {
 	Events() <-chan sharedacp.Event
@@ -25,7 +26,7 @@ type acpSession interface {
 
 // startACPSessionFn is the constructor used by dispatchACP to start a
 // runner. It is overridable in tests so the dispatcher can be exercised
-// without invoking real claude/gemini/cursor binaries.
+// without invoking real claude/gemini/cursor/agy binaries.
 var startACPSessionFn = startACPSession
 
 // acpCompletionSentinel is the exact string the preamble asks ACP subagents
@@ -61,7 +62,7 @@ func acpPromptPreamble(agentName, task string) string {
 		agentName, task, acpCompletionSentinel, acpCompletionSentinel)
 }
 
-// dispatchACP starts an ACP-based subagent (claude, gemini, cursor) and
+// dispatchACP starts an ACP-based subagent (claude, gemini, cursor, agy) and
 // returns a *Process whose event channel is fed by the runner's session,
 // translated into the orchestrator's Event format.
 //
@@ -135,6 +136,13 @@ func startACPSession(ctx context.Context, agentName, prompt string, opts SpawnOp
 	case "copilot":
 		r := copilot.Runner{ExtraEnv: opts.Env}
 		return r.Start(ctx, copilot.RunRequest{
+			Prompt: prompt,
+			CWD:    opts.WorkDir,
+			Env:    opts.Env,
+		})
+	case "agy":
+		r := agy.Runner{ExtraEnv: opts.Env}
+		return r.Start(ctx, agy.RunRequest{
 			Prompt: prompt,
 			CWD:    opts.WorkDir,
 			Env:    opts.Env,
