@@ -113,6 +113,11 @@ var slashCommandSpecs = []slashCommandSpec{
 		desc: "Execute a spec with task agent (verifies subagent exit status before merging)",
 		run:  (*model).handleRunCommand,
 	},
+	{
+		name: "/pr-autofix",
+		desc: "Watch a GitHub PR's checks and fix them until it is green",
+		run:  (*model).handlePRAutofixCommand,
+	},
 	{name: "/skills", desc: "List skills (create, load)", run: (*model).handleSkillsCommand},
 	{name: "/skill-list", desc: "List all loaded skills", hidden: true, run: slashCmdBare((*model).handleSkillListCommand)},
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},

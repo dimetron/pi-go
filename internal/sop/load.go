@@ -16,7 +16,11 @@ var defaultPlanSOP []byte
 //go:embed run.sop.yaml
 var defaultRunSOP []byte
 
-// LoadDefinition returns the declarative SOP named `name` ("plan" or "run").
+//go:embed pr-autofix.sop.yaml
+var defaultPRAutofixSOP []byte
+
+// LoadDefinition returns the declarative SOP named `name` ("plan", "run" or
+// "pr-autofix").
 //
 // Resolution mirrors LoadPDD: project .pi-go/sops/<name>.sop.yaml → global
 // ~/.pi-go/sops/<name>.sop.yaml → embedded default. An override that fails to
@@ -90,6 +94,8 @@ func embeddedDefinition(name string) (data []byte, source string) {
 	switch name {
 	case "run":
 		return defaultRunSOP, "embedded run.sop.yaml"
+	case "pr-autofix":
+		return defaultPRAutofixSOP, "embedded pr-autofix.sop.yaml"
 	default:
 		return defaultPlanSOP, "embedded plan.sop.yaml"
 	}
