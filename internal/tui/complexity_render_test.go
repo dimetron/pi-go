@@ -929,6 +929,11 @@ func TestRenderToolCardsRender(t *testing.T) {
 			want: "◉ agent[claude+pi+gemini]\n  │ → ok\n",
 		},
 		{
+			desc: "bundled adapters keep their names, pi subagents collapse",
+			msg:  message{role: "tool", tool: "subagent", agentType: "agy+task+copilot+codex", content: "ok"},
+			want: "◉ agent[agy+pi+copilot+codex]\n  │ → ok\n",
+		},
+		{
 			desc: "agent result collapses newlines into one gutter line",
 			msg:  message{role: "tool", tool: "agent", agentType: "gemini", content: "one\ntwo\n\nthree"},
 			want: "◉ agent[gemini]\n  │ → one two three\n",
@@ -1066,7 +1071,7 @@ func TestRenderableAgentEventsRender(t *testing.T) {
 		{kind: "custom"},
 	}
 	got := renderableAgentEvents(in)
-	want := []string{"text", "tool_call", "stderr", "custom"}
+	want := []string{"text", "tool_call", "custom"}
 	if len(got) != len(want) {
 		t.Fatalf("kept %d events (%v), want %d", len(got), got, len(want))
 	}
@@ -1160,6 +1165,9 @@ func TestAgentCardHeaderRender(t *testing.T) {
 		{"label only", ToolDisplayModel{}, message{agentType: "task", content: "x"}, "◉ agent[pi]\n"},
 		{"title only", ToolDisplayModel{}, message{agentTitle: "hi", content: "x"}, "◉ agent hi\n"},
 		{"both", ToolDisplayModel{}, message{agentType: "gemini", agentTitle: "hi", content: "x"}, "◉ agent[gemini] hi\n"},
+		{"agy keeps its name", ToolDisplayModel{}, message{agentType: "agy", content: "x"}, "◉ agent[agy]\n"},
+		{"copilot keeps its name", ToolDisplayModel{}, message{agentType: "copilot", content: "x"}, "◉ agent[copilot]\n"},
+		{"codex keeps its name", ToolDisplayModel{}, message{agentType: "codex", content: "x"}, "◉ agent[codex]\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.desc, func(t *testing.T) {
