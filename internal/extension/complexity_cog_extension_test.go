@@ -13,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/dimetron/pi-go/internal/notice"
 	"github.com/dimetron/pi-go/internal/tools"
 )
 
@@ -81,7 +82,7 @@ func TestReadImageCallback_SkipsEverythingButReadImageResults(t *testing.T) {
 	sb := cogSandbox(t)
 
 	t.Run("nil request", func(t *testing.T) {
-		resp, err := BuildReadImageCallback(sb)(&mockReadonlyContext{}, nil)
+		resp, err := BuildReadImageCallback(sb, "gemini")(&mockReadonlyContext{}, nil)
 		if resp != nil || err != nil {
 			t.Fatalf("callback(nil req) = %v, %v; want nil, nil", resp, err)
 		}
@@ -93,7 +94,7 @@ func TestReadImageCallback_SkipsEverythingButReadImageResults(t *testing.T) {
 			Parts: []*genai.Part{cogRespPart(readImageToolName, map[string]any{"path": "shot.png"})},
 		}
 		req := &model.LLMRequest{Contents: []*genai.Content{content}}
-		if _, err := BuildReadImageCallback(nil)(&mockReadonlyContext{}, req); err != nil {
+		if _, err := BuildReadImageCallback(nil, "gemini")(&mockReadonlyContext{}, req); err != nil {
 			t.Fatalf("callback: %v", err)
 		}
 		if len(content.Parts) != 1 {
@@ -118,7 +119,7 @@ func TestReadImageCallback_SkipsEverythingButReadImageResults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			content := &genai.Content{Role: "user", Parts: []*genai.Part{tc.part}}
 			req := &model.LLMRequest{Contents: []*genai.Content{nil, content}}
-			if _, err := BuildReadImageCallback(sb)(&mockReadonlyContext{}, req); err != nil {
+			if _, err := BuildReadImageCallback(sb, "gemini")(&mockReadonlyContext{}, req); err != nil {
 				t.Fatalf("callback: %v", err)
 			}
 			if got := len(content.Parts); got != 1 {
@@ -131,10 +132,10 @@ func TestReadImageCallback_SkipsEverythingButReadImageResults(t *testing.T) {
 	}
 }
 
-// TestReadImageCallback_UnreadablePathIsWarnedNotFatal pins that a read
+// TestReadImageCallback_UnreadablePathIsSkippedNotFatal pins that a read
 // failure only skips that one part: the callback still returns nil, nil and
 // still injects the image for a sibling part that does resolve.
-func TestReadImageCallback_UnreadablePathIsWarnedNotFatal(t *testing.T) {
+func TestReadImageCallback_UnreadablePathIsSkippedNotFatal(t *testing.T) {
 	sb := cogSandbox(t)
 	good := cogWriteImage(t, sb, "good.png")
 
@@ -147,7 +148,7 @@ func TestReadImageCallback_UnreadablePathIsWarnedNotFatal(t *testing.T) {
 	}
 	req := &model.LLMRequest{Contents: []*genai.Content{content}}
 
-	resp, err := BuildReadImageCallback(sb)(&mockReadonlyContext{}, req)
+	resp, err := BuildReadImageCallback(sb, "gemini")(&mockReadonlyContext{}, req)
 	if resp != nil || err != nil {
 		t.Fatalf("callback = %v, %v; want nil, nil", resp, err)
 	}
@@ -162,21 +163,27 @@ func TestReadImageCallback_UnreadablePathIsWarnedNotFatal(t *testing.T) {
 	}
 }
 
-// TestReadImageCallback_AppendsPerContentInOrder pins that images are appended
-// to the Content that carried the response — not pooled onto the first one —
-// and that two responses on one Content append in the order they appear.
-func TestReadImageCallback_AppendsPerContentInOrder(t *testing.T) {
+// TestReadImageCallback_InjectsNewestContentOnly pins the scoping rule: only
+// the last Content carrying read_image results is injected into, and within it
+// the images append in the order the responses appear. An older Content that
+// also carried a read_image result is left alone — re-injecting it on every
+// agentic step is what this scoping exists to stop.
+func TestReadImageCallback_InjectsNewestContentOnly(t *testing.T) {
 	sb := cogSandbox(t)
+	stale := cogWriteImage(t, sb, "stale.png")
 	first := cogWriteImage(t, sb, "first.png")
 	second := cogWriteImage(t, sb, "second.png")
-	other := cogWriteImage(t, sb, "other.png")
 
 	// Make the payloads distinguishable by size.
 	if err := os.WriteFile(second, append(cogPNGBytes(t), make([]byte, 64)...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	contentA := &genai.Content{
+	older := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{cogRespPart(readImageToolName, map[string]any{"path": stale})},
+	}
+	newest := &genai.Content{
 		Role: "user",
 		Parts: []*genai.Part{
 			cogRespPart(readImageToolName, map[string]any{"path": first}),
@@ -184,18 +191,21 @@ func TestReadImageCallback_AppendsPerContentInOrder(t *testing.T) {
 			cogRespPart(readImageToolName, map[string]any{"path": second}),
 		},
 	}
-	contentB := &genai.Content{
-		Role:  "user",
-		Parts: []*genai.Part{cogRespPart(readImageToolName, map[string]any{"path": other})},
-	}
-	req := &model.LLMRequest{Contents: []*genai.Content{contentA, contentB}}
+	req := &model.LLMRequest{Contents: []*genai.Content{older, newest}}
 
-	if _, err := BuildReadImageCallback(sb)(&mockReadonlyContext{}, req); err != nil {
+	if _, err := BuildReadImageCallback(sb, "gemini")(&mockReadonlyContext{}, req); err != nil {
 		t.Fatalf("callback: %v", err)
 	}
 
-	if got := len(contentA.Parts); got != 5 {
-		t.Fatalf("contentA parts = %d, want 5", got)
+	if got := len(older.Parts); got != 1 {
+		t.Fatalf("older parts = %d, want 1 (a superseded read_image must not be re-injected)", got)
+	}
+	if n := cogInlineCount(older); n != 0 {
+		t.Fatalf("older inline parts = %d, want 0", n)
+	}
+
+	if got := len(newest.Parts); got != 5 {
+		t.Fatalf("newest parts = %d, want 5", got)
 	}
 	firstBytes, err := os.ReadFile(first)
 	if err != nil {
@@ -205,17 +215,104 @@ func TestReadImageCallback_AppendsPerContentInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(contentA.Parts[3].InlineData.Data, firstBytes) {
-		t.Error("contentA.Parts[3] is not the first image: injection order changed")
+	if !bytes.Equal(newest.Parts[3].InlineData.Data, firstBytes) {
+		t.Error("newest.Parts[3] is not the first image: injection order changed")
 	}
-	if !bytes.Equal(contentA.Parts[4].InlineData.Data, secondBytes) {
-		t.Error("contentA.Parts[4] is not the second image: injection order changed")
+	if !bytes.Equal(newest.Parts[4].InlineData.Data, secondBytes) {
+		t.Error("newest.Parts[4] is not the second image: injection order changed")
 	}
-	if got := len(contentB.Parts); got != 2 {
-		t.Fatalf("contentB parts = %d, want 2 (its own image, not contentA's)", got)
+}
+
+// TestReadImageCallback_TrailingContentWithoutImages pins that the scan walks
+// back past the trailing turns a request processor may append — the newest
+// read_image result is still found and injected.
+func TestReadImageCallback_TrailingContentWithoutImages(t *testing.T) {
+	sb := cogSandbox(t)
+	shot := cogWriteImage(t, sb, "shot.png")
+
+	withImage := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{cogRespPart(readImageToolName, map[string]any{"path": shot})},
 	}
-	if cogInlineCount(contentB) != 1 {
-		t.Error("contentB did not receive its own inline image")
+	trailing := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "continue"}}}
+	req := &model.LLMRequest{Contents: []*genai.Content{withImage, trailing}}
+
+	if _, err := BuildReadImageCallback(sb, "gemini")(&mockReadonlyContext{}, req); err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	if n := cogInlineCount(withImage); n != 1 {
+		t.Fatalf("inline parts = %d, want 1", n)
+	}
+	if got := len(trailing.Parts); got != 1 {
+		t.Errorf("trailing parts = %d, want 1 (nothing injected there)", got)
+	}
+}
+
+// TestReadImageCallback_NonForwardingProviderIsNoOp pins that a provider whose
+// adapter drops InlineData gets a callback that does no work at all. Reading
+// the bytes there costs the disk I/O and buys nothing, because the parts are
+// discarded before the request goes out.
+func TestReadImageCallback_NonForwardingProviderIsNoOp(t *testing.T) {
+	sb := cogSandbox(t)
+	shot := cogWriteImage(t, sb, "shot.png")
+
+	for _, providerName := range []string{"ollama", "openai", "anthropic", ""} {
+		t.Run(providerName, func(t *testing.T) {
+			content := &genai.Content{
+				Role:  "user",
+				Parts: []*genai.Part{cogRespPart(readImageToolName, map[string]any{"path": shot})},
+			}
+			req := &model.LLMRequest{Contents: []*genai.Content{content}}
+			resp, err := BuildReadImageCallback(sb, providerName)(&mockReadonlyContext{}, req)
+			if resp != nil || err != nil {
+				t.Fatalf("callback = %v, %v; want nil, nil", resp, err)
+			}
+			if got := len(content.Parts); got != 1 {
+				t.Fatalf("parts = %d, want 1 (provider cannot carry InlineData)", got)
+			}
+		})
+	}
+}
+
+// TestReadImageCallback_WarnsOncePerPath pins the notice behavior. The
+// callback runs once per agentic step over a history that is rebuilt each
+// time, so an unreadable path would otherwise be reported again on every step
+// of the turn. A file that is merely gone is never reported: screenshots live
+// in scratch directories the agent cleans up itself.
+func TestReadImageCallback_WarnsOncePerPath(t *testing.T) {
+	sb := cogSandbox(t)
+
+	var got []string
+	prev := notice.SetSink(func(msg string) { got = append(got, msg) })
+	t.Cleanup(func() { notice.SetSink(prev) })
+
+	// A directory is readable as a path but not as a file, so ReadFile fails
+	// with something other than fs.ErrNotExist.
+	dir := filepath.Join(sb.Dir(), "adir")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(sb.Dir(), "gone.png")
+
+	cb := BuildReadImageCallback(sb, "gemini")
+	for range 3 {
+		req := &model.LLMRequest{Contents: []*genai.Content{{
+			Role: "user",
+			Parts: []*genai.Part{
+				cogRespPart(readImageToolName, map[string]any{"path": missing}),
+				cogRespPart(readImageToolName, map[string]any{"path": dir}),
+			},
+		}}}
+		if _, err := cb(&mockReadonlyContext{}, req); err != nil {
+			t.Fatalf("callback: %v", err)
+		}
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("notices = %d %q, want 1 (one per unreadable path, none for a deleted file)", len(got), got)
+	}
+	if !strings.Contains(got[0], "adir") {
+		t.Errorf("notice = %q, want the unreadable directory, not the deleted file", got[0])
 	}
 }
 

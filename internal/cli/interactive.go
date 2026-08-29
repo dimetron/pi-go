@@ -586,7 +586,7 @@ func buildDeferredCallbacks(
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(providerName)
 
 	// Inject image bytes (screenshots) as visible InlineData parts for the model.
-	llmBefore = append(llmBefore, extension.BuildReadImageCallback(sandbox))
+	llmBefore = append(llmBefore, extension.BuildReadImageCallback(sandbox, providerName))
 
 	if memRecorder != nil {
 		afterCBs = append(afterCBs, memRecorder.afterTool)

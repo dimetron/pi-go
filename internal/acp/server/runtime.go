@@ -162,12 +162,12 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, err
 	}
 
-	llm, err := buildSessionLLM(ctx, rt, cfg)
+	llm, providerName, err := buildSessionLLM(ctx, rt, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := buildSessionResources(rt, cfg, turn, cwd, span)
+	res, err := buildSessionResources(rt, cfg, turn, cwd, providerName, span)
 	if err != nil {
 		return nil, err
 	}
@@ -227,26 +227,28 @@ func loadSessionConfig(rt RuntimeConfig, cwd string) (config.Config, error) {
 }
 
 // buildSessionLLM resolves the default role to a provider and returns a
-// token-guarded LLM for it.
-func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (adkmodel.LLM, error) {
+// token-guarded LLM for it, along with the name of the provider it resolved to
+// — callbacks built alongside the agent need it to know what the wire format
+// can carry.
+func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (adkmodel.LLM, string, error) {
 	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole("default")
 	if err != nil {
-		return nil, fmt.Errorf("resolving model role: %w", err)
+		return nil, "", fmt.Errorf("resolving model role: %w", err)
 	}
 
 	info, baseURL, err := resolveSessionProvider(cfg, rt.BaseURL, modelName, providerName)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
 	if err := checkProviderCredentials(info, apiKey, baseURL); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	baseURL, err = resolveOllamaBaseURL(info, apiKey, baseURL)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, &provider.LLMOptions{
@@ -257,12 +259,12 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 		AdvisorCaching:  advisorCaching,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating LLM provider: %w", err)
+		return nil, "", fmt.Errorf("creating LLM provider: %w", err)
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
 	tokenTracker.SetContextWindowSize(sessionContextWindow(ctx, info, baseURL))
-	return guardrail.WrapModel(llm, tokenTracker), nil
+	return guardrail.WrapModel(llm, tokenTracker), info.Provider, nil
 }
 
 // checkProviderCredentials rejects a provider that needs an API key and has
@@ -358,7 +360,7 @@ type sessionResources struct {
 // buildSessionResources opens the sandbox and starts the subagent orchestrator
 // and LSP manager, assembling the tool set and callbacks around them. On
 // failure it releases whatever it had already opened.
-func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn, cwd string, span trace.Span) (*sessionResources, error) {
+func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn, cwd, providerName string, span trace.Span) (*sessionResources, error) {
 	sandboxRoot := cwd
 	if rt.SandboxRootFunc != nil {
 		sandboxRoot = rt.SandboxRootFunc(turn)
@@ -426,7 +428,7 @@ func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn,
 
 	// Inject image bytes (screenshots) as visible InlineData parts for the model.
 	beforeModelCBs := []llmagent.BeforeModelCallback{
-		extension.BuildReadImageCallback(sandbox),
+		extension.BuildReadImageCallback(sandbox, providerName),
 	}
 
 	return &sessionResources{

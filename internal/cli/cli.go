@@ -679,7 +679,7 @@ func runNonInteractive(
 	beforeCBs = append(beforeCBs, tracingBefore...)
 	afterCBs = append(afterCBs, tracingAfter...)
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(info.Provider)
-	llmBefore = append(llmBefore, extension.BuildReadImageCallback(runtime.sandbox))
+	llmBefore = append(llmBefore, extension.BuildReadImageCallback(runtime.sandbox, info.Provider))
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
