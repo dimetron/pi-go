@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -254,6 +255,9 @@ func (m *model) handlePRAutofixMsg(in prAutofixChan) (tea.Model, tea.Cmd) {
 	switch {
 	case in.msg.event != nil:
 		st.tracker.observe(in.msg.event)
+		if stage, cycle, ok := prAutofixStageStart(in.msg.event); ok {
+			m.appendAssistant(prAutofixStartLine(stage, cycle))
+		}
 	case in.msg.output != "":
 		m.appendAssistant(prAutofixStageLine(in.msg.stage, in.msg.output))
 	}
@@ -284,6 +288,57 @@ func prAutofixStageLine(stage, output string) string {
 		lines = append(lines[:maxLines], fmt.Sprintf("… %d more lines", omitted))
 	}
 	return "[" + stage + "] " + strings.Join(lines, "\n")
+}
+
+// prAutofixStageStart reports whether ev is a lifecycle event (a stage starting)
+// and, if so, the stage id and its cycle number. Cycle is 1 on first activation
+// and increments each time the graph routes back to the stage.
+func prAutofixStageStart(ev *session.Event) (stage string, cycle int, ok bool) {
+	stage, ok = sopexec.StageStarted(ev)
+	if !ok {
+		return "", 0, false
+	}
+	// The lifecycle event encodes the cycle as "stage#N" in Branch. StageStarted
+	// strips it; re-read the raw branch to recover the number.
+	if ev.Branch != "" {
+		for i := range ev.Branch {
+			if ev.Branch[i] == '#' {
+				if n, err := strconv.Atoi(ev.Branch[i+1:]); err == nil {
+					return stage, n, true
+				}
+				break
+			}
+		}
+	}
+	return stage, 1, true
+}
+
+// prAutofixStageNarration maps a stage id to the one-line description shown in
+// the transcript when the stage starts. This is the narration that makes a run
+// observable stage-by-stage rather than a stream of raw script output.
+var prAutofixStageNarration = map[string]string{
+	"resolve":  "Resolving PR and checking out the branch",
+	"watch":    "Polling CI checks until they settle",
+	"triage":   "Triaging check results — green or failing?",
+	"diagnose": "Pulling failing job logs for evidence",
+	"fix":      "Fixing the failing checks in the working tree",
+	"gates":    "Running local gates (build, vet, test, lint)",
+	"commit":   "Committing the fix (signed, signed off)",
+	"push":     "Pushing to the PR branch — a fresh CI run starts",
+	"summary":  "Writing the summary",
+}
+
+// prAutofixStartLine renders the narration for a stage starting. A cycle > 1
+// means the graph has looped back, so the line says which cycle it is.
+func prAutofixStartLine(stage string, cycle int) string {
+	desc := prAutofixStageNarration[stage]
+	if desc == "" {
+		desc = stage
+	}
+	if cycle > 1 {
+		return fmt.Sprintf("▶ %s — %s (cycle %d)", stage, desc, cycle)
+	}
+	return fmt.Sprintf("▶ %s — %s", stage, desc)
 }
 
 // showPRAutofixUsage explains the command.
