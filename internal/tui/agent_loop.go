@@ -1384,7 +1384,14 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 	// a fresh block and the accumulator restarts with it. Carrying the buffer
 	// across a tool call made every later block re-render every earlier one,
 	// glued together without a separator ("...say hi." + "agy ran cleanly").
-	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" {
+	//
+	// A closed block — an error, a warning, a meta note — closes the message the
+	// same way a tool card does. It shares the "assistant" role, so without the
+	// guard a warning raised mid-turn (a retry, a truncation, a loop recovery)
+	// absorbs the rest of the reply: the notice text is overwritten and the
+	// answer is drawn in the warning's orange, unwrapped and unrendered.
+	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" &&
+		!m.chatModel.Messages[n-1].closed() {
 		m.chatModel.Streaming += msg.text
 		m.chatModel.Messages[n-1].content = m.chatModel.Streaming
 	} else {

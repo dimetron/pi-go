@@ -294,6 +294,16 @@ func (c *ChatModel) Clear() {
 	c.Scroll = 0
 }
 
+// closed reports whether a message is a finished block that must never absorb
+// more streamed text. Errors, warnings, meta notes and pre-rendered output all
+// carry role "assistant" so they sit in the reply column, but each is complete
+// the moment it is appended. Streaming into one overwrites the notice with the
+// reply and drags the notice's styling over every line that follows — a
+// mid-turn warning used to swallow the rest of the answer and paint it orange.
+func (m *message) closed() bool {
+	return m.isError || m.isWarning || m.isMeta || m.preRendered
+}
+
 // AppendError adds an error message styled with red text. Errors that end a
 // run must be impossible to miss: the plain assistant bubble reads like part of
 // the model's answer, which is how provider failures used to slip past.
@@ -303,7 +313,7 @@ func (c *ChatModel) AppendError(text string) {
 		content: text,
 		isError: true,
 	})
-	c.Scroll = 0
+	c.closeStreamingBlock()
 }
 
 // AppendWarning adds a warning message styled with yellow text.
@@ -313,6 +323,15 @@ func (c *ChatModel) AppendWarning(text string) {
 		content:   text,
 		isWarning: true,
 	})
+	c.closeStreamingBlock()
+}
+
+// closeStreamingBlock ends the open reply block. The accumulator has to be
+// dropped along with it: it holds the text of the block that just closed, and
+// the next delta appends to whatever is left in it, so a stale buffer replays
+// the previous block inside the new one.
+func (c *ChatModel) closeStreamingBlock() {
+	c.Streaming = ""
 	c.Scroll = 0
 }
 
@@ -325,7 +344,7 @@ func (c *ChatModel) AppendMeta(text string) {
 		content: text,
 		isMeta:  true,
 	})
-	c.Scroll = 0
+	c.closeStreamingBlock()
 }
 
 // ResetScroll resets the scroll offset to bottom.
@@ -853,9 +872,7 @@ func (c *ChatModel) assistantBody(msg *message, content string, p Palette, bulle
 		// classic light-theme casualty — it washes out to nothing on white.
 		// Orange carries the same "look here, but nothing broke" weight and
 		// stays legible on both backgrounds.
-		warnStyle := lipgloss.NewStyle().Foreground(p.Peach).Bold(true)
-		warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
-		return warnBullet + warnStyle.Render(content)
+		return c.assistantWarningBody(content, p)
 	case msg.isMeta:
 		// A dim "Σ" prefix marks the line as a per-turn tally rather than the
 		// model's own words — the reply uses "◉", so the two must never be
@@ -874,16 +891,31 @@ func (c *ChatModel) assistantBody(msg *message, content string, p Palette, bulle
 // do — an error truncated by the terminal is barely better than the silent
 // failure this replaces.
 func (c *ChatModel) assistantErrorBody(content string, p Palette) string {
-	errStyle := lipgloss.NewStyle().Foreground(p.Error).Bold(true)
+	return c.noticeBody(content, "✖ ", lipgloss.NewStyle().Foreground(p.Error).Bold(true))
+}
 
+// assistantWarningBody renders a warning reply, wrapped for the same reason
+// errors are. A retry notice or a loop-detection line easily outruns the pane,
+// and an over-wide line is cut at the right edge by the terminal — which takes
+// the trailing SGR reset with it and leaves the styling open, so everything
+// drawn afterwards inherits the warning's orange.
+func (c *ChatModel) assistantWarningBody(content string, p Palette) string {
+	return c.noticeBody(content, "⚠ ", lipgloss.NewStyle().Foreground(p.Peach).Bold(true))
+}
+
+// noticeBody renders a bullet-prefixed notice wrapped to the pane, styling and
+// closing each line on its own so no line can carry an unterminated color into
+// the next one. The hanging indent keeps continuation lines under the text
+// rather than under the bullet.
+func (c *ChatModel) noticeBody(content, bullet string, style lipgloss.Style) string {
 	var b strings.Builder
-	b.WriteString(errStyle.Render("✖ "))
-	contentWidth := renderWrapWidth(c.Width, 3) // "✖ " plus the hanging indent
+	b.WriteString(style.Render(bullet))
+	contentWidth := renderWrapWidth(c.Width, 3) // bullet plus the hanging indent
 	for j, line := range wordWrap(content, contentWidth) {
 		if j > 0 {
 			b.WriteString("\n   ")
 		}
-		b.WriteString(errStyle.Render(line))
+		b.WriteString(style.Render(line))
 	}
 	return b.String()
 }
