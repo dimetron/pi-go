@@ -31,13 +31,17 @@ install:
 
 # hooks: point core.hooksPath at the versioned .githooks/ directory.
 #
-# The hooks enforce AGENTS.md's signing rules: commit-msg adds a missing
+# The hooks enforce CLAUDE.md's signing rules: commit-msg adds a missing
 # Signed-off-by, post-commit warns on unsigned commits, and pre-push
 # HARD-FAILS any push containing unsigned or unsigned-off commits.
+#
+# pre-commit and pre-push also run check-large-files, which refuses oversized
+# blobs — GIFs and screen recordings above all, which belong on a release
+# rather than in every clone's history forever.
 # Run once per clone: `make hooks`.
 hooks:
 	git config core.hooksPath .githooks
-	@echo "hooks installed: commit-msg, post-commit, pre-push (.githooks/)"
+	@echo "hooks installed: pre-commit, commit-msg, post-commit, pre-push (.githooks/)"
 
 # Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
 #

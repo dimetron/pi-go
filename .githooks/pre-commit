@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Refuse oversized blobs — GIFs and screen recordings above all — before they
+# enter history, where they are permanent. Runs first: there is no point
+# formatting and linting a commit that cannot be allowed to exist.
+"$(dirname "$0")/check-large-files" staged
+
 # Format code with gofmt and goimports.
 # Exclude worktree directories (.worktrees/, .pi-go/) — they are separate
 # checkouts on their own branches and must not be reformatted by this hook.

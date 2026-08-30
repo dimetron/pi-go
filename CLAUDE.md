@@ -128,6 +128,46 @@ branch never touched (currently 10 `SA1019` deprecation errors in
 `hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
 the unrelated lint failure or to have the user decide, not to bypass the hook.
 
+## Never commit a GIF or a screen recording
+
+**Recordings go on a GitHub release, never into git history.** A GIF of a test
+run or a TUI session is large, write-once, and stale within a week — but every
+revision of one is downloaded by every clone forever, and a blob cannot be
+un-pushed without rewriting history for everyone. GitHub itself warns above
+50 MiB and rejects a push above 100 MiB.
+
+Attach one to a PR instead — the `vhs-e2e-gif` skill wraps this:
+
+```bash
+CAPTIONS='e2e: tool calls after the fix' \
+  .claude/skills/vhs-e2e-gif/scripts/attach-gif-to-pr.sh 246 /tmp/e2e.gif
+```
+
+`.githooks/check-large-files` enforces it from both `pre-commit` (staged blobs)
+and `pre-push` (blobs the push would upload), with two limits:
+
+| What | Limit | Why |
+|---|---|---|
+| `.gif .gifv .apng .mp4 .m4v .mov .webm .mkv .avi .ogv .cast` | 1 MiB | Recordings belong on a release |
+| Anything else | 10 MiB | Far below GitHub's 100 MiB hard reject; the largest non-media file in the tree is ~70 KiB |
+
+The check runs twice on purpose. `pre-commit` catches it early, when unstaging
+is the whole fix; `pre-push` is the last reversible moment for a commit that
+reached the branch some other way — a rebase, a cherry-pick, another tool.
+
+One path is grandfathered in the script's `allow_re`: `docs/screen/pi-go.gif`
+(5.4 MiB), committed before the hook existed and referenced by nothing in the
+tree. It should move to a release asset and take its allowlist entry with it.
+
+If a file genuinely has to live in the tree, shrink it, or as a last resort:
+
+```bash
+PI_ALLOW_LARGE_FILES=1 git commit -sS -m "..."
+```
+
+**Do not reach for `--no-verify`** — it skips the signing hooks too, and lands
+an unsigned commit (see above).
+
 ## Review with Codex: open the PR first, review on GitHub
 
 **The PR is the review track.** Open it first, then have Codex post its review
