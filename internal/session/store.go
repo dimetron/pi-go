@@ -918,6 +918,38 @@ func (e eventList) At(i int) *session.Event {
 
 // File I/O helpers.
 
+// writeFileAtomic writes data to path via a temp file and rename, so a reader
+// (including rsync copying the sessions tree) never observes a partially
+// written file. The temp file lives in the same directory as the target so the
+// rename is atomic on the same filesystem.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".pi-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("renaming temp file: %w", err)
+	}
+	return nil
+}
+
 func writeMeta(sessionDir string, meta *Meta) error {
 	if strings.TrimSpace(meta.Model) == "" {
 		meta.Model = UnknownModel
@@ -926,7 +958,7 @@ func writeMeta(sessionDir string, meta *Meta) error {
 	if err != nil {
 		return fmt.Errorf("marshaling meta: %w", err)
 	}
-	return os.WriteFile(filepath.Join(sessionDir, "meta.json"), data, 0o644)
+	return writeFileAtomic(filepath.Join(sessionDir, "meta.json"), data, 0o644)
 }
 
 // SessionBackend returns the provider and endpoint recorded for a session.

@@ -201,11 +201,13 @@ func loadBranches(sessionDir string) (*branchState, error) {
 	return &bs, nil
 }
 
-// saveBranches writes branches.json to disk.
+// saveBranches writes branches.json to disk atomically (temp + rename) so a
+// concurrent reader — or rsync copying the sessions tree — never sees a torn
+// file.
 func saveBranches(sessionDir string, bs *branchState) error {
 	data, err := json.MarshalIndent(bs, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling branches: %w", err)
 	}
-	return os.WriteFile(filepath.Join(sessionDir, "branches.json"), data, 0o644)
+	return writeFileAtomic(filepath.Join(sessionDir, "branches.json"), data, 0o644)
 }
