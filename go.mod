@@ -187,3 +187,5 @@ require (
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )
+
+replace github.com/coder/acp-go-sdk => ./third_party/acp-go-sdk
