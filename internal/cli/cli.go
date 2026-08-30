@@ -70,6 +70,7 @@ var (
 	flagPprof     string
 	flagPprofPort string
 	flagTraceHTTP bool
+	flagA2AAddr   string
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).
@@ -233,6 +234,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newModelCmd())
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newACPServerCmd())
+	cmd.AddCommand(newA2AServerCmd())
 	cmd.AddCommand(newUpgradeCmd())
 	cmd.AddCommand(newSessionStatsCmd())
 	cmd.AddCommand(newVerifyCmd())
