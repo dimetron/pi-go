@@ -10,9 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 )
 
 // MergeOptions controls MergeRemoteSessions.
@@ -35,17 +33,22 @@ type MergeReport struct {
 // place. Sessions that exist only on the remote side are copied in. Sessions
 // present on both sides are merged:
 //
-//   - events.jsonl: union by event ID. If one side is a prefix of the other
-//     (the common "one machine continued the session" case) the longer file
-//     wins; otherwise events are deduplicated by ID and ordered by timestamp.
+//   - events.jsonl: the local file is never rewritten — remote-only events are
+//     appended. If one side is a strict continuation of the other (the common
+//     "one machine continued the session" case) the missing tail is appended;
+//     otherwise the remote events whose IDs are absent locally are appended.
+//     Appending (rather than replace) means a pi still writing to the session
+//     cannot lose its events to the merge: both processes only ever add lines,
+//     at worst interleaved.
 //   - meta.json: the copy with the newer updatedAt wins.
 //   - trajectory.atif.json / acp.jsonl: the winning side's copy wins.
-//   - branches/: per-branch events are merged with the same union rule;
-//     branches.json metadata follows the events winner.
+//   - branches/: per-branch events are merged with the same append rule;
+//     branches.json branch entries are merged by name, preserving local-only
+//     branches.
 //
 // Local-only sessions are never touched, and nothing is ever deleted. All
-// writes are atomic (temp + rename), so an interrupted merge leaves each file
-// either old or new, never torn.
+// writes are atomic (temp + rename) or pure appends, so an interrupted merge
+// leaves each file either old or new, never torn.
 func MergeRemoteSessions(localDir, remoteDir string, opts MergeOptions) (MergeReport, error) {
 	var report MergeReport
 	entries, err := os.ReadDir(remoteDir)
@@ -66,7 +69,12 @@ func MergeRemoteSessions(localDir, remoteDir string, opts MergeOptions) (MergeRe
 			continue
 		}
 		localSession := filepath.Join(localDir, id)
-		if _, err := os.Stat(filepath.Join(localSession, "meta.json")); os.IsNotExist(err) {
+		exists, err := localSessionExists(localSession)
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", id, err))
+			continue
+		}
+		if !exists {
 			if err := r.copyDir(localSession, remoteSession); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", id, err))
 				continue
@@ -95,6 +103,22 @@ func isSessionDir(dir string) bool {
 	return false
 }
 
+// localSessionExists reports whether the local side already has this session.
+// Either marker (meta.json or events.jsonl) counts: a session with only an
+// events file (torn or legacy) must still be merged, never overwritten.
+func localSessionExists(dir string) (bool, error) {
+	for _, f := range []string{"meta.json", "events.jsonl"} {
+		_, err := os.Stat(filepath.Join(dir, f))
+		if err == nil {
+			return true, nil
+		}
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
 // mergeRunner carries merge state (currently just dry-run) through the
 // per-session merge helpers.
 type mergeRunner struct {
@@ -111,14 +135,17 @@ func (r *mergeRunner) mergeSession(localDir, remoteDir string) error {
 		return err
 	}
 	if wEvents == "remote" {
-		// Remote is a strict continuation of local: its derived files are the
-		// authoritative ones. For "local" or "merged" winners the local
-		// derived files stay put.
+		// Remote events are a strict, longer continuation of local: its
+		// derived files are the authoritative ones. For "local" or "merged"
+		// winners the local derived files stay put.
 		if err := r.copyDerivedFiles(localDir, remoteDir); err != nil {
 			return err
 		}
 	}
-	return r.mergeBranchesDir(localDir, remoteDir, wEvents)
+	if err := r.mergeBranchesDir(localDir, remoteDir); err != nil {
+		return err
+	}
+	return r.mergeBranchesJSON(localDir, remoteDir)
 }
 
 // derivedFiles are per-session artifacts derived from events; they follow the
@@ -145,10 +172,18 @@ func (r *mergeRunner) copyDerivedFiles(localDir, remoteDir string) error {
 }
 
 // mergeEventsFiles merges the events.jsonl of two session dirs into the local
-// one and reports which side won: "local", "remote", or "merged".
+// one and reports which side the local history now reflects: "local" (nothing
+// changed), "remote" (remote was a strict, longer continuation and its tail
+// was appended), or "merged" (remote-only events were appended).
+//
+// The local file is never replaced wholesale: only lines absent from it are
+// appended. Appends cannot lose concurrent pi writes the way a read-modify-
+// write rewrite would — both writers only ever add lines.
 func (r *mergeRunner) mergeEventsFiles(localDir, remoteDir string) (string, error) {
-	lData, lErr := os.ReadFile(filepath.Join(localDir, "events.jsonl"))
-	rData, rErr := os.ReadFile(filepath.Join(remoteDir, "events.jsonl"))
+	localPath := filepath.Join(localDir, "events.jsonl")
+	remotePath := filepath.Join(remoteDir, "events.jsonl")
+	lData, lErr := os.ReadFile(localPath)
+	rData, rErr := os.ReadFile(remotePath)
 	lMissing := lErr != nil && os.IsNotExist(lErr)
 	rMissing := rErr != nil && os.IsNotExist(rErr)
 	switch {
@@ -159,29 +194,93 @@ func (r *mergeRunner) mergeEventsFiles(localDir, remoteDir string) (string, erro
 	case lMissing && rMissing:
 		return "local", nil
 	case lMissing:
-		if err := r.writeFileAtomic(filepath.Join(localDir, "events.jsonl"), rData, 0o644); err != nil {
+		if err := r.appendToFile(localPath, rData); err != nil {
 			return "", err
 		}
 		return "remote", nil
 	case rMissing:
 		return "local", nil
 	}
-	merged, winner := mergeEventsData(lData, rData)
-	if winner != "local" {
-		if err := r.writeFileAtomic(filepath.Join(localDir, "events.jsonl"), merged, 0o644); err != nil {
+	l, err := parseRawEvents(lData)
+	if err != nil {
+		return "", fmt.Errorf("parsing local events: %w", err)
+	}
+	remote, err := parseRawEvents(rData)
+	if err != nil {
+		return "", fmt.Errorf("parsing remote events: %w", err)
+	}
+	if len(remote) == 0 {
+		return "local", nil
+	}
+	// Strict continuation: the shorter sequence is a prefix of the longer one.
+	// Append the longer tail. Equal-length identical histories are NOT a
+	// continuation (nothing to append) and must not trigger a write.
+	if len(l) < len(remote) && isPrefix(l, remote) {
+		tail := marshalEvents(remote[len(l):])
+		if err := r.appendToFile(localPath, tail); err != nil {
 			return "", err
 		}
+		return "remote", nil
 	}
-	return winner, nil
+	if len(remote) < len(l) && isPrefix(remote, l) {
+		return "local", nil
+	}
+	// Divergent histories: append remote events whose IDs are absent locally.
+	lIDs := make(map[string]bool, len(l))
+	for _, e := range l {
+		if e.id != "" {
+			lIDs[e.id] = true
+		}
+	}
+	var missing []rawEvent
+	for _, e := range remote {
+		if e.id != "" && lIDs[e.id] {
+			continue
+		}
+		missing = append(missing, e)
+	}
+	if len(missing) == 0 {
+		return "local", nil
+	}
+	if err := r.appendToFile(localPath, marshalEvents(missing)); err != nil {
+		return "", err
+	}
+	return "merged", nil
 }
 
-// rawEvent is one JSONL line plus the fields the merge keys on. Keeping the
-// raw line means a merged file preserves every field of the original events,
-// including ones this binary does not know about.
+// marshalEvents renders raw events back to JSONL in their given order.
+func marshalEvents(events []rawEvent) []byte {
+	var sb strings.Builder
+	for _, e := range events {
+		sb.Write(e.line)
+		sb.WriteByte('\n')
+	}
+	return []byte(sb.String())
+}
+
+// appendToFile appends data to path with O_APPEND so the write is atomic and
+// interleaves safely with other appenders (a pi still running on this session).
+func (r *mergeRunner) appendToFile(path string, data []byte) error {
+	if r.dryRun || len(data) == 0 {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening %s for append: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("appending to %s: %w", path, err)
+	}
+	return f.Sync()
+}
+
+// rawEvent is one JSONL line plus its event ID, the field the merge keys on.
+// Keeping the raw line means an appended event preserves every field of the
+// original, including ones this binary does not know about.
 type rawEvent struct {
-	line      []byte
-	id        string
-	timestamp time.Time
+	line []byte
+	id   string
 }
 
 // parseRawEvents splits a JSONL events file into rawEvent entries.
@@ -192,13 +291,12 @@ func parseRawEvents(data []byte) ([]rawEvent, error) {
 			continue
 		}
 		var meta struct {
-			ID        string    `json:"id"`
-			Timestamp time.Time `json:"timestamp"`
+			ID string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(line), &meta); err != nil {
 			return nil, err
 		}
-		out = append(out, rawEvent{line: []byte(line), id: meta.ID, timestamp: meta.Timestamp})
+		out = append(out, rawEvent{line: []byte(line), id: meta.ID})
 	}
 	return out, nil
 }
@@ -214,57 +312,6 @@ func isPrefix(a, b []rawEvent) bool {
 		}
 	}
 	return true
-}
-
-// unionEvents deduplicates by event ID and orders by timestamp. Events with an
-// empty ID are kept as-is (they cannot be deduplicated).
-func unionEvents(a, b []rawEvent) []rawEvent {
-	seen := make(map[string]bool)
-	out := make([]rawEvent, 0, len(a)+len(b))
-	for _, e := range append(append([]rawEvent{}, a...), b...) {
-		if e.id != "" {
-			if seen[e.id] {
-				continue
-			}
-			seen[e.id] = true
-		}
-		out = append(out, e)
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].timestamp.Before(out[j].timestamp) })
-	return out
-}
-
-// mergeEventsData merges two events.jsonl payloads. It returns the merged
-// bytes and the winner: "local" (keep local), "remote" (remote is a strict
-// continuation), or "merged" (both sides contributed unique events).
-func mergeEventsData(local, remote []byte) ([]byte, string) {
-	l, err := parseRawEvents(local)
-	if err != nil {
-		return local, "local"
-	}
-	r, err := parseRawEvents(remote)
-	if err != nil {
-		return local, "local"
-	}
-	if len(l) == 0 {
-		return remote, "remote"
-	}
-	if len(r) == 0 {
-		return local, "local"
-	}
-	if isPrefix(l, r) {
-		return remote, "remote"
-	}
-	if isPrefix(r, l) {
-		return local, "local"
-	}
-	merged := unionEvents(l, r)
-	var sb strings.Builder
-	for _, e := range merged {
-		sb.Write(e.line)
-		sb.WriteByte('\n')
-	}
-	return []byte(sb.String()), "merged"
 }
 
 // mergeMeta keeps the meta.json with the newer updatedAt. The winning file is
@@ -304,9 +351,9 @@ func (r *mergeRunner) copyMeta(localDir, remoteDir string) (string, error) {
 }
 
 // mergeBranchesDir merges the branches/ subdirectory. Per-branch events are
-// merged with the same union rule; branches.json metadata follows the events
-// winner.
-func (r *mergeRunner) mergeBranchesDir(localDir, remoteDir, winner string) error {
+// merged with the same append rule as the root events file; branches that
+// exist only on one side are copied in without touching the other side.
+func (r *mergeRunner) mergeBranchesDir(localDir, remoteDir string) error {
 	localBranches := filepath.Join(localDir, "branches")
 	remoteBranches := filepath.Join(remoteDir, "branches")
 	_, lErr := os.ReadDir(localBranches)
@@ -342,17 +389,77 @@ func (r *mergeRunner) mergeBranchesDir(localDir, remoteDir, winner string) error
 			return err
 		}
 	}
-	if winner == "remote" {
-		data, err := os.ReadFile(filepath.Join(remoteDir, "branches.json"))
+	return nil
+}
+
+// mergeBranchesJSON merges branches.json by branch name, preserving local-only
+// branches and the per-branch heads that each side progressed. The active
+// branch is the local one unless the remote side is a strict continuation of
+// it, in which case the remote active branch is kept.
+func (r *mergeRunner) mergeBranchesJSON(localDir, remoteDir string) error {
+	lPath := filepath.Join(localDir, "branches.json")
+	rPath := filepath.Join(remoteDir, "branches.json")
+	_, lStatErr := os.Stat(lPath)
+	_, rStatErr := os.Stat(rPath)
+	switch {
+	case lStatErr != nil && !os.IsNotExist(lStatErr):
+		return lStatErr
+	case rStatErr != nil && !os.IsNotExist(rStatErr):
+		return rStatErr
+	}
+	lHas := lStatErr == nil
+	rHas := rStatErr == nil
+	switch {
+	case !lHas && !rHas:
+		return nil
+	case !lHas:
+		data, err := os.ReadFile(rPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
 			return err
 		}
-		return r.writeFileAtomic(filepath.Join(localDir, "branches.json"), data, 0o644)
+		return r.writeFileAtomic(lPath, data, 0o644)
+	case !rHas:
+		return nil
 	}
-	return nil
+
+	// Both sides have branch state: union branch entries by name, keeping the
+	// larger per-branch head and the local active branch unless remote is a
+	// strict continuation.
+	lBS, err := loadBranches(localDir)
+	if err != nil {
+		return err
+	}
+	rBS, err := loadBranches(remoteDir)
+	if err != nil {
+		return err
+	}
+	merged := branchState{
+		Active:   lBS.Active,
+		Branches: make(map[string]BranchInfo, len(lBS.Branches)+len(rBS.Branches)),
+	}
+	for name, bi := range lBS.Branches {
+		merged.Branches[name] = bi
+	}
+	for name, rbi := range rBS.Branches {
+		if lbi, ok := merged.Branches[name]; !ok {
+			merged.Branches[name] = rbi
+		} else if rbi.Head > lbi.Head {
+			merged.Branches[name] = rbi
+		}
+	}
+	// Keep the local active branch unless it does not exist locally and the
+	// remote side introduced it (remote-only branch): never point active at a
+	// branch that is absent from the merged map.
+	if _, ok := rBS.Branches[lBS.Active]; !ok {
+		if _, ok := merged.Branches[rBS.Active]; ok {
+			merged.Active = rBS.Active
+		}
+	}
+	data, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling merged branches: %w", err)
+	}
+	return r.writeFileAtomic(lPath, data, 0o644)
 }
 
 // copyDir copies a directory tree from src to dst, atomically per file.
