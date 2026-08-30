@@ -64,9 +64,15 @@ type SidebarRenderInput struct {
 	Orchestrator   *subagent.Orchestrator   // may be nil — for agents section
 	Skills         []extension.Skill        // skills section; nil = hidden
 	MCPTools       []extension.MCPToolEntry // MCP tools section; nil = hidden
+	A2AAgents      []A2AAgentEntry          // A2A agents section; nil = hidden
 	MemoryStatus   *palace.PalaceStatus     // memory palace status; nil = hidden
 	Artifacts      []ArtifactEntry          // artifacts section; nil/empty = hidden
 	Palette        Palette                  // resolved theme palette; zero = dark default
+}
+
+// A2AAgentEntry is one row in the A2A Agents sidebar section.
+type A2AAgentEntry struct {
+	Name string
 }
 
 // ArtifactEntry is one row in the Artifacts sidebar section.
@@ -268,6 +274,7 @@ func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 		sidebarSkillLines(in, st),
 		sidebarMemoryLines(in, st),
 		sidebarMCPLines(in, innerW, st),
+		sidebarA2ALines(in, innerW, st),
 		sidebarLoadingLines(in, st),
 	} {
 		out = append(out, section...)
@@ -644,6 +651,21 @@ func sidebarMCPLines(in SidebarRenderInput, innerW int, st sidebarStyles) []stri
 		countLabel := fmt.Sprintf(" [%d]", toolCounts[srv])
 		srvLabel := truncateLabel(srv, max(innerW-4-len(countLabel), 1))
 		lines = append(lines, st.dim.Render("  ⬡ "+srvLabel+countLabel))
+	}
+	return append(lines, "")
+}
+
+// sidebarA2ALines lists configured remote A2A agents, one row per agent.
+func sidebarA2ALines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if len(in.A2AAgents) == 0 {
+		return nil
+	}
+	// Blue heading, distinct from MCP's mauve.
+	lines := []string{st.blue.Bold(true).
+		Render(fmt.Sprintf("  A2A Agents [%d]", len(in.A2AAgents)))}
+	for _, a := range in.A2AAgents {
+		name := truncateLabel(a.Name, max(innerW-5, 1))
+		lines = append(lines, st.dim.Render("  ⬡ "+name))
 	}
 	return append(lines, "")
 }

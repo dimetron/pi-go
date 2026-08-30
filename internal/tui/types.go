@@ -69,6 +69,8 @@ type Config struct {
 	MCPToolsets []adktool.Toolset
 	// MCPServers holds the configured MCP server definitions.
 	MCPServers []extension.MCPServerConfig
+	// A2A holds the configured A2A agent endpoints, shown in the sidebar.
+	A2A *config.A2AConfig
 
 	// ModelSwitcher creates a new LLM instance for the given model name,
 	// updates the token tracker's context window size, and returns the

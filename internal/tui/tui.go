@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/sop"
@@ -1701,6 +1702,19 @@ func clipMessagesToViewport(messagesView string, availableHeight, scroll int) (v
 	return visible, startLine, endLine
 }
 
+// a2aSidebarEntries flattens the configured A2A agents into sidebar rows, in
+// config order. A nil/empty config yields nil, hiding the section.
+func a2aSidebarEntries(cfg *config.A2AConfig) []A2AAgentEntry {
+	if cfg == nil {
+		return nil
+	}
+	entries := make([]A2AAgentEntry, 0, len(cfg.Agents))
+	for _, a := range cfg.Agents {
+		entries = append(entries, A2AAgentEntry{Name: a.Name})
+	}
+	return entries
+}
+
 // sidebarRenderInput gathers everything the sidebar draws for this frame.
 func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInput {
 	in := SidebarRenderInput{
@@ -1729,6 +1743,7 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 		StatusLine:   "",
 		Orchestrator: m.cfg.Orchestrator,
 		MCPTools:     extension.BuildMCPToolEntries(m.cfg.MCPToolsets),
+		A2AAgents:    a2aSidebarEntries(m.cfg.A2A),
 		MemoryStatus: m.memoryStatus,
 		Artifacts:    m.artifactList(),
 		Palette:      m.palette,
