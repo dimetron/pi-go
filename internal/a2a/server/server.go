@@ -33,6 +33,16 @@ import (
 	acpserver "github.com/dimetron/pi-go/internal/acp/server"
 )
 
+// heartbeatInterval is how long the executor lets a turn's stream stay silent
+// before emitting a Working status update to hold it open.
+//
+// The binding constraint is the ~30s after which the kagent path cancels a
+// SendStreamingMessage that has carried nothing. 10s leaves room for two
+// missed heartbeats before that cancel, which matters because the interval is
+// measured from the last event this process yielded, not from what the client
+// received — a slow hop shifts the deadline the wrong way.
+const heartbeatInterval = 10 * time.Second
+
 // ServeConfig configures a server.Serve run.
 type ServeConfig struct {
 	// Addr is the HTTP/gRPC listen address. Default ":8085".
@@ -175,6 +185,17 @@ type piExecutor struct {
 	handler acpserver.PromptHandler
 	cwd     string
 	logger  *slog.Logger
+	// heartbeat overrides heartbeatInterval. Zero means the default; only
+	// tests set it, so they need not wait out a real interval.
+	heartbeat time.Duration
+}
+
+// heartbeatEvery returns the interval between Working status updates.
+func (e *piExecutor) heartbeatEvery() time.Duration {
+	if e.heartbeat > 0 {
+		return e.heartbeat
+	}
+	return heartbeatInterval
 }
 
 func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
@@ -246,8 +267,27 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 			}
 		}()
 
+		// Keep the stream from going quiet while a tool runs. A subagent is
+		// a single tool call that can legitimately run for minutes
+		// (subagent.DefaultAbsoluteTimeout is 20) and produces no A2A events
+		// between its start and end frames, but the kagent path cancels a
+		// SendStreamingMessage that carries nothing for ~30s and Substrate
+		// then checkpoints the actor as idle — freezing the turn mid-tool.
+		// A Working status update every heartbeatInterval resets the idle
+		// timers along that path; unlike an artifact it carries no content,
+		// so it neither reaches the transcript nor disturbs the artifact
+		// sequence the UI reassembles.
+		every := e.heartbeatEvery()
+		heartbeat := time.NewTicker(every)
+		defer heartbeat.Stop()
+
 		for {
 			select {
+			case <-heartbeat.C:
+				if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+					cancel()
+					return
+				}
 			case ev, ok := <-updater.events:
 				if !ok {
 					res := <-resultCh
@@ -275,6 +315,10 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 					cancel()
 					return
 				}
+				// A real event is itself proof the stream is alive, so the
+				// next heartbeat is due a full interval from here rather
+				// than from whenever the ticker last fired.
+				heartbeat.Reset(every)
 			case <-ctx.Done():
 				return
 			}
