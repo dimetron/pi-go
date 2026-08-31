@@ -43,6 +43,7 @@ require (
 	golang.org/x/text v0.41.0
 	google.golang.org/adk/v2 v2.2.0
 	google.golang.org/genai v1.70.0
+	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.57.0
@@ -126,7 +127,6 @@ require (
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/knights-analytics/ortgenai v0.3.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
-	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
@@ -179,7 +179,6 @@ require (
 	google.golang.org/api v0.293.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/grpc v1.83.1
 	k8s.io/klog/v2 v2.140.0 // indirect
 	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -189,3 +188,12 @@ require (
 )
 
 replace github.com/coder/acp-go-sdk => ./third_party/acp-go-sdk
+
+// wk8/go-ordered-map/v2 pulls in github.com/mailru/easyjson (a VK-affiliated
+// library flagged as a supply-chain risk; see lima-vm/lima#3527). The vendored
+// copy under third_party/go-ordered-map is the pb33f/ordered-map fork (which
+// drops the easyjson import) keeping the original module path, so the replace
+// works without a module-path collision. Remove this replace when
+// ollama/ollama switches its internal/orderedmap wrapper to the fork (or drops
+// the dependency).
+replace github.com/wk8/go-ordered-map/v2 => ./third_party/go-ordered-map

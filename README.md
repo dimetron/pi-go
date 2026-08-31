@@ -312,7 +312,6 @@ pi --mode rpc                              # pi-compatible NDJSON over stdio (fo
 | `/skill-load`   | Reload skills from disk                                  |
 | `/memory`       | Memory Palace commands (see below)                       |
 | `/audit`        | Scan skills for hidden Unicode threats                   |
-| `/restart`      | Restart pi-go                                            |
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
 

@@ -573,7 +573,7 @@ graph TD
     style BubbleTea fill:#1a2a1a,color:#fff
 ```
 
-**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/context`, `/branch`, `/compact`, `/commit`, `/agents`, `/history`, `/plan`, `/run`, `/login`, `/skills`, `/theme`, `/rtk`, `/ping`, `/restart`, `/exit`, `/quit`
+**Slash commands**: `/help`, `/clear`, `/model`, `/session`, `/context`, `/branch`, `/compact`, `/commit`, `/agents`, `/history`, `/plan`, `/run`, `/login`, `/skills`, `/theme`, `/rtk`, `/ping`, `/exit`, `/quit`
 
 **Keyboard**: Enter (submit), Ctrl+C/Esc (quit), Up/Down (history), PgUp/PgDown (scroll), Enter/Esc (commit confirm/cancel)
 
