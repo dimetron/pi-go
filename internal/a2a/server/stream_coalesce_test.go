@@ -334,3 +334,154 @@ func TestToolPartsMatchKagentShape(t *testing.T) {
 		t.Errorf("response name = %v, want the same title as the call", respData["name"])
 	}
 }
+
+// blockedUpdater returns an updater nobody is draining, with its event buffer
+// already full, so the next emit blocks. Paired with a canceled context that
+// is how a send fails in practice: the client stopped pulling and the run
+// context was canceled under it.
+func blockedUpdater(t *testing.T) (*a2aUpdater, context.Context) {
+	t.Helper()
+	u := newA2AUpdater(context.Background(), newExecCtx("hello"))
+	for len(u.events) < cap(u.events) {
+		u.events <- a2a.NewArtifactEvent(u.execCtx, a2a.NewTextPart("filler"))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return u, ctx
+}
+
+// TestUpdateIgnoresUnknownAndEmpty covers the update kinds the translator has
+// no mapping for, and a chunk with no text: both are dropped rather than
+// emitted as an empty artifact, which a2a-go rejects.
+func TestUpdateIgnoresUnknownAndEmpty(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		if err := u.Update(ctx, acp.SessionUpdate{}); err != nil {
+			t.Errorf("unknown update: %v", err)
+		}
+		if err := u.Update(ctx, textChunk("")); err != nil {
+			t.Errorf("empty chunk: %v", err)
+		}
+		if err := u.Update(ctx, acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{}}); err != nil {
+			t.Errorf("chunk without content: %v", err)
+		}
+	})
+	if len(events) != 0 {
+		t.Fatalf("events = %d, want none", len(events))
+	}
+}
+
+// TestEmitErrorsPropagate covers the send-failure paths: when nobody is
+// draining and the run context is canceled, every emit fails, and each caller
+// must surface that rather than carry on producing events nobody reads.
+func TestEmitErrorsPropagate(t *testing.T) {
+	t.Run("text chunk", func(t *testing.T) {
+		u, ctx := blockedUpdater(t)
+		if err := u.Update(ctx, textChunk("hi")); err == nil {
+			t.Fatal("want an error when the consumer is gone")
+		}
+	})
+
+	t.Run("closing frame", func(t *testing.T) {
+		u := newA2AUpdater(context.Background(), newExecCtx("hello"))
+		if err := u.Update(context.Background(), textChunk("hi")); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		for len(u.events) < cap(u.events) {
+			u.events <- a2a.NewArtifactEvent(u.execCtx, a2a.NewTextPart("filler"))
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := u.closeTextArtifacts(ctx); err == nil {
+			t.Fatal("want the closing frame to surface the cancellation")
+		}
+	})
+
+	t.Run("tool start", func(t *testing.T) {
+		u, ctx := blockedUpdater(t)
+		err := u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1", Title: "bash ls",
+		}})
+		if err == nil {
+			t.Fatal("want an error when the consumer is gone")
+		}
+	})
+
+	t.Run("tool end", func(t *testing.T) {
+		u, ctx := blockedUpdater(t)
+		err := u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1",
+		}})
+		if err == nil {
+			t.Fatal("want an error when the consumer is gone")
+		}
+	})
+
+	// A tool boundary closes the open text artifact first, so a failure there
+	// must abort the tool event rather than be swallowed.
+	t.Run("tool boundary close failure", func(t *testing.T) {
+		u := newA2AUpdater(context.Background(), newExecCtx("hello"))
+		if err := u.Update(context.Background(), textChunk("hi")); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		for len(u.events) < cap(u.events) {
+			u.events <- a2a.NewArtifactEvent(u.execCtx, a2a.NewTextPart("filler"))
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1", Title: "bash ls",
+		}})
+		if err == nil {
+			t.Fatal("want the close failure to abort the tool event")
+		}
+	})
+}
+
+// TestToolNameFallsBackWhenUntitled keeps an untitled ACP tool call from
+// rendering as a nameless card; the response carries the same fallback.
+func TestToolNameFallsBackWhenUntitled(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1",
+		}})
+		// A result whose call was never seen also falls back.
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "unknown-call",
+		}})
+	})
+
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	for i, ev := range events {
+		data, ok := ev.(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+		if !ok {
+			t.Fatalf("event %d part is not a data part", i)
+		}
+		if data["name"] != "tool" {
+			t.Errorf("event %d name = %v, want the %q fallback", i, data["name"], "tool")
+		}
+	}
+}
+
+// TestCloseIsIdempotent keeps a second close from emitting a duplicate frame,
+// which matters because the executor closes at the end of every turn and a
+// tool boundary may have closed already.
+func TestCloseIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, textChunk("done"))
+		if err := u.closeTextArtifacts(ctx); err != nil {
+			t.Errorf("first close: %v", err)
+		}
+		if err := u.closeTextArtifacts(ctx); err != nil {
+			t.Errorf("second close: %v", err)
+		}
+	})
+	// chunk + one closing frame; the collect helper's own close adds nothing.
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2 (chunk + one closing frame)", len(events))
+	}
+}
