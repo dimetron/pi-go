@@ -8,6 +8,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2aclient "github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/google/uuid"
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/kagentapi"
@@ -94,12 +95,25 @@ func (c *kagentAPIClient) createAgentInstance(ctx context.Context, namespace, ag
 		Namespace:     namespace,
 		Harness:       agent,
 		AgentTemplate: agent,
+		// request_id is validated as a 1-128 character idempotency key, so
+		// the service rejects a create with InvalidArgument when it is
+		// empty. It must be unique per creation attempt: reusing one would
+		// make a genuine second create collapse into the first's result.
+		RequestId: newKagentRequestID(),
 	}
 	var resp kagentapi.CreateAgentInstanceResponse
-	if err := c.http.call(ctx, kagentAPIMethod("CreateAgentInstance"), req, &resp); err != nil {
+	// callPath, not call: call prepends the A2A service prefix, which would
+	// post to /lf.a2a.v1.A2AService/ + this already-complete method path.
+	if err := c.http.callPath(ctx, kagentAPIMethod("CreateAgentInstance"), req, &resp); err != nil {
 		return nil, err
 	}
 	return resp.AgentInstance, nil
+}
+
+// newKagentRequestID returns an idempotency key for one create attempt. The
+// service caps request_id at 128 characters; a UUID is far inside that.
+func newKagentRequestID() string {
+	return uuid.NewString()
 }
 
 // ensureAgentInstance finds a READY AgentInstance for the agent, creating one

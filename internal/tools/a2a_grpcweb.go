@@ -53,6 +53,11 @@ func (f *grpcWebTransportFactory) Create(context.Context, *a2a.AgentCard, *a2a.A
 	return newGRPCWebTransport(f.baseURL, f.headers), nil
 }
 
+// errMissingGRPCWebTrailer reports a response that ended without the trailer
+// frame carrying grpc-status, which is the only thing that makes a gRPC-Web
+// response authoritatively complete.
+var errMissingGRPCWebTrailer = errors.New("response ended without a gRPC-Web trailer")
+
 // methodPath maps an A2A method name to the gRPC-Web URL path.
 func methodPath(method string) string {
 	return "/lf.a2a.v1.A2AService/" + method
@@ -106,6 +111,7 @@ func (t *grpcWebTransport) callPath(ctx context.Context, path string, req proto.
 	// frame is.
 	var payload []byte
 	sawData := false
+	sawTrailer := false
 	off := 0
 	for off+5 <= len(data) {
 		flag := data[off]
@@ -120,6 +126,7 @@ func (t *grpcWebTransport) callPath(ctx context.Context, path string, req proto.
 			if status != "0" {
 				return fmt.Errorf("%s: grpc-status %s", path, status)
 			}
+			sawTrailer = true
 			break
 		}
 		sawData = true
@@ -128,6 +135,11 @@ func (t *grpcWebTransport) callPath(ctx context.Context, path string, req proto.
 	}
 	if !sawData {
 		return fmt.Errorf("%s: empty response", path)
+	}
+	// A body that ends after its data frame never reported a status; taking
+	// it as success would unmarshal a possibly-truncated payload.
+	if !sawTrailer {
+		return fmt.Errorf("%s: %w", path, errMissingGRPCWebTrailer)
 	}
 	if err := proto.Unmarshal(payload, resp); err != nil {
 		return fmt.Errorf("unmarshal %s response: %w", path, err)
@@ -230,6 +242,12 @@ func (t *grpcWebTransport) SendStreamingMessage(ctx context.Context, params a2ac
 		for {
 			flag, payload, err := reader.Next()
 			if errors.Is(err, io.EOF) {
+				// The trailer carries the authoritative grpc-status, so a
+				// stream that just stops is a truncated response, not a
+				// successful one. Reporting it as success would hand back
+				// whatever partial text arrived as if it were the whole
+				// reply.
+				yield(nil, errMissingGRPCWebTrailer)
 				return
 			}
 			if err != nil {

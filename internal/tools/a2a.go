@@ -187,24 +187,52 @@ func (c *ClientCache) SendMessage(ctx context.Context, agentName string, prompt 
 
 // sendStreamingMessage sends a streaming message and accumulates all text parts.
 func (c *ClientCache) sendStreamingMessage(ctx context.Context, client *a2aclient.Client, msg *a2a.Message) (string, error) {
-	var sb strings.Builder
+	collector := newStreamTextCollector()
 	req := &a2a.SendMessageRequest{Message: msg}
 
 	for event, err := range client.SendStreamingMessage(ctx, req) {
 		if err != nil {
-			return sb.String(), fmt.Errorf("streaming error: %w", err)
+			return collector.String(), fmt.Errorf("streaming error: %w", err)
 		}
-		if appendStreamEvent(&sb, event) {
-			return sb.String(), nil
+		if collector.appendStreamEvent(event) {
+			return collector.String(), nil
 		}
 	}
 
-	return sb.String(), nil
+	return collector.String(), nil
+}
+
+// streamTextCollector accumulates the text of a streamed reply.
+//
+// It tracks which artifacts have already contributed text, because that is
+// what distinguishes the two shapes a LastChunk artifact event can have: a
+// server that streams deltas and then closes with a full-text replacement
+// (kagent's ADK runtime, and pi's own A2A server) versus one that sends the
+// whole artifact as a single frame already marked LastChunk. Only the former
+// would be duplicated by appending.
+type streamTextCollector struct {
+	sb strings.Builder
+	// wrote holds the artifacts whose parts have already been appended.
+	wrote map[a2a.ArtifactID]bool
+}
+
+func newStreamTextCollector() *streamTextCollector {
+	return &streamTextCollector{wrote: map[a2a.ArtifactID]bool{}}
+}
+
+func (c *streamTextCollector) String() string { return c.sb.String() }
+
+// appendStreamEvent writes any text carried by a streaming event and reports
+// whether the event ends the stream.
+func (c *streamTextCollector) appendStreamEvent(event a2a.Event) bool {
+	return appendStreamEvent(&c.sb, event, c.wrote)
 }
 
 // appendStreamEvent writes any text carried by a streaming event to sb and
-// reports whether the event ends the stream.
-func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
+// reports whether the event ends the stream. wrote records the artifacts that
+// have already contributed text; it may be nil, in which case every artifact
+// event is treated as the first for its artifact.
+func appendStreamEvent(sb *strings.Builder, event a2a.Event, wrote map[a2a.ArtifactID]bool) bool {
 	switch e := event.(type) {
 	case *a2a.Message:
 		// Terminal message with result
@@ -228,25 +256,38 @@ func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
 		return e.Status.State.Terminal()
 
 	case *a2a.TaskArtifactUpdateEvent:
-		// Extract text from artifact parts. A lastChunk update carries the
-		// full accumulated artifact text, not a delta, so appending it would
-		// duplicate what the incremental updates already wrote.
-		if e.LastChunk {
+		if e.Artifact == nil {
 			return false
 		}
-		appendPartsText(sb, e.Artifact.Parts)
+		// LastChunk marks the final frame of an artifact; Append is what says
+		// whether the frame is a delta or a replacement. A replacement that
+		// closes an artifact we have already written carries the full
+		// accumulated text, so appending it would duplicate the deltas —
+		// skip only that. A LastChunk frame that is an artifact's first is
+		// the content itself (the shape a single-shot server sends) and must
+		// be kept, as must any delta.
+		if e.LastChunk && !e.Append && wrote[e.Artifact.ID] {
+			return false
+		}
+		if appendPartsText(sb, e.Artifact.Parts) && wrote != nil {
+			wrote[e.Artifact.ID] = true
+		}
 	}
 
 	return false
 }
 
-// appendPartsText writes the text of every non-empty content part to sb.
-func appendPartsText(sb *strings.Builder, parts a2a.ContentParts) {
+// appendPartsText writes the text of every non-empty content part to sb and
+// reports whether it wrote anything.
+func appendPartsText(sb *strings.Builder, parts a2a.ContentParts) bool {
+	wrote := false
 	for _, part := range parts {
 		if text := part.Text(); text != "" {
 			sb.WriteString(text)
+			wrote = true
 		}
 	}
+	return wrote
 }
 
 // extractSendMessageResult extracts text from a SendMessageResult (either *a2a.Task or *a2a.Message).
