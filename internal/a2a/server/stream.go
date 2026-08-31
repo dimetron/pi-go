@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -38,6 +39,9 @@ type a2aUpdater struct {
 	mu                sync.Mutex
 	textArtifactID    a2a.ArtifactID
 	thoughtArtifactID a2a.ArtifactID
+	textBuf           strings.Builder // accumulated assistant text for the open artifact
+	thoughtBuf        strings.Builder // accumulated thinking for the open artifact
+	streamedAnyText   bool
 	toolNames         map[string]string // ACP call ID → tool name
 }
 
@@ -71,12 +75,18 @@ func (u *a2aUpdater) Update(ctx context.Context, update acp.SessionUpdate) error
 func (u *a2aUpdater) streamedText() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return u.textArtifactID != ""
+	return u.streamedAnyText
 }
 
-// emitText streams one text chunk as an artifact update. The first chunk of a
-// kind creates the artifact; later chunks append to it (Append=true), which is
-// how the kagent UI accumulates a reply token by token.
+// emitText streams one text chunk as an artifact update.
+//
+// Each chunk carries the full text accumulated for the open artifact and is
+// sent with Append=false, so the artifact always holds exactly one text part
+// that grows. A2A's append semantics (a2aevent.applyArtifactUpdate) concatenate
+// *parts*, not text: appending each chunk as its own part leaves the stored
+// task holding one part per token, and a client that renders a part at a time
+// shows a single reply as a column of fragments. Replacing keeps one part, so
+// the reply renders as one growing message.
 func (u *a2aUpdater) emitText(ctx context.Context, content acp.ContentBlock, thought bool) error {
 	text := ""
 	if content.Text != nil {
@@ -87,31 +97,46 @@ func (u *a2aUpdater) emitText(ctx context.Context, content acp.ContentBlock, tho
 	}
 
 	u.mu.Lock()
-	id := u.textArtifactID
+	buf, id := &u.textBuf, u.textArtifactID
 	if thought {
-		id = u.thoughtArtifactID
+		buf, id = &u.thoughtBuf, u.thoughtArtifactID
 	}
+	buf.WriteString(text)
+	full := buf.String()
+
 	var ev *a2a.TaskArtifactUpdateEvent
 	if id == "" {
-		ev = a2a.NewArtifactEvent(u.execCtx, a2a.NewTextPart(text))
-		if thought {
-			ev.Artifact.Parts[0].SetMeta(adkMetaThoughtKey, true)
-		}
+		ev = a2a.NewArtifactEvent(u.execCtx, a2a.NewTextPart(full))
 		id = ev.Artifact.ID
 		if thought {
 			u.thoughtArtifactID = id
 		} else {
 			u.textArtifactID = id
+			u.streamedAnyText = true
 		}
 	} else {
-		ev = a2a.NewArtifactUpdateEvent(u.execCtx, id, a2a.NewTextPart(text))
-		if thought {
-			ev.Artifact.Parts[0].SetMeta(adkMetaThoughtKey, true)
-		}
+		ev = a2a.NewArtifactUpdateEvent(u.execCtx, id, a2a.NewTextPart(full))
+		// Replace the artifact's single part rather than appending another.
+		ev.Append = false
+	}
+	if thought {
+		ev.Artifact.Parts[0].SetMeta(adkMetaThoughtKey, true)
 	}
 	u.mu.Unlock()
 
 	return u.emit(ctx, ev)
+}
+
+// closeTextArtifacts ends the open text and thinking artifacts so the next
+// chunk starts a new one. Called at a tool-call boundary: without it, text
+// produced after a tool call would keep growing the artifact opened before it,
+// and the reply would render above the tool card instead of below it.
+func (u *a2aUpdater) closeTextArtifacts() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.textArtifactID, u.thoughtArtifactID = "", ""
+	u.textBuf.Reset()
+	u.thoughtBuf.Reset()
 }
 
 // emitToolStart streams a tool invocation as a function_call data part. The
@@ -124,6 +149,8 @@ func (u *a2aUpdater) emitToolStart(ctx context.Context, tc *acp.SessionUpdateToo
 	if name == "" {
 		name = "tool"
 	}
+
+	u.closeTextArtifacts()
 
 	u.mu.Lock()
 	u.toolNames[string(tc.ToolCallId)] = name
@@ -140,6 +167,8 @@ func (u *a2aUpdater) emitToolStart(ctx context.Context, tc *acp.SessionUpdateToo
 
 // emitToolEnd streams a tool result as a function_response data part.
 func (u *a2aUpdater) emitToolEnd(ctx context.Context, tu *acp.SessionToolCallUpdate) error {
+	u.closeTextArtifacts()
+
 	u.mu.Lock()
 	name := u.toolNames[string(tu.ToolCallId)]
 	delete(u.toolNames, string(tu.ToolCallId))
