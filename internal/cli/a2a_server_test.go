@@ -49,7 +49,12 @@ func isolateA2AFlags(t *testing.T) {
 	flagA2AAddr = freeA2AAddr(t)
 	flagA2AReadyAddr = freeA2AAddr(t)
 	flagModel, flagURL, flagSystem = "", "", ""
-	t.Setenv("HOME", t.TempDir())
+
+	// os.UserHomeDir reads $HOME on unix and %USERPROFILE% on Windows; set
+	// both so the server's log directory lands in the temp dir either way.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 }
 
 func TestNewA2AServerCmd(t *testing.T) {
@@ -88,7 +93,13 @@ func TestRunA2AServerShutsDownOnCanceledContext(t *testing.T) {
 
 func TestRunA2AServerWritesErrorLog(t *testing.T) {
 	isolateA2AFlags(t)
-	home := os.Getenv("HOME")
+
+	// Resolve the home directory the same way runA2AServer does, so the
+	// assertion follows the platform rather than assuming $HOME.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
 
 	if err := runA2AServer(canceledCmd(t), nil); err == nil {
 		t.Fatal("want an error from the canceled context")

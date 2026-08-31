@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -425,4 +426,83 @@ func TestBuildCard(t *testing.T) {
 			t.Errorf("Name = %q, want the built-in fallback", card.Name)
 		}
 	})
+}
+
+// TestExecuteRecoversHandlerPanic covers the recover() path added with
+// streaming: a panicking prompt turn must surface as a failed task rather
+// than taking the server down.
+func TestExecuteRecoversHandlerPanic(t *testing.T) {
+	h := func(context.Context, acpserver.PromptTurn) (acpserver.PromptResult, error) {
+		panic("boom")
+	}
+	e := &piExecutor{handler: h, logger: discardLogger()}
+	events, _ := drain(e.Execute(context.Background(), newExecCtx("hello")))
+
+	got := states(events)
+	if len(got) != 2 || got[1] != a2a.TaskStateFailed {
+		t.Fatalf("states = %v, want [working failed]", got)
+	}
+	last := events[len(events)-1].(*a2a.TaskStatusUpdateEvent)
+	if txt := extractText(last.Status.Message); !strings.Contains(txt, "handler panicked") {
+		t.Errorf("failure text = %q, want it to mention the panic", txt)
+	}
+}
+
+// TestExecuteReturnsOnContextCancel covers the ctx.Done() branch of the
+// streaming loop: a canceled request context stops the iterator.
+func TestExecuteReturnsOnContextCancel(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	h := func(ctx context.Context, _ acpserver.PromptTurn) (acpserver.PromptResult, error) {
+		select {
+		case <-ctx.Done():
+			return acpserver.PromptResult{}, ctx.Err()
+		case <-release:
+			return acpserver.PromptResult{}, nil
+		}
+	}
+	e := &piExecutor{handler: h, logger: discardLogger()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan []a2a.TaskState, 1)
+	go func() {
+		events, _ := drain(e.Execute(ctx, newExecCtx("hello")))
+		done <- states(events)
+	}()
+
+	// Let the executor emit Task and Working, then cancel mid-turn.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case got := <-done:
+		if len(got) == 0 || got[0] != a2a.TaskStateWorking {
+			t.Fatalf("states = %v, want the turn to stop after working", got)
+		}
+		for _, s := range got {
+			if s == a2a.TaskStateCompleted {
+				t.Error("turn completed despite a canceled context")
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Execute did not return after context cancel")
+	}
+}
+
+// TestExecuteStopsWhileStreaming covers the cancel() taken when the consumer
+// stops reading part-way through streamed artifact events.
+func TestExecuteStopsWhileStreaming(t *testing.T) {
+	e := &piExecutor{handler: streamingHandler, logger: discardLogger()}
+
+	seen := 0
+	e.Execute(context.Background(), newExecCtx("hello"))(func(a2a.Event, error) bool {
+		seen++
+		// Stop once past Task + Working, i.e. during the streamed artifacts.
+		return seen < 3
+	})
+
+	if seen != 3 {
+		t.Fatalf("yielded %d events, want the iterator to stop at 3", seen)
+	}
 }
