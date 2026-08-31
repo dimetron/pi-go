@@ -35,12 +35,17 @@ func startTestServerWithHandler(t *testing.T, handler acpserver.PromptHandler) (
 	addr := ln.Addr().String()
 	_ = ln.Close() // let Serve rebind the same address
 
+	// Bind the readiness listener on an ephemeral port too, so parallel
+	// packages do not contend on the default :8081.
+	readyAddr := freeAddr(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- Serve(ctx, ServeConfig{
-			Addr:    addr,
-			Handler: handler,
+			Addr:      addr,
+			ReadyAddr: readyAddr,
+			Handler:   handler,
 		})
 	}()
 
