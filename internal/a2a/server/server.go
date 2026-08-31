@@ -1,32 +1,43 @@
-// Package server implements an HTTP A2A (Agent-to-Agent) server for pi.
+// Package server implements an HTTP/gRPC A2A (Agent-to-Agent) server for pi.
 //
 // It mirrors the ACP server in internal/acp/server: the same pi runtime
 // (PromptHandler) is exposed over the A2A protocol instead of ACP. The server
 // serves an agent card at /.well-known/agent-card.json and accepts JSON-RPC
-// A2A message requests on the root path.
+// A2A message requests on the root path, plus gRPC A2A on the same port
+// (HTTP/2 with application/grpc content type), matching the kagent Substrate
+// runtime contract.
 package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
+	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 
 	acpserver "github.com/dimetron/pi-go/internal/acp/server"
 )
 
 // ServeConfig configures a server.Serve run.
 type ServeConfig struct {
-	// Addr is the HTTP listen address. Default ":8085".
+	// Addr is the HTTP/gRPC listen address. Default ":8085".
 	Addr string
+	// ReadyAddr is the readiness listen address. Default ":8081".
+	ReadyAddr string
 	// Handler processes one A2A prompt turn. Required.
 	Handler acpserver.PromptHandler
 	// CWD is the working directory for sessions. Empty means current dir.
@@ -35,8 +46,8 @@ type ServeConfig struct {
 	Logger *slog.Logger
 }
 
-// Serve runs pi as an A2A agent over HTTP and returns when ctx is canceled.
-// Serve does not close the listener; callers own it.
+// Serve runs pi as an A2A agent over HTTP/gRPC and returns when ctx is
+// canceled. Serve does not close the listeners; callers own them.
 func Serve(ctx context.Context, cfg ServeConfig) error {
 	if cfg.Handler == nil {
 		return fmt.Errorf("a2a serve: handler is required")
@@ -44,6 +55,10 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	addr := cfg.Addr
 	if addr == "" {
 		addr = ":8085"
+	}
+	readyAddr := cfg.ReadyAddr
+	if readyAddr == "" {
+		readyAddr = ":8081"
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -63,18 +78,60 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		a2asrv.WithLogger(logger),
 	)
 
+	// gRPC A2A server (kagent gateway dials the runtime over gRPC).
+	grpcServer := grpc.NewServer()
+	a2agrpc.NewHandler(handler).RegisterWith(grpcServer)
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus(a2apb.A2AService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// HTTP mux: JSON-RPC A2A + card + health; gRPC requests are routed by
+	// content type (HTTP/2 application/grpc), matching kagent's A2AServer.
 	mux := http.NewServeMux()
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 	mux.Handle("/", a2asrv.NewJSONRPCHandler(handler))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handlerMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 
-	srv := &http.Server{Handler: mux}
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+
+	srv := &http.Server{Handler: handlerMux, Protocols: protocols}
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Log(ctx, slog.LevelInfo, "a2a-server: listening", "addr", ln.Addr().String())
 		errCh <- srv.Serve(ln)
+	}()
+
+	// Readiness server on ReadyAddr (Substrate probes /readyz:8081).
+	readyLn, err := net.Listen("tcp", readyAddr)
+	if err != nil {
+		_ = srv.Close()
+		return fmt.Errorf("a2a serve: listen ready %s: %w", readyAddr, err)
+	}
+	readySrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/readyz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})}
+	readyErrCh := make(chan error, 1)
+	go func() {
+		logger.Log(ctx, slog.LevelInfo, "a2a-server: ready listening", "addr", readyLn.Addr().String())
+		readyErrCh <- readySrv.Serve(readyLn)
 	}()
 
 	select {
@@ -82,10 +139,17 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		_ = readySrv.Shutdown(shutdownCtx)
+		grpcServer.GracefulStop()
 		return ctx.Err()
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("a2a serve: %w", err)
+		}
+		return nil
+	case err := <-readyErrCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("a2a serve ready: %w", err)
 		}
 		return nil
 	}
@@ -150,10 +214,18 @@ func extractText(msg *a2a.Message) string {
 	return sb.String()
 }
 
-// buildCard returns the agent card advertised by the server. The card carries
-// one skill so clients that reject empty skill lists (a2a-go's pbconv) can
+// buildCard returns the agent card advertised by the server. When the kagent
+// compiler injects KAGENT_AGENT_CARD_JSON, that card is used verbatim (it
+// carries the compiled template identity); otherwise a built-in card with one
+// skill is used so clients that reject empty skill lists (a2a-go's pbconv) can
 // still parse it.
 func buildCard(addr string) *a2a.AgentCard {
+	if raw := strings.TrimSpace(os.Getenv("KAGENT_AGENT_CARD_JSON")); raw != "" {
+		var card a2a.AgentCard
+		if err := json.Unmarshal([]byte(raw), &card); err == nil {
+			return &card
+		}
+	}
 	url := "http://" + addr
 	return &a2a.AgentCard{
 		Name:        "pi-go",

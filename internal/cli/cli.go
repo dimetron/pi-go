@@ -58,19 +58,20 @@ var (
 	// from the default value. Set by runRoot.
 	flagSocketChanged bool
 
-	flagContinue  bool
-	flagInsecure  bool
-	flagCACert    string
-	flagSmol      bool
-	flagSlow      bool
-	flagPlan      bool
-	flagMemoryOff bool
-	flagLSP       string
-	flagSystem    string
-	flagPprof     string
-	flagPprofPort string
-	flagTraceHTTP bool
-	flagA2AAddr   string
+	flagContinue     bool
+	flagInsecure     bool
+	flagCACert       string
+	flagSmol         bool
+	flagSlow         bool
+	flagPlan         bool
+	flagMemoryOff    bool
+	flagLSP          string
+	flagSystem       string
+	flagPprof        string
+	flagPprofPort    string
+	flagTraceHTTP    bool
+	flagA2AAddr      string
+	flagA2AReadyAddr string
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).

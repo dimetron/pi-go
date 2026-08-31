@@ -33,7 +33,8 @@ The server returns when the process receives SIGINT.`,
 		f.NoOptDefVal = ""
 	}
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
-	cmd.Flags().StringVar(&flagA2AAddr, "addr", ":8085", "HTTP listen address for the A2A server")
+	cmd.Flags().StringVar(&flagA2AAddr, "addr", "", "HTTP/gRPC listen address (default $PORT or :8085)")
+	cmd.Flags().StringVar(&flagA2AReadyAddr, "ready-addr", ":8081", "Readiness listen address")
 	return cmd
 }
 
@@ -74,10 +75,19 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		System:   flagSystem,
 	})
 
+	addr := flagA2AAddr
+	if addr == "" {
+		addr = ":" + os.Getenv("PORT")
+		if os.Getenv("PORT") == "" {
+			addr = ":8085"
+		}
+	}
+
 	if err := a2aserver.Serve(ctx, a2aserver.ServeConfig{
-		Addr:    flagA2AAddr,
-		Handler: handler,
-		Logger:  logger,
+		Addr:      addr,
+		ReadyAddr: flagA2AReadyAddr,
+		Handler:   handler,
+		Logger:    logger,
 	}); err != nil {
 		if f != nil {
 			_, _ = io.WriteString(f, fmt.Sprintf("%v\n", err))
