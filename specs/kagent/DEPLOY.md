@@ -1,5 +1,22 @@
 # Deploy the pi-go Harness on local Kind
 
+## Quickest path: install a release
+
+If you only want the latest released harness on a cluster `kubectl` already
+points at, skip the rest of this document:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/specs/kagent/install.sh | sh
+```
+
+It resolves the latest release, applies its `kagent-manifests.yaml` asset —
+already pinned to the digest that release built — and prints what it changed.
+`--tag`, `--namespace`, `--dry-run`, `--print`, and `--model` / `--base-url`
+(which patch the Harness env after applying) are available via
+`| sh -s -- --dry-run`.
+
+The rest of this document covers building and deploying your own image.
+
 This directory contains `manifests.yaml.tmpl`, a kagent `Harness` and
 `AgentTemplate` template for running pi-go on Agent Substrate, and
 `render-manifests.sh`, which renders it against a digest-pinned image. The

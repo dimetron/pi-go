@@ -15,6 +15,7 @@ Docs in this section:
 | `specs/kagent/DEPLOY.md` | Full end-to-end deploy steps on local Kind |
 | `specs/kagent/manifests.yaml.tmpl` | `Harness` + `AgentTemplate` template |
 | `specs/kagent/render-manifests.sh` | Renders that template against a digest-pinned image |
+| `specs/kagent/install.sh` | One-liner installer: applies a release's manifest to a cluster |
 
 ## What the adapter image contains
 
