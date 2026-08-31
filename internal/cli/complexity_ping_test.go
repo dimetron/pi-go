@@ -1159,6 +1159,9 @@ func TestModelListBaseURL(t *testing.T) {
 		{name: "ollama falls back to localhost", provider: "ollama", want: "http://localhost:11434"},
 		{name: "--url beats the ollama default", provider: "ollama", flagURL: "https://flag.example",
 			want: "https://flag.example"},
+		{name: "agentgateway falls back to localhost", provider: "agentgateway", want: "http://localhost:4000"},
+		{name: "--url beats the agentgateway default", provider: "agentgateway", flagURL: "https://flag.example",
+			want: "https://flag.example"},
 		{name: "everyone else gets nothing", provider: "anthropic", want: ""},
 	}
 	for _, tt := range tests {
