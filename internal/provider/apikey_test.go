@@ -18,6 +18,7 @@ func TestAPIKeyEnvVar(t *testing.T) {
 		{"mistral", "MISTRAL_API_KEY"},
 		{"ollama", "OLLAMA_API_KEY"},
 		{"opencode", "OPENCODE_API_KEY"},
+		{"agentgateway", "AGENTGATEWAY_API_KEY"},
 		{"", "_API_KEY"},
 	}
 	for _, tt := range tests {

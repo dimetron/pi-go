@@ -311,14 +311,15 @@ func TestToolSpansAreExportedPerCall(t *testing.T) {
 
 func TestGenAIProviderAttr(t *testing.T) {
 	tests := map[string]string{
-		"openai":    "openai",
-		"anthropic": "anthropic",
-		"gemini":    "gcp.gemini",
-		"mistral":   "mistral_ai",
-		"xai":       "x_ai",
-		"azure":     "azure.ai.openai",
-		"opencode":  "opencode",
-		"":          "",
+		"openai":       "openai",
+		"anthropic":    "anthropic",
+		"gemini":       "gcp.gemini",
+		"mistral":      "mistral_ai",
+		"xai":          "x_ai",
+		"azure":        "azure.ai.openai",
+		"opencode":     "opencode",
+		"agentgateway": "agentgateway",
+		"":             "",
 	}
 	for in, want := range tests {
 		if got := genAIProviderAttr(in).Value.AsString(); got != want {

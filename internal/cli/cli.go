@@ -116,6 +116,7 @@ routing you need:
   mistral-*, magistral-*   Mistral         MISTRAL_API_KEY
   grok-*                   xAI             XAI_API_KEY
   openrouter/<model>       OpenRouter      OPENROUTER_API_KEY
+  agentgateway/<model>     agentgateway    none; http://localhost:4000
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
                                            without a key: the local daemon
@@ -158,6 +159,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 
   # OpenCode
   pi --model opencode/claude-sonnet-5 "find the goroutine leak"
+
+  # agentgateway — a local OpenAI-compatible gateway, no API key needed
+  pi --model agentgateway/deepseek-v4-flash:0731-cloud "draft release notes"
 
   # Any OpenAI-compatible gateway, with an extra header and a corporate CA
   pi --url https://llm.corp.internal/v1 --model gpt-5.2 \
@@ -337,7 +341,7 @@ func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, acti
 // available. A custom base URL, or a provider that authenticates some other
 // way, is exempt.
 func requireRuntimeAPIKey(info provider.Info, apiKey, baseURL string) error {
-	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && info.Provider != "agentgateway" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}

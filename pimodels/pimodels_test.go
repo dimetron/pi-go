@@ -86,6 +86,10 @@ func TestNewFromInfoBuildsResolvedPrefixedModels(t *testing.T) {
 			info: Info{Provider: "opencode", Model: "kimi-k3"},
 			opts: []Option{WithAPIKey("test-key")},
 		},
+		{
+			name: "agentgateway prefix",
+			info: Info{Provider: "agentgateway", Model: "deepseek-v4-flash:0731-cloud"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -37,7 +37,7 @@ If a provider is specified as an argument, only that provider is queried.
 If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
-Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter
+Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 
 Examples:
   pi model list                 # list models for all configured providers
@@ -47,7 +47,8 @@ Examples:
   pi model list mistral         # list models from Mistral
   pi model list xai             # list models from xAI
   pi model list ollama          # list locally installed Ollama models
-  pi model list openrouter      # list models from OpenRouter`,
+  pi model list openrouter      # list models from OpenRouter
+  pi model list agentgateway    # list models from the local agentgateway`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runModelList,
 	}
@@ -59,7 +60,7 @@ Examples:
 }
 
 // allProviders is the fixed list of providers supporting model listing.
-var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter"}
+var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway"}
 
 // flagModelListOutput is the --output flag value for `pi model list`.
 var flagModelListOutput string
@@ -149,7 +150,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 	if len(args) == 1 {
 		p := strings.ToLower(args[0])
 		switch p {
-		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter":
+		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway":
 			return []string{p}, nil
 		case "azure":
 			// Not a live query: enumerating deployments needs ARM credentials
@@ -160,7 +161,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 			printAzureDeployments(out)
 			return nil, nil
 		default:
-			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter", args[0])
+			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter, agentgateway", args[0])
 		}
 	}
 
@@ -199,6 +200,9 @@ func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	}
 	if baseURL == "" && providerName == "ollama" {
 		baseURL = "http://localhost:11434"
+	}
+	if baseURL == "" && providerName == "agentgateway" {
+		baseURL = "http://localhost:4000"
 	}
 	return baseURL
 }

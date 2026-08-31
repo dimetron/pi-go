@@ -104,6 +104,7 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"opencode/kimi-k3", "opencode"},
 		{"opencode/minimax-m3", "opencode"},
 		{"opencode/gpt-5.6-luna", "opencode"},
+		{"agentgateway/deepseek-v4-flash:0731-cloud", "agentgateway"},
 		{"openrouter/google/gemini-3.7-flash", "openrouter"},
 		{"openrouter/auto", "openrouter"},
 		{"mistral-large-latest", "mistral"},
@@ -225,6 +226,7 @@ func TestAPIKeys(t *testing.T) {
 	t.Setenv("AZURE_API_KEY", "")
 	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
 	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+	t.Setenv("AGENTGATEWAY_API_KEY", "agentgateway-test-key")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
@@ -239,6 +241,9 @@ func TestAPIKeys(t *testing.T) {
 	if keys["openrouter"] != "openrouter-test-key" {
 		t.Errorf("expected openrouter key, got %q", keys["openrouter"])
 	}
+	if keys["agentgateway"] != "agentgateway-test-key" {
+		t.Errorf("expected agentgateway key, got %q", keys["agentgateway"])
+	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")
 	}
@@ -250,6 +255,7 @@ func TestBaseURLs(t *testing.T) {
 	t.Setenv("GEMINI_BASE_URL", "http://localhost:8080")
 	t.Setenv("OPENCODE_BASE_URL", "http://localhost:9999")
 	t.Setenv("OPENROUTER_BASE_URL", "https://custom.example")
+	t.Setenv("AGENTGATEWAY_BASE_URL", "http://localhost:4000")
 
 	urls := BaseURLs()
 	if urls["anthropic"] != "http://localhost:11434" {
@@ -263,6 +269,9 @@ func TestBaseURLs(t *testing.T) {
 	}
 	if urls["openrouter"] != "https://custom.example" {
 		t.Errorf("expected openrouter base URL, got %q", urls["openrouter"])
+	}
+	if urls["agentgateway"] != "http://localhost:4000" {
+		t.Errorf("expected agentgateway base URL, got %q", urls["agentgateway"])
 	}
 	if _, ok := urls["openai"]; ok {
 		t.Error("expected no openai base URL for empty env var")

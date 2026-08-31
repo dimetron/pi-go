@@ -62,7 +62,7 @@ import (
 // the not-ok branch.
 type ProviderNamer interface {
 	// Provider returns the provider family: "openai", "anthropic", "gemini",
-	// "mistral", "xai", "ollama", "azure" or "opencode".
+	// "mistral", "xai", "ollama", "azure", "opencode" or "agentgateway".
 	Provider() string
 }
 
@@ -87,7 +87,8 @@ type Model = model.LLM
 // Info describes how a model name was resolved.
 type Info struct {
 	// Provider is the backend that will serve the model: "openai",
-	// "anthropic", "gemini", "mistral", "xai", "ollama", "azure", "opencode".
+	// "anthropic", "gemini", "mistral", "xai", "ollama", "azure", "opencode"
+	// or "agentgateway".
 	Provider string
 	// Model is the model name as the provider expects it, with any routing
 	// prefix such as "ollama/" removed.

@@ -85,6 +85,8 @@ func defaultAPIBaseURL(providerName string) string {
 		return "https://generativelanguage.googleapis.com"
 	case "xai":
 		return "https://api.x.ai"
+	case "agentgateway":
+		return "http://localhost:4000"
 	default:
 		return ""
 	}
@@ -101,6 +103,8 @@ func pingEndpoint(providerName string) string {
 		return "/v1beta/models"
 	case "xai":
 		return "/v1/models"
+	case "agentgateway":
+		return "/v1/models"
 	default:
 		return "/"
 	}
@@ -111,7 +115,7 @@ func pingEndpoint(providerName string) string {
 func pingEndpointForBaseURL(providerName, baseURL string) string {
 	endpoint := pingEndpoint(providerName)
 	switch providerName {
-	case "openai", "xai":
+	case "openai", "xai", "agentgateway":
 		if strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
 			return "/models"
 		}

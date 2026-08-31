@@ -275,6 +275,13 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(lower, "openrouter/") {
 		return "openrouter"
 	}
+	// agentgateway/ prefix → agentgateway provider. Checked before the
+	// :cloud/-cloud suffix check below: agentgateway model IDs carry a
+	// "-cloud" tag (e.g. deepseek-v4-flash:0731-cloud) that would otherwise
+	// route them to Ollama.
+	if strings.HasPrefix(lower, "agentgateway/") {
+		return "agentgateway"
+	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return "ollama"
@@ -636,15 +643,16 @@ func loadFile(path string, cfg *Config) error {
 func APIKeys() map[string]string {
 	keys := make(map[string]string)
 	envVars := map[string][]string{
-		"anthropic":  {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
-		"openai":     {"OPENAI_API_KEY"},
-		"azure":      {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
-		"gemini":     {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		"mistral":    {"MISTRAL_API_KEY"},
-		"xai":        {"XAI_API_KEY"},
-		"openrouter": {"OPENROUTER_API_KEY"},
-		"ollama":     {"OLLAMA_API_KEY"},
-		"opencode":   {"OPENCODE_API_KEY"},
+		"anthropic":    {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+		"openai":       {"OPENAI_API_KEY"},
+		"azure":        {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
+		"gemini":       {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+		"mistral":      {"MISTRAL_API_KEY"},
+		"xai":          {"XAI_API_KEY"},
+		"openrouter":   {"OPENROUTER_API_KEY"},
+		"ollama":       {"OLLAMA_API_KEY"},
+		"opencode":     {"OPENCODE_API_KEY"},
+		"agentgateway": {"AGENTGATEWAY_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -663,14 +671,15 @@ func APIKeys() map[string]string {
 func BaseURLs() map[string]string {
 	urls := make(map[string]string)
 	envVars := map[string]string{
-		"anthropic":  "ANTHROPIC_BASE_URL",
-		"openai":     "OPENAI_BASE_URL",
-		"gemini":     "GEMINI_BASE_URL",
-		"mistral":    "MISTRAL_BASE_URL",
-		"xai":        "XAI_BASE_URL",
-		"openrouter": "OPENROUTER_BASE_URL",
-		"ollama":     "OLLAMA_HOST",
-		"opencode":   "OPENCODE_BASE_URL",
+		"anthropic":    "ANTHROPIC_BASE_URL",
+		"openai":       "OPENAI_BASE_URL",
+		"gemini":       "GEMINI_BASE_URL",
+		"mistral":      "MISTRAL_BASE_URL",
+		"xai":          "XAI_BASE_URL",
+		"openrouter":   "OPENROUTER_BASE_URL",
+		"ollama":       "OLLAMA_HOST",
+		"opencode":     "OPENCODE_BASE_URL",
+		"agentgateway": "AGENTGATEWAY_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {
