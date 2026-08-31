@@ -1,0 +1,50 @@
+# kagent Harness + AgentTemplate for pi-go on Agent Substrate.
+#
+# A template, not a deployable file. Substrate requires a digest-pinned image,
+# and a digest is only known once an image has been pushed — so committing a
+# rendered manifest means committing a digest that is stale the moment the next
+# image is built, and (worse) one that pointed at a local registry nobody else
+# can reach.
+#
+# Render it with render-manifests.sh:
+#
+#   ./render-manifests.sh --image ghcr.io/dimetron/pi-go-kagent@sha256:... \
+#     | kubectl apply -f -
+#
+# The release workflow renders this on every v* tag and attaches the result to
+# the release as kagent-manifests.yaml, pinned to the digest it just pushed.
+apiVersion: kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: ${PI_GO_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+spec:
+  # The registered kagent compiler, while the dedicated custom runtime compiler
+  # is not yet implemented (see custom-harness.md).
+  kagent: {}
+  workload:
+    image: ${PI_GO_IMAGE}
+  substrate:
+    workerPoolRef:
+      name: ${PI_GO_WORKER_POOL}
+    snapshotPolicy:
+      location: ${PI_GO_SNAPSHOT_LOCATION}
+  allowedAgentTemplates:
+    selector:
+      matchLabels:
+        runtime: ${PI_GO_NAME}
+${PI_GO_ENV_BLOCK}---
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: ${PI_GO_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+  labels:
+    runtime: ${PI_GO_NAME}
+spec:
+  description: pi-go coding agent running on Agent Substrate
+  modelConfig:
+    name: ${PI_GO_MODEL_CONFIG}
+  systemPrompt: |
+    You are pi-go, a helpful coding and Kubernetes assistant.
+    Use tools carefully and explain actions briefly.
