@@ -869,15 +869,12 @@ func (m *model) updateRunWorkflow(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 }
 
 // updateSession handles the side-channels that outlive a single turn: startup,
-// restart, login, commit, memory polling and ping.
+// login, commit, memory polling and ping.
 func (m *model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case initEventMsg:
 		model, cmd := m.handleInitEvent(msg)
 		return model, cmd, true
-	case restartMsg:
-		execRestart()
-		return m, tea.Quit, true
 	case loginSSOResultMsg:
 		model, cmd := m.handleLoginSSOResult(msg)
 		return model, cmd, true

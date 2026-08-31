@@ -23,7 +23,6 @@ import (
 // theme and default model role.
 func TestMain(m *testing.M) {
 	openBrowser = func(string) error { return nil }
-	execRestart = func() {}
 
 	dir, err := os.MkdirTemp("", "pi-go-test-home-")
 	if err != nil {

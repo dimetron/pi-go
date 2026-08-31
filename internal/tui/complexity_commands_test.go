@@ -87,7 +87,7 @@ func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
 		"/pr-autofix",
 		"/skills", "/skill-list", "/skill-load", "/skill-create", "/theme", "/ping",
-		"/rtk", "/mcp", "/restart", "/exit", "/quit",
+		"/rtk", "/mcp", "/exit", "/quit",
 	}
 	if len(slashCommandSpecs) != len(want) {
 		t.Fatalf("slashCommandSpecs has %d entries, want %d", len(slashCommandSpecs), len(want))
@@ -116,7 +116,7 @@ func TestCplxSlashCommands_DerivedOrder(t *testing.T) {
 		// After /plan, so "/p" still completes to /plan and "/pr" is
 		// unambiguous: autocomplete returns the first prefix match.
 		"/pr-autofix",
-		"/skills", "/theme", "/ping", "/rtk", "/mcp", "/restart", "/exit", "/quit",
+		"/skills", "/theme", "/ping", "/rtk", "/mcp", "/exit", "/quit",
 	}
 	if len(slashCommands) != len(want) {
 		t.Fatalf("slashCommands = %v (%d), want %d entries", slashCommands, len(slashCommands), len(want))

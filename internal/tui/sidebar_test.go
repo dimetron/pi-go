@@ -210,24 +210,6 @@ func TestSortedKeys_Empty(t *testing.T) {
 	}
 }
 
-// --- handleRestartCommand ---
-
-func TestHandleRestartCommand(t *testing.T) {
-	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	newM, cmd := m.handleRestartCommand()
-	mm := newM.(*model)
-
-	if !mm.quitting {
-		t.Error("expected quitting to be true")
-	}
-	if cmd == nil {
-		t.Error("expected non-nil cmd")
-	}
-}
-
 // --- historyPathPlain ---
 
 func TestHistoryPathPlain(t *testing.T) {

@@ -293,25 +293,6 @@ func TestHandleMCPCommand_WithServers(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// handleRestartCommand — cover restart msg return.
-// -----------------------------------------------------------------------------
-
-func TestHandleRestartCommand_CB(t *testing.T) {
-	m := &model{}
-	_, cmd := m.handleRestartCommand()
-	if !m.quitting {
-		t.Error("expected m.quitting=true after restart")
-	}
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	msg := cmd()
-	if _, ok := msg.(restartMsg); !ok {
-		t.Errorf("expected restartMsg, got %T", msg)
-	}
-}
-
-// -----------------------------------------------------------------------------
 // waitForInitEvent tests
 // -----------------------------------------------------------------------------
 
