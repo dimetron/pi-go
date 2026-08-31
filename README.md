@@ -568,6 +568,12 @@ Add pi to Zed's `agent_servers` in your settings:
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
 
+## kagent
+
+Run pi-go as a custom agent inside [kagent](https://kagent.dev) on Agent Substrate via the A2A
+adapter image. See [docs/kagent-harness.md](docs/kagent-harness.md) for the deployment guide and
+`specs/kagent/` for the Dockerfile, manifests, and step-by-step deploy notes.
+
 ## License
 
 See [LICENSE](LICENSE) for details.

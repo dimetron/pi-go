@@ -1,0 +1,39 @@
+# Deploy after building the pi-go A2A adapter image and replacing
+# <PI_GO_ADAPTER_DIGEST> with its sha256 digest.
+#
+# The image must contain an HTTP A2A server. `pi acp-server` alone is ACP over
+# stdin/stdout and is not sufficient for this Harness.
+apiVersion: kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: pi-go
+  namespace: kagent
+spec:
+  kagent: {}
+  workload:
+    image: localhost:5001/dimetron/pi-go-kagent@sha256:<PI_GO_ADAPTER_DIGEST>
+  substrate:
+    workerPoolRef:
+      name: kagent-default
+    snapshotPolicy:
+      location: gs://ate-snapshots/pi-go/
+  allowedAgentTemplates:
+    selector:
+      matchLabels:
+        runtime: pi-go
+---
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: pi-go
+  namespace: kagent
+  labels:
+    runtime: pi-go
+spec:
+  description: pi-go coding agent running on Agent Substrate
+  modelConfig:
+    # Use a ModelConfig that matches the provider configured in the adapter.
+    name: default-model-config
+  systemPrompt: |
+    You are pi-go, a helpful coding and Kubernetes assistant.
+    Use tools carefully and explain actions briefly.

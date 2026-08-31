@@ -1,0 +1,40 @@
+apiVersion: kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: pi-go
+  namespace: kagent
+spec:
+  # Use the registered kagent compiler while the dedicated custom runtime
+  # compiler is not yet implemented (see specs/kagent/custom-harness.md).
+  kagent: {}
+  workload:
+    image: localhost:5001/dimetron/pi-go-kagent@sha256:c748aec952342bc1eec298174cedf1e5b8bc403b397215e2b54fe08e5fbf2b07
+  substrate:
+    workerPoolRef:
+      name: kagent-default
+    snapshotPolicy:
+      location: gs://ate-snapshots/pi-go/
+  allowedAgentTemplates:
+    selector:
+      matchLabels:
+        runtime: pi-go
+  env:
+    - name: PI_MODEL
+      value: ollama/deepseek-v4-flash:0731-cloud
+    - name: PI_BASE_URL
+      value: http://host.docker.internal:11434
+---
+apiVersion: kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: pi-go
+  namespace: kagent
+  labels:
+    runtime: pi-go
+spec:
+  description: pi-go coding agent running on Agent Substrate
+  modelConfig:
+    name: default-model-config
+  systemPrompt: |
+    You are pi-go, a helpful coding and Kubernetes assistant.
+    Use tools carefully and explain actions briefly.
