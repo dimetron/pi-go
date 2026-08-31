@@ -6,7 +6,7 @@ If you only want the latest released harness on a cluster `kubectl` already
 points at, skip the rest of this document:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/specs/kagent/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install-kagent.sh | sh
 ```
 
 It resolves the latest release, applies its `kagent-manifests.yaml` asset —

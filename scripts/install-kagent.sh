@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install the pi-go Harness and AgentTemplate into a kagent cluster.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/specs/kagent/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install-kagent.sh | sh
 #
 # Applies the kagent-manifests.yaml asset from a pi-go release — already
 # pinned to the digest of the image that release built, which is what
@@ -29,8 +29,8 @@ base_url=""
 dry_run=0
 print_only=0
 
-die() { echo "install.sh: $*" >&2; exit 1; }
-note() { echo "install.sh: $*" >&2; }
+die() { echo "install-kagent.sh: $*" >&2; exit 1; }
+note() { echo "install-kagent.sh: $*" >&2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
