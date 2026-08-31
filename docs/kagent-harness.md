@@ -13,7 +13,8 @@ Docs in this section:
 | `specs/kagent/Dockerfile` | Builds the pi-go-kagent adapter image |
 | `specs/kagent/image-digests.sh` | Prints the digest-pinned amd64/arm64 image refs for a release |
 | `specs/kagent/DEPLOY.md` | Full end-to-end deploy steps on local Kind |
-| `specs/kagent/harness.yaml` | `Harness` + `AgentTemplate` manifests |
+| `specs/kagent/manifests.yaml.tmpl` | `Harness` + `AgentTemplate` template |
+| `specs/kagent/render-manifests.sh` | Renders that template against a digest-pinned image |
 
 ## What the adapter image contains
 
@@ -74,8 +75,9 @@ The short version:
 1. Build/push the image and copy its immutable digest
    (`docker buildx imagetools inspect ...`), or run
    `specs/kagent/image-digests.sh <tag>` for a release.
-2. Substitute the digest into `specs/kagent/harness.yaml`.
-3. `kubectl apply -f specs/kagent/harness.yaml`.
+2. Render the manifest against that digest:
+   `specs/kagent/render-manifests.sh --image <ref>@sha256:<digest>`.
+3. Apply it: pipe the render into `kubectl apply -f -`.
 4. Verify the Harness and AgentTemplate conditions are all `True`.
 5. Create an `AgentInstance` through the kagent gRPC API and confirm it reaches
    `AGENT_INSTANCE_STATE_READY`, then chat with it from the kagent UI.

@@ -9,7 +9,7 @@
 # Substrate requires digest-pinned image references, so before deploying a
 # release you need the immutable digests. This script prints the manifest-list
 # digest plus the per-architecture digests, and a ready-to-paste YAML snippet
-# for specs/kagent/manifests.yaml.
+# to pass to render-manifests.sh --image.
 #
 # Usage:
 #   ./image-digests.sh <tag>            # e.g. v0.0.87
@@ -51,7 +51,7 @@ echo "linux/arm64: ${IMAGE}@${ARM64_DIGEST}"
 echo
 
 cat <<EOF
-YAML for specs/kagent/manifests.yaml (pick the arch matching the worker nodes):
+Render with (pick the arch matching the worker nodes):
 
   # amd64
   image: ${IMAGE}@${AMD64_DIGEST}
