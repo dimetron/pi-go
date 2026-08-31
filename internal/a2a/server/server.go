@@ -235,6 +235,15 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 				Prompt:    prompt,
 				Updater:   updater,
 			})
+			// Settle the artifact left open by the last text chunk: the
+			// closing frame replaces it with the whole text and marks it
+			// the last chunk, matching what kagent's ADK runtime emits.
+			if res.err == nil {
+				if err := updater.closeTextArtifacts(runCtx); err != nil {
+					e.logger.Log(ctx, slog.LevelWarn, "a2a-server: closing artifacts",
+						"task", execCtx.TaskID, "err", err)
+				}
+			}
 		}()
 
 		for {
