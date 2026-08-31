@@ -11,6 +11,7 @@ Docs in this section:
 | File | Purpose |
 |---|---|
 | `specs/kagent/Dockerfile` | Builds the pi-go-kagent adapter image |
+| `specs/kagent/image-digests.sh` | Prints the digest-pinned amd64/arm64 image refs for a release |
 | `specs/kagent/DEPLOY.md` | Full end-to-end deploy steps on local Kind |
 | `specs/kagent/harness.yaml` | `Harness` + `AgentTemplate` manifests |
 
@@ -57,7 +58,13 @@ docker buildx build --platform linux/amd64,linux/arm64 --push \
 ```
 
 The release workflow (`release.yml`) already builds and pushes the image to
-`ghcr.io/<owner>/<repo>-kagent:<tag>` on every `v*` tag push.
+`ghcr.io/<owner>/<repo>-kagent:<tag>` on every `v*` tag push. To identify the
+immutable digests for a release — the manifest-list digest plus the
+per-architecture `linux/amd64` and `linux/arm64` digests — run:
+
+```bash
+./specs/kagent/image-digests.sh <tag>   # e.g. v0.0.87
+```
 
 ## Deploy on kagent
 
@@ -65,7 +72,8 @@ See [`specs/kagent/DEPLOY.md`](../specs/kagent/DEPLOY.md) for the full walkthrou
 The short version:
 
 1. Build/push the image and copy its immutable digest
-   (`docker buildx imagetools inspect ...`).
+   (`docker buildx imagetools inspect ...`), or run
+   `specs/kagent/image-digests.sh <tag>` for a release.
 2. Substitute the digest into `specs/kagent/harness.yaml`.
 3. `kubectl apply -f specs/kagent/harness.yaml`.
 4. Verify the Harness and AgentTemplate conditions are all `True`.
