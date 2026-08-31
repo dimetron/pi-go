@@ -103,6 +103,39 @@ syntax in prompts: `;` or a newline rather than `&&`. Installing
 [Git for Windows](https://git-scm.com/download/win) puts a `bash` on `PATH` and
 restores the bash behaviour.
 
+### NixOS / Nix
+
+The repository includes a flake that builds `pi-go` reproducibly and exposes a
+NixOS module. To install it in a NixOS configuration, add the repository as an
+input:
+
+```nix
+# flake.nix
+{
+  inputs.pi-go.url = "github:dimetron/pi-go";
+
+  outputs = { self, nixpkgs, pi-go, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        pi-go.nixosModules.default
+      ];
+    };
+  };
+}
+```
+
+Enable it in `configuration.nix`:
+
+```nix
+{ programs.pi-go.enable = true; }
+```
+
+Then rebuild with `sudo nixos-rebuild switch --flake .`. For a one-off use,
+run `nix run github:dimetron/pi-go` or install it into a profile with
+`nix profile install github:dimetron/pi-go`.
+
 ### go install
 
 ```bash
