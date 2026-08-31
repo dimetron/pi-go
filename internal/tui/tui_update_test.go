@@ -308,20 +308,6 @@ func TestUpdateMouseMoveMsg(t *testing.T) {
 	}
 }
 
-func TestUpdateRestartMsg(t *testing.T) {
-	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	newM, cmd := m.Update(restartMsg{})
-	mm := newM.(*model)
-
-	if cmd == nil {
-		t.Error("restartMsg should return tea.Quit")
-	}
-	_ = mm // model state doesn't change for restart
-}
-
 // TestUpdateUnknownMsgLeavesListenerUntouched replaces TestUpdateAgentListenerAlive,
 // which asserted that an unknown message re-armed the agent listener. That was the
 // bug, not the contract: nothing was consumed from m.agentCh, so the re-arm added a

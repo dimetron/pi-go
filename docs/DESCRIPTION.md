@@ -186,7 +186,7 @@ View() → render (lipgloss + glamour)
 /commit        /agents          /history
 /plan          /run             /login
 /skills        /theme           /rtk
-/ping          /restart         /exit
+/ping          /exit
 /memory        /audit           /clear
 ```
 
