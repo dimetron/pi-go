@@ -1,8 +1,26 @@
 # Deploy the pi-go Harness on local Kind
 
-This directory contains `harness.yaml`, a deployable kagent `Harness` and
-`AgentTemplate` pair for running pi-go on Agent Substrate. The adapter image is
-built from `Dockerfile` in this directory; see
+## Quickest path: install a release
+
+If you only want the latest released harness on a cluster `kubectl` already
+points at, skip the rest of this document:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimetron/pi-go/main/scripts/install-kagent.sh | sh
+```
+
+It resolves the latest release, applies its `kagent-manifests.yaml` asset —
+already pinned to the digest that release built — and prints what it changed.
+`--tag`, `--namespace`, `--dry-run`, `--print`, and `--model` / `--base-url`
+(which patch the Harness env after applying) are available via
+`| sh -s -- --dry-run`.
+
+The rest of this document covers building and deploying your own image.
+
+This directory contains `manifests.yaml.tmpl`, a kagent `Harness` and
+`AgentTemplate` template for running pi-go on Agent Substrate, and
+`render-manifests.sh`, which renders it against a digest-pinned image. The
+adapter image is built from `Dockerfile` in this directory; see
 [docs/kagent-harness.md](/docs/kagent-harness.md) for an overview.
 
 ## Prerequisite: HTTP A2A adapter
@@ -38,11 +56,15 @@ docker buildx imagetools inspect \
   localhost:5001/dimetron/pi-go-kagent:dev
 ```
 
-Copy the `linux/arm64` manifest digest and substitute it in `harness.yaml`:
+Copy the manifest-list digest and render the manifest against it:
 
-```yaml
-image: localhost:5001/dimetron/pi-go-kagent@sha256:<64-hex-digit-digest>
+```bash
+./render-manifests.sh \
+  --image localhost:5001/dimetron/pi-go-kagent@sha256:<64-hex-digit-digest>
 ```
+
+The script refuses an image that is not digest-pinned, because Substrate
+requires one and a tag would deploy whatever it points at today.
 
 A public release gets the same image with both architectures from the release
 workflow: `ghcr.io/<owner>/pi-go-kagent:<tag>` (see
@@ -54,8 +76,9 @@ digests for a release — the manifest-list digest plus the per-architecture
 ./image-digests.sh <tag>   # e.g. ./image-digests.sh v0.0.87
 ```
 
-Pick the arch matching the worker nodes (the local Kind Substrate workers are
-arm64) and substitute the digest in `harness.yaml` or `manifests.yaml`.
+Pass the digest to `render-manifests.sh --image`. A release also ships the
+rendered manifest as the `kagent-manifests.yaml` asset, already pinned to the
+image that release built.
 
 Check that the Kind cluster can resolve the registry before applying:
 
@@ -85,10 +108,10 @@ docker image inspect pi-go-kagent:dev \
   --format '{{index .RepoDigests 0}}'
 ```
 
-Use the printed digest in `harness.yaml`, for example:
+Render against the printed digest, for example:
 
-```yaml
-image: pi-go-kagent@sha256:<digest>
+```bash
+./render-manifests.sh --image pi-go-kagent@sha256:<digest> | kubectl apply -f -
 ```
 
 Do not use `imagePullPolicy: Always` with an image that exists only in the Kind
@@ -125,15 +148,19 @@ stringData:
   ANTHROPIC_API_KEY: <not-committed>
 ```
 
-Never place a real API key in `harness.yaml`, shell history, or a Dockerfile.
+Never place a real API key in a rendered manifest, shell history, or a Dockerfile.
 
 ## Apply the Harness and template
 
 From this directory:
 
 ```bash
-kubectl apply -f harness.yaml
+./render-manifests.sh --image <ref>@sha256:<digest> | kubectl apply -f -
 ```
+
+Add `--model` / `--base-url` to point pi at a different LLM endpoint, or
+`--no-env` to leave the endpoint to the cluster operator (what a release
+renders).
 
 Verify the Harness and template:
 
