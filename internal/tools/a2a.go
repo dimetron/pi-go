@@ -120,12 +120,22 @@ func (c *ClientCache) GetClient(ctx context.Context, agentName string) (*a2aclie
 		return client, nil
 	}
 
-	// Create new client using AgentInterface
-	agentInterface := a2a.NewAgentInterface(agent.URL, a2a.TransportProtocolJSONRPC)
-	client, err := a2aclient.NewFromEndpoints(ctx, []*a2a.AgentInterface{agentInterface})
+	// Create new client. kagent controller URLs (…/api/a2a/kagent/<agent>)
+	// are routed through the controller's gRPC-Web A2A service, which requires
+	// an AgentInstance to be created/reused first. Plain A2A agent URLs use the
+	// JSON-RPC transport.
+	var newClient *a2aclient.Client
+	var err error
+	if isKagentURL(agent.URL) {
+		newClient, err = kagentClientForConfig(ctx, agent)
+	} else {
+		agentInterface := a2a.NewAgentInterface(agent.URL, a2a.TransportProtocolJSONRPC)
+		newClient, err = a2aclient.NewFromEndpoints(ctx, []*a2a.AgentInterface{agentInterface})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("creating A2A client for %q: %w", agentName, err)
 	}
+	client = newClient
 
 	c.clients[agentName] = client
 	return client, nil
@@ -202,16 +212,28 @@ func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
 		return true
 
 	case *a2a.Task:
-		// Terminal task (non-streaming completion)
-		sb.WriteString(extractTaskResult(e))
-		return true
+		// A Task event is terminal when its state is terminal, or when the
+		// state is unset (simple servers return a bare Task as the result).
+		// The kagent gateway emits a SUBMITTED Task (with the user's message
+		// in history) before the reply, so an explicitly non-terminal Task
+		// must not end the stream or echo the user's own text back.
+		if e.Status.State.Terminal() || e.Status.State == a2a.TaskStateUnspecified {
+			sb.WriteString(extractTaskResult(e))
+			return true
+		}
+		return false
 
 	case *a2a.TaskStatusUpdateEvent:
 		// State change updates - check for terminal state
 		return e.Status.State.Terminal()
 
 	case *a2a.TaskArtifactUpdateEvent:
-		// Extract text from artifact parts
+		// Extract text from artifact parts. A lastChunk update carries the
+		// full accumulated artifact text, not a delta, so appending it would
+		// duplicate what the incremental updates already wrote.
+		if e.LastChunk {
+			return false
+		}
 		appendPartsText(sb, e.Artifact.Parts)
 	}
 
@@ -255,19 +277,20 @@ func extractTaskResult(task *a2a.Task) string {
 		return ""
 	}
 
-	// Check History for messages
-	for _, msg := range task.History {
-		if text := extractMessageText(msg); text != "" {
-			return text
-		}
-	}
-
-	// Check Artifacts for content
+	// Prefer Artifacts: they carry the agent's reply. History contains the
+	// user's own messages too, so it is only a fallback.
 	for _, artifact := range task.Artifacts {
 		for _, part := range artifact.Parts {
 			if text := part.Text(); text != "" {
 				return text
 			}
+		}
+	}
+
+	// Check History for messages
+	for _, msg := range task.History {
+		if text := extractMessageText(msg); text != "" {
+			return text
 		}
 	}
 
