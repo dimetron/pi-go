@@ -66,8 +66,8 @@ func providerDefaultBaseURL(p string) string {
 }
 
 // ListModels calls the given provider's model listing API and returns
-// available model IDs. Supported providers: anthropic, openai, gemini,
-// mistral, xai, ollama.
+// available model IDs. The switch below is the list of supported providers;
+// an unsupported one returns an error.
 func ListModels(ctx context.Context, providerName string, opts ListModelsOptions) ([]ModelInfo, error) {
 	switch providerName {
 	case "anthropic":

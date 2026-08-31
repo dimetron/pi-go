@@ -191,8 +191,8 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 }
 
 // modelListBaseURL resolves the endpoint to query: --url flag > env var >
-// default. Only Ollama has a default, because only Ollama is expected to be
-// running somewhere unconfigured.
+// default. Only Ollama and agentgateway have a default, because only those two
+// are expected to be running locally on a well-known port with no configuration.
 func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	baseURL := flagURL
 	if baseURL == "" {

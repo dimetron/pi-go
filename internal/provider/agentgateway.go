@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/adk/v2/model"
 )
@@ -20,5 +21,9 @@ func NewAgentGateway(ctx context.Context, modelName, apiKey, baseURL string, opt
 	if baseURL == "" {
 		baseURL = agentgatewayDefaultBaseURL
 	}
-	return NewOpenAI(ctx, modelName, apiKey, baseURL, opts)
+	llm, err := NewOpenAI(ctx, modelName, apiKey, baseURL, opts)
+	if err != nil {
+		return nil, fmt.Errorf("creating agentgateway client: %w", err)
+	}
+	return llm, nil
 }

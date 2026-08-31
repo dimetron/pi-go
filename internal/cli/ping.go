@@ -488,7 +488,7 @@ func setPingAuthHeaders(req *http.Request, providerName, apiKey string) {
 	case "anthropic":
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "openai", "xai":
+	case "openai", "xai", "agentgateway":
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	case "azure":
 		req.Header.Set("Api-Key", apiKey)
