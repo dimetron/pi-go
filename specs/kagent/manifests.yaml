@@ -26,7 +26,7 @@ spec:
   workload:
     # arm64 (local Kind Substrate workers). For amd64 workers use the
     # linux/amd64 digest from image-digests.sh.
-    image: localhost:5001/dimetron/pi-go-kagent@sha256:c748aec952342bc1eec298174cedf1e5b8bc403b397215e2b54fe08e5fbf2b07
+    image: localhost:5001/dimetron/pi-go-kagent@sha256:09ff19adabaaaab8762107e510658986bec87198152a6dd6c0895028bdf640cf
   substrate:
     workerPoolRef:
       name: kagent-default

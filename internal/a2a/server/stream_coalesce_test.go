@@ -36,6 +36,11 @@ func collect(t *testing.T, fn func(u *a2aUpdater)) ([]a2a.Event, *a2asrvExecCtx)
 	u := newA2AUpdater(context.Background(), execCtx)
 	go func() {
 		fn(u)
+		// The executor settles the open artifact when the turn ends; the
+		// closing frame is part of the protocol, not an afterthought.
+		if err := u.closeTextArtifacts(context.Background()); err != nil {
+			t.Errorf("closeTextArtifacts: %v", err)
+		}
 		close(u.events)
 	}()
 	var events []a2a.Event
@@ -156,6 +161,7 @@ func TestStreamedTextSuppressesFinalArtifact(t *testing.T) {
 		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
 			ToolCallId: "call-1", Title: "bash ls",
 		}})
+		_ = u.closeTextArtifacts(ctx)
 		close(u.events)
 	}()
 	for range u.events { //nolint:revive // draining
@@ -190,5 +196,141 @@ func TestBashOutputLinesCoalesce(t *testing.T) {
 	}
 	if got := task.Artifacts[0].Parts[0].Text(); got != strings.Join(lines, "") {
 		t.Errorf("text = %q, want the lines joined into one part", got)
+	}
+}
+
+// TestStreamFramesMatchKagentContract pins the wire sequence against the run
+// kagent captured from its own ADK runtime and documented in
+// ui/src/api/chat/a2aGrpcChatClient.ts:
+//
+//	artifactUpdate  id=A  "alpha"              (no append)
+//	artifactUpdate  id=A  " beta"              append: true
+//	artifactUpdate  id=A  " gamma"             append: true
+//	artifactUpdate  id=A  "alpha beta gamma"   lastChunk: true
+//
+// The deltas are what make the UI stream token by token; the closing frame is
+// what settles the message and leaves one part in the stored task.
+func TestStreamFramesMatchKagentContract(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		for _, chunk := range []string{"alpha", " beta", " gamma"} {
+			if err := u.Update(ctx, textChunk(chunk)); err != nil {
+				t.Errorf("Update: %v", err)
+			}
+		}
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("frames = %d, want 4 (3 chunks + closing replacement)", len(events))
+	}
+
+	type frame struct {
+		text      string
+		append    bool
+		lastChunk bool
+	}
+	want := []frame{
+		{"alpha", false, false},
+		{" beta", true, false},
+		{" gamma", true, false},
+		{"alpha beta gamma", false, true},
+	}
+
+	var id a2a.ArtifactID
+	for i, ev := range events {
+		au, ok := ev.(*a2a.TaskArtifactUpdateEvent)
+		if !ok {
+			t.Fatalf("frame %d is %T, want *a2a.TaskArtifactUpdateEvent", i, ev)
+		}
+		if i == 0 {
+			id = au.Artifact.ID
+		} else if au.Artifact.ID != id {
+			t.Errorf("frame %d artifact id = %q, want every frame to share %q", i, au.Artifact.ID, id)
+		}
+		got := frame{au.Artifact.Parts[0].Text(), au.Append, au.LastChunk}
+		if got != want[i] {
+			t.Errorf("frame %d = %+v, want %+v", i, got, want[i])
+		}
+	}
+}
+
+// TestThinkingFramesCarryThoughtMeta keeps the adk_thought marker on every
+// frame, including the closing replacement, so a client that classifies parts
+// by metadata does not show the last one as an ordinary reply.
+func TestThinkingFramesCarryThoughtMeta(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, thoughtChunk("weighing "))
+		_ = u.Update(ctx, thoughtChunk("options"))
+	})
+
+	if len(events) != 3 {
+		t.Fatalf("frames = %d, want 3 (2 chunks + closing replacement)", len(events))
+	}
+	for i, ev := range events {
+		au := ev.(*a2a.TaskArtifactUpdateEvent)
+		if v, ok := au.Artifact.Parts[0].Meta()[adkMetaThoughtKey].(bool); !ok || !v {
+			t.Errorf("frame %d is missing %s=true", i, adkMetaThoughtKey)
+		}
+	}
+	last := events[2].(*a2a.TaskArtifactUpdateEvent)
+	if got := last.Artifact.Parts[0].Text(); got != "weighing options" {
+		t.Errorf("closing thinking text = %q, want %q", got, "weighing options")
+	}
+	if !last.LastChunk || last.Append {
+		t.Errorf("closing frame append=%v lastChunk=%v, want append=false lastChunk=true",
+			last.Append, last.LastChunk)
+	}
+}
+
+// TestToolPartsMatchKagentShape pins the data-part shape the kagent UI
+// classifies tool cards by ({name,args} vs {name,response}), with the ADK
+// metadata key kagent's ReadMetadataValue looks for first.
+func TestToolPartsMatchKagentShape(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1", Title: "bash git status -s",
+			RawInput: map[string]any{"command": "git status -s"},
+		}})
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", RawOutput: map[string]any{"exit_code": 0},
+		}})
+	})
+
+	if len(events) != 2 {
+		t.Fatalf("frames = %d, want 2", len(events))
+	}
+
+	call := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0]
+	if got, _ := call.Meta()[adkMetaTypeKey].(string); got != "function_call" {
+		t.Errorf("call %s = %q, want function_call", adkMetaTypeKey, got)
+	}
+	callData, ok := call.Data().(map[string]any)
+	if !ok {
+		t.Fatalf("call data = %T, want map[string]any", call.Data())
+	}
+	for _, key := range []string{"name", "args", "id"} {
+		if _, has := callData[key]; !has {
+			t.Errorf("function_call part is missing %q", key)
+		}
+	}
+	if callData["name"] != "bash git status -s" {
+		t.Errorf("call name = %v, want the ACP title", callData["name"])
+	}
+
+	resp := events[1].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0]
+	if got, _ := resp.Meta()[adkMetaTypeKey].(string); got != "function_response" {
+		t.Errorf("response %s = %q, want function_response", adkMetaTypeKey, got)
+	}
+	respData, ok := resp.Data().(map[string]any)
+	if !ok {
+		t.Fatalf("response data = %T, want map[string]any", resp.Data())
+	}
+	if _, has := respData["response"]; !has {
+		t.Error("function_response part is missing \"response\"")
+	}
+	if respData["name"] != "bash git status -s" {
+		t.Errorf("response name = %v, want the same title as the call", respData["name"])
 	}
 }
