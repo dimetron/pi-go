@@ -1,3 +1,19 @@
+# Deployable kagent Harness + AgentTemplate for pi-go on Agent Substrate.
+#
+# The workload image must be digest-pinned. The release workflow
+# (.github/workflows/release.yml) pushes a multi-arch image
+# (linux/amd64 + linux/arm64) to GHCR on every v* tag:
+#
+#   ghcr.io/dimetron/pi-go-kagent:<tag>
+#
+# Identify the immutable digests for a release with:
+#
+#   ./image-digests.sh <tag>     # e.g. v0.0.87
+#
+# which prints the manifest-list digest plus the per-architecture digests.
+# Pick the arch matching the worker nodes (the local Kind Substrate workers
+# are arm64) and substitute it below. The digest below is from a local dev
+# build; replace it before deploying a release.
 apiVersion: kagent.dev/v1alpha3
 kind: Harness
 metadata:
@@ -8,6 +24,8 @@ spec:
   # compiler is not yet implemented (see specs/kagent/custom-harness.md).
   kagent: {}
   workload:
+    # arm64 (local Kind Substrate workers). For amd64 workers use the
+    # linux/amd64 digest from image-digests.sh.
     image: localhost:5001/dimetron/pi-go-kagent@sha256:c748aec952342bc1eec298174cedf1e5b8bc403b397215e2b54fe08e5fbf2b07
   substrate:
     workerPoolRef:

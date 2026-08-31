@@ -191,8 +191,8 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 		// event ("message not allowed after task was stored"). When no task
 		// was stored, the manager requires the first event to be a Task.
 		// Emit the same sequence kagent's ADK executor and a2a-go's own
-		// exec executor emit: Task (if needed) → Working → artifact with the
-		// reply → Completed.
+		// exec executor emit: Task (if needed) → Working → streamed
+		// artifacts → Completed.
 		if execCtx.StoredTask == nil {
 			if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
 				return
@@ -201,24 +201,74 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 			return
 		}
-		result, err := e.handler(ctx, acpserver.PromptTurn{
-			SessionID: execCtx.ContextID,
-			CWD:       e.cwd,
-			Prompt:    prompt,
-			Updater:   nil,
-		})
-		if err != nil {
-			e.logger.Log(ctx, slog.LevelError, "a2a-server: prompt failed",
-				"task", execCtx.TaskID, "err", err)
-			yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed,
-				a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))), nil)
-			return
+
+		// Run the prompt turn in a goroutine and stream its ACP session
+		// updates back as A2A artifact events. The adapter.Stream classifies
+		// ADK events (thought vs text vs tool calls) and calls the updater,
+		// which pushes A2A events onto a channel this iterator drains and
+		// yields — so thinking and tool calls reach the UI as they happen,
+		// not in one artifact at the end of the turn.
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		updater := newA2AUpdater(runCtx, execCtx)
+
+		type turnResult struct {
+			result acpserver.PromptResult
+			err    error
 		}
-		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(result.FinalText)), nil) {
-			return
-		}
-		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
-			return
+		resultCh := make(chan turnResult, 1)
+		go func() {
+			var res turnResult
+			defer func() {
+				if r := recover(); r != nil {
+					e.logger.Log(ctx, slog.LevelError, "a2a-server: prompt panic",
+						"task", execCtx.TaskID, "panic", r)
+					res = turnResult{err: fmt.Errorf("handler panicked: %v", r)}
+				}
+				close(updater.events)
+				resultCh <- res
+			}()
+			res.result, res.err = e.handler(runCtx, acpserver.PromptTurn{
+				SessionID: execCtx.ContextID,
+				CWD:       e.cwd,
+				Prompt:    prompt,
+				Updater:   updater,
+			})
+		}()
+
+		for {
+			select {
+			case ev, ok := <-updater.events:
+				if !ok {
+					res := <-resultCh
+					if res.err != nil {
+						e.logger.Log(ctx, slog.LevelError, "a2a-server: prompt failed",
+							"task", execCtx.TaskID, "err", res.err)
+						yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed,
+							a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(res.err.Error()))), nil)
+						return
+					}
+					// The reply was already streamed as chunks; a final
+					// artifact would duplicate it. Emit one only when the
+					// turn produced text without streaming it.
+					if !updater.streamedText() && strings.TrimSpace(res.result.FinalText) != "" {
+						if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(res.result.FinalText)), nil) {
+							return
+						}
+					}
+					if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
+						return
+					}
+					return
+				}
+				if !yield(ev, nil) {
+					cancel()
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }

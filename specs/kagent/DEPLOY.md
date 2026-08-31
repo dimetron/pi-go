@@ -46,7 +46,16 @@ image: localhost:5001/dimetron/pi-go-kagent@sha256:<64-hex-digit-digest>
 
 A public release gets the same image with both architectures from the release
 workflow: `ghcr.io/<owner>/pi-go-kagent:<tag>` (see
-[release.yml](../../.github/workflows/release.yml)).
+[release.yml](../../.github/workflows/release.yml)). Identify the immutable
+digests for a release — the manifest-list digest plus the per-architecture
+`linux/amd64` and `linux/arm64` digests — with:
+
+```bash
+./image-digests.sh <tag>   # e.g. ./image-digests.sh v0.0.87
+```
+
+Pick the arch matching the worker nodes (the local Kind Substrate workers are
+arm64) and substitute the digest in `harness.yaml` or `manifests.yaml`.
 
 Check that the Kind cluster can resolve the registry before applying:
 
