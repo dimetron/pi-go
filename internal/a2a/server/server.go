@@ -25,6 +25,7 @@ import (
 	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	a2ataskstore "github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
@@ -72,10 +73,22 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 
 	card := buildCard(ln.Addr().String())
 	executor := &piExecutor{handler: cfg.Handler, cwd: cfg.CWD, logger: logger}
+
+	// In-memory task store so GetTask/SubscribeToTask and continuation
+	// messages keep working for stateless runtime turn processing. The seed
+	// interceptor mirrors kagent's Go ADK: the kagent gateway assigns the
+	// TaskID and forwards the message, so the runtime must seed the task in
+	// its local store before the handler runs, or the executor rejects the
+	// message with "task not found".
+	tasks := a2ataskstore.NewInMemory(&a2ataskstore.InMemoryStoreConfig{
+		Authenticator: a2asrv.NewTaskStoreAuthenticator(),
+	})
 	handler := a2asrv.NewHandler(executor,
 		a2asrv.WithCapabilityChecks(&a2a.AgentCapabilities{Streaming: true, ExtendedAgentCard: true}),
 		a2asrv.WithExtendedAgentCard(card),
+		a2asrv.WithTaskStore(tasks),
 		a2asrv.WithLogger(logger),
+		a2asrv.WithCallInterceptors(&seedTaskInterceptor{store: tasks}),
 	)
 
 	// gRPC A2A server (kagent gateway dials the runtime over gRPC).
@@ -173,6 +186,21 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 			return
 		}
 
+		// When the gateway pre-seeds the task (seedTaskInterceptor), the
+		// manager already holds a stored task and rejects a bare Message
+		// event ("message not allowed after task was stored"). When no task
+		// was stored, the manager requires the first event to be a Task.
+		// Emit the same sequence kagent's ADK executor and a2a-go's own
+		// exec executor emit: Task (if needed) → Working → artifact with the
+		// reply → Completed.
+		if execCtx.StoredTask == nil {
+			if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
+				return
+			}
+		}
+		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+			return
+		}
 		result, err := e.handler(ctx, acpserver.PromptTurn{
 			SessionID: execCtx.ContextID,
 			CWD:       e.cwd,
@@ -186,8 +214,10 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 				a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(err.Error()))), nil)
 			return
 		}
-
-		if !yield(a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(result.FinalText)), nil) {
+		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(result.FinalText)), nil) {
+			return
+		}
+		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil) {
 			return
 		}
 	}
@@ -197,6 +227,89 @@ func (e *piExecutor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) 
 	return func(yield func(a2a.Event, error) bool) {
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil)
 	}
+}
+
+// seedTaskInterceptor seeds a gateway-assigned task in the local in-memory
+// store before an A2A SendMessage is processed. kagent's gateway creates the
+// task in its own database and assigns the TaskID; the runtime's local store
+// then sees a continuation it has never heard of and would reject it. The
+// stored task (in InputRequired/AuthRequired state) travels in the message
+// metadata; when present, this interceptor replays it into the local store.
+type seedTaskInterceptor struct {
+	a2asrv.PassthroughCallInterceptor
+	store a2ataskstore.Store
+}
+
+// takenStoredTask is the kagent private continuation metadata key.
+const storedTaskMetadataKey = "https://kagent.dev/internal/stored-task/v1"
+
+// takeStoredTask consumes the kagent gateway's stored-task metadata from a
+// message, mirroring kagent's go/api/a2a.TakeStoredTask. Returns nil when the
+// key is absent.
+func takeStoredTask(message *a2a.Message) (*a2a.Task, error) {
+	if message == nil || message.Metadata == nil {
+		return nil, nil
+	}
+	raw, ok := message.Metadata[storedTaskMetadataKey]
+	if !ok {
+		return nil, nil
+	}
+	delete(message.Metadata, storedTaskMetadataKey)
+	stateMap, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("invalid stored task state")
+	}
+	taskState, _ := stateMap["state"].(string)
+	switch a2a.TaskState(taskState) {
+	case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+	default:
+		return nil, fmt.Errorf("invalid stored task state %q", taskState)
+	}
+	var statusMessage *a2a.Message
+	if rawMessage, ok := stateMap["message"]; ok && rawMessage != nil {
+		encoded, err := json.Marshal(rawMessage)
+		if err != nil {
+			return nil, fmt.Errorf("decode stored status message: %w", err)
+		}
+		statusMessage = &a2a.Message{}
+		if err := json.Unmarshal(encoded, statusMessage); err != nil {
+			return nil, fmt.Errorf("decode stored status message: %w", err)
+		}
+	}
+	return &a2a.Task{
+		ID:        message.TaskID,
+		ContextID: message.ContextID,
+		Status:    a2a.TaskStatus{State: a2a.TaskState(taskState), Message: statusMessage},
+	}, nil
+}
+
+// Before implements a2asrv.CallInterceptor.
+func (i *seedTaskInterceptor) Before(ctx context.Context, _ *a2asrv.CallContext, req *a2asrv.Request) (context.Context, any, error) {
+	if req == nil {
+		return ctx, nil, nil
+	}
+	send, ok := req.Payload.(*a2a.SendMessageRequest)
+	if !ok || send.Message == nil || send.Message.TaskID == "" {
+		return ctx, nil, nil
+	}
+	storedTask, err := takeStoredTask(send.Message)
+	if err != nil {
+		return ctx, nil, err
+	}
+	if _, err := i.store.Get(ctx, send.Message.TaskID); err == nil {
+		return ctx, nil, nil
+	} else if !errors.Is(err, a2a.ErrTaskNotFound) {
+		return ctx, nil, fmt.Errorf("load actor task: %w", err)
+	}
+	if storedTask == nil {
+		storedTask = a2a.NewSubmittedTask(send.Message, send.Message)
+	}
+	storedTask.ID = send.Message.TaskID
+	storedTask.ContextID = send.Message.ContextID
+	if _, err := i.store.Create(ctx, storedTask); err != nil && !errors.Is(err, a2ataskstore.ErrTaskAlreadyExists) {
+		return ctx, nil, fmt.Errorf("seed actor task: %w", err)
+	}
+	return ctx, nil, nil
 }
 
 // extractText concatenates the text of every non-empty content part of a

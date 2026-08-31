@@ -64,15 +64,27 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 
 	model := flagModel
 	if model == "" {
+		model = os.Getenv("PI_MODEL")
+	}
+	if model == "" {
 		model = "glm-5.2:cloud"
+	}
+
+	baseURL := flagURL
+	if baseURL == "" {
+		baseURL = os.Getenv("PI_BASE_URL")
+	}
+	system := flagSystem
+	if system == "" {
+		system = os.Getenv("PI_SYSTEM")
 	}
 
 	handler := acpserver.NewPromptHandler(acpserver.RuntimeConfig{
 		Model:    model,
-		BaseURL:  flagURL,
+		BaseURL:  baseURL,
 		Headers:  flagHeaders,
 		Insecure: flagInsecure,
-		System:   flagSystem,
+		System:   system,
 	})
 
 	addr := flagA2AAddr
