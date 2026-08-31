@@ -38,8 +38,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     range="$(git rev-list "$local_sha" --not --remotes="$remote")"
     size_scan+=("$local_sha" --not --remotes="$remote")
   else
-    range="$(git rev-list "$remote_sha..$local_sha")"
-    size_scan+=("$remote_sha..$local_sha")
+    # Exclude commits already reachable from a remote branch. After a
+    # rebase onto an updated main, remote_sha..local_sha also spans the
+    # upstream commits the rebase pulled in — commits that are already
+    # published and are not this push's to vouch for.
+    range="$(git rev-list "$remote_sha..$local_sha" --not --remotes="$remote")"
+    size_scan+=("$remote_sha..$local_sha" --not --remotes="$remote")
   fi
 
   for sha in $range; do
