@@ -9,16 +9,21 @@ set -e
 # Format code with gofmt and goimports.
 # Exclude worktree directories (.worktrees/, .pi-go/) — they are separate
 # checkouts on their own branches and must not be reformatted by this hook.
+# Also exclude tmp/ — a gitignored scratch area for vendored third-party
+# repos whose samples never compile standalone (same rationale as the
+# tmp/ exclusion in .golangci.yml).
 echo "Formatting code..."
 find . -name '*.go' \
   -not -path './.git/*' \
   -not -path './.worktrees/*' \
   -not -path './.pi-go/*' \
+  -not -path './tmp/*' \
   -exec gofmt -l -s -w {} +
 find . -name '*.go' \
   -not -path './.git/*' \
   -not -path './.worktrees/*' \
   -not -path './.pi-go/*' \
+  -not -path './tmp/*' \
   -exec goimports -l -w {} +
 
 # Stage any formatting changes
