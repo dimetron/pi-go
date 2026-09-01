@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -263,6 +265,36 @@ func TestSplitSubagentCards_Chain(t *testing.T) {
 	}
 	if cards[0].agentType != "explore" || cards[1].agentType != "task" {
 		t.Errorf("chain card types = %q/%q, want explore/task", cards[0].agentType, cards[1].agentType)
+	}
+}
+
+func TestSplitSubagentCards_A2A(t *testing.T) {
+	base := message{role: "tool", tool: "a2a"}
+	cards := splitSubagentCards(base, map[string]any{
+		"agent_name": "istio-agent",
+		"prompt":     "check the mesh",
+	})
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(cards))
+	}
+	if cards[0].agentLabel != "istio-agent" {
+		t.Errorf("agentLabel = %q, want %q", cards[0].agentLabel, "istio-agent")
+	}
+	if cards[0].agentTitle != "check the mesh" {
+		t.Errorf("agentTitle = %q, want %q", cards[0].agentTitle, "check the mesh")
+	}
+}
+
+func TestSplitSubagentCards_A2AWithoutName(t *testing.T) {
+	base := message{role: "tool", tool: "a2a"}
+	cards := splitSubagentCards(base, map[string]any{
+		"prompt": "hello",
+	})
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(cards))
+	}
+	if cards[0].agentLabel != "" {
+		t.Errorf("agentLabel = %q, want empty when agent_name is absent", cards[0].agentLabel)
 	}
 }
 
@@ -1610,5 +1642,53 @@ func TestAgentDoneMsg_ErrorDoesNotFireUserInputHook(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if _, err := os.Stat(inputOut); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("user_input_required hook ran after an error, stat err = %v", err)
+	}
+}
+
+// TestA2ACallRendersAsAgentCard drives the full call path for the a2a tool:
+// handleAgentToolCall fans it into an agent card with the configured agent
+// name as the bracketed label, and the renderer draws it as agent[istio-agent]
+// with the result under the gutter — the same shape as a subagent card.
+func TestA2ACallRendersAsAgentCard(t *testing.T) {
+	m := &model{
+		width:     120,
+		chatModel: ChatModel{Messages: []message{{role: "user", content: "call istio"}}},
+		agentCh:   make(chan agentMsg, 8),
+	}
+	m.handleAgentToolCall(agentToolCallMsg{
+		id:   "fc-1",
+		name: "a2a",
+		args: map[string]any{"agent_name": "istio-agent", "prompt": "check the mesh"},
+	})
+	if len(m.chatModel.Messages) != 2 {
+		t.Fatalf("expected 2 messages (user + a2a card), got %d", len(m.chatModel.Messages))
+	}
+	card := m.chatModel.Messages[1]
+	if card.tool != "a2a" {
+		t.Errorf("card.tool = %q, want a2a", card.tool)
+	}
+	if card.agentLabel != "istio-agent" {
+		t.Errorf("card.agentLabel = %q, want istio-agent", card.agentLabel)
+	}
+	if card.agentTitle != "check the mesh" {
+		t.Errorf("card.agentTitle = %q, want check the mesh", card.agentTitle)
+	}
+
+	// Result binds to the card by call ID.
+	m.handleAgentToolResult(agentToolResultMsg{id: "fc-1", name: "a2a", content: `{"status":"completed","result":"Hello!"}`})
+	if m.chatModel.Messages[1].content == "" {
+		t.Fatal("a2a result did not bind to the card")
+	}
+
+	m.chatModel.UpdateRenderer(m.width)
+	output := ansi.Strip(m.chatModel.RenderMessages(m.running))
+	if !strings.Contains(output, "agent[istio-agent]") {
+		t.Errorf("rendered output missing agent[istio-agent]:\n%s", output)
+	}
+	if !strings.Contains(output, "check the mesh") {
+		t.Errorf("rendered output missing the prompt title:\n%s", output)
+	}
+	if !strings.Contains(output, "→") {
+		t.Errorf("rendered output missing the result gutter:\n%s", output)
 	}
 }

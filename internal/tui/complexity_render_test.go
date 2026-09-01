@@ -433,6 +433,37 @@ func TestAgentCallSummaryRender(t *testing.T) {
 	}
 }
 
+// TestA2ACallSummaryRender pins the "agent_name: prompt" join and both
+// truncations, mirroring the subagent summary.
+func TestA2ACallSummaryRender(t *testing.T) {
+	tests := []struct {
+		desc string
+		args map[string]any
+		want string
+	}{
+		{"both", map[string]any{"agent_name": "istio-agent", "prompt": "check the mesh"}, "istio-agent: check the mesh"},
+		{"name only", map[string]any{"agent_name": "istio-agent"}, "istio-agent"},
+		{"prompt only", map[string]any{"prompt": "just a prompt"}, "just a prompt"},
+		{"neither", map[string]any{}, ""},
+		{"first line only", map[string]any{"agent_name": "a", "prompt": "first line\nsecond line"}, "a: first line"},
+		{
+			"long prompt clipped to 60",
+			map[string]any{"agent_name": "a", "prompt": strings.Repeat("p", 100)},
+			"a: " + strings.Repeat("p", 57) + "...",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := a2aCallSummary(tc.args); got != tc.want {
+				t.Errorf("a2aCallSummary(%v) = %q, want %q", tc.args, got, tc.want)
+			}
+			if got := toolCallSummary("a2a", tc.args); got != tc.want {
+				t.Errorf("toolCallSummary(a2a) = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // formatToolResult and its extracted shapes
 // ---------------------------------------------------------------------------
@@ -480,6 +511,9 @@ func TestFormatToolResultRender(t *testing.T) {
 		{"bash exit zero", map[string]any{"exit_code": 0.0, "stdout": "hi", "stderr": ""}, "hi"},
 		{"bash exit nonzero", map[string]any{"exit_code": 1.0, "stdout": "", "stderr": "bad"}, "exit 1: bad"},
 		{"bash no output", map[string]any{"exit_code": 0.0}, "(No output)"},
+		{"a2a result", map[string]any{"status": "completed", "result": "Hello!"}, "Hello!"},
+		{"a2a error", map[string]any{"status": "failed", "error": "boom"}, "error: boom"},
+		{"a2a empty result falls through", map[string]any{"status": "completed", "result": ""}, `{"result":"","status":"completed"}`},
 		{"fallback json", map[string]any{"unknown": "value"}, `{"unknown":"value"}`},
 		{"fallback empty", map[string]any{}, "{}"},
 	}
@@ -570,6 +604,7 @@ func TestToolResultShapesReject(t *testing.T) {
 		"diagnostics": diagnosticsResultSummary,
 		"bashWindow":  bashWindowResultSummary,
 		"bashExit":    bashExitResultSummary,
+		"a2a":         a2aResultSummary,
 	}
 	if len(shapes) != len(toolResultShapes) {
 		t.Fatalf("test covers %d shapes but formatToolResult tries %d", len(shapes), len(toolResultShapes))
@@ -1168,6 +1203,8 @@ func TestAgentCardHeaderRender(t *testing.T) {
 		{"agy keeps its name", ToolDisplayModel{}, message{agentType: "agy", content: "x"}, "◉ agent[agy]\n"},
 		{"copilot keeps its name", ToolDisplayModel{}, message{agentType: "copilot", content: "x"}, "◉ agent[copilot]\n"},
 		{"codex keeps its name", ToolDisplayModel{}, message{agentType: "codex", content: "x"}, "◉ agent[codex]\n"},
+		{"a2a label is verbatim", ToolDisplayModel{}, message{tool: "a2a", agentLabel: "istio-agent", content: "x"}, "◉ agent[istio-agent]\n"},
+		{"a2a label wins over type", ToolDisplayModel{}, message{tool: "a2a", agentType: "task", agentLabel: "istio-agent", content: "x"}, "◉ agent[istio-agent]\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.desc, func(t *testing.T) {

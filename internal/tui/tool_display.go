@@ -139,7 +139,7 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 	if msg.tool == "skill" {
 		return t.renderSkillTool(msg, dim, p)
 	}
-	if msg.tool == "agent" || msg.tool == "subagent" {
+	if msg.tool == "agent" || msg.tool == "subagent" || msg.tool == "a2a" {
 		return t.renderAgentTool(msg, dim, p)
 	}
 	return t.renderRegularTool(msg, dim, p)
@@ -259,6 +259,12 @@ func (t *ToolDisplayModel) agentCardHeader(msg message, p Palette) string {
 	b.WriteString(agentBullet)
 	b.WriteString(typeStyle.Render("agent"))
 	label := agentBracketLabel(msg.agentType)
+	if msg.agentLabel != "" {
+		// A2A cards carry the configured agent name verbatim (e.g.
+		// "istio-agent"); it is not a subagent type, so it must not be
+		// collapsed through agentBracketLabel.
+		label = msg.agentLabel
+	}
 	if label != "" {
 		b.WriteString(typeStyle.Render("[" + label + "]"))
 	}
@@ -762,6 +768,8 @@ func toolCallSummary(name string, args map[string]any) string {
 		return treeCallSummary(args)
 	case "agent":
 		return agentCallSummary(args)
+	case "a2a":
+		return a2aCallSummary(args)
 	}
 	return ""
 }
@@ -796,6 +804,28 @@ func agentCallSummary(args map[string]any) string {
 		return fmt.Sprintf("%s: %s", typ, prompt)
 	case typ != "":
 		return typ
+	default:
+		return prompt
+	}
+}
+
+// a2aCallSummary summarizes an A2A call as "agent_name: prompt", dropping
+// whichever half is absent. It mirrors agentCallSummary so the a2a card's
+// header reads like a subagent card's.
+func a2aCallSummary(args map[string]any) string {
+	name, _ := args["agent_name"].(string)
+	prompt, _ := args["prompt"].(string)
+	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+		prompt = prompt[:idx]
+	}
+	if len(prompt) > 60 {
+		prompt = prompt[:57] + "..."
+	}
+	switch {
+	case name != "" && prompt != "":
+		return fmt.Sprintf("%s: %s", name, prompt)
+	case name != "":
+		return name
 	default:
 		return prompt
 	}
@@ -848,6 +878,7 @@ var toolResultShapes = []toolResultShape{
 	diagnosticsResultSummary,
 	bashWindowResultSummary,
 	bashExitResultSummary,
+	a2aResultSummary,
 }
 
 // formatToolResult extracts a readable summary from a parsed tool result.
@@ -1048,6 +1079,21 @@ func bashExitResultSummary(data map[string]any) (string, bool) {
 	}
 	if int(code) != 0 {
 		return fmt.Sprintf("exit %d: %s", int(code), result), true
+	}
+	return result, true
+}
+
+// a2aResultSummary formats an A2A tool result as the remote agent's reply.
+// The A2AOutput shape carries the answer in "result" (with "status" and
+// "error" alongside); a failed call surfaces its error instead. This is what
+// lets the a2a card's gutter read "→ Hello! ..." rather than raw JSON.
+func a2aResultSummary(data map[string]any) (string, bool) {
+	if err, _ := data["error"].(string); err != "" {
+		return "error: " + err, true
+	}
+	result, ok := data["result"].(string)
+	if !ok || result == "" {
+		return "", false
 	}
 	return result, true
 }

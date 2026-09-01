@@ -24,6 +24,7 @@ func TestKindOf(t *testing.T) {
 		{"write tool", message{role: "tool", tool: "write"}, blockEdit},
 		{"bash tool", message{role: "tool", tool: "bash"}, blockExecute},
 		{"subagent", message{role: "tool", tool: "subagent"}, blockAgent},
+		{"a2a", message{role: "tool", tool: "a2a"}, blockAgent},
 		{"mcp tool", message{role: "tool", tool: "some_mcp_thing"}, blockTool},
 	}
 	for _, tt := range tests {

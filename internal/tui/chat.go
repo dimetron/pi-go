@@ -129,14 +129,20 @@ type message struct {
 	// matchToolResultCard treats it like an empty card when binding the result.
 	pendingRefresh bool
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
-	agentID       string    // subagent ID for matching events
-	agentType     string    // subagent type (e.g. "task", "explore")
-	agentTitle    string    // short description from prompt
-	agentEvents   []agentEv // streamed events from the subagent
-	pipelineID    string    // pipeline ID for grouping
-	pipelineMode  string    // "single", "parallel", "chain"
-	pipelineStep  int       // 1-based step in pipeline
-	pipelineTotal int       // total steps in pipeline
+	agentID     string    // subagent ID for matching events
+	agentType   string    // subagent type (e.g. "task", "explore")
+	agentTitle  string    // short description from prompt
+	agentEvents []agentEv // streamed events from the subagent
+	// agentLabel is the verbatim string rendered inside "agent[...]" for a
+	// card whose label is not derived from agentType. A2A calls set it to the
+	// configured agent name (e.g. "istio-agent") so the card reads
+	// "agent[istio-agent]" instead of collapsing to "agent[pi]". Empty for
+	// subagent cards, which derive the label from agentType.
+	agentLabel    string
+	pipelineID    string // pipeline ID for grouping
+	pipelineMode  string // "single", "parallel", "chain"
+	pipelineStep  int    // 1-based step in pipeline
+	pipelineTotal int    // total steps in pipeline
 	// Render cache: stores pre-rendered output to avoid repeated glamour and
 	// chroma work. renderCacheKey fingerprints every input the render depends
 	// on, so a message that changes re-renders itself — no caller has to
@@ -194,6 +200,7 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	h = fnvStr(h, m.agentID)
 	h = fnvStr(h, m.agentType)
 	h = fnvStr(h, m.agentTitle)
+	h = fnvStr(h, m.agentLabel)
 	h = fnvStr(h, m.pipelineID)
 	h = fnvStr(h, m.pipelineMode)
 	for _, ev := range m.agentEvents {
