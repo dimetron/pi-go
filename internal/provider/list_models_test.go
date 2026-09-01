@@ -25,6 +25,7 @@ func TestProviderDefaultBaseURL(t *testing.T) {
 		// would produce /v1/v1/models.
 		{"xai", "https://api.x.ai"},
 		{"openrouter", "https://openrouter.ai/api/v1"},
+		{"agentgateway", "http://localhost:4000"},
 		{"unknown", ""},
 	}
 	for _, tt := range tests {

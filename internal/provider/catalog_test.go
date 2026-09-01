@@ -300,6 +300,7 @@ func TestAPIKeyForProvider(t *testing.T) {
 		{"mistral", "MISTRAL_API_KEY"},
 		{"xai", "XAI_API_KEY"},
 		{"openrouter", "OPENROUTER_API_KEY"},
+		{"agentgateway", "AGENTGATEWAY_API_KEY"},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Setenv(tc.env, "key-"+tc.provider)
@@ -326,6 +327,7 @@ func TestBaseURLForProvider(t *testing.T) {
 		{"mistral", "MISTRAL_BASE_URL"},
 		{"xai", "XAI_BASE_URL"},
 		{"openrouter", "OPENROUTER_BASE_URL"},
+		{"agentgateway", "AGENTGATEWAY_BASE_URL"},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			t.Setenv(tc.env, "http://gateway.invalid/"+tc.provider)

@@ -60,6 +60,7 @@ func isolateRunModelListEnv(t *testing.T) {
 		"OLLAMA_HOST",
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
 		"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
+		"AGENTGATEWAY_API_KEY", "AGENTGATEWAY_BASE_URL",
 	} {
 		t.Setenv(k, "")
 	}

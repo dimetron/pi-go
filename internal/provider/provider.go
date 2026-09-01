@@ -363,6 +363,8 @@ func apiKeyForProvider(p string) string {
 		return os.Getenv("XAI_API_KEY")
 	case "openrouter":
 		return os.Getenv("OPENROUTER_API_KEY")
+	case "agentgateway":
+		return os.Getenv("AGENTGATEWAY_API_KEY")
 	}
 	return ""
 }
@@ -387,6 +389,8 @@ func baseURLForProvider(p string) string {
 		return os.Getenv("XAI_BASE_URL")
 	case "openrouter":
 		return os.Getenv("OPENROUTER_BASE_URL")
+	case "agentgateway":
+		return os.Getenv("AGENTGATEWAY_BASE_URL")
 	}
 	return ""
 }
@@ -450,6 +454,14 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "openrouter", Model: modelName[len("openrouter/"):]}, nil
 	}
 
+	// Detect agentgateway/ prefix → agentgateway provider. Checked before the
+	// :cloud/-cloud suffix check below: agentgateway model IDs carry a
+	// "-cloud" tag (e.g. deepseek-v4-flash:0731-cloud) that would otherwise
+	// route them to Ollama.
+	if strings.HasPrefix(strings.ToLower(modelName), "agentgateway/") {
+		return Info{Provider: "agentgateway", Model: modelName[len("agentgateway/"):]}, nil
+	}
+
 	// Detect mistral/ prefix → native Mistral provider.
 	// The prefix is stripped; the remainder is the Mistral model name.
 	if strings.HasPrefix(strings.ToLower(modelName), "mistral/") {
@@ -480,7 +492,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter, agentgateway; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -604,6 +616,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewXAI(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "opencode":
 		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
+	case "agentgateway":
+		return NewAgentGateway(ctx, info.Model, apiKey, baseURL, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

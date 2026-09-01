@@ -1093,10 +1093,15 @@ func switchContextWindowSize(ctx context.Context, cfg config.Config, info provid
 // the TUI stores as the current model and re-resolves on the next switch — so
 // returning the bare name would drop the one part of the spelling that says
 // "local", and a cloud-tagged model would move to api.ollama.com behind the
-// user's back the moment a key was set.
+// user's back the moment a key was set. The same applies to agentgateway
+// models, whose IDs carry a "-cloud" tag that would otherwise route them to
+// Ollama.
 func switchedModelName(info provider.Info) string {
 	if info.LocalOllama {
 		return "ollama/" + info.Model
+	}
+	if info.Provider == "agentgateway" {
+		return "agentgateway/" + info.Model
 	}
 	return info.Model
 }

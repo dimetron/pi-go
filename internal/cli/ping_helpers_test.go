@@ -110,6 +110,12 @@ func TestSetPingAuthHeaders(t *testing.T) {
 			wantHeaders: map[string]string{"Authorization": "Bearer xai-key"},
 		},
 		{
+			name:        "agentgateway uses bearer when a key is configured",
+			provider:    "agentgateway",
+			apiKey:      "agw-key",
+			wantHeaders: map[string]string{"Authorization": "Bearer agw-key"},
+		},
+		{
 			name:        "azure uses api-key header",
 			provider:    "azure",
 			apiKey:      "azure-key",

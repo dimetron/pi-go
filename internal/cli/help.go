@@ -85,9 +85,15 @@ func writeRoleSummary(w io.Writer) {
 // A cloud tag with no key is not a missing credential either: the request falls
 // back to the local daemon, which proxies cloud models on the signed-in
 // identity. Calling that MISSING would report a failure that does not happen.
+//
+// agentgateway is a local OpenAI-compatible gateway and needs no credential
+// either; AGENTGATEWAY_API_KEY is only for a gateway that requires one.
 func credentialStatus(prov, model string, keys map[string]string) string {
 	if prov == "ollama" && !provider.IsOllamaCloudModel(model) {
 		return "none (local daemon)"
+	}
+	if prov == "agentgateway" {
+		return "none (local gateway)"
 	}
 
 	envVar := providerEnvVar(prov)

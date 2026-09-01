@@ -12,7 +12,7 @@ func TestProviderForwardsInlineImages(t *testing.T) {
 	}
 	for _, p := range []string{
 		"ollama", "openai", "azure", "anthropic", "mistral",
-		"openrouter", "xai", "opencode", "", "unknown",
+		"openrouter", "xai", "opencode", "agentgateway", "", "unknown",
 	} {
 		if providerForwardsInlineImages(p) {
 			t.Errorf("providerForwardsInlineImages(%q) = true; no adapter for it converts InlineData", p)
