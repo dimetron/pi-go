@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -142,6 +142,12 @@ check-cve:
 	go install golang.org/x/vuln/cmd/govulncheck@latest
 	govulncheck ./... | grep -A7 Vulnerability || :
 	grype .
+
+# grype scan of the repo, excluding gitignored scratch dirs (tmp/, .worktrees/)
+# that hold vendored SDKs and agent worktrees — they are not part of the build.
+# Note: grype needs one --exclude per pattern; a comma-joined glob matches nothing.
+scan:
+	grype . --exclude './tmp/**' --exclude './.worktrees/**'
 
 # Same invocation the release workflow uses for the aggregate SBOM, so a
 # release-time syft failure can be reproduced locally.
