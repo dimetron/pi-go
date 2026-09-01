@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+config:
+  database:
+    url: ${AGENTGATEWAY_DATABASE_URL:-postgresql://agentgateway:agentgateway@localhost:5432/agentgateway}
+gateways:
+  default:
+    port: 4000
+ui:
+  gateways: default
+llm:
+  providers:
+  - name: ollama-1
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_1:-}
+  - name: ollama-2
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_2:-}
+  - name: ollama-3
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_3:-}
+  models:
+  - name: ollama1/*
+    provider:
+      reference: ollama-1
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama1/")
+  - name: ollama2/*
+    provider:
+      reference: ollama-2
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama2/")
+  - name: ollama3/*
+    provider:
+      reference: ollama-3
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama3/")
+  virtualModels:
+  - name: ollama
+    routing:
+      failover:
+        targets:
+        - model: ollama1/deepseek-v4-flash:0731-cloud
+          priority: 0
+        - model: ollama2/deepseek-v4-flash:0731-cloud
+          priority: 1
+        - model: ollama3/deepseek-v4-flash:0731-cloud
+          priority: 2
+  policies:
+    apiKey:
+      mode: strict
+      keys:
+      - key: ${AGENTGATEWAY_API_KEY:-agw_sk_CHANGE_ME}
+        metadata:
+          name: pi-go
+          agentgateway.dev/id: bf981e0f-2d7c-4945-9b22-bb13ff04dbba
+          agentgateway.dev/createdAt: 1788257821

@@ -1,0 +1,246 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+config:
+  logging:
+    fields:
+      add:
+        llm.prompt: llm.prompt
+        llm.completion: llm.completion
+  database:
+    url: ${AGENTGATEWAY_DATABASE_URL:-postgresql://agentgateway:agentgateway@localhost:5432/agentgateway}
+  storage:
+    mode: ${AGENTGATEWAY_STORAGE_MODE:-file}
+  modelCatalog:
+  - file: ${AGENTGATEWAY_BASE_COSTS:-./base-costs.json}
+  - file: ${AGENTGATEWAY_PI_ALIASES:-./pi-aliases.json}
+  - inline:
+      providers: {}
+gateways:
+  default:
+    port: 4000
+mcp:
+  gateways: default
+  prefixMode: always
+  targets:
+  - name: openai-docs
+    mcp:
+      host: https://developers.openai.com/mcp
+  - name: tavily
+    mcp:
+      host: mcp.tavily.com
+      port: 443
+      path: /mcp/?tavilyApiKey=${TAVILY_API_KEY:-}
+    policies:
+      backendTLS:
+        hostname: mcp.tavily.com
+
+ui:
+  gateways: default
+llm:
+  providers:
+  - name: anthropic
+    provider: anthropic
+    params:
+      apiKey: ${ANTHROPIC_API_KEY:-}
+  - name: openai
+    provider: openai
+    params:
+      apiKey: ${OPENAI_API_KEY:-}
+  - name: gemini
+    provider: gemini
+    params:
+      apiKey: ${GEMINI_API_KEY:-}
+  - name: mistral
+    provider: mistral
+    params:
+      apiKey: ${MISTRAL_API_KEY:-}
+  - name: openrouter
+    provider: openrouter
+    params:
+      apiKey: ${OPENROUTER_API_KEY:-}
+  - name: xai
+    provider: xai
+    params:
+      apiKey: ${XAI_API_KEY:-}
+  - name: ollama
+    provider: ollama
+    params:
+      baseUrl: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}
+  - name: ollama-cloud-1
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_1:-}
+  - name: ollama-cloud-2
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_2:-}
+  - name: ollama-cloud-3
+    provider: ollama
+    params:
+      baseUrl: https://ollama.com/v1
+      apiKey: ${OLLAMA_API_KEY_3:-}
+  - name: opencode
+    provider:
+      custom:
+        providerOverride: opencode
+        formats:
+        - type: completions
+        - type: messages
+    params:
+      baseUrl: ${OPENCODE_BASE_URL:-https://opencode.ai/zen/go/v1}
+      apiKey: ${OPENCODE_API_KEY:-}
+  models:
+  - name: anthropic/*
+    provider:
+      reference: anthropic
+    transformation:
+      model: llmRequest.model.stripPrefix("anthropic/")
+  - name: openai/*
+    provider:
+      reference: openai
+    transformation:
+      model: llmRequest.model.stripPrefix("openai/")
+  - name: gemini/*
+    provider:
+      reference: gemini
+    transformation:
+      model: llmRequest.model.stripPrefix("gemini/")
+  - name: mistral/*
+    provider:
+      reference: mistral
+    transformation:
+      model: llmRequest.model.stripPrefix("mistral/")
+  - name: openrouter/*
+    provider:
+      reference: openrouter
+    transformation:
+      model: llmRequest.model.stripPrefix("openrouter/")
+  - name: xai/*
+    provider:
+      reference: xai
+    transformation:
+      model: llmRequest.model.stripPrefix("xai/")
+  - name: ollama/*
+    provider:
+      reference: ollama
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama/")
+  - name: ollama1/*
+    provider:
+      reference: ollama-cloud-1
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama1/")
+  - name: ollama2/*
+    provider:
+      reference: ollama-cloud-2
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama2/")
+  - name: ollama3/*
+    provider:
+      reference: ollama-cloud-3
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama3/")
+  - name: ollama-cloud/*
+    provider:
+      reference: ollama-cloud-1
+    transformation:
+      model: llmRequest.model.stripPrefix("ollama-cloud/")
+  - name: opencode/*
+    provider:
+      reference: opencode
+    transformation:
+      model: llmRequest.model.stripPrefix("opencode/")
+  - name: claude-*
+    provider:
+      reference: anthropic
+  - name: gpt-*
+    provider:
+      reference: openai
+  - name: o3*
+    provider:
+      reference: openai
+  - name: gemini-*
+    provider:
+      reference: gemini
+  - name: grok-*
+    provider:
+      reference: xai
+  virtualModels:
+  - name: ollama-deepseek-balanced
+    routing:
+      weighted:
+        targets:
+        - model: ollama1/deepseek-v4-flash:0731-cloud
+          weight: 1
+        - model: ollama2/deepseek-v4-flash:0731-cloud
+          weight: 1
+        - model: ollama3/deepseek-v4-flash:0731-cloud
+          weight: 1
+  - name: ollama-gemma4
+    routing:
+      failover:
+        targets:
+        - model: ollama1/gemma4:cloud
+          priority: 0
+        - model: ollama2/gemma4:cloud
+          priority: 1
+        - model: ollama3/gemma4:cloud
+          priority: 2
+  - name: ollama-glm-flash
+    routing:
+      failover:
+        targets:
+        - model: ollama1/glm-5.3-flash:cloud
+          priority: 0
+        - model: ollama2/glm-5.3-flash:cloud
+          priority: 1
+        - model: ollama3/glm-5.3-flash:cloud
+          priority: 2
+  - name: ollama-minimax
+    routing:
+      failover:
+        targets:
+        - model: ollama1/minimax-m3:cloud
+          priority: 0
+        - model: ollama2/minimax-m3:cloud
+          priority: 1
+        - model: ollama3/minimax-m3:cloud
+          priority: 2
+  - name: ollama-deepseek
+    routing:
+      failover:
+        targets:
+        - model: ollama1/deepseek-v4-flash:0731-cloud
+          priority: 0
+        - model: ollama2/deepseek-v4-flash:0731-cloud
+          priority: 1
+        - model: ollama3/deepseek-v4-flash:0731-cloud
+          priority: 2
+  - name: pi-default
+    routing:
+      failover:
+        targets:
+        - model: anthropic/claude-opus-5
+          priority: 0
+        - model: openai/gpt-5.6
+          priority: 1
+        - model: gemini/gemini-3-pro
+          priority: 2
+  - name: pi-fast
+    routing:
+      failover:
+        targets:
+        - model: ollama1/deepseek-v4-flash:0731-cloud
+          priority: 0
+        - model: openai/gpt-5.6-luna
+          priority: 1
+  policies:
+    apiKey:
+      mode: strict
+      keys:
+      - key: ${AGENTGATEWAY_API_KEY:-agw_sk_CHANGE_ME}
+        metadata:
+          name: pi-go
+          agentgateway.dev/id: 32a5356e-e005-45a1-ade5-d4862546b64c
+          agentgateway.dev/createdAt: 1788259453

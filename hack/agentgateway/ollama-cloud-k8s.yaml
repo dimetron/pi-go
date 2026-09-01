@@ -1,0 +1,176 @@
+---
+# 3 Ollama Cloud API keys — one per instance.
+# Replace the placeholders with real keys from https://ollama.com/settings/keys
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ollama-cloud-key-1
+  namespace: default
+stringData:
+  Authorization: ollama_key_1_placeholder
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ollama-cloud-key-2
+  namespace: default
+stringData:
+  Authorization: ollama_key_2_placeholder
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ollama-cloud-key-3
+  namespace: default
+stringData:
+  Authorization: ollama_key_3_placeholder
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ollama-gw
+  namespace: default
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - protocol: HTTP
+    port: 8080
+    name: llm
+    allowedRoutes:
+      namespaces:
+        from: Same
+      kinds:
+      - group: agentgateway.dev
+        kind: AgentgatewayModel
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: ollama-cloud-1
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ollama-gw
+    sectionName: llm
+  match:
+    model: ollama1/*
+  provider: Ollama
+  baseURL: https://ollama.com/v1
+  policies:
+    auth:
+      secretRef:
+        name: ollama-cloud-key-1
+        key: Authorization
+    transformations:
+    - field: model
+      expression: 'llmRequest.model.stripPrefix("ollama1/")'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: ollama-cloud-2
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ollama-gw
+    sectionName: llm
+  match:
+    model: ollama2/*
+  provider: Ollama
+  baseURL: https://ollama.com/v1
+  policies:
+    auth:
+      secretRef:
+        name: ollama-cloud-key-2
+        key: Authorization
+    transformations:
+    - field: model
+      expression: 'llmRequest.model.stripPrefix("ollama2/")'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: ollama-cloud-3
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ollama-gw
+    sectionName: llm
+  match:
+    model: ollama3/*
+  provider: Ollama
+  baseURL: https://ollama.com/v1
+  policies:
+    auth:
+      secretRef:
+        name: ollama-cloud-key-3
+        key: Authorization
+    transformations:
+    - field: model
+      expression: 'llmRequest.model.stripPrefix("ollama3/")'
+---
+# Virtual Model: Load-balances requests evenly across all 3 Ollama Cloud instances
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: ollama-balanced
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ollama-gw
+    sectionName: llm
+  virtualModel:
+    weighted:
+      targets:
+      - modelRef:
+          name: ollama-cloud-1
+        model: ollama1/deepseek-v4-flash:0731-cloud
+        weight: 1
+      - modelRef:
+          name: ollama-cloud-2
+        model: ollama2/deepseek-v4-flash:0731-cloud
+        weight: 1
+      - modelRef:
+          name: ollama-cloud-3
+        model: ollama3/deepseek-v4-flash:0731-cloud
+        weight: 1
+---
+# Virtual Model: Priority failover routing across Ollama Cloud instances
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: ollama-resilient
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ollama-gw
+    sectionName: llm
+  virtualModel:
+    failover:
+      targets:
+      - modelRef:
+          name: ollama-cloud-1
+        model: ollama1/deepseek-v4-flash:0731-cloud
+        priority: 0
+      - modelRef:
+          name: ollama-cloud-2
+        model: ollama2/deepseek-v4-flash:0731-cloud
+        priority: 1
+      - modelRef:
+          name: ollama-cloud-3
+        model: ollama3/deepseek-v4-flash:0731-cloud
+        priority: 2
+
+
