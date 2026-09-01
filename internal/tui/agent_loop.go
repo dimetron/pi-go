@@ -1453,12 +1453,13 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		// filters on tool=="bash"), so reusing the field here cannot cross wires.
 		agentID: handle, pollCount: 1,
 	}
-	if msg.name == "agent" || msg.name == "subagent" {
+	if msg.name == "agent" || msg.name == "subagent" || msg.name == "a2a" {
 		// A single subagent tool call in parallel/chain mode spawns N children.
 		// Render one card per child so the user sees agent[pi], agent[claude],
 		// ... instead of a collapsed agent[pi+claude+...] card. Each card
 		// carries its own type + title and will later be matched to its spawn
-		// event by agent-ID prefix.
+		// event by agent-ID prefix. A2A calls render the same card shape, with
+		// the configured agent name (agent_name) as the bracketed label.
 		subMsgs := splitSubagentCards(newMsg, msg.args)
 		m.chatModel.Messages = append(m.chatModel.Messages, subMsgs...)
 		return m, waitForAgent(m.agentCh)
@@ -1486,6 +1487,14 @@ func splitSubagentCards(base message, args map[string]any) []message {
 		prompt, _ = args["task"].(string)
 	}
 	single.agentTitle = truncatePrompt(prompt)
+	// A2A calls carry the configured agent name in agent_name; render it
+	// verbatim in the bracket so the card reads agent[istio-agent] rather than
+	// collapsing to agent[pi].
+	if base.tool == "a2a" {
+		if name, _ := args["agent_name"].(string); name != "" {
+			single.agentLabel = name
+		}
+	}
 	return []message{single}
 }
 

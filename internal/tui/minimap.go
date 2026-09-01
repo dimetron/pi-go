@@ -160,7 +160,7 @@ func toolBlockKind(tool string) blockKind {
 		return blockEdit
 	case "bash", "shell":
 		return blockExecute
-	case "agent", "subagent":
+	case "agent", "subagent", "a2a":
 		return blockAgent
 	}
 	return blockTool
