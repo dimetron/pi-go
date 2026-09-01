@@ -1,0 +1,46 @@
+# The upstream llm-ollama-cloud example: 3 Ollama Cloud instances, each with its
+# own key, plus the Postgres that agentgateway writes request logs to.
+# Superseded for day-to-day use by config.yaml (which exposes ollama-cloud/*),
+# kept because ollama-cloud.yaml and ollama-cloud-k8s.yaml still reference it.
+#
+#   docker compose -f docker-compose.ollama-cloud.yaml up -d
+#
+# UI admin - http://localhost:15000/ui
+# LLM port - http://localhost:4000/ - use as base URL
+services:
+  agentgateway:
+    image: ghcr.io/agentgateway/agentgateway:v1.5.0
+    container_name: agentgateway-ollama-cloud
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      OLLAMA_API_KEY_1: ${OLLAMA_API_KEY_1:-}
+      OLLAMA_API_KEY_2: ${OLLAMA_API_KEY_2:-}
+      OLLAMA_API_KEY_3: ${OLLAMA_API_KEY_3:-}
+      AGENTGATEWAY_DATABASE_URL: postgresql://agentgateway:agentgateway@postgres:5432/agentgateway
+    volumes:
+      - ./ollama-cloud.yaml:/etc/agentgateway/config.yaml:ro
+    command:
+      - -f
+      - /etc/agentgateway/config.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: agentgateway
+      POSTGRES_USER: agentgateway
+      POSTGRES_PASSWORD: agentgateway
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentgateway -d agentgateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:

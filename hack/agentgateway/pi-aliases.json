@@ -1,0 +1,461 @@
+{
+  "providers": {
+    "anthropic": {
+      "models": {
+        "claude-3-haiku": {
+          "rates": {
+            "input": "0.25",
+            "output": "1.25",
+            "cacheRead": "0.025",
+            "cacheWrite": "0.3125"
+          }
+        },
+        "claude-3-opus": {
+          "rates": {
+            "input": "15",
+            "output": "75",
+            "cacheRead": "1.5",
+            "cacheWrite": "18.75"
+          }
+        },
+        "claude-3.5-haiku": {
+          "rates": {
+            "input": "0.8",
+            "output": "4",
+            "cacheRead": "0.08",
+            "cacheWrite": "1"
+          }
+        },
+        "claude-3.5-sonnet": {
+          "rates": {
+            "input": "3",
+            "output": "15",
+            "cacheRead": "0.3",
+            "cacheWrite": "3.75"
+          }
+        },
+        "claude-3.7-sonnet": {
+          "rates": {
+            "input": "3",
+            "output": "15",
+            "cacheRead": "0.3",
+            "cacheWrite": "3.75"
+          }
+        },
+        "claude-4.5-haiku": {
+          "rates": {
+            "input": "1",
+            "output": "5",
+            "cacheRead": "0.1",
+            "cacheWrite": "1.25"
+          }
+        },
+        "claude-mythos-5": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "1",
+            "cacheWrite": "12.5"
+          }
+        },
+        "claude-opus-4": {
+          "rates": {
+            "input": "15",
+            "output": "75",
+            "cacheRead": "1.5",
+            "cacheWrite": "18.75"
+          }
+        },
+        "claude-opus-4-1": {
+          "rates": {
+            "input": "15",
+            "output": "75",
+            "cacheRead": "1.5",
+            "cacheWrite": "18.75"
+          }
+        },
+        "claude-sonnet-4.5": {
+          "rates": {
+            "input": "3",
+            "output": "15",
+            "cacheRead": "0.3",
+            "cacheWrite": "3.75"
+          }
+        },
+        "claude-sonnet-4.5-200k": {
+          "rates": {
+            "input": "6",
+            "output": "22.5",
+            "cacheRead": "0.6",
+            "cacheWrite": "7.5"
+          }
+        }
+      }
+    },
+    "openai": {
+      "models": {
+        "chatgpt-4o-latest": {
+          "rates": {
+            "input": "5",
+            "output": "15"
+          }
+        },
+        "gpt-4.1-nano": {
+          "rates": {
+            "input": "0.1",
+            "output": "0.4",
+            "cacheRead": "0.025"
+          }
+        },
+        "gpt-4.5": {
+          "rates": {
+            "input": "75",
+            "output": "150",
+            "cacheRead": "37.5"
+          }
+        },
+        "gpt-5.1-codex": {
+          "rates": {
+            "input": "1.25",
+            "output": "10",
+            "cacheRead": "0.125"
+          }
+        },
+        "gpt-5.1-codex-mini": {
+          "rates": {
+            "input": "0.25",
+            "output": "2",
+            "cacheRead": "0.025"
+          }
+        },
+        "gpt-5.4-272k": {
+          "rates": {
+            "input": "5",
+            "output": "22.5",
+            "cacheRead": "0.5"
+          }
+        },
+        "gpt-5.4-pro-272k": {
+          "rates": {
+            "input": "60",
+            "output": "270"
+          }
+        },
+        "gpt-5.5-272k": {
+          "rates": {
+            "input": "10",
+            "output": "45",
+            "cacheRead": "1"
+          }
+        },
+        "gpt-image-1": {
+          "rates": {
+            "input": "10",
+            "output": "40",
+            "cacheRead": "1.25"
+          }
+        },
+        "gpt-image-1-mini": {
+          "rates": {
+            "input": "2",
+            "output": "8",
+            "cacheRead": "0.2"
+          }
+        },
+        "gpt-image-2-image": {
+          "rates": {
+            "input": "8",
+            "output": "30",
+            "cacheRead": "2"
+          }
+        },
+        "gpt-image-2-text": {
+          "rates": {
+            "input": "5",
+            "output": "10",
+            "cacheRead": "1.25"
+          }
+        },
+        "o1-mini": {
+          "rates": {
+            "input": "1.1",
+            "output": "4.4",
+            "cacheRead": "0.55"
+          }
+        },
+        "o1-preview": {
+          "rates": {
+            "input": "15",
+            "output": "60",
+            "cacheRead": "7.5"
+          }
+        },
+        "o1-pro": {
+          "rates": {
+            "input": "150",
+            "output": "600"
+          }
+        },
+        "o3-deep-research": {
+          "rates": {
+            "input": "10",
+            "output": "40",
+            "cacheRead": "2.5"
+          }
+        },
+        "o3-mini": {
+          "rates": {
+            "input": "1.1",
+            "output": "4.4",
+            "cacheRead": "0.55"
+          }
+        },
+        "o4-mini": {
+          "rates": {
+            "input": "1.1",
+            "output": "4.4",
+            "cacheRead": "0.275"
+          }
+        },
+        "o4-mini-deep-research": {
+          "rates": {
+            "input": "2",
+            "output": "8",
+            "cacheRead": "0.5"
+          }
+        },
+        "text-davinci-003": {
+          "rates": {
+            "input": "20",
+            "output": "20"
+          }
+        }
+      }
+    },
+    "ollama": {
+      "models": {
+        "deepseek-v4-flash:0731": {
+          "rates": {
+            "input": "0.22",
+            "output": "0.66",
+            "cacheRead": "0.007"
+          }
+        },
+        "deepseek-v4-flash:0731-cloud": {
+          "rates": {
+            "input": "0.22",
+            "output": "0.66",
+            "cacheRead": "0.007"
+          }
+        },
+        "deepseek-v4-pro:0813": {
+          "rates": {
+            "input": "0.66",
+            "output": "1.98",
+            "cacheRead": "0.022"
+          }
+        },
+        "deepseek-v4-pro:0813-cloud": {
+          "rates": {
+            "input": "0.66",
+            "output": "1.98",
+            "cacheRead": "0.022"
+          }
+        },
+        "gemma4:31b": {
+          "rates": {
+            "input": "0.09",
+            "output": "0.34",
+            "cacheRead": "0.05"
+          }
+        },
+        "gemma4:cloud": {
+          "rates": {
+            "input": "0.09",
+            "output": "0.34",
+            "cacheRead": "0.05"
+          }
+        },
+        "glm-5.1": {
+          "rates": {
+            "input": "0.966",
+            "output": "3.036",
+            "cacheRead": "0.1794"
+          }
+        },
+        "glm-5.1:cloud": {
+          "rates": {
+            "input": "0.966",
+            "output": "3.036",
+            "cacheRead": "0.1794"
+          }
+        },
+        "glm-5.2": {
+          "rates": {
+            "input": "1.19",
+            "output": "3.74",
+            "cacheRead": "0.221"
+          }
+        },
+        "glm-5.2:cloud": {
+          "rates": {
+            "input": "1.19",
+            "output": "3.74",
+            "cacheRead": "0.221"
+          }
+        },
+        "glm-5.3": {
+          "rates": {
+            "input": "1.4",
+            "output": "4.4",
+            "cacheRead": "0.26"
+          }
+        },
+        "glm-5.3-flash": {
+          "rates": {
+            "input": "0.075",
+            "output": "0.25",
+            "cacheRead": "0.015"
+          }
+        },
+        "glm-5.3-flash:cloud": {
+          "rates": {
+            "input": "0.075",
+            "output": "0.25",
+            "cacheRead": "0.015"
+          }
+        },
+        "glm-5.3:cloud": {
+          "rates": {
+            "input": "1.4",
+            "output": "4.4",
+            "cacheRead": "0.26"
+          }
+        },
+        "minimax-m3": {
+          "rates": {
+            "input": "0.3",
+            "output": "1.2",
+            "cacheRead": "0.06"
+          }
+        },
+        "minimax-m3:cloud": {
+          "rates": {
+            "input": "0.3",
+            "output": "1.2",
+            "cacheRead": "0.06"
+          }
+        }
+      }
+    },
+    "openrouter": {
+      "models": {
+        "deepseek/deepseek-v3.2": {
+          "rates": {
+            "input": "0.269",
+            "output": "0.4",
+            "cacheRead": "0.1345"
+          }
+        },
+        "deepseek/deepseek-v4-flash": {
+          "rates": {
+            "input": "0.08092",
+            "output": "0.16184",
+            "cacheRead": "0.016184"
+          }
+        },
+        "deepseek/deepseek-v4-flash-0731": {
+          "rates": {
+            "input": "0.065",
+            "output": "0.18",
+            "cacheRead": "0.016"
+          }
+        },
+        "deepseek/deepseek-v4-pro": {
+          "rates": {
+            "input": "1.6",
+            "output": "3.2",
+            "cacheRead": "0.135"
+          }
+        },
+        "deepseek/deepseek-v4-pro-0813": {
+          "rates": {
+            "input": "0.66",
+            "output": "1.98",
+            "cacheRead": "0.022"
+          }
+        },
+        "google/gemma-4-31b-it": {
+          "rates": {
+            "input": "0.09",
+            "output": "0.34",
+            "cacheRead": "0.05"
+          }
+        },
+        "minimax/minimax-m2.7": {
+          "rates": {
+            "input": "0.3",
+            "output": "1.2",
+            "cacheRead": "0.06"
+          }
+        },
+        "minimax/minimax-m3": {
+          "rates": {
+            "input": "0.3",
+            "output": "1.2",
+            "cacheRead": "0.06"
+          }
+        },
+        "z-ai/glm-4.6": {
+          "rates": {
+            "input": "0.43",
+            "output": "1.75",
+            "cacheRead": "0.08"
+          }
+        },
+        "z-ai/glm-4.7": {
+          "rates": {
+            "input": "0.4",
+            "output": "1.75",
+            "cacheRead": "0.08"
+          }
+        },
+        "z-ai/glm-5": {
+          "rates": {
+            "input": "0.6",
+            "output": "1.92",
+            "cacheRead": "0.12"
+          }
+        },
+        "z-ai/glm-5.1": {
+          "rates": {
+            "input": "0.966",
+            "output": "3.036",
+            "cacheRead": "0.1794"
+          }
+        },
+        "z-ai/glm-5.2": {
+          "rates": {
+            "input": "1.19",
+            "output": "3.74",
+            "cacheRead": "0.221"
+          }
+        },
+        "z-ai/glm-5.3": {
+          "rates": {
+            "input": "1.4",
+            "output": "4.4",
+            "cacheRead": "0.26"
+          }
+        },
+        "z-ai/glm-5.3-flash": {
+          "rates": {
+            "input": "0.075",
+            "output": "0.25",
+            "cacheRead": "0.015"
+          }
+        }
+      }
+    }
+  }
+}
