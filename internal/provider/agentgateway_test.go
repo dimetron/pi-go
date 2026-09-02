@@ -118,6 +118,41 @@ func TestListAgentGatewayModels(t *testing.T) {
 	}
 }
 
+// TestListAgentGatewayModelsEnrichesContextWindow pins that the listing path
+// fills in the context window from the embedded table, since the gateway's
+// /v1/models only carries id/owned_by. This is what makes `pi model list
+// agentgateway -o json` show a real context_window for the virtual models.
+func TestListAgentGatewayModelsEnrichesContextWindow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "ollama-deepseek", "owned_by": "openai"},
+				{"id": "ollama-gemma4", "owned_by": "openai"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	models, err := listAgentGatewayModels(context.Background(), ListModelsOptions{
+		APIKey:  "agw-key",
+		BaseURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("listAgentGatewayModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	// ollama-deepseek routes to deepseek-v4-flash:0731-cloud (1M).
+	if got := models[0].ContextWindow; got != 1_000_000 {
+		t.Errorf("ollama-deepseek ContextWindow = %d, want 1000000", got)
+	}
+	// ollama-gemma4 routes to gemma4:cloud, which is not in the table → 0.
+	if got := models[1].ContextWindow; got != 0 {
+		t.Errorf("ollama-gemma4 ContextWindow = %d, want 0 (uncataloged)", got)
+	}
+}
+
 // TestListModelsRoutesAgentGateway pins that the exported entry point reaches
 // the agentgateway branch, not the default "unsupported provider" error.
 func TestListModelsRoutesAgentGateway(t *testing.T) {
