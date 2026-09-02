@@ -59,6 +59,31 @@ func TestResolveRuntimeModel_RestoresSessionBackend(t *testing.T) {
 	}
 }
 
+// A resumed session whose model is a virtual name that only its recorded
+// provider understands — e.g. an agentgateway virtual model like
+// "ollama-deepseek", whose dash spelling carries no provider prefix — must
+// resolve through the recorded provider rather than failing on the name alone.
+func TestResolveRuntimeModel_ResumesVirtualModelViaRecordedProvider(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	writeSessionBackendMeta(t, home, "sess-agw", "ollama-deepseek", "agentgateway", "")
+	origSession, origModel, origURL := flagSession, flagModel, flagURL
+	t.Cleanup(func() { flagSession, flagModel, flagURL = origSession, origModel, origURL })
+	flagSession, flagModel, flagURL = "sess-agw", "", ""
+
+	cfg := config.Config{Roles: map[string]config.RoleConfig{"default": {Model: "gpt-5.6-luna", Provider: "openai"}}}
+	info, _, err := resolveRuntimeModelForRole(cfg, "ollama-deepseek", "openai", "default")
+	if err != nil {
+		t.Fatalf("resolveRuntimeModelForRole: %v", err)
+	}
+	if info.Provider != "agentgateway" {
+		t.Fatalf("provider = %q, want agentgateway from recorded session metadata", info.Provider)
+	}
+	if info.Model != "ollama-deepseek" {
+		t.Fatalf("model = %q, want ollama-deepseek", info.Model)
+	}
+}
+
 func TestResolveRuntimeModel_ExplicitURLWinsResume(t *testing.T) {
 	home := t.TempDir()
 	testenv.SetHome(t, home)

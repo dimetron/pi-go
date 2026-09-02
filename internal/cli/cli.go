@@ -302,11 +302,13 @@ func resolveRuntimeModel(cfg config.Config, modelName, providerName string) (pro
 
 func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, activeRole string) (provider.Info, string, error) {
 	baseURL := flagURL
+	resumedProvider := ""
 	if baseURL == "" && flagSession != "" && flagModel == "" && activeRole == "default" {
 		if dir, err := sessionsDir(); err == nil {
-			if resumedProvider, resumedURL, ok := pisession.SessionBackend(dir, flagSession); ok {
-				if resumedProvider != "" {
-					providerName = resumedProvider
+			if rp, resumedURL, ok := pisession.SessionBackend(dir, flagSession); ok {
+				if rp != "" {
+					providerName = rp
+					resumedProvider = rp
 				}
 				baseURL = resumedURL
 			}
@@ -318,7 +320,17 @@ func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, acti
 	}
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+		// A resumed session's model may be a virtual name that only its
+		// recorded provider understands — e.g. an agentgateway virtual model
+		// like "ollama-deepseek", whose dash spelling carries no provider
+		// prefix and so cannot be resolved from the name alone. The provider
+		// recorded in the session metadata is the authority for which backend
+		// served it, so fall back to it rather than failing the resume.
+		if resumedProvider != "" {
+			info = provider.Info{Provider: resumedProvider, Model: modelName}
+		} else {
+			return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+		}
 	}
 	if providerName != "" {
 		info.Provider = providerName
