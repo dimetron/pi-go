@@ -66,6 +66,19 @@ func TestContextWindowSizeForAgentGateway(t *testing.T) {
 	}
 }
 
+// TestContextWindowSizeForAgentGatewayVirtualModels pins that the gateway's
+// virtual model names resolve to the deepseek window they route to. A session
+// that names the virtual model (e.g. `ollama-deepseek`) must not fall back to a
+// 0 window, which disables auto-compaction and lets the session grow unchecked
+// until the model hits its output cap.
+func TestContextWindowSizeForAgentGatewayVirtualModels(t *testing.T) {
+	for _, name := range []string{"ollama-deepseek", "ollama-deepseek-balanced", "pi-fast"} {
+		if got := ContextWindowSizeFor("agentgateway", name); got != 1_000_000 {
+			t.Errorf("ContextWindowSizeFor(agentgateway, %q) = %d, want 1000000", name, got)
+		}
+	}
+}
+
 // TestListAgentGatewayModels covers the listing path against a stub gateway:
 // the OpenAI {"data":[...]} envelope, and the bearer header a gateway that
 // requires the optional AGENTGATEWAY_API_KEY would check.
