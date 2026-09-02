@@ -216,7 +216,7 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 
 	fmt.Printf("%s (%d models):\n", providerName, len(models))
 	for _, m := range models {
-		if providerName == "mistral" && m.ContextWindow > 0 {
+		if (providerName == "mistral" || providerName == "agentgateway") && m.ContextWindow > 0 {
 			fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
 		} else if m.OwnedBy != "" {
 			fmt.Printf("  %-45s  %s\n", m.ID, m.OwnedBy)

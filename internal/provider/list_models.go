@@ -191,8 +191,20 @@ func listOpenRouterModels(ctx context.Context, opts ListModelsOptions) ([]ModelI
 // listAgentGatewayModels fetches models from GET /v1/models on the local
 // agentgateway. The gateway is OpenAI-compatible, so the shared bearer
 // envelope applies; the default endpoint is localhost:4000.
+//
+// The gateway's /v1/models only carries id/owned_by — no context window — so
+// each model is enriched from the embedded context-window table. That is what
+// makes `pi model list agentgateway -o json` show a real context_window for
+// the virtual models (e.g. ollama-deepseek → 1M) instead of omitting the field.
 func listAgentGatewayModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
-	return listBearerModels(ctx, opts, "agentgateway", "agentgateway")
+	models, err := listBearerModels(ctx, opts, "agentgateway", "agentgateway")
+	if err != nil {
+		return nil, err
+	}
+	for i := range models {
+		models[i].ContextWindow = ContextWindowSizeFor("agentgateway", models[i].ID)
+	}
+	return models, nil
 }
 
 // listBearerModels fetches models from GET <base>/v1/models with bearer auth
