@@ -32,7 +32,9 @@ mcp:
     policies:
       backendTLS:
         hostname: mcp.tavily.com
-
+  - name: openrouter
+    mcp:
+      host: https://mcp.openrouter.ai/mcp
 ui:
   gateways: default
 llm:
