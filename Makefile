@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo hooks fetch-models
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -18,9 +18,19 @@ GO_BUILD_FLAGS := -v $(if $(filter-out 0,$(V)),-x,)
 # drift into producing differently-stamped binaries.
 GO_LDFLAGS := -X github.com/dimetron/pi-go/internal/cli.BuildTag=$$(git rev-parse --short HEAD 2>/dev/null || echo local)
 
-build:
+build: cache-clean
 	go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" ./cmd/pi
 	go build $(GO_BUILD_FLAGS) ./cmd/pi-sandbox
+
+# Clean the golangci-lint cache before building. The pre-commit hook runs
+# golangci-lint, and a full lint cache (hundreds of MB) can fill the disk and
+# make the hook fail with "no space left on device" / "parallel golangci-lint
+# is running". Clearing it here keeps the build from wedging on a full cache.
+# The Go build cache is deliberately NOT cleaned: it is the whole point of
+# incremental builds, and wiping it on every build would make each one cold.
+cache-clean:
+	@golangci-lint cache clean 2>/dev/null || true
+	@echo "golangci-lint cache cleaned"
 
 # Install onto PATH, i.e. $(go env GOBIN) or $GOPATH/bin. This used to be a bare
 # `install: build`, which has no recipe — it dropped the binaries in the repo
