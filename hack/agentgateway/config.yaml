@@ -46,8 +46,9 @@ llm:
     params:
       apiKey: ${OPENAI_API_KEY:-}
   - name: gemini
-    provider: gemini
+    provider: openai
     params:
+      baseUrl: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       apiKey: ${GEMINI_API_KEY:-}
   - name: mistral
     provider: mistral
