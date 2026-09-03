@@ -40,7 +40,9 @@ func TestHandleModelPriceRefreshDone_ReplacesPlaceholder(t *testing.T) {
 		}},
 	}
 
-	newM, _ := m.handleModelPriceRefreshDone(modelPriceRefreshDoneMsg{err: nil})
+	// Go through m.Update so the updateSession dispatch case for
+	// modelPriceRefreshDoneMsg is exercised.
+	newM, _ := m.Update(modelPriceRefreshDoneMsg{err: nil})
 	mm := newM.(*model)
 
 	if len(mm.chatModel.Messages) != 1 {
@@ -61,10 +63,33 @@ func TestHandleModelPriceRefreshDone_Error(t *testing.T) {
 		}},
 	}
 
-	newM, _ := m.handleModelPriceRefreshDone(modelPriceRefreshDoneMsg{err: context.DeadlineExceeded})
+	newM, _ := m.Update(modelPriceRefreshDoneMsg{err: context.DeadlineExceeded})
 	mm := newM.(*model)
 
 	if !strings.Contains(mm.chatModel.Messages[0].content, "✗ Model price refresh failed") {
 		t.Errorf("expected failure message, got %q", mm.chatModel.Messages[0].content)
+	}
+}
+
+func TestHandleModelPriceRefreshDone_AppendsWhenNoPlaceholder(t *testing.T) {
+	// When the last message is not a thinking placeholder, the result is
+	// appended rather than replacing.
+	m := &model{
+		chatModel: ChatModel{Messages: []message{
+			{role: "assistant", content: "previous"},
+		}},
+	}
+
+	newM, _ := m.Update(modelPriceRefreshDoneMsg{err: nil})
+	mm := newM.(*model)
+
+	if len(mm.chatModel.Messages) != 2 {
+		t.Fatalf("expected 2 messages (append), got %d", len(mm.chatModel.Messages))
+	}
+	if mm.chatModel.Messages[1].role != "assistant" {
+		t.Errorf("expected appended assistant message, got %q", mm.chatModel.Messages[1].role)
+	}
+	if !strings.Contains(mm.chatModel.Messages[1].content, "✓ Model prices refreshed") {
+		t.Errorf("expected success message, got %q", mm.chatModel.Messages[1].content)
 	}
 }
