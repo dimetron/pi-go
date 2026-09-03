@@ -10,6 +10,14 @@
             "cacheWrite": "12.5"
           }
         },
+        "claude-fable-5-1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
+            "cacheWrite": "12.5"
+          }
+        },
         "claude-haiku-4-5": {
           "rates": {
             "input": "1",
@@ -142,6 +150,14 @@
             "input": "10",
             "output": "50",
             "cacheRead": "1",
+            "cacheWrite": "12.5"
+          }
+        },
+        "anthropic.claude-fable-5-1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
             "cacheWrite": "12.5"
           }
         },
@@ -376,6 +392,14 @@
             "input": "10",
             "output": "50",
             "cacheRead": "1",
+            "cacheWrite": "12.5"
+          }
+        },
+        "global.anthropic.claude-fable-5-1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
             "cacheWrite": "12.5"
           }
         },
@@ -877,6 +901,14 @@
             "cacheWrite": "12.5"
           }
         },
+        "us.anthropic.claude-fable-5-1": {
+          "rates": {
+            "input": "11",
+            "output": "55",
+            "cacheRead": "0.275",
+            "cacheWrite": "13.75"
+          }
+        },
         "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
           "rates": {
             "input": "1",
@@ -1020,6 +1052,14 @@
             "input": "10",
             "output": "50",
             "cacheRead": "1",
+            "cacheWrite": "12.5"
+          }
+        },
+        "claude-fable-5-1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
             "cacheWrite": "12.5"
           }
         },
@@ -1354,8 +1394,8 @@
         },
         "gpt-5.6-sol": {
           "rates": {
-            "input": "5",
-            "output": "30",
+            "input": "4",
+            "output": "20",
             "cacheRead": "0.5",
             "cacheWrite": "6.25"
           },
@@ -2611,9 +2651,16 @@
       "models": {
         "accounts/fireworks/models/deepseek-v4-flash-0731": {
           "rates": {
-            "input": "0.14",
-            "output": "0.28",
-            "cacheRead": "0.028"
+            "input": "0.22",
+            "output": "0.66",
+            "cacheRead": "0.007"
+          }
+        },
+        "accounts/fireworks/models/deepseek-v4-flash-vision-exp": {
+          "rates": {
+            "input": "0.22",
+            "output": "0.66",
+            "cacheRead": "0.007"
           }
         },
         "accounts/fireworks/models/deepseek-v4-pro-0813": {
@@ -2641,7 +2688,7 @@
           "rates": {
             "input": "0.15",
             "output": "0.5",
-            "cacheRead": "0.029"
+            "cacheRead": "0.03"
           }
         },
         "accounts/fireworks/models/gpt-oss-120b": {
@@ -2973,6 +3020,14 @@
             "inputAudio": "0.75"
           }
         },
+        "gemini-3.8-flash": {
+          "rates": {
+            "input": "0.75",
+            "output": "3.75",
+            "cacheRead": "0.075",
+            "inputAudio": "0.75"
+          }
+        },
         "gemini-embedding-001": {
           "rates": {
             "input": "0.15",
@@ -3023,6 +3078,14 @@
     },
     "gcp.vertex_ai": {
       "models": {
+        "claude-fable-5-1@default": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
+            "cacheWrite": "12.5"
+          }
+        },
         "claude-fable-5@default": {
           "rates": {
             "input": "10",
@@ -3286,6 +3349,14 @@
           }
         },
         "gemini-3.7-flash": {
+          "rates": {
+            "input": "0.75",
+            "output": "3.75",
+            "cacheRead": "0.075",
+            "inputAudio": "0.75"
+          }
+        },
+        "gemini-3.8-flash": {
           "rates": {
             "input": "0.75",
             "output": "3.75",
@@ -4075,24 +4146,10 @@
             "cacheRead": "0.175"
           }
         },
-        "gpt-5.2-chat-latest": {
-          "rates": {
-            "input": "1.75",
-            "output": "14",
-            "cacheRead": "0.175"
-          }
-        },
         "gpt-5.2-pro": {
           "rates": {
             "input": "21",
             "output": "168"
-          }
-        },
-        "gpt-5.3-chat-latest": {
-          "rates": {
-            "input": "1.75",
-            "output": "14",
-            "cacheRead": "0.175"
           }
         },
         "gpt-5.3-codex": {
@@ -4394,6 +4451,14 @@
             "cacheWrite": "12.5"
           }
         },
+        "anthropic/claude-fable-5.1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
+            "cacheWrite": "12.5"
+          }
+        },
         "anthropic/claude-haiku-4.5": {
           "rates": {
             "input": "1",
@@ -4464,14 +4529,6 @@
             }
           ]
         },
-        "anthropic/claude-opus-4.7-fast": {
-          "rates": {
-            "input": "30",
-            "output": "150",
-            "cacheRead": "3",
-            "cacheWrite": "37.5"
-          }
-        },
         "anthropic/claude-opus-4.8": {
           "rates": {
             "input": "5",
@@ -4480,28 +4537,12 @@
             "cacheWrite": "6.25"
           }
         },
-        "anthropic/claude-opus-4.8-fast": {
-          "rates": {
-            "input": "10",
-            "output": "50",
-            "cacheRead": "1",
-            "cacheWrite": "12.5"
-          }
-        },
         "anthropic/claude-opus-5": {
           "rates": {
             "input": "5",
             "output": "25",
             "cacheRead": "0.5",
             "cacheWrite": "6.25"
-          }
-        },
-        "anthropic/claude-opus-5-fast": {
-          "rates": {
-            "input": "10",
-            "output": "50",
-            "cacheRead": "1",
-            "cacheWrite": "12.5"
           }
         },
         "anthropic/claude-sonnet-4": {
@@ -4720,9 +4761,9 @@
         },
         "deepseek/deepseek-chat-v3.1": {
           "rates": {
-            "input": "0.55",
-            "output": "1.65",
-            "cacheRead": "0.55"
+            "input": "0.25",
+            "output": "0.95",
+            "cacheRead": "0.13"
           }
         },
         "deepseek/deepseek-r1": {
@@ -4766,9 +4807,9 @@
         },
         "deepseek/deepseek-v4-flash": {
           "rates": {
-            "input": "0.08092",
-            "output": "0.16184",
-            "cacheRead": "0.016184"
+            "input": "0.088606",
+            "output": "0.177212",
+            "cacheRead": "0.017721"
           }
         },
         "deepseek/deepseek-v4-flash-0731": {
@@ -4780,23 +4821,23 @@
         },
         "deepseek/deepseek-v4-flash-vision-exp": {
           "rates": {
-            "input": "0.22",
-            "output": "0.66",
-            "cacheRead": "0.007"
+            "input": "0.44",
+            "output": "1.32",
+            "cacheRead": "0.014"
           }
         },
         "deepseek/deepseek-v4-pro": {
           "rates": {
-            "input": "1.6",
-            "output": "3.2",
-            "cacheRead": "0.135"
+            "input": "1.04226",
+            "output": "2.08452",
+            "cacheRead": "0.086855"
           }
         },
         "deepseek/deepseek-v4-pro-0813": {
           "rates": {
-            "input": "0.66",
-            "output": "1.98",
-            "cacheRead": "0.022"
+            "input": "1.1154",
+            "output": "3.3462",
+            "cacheRead": "0.03718"
           }
         },
         "dots-studio/dots-3-note-preview:free": {
@@ -5025,6 +5066,15 @@
             "reasoning": "3.75"
           }
         },
+        "google/gemini-3.8-flash": {
+          "rates": {
+            "input": "0.75",
+            "output": "3.75",
+            "cacheRead": "0.075",
+            "cacheWrite": "0.041667",
+            "reasoning": "3.75"
+          }
+        },
         "google/gemma-2-27b-it": {
           "rates": {
             "input": "0.65",
@@ -5120,6 +5170,13 @@
             "cacheRead": "0.025"
           }
         },
+        "inception/mercury-2.5-preview": {
+          "rates": {
+            "input": "0.04",
+            "output": "0.15",
+            "cacheRead": "0.004"
+          }
+        },
         "inclusionai/ling-3.0-flash": {
           "rates": {
             "input": "0.021",
@@ -5193,9 +5250,8 @@
         },
         "meta-llama/llama-3.3-70b-instruct": {
           "rates": {
-            "input": "0.71",
-            "output": "0.71",
-            "cacheRead": "0.71"
+            "input": "0.1",
+            "output": "0.32"
           }
         },
         "meta-llama/llama-4-maverick": {
@@ -5219,7 +5275,7 @@
         "meta/muse-glimmer-30b": {
           "rates": {
             "input": "0.3",
-            "output": "1.2",
+            "output": "1.1",
             "cacheRead": "0.04"
           }
         },
@@ -5238,6 +5294,20 @@
           }
         },
         "meta/muse-spark-1.2-contributor": {
+          "rates": {
+            "input": "0.1",
+            "output": "0.2",
+            "cacheRead": "0.002"
+          }
+        },
+        "meta/muse-spark-1.3": {
+          "rates": {
+            "input": "1.25",
+            "output": "4.25",
+            "cacheRead": "0.15"
+          }
+        },
+        "meta/muse-spark-1.3-contributor": {
           "rates": {
             "input": "0.1",
             "output": "0.2",
@@ -5550,7 +5620,7 @@
           "rates": {
             "input": "0.05",
             "output": "0.2",
-            "cacheRead": "0.025"
+            "cacheRead": "0.03"
           }
         },
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
@@ -5573,9 +5643,9 @@
         },
         "nvidia/nemotron-3-ultra-550b-a55b": {
           "rates": {
-            "input": "0.5",
-            "output": "2.2",
-            "cacheRead": "0.1"
+            "input": "0.6",
+            "output": "2.4",
+            "cacheRead": "0.12"
           }
         },
         "nvidia/nemotron-3-ultra-550b-a55b:free": {
@@ -6487,8 +6557,9 @@
         },
         "qwen/qwen3.5-397b-a17b": {
           "rates": {
-            "input": "0.39",
-            "output": "2.34"
+            "input": "0.55",
+            "output": "3.5",
+            "cacheRead": "0.225"
           }
         },
         "qwen/qwen3.5-9b": {
@@ -7021,9 +7092,9 @@
         },
         "z-ai/glm-4.6": {
           "rates": {
-            "input": "0.43",
-            "output": "1.75",
-            "cacheRead": "0.08"
+            "input": "0.55",
+            "output": "2.2",
+            "cacheRead": "0.11"
           }
         },
         "z-ai/glm-4.6v": {
@@ -7070,9 +7141,9 @@
         },
         "z-ai/glm-5.2": {
           "rates": {
-            "input": "1.19",
-            "output": "3.74",
-            "cacheRead": "0.221"
+            "input": "0.966",
+            "output": "3.036",
+            "cacheRead": "0.1932"
           }
         },
         "z-ai/glm-5.2:free": {
@@ -7085,7 +7156,7 @@
           "rates": {
             "input": "1.4",
             "output": "4.4",
-            "cacheRead": "0.26"
+            "cacheRead": "0.14"
           }
         },
         "z-ai/glm-5.3-flash": {
@@ -7106,7 +7177,7 @@
           "rates": {
             "input": "10",
             "output": "50",
-            "cacheRead": "1",
+            "cacheRead": "0.25",
             "cacheWrite": "12.5"
           }
         },
@@ -7219,11 +7290,18 @@
             }
           ]
         },
+        "~z-ai/glm-flash-latest": {
+          "rates": {
+            "input": "0.075",
+            "output": "0.25",
+            "cacheRead": "0.015"
+          }
+        },
         "~z-ai/glm-latest": {
           "rates": {
-            "input": "1.17",
-            "output": "3.96",
-            "cacheRead": "0.234"
+            "input": "1.106",
+            "output": "3.476",
+            "cacheRead": "0.1817"
           }
         }
       }
