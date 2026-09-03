@@ -123,7 +123,8 @@ func oaiContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 
 		switch {
 		case len(functionCalls) > 0 && genaiIsAssistantRole(role):
-			messages = append(messages, oaiToolCallMessages(textParts, functionCalls, functionResponses)...)
+			signatures := genaiThoughtSignatures(content.Parts)
+			messages = append(messages, oaiToolCallMessages(textParts, functionCalls, functionResponses, signatures)...)
 		case len(textParts) > 0:
 			messages = append(messages, oaiTextMessage(role, strings.Join(textParts, "\n")))
 		}
@@ -138,6 +139,7 @@ func oaiToolCallMessages(
 	textParts []string,
 	functionCalls []*genai.FunctionCall,
 	functionResponses map[string]*genai.FunctionResponse,
+	signatures map[string][]byte,
 ) []openai.ChatCompletionMessageParamUnion {
 	toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(functionCalls))
 	var toolResponseMessages []openai.ChatCompletionMessageParamUnion
@@ -146,16 +148,21 @@ func oaiToolCallMessages(
 			continue
 		}
 		argsJSON, _ := json.Marshal(fc.Args)
-		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-				ID:   fc.ID,
-				Type: constant.Function("function"),
-				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-					Name:      fc.Name,
-					Arguments: string(argsJSON),
-				},
+		call := &openai.ChatCompletionMessageFunctionToolCallParam{
+			ID:   fc.ID,
+			Type: constant.Function("function"),
+			Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+				Name:      fc.Name,
+				Arguments: string(argsJSON),
 			},
-		})
+		}
+		// Gemini 3 rejects a replayed call whose thought signature was
+		// dropped; every other provider never produced one, so the field
+		// is only ever set when the model itself sent it.
+		if extra := oaiThoughtSignatureExtraContent(signatures[fc.ID]); extra != nil {
+			call.SetExtraFields(extra)
+		}
+		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{OfFunction: call})
 		contentStr := "No response available for this function call."
 		if fr := functionResponses[fc.ID]; fr != nil {
 			contentStr = oaiFunctionResponseContent(fr.Response)
@@ -237,6 +244,20 @@ func accumulateOaiToolCall(acc map[int64]map[string]any, idx int64, id, name, ar
 	}
 }
 
+// accumulateOaiToolCallSignature records a Gemini thought signature for a tool
+// call being streamed. It is separate from accumulateOaiToolCall because the
+// signature is not part of the OpenAI delta shape and has to be read out of
+// the chunk's raw JSON, and because it arrives whole rather than in fragments.
+func accumulateOaiToolCallSignature(acc map[int64]map[string]any, idx int64, sig []byte) {
+	if len(sig) == 0 {
+		return
+	}
+	if acc[idx] == nil {
+		acc[idx] = map[string]any{"id": "", "name": "", "arguments": ""}
+	}
+	acc[idx]["thought_signature"] = sig
+}
+
 // buildOaiFinalResponse constructs the final LLMResponse from accumulated streaming state.
 func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 	indices := make([]int64, 0, len(s.toolCalls))
@@ -269,6 +290,9 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 		if name != "" || id != "" {
 			p := genai.NewPartFromFunctionCall(name, args)
 			p.FunctionCall.ID = id
+			if sig, ok := tc["thought_signature"].([]byte); ok {
+				p.ThoughtSignature = sig
+			}
 			finalParts = append(finalParts, p)
 		}
 	}
@@ -381,6 +405,7 @@ func oaiRunStreamingHooks(ctx context.Context, client *openai.Client, params ope
 		}
 		for _, tc := range delta.ToolCalls {
 			accumulateOaiToolCall(state.toolCalls, tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)
+			accumulateOaiToolCallSignature(state.toolCalls, tc.Index, oaiThoughtSignature(tc.RawJSON()))
 		}
 		if choice.FinishReason != "" {
 			state.finishReason = choice.FinishReason
@@ -441,6 +466,7 @@ func oaiRunNonStreamingHooks(ctx context.Context, client *openai.Client, params 
 			}
 			p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
 			p.FunctionCall.ID = tc.ID
+			p.ThoughtSignature = oaiThoughtSignature(tc.RawJSON())
 			parts = append(parts, p)
 		}
 	}
