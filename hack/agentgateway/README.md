@@ -167,6 +167,34 @@ The container runs as uid 65532. On macOS (Docker Desktop, OrbStack) the bind
 mount maps ownership and writes just work. On Linux the file must be writable by
 that uid — `chmod 666 config.yaml` — or every UI save fails.
 
+### The mount is the directory, not the files
+
+Compose bind-mounts `hack/agentgateway/` at `/etc/agentgateway`, rather than
+mounting `config.yaml`, `base-costs.json` and `pi-aliases.json` one by one.
+
+A single-file bind mount binds one *inode*. Replace that file on the host by
+unlink-then-create — a `git checkout` of a deleted file, many editors' save —
+and the container is left holding a mount that resolves to nothing. Every read,
+write and watch of it then fails, while the gateway carries on serving whatever
+it loaded at boot:
+
+```
+warn  failed to watch path /etc/agentgateway/base-costs.json: No path was found.
+error Failed to reload config: failed to read from file
+      `/etc/agentgateway/config.yaml`: No such file or directory (os error 2)
+failed to write to file `./base-costs.json`: No such file or directory (os error 2)
+```
+
+Replacing the file by rename-over survives, so this fails *intermittently*,
+depending on which tool touched the file last — which is why it reads as
+"refresh costs is broken today" rather than as a broken mount. A single-file
+mount also blocks the reverse: an atomic save from inside the container cannot
+rename onto its own mount point (`EBUSY`).
+
+`.env` sits in this directory and holds the keys compose reads, so it is
+shadowed with a `/dev/null` mount — the gateway has no use for it, and
+`/dev/null` is safe as a single-file mount precisely because nothing replaces it.
+
 **Anything you create in the UI lands in this file**, including API keys under
 `llm.policies.apiKey`. Those are real credentials in plaintext. Treat
 `config.yaml` as a secret once you have used the UI: do not commit it, or switch
@@ -311,14 +339,20 @@ which injects a proxy into the Electron app — out of scope for this directory.
 
 Two `config.modelCatalog` sources, merged in order — later wins.
 
-| File | Mount | Contents |
+Both arrive through the one read-write directory mount, so the "written by"
+column is about what actually touches each file, not about permissions.
+
+| File | Written by | Contents |
 |---|---|---|
-| `base-costs.json` | **read-write** | The full models.dev catalog, ~930 models across 19 providers. Machine-managed. |
-| `pi-aliases.json` | read-only | 62 hand-maintained entries: pi-go's dotted aliases (`claude-sonnet-4.5`), older OpenAI ids (`o1-mini`, `gpt-5.1-codex`), and Ollama/OpenRouter prices the base catalog lacks. |
+| `base-costs.json` | the gateway, on every refresh | The full models.dev catalog, ~930 models across 19 providers. Machine-managed. |
+| `pi-aliases.json` | you, by hand | 62 hand-maintained entries: pi-go's dotted aliases (`claude-sonnet-4.5`), older OpenAI ids (`o1-mini`, `gpt-5.1-codex`), and Ollama/OpenRouter prices the base catalog lacks. |
 
 **`base-costs.json` is mounted writable on purpose.** The UI's refresh action —
 `POST /api/costs/refresh-base` — fetches models.dev, **overwrites this file**,
-and hot-reloads it without a restart. A read-only mount makes it fail.
+and hot-reloads it without a restart. A read-only mount makes it fail, and so
+does a stale single-file mount (see "The mount is the directory, not the files"
+above) — with a *different* error, `No such file or directory`, that looks
+nothing like a permission problem.
 
 ```bash
 curl -X POST http://localhost:4000/api/costs/refresh-base \

@@ -679,7 +679,7 @@ func (s *ollamaStreamState) finalParts() []*genai.Part {
 	}
 	for _, tc := range s.toolCalls {
 		args := tc.Function.Arguments.ToMap()
-		p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
+		p := newFunctionCallPart(tc.Function.Name, args)
 		p.FunctionCall.ID = tc.ID
 		finalParts = append(finalParts, p)
 	}
@@ -758,7 +758,7 @@ func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatRe
 
 	for _, tc := range msg.ToolCalls {
 		args := tc.Function.Arguments.ToMap()
-		p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
+		p := newFunctionCallPart(tc.Function.Name, args)
 		p.FunctionCall.ID = tc.ID
 		parts = append(parts, p)
 	}

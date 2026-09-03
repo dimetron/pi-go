@@ -332,7 +332,7 @@ func oaiAppendResponsesItems(
 			if _, ok := responseIDs[fc.ID]; !ok {
 				continue
 			}
-			argsJSON, _ := json.Marshal(fc.Args)
+			argsJSON := marshalFunctionCallArgs(fc.Args)
 			items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(argsJSON), fc.ID, fc.Name))
 		case part.FunctionResponse != nil:
 			flushText()
@@ -612,7 +612,7 @@ func buildResponsesFinalParts(s *responsesStreamState) []*genai.Part {
 			_ = json.Unmarshal([]byte(tc.arguments), &args)
 		}
 		if tc.name != "" || tc.id != "" {
-			p := genai.NewPartFromFunctionCall(tc.name, args)
+			p := newFunctionCallPart(tc.name, args)
 			p.FunctionCall.ID = tc.id
 			parts = append(parts, p)
 		}
@@ -685,7 +685,7 @@ func parseResponsesOutput(items []responses.ResponseOutputItemUnion) ([]*genai.P
 			if variant.Arguments != "" {
 				_ = json.Unmarshal([]byte(variant.Arguments), &args)
 			}
-			p := genai.NewPartFromFunctionCall(variant.Name, args)
+			p := newFunctionCallPart(variant.Name, args)
 			p.FunctionCall.ID = variant.CallID
 			parts = append(parts, p)
 

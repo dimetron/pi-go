@@ -1897,6 +1897,7 @@ func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[st
 // the transport settings from config. The flags are additive: none of them can
 // turn a config-enabled setting back off, matching how --header behaves.
 func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config) {
+	opts.MaxOutputTokens = cfg.MaxOutputTokens
 	opts.InsecureSkipTLS = cfg.InsecureSkipTLS || flagInsecure
 	opts.CACertPath = cfg.CACertPath
 	if flagCACert != "" {
