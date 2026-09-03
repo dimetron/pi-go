@@ -151,10 +151,16 @@ Measured, same conversation both ways:
 | `gemini-2.5-flash` | no | 200 | 200 |
 
 This is a **client** obligation, not something the gateway can paper over — it
-forwards what it is given. A client that strips unknown fields from
-`tool_calls` cannot hold a multi-turn tool conversation with any Gemini 3 model.
-The 2.5 line is unaffected, which makes it the fallback while a client is being
-fixed.
+forwards what it is given, and it was verified to forward `extra_content` in
+both directions. A client that strips unknown fields from `tool_calls` cannot
+hold a multi-turn tool conversation with any Gemini 3 model; the 2.5 line is
+unaffected and is the fallback while a client is being fixed.
+
+pi-go itself carries the signature through
+`internal/provider/openai_thought_signature.go`, parking it on
+`genai.Part.ThoughtSignature` between the response and the next request. If a
+Gemini 3 tool loop starts 400ing again, look there before looking at this
+config.
 
 ## Diagnosing a 401: three probes, in order
 
