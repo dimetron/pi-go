@@ -124,6 +124,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/skill-create", desc: "Create a new skill", hidden: true, run: (*model).handleSkillCreateCommand},
 	{name: "/theme", desc: "Switch theme or list themes", run: (*model).handleThemeCommand},
 	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
+	{name: "/model-price-refresh", desc: "Refresh model prices from models.dev", run: (*model).handleModelPriceRefreshCommand},
 	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
 	{name: "/mcp", desc: "List MCP servers and tool status", run: slashCmdVoid((*model).handleMCPCommand)},
 	{name: "/exit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},

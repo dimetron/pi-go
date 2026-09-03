@@ -890,6 +890,9 @@ func (m *model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case pingDoneMsg:
 		model, cmd := m.handlePingDone(msg)
 		return model, cmd, true
+	case modelPriceRefreshDoneMsg:
+		model, cmd := m.handleModelPriceRefreshDone(msg)
+		return model, cmd, true
 	}
 	return nil, nil, false
 }

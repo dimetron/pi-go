@@ -38,9 +38,9 @@ If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
 The human table shows each model's per-million-token input/output price in
-USD, from the embedded models.dev snapshot (refreshed daily at startup).
-Local providers (ollama, agentgateway) and models absent from the snapshot
-show no price.
+USD, from the embedded models.dev snapshot (refresh on demand with the
+/model-price-refresh slash command). Local providers (ollama, agentgateway)
+and models absent from the snapshot show no price.
 
 Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 

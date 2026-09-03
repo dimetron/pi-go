@@ -33,10 +33,10 @@ Usage:
   https://models.dev/api.json, keeping only the providers pi-go supports
   (`openai`, `anthropic`, `gemini`, `mistral`, `xai`, `azure`, `openrouter`)
   and only the per-million-token USD rate fields cost estimation needs. It is
-  the embedded baseline for `CostFor`; the runtime refreshes it from the same
-  endpoint into the XDG cache
-  (`os.UserCacheDir()/pi-go/models/modelsdev-pricing.json`) when the snapshot
-  is more than a day old. Regenerate with `make fetch-modelsdev-pricing`.
+  the embedded baseline for `CostFor`; the `/model-price-refresh` slash command
+  pulls a fresh copy from the same endpoint into the XDG cache
+  (`os.UserCacheDir()/pi-go/models/modelsdev-pricing.json`) on demand.
+  Regenerate the embedded snapshot with `make fetch-modelsdev-pricing`.
 
 Update process:
 1. Refresh the two `llm-prices-*.json` files from upstream.

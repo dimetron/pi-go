@@ -620,11 +620,6 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	go checkForUpdate(cmd.Context(), Version)
 	config.NotifyReroutedLLMS(runtime.cfg)
 
-	// Refresh the embedded models.dev pricing snapshot in the background when it
-	// is stale. Best-effort: a network failure leaves the embedded data in
-	// place and is silently ignored.
-	go refreshPricing(cmd.Context())
-
 	return runNonInteractive(
 		cmd.Context(),
 		cmd,

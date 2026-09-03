@@ -18,12 +18,6 @@ import (
 // at a local server.
 var modelsDevPricingURL = "https://models.dev/api.json"
 
-// pricingStaleAfter is how old the embedded (or cached) pricing snapshot may be
-// before a fresh pull is attempted at startup. models.dev updates pricing
-// infrequently; a day is a comfortable window that keeps the embedded fallback
-// usable offline while still refreshing in the common case.
-const pricingStaleAfter = 24 * time.Hour
-
 // pricingCacheFile is the on-disk cache file name under the pi-go models cache
 // dir. It holds the same shape as the embedded snapshot, so a fresh pull
 // replaces the embedded data without a code change.
@@ -148,23 +142,10 @@ func CostFor(providerName, modelName string) (PricingModel, bool) {
 	return models[best], true
 }
 
-// RefreshPricingIfStale pulls a fresh pricing snapshot from models.dev when the
-// current one (cache, else embedded) is older than pricingStaleAfter, and
-// persists it to the XDG cache. It is a best-effort background refresh: network
-// or write errors are returned to the caller, which should ignore them and keep
-// using the embedded data. A fresh cache is never overwritten by a stale pull.
-func RefreshPricingIfStale(ctx context.Context) error {
-	// Determine the age of the current data.
-	var fetchedAt time.Time
-	if s, ok := loadCachedPricing(); ok {
-		fetchedAt, _ = time.Parse(time.RFC3339, s.FetchedAt)
-	} else if s, ok := loadEmbeddedPricing(); ok {
-		fetchedAt, _ = time.Parse(time.RFC3339, s.FetchedAt)
-	}
-	if !fetchedAt.IsZero() && time.Since(fetchedAt) < pricingStaleAfter {
-		return nil // fresh enough; nothing to do
-	}
-
+// RefreshPricing fetches a fresh pricing snapshot from models.dev and persists
+// it to the XDG cache, regardless of the current snapshot's age. It is the
+// force-refresh path used by the /model-price-refresh command.
+func RefreshPricing(ctx context.Context) error {
 	s, err := fetchModelsDevPricing(ctx)
 	if err != nil {
 		return err

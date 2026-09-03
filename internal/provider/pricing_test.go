@@ -117,51 +117,8 @@ func TestParseModelsDevPricingEmpty(t *testing.T) {
 	}
 }
 
-func TestRefreshPricingIfStaleFreshCache(t *testing.T) {
+func TestRefreshPricingFetches(t *testing.T) {
 	withTempCacheDir(t)
-	// Write a fresh cache (now) so the refresh is a no-op.
-	s := pricingSnapshot{
-		Source:    "models.dev",
-		FetchedAt: time.Now().UTC().Format(time.RFC3339),
-		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
-	}
-	b, _ := json.Marshal(s)
-	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// A server that would fail if hit.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("fresh cache should not trigger a fetch")
-	}))
-	defer srv.Close()
-	oldURL := modelsDevPricingURL
-	modelsDevPricingURL = srv.URL
-	defer func() { modelsDevPricingURL = oldURL }()
-
-	if err := RefreshPricingIfStale(context.Background()); err != nil {
-		t.Fatalf("RefreshPricingIfStale: %v", err)
-	}
-}
-
-func TestRefreshPricingIfStaleFetches(t *testing.T) {
-	withTempCacheDir(t)
-	// Write a stale cache (2 days old) so the refresh fires.
-	s := pricingSnapshot{
-		Source:    "models.dev",
-		FetchedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
-		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
-	}
-	b, _ := json.Marshal(s)
-	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"openai": {"models": {"gpt-4o": {"cost": {"input": 2.5, "output": 10}}}}}`))
 	}))
@@ -170,10 +127,10 @@ func TestRefreshPricingIfStaleFetches(t *testing.T) {
 	modelsDevPricingURL = srv.URL
 	defer func() { modelsDevPricingURL = oldURL }()
 
-	if err := RefreshPricingIfStale(context.Background()); err != nil {
-		t.Fatalf("RefreshPricingIfStale: %v", err)
+	if err := RefreshPricing(context.Background()); err != nil {
+		t.Fatalf("RefreshPricing: %v", err)
 	}
-	// Cache file updated with fresh fetched_at.
+	// Cache file written with fresh fetched_at.
 	b, err := os.ReadFile(pricingCachePath())
 	if err != nil {
 		t.Fatalf("cache file: %v", err)
@@ -191,21 +148,8 @@ func TestRefreshPricingIfStaleFetches(t *testing.T) {
 	}
 }
 
-func TestRefreshPricingIfStaleFetchErrorKeepsCache(t *testing.T) {
+func TestRefreshPricingFetchError(t *testing.T) {
 	withTempCacheDir(t)
-	// Stale cache.
-	s := pricingSnapshot{
-		Source:    "models.dev",
-		FetchedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
-		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
-	}
-	b, _ := json.Marshal(s)
-	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	// Server returns 500.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -215,16 +159,12 @@ func TestRefreshPricingIfStaleFetchErrorKeepsCache(t *testing.T) {
 	modelsDevPricingURL = srv.URL
 	defer func() { modelsDevPricingURL = oldURL }()
 
-	if err := RefreshPricingIfStale(context.Background()); err == nil {
+	if err := RefreshPricing(context.Background()); err == nil {
 		t.Fatal("expected error from failed fetch")
 	}
-	// Cache unchanged.
-	got, err := os.ReadFile(pricingCachePath())
-	if err != nil {
-		t.Fatalf("cache file: %v", err)
-	}
-	if string(got) != string(b) {
-		t.Error("cache file changed after failed fetch")
+	// No cache file written on failure.
+	if _, err := os.Stat(pricingCachePath()); !os.IsNotExist(err) {
+		t.Errorf("cache file should not exist after failed fetch, stat err = %v", err)
 	}
 }
 
