@@ -40,6 +40,13 @@ func toolKind(name string) acp.ToolKind {
 	}
 }
 
+// ToolKind maps a pi-go tool name to the ACP ToolKind the live stream
+// renders it with, so a replayed transcript gets the same cards as the
+// original turn did.
+func ToolKind(name string) acp.ToolKind {
+	return toolKind(name)
+}
+
 // isSubagentTool returns true for tool names that dispatch a sub-agent.
 // Sub-agents become parent "think" cards under which inner tool calls are
 // nested. pi-go's dispatch tool is named "subagent"; "agent" is kept as a

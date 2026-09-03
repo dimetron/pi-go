@@ -27,6 +27,7 @@ WORKDIR /src
 # Cache module downloads first.
 COPY go.mod go.sum ./
 COPY third_party/acp-go-sdk ./third_party/acp-go-sdk
+COPY third_party/go-ordered-map ./third_party/go-ordered-map
 RUN go mod download
 
 # Build the pure-Go pi binary for the target architecture (TARGETARCH is set
@@ -106,11 +107,18 @@ ARG GH_VERSION=v2.65.0
 RUN arkade get gh --version "${GH_VERSION}" --path /usr/local/bin --progress=false \
     && gh --version
 
-ENV PATH="${PATH}:/usr/local/go/bin:/home/pi/.arkade/bin"
+ENV PATH="${PATH}:/usr/local/go/bin:/home/pi/.arkade/bin:/data/.arkade/bin"
 
 USER pi
 
 WORKDIR /data
+
+# Everything pi keeps under ~/.pi-go — session transcripts, the memory
+# store, logs — has to land on the durable mount, or an actor that Substrate
+# checkpoints and restores elsewhere, or replaces outright, comes back with
+# no record of its conversations. HOME is the one knob all of it hangs off;
+# PI_SESSIONS_DIR alone would leave the memory store behind.
+ENV HOME=/data
 COPY --from=build /out/pi /usr/local/bin/pi
 
 # A2A HTTP/gRPC port (kagent compiler sets PORT=80; readyz stays 8081).

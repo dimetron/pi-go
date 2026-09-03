@@ -198,8 +198,18 @@ func TestAgentCloseAndResumeSession(t *testing.T) {
 		t.Fatalf("session %q still exists after CloseSession", sess.SessionId)
 	}
 
-	if _, err := a.ResumeSession(context.Background(), acp.ResumeSessionRequest{SessionId: sess.SessionId}); err == nil {
-		t.Fatal("ResumeSession() error = nil, want method-not-found")
+	// Without a store there is nothing to check a closed id against, so
+	// resume re-binds it: the runtime starts a transcript under it on the
+	// next prompt. Rejection of unknown ids is a store's call (see
+	// TestAgentResumeSessionWithStore).
+	if _, err := a.ResumeSession(context.Background(), acp.ResumeSessionRequest{SessionId: sess.SessionId, Cwd: "/tmp"}); err != nil {
+		t.Fatalf("ResumeSession() after close error = %v, want re-bind", err)
+	}
+	a.mu.Lock()
+	_, rebound := a.sessions[string(sess.SessionId)]
+	a.mu.Unlock()
+	if !rebound {
+		t.Fatalf("session %q not re-bound by ResumeSession", sess.SessionId)
 	}
 }
 

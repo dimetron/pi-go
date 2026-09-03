@@ -165,7 +165,9 @@ func TestRunModelList_Mistral(t *testing.T) {
 	if !strings.Contains(out, "128K") {
 		t.Errorf("output missing context window 128K: %s", out)
 	}
-	if !strings.Contains(out, "completion_chat,vision") {
+	// The listing renders capabilities into a markdown table cell, so they
+	// are joined with ", " rather than packed together.
+	if !strings.Contains(out, "completion_chat, vision") {
 		t.Errorf("output missing capabilities: %s", out)
 	}
 }
@@ -361,6 +363,35 @@ func TestPriceAmount(t *testing.T) {
 		if got := priceAmount(v); got != want {
 			t.Errorf("priceAmount(%v) = %q, want %q", v, got, want)
 		}
+	}
+}
+
+func TestEnrichAndFilterModels(t *testing.T) {
+	// gpt-image-1 is deprecated, released 2025-04-24, unpriced — filtered.
+	// gpt-5.5 is priced and current — kept, with its release date annotated.
+	in := []provider.ModelInfo{
+		{ID: "gpt-image-1"},
+		{ID: "gpt-5.5"},
+	}
+	out := enrichAndFilterModels("openai", in)
+	if len(out) != 1 || out[0].ID != "gpt-5.5" {
+		t.Fatalf("enrichAndFilterModels = %+v, want only gpt-5.5", out)
+	}
+	if out[0].ReleaseDate != "2026-04-23" {
+		t.Errorf("gpt-5.5 release date = %q, want 2026-04-23", out[0].ReleaseDate)
+	}
+}
+
+func TestEnrichAndFilterModelsNonText(t *testing.T) {
+	// gpt-image-2 emits image output, not text — filtered even though it is
+	// priced and current. gpt-4o emits text — kept.
+	in := []provider.ModelInfo{
+		{ID: "gpt-image-2"},
+		{ID: "gpt-4o"},
+	}
+	out := enrichAndFilterModels("openai", in)
+	if len(out) != 1 || out[0].ID != "gpt-4o" {
+		t.Fatalf("enrichAndFilterModels = %+v, want only gpt-4o", out)
 	}
 }
 

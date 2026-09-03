@@ -71,7 +71,7 @@ func TestParseModelsDevPricing(t *testing.T) {
 						"tiers": [{"input": 8, "output": 30, "tier": {"type": "context", "size": 272000}}]
 					}
 				},
-				"no-cost-model": {"id": "x"}
+				"no-cost-model": {"id": "x", "modalities": {"output": ["text"]}}
 			}
 		},
 		"anthropic": {
@@ -117,22 +117,18 @@ func TestParseModelsDevPricingEmpty(t *testing.T) {
 	}
 }
 
-func TestParseModelsDevPricingSkipsNonContextTierAndZeroModel(t *testing.T) {
-	// A tier whose type is not "context" is skipped; a model whose rates are
-	// all zero and has no tiers is dropped entirely.
+func TestParseModelsDevPricingReleaseAndDeprecated(t *testing.T) {
 	body := `{
 		"openai": {
 			"models": {
-				"gpt-4o": {
-					"cost": {
-						"input": 2.5, "output": 10,
-						"tiers": [
-							{"input": 5, "output": 20, "tier": {"type": "context", "size": 100000}},
-							{"input": 9, "output": 30, "tier": {"type": "prompt", "size": 200000}}
-						]
-					}
+				"gpt-5.5": {
+					"release_date": "2026-04-23",
+					"cost": {"input": 5, "output": 30}
 				},
-				"zero-model": {"cost": {"input": 0, "output": 0}}
+				"gpt-image-1": {
+					"release_date": "2025-04-24",
+					"status": "deprecated"
+				}
 			}
 		}
 	}`
@@ -140,14 +136,56 @@ func TestParseModelsDevPricingSkipsNonContextTierAndZeroModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseModelsDevPricing: %v", err)
 	}
-	// Only the context tier survives.
-	got := s.Providers["openai"]["gpt-4o"]
-	if len(got.Tiers) != 1 || got.Tiers[0].ContextOver != 100000 {
-		t.Errorf("gpt-4o tiers = %+v, want only the 100k context tier", got.Tiers)
+	// Priced model carries its release date and is not deprecated.
+	gpt := s.Providers["openai"]["gpt-5.5"]
+	if gpt.ReleaseDate != "2026-04-23" {
+		t.Errorf("gpt-5.5 release_date = %q, want 2026-04-23", gpt.ReleaseDate)
 	}
-	// The all-zero model is dropped.
-	if _, ok := s.Providers["openai"]["zero-model"]; ok {
-		t.Error("zero-model should be dropped")
+	if gpt.Deprecated {
+		t.Error("gpt-5.5 should not be deprecated")
+	}
+	// Deprecated no-cost model is kept, with no price and the flag set.
+	img := s.Providers["openai"]["gpt-image-1"]
+	if !img.Deprecated {
+		t.Error("gpt-image-1 should be deprecated")
+	}
+	if img.ReleaseDate != "2025-04-24" {
+		t.Errorf("gpt-image-1 release_date = %q, want 2025-04-24", img.ReleaseDate)
+	}
+	if img.hasPrice() {
+		t.Error("gpt-image-1 should have no price")
+	}
+}
+
+func TestModelReleaseDate(t *testing.T) {
+	withTempCacheDir(t)
+	if got := ModelReleaseDate("openai", "gpt-5.5"); got != "2026-04-23" {
+		t.Errorf("ModelReleaseDate(openai, gpt-5.5) = %q, want 2026-04-23", got)
+	}
+	// Unknown model has no date.
+	if got := ModelReleaseDate("openai", "definitely-not-a-model"); got != "" {
+		t.Errorf("ModelReleaseDate(openai, unknown) = %q, want empty", got)
+	}
+}
+
+func TestShouldFilterModel(t *testing.T) {
+	withTempCacheDir(t)
+	ref := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	// gpt-image-1 is deprecated, released 2025-04-24 (>1y before ref), no price.
+	if !ShouldFilterModel("openai", "gpt-image-1", ref) {
+		t.Error("gpt-image-1 should be filtered (deprecated, old, unpriced)")
+	}
+	// A priced deprecated model is not filtered.
+	if ShouldFilterModel("openai", "gpt-5.5", ref) {
+		t.Error("gpt-5.5 should not be filtered (it is priced)")
+	}
+	// A recent deprecated model is not filtered.
+	if ShouldFilterModel("openai", "gpt-image-1", time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Error("gpt-image-1 should not be filtered when reference is within a year of release")
+	}
+	// Unknown model is not filtered.
+	if ShouldFilterModel("openai", "definitely-not-a-model", ref) {
+		t.Error("unknown model should not be filtered")
 	}
 }
 
@@ -209,12 +247,102 @@ func TestPricingCachePathUsesModelsCacheDir(t *testing.T) {
 	}
 }
 
-func TestLoadPricingSnapshotInvalid(t *testing.T) {
-	if _, ok := loadPricingSnapshot([]byte("not json")); ok {
-		t.Error("loadPricingSnapshot(not json) should be false")
+func TestModelTextOutput(t *testing.T) {
+	withTempCacheDir(t)
+
+	// A chat model emits text.
+	text, ok := ModelTextOutput("openai", "gpt-4o")
+	if !ok {
+		t.Fatal("ModelTextOutput(openai, gpt-4o) not found")
 	}
-	if _, ok := loadPricingSnapshot([]byte(`{"source":"models.dev"}`)); ok {
-		t.Error("loadPricingSnapshot with no providers should be false")
+	if !text {
+		t.Error("gpt-4o should report text output")
+	}
+
+	// An image generator carries no text_output flag, so it reports false —
+	// which is what keeps it out of the model listing.
+	text, ok = ModelTextOutput("openai", "gpt-image-1")
+	if !ok {
+		t.Fatal("ModelTextOutput(openai, gpt-image-1) not found")
+	}
+	if text {
+		t.Error("gpt-image-1 should not report text output")
+	}
+
+	// An unknown model is not classified either way, so callers keep it.
+	if _, ok := ModelTextOutput("openai", "definitely-not-a-model"); ok {
+		t.Error("unknown model should report ok=false")
+	}
+	if _, ok := ModelTextOutput("nonexistent", "x"); ok {
+		t.Error("unknown provider should report ok=false")
+	}
+}
+
+func TestCostForEmptyModelName(t *testing.T) {
+	withTempCacheDir(t)
+	if _, ok := CostFor("openai", ""); ok {
+		t.Error("CostFor(openai, \"\") should not be found")
+	}
+}
+
+func TestFetchModelsDevPricingBadBody(t *testing.T) {
+	withTempCacheDir(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for malformed body")
+	}
+}
+
+func TestFetchModelsDevPricingInvalidURL(t *testing.T) {
+	withTempCacheDir(t)
+	// An invalid URL makes http.NewRequestWithContext fail.
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = "://bad"
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+}
+
+func TestFetchModelsDevPricingNetworkError(t *testing.T) {
+	withTempCacheDir(t)
+	// Point at a closed port so http.DefaultClient.Do fails.
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = "http://127.0.0.1:1"
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for unreachable endpoint")
+	}
+}
+
+func TestFetchModelsDevPricingNon200(t *testing.T) {
+	withTempCacheDir(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestLoadCachedPricingMissing(t *testing.T) {
+	withTempCacheDir(t)
+	if _, ok := loadCachedPricing(); ok {
+		t.Error("loadCachedPricing() should be false with no cache file")
 	}
 }
 
@@ -228,10 +356,61 @@ func TestLoadEmbeddedPricingMissing(t *testing.T) {
 	}
 }
 
-func TestLoadCachedPricingMissing(t *testing.T) {
-	withTempCacheDir(t)
-	if _, ok := loadCachedPricing(); ok {
-		t.Error("loadCachedPricing() should be false with no cache file")
+func TestLoadPricingSnapshotInvalid(t *testing.T) {
+	if _, ok := loadPricingSnapshot([]byte("not json")); ok {
+		t.Error("loadPricingSnapshot(not json) should be false")
+	}
+	if _, ok := loadPricingSnapshot([]byte(`{"source":"models.dev"}`)); ok {
+		t.Error("loadPricingSnapshot with no providers should be false")
+	}
+}
+
+func TestNumInvalid(t *testing.T) {
+	if got := num(json.Number("not-a-number")); got != 0 {
+		t.Errorf("num(invalid) = %v, want 0", got)
+	}
+	if got := num(json.Number("")); got != 0 {
+		t.Errorf("num(empty) = %v, want 0", got)
+	}
+}
+
+func TestParseModelsDevPricingSkipsNonContextTierAndZeroModel(t *testing.T) {
+	// A tier whose type is not "context" is skipped; a model whose rates are
+	// all zero and has no tiers is dropped entirely.
+	body := `{
+		"openai": {
+			"models": {
+				"gpt-4o": {
+					"cost": {
+						"input": 2.5, "output": 10,
+						"tiers": [
+							{"input": 5, "output": 20, "tier": {"type": "context", "size": 100000}},
+							{"input": 9, "output": 30, "tier": {"type": "prompt", "size": 200000}}
+						]
+					}
+				},
+				"zero-model": {
+					"cost": {"input": 0, "output": 0},
+					"modalities": {"output": ["text"]}
+				}
+			}
+		}
+	}`
+	s, err := parseModelsDevPricing([]byte(body))
+	if err != nil {
+		t.Fatalf("parseModelsDevPricing: %v", err)
+	}
+	// Only the context tier survives.
+	got := s.Providers["openai"]["gpt-4o"]
+	if len(got.Tiers) != 1 || got.Tiers[0].ContextOver != 100000 {
+		t.Errorf("gpt-4o tiers = %+v, want only the 100k context tier", got.Tiers)
+	}
+	// A text model with all-zero rates has no price, is not deprecated, and
+	// emits text, so there is nothing to show for it and it is dropped. A
+	// model that fails any of those three is kept on purpose, so the listing
+	// can annotate a deprecated one and filter a non-text one.
+	if _, ok := s.Providers["openai"]["zero-model"]; ok {
+		t.Error("zero-model should be dropped")
 	}
 }
 
@@ -256,75 +435,5 @@ func TestPricingForPrefersCache(t *testing.T) {
 	}
 	if _, ok := got.Providers["openai"]["gpt-4o"]; !ok {
 		t.Errorf("pricingFor() did not prefer the cache: %+v", got.Providers)
-	}
-}
-
-func TestCostForEmptyModelName(t *testing.T) {
-	withTempCacheDir(t)
-	if _, ok := CostFor("openai", ""); ok {
-		t.Error("CostFor(openai, \"\") should not be found")
-	}
-}
-
-func TestNumInvalid(t *testing.T) {
-	if got := num(json.Number("not-a-number")); got != 0 {
-		t.Errorf("num(invalid) = %v, want 0", got)
-	}
-	if got := num(json.Number("")); got != 0 {
-		t.Errorf("num(empty) = %v, want 0", got)
-	}
-}
-
-func TestFetchModelsDevPricingNon200(t *testing.T) {
-	withTempCacheDir(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-	oldURL := modelsDevPricingURL
-	modelsDevPricingURL = srv.URL
-	defer func() { modelsDevPricingURL = oldURL }()
-
-	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
-		t.Fatal("expected error for non-200 response")
-	}
-}
-
-func TestFetchModelsDevPricingBadBody(t *testing.T) {
-	withTempCacheDir(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("not json"))
-	}))
-	defer srv.Close()
-	oldURL := modelsDevPricingURL
-	modelsDevPricingURL = srv.URL
-	defer func() { modelsDevPricingURL = oldURL }()
-
-	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
-		t.Fatal("expected error for malformed body")
-	}
-}
-
-func TestFetchModelsDevPricingNetworkError(t *testing.T) {
-	withTempCacheDir(t)
-	// Point at a closed port so http.DefaultClient.Do fails.
-	oldURL := modelsDevPricingURL
-	modelsDevPricingURL = "http://127.0.0.1:1"
-	defer func() { modelsDevPricingURL = oldURL }()
-
-	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
-		t.Fatal("expected error for unreachable endpoint")
-	}
-}
-
-func TestFetchModelsDevPricingInvalidURL(t *testing.T) {
-	withTempCacheDir(t)
-	// An invalid URL makes http.NewRequestWithContext fail.
-	oldURL := modelsDevPricingURL
-	modelsDevPricingURL = "://bad"
-	defer func() { modelsDevPricingURL = oldURL }()
-
-	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
-		t.Fatal("expected error for invalid URL")
 	}
 }

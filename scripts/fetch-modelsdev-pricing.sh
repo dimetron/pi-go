@@ -59,23 +59,36 @@ for pigo, srcid in provs.items():
     models = {}
     for mid, m in api[srcid].get("models", {}).items():
         cost = m.get("cost")
-        if not cost:
+        deprecated = m.get("status") == "deprecated"
+        mods = m.get("modalities", {})
+        text_output = "text" in mods.get("output", [])
+        # Keep a model when it has a price, is deprecated, or does not emit
+        # text output. The last two are kept so the listing can annotate and
+        # filter them; a priced text model is the normal case.
+        if not cost and not deprecated and text_output:
             continue
         entry = {}
-        for k in ("input", "output", "cache_read", "cache_write"):
-            if k in cost and cost[k] is not None:
-                entry[k] = cost[k]
-        tiers = []
-        for t in cost.get("tiers", []):
-            if t.get("tier", {}).get("type") != "context":
-                continue
-            tr = {"context_over": t["tier"]["size"]}
+        if cost:
             for k in ("input", "output", "cache_read", "cache_write"):
-                if k in t and t[k] is not None:
-                    tr[k] = t[k]
-            tiers.append(tr)
-        if tiers:
-            entry["tiers"] = tiers
+                if k in cost and cost[k] is not None:
+                    entry[k] = cost[k]
+            tiers = []
+            for t in cost.get("tiers", []):
+                if t.get("tier", {}).get("type") != "context":
+                    continue
+                tr = {"context_over": t["tier"]["size"]}
+                for k in ("input", "output", "cache_read", "cache_write"):
+                    if k in t and t[k] is not None:
+                        tr[k] = t[k]
+                tiers.append(tr)
+            if tiers:
+                entry["tiers"] = tiers
+        if m.get("release_date"):
+            entry["release_date"] = m["release_date"]
+        if deprecated:
+            entry["deprecated"] = True
+        if text_output:
+            entry["text_output"] = True
         if entry:
             models[mid] = entry
     if models:
