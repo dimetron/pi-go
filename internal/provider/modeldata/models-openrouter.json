@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-08-27T00:00:00Z",
+  "fetched_at": "2026-09-03T00:00:00Z",
   "models": [
     {
       "id": "aion-labs/aion-2.0"
@@ -13,9 +13,6 @@
     },
     {
       "id": "aion-labs/aion-rp-llama-3.1-8b"
-    },
-    {
-      "id": "allenai/olmo-3-32b-think"
     },
     {
       "id": "amazon/nova-2-lite-v1"
@@ -40,6 +37,12 @@
     },
     {
       "id": "anthropic/claude-fable-5"
+    },
+    {
+      "id": "anthropic/claude-fable-5.1"
+    },
+    {
+      "id": "anthropic/claude-fable-5.1:batch"
     },
     {
       "id": "anthropic/claude-fable-5:batch"
@@ -75,25 +78,16 @@
       "id": "anthropic/claude-opus-4.7"
     },
     {
-      "id": "anthropic/claude-opus-4.7-fast"
-    },
-    {
       "id": "anthropic/claude-opus-4.7:batch"
     },
     {
       "id": "anthropic/claude-opus-4.8"
     },
     {
-      "id": "anthropic/claude-opus-4.8-fast"
-    },
-    {
       "id": "anthropic/claude-opus-4.8:batch"
     },
     {
       "id": "anthropic/claude-opus-5"
-    },
-    {
-      "id": "anthropic/claude-opus-5-fast"
     },
     {
       "id": "anthropic/claude-opus-5:batch"
@@ -121,9 +115,6 @@
     },
     {
       "id": "arcee-ai/trinity-large-thinking"
-    },
-    {
-      "id": "arcee-ai/virtuoso-large"
     },
     {
       "id": "baidu/ernie-4.5-vl-424b-a47b"
@@ -201,6 +192,9 @@
       "id": "deepseek/deepseek-v4-flash-0731"
     },
     {
+      "id": "deepseek/deepseek-v4-flash-0731:batch"
+    },
+    {
       "id": "deepseek/deepseek-v4-flash-vision-exp"
     },
     {
@@ -208,6 +202,9 @@
     },
     {
       "id": "deepseek/deepseek-v4-pro-0813"
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro-0813:batch"
     },
     {
       "id": "dots-studio/dots-3-note-preview:free"
@@ -303,6 +300,12 @@
       "id": "google/gemini-3.7-flash:batch"
     },
     {
+      "id": "google/gemini-3.8-flash"
+    },
+    {
+      "id": "google/gemini-3.8-flash:batch"
+    },
+    {
       "id": "google/gemma-2-27b-it"
     },
     {
@@ -324,6 +327,9 @@
       "id": "google/gemma-4-31b-it"
     },
     {
+      "id": "google/gemma-4-31b-it:batch"
+    },
+    {
       "id": "google/gemma-4-31b-it:free"
     },
     {
@@ -342,13 +348,19 @@
       "id": "ibm-granite/granite-4.1-8b"
     },
     {
+      "id": "ibm-granite/granite-4.2-8b"
+    },
+    {
       "id": "inception/mercury-2"
+    },
+    {
+      "id": "inception/mercury-2.5-preview"
     },
     {
       "id": "inclusionai/ling-3.0-flash"
     },
     {
-      "id": "kwaipilot/kat-coder-air-v2.5"
+      "id": "inclusionai/ling-3.0-flash-fin:free"
     },
     {
       "id": "kwaipilot/kat-coder-pro-v2"
@@ -393,6 +405,9 @@
       "id": "meta/muse-glimmer-30b"
     },
     {
+      "id": "meta/muse-glimmer-30b:batch"
+    },
+    {
       "id": "meta/muse-spark-1.1"
     },
     {
@@ -400,6 +415,12 @@
     },
     {
       "id": "meta/muse-spark-1.2-contributor"
+    },
+    {
+      "id": "meta/muse-spark-1.3"
+    },
+    {
+      "id": "meta/muse-spark-1.3-contributor"
     },
     {
       "id": "microsoft/phi-4"
@@ -453,9 +474,6 @@
       "id": "mistralai/ministral-3b-2512"
     },
     {
-      "id": "mistralai/ministral-8b"
-    },
-    {
       "id": "mistralai/ministral-8b-2512"
     },
     {
@@ -472,6 +490,9 @@
     },
     {
       "id": "mistralai/mistral-medium-3-5"
+    },
+    {
+      "id": "mistralai/mistral-medium-3-5:batch"
     },
     {
       "id": "mistralai/mistral-medium-3.1"
@@ -519,10 +540,10 @@
       "id": "moonshotai/kimi-k2.7-code"
     },
     {
-      "id": "moonshotai/kimi-k2.7-code:batch"
+      "id": "moonshotai/kimi-k3"
     },
     {
-      "id": "moonshotai/kimi-k3"
+      "id": "moonshotai/kimi-k3:batch"
     },
     {
       "id": "morph/morph-v3-fast"
@@ -562,9 +583,6 @@
     },
     {
       "id": "nvidia/nemotron-3-ultra-550b-a55b"
-    },
-    {
-      "id": "nvidia/nemotron-3-ultra-550b-a55b:batch"
     },
     {
       "id": "nvidia/nemotron-3-ultra-550b-a55b:free"
@@ -649,9 +667,6 @@
     },
     {
       "id": "openai/gpt-5"
-    },
-    {
-      "id": "openai/gpt-5-codex:batch"
     },
     {
       "id": "openai/gpt-5-image"
@@ -804,7 +819,13 @@
       "id": "openai/gpt-oss-120b"
     },
     {
+      "id": "openai/gpt-oss-120b:batch"
+    },
+    {
       "id": "openai/gpt-oss-20b"
+    },
+    {
+      "id": "openai/gpt-oss-20b:batch"
     },
     {
       "id": "openai/gpt-oss-safeguard-20b"
@@ -816,12 +837,6 @@
       "id": "openai/o1-pro"
     },
     {
-      "id": "openai/o1-pro:batch"
-    },
-    {
-      "id": "openai/o1:batch"
-    },
-    {
       "id": "openai/o3"
     },
     {
@@ -831,16 +846,10 @@
       "id": "openai/o3-mini-high"
     },
     {
-      "id": "openai/o3-mini-high:batch"
-    },
-    {
       "id": "openai/o3-mini:batch"
     },
     {
       "id": "openai/o3-pro"
-    },
-    {
-      "id": "openai/o3-pro:batch"
     },
     {
       "id": "openai/o3:batch"
@@ -850,9 +859,6 @@
     },
     {
       "id": "openai/o4-mini-high"
-    },
-    {
-      "id": "openai/o4-mini-high:batch"
     },
     {
       "id": "openai/o4-mini:batch"
@@ -1014,6 +1020,9 @@
       "id": "qwen/qwen3.5-9b"
     },
     {
+      "id": "qwen/qwen3.5-9b:batch"
+    },
+    {
       "id": "qwen/qwen3.5-flash-02-23"
     },
     {
@@ -1048,6 +1057,9 @@
     },
     {
       "id": "qwen/qwen3.8-2.4t-a95b"
+    },
+    {
+      "id": "qwen/qwen3.8-2.4t-a95b:batch"
     },
     {
       "id": "qwen/qwen3.8-27b"
@@ -1110,10 +1122,10 @@
       "id": "tencent/hy3-preview"
     },
     {
-      "id": "thedrummer/cydonia-24b-v4.1"
+      "id": "tencent/hy4-preview"
     },
     {
-      "id": "thedrummer/rocinante-12b"
+      "id": "thedrummer/cydonia-24b-v4.1"
     },
     {
       "id": "thedrummer/skyfall-36b-v2"
@@ -1126,6 +1138,9 @@
     },
     {
       "id": "thinkingmachines/inkling-small"
+    },
+    {
+      "id": "thinkingmachines/inkling-small:batch"
     },
     {
       "id": "thinkingmachines/inkling-small:free"
@@ -1215,6 +1230,9 @@
       "id": "z-ai/glm-5.3-flash"
     },
     {
+      "id": "z-ai/glm-5.3-flash:batch"
+    },
+    {
       "id": "z-ai/glm-5v-turbo"
     },
     {
@@ -1249,6 +1267,9 @@
     },
     {
       "id": "~x-ai/grok-latest"
+    },
+    {
+      "id": "~z-ai/glm-flash-latest"
     },
     {
       "id": "~z-ai/glm-latest"

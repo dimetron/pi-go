@@ -1,9 +1,13 @@
 {
   "provider": "anthropic",
-  "fetched_at": "2026-08-27T00:00:00Z",
+  "fetched_at": "2026-09-03T00:00:00Z",
   "models": [
     {
       "id": "claude-fable-5",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-fable-5-1",
       "owned_by": "model"
     },
     {

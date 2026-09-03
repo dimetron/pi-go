@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-08-27T00:00:00Z",
+  "fetched_at": "2026-09-03T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -47,10 +47,6 @@
       "owned_by": "Gemini 2.5 Flash Native Audio Preview 09-2025"
     },
     {
-      "id": "gemini-2.5-flash-native-audio-preview-12-2025",
-      "owned_by": "Gemini 2.5 Flash Native Audio Preview 12-2025"
-    },
-    {
       "id": "gemini-2.5-flash-preview-tts",
       "owned_by": "Gemini 2.5 Flash Preview TTS"
     },
@@ -95,10 +91,6 @@
       "owned_by": "Gemini 3.1 Flash Lite Preview"
     },
     {
-      "id": "gemini-3.1-flash-live-preview",
-      "owned_by": "Gemini 3.1 Flash Live Preview"
-    },
-    {
       "id": "gemini-3.1-flash-tts-preview",
       "owned_by": "Gemini 3.1 Flash TTS Preview"
     },
@@ -135,6 +127,10 @@
       "owned_by": "Gemini 3.7 Flash"
     },
     {
+      "id": "gemini-3.8-flash",
+      "owned_by": "Gemini 3.8 Flash"
+    },
+    {
       "id": "gemini-embedding-001",
       "owned_by": "Gemini Embedding 001"
     },
@@ -151,8 +147,16 @@
       "owned_by": "Gemini Flash Latest"
     },
     {
+      "id": "gemini-flash-latest-high-res-exp",
+      "owned_by": "Gemini Flash Latest"
+    },
+    {
       "id": "gemini-flash-lite-latest",
       "owned_by": "Gemini Flash-Lite Latest"
+    },
+    {
+      "id": "gemini-omni-1.1-flash",
+      "owned_by": "Gemini Omni 1.1 Flash"
     },
     {
       "id": "gemini-omni-flash-preview",
@@ -161,10 +165,6 @@
     {
       "id": "gemini-pro-latest",
       "owned_by": "Gemini Pro Latest"
-    },
-    {
-      "id": "gemini-robotics-er-1.6-preview",
-      "owned_by": "Gemini Robotics-ER 1.6 Preview"
     },
     {
       "id": "gemini-robotics-er-2-preview",

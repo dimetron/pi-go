@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "fetched_at": "2026-08-27T00:00:00Z",
+  "fetched_at": "2026-09-03T00:00:00Z",
   "models": [
     {
       "id": "codestral-2508",
@@ -19,33 +19,6 @@
       "capabilities": [
         "completion_chat",
         "completion_fim",
-        "function_calling"
-      ]
-    },
-    {
-      "id": "devstral-2512",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling"
-      ]
-    },
-    {
-      "id": "devstral-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling"
-      ]
-    },
-    {
-      "id": "devstral-medium-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
         "function_calling"
       ]
     },
@@ -165,15 +138,6 @@
       ]
     },
     {
-      "id": "mistral-code-agent-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling"
-      ]
-    },
-    {
       "id": "mistral-code-fim-latest",
       "owned_by": "mistralai",
       "context_window": 256000,
@@ -222,28 +186,6 @@
       "capabilities": [
         "completion_chat",
         "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-2505",
-      "owned_by": "mistralai",
-      "context_window": 131072,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "fine_tuning",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-2508",
-      "owned_by": "mistralai",
-      "context_window": 131072,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "fine_tuning",
         "vision"
       ]
     },
