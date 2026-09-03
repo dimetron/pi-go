@@ -1,0 +1,236 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestCostForExactMatch(t *testing.T) {
+	withTempCacheDir(t)
+	m, ok := CostFor("openai", "gpt-5.6-sol")
+	if !ok {
+		t.Fatal("CostFor(openai, gpt-5.6-sol) not found")
+	}
+	if m.Input != 4 || m.Output != 20 {
+		t.Errorf("gpt-5.6-sol rates = %+v, want input 4 output 20", m)
+	}
+	if len(m.Tiers) != 1 || m.Tiers[0].ContextOver != 272000 {
+		t.Errorf("gpt-5.6-sol tiers = %+v, want one 272k tier", m.Tiers)
+	}
+}
+
+func TestCostForPrefixMatch(t *testing.T) {
+	withTempCacheDir(t)
+	// A dated model ID resolves against its base entry.
+	m, ok := CostFor("anthropic", "claude-opus-4-7-20260101")
+	if !ok {
+		t.Fatal("CostFor(anthropic, claude-opus-4-7-20260101) not found")
+	}
+	if m.Input != 5 || m.Output != 25 {
+		t.Errorf("claude-opus-4-7 rates = %+v, want input 5 output 25", m)
+	}
+}
+
+func TestCostForUnknownProviderOrModel(t *testing.T) {
+	withTempCacheDir(t)
+	if _, ok := CostFor("nonexistent", "x"); ok {
+		t.Error("CostFor(nonexistent, x) should not be found")
+	}
+	if _, ok := CostFor("openai", "definitely-not-a-model"); ok {
+		t.Error("CostFor(openai, definitely-not-a-model) should not be found")
+	}
+}
+
+func TestCostForCaseInsensitive(t *testing.T) {
+	withTempCacheDir(t)
+	m, ok := CostFor("OpenAI", "GPT-5.6-SOL")
+	if !ok {
+		t.Fatal("CostFor(OpenAI, GPT-5.6-SOL) not found")
+	}
+	if m.Input != 4 {
+		t.Errorf("rates = %+v, want input 4", m)
+	}
+}
+
+func TestParseModelsDevPricing(t *testing.T) {
+	body := `{
+		"openai": {
+			"models": {
+				"gpt-4o": {
+					"cost": {"input": 2.5, "output": 10, "cache_read": 1.25}
+				},
+				"gpt-5.6-sol": {
+					"cost": {
+						"input": 4, "output": 20, "cache_read": 0.4, "cache_write": 5,
+						"tiers": [{"input": 8, "output": 30, "tier": {"type": "context", "size": 272000}}]
+					}
+				},
+				"no-cost-model": {"id": "x"}
+			}
+		},
+		"anthropic": {
+			"models": {
+				"claude-opus-4-7": {"cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25}}
+			}
+		},
+		"unsupported-provider": {
+			"models": {"foo": {"cost": {"input": 1, "output": 1}}}
+		}
+	}`
+	s, err := parseModelsDevPricing([]byte(body))
+	if err != nil {
+		t.Fatalf("parseModelsDevPricing: %v", err)
+	}
+	if s.Source != "models.dev" {
+		t.Errorf("source = %q, want models.dev", s.Source)
+	}
+	if _, ok := s.Providers["openai"]; !ok {
+		t.Fatal("openai provider missing")
+	}
+	if _, ok := s.Providers["gemini"]; ok {
+		t.Error("gemini should be absent (no google source in body)")
+	}
+	// Unsupported providers are dropped.
+	if _, ok := s.Providers["unsupported-provider"]; ok {
+		t.Error("unsupported-provider should be dropped")
+	}
+	// Models without cost are dropped.
+	if _, ok := s.Providers["openai"]["no-cost-model"]; ok {
+		t.Error("no-cost-model should be dropped")
+	}
+	// Tier parsed.
+	sol := s.Providers["openai"]["gpt-5.6-sol"]
+	if len(sol.Tiers) != 1 || sol.Tiers[0].ContextOver != 272000 || sol.Tiers[0].Input != 8 {
+		t.Errorf("gpt-5.6-sol tiers = %+v", sol.Tiers)
+	}
+}
+
+func TestParseModelsDevPricingEmpty(t *testing.T) {
+	if _, err := parseModelsDevPricing([]byte(`{"openai": {"models": {}}}`)); err == nil {
+		t.Error("expected error for no supported priced models")
+	}
+}
+
+func TestRefreshPricingIfStaleFreshCache(t *testing.T) {
+	withTempCacheDir(t)
+	// Write a fresh cache (now) so the refresh is a no-op.
+	s := pricingSnapshot{
+		Source:    "models.dev",
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
+	}
+	b, _ := json.Marshal(s)
+	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A server that would fail if hit.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("fresh cache should not trigger a fetch")
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if err := RefreshPricingIfStale(context.Background()); err != nil {
+		t.Fatalf("RefreshPricingIfStale: %v", err)
+	}
+}
+
+func TestRefreshPricingIfStaleFetches(t *testing.T) {
+	withTempCacheDir(t)
+	// Write a stale cache (2 days old) so the refresh fires.
+	s := pricingSnapshot{
+		Source:    "models.dev",
+		FetchedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
+	}
+	b, _ := json.Marshal(s)
+	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"openai": {"models": {"gpt-4o": {"cost": {"input": 2.5, "output": 10}}}}}`))
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if err := RefreshPricingIfStale(context.Background()); err != nil {
+		t.Fatalf("RefreshPricingIfStale: %v", err)
+	}
+	// Cache file updated with fresh fetched_at.
+	b, err := os.ReadFile(pricingCachePath())
+	if err != nil {
+		t.Fatalf("cache file: %v", err)
+	}
+	var got pricingSnapshot
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("cache file not valid JSON: %v", err)
+	}
+	ft, _ := time.Parse(time.RFC3339, got.FetchedAt)
+	if time.Since(ft) > time.Minute {
+		t.Errorf("fetched_at = %s, want recent", got.FetchedAt)
+	}
+	if _, ok := got.Providers["openai"]["gpt-4o"]; !ok {
+		t.Errorf("cache missing gpt-4o: %+v", got.Providers)
+	}
+}
+
+func TestRefreshPricingIfStaleFetchErrorKeepsCache(t *testing.T) {
+	withTempCacheDir(t)
+	// Stale cache.
+	s := pricingSnapshot{
+		Source:    "models.dev",
+		FetchedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
+	}
+	b, _ := json.Marshal(s)
+	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Server returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if err := RefreshPricingIfStale(context.Background()); err == nil {
+		t.Fatal("expected error from failed fetch")
+	}
+	// Cache unchanged.
+	got, err := os.ReadFile(pricingCachePath())
+	if err != nil {
+		t.Fatalf("cache file: %v", err)
+	}
+	if string(got) != string(b) {
+		t.Error("cache file changed after failed fetch")
+	}
+}
+
+func TestPricingCachePathUsesModelsCacheDir(t *testing.T) {
+	dir := withTempCacheDir(t)
+	if got := pricingCachePath(); got != filepath.Join(dir, pricingCacheFile) {
+		t.Errorf("pricingCachePath() = %q, want %q", got, filepath.Join(dir, pricingCacheFile))
+	}
+}

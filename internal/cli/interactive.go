@@ -110,6 +110,11 @@ func runInteractive(
 	// written to os.Stderr would land inside the painted frame.
 	go checkForUpdate(ctx, Version)
 
+	// Refresh the embedded models.dev pricing snapshot in the background when it
+	// is stale. Best-effort: a network failure leaves the embedded data in
+	// place and is silently ignored.
+	go refreshPricing(ctx)
+
 	// Likewise for anything config load decided: it ran before the sink
 	// existed, and the terminal reset before the first frame would have
 	// erased a message written then.

@@ -29,6 +29,15 @@ Usage:
   daemon has pulled, so a checked-in snapshot would describe one developer's
   machine; `ValidateModel` exempts Ollama for the same reason.
 
+- `modelsdev-pricing.json` is a compact snapshot of
+  https://models.dev/api.json, keeping only the providers pi-go supports
+  (`openai`, `anthropic`, `gemini`, `mistral`, `xai`, `azure`, `openrouter`)
+  and only the per-million-token USD rate fields cost estimation needs. It is
+  the embedded baseline for `CostFor`; the runtime refreshes it from the same
+  endpoint into the XDG cache
+  (`os.UserCacheDir()/pi-go/models/modelsdev-pricing.json`) when the snapshot
+  is more than a day old. Regenerate with `make fetch-modelsdev-pricing`.
+
 Update process:
 1. Refresh the two `llm-prices-*.json` files from upstream.
 2. Review new IDs and update `context-windows.json` where official context-window data is known.
@@ -37,4 +46,6 @@ Update process:
    `$HOME/.pi-go/.env` first, then the nearest `.pi-go/.env` walking up from the
    working directory, which wins. A provider whose key is absent is skipped with
    a note rather than failing the target — check the output for `skip` lines.
-4. Run `go test ./internal/provider`.
+4. Run `make fetch-modelsdev-pricing` to regenerate `modelsdev-pricing.json`
+   from models.dev. It needs no API key.
+5. Run `go test ./internal/provider`.
