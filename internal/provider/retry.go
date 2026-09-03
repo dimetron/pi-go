@@ -14,12 +14,29 @@ import (
 type streamAttempt func(yield func(*model.LLMResponse, error) bool)
 
 // streamRetry is the budget for re-sending a request that died before it
-// produced anything: three retries, paced 3s, 5s, 7s. It is deliberately
-// smaller than the agent-level budget — this retries a single HTTP request, so
-// it runs inside whatever timeout the caller already set for the turn — and it
-// is paced linearly rather than exponentially because the faults it is meant
-// to ride out (a dropped socket, a reset stream, a 5xx blip) clear in seconds,
-// not minutes. A server-supplied rate-limit window still overrides the pace.
+// produced anything: five retries, paced 3s, 5s, 7s, 15s, 30s. It retries a
+// single HTTP request, so it runs inside whatever timeout the caller already
+// set for the turn. A server-supplied rate-limit window still overrides the
+// pace.
+//
+// The schedule is two schedules, because it serves two populations of failure.
+//
+// The first three delays are short and linear, unchanged, for the faults this
+// was originally built for: a dropped socket, a reset stream, a 5xx blip.
+// Those clear in seconds, and waiting longer only makes a recoverable turn
+// feel broken.
+//
+// The last two are long because the other population is a per-minute quota
+// window, and a retry that lands inside the window that just rejected it is a
+// wasted attempt. Cumulatively the five attempts go out at roughly 3s, 8s,
+// 15s, 30s and 60s after the first failure, so the budget is not spent before
+// the window has had a chance to reopen — which is what three retries totaling
+// 15s did against a Gemini rejection asking for 11s. 30s is also the largest
+// delay worth naming here: retry.DefaultConfig caps any wait at 60s, so a
+// longer entry would be clamped rather than honored.
+//
+// Five also matches retry.DefaultConfig's MaxRetries, so the per-request and
+// per-run budgets no longer disagree about how many attempts a failure gets.
 //
 // It is a package variable so the provider tests, which drive real error
 // responses through httptest servers, can shrink the pauses instead of paying
@@ -28,8 +45,11 @@ var streamRetry = defaultStreamRetry()
 
 func defaultStreamRetry() retry.Config {
 	cfg := retry.DefaultConfig()
-	cfg.MaxRetries = 3
-	cfg.Delays = []time.Duration{3 * time.Second, 5 * time.Second, 7 * time.Second}
+	cfg.MaxRetries = 5
+	cfg.Delays = []time.Duration{
+		3 * time.Second, 5 * time.Second, 7 * time.Second,
+		15 * time.Second, 30 * time.Second,
+	}
 	return cfg
 }
 
