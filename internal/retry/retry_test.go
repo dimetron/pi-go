@@ -50,6 +50,8 @@ func TestIsTransient(t *testing.T) {
 		// Retryable: connection and stream faults.
 		{"connection reset", errors.New("connection reset by peer"), true},
 		{"connection refused", errors.New("connection refused"), true},
+		{"dns no such host", errors.New(`Post "https://chatgpt.com/backend-api/codex/responses": dial tcp: lookup chatgpt.com: no such host`), true},
+		{"dns temporary failure", errors.New("dial tcp: lookup api.example.com: temporary failure in name resolution"), true},
 		{"deadline", errors.New("context deadline exceeded"), true},
 		{"wrapped timeout", fmt.Errorf("wrapped: %w", errors.New("timeout")), true},
 		{"timed out", errors.New("read tcp 192.168.1.103:57601->104.18.32.47:443: read: operation timed out"), true},

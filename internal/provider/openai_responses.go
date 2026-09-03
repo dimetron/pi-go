@@ -19,27 +19,11 @@ import (
 
 // modelNeedsResponses returns true for models that only support the Responses API.
 func modelNeedsResponses(modelName string) bool {
-	lower := strings.ToLower(modelName)
-	// Strip any provider prefix (e.g. "openai/gpt-5.6-luna" from an
-	// agentgateway virtual model) so the bare model ID is matched. The gateway
-	// forwards the bare ID upstream, so the endpoint decision must be made on it.
-	// Loop so nested prefixes (e.g. "agentgateway/openai/gpt-5.6-luna") collapse.
-	for {
-		stripped := false
-		for _, p := range []string{
-			"openai/", "anthropic/", "gemini/", "mistral/", "xai/", "grok/",
-			"openrouter/", "agentgateway/", "ollama/", "azure/", "opencode/",
-		} {
-			if strings.HasPrefix(lower, p) {
-				lower = strings.TrimPrefix(lower, p)
-				stripped = true
-				break
-			}
-		}
-		if !stripped {
-			break
-		}
-	}
+	// Strip any provider prefix (e.g. "openai/gpt-5.6-luna" or nested
+	// "agentgateway/openai/gpt-5.6-luna") so the bare model ID is matched. The
+	// gateway forwards the bare ID upstream, so the endpoint decision must be
+	// made on it.
+	lower := strings.ToLower(StripKnownProviderPrefixes(modelName))
 	// Responses-only model families.
 	responsesOnly := []string{
 		"gpt-5-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max",
@@ -332,7 +316,7 @@ func oaiAppendResponsesItems(
 			if _, ok := responseIDs[fc.ID]; !ok {
 				continue
 			}
-			argsJSON, _ := json.Marshal(fc.Args)
+			argsJSON := marshalFunctionCallArgs(fc.Args)
 			items = append(items, responses.ResponseInputItemParamOfFunctionCall(string(argsJSON), fc.ID, fc.Name))
 		case part.FunctionResponse != nil:
 			flushText()
@@ -612,7 +596,7 @@ func buildResponsesFinalParts(s *responsesStreamState) []*genai.Part {
 			_ = json.Unmarshal([]byte(tc.arguments), &args)
 		}
 		if tc.name != "" || tc.id != "" {
-			p := genai.NewPartFromFunctionCall(tc.name, args)
+			p := newFunctionCallPart(tc.name, args)
 			p.FunctionCall.ID = tc.id
 			parts = append(parts, p)
 		}
@@ -685,7 +669,7 @@ func parseResponsesOutput(items []responses.ResponseOutputItemUnion) ([]*genai.P
 			if variant.Arguments != "" {
 				_ = json.Unmarshal([]byte(variant.Arguments), &args)
 			}
-			p := genai.NewPartFromFunctionCall(variant.Name, args)
+			p := newFunctionCallPart(variant.Name, args)
 			p.FunctionCall.ID = variant.CallID
 			parts = append(parts, p)
 

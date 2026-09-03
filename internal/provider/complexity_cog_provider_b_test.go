@@ -674,7 +674,10 @@ func TestCogProviderBBetaNonStreamingGolden(t *testing.T) {
 		t.Fatal("no response")
 	}
 
-	const wantParts = `[{"text":"hello"},{"text":"reasoning"},{"fc_name":"bash","fc_id":"toolu_1","fc_args":{"command":"ls"}},{"fc_name":"noargs","fc_id":"toolu_2","fc_nil_args":true},{"fc_name":"nested","fc_id":"toolu_3","fc_args":{"filter":{"limit":3,"since":"yesterday"},"tags":["a","b"]}},{"text":"advice payload"},{"text":"[advisor result encrypted; will be decrypted on next turn]"},{"text":"tail"}]`
+	// "noargs" carries an empty argument map rather than a nil one: a nil map
+	// replays as tool_use.input null, which Anthropic rejects for every later
+	// request in the conversation. See newFunctionCallPart.
+	const wantParts = `[{"text":"hello"},{"text":"reasoning"},{"fc_name":"bash","fc_id":"toolu_1","fc_args":{"command":"ls"}},{"fc_name":"noargs","fc_id":"toolu_2"},{"fc_name":"nested","fc_id":"toolu_3","fc_args":{"filter":{"limit":3,"since":"yesterday"},"tags":["a","b"]}},{"text":"advice payload"},{"text":"[advisor result encrypted; will be decrypted on next turn]"},{"text":"tail"}]`
 	if got := cogBMarshal(t, cogBParts(last.Content.Parts)); got != wantParts {
 		t.Errorf("parts:\n got %s\nwant %s", got, wantParts)
 	}

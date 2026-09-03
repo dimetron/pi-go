@@ -88,6 +88,12 @@ type Config struct {
 	BaseURLs        map[string]string     `json:"baseURLs,omitempty"` // provider → base URL; overridden by env
 	ExtraHeaders    map[string]string     `json:"extraHeaders,omitempty"`
 	InsecureSkipTLS bool                  `json:"insecureSkipTLS,omitempty"`
+	// MaxOutputTokens caps a reply on the OpenAI-compatible provider paths,
+	// in tokens. Zero uses the provider default (64000), which is the output
+	// ceiling of the current Claude and GPT models. Lower it for a backend
+	// whose models stop below that and reject the request rather than
+	// clamping it. This is an output cap, not a context window.
+	MaxOutputTokens int64 `json:"maxOutputTokens,omitempty"`
 	// CACertPath is a PEM bundle trusted in addition to the system roots, for
 	// TLS-intercepting corporate proxies. Prefer it over insecureSkipTLS,
 	// which turns verification off for every endpoint.

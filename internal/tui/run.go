@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/procs"
+	"github.com/dimetron/pi-go/internal/retry"
 	"github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -1032,33 +1033,64 @@ func (m *model) retryRun(reason, extraContext string) tea.Cmd {
 		return nil
 	}
 
-	m.run.retries++
-	m.run.phase = "retrying"
-
 	wtPath := m.runWorktreePath(m.run.worktreeAgentID)
-
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role: "assistant",
-		content: fmt.Sprintf("**%s** — cycle %d/%d (retry %d) in worktree `%s`...",
-			reason, m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
-	})
-
 	prompt := buildResumePrompt(m.run.specName, m.run.promptMD, reason, extraContext)
 
-	events, agentID, err := m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
-		Type:        "task",
-		Prompt:      prompt,
-		WorkDir:     wtPath,
-		SkipCleanup: true,
-		Timeout:     int((60 * time.Minute) / time.Millisecond),
-		Attribution: runAttribution(m.run.runID, m.run.specName, m.cfg.SessionID, 0, m.run.retries),
-	})
-	if err != nil {
-		m.run.phase = "failed"
+	// A provider or process error while starting a retry is itself transient.
+	// Keep consuming the configured retry budget instead of leaving the run in
+	// retrying with no command to drive it forward. Spawn failures are setup
+	// errors, so retrying here does not block the event stream or recurse through
+	// the Bubble Tea update loop.
+	var events <-chan subagent.Event
+	var agentID string
+	spawned := false
+	for m.run.retries < m.run.maxRetries {
+		m.run.retries++
+		m.run.phase = "retrying"
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role: "assistant",
+			content: fmt.Sprintf("**%s** — cycle %d/%d (retry %d) in worktree `%s`...",
+				reason, m.run.retries+1, m.run.maxRetries, m.run.retries, wtPath),
+		})
+
+		var err error
+		events, agentID, err = m.cfg.Orchestrator.SpawnWithInput(m.ctx, subagent.AgentInput{
+			Type:        "task",
+			Prompt:      prompt,
+			WorkDir:     wtPath,
+			SkipCleanup: true,
+			Timeout:     int((60 * time.Minute) / time.Millisecond),
+			// Attribution is rebuilt each pass: it carries the retry
+			// number, so hoisting it out of the loop would label every
+			// attempt as the first one.
+			Attribution: runAttribution(m.run.runID, m.run.specName, m.cfg.SessionID, 0, m.run.retries),
+		})
+		if err == nil {
+			spawned = true
+			break
+		}
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
-			content: fmt.Sprintf("Failed to spawn retry agent: %v", err),
+			content: fmt.Sprintf("Failed to spawn retry agent (retry %d/%d): %v", m.run.retries, m.run.maxRetries, err),
 		})
+		if retry.IsTransient(err) && m.run.retries < m.run.maxRetries {
+			delay := retry.Delay(retry.DefaultConfig(), m.run.retries-1, err)
+			m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: fmt.Sprintf("Transient spawn error; retrying in %s...", delay.Round(time.Millisecond))})
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-m.ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil
+			}
+		}
+	}
+	if !spawned {
+		// The budget is spent and nothing is driving the run. Leaving it in
+		// "retrying" is the stuck state this whole loop exists to avoid.
+		m.run.phase = "failed"
 		return nil
 	}
 

@@ -34,10 +34,31 @@ type openaiModel struct {
 	// backend (authenticated with a codex OAuth token). Those deployments
 	// only expose /codex/responses, so chat completions must be skipped.
 	codexBackend bool
+	// maxOutputTokens caps the reply, in tokens. See
+	// defaultOaiMaxOutputTokens for why omitting it is not an option.
+	maxOutputTokens int64
 	// mu protects responseState for Responses mode multi-turn.
 	mu            sync.Mutex
 	responseState *responsesState // nil when using Chat Completions
 }
+
+// defaultOaiMaxOutputTokens caps a reply on the OpenAI-compatible paths when
+// neither the request nor the configuration asks for something else.
+//
+// Sending nothing is not the neutral choice it looks like. Every server
+// substitutes its own default, and some are small: agentgateway in front of
+// Anthropic settles on 4096, which cuts a long coding turn off mid-sentence
+// (finish_reason "length"). Worse, when the cut lands inside a tool call's
+// arguments the JSON never closes, the call reaches the tool with no arguments
+// at all, and — before marshalFunctionCallArgs — that malformed turn went into
+// the history and 400ed every request after it.
+//
+// 64000 is the output ceiling of the current Claude and GPT models, which is
+// what this path mostly carries. It is an output cap, not a context window:
+// the million-token figure quoted for these models is how much they can *read*.
+// Override it with the maxOutputTokens setting for a backend whose models stop
+// lower and reject the request rather than clamping it.
+const defaultOaiMaxOutputTokens int64 = 64000
 
 // responsesState holds state threaded across Responses API calls.
 type responsesState struct {
@@ -102,11 +123,16 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 	baseTransport = &errorBodyLoggingTransport{base: baseTransport}
 	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: baseTransport}))
 	client := openai.NewClient(opts...)
+	maxOutputTokens := defaultOaiMaxOutputTokens
+	if llmOpts != nil && llmOpts.MaxOutputTokens > 0 {
+		maxOutputTokens = llmOpts.MaxOutputTokens
+	}
 	return &openaiModel{
-		modelName:     modelName,
-		client:        client,
-		codexBackend:  useCodexBackend,
-		responseState: nil, // determined per-call based on model
+		modelName:       modelName,
+		client:          client,
+		codexBackend:    useCodexBackend,
+		maxOutputTokens: maxOutputTokens,
+		responseState:   nil, // determined per-call based on model
 	}, nil
 }
 

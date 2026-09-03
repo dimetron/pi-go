@@ -25,6 +25,9 @@ func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, m
 			Model:    modelName,
 			Messages: messages,
 		}
+		if maxTokens := oaiMaxOutputTokens(req.Config, m.maxOutputTokens); maxTokens > 0 {
+			params.MaxCompletionTokens = openai.Int(maxTokens)
+		}
 		if systemInstruction != "" {
 			params.Messages = append([]openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemInstruction),
@@ -147,7 +150,7 @@ func oaiToolCallMessages(
 		if fc == nil || strings.TrimSpace(fc.ID) == "" {
 			continue
 		}
-		argsJSON, _ := json.Marshal(fc.Args)
+		argsJSON := marshalFunctionCallArgs(fc.Args)
 		call := &openai.ChatCompletionMessageFunctionToolCallParam{
 			ID:   fc.ID,
 			Type: constant.Function("function"),
@@ -225,6 +228,62 @@ type oaiStreamState struct {
 	promptTokens     int64
 	completionTokens int64
 	cachedTokens     int64
+
+	// Slot bookkeeping for streams that omit the tool call index; see
+	// toolCallSlot.
+	toolCallSlots    map[string]int64
+	nextToolCallSlot int64
+	lastToolCallSlot int64
+	haveToolCallSlot bool
+}
+
+// toolCallSlot resolves the accumulator key for one streamed tool call delta.
+//
+// OpenAI streams a tool call as fragments that all carry the same "index", and
+// that index is what separates one call from the next in a parallel batch.
+// Google's OpenAI-compatible endpoint — the one agentgateway puts in front of
+// Gemini — omits the field entirely and instead sends each call whole, in its
+// own chunk:
+//
+//	{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"bash",
+//	  "arguments":"{\"command\":\"ls\"}"}}]},"index":0}
+//
+// The "index" there belongs to the choice, not to the tool call. Reading the
+// absent field as its zero value collapses every call in a parallel batch onto
+// slot 0, where accumulateOaiToolCall concatenates their arguments into
+// "{...}{...}" — invalid JSON, which then unmarshals to a nil argument map and
+// reaches the tool as a call with no arguments at all ("command is required").
+//
+// So: trust the index when the wire actually sent one, and otherwise give each
+// distinct tool call ID its own slot. A delta with neither index nor ID is
+// treated as a continuation of the call before it, which is the best reading
+// available and matches the fragment-stream shape.
+func (s *oaiStreamState) toolCallSlot(indexPresent bool, index int64, id string) int64 {
+	claim := func(slot int64) int64 {
+		if slot >= s.nextToolCallSlot {
+			s.nextToolCallSlot = slot + 1
+		}
+		s.lastToolCallSlot, s.haveToolCallSlot = slot, true
+		return slot
+	}
+	if indexPresent {
+		return claim(index)
+	}
+	if id == "" {
+		if s.haveToolCallSlot {
+			return s.lastToolCallSlot
+		}
+		return claim(s.nextToolCallSlot)
+	}
+	if slot, ok := s.toolCallSlots[id]; ok {
+		return claim(slot)
+	}
+	if s.toolCallSlots == nil {
+		s.toolCallSlots = make(map[string]int64)
+	}
+	slot := s.nextToolCallSlot
+	s.toolCallSlots[id] = slot
+	return claim(slot)
 }
 
 // accumulateOaiToolCall updates the tool call accumulator with a single delta chunk.
@@ -288,7 +347,7 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 		name, _ := tc["name"].(string)
 		id, _ := tc["id"].(string)
 		if name != "" || id != "" {
-			p := genai.NewPartFromFunctionCall(name, args)
+			p := newFunctionCallPart(name, args)
 			p.FunctionCall.ID = id
 			if sig, ok := tc["thought_signature"].([]byte); ok {
 				p.ThoughtSignature = sig
@@ -404,8 +463,9 @@ func oaiRunStreamingHooks(ctx context.Context, client *openai.Client, params ope
 			}
 		}
 		for _, tc := range delta.ToolCalls {
-			accumulateOaiToolCall(state.toolCalls, tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)
-			accumulateOaiToolCallSignature(state.toolCalls, tc.Index, oaiThoughtSignature(tc.RawJSON()))
+			slot := state.toolCallSlot(tc.JSON.Index.Valid(), tc.Index, tc.ID)
+			accumulateOaiToolCall(state.toolCalls, slot, tc.ID, tc.Function.Name, tc.Function.Arguments)
+			accumulateOaiToolCallSignature(state.toolCalls, slot, oaiThoughtSignature(tc.RawJSON()))
 		}
 		if choice.FinishReason != "" {
 			state.finishReason = choice.FinishReason
@@ -464,7 +524,7 @@ func oaiRunNonStreamingHooks(ctx context.Context, client *openai.Client, params 
 			if tc.Function.Arguments != "" {
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			}
-			p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
+			p := newFunctionCallPart(tc.Function.Name, args)
 			p.FunctionCall.ID = tc.ID
 			p.ThoughtSignature = oaiThoughtSignature(tc.RawJSON())
 			parts = append(parts, p)

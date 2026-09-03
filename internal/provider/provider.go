@@ -291,31 +291,53 @@ func AzureDeployments() []ModelWindow {
 	return out
 }
 
+// KnownProviderPrefixes lists known vendor and gateway prefixes that may wrap
+// model names in layered routing configurations (e.g. agentgateway/openai/...).
+var KnownProviderPrefixes = []string{
+	"agentgateway/",
+	"anthropic/",
+	"openai/",
+	"gemini/",
+	"google/",
+	"mistral/",
+	"xai/",
+	"grok/",
+	"ollama/",
+	"ollama1/",
+	"ollama2/",
+	"ollama3/",
+	"ollama-cloud/",
+	"azure/",
+	"opencode/",
+	"openrouter/",
+}
+
+// StripKnownProviderPrefixes removes known provider prefix wrappers from a
+// model name iteratively (e.g. "agentgateway/openai/gpt-5.6-luna" -> "gpt-5.6-luna").
+// It preserves the casing of the un-prefixed model identifier.
+func StripKnownProviderPrefixes(modelName string) string {
+	current := modelName
+	for {
+		stripped := false
+		lower := strings.ToLower(current)
+		for _, p := range KnownProviderPrefixes {
+			if strings.HasPrefix(lower, p) {
+				current = current[len(p):]
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	return current
+}
+
 // longestPrefixSize resolves modelName against a prefix table, preferring the
 // longest match so "gpt-5.1" beats "gpt-5" and "o1-mini" beats "o1".
 func longestPrefixSize(sizes map[string]int64, modelName string) int64 {
-	lower := strings.ToLower(modelName)
-	// Trim gateway wrapper prefix first so layered routes like
-	// agentgateway/gemini/... or agentgateway/anthropic/... unwrap cleanly.
-	lower = strings.TrimPrefix(lower, "agentgateway/")
-	for _, p := range []string{
-		"anthropic/",
-		"openai/",
-		"gemini/",
-		"google/",
-		"mistral/",
-		"xai/",
-		"ollama/",
-		"ollama1/",
-		"ollama2/",
-		"ollama3/",
-		"ollama-cloud/",
-		"azure/",
-		"opencode/",
-		"openrouter/",
-	} {
-		lower = strings.TrimPrefix(lower, p)
-	}
+	lower := strings.ToLower(StripKnownProviderPrefixes(modelName))
 	bestLen := 0
 	var bestSize int64
 	for prefix, size := range sizes {
@@ -618,6 +640,11 @@ type LLMOptions struct {
 	// EnableXAITools opts into xAI server-side tools (web search, X search,
 	// and code interpreter) for xAI Responses API requests.
 	EnableXAITools bool
+	// MaxOutputTokens caps a reply on the OpenAI-compatible paths, in tokens.
+	// Zero uses defaultOaiMaxOutputTokens; set it for a backend whose models
+	// stop below that and reject the request rather than clamping it. A
+	// per-request genai MaxOutputTokens still wins over both.
+	MaxOutputTokens int64
 	// RateLimit paces outbound requests so a turn stays inside the provider's
 	// per-minute quota rather than being rejected by it. A zero value sends at
 	// whatever rate the caller manages. Resolved from config by

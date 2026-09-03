@@ -21,10 +21,15 @@
             # The repository currently requires Go 1.27, which is not yet
             # available in the pinned nixpkgs revision. This is only a module
             # directive compatibility patch; the source uses no newer APIs.
+            #
+            # This was once accompanied by a second substitution promoting
+            # google.golang.org/grpc out of the indirect block. main now
+            # requires it directly, so the pattern no longer matches — and
+            # because substituteInPlace uses --replace-fail, a stale pattern
+            # does not degrade to a no-op, it aborts the build.
             postPatch = ''
               substituteInPlace go.mod \
-                --replace-fail 'go 1.27.0' 'go 1.26.5' \
-                --replace-fail 'google.golang.org/grpc v1.83.1 // indirect' 'google.golang.org/grpc v1.83.1'
+                --replace-fail 'go 1.27.0' 'go 1.26.5'
             '';
 
             subPackages = [ "cmd/pi" ];
