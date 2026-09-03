@@ -454,6 +454,14 @@
             "output": "0.25",
             "cacheRead": "0.015"
           }
+        },
+        "anthropic/claude-fable-5-1": {
+          "rates": {
+            "input": "10",
+            "output": "50",
+            "cacheRead": "0.25",
+            "cacheWrite": "12.5"
+          }
         }
       }
     },
