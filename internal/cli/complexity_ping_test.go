@@ -1188,12 +1188,19 @@ func TestPrintProviderModels(t *testing.T) {
 	if !strings.Contains(out, "openai (2 models):") {
 		t.Errorf("expected the count header, got:\n%s", out)
 	}
-	// Sorted by ID, so gpt-a comes first, and only it shows an owner.
-	if strings.Index(out, "gpt-a") > strings.Index(out, "gpt-z") {
-		t.Errorf("models are not sorted by ID:\n%s", out)
+	// Rendered as a markdown table with a header and separator.
+	if !strings.Contains(out, "| Model | Release | Price | Notes |") {
+		t.Errorf("expected the markdown table header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "gpt-a") || !strings.Contains(out, "openai\n") {
-		t.Errorf("expected the owner column for gpt-a, got:\n%s", out)
+	if !strings.Contains(out, "|---|---|---|---|") {
+		t.Errorf("expected the markdown separator row, got:\n%s", out)
+	}
+	// Both models present, and gpt-a shows its owner in the Notes column.
+	if !strings.Contains(out, "| gpt-a |") || !strings.Contains(out, "| gpt-z |") {
+		t.Errorf("expected both model rows, got:\n%s", out)
+	}
+	if !strings.Contains(out, "| gpt-a |") || !strings.Contains(out, "openai |") {
+		t.Errorf("expected the owner in the Notes column for gpt-a, got:\n%s", out)
 	}
 }
 

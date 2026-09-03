@@ -71,7 +71,7 @@ func TestParseModelsDevPricing(t *testing.T) {
 						"tiers": [{"input": 8, "output": 30, "tier": {"type": "context", "size": 272000}}]
 					}
 				},
-				"no-cost-model": {"id": "x"}
+				"no-cost-model": {"id": "x", "modalities": {"output": ["text"]}}
 			}
 		},
 		"anthropic": {
@@ -114,6 +114,78 @@ func TestParseModelsDevPricing(t *testing.T) {
 func TestParseModelsDevPricingEmpty(t *testing.T) {
 	if _, err := parseModelsDevPricing([]byte(`{"openai": {"models": {}}}`)); err == nil {
 		t.Error("expected error for no supported priced models")
+	}
+}
+
+func TestParseModelsDevPricingReleaseAndDeprecated(t *testing.T) {
+	body := `{
+		"openai": {
+			"models": {
+				"gpt-5.5": {
+					"release_date": "2026-04-23",
+					"cost": {"input": 5, "output": 30}
+				},
+				"gpt-image-1": {
+					"release_date": "2025-04-24",
+					"status": "deprecated"
+				}
+			}
+		}
+	}`
+	s, err := parseModelsDevPricing([]byte(body))
+	if err != nil {
+		t.Fatalf("parseModelsDevPricing: %v", err)
+	}
+	// Priced model carries its release date and is not deprecated.
+	gpt := s.Providers["openai"]["gpt-5.5"]
+	if gpt.ReleaseDate != "2026-04-23" {
+		t.Errorf("gpt-5.5 release_date = %q, want 2026-04-23", gpt.ReleaseDate)
+	}
+	if gpt.Deprecated {
+		t.Error("gpt-5.5 should not be deprecated")
+	}
+	// Deprecated no-cost model is kept, with no price and the flag set.
+	img := s.Providers["openai"]["gpt-image-1"]
+	if !img.Deprecated {
+		t.Error("gpt-image-1 should be deprecated")
+	}
+	if img.ReleaseDate != "2025-04-24" {
+		t.Errorf("gpt-image-1 release_date = %q, want 2025-04-24", img.ReleaseDate)
+	}
+	if img.hasPrice() {
+		t.Error("gpt-image-1 should have no price")
+	}
+}
+
+func TestModelReleaseDate(t *testing.T) {
+	withTempCacheDir(t)
+	if got := ModelReleaseDate("openai", "gpt-5.5"); got != "2026-04-23" {
+		t.Errorf("ModelReleaseDate(openai, gpt-5.5) = %q, want 2026-04-23", got)
+	}
+	// Unknown model has no date.
+	if got := ModelReleaseDate("openai", "definitely-not-a-model"); got != "" {
+		t.Errorf("ModelReleaseDate(openai, unknown) = %q, want empty", got)
+	}
+}
+
+func TestShouldFilterModel(t *testing.T) {
+	withTempCacheDir(t)
+	ref := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	// gpt-image-1 is deprecated, released 2025-04-24 (>1y before ref), no price.
+	if !ShouldFilterModel("openai", "gpt-image-1", ref) {
+		t.Error("gpt-image-1 should be filtered (deprecated, old, unpriced)")
+	}
+	// A priced deprecated model is not filtered.
+	if ShouldFilterModel("openai", "gpt-5.5", ref) {
+		t.Error("gpt-5.5 should not be filtered (it is priced)")
+	}
+	// A recent deprecated model is not filtered.
+	if ShouldFilterModel("openai", "gpt-image-1", time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Error("gpt-image-1 should not be filtered when reference is within a year of release")
+	}
+	// Unknown model is not filtered.
+	if ShouldFilterModel("openai", "definitely-not-a-model", ref) {
+		t.Error("unknown model should not be filtered")
 	}
 }
 

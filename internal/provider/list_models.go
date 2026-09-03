@@ -18,6 +18,7 @@ type ModelInfo struct {
 	OwnedBy       string   `json:"owned_by,omitempty"`
 	ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
 	Capabilities  []string `json:"capabilities,omitempty"`   // e.g. completion_chat, vision
+	ReleaseDate   string   `json:"release_date,omitempty"`   // models.dev catalog date, when known
 }
 
 // ListModelsOptions controls how models are fetched from a provider.

@@ -35,13 +35,24 @@ type pricingSnapshot struct {
 
 // PricingModel holds a model's per-million-token rates in USD. All fields are
 // optional; a provider may omit cache rates or reasoning. Tiers carry the
-// context-over threshold at which the higher rate applies.
+// context-over threshold at which the higher rate applies. ReleaseDate,
+// Deprecated, and TextOutput come from the models.dev catalog and are used to
+// annotate and filter model listings.
 type PricingModel struct {
-	Input      float64       `json:"input,omitempty"`
-	Output     float64       `json:"output,omitempty"`
-	CacheRead  float64       `json:"cache_read,omitempty"`
-	CacheWrite float64       `json:"cache_write,omitempty"`
-	Tiers      []PricingTier `json:"tiers,omitempty"`
+	Input       float64       `json:"input,omitempty"`
+	Output      float64       `json:"output,omitempty"`
+	CacheRead   float64       `json:"cache_read,omitempty"`
+	CacheWrite  float64       `json:"cache_write,omitempty"`
+	Tiers       []PricingTier `json:"tiers,omitempty"`
+	ReleaseDate string        `json:"release_date,omitempty"`
+	Deprecated  bool          `json:"deprecated,omitempty"`
+	TextOutput  bool          `json:"text_output,omitempty"`
+}
+
+// hasPrice reports whether the model carries any rate (input, output, cache, or
+// a tier). A model with no rate is unpriced.
+func (p PricingModel) hasPrice() bool {
+	return p.Input != 0 || p.Output != 0 || p.CacheRead != 0 || p.CacheWrite != 0 || len(p.Tiers) > 0
 }
 
 // PricingTier is a context-length tier: rates that apply once the prompt
@@ -114,6 +125,58 @@ func pricingFor() (pricingSnapshot, bool) {
 // against its base entry (gpt-5.6). ok is false when the provider or model is
 // unknown.
 func CostFor(providerName, modelName string) (PricingModel, bool) {
+	return lookupPricing(providerName, modelName)
+}
+
+// ModelReleaseDate returns the models.dev release date for a model, or "" when
+// the provider or model is unknown. It uses the same prefix matching as CostFor.
+func ModelReleaseDate(providerName, modelName string) string {
+	pm, ok := lookupPricing(providerName, modelName)
+	if !ok {
+		return ""
+	}
+	return pm.ReleaseDate
+}
+
+// ModelTextOutput reports whether a model can emit text output, per the
+// models.dev catalog. ok is false when the provider or model is unknown.
+func ModelTextOutput(providerName, modelName string) (text bool, ok bool) {
+	pm, ok := lookupPricing(providerName, modelName)
+	if !ok {
+		return false, false
+	}
+	return pm.TextOutput, true
+}
+
+// ShouldFilterModel reports whether a model should be hidden from listings: it
+// is deprecated, released more than a year before the given reference date, and
+// carries no price. Such models are stale and offer nothing to a user.
+func ShouldFilterModel(providerName, modelName string, ref time.Time) bool {
+	pm, ok := lookupPricing(providerName, modelName)
+	if !ok {
+		return false
+	}
+	if !pm.Deprecated || pm.hasPrice() {
+		return false
+	}
+	rd, err := time.Parse("2006-01-02", pm.ReleaseDate)
+	if err != nil {
+		// Month-only dates (e.g. "2026-01") are treated as the first of the
+		// month; anything unparseable is not filtered.
+		if len(pm.ReleaseDate) == 7 {
+			rd, err = time.Parse("2006-01", pm.ReleaseDate)
+		}
+		if err != nil {
+			return false
+		}
+	}
+	return rd.Before(ref.AddDate(-1, 0, 0))
+}
+
+// lookupPricing resolves a model against the pricing snapshot with exact-then-
+// longest-prefix matching, shared by CostFor, ModelReleaseDate, and
+// ShouldFilterModel.
+func lookupPricing(providerName, modelName string) (PricingModel, bool) {
 	s, ok := pricingFor()
 	if !ok {
 		return PricingModel{}, false
@@ -182,6 +245,11 @@ func fetchModelsDevPricing(ctx context.Context) (pricingSnapshot, error) {
 func parseModelsDevPricing(body []byte) (pricingSnapshot, error) {
 	var api map[string]struct {
 		Models map[string]struct {
+			ReleaseDate string `json:"release_date"`
+			Status      string `json:"status"`
+			Modalities  struct {
+				Output []string `json:"output"`
+			} `json:"modalities"`
 			Cost *struct {
 				Input      json.Number `json:"input"`
 				Output     json.Number `json:"output"`
@@ -227,28 +295,38 @@ func parseModelsDevPricing(body []byte) (pricingSnapshot, error) {
 		}
 		models := map[string]PricingModel{}
 		for modelID, m := range src.Models {
-			if m.Cost == nil {
+			textOutput := sliceContains(m.Modalities.Output, "text")
+			// Keep a model when it has a price, is deprecated, or does not emit
+			// text output. The last two are kept so the listing can annotate and
+			// filter them; a priced text model is the normal case. A model with
+			// none of those has nothing to show and is dropped.
+			if m.Cost == nil && m.Status != "deprecated" && textOutput {
 				continue
 			}
 			pm := PricingModel{
-				Input:      num(m.Cost.Input),
-				Output:     num(m.Cost.Output),
-				CacheRead:  num(m.Cost.CacheRead),
-				CacheWrite: num(m.Cost.CacheWrite),
+				ReleaseDate: m.ReleaseDate,
+				Deprecated:  m.Status == "deprecated",
+				TextOutput:  textOutput,
 			}
-			for _, t := range m.Cost.Tiers {
-				if t.Tier.Type != "context" || t.Tier.Size <= 0 {
-					continue
+			if m.Cost != nil {
+				pm.Input = num(m.Cost.Input)
+				pm.Output = num(m.Cost.Output)
+				pm.CacheRead = num(m.Cost.CacheRead)
+				pm.CacheWrite = num(m.Cost.CacheWrite)
+				for _, t := range m.Cost.Tiers {
+					if t.Tier.Type != "context" || t.Tier.Size <= 0 {
+						continue
+					}
+					pm.Tiers = append(pm.Tiers, PricingTier{
+						ContextOver: t.Tier.Size,
+						Input:       num(t.Input),
+						Output:      num(t.Output),
+						CacheRead:   num(t.CacheRead),
+						CacheWrite:  num(t.CacheWrite),
+					})
 				}
-				pm.Tiers = append(pm.Tiers, PricingTier{
-					ContextOver: t.Tier.Size,
-					Input:       num(t.Input),
-					Output:      num(t.Output),
-					CacheRead:   num(t.CacheRead),
-					CacheWrite:  num(t.CacheWrite),
-				})
 			}
-			if pm.Input == 0 && pm.Output == 0 && pm.CacheRead == 0 && pm.CacheWrite == 0 && len(pm.Tiers) == 0 {
+			if !pm.hasPrice() && !pm.Deprecated && pm.TextOutput {
 				continue
 			}
 			models[modelID] = pm
@@ -274,6 +352,16 @@ func num(n json.Number) float64 {
 		return 0
 	}
 	return f
+}
+
+// sliceContains reports whether s is present in the slice.
+func sliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // writePricingCache persists a pricing snapshot to the XDG cache atomically
