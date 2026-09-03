@@ -165,7 +165,9 @@ func TestRunModelList_Mistral(t *testing.T) {
 	if !strings.Contains(out, "128K") {
 		t.Errorf("output missing context window 128K: %s", out)
 	}
-	if !strings.Contains(out, "completion_chat,vision") {
+	// The listing renders capabilities into a markdown table cell, so they
+	// are joined with ", " rather than packed together.
+	if !strings.Contains(out, "completion_chat, vision") {
 		t.Errorf("output missing capabilities: %s", out)
 	}
 }
