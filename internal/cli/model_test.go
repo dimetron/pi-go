@@ -165,7 +165,9 @@ func TestRunModelList_Mistral(t *testing.T) {
 	if !strings.Contains(out, "128K") {
 		t.Errorf("output missing context window 128K: %s", out)
 	}
-	if !strings.Contains(out, "completion_chat,vision") {
+	// The listing renders capabilities into a markdown table cell, so they
+	// are joined with ", " rather than packed together.
+	if !strings.Contains(out, "completion_chat, vision") {
 		t.Errorf("output missing capabilities: %s", out)
 	}
 }
@@ -344,6 +346,71 @@ func TestHumanTokens(t *testing.T) {
 		if got := humanTokens(n); got != want {
 			t.Errorf("humanTokens(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestPriceAmount(t *testing.T) {
+	cases := map[float64]string{
+		0:     "—",
+		2.5:   "2.50",
+		10:    "10.00",
+		0.5:   "0.50",
+		0.075: "0.07",
+		0.005: "0.005",
+		1.25:  "1.25",
+	}
+	for v, want := range cases {
+		if got := priceAmount(v); got != want {
+			t.Errorf("priceAmount(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+func TestEnrichAndFilterModels(t *testing.T) {
+	// gpt-image-1 is deprecated, released 2025-04-24, unpriced — filtered.
+	// gpt-5.5 is priced and current — kept, with its release date annotated.
+	in := []provider.ModelInfo{
+		{ID: "gpt-image-1"},
+		{ID: "gpt-5.5"},
+	}
+	out := enrichAndFilterModels("openai", in)
+	if len(out) != 1 || out[0].ID != "gpt-5.5" {
+		t.Fatalf("enrichAndFilterModels = %+v, want only gpt-5.5", out)
+	}
+	if out[0].ReleaseDate != "2026-04-23" {
+		t.Errorf("gpt-5.5 release date = %q, want 2026-04-23", out[0].ReleaseDate)
+	}
+}
+
+func TestEnrichAndFilterModelsNonText(t *testing.T) {
+	// gpt-image-2 emits image output, not text — filtered even though it is
+	// priced and current. gpt-4o emits text — kept.
+	in := []provider.ModelInfo{
+		{ID: "gpt-image-2"},
+		{ID: "gpt-4o"},
+	}
+	out := enrichAndFilterModels("openai", in)
+	if len(out) != 1 || out[0].ID != "gpt-4o" {
+		t.Fatalf("enrichAndFilterModels = %+v, want only gpt-4o", out)
+	}
+}
+
+func TestModelPrice(t *testing.T) {
+	// Known model with pricing in the embedded snapshot.
+	if got := modelPrice("openai", "gpt-5.5"); got != "$5.00/$30.00 per 1M" {
+		t.Errorf("modelPrice(openai, gpt-5.5) = %q, want $5.00/$30.00 per 1M", got)
+	}
+	// Prefix match: dated model ID resolves against its base entry.
+	if got := modelPrice("anthropic", "claude-opus-4-7-20260101"); got != "$5.00/$25.00 per 1M" {
+		t.Errorf("modelPrice(anthropic, claude-opus-4-7-20260101) = %q, want $5.00/$25.00 per 1M", got)
+	}
+	// Unknown model shows no price.
+	if got := modelPrice("openai", "definitely-not-a-model"); got != "" {
+		t.Errorf("modelPrice(openai, definitely-not-a-model) = %q, want empty", got)
+	}
+	// Local provider (ollama) has no pricing.
+	if got := modelPrice("ollama", "llama3:latest"); got != "" {
+		t.Errorf("modelPrice(ollama, llama3:latest) = %q, want empty", got)
 	}
 }
 

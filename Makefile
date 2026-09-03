@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -221,3 +221,10 @@ endif
 .PHONY: fetch-models
 fetch-models:
 	@bash scripts/fetch-models.sh
+
+# fetch-modelsdev-pricing: regenerate the embedded models.dev pricing snapshot
+# under internal/provider/modeldata/modelsdev-pricing.json. The runtime
+# refreshes it from the same endpoint when it is more than a day old.
+.PHONY: fetch-modelsdev-pricing
+fetch-modelsdev-pricing:
+	@bash scripts/fetch-modelsdev-pricing.sh

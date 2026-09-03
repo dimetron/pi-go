@@ -37,6 +37,11 @@ If a provider is specified as an argument, only that provider is queried.
 If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
+The human table shows each model's per-million-token input/output price in
+USD, from the embedded models.dev snapshot (refresh on demand with the
+/model-price-refresh slash command). Local providers (ollama, agentgateway)
+and models absent from the snapshot show no price.
+
 Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 
 Examples:
@@ -112,6 +117,8 @@ func runModelList(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		models = enrichAndFilterModels(p, models)
+
 		if flagModelListOutput == "json" {
 			doc := modelListJSONDoc{
 				Provider:  p,
@@ -140,6 +147,29 @@ func runModelList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("one or more providers failed")
 	}
 	return nil
+}
+
+// enrichAndFilterModels annotates each model with its models.dev release date
+// and drops models pi-go cannot use: those that do not emit text output (image,
+// video, audio generators), and stale deprecated models released more than a
+// year before today that carry no price. Such models are dead weight in the
+// listing.
+func enrichAndFilterModels(providerName string, models []provider.ModelInfo) []provider.ModelInfo {
+	now := time.Now()
+	out := models[:0]
+	for _, m := range models {
+		m.ReleaseDate = provider.ModelReleaseDate(providerName, m.ID)
+		// Drop non-text-output models (image/video/audio generators) when the
+		// catalog knows the model; unknown models are kept.
+		if text, ok := provider.ModelTextOutput(providerName, m.ID); ok && !text {
+			continue
+		}
+		if provider.ShouldFilterModel(providerName, m.ID, now) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // selectModelListProviders decides which providers `model list` queries: the
@@ -207,24 +237,81 @@ func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	return baseURL
 }
 
-// printProviderModels renders one provider's catalog, sorted by model ID.
+// printProviderModels renders one provider's catalog as a markdown table,
+// sorted by release date (newest first), then by model ID for models without a
+// date.
 func printProviderModels(providerName string, models []provider.ModelInfo) {
-	// Sort model IDs alphabetically.
+	// Sort by release date descending (latest on top); models with no date
+	// (empty string) sort last, and equal dates fall back to ID order.
 	sort.Slice(models, func(i, j int) bool {
+		if models[i].ReleaseDate != models[j].ReleaseDate {
+			return models[i].ReleaseDate > models[j].ReleaseDate
+		}
 		return models[i].ID < models[j].ID
 	})
 
+	// mistral and agentgateway carry a context window and capabilities; the
+	// other providers carry an owner (or nothing). Build a uniform table with a
+	// Notes column that holds whichever applies.
+	hasContext := (providerName == "mistral" || providerName == "agentgateway")
+	var header, sep string
+	if hasContext {
+		header = "| Model | Release | Price | Context | Notes |"
+		sep = "|---|---|---|---|---|"
+	} else {
+		header = "| Model | Release | Price | Notes |"
+		sep = "|---|---|---|---|"
+	}
+
 	fmt.Printf("%s (%d models):\n", providerName, len(models))
+	fmt.Println(header)
+	fmt.Println(sep)
 	for _, m := range models {
-		if (providerName == "mistral" || providerName == "agentgateway") && m.ContextWindow > 0 {
-			fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
-		} else if m.OwnedBy != "" {
-			fmt.Printf("  %-45s  %s\n", m.ID, m.OwnedBy)
+		price := modelPrice(providerName, m.ID)
+		rel := m.ReleaseDate
+		if rel == "" {
+			rel = "—"
+		}
+		if price == "" {
+			price = "—"
+		}
+		if hasContext {
+			ctx := ""
+			if m.ContextWindow > 0 {
+				ctx = humanTokens(m.ContextWindow)
+			}
+			fmt.Printf("| %s | %s | %s | %s | %s |\n", m.ID, rel, price, ctx, strings.Join(m.Capabilities, ", "))
 		} else {
-			fmt.Printf("  %s\n", m.ID)
+			notes := m.OwnedBy
+			fmt.Printf("| %s | %s | %s | %s |\n", m.ID, rel, price, notes)
 		}
 	}
 	fmt.Println()
+}
+
+// modelPrice returns a human-readable per-million-token price for a model, or
+// "" when the pricing snapshot has no entry for it. Prices come from the
+// embedded models.dev snapshot (refreshed daily at startup); local providers
+// (ollama, agentgateway) and unknown models have no price and show none.
+func modelPrice(providerName, modelID string) string {
+	pm, ok := provider.CostFor(providerName, modelID)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("$%s/$%s per 1M", priceAmount(pm.Input), priceAmount(pm.Output))
+}
+
+// priceAmount renders a per-million-token USD rate at a precision that suits
+// its magnitude: two decimals for rates at or above a cent, three for the
+// sub-cent rates some cheap models carry.
+func priceAmount(v float64) string {
+	if v == 0 {
+		return "—"
+	}
+	if v < 0.01 {
+		return fmt.Sprintf("%.3f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
 }
 
 // printAzureDeployments renders the embedded Azure deployment catalog.
