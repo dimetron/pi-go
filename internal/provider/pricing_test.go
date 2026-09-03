@@ -246,3 +246,34 @@ func TestPricingCachePathUsesModelsCacheDir(t *testing.T) {
 		t.Errorf("pricingCachePath() = %q, want %q", got, filepath.Join(dir, pricingCacheFile))
 	}
 }
+
+func TestModelTextOutput(t *testing.T) {
+	withTempCacheDir(t)
+
+	// A chat model emits text.
+	text, ok := ModelTextOutput("openai", "gpt-4o")
+	if !ok {
+		t.Fatal("ModelTextOutput(openai, gpt-4o) not found")
+	}
+	if !text {
+		t.Error("gpt-4o should report text output")
+	}
+
+	// An image generator carries no text_output flag, so it reports false —
+	// which is what keeps it out of the model listing.
+	text, ok = ModelTextOutput("openai", "gpt-image-1")
+	if !ok {
+		t.Fatal("ModelTextOutput(openai, gpt-image-1) not found")
+	}
+	if text {
+		t.Error("gpt-image-1 should not report text output")
+	}
+
+	// An unknown model is not classified either way, so callers keep it.
+	if _, ok := ModelTextOutput("openai", "definitely-not-a-model"); ok {
+		t.Error("unknown model should report ok=false")
+	}
+	if _, ok := ModelTextOutput("nonexistent", "x"); ok {
+		t.Error("unknown provider should report ok=false")
+	}
+}
