@@ -602,6 +602,21 @@ Add pi to Zed's `agent_servers` in your settings:
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
 
+### Sessions survive the server
+
+Every ACP session's transcript is written to the same store the terminal uses
+(`~/.pi-go/sessions/<session-id>/`, or `$PI_SESSIONS_DIR`), keyed by the ACP
+session id. The server implements the protocol's session lifecycle on top of it:
+
+| Method | What pi does |
+|---|---|
+| `session/load` | Replays the stored transcript to the client, then continues it |
+| `session/resume` | Continues the transcript without replaying it |
+| `session/list` | Lists stored sessions, newest first, optionally filtered by `cwd` |
+
+So an editor can restart pi — or the machine — and pick a thread up where it
+left off, and `pi --session <id>` reopens the same conversation from the terminal.
+
 ## kagent
 
 Run pi-go as a custom agent inside [kagent](https://kagent.dev) on Agent Substrate via the A2A

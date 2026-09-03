@@ -65,6 +65,9 @@ type Agent struct {
 	Subagents []subagent.AgentConfig
 	// Logger is used for diagnostic output. If nil, a discard logger is used.
 	Logger *slog.Logger
+	// Sessions persists transcripts across processes and backs session/load,
+	// session/resume and session/list. Nil keeps sessions in memory only.
+	Sessions SessionStore
 
 	mu       sync.Mutex
 	conn     *acp.AgentSideConnection
@@ -128,17 +131,29 @@ func (a *Agent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, 
 
 // Initialize advertises pi's baseline capabilities. EmbeddedContext is on so
 // Zed can inline file context; Image defaults to false until zed-09 wires the
-// provider gate.
+// provider gate. session/load and session/resume are always offered;
+// session/list only when a SessionStore can answer it.
 func (a *Agent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
 	info := a.info()
+	caps := acp.SessionCapabilities{Resume: &acp.SessionResumeCapabilities{}}
+	if a.store() != nil {
+		caps.List = &acp.SessionListCapabilities{}
+	}
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
 		AgentInfo:       &info,
 		AgentCapabilities: acp.AgentCapabilities{
-			LoadSession:        true,
-			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: true},
+			LoadSession:         true,
+			PromptCapabilities:  acp.PromptCapabilities{EmbeddedContext: true},
+			SessionCapabilities: caps,
 		},
 	}, nil
+}
+
+func (a *Agent) store() SessionStore {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Sessions
 }
 
 // NewSession registers a new session and returns its identifier.
@@ -271,10 +286,39 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	return resp, nil
 }
 
-// ListSessions is not yet supported; advertise method-not-found so clients
-// can detect capability absence.
-func (a *Agent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+// ListSessions reports the sessions the SessionStore has transcripts for,
+// newest first, optionally narrowed to one working directory. Without a
+// store there is nothing to list, and method-not-found tells the client so.
+func (a *Agent) ListSessions(ctx context.Context, params acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+	store := a.store()
+	if store == nil {
+		return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+	}
+	summaries, err := store.List(ctx)
+	if err != nil {
+		return acp.ListSessionsResponse{}, err
+	}
+	sessions := make([]acp.SessionInfo, 0, len(summaries))
+	for _, s := range summaries {
+		if params.Cwd != nil && *params.Cwd != "" && s.Cwd != *params.Cwd {
+			continue
+		}
+		sessions = append(sessions, sessionInfo(s))
+	}
+	return acp.ListSessionsResponse{Sessions: sessions}, nil
+}
+
+func sessionInfo(s SessionSummary) acp.SessionInfo {
+	info := acp.SessionInfo{SessionId: acp.SessionId(s.ID), Cwd: s.Cwd}
+	if s.Title != "" {
+		title := s.Title
+		info.Title = &title
+	}
+	if !s.UpdatedAt.IsZero() {
+		updated := s.UpdatedAt.UTC().Format(time.RFC3339)
+		info.UpdatedAt = &updated
+	}
+	return info
 }
 
 // CloseSession closes a session and cancels any in-flight prompt work.
@@ -288,9 +332,62 @@ func (a *Agent) CloseSession(ctx context.Context, params acp.CloseSessionRequest
 	return acp.CloseSessionResponse{}, nil
 }
 
-// ResumeSession is not yet supported.
-func (a *Agent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
+// ResumeSession binds an existing session id to this agent without replaying
+// its transcript — the client already shows it and only needs the next prompt
+// to continue the conversation. The pi runtime picks the persisted history up
+// under the same id on that prompt.
+func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	if _, err := a.bindSession(ctx, string(params.SessionId), params.Cwd); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
+	return acp.ResumeSessionResponse{}, nil
+}
+
+// bindSession attaches sid to this agent with the given cwd, refreshing the
+// record when the session is already in memory, and reports whether a
+// persisted transcript exists for it. With a store, an id that is neither in
+// memory nor on disk is rejected. Without one every id is accepted: nothing
+// can be checked, and the runtime starts a transcript under that id on the
+// first prompt — which is how a client resuming an id against a fresh agent
+// process keeps working.
+func (a *Agent) bindSession(ctx context.Context, sid, cwd string) (persisted bool, err error) {
+	if strings.TrimSpace(sid) == "" {
+		return false, fmt.Errorf("session id is required")
+	}
+	a.mu.Lock()
+	_, known := a.sessions[sid]
+	store := a.Sessions
+	a.mu.Unlock()
+
+	if store != nil {
+		persisted = store.Exists(ctx, sid)
+		if !known && !persisted {
+			return false, fmt.Errorf("session %s not found", sid)
+		}
+	}
+
+	a.mu.Lock()
+	if a.sessions == nil {
+		a.sessions = make(map[string]*sessionState)
+	}
+	st, ok := a.sessions[sid]
+	if !ok {
+		st = &sessionState{}
+		a.sessions[sid] = st
+	}
+	st.cwd = cwd
+	st.commandsSent = false
+	st.commandsPending = false
+	a.mu.Unlock()
+
+	a.log().Log(ctx, slog.LevelDebug,
+		"acp-server: session bound",
+		"session_id", sid,
+		"cwd", cwd,
+		"persisted", persisted,
+	)
+	go a.sendAvailableCommands(sid)
+	return persisted, nil
 }
 
 // SetSessionConfigOption is not yet supported.
