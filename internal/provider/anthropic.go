@@ -543,7 +543,7 @@ func buildAntFinalResponse(s *antStreamState) *model.LLMResponse {
 			_ = json.Unmarshal([]byte(block.inputJSON), &args)
 		}
 		if block.name != "" || block.id != "" {
-			p := genai.NewPartFromFunctionCall(block.name, args)
+			p := newFunctionCallPart(block.name, args)
 			p.FunctionCall.ID = block.id
 			finalParts = append(finalParts, p)
 		}
@@ -697,7 +697,7 @@ func antRunNonStreaming(ctx context.Context, client *anthropic.Client, params an
 				var args map[string]any
 				inputBytes, _ := json.Marshal(toolUse.Input)
 				_ = json.Unmarshal(inputBytes, &args)
-				p := genai.NewPartFromFunctionCall(toolUse.Name, args)
+				p := newFunctionCallPart(toolUse.Name, args)
 				p.FunctionCall.ID = toolUse.ID
 				parts = append(parts, p)
 			}
@@ -885,7 +885,7 @@ func antBetaToolUsePart(block anthropic.BetaContentBlockUnion) *genai.Part {
 	if block.Input != nil {
 		_ = json.Unmarshal(block.Input, &args)
 	}
-	p := genai.NewPartFromFunctionCall(block.Name, args)
+	p := newFunctionCallPart(block.Name, args)
 	p.FunctionCall.ID = block.ID
 	return p
 }

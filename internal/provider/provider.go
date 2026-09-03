@@ -580,6 +580,11 @@ type LLMOptions struct {
 	// EnableXAITools opts into xAI server-side tools (web search, X search,
 	// and code interpreter) for xAI Responses API requests.
 	EnableXAITools bool
+	// MaxOutputTokens caps a reply on the OpenAI-compatible paths, in tokens.
+	// Zero uses defaultOaiMaxOutputTokens; set it for a backend whose models
+	// stop below that and reject the request rather than clamping it. A
+	// per-request genai MaxOutputTokens still wins over both.
+	MaxOutputTokens int64
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.

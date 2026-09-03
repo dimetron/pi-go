@@ -25,6 +25,9 @@ func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, m
 			Model:    modelName,
 			Messages: messages,
 		}
+		if maxTokens := oaiMaxOutputTokens(req.Config, m.maxOutputTokens); maxTokens > 0 {
+			params.MaxCompletionTokens = openai.Int(maxTokens)
+		}
 		if systemInstruction != "" {
 			params.Messages = append([]openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemInstruction),
@@ -147,7 +150,7 @@ func oaiToolCallMessages(
 		if fc == nil || strings.TrimSpace(fc.ID) == "" {
 			continue
 		}
-		argsJSON, _ := json.Marshal(fc.Args)
+		argsJSON := marshalFunctionCallArgs(fc.Args)
 		call := &openai.ChatCompletionMessageFunctionToolCallParam{
 			ID:   fc.ID,
 			Type: constant.Function("function"),
@@ -344,7 +347,7 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 		name, _ := tc["name"].(string)
 		id, _ := tc["id"].(string)
 		if name != "" || id != "" {
-			p := genai.NewPartFromFunctionCall(name, args)
+			p := newFunctionCallPart(name, args)
 			p.FunctionCall.ID = id
 			if sig, ok := tc["thought_signature"].([]byte); ok {
 				p.ThoughtSignature = sig
@@ -521,7 +524,7 @@ func oaiRunNonStreamingHooks(ctx context.Context, client *openai.Client, params 
 			if tc.Function.Arguments != "" {
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			}
-			p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
+			p := newFunctionCallPart(tc.Function.Name, args)
 			p.FunctionCall.ID = tc.ID
 			p.ThoughtSignature = oaiThoughtSignature(tc.RawJSON())
 			parts = append(parts, p)
