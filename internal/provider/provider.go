@@ -282,8 +282,27 @@ func AzureDeployments() []ModelWindow {
 // longest match so "gpt-5.1" beats "gpt-5" and "o1-mini" beats "o1".
 func longestPrefixSize(sizes map[string]int64, modelName string) int64 {
 	lower := strings.ToLower(modelName)
-	lower = strings.TrimPrefix(lower, "ollama/")
-	lower = strings.TrimPrefix(lower, "azure/")
+	// Trim gateway wrapper prefix first so layered routes like
+	// agentgateway/gemini/... or agentgateway/anthropic/... unwrap cleanly.
+	lower = strings.TrimPrefix(lower, "agentgateway/")
+	for _, p := range []string{
+		"anthropic/",
+		"openai/",
+		"gemini/",
+		"google/",
+		"mistral/",
+		"xai/",
+		"ollama/",
+		"ollama1/",
+		"ollama2/",
+		"ollama3/",
+		"ollama-cloud/",
+		"azure/",
+		"opencode/",
+		"openrouter/",
+	} {
+		lower = strings.TrimPrefix(lower, p)
+	}
 	bestLen := 0
 	var bestSize int64
 	for prefix, size := range sizes {
