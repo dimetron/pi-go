@@ -995,8 +995,13 @@ func memoryInstructionContext(ctx context.Context, store memory.Store, cfg confi
 
 // sessionsDir is the directory FileService keeps one subdirectory per session
 // in. Startup reaches for it before any session service exists, so it cannot
-// be asked of the service itself.
+// be asked of the service itself. PI_SESSIONS_DIR overrides the default of
+// $HOME/.pi-go/sessions — a server whose home is not durable storage points
+// it at a directory that is.
 func sessionsDir() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv("PI_SESSIONS_DIR")); dir != "" {
+		return dir, nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("getting home dir: %w", err)

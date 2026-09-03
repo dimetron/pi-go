@@ -83,6 +83,29 @@ The short version:
 5. Create an `AgentInstance` through the kagent gRPC API and confirm it reaches
    `AGENT_INSTANCE_STATE_READY`, then chat with it from the kagent UI.
 
+## Durable state: sessions survive suspend, restore and replacement
+
+Substrate checkpoints an idle actor and may restore it elsewhere, or replace it
+outright. Either way the actor comes back as a new process, and the only thing
+that carries over is the durable directory mounted at `/data`. The adapter is
+built so that is enough:
+
+- The image sets `HOME=/data`, so everything pi keeps under `~/.pi-go` — session
+  transcripts, the memory store, server logs — lands on the durable mount. A
+  home under `/home/pi` would be lost with the pod.
+- Each A2A context id is a pi session id, and its transcript is persisted under
+  `/data/.pi-go/sessions/<context-id>/` as it happens (`events.jsonl` is
+  append-on-write, so nothing is lost to a checkpoint taken between turns).
+- On the next message for a context the restarted process opens the stored
+  transcript instead of starting a fresh one, and the conversation continues.
+
+Set `PI_SESSIONS_DIR` in the Harness `spec.env` to keep transcripts somewhere
+other than the default `$HOME/.pi-go/sessions`. Each AgentInstance has its own
+durable directory, so one actor cannot read another's transcripts.
+
+The ACP server (`pi acp-server`) persists sessions the same way and exposes
+them through `session/load`, `session/resume` and `session/list`.
+
 ## Model configuration
 
 Set `PI_MODEL` and `PI_BASE_URL` in the Harness `spec.env` to point at the

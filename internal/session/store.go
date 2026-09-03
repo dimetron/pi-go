@@ -314,6 +314,43 @@ func (s *FileService) List(_ context.Context, req *session.ListRequest) (*sessio
 	}, nil
 }
 
+// ListMeta returns the metadata of every session under baseDir for the given
+// app, newest first. It reads only meta.json, never events, so listing a large
+// store stays cheap. An empty userID matches every user. Directories without
+// readable metadata are skipped.
+func (s *FileService) ListMeta(appName, userID string) ([]Meta, error) {
+	if appName == "" {
+		return nil, fmt.Errorf("app_name is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading sessions dir: %w", err)
+	}
+
+	metas := make([]Meta, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		meta, err := readMeta(filepath.Join(s.baseDir, entry.Name()))
+		if err != nil || meta.AppName != appName {
+			continue
+		}
+		if userID != "" && meta.UserID != userID {
+			continue
+		}
+		metas = append(metas, *meta)
+	}
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
+	})
+	return metas, nil
+}
+
 // Archive moves the session directory under baseDir to archiveDir/yyyy/mm/dd/
 // using the current time. It removes the session from the in-memory cache.
 func (s *FileService) Archive(_ context.Context, req *session.DeleteRequest) error {
@@ -639,6 +676,28 @@ func (s *FileService) SetSessionTitle(sessionID, title string) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.meta.Title = title
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// SetSessionWorkDir records the working directory a session runs in and
+// persists it to meta.json. Create captures the process's own cwd, which is
+// right for the CLI but not for a server that hosts sessions for directories
+// it was not started in — an ACP editor's project, an A2A actor's workspace.
+func (s *FileService) SetSessionWorkDir(sessionID, dir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.WorkDir = dir
 	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
 }
 

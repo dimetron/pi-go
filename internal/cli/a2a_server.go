@@ -79,13 +79,20 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		system = os.Getenv("PI_SYSTEM")
 	}
 
-	handler := acpserver.NewPromptHandler(acpserver.RuntimeConfig{
+	// The A2A context id is the pi session id, and the transcript behind it
+	// is persisted, so a conversation survives Substrate replacing the actor:
+	// the next message on the same context resumes it from the durable dir.
+	rt := acpserver.RuntimeConfig{
 		Model:    model,
 		BaseURL:  baseURL,
 		Headers:  flagHeaders,
 		Insecure: flagInsecure,
 		System:   system,
-	})
+	}
+	if sessionSvc := openServerSessionStore(ctx, logger); sessionSvc != nil {
+		rt.SessionService = sessionSvc
+	}
+	handler := acpserver.NewPromptHandler(rt)
 
 	addr := flagA2AAddr
 	if addr == "" {

@@ -42,6 +42,13 @@ type RuntimeConfig struct {
 	System          string
 	LoadConfig      func() (config.Config, error)
 	SandboxRootFunc func(turn PromptTurn) string
+	// SessionService, when set, persists each ACP session's transcript under
+	// its ACP session id (see StoreSessionID), so a session survives the
+	// process that started it: the next process to see the same id — after
+	// an editor restart, or after Substrate replaces an actor — continues
+	// the conversation instead of starting over. Nil keeps transcripts in
+	// memory for the life of the process.
+	SessionService adksession.Service
 }
 
 // piSessionState caches the per-ACP-session pi runtime so all turns within one
@@ -182,6 +189,8 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		Tools:                res.coreTools,
 		Toolsets:             buildToolsetsFromCfg(cfg),
 		Instruction:          instruction,
+		SessionService:       rt.SessionService,
+		WorkingDir:           cwd,
 		BeforeToolCallbacks:  res.beforeCBs,
 		AfterToolCallbacks:   res.afterCBs,
 		BeforeModelCallbacks: res.beforeModelCBs,
@@ -191,11 +200,12 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, fmt.Errorf("creating agent: %w", err)
 	}
 
-	sessionID, _, err := ag.CreateSession(ctx)
+	sessionID, resumed, err := openPiSession(ctx, rt, ag, turn.SessionID)
 	if err != nil {
 		res.cleanup()
-		return nil, fmt.Errorf("creating session: %w", err)
+		return nil, err
 	}
+	span.SetAttributes(attribute.Bool("session.resumed", resumed))
 
 	return &piSessionState{
 		agent:       ag,
@@ -204,6 +214,27 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		bashSup:     res.bashSup,
 		cleanup:     res.cleanup,
 	}, nil
+}
+
+// openPiSession settles the ADK session a turn runs in and reports whether it
+// carried history. With a persistent service the transcript lives under the
+// ACP session id, so an id seen before — by an earlier process, or by the CLI
+// — resumes where it left off. Without one every ACP session starts a fresh
+// in-memory transcript.
+func openPiSession(ctx context.Context, rt RuntimeConfig, ag *piagent.Agent, acpSessionID string) (sessionID string, resumed bool, err error) {
+	if rt.SessionService == nil {
+		sid, _, err := ag.CreateSession(ctx)
+		if err != nil {
+			return "", false, fmt.Errorf("creating session: %w", err)
+		}
+		return sid, false, nil
+	}
+	sid := StoreSessionID(acpSessionID)
+	resumed, err = ag.OpenSession(ctx, sid)
+	if err != nil {
+		return "", false, fmt.Errorf("opening session: %w", err)
+	}
+	return sid, resumed, nil
 }
 
 // loadSessionConfig loads the pi config for the session's working directory and

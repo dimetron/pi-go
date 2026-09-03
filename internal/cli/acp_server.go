@@ -65,17 +65,25 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 		model = "glm-5.2:cloud"
 	}
 
+	// Transcripts go to the on-disk store so session/load, session/resume
+	// and session/list work across restarts of this process.
+	sessionSvc := openServerSessionStore(ctx, logger)
+	rt := acpserver.RuntimeConfig{
+		Model:    model,
+		BaseURL:  flagURL,
+		Headers:  flagHeaders,
+		Insecure: flagInsecure,
+		System:   flagSystem,
+	}
+	if sessionSvc != nil {
+		rt.SessionService = sessionSvc
+	}
 	agent := &acpserver.Agent{
 		AgentInfo:                 acp.Implementation{Name: "pi-go", Version: Version},
 		AvailableCommandsResolver: acpserver.DiscoverAvailableCommands,
-		Handler: acpserver.NewPromptHandler(acpserver.RuntimeConfig{
-			Model:    model,
-			BaseURL:  flagURL,
-			Headers:  flagHeaders,
-			Insecure: flagInsecure,
-			System:   flagSystem,
-		}),
-		Logger: logger,
+		Handler:                   acpserver.NewPromptHandler(rt),
+		Logger:                    logger,
+		Sessions:                  serverSessionStore(sessionSvc),
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
 		Agent: agent,

@@ -580,6 +580,12 @@ type titleNamer interface {
 	SetSessionTitle(sessionID, title string) error
 }
 
+// workDirRecorder is implemented by session services that can record the
+// working directory a session runs in (e.g. session.FileService).
+type workDirRecorder interface {
+	SetSessionWorkDir(sessionID, dir string) error
+}
+
 // agentContextRecorder is implemented by session services that can persist a
 // session's place in an agent tree. Declared here for the same reason as
 // titleNamer: the agent takes the capability, not the concrete service.
@@ -601,13 +607,49 @@ func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle stri
 		return "", "", fmt.Errorf("creating session: %w", err)
 	}
 	sid := resp.Session.ID()
+	return sid, a.recordNewSessionMeta(sid), nil
+}
+
+// OpenSession resumes the session persisted under sessionID, creating it when
+// the session service has no record of that id. It reports whether an existing
+// transcript was found. This is how a server hosting a session for an external
+// client — an ACP editor, an A2A gateway — continues a conversation across its
+// own restarts: the client keeps the id, and the transcript lives under it.
+func (a *Agent) OpenSession(ctx context.Context, sessionID string) (resumed bool, err error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return false, fmt.Errorf("opening session: id is required")
+	}
+	if _, err := a.sessionService.Get(ctx, &session.GetRequest{
+		AppName:   AppName,
+		UserID:    DefaultUserID,
+		SessionID: sessionID,
+	}); err == nil {
+		return true, nil
+	}
+	if _, err := a.sessionService.Create(ctx, &session.CreateRequest{
+		AppName:   AppName,
+		UserID:    DefaultUserID,
+		SessionID: sessionID,
+	}); err != nil {
+		return false, fmt.Errorf("creating session %s: %w", sessionID, err)
+	}
+	a.recordNewSessionMeta(sessionID)
+	return false, nil
+}
+
+// recordNewSessionMeta writes the metadata a brand-new session starts with —
+// its place in an agent tree, the model, the working directory, and a default
+// title — through whichever optional recorder interfaces the session service
+// implements. Every write is best-effort metadata. It returns the title that
+// was applied, or "" when none was.
+func (a *Agent) recordNewSessionMeta(sid string) string {
 	// Record this process's place in an agent tree, if it has one. A spawned
 	// worker knows its coordinator, spec, slice and cycle only through the
 	// environment; writing them here is what makes a run tree a field lookup
 	// instead of an inference from workDir and title prefixes.
 	if ac, ok := a.sessionService.(agentContextRecorder); ok {
 		if actx := pisession.AgentContextFromEnv(); actx != nil {
-			_ = ac.UpdateAgentContext(sid, actx) // best-effort metadata
+			_ = ac.UpdateAgentContext(sid, actx)
 		}
 	}
 	if mn, ok := a.sessionService.(modelNamer); ok {
@@ -615,18 +657,23 @@ func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle stri
 		if a.config.Model != nil {
 			modelName = a.config.Model.Name()
 		}
-		_ = mn.SetSessionModel(sid, modelName) // best-effort; meta defaults to "unknown"
+		_ = mn.SetSessionModel(sid, modelName) // meta defaults to "unknown"
+	}
+	// The service records the process cwd at creation; an explicitly
+	// configured working directory is the one the session actually runs in.
+	if wr, ok := a.sessionService.(workDirRecorder); ok && a.config.WorkingDir != "" {
+		_ = wr.SetSessionWorkDir(sid, a.config.WorkingDir)
 	}
 	// Default title: the git repo name (or CWD basename) so brand-new sessions
 	// in /sessions listings have a sensible label before the first user prompt
 	// overwrites it via the TUI's applySessionTitle / runPrint's derivePrintTitle.
 	if tn, ok := a.sessionService.(titleNamer); ok {
 		if title := defaultSessionTitle(a.config.workingDir()); title != "" {
-			_ = tn.SetSessionTitle(sid, title) // best-effort metadata
-			return sid, title, nil
+			_ = tn.SetSessionTitle(sid, title)
+			return title
 		}
 	}
-	return sid, "", nil
+	return ""
 }
 
 // gitToplevelTimeout caps the `git rev-parse --show-toplevel` subprocess so a
