@@ -347,6 +347,42 @@ func TestHumanTokens(t *testing.T) {
 	}
 }
 
+func TestPriceAmount(t *testing.T) {
+	cases := map[float64]string{
+		0:     "—",
+		2.5:   "2.50",
+		10:    "10.00",
+		0.5:   "0.50",
+		0.075: "0.07",
+		0.005: "0.005",
+		1.25:  "1.25",
+	}
+	for v, want := range cases {
+		if got := priceAmount(v); got != want {
+			t.Errorf("priceAmount(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+func TestModelPrice(t *testing.T) {
+	// Known model with pricing in the embedded snapshot.
+	if got := modelPrice("openai", "gpt-5.5"); got != "$5.00/$30.00 per 1M" {
+		t.Errorf("modelPrice(openai, gpt-5.5) = %q, want $5.00/$30.00 per 1M", got)
+	}
+	// Prefix match: dated model ID resolves against its base entry.
+	if got := modelPrice("anthropic", "claude-opus-4-7-20260101"); got != "$5.00/$25.00 per 1M" {
+		t.Errorf("modelPrice(anthropic, claude-opus-4-7-20260101) = %q, want $5.00/$25.00 per 1M", got)
+	}
+	// Unknown model shows no price.
+	if got := modelPrice("openai", "definitely-not-a-model"); got != "" {
+		t.Errorf("modelPrice(openai, definitely-not-a-model) = %q, want empty", got)
+	}
+	// Local provider (ollama) has no pricing.
+	if got := modelPrice("ollama", "llama3:latest"); got != "" {
+		t.Errorf("modelPrice(ollama, llama3:latest) = %q, want empty", got)
+	}
+}
+
 func TestPrintAzureDeployments(t *testing.T) {
 	var sb strings.Builder
 	printAzureDeployments(&sb)

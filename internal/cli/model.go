@@ -37,6 +37,11 @@ If a provider is specified as an argument, only that provider is queried.
 If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
+The human table shows each model's per-million-token input/output price in
+USD, from the embedded models.dev snapshot (refreshed daily at startup).
+Local providers (ollama, agentgateway) and models absent from the snapshot
+show no price.
+
 Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 
 Examples:
@@ -216,15 +221,41 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 
 	fmt.Printf("%s (%d models):\n", providerName, len(models))
 	for _, m := range models {
+		price := modelPrice(providerName, m.ID)
 		if (providerName == "mistral" || providerName == "agentgateway") && m.ContextWindow > 0 {
-			fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
+			fmt.Printf("  %-45s  %-10s  %-22s  %s\n", m.ID, humanTokens(m.ContextWindow), price, strings.Join(m.Capabilities, ","))
 		} else if m.OwnedBy != "" {
-			fmt.Printf("  %-45s  %s\n", m.ID, m.OwnedBy)
+			fmt.Printf("  %-45s  %-22s  %s\n", m.ID, price, m.OwnedBy)
 		} else {
-			fmt.Printf("  %s\n", m.ID)
+			fmt.Printf("  %-45s  %s\n", m.ID, price)
 		}
 	}
 	fmt.Println()
+}
+
+// modelPrice returns a human-readable per-million-token price for a model, or
+// "" when the pricing snapshot has no entry for it. Prices come from the
+// embedded models.dev snapshot (refreshed daily at startup); local providers
+// (ollama, agentgateway) and unknown models have no price and show none.
+func modelPrice(providerName, modelID string) string {
+	pm, ok := provider.CostFor(providerName, modelID)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("$%s/$%s per 1M", priceAmount(pm.Input), priceAmount(pm.Output))
+}
+
+// priceAmount renders a per-million-token USD rate at a precision that suits
+// its magnitude: two decimals for rates at or above a cent, three for the
+// sub-cent rates some cheap models carry.
+func priceAmount(v float64) string {
+	if v == 0 {
+		return "—"
+	}
+	if v < 0.01 {
+		return fmt.Sprintf("%.3f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
 }
 
 // printAzureDeployments renders the embedded Azure deployment catalog.
