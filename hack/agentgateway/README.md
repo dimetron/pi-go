@@ -362,11 +362,16 @@ These each cost a debugging cycle when this config was built.
   error, so cost data silently goes missing.
 - **The UI is on `:4000/ui`**, served by the gateway itself. The admin listener
   on `:15000` binds to localhost inside the container and is not the UI.
-- **Gemini uses `provider: openai`, not `provider: gemini`.** The `gemini`
-  preset presents the key as `Authorization: Bearer`, which
+- **Gemini is a `custom` provider, not the `gemini` preset.** The preset
+  presents the key as `Authorization: Bearer`, which
   generativelanguage.googleapis.com accepts only for OAuth2 tokens; an AI Studio
   API key gets a 401 that reads as a bad key but is not one. The provider points
-  at Google's OpenAI-compatible endpoint instead. See `CLAUDE.md`.
+  at Google's OpenAI-compatible endpoint instead, and keeps
+  `providerOverride: gcp.gemini` so the cost catalog still resolves — without it
+  requests succeed but log no cost at all. See `CLAUDE.md`.
+- **Gemini 3.x needs its `thought_signature` echoed back** on replayed tool
+  calls, or the second turn of any tool conversation is a 400. A client that
+  drops unknown `tool_calls` fields cannot use Gemini 3; 2.5 is unaffected.
 - **`localhost` inside a container is the container.** The compose file points
   `OLLAMA_BASE_URL` at `host.docker.internal` and adds the `host-gateway` entry
   that Linux needs.

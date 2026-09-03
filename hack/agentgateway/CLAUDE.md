@@ -77,17 +77,84 @@ provider is wired to that:
 
 ```yaml
 - name: gemini
-  provider: openai
+  provider:
+    custom:
+      providerOverride: gcp.gemini
+      formats:
+      - type: completions
   params:
     baseUrl: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
     apiKey: ${GEMINI_API_KEY:-}
 ```
 
-Do not "fix" this back to `provider: gemini`. If a future agentgateway release
-sends `x-goog-api-key`, verify with the probes below before switching.
+**`providerOverride: gcp.gemini` is load-bearing, not decoration.** A plain
+`provider: openai` with the same `baseUrl` authenticates identically and returns
+200s — but it reports `gen_ai.provider.name=openai`, so the cost catalog looks
+the model up under `openai`, finds no `gemini-*` there, and every Gemini request
+logs with **no `agw.ai.usage.cost.total` at all**. Nothing errors; the cost
+column in the UI is simply blank. The override keeps the provider identity that
+`base-costs.json` keys on (`providers."gcp.gemini"`) while the request still
+goes out in OpenAI wire format with Bearer auth.
+
+Whenever you retarget a provider's `baseUrl`, check a log line for
+`agw.ai.usage.cost.total` — silent loss of cost attribution is the failure mode
+this config invites.
+
+Do not "fix" this back to `provider: gemini` — **including on the strength of
+the upstream docs**, which prescribe exactly that:
+
+```yaml
+# https://agentgateway.dev/docs/standalone/latest/llm/providers/gemini/
+llm:
+  models:
+  - name: "*"
+    provider: gemini
+    params:
+      apiKey: "$GEMINI_API_KEY"
+```
+
+That is the config this directory started from, and it 401s on v1.5.0 —
+the latest release as of 2026-09-03, so there is no version to upgrade into.
+The provider reference elsewhere notes `auth.gcp uses Application Default
+Credentials`, which fits what the wire shows: the preset is built around a GCP
+OAuth token, and hands an AI Studio API key to the same code path. If a later
+release sends `x-goog-api-key`, re-run the probes below before switching back.
 
 Vertex AI is a different story — it genuinely wants an OAuth2 token — and is not
 configured here.
+
+### Gemini 3.x tool calls need their thought_signature echoed back
+
+A one-shot Gemini 3 request works; the *second* turn of a tool-using
+conversation fails with a 400 that has nothing to do with the gateway:
+
+```
+Function call is missing a thought_signature in functionCall parts. This is
+required for tools to work correctly... position 2.
+https://ai.google.dev/gemini-api/docs/thought-signatures
+```
+
+Gemini 3 returns an opaque signature on each tool call, inside a non-standard
+field an OpenAI-shaped client will happily drop:
+
+```json
+"tool_calls": [{"id": "...", "type": "function", "function": {...},
+                "extra_content": {"google": {"thought_signature": "Ep4BCpsB..."}}}]
+```
+
+It must come back verbatim on the assistant message that replays that tool call.
+Measured, same conversation both ways:
+
+| Model | Signature returned | Replay without it | Replay with it |
+|---|---|---|---|
+| `gemini-3.8-flash` | yes | **400** | 200 |
+| `gemini-2.5-flash` | no | 200 | 200 |
+
+This is a **client** obligation, not something the gateway can paper over — it
+forwards what it is given. A client that strips unknown fields from
+`tool_calls` cannot hold a multi-turn tool conversation with any Gemini 3 model.
+The 2.5 line is unaffected, which makes it the fallback while a client is being
+fixed.
 
 ## Diagnosing a 401: three probes, in order
 
@@ -133,6 +200,7 @@ reading rather than skimming:
 | `Method doesn't allow unregistered callers` (403) | No credential reached the API at all — an empty `${VAR:-}` |
 | `API key ... used with other authentication credentials` (401) | Both `x-goog-api-key` and `Authorization` were sent |
 | `API key not valid` (400) | The key really is wrong |
+| `missing a thought_signature` (400) | Not auth at all — see the Gemini 3.x section above |
 
 Two more environment traps that read as auth failures but are not: the container
 is distroless, so `docker exec agentgateway env` fails with

@@ -46,7 +46,11 @@ llm:
     params:
       apiKey: ${OPENAI_API_KEY:-}
   - name: gemini
-    provider: openai
+    provider:
+      custom:
+        providerOverride: gcp.gemini
+        formats:
+        - type: completions
     params:
       baseUrl: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       apiKey: ${GEMINI_API_KEY:-}
