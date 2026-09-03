@@ -188,6 +188,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 			startPprofServer()
 			startCPUProfile()
 		},
+		PersistentPostRun: func(*cobra.Command, []string) {
+			stopCPUProfile()
+		},
 		RunE: runRoot,
 	}
 
@@ -511,13 +514,15 @@ var pprofOnce sync.Once
 // cpuProfileOnce guards the CPU profile writer. Like pprofOnce it exists so a
 // command reached both through PersistentPreRun and directly in tests does not
 // start two writers on the same file.
-var cpuProfileOnce sync.Once
+var (
+	cpuProfileOnce sync.Once
+	cpuProfileMu   sync.Mutex
+	cpuProfileFile *os.File
+)
 
 // startCPUProfile begins writing a runtime CPU profile to flagCPUProfile when
 // set. The profile is the input PGO consumes, so it must cover a representative
-// workload (see `make record-pgo`). It is stopped by stopCPUProfile, which
-// runRoot defers; a command that never reaches runRoot (a subcommand with its
-// own RunE) leaves the profile unwritten rather than corrupting it.
+// workload (see `make record-pgo`). It is stopped and closed by stopCPUProfile.
 func startCPUProfile() {
 	if flagCPUProfile == "" {
 		return
@@ -530,17 +535,26 @@ func startCPUProfile() {
 		}
 		if err := pprof.StartCPUProfile(f); err != nil {
 			fmt.Fprintf(os.Stderr, "cpuprofile: start: %v\n", err)
-			f.Close()
+			_ = f.Close()
 			return
 		}
+		cpuProfileMu.Lock()
+		cpuProfileFile = f
+		cpuProfileMu.Unlock()
 		fmt.Fprintf(os.Stderr, "cpuprofile: writing to %s\n", flagCPUProfile)
 	})
 }
 
 // stopCPUProfile flushes and closes the CPU profile started by startCPUProfile.
-// It is safe to call when no profile was started.
+// It is safe to call when no profile was started or multiple times.
 func stopCPUProfile() {
-	pprof.StopCPUProfile()
+	cpuProfileMu.Lock()
+	defer cpuProfileMu.Unlock()
+	if cpuProfileFile != nil {
+		pprof.StopCPUProfile()
+		_ = cpuProfileFile.Close()
+		cpuProfileFile = nil
+	}
 }
 
 // startPprofServer serves net/http/pprof on --pprof-port when --pprof is set to
