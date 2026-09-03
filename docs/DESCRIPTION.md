@@ -5,7 +5,7 @@
 **pi-go** is a terminal-based coding agent built on the Google ADK (Application Development Kit) with multi-provider LLM support, sandboxed tool execution, session persistence, interactive terminal UI, LSP integration, and subagent orchestration.
 
 **Stack:**
-- **Language:** Go 1.26.3+
+- **Language:** Go 1.27+
 - **Framework:** Google ADK Go (`google.golang.org/adk`) for agent/tooling
 - **CLI:** Cobra
 - **TUI:** Bubble Tea v2 with Glamour for Markdown rendering
@@ -186,7 +186,7 @@ View() → render (lipgloss + glamour)
 /commit        /agents          /history
 /plan          /run             /login
 /skills        /theme           /rtk
-/ping          /restart         /exit
+/ping          /exit
 /memory        /audit           /clear
 ```
 

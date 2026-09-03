@@ -36,7 +36,7 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start web server for remote terminal access",
 		Long: `Start a web server that exposes a terminal running the pi-go agent via a browser.
-Users authenticate by scanning a QR code or entering a pair code in the pi-go mobile app.
+Users authenticate by entering the pair code shown at startup.
 Each browser tab gets its own isolated agent session.`,
 		RunE: runServe,
 	}
@@ -113,9 +113,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	printServeBanner(os.Stdout, server.Addr(), project, code)
 
-	// Wait for shutdown signal
-	<-sigChan
-	fmt.Println("\nShutting down...")
+	// Wait for an interrupt, or for pairing to give up.
+	//
+	// Three wrong codes stop the server outright rather than opening a lockout
+	// window. A window would slow a guessing run without ending it, and an
+	// attacker could also trigger it deliberately to deny the operator their
+	// own pairing. Exiting means the only way back is a restart by whoever
+	// controls the machine.
+	select {
+	case <-sigChan:
+		fmt.Println("\nShutting down...")
+	case <-server.LockedOut():
+		fmt.Fprintln(os.Stderr, "\nToo many failed pairing attempts — shutting down.")
+		fmt.Fprintln(os.Stderr, "Restart pi serve to pair again.")
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -157,6 +168,12 @@ func resolveServeProject() (string, error) {
 // only for the options actually in effect.
 func printServeBanner(w io.Writer, addr, project, code string) {
 	fmt.Fprintf(w, "Pi-Go web server started at http://%s\n", browsableAddr(addr))
+	// The default bind is loopback, so a phone on the same Wi-Fi cannot reach
+	// this URL. Say so here rather than letting the operator debug a pairing
+	// screen that never loads.
+	if isLoopbackAddr(addr) {
+		fmt.Fprintln(w, "Reachable from this machine only. To pair another device on your network, restart with --addr 0.0.0.0:8765.")
+	}
 	fmt.Fprintf(w, "Project: %s\n", project)
 	if flagServeModel != "" {
 		fmt.Fprintf(w, "Model: %s\n", flagServeModel)
@@ -191,6 +208,24 @@ func browsableAddr(addr string) string {
 		host = "localhost"
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// isLoopbackAddr reports whether a listen address is reachable only from this
+// machine. A wildcard bind ("", "0.0.0.0", "::") is not: it answers on every
+// interface.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // GetServePairingManager returns the pairing manager from the server for mobile app approval.

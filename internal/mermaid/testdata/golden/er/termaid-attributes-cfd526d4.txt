@@ -1,0 +1,19 @@
+
+ ┌─────────────────┐
+ │    CUSTOMER     │
+ ├─────────────────┤
+ │ int id PK       │
+ │ string name     │
+ │ string email UK │
+ └─────────────────┘
+          │
+        places
+          └─┐
+            │0..*
+ ┌──────────┼─────────┐
+ │       ORDER        │
+ ├────────────────────┤
+ │ int id PK          │
+ │ int customer_id FK │
+ │ date created       │
+ └────────────────────┘

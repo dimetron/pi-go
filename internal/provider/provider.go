@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dimetron/pi-go/internal/auth"
+
 	"google.golang.org/adk/v2/model"
 )
 
@@ -142,6 +144,21 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set(k, v)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// BackendName returns a safe description of the selected request backend.
+// It intentionally exposes no credential material.
+func BackendName(info Info, apiKey, baseURL string) string {
+	if baseURL != "" {
+		return info.Provider + "-custom"
+	}
+	if info.Provider == "openai" {
+		if auth.IsCodexOAuthToken(apiKey) {
+			return "openai-codex-chatgpt"
+		}
+		return "openai-platform"
+	}
+	return info.Provider
 }
 
 // Info describes a provider and the model to use.
@@ -285,18 +302,97 @@ func ValidateModel(info Info) error {
 	if info.Ollama || info.Custom {
 		return nil
 	}
-	known, ok := KnownModels[info.Provider]
-	if !ok {
+	known := CatalogFor(info.Provider)
+	if len(known) == 0 {
 		return nil // unknown provider, skip validation
 	}
 	lower := strings.ToLower(info.Model)
-	for _, prefix := range known {
-		if strings.HasPrefix(lower, prefix) {
-			return nil
+	if matchPrefix(known, lower) {
+		return nil
+	}
+	// Validation miss: refresh once when an API key is available, then
+	// re-check against what the provider just returned. Network errors are
+	// non-fatal.
+	//
+	// Match against the returned slice rather than re-reading CatalogFor:
+	// RefreshCatalog deliberately returns the fetched models even when it
+	// could not persist them (no resolvable cache dir, a read-only or full
+	// cache), and re-reading would then see only the embedded snapshot. A
+	// model the provider just confirmed must not be rejected because caching
+	// failed.
+	if key := apiKeyForProvider(info.Provider); key != "" {
+		opts := ListModelsOptions{APIKey: key, BaseURL: baseURLForProvider(info.Provider)}
+		if fresh, err := RefreshCatalog(context.Background(), info.Provider, opts); err == nil || len(fresh) > 0 {
+			ids := make([]string, 0, len(fresh))
+			for _, m := range fresh {
+				ids = append(ids, strings.ToLower(m.ID))
+			}
+			if matchPrefix(ids, lower) {
+				return nil
+			}
 		}
 	}
 	return fmt.Errorf("unknown %s model %q; known models: %s",
 		info.Provider, info.Model, strings.Join(known, ", "))
+}
+
+// matchPrefix reports whether lower starts with any of the given prefixes.
+func matchPrefix(prefixes []string, lower string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// apiKeyForProvider returns the API key for a provider from the conventional
+// env var, without importing internal/config (which would risk an import
+// cycle). Only providers that support /v1/models are listed.
+func apiKeyForProvider(p string) string {
+	switch p {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY")
+	case "mistral":
+		return os.Getenv("MISTRAL_API_KEY")
+	case "xai":
+		return os.Getenv("XAI_API_KEY")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_API_KEY")
+	case "agentgateway":
+		return os.Getenv("AGENTGATEWAY_API_KEY")
+	}
+	return ""
+}
+
+// baseURLForProvider returns the configured endpoint override for a provider,
+// from the same env vars config.BaseURLs reads. Without it a validation refresh
+// would go to the vendor's public API even for a user who has pointed pi at a
+// gateway, which answers 401 and turns a valid model into "unknown". Empty
+// means "use the provider default"; internal/config is not imported here
+// because that would be an import cycle.
+func baseURLForProvider(p string) string {
+	switch p {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_BASE_URL")
+	case "openai":
+		return os.Getenv("OPENAI_BASE_URL")
+	case "gemini":
+		return os.Getenv("GEMINI_BASE_URL")
+	case "mistral":
+		return os.Getenv("MISTRAL_BASE_URL")
+	case "xai":
+		return os.Getenv("XAI_BASE_URL")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_BASE_URL")
+	case "agentgateway":
+		return os.Getenv("AGENTGATEWAY_BASE_URL")
+	}
+	return ""
 }
 
 // ResolveWithBaseURL determines the provider from a model name.
@@ -358,6 +454,26 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "openrouter", Model: modelName[len("openrouter/"):]}, nil
 	}
 
+	// Detect agentgateway/ prefix → agentgateway provider. Checked before the
+	// :cloud/-cloud suffix check below: agentgateway model IDs carry a
+	// "-cloud" tag (e.g. deepseek-v4-flash:0731-cloud) that would otherwise
+	// route them to Ollama.
+	if strings.HasPrefix(strings.ToLower(modelName), "agentgateway/") {
+		return Info{Provider: "agentgateway", Model: modelName[len("agentgateway/"):]}, nil
+	}
+
+	// Detect mistral/ prefix → native Mistral provider.
+	// The prefix is stripped; the remainder is the Mistral model name.
+	if strings.HasPrefix(strings.ToLower(modelName), "mistral/") {
+		return Info{Provider: "mistral", Model: modelName[len("mistral/"):]}, nil
+	}
+
+	// Detect anthropic/ prefix → native Anthropic provider.
+	// The prefix is stripped; the remainder is the Anthropic model name.
+	if strings.HasPrefix(strings.ToLower(modelName), "anthropic/") {
+		return Info{Provider: "anthropic", Model: modelName[len("anthropic/"):]}, nil
+	}
+
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
 	if IsOllamaCloudModel(modelName) {
@@ -382,7 +498,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter, agentgateway; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -496,7 +612,7 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	case "anthropic":
 		return NewAnthropic(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "mistral":
-		return NewMistral(ctx, info.Model, apiKey, baseURL, opts)
+		return NewMistral(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "openrouter":
 		return NewOpenRouter(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "xai":
@@ -506,6 +622,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewXAI(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "opencode":
 		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
+	case "agentgateway":
+		return NewAgentGateway(ctx, info.Model, apiKey, baseURL, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

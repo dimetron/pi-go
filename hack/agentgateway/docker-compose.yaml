@@ -1,0 +1,100 @@
+# agentgateway in front of every pi-go provider and the three coding agents,
+# with Postgres behind it for the request log.
+#
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d
+#
+# To reuse pi-go's own keys instead of a second copy of them:
+#   docker compose --env-file ../../.pi-go/.env up -d
+#
+# LLM endpoint: http://localhost:4000     UI: http://localhost:4000/ui
+
+services:
+  agentgateway:
+    # Pinned rather than :latest so a config that validates today keeps working.
+    # config.yaml needs >= v1.5.0 (modelCatalog, provider presets).
+    image: ghcr.io/agentgateway/agentgateway:v1.5.0
+    container_name: agentgateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Google's OpenAI-compatible endpoint, not the native one — see
+      # CLAUDE.md "Gemini must go through the OpenAI-compatible endpoint".
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      # MCP: Tavily's remote server takes its key in the URL query.
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      OLLAMA_API_KEY_1: ${OLLAMA_API_KEY_1:-}
+      OLLAMA_API_KEY_2: ${OLLAMA_API_KEY_2:-}
+      OLLAMA_API_KEY_3: ${OLLAMA_API_KEY_3:-}
+      # localhost inside a container is the container, so reach the host's
+      # Ollama explicitly. Linux needs the extra_hosts entry below.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_RESOURCE_NAME: ${AZURE_OPENAI_RESOURCE_NAME:-}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
+      # The config default points at localhost, which is right for run.sh but
+      # wrong in a container: here Postgres is a sibling service.
+      AGENTGATEWAY_DATABASE_URL: postgresql://agentgateway:agentgateway@postgres:5432/agentgateway
+      AGENTGATEWAY_STORAGE_MODE: ${AGENTGATEWAY_STORAGE_MODE:-file}
+      # Required, and deliberately has no default. config.yaml uses the bare
+      # ${AGENTGATEWAY_API_KEY} for llm.policies.apiKey, so an empty value would
+      # register an empty key that strict mode then accepts. `:?` makes compose
+      # refuse to start with a readable message instead of crash-looping the
+      # container on "error looking key 'AGENTGATEWAY_API_KEY' up".
+      AGENTGATEWAY_API_KEY: ${AGENTGATEWAY_API_KEY:?set AGENTGATEWAY_API_KEY in your env file (see .env.example)}
+      # Catalog paths, resolved against working_dir inside the container.
+      AGENTGATEWAY_BASE_COSTS: ${AGENTGATEWAY_BASE_COSTS:-./base-costs.json}
+      AGENTGATEWAY_PI_ALIASES: ${AGENTGATEWAY_PI_ALIASES:-./pi-aliases.json}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Deliberately NOT :ro — with storage.mode=file the UI saves config
+      # changes by rewriting this file, and a read-only mount makes every save
+      # fail. The container runs as uid 65532, so on Linux the file must be
+      # group/other writable (chmod 666 config.yaml) for a save to land;
+      # Docker Desktop and OrbStack on macOS map the owner and need nothing.
+      # Set AGENTGATEWAY_STORAGE_MODE=readOnly and restore :ro to lock it down.
+      - ./config.yaml:/etc/agentgateway/config.yaml
+      # Also NOT :ro. POST /api/costs/refresh-base (the UI's "refresh costs"
+      # action) rewrites this file from models.dev, then hot-reloads it.
+      # A read-only mount makes that fail with a permission error.
+      - ./base-costs.json:/etc/agentgateway/base-costs.json
+      # Hand-maintained aliases, layered after base-costs.json so a refresh
+      # cannot wipe them. Read-only: nothing in the gateway writes this.
+      - ./pi-aliases.json:/etc/agentgateway/pi-aliases.json:ro
+    working_dir: /etc/agentgateway
+    command: ["-f", "/etc/agentgateway/config.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    container_name: agentgateway-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agentgateway
+      POSTGRES_USER: agentgateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentgateway}
+    # Not published by default: the gateway reaches it over the compose network.
+    # Uncomment to inspect it with psql from the host.
+    # ports:
+    #   - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentgateway -d agentgateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:

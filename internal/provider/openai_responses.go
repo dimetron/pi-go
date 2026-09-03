@@ -20,6 +20,26 @@ import (
 // modelNeedsResponses returns true for models that only support the Responses API.
 func modelNeedsResponses(modelName string) bool {
 	lower := strings.ToLower(modelName)
+	// Strip any provider prefix (e.g. "openai/gpt-5.6-luna" from an
+	// agentgateway virtual model) so the bare model ID is matched. The gateway
+	// forwards the bare ID upstream, so the endpoint decision must be made on it.
+	// Loop so nested prefixes (e.g. "agentgateway/openai/gpt-5.6-luna") collapse.
+	for {
+		stripped := false
+		for _, p := range []string{
+			"openai/", "anthropic/", "gemini/", "mistral/", "xai/", "grok/",
+			"openrouter/", "agentgateway/", "ollama/", "azure/", "opencode/",
+		} {
+			if strings.HasPrefix(lower, p) {
+				lower = strings.TrimPrefix(lower, p)
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
 	// Responses-only model families.
 	responsesOnly := []string{
 		"gpt-5-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max",
@@ -323,7 +343,10 @@ func oaiAppendResponsesItems(
 			if _, ok := callIDs[fr.ID]; !ok {
 				continue
 			}
-			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(fr.ID, oaiFunctionResponseContent(fr.Response)))
+			// openai-go v3.54 dropped callID from the helper; set it on the param.
+			out := responses.ResponseInputItemParamOfFunctionCallOutput(oaiFunctionResponseContent(fr.Response))
+			out.OfFunctionCallOutput.CallID = param.NewOpt(fr.ID)
+			items = append(items, out)
 		}
 	}
 	flushText()

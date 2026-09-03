@@ -150,7 +150,7 @@ func TestRootExampleCoversEveryProvider(t *testing.T) {
 	for _, want := range []string{
 		"--model claude-", "--model gpt-", "--model gemini-", "--model mistral-",
 		"--model grok-", "--model openrouter/", "--model ollama/", "--model minimax-m3:cloud",
-		"--model azure/", "--model opencode/",
+		"--model azure/", "--model opencode/", "--model agentgateway/",
 	} {
 		if !strings.Contains(example, want) {
 			t.Errorf("root examples missing %q", want)

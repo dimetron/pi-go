@@ -19,12 +19,14 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
+
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/util/instructionutil"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 // re-export callback types for use by CLI without importing llmagent directly.
@@ -190,6 +192,51 @@ You can call multiple tools in a single response when they are independent. For 
 - Spawn multiple subagents at once
 The TUI tracks all active tools and shows them in the status bar. Only parallelize when operations are truly independent — do not parallelize edits to the same file or dependent operations.
 
+# Diagrams
+
+When a response benefits from a visual diagram, use these three styles as appropriate:
+
+- **Mermaid ` + "`" + `mindmap` + "`" + `** — for showing hierarchy, grouping, or "what belongs to what" (e.g. a toolbelt, a category tree). No directional flow; branches radiate from a center node.
+- **Mermaid ` + "`" + `flowchart` + "`" + `** (` + "`" + `TD` + "`" + ` or ` + "`" + `LR` + "`" + `) — for showing a process, pipeline, or decision flow with arrows. Use ` + "`" + `TD` + "`" + ` (top-down) for sequential steps, ` + "`" + `LR` + "`" + ` (left-right) for pipelines with feedback loops.
+- **ASCII tree** — for showing file/directory structure, nested config, or anything naturally tree-shaped. Use box-drawing characters (` + "`" + `├──` + "`" + `, ` + "`" + `└──` + "`" + `, ` + "`" + `│` + "`" + `) with optional emoji annotations.
+
+Prefer the simplest style that communicates the idea. Do not mix styles within a single diagram. Use markdown tables to compare or summarize when a diagram is not needed — except for CI and check status, which has its own format below.
+
+# CI status tables
+
+When reporting the state of CI stages — check runs, test gates, coverage gates,
+or any set of named checks — draw a box-drawing table. Do not use a markdown
+table for this: the TUI renders the response as text, so a markdown table
+arrives as raw pipes and dashes, while a box-drawing table renders as the grid
+you drew.
+
+Rules:
+- Pad every cell so the column rules line up. The table is only readable if the
+  vertical bars align down the whole grid; count display width, remembering an
+  emoji occupies two columns.
+- One row per check, with a separator row between rows.
+- Write the status as emoji plus word — ✅ pass, ❌ fail, ⏳ running — so the
+  state still reads where emoji do not render.
+- Include a Before column only when you changed something and know both states.
+  For a single snapshot, drop it and show the current status alone.
+- Never invent a status. A check you have not actually observed is unknown:
+  say so or leave the row out. Report what the CI output said, not what you
+  expect it to say once it finishes.
+
+Example shape:
+
+    ┌─────────────────┬─────────┬────────────┐
+    │      Check      │ Before  │    Now     │
+    ├─────────────────┼─────────┼────────────┤
+    │ codecov/patch   │ ❌ fail │ ✅ pass    │
+    ├─────────────────┼─────────┼────────────┤
+    │ codecov/project │ ❌ fail │ ✅ pass    │
+    ├─────────────────┼─────────┼────────────┤
+    │ Test (Windows)  │ ❌ fail │ ⏳ running │
+    ├─────────────────┼─────────┼────────────┤
+    │ Test            │ pass    │ ⏳ running │
+    └─────────────────┴─────────┴────────────┘
+
 # Internal tools
 
 - restart — Restarts the pi process (re-exec with same binary and args). Call this tool after successfully rebuilding the pi binary to apply changes. The process will restart with the updated binary.
@@ -235,6 +282,32 @@ Use agents for any task that benefits from parallel or independent work:
 - **Prefer parallel over sequential**: when researching a topic, spawn 2-4 explore agents with different search angles rather than one agent doing everything.
 - **Prefer agents over manual multi-step search**: if finding the answer requires reading 3+ files across different packages, delegate to an explore agent instead of doing it yourself.
 - Chain mode passes results between agents: use it when step 2 depends on step 1's output (e.g., explore → plan → task).
+
+# Diagram style
+
+For diagrams of packages, modules, or folders, use an ASCII tree with
+category-grouped emojis — not Mermaid. Mermaid is still fine for flowcharts and
+process; ASCII + emoji is for structure.
+
+Rules:
+- Print the root directory with a leading emoji and a bucket label (e.g. internal/).
+- Group first-level children under a blank line beginning with the tree char, the emoji, and the category, then list the package(s) under it indented with the tree chars.
+- Use one emoji per category, reused consistently across diagrams.
+- Keep descriptions on the same line, terse.
+- Prefer the last-item tree char for the final item in a group; use the mid-item char otherwise.
+
+Example shape (tree chars shown literally):
+
+    internal/
+    ├── 🤖 agent runtime
+    │   ├── agent/          Agent, run loop, callbacks, eventstream
+    │   └── subagent/       Orchestrator, worktree mgmt, spawn/cancel
+    ├── 🧠 model pipeline
+    │   ├── provider/       9 backends + modeldata/ + list_models
+    │   └── (pimodels/)     public façade — at repo root
+    └── 🧰 tools
+        ├── tools/          read·write·edit·bash·grep·find·git·lsp·mem
+        └── lsp/            Manager, language servers, protocol
 `
 
 // Config holds configuration for creating a new Agent.
@@ -392,7 +465,7 @@ func buildRunner(cfg Config, instruction string, sessionSvc session.Service) (*r
 		Model:                cfg.Model,
 		InstructionProvider:  safeInstructionProvider(instruction, cfg.Logger),
 		Tools:                cfg.Tools,
-		Toolsets:             cfg.Toolsets,
+		Toolsets:             dedupeToolsets(cfg.Tools, cfg.Toolsets),
 		BeforeToolCallbacks:  cfg.BeforeToolCallbacks,
 		AfterToolCallbacks:   cfg.AfterToolCallbacks,
 		BeforeModelCallbacks: cfg.BeforeModelCallbacks,
@@ -507,6 +580,13 @@ type titleNamer interface {
 	SetSessionTitle(sessionID, title string) error
 }
 
+// agentContextRecorder is implemented by session services that can persist a
+// session's place in an agent tree. Declared here for the same reason as
+// titleNamer: the agent takes the capability, not the concrete service.
+type agentContextRecorder interface {
+	UpdateAgentContext(sessionID string, ctx *pisession.AgentContext) error
+}
+
 // CreateSession creates a new session and returns its ID together with the
 // default title that was applied (git repo name, or CWD basename) — or "" if
 // no title was set. The title is metadata only; the TUI seeds its terminal
@@ -521,6 +601,15 @@ func (a *Agent) CreateSession(ctx context.Context) (sessionID, defaultTitle stri
 		return "", "", fmt.Errorf("creating session: %w", err)
 	}
 	sid := resp.Session.ID()
+	// Record this process's place in an agent tree, if it has one. A spawned
+	// worker knows its coordinator, spec, slice and cycle only through the
+	// environment; writing them here is what makes a run tree a field lookup
+	// instead of an inference from workDir and title prefixes.
+	if ac, ok := a.sessionService.(agentContextRecorder); ok {
+		if actx := pisession.AgentContextFromEnv(); actx != nil {
+			_ = ac.UpdateAgentContext(sid, actx) // best-effort metadata
+		}
+	}
 	if mn, ok := a.sessionService.(modelNamer); ok {
 		modelName := ""
 		if a.config.Model != nil {

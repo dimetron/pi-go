@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
@@ -128,6 +129,62 @@ func TestResolveWithAzurePrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestResolveWithAnthropicPrefix(t *testing.T) {
+	info, err := Resolve("anthropic/claude-fable-5-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", info.Provider)
+	}
+	if info.Model != "claude-fable-5-1" {
+		t.Errorf("model = %q, want %q", info.Model, "claude-fable-5-1")
+	}
+}
+
+func TestResolveWithAnthropicPrefixCaseInsensitive(t *testing.T) {
+	info, err := Resolve("ANTHROPIC/claude-fable-5-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", info.Provider)
+	}
+	if info.Model != "claude-fable-5-1" {
+		t.Errorf("model = %q, want %q", info.Model, "claude-fable-5-1")
+	}
+}
+
+func TestResolveMistralPrefixStripped(t *testing.T) {
+	tests := []struct {
+		model     string
+		wantProv  string
+		wantModel string
+	}{
+		{"mistral/codestral-2508", "mistral", "codestral-2508"},
+		{"mistral/mistral-small-latest", "mistral", "mistral-small-latest"},
+		{"MISTRAL/large", "mistral", "large"},
+		// Bare mistral-* names auto-route via the modelPrefixes map with the
+		// full model name preserved.
+		{"mistral-large-latest", "mistral", "mistral-large-latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			info, err := Resolve(tt.model)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Provider != tt.wantProv {
+				t.Errorf("provider = %q, want %q", info.Provider, tt.wantProv)
+			}
+			if info.Model != tt.wantModel {
+				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+			}
+		})
+	}
+}
+
 func TestCheckOllamaUnreachable(t *testing.T) {
 	// Port 19 (chargen) is almost certainly not running Ollama.
 	err := CheckOllama("http://localhost:19")
@@ -230,6 +287,17 @@ func TestResolveOllamaRequiresExplicitPrefix(t *testing.T) {
 }
 
 func TestValidateModel(t *testing.T) {
+	// Isolate from the real user cache so CatalogFor falls back to the
+	// embedded snapshot.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	tests := []struct {
 		info    Info
 		wantErr bool
@@ -268,6 +336,130 @@ func TestValidateModel(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateModel_CacheHit(t *testing.T) {
+	// A model not in the embedded snapshot passes when the XDG cache contains it.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	dir := modelsCacheDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cf := catalogFile{
+		Provider:  "mistral",
+		FetchedAt: "2026-08-27T00:00:00Z",
+		Models:    []ModelInfo{{ID: "codestral-2508"}},
+	}
+	b, _ := json.Marshal(cf)
+	if err := os.WriteFile(cachePath("mistral"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateModel(Info{Provider: "mistral", Model: "codestral-2508"}); err != nil {
+		t.Errorf("ValidateModel with cached model: %v", err)
+	}
+}
+
+func TestValidateModel_NoKeyNoNetwork(t *testing.T) {
+	// A model in neither list and no key → error; no network call (no server hit).
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("MISTRAL_API_KEY", "")
+	err := ValidateModel(Info{Provider: "mistral", Model: "llama-3"})
+	if err == nil {
+		t.Fatal("expected error for unknown model with no key")
+	}
+	if !strings.Contains(err.Error(), "mistral") || !strings.Contains(err.Error(), "llama-3") {
+		t.Errorf("error should mention provider and model: %v", err)
+	}
+}
+
+// refreshOnMissServer serves a single Mistral model and reports whether it was
+// ever asked. The ID must be absent from both the embedded snapshot and the
+// hard-coded KnownModels list, or ValidateModel matches before the refresh and
+// the test proves nothing.
+func refreshOnMissServer(t *testing.T, id string) (*httptest.Server, *bool) {
+	t.Helper()
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":                 id,
+					"owned_by":           "mistral",
+					"max_context_length": 256000,
+					"capabilities":       map[string]any{"completion_chat": true},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &called
+}
+
+const refreshOnMissModel = "zz-not-in-any-catalog-2599"
+
+func TestValidateModel_RefreshOnMiss(t *testing.T) {
+	withTempCacheDir(t)
+	// Guard the premise: if the ID ever lands in a catalog, this test would
+	// pass without the refresh running at all.
+	if matchPrefix(CatalogFor("mistral"), refreshOnMissModel) {
+		t.Fatalf("%q is now a known mistral model; pick another sentinel", refreshOnMissModel)
+	}
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: refreshOnMissModel}); err != nil {
+		t.Errorf("ValidateModel after refresh: %v", err)
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
+	}
+}
+
+// TestValidateModel_RefreshOnMissWithoutCache pins that validation depends on
+// what the provider returned, not on whether it could be cached. RefreshCatalog
+// hands back the fetched models even when there is nowhere to persist them, and
+// re-reading CatalogFor at that point would see only the embedded snapshot.
+func TestValidateModel_RefreshOnMissWithoutCache(t *testing.T) {
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
+	withUnresolvableCacheDir(t)
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: refreshOnMissModel}); err != nil {
+		t.Errorf("ValidateModel with no usable cache: %v", err)
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
+	}
+}
+
+// TestValidateModel_RefreshOnMissStillRejectsUnknown keeps the refresh from
+// becoming a blanket pass: a model the provider does not list stays rejected.
+func TestValidateModel_RefreshOnMissStillRejectsUnknown(t *testing.T) {
+	withTempCacheDir(t)
+	srv, called := refreshOnMissServer(t, refreshOnMissModel)
+	t.Setenv("MISTRAL_API_KEY", "testkey")
+	t.Setenv("MISTRAL_BASE_URL", srv.URL)
+
+	if err := ValidateModel(Info{Provider: "mistral", Model: "zz-something-else-entirely"}); err == nil {
+		t.Error("ValidateModel: want an error for a model the refresh did not return")
+	}
+	if !*called {
+		t.Error("the provider was never contacted; the refresh path did not run")
+	}
+}
+
+func TestValidateModel_UnknownProvider(t *testing.T) {
+	if err := ValidateModel(Info{Provider: "nope", Model: "whatever"}); err != nil {
+		t.Errorf("unknown provider should skip validation, got: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -36,7 +37,7 @@ If a provider is specified as an argument, only that provider is queried.
 If no provider is given, all configured providers (those with an API key
 or base URL set) are queried in turn.
 
-Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter
+Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 
 Examples:
   pi model list                 # list models for all configured providers
@@ -46,18 +47,30 @@ Examples:
   pi model list mistral         # list models from Mistral
   pi model list xai             # list models from xAI
   pi model list ollama          # list locally installed Ollama models
-  pi model list openrouter      # list models from OpenRouter`,
+  pi model list openrouter      # list models from OpenRouter
+  pi model list agentgateway    # list models from the local agentgateway`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runModelList,
 	}
 
 	cmd.Flags().StringVar(&flagURL, "url", "", "Alternative base URL for the provider API endpoint")
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification")
+	cmd.Flags().StringVarP(&flagModelListOutput, "output", "o", "", "Output format: \"json\" emits one JSON document per provider (default: human table)")
 	return cmd
 }
 
 // allProviders is the fixed list of providers supporting model listing.
-var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter"}
+var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway"}
+
+// flagModelListOutput is the --output flag value for `pi model list`.
+var flagModelListOutput string
+
+// modelListJSONDoc is the per-provider JSON document emitted by `-o json`.
+type modelListJSONDoc struct {
+	Provider  string               `json:"provider"`
+	FetchedAt string               `json:"fetched_at"`
+	Models    []provider.ModelInfo `json:"models"`
+}
 
 func runModelList(cmd *cobra.Command, args []string) error {
 	loadDotEnv()
@@ -99,6 +112,27 @@ func runModelList(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if flagModelListOutput == "json" {
+			doc := modelListJSONDoc{
+				Provider:  p,
+				FetchedAt: time.Now().UTC().Format(time.RFC3339),
+				Models:    models,
+			}
+			// Sort by ID and pretty-print so the checked-in snapshots are
+			// stable and diff-friendly across fetches.
+			sort.Slice(doc.Models, func(i, j int) bool {
+				return doc.Models[i].ID < doc.Models[j].ID
+			})
+			b, err := json.MarshalIndent(doc, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: encoding JSON: %v\n", p, err)
+				exitCode = 1
+				continue
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			continue
+		}
+
 		printProviderModels(p, models)
 	}
 
@@ -116,7 +150,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 	if len(args) == 1 {
 		p := strings.ToLower(args[0])
 		switch p {
-		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter":
+		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway":
 			return []string{p}, nil
 		case "azure":
 			// Not a live query: enumerating deployments needs ARM credentials
@@ -127,7 +161,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 			printAzureDeployments(out)
 			return nil, nil
 		default:
-			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter", args[0])
+			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter, agentgateway", args[0])
 		}
 	}
 
@@ -144,9 +178,10 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 	}
 	// Azure is not in allProviders because it has nothing to query, but a
 	// configured Azure user asking for "every provider" should still see
-	// their deployments rather than have them silently omitted.
+	// their deployments rather than have them silently omitted. In JSON
+	// mode the human table would corrupt the JSONL stream, so it is skipped.
 	azureConfigured := keys["azure"] != "" || os.Getenv("AZURE_OPENAI_ENDPOINT") != ""
-	if azureConfigured {
+	if azureConfigured && flagModelListOutput != "json" {
 		printAzureDeployments(out)
 	}
 	if len(providers) == 0 && !azureConfigured {
@@ -156,8 +191,8 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 }
 
 // modelListBaseURL resolves the endpoint to query: --url flag > env var >
-// default. Only Ollama has a default, because only Ollama is expected to be
-// running somewhere unconfigured.
+// default. Only Ollama and agentgateway have a default, because only those two
+// are expected to be running locally on a well-known port with no configuration.
 func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	baseURL := flagURL
 	if baseURL == "" {
@@ -165,6 +200,9 @@ func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	}
 	if baseURL == "" && providerName == "ollama" {
 		baseURL = "http://localhost:11434"
+	}
+	if baseURL == "" && providerName == "agentgateway" {
+		baseURL = "http://localhost:4000"
 	}
 	return baseURL
 }
@@ -178,7 +216,9 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 
 	fmt.Printf("%s (%d models):\n", providerName, len(models))
 	for _, m := range models {
-		if m.OwnedBy != "" {
+		if (providerName == "mistral" || providerName == "agentgateway") && m.ContextWindow > 0 {
+			fmt.Printf("  %-45s  %-10s  %s\n", m.ID, humanTokens(m.ContextWindow), strings.Join(m.Capabilities, ","))
+		} else if m.OwnedBy != "" {
 			fmt.Printf("  %-45s  %s\n", m.ID, m.OwnedBy)
 		} else {
 			fmt.Printf("  %s\n", m.ID)

@@ -1,0 +1,122 @@
+sop: plan
+version: 2
+description: Prompt-Driven Development planning — produces a spec /run can execute
+
+workspace:
+  worktree: per-run
+  branch: "specs/{{.TaskName}}"
+  merge_on: success
+  cleanup: always
+
+defaults:
+  timeout: 20m
+  max_concurrency: 4
+  on_rate_limit: throttle
+  retry:
+    max_attempts: 3
+    initial_delay: 5s
+    max_delay: 60s
+    backoff: 2.0
+    jitter: 1.0
+
+stages:
+  - id: clarify
+    description: Clarify requirements with the user, one question at a time
+    agent: plan
+    produces:
+      - path: requirements.md
+        validate:
+          - non_empty
+          - "min_qa(min: 3)"
+    review:
+      kind: human
+      prompt: "Requirements captured. Approve to continue to research?"
+    next: research
+
+  - id: research
+    description: Establish how the code works today, in parallel, without reading it into this context
+    fan_out:
+      over: research_angles
+      agent: explore
+      max_concurrency: 4
+      isolation: sub_branch
+    produces:
+      - path: "research/*.md"
+        validate:
+          - non_empty
+          - no_solution_language
+    join: research_summary
+    next: design
+
+  - id: design
+    description: Write the standalone design document
+    agent: plan
+    inputs: [requirements, research_summary]
+    produces:
+      - path: design.md
+        validate:
+          - non_empty
+          - "max_lines(max: 2000)"
+          - 'has_headings(["Acceptance Criteria", "Testing Strategy"])'
+          - acceptance_criteria_are_given_when_then
+          - "research_at_least(min: 2)"
+    review:
+      kind: human
+      prompt: "Approve the design?"
+    next: outline
+
+  - id: outline
+    description: The cheap review checkpoint before the full plan
+    agent: plan
+    produces:
+      - path: outline.md
+        validate:
+          - non_empty
+          - "max_lines(max: 120)"
+          - "lists_slices(min: 2)"
+    review:
+      kind: human
+      prompt: "Approve the outline before expanding it into the plan?"
+    next: plan
+
+  - id: plan
+    description: Expand the outline into vertical slices
+    agent: plan
+    produces:
+      - path: plan.md
+        validate:
+          - non_empty
+          - "max_lines(max: 2000)"
+          - slices_are_checkboxes
+          - "slice_count(min: 1, max: 25)"
+          - outline_slices_match_plan_slices
+    review:
+      kind: agent
+      agent: spec-reviewer
+      verdict_schema: Verdict
+    routes:
+      FAIL: plan
+      PASS: prompt
+    max_cycles: 3
+
+  - id: prompt
+    description: Compress the plan into the execution briefing /run consumes
+    agent: plan
+    produces:
+      - path: PROMPT.md
+        validate:
+          - non_empty
+          - 'has_headings(["Objective", "Acceptance Criteria", "Implementation Slices", "Done Criteria", "Gates"])'
+          - 'every_slice_has(["files", "verify", "parallel_safe"])'
+          - "slice_budget(max_files: 10)"
+          - gates_are_executable
+          - "done_criteria(min: 3, no_placeholders: true)"
+          - references_exist
+          - plan_slices_match_prompt_slices
+    next: manifest
+
+  - id: manifest
+    description: Record what was checked, by which contract, at which SOP version
+    kind: function
+    produces:
+      - path: .sop-manifest.json

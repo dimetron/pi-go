@@ -104,8 +104,12 @@ func TestResolveRole_AutoDetectProvider(t *testing.T) {
 		{"opencode/kimi-k3", "opencode"},
 		{"opencode/minimax-m3", "opencode"},
 		{"opencode/gpt-5.6-luna", "opencode"},
+		{"agentgateway/deepseek-v4-flash:0731-cloud", "agentgateway"},
 		{"openrouter/google/gemini-3.7-flash", "openrouter"},
 		{"openrouter/auto", "openrouter"},
+		{"mistral-large-latest", "mistral"},
+		{"mistral/codestral-2508", "mistral"},
+		{"magistral-medium-latest", "mistral"},
 	}
 
 	for _, tt := range tests {
@@ -222,6 +226,7 @@ func TestAPIKeys(t *testing.T) {
 	t.Setenv("AZURE_API_KEY", "")
 	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
 	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+	t.Setenv("AGENTGATEWAY_API_KEY", "agentgateway-test-key")
 
 	keys := APIKeys()
 	if keys["anthropic"] != "test-key" {
@@ -236,6 +241,9 @@ func TestAPIKeys(t *testing.T) {
 	if keys["openrouter"] != "openrouter-test-key" {
 		t.Errorf("expected openrouter key, got %q", keys["openrouter"])
 	}
+	if keys["agentgateway"] != "agentgateway-test-key" {
+		t.Errorf("expected agentgateway key, got %q", keys["agentgateway"])
+	}
 	if _, ok := keys["openai"]; ok {
 		t.Error("expected no openai key for empty env var")
 	}
@@ -247,6 +255,7 @@ func TestBaseURLs(t *testing.T) {
 	t.Setenv("GEMINI_BASE_URL", "http://localhost:8080")
 	t.Setenv("OPENCODE_BASE_URL", "http://localhost:9999")
 	t.Setenv("OPENROUTER_BASE_URL", "https://custom.example")
+	t.Setenv("AGENTGATEWAY_BASE_URL", "http://localhost:4000")
 
 	urls := BaseURLs()
 	if urls["anthropic"] != "http://localhost:11434" {
@@ -260,6 +269,9 @@ func TestBaseURLs(t *testing.T) {
 	}
 	if urls["openrouter"] != "https://custom.example" {
 		t.Errorf("expected openrouter base URL, got %q", urls["openrouter"])
+	}
+	if urls["agentgateway"] != "http://localhost:4000" {
+		t.Errorf("expected agentgateway base URL, got %q", urls["agentgateway"])
 	}
 	if _, ok := urls["openai"]; ok {
 		t.Error("expected no openai base URL for empty env var")
@@ -847,6 +859,58 @@ func TestLoadFrom_UsesProvidedCWDForProjectMCPJSON(t *testing.T) {
 	}
 }
 
+// TestLoadFrom_MergesMCPJSONWithConfigServers verifies that mcp.json servers
+// are appended to servers declared in config.json instead of being discarded.
+// A project must be able to add a server without redefining the global set;
+// names already declared in config.json keep their config.json definition.
+func TestLoadFrom_MergesMCPJSONWithConfigServers(t *testing.T) {
+	tmp := t.TempDir()
+	home := t.TempDir()
+
+	globalDir := filepath.Join(home, ".pi-go")
+	if err := os.MkdirAll(globalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// config.json declares tavily; mcp.json redefines it and adds openrouter.
+	configJSON := `{"mcp": {"servers": [{"name": "tavily", "url": "https://mcp.tavily.example"}]}}`
+	if err := os.WriteFile(filepath.Join(globalDir, "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"mcpServers": {"tavily": {"url": "https://should-not-win.example"}, "openrouter": {"url": "https://mcp.openrouter.example"}}}`
+	if err := os.WriteFile(filepath.Join(globalDir, "mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	testenv.SetHome(t, home)
+
+	origWd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	cfg, err := LoadFrom(tmp)
+	if err != nil {
+		t.Fatalf("LoadFrom() error: %v", err)
+	}
+	if cfg.MCP == nil {
+		t.Fatal("expected MCP config, got nil")
+	}
+	names := make(map[string]string, len(cfg.MCP.Servers))
+	for _, s := range cfg.MCP.Servers {
+		names[s.Name] = s.URL
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected 2 merged servers, got %d: %v", len(names), names)
+	}
+	if url := names["tavily"]; url != "https://mcp.tavily.example" {
+		t.Errorf("tavily should keep its config.json URL, got %q", url)
+	}
+	if url := names["openrouter"]; url != "https://mcp.openrouter.example" {
+		t.Errorf("openrouter should come from mcp.json, got %q", url)
+	}
+}
+
 func TestLoadMCPServers_ObjectFormat(t *testing.T) {
 	// Claude Desktop format: mcpServers is an object keyed by server name.
 	tmp := t.TempDir()
@@ -1313,5 +1377,45 @@ func clearBaseURLEnv(t *testing.T) {
 	t.Helper()
 	for _, v := range []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "MISTRAL_BASE_URL", "OLLAMA_HOST"} {
 		t.Setenv(v, "")
+	}
+}
+
+// TestSave_DoesNotPersistMCPJSONServers verifies that servers merged from
+// .pi-go/mcp.json are stripped on Save, so SaveDefaultRole (Load → mutate →
+// Save) cannot copy project-scoped servers into the global config.json.
+func TestSave_DoesNotPersistMCPJSONServers(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	testenv.SetHome(t, home)
+
+	cfg := Defaults()
+	cfg.MCP = &MCPConfig{Servers: []MCPServer{
+		{Name: "declared", URL: "https://declared.example"},
+		{Name: "from-mcp-json", URL: "https://project.example", fromStandaloneFile: true},
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".pi-go", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Config
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.MCP == nil {
+		t.Fatal("expected saved config to keep MCP servers")
+	}
+	for _, s := range saved.MCP.Servers {
+		if s.Name == "from-mcp-json" {
+			t.Errorf("standalone mcp.json server %q leaked into global config", s.Name)
+		}
+	}
+	if len(saved.MCP.Servers) != 1 || saved.MCP.Servers[0].Name != "declared" {
+		t.Errorf("expected only declared server to survive, got %+v", saved.MCP.Servers)
 	}
 }

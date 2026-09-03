@@ -1,0 +1,320 @@
+{
+  "provider": "mistral",
+  "fetched_at": "2026-09-03T00:00:00Z",
+  "models": [
+    {
+      "id": "codestral-2508",
+      "owned_by": "mistralai",
+      "context_window": 256000,
+      "capabilities": [
+        "completion_chat",
+        "completion_fim",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "codestral-latest",
+      "owned_by": "mistralai",
+      "context_window": 256000,
+      "capabilities": [
+        "completion_chat",
+        "completion_fim",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "glm-5-2",
+      "owned_by": "mistralai",
+      "context_window": 1048576,
+      "capabilities": [
+        "completion_chat",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "labs-leanstral-1-5",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "labs-leanstral-1-5-1",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "magistral-medium-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "magistral-small-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-14b-2512",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-14b-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-3b-2512",
+      "owned_by": "mistralai",
+      "context_window": 131072,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-3b-latest",
+      "owned_by": "mistralai",
+      "context_window": 131072,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-8b-2512",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "ministral-8b-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-code-fim-latest",
+      "owned_by": "mistralai",
+      "context_window": 256000,
+      "capabilities": [
+        "completion_chat",
+        "completion_fim",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "mistral-code-latest",
+      "owned_by": "mistralai",
+      "context_window": 256000,
+      "capabilities": [
+        "completion_chat",
+        "completion_fim",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "mistral-large-2512",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-large-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "fine_tuning",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium-2604",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium-3",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium-3-5",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium-3.5",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-medium-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-small-2603",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-small-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-vibe-cli-fast",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-vibe-cli-latest",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "mistral-vibe-cli-with-tools",
+      "owned_by": "mistralai",
+      "context_window": 262144,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
+      "id": "voxtral-small-2507",
+      "owned_by": "mistralai",
+      "context_window": 32768,
+      "capabilities": [
+        "completion_chat",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "voxtral-small-latest",
+      "owned_by": "mistralai",
+      "context_window": 32768,
+      "capabilities": [
+        "completion_chat",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "zai-glm-5-2",
+      "owned_by": "mistralai",
+      "context_window": 1048576,
+      "capabilities": [
+        "completion_chat",
+        "function_calling"
+      ]
+    }
+  ]
+}

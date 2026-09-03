@@ -1358,6 +1358,14 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"gpt-5.6-sol", true},
 		{"gpt-5.6-terra", true},
 		{"gpt-5.1-codex", true},
+		// Provider-prefixed forms (agentgateway virtual models forward the
+		// bare ID upstream, so the endpoint decision must match on it).
+		{"openai/gpt-5.6-luna", true},
+		{"openai/gpt-5.6-sol", true},
+		{"anthropic/gpt-5.6-luna", true},
+		{"gemini/gpt-5.6-luna", true},
+		{"agentgateway/openai/gpt-5.6-luna", true},
+		{"openai/gpt-5.5", false},
 		// Case insensitive
 		{"GPT-5-CODEX", true},
 		{"Gpt-5.1-Codex-Mini", true},
@@ -1493,8 +1501,8 @@ func TestOaiContentsToResponsesInput_WithFunctionCalls(t *testing.T) {
 	if items[2].OfFunctionCallOutput == nil {
 		t.Fatal("expected function call output item")
 	}
-	if items[2].OfFunctionCallOutput.CallID != "call_123" {
-		t.Fatalf("function output CallID = %q, want %q", items[2].OfFunctionCallOutput.CallID, "call_123")
+	if got := items[2].OfFunctionCallOutput.CallID.Or(""); got != "call_123" {
+		t.Fatalf("function output CallID = %q, want %q", got, "call_123")
 	}
 }
 

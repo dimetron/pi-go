@@ -10,9 +10,9 @@ import (
 	"net/http"
 	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +26,7 @@ import (
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
+	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/jsonrpc"
@@ -58,18 +59,21 @@ var (
 	// from the default value. Set by runRoot.
 	flagSocketChanged bool
 
-	flagContinue  bool
-	flagInsecure  bool
-	flagCACert    string
-	flagSmol      bool
-	flagSlow      bool
-	flagPlan      bool
-	flagMemoryOff bool
-	flagLSP       string
-	flagSystem    string
-	flagPprof     string
-	flagPprofPort string
-	flagTraceHTTP bool
+	flagContinue     bool
+	flagInsecure     bool
+	flagCACert       string
+	flagSmol         bool
+	flagSlow         bool
+	flagPlan         bool
+	flagMemoryOff    bool
+	flagLSP          string
+	flagSystem       string
+	flagPprof        string
+	flagPprofPort    string
+	flagCPUProfile   string
+	flagTraceHTTP    bool
+	flagA2AAddr      string
+	flagA2AReadyAddr string
 
 	// lastSessionFile persists the last session start metadata across invocations.
 	// Used to detect rapid restart loops (e.g. print mode crashes).
@@ -114,6 +118,7 @@ routing you need:
   mistral-*, magistral-*   Mistral         MISTRAL_API_KEY
   grok-*                   xAI             XAI_API_KEY
   openrouter/<model>       OpenRouter      OPENROUTER_API_KEY
+  agentgateway/<model>     agentgateway    none; http://localhost:4000
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
                                            without a key: the local daemon
@@ -157,6 +162,9 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
   # OpenCode
   pi --model opencode/claude-sonnet-5 "find the goroutine leak"
 
+  # agentgateway — a local OpenAI-compatible gateway, no API key needed
+  pi --model agentgateway/deepseek-v4-flash:0731-cloud "draft release notes"
+
   # Any OpenAI-compatible gateway, with an extra header and a corporate CA
   pi --url https://llm.corp.internal/v1 --model gpt-5.2 \
      --header X-Team=platform --ca-cert /etc/ssl/corp.pem "run the tests"
@@ -176,8 +184,11 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 		// `pi audit`, ...) have their own RunE and never reach runRoot, so
 		// profiling them was impossible. PersistentPreRun runs for the root and
 		// every subcommand alike.
-		PersistentPreRun: func(*cobra.Command, []string) { startPprofServer() },
-		RunE:             runRoot,
+		PersistentPreRun: func(*cobra.Command, []string) {
+			startPprofServer()
+			startCPUProfile()
+		},
+		RunE: runRoot,
 	}
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-5, gpt-5.2, gemini-3.5-pro, ollama/gemma4:e4b, minimax-m3:cloud)")
@@ -209,6 +220,12 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	// "unknown flag: --pprof" the moment a subcommand was used.
 	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
 	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
+	// --cpuprofile writes a runtime CPU profile to the given path for the whole
+	// process lifetime. This is the profile PGO consumes: `go build` reads a CPU
+	// pprof profile (default.pgo in the main package dir, or -pgo=<path>) to
+	// guide inlining and layout. Collect it from a representative workload —
+	// the eval-tools suite (`make record-pgo`) — not from a microbenchmark.
+	cmd.PersistentFlags().StringVar(&flagCPUProfile, "cpuprofile", "", "Write a CPU profile to this path for the process lifetime (PGO input)")
 	// Persistent for the same reason as --pprof: `pi ping --trace-http` and the
 	// other subcommands that reach a provider all need it.
 	cmd.PersistentFlags().BoolVar(&flagTraceHTTP, "trace-http", false,
@@ -233,6 +250,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newModelCmd())
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newACPServerCmd())
+	cmd.AddCommand(newA2AServerCmd())
 	cmd.AddCommand(newUpgradeCmd())
 	cmd.AddCommand(newSessionStatsCmd())
 	cmd.AddCommand(newVerifyCmd())
@@ -290,14 +308,40 @@ func loadRootConfig() (config.Config, error) {
 // consulted, first under the role's provider name and then under the provider
 // the model itself resolved to.
 func resolveRuntimeModel(cfg config.Config, modelName, providerName string) (provider.Info, string, error) {
+	return resolveRuntimeModelForRole(cfg, modelName, providerName, "")
+}
+
+func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, activeRole string) (provider.Info, string, error) {
 	baseURL := flagURL
+	resumedProvider := ""
+	if baseURL == "" && flagSession != "" && flagModel == "" && activeRole == "default" {
+		if dir, err := sessionsDir(); err == nil {
+			if rp, resumedURL, ok := pisession.SessionBackend(dir, flagSession); ok {
+				if rp != "" {
+					providerName = rp
+					resumedProvider = rp
+				}
+				baseURL = resumedURL
+			}
+		}
+	}
 	if baseURL == "" && providerName != "" {
 		baseURLs := cfg.ResolveBaseURLs()
 		baseURL = baseURLs[providerName]
 	}
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+		// A resumed session's model may be a virtual name that only its
+		// recorded provider understands — e.g. an agentgateway virtual model
+		// like "ollama-deepseek", whose dash spelling carries no provider
+		// prefix and so cannot be resolved from the name alone. The provider
+		// recorded in the session metadata is the authority for which backend
+		// served it, so fall back to it rather than failing the resume.
+		if resumedProvider != "" {
+			info = provider.Info{Provider: resumedProvider, Model: modelName}
+		} else {
+			return provider.Info{}, "", fmt.Errorf("resolving model: %w", err)
+		}
 	}
 	if providerName != "" {
 		info.Provider = providerName
@@ -320,7 +364,7 @@ func resolveRuntimeModel(cfg config.Config, modelName, providerName string) (pro
 // available. A custom base URL, or a provider that authenticates some other
 // way, is exempt.
 func requireRuntimeAPIKey(info provider.Info, apiKey, baseURL string) error {
-	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && !info.Ollama {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && info.Provider != "agentgateway" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}
@@ -399,10 +443,11 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	mode := resolveMode()
-	info, baseURL, err := resolveRuntimeModel(cfg, modelName, providerName)
+	info, baseURL, err := resolveRuntimeModelForRole(cfg, modelName, providerName, activeRole)
 	if err != nil {
 		return rootRuntime{}, err
 	}
+	info.BaseURL = baseURL
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
@@ -463,6 +508,41 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 // with "address already in use".
 var pprofOnce sync.Once
 
+// cpuProfileOnce guards the CPU profile writer. Like pprofOnce it exists so a
+// command reached both through PersistentPreRun and directly in tests does not
+// start two writers on the same file.
+var cpuProfileOnce sync.Once
+
+// startCPUProfile begins writing a runtime CPU profile to flagCPUProfile when
+// set. The profile is the input PGO consumes, so it must cover a representative
+// workload (see `make record-pgo`). It is stopped by stopCPUProfile, which
+// runRoot defers; a command that never reaches runRoot (a subcommand with its
+// own RunE) leaves the profile unwritten rather than corrupting it.
+func startCPUProfile() {
+	if flagCPUProfile == "" {
+		return
+	}
+	cpuProfileOnce.Do(func() {
+		f, err := os.Create(flagCPUProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cpuprofile: create %s: %v\n", flagCPUProfile, err)
+			return
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "cpuprofile: start: %v\n", err)
+			f.Close()
+			return
+		}
+		fmt.Fprintf(os.Stderr, "cpuprofile: writing to %s\n", flagCPUProfile)
+	})
+}
+
+// stopCPUProfile flushes and closes the CPU profile started by startCPUProfile.
+// It is safe to call when no profile was started.
+func stopCPUProfile() {
+	pprof.StopCPUProfile()
+}
+
 // startPprofServer serves net/http/pprof on --pprof-port when --pprof is set to
 // any non-empty value. Profiles are then collected over HTTP
 // (http://localhost:<port>/debug/pprof), so no profile-specific setup is needed
@@ -494,6 +574,11 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Normally started by the root's PersistentPreRun; harmless if already up.
 	startPprofServer()
+	startCPUProfile()
+	// Flush the CPU profile on the way out. runRoot is the only path that
+	// reaches the agent loop, so deferring here (rather than in main) keeps the
+	// profile covering exactly the work the process did.
+	defer stopCPUProfile()
 
 	runtime, err := buildRootRuntime(cmd.Context(), args)
 	if err != nil {
@@ -664,7 +749,7 @@ func runNonInteractive(
 	beforeCBs = append(beforeCBs, tracingBefore...)
 	afterCBs = append(afterCBs, tracingAfter...)
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(info.Provider)
-	llmBefore = append(llmBefore, extension.BuildReadImageCallback(runtime.sandbox))
+	llmBefore = append(llmBefore, extension.BuildReadImageCallback(runtime.sandbox, info.Provider))
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
@@ -776,7 +861,7 @@ func runNonInteractive(
 
 	armMemoryObservationSession(ctx, memStore, sessionID, cwd, &memSessionID)
 
-	sessionLog.SessionStart(sessionID, llm.Name(), mode)
+	sessionLog.SessionStart(sessionID, llm.Name(), info.Provider, provider.BackendName(info, config.APIKeys()[info.Provider], info.BaseURL), info.BaseURL, mode)
 	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker)
 }
 
@@ -1849,16 +1934,13 @@ const gitCmdTimeout = 5 * time.Second
 
 // detectGitRoot returns the git repository root for the given directory,
 // or empty string if not inside a git repo.
+//
+// Inside a linked worktree this resolves the *main* checkout, not the worktree
+// — the value becomes PI_SANDBOX_ROOT for spawned subagents, and rooting that
+// at a worktree makes every file-tool access to the rest of the repo fail.
+// See internal/gitroot.
 func detectGitRoot(ctx context.Context, dir string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitCmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return gitroot.Detect(ctx, dir)
 }
 
 // LoadDotEnv loads environment variables from ~/.pi-go/.env and the nearest

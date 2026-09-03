@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# check-large-files: refuse to let oversized blobs — GIFs and screen
+# recordings above all — enter the repository.
+#
+# Two rules, two reasons:
+#
+#   1. GitHub's own limits. A blob over 50 MiB draws a warning and one over
+#      100 MiB is rejected outright at push time, with no way to un-push it
+#      afterwards: the object stays in history and the only fix is a rewrite.
+#      This gate fails long before that, at 10 MiB, because the repo has no
+#      legitimate file anywhere near it (the largest non-media file tracked is
+#      ~70 KiB).
+#
+#   2. CLAUDE.md's recording rule: a GIF of a test run or a TUI session is
+#      attached to a PR as a *release asset*, never committed. See the
+#      `vhs-e2e-gif` skill's attach-gif-to-pr.sh. Recordings are
+#      write-once and quickly stale, and every revision of one is kept forever
+#      by every clone. 1 MiB is generous for anything that genuinely belongs
+#      in-tree, such as a small doc illustration.
+#
+# Usage:
+#   check-large-files staged                 # pre-commit: blobs in the index
+#   check-large-files commits <rev-list-args…>   # pre-push: blobs a push adds
+#
+# Escape hatch — NOT --no-verify, which CLAUDE.md forbids because it also
+# skips the signing hooks:
+#
+#   PI_ALLOW_LARGE_FILES=1 git commit -sS -m "…"
+#
+# Thresholds are overridable for testing:
+#   PI_MEDIA_MAX_BYTES, PI_FILE_MAX_BYTES
+set -euo pipefail
+
+media_max=${PI_MEDIA_MAX_BYTES:-1048576}    #  1 MiB — GIFs, videos, casts
+file_max=${PI_FILE_MAX_BYTES:-10485760}     # 10 MiB — anything else
+
+# Animated and video formats plus terminal recordings. Still images are not
+# listed: they fall under the general file limit.
+media_re='\.(gif|gifv|apng|mp4|m4v|mov|webm|mkv|avi|ogv|cast)$'
+
+# Grandfathered paths, one extended-regex per line. Everything here is already
+# in history, so blocking it would only stop legitimate edits — the object is
+# in every clone either way.
+#
+#   docs/screen/pi-go.gif — 5.4 MiB, committed before this hook existed. It is
+#   referenced by nothing in the tree; it should move to a release asset and
+#   the entry below should go with it.
+allow_re='^docs/screen/pi-go\.gif$'
+
+if [ "${PI_ALLOW_LARGE_FILES:-}" = "1" ]; then
+  echo "check-large-files: skipped (PI_ALLOW_LARGE_FILES=1)" >&2
+  exit 0
+fi
+
+human() {
+  awk -v b="$1" 'BEGIN {
+    split("B KiB MiB GiB", u, " ")
+    i = 1
+    while (b >= 1024 && i < 4) { b /= 1024; i++ }
+    printf (i == 1 ? "%d %s\n" : "%.1f %s\n"), b, u[i]
+  }'
+}
+
+# Emits "size<TAB>path" for every blob to inspect.
+#
+# Both modes end in the same `cat-file --batch-check` pipeline: a stream of
+# "<sha> <path>" lines in, sizes out. It stays a pipeline (no temp file, no
+# process substitution) so that `set -o pipefail` still sees a git failure — a
+# gate that passes because its own enumeration broke is worse than no gate.
+list_blobs() {
+  local mode=$1
+  shift
+  {
+    case "$mode" in
+      staged)
+        # Raw format: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\t<path>".
+        # --no-renames keeps every record to a single path field; a rename
+        # would otherwise add a second one and shift the path column.
+        git diff --cached --raw --abbrev=40 --no-renames --diff-filter=ACM \
+          | sed 's/^://' \
+          | awk -F'\t' 'NF > 1 { split($1, f, " "); print f[4], $2 }'
+        ;;
+      commits)
+        # Objects reachable from the pushed commits but not from what the
+        # remote already has — i.e. exactly what this push would upload.
+        [ "$#" -gt 0 ] || return 0
+        git rev-list --objects "$@"
+        ;;
+    esac
+  } \
+    | git cat-file --batch-check='%(objecttype) %(objectsize) %(rest)' \
+    | awk '$1 == "blob" && NF > 2 {
+        size = $2
+        $1 = ""; $2 = ""
+        sub(/^  /, "")
+        printf "%s\t%s\n", size, $0
+      }'
+}
+
+case "${1:-}" in
+  staged | commits) ;;
+  *)
+    echo "check-large-files: usage: check-large-files staged|commits [rev-list-args…]" >&2
+    exit 2
+    ;;
+esac
+
+# Collected up front rather than piped straight into the loop: a `git` failure
+# inside a process substitution cannot fail the enclosing script, and a gate
+# that passes when its own enumeration broke is worse than no gate. Under
+# `set -e` plus `pipefail` a failed command substitution aborts the hook.
+blobs=$(list_blobs "$@" | sort -u)
+
+violations=()
+while IFS=$'\t' read -r size path; do
+  [ -n "$path" ] || continue
+  if printf '%s' "$path" | grep -qE "$allow_re"; then
+    continue
+  fi
+  if printf '%s' "$path" | grep -qiE "$media_re"; then
+    if [ "$size" -gt "$media_max" ]; then
+      violations+=("$(human "$size")|$path|recording/animation over $(human "$media_max")")
+    fi
+  elif [ "$size" -gt "$file_max" ]; then
+    violations+=("$(human "$size")|$path|file over $(human "$file_max")")
+  fi
+done <<< "$blobs"
+
+[ "${#violations[@]}" -eq 0 ] && exit 0
+
+{
+  echo
+  echo "check-large-files: refusing to add oversized files to git history:"
+  for v in "${violations[@]}"; do
+    IFS='|' read -r vsize vpath vwhy <<< "$v"
+    printf '  %-12s %s\n' "$vsize" "$vpath"
+    printf '  %-12s (%s)\n' "" "$vwhy"
+  done
+  echo
+  echo "GIFs and screen recordings belong on a GitHub release, not in the repo."
+  echo "Attach one to a PR instead — it stays out of every clone's history:"
+  echo
+  echo "  CAPTIONS='e2e: …' \\"
+  echo "    .claude/skills/vhs-e2e-gif/scripts/attach-gif-to-pr.sh <PR> <file.gif>"
+  echo
+  echo "Then unstage it:  git restore --staged <file>  (and delete or gitignore it)"
+  echo
+  echo "If a file genuinely must live in the tree, shrink it, or — as a last"
+  echo "resort — re-run with PI_ALLOW_LARGE_FILES=1. Do NOT use --no-verify:"
+  echo "it also skips the signing hooks and lands an unsigned commit."
+  echo
+} >&2
+exit 1

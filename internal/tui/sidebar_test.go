@@ -210,24 +210,6 @@ func TestSortedKeys_Empty(t *testing.T) {
 	}
 }
 
-// --- handleRestartCommand ---
-
-func TestHandleRestartCommand(t *testing.T) {
-	m := &model{
-		chatModel: ChatModel{Messages: make([]message, 0)},
-	}
-
-	newM, cmd := m.handleRestartCommand()
-	mm := newM.(*model)
-
-	if !mm.quitting {
-		t.Error("expected quitting to be true")
-	}
-	if cmd == nil {
-		t.Error("expected non-nil cmd")
-	}
-}
-
 // --- historyPathPlain ---
 
 func TestHistoryPathPlain(t *testing.T) {
@@ -434,6 +416,55 @@ func TestRenderSidebar_MCPTools(t *testing.T) {
 	}
 }
 
+func TestRenderSidebar_A2AAgents(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 40,
+		A2AAgents: []A2AAgentEntry{
+			{Name: "k8s-agent"},
+			{Name: "istio-agent"},
+			{Name: "helm-agent"},
+		},
+	})
+	if !strings.Contains(result, "A2A Agents") {
+		t.Error("expected 'A2A Agents' heading in sidebar")
+	}
+	if !strings.Contains(result, "[3]") {
+		t.Error("expected '[3]' agent count in A2A Agents heading")
+	}
+	for _, name := range []string{"k8s-agent", "istio-agent", "helm-agent"} {
+		if !strings.Contains(result, name) {
+			t.Errorf("expected agent %q in sidebar", name)
+		}
+	}
+}
+
+func TestRenderSidebar_A2AAgents_EmptyHidden(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 20,
+	})
+	if strings.Contains(result, "A2A Agents") {
+		t.Error("expected no 'A2A Agents' section when A2AAgents is nil")
+	}
+}
+
+func TestRenderSidebar_A2AAppearsAfterMCPTools(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 40,
+		MCPTools: []extension.MCPToolEntry{
+			{Server: "filesystem", Tool: "read_file"},
+		},
+		A2AAgents: []A2AAgentEntry{
+			{Name: "k8s-agent"},
+		},
+	})
+	if strings.Index(result, "A2A Agents [1]") < strings.Index(result, "MCP Tools [1]") {
+		t.Error("expected A2A Agents section below MCP Tools section")
+	}
+}
+
 func TestRenderSidebar_Skills(t *testing.T) {
 	result := RenderSidebar(SidebarRenderInput{
 		Width:  30,
@@ -616,5 +647,46 @@ func TestRenderSidebar_Artifacts_Populated(t *testing.T) {
 	// Truncated filename should NOT appear in full.
 	if strings.Contains(stripped, "screenshot.png") {
 		t.Error("did not expect untruncated 'screenshot.png' — sidebar too narrow")
+	}
+}
+
+func TestRenderSidebar_PlanChecklist(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 30,
+		Mode:   "plan",
+		PlanPhases: []PlanPhase{
+			{Name: "Idea", Done: true},
+			{Name: "Requirements", Done: false},
+			{Name: "Research", Done: false},
+			{Name: "Design", Done: false},
+			{Name: "Outline", Done: false},
+			{Name: "Plan", Done: false},
+			{Name: "Prompt", Done: false},
+		},
+	})
+	stripped := ansi.Strip(result)
+	for _, want := range []string{"Plan", "[x] Idea", "▶ Requirements", "[ ] Research"} {
+		if !strings.Contains(stripped, want) {
+			t.Errorf("expected %q in rendered output:\n%s", want, stripped)
+		}
+	}
+	if strings.Contains(stripped, "[chat]") {
+		t.Error("did not expect [chat] mode in plan-mode sidebar")
+	}
+}
+
+func TestRenderSidebar_NoPlanSection(t *testing.T) {
+	result := RenderSidebar(SidebarRenderInput{
+		Width:  30,
+		Height: 20,
+		Mode:   "chat",
+	})
+	stripped := ansi.Strip(result)
+	if strings.Contains(stripped, "▶ ") {
+		t.Error("did not expect a current-phase marker when no PlanPhases are present")
+	}
+	if strings.Contains(stripped, "[x] Idea") {
+		t.Error("did not expect a plan checklist row when no PlanPhases are present")
 	}
 }

@@ -433,6 +433,37 @@ func TestAgentCallSummaryRender(t *testing.T) {
 	}
 }
 
+// TestA2ACallSummaryRender pins the "agent_name: prompt" join and both
+// truncations, mirroring the subagent summary.
+func TestA2ACallSummaryRender(t *testing.T) {
+	tests := []struct {
+		desc string
+		args map[string]any
+		want string
+	}{
+		{"both", map[string]any{"agent_name": "istio-agent", "prompt": "check the mesh"}, "istio-agent: check the mesh"},
+		{"name only", map[string]any{"agent_name": "istio-agent"}, "istio-agent"},
+		{"prompt only", map[string]any{"prompt": "just a prompt"}, "just a prompt"},
+		{"neither", map[string]any{}, ""},
+		{"first line only", map[string]any{"agent_name": "a", "prompt": "first line\nsecond line"}, "a: first line"},
+		{
+			"long prompt clipped to 60",
+			map[string]any{"agent_name": "a", "prompt": strings.Repeat("p", 100)},
+			"a: " + strings.Repeat("p", 57) + "...",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := a2aCallSummary(tc.args); got != tc.want {
+				t.Errorf("a2aCallSummary(%v) = %q, want %q", tc.args, got, tc.want)
+			}
+			if got := toolCallSummary("a2a", tc.args); got != tc.want {
+				t.Errorf("toolCallSummary(a2a) = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // formatToolResult and its extracted shapes
 // ---------------------------------------------------------------------------
@@ -480,6 +511,9 @@ func TestFormatToolResultRender(t *testing.T) {
 		{"bash exit zero", map[string]any{"exit_code": 0.0, "stdout": "hi", "stderr": ""}, "hi"},
 		{"bash exit nonzero", map[string]any{"exit_code": 1.0, "stdout": "", "stderr": "bad"}, "exit 1: bad"},
 		{"bash no output", map[string]any{"exit_code": 0.0}, "(No output)"},
+		{"a2a result", map[string]any{"status": "completed", "result": "Hello!"}, "Hello!"},
+		{"a2a error", map[string]any{"status": "failed", "error": "boom"}, "error: boom"},
+		{"a2a empty result falls through", map[string]any{"status": "completed", "result": ""}, `{"result":"","status":"completed"}`},
 		{"fallback json", map[string]any{"unknown": "value"}, `{"unknown":"value"}`},
 		{"fallback empty", map[string]any{}, "{}"},
 	}
@@ -570,6 +604,7 @@ func TestToolResultShapesReject(t *testing.T) {
 		"diagnostics": diagnosticsResultSummary,
 		"bashWindow":  bashWindowResultSummary,
 		"bashExit":    bashExitResultSummary,
+		"a2a":         a2aResultSummary,
 	}
 	if len(shapes) != len(toolResultShapes) {
 		t.Fatalf("test covers %d shapes but formatToolResult tries %d", len(shapes), len(toolResultShapes))
@@ -929,6 +964,11 @@ func TestRenderToolCardsRender(t *testing.T) {
 			want: "◉ agent[claude+pi+gemini]\n  │ → ok\n",
 		},
 		{
+			desc: "bundled adapters keep their names, pi subagents collapse",
+			msg:  message{role: "tool", tool: "subagent", agentType: "agy+task+copilot+codex", content: "ok"},
+			want: "◉ agent[agy+pi+copilot+codex]\n  │ → ok\n",
+		},
+		{
 			desc: "agent result collapses newlines into one gutter line",
 			msg:  message{role: "tool", tool: "agent", agentType: "gemini", content: "one\ntwo\n\nthree"},
 			want: "◉ agent[gemini]\n  │ → one two three\n",
@@ -1066,7 +1106,7 @@ func TestRenderableAgentEventsRender(t *testing.T) {
 		{kind: "custom"},
 	}
 	got := renderableAgentEvents(in)
-	want := []string{"text", "tool_call", "stderr", "custom"}
+	want := []string{"text", "tool_call", "custom"}
 	if len(got) != len(want) {
 		t.Fatalf("kept %d events (%v), want %d", len(got), got, len(want))
 	}
@@ -1081,10 +1121,10 @@ func TestRenderableAgentEventsRender(t *testing.T) {
 // notes: whole events dropped reports a count, a single over-long event
 // reports that its head was cut.
 func TestAgentWindowLinesRender(t *testing.T) {
-	st := lipgloss.NewStyle()
+	st := newAgentEventStyles("", Palette{})
 
 	t.Run("empty stream has no lines and no note", func(t *testing.T) {
-		lines, note := agentWindowLines(nil, st, st, 60)
+		lines, note := agentWindowLines(nil, st, 60)
 		if len(lines) != 0 || note != "" {
 			t.Errorf("got %d lines, note %q", len(lines), note)
 		}
@@ -1092,7 +1132,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("under budget shows everything with no note", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: "a"}, {kind: "text", content: "b"}}
-		lines, note := agentWindowLines(evs, st, st, 60)
+		lines, note := agentWindowLines(evs, st, 60)
 		if len(lines) != 2 || note != "" {
 			t.Errorf("got %d lines %v, note %q", len(lines), lines, note)
 		}
@@ -1106,7 +1146,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 		for i := range evs {
 			evs[i] = agentEv{kind: "text", content: fmt.Sprintf("e%d", i)}
 		}
-		lines, note := agentWindowLines(evs, st, st, 60)
+		lines, note := agentWindowLines(evs, st, 60)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}
@@ -1120,7 +1160,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("one over-long event reports a clip", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: strings.Repeat("word ", 200)}}
-		lines, note := agentWindowLines(evs, st, st, 40)
+		lines, note := agentWindowLines(evs, st, 40)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}
@@ -1160,6 +1200,11 @@ func TestAgentCardHeaderRender(t *testing.T) {
 		{"label only", ToolDisplayModel{}, message{agentType: "task", content: "x"}, "◉ agent[pi]\n"},
 		{"title only", ToolDisplayModel{}, message{agentTitle: "hi", content: "x"}, "◉ agent hi\n"},
 		{"both", ToolDisplayModel{}, message{agentType: "gemini", agentTitle: "hi", content: "x"}, "◉ agent[gemini] hi\n"},
+		{"agy keeps its name", ToolDisplayModel{}, message{agentType: "agy", content: "x"}, "◉ agent[agy]\n"},
+		{"copilot keeps its name", ToolDisplayModel{}, message{agentType: "copilot", content: "x"}, "◉ agent[copilot]\n"},
+		{"codex keeps its name", ToolDisplayModel{}, message{agentType: "codex", content: "x"}, "◉ agent[codex]\n"},
+		{"a2a label is verbatim", ToolDisplayModel{}, message{tool: "a2a", agentLabel: "istio-agent", content: "x"}, "◉ agent[istio-agent]\n"},
+		{"a2a label wins over type", ToolDisplayModel{}, message{tool: "a2a", agentType: "task", agentLabel: "istio-agent", content: "x"}, "◉ agent[istio-agent]\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.desc, func(t *testing.T) {

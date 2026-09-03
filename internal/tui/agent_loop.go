@@ -31,6 +31,22 @@ const (
 	// make the repetition meaningless.
 	maxRepeatToolCalls = 10
 
+	// maxRunningPollRepeats is the identical-call threshold that replaces
+	// maxRepeatToolCalls while a bash poll's command is still running.
+	//
+	// A poll that returns byte-identical output is not evidence of a loop when
+	// the command behind it is alive: ffmpeg's palettegen pass, a linker, a
+	// test binary mid-run — all go quiet for tens of seconds while working, and
+	// at roughly three seconds per model round-trip ten identical polls is
+	// under half a minute of silence. Ten was a threshold set for tools whose
+	// target is static, and re-reading an unchanged file ten times really is a
+	// loop; waiting on a live process is not, so it gets its own budget.
+	//
+	// Deliberately large rather than unbounded: a model polling a hung handle
+	// forever should still be stopped eventually, and the poll's own wait_ms
+	// paces the spin in the meantime.
+	maxRunningPollRepeats = 500
+
 	// maxRepeatErrorCalls aliases maxRepeatToolCalls for callers that frame
 	// the threshold as an error-streak rather than a call-streak. The
 	// underlying detector is identical — identical fingerprint = stuck.
@@ -48,7 +64,14 @@ const (
 
 	// maxOutputRepeats is the number of back-to-back copies of one phrase in
 	// the model's own output before the turn is called degenerate.
-	maxOutputRepeats = 12
+	//
+	// Set low enough to catch a model that repeats a single intent while
+	// varying its tool calls just enough to dodge the identical-call streak
+	// (session 260903-1012-bf620-ef665 repeated one phrase 8 times and burned
+	// the full 65536-token output budget before being cut off). 6 copies of a
+	// ~100-char phrase is ~600 bytes of output — far too little to be a
+	// legitimate answer, and well under the 512-byte scan cadence.
+	maxOutputRepeats = 6
 
 	// outputWindowBytes is the rolling tail of streamed output kept for
 	// repetition detection. It has to hold maxOutputRepeats copies of the
@@ -127,15 +150,61 @@ func extractAgentType(args map[string]any) string {
 
 // stuckDetector tracks recent tool calls and detects repetition loops.
 type stuckDetector struct {
-	recent      []string // ring of fingerprints (len <= recentWindowSize)
-	lastPrint   string   // fingerprint of last tool call
-	lastName    string   // tool name behind lastPrint
-	lastResult  string   // fingerprint of the streak's previous result ("" = none yet)
-	streak      int      // consecutive identical tool calls with identical results
-	lastErrTool string   // name of last tool that errored
-	errStreak   int      // consecutive errors for that tool
-	outBuf      string   // rolling tail of the model's own output
-	outSince    int      // bytes of output since the last repetition scan
+	recent     []recentCall // ring of call+result pairs (len <= recentWindowSize)
+	recentSeq  int          // monotonic id handed to each entry in recent
+	lastPrint  string       // fingerprint of last tool call
+	lastName   string       // tool name behind lastPrint
+	lastResult string       // fingerprint of the streak's previous result ("" = none yet)
+	streak     int          // consecutive identical tool calls with identical results
+	// livePoll is set while the streak's tool is a bash poll whose last
+	// response reported the command still running. It swaps the identical-call
+	// threshold for maxRunningPollRepeats — see repeatLimit.
+	livePoll bool
+	// Two error detectors run in parallel. The args-aware streak keys on the
+	// call fingerprint, so only the same tool call failing repeatedly counts;
+	// the name-only streak keys on the tool name and compounds only across
+	// distinct model messages, so a batch of different calls in one message is
+	// a single attempt rather than a streak. See observeError.
+	callInfo       map[string]callRecord // call ID -> fingerprint + message, for response correlation
+	lastCallByName map[string]callRecord // name -> most recent call, fallback when a response carries no/unknown ID
+	msgSeq         int                   // per-event counter; calls in the same event share it
+	lastErrFP      string                // fingerprint of the previous error (args-aware streak)
+	errFPStreak    int                   // consecutive errors of the same call fingerprint
+	lastErrTool    string                // name of last tool that errored
+	errStreak      int                   // consecutive errors of that tool across distinct messages
+	lastErrBatch   int                   // message sequence of the call the last error answered
+	outBuf         string                // rolling tail of the model's own output
+	outSince       int                   // bytes of output since the last repetition scan
+}
+
+// callRecord is what the detector remembers about an observed tool call so a
+// later response can be correlated back to it: the call's fingerprint (for the
+// args-aware error streak), the message it appeared in (for the name-only
+// cross-batch streak), and its slot in the repetition window (so the response
+// can be filed against the call it answers rather than against whichever call
+// happened to be observed last).
+type callRecord struct {
+	fp  string
+	msg int
+	seq int
+}
+
+// recentCall is one entry in the repetition window: a call, and what came back
+// from it. Both halves matter. Comparing calls alone cannot tell a model
+// spinning on a dead pattern from one driving several long-running jobs — the
+// fan-out of a parallel poll is a repeating sequence of fingerprints by
+// construction, and the only thing separating it from a genuine loop is that
+// its results keep changing. That is the rule observeResult already applies to
+// the identical-call streak; detectCycle applies it here.
+type recentCall struct {
+	call   string // call fingerprint
+	result string // result fingerprint; "" until the response arrives
+	seq    int    // matches the callRecord that produced it
+}
+
+// repeats reports whether c re-ran prev and got nothing new back.
+func (c recentCall) repeats(prev recentCall) bool {
+	return c.call == prev.call && c.result == prev.result
 }
 
 // volatileToolArgs address a slice of a target rather than the target itself.
@@ -175,9 +244,31 @@ func stableToolArgs(args map[string]any) map[string]any {
 	return stable
 }
 
+// beginEvent advances the message counter so calls in one model event share a
+// batch identity. Responses later use it to tell a single batch of calls from
+// repeated attempts spread across turns.
+func (s *stuckDetector) beginEvent() {
+	s.msgSeq++
+}
+
 // observe records a tool call and returns true if the loop appears stuck.
-func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, detail string) {
+// id correlates the call to its later response (FunctionCall.ID). Calls with
+// an empty id cannot be correlated by ID, so they are remembered only by name
+// (see lastCallByName); observeError uses that fallback so a batch of ID-less
+// calls still reads as one message.
+func (s *stuckDetector) observe(id, name string, args map[string]any) (stuck bool, detail string) {
 	fp := toolFingerprint(name, args)
+	rec := callRecord{fp: fp, msg: s.msgSeq, seq: s.recentSeq}
+	if id != "" {
+		if s.callInfo == nil {
+			s.callInfo = make(map[string]callRecord)
+		}
+		s.callInfo[id] = rec
+	}
+	if s.lastCallByName == nil {
+		s.lastCallByName = make(map[string]callRecord)
+	}
+	s.lastCallByName[name] = rec
 
 	// Consecutive identical call detection.
 	if fp == s.lastPrint {
@@ -187,24 +278,35 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 		s.lastPrint = fp
 		s.lastName = name
 		s.lastResult = ""
+		s.livePoll = false
 	}
 
-	// Sliding window.
-	s.recent = append(s.recent, fp)
+	// Sliding window. The result half is filled in later, by observeResult.
+	s.recent = append(s.recent, recentCall{call: fp, seq: s.recentSeq})
+	s.recentSeq++
 	if len(s.recent) > recentWindowSize {
 		s.recent = s.recent[1:]
 	}
 
-	if s.streak >= maxRepeatToolCalls {
+	if limit := s.repeatLimit(); s.streak >= limit {
 		return true, fmt.Sprintf("identical tool call %q repeated %d times", name, s.streak)
 	}
 
-	// Detect short repeating cycles (AB AB AB) in the window.
-	if cycle := s.detectCycle(); cycle != "" {
-		return true, fmt.Sprintf("repeating tool cycle detected: %s", cycle)
-	}
-
+	// Cycle detection runs from observeResult instead: a cycle is only a cycle
+	// once the results are in, and at this point the call just observed has no
+	// result yet.
 	return false, ""
+}
+
+// repeatLimit is how many identical consecutive calls the current streak is
+// allowed before it counts as stuck. Waiting on a live command gets a much
+// larger budget than repeating a call against something static — see
+// maxRunningPollRepeats.
+func (s *stuckDetector) repeatLimit() int {
+	if s.livePoll {
+		return maxRunningPollRepeats
+	}
+	return maxRepeatToolCalls
 }
 
 // observeResult records a tool call's response. Polling tools repeat identical
@@ -215,13 +317,41 @@ func (s *stuckDetector) observe(name string, args map[string]any) (stuck bool, d
 // re-polling a finished command or re-reading an unchanged file is genuine
 // repetition. A stuck loop whose responses vary trivially (timestamps) escapes
 // this detector, but observeError and observeOutput still cover that shape.
-func (s *stuckDetector) observeResult(name string, response map[string]any) {
-	if name != s.lastName {
-		return
+//
+// It also closes the repetition window entry for the call it answers and runs
+// cycle detection, which is why it reports a verdict: a cycle is a claim about
+// calls *and* their results, so it cannot be decided when the call is observed.
+func (s *stuckDetector) observeResult(id, name string, response map[string]any) (stuck bool, detail string) {
+	fp := resultFingerprint(name, response)
+	rec, known := s.callFor(id, name)
+	if known {
+		s.fillResult(rec.seq, fp)
 	}
-	// bash_wait includes elapsed/idle fields that change on every poll even
-	// when the command produced no new output. Those fields are progress for the
-	// UI, not progress from the command, so exclude them from loop detection.
+
+	// The streak only tracks one call at a time, so a result belonging to some
+	// other call — another handle in the same parallel batch, or another tool
+	// entirely — must not be compared against it.
+	if name == s.lastName && (!known || rec.fp == s.lastPrint) {
+		if s.lastResult != "" && fp != s.lastResult {
+			s.streak = 0
+		}
+		s.lastResult = fp
+		s.livePoll = isLiveBashPoll(name, response)
+	}
+
+	if cycle := s.detectCycle(); cycle != "" {
+		return true, fmt.Sprintf("repeating tool cycle detected: %s", cycle)
+	}
+	return false, ""
+}
+
+// resultFingerprint hashes a tool response for comparison against the previous
+// response to the same call.
+//
+// bash_wait includes elapsed/idle fields that change on every poll even when
+// the command produced no new output. Those fields are progress for the UI, not
+// progress from the command, so exclude them from loop detection.
+func resultFingerprint(name string, response map[string]any) string {
 	stable := response
 	if isBashPoll(name) {
 		stable = make(map[string]any, len(response))
@@ -233,27 +363,115 @@ func (s *stuckDetector) observeResult(name string, response map[string]any) {
 	}
 	b, _ := json.Marshal(stable)
 	sum := sha256.Sum256(b)
-	fp := hex.EncodeToString(sum[:])[:16]
-	if s.lastResult != "" && fp != s.lastResult {
-		s.streak = 0
-	}
-	s.lastResult = fp
+	return hex.EncodeToString(sum[:])[:16]
 }
 
-// observeError records the outcome of a tool call by name. Consecutive errors
-// of the same tool name — regardless of args — trip the detector once the
-// streak reaches maxToolErrorStreak. A success (isError == false) or a switch
-// to a different tool name resets the streak.
-func (s *stuckDetector) observeError(name string, isError bool) (stuck bool, detail string) {
-	if isError && name == s.lastErrTool {
-		s.errStreak++
-	} else {
-		s.errStreak = 1
-		s.lastErrTool = name
+// isLiveBashPoll reports whether response is a poll of a command that has not
+// finished yet.
+func isLiveBashPoll(name string, response map[string]any) bool {
+	if !isBashPoll(name) {
+		return false
 	}
-	if s.errStreak >= maxToolErrorStreak {
-		return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
+	running, _ := response["running"].(bool)
+	return running
+}
+
+// callFor resolves the call a response belongs to, by ID where the provider
+// supplies one and by tool name otherwise — the same fallback observeError
+// uses for ID-less calls.
+func (s *stuckDetector) callFor(id, name string) (callRecord, bool) {
+	if id != "" {
+		if rec, ok := s.callInfo[id]; ok {
+			return rec, true
+		}
 	}
+	rec, ok := s.lastCallByName[name]
+	return rec, ok
+}
+
+// fillResult attaches a result fingerprint to its call in the repetition
+// window. The entry is gone if the window has already slid past it, which is
+// not an error: a window that old cannot be part of a cycle being detected now.
+func (s *stuckDetector) fillResult(seq int, fp string) {
+	for i := range s.recent {
+		if s.recent[i].seq == seq {
+			s.recent[i].result = fp
+			return
+		}
+	}
+}
+
+// observeError records the outcome of a tool call and reports whether the loop
+// is stuck. Two streaks run in parallel, catching different loop shapes:
+//
+//  1. Args-aware (errFPStreak): the same call — same tool and same argument
+//     fingerprint — failing maxToolErrorStreak times. A model stuck re-issuing
+//     one call trips here no matter how many messages pass.
+//
+//  2. Name-only, cross-batch (errStreak): consecutive failures of the same
+//     tool name that come from calls in *different* model messages. A batch of
+//     distinct calls sent in one message (e.g. fetching pricing for ten
+//     models in a single turn) is one attempt, not ten, so it does not
+//     compound; the same tool failing once per message across ten messages is
+//     the flailing pattern and does.
+//
+// A success (isError == false) resets both streaks. id is the FunctionResponse
+// ID, used to look up which call — and therefore which message — this result
+// answers.
+func (s *stuckDetector) observeError(id, name string, isError bool) (stuck bool, detail string) {
+	// Correlate this response to the call it answers. By ID first: a matched
+	// record gives the call's fingerprint and message, and is consumed so the
+	// map stays bounded by outstanding (unanswered) calls. When the response
+	// carries no usable ID, fall back to the most recent call of that name —
+	// responses trail their calls in order, so this is the call being answered.
+	// Only the batch is trusted from the name fallback: without an ID we cannot
+	// pair a response to a specific call's arguments, so the args-aware streak
+	// must not see a fingerprint — a batch of distinct ID-less calls would all
+	// collapse onto the last call's fingerprint and false-abort.
+	fp := ""
+	batch := 0
+	if rec, ok := s.callInfo[id]; ok {
+		fp, batch = rec.fp, rec.msg
+		delete(s.callInfo, id)
+	} else if rec, ok := s.lastCallByName[name]; ok {
+		batch = rec.msg
+	}
+
+	if isError {
+		if fp != "" && fp == s.lastErrFP {
+			s.errFPStreak++
+		} else {
+			s.errFPStreak = 1
+			s.lastErrFP = fp
+		}
+		if s.errFPStreak >= maxToolErrorStreak {
+			return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errFPStreak)
+		}
+
+		// Name-only streak. Compound only when this failure answers a call
+		// from a different message than the previous one (or from an
+		// unknown message — treat unobserved calls as new attempts).
+		if name == s.lastErrTool {
+			if s.lastErrBatch == 0 || batch != s.lastErrBatch {
+				s.errStreak++
+				s.lastErrBatch = batch
+			}
+		} else {
+			s.errStreak = 1
+			s.lastErrTool = name
+			s.lastErrBatch = batch
+		}
+		if s.errStreak >= maxToolErrorStreak {
+			return true, fmt.Sprintf("tool %q failed %d times in a row", name, s.errStreak)
+		}
+		return false, ""
+	}
+
+	s.errFPStreak = 0
+	s.lastErrFP = ""
+	s.errStreak = 0
+	s.lastErrTool = ""
+	s.lastErrBatch = 0
 	return false, ""
 }
 
@@ -345,8 +563,18 @@ func isPeriodic(buf string, period, repeats int) bool {
 // A "cycle" requires that consecutive elements differ — a uniform window
 // like [a,a,a,a,a,a] is a streak, not a cycle, and the identical-call
 // detector above already handles that case at maxRepeatToolCalls.
+//
+// It also requires every repetition to have produced the same result as the
+// one before it. Distinct calls arranged in a repeating order are not on their
+// own evidence of anything: a model driving four background jobs polls them in
+// the same order every message, and a rotation of that fan-out is a perfect
+// length-3 cycle across message boundaries while every poll returns fresh
+// output. Without the result half, that shape aborts a working run in three
+// model messages — see session 260829-1537-6a139-71d65, which died eight
+// seconds after one of its four jobs finished and the fan-out fell to three.
 func (s *stuckDetector) detectCycle() string {
-	n := len(s.recent)
+	window := s.completedWindow()
+	n := len(window)
 	if n < 6 {
 		return ""
 	}
@@ -356,13 +584,13 @@ func (s *stuckDetector) detectCycle() string {
 		if n < need {
 			continue
 		}
-		tail := s.recent[n-need:]
+		tail := window[n-need:]
 		cycle := tail[:cycleLen]
 		// Require adjacent elements in the candidate cycle to differ —
 		// otherwise it's a uniform streak, not an alternating cycle.
 		cycleValid := true
 		for i := 1; i < cycleLen; i++ {
-			if cycle[i] == cycle[i-1] {
+			if cycle[i].call == cycle[i-1].call {
 				cycleValid = false
 				break
 			}
@@ -372,7 +600,7 @@ func (s *stuckDetector) detectCycle() string {
 		}
 		match := true
 		for i := cycleLen; i < need; i++ {
-			if tail[i] != cycle[i%cycleLen] {
+			if !tail[i].repeats(cycle[i%cycleLen]) {
 				match = false
 				break
 			}
@@ -382,6 +610,19 @@ func (s *stuckDetector) detectCycle() string {
 		}
 	}
 	return ""
+}
+
+// completedWindow is the leading run of the window whose responses have all
+// arrived. A call still in flight has no result to compare, and calls issued in
+// one batch are all observed before any of them answers, so the pending entries
+// are skipped rather than treated as matching anything.
+func (s *stuckDetector) completedWindow() []recentCall {
+	for i := range s.recent {
+		if s.recent[i].result == "" {
+			return s.recent[:i]
+		}
+	}
+	return s.recent
 }
 
 // agentMsg wraps messages coming from the agent goroutine via a channel.
@@ -940,6 +1181,10 @@ func (m *model) emitEventParts(
 	detector *stuckDetector,
 	log *logger.Logger,
 ) error {
+	// Each event is one model message. Calls in the same event share a batch
+	// identity so the error detector treats a batch of distinct calls as one
+	// attempt rather than a streak (see observeError).
+	detector.beginEvent()
 	for _, part := range ev.Content.Parts {
 		if err := m.emitEventPart(ch, ev, dedup, detector, log, part); err != nil {
 			return err
@@ -976,7 +1221,7 @@ func (m *model) emitEventPart(
 		log.ToolCall(ev.Author, fc.Name, fc.Args)
 		ch <- agentToolCallMsg{id: fc.ID, name: fc.Name, args: fc.Args}
 
-		if err := stuckErr(detector.observe(fc.Name, fc.Args)); err != nil {
+		if err := stuckErr(detector.observe(fc.ID, fc.Name, fc.Args)); err != nil {
 			return err
 		}
 	}
@@ -1026,14 +1271,18 @@ func (m *model) emitPartResponse(
 
 	// A changed result on a repeated call is progress, not a loop
 	// (a poll returning fresh output) — let it reset the
-	// identical-call streak before the next call is observed.
-	detector.observeResult(fr.Name, fr.Response)
+	// identical-call streak before the next call is observed. This is
+	// also where cycle detection runs, since a cycle is only decidable
+	// once the calls in the window have their results.
+	if err := stuckErr(detector.observeResult(fr.ID, fr.Name, fr.Response)); err != nil {
+		return err
+	}
 
 	// Track per-tool error streaks: ADK wraps tool errors as
 	// map[string]any{"error": ...}. Anything else (including a
 	// missing key) is treated as success and resets the streak.
 	_, isErr := fr.Response["error"]
-	return stuckErr(detector.observeError(fr.Name, isErr))
+	return stuckErr(detector.observeError(fr.ID, fr.Name, isErr))
 }
 
 // stuckError is a loop abort the run can recover from. It is distinguished
@@ -1083,10 +1332,15 @@ func (m *model) handleAgentThinking(msg agentThinkingMsg) (tea.Model, tea.Cmd) {
 		m.face.SetMood(MoodThinking)
 	}
 	m.matrix.feed(msg.text, m.mainWidth())
-	m.chatModel.Thinking += msg.text
+	// Thinking buffers the open reasoning block only, for the same reason
+	// Streaming does in handleAgentText: a tool call between two reasoning
+	// blocks starts a new message, and a carried-over buffer would repeat the
+	// earlier block inside it.
 	if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+		m.chatModel.Thinking += msg.text
 		m.chatModel.Messages[len(m.chatModel.Messages)-1].content = m.chatModel.Thinking
 	} else {
+		m.chatModel.Thinking = msg.text
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role: "thinking", content: m.chatModel.Thinking,
 		})
@@ -1119,17 +1373,36 @@ func (m *model) handleAgentText(msg agentTextMsg) (tea.Model, tea.Cmd) {
 	if m.chatModel.Thinking != "" {
 		m.chatModel.Thinking = ""
 		if len(m.chatModel.Messages) > 0 && m.chatModel.Messages[len(m.chatModel.Messages)-1].role == "thinking" {
+			// The reasoning block becomes the shell for the answer that follows
+			// it. That is a brand-new empty message, so the text accumulator has
+			// to restart here too — otherwise the block below appends to a
+			// buffer left over from the message before the last tool call.
 			m.chatModel.Messages[len(m.chatModel.Messages)-1] = message{role: "assistant", content: ""}
+			m.chatModel.Streaming = ""
 		}
 	}
 	m.matrix.feed(msg.text, m.mainWidth())
-	m.chatModel.Streaming += msg.text
 	// Keep chronology stable: only update a trailing assistant message.
 	// If the latest message is a tool event, append a new assistant message
 	// so rendered order matches event order.
-	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" {
+	//
+	// Streaming buffers the message currently being rendered, not the whole
+	// turn: a tool card closes the open message, so the next text delta starts
+	// a fresh block and the accumulator restarts with it. Carrying the buffer
+	// across a tool call made every later block re-render every earlier one,
+	// glued together without a separator ("...say hi." + "agy ran cleanly").
+	//
+	// A closed block — an error, a warning, a meta note — closes the message the
+	// same way a tool card does. It shares the "assistant" role, so without the
+	// guard a warning raised mid-turn (a retry, a truncation, a loop recovery)
+	// absorbs the rest of the reply: the notice text is overwritten and the
+	// answer is drawn in the warning's orange, unwrapped and unrendered.
+	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "assistant" &&
+		!m.chatModel.Messages[n-1].closed() {
+		m.chatModel.Streaming += msg.text
 		m.chatModel.Messages[n-1].content = m.chatModel.Streaming
 	} else {
+		m.chatModel.Streaming = msg.text
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
 			role:    "assistant",
 			content: m.chatModel.Streaming,
@@ -1187,12 +1460,13 @@ func (m *model) handleAgentToolCall(msg agentToolCallMsg) (tea.Model, tea.Cmd) {
 		// filters on tool=="bash"), so reusing the field here cannot cross wires.
 		agentID: handle, pollCount: 1,
 	}
-	if msg.name == "agent" || msg.name == "subagent" {
+	if msg.name == "agent" || msg.name == "subagent" || msg.name == "a2a" {
 		// A single subagent tool call in parallel/chain mode spawns N children.
 		// Render one card per child so the user sees agent[pi], agent[claude],
 		// ... instead of a collapsed agent[pi+claude+...] card. Each card
 		// carries its own type + title and will later be matched to its spawn
-		// event by agent-ID prefix.
+		// event by agent-ID prefix. A2A calls render the same card shape, with
+		// the configured agent name (agent_name) as the bracketed label.
 		subMsgs := splitSubagentCards(newMsg, msg.args)
 		m.chatModel.Messages = append(m.chatModel.Messages, subMsgs...)
 		return m, waitForAgent(m.agentCh)
@@ -1220,6 +1494,14 @@ func splitSubagentCards(base message, args map[string]any) []message {
 		prompt, _ = args["task"].(string)
 	}
 	single.agentTitle = truncatePrompt(prompt)
+	// A2A calls carry the configured agent name in agent_name; render it
+	// verbatim in the bracket so the card reads agent[istio-agent] rather than
+	// collapsing to agent[pi].
+	if base.tool == "a2a" {
+		if name, _ := args["agent_name"].(string); name != "" {
+			single.agentLabel = name
+		}
+	}
 	return []message{single}
 }
 
@@ -1308,6 +1590,7 @@ func truncatePrompt(prompt string) string {
 
 // handleAgentToolResult processes an agentToolResultMsg.
 func (m *model) handleAgentToolResult(msg agentToolResultMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	if m.face != nil {
 		m.face.SetMood(MoodProcessing)
 	}
@@ -1572,6 +1855,7 @@ func findUnassignedBashCard(messages []message, command string) int {
 
 // handleAgentSubEvent processes an agentSubEventMsg.
 func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	if strings.HasPrefix(msg.kind, bashEventPrefix) {
 		return m.handleBashEvent(msg)
 	}
@@ -1618,6 +1902,7 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 
 // handleAgentDone processes an agentDoneMsg.
 func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
+	m.invalidatePlanPhases()
 	m.running = false
 	m.agentCancel = nil
 	m.matrix.clear()

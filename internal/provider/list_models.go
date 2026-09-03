@@ -14,8 +14,10 @@ import (
 // ModelInfo holds a model ID and optional metadata returned by a provider's
 // model listing API.
 type ModelInfo struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by,omitempty"`
+	ID            string   `json:"id"`
+	OwnedBy       string   `json:"owned_by,omitempty"`
+	ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
+	Capabilities  []string `json:"capabilities,omitempty"`   // e.g. completion_chat, vision
 }
 
 // ListModelsOptions controls how models are fetched from a provider.
@@ -56,14 +58,16 @@ func providerDefaultBaseURL(p string) string {
 		return "https://api.x.ai"
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
+	case "agentgateway":
+		return "http://localhost:4000"
 	default:
 		return ""
 	}
 }
 
 // ListModels calls the given provider's model listing API and returns
-// available model IDs. Supported providers: anthropic, openai, gemini,
-// mistral, xai, ollama.
+// available model IDs. The switch below is the list of supported providers;
+// an unsupported one returns an error.
 func ListModels(ctx context.Context, providerName string, opts ListModelsOptions) ([]ModelInfo, error) {
 	switch providerName {
 	case "anthropic":
@@ -78,6 +82,8 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 		return listXAIModels(ctx, opts)
 	case "openrouter":
 		return listOpenRouterModels(ctx, opts)
+	case "agentgateway":
+		return listAgentGatewayModels(ctx, opts)
 	case "ollama":
 		names, err := OllamaListModels(ctx, opts.BaseURL)
 		if err != nil {
@@ -99,9 +105,77 @@ func listOpenAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo,
 	return listBearerModels(ctx, opts, "openai", "OpenAI")
 }
 
-// listMistralModels fetches models from GET /v1/models.
+// listMistralModels fetches models from GET <base>/v1/models and parses the
+// documented Mistral model-card shape:
+//
+//	{"data":[{"id","owned_by","max_context_length","capabilities":{
+//	  "completion_chat":bool,"completion_fim":bool,"function_calling":bool,
+//	  "fine_tuning":bool,"vision":bool,"classification":bool}}]}
+//
+// Only completion_chat-capable models are returned (like the reference TS
+// generator's tool_call filter). Context length and capabilities are copied
+// through for display and JSON output.
 func listMistralModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
-	return listBearerModels(ctx, opts, "mistral", "Mistral")
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = providerDefaultBaseURL("mistral")
+	}
+	trimmed := strings.TrimRight(baseURL, "/")
+	endpoint := trimmed + "/v1/models"
+	if strings.HasSuffix(trimmed, "/v1") {
+		endpoint = trimmed + "/models"
+	}
+
+	var payload struct {
+		Data []struct {
+			ID               string `json:"id"`
+			OwnedBy          string `json:"owned_by"`
+			MaxContextLength int64  `json:"max_context_length"`
+			Capabilities     struct {
+				CompletionChat bool `json:"completion_chat"`
+				CompletionFIM  bool `json:"completion_fim"`
+				FunctionCall   bool `json:"function_calling"`
+				FineTuning     bool `json:"fine_tuning"`
+				Vision         bool `json:"vision"`
+				Classification bool `json:"classification"`
+			} `json:"capabilities"`
+		} `json:"data"`
+	}
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "mistral", &payload); err != nil {
+		return nil, fmt.Errorf("listing Mistral models: %w", err)
+	}
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		if !m.Capabilities.CompletionChat {
+			continue
+		}
+		caps := make([]string, 0, 6)
+		if m.Capabilities.CompletionChat {
+			caps = append(caps, "completion_chat")
+		}
+		if m.Capabilities.CompletionFIM {
+			caps = append(caps, "completion_fim")
+		}
+		if m.Capabilities.FunctionCall {
+			caps = append(caps, "function_calling")
+		}
+		if m.Capabilities.FineTuning {
+			caps = append(caps, "fine_tuning")
+		}
+		if m.Capabilities.Vision {
+			caps = append(caps, "vision")
+		}
+		if m.Capabilities.Classification {
+			caps = append(caps, "classification")
+		}
+		models = append(models, ModelInfo{
+			ID:            m.ID,
+			OwnedBy:       m.OwnedBy,
+			ContextWindow: m.MaxContextLength,
+			Capabilities:  caps,
+		})
+	}
+	return models, nil
 }
 
 // listXAIModels fetches models from GET /v1/models.
@@ -112,6 +186,25 @@ func listXAIModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, er
 // listOpenRouterModels fetches models from GET /v1/models.
 func listOpenRouterModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
 	return listBearerModels(ctx, opts, "openrouter", "OpenRouter")
+}
+
+// listAgentGatewayModels fetches models from GET /v1/models on the local
+// agentgateway. The gateway is OpenAI-compatible, so the shared bearer
+// envelope applies; the default endpoint is localhost:4000.
+//
+// The gateway's /v1/models only carries id/owned_by — no context window — so
+// each model is enriched from the embedded context-window table. That is what
+// makes `pi model list agentgateway -o json` show a real context_window for
+// the virtual models (e.g. ollama-deepseek → 1M) instead of omitting the field.
+func listAgentGatewayModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
+	models, err := listBearerModels(ctx, opts, "agentgateway", "agentgateway")
+	if err != nil {
+		return nil, err
+	}
+	for i := range models {
+		models[i].ContextWindow = ContextWindowSizeFor("agentgateway", models[i].ID)
+	}
+	return models, nil
 }
 
 // listBearerModels fetches models from GET <base>/v1/models with bearer auth
@@ -241,9 +334,12 @@ func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, 
 			req.Header.Set("x-api-key", opts.APIKey)
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "openai", "mistral", "xai", "openrouter":
+	case "openai", "mistral", "xai", "openrouter", "agentgateway":
 		if opts.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
+		}
+		if providerName == "openrouter" {
+			openrouterAppAttribution(req.Header)
 		}
 	}
 

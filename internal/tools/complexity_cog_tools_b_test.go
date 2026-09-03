@@ -801,13 +801,13 @@ func TestCogBAppendStreamEvent(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			end := appendStreamEvent(&sb, tt.event)
+			c := newStreamTextCollector()
+			end := c.appendStreamEvent(tt.event)
 			if end != tt.wantEnd {
 				t.Errorf("terminal = %v, want %v", end, tt.wantEnd)
 			}
-			if sb.String() != tt.wantText {
-				t.Errorf("text = %q, want %q", sb.String(), tt.wantText)
+			if c.String() != tt.wantText {
+				t.Errorf("text = %q, want %q", c.String(), tt.wantText)
 			}
 		})
 	}
@@ -815,22 +815,22 @@ func TestCogBAppendStreamEvent(t *testing.T) {
 
 func TestCogBAppendStreamEventAccumulates(t *testing.T) {
 	// Two artifact chunks then a terminal status: the builder keeps both.
-	var sb strings.Builder
+	c := newStreamTextCollector()
 	for _, chunk := range []string{"a", "b"} {
 		e := &a2a.TaskArtifactUpdateEvent{Artifact: &a2a.Artifact{
 			Parts: a2a.ContentParts{a2a.NewTextPart(chunk)},
 		}}
-		if appendStreamEvent(&sb, e) {
+		if c.appendStreamEvent(e) {
 			t.Fatal("artifact event reported the stream as ended")
 		}
 	}
-	if !appendStreamEvent(&sb, &a2a.TaskStatusUpdateEvent{
+	if !c.appendStreamEvent(&a2a.TaskStatusUpdateEvent{
 		Status: a2a.TaskStatus{State: a2a.TaskStateFailed},
 	}) {
 		t.Fatal("failed status did not end the stream")
 	}
-	if sb.String() != "ab" {
-		t.Errorf("accumulated %q, want %q", sb.String(), "ab")
+	if c.String() != "ab" {
+		t.Errorf("accumulated %q, want %q", c.String(), "ab")
 	}
 }
 

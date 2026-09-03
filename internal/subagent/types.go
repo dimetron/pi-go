@@ -3,6 +3,8 @@ package subagent
 import (
 	"fmt"
 	"time"
+
+	"github.com/dimetron/pi-go/internal/session"
 )
 
 // SpawnInput is the input to spawn a subagent with an AgentConfig.
@@ -17,6 +19,11 @@ type SpawnInput struct {
 	Env          []string    `json:"env,omitempty"`           // Additional environment variables
 	MaxRetries   int         `json:"max_retries,omitempty"`   // Max retry attempts on crash (default 0, max 3)
 	Timeout      int         `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
+
+	// Attribution records where the spawned agent sits in a run tree. The
+	// orchestrator forwards it through the environment; the child writes it
+	// onto its own session metadata. Nil for spawns that are not part of one.
+	Attribution *session.AgentContext `json:"attribution,omitempty"`
 }
 
 // AgentInput is the legacy input to spawn a subagent (deprecated, use SpawnInput).
@@ -31,6 +38,9 @@ type AgentInput struct {
 	Background   bool   `json:"background,omitempty"`    // Run in background
 	SkipCleanup  bool   `json:"skip_cleanup,omitempty"`  // Deprecated: worktree cleanup is always deferred to the caller or shutdown
 	Timeout      int    `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
+
+	// Attribution records where the spawned agent sits in a run tree.
+	Attribution *session.AgentContext `json:"attribution,omitempty"`
 }
 
 // ToSpawnInput converts a legacy AgentInput to the new SpawnInput format.
@@ -64,6 +74,7 @@ func (a AgentInput) ToSpawnInput() (SpawnInput, error) {
 		Background:   a.Background,
 		SkipCleanup:  a.SkipCleanup,
 		Timeout:      a.Timeout,
+		Attribution:  a.Attribution,
 	}, nil
 }
 

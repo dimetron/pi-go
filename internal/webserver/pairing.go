@@ -6,17 +6,14 @@
 package webserver
 
 import (
-	"bytes"
 	"crypto/rand"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 // PairStatus represents the status of a pairing request.
@@ -45,31 +42,65 @@ type ApprovedPair struct {
 	ApprovedAt time.Time
 }
 
+// defaultMaxApproveFailures is how many wrong codes pairing tolerates before
+// it gives up entirely.
+//
+// A pairing code is 6 digits, so there are only 10^6 of them: an unthrottled
+// /api/pair/submit is a puzzle an attacker solves in an afternoon. A timed
+// lockout would only slow that down. Spending the budget instead destroys every
+// pending code and signals the server to stop, so a guessing run gets three
+// tries and then has nothing left to talk to.
+//
+// Three is deliberately below the threshold where a human is still fumbling: an
+// operator mistyping a code they can see on screen gets a second chance, and a
+// third, and that is enough. The cost of being wrong is a restart, not a
+// lockout the attacker can also trigger to deny service.
+const defaultMaxApproveFailures = 3
+
+// ErrTooManyAttempts is returned by Approve once the failure budget is spent.
+// It is distinct from a plain wrong-code error so callers and tests can tell a
+// terminal refusal from an ordinary rejection.
+var ErrTooManyAttempts = errors.New("too many pairing attempts")
+
 // PairingManager handles pairing code generation, approval, and expiry.
 type PairingManager struct {
 	mu       sync.RWMutex
 	timeout  time.Duration
 	pending  map[string]*PendingPair  // code → pending info
 	approved map[string]*ApprovedPair // token → approved info
+
+	// Attempt limiting. maxFailures is a field rather than
+	// constants only so tests can shorten them; nothing in production
+	// overrides the defaults. failures counts rejected codes since the last
+	// successful approval, and is deliberately *not* reset by CreatePair —
+	// otherwise an attacker resets the budget by asking for a new code.
+	maxFailures int
+	failures    int
+	lockedOut   bool
+	lockedOutCh chan struct{}
+	lockedOnce  sync.Once
 }
 
 // NewPairingManager creates a new PairingManager with the specified timeout.
 func NewPairingManager(timeout time.Duration) *PairingManager {
 	return &PairingManager{
-		timeout:  timeout,
-		pending:  make(map[string]*PendingPair),
-		approved: make(map[string]*ApprovedPair),
+		timeout:     timeout,
+		pending:     make(map[string]*PendingPair),
+		approved:    make(map[string]*ApprovedPair),
+		maxFailures: defaultMaxApproveFailures,
+		lockedOutCh: make(chan struct{}),
 	}
 }
 
 // CreatePair generates a new 6-digit pairing code and returns the code,
-// token, and QR data.
-func (pm *PairingManager) CreatePair(project string) (code, token string, qrData []byte, err error) {
-	return pm.CreatePairWithContext(project, "pi-go", "")
+// token.
+func (pm *PairingManager) CreatePair(project string) (code, token string, err error) {
+	return pm.CreatePairWithContext(project)
 }
 
-// CreatePairWithContext generates a pair and embeds server context in the QR payload.
-func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL string) (code, token string, qrData []byte, err error) {
+// CreatePairWithContext generates a pair. The context parameters the QR payload
+// once needed are gone with it; the signature is kept so callers read the same.
+func (pm *PairingManager) CreatePairWithContext(project string) (code, token string, err error) {
 	// Generate a 6-digit code that doesn't collide with one already in flight.
 	// With 1M possible codes the per-call collision chance is tiny, but it is
 	// observable in tight test loops; retrying up to a small cap absorbs it
@@ -81,7 +112,7 @@ func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL str
 		codeNum, err = rand.Int(rand.Reader, big.NewInt(1000000))
 		if err != nil {
 			pm.mu.Unlock()
-			return "", "", nil, fmt.Errorf("generating code: %w", err)
+			return "", "", fmt.Errorf("generating code: %w", err)
 		}
 		code = fmt.Sprintf("%06d", codeNum.Int64())
 		if _, exists := pm.pending[code]; !exists {
@@ -91,7 +122,7 @@ func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL str
 	}
 	pm.mu.Unlock()
 	if code == "" {
-		return "", "", nil, fmt.Errorf("generating code: exhausted %d retries", maxAttempts)
+		return "", "", fmt.Errorf("generating code: exhausted %d retries", maxAttempts)
 	}
 
 	// Generate token
@@ -110,21 +141,7 @@ func (pm *PairingManager) CreatePairWithContext(project, serverHost, pairURL str
 	pm.pending[code] = pp
 	pm.mu.Unlock()
 
-	if strings.TrimSpace(serverHost) == "" {
-		serverHost = "pi-go"
-	}
-
-	qrPayload, err := buildQRPayload(code, token, serverHost, pairURL)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("encoding QR data: %w", err)
-	}
-
-	qrData, err = GenerateQRCode(string(qrPayload))
-	if err != nil {
-		return "", "", nil, fmt.Errorf("generating QR image: %w", err)
-	}
-
-	return code, token, qrData, nil
+	return code, token, nil
 }
 
 // CheckStatus returns the current status of a pairing token.
@@ -150,19 +167,26 @@ func (pm *PairingManager) CheckStatus(token string) (PairStatus, error) {
 	return PairStatusUnknown, fmt.Errorf("token not found")
 }
 
-// Approve approves a pairing code and returns the associated token.
+// Approve approves a pairing code and returns the associated token. Failed
+// attempts are counted: once the budget is spent every pending pair is
+// invalidated and every later attempt is refused, including a correct code.
 func (pm *PairingManager) Approve(code string) (string, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	pp, ok := pm.pending[code]
-	if !ok {
-		return "", fmt.Errorf("code not found")
+	now := time.Now()
+	if pm.lockedOut {
+		return "", ErrTooManyAttempts
 	}
 
-	if time.Now().After(pp.ExpiresAt) {
+	pp, ok := pm.pending[code]
+	if !ok {
+		return "", pm.recordFailure(fmt.Errorf("code not found"))
+	}
+
+	if now.After(pp.ExpiresAt) {
 		delete(pm.pending, code)
-		return "", fmt.Errorf("code expired")
+		return "", pm.recordFailure(fmt.Errorf("code expired"))
 	}
 
 	// Create approved entry
@@ -176,7 +200,35 @@ func (pm *PairingManager) Approve(code string) (string, error) {
 	// Remove from pending
 	delete(pm.pending, code)
 
+	// A code that landed clears the budget: the operator is demonstrably in
+	// the loop, so a later typo should not inherit an attacker's failures.
+	pm.failures = 0
+
 	return pp.Token, nil
+}
+
+// recordFailure counts one rejected code and returns the error the caller
+// should report. Once the budget is spent it drops every pending pair — the
+// codes being ground against are destroyed, not merely slowed — and closes the
+// lockout channel so the server can stop. Callers must hold pm.mu.
+func (pm *PairingManager) recordFailure(cause error) error {
+	pm.failures++
+	if pm.failures < pm.maxFailures {
+		return cause
+	}
+
+	pm.pending = make(map[string]*PendingPair)
+	pm.lockedOut = true
+	// Closing under pm.mu is safe: nothing in the close path takes the lock.
+	pm.lockedOnce.Do(func() { close(pm.lockedOutCh) })
+	return ErrTooManyAttempts
+}
+
+// LockedOut returns a channel closed once pairing has spent its failure
+// budget. The server selects on it to shut down, which is what makes three
+// attempts a hard stop rather than a pause an attacker can wait out.
+func (pm *PairingManager) LockedOut() <-chan struct{} {
+	return pm.lockedOutCh
 }
 
 // IsApproved checks if a token has been approved.
@@ -214,39 +266,20 @@ func (pm *PairingManager) CleanupExpired() {
 	}
 }
 
-// PairResponse represents the API response for pairing.
+// PairResponse is the JSON body returned by the pairing endpoints. It
+// deliberately carries no token: /api/pair answers unauthenticated callers, so
+// anything in here is public. The token stays server-side and reaches the
+// operator out-of-band (the startup banner) and the browser as the pi_token
+// cookie set once a code is submitted. The internal view that does carry the
+// token is ServerV2.activePair.
 type PairResponse struct {
-	Code  string `json:"code"`
-	Token string `json:"token"`
-	QR    string `json:"qr"` // base64 encoded PNG image
+	Code string `json:"code"`
 }
 
 // StatusResponse represents the API response for status check.
 type StatusResponse struct {
 	Status    PairStatus `json:"status"`
 	SessionID string     `json:"sessionID,omitempty"`
-}
-
-// GenerateQRCode generates a QR code image for the pairing data.
-// Returns PNG data or an error.
-func GenerateQRCode(data string) ([]byte, error) {
-	png, err := qrcode.Encode(data, qrcode.Medium, 256)
-	if err != nil {
-		return nil, fmt.Errorf("encode QR PNG: %w", err)
-	}
-	if !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
-		return nil, fmt.Errorf("generated QR is not valid PNG")
-	}
-	return png, nil
-}
-
-// BuildPairQRCode builds a QR PNG for a pairing code/token and server context.
-func BuildPairQRCode(code, token, serverHost, pairURL string) ([]byte, error) {
-	payload, err := buildQRPayload(code, token, serverHost, pairURL)
-	if err != nil {
-		return nil, fmt.Errorf("encoding QR payload: %w", err)
-	}
-	return GenerateQRCode(string(payload))
 }
 
 // ValidateCode checks if a code is valid (6 digits).
@@ -260,30 +293,4 @@ func ValidateCode(code string) bool {
 		}
 	}
 	return true
-}
-
-// ParseQRData parses QR code data and extracts code and token.
-func ParseQRData(data string) (code, token string, err error) {
-	var qrInfo map[string]string
-	if err := json.Unmarshal([]byte(data), &qrInfo); err != nil {
-		// Try parsing as plain "code:token"
-		parts := strings.Split(data, ":")
-		if len(parts) == 2 {
-			return parts[0], parts[1], nil
-		}
-		return "", "", fmt.Errorf("parsing QR data: %w", err)
-	}
-	return qrInfo["code"], qrInfo["token"], nil
-}
-
-func buildQRPayload(code, token, serverHost, pairURL string) ([]byte, error) {
-	qrInfo := map[string]string{
-		"code":   code,
-		"token":  token,
-		"server": serverHost,
-	}
-	if strings.TrimSpace(pairURL) != "" {
-		qrInfo["url"] = pairURL
-	}
-	return json.Marshal(qrInfo)
 }

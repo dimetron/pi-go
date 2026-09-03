@@ -120,12 +120,22 @@ func (c *ClientCache) GetClient(ctx context.Context, agentName string) (*a2aclie
 		return client, nil
 	}
 
-	// Create new client using AgentInterface
-	agentInterface := a2a.NewAgentInterface(agent.URL, a2a.TransportProtocolJSONRPC)
-	client, err := a2aclient.NewFromEndpoints(ctx, []*a2a.AgentInterface{agentInterface})
+	// Create new client. kagent controller URLs (…/api/a2a/kagent/<agent>)
+	// are routed through the controller's gRPC-Web A2A service, which requires
+	// an AgentInstance to be created/reused first. Plain A2A agent URLs use the
+	// JSON-RPC transport.
+	var newClient *a2aclient.Client
+	var err error
+	if isKagentURL(agent.URL) {
+		newClient, err = kagentClientForConfig(ctx, agent)
+	} else {
+		agentInterface := a2a.NewAgentInterface(agent.URL, a2a.TransportProtocolJSONRPC)
+		newClient, err = a2aclient.NewFromEndpoints(ctx, []*a2a.AgentInterface{agentInterface})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("creating A2A client for %q: %w", agentName, err)
 	}
+	client = newClient
 
 	c.clients[agentName] = client
 	return client, nil
@@ -177,24 +187,52 @@ func (c *ClientCache) SendMessage(ctx context.Context, agentName string, prompt 
 
 // sendStreamingMessage sends a streaming message and accumulates all text parts.
 func (c *ClientCache) sendStreamingMessage(ctx context.Context, client *a2aclient.Client, msg *a2a.Message) (string, error) {
-	var sb strings.Builder
+	collector := newStreamTextCollector()
 	req := &a2a.SendMessageRequest{Message: msg}
 
 	for event, err := range client.SendStreamingMessage(ctx, req) {
 		if err != nil {
-			return sb.String(), fmt.Errorf("streaming error: %w", err)
+			return collector.String(), fmt.Errorf("streaming error: %w", err)
 		}
-		if appendStreamEvent(&sb, event) {
-			return sb.String(), nil
+		if collector.appendStreamEvent(event) {
+			return collector.String(), nil
 		}
 	}
 
-	return sb.String(), nil
+	return collector.String(), nil
+}
+
+// streamTextCollector accumulates the text of a streamed reply.
+//
+// It tracks which artifacts have already contributed text, because that is
+// what distinguishes the two shapes a LastChunk artifact event can have: a
+// server that streams deltas and then closes with a full-text replacement
+// (kagent's ADK runtime, and pi's own A2A server) versus one that sends the
+// whole artifact as a single frame already marked LastChunk. Only the former
+// would be duplicated by appending.
+type streamTextCollector struct {
+	sb strings.Builder
+	// wrote holds the artifacts whose parts have already been appended.
+	wrote map[a2a.ArtifactID]bool
+}
+
+func newStreamTextCollector() *streamTextCollector {
+	return &streamTextCollector{wrote: map[a2a.ArtifactID]bool{}}
+}
+
+func (c *streamTextCollector) String() string { return c.sb.String() }
+
+// appendStreamEvent writes any text carried by a streaming event and reports
+// whether the event ends the stream.
+func (c *streamTextCollector) appendStreamEvent(event a2a.Event) bool {
+	return appendStreamEvent(&c.sb, event, c.wrote)
 }
 
 // appendStreamEvent writes any text carried by a streaming event to sb and
-// reports whether the event ends the stream.
-func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
+// reports whether the event ends the stream. wrote records the artifacts that
+// have already contributed text; it may be nil, in which case every artifact
+// event is treated as the first for its artifact.
+func appendStreamEvent(sb *strings.Builder, event a2a.Event, wrote map[a2a.ArtifactID]bool) bool {
 	switch e := event.(type) {
 	case *a2a.Message:
 		// Terminal message with result
@@ -202,29 +240,54 @@ func appendStreamEvent(sb *strings.Builder, event a2a.Event) bool {
 		return true
 
 	case *a2a.Task:
-		// Terminal task (non-streaming completion)
-		sb.WriteString(extractTaskResult(e))
-		return true
+		// A Task event is terminal when its state is terminal, or when the
+		// state is unset (simple servers return a bare Task as the result).
+		// The kagent gateway emits a SUBMITTED Task (with the user's message
+		// in history) before the reply, so an explicitly non-terminal Task
+		// must not end the stream or echo the user's own text back.
+		if e.Status.State.Terminal() || e.Status.State == a2a.TaskStateUnspecified {
+			sb.WriteString(extractTaskResult(e))
+			return true
+		}
+		return false
 
 	case *a2a.TaskStatusUpdateEvent:
 		// State change updates - check for terminal state
 		return e.Status.State.Terminal()
 
 	case *a2a.TaskArtifactUpdateEvent:
-		// Extract text from artifact parts
-		appendPartsText(sb, e.Artifact.Parts)
+		if e.Artifact == nil {
+			return false
+		}
+		// LastChunk marks the final frame of an artifact; Append is what says
+		// whether the frame is a delta or a replacement. A replacement that
+		// closes an artifact we have already written carries the full
+		// accumulated text, so appending it would duplicate the deltas —
+		// skip only that. A LastChunk frame that is an artifact's first is
+		// the content itself (the shape a single-shot server sends) and must
+		// be kept, as must any delta.
+		if e.LastChunk && !e.Append && wrote[e.Artifact.ID] {
+			return false
+		}
+		if appendPartsText(sb, e.Artifact.Parts) && wrote != nil {
+			wrote[e.Artifact.ID] = true
+		}
 	}
 
 	return false
 }
 
-// appendPartsText writes the text of every non-empty content part to sb.
-func appendPartsText(sb *strings.Builder, parts a2a.ContentParts) {
+// appendPartsText writes the text of every non-empty content part to sb and
+// reports whether it wrote anything.
+func appendPartsText(sb *strings.Builder, parts a2a.ContentParts) bool {
+	wrote := false
 	for _, part := range parts {
 		if text := part.Text(); text != "" {
 			sb.WriteString(text)
+			wrote = true
 		}
 	}
+	return wrote
 }
 
 // extractSendMessageResult extracts text from a SendMessageResult (either *a2a.Task or *a2a.Message).
@@ -255,19 +318,20 @@ func extractTaskResult(task *a2a.Task) string {
 		return ""
 	}
 
-	// Check History for messages
-	for _, msg := range task.History {
-		if text := extractMessageText(msg); text != "" {
-			return text
-		}
-	}
-
-	// Check Artifacts for content
+	// Prefer Artifacts: they carry the agent's reply. History contains the
+	// user's own messages too, so it is only a fallback.
 	for _, artifact := range task.Artifacts {
 		for _, part := range artifact.Parts {
 			if text := part.Text(); text != "" {
 				return text
 			}
+		}
+	}
+
+	// Check History for messages
+	for _, msg := range task.History {
+		if text := extractMessageText(msg); text != "" {
+			return text
 		}
 	}
 

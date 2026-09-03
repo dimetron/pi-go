@@ -1,0 +1,93 @@
+sop: run
+version: 2
+description: Execute a validated spec — Coordinator, Workers, Verifier as a graph
+
+workspace:
+  worktree: per-run
+  branch: "run/{{.SpecName}}"
+  merge_on: success
+  cleanup: always
+
+defaults:
+  timeout: 30m
+  max_concurrency: 3
+  on_rate_limit: throttle
+  retry:
+    max_attempts: 3
+    initial_delay: 10s
+    max_delay: 5m
+    backoff: 2.0
+    jitter: 1.0
+
+preflight:
+  - id: validate_spec
+    description: Refuse to start a spec that cannot succeed
+    kind: function
+    validate:
+      - sop_manifest_valid
+      - gates_are_executable
+      - "slice_budget(max_files: 10)"
+    on_fail: abort
+    next: slices
+
+stages:
+  - id: slices
+    description: One worker per slice; slices marked parallel-safe run together
+    fan_out:
+      over: plan.slices
+      agent: worker
+      group_by: parallel_safe
+      max_concurrency: 3
+      isolation: sub_branch
+      output_schema: SliceResult
+    gate: "{{ .Slice.Verify }}"
+    timeout: 30m
+    retry:
+      max_attempts: 3
+      initial_delay: 10s
+      max_delay: 5m
+      backoff: 2.0
+      jitter: 1.0
+    on_fail: repair
+    join: slice_results
+    next: gates
+
+  - id: gates
+    description: Run the spec's gates; a hang is neither a pass nor a fail
+    kind: function
+    gates_from: PROMPT.md
+    timeout: 10m
+    on_fail: repair
+    next: verify
+
+  - id: verify
+    description: Check the diff against the Done Criteria
+    agent: code-reviewer
+    inputs: [diff, done_criteria, slice_results]
+    output_schema: Verdict
+    routes:
+      FAIL: repair
+      PASS: merge
+
+  - id: repair
+    description: Dispatch fix workers for the unmet criteria, then verify again
+    fan_out:
+      over: verdict.unmet
+      agent: worker
+      max_concurrency: 2
+      output_schema: SliceResult
+    loop_back: verify
+    max_cycles: 10
+
+  - id: merge
+    description: Merge the run worktree into the invoking branch
+    kind: function
+    next: summary
+
+  - id: summary
+    description: Write the run report
+    kind: function
+    produces:
+      - path: summary.md
+        validate:
+          - non_empty

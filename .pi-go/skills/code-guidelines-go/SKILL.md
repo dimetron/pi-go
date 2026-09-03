@@ -1,7 +1,7 @@
 ---
 name: code-guidelines-go
 description: >
-  Go 1.24–1.26 coding guidelines for the dimetron/pi-go AI agent runtime.
+  Go 1.24–1.27 coding guidelines for the dimetron/pi-go AI agent runtime.
   Use this skill whenever writing, reviewing, or refactoring ANY Go code in pi-go.
   This covers idiomatic style, error handling, concurrency, project layout, testing
   (table-driven, fuzz, benchmarks, synctest), new stdlib usage, golangci-lint v2
@@ -10,11 +10,15 @@ description: >
   small snippets, to ensure every output is idiomatic and modern.
 ---
 
-# Go 1.24–1.26 Coding Guidelines — pi-go
+# Go 1.24–1.27 Coding Guidelines — pi-go
 
 **Project**: `github.com/dimetron/pi-go` — Go-native AI coding agent runtime  
 **Layout**: `cmd/pi/` · `internal/` · `.pi-go/` · `.vibe/compiled/` · `scripts/`  
-**Min version**: Go 1.24 (tool directive support) | Target: Go 1.26
+**Min version**: Go 1.24 (tool directive support) | Target: Go 1.27
+
+> For what Go 1.27 changed — generic methods, struct-literal field selectors,
+> `encoding/json/v2`, the stdlib `uuid` package, removals that break a build, and the
+> `GOEXPERIMENT=none` trap on this machine — see the **`go-127`** skill.
 
 ---
 
@@ -273,7 +277,10 @@ var getConfig = sync.OnceValue(func() *Config {
 ### Goroutine leak prevention
 - Every goroutine must have an exit path (context cancel, channel close, done signal)
 - In tests, use `goleak.VerifyTestMain(m)` in `TestMain`
-- Go 1.26 experimental `goroutineleak` pprof profile for production
+- `goroutineleak` pprof profile — GA in Go 1.26 → 1.27, no GOEXPERIMENT needed.
+  Scrape `/debug/pprof/goroutineleak`, or `pprof.Lookup("goroutineleak")`.
+  It misses leaks whose primitive is reachable via a global or a runnable goroutine's
+  locals, so keep `goleak` in tests. See `go-127` §3.2
 
 ---
 
@@ -407,13 +414,11 @@ func TestAgentTimeout(t *testing.T) {
         ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
         defer cancel()
 
-        time.Sleep(5*time.Second - time.Nanosecond)
-        synctest.Wait()   // all goroutines reach blocked state
+        synctest.Sleep(5*time.Second - time.Nanosecond)  // sleep + Wait (Go 1.27)
         if ctx.Err() != nil {
             t.Fatal("should not have timed out yet")
         }
-        time.Sleep(time.Nanosecond)
-        synctest.Wait()
+        synctest.Sleep(time.Nanosecond)
         if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
             t.Fatal("should have timed out")
         }
@@ -421,6 +426,11 @@ func TestAgentTimeout(t *testing.T) {
 }
 ```
 > **Note**: `synctest.Run` was deprecated — use `synctest.Test` (Go 1.25+).  
+> `synctest.Sleep(d)` (Go 1.27) replaces the `time.Sleep(d); synctest.Wait()` pair —
+> prefer it inside a bubble, since a bare `time.Sleep` leaves the wake order between the
+> test and the code under test unpredictable when both sleep the same duration.  
+> `httptest.NewTestServer(t, h)` (Go 1.27) gives an in-memory HTTP server that runs in
+> synthetic time inside a bubble and self-cleans — no `defer srv.Close()`.  
 > `t.Attr(key, value)` (Go 1.25) emits structured metadata in test output.
 
 ---
@@ -437,6 +447,8 @@ func TestAgentTimeout(t *testing.T) {
 | Lazy singleton | `sync.Once` + var | `sync.OnceValue` |
 | Directory FS safety | path.Join | `os.Root` (prevents traversal) |
 | Zero-value JSON omit | `omitempty` | `omitzero` tag |
+| Split on last separator | `strings.LastIndex` + slicing | `strings.CutLast` / `bytes.CutLast` (1.27) |
+| UUIDs | `github.com/google/uuid` | stdlib `uuid` (1.27); `uuid.NewV7()` for keys |
 
 ```go
 // iter.Seq2 for lazy DB rows
@@ -471,6 +483,22 @@ enabled := new(true)               // *bool
 
 // errors.AsType — already shown in §2
 ```
+
+### Go 1.27 syntax
+```go
+// Generic methods — a generic operation can now live on the type it belongs to.
+// Restriction: interfaces cannot declare them, and they cannot satisfy an interface
+// method — so keep the package-level generic func wherever the call site is an
+// interface (which, per §1, is most of pi-go).
+func (b Box[T]) Map[U any](f func(T) U) Box[U] { return Box[U]{v: f(b.v)} }
+
+// Struct literal keys may be any valid field selector — promoted fields included
+u := User{ID: 7, Name: "Mittens"}          // was User{Base: Base{ID: 7}, Name: ...}
+
+// Function type inference now applies in conversions and composite literals too
+ops := []func([]int) int{first, last}      // was {first[int], last[int]}
+```
+Full detail, including removals that break a build: **`go-127`** skill.
 
 ---
 
@@ -529,7 +557,7 @@ lint:
   steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
-      with: { go-version: '1.26' }
+      with: { go-version: '1.27' }
     - uses: golangci/golangci-lint-action@v9
       with: { version: v2 }
 
@@ -538,7 +566,7 @@ test:
   steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
-      with: { go-version: '1.26' }
+      with: { go-version: '1.27' }
     - run: go test -v -race -coverprofile=coverage.out ./...
     - run: go mod tidy -diff && go mod verify
 ```
@@ -658,7 +686,10 @@ func TestRunner_Execute(t *testing.T) {
 | Error wrapping | `fmt.Errorf("...: %w", err)` | `%v` when caller needs to unwrap |
 | Error type check | `errors.AsType[T]` (1.26) / `errors.As` | type assertions |
 | Benchmarks | `b.Loop()` | `for i := 0; i < b.N; i++` |
-| Concurrent tests | `synctest.Test` | `time.Sleep` in tests |
+| Concurrent tests | `synctest.Test` + `synctest.Sleep` (1.27) | `time.Sleep` in tests |
+| HTTP test server | `httptest.NewTestServer(t, h)` (1.27) | `httptest.NewServer` + `defer Close()` |
+| Split on last separator | `strings.CutLast` (1.27) | `strings.LastIndex` + slicing |
+| UUIDs | stdlib `uuid` (1.27) | `github.com/google/uuid` |
 | WaitGroup | `wg.Go(func(){...})` (1.25) | `wg.Add(1); defer wg.Done()` |
 | Slice ops | `slices.*`, `maps.*` | hand-written loops |
 | Randomness | `math/rand/v2` | `math/rand` |

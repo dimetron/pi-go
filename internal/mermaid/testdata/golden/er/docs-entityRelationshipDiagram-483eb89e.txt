@@ -1,0 +1,8 @@
+
+ ┌───────────────────────────┐            ┌──────────────────┐
+ │            CAR            │            │      PERSON      │
+ ├───────────────────────────┤            ├──────────────────┤
+ │ string registrationNumber │            │ string firstName │
+ │ string make               │            │ string lastName  │
+ │ string model              │            │ int age          │
+ └───────────────────────────┘            └──────────────────┘

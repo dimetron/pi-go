@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"bufio"
 	"cmp"
 	"fmt"
 	"image/color"
+	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -44,19 +48,31 @@ type SidebarRenderInput struct {
 	Messages     []message
 	ActiveTool   string
 	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep          // steps from plan.md during /run
-	RunPhase     string                   // current /run phase (empty if not running)
-	RunSpec      string                   // spec name during /run
-	RunCycle     int                      // current retry cycle
-	RunMaxCycle  int                      // max retries
-	MatrixLines  string                   // pre-rendered matrix rain (2 lines)
-	StatusLine   string                   // status text shown above matrix
-	Orchestrator *subagent.Orchestrator   // may be nil — for agents section
-	Skills       []extension.Skill        // skills section; nil = hidden
-	MCPTools     []extension.MCPToolEntry // MCP tools section; nil = hidden
-	MemoryStatus *palace.PalaceStatus     // memory palace status; nil = hidden
-	Artifacts    []ArtifactEntry          // artifacts section; nil/empty = hidden
-	Palette      Palette                  // resolved theme palette; zero = dark default
+	RunChecklist []ChecklistStep // steps from plan.md during /run
+	RunPhase     string          // current /run phase (empty if not running)
+	RunSpec      string          // spec name during /run
+	RunCycle     int             // current retry cycle
+	RunMaxCycle  int             // max retries
+	PlanPhases   []PlanPhase     // PDD phase checklist shown in plan mode; nil/empty = hidden
+	Graph        *SOPGraph       // compiled SOP drawn under the stage list; nil = hidden
+	// mergePlanGraph draws the plan section as the graph alone rather than as a
+	// checklist plus a graph saying the same thing twice. Set by RenderSidebar
+	// once it knows the graph will fit.
+	mergePlanGraph bool
+	MatrixLines    string                   // pre-rendered matrix rain (2 lines)
+	StatusLine     string                   // status text shown above matrix
+	Orchestrator   *subagent.Orchestrator   // may be nil — for agents section
+	Skills         []extension.Skill        // skills section; nil = hidden
+	MCPTools       []extension.MCPToolEntry // MCP tools section; nil = hidden
+	A2AAgents      []A2AAgentEntry          // A2A agents section; nil = hidden
+	MemoryStatus   *palace.PalaceStatus     // memory palace status; nil = hidden
+	Artifacts      []ArtifactEntry          // artifacts section; nil/empty = hidden
+	Palette        Palette                  // resolved theme palette; zero = dark default
+}
+
+// A2AAgentEntry is one row in the A2A Agents sidebar section.
+type A2AAgentEntry struct {
+	Name string
 }
 
 // ArtifactEntry is one row in the Artifacts sidebar section.
@@ -68,6 +84,102 @@ type ArtifactEntry struct {
 	Filename string
 	Size     int64
 	Mime     string
+}
+
+// SOPGraph is the compiled SOP the sidebar draws underneath the stage list:
+// the stages in order, the edges between them, and each stage's status. Nil
+// hides the diagram.
+type SOPGraph struct {
+	Order  []string
+	Edges  []sop.GraphEdge
+	Status map[string]stageStatus
+}
+
+// PlanPhase is one PDD phase in the plan-mode sidebar checklist.
+type PlanPhase struct {
+	Name string // short label, e.g. "Requirements"
+	Done bool   // the artifact carries real content, not just a skeleton
+}
+
+// phaseArtifacts maps each PDD phase to the spec artifact that marks it complete.
+var phaseArtifacts = []struct {
+	Name     string
+	Artifact string // file or dir name under specDir
+}{
+	{"Idea", "rough-idea.md"},
+	{"Requirements", "requirements.md"},
+	{"Research", "research"}, // directory
+	{"Design", "design.md"},
+	{"Outline", "outline.md"},
+	{"Plan", "plan.md"},
+	{"Prompt", "PROMPT.md"},
+}
+
+// detectPlanPhases inspects each PDD phase artifact under specDir and returns
+// the phases in order, with Done set when the artifact carries real content. A
+// missing or unreadable specDir degrades gracefully to all-incomplete (no
+// crash).
+//
+// Existence is not enough. createSpecSkeleton writes the skeleton up front — an
+// empty research/ directory and a requirements.md holding only its two headings
+// — so a "does the file exist" test ticked Requirements and Research before a
+// single question had been asked.
+func detectPlanPhases(specDir string) []PlanPhase {
+	phases := make([]PlanPhase, 0, len(phaseArtifacts))
+	for _, pa := range phaseArtifacts {
+		phases = append(phases, PlanPhase{
+			Name: pa.Name,
+			Done: hasSubstance(filepath.Join(specDir, pa.Artifact)),
+		})
+	}
+	return phases
+}
+
+// artifactScanLimit bounds how far hasSubstance reads looking for a body line.
+// This runs on every frame, so it must not grow with the size of plan.md; a
+// real document says something well inside the first few KB.
+const artifactScanLimit = 4 << 10
+
+// hasSubstance reports whether a phase artifact holds more than its skeleton: a
+// directory with at least one non-empty file in it, or a file with at least one
+// line that is neither blank nor a markdown heading.
+func hasSubstance(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if fi, err := e.Info(); err == nil && fi.Size() > 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(io.LimitReader(f, artifactScanLimit))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // sidebarStyles bundles the resolved styles the sidebar draws with, derived
@@ -114,23 +226,96 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	st := newSidebarStyles(paletteOrDark(in.Palette))
 
-	var lines []string
+	tail := sidebarTailLines(in, innerW, st)
+
+	// Prefer the merged plan view: one section carrying both the progress and
+	// the shape. It is tried first and kept only if the whole thing fits, since
+	// the checklist alone is what a short panel can still show usefully.
+	if in.Graph != nil && len(in.PlanPhases) > 0 {
+		merged := in
+		merged.mergePlanGraph = true
+		head := sidebarHeadLines(merged, innerW, st)
+		if len(head)+len(tail) <= sidebarContentHeight(in) {
+			return sidebarFrame(in, append(head, tail...), w, st)
+		}
+	}
+
+	head := sidebarHeadLines(in, innerW, st)
+
+	// Outside plan mode the diagram annotates the list above it rather than
+	// replacing it — a /run slice checklist is per-slice progress, which the
+	// stage graph does not duplicate — so it is spliced between head and tail.
+	lines := append(head, graphSection(in, len(head)+len(tail), innerW, st)...)
+	lines = append(lines, tail...)
+
+	return sidebarFrame(in, lines, w, st)
+}
+
+// sidebarHeadLines renders the sections above the SOP diagram.
+func sidebarHeadLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	var out []string
 	for _, section := range [][]string{
 		sidebarMoodLines(in, st),
 		sidebarModelLines(in, innerW, st),
 		sidebarArtifactLines(in, innerW, st),
 		sidebarGitLines(in, innerW, st),
 		sidebarModeLines(in, innerW, st),
+	} {
+		out = append(out, section...)
+	}
+	return out
+}
+
+// sidebarTailLines renders the sections below the SOP diagram.
+func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	var out []string
+	for _, section := range [][]string{
 		sidebarAgentLines(in, innerW, st),
 		sidebarSkillLines(in, st),
 		sidebarMemoryLines(in, st),
 		sidebarMCPLines(in, innerW, st),
+		sidebarA2ALines(in, innerW, st),
 		sidebarLoadingLines(in, st),
 	} {
-		lines = append(lines, section...)
+		out = append(out, section...)
 	}
+	return out
+}
 
-	return sidebarFrame(in, lines, w, st)
+// graphSection renders the SOP diagram, or nothing when it will not fit.
+//
+// All or nothing, on purpose: sidebarFrame clips from the bottom, so a diagram
+// that overruns the panel would be cut mid-branch — half a graph, with no sign
+// that the rest exists. Dropping it whole leaves the stage list, which always
+// fits.
+func graphSection(in SidebarRenderInput, used, innerW int, st sidebarStyles) []string {
+	if in.Graph == nil || len(in.PlanPhases) > 0 {
+		return nil // plan mode draws the graph inside its own section, or not at all
+	}
+	graph := sidebarGraphLines(in.Graph.Order, in.Graph.Edges, in.Graph.Status, innerW, st)
+	if len(graph) == 0 {
+		return nil
+	}
+	if used+len(graph)+1 > sidebarContentHeight(in) {
+		return nil
+	}
+	return append(graph, "")
+}
+
+// sidebarContentHeight is how many rows sidebarFrame keeps before it clips. It
+// mirrors the frame's own reservation; the two must agree or the fit test above
+// is a guess.
+func sidebarContentHeight(in SidebarRenderInput) int {
+	matrixH, statusH := 0, 0
+	if in.MatrixLines != "" {
+		matrixH = matrixLines
+		statusH = 1
+	}
+	ruleH := 0
+	if in.Height > 0 {
+		ruleH = 1
+	}
+	return max(0, in.Height-matrixH-statusH-ruleH)
 }
 
 // sidebarMoodLines renders the mascot face or the eyes at the top of the
@@ -218,6 +403,16 @@ func sidebarModeLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 		lines = append(lines, st.dim.Render("  ["+mode+"]"))
 	}
 	lines = append(lines, sidebarActivityLines(in, st)...)
+	if len(in.PlanPhases) > 0 {
+		// Every other section is separated by a blank row; the plan section
+		// read as part of the Mode block without one. Both plan renderers close
+		// with their own blank, so the section ends there.
+		lines = append(lines, "")
+		if in.mergePlanGraph && in.Graph != nil {
+			return append(lines, sidebarPlanGraphLines(in, innerW, st)...)
+		}
+		return append(lines, sidebarPlanLines(in, innerW, st)...)
+	}
 	return append(lines, "")
 }
 
@@ -247,6 +442,60 @@ func sidebarRunLines(in SidebarRenderInput, innerW int, st sidebarStyles) []stri
 		lines = append(lines, sidebarActivityLines(in, st)...)
 	}
 	return lines
+}
+
+// sidebarPlanGraphLines renders the plan section as a single view: the compiled
+// SOP with each stage's status, headed by the progress the checklist used to
+// carry.
+//
+// The checklist and the diagram were two vocabularies for one thing —
+// "Requirements" and "clarify" are the same stage — stacked on top of each
+// other, which cost about twenty of the sidebar's rows to say everything twice.
+func sidebarPlanGraphLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	graph := sidebarGraphLines(in.Graph.Order, in.Graph.Edges, in.Graph.Status, innerW, st)
+	if len(graph) == 0 {
+		return nil
+	}
+
+	done := 0
+	for _, p := range in.PlanPhases {
+		if p.Done {
+			done++
+		}
+	}
+	progress := fmt.Sprintf("%d/%d", done, len(in.PlanPhases))
+	pad := max(1, innerW-len("Plan")-len(progress))
+	head := st.heading.Render("  Plan") + strings.Repeat(" ", pad) + st.dim.Render(progress)
+
+	lines := make([]string, 0, len(graph)+3)
+	lines = append(lines, head, "")
+	lines = append(lines, graph...)
+	return append(lines, "")
+}
+
+// sidebarPlanLines renders the PDD phase checklist for plan mode. It returns nil
+// (hidden) when no PlanPhases are present. The current phase is the first with
+// Done == false and is marked with ▶; done phases show [x] in green, future
+// phases show [ ] in overlay.
+func sidebarPlanLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if len(in.PlanPhases) == 0 {
+		return nil
+	}
+	lines := []string{st.heading.Render("  Plan")}
+	current := true
+	for _, p := range in.PlanPhases {
+		title := truncateLabel(p.Name, max(innerW-5, 10)) // room for "  [x] " prefix
+		switch {
+		case p.Done:
+			lines = append(lines, st.green.Render("  [x] "+title))
+		case current:
+			lines = append(lines, st.peach.Render("  ▶ "+title))
+			current = false
+		default:
+			lines = append(lines, st.overlay.Render("  [ ] "+title))
+		}
+	}
+	return append(lines, "")
 }
 
 // sidebarActivityLines shows the running tool, or a thinking indicator when the
@@ -402,6 +651,21 @@ func sidebarMCPLines(in SidebarRenderInput, innerW int, st sidebarStyles) []stri
 		countLabel := fmt.Sprintf(" [%d]", toolCounts[srv])
 		srvLabel := truncateLabel(srv, max(innerW-4-len(countLabel), 1))
 		lines = append(lines, st.dim.Render("  ⬡ "+srvLabel+countLabel))
+	}
+	return append(lines, "")
+}
+
+// sidebarA2ALines lists configured remote A2A agents, one row per agent.
+func sidebarA2ALines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if len(in.A2AAgents) == 0 {
+		return nil
+	}
+	// Blue heading, distinct from MCP's mauve.
+	lines := []string{st.blue.Bold(true).
+		Render(fmt.Sprintf("  A2A Agents [%d]", len(in.A2AAgents)))}
+	for _, a := range in.A2AAgents {
+		name := truncateLabel(a.Name, max(innerW-5, 1))
+		lines = append(lines, st.dim.Render("  ⬡ "+name))
 	}
 	return append(lines, "")
 }

@@ -111,6 +111,18 @@ func TestDefaultEnvAllowlist(t *testing.T) {
 		}
 	})
 
+	t.Run("contains agentgateway credentials for subagent processes", func(t *testing.T) {
+		// Subagents are themselves pi processes; when the parent is pointed at a
+		// local agentgateway they must inherit the gateway key and base URL or the
+		// child starts up unauthenticated and cannot reach the gateway.
+		required := []string{"AGENTGATEWAY_API_KEY", "AGENTGATEWAY_BASE_URL"}
+		for _, req := range required {
+			if !slices.Contains(DefaultEnvAllowlist, req) {
+				t.Errorf("DefaultEnvAllowlist missing agentgateway credential %q", req)
+			}
+		}
+	})
+
 	t.Run("contains CODEX_HOME for codex subagents", func(t *testing.T) {
 		// codex app-server reads its config and login state from CODEX_HOME;
 		// without it a codex subagent starts up unauthenticated.

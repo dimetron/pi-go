@@ -103,6 +103,39 @@ syntax in prompts: `;` or a newline rather than `&&`. Installing
 [Git for Windows](https://git-scm.com/download/win) puts a `bash` on `PATH` and
 restores the bash behaviour.
 
+### NixOS / Nix
+
+The repository includes a flake that builds `pi-go` reproducibly and exposes a
+NixOS module. To install it in a NixOS configuration, add the repository as an
+input:
+
+```nix
+# flake.nix
+{
+  inputs.pi-go.url = "github:dimetron/pi-go";
+
+  outputs = { self, nixpkgs, pi-go, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        pi-go.nixosModules.default
+      ];
+    };
+  };
+}
+```
+
+Enable it in `configuration.nix`:
+
+```nix
+{ programs.pi-go.enable = true; }
+```
+
+Then rebuild with `sudo nixos-rebuild switch --flake .`. For a one-off use,
+run `nix run github:dimetron/pi-go` or install it into a profile with
+`nix profile install github:dimetron/pi-go`.
+
 ### go install
 
 ```bash
@@ -207,7 +240,7 @@ Regenerate the aggregate SBOM locally with `make sbom` (requires
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.27+
 - At least one LLM provider API key or a running Ollama instance
 
 ## API keys
@@ -222,6 +255,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | Mistral | `mistral-*`, `magistral-*` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` |
 | xAI (Grok) | `grok-*` | `XAI_API_KEY` | `XAI_BASE_URL` |
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` |
+| agentgateway | `agentgateway/<model>` | none (optional `AGENTGATEWAY_API_KEY`) | `AGENTGATEWAY_BASE_URL` (default `http://localhost:4000`) |
 | Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
 | OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
 | Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
@@ -273,6 +307,7 @@ pi --model azure/my-gpt5-deployment
 pi --model openrouter/google/gemini-3.7-flash
 pi --model ollama/gemma4:12b-mlx
 pi --model opencode/kimi-k3
+pi --model agentgateway/deepseek-v4-flash:0731-cloud
 pi --model minimax-m3:cloud # automatically detect ollama if :cloud
 
 # Use model roles
@@ -312,7 +347,6 @@ pi --mode rpc                              # pi-compatible NDJSON over stdio (fo
 | `/skill-load`   | Reload skills from disk                                  |
 | `/memory`       | Memory Palace commands (see below)                       |
 | `/audit`        | Scan skills for hidden Unicode threats                   |
-| `/restart`      | Restart pi-go                                            |
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
 
@@ -567,6 +601,12 @@ Add pi to Zed's `agent_servers` in your settings:
 
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
+
+## kagent
+
+Run pi-go as a custom agent inside [kagent](https://kagent.dev) on Agent Substrate via the A2A
+adapter image. See [docs/kagent-harness.md](docs/kagent-harness.md) for the deployment guide and
+`specs/kagent/` for the Dockerfile, manifests, and step-by-step deploy notes.
 
 ## License
 

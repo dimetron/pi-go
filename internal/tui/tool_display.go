@@ -13,17 +13,27 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wrap"
 
 	"charm.land/lipgloss/v2"
 )
 
-// acpBundledAgents lists agent names backed by ACP subprocess adapters; the
-// rest are regular pi-based subagents and render under the "pi" label.
+// acpBundledAgents lists bundled agent names that are NOT regular pi-based
+// subagents and so keep their own label in the "agent[...]" header instead of
+// collapsing to "pi". It mirrors the union of internal/subagent.acpAgentNames
+// (claude, gemini, cursor, copilot, agy) and codexAgentNames (codex,
+// codex-review): every name that has its own subprocess adapter renders under
+// its real name; built-in pi subagents (task, explore, worker, …) fall through
+// to "pi".
 var acpBundledAgents = map[string]struct{}{
-	"claude": {},
-	"gemini": {},
-	"cursor": {},
+	"claude":       {},
+	"gemini":       {},
+	"cursor":       {},
+	"copilot":      {},
+	"agy":          {},
+	"codex":        {},
+	"codex-review": {},
 }
 
 // agentToolColor returns the foreground color used for tool/command lines
@@ -52,7 +62,8 @@ func agentToolColor(agentType string, pal Palette) color.Color {
 }
 
 // agentBracketLabel returns the string rendered inside "agent[...]" for a
-// given subagent type. ACP-backed agents (claude, gemini) keep their name;
+// given subagent type. Bundled agents with their own subprocess adapter
+// (claude, gemini, cursor, copilot, agy, codex, codex-review) keep their name;
 // all other pi-based subagents collapse to "pi". Parallel/chain calls encode
 // multiple agents as "claude+gemini" — each component is mapped individually
 // and duplicates are deduped, so [claude+explore+task] becomes [claude+pi].
@@ -128,7 +139,7 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 	if msg.tool == "skill" {
 		return t.renderSkillTool(msg, dim, p)
 	}
-	if msg.tool == "agent" || msg.tool == "subagent" {
+	if msg.tool == "agent" || msg.tool == "subagent" || msg.tool == "a2a" {
 		return t.renderAgentTool(msg, dim, p)
 	}
 	return t.renderRegularTool(msg, dim, p)
@@ -248,6 +259,12 @@ func (t *ToolDisplayModel) agentCardHeader(msg message, p Palette) string {
 	b.WriteString(agentBullet)
 	b.WriteString(typeStyle.Render("agent"))
 	label := agentBracketLabel(msg.agentType)
+	if msg.agentLabel != "" {
+		// A2A cards carry the configured agent name verbatim (e.g.
+		// "istio-agent"); it is not a subagent type, so it must not be
+		// collapsed through agentBracketLabel.
+		label = msg.agentLabel
+	}
 	if label != "" {
 		b.WriteString(typeStyle.Render("[" + label + "]"))
 	}
@@ -294,11 +311,8 @@ func agentTitleFit(title string, n int) string {
 // agentEventWindow renders the card's live event stream, newest activity last,
 // preceded by a note whenever output was withheld.
 func agentEventWindow(msg message, dim lipgloss.Style, p Palette, cw int) string {
-	evStyle := lipgloss.NewStyle().Foreground(p.Dim)
-	evToolStyle := lipgloss.NewStyle().Foreground(agentToolColor(msg.agentType, p))
-
 	renderable := renderableAgentEvents(msg.agentEvents)
-	lines, note := agentWindowLines(renderable, evStyle, evToolStyle, cw)
+	lines, note := agentWindowLines(renderable, newAgentEventStyles(msg.agentType, p), cw)
 
 	var b strings.Builder
 	if note != "" {
@@ -315,7 +329,13 @@ func renderableAgentEvents(evs []agentEv) []agentEv {
 	renderable := make([]agentEv, 0, len(evs))
 	for _, ev := range evs {
 		switch ev.kind {
-		case "message_start", "message_end", "done", "spawn":
+		case "message_start", "message_end", "done", "spawn", "stderr":
+			// stderr is dropped from the live card: subprocess diagnostics
+			// (Antigravity's raw WS frame dumps, "Stdin closed, cleaning
+			// up...", OAuth chatter) flood the TUI and corrupt the layout.
+			// The full stderr is still durably captured in RunResult.Stderr
+			// and surfaced on error via acpErrorText, so diagnostics on real
+			// failures are preserved — only the live cosmetic stream is gone.
 			continue
 		case "text", "text_delta":
 			if strings.TrimSpace(ev.content) == "" {
@@ -339,10 +359,10 @@ func renderableAgentEvents(evs []agentEv) []agentEv {
 // The note is written whenever output was withheld. A single huge event is
 // clipped without any whole event being dropped, and hiding 60-odd lines with
 // no mark would read as if that were all the agent said.
-func agentWindowLines(renderable []agentEv, evStyle, evToolStyle lipgloss.Style, cw int) (lines []string, note string) {
+func agentWindowLines(renderable []agentEv, st agentEventStyles, cw int) (lines []string, note string) {
 	used := 0
 	for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
-		lines = append(agentEventLines(renderable[i], evStyle, evToolStyle, cw), lines...)
+		lines = append(agentEventLines(renderable[i], st, cw), lines...)
 		used++
 	}
 	skipped := len(renderable) - used
@@ -438,42 +458,100 @@ func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style, p P
 // enough to see what the agent is doing right now.
 const maxAgentOutputLines = 3
 
+// agentEventStyles is the per-kind stylesheet for a subagent card's event
+// window. The card mixes four different sorts of line — what the agent said,
+// what it ran, what came back, and lifecycle bookkeeping — and rendering them
+// all in one muted grey left the agent's actual answer no more prominent than a
+// "run_done" marker, and a failed run indistinguishable from a healthy one.
+//
+// The ranking is deliberate: speech reads brightest, then tool activity, then
+// results, with lifecycle noise faintest and errors pulled out in red.
+type agentEventStyles struct {
+	text      lipgloss.Style // what the agent said — the reason the card exists
+	tool      lipgloss.Style // tool calls, in the per-agent hue
+	result    lipgloss.Style // tool results that came back clean
+	thinking  lipgloss.Style // reasoning — deliberately backgrounded
+	failure   lipgloss.Style // error events and failed tool results
+	lifecycle lipgloss.Style // run_done and other bookkeeping
+}
+
+// newAgentEventStyles builds the card stylesheet. Only the tool hue varies by
+// agent: it is what lets a user pick one agent's calls out of several running
+// in parallel, so it stays keyed to agentType while every other role is
+// semantic and shared.
+func newAgentEventStyles(agentType string, p Palette) agentEventStyles {
+	p = paletteOrDark(p)
+	return agentEventStyles{
+		text:      lipgloss.NewStyle().Foreground(p.Text),
+		tool:      lipgloss.NewStyle().Foreground(agentToolColor(agentType, p)),
+		result:    lipgloss.NewStyle().Foreground(p.Success),
+		thinking:  lipgloss.NewStyle().Foreground(p.Dim),
+		failure:   lipgloss.NewStyle().Foreground(p.Error),
+		lifecycle: lipgloss.NewStyle().Foreground(p.Faint),
+	}
+}
+
 // agentEventLines renders one subagent event into the lines it occupies in the
 // card, already styled and soft-wrapped to width.
-func agentEventLines(ev agentEv, evStyle, evToolStyle lipgloss.Style, width int) []string {
+func agentEventLines(ev agentEv, st agentEventStyles, width int) []string {
 	var line string
 	switch ev.kind {
 	case "tool_call":
 		// Collapse embedded newlines so tool-call headers occupy one visual
 		// row — otherwise markdown prose inside a tool title (e.g. Gemini's
 		// "**Identifying...**\n\n\n...") drops blank rows into the card gutter.
-		line = evToolStyle.Render("⚙ " + collapseToSingleLine(ev.content))
+		line = st.tool.Render("⚙ " + collapseToSingleLine(ev.content))
 	case "tool_result":
-		line = evStyle.Render("  ✓ " + truncateRunes(toolResultSummary(ev.content), 80))
-	case "stderr":
-		// Subprocess stderr — diagnostic chatter. Color it with the per-agent
-		// hue (orange/gray/blue) so users can tell at a glance which subagent
-		// is writing what when several run in parallel. The thin "▎" marker
-		// still distinguishes stderr from real tool calls, which use "⚙".
-		line = evToolStyle.Render("▎ " + truncateRunes(collapseToSingleLine(ev.content), 120))
+		summary := truncateRunes(toolResultSummary(ev.content), 80)
+		if isFailedToolResult(ev.content) {
+			line = st.failure.Render("  ✗ " + summary)
+		} else {
+			line = st.result.Render("  ✓ " + summary)
+		}
 	case "text", "text_delta":
 		// Subagent message text — what the agent actually said. Collapse
 		// internal blank-line runs so paragraph spacing from streamed chunks
 		// doesn't produce wide gaps in the card.
-		line = evStyle.Render("» " + collapseToSingleLine(ev.content))
+		line = st.text.Render("» " + collapseToSingleLine(ev.content))
 	case "thinking_delta":
 		// Subagent reasoning — show it with the same 💭 marker the main
 		// chat uses for thinking, so it reads as thought, not speech.
-		line = evStyle.Render("💭 " + collapseToSingleLine(ev.content))
+		line = st.thinking.Render("💭 " + collapseToSingleLine(ev.content))
+	case "error":
+		// A failed spawn or a subprocess that died. This arrives as a normal
+		// event (forwardSingleModeEvents substitutes Event.Error into the
+		// content), so without its own branch it rendered as a grey
+		// "error: ..." line indistinguishable from lifecycle bookkeeping.
+		line = st.failure.Render("✗ " + truncateRunes(collapseToSingleLine(ev.content), 120))
 	default:
 		content := collapseToSingleLine(ev.content)
 		if content == "" {
-			line = evStyle.Render(ev.kind)
+			line = st.lifecycle.Render(ev.kind)
 		} else {
-			line = evStyle.Render(ev.kind + ": " + content)
+			line = st.lifecycle.Render(ev.kind + ": " + content)
 		}
 	}
 	return softWrap(line, width)
+}
+
+// isFailedToolResult reports whether a subagent tool result describes a
+// failure. The event carries only a content string — the shape a tool chose for
+// its own result — so this reads the two markers those results actually use: a
+// JSON "error" field, and a non-zero "exit_code". Anything else counts as
+// success, which keeps an unrecognized result looking normal rather than
+// painting every unfamiliar tool red.
+func isFailedToolResult(content string) bool {
+	var data map[string]any
+	if json.Unmarshal([]byte(content), &data) != nil {
+		return false
+	}
+	if s, ok := data["error"].(string); ok && strings.TrimSpace(s) != "" {
+		return true
+	}
+	if code, ok := data["exit_code"].(float64); ok && code != 0 {
+		return true
+	}
+	return false
 }
 
 // truncateRunes clips s to at most n runes, marking the cut. Slicing by byte
@@ -517,10 +595,17 @@ func (t ToolDisplayModel) argWidth() int {
 // collapseToSingleLine replaces newlines and tabs with spaces and collapses
 // runs of whitespace, so long multi-line content renders on a single wrapped
 // line under the agent tool's "│ " gutter rather than drifting to column 0.
+//
+// ANSI escape sequences are stripped first: subagent text (notably Antigravity)
+// can carry SGR color codes, cursor moves or OSC sequences that, if left in,
+// execute as terminal control codes when Bubble Tea paints the styled string
+// and shift the TUI layout. ansi.Strip removes CSI/OSC/other escapes before the
+// whitespace pass, so only plain text reaches the renderer.
 func collapseToSingleLine(s string) string {
 	if s == "" {
 		return ""
 	}
+	s = ansi.Strip(s)
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
@@ -683,6 +768,8 @@ func toolCallSummary(name string, args map[string]any) string {
 		return treeCallSummary(args)
 	case "agent":
 		return agentCallSummary(args)
+	case "a2a":
+		return a2aCallSummary(args)
 	}
 	return ""
 }
@@ -717,6 +804,28 @@ func agentCallSummary(args map[string]any) string {
 		return fmt.Sprintf("%s: %s", typ, prompt)
 	case typ != "":
 		return typ
+	default:
+		return prompt
+	}
+}
+
+// a2aCallSummary summarizes an A2A call as "agent_name: prompt", dropping
+// whichever half is absent. It mirrors agentCallSummary so the a2a card's
+// header reads like a subagent card's.
+func a2aCallSummary(args map[string]any) string {
+	name, _ := args["agent_name"].(string)
+	prompt, _ := args["prompt"].(string)
+	if idx := strings.IndexByte(prompt, '\n'); idx > 0 {
+		prompt = prompt[:idx]
+	}
+	if len(prompt) > 60 {
+		prompt = prompt[:57] + "..."
+	}
+	switch {
+	case name != "" && prompt != "":
+		return fmt.Sprintf("%s: %s", name, prompt)
+	case name != "":
+		return name
 	default:
 		return prompt
 	}
@@ -769,6 +878,7 @@ var toolResultShapes = []toolResultShape{
 	diagnosticsResultSummary,
 	bashWindowResultSummary,
 	bashExitResultSummary,
+	a2aResultSummary,
 }
 
 // formatToolResult extracts a readable summary from a parsed tool result.
@@ -969,6 +1079,21 @@ func bashExitResultSummary(data map[string]any) (string, bool) {
 	}
 	if int(code) != 0 {
 		return fmt.Sprintf("exit %d: %s", int(code), result), true
+	}
+	return result, true
+}
+
+// a2aResultSummary formats an A2A tool result as the remote agent's reply.
+// The A2AOutput shape carries the answer in "result" (with "status" and
+// "error" alongside); a failed call surfaces its error instead. This is what
+// lets the a2a card's gutter read "→ Hello! ..." rather than raw JSON.
+func a2aResultSummary(data map[string]any) (string, bool) {
+	if err, _ := data["error"].(string); err != "" {
+		return "error: " + err, true
+	}
+	result, ok := data["result"].(string)
+	if !ok || result == "" {
+		return "", false
 	}
 	return result, true
 }

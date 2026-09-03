@@ -24,7 +24,7 @@ func TestBuildSessionLLM_OllamaRoutesByTag(t *testing.T) {
 		},
 	}
 
-	llm, err := buildSessionLLM(context.Background(), RuntimeConfig{}, cfg)
+	llm, _, err := buildSessionLLM(context.Background(), RuntimeConfig{}, cfg)
 	if err != nil {
 		t.Fatalf("buildSessionLLM: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestBuildSessionLLM_OllamaHealthCheckFailureIsReported(t *testing.T) {
 		},
 	}
 
-	_, err := buildSessionLLM(context.Background(), RuntimeConfig{}, cfg)
+	_, _, err := buildSessionLLM(context.Background(), RuntimeConfig{}, cfg)
 	if err == nil {
 		t.Fatal("expected an error when the daemon is unreachable")
 	}

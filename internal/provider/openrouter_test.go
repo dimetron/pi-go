@@ -327,7 +327,12 @@ func TestOpenRouterContextWindowSize(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			openrouterResetWindowCache()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("HTTP-Referer") != openrouterHTTPReferer ||
+					r.Header.Get("X-OpenRouter-Title") != openrouterAppTitle ||
+					r.Header.Get("X-OpenRouter-Categories") != openrouterAppCategories {
+					t.Errorf("missing OpenRouter app-attribution headers: %v", r.Header)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.json))
 			}))

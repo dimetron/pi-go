@@ -1,0 +1,66 @@
+
+
+main          MetroLine2       MetroLine3
+  │
+  ●
+ewYork
+  │
+  │
+  ●
+allas
+  │
+  │
+  ├────────────────●
+              LosAngeles
+                   │
+                   │
+                   ●
+                Chicago
+                   │
+                   │
+                   ●
+                Houston
+                   │
+                   │
+                   ├────────────────●
+                   │             Phoenix
+                   │                │
+                   │                │
+                   │                ■
+                   │             Denver
+                   │                │
+                   │                │
+                   │                │
+                   │                │
+                   │                │
+                   │                │
+                   │                ●
+                   │             Atlanta
+                   │                │
+                   │                │
+                   │                ●
+                   │                0
+                   │                │
+                   │                │
+                   │                ●
+                   │              Miami
+                   │                │
+                   │                │
+                   │                ●
+                   │           Washington
+                   │                │
+                   │          [MY JUNCTION]
+                   ├────────────────●
+                                    1
+                                    │
+                                    │
+                                    ●
+                                 Boston
+                                    │
+                                    │
+                                    ●
+                                 Detroit
+                                    │
+                                    │
+                                    ✖
+                              SanFrancisco

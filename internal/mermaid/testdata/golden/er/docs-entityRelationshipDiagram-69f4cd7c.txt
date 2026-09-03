@@ -1,0 +1,8 @@
+
+ ┌───────────────────┐            ┌──────────────────┐
+ │     CUSTOMER      │            │      PERSON      │
+ ├───────────────────┤            ├──────────────────┤
+ │ string name       │            │ string firstName │
+ │ string custNumber │            │ string lastName  │
+ │ string sector     │            │ int age          │
+ └───────────────────┘            └──────────────────┘

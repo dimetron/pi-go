@@ -1,0 +1,20 @@
+classDiagram
+    direction LR
+    class Store {
+        +String name
+        +open() bool
+        -close()
+        #flush() int
+    }
+    class Reader {
+        <<interface>>
+        +read() bytes
+    }
+    class Writer {
+        <<abstract>>
+        +write(b) int
+    }
+    Store <|-- Reader
+    Store <|-- Writer
+    Reader ..|> Writer : implements
+    Store "1" o-- "many" Reader : holds

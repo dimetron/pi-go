@@ -1,0 +1,50 @@
+{
+  "provider": "anthropic",
+  "fetched_at": "2026-09-03T00:00:00Z",
+  "models": [
+    {
+      "id": "claude-fable-5",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-fable-5-1",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-opus-4-6",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-opus-4-7",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-opus-4-8",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-opus-5",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "owned_by": "model"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "owned_by": "model"
+    }
+  ]
+}

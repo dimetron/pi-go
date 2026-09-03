@@ -1,12 +1,10 @@
-.PHONY: build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo hooks fetch-models
 
-# Go 1.26's simd/archsimd, which gomlx's Go backend uses for its matmul kernels
-# (gomlx/compute internal/gobackend/dot/matmul). Those kernels are gated on
-# `//go:build amd64 && goexperiment.simd`, so this speeds up `pi memory mine` on
-# amd64 and does nothing on arm64 — upstream ships no NEON path. Measured on an
-# M2 Max: 6.4 vs 6.6 chunks/sec, i.e. noise. Exported so every recipe below
-# (build, install, test) compiles the same way.
-export GOEXPERIMENT := simd
+# No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
+# gomlx/compute's amd64 matmul kernels (gated on
+# `//go:build amd64 && goexperiment.simd`) do not compile against it yet.
+# The kernels' measured benefit was noise anyway (6.4 vs 6.6 chunks/sec on an
+# M2 Max), so we drop the experiment until gomlx updates for the new API.
 
 # Build verbosity. `-v` is on by default: it names each package as it compiles,
 # which is the difference between "the build is working through a cold module
@@ -33,13 +31,17 @@ install:
 
 # hooks: point core.hooksPath at the versioned .githooks/ directory.
 #
-# The hooks enforce AGENTS.md's signing rules: commit-msg adds a missing
+# The hooks enforce CLAUDE.md's signing rules: commit-msg adds a missing
 # Signed-off-by, post-commit warns on unsigned commits, and pre-push
 # HARD-FAILS any push containing unsigned or unsigned-off commits.
+#
+# pre-commit and pre-push also run check-large-files, which refuses oversized
+# blobs — GIFs and screen recordings above all, which belong on a release
+# rather than in every clone's history forever.
 # Run once per clone: `make hooks`.
 hooks:
 	git config core.hooksPath .githooks
-	@echo "hooks installed: commit-msg, post-commit, pre-push (.githooks/)"
+	@echo "hooks installed: pre-commit, commit-msg, post-commit, pre-push (.githooks/)"
 
 # Accelerated build: ONNX Runtime + CoreML (Apple GPU / Neural Engine).
 #
@@ -120,6 +122,30 @@ eval-tools-judge: build
 	PI_EVAL_TOOLS=1 PI_EVAL_JUDGE_MODEL=$(PI_EVAL_JUDGE_MODEL) PI_BINARY=$(abspath ./pi) \
 		go test -tags e2e -v -run '^TestEvalTools$$' ./internal/eval/scenarios/ -parallel 4 -timeout 60m
 
+# Record a PGO profile: run the tool-coverage eval suite with --cpuprofile on
+# every scenario's pi process, plus the TUI render benchmarks, then merge all
+# profiles into cmd/pi/default.pgo. `go build` auto-detects default.pgo in the
+# main package dir and enables PGO, so this is the one step that keeps the
+# profile fresh.
+#
+# Two workloads are merged so the profile covers both of the binary's hot
+# paths: the headless agent/tool loop (one `pi --mode print` per tool family)
+# and the TUI render loop (RenderMessages / collapseBlankLines / matchLexer,
+# which a live profile attributed ~24% of CPU to — bubbletea calls View() once
+# per token during streaming). A single-workload profile would optimize only
+# one half of the program. Requires a built binary and an LLM API key (see
+# eval-tools). Knobs: PI_EVAL_MODEL, PI_EVAL_SCENARIO, PI_EVAL_TIMEOUT,
+# PI_EVAL_SERIAL=1. See .pi-go/skills/pgo/SKILL.md.
+record-pgo: build
+	@mkdir -p tmp/pgo
+	PI_EVAL_TOOLS=1 PI_EVAL_CPU_PROFILE=$(abspath tmp/pgo) PI_BINARY=$(abspath ./pi) \
+		go test -tags e2e -v -run '^TestEvalTools$$' ./internal/eval/scenarios/ -parallel 4 -timeout 60m
+	@go test -tags e2e -run '^$$' -bench 'BenchmarkRenderMessagesRunningCached|BenchmarkCollapseBlankLines|BenchmarkMatchLexerCached' \
+		-benchtime 2s -cpuprofile $(abspath tmp/pgo)/render.pprof ./internal/tui/
+	@go tool pprof -proto tmp/pgo/*.pprof > cmd/pi/default.pgo
+	@echo "PGO profile written to cmd/pi/default.pgo ($$(ls -la cmd/pi/default.pgo | awk '{print $$5}') bytes)"
+	@rm -rf tmp/pgo
+
 test-all: test-unit test-integration test-e2e
 
 test-coverage:
@@ -128,12 +154,24 @@ test-coverage:
 test-ollama: build
 	@bash scripts/test-ollama-e2e.sh
 
+# Fails only on vulnerabilities that have a fix released; the rest are printed.
+# Same gate CI runs, so a red build reproduces here.
+vulncheck:
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck -format json ./... | go run ./hack/vulngate
+
 check-cve:
 	go mod tidy -v
 	grype db update || :
 	go install golang.org/x/vuln/cmd/govulncheck@latest
 	govulncheck ./... | grep -A7 Vulnerability || :
 	grype .
+
+# grype scan of the repo, excluding gitignored scratch dirs (tmp/, .worktrees/)
+# that hold vendored SDKs and agent worktrees — they are not part of the build.
+# Note: grype needs one --exclude per pattern; a comma-joined glob matches nothing.
+scan:
+	grype . --exclude './tmp/**' --exclude './.worktrees/**'
 
 # Same invocation the release workflow uses for the aggregate SBOM, so a
 # release-time syft failure can be reproduced locally.
@@ -149,7 +187,7 @@ vet:
 	go vet ./...
 
 clean:
-	rm -f pi coverage.out sbom.spdx.json
+	rm -f pi coverage.out sbom.spdx.json cmd/pi/default.pgo
 
 ## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
 sandbox-run: install
@@ -165,3 +203,11 @@ ifeq ($(shell uname),Darwin)
 else
 	@echo "sandbox-log is only available on macOS"
 endif
+
+# fetch-models: regenerate the embedded per-provider model catalogs under
+# internal/provider/modeldata/ from live provider APIs. Providers without an
+# API key are skipped with a note. Run before opening a PR that touches the
+# model catalog (requirements Q10 of features/TOO/024-mistral-provider).
+.PHONY: fetch-models
+fetch-models:
+	@bash scripts/fetch-models.sh

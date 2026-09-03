@@ -113,6 +113,11 @@ var slashCommandSpecs = []slashCommandSpec{
 		desc: "Execute a spec with task agent (verifies subagent exit status before merging)",
 		run:  (*model).handleRunCommand,
 	},
+	{
+		name: "/pr-autofix",
+		desc: "Watch a GitHub PR's checks and fix them until it is green",
+		run:  (*model).handlePRAutofixCommand,
+	},
 	{name: "/skills", desc: "List skills (create, load)", run: (*model).handleSkillsCommand},
 	{name: "/skill-list", desc: "List all loaded skills", hidden: true, run: slashCmdBare((*model).handleSkillListCommand)},
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
@@ -121,7 +126,6 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
 	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
 	{name: "/mcp", desc: "List MCP servers and tool status", run: slashCmdVoid((*model).handleMCPCommand)},
-	{name: "/restart", desc: "Restart pi process", run: slashCmdBare((*model).handleRestartCommand)},
 	{name: "/exit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
 	{name: "/quit", desc: "Exit", run: slashCmdBare((*model).handleQuitCommand)},
 }
@@ -928,7 +932,6 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/rtk` | Output compaction stats |\n")
 	b.WriteString("| `/mcp` | List MCP servers and tool status |\n")
 	b.WriteString("| `/login <provider>` | Configure API keys |\n")
-	b.WriteString("| `/restart` | Restart pi process |\n")
 
 	b.WriteString("\n**Skills:**\n\n")
 	b.WriteString("| Command | Description |\n")

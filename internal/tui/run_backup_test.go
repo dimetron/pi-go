@@ -192,7 +192,7 @@ func TestHandleRunCommand_SpawnFailure(t *testing.T) {
 	writeRunSpec(t, workDir, "my-spec", "# My Spec\n\n## Gates\n\n- **build**: `go build ./...`\n", "")
 
 	m := runTestModel(t, workDir)
-	m.handleRunCommand([]string{"my-spec"})
+	m.handleRunCommand([]string{"my-spec", "--force"})
 
 	if got := lastMessage(t, m); !strings.Contains(got, "Failed to spawn task agent") {
 		t.Errorf("message %q does not report the spawn failure", got)
@@ -220,7 +220,7 @@ func TestHandleRunCommand_ParallelSpawnFailure(t *testing.T) {
 	writeRunSpec(t, workDir, "my-spec", "# My Spec\n", plan)
 
 	m := runTestModel(t, workDir)
-	m.handleRunCommand([]string{"my-spec", "--parallel"})
+	m.handleRunCommand([]string{"my-spec", "--parallel", "--force"})
 
 	got := lastMessage(t, m)
 	if !strings.Contains(got, "Failed to spawn agent 1") {
@@ -239,7 +239,7 @@ func TestHandleRunCommand_ParallelFallsBackToSingleAgent(t *testing.T) {
 	writeRunSpec(t, workDir, "my-spec", "# My Spec\n", "# Plan\n\n- [ ] Step 1: the only slice\n")
 
 	m := runTestModel(t, workDir)
-	m.handleRunCommand([]string{"my-spec", "--parallel"})
+	m.handleRunCommand([]string{"my-spec", "--parallel", "--force"})
 
 	if got := lastMessage(t, m); !strings.Contains(got, "Failed to spawn task agent") {
 		t.Errorf("message %q suggests the parallel path ran with a single slice", got)

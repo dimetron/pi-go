@@ -9,13 +9,10 @@ on:
 permissions:
   contents: read
 
-# gomlx's Go backend takes its matmul kernels from Go 1.26's simd/archsimd, gated
-# on `//go:build amd64 && goexperiment.simd`. CI runs on amd64 runners, so this is
-# where it actually applies; it is inert on the arm64 matrix entries because
-# upstream ships no NEON kernels. Set workflow-wide so every job builds the same
-# way and the build cache is shared rather than split per-job.
-env:
-  GOEXPERIMENT: simd
+# No workflow-wide GOEXPERIMENT: Go 1.27 changed the simd/archsimd intrinsics
+# API, which gomlx/compute's amd64 kernels (gated on goexperiment.simd) do not
+# compile against yet. The measured benefit of those kernels was noise anyway
+# (see Makefile history), so builds now use the default experiment set.
 
 jobs:
   lint:
@@ -29,7 +26,26 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.11
+          version: v2.13
+
+  vulncheck:
+    name: Vulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # The gate fails only on findings that name a fixed version. A finding
+      # with no fix cannot be acted on here — there is nothing to upgrade to —
+      # so failing on it would leave this check red on every commit until an
+      # upstream maintainer cuts a release, and a check that is always red is a
+      # check nobody reads. Unfixed findings are printed, so a fix appearing
+      # later turns one into a build failure exactly when someone should look.
+      - name: govulncheck
+        run: govulncheck -format json ./... | go run ./hack/vulngate
 
   test:
     name: Test

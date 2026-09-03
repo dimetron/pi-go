@@ -1,0 +1,6 @@
+                      Jan 01                                                                Jan 02
+                      ────────────────────────────────────────────────────────────────────────────
+ Initial milestone  │ ◆
+            Task A  │                                                                            ▓
+            Task B  │                                                                            ▓
+   Final milestone  │ ◆

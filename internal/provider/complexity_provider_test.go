@@ -649,7 +649,7 @@ func TestOaiToolCallMessages_SkipsCallsWithoutID(t *testing.T) {
 		{ID: "  ", Name: "blank"},
 		{ID: "keep", Name: "fn", Args: map[string]any{"a": 1}},
 	}
-	messages := oaiToolCallMessages([]string{"text"}, calls, map[string]*genai.FunctionResponse{})
+	messages := oaiToolCallMessages([]string{"text"}, calls, map[string]*genai.FunctionResponse{}, nil)
 
 	// assistant + exactly one tool message.
 	if len(messages) != 2 {

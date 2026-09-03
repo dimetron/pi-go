@@ -1,0 +1,17 @@
+---
+title: Branching with init and reset
+---
+gitGraph
+    commit id: "root"
+    branch develop
+    checkout develop
+    commit id: "feature-a"
+    commit id: "feature-b" tag: "v0.1"
+    checkout main
+    merge develop
+    commit id: "hotfix" type: HIGHLIGHT
+    branch release
+    checkout release
+    commit id: "rc1"
+    checkout main
+    cherry-pick id: "rc1"

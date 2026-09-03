@@ -1,0 +1,12 @@
+classDiagram
+    class Shape {
+        <<interface>>
+        +draw()
+        +area() float
+    }
+    class Circle {
+        +float radius
+        +draw()
+        +area() float
+    }
+    Shape <|.. Circle

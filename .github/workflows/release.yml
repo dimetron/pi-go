@@ -20,7 +20,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.11
+          version: v2.13
 
   test:
     name: Test
@@ -32,6 +32,49 @@ jobs:
           go-version-file: go.mod
       - name: Run tests
         run: go test -race -count=1 ./...
+
+  docker:
+    name: Docker image
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      # Push the pi-go-kagent harness image to GHCR.
+      packages: write
+      contents: read
+    outputs:
+      # The manifest-list digest of the image just pushed. The kagent manifest
+      # is pinned to it, so the release ships a reference to exactly the image
+      # this run built rather than to a tag that later moves.
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the kagent harness image
+        id: build
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v6.20.0
+        with:
+          context: .
+          file: specs/kagent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-kagent:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}-kagent:latest
 
   release:
     name: GoReleaser
@@ -122,3 +165,44 @@ jobs:
             dist/*/pi
             dist/*/pi.exe
           sbom-path: sbom.spdx.json
+
+  # The deployable kagent manifest for this release.
+  #
+  # specs/kagent/manifests.yaml.tmpl is a template because Substrate requires a
+  # digest-pinned image and a digest only exists once an image is pushed —
+  # committing a rendered copy means committing a digest that is stale by the
+  # next build. Rendering here pins it to the image this run actually pushed.
+  #
+  # Rendered with --no-env so the published manifest carries no cluster-specific
+  # model endpoint; the operator sets PI_MODEL / PI_BASE_URL for their cluster.
+  kagent-manifest:
+    name: kagent manifest
+    needs: [docker, release]
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload the rendered manifest as a release asset.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render the manifest against the pushed digest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}-kagent@${{ needs.docker.outputs.digest }}
+        run: |
+          test -n "${{ needs.docker.outputs.digest }}" || {
+            echo "the docker job produced no digest" >&2
+            exit 1
+          }
+          ./specs/kagent/render-manifests.sh \
+            --image "${IMAGE}" \
+            --no-env \
+            --output kagent-manifests.yaml
+          cat kagent-manifests.yaml
+
+      # --clobber so re-running a release replaces the asset rather than
+      # failing on one that is already attached.
+      - name: Attach it to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" kagent-manifests.yaml --clobber

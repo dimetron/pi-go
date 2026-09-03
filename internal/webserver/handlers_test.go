@@ -23,16 +23,23 @@ func TestHandler_HandleCreatePair(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 
-	var resp PairResponse
+	// Decode into a map, not PairResponse: the point of the assertion is that
+	// no "token" key reaches an unauthenticated caller, and a typed decode
+	// would silently drop one if it came back.
+	var resp map[string]any
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if len(resp.Code) != 6 {
-		t.Errorf("expected 6-digit code, got %q", resp.Code)
+	code, _ := resp["code"].(string)
+	if len(code) != 6 {
+		t.Errorf("expected 6-digit code, got %q", code)
 	}
-	if resp.Token == "" {
-		t.Error("token should not be empty")
+	if _, ok := resp["token"]; ok {
+		t.Errorf("pair response leaked a token: %v", resp["token"])
+	}
+	if _, present := resp["qr"]; present {
+		t.Error("response still carries a qr field")
 	}
 }
 
@@ -40,7 +47,7 @@ func TestHandler_HandleStatus(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create a pair first
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -137,7 +144,7 @@ func TestHandler_HandleIndex_WithApprovedToken(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create and approve a pair
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}
@@ -162,7 +169,7 @@ func TestHandler_HandleIndex_WithQueryToken(t *testing.T) {
 	s := NewServer(Config{PairingTimeout: 5 * time.Minute, StaticDir: "."})
 
 	// Create and approve a pair
-	code, token, _, err := s.pairingManager.CreatePair("/tmp/test-project")
+	code, token, err := s.pairingManager.CreatePair("/tmp/test-project")
 	if err != nil {
 		t.Fatalf("CreatePair failed: %v", err)
 	}

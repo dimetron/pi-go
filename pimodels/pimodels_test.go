@@ -56,6 +56,71 @@ func TestResolveKnownModels(t *testing.T) {
 	}
 }
 
+func TestResolveMarksExplicitOllamaAsLocal(t *testing.T) {
+	info, err := Resolve("ollama/deepseek-v4-flash:0731-cloud")
+	if err != nil {
+		t.Fatalf("Resolve explicit Ollama model: %v", err)
+	}
+	if !info.LocalOllama {
+		t.Fatal("Resolve lost the explicit ollama/ local-routing decision")
+	}
+}
+
+func TestNewFromInfoBuildsResolvedPrefixedModels(t *testing.T) {
+	tests := []struct {
+		name string
+		info Info
+		opts []Option
+	}{
+		{
+			name: "ollama prefix",
+			info: Info{Provider: "ollama", Model: "gemma4:e4b", Ollama: true, LocalOllama: true},
+		},
+		{
+			name: "azure prefix",
+			info: Info{Provider: "azure", Model: "prod-deployment"},
+			opts: []Option{WithBaseURL("https://azure.example.openai.azure.com"), WithAPIKey("test-key")},
+		},
+		{
+			name: "opencode prefix",
+			info: Info{Provider: "opencode", Model: "kimi-k3"},
+			opts: []Option{WithAPIKey("test-key")},
+		},
+		{
+			name: "agentgateway prefix",
+			info: Info{Provider: "agentgateway", Model: "deepseek-v4-flash:0731-cloud"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := NewFromInfo(context.Background(), tt.info, tt.opts...)
+			if err != nil {
+				t.Fatalf("NewFromInfo(%+v): %v", tt.info, err)
+			}
+			if got := m.Name(); got != tt.info.Model {
+				t.Fatalf("Name() = %q, want resolved model %q", got, tt.info.Model)
+			}
+			p, ok := any(m).(interface{ Provider() string })
+			if !ok {
+				t.Fatal("NewFromInfo result does not report its provider")
+			}
+			if got := p.Provider(); got != tt.info.Provider {
+				t.Fatalf("Provider() = %q, want %q", got, tt.info.Provider)
+			}
+		})
+	}
+}
+
+func TestNewFromInfoRejectsIncompleteInfo(t *testing.T) {
+	if _, err := NewFromInfo(context.Background(), Info{Model: "gemma4:e4b"}); err == nil {
+		t.Fatal("NewFromInfo accepted an Info without a provider")
+	}
+	if _, err := NewFromInfo(context.Background(), Info{Provider: "ollama"}); err == nil {
+		t.Fatal("NewFromInfo accepted an Info without a model")
+	}
+}
+
 func TestResolveUnknownModel(t *testing.T) {
 	if _, err := Resolve("not-a-model-at-all-123"); err == nil {
 		t.Fatal("expected an error for an unresolvable model name")

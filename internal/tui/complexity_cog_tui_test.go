@@ -645,12 +645,12 @@ func TestCogEmitEventParts_Sequences(t *testing.T) {
 		{
 			name: "stuck on thinking output aborts after emitting",
 			ev:   cogEvent("thinking", false, &genai.Part{Text: cogStuckPhrase}),
-			want: "thinking(" + cogStuckPhrase + ")\nerr(agent loop aborted: model repeated a 64-character phrase 12 times)\n",
+			want: fmt.Sprintf("thinking(%s)\nerr(agent loop aborted: model repeated a 64-character phrase %d times)\n", cogStuckPhrase, maxOutputRepeats),
 		},
 		{
 			name: "stuck on model output aborts after emitting",
 			ev:   cogEvent("model", false, &genai.Part{Text: cogStuckPhrase}),
-			want: "text(" + cogStuckPhrase + ")\nerr(agent loop aborted: model repeated a 64-character phrase 12 times)\n",
+			want: fmt.Sprintf("text(%s)\nerr(agent loop aborted: model repeated a 64-character phrase %d times)\n", cogStuckPhrase, maxOutputRepeats),
 		},
 		{
 			name: "stuck output abort stops before a later part",
@@ -658,7 +658,7 @@ func TestCogEmitEventParts_Sequences(t *testing.T) {
 				&genai.Part{Text: cogStuckPhrase},
 				&genai.Part{FunctionCall: &genai.FunctionCall{ID: "c2", Name: "bash"}},
 			),
-			want: "text(" + cogStuckPhrase + ")\nerr(agent loop aborted: model repeated a 64-character phrase 12 times)\n",
+			want: fmt.Sprintf("text(%s)\nerr(agent loop aborted: model repeated a 64-character phrase %d times)\n", cogStuckPhrase, maxOutputRepeats),
 		},
 		{
 			name: "stuck on repeated tool call: the call is emitted first",

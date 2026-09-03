@@ -1,0 +1,78 @@
+{
+  "provider": "openai",
+  "fetched_at": "2026-09-03T00:00:00Z",
+  "models": [
+    {
+      "id": "chatgpt-image-latest",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.1",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.4",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.5",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.5-2026-04-23",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-audio-1.5",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-1",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-1-mini",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-2",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-2-2026-04-21",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-realtime-1.5",
+      "owned_by": "system"
+    },
+    {
+      "id": "text-embedding-ada-002",
+      "owned_by": "openai-internal"
+    }
+  ]
+}

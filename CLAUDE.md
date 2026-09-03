@@ -55,10 +55,14 @@ Agents marked `[worktree]` edit an isolated tree. Their edits do **not** land in
 the caller's tree — ask for an explicit patch or file list to apply, or use a
 non-worktree editing agent (`internal/tools/subagent.go:127-128`).
 
-## Commits: always sign off and sign
+## Commits: all commits must be signed
 
-Every commit must carry both a `Signed-off-by` trailer and a cryptographic
-signature:
+**Rule: every commit must be cryptographically signed and carry a
+`Signed-off-by` trailer.** There is no exception — not for merge commits, not
+for reverts, not for WIP or "just this once". An unsigned commit is a broken
+commit; fix it before pushing (see the pre-push hook below).
+
+The signing command:
 
 ```bash
 git commit -s -S -m "..."     # -s = Signed-off-by trailer, -S = sign
@@ -66,7 +70,9 @@ git commit -s -S -m "..."     # -s = Signed-off-by trailer, -S = sign
 
 `-S` is redundant when config is honoured (`commit.gpgsign` and `tag.gpgsign`
 are already `true`), but pass it explicitly so a commit fails loudly rather than
-landing unsigned when config is missing or overridden.
+landing unsigned when config is missing or overridden. The `pre-push` hook
+hard-fails any push containing an unsigned commit or one missing a matching
+`Signed-off-by` trailer, so an unsigned commit cannot reach the remote.
 
 Signing here is SSH-format, not GPG, through 1Password:
 
@@ -122,37 +128,134 @@ branch never touched (currently 10 `SA1019` deprecation errors in
 `hack/test/mcp/`). When that happens, stop and report it — the fix is to clear
 the unrelated lint failure or to have the user decide, not to bypass the hook.
 
-## Review with codex before opening a PR
+## Never commit a GIF or a screen recording
 
-**Always run a `codex` review of the changes before opening a pull request.**
-Not after, not instead of the other gates — before, so findings are fixed in the
-branch rather than in review comments.
+**Recordings go on a GitHub release, never into git history.** A GIF of a test
+run or a TUI session is large, write-once, and stale within a week — but every
+revision of one is downloaded by every clone forever, and a blob cannot be
+un-pushed without rewriting history for everyone. GitHub itself warns above
+50 MiB and rejects a push above 100 MiB.
+
+Attach one to a PR instead — the `vhs-e2e-gif` skill wraps this:
 
 ```bash
-cd <the worktree holding the branch>
-codex review --base main --title "<short description>"
+CAPTIONS='e2e: tool calls after the fix' \
+  .claude/skills/vhs-e2e-gif/scripts/attach-gif-to-pr.sh 246 /tmp/e2e.gif
 ```
 
-`--base <BRANCH>` and a custom `[PROMPT]` are mutually exclusive: passing both
-fails with `the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Use
-`--base` alone for branch review; use `--commit <SHA>` or `--uncommitted` for the
-other scopes.
+`.githooks/check-large-files` enforces it from both `pre-commit` (staged blobs)
+and `pre-push` (blobs the push would upload), with two limits:
 
-Treat the output as a real reviewer, not a formality:
+| What | Limit | Why |
+|---|---|---|
+| `.gif .gifv .apng .mp4 .m4v .mov .webm .mkv .avi .ogv .cast` | 1 MiB | Recordings belong on a release |
+| Anything else | 10 MiB | Far below GitHub's 100 MiB hard reject; the largest non-media file in the tree is ~70 KiB |
 
-- Act on findings before pushing. Verify each one against the code yourself
-  before accepting or dismissing it — a finding is a claim, not a verdict.
-- If a finding is wrong, say why in the PR description rather than silently
-  ignoring it.
-- Codex prints a long execution trace; the findings are at the end of the output.
-- A CLI usage error is not a clean review. `exit 0` with an argument-parsing
-  message means the review never ran — re-run it properly.
+The check runs twice on purpose. `pre-commit` catches it early, when unstaging
+is the whole fix; `pre-push` is the last reversible moment for a commit that
+reached the branch some other way — a rebase, a cherry-pick, another tool.
 
-This has already paid for itself: a codex review of the worktree stash fix found
-a time-of-check/time-of-use race that the tests, `-race`, and `golangci-lint` all
-passed over — `git stash list` returns positional `stash@{N}` refs, so an
-external push or drop between lookup and use renumbers the list and a positional
-drop deletes a stranger's work.
+One path is grandfathered in the script's `allow_re`: `docs/screen/pi-go.gif`
+(5.4 MiB), committed before the hook existed and referenced by nothing in the
+tree. It should move to a release asset and take its allowlist entry with it.
+
+If a file genuinely has to live in the tree, shrink it, or as a last resort:
+
+```bash
+PI_ALLOW_LARGE_FILES=1 git commit -sS -m "..."
+```
+
+**Do not reach for `--no-verify`** — it skips the signing hooks too, and lands
+an unsigned commit (see above).
+
+## Review with Codex: open the PR first, review on GitHub
+
+**The PR is the review track.** Open it first, then have Codex post its review
+directly to the PR as a formal GitHub review, then resolve findings in-thread.
+This keeps every finding, fix, and resolution permanently linked in one place —
+a local terminal dump of findings is lost context; PR comments are not.
+
+The flow:
+
+1. **Finish the branch and open the PR** (rules below). All gates — build,
+   tests, lint, vet — still run *before* pushing; opening early does not skip
+   them.
+2. **Have Codex review and post to the PR itself.** In the environment tested on
+   PR #237, the `codex-review` subagent and restricted sandbox modes could not
+   reach `api.github.com` ("credential rejected", browser fallback denied).
+   Run this from a clean, dedicated PR worktree because the required
+   `danger-full-access` mode removes the filesystem boundary as well as the
+   network restriction:
+
+   ```bash
+   cd <pr-worktree>
+   codex exec --sandbox danger-full-access "Read-only code review of GitHub PR <N> \
+   (repo dimetron/pi-go; current dir is the PR worktree, branch <branch>). Scope: \
+   'git diff main...HEAD'. Then POST one formal GitHub review yourself using gh: \
+   build inline comments for actionable findings, anchored to file+line, as a \
+   JSON payload file in /tmp, \
+   submit with 'gh api --input' against /repos/dimetron/pi-go/pulls/<N>/reviews \
+   with event=COMMENT. Sign the body '— Codex review'. Do not modify tracked files. \
+   Do not commit or push." > /tmp/codex-pr-review.log 2>&1
+   ```
+
+   Contract: read-only over tracked files (the `/tmp` payload file is fine),
+   diff scoped to `main...HEAD`, one formal review signed "— Codex review", with
+   inline file:line comments for every actionable finding. A no-findings review
+   has no inline comments. Budget ~5 minutes; run the foreground command with a
+   generous timeout, then verify `git status --short` is still empty.
+
+   The `gh` credential inside Codex's process may still be rejected even with
+   network open. If Codex cannot post, have it emit findings as text (`FILE:` /
+   `VERDICT:` / explanation per finding). The caller must convert those findings
+   into the same formal review payload and submit it to
+   `/repos/dimetron/pi-go/pulls/<N>/reviews`; a top-level `gh pr comment` is not
+   a substitute for the review.
+
+3. **Resolve findings in their review threads**: fix accepted ones in normal
+   signed commits pushed to the branch, reply to each inline thread with its
+   resolving commit, and resolve the thread after verification. For a dismissed
+   finding, reply in that thread with the reason before resolving it — never use
+   an unrelated top-level comment or silently ignore a finding.
+
+A finding is a claim, not a verdict: verify each against the code before
+accepting or dismissing it. The review is an independent gate from tests, lint,
+vet, and build; it does not replace any of them.
+
+### Local vs GitHub review — when to use which
+
+- **GitHub review (default)** for anything that becomes a PR: permanent track,
+  inline line comments, resolvable threads, visible to humans later.
+- **Local `codex exec` output (no posting)** for pre-PR sanity checks on
+  uncommitted work-in-progress, or quick second opinions on a spec/design doc
+  where there is nothing to anchor comments to yet. Do not let local-only
+  reviews substitute for the on-PR review before merge.
+
+### After the review: run govulncheck and post the result
+
+**Once the review is resolved and before the PR merges, run `govulncheck`
+against the branch and post the result as a PR comment.** It belongs after the
+review rather than before because it is about what the branch *depends on*
+rather than what it says, and a dependency added mid-review would otherwise go
+unscanned.
+
+```bash
+make vulncheck        # govulncheck -format json ./... | go run ./hack/vulngate
+```
+
+The gate fails only on findings that name a fixed version — those are the ones
+someone can act on. Findings with no released fix are printed and do not fail:
+there is nothing to upgrade to, so failing on them would leave every build red
+until an upstream maintainer cuts a release, and a permanently red check is one
+nobody reads.
+
+Post the scanner and DB versions along with the findings, because the answer is
+only true for the database on the day it ran. If a finding does have a fix,
+upgrade rather than explain it away — the gate is deliberately narrow so that a
+failure always means "there is something to do".
+
+Do not run `make check-cve` for this: it opens with `go mod tidy -v`, which
+rewrites tracked files, and a check should not mutate the tree it is checking.
 
 ## Creating a pull request
 
@@ -175,9 +278,25 @@ gh pr create --fill --web        # --web opens the PR page in the browser
   automatically; if you create the PR without `--web`, open the returned URL
   yourself.
 
+### Never link an agent session in a PR
+
+**Do not put a `claude.ai/code/session_...` link — or any other agent session
+link — in a PR body, title, commit message, or review comment.** A session link
+hands anyone who can read the PR the entire transcript that produced it,
+including whatever unrelated context happened to be in that conversation. That
+is a wider audience than the PR, and it is not what a reviewer asked for.
+
+A PR must stand on its own: what changed, why, and how it was verified. The
+tooling that produced it is not part of the record.
+
+This overrides the harness default. Claude Code is instructed to append a
+session link to PR bodies and to commit messages; in this repo, leave it out —
+`gh pr create --fill` inherits whatever is in the commit message, so the link
+must not be there either.
+
 ## Build, test, lint
 
-Go 1.26.5. Use the Makefile rather than raw `go` invocations where a target
+Go 1.27.0. Use the Makefile rather than raw `go` invocations where a target
 exists:
 
 ```bash
@@ -201,6 +320,33 @@ make check-cve
   This is not a real failure — re-run outside the sandbox before believing it.
 - **Profiling endpoints are on localhost**, so `curl localhost:6060/...` is
   blocked by the sandbox too. See the `go-pprof` skill.
+
+## TUI output safety: never write to stdout/stderr
+
+The interactive TUI runs on the terminal's alternate screen. **Any write to
+stdout or stderr from inside the TUI corrupts the display** — stray `fmt.Print*`,
+`log.Print*`, `os.Stdout.Write`, or `os.Stderr.Write` calls render as garbage
+over the UI and break the session.
+
+Rules:
+
+- **Never** use `fmt.Print*`, `log.Print*`, `stdlog`, `os.Stdout`, or
+  `os.Stderr` to emit diagnostics or output from code that runs while the TUI
+  is active (agent loop, callbacks, hooks, commands, model/tool callbacks).
+- **Route diagnostics through the session logger** (`m.cfg.Logger` /
+  `logger.Logger`) instead — `Info`, `Error`, `Errorf`, etc. These write to the
+  session log file, never the terminal.
+- **Allowed TUI outputs** are the only sanctioned ways to surface text to the
+  user: the chat transcript, `SystemNoticeCh` (short system notices like
+  auto-compaction outcomes), and the TUI's own status/error rendering. If a
+  message must reach the user, deliver it through one of these, not a raw
+  stdout/stderr write.
+- A panic handler may write to stderr only as a last resort before the process
+  dies; it must never be used for routine logging.
+
+When in doubt, grep for `Printf|Println|os.Stdout|os.Stderr|stdlog` in the
+package you are touching and confirm every hit is either outside the TUI path
+or routed through the session logger.
 
 ## Profiling
 

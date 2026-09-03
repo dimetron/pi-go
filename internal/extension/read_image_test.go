@@ -48,7 +48,7 @@ func TestBuildReadImageCallback(t *testing.T) {
 	writePNG(t, path)
 
 	t.Run("injects inline data part", func(t *testing.T) {
-		cb := BuildReadImageCallback(sb)
+		cb := BuildReadImageCallback(sb, "gemini")
 		// Build a request whose user-turn Content contains a read_image
 		// FunctionResponse referencing the screenshot path.
 		req := &model.LLMRequest{
@@ -93,7 +93,7 @@ func TestBuildReadImageCallback(t *testing.T) {
 	})
 
 	t.Run("ignores non-read_image tools", func(t *testing.T) {
-		cb := BuildReadImageCallback(sb)
+		cb := BuildReadImageCallback(sb, "gemini")
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{
@@ -119,7 +119,7 @@ func TestBuildReadImageCallback(t *testing.T) {
 	})
 
 	t.Run("missing path is skipped", func(t *testing.T) {
-		cb := BuildReadImageCallback(sb)
+		cb := BuildReadImageCallback(sb, "gemini")
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{
@@ -145,7 +145,7 @@ func TestBuildReadImageCallback(t *testing.T) {
 	})
 
 	t.Run("nil sandbox is a no-op", func(t *testing.T) {
-		cb := BuildReadImageCallback(nil)
+		cb := BuildReadImageCallback(nil, "gemini")
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
@@ -184,7 +184,7 @@ func TestBuildReadImageCallback(t *testing.T) {
 		}
 		t.Cleanup(func() { sb.Close() })
 
-		cb := BuildReadImageCallback(sb)
+		cb := BuildReadImageCallback(sb, "gemini")
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{

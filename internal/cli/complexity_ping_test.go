@@ -1063,7 +1063,7 @@ func TestSelectModelListProviders(t *testing.T) {
 		{
 			name:    "--url opts every provider in",
 			flagURL: "https://proxy.example",
-			want:    []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter"},
+			want:    []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway"},
 		},
 		{
 			name: "a configured azure prints alongside the queried providers",
@@ -1158,6 +1158,9 @@ func TestModelListBaseURL(t *testing.T) {
 			baseURLs: map[string]string{"openai": "https://cfg.example"}, want: "https://cfg.example"},
 		{name: "ollama falls back to localhost", provider: "ollama", want: "http://localhost:11434"},
 		{name: "--url beats the ollama default", provider: "ollama", flagURL: "https://flag.example",
+			want: "https://flag.example"},
+		{name: "agentgateway falls back to localhost", provider: "agentgateway", want: "http://localhost:4000"},
+		{name: "--url beats the agentgateway default", provider: "agentgateway", flagURL: "https://flag.example",
 			want: "https://flag.example"},
 		{name: "everyone else gets nothing", provider: "anthropic", want: ""},
 	}

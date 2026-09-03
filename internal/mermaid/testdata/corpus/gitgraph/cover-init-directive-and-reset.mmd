@@ -1,0 +1,11 @@
+%%{init: {'gitGraph': {'showBranches': true, 'mainBranchName': 'trunk'}} }%%
+gitGraph
+    commit id: "base"
+    branch spike
+    checkout spike
+    commit id: "try-one"
+    commit id: "try-two"
+    reset trunk
+    commit id: "after-reset"
+    checkout trunk
+    merge spike tag: "merged"

@@ -211,6 +211,7 @@ func TestE2E_GatePassTriggersMerge(t *testing.T) {
 		passed: true,
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(msg)
 
 	if m.run.phase != "merging" {
@@ -265,6 +266,7 @@ func TestE2E_GateFailTriggersRetry(t *testing.T) {
 		passed: false,
 	}
 
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(msg)
 
 	// Should attempt retry (retry count incremented).
@@ -611,6 +613,7 @@ func TestE2E_AgentDoneGatePassMergeFlow(t *testing.T) {
 		},
 		passed: true,
 	}
+	seedPassVerdict(m.run)
 	m.handleRunGateResult(gateMsg)
 	if m.run.phase != "merging" {
 		t.Fatalf("phase after gates = %q, want %q", m.run.phase, "merging")

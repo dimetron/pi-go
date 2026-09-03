@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# pre-push: hard-fail when any commit about to be pushed is unsigned or lacks
-# a Signed-off-by trailer.
+# pre-push: hard-fail when any commit about to be pushed is unsigned, lacks a
+# Signed-off-by trailer, or carries an oversized blob.
+#
+# The size check is repeated here rather than left to pre-commit because a
+# push is the last reversible moment: GitHub rejects a blob over 100 MiB and
+# nothing can un-push one under that, so a commit that reached the branch some
+# other way still has to be caught before the objects leave the machine.
 #
 # The post-commit hook only warns — it cannot stop an unsigned commit, and
 # AGENTS.md records commits (0714568, a8b243b, bcb6d26) that reached the
@@ -19,6 +24,7 @@ zero=0000000000000000000000000000000000000000
 
 unsigned=()
 missing_sob=()
+size_scan=()
 
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Branch deletion or remote already has the ref with no new commits.
@@ -30,8 +36,14 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # limited to what this push would add. Fall back to the full history
     # behind local_sha minus existing remotes to avoid re-checking history.
     range="$(git rev-list "$local_sha" --not --remotes="$remote")"
+    size_scan+=("$local_sha" --not --remotes="$remote")
   else
-    range="$(git rev-list "$remote_sha..$local_sha")"
+    # Exclude commits already reachable from a remote branch. After a
+    # rebase onto an updated main, remote_sha..local_sha also spans the
+    # upstream commits the rebase pulled in — commits that are already
+    # published and are not this push's to vouch for.
+    range="$(git rev-list "$remote_sha..$local_sha" --not --remotes="$remote")"
+    size_scan+=("$remote_sha..$local_sha" --not --remotes="$remote")
   fi
 
   for sha in $range; do
@@ -49,6 +61,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 done
 
 fail=0
+if [ "${#size_scan[@]}" -gt 0 ]; then
+  "$(dirname "$0")/check-large-files" commits "${size_scan[@]}" || fail=1
+fi
 if [ "${#unsigned[@]}" -gt 0 ]; then
   echo "pre-push: UNSIGNED commits cannot be pushed:" >&2
   printf '  %s\n' "${unsigned[@]}" >&2

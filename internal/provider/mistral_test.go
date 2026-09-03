@@ -12,14 +12,14 @@ import (
 )
 
 func TestNewMistralRequiresAPIKey(t *testing.T) {
-	_, err := NewMistral(context.Background(), "mistral-large-latest", "", "", nil)
+	_, err := NewMistral(context.Background(), "mistral-large-latest", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error when API key is empty")
 	}
 }
 
 func TestNewMistralDefaultBaseURL(t *testing.T) {
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestNewMistralDefaultBaseURL(t *testing.T) {
 }
 
 func TestNewMistralCustomBaseURL(t *testing.T) {
-	m, err := NewMistral(context.Background(), "mistral-small-latest", "test-key", "https://custom.example.com/v1", nil)
+	m, err := NewMistral(context.Background(), "mistral-small-latest", "test-key", "https://custom.example.com/v1", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestNewMistralWithExtraHeaders(t *testing.T) {
 	opts := &LLMOptions{
 		ExtraHeaders: map[string]string{"X-Custom": "value"},
 	}
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", opts)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestNewMistralWithExtraHeaders(t *testing.T) {
 
 func TestNewMistralWithInsecureTLS(t *testing.T) {
 	opts := &LLMOptions{InsecureSkipTLS: true}
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", opts)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", "", "", opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestMistralNonStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestMistralStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestMistralWithToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, nil)
+	m, err := NewMistral(context.Background(), "mistral-large-latest", "test-key", srv.URL, "", nil)
 	if err != nil {
 		t.Fatalf("NewMistral() error: %v", err)
 	}
@@ -308,6 +308,11 @@ func TestMistralWithToolCalls(t *testing.T) {
 	}
 }
 
+// TestMistralFinishReasonMapping covers Mistral's finish_reason enum
+// (stop|length|model_length|error|tool_calls) against the mapper the request
+// path actually uses. The previous version of this test called a
+// mistralFinishReasonToGenai wrapper that nothing on the request path invoked,
+// so it passed while model_length and error were being mapped to Stop.
 func TestMistralFinishReasonMapping(t *testing.T) {
 	tests := []struct {
 		reason string
@@ -315,14 +320,18 @@ func TestMistralFinishReasonMapping(t *testing.T) {
 	}{
 		{"stop", genai.FinishReasonStop},
 		{"length", genai.FinishReasonMaxTokens},
+		{"model_length", genai.FinishReasonMaxTokens},
+		{"error", genai.FinishReasonOther},
 		{"content_filter", genai.FinishReasonSafety},
 		{"tool_calls", genai.FinishReasonStop},
+		{"", genai.FinishReasonStop},
+		{"something_new", genai.FinishReasonStop},
 	}
 	for _, tt := range tests {
 		t.Run(tt.reason, func(t *testing.T) {
-			got := mistralFinishReasonToGenai(tt.reason)
+			got := oaiFinishReasonToGenai(tt.reason)
 			if got != tt.want {
-				t.Errorf("mistralFinishReasonToGenai(%q) = %v, want %v", tt.reason, got, tt.want)
+				t.Errorf("oaiFinishReasonToGenai(%q) = %v, want %v", tt.reason, got, tt.want)
 			}
 		})
 	}

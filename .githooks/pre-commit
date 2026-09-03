@@ -1,24 +1,37 @@
 #!/bin/sh
 set -e
 
+# Refuse oversized blobs — GIFs and screen recordings above all — before they
+# enter history, where they are permanent. Runs first: there is no point
+# formatting and linting a commit that cannot be allowed to exist.
+"$(dirname "$0")/check-large-files" staged
+
 # Format code with gofmt and goimports.
 # Exclude worktree directories (.worktrees/, .pi-go/) — they are separate
 # checkouts on their own branches and must not be reformatted by this hook.
+# Also exclude tmp/ — a gitignored scratch area for vendored third-party
+# repos whose samples never compile standalone (same rationale as the
+# tmp/ exclusion in .golangci.yml).
 echo "Formatting code..."
 find . -name '*.go' \
   -not -path './.git/*' \
   -not -path './.worktrees/*' \
   -not -path './.pi-go/*' \
+  -not -path './tmp/*' \
   -exec gofmt -l -s -w {} +
 find . -name '*.go' \
   -not -path './.git/*' \
   -not -path './.worktrees/*' \
   -not -path './.pi-go/*' \
+  -not -path './tmp/*' \
   -exec goimports -l -w {} +
 
 # Stage any formatting changes
 git add -u
 
-# Run linters
+# Run linters. Scoped to repo packages: a bare `./...` also typechecks the
+# gitignored tmp/ scratch area (vendored third-party repos), whose samples
+# never compile standalone and would hard-fail every commit, including the
+# amends made by `git rebase --exec`.
 echo "Running golangci-lint..."
-golangci-lint run ./...
+golangci-lint run ./cmd/... ./internal/... ./hack/...

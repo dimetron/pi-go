@@ -161,6 +161,14 @@ type MCPServer struct {
 	URL     string            `json:"url,omitempty"`     // HTTP transport (e.g., cloudflare-api)
 	Headers map[string]string `json:"headers,omitempty"` // Custom HTTP headers for the URL (Streamable HTTP) transport
 	OAuth   bool              `json:"oauth,omitempty"`   // run the OAuth authorization-code flow on first connect
+
+	// fromStandaloneFile marks a server that was loaded from a .pi-go/mcp.json
+	// file rather than declared in config.json. Such servers live in memory
+	// only: Save serializes the whole Config, so without this marker a merged
+	// project server would be copied into ~/.pi-go/config.json on the next
+	// save and leak into every other project. Unexported, so json.Marshal
+	// skips it.
+	fromStandaloneFile bool
 }
 
 // A2AAgentConfig defines a single A2A-capable agent endpoint.
@@ -209,11 +217,13 @@ func Defaults() Config {
 
 // Known model prefixes for auto-detecting provider.
 var modelPrefixes = map[string]string{
-	"claude": "anthropic",
-	"gpt":    "openai",
-	"gpt-5":  "openai",
-	"gemini": "gemini",
-	"grok":   "xai",
+	"claude":    "anthropic",
+	"gpt":       "openai",
+	"gpt-5":     "openai",
+	"gemini":    "gemini",
+	"mistral":   "mistral",
+	"magistral": "mistral",
+	"grok":      "xai",
 }
 
 // ResolveRole returns the model name, provider, and advisor settings for a given role.
@@ -265,6 +275,13 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(lower, "openrouter/") {
 		return "openrouter"
 	}
+	// agentgateway/ prefix → agentgateway provider. Checked before the
+	// :cloud/-cloud suffix check below: agentgateway model IDs carry a
+	// "-cloud" tag (e.g. deepseek-v4-flash:0731-cloud) that would otherwise
+	// route them to Ollama.
+	if strings.HasPrefix(lower, "agentgateway/") {
+		return "agentgateway"
+	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return "ollama"
@@ -290,51 +307,82 @@ func Load() (Config, error) {
 func LoadFrom(cwd string) (Config, error) {
 	cfg := Defaults()
 
-	home, err := os.UserHomeDir()
-	if err == nil {
-		globalPath := filepath.Join(home, ".pi-go", "config.json")
-		if err := loadFile(globalPath, &cfg); err != nil && !os.IsNotExist(err) {
-			return cfg, err
-		}
+	if err := loadConfigFiles(&cfg, cwd); err != nil {
+		return cfg, err
 	}
 
-	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "config.json")); projectPath != "" {
-		if err := loadFile(projectPath, &cfg); err != nil && !os.IsNotExist(err) {
-			return cfg, err
-		}
-	}
-
-	// Load MCP config from separate mcp.json files if present.
-	mcpServers := LoadMCPServersFrom(cwd)
-	if len(mcpServers) > 0 {
-		// Merge: mcp.json servers take precedence if none in config.json.
-		if cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
-			cfg.MCP = &MCPConfig{Servers: mcpServers}
-		}
-	}
+	// Load MCP config from separate mcp.json files if present and merge with
+	// servers declared in config.json. A server name already present wins from
+	// config.json; mcp.json-only servers are appended so a project can add
+	// servers without redefining the global set. Appended entries keep the
+	// standalone marker so Save never copies them into config.json.
+	mergeStandaloneMCPServers(&cfg, LoadMCPServersFrom(cwd))
 
 	// An llms.txt index configured as an MCP server is also registered as a
-	// fetch_docs source, so the documentation is readable straight away. The
-	// names are recorded rather than announced here: config loads before any
-	// front end exists, and the TUI's first act is a full terminal reset that
-	// clears the screen and scrollback, so a notice raised now would be wiped
-	// before it could be read. NotifyReroutedLLMS delivers it once the caller
-	// knows where output goes.
+	// fetch_docs source, so the documentation is readable straight away.
 	cfg.ReroutedLLMS = registerLLMSDocsSources(&cfg)
 
-	// Migrate deprecated DefaultModel to roles if roles not set.
-	if cfg.DefaultModel != "" && len(cfg.Roles) == 0 {
+	migrateDefaultModelRoles(&cfg)
+
+	return cfg, nil
+}
+
+// loadConfigFiles overlays the nearest project .pi-go/config.json onto the
+// global ~/.pi-go/config.json on top of cfg. A missing file is not an error;
+// any other read or parse failure is.
+func loadConfigFiles(cfg *Config, cwd string) error {
+	if home, err := os.UserHomeDir(); err == nil {
+		globalPath := filepath.Join(home, ".pi-go", "config.json")
+		if err := loadFile(globalPath, cfg); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if projectPath := findNearestProjectFile(cwd, filepath.Join(".pi-go", "config.json")); projectPath != "" {
+		if err := loadFile(projectPath, cfg); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// mergeStandaloneMCPServers appends standalone mcp.json servers that config.json
+// does not already declare. Existing names win; appended entries keep the
+// standalone marker so Save never copies them into config.json.
+func mergeStandaloneMCPServers(cfg *Config, mcpServers []MCPServer) {
+	if len(mcpServers) == 0 {
+		return
+	}
+	if cfg.MCP == nil {
+		cfg.MCP = &MCPConfig{}
+	}
+	known := make(map[string]bool, len(cfg.MCP.Servers))
+	for _, s := range cfg.MCP.Servers {
+		known[s.Name] = true
+	}
+	for _, s := range mcpServers {
+		if !known[s.Name] {
+			s.fromStandaloneFile = true
+			cfg.MCP.Servers = append(cfg.MCP.Servers, s)
+		}
+	}
+}
+
+// migrateDefaultModelRoles migrates the deprecated DefaultModel field into
+// Roles: as the default role when none exist, otherwise filling in just the
+// default role if roles are set but leave it unset.
+func migrateDefaultModelRoles(cfg *Config) {
+	if cfg.DefaultModel == "" {
+		return
+	}
+	if len(cfg.Roles) == 0 {
 		cfg.Roles = map[string]RoleConfig{
 			"default": {Model: cfg.DefaultModel},
 		}
-	} else if cfg.DefaultModel != "" && cfg.Roles != nil {
-		// If DefaultModel is set alongside roles, update the default role if not already set.
+	} else if cfg.Roles != nil {
 		if _, ok := cfg.Roles["default"]; !ok {
 			cfg.Roles["default"] = RoleConfig{Model: cfg.DefaultModel}
 		}
 	}
-
-	return cfg, nil
 }
 
 // mcpServerFile represents the JSON structure of a standalone mcp.json file.
@@ -595,15 +643,16 @@ func loadFile(path string, cfg *Config) error {
 func APIKeys() map[string]string {
 	keys := make(map[string]string)
 	envVars := map[string][]string{
-		"anthropic":  {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
-		"openai":     {"OPENAI_API_KEY"},
-		"azure":      {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
-		"gemini":     {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		"mistral":    {"MISTRAL_API_KEY"},
-		"xai":        {"XAI_API_KEY"},
-		"openrouter": {"OPENROUTER_API_KEY"},
-		"ollama":     {"OLLAMA_API_KEY"},
-		"opencode":   {"OPENCODE_API_KEY"},
+		"anthropic":    {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+		"openai":       {"OPENAI_API_KEY"},
+		"azure":        {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
+		"gemini":       {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+		"mistral":      {"MISTRAL_API_KEY"},
+		"xai":          {"XAI_API_KEY"},
+		"openrouter":   {"OPENROUTER_API_KEY"},
+		"ollama":       {"OLLAMA_API_KEY"},
+		"opencode":     {"OPENCODE_API_KEY"},
+		"agentgateway": {"AGENTGATEWAY_API_KEY"},
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -622,14 +671,15 @@ func APIKeys() map[string]string {
 func BaseURLs() map[string]string {
 	urls := make(map[string]string)
 	envVars := map[string]string{
-		"anthropic":  "ANTHROPIC_BASE_URL",
-		"openai":     "OPENAI_BASE_URL",
-		"gemini":     "GEMINI_BASE_URL",
-		"mistral":    "MISTRAL_BASE_URL",
-		"xai":        "XAI_BASE_URL",
-		"openrouter": "OPENROUTER_BASE_URL",
-		"ollama":     "OLLAMA_HOST",
-		"opencode":   "OPENCODE_BASE_URL",
+		"anthropic":    "ANTHROPIC_BASE_URL",
+		"openai":       "OPENAI_BASE_URL",
+		"gemini":       "GEMINI_BASE_URL",
+		"mistral":      "MISTRAL_BASE_URL",
+		"xai":          "XAI_BASE_URL",
+		"openrouter":   "OPENROUTER_BASE_URL",
+		"ollama":       "OLLAMA_HOST",
+		"opencode":     "OPENCODE_BASE_URL",
+		"agentgateway": "AGENTGATEWAY_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {
@@ -666,7 +716,21 @@ func (c *Config) Save() error {
 	}
 	path := filepath.Join(home, ".pi-go", "config.json")
 
-	data, err := json.MarshalIndent(c, "", "  ")
+	// Servers merged in from .pi-go/mcp.json are project-scoped and live in
+	// memory only; strip them before serializing so a save (e.g. from
+	// SaveDefaultRole) does not copy them into the global config.
+	snapshot := *c
+	if snapshot.MCP != nil && len(snapshot.MCP.Servers) > 0 {
+		kept := make([]MCPServer, 0, len(snapshot.MCP.Servers))
+		for _, s := range snapshot.MCP.Servers {
+			if !s.fromStandaloneFile {
+				kept = append(kept, s)
+			}
+		}
+		snapshot.MCP = &MCPConfig{Servers: kept}
+	}
+
+	data, err := json.MarshalIndent(&snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}

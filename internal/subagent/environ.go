@@ -52,6 +52,8 @@ var DefaultEnvAllowlist = []string{
 	"GEMINI_API_KEY",
 	"GOOGLE_API_KEY", // legacy fallback
 	"GEMINI_BASE_URL",
+	"AGENTGATEWAY_API_KEY",
+	"AGENTGATEWAY_BASE_URL",
 	"OLLAMA_HOST", // Ollama server address override.
 	"CODEX_HOME",  // Codex CLI config/state dir — its auth lives here.
 

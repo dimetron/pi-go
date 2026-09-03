@@ -1,0 +1,8 @@
+
+ ┌───────────────────┐                ┌────────────────────────┐
+ │     CUSTOMER      │                │         ORDER          │
+ ├───────────────────┤ 1   places     ├────────────────────────┤
+ │ string name       │────────────────┼ int orderNumber        │
+ │ string custNumber │                │ string deliveryAddress │
+ │ string sector     │                └────────────────────────┘
+ └───────────────────┘

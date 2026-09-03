@@ -129,14 +129,20 @@ type message struct {
 	// matchToolResultCard treats it like an empty card when binding the result.
 	pendingRefresh bool
 	// Subagent event stream (for tool=="agent" or tool=="subagent").
-	agentID       string    // subagent ID for matching events
-	agentType     string    // subagent type (e.g. "task", "explore")
-	agentTitle    string    // short description from prompt
-	agentEvents   []agentEv // streamed events from the subagent
-	pipelineID    string    // pipeline ID for grouping
-	pipelineMode  string    // "single", "parallel", "chain"
-	pipelineStep  int       // 1-based step in pipeline
-	pipelineTotal int       // total steps in pipeline
+	agentID     string    // subagent ID for matching events
+	agentType   string    // subagent type (e.g. "task", "explore")
+	agentTitle  string    // short description from prompt
+	agentEvents []agentEv // streamed events from the subagent
+	// agentLabel is the verbatim string rendered inside "agent[...]" for a
+	// card whose label is not derived from agentType. A2A calls set it to the
+	// configured agent name (e.g. "istio-agent") so the card reads
+	// "agent[istio-agent]" instead of collapsing to "agent[pi]". Empty for
+	// subagent cards, which derive the label from agentType.
+	agentLabel    string
+	pipelineID    string // pipeline ID for grouping
+	pipelineMode  string // "single", "parallel", "chain"
+	pipelineStep  int    // 1-based step in pipeline
+	pipelineTotal int    // total steps in pipeline
 	// Render cache: stores pre-rendered output to avoid repeated glamour and
 	// chroma work. renderCacheKey fingerprints every input the render depends
 	// on, so a message that changes re-renders itself — no caller has to
@@ -194,6 +200,7 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	h = fnvStr(h, m.agentID)
 	h = fnvStr(h, m.agentType)
 	h = fnvStr(h, m.agentTitle)
+	h = fnvStr(h, m.agentLabel)
 	h = fnvStr(h, m.pipelineID)
 	h = fnvStr(h, m.pipelineMode)
 	for _, ev := range m.agentEvents {
@@ -294,6 +301,16 @@ func (c *ChatModel) Clear() {
 	c.Scroll = 0
 }
 
+// closed reports whether a message is a finished block that must never absorb
+// more streamed text. Errors, warnings, meta notes and pre-rendered output all
+// carry role "assistant" so they sit in the reply column, but each is complete
+// the moment it is appended. Streaming into one overwrites the notice with the
+// reply and drags the notice's styling over every line that follows — a
+// mid-turn warning used to swallow the rest of the answer and paint it orange.
+func (m *message) closed() bool {
+	return m.isError || m.isWarning || m.isMeta || m.preRendered
+}
+
 // AppendError adds an error message styled with red text. Errors that end a
 // run must be impossible to miss: the plain assistant bubble reads like part of
 // the model's answer, which is how provider failures used to slip past.
@@ -303,7 +320,7 @@ func (c *ChatModel) AppendError(text string) {
 		content: text,
 		isError: true,
 	})
-	c.Scroll = 0
+	c.closeStreamingBlock()
 }
 
 // AppendWarning adds a warning message styled with yellow text.
@@ -313,6 +330,15 @@ func (c *ChatModel) AppendWarning(text string) {
 		content:   text,
 		isWarning: true,
 	})
+	c.closeStreamingBlock()
+}
+
+// closeStreamingBlock ends the open reply block. The accumulator has to be
+// dropped along with it: it holds the text of the block that just closed, and
+// the next delta appends to whatever is left in it, so a stale buffer replays
+// the previous block inside the new one.
+func (c *ChatModel) closeStreamingBlock() {
+	c.Streaming = ""
 	c.Scroll = 0
 }
 
@@ -325,7 +351,7 @@ func (c *ChatModel) AppendMeta(text string) {
 		content: text,
 		isMeta:  true,
 	})
-	c.Scroll = 0
+	c.closeStreamingBlock()
 }
 
 // ResetScroll resets the scroll offset to bottom.
@@ -554,20 +580,80 @@ func expandLinks(text string) string {
 // RenderMarkdown renders text as markdown using the glamour renderer.
 // It first expands markdown links (like [text](url)) into inline format
 // when the link has both a display name and an actual file:// or http:// URL.
+//
+// Closed ```mermaid fences are drawn as terminal art instead of being printed
+// as source. The art is spliced in after glamour has run on the prose around
+// it: glamour treats escape bytes as literal text, so anything already
+// carrying ANSI has to bypass it.
 func (c *ChatModel) RenderMarkdown(text string) string {
 	if text == "" {
 		return ""
 	}
+	if c.Renderer == nil {
+		return expandLinks(text)
+	}
+
+	segments := splitMermaidFences(text)
+	if len(segments) == 1 && segments[0].diagram == "" {
+		return c.renderMarkdownSegment(text)
+	}
+
+	parts := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg.diagram != "" {
+			if art := RenderMermaid(seg.diagram, c.mermaidWidth(), c.Palette); art != "" {
+				// Blank lines around the art. Glamour spaces its own blocks
+				// apart, but the diagram bypasses glamour precisely because it
+				// already carries ANSI — so without this the first row of a
+				// box sits directly against the last line of the prose that
+				// introduces it, and the two read as one paragraph.
+				//
+				// Runs of blank lines are collapsed later by
+				// collapseBlankLines, so adding one here cannot stack up with
+				// the spacing glamour already emitted.
+				parts = append(parts, "\n"+art+"\n")
+				continue
+			}
+			// Not a diagram this renderer models, or too wide for the pane:
+			// fall through and show the fence as the model wrote it, but with
+			// a language Chroma knows so the block does not shimmer on every
+			// repaint (see stableFenceLang).
+			if rendered := c.renderMarkdownSegment(stableFenceLang(seg.raw)); rendered != "" {
+				parts = append(parts, rendered)
+			}
+			continue
+		}
+		if rendered := c.renderMarkdownSegment(seg.raw); rendered != "" {
+			parts = append(parts, rendered)
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// renderMarkdownSegment runs one stretch of markdown through glamour.
+func (c *ChatModel) renderMarkdownSegment(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
 	// Expand markdown links into inline format for better visibility in terminal.
 	text = expandLinks(text)
-	if c.Renderer == nil {
-		return text
-	}
 	rendered, err := c.Renderer.Render(text)
 	if err != nil {
 		return text
 	}
 	return hyperlinkRenderedURLs(strings.TrimRight(rendered, "\n"))
+}
+
+// mermaidWidth is the column budget a diagram has inside an assistant message.
+//
+// The reserve covers the "◉ " bullet the reply is prefixed with plus glamour's
+// own document margin, which the diagram does not get but must not collide
+// with. Guessing high here is the safe direction: RenderMermaid rejects
+// anything that does not fit, so an over-tight budget costs a diagram, while
+// an over-generous one would let art run past the pane edge.
+func (c *ChatModel) mermaidWidth() int {
+	return renderWrapWidth(c.Width, 6)
 }
 
 // PlainTranscript returns the conversation as copy-friendly plain text.
@@ -793,9 +879,7 @@ func (c *ChatModel) assistantBody(msg *message, content string, p Palette, bulle
 		// classic light-theme casualty — it washes out to nothing on white.
 		// Orange carries the same "look here, but nothing broke" weight and
 		// stays legible on both backgrounds.
-		warnStyle := lipgloss.NewStyle().Foreground(p.Peach).Bold(true)
-		warnBullet := lipgloss.NewStyle().Foreground(p.Peach).Bold(true).Render("⚠ ")
-		return warnBullet + warnStyle.Render(content)
+		return c.assistantWarningBody(content, p)
 	case msg.isMeta:
 		// A dim "Σ" prefix marks the line as a per-turn tally rather than the
 		// model's own words — the reply uses "◉", so the two must never be
@@ -814,16 +898,31 @@ func (c *ChatModel) assistantBody(msg *message, content string, p Palette, bulle
 // do — an error truncated by the terminal is barely better than the silent
 // failure this replaces.
 func (c *ChatModel) assistantErrorBody(content string, p Palette) string {
-	errStyle := lipgloss.NewStyle().Foreground(p.Error).Bold(true)
+	return c.noticeBody(content, "✖ ", lipgloss.NewStyle().Foreground(p.Error).Bold(true))
+}
 
+// assistantWarningBody renders a warning reply, wrapped for the same reason
+// errors are. A retry notice or a loop-detection line easily outruns the pane,
+// and an over-wide line is cut at the right edge by the terminal — which takes
+// the trailing SGR reset with it and leaves the styling open, so everything
+// drawn afterwards inherits the warning's orange.
+func (c *ChatModel) assistantWarningBody(content string, p Palette) string {
+	return c.noticeBody(content, "⚠ ", lipgloss.NewStyle().Foreground(p.Peach).Bold(true))
+}
+
+// noticeBody renders a bullet-prefixed notice wrapped to the pane, styling and
+// closing each line on its own so no line can carry an unterminated color into
+// the next one. The hanging indent keeps continuation lines under the text
+// rather than under the bullet.
+func (c *ChatModel) noticeBody(content, bullet string, style lipgloss.Style) string {
 	var b strings.Builder
-	b.WriteString(errStyle.Render("✖ "))
-	contentWidth := renderWrapWidth(c.Width, 3) // "✖ " plus the hanging indent
+	b.WriteString(style.Render(bullet))
+	contentWidth := renderWrapWidth(c.Width, 3) // bullet plus the hanging indent
 	for j, line := range wordWrap(content, contentWidth) {
 		if j > 0 {
 			b.WriteString("\n   ")
 		}
-		b.WriteString(errStyle.Render(line))
+		b.WriteString(style.Render(line))
 	}
 	return b.String()
 }

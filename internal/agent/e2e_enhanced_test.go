@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/config"
@@ -691,46 +693,54 @@ func TestE2EWorktreeLifecycle(t *testing.T) {
 
 // TestE2ELSPToolRegistration verifies LSPTools() returns the expected set of tools.
 func TestE2ELSPToolRegistration(t *testing.T) {
-	mgr := lsp.NewManager(nil)
-	defer mgr.Shutdown()
-
-	lspTools, err := tools.LSPTools(mgr)
-	if err != nil {
-		t.Fatalf("LSPTools() error: %v", err)
+	// LSPTools defaults to the minimal pair; the wide set is opt-in through
+	// LSPFull. Both are checked here so a change to either list is caught.
+	cases := []struct {
+		name  string
+		tools func(*lsp.Manager) ([]adktool.Tool, error)
+		want  []string
+	}{
+		{
+			name:  "default is minimal",
+			tools: tools.LSPTools,
+			want:  []string{"lsp-symbols", "lsp-diagnostics"},
+		},
+		{
+			name: "full",
+			tools: func(m *lsp.Manager) ([]adktool.Tool, error) {
+				return tools.LSPToolsFor(m, tools.LSPFull)
+			},
+			want: []string{
+				"lsp-diagnostics", "lsp-definition", "lsp-references", "lsp-hover",
+				"lsp-symbols", "lsp-workspace-symbol", "lsp-code-action",
+			},
+		},
 	}
 
-	if len(lspTools) != 7 {
-		t.Fatalf("expected 7 LSP tools, got %d", len(lspTools))
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := lsp.NewManager(nil)
+			defer mgr.Shutdown()
 
-	expected := map[string]bool{
-		"lsp-diagnostics":      false,
-		"lsp-definition":       false,
-		"lsp-references":       false,
-		"lsp-hover":            false,
-		"lsp-symbols":          false,
-		"lsp-workspace-symbol": false,
-		"lsp-code-action":      false,
-	}
+			lspTools, err := tc.tools(mgr)
+			if err != nil {
+				t.Fatalf("LSP tools error: %v", err)
+			}
 
-	for _, tool := range lspTools {
-		name := tool.Name()
-		if _, ok := expected[name]; !ok {
-			t.Errorf("unexpected LSP tool name: %s", name)
-			continue
-		}
-		expected[name] = true
-
-		// Verify each tool has a description
-		if tool.Description() == "" {
-			t.Errorf("tool %s has empty description", name)
-		}
-	}
-
-	for name, found := range expected {
-		if !found {
-			t.Errorf("missing expected LSP tool: %s", name)
-		}
+			var got []string
+			for _, tl := range lspTools {
+				got = append(got, tl.Name())
+				if tl.Description() == "" {
+					t.Errorf("tool %s has empty description", tl.Name())
+				}
+			}
+			slices.Sort(got)
+			wantSorted := slices.Clone(tc.want)
+			slices.Sort(wantSorted)
+			if !slices.Equal(got, wantSorted) {
+				t.Errorf("LSP tools = %v, want %v", got, wantSorted)
+			}
+		})
 	}
 }
 

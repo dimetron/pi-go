@@ -40,6 +40,31 @@ func clearBaseURLEnv(t *testing.T) {
 	}
 }
 
+// isolateModelCatalog makes model validation depend only on the embedded
+// modeldata/ snapshots. Two machine-dependent inputs are cut off:
+//
+//   - The XDG catalog cache (os.UserCacheDir()/pi-go/models). CatalogFor
+//     prefers it over the embedded snapshot, so a developer who ran the binary
+//     once would validate against their cache, not the tree.
+//   - Provider API keys. ValidateModel refreshes a provider's catalog over the
+//     network on a validation miss when a key is exported, which turned the
+//     "unknown model" cases into live HTTP calls taking tens of seconds.
+func isolateModelCatalog(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	// os.UserCacheDir consults exactly one variable per platform: $HOME on
+	// macOS, $XDG_CACHE_HOME on Linux, %LocalAppData% on Windows.
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+	for _, v := range []string{
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+		"MISTRAL_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY",
+	} {
+		t.Setenv(v, "")
+	}
+}
+
 // --- cli.go: buildRootRuntime helpers -------------------------------------
 
 func TestResolveRuntimeModel(t *testing.T) {
@@ -71,11 +96,27 @@ func TestResolveRuntimeModel(t *testing.T) {
 			wantCustom:   true,
 		},
 		{
+			// opencode has no model catalog, so the override is observable on
+			// its own: info.Provider changes and validation stays out of it.
 			name:         "role provider name overrides the resolved provider",
 			modelName:    "claude-sonnet-4-6",
-			providerName: "openrouter",
-			wantProvider: "openrouter",
+			providerName: "opencode",
+			wantProvider: "opencode",
 			wantModel:    "claude-sonnet-4-6",
+		},
+		{
+			// The override changes the provider but not the model string, so
+			// the pair is validated against the overriding provider. OpenRouter
+			// names Anthropic models "anthropic/claude-sonnet-4.6"; the bare
+			// Anthropic ID is not one of its models and is rejected here rather
+			// than at the first request. This case only bites once OpenRouter
+			// has an embedded catalog - before modeldata/models-openrouter.json
+			// existed, CatalogFor("openrouter") was empty and ValidateModel
+			// skipped the provider entirely.
+			name:         "role provider override is validated against that provider's catalog",
+			modelName:    "claude-sonnet-4-6",
+			providerName: "openrouter",
+			wantErr:      true,
 		},
 		{
 			name:         "config base url for the role provider is used for resolution",
@@ -117,6 +158,7 @@ func TestResolveRuntimeModel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resetGlobalFlags(t)
 			clearBaseURLEnv(t)
+			isolateModelCatalog(t)
 			flagURL = tt.flagURL
 
 			cfg := config.Config{BaseURLs: tt.cfgBaseURLs}

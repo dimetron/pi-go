@@ -319,3 +319,42 @@ func TestBashHandler_BothStreamsAndExitCode(t *testing.T) {
 		t.Errorf("Stderr = %q, want 'err-line'", out.Stderr)
 	}
 }
+
+// TestBashHandler_RejectsControlToolCall covers the guard against models
+// pasting a suggested control-tool invocation — e.g. bash_wait(handle="bg_1")
+// from the backgrounding note — into the bash tool as shell text.
+func TestBashHandler_RejectsControlToolCall(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+
+	for _, cmd := range []string{
+		`bash_wait(handle="bg_12", wait_sec=5)`,
+		`bash_kill(handle="bg_3")`,
+		"bash_wait( handle=\"bg_1\")",
+	} {
+		_, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: cmd})
+		if err == nil {
+			t.Errorf("command %q should be rejected as a control-tool call", cmd)
+			continue
+		}
+		if !strings.Contains(err.Error(), "tool name") {
+			t.Errorf("command %q error should name the confusion, got %v", cmd, err)
+		}
+	}
+
+	// Shell that merely mentions the tools still runs normally, and so does a
+	// valid function definition that shares the name prefix.
+	for _, cmd := range []string{
+		`echo "use bash_wait to poll"`,
+		`bash_wait() { echo ok; }; bash_wait`,
+	} {
+		out, err := bashHandler(sb, testSupervisor(t), nil, BashInput{Command: cmd})
+		if err != nil {
+			t.Fatalf("valid shell %q should not be rejected: %v", cmd, err)
+		}
+		if out.ExitCode != 0 {
+			t.Errorf("command %q ExitCode = %d, want 0 (Stdout %q, Stderr %q)", cmd, out.ExitCode, out.Stdout, out.Stderr)
+		}
+	}
+}

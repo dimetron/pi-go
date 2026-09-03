@@ -123,7 +123,8 @@ func oaiContentsToMessages(contents []*genai.Content, config *genai.GenerateCont
 
 		switch {
 		case len(functionCalls) > 0 && genaiIsAssistantRole(role):
-			messages = append(messages, oaiToolCallMessages(textParts, functionCalls, functionResponses)...)
+			signatures := genaiThoughtSignatures(content.Parts)
+			messages = append(messages, oaiToolCallMessages(textParts, functionCalls, functionResponses, signatures)...)
 		case len(textParts) > 0:
 			messages = append(messages, oaiTextMessage(role, strings.Join(textParts, "\n")))
 		}
@@ -138,6 +139,7 @@ func oaiToolCallMessages(
 	textParts []string,
 	functionCalls []*genai.FunctionCall,
 	functionResponses map[string]*genai.FunctionResponse,
+	signatures map[string][]byte,
 ) []openai.ChatCompletionMessageParamUnion {
 	toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(functionCalls))
 	var toolResponseMessages []openai.ChatCompletionMessageParamUnion
@@ -146,16 +148,21 @@ func oaiToolCallMessages(
 			continue
 		}
 		argsJSON, _ := json.Marshal(fc.Args)
-		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-				ID:   fc.ID,
-				Type: constant.Function("function"),
-				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-					Name:      fc.Name,
-					Arguments: string(argsJSON),
-				},
+		call := &openai.ChatCompletionMessageFunctionToolCallParam{
+			ID:   fc.ID,
+			Type: constant.Function("function"),
+			Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+				Name:      fc.Name,
+				Arguments: string(argsJSON),
 			},
-		})
+		}
+		// Gemini 3 rejects a replayed call whose thought signature was
+		// dropped; every other provider never produced one, so the field
+		// is only ever set when the model itself sent it.
+		if extra := oaiThoughtSignatureExtraContent(signatures[fc.ID]); extra != nil {
+			call.SetExtraFields(extra)
+		}
+		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{OfFunction: call})
 		contentStr := "No response available for this function call."
 		if fr := functionResponses[fc.ID]; fr != nil {
 			contentStr = oaiFunctionResponseContent(fr.Response)
@@ -237,6 +244,20 @@ func accumulateOaiToolCall(acc map[int64]map[string]any, idx int64, id, name, ar
 	}
 }
 
+// accumulateOaiToolCallSignature records a Gemini thought signature for a tool
+// call being streamed. It is separate from accumulateOaiToolCall because the
+// signature is not part of the OpenAI delta shape and has to be read out of
+// the chunk's raw JSON, and because it arrives whole rather than in fragments.
+func accumulateOaiToolCallSignature(acc map[int64]map[string]any, idx int64, sig []byte) {
+	if len(sig) == 0 {
+		return
+	}
+	if acc[idx] == nil {
+		acc[idx] = map[string]any{"id": "", "name": "", "arguments": ""}
+	}
+	acc[idx]["thought_signature"] = sig
+}
+
 // buildOaiFinalResponse constructs the final LLMResponse from accumulated streaming state.
 func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 	indices := make([]int64, 0, len(s.toolCalls))
@@ -269,6 +290,9 @@ func buildOaiFinalResponse(s *oaiStreamState) *model.LLMResponse {
 		if name != "" || id != "" {
 			p := genai.NewPartFromFunctionCall(name, args)
 			p.FunctionCall.ID = id
+			if sig, ok := tc["thought_signature"].([]byte); ok {
+				p.ThoughtSignature = sig
+			}
 			finalParts = append(finalParts, p)
 		}
 	}
@@ -302,6 +326,40 @@ func oaiRunStreaming(ctx context.Context, client *openai.Client, params openai.C
 // the Anthropic and Ollama providers emit, which the TUI renders with 💭);
 // it is re-sent as turn content only when the model produced nothing else.
 func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawChunk string) string) {
+	oaiRunStreamingHooks(ctx, client, params, yield, oaiExtractHooks{deltaThinking: extractThinking})
+}
+
+// oaiExtractHooks collects the escape hatches a provider needs when it puts
+// data where the openai-go SDK has no field for it. Every hook is optional.
+type oaiExtractHooks struct {
+	// deltaThinking pulls reasoning text out of one streaming chunk's raw JSON.
+	deltaThinking func(rawChunk string) string
+	// messageThinking pulls reasoning text out of a non-streaming completion's
+	// raw JSON.
+	messageThinking func(rawResponse string) string
+	// answerText rewrites the content string the SDK decoded before it is
+	// treated as answer text. Mistral reasoning models send content as a JSON
+	// array, and the SDK's decoder leaves that array's raw text in the string
+	// field, so without this hook the transcript would show raw JSON. nil
+	// means the decoded string is already the answer.
+	answerText func(content string) string
+}
+
+// answer applies the answerText hook, or passes the content through when the
+// provider did not install one.
+func (h oaiExtractHooks) answer(content string) string {
+	if h.answerText == nil {
+		return content
+	}
+	return h.answerText(content)
+}
+
+// oaiRunStreamingHooks is oaiRunStreaming with the full set of provider hooks
+// (see oaiExtractHooks). Reasoning streams as "thinking"-role partials (the
+// same shape the Anthropic and Ollama providers emit, which the TUI renders
+// with 💭); it is re-sent as turn content only when the model produced nothing
+// else.
+func oaiRunStreamingHooks(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, hooks oaiExtractHooks) {
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 		IncludeUsage: param.NewOpt(true),
 	}
@@ -318,8 +376,8 @@ func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params o
 			state.completionTokens = chunk.Usage.CompletionTokens
 			state.cachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
-		if extractThinking != nil && len(chunk.Choices) > 0 {
-			if think := extractThinking(chunk.RawJSON()); think != "" {
+		if hooks.deltaThinking != nil && len(chunk.Choices) > 0 {
+			if think := hooks.deltaThinking(chunk.RawJSON()); think != "" {
 				state.thinking += think
 				if !yield(&model.LLMResponse{
 					Partial:      true,
@@ -335,18 +393,19 @@ func oaiRunStreamingExtract(ctx context.Context, client *openai.Client, params o
 		}
 		choice := chunk.Choices[0]
 		delta := choice.Delta
-		if delta.Content != "" {
-			state.text += delta.Content
+		if text := hooks.answer(delta.Content); text != "" {
+			state.text += text
 			if !yield(&model.LLMResponse{
 				Partial:      true,
 				TurnComplete: false,
-				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: delta.Content}}},
+				Content:      &genai.Content{Role: string(genai.RoleModel), Parts: []*genai.Part{{Text: text}}},
 			}, nil) {
 				return
 			}
 		}
 		for _, tc := range delta.ToolCalls {
 			accumulateOaiToolCall(state.toolCalls, tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)
+			accumulateOaiToolCallSignature(state.toolCalls, tc.Index, oaiThoughtSignature(tc.RawJSON()))
 		}
 		if choice.FinishReason != "" {
 			state.finishReason = choice.FinishReason
@@ -373,6 +432,12 @@ func oaiRunNonStreaming(ctx context.Context, client *openai.Client, params opena
 // pulls reasoning text out of the completion's raw JSON (see
 // oaiRunStreamingExtract). The reasoning is prepended to the response parts.
 func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, extractThinking func(rawResponse string) string) {
+	oaiRunNonStreamingHooks(ctx, client, params, yield, oaiExtractHooks{messageThinking: extractThinking})
+}
+
+// oaiRunNonStreamingHooks is oaiRunNonStreaming with the full set of provider
+// hooks (see oaiExtractHooks). The reasoning is prepended to the response parts.
+func oaiRunNonStreamingHooks(ctx context.Context, client *openai.Client, params openai.ChatCompletionNewParams, yield func(*model.LLMResponse, error) bool, hooks oaiExtractHooks) {
 	completion, err := client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		yield(nil, fmt.Errorf("OpenAI chat completion failed: %w", err))
@@ -385,13 +450,13 @@ func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, param
 	choice := completion.Choices[0]
 	msg := choice.Message
 	parts := make([]*genai.Part, 0, 2+len(msg.ToolCalls))
-	if extractThinking != nil {
-		if thinking := extractThinking(completion.RawJSON()); thinking != "" {
+	if hooks.messageThinking != nil {
+		if thinking := hooks.messageThinking(completion.RawJSON()); thinking != "" {
 			parts = append(parts, &genai.Part{Text: thinking})
 		}
 	}
-	if msg.Content != "" {
-		parts = append(parts, &genai.Part{Text: msg.Content})
+	if text := hooks.answer(msg.Content); text != "" {
+		parts = append(parts, &genai.Part{Text: text})
 	}
 	for _, tc := range msg.ToolCalls {
 		if tc.Type == "function" && tc.Function.Name != "" {
@@ -401,6 +466,7 @@ func oaiRunNonStreamingExtract(ctx context.Context, client *openai.Client, param
 			}
 			p := genai.NewPartFromFunctionCall(tc.Function.Name, args)
 			p.FunctionCall.ID = tc.ID
+			p.ThoughtSignature = oaiThoughtSignature(tc.RawJSON())
 			parts = append(parts, p)
 		}
 	}

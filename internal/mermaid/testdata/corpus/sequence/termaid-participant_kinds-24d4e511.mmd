@@ -1,0 +1,8 @@
+sequenceDiagram
+    actor User
+    participant App
+    database DB
+    User->>App: Request
+    App->>DB: Query
+    DB-->>App: Result
+    App-->>User: Response
