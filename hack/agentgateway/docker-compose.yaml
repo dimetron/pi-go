@@ -56,20 +56,41 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      # The DIRECTORY, not the three files inside it. A single-file bind mount
+      # binds one inode. Replacing that file on the host by unlink-then-create
+      # — what a `git checkout` of a deleted file and many editors' save do —
+      # leaves the container holding a mount that resolves to nothing, and
+      # every read, write and watch of it fails:
+      #
+      #   warn  failed to watch path /etc/agentgateway/base-costs.json: No path was found.
+      #   error Failed to reload config: failed to read from file
+      #         `/etc/agentgateway/config.yaml`: No such file or directory (os error 2)
+      #   failed to write to file `./base-costs.json`: No such file or directory (os error 2)
+      #
+      # Replacing it by rename-over survives, so this fails intermittently
+      # depending on which tool touched the file last — and the gateway keeps
+      # serving whatever it loaded at boot, so it reads as "refresh costs is
+      # broken" rather than as a crash. A single-file mount also refuses the
+      # reverse: an atomic save from *inside* the container cannot rename onto
+      # its own mount point (EBUSY, "Device or resource busy").
+      #
+      # Mounting the directory fixes both: the container follows a replacement,
+      # and a restart is no longer the only way to pick up a host-side edit.
+      #
       # Deliberately NOT :ro — with storage.mode=file the UI saves config
-      # changes by rewriting this file, and a read-only mount makes every save
-      # fail. The container runs as uid 65532, so on Linux the file must be
-      # group/other writable (chmod 666 config.yaml) for a save to land;
-      # Docker Desktop and OrbStack on macOS map the owner and need nothing.
-      # Set AGENTGATEWAY_STORAGE_MODE=readOnly and restore :ro to lock it down.
-      - ./config.yaml:/etc/agentgateway/config.yaml
-      # Also NOT :ro. POST /api/costs/refresh-base (the UI's "refresh costs"
-      # action) rewrites this file from models.dev, then hot-reloads it.
-      # A read-only mount makes that fail with a permission error.
-      - ./base-costs.json:/etc/agentgateway/base-costs.json
-      # Hand-maintained aliases, layered after base-costs.json so a refresh
-      # cannot wipe them. Read-only: nothing in the gateway writes this.
-      - ./pi-aliases.json:/etc/agentgateway/pi-aliases.json:ro
+      # changes by rewriting config.yaml, and POST /api/costs/refresh-base (the
+      # UI's "refresh costs" action) rewrites base-costs.json from models.dev
+      # and hot-reloads it. A read-only mount makes both fail. The container
+      # runs as uid 65532, so on Linux the files must be group/other writable
+      # (chmod 666 config.yaml base-costs.json) for a save to land; Docker
+      # Desktop and OrbStack on macOS map the owner and need nothing.
+      # Set AGENTGATEWAY_STORAGE_MODE=readOnly and append :ro to lock it down.
+      - .:/etc/agentgateway
+      # Mounting the directory also exposes this directory's .env — the keys
+      # compose reads to build the environment above. The gateway has no use
+      # for the file, so shadow it with an empty one. /dev/null is safe as a
+      # single-file mount precisely because nothing ever replaces it.
+      - /dev/null:/etc/agentgateway/.env:ro
     working_dir: /etc/agentgateway
     command: ["-f", "/etc/agentgateway/config.yaml"]
     depends_on:
