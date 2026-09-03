@@ -66,6 +66,37 @@ func TestContextWindowSizeForAgentGateway(t *testing.T) {
 	}
 }
 
+// TestContextWindowSizeForAgentGatewayLayeredRoutes pins that agentgateway/
+// prefix and downstream provider prefixes (gemini/, anthropic/, openai/) are
+// stripped in sequence so layered names resolve to the underlying vendor's
+// nominal window instead of falling back to 0 (which triggers 256k default).
+func TestContextWindowSizeForAgentGatewayLayeredRoutes(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int64
+	}{
+		{"gemini/gemini-2.5-flash", 1_048_576},
+		{"gemini/gemini-3.8-flash", 1_048_576},
+		{"gemini-3.8-flash", 1_048_576},
+		{"agentgateway/gemini/gemini-2.5-flash", 1_048_576},
+		{"agentgateway/gemini/gemini-3.8-flash", 1_048_576},
+		{"agentgateway/gemini-3.8-flash", 1_048_576},
+		{"agentgateway/anthropic/claude-3-5-sonnet", 200_000},
+		{"anthropic/claude-3-5-sonnet", 200_000},
+		{"agentgateway/openai/gpt-5.2", 1_050_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := ContextWindowSizeFor("agentgateway", tt.model); got != tt.want {
+				t.Errorf("ContextWindowSizeFor(agentgateway, %q) = %d, want %d", tt.model, got, tt.want)
+			}
+			if got := ContextWindowSize(tt.model); got != tt.want {
+				t.Errorf("ContextWindowSize(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestContextWindowSizeForAgentGatewayVirtualModels pins that the gateway's
 // virtual model names resolve to the deepseek window they route to. A session
 // that names the virtual model (e.g. `ollama-deepseek`) must not fall back to a
