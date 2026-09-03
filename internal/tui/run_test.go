@@ -947,7 +947,8 @@ func TestBuildResumePrompt_NoStateSection(t *testing.T) {
 }
 
 func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
-	// When spawn fails during retry, phase should be "failed" and retry counter should increment.
+	// When spawn fails during retry, every configured retry should be consumed
+	// before the gate failure becomes terminal.
 	// We use a real orchestrator with empty config — Spawn will fail on role resolution.
 	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
 
@@ -979,12 +980,11 @@ func TestRetryOnGateFailure_FirstRetry_SpawnFails(t *testing.T) {
 
 	m.handleRunGateResult(msg)
 
-	// Retry counter should increment even if spawn fails.
-	if m.run.retries != 1 {
-		t.Errorf("retries = %d, want 1", m.run.retries)
+	if m.run.retries != 3 {
+		t.Errorf("retries = %d, want 3", m.run.retries)
 	}
 
-	// Phase should be "failed" because spawn failed.
+	// Phase should be "failed" after the retry budget is exhausted.
 	if m.run.phase != "failed" {
 		t.Errorf("phase = %q, want %q", m.run.phase, "failed")
 	}
@@ -1035,8 +1035,8 @@ func TestRetryOnGateFailure_RetryCountIncrement(t *testing.T) {
 
 	m.handleRunGateResult(msg)
 
-	if m.run.retries != 2 {
-		t.Errorf("retries = %d, want 2", m.run.retries)
+	if m.run.retries != 3 {
+		t.Errorf("retries = %d, want 3", m.run.retries)
 	}
 
 	// The gate output should contain the LATEST failure.
@@ -1758,8 +1758,8 @@ func TestVerifier_IncompletePlanDoesNotMerge(t *testing.T) {
 	if m.run.phase == "merging" || m.run.phase == "done" {
 		t.Fatalf("phase = %q — must not merge while slices are unchecked", m.run.phase)
 	}
-	if m.run.retries != 1 {
-		t.Errorf("retries = %d, want 1 (verifier should trigger a cycle)", m.run.retries)
+	if m.run.retries != 3 {
+		t.Errorf("retries = %d, want 3 (verifier should consume the retry budget)", m.run.retries)
 	}
 
 	var sawVerdict bool
@@ -1885,8 +1885,8 @@ func TestAgentFailure_TriggersRetryInsteadOfGivingUp(t *testing.T) {
 
 	m.handleRunAgentDone(runAgentDoneMsg{agentID: "task-1", status: "failed"})
 
-	if m.run.retries != 1 {
-		t.Errorf("retries = %d, want 1 — an agent failure should start a new cycle", m.run.retries)
+	if m.run.retries != 10 {
+		t.Errorf("retries = %d, want 10 — an agent failure should consume the retry budget", m.run.retries)
 	}
 	if m.run.phase == "gating" || m.run.phase == "merging" {
 		t.Errorf("phase = %q — a failed agent must not reach gates or merge", m.run.phase)

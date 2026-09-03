@@ -127,6 +127,9 @@ var transientPatterns = []string{
 	"cannot assign requested address",
 	"network is unreachable",
 	"no route to host",
+	"no such host",
+	"server misbehaving",
+	"temporary failure in name resolution",
 	"broken pipe",
 	"connection aborted",
 
