@@ -155,6 +155,32 @@ func TestResolveWithAnthropicPrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestStripKnownProviderPrefixes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"gpt-5.4", "gpt-5.4"},
+		{"openai/gpt-5.6-luna", "gpt-5.6-luna"},
+		{"OPENAI/gpt-5.6-luna", "gpt-5.6-luna"},
+		{"agentgateway/openai/gpt-5.6-luna", "gpt-5.6-luna"},
+		{"agentgateway/openrouter/anthropic/claude-3-5-sonnet", "claude-3-5-sonnet"},
+		{"agentgateway/gemini/Gemini-3.8-Flash", "Gemini-3.8-Flash"},
+		{"azure/gpt-4o", "gpt-4o"},
+		{"ollama/llama3.3", "llama3.3"},
+		{"ollama-cloud/deepseek-v3", "deepseek-v3"},
+		{"mycorp/custom-model", "mycorp/custom-model"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := StripKnownProviderPrefixes(tt.input); got != tt.want {
+				t.Errorf("StripKnownProviderPrefixes(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveMistralPrefixStripped(t *testing.T) {
 	tests := []struct {
 		model     string

@@ -11,16 +11,16 @@ import (
 func resetGlobalFlags(t *testing.T) {
 	t.Helper()
 	orig := struct {
-		model, mode, session, socket, url, system, pprof, pprofPort string
-		headers                                                     []string
-		cont, insecure, smol, slow, plan, memOff                    bool
-		loginModel                                                  string
-		serveAddr, serveProject, serveModel, serveURL               string
-		serveHeaders                                                []string
-		servePairing                                                time.Duration
-		serveInsecure                                               bool
+		model, mode, session, socket, url, system, pprof, pprofPort, cpuProfile string
+		headers                                                                 []string
+		cont, insecure, smol, slow, plan, memOff                                bool
+		loginModel                                                              string
+		serveAddr, serveProject, serveModel, serveURL                           string
+		serveHeaders                                                            []string
+		servePairing                                                            time.Duration
+		serveInsecure                                                           bool
 	}{
-		flagModel, flagMode, flagSession, flagSocket, flagURL, flagSystem, flagPprof, flagPprofPort,
+		flagModel, flagMode, flagSession, flagSocket, flagURL, flagSystem, flagPprof, flagPprofPort, flagCPUProfile,
 		flagHeaders,
 		flagContinue, flagInsecure, flagSmol, flagSlow, flagPlan, flagMemoryOff,
 		flagLoginModel,
@@ -38,6 +38,7 @@ func resetGlobalFlags(t *testing.T) {
 		flagSystem = orig.system
 		flagPprof = orig.pprof
 		flagPprofPort = orig.pprofPort
+		flagCPUProfile = orig.cpuProfile
 		flagHeaders = orig.headers
 		flagContinue = orig.cont
 		flagInsecure = orig.insecure
@@ -63,6 +64,7 @@ func resetGlobalFlags(t *testing.T) {
 	flagSystem = ""
 	flagPprof = ""
 	flagPprofPort = "6060"
+	flagCPUProfile = ""
 	flagHeaders = nil
 	flagContinue = false
 	flagInsecure = false
