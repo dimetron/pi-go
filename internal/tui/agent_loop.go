@@ -64,7 +64,14 @@ const (
 
 	// maxOutputRepeats is the number of back-to-back copies of one phrase in
 	// the model's own output before the turn is called degenerate.
-	maxOutputRepeats = 12
+	//
+	// Set low enough to catch a model that repeats a single intent while
+	// varying its tool calls just enough to dodge the identical-call streak
+	// (session 260903-1012-bf620-ef665 repeated one phrase 8 times and burned
+	// the full 65536-token output budget before being cut off). 6 copies of a
+	// ~100-char phrase is ~600 bytes of output — far too little to be a
+	// legitimate answer, and well under the 512-byte scan cadence.
+	maxOutputRepeats = 6
 
 	// outputWindowBytes is the rolling tail of streamed output kept for
 	// repetition detection. It has to hold maxOutputRepeats copies of the

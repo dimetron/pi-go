@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge hooks fetch-models
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo hooks fetch-models
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -122,6 +122,30 @@ eval-tools-judge: build
 	PI_EVAL_TOOLS=1 PI_EVAL_JUDGE_MODEL=$(PI_EVAL_JUDGE_MODEL) PI_BINARY=$(abspath ./pi) \
 		go test -tags e2e -v -run '^TestEvalTools$$' ./internal/eval/scenarios/ -parallel 4 -timeout 60m
 
+# Record a PGO profile: run the tool-coverage eval suite with --cpuprofile on
+# every scenario's pi process, plus the TUI render benchmarks, then merge all
+# profiles into cmd/pi/default.pgo. `go build` auto-detects default.pgo in the
+# main package dir and enables PGO, so this is the one step that keeps the
+# profile fresh.
+#
+# Two workloads are merged so the profile covers both of the binary's hot
+# paths: the headless agent/tool loop (one `pi --mode print` per tool family)
+# and the TUI render loop (RenderMessages / collapseBlankLines / matchLexer,
+# which a live profile attributed ~24% of CPU to — bubbletea calls View() once
+# per token during streaming). A single-workload profile would optimize only
+# one half of the program. Requires a built binary and an LLM API key (see
+# eval-tools). Knobs: PI_EVAL_MODEL, PI_EVAL_SCENARIO, PI_EVAL_TIMEOUT,
+# PI_EVAL_SERIAL=1. See .pi-go/skills/pgo/SKILL.md.
+record-pgo: build
+	@mkdir -p tmp/pgo
+	PI_EVAL_TOOLS=1 PI_EVAL_CPU_PROFILE=$(abspath tmp/pgo) PI_BINARY=$(abspath ./pi) \
+		go test -tags e2e -v -run '^TestEvalTools$$' ./internal/eval/scenarios/ -parallel 4 -timeout 60m
+	@go test -tags e2e -run '^$$' -bench 'BenchmarkRenderMessagesRunningCached|BenchmarkCollapseBlankLines|BenchmarkMatchLexerCached' \
+		-benchtime 2s -cpuprofile $(abspath tmp/pgo)/render.pprof ./internal/tui/
+	@go tool pprof -proto tmp/pgo/*.pprof > cmd/pi/default.pgo
+	@echo "PGO profile written to cmd/pi/default.pgo ($$(ls -la cmd/pi/default.pgo | awk '{print $$5}') bytes)"
+	@rm -rf tmp/pgo
+
 test-all: test-unit test-integration test-e2e
 
 test-coverage:
@@ -163,7 +187,7 @@ vet:
 	go vet ./...
 
 clean:
-	rm -f pi coverage.out sbom.spdx.json
+	rm -f pi coverage.out sbom.spdx.json cmd/pi/default.pgo
 
 ## OSX sandbox — pi-sandbox embeds pi-profile.sb, resolves params, tails denial logs automatically
 sandbox-run: install

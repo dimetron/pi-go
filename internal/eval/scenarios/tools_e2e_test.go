@@ -238,11 +238,19 @@ func errorResult(s eval.Scenario, started time.Time, reason string) eval.Scenari
 // at the scenario's isolated home. Returns the exit code (-1 when the process
 // did not exit on its own), the combined output, and an error describing a
 // non-zero exit or timeout.
+//
+// When PI_EVAL_CPU_PROFILE is set to a directory, each scenario's pi process
+// also writes a runtime CPU profile to <dir>/<scenario>.pprof via --cpuprofile.
+// These are the PGO inputs: `make record-pgo` runs the suite with this set and
+// merges the per-scenario profiles into cmd/pi/default.pgo.
 func runPi(ctx context.Context, bin, workDir, home string, s eval.Scenario, timeout time.Duration) (int, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	args := append([]string{"--mode", "print"}, s.Args...)
+	if profDir := os.Getenv("PI_EVAL_CPU_PROFILE"); profDir != "" {
+		args = append(args, "--cpuprofile", filepath.Join(profDir, s.Name+".pprof"))
+	}
 	args = append(args, s.Prompt)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = workDir

@@ -52,6 +52,12 @@ sandbox-trace.log
 sandbox.log
 /pi-sandbox
 
+# Local secrets — never commit real API keys. hack/agentgateway/.env holds
+# live keys (Anthropic, OpenAI, Gemini, ...) and the repo is public.
+.env
+.env.*
+!.env.example
+
 # Binaries built from the tools under hack/. `go build ./hack/<tool>` drops the
 # executable in the repo root, which is easy to commit by accident — it happened
 # once with vulngate.

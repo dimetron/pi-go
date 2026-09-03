@@ -46,8 +46,13 @@ llm:
     params:
       apiKey: ${OPENAI_API_KEY:-}
   - name: gemini
-    provider: gemini
+    provider:
+      custom:
+        providerOverride: gcp.gemini
+        formats:
+        - type: completions
     params:
+      baseUrl: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       apiKey: ${GEMINI_API_KEY:-}
   - name: mistral
     provider: mistral
@@ -225,7 +230,7 @@ llm:
           priority: 0
         - model: openai/gpt-5.6
           priority: 1
-        - model: gemini/gemini-3-pro
+        - model: gemini/gemini-3.1-pro-preview
           priority: 2
   - name: pi-fast
     routing:
