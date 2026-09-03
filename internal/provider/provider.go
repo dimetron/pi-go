@@ -468,6 +468,12 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "mistral", Model: modelName[len("mistral/"):]}, nil
 	}
 
+	// Detect anthropic/ prefix → native Anthropic provider.
+	// The prefix is stripped; the remainder is the Anthropic model name.
+	if strings.HasPrefix(strings.ToLower(modelName), "anthropic/") {
+		return Info{Provider: "anthropic", Model: modelName[len("anthropic/"):]}, nil
+	}
+
 	// Detect :cloud or -cloud suffix → native Ollama provider.
 	// Keep the full model name — :cloud and -cloud are valid Ollama model tags.
 	if IsOllamaCloudModel(modelName) {
