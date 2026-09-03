@@ -10,13 +10,21 @@ import "strings"
 //	quotaMetric:  generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count
 //	quotaValue:   2000000
 //
-// The 10% haircut off that 2,000,000 is deliberate. pi-go counts tokens by
-// estimating from the request's byte length, and its minute is a token bucket
-// rather than the server's window, so the two ledgers drift; pacing exactly at
-// the published figure would convert every rounding error into a 429. The
-// margin costs throughput nobody was using — the turn that triggered this
-// spent 2,005,778 tokens in the minute it was rejected, so it was over the
-// line by a quarter of a percent, not by a factor.
+// The 10% haircut off that 2,000,000 is the *only* safety margin in the
+// pacing path, and it is deliberately the only one. pi-go's minute is a token
+// bucket rather than the server's window, so the two ledgers drift even when
+// the token count is right; pacing exactly at the published figure would
+// convert every rounding error into a 429.
+//
+// The margin lives here rather than in ratelimit.bytesPerToken on purpose.
+// That constant is a measurement — bytes per token, checked against what the
+// gateway reports — so folding a fudge factor into it would stop it meaning
+// what it says and make it impossible to re-measure. Anyone tightening the
+// margin should move this number, not that one, and should not do both.
+//
+// It costs throughput nobody was using: the turn that triggered this spent
+// 2,005,778 tokens in the minute it was rejected, so it was over the line by a
+// quarter of a percent, not by a factor.
 //
 // Google no longer publishes per-model RPM/TPM tables on
 // ai.google.dev/gemini-api/docs/rate-limits — it points at the AI Studio

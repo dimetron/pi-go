@@ -52,8 +52,8 @@ func newRequest(t *testing.T, body string) *http.Request {
 
 func TestEstimateRequestTokens(t *testing.T) {
 	t.Parallel()
-	req := newRequest(t, strings.Repeat("x", 400))
-	if got, want := estimateRequestTokens(req), 100; got != want {
+	req := newRequest(t, strings.Repeat("x", 405))
+	if got, want := estimateRequestTokens(req), 150; got != want {
 		t.Fatalf("estimateRequestTokens = %d, want %d", got, want)
 	}
 
@@ -277,5 +277,53 @@ func TestTransportPropagatesError(t *testing.T) {
 
 	if _, err := tr.RoundTrip(newRequest(t, "hello")); !errors.Is(err, wantErr) {
 		t.Fatalf("RoundTrip err = %v, want %v", err, wantErr)
+	}
+}
+
+// The estimate must not under-count against what the gateway actually charged.
+// These are the paired samples the bytesPerToken comment cites — body bytes
+// measured from the httplog entry, input tokens from the gateway's log line
+// for that same request. Pinned so a future change to the divisor has to face
+// the measurement rather than a round number that looked reasonable.
+func TestEstimateRequestTokensDoesNotUndercountMeasuredTraffic(t *testing.T) {
+	t.Parallel()
+	samples := []struct {
+		bodyBytes int64
+		actual    int
+	}{
+		{47513, 11136},  // first request: system prompt and tool definitions
+		{150818, 50684}, // source code entering the conversation
+		{213462, 75302},
+		{319659, 116592},
+		{433693, 159629},
+		{468940, 172922}, // the densest sample: 2.71 bytes/token
+		{605301, 220154},
+	}
+	for _, s := range samples {
+		req := &http.Request{ContentLength: s.bodyBytes}
+		est := estimateRequestTokens(req)
+		if est < s.actual {
+			t.Errorf("%d bytes estimated at %d tokens but was charged %d — under-counting is what causes the 429",
+				s.bodyBytes, est, s.actual)
+		}
+	}
+}
+
+// The defect this divisor was corrected for: at 4 bytes per token the limiter
+// would have paced nothing through the minute that drew the original
+// rejection, and 429'd anyway. 2,005,778 tokens were charged in that minute;
+// at the measured 2.75 bytes/token that is about 5.5 MB on the wire, which has
+// to estimate above the budget for the limiter to hold anything back.
+func TestEstimateCatchesTheRejectedMinute(t *testing.T) {
+	t.Parallel()
+	const chargedTokens = 2_005_778
+	// 2.75 bytes per token, in integer arithmetic so the figure stays exact.
+	wireBytes := int64(chargedTokens) * 275 / 100
+	est := estimateRequestTokens(&http.Request{ContentLength: wireBytes})
+
+	budget := DefaultsFor("gemini", "gemini-3.8-flash").InputTokensPerMinute
+	if est <= budget {
+		t.Fatalf("the rejected minute (%d bytes) estimates at %d tokens, inside the %d budget: "+
+			"the limiter would pace nothing and the 429 would recur", wireBytes, est, budget)
 	}
 }

@@ -13,14 +13,31 @@ import (
 
 // bytesPerToken converts a serialized request body to an input-token estimate.
 //
-// Four, the same ratio internal/memory and internal/tui already use. The
-// budget being paced is measured in tokens and only the server can count them
-// exactly, so the choice is between a cheap estimate and no pacing at all; an
-// estimate that is wrong by a few percent still keeps a turn off a wall it was
-// otherwise hitting every minute. JSON structure inflates the byte count
-// slightly, which errs toward sending less than the budget allows — the safe
-// direction.
-const bytesPerToken = 4
+// Measured, not assumed. 22 requests were driven through the local
+// agentgateway with `pi --mode print --trace-http` against
+// agentgateway/gemini-3.8-flash, pairing each request's body length from the
+// httplog entry with the gen_ai.usage.input_tokens the gateway logged for that
+// same request; runs were tagged with a nonce in the prompt so the pairing is
+// exact rather than by timestamp. Bodies spanned 47 KB to 605 KB, 11k to 220k
+// input tokens:
+//
+//	all 22 samples          min 2.71   median 2.79   max 4.27
+//	>=50k tokens (n=20)     min 2.71   median 2.75   max 3.12
+//
+// 2.7 is the conservative end of the range that matters. The ratio is not
+// constant — a first request is mostly system prompt and tool definitions and
+// runs near 4.3, but it falls and settles just above 2.7 once source code
+// dominates the payload, which is exactly the regime that exhausts a token
+// quota. Picking the low end over-charges the small requests, and that is the
+// direction to be wrong in: under-counting causes the 429s this package
+// exists to prevent, over-counting only costs throughput.
+//
+// This started as 4 — the ratio internal/memory and internal/tui use for plain
+// text — and that was a real defect rather than a rounding error. At the
+// measured 2.75, the 2,005,778 tokens that drew the original rejection were
+// about 5.5 MB on the wire, which a divisor of 4 estimates at 1.38M: under the
+// budget, so the limiter would have paced nothing and 429'd anyway.
+const bytesPerToken = 2.7
 
 // hintBodyLimit bounds how much of an error body is scanned for a retry hint.
 // Rate-limit bodies are a few hundred bytes; the cap is only there so a
@@ -78,7 +95,7 @@ func estimateRequestTokens(req *http.Request) int {
 	if req == nil || req.ContentLength <= 0 {
 		return 0
 	}
-	return int(req.ContentLength / bytesPerToken)
+	return int(float64(req.ContentLength) / bytesPerToken)
 }
 
 // retryHint extracts how long the server asked us to wait.
