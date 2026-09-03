@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/ratelimit"
 
 	"google.golang.org/adk/v2/model"
 )
@@ -36,7 +37,8 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 	}
 	hasHeaders := len(opts.ExtraHeaders) > 0
 	needsTLS := opts.InsecureSkipTLS || opts.CACertPath != ""
-	if !needsTLS && !hasHeaders && opts.ConnectTimeout <= 0 {
+	needsPacing := opts.RateLimit.Enabled()
+	if !needsTLS && !hasHeaders && !needsPacing && opts.ConnectTimeout <= 0 {
 		return maybeTrace(nil, traceHTTP), nil
 	}
 
@@ -67,6 +69,17 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 	base = maybeTrace(base, traceHTTP)
 	if hasHeaders {
 		base = &headerTransport{base: base, headers: opts.ExtraHeaders}
+	}
+	// Outermost, above the trace and the header injection: the wait has to
+	// happen before the request is spent, and the trace should record the
+	// moment the request actually went on the wire rather than the moment the
+	// caller queued it. Wrapping the other way round would log a send time
+	// that could be a minute earlier than the send.
+	if needsPacing {
+		base = &ratelimit.Transport{
+			Base:    base,
+			Limiter: ratelimit.Shared(opts.RateLimitScope, opts.RateLimit),
+		}
 	}
 	return base, nil
 }
@@ -580,12 +593,29 @@ type LLMOptions struct {
 	// EnableXAITools opts into xAI server-side tools (web search, X search,
 	// and code interpreter) for xAI Responses API requests.
 	EnableXAITools bool
+	// RateLimit paces outbound requests so a turn stays inside the provider's
+	// per-minute quota rather than being rejected by it. A zero value sends at
+	// whatever rate the caller manages. Resolved from config by
+	// Config.ResolveRateLimits.
+	RateLimit ratelimit.Limits
+	// RateLimitScope names the budget RateLimit applies to. Every client
+	// aimed at the same budget must pass the same scope, because the quota is
+	// enforced per account and not per client — see ratelimit.Shared. Left
+	// empty, NewLLM fills it in from the provider, model and base URL.
+	RateLimitScope string
 }
 
 // NewLLM creates a model.LLM for the given provider info, API key, optional base URL, thinking level, and options.
 func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel string, opts *LLMOptions) (model.LLM, error) {
 	if opts == nil {
 		opts = &LLMOptions{}
+	}
+	// Name the pacing budget here rather than at every call site: this is the
+	// one place that holds the provider, the model and the endpoint together,
+	// and every client aimed at the same three has to agree on the name or
+	// they get separate buckets over one quota.
+	if opts.RateLimitScope == "" {
+		opts.RateLimitScope = ratelimit.ScopeFor(info.Provider, info.Model, baseURL)
 	}
 	switch info.Provider {
 	case "ollama":

@@ -77,5 +77,6 @@ func geminiHTTPOptions(baseURL string, opts *LLMOptions) (genai.HTTPOptions, boo
 // geminiNeedsHTTPClient reports whether opts asks for transport settings that
 // only a custom *http.Client can carry.
 func geminiNeedsHTTPClient(opts *LLMOptions) bool {
-	return opts != nil && (opts.InsecureSkipTLS || opts.CACertPath != "" || opts.ConnectTimeout > 0)
+	return opts != nil && (opts.InsecureSkipTLS || opts.CACertPath != "" ||
+		opts.ConnectTimeout > 0 || opts.RateLimit.Enabled())
 }

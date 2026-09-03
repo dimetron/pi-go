@@ -166,7 +166,7 @@ func TestServerDelay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := ServerDelay(errors.New(tt.msg))
+			got, ok := ServerDelay(providerErr(tt.msg))
 			if ok != tt.ok {
 				t.Fatalf("ServerDelay(%q) ok = %v, want %v", tt.msg, ok, tt.ok)
 			}
@@ -235,5 +235,67 @@ func TestDelayClampsServerHint(t *testing.T) {
 func TestDelayZeroConfigUsesDefaults(t *testing.T) {
 	if got := Delay(Config{}, 0, errors.New("503")); got != DefaultConfig().InitialDelay {
 		t.Errorf("Delay with zero config = %v, want %v", got, DefaultConfig().InitialDelay)
+	}
+}
+
+// A transport that reads a 429 body directly sees Gemini's RetryInfo detail as
+// raw JSON rather than as the Go-map rendering that reaches the session log.
+// Both spellings have to parse, or the hint is lost exactly where it is most
+// useful — on the OpenAI-compatible paths, whose SDK discards the body before
+// the retry loop can classify it.
+func TestServerDelayReadsJSONRetryInfo(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		msg  string
+		want time.Duration
+	}{
+		{
+			name: "json retryDelay",
+			msg:  `{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"11s"}]}`,
+			want: 11 * time.Second,
+		},
+		{
+			name: "json retryDelay with spacing",
+			msg:  `{"@type": "…/google.rpc.RetryInfo", "retryDelay": "59s"}`,
+			want: 59 * time.Second,
+		},
+		{
+			name: "go map rendering",
+			msg:  "map[@type:type.googleapis.com/google.rpc.RetryInfo retryDelay:11s]",
+			want: 11 * time.Second,
+		},
+		{
+			name: "prose alongside the quota",
+			msg: "Quota exceeded for metric: generativelanguage.googleapis.com/" +
+				"generate_content_paid_tier_input_token_count, limit: 2000000, " +
+				"model: gemini-3.8-flash\\nPlease retry in 10.419145242s.",
+			want: 10419145242 * time.Nanosecond,
+		},
+	}
+	for _, tt := range tests {
+		got, ok := ServerDelay(providerErr(tt.msg))
+		if !ok {
+			t.Errorf("%s: ServerDelay found no hint in %q", tt.name, tt.msg)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("%s: ServerDelay = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// A quota 429 that names a window is retryable even though its prose reads
+// like plan exhaustion — the Gemini per-minute token limit reuses that wording
+// verbatim. This is the classification the JSON form above now also reaches.
+func TestJSONRetryInfoMakesQuotaErrorTransient(t *testing.T) {
+	t.Parallel()
+	err := providerErr(`429: You exceeded your current quota, please check your plan and ` +
+		`billing details. {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"11s"}`)
+	if IsTerminal(err) {
+		t.Error("a quota error naming a retry window was classified terminal")
+	}
+	if !IsTransient(err) {
+		t.Error("a quota error naming a retry window was not classified transient")
 	}
 }

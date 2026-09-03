@@ -57,6 +57,27 @@ func MemoryDefaults() MemoryConfig {
 	}
 }
 
+// RateLimitConfig paces pi-go's outbound requests to one provider so a turn
+// stays inside the provider's quota instead of discovering it by being
+// rejected. See internal/ratelimit for why retrying is not a substitute.
+//
+// Fields are pointers so that "not configured" and "explicitly unlimited" stay
+// distinguishable: a missing field inherits the built-in default for the
+// provider, and an explicit 0 turns that budget off.
+type RateLimitConfig struct {
+	// RequestsPerMinute caps request count. Unset for every provider by
+	// default — the limits pi-go has actually been rejected by are token
+	// budgets, not request counts.
+	RequestsPerMinute *int `json:"requestsPerMinute,omitempty"`
+	// InputTokensPerMinute caps input tokens sent per minute. This is the
+	// budget that binds in practice; see ratelimit.DefaultsFor.
+	InputTokensPerMinute *int `json:"inputTokensPerMinute,omitempty"`
+}
+
+// rateLimitWildcard is the RateLimits key applied to any provider without an
+// entry of its own.
+const rateLimitWildcard = "*"
+
 // Config holds all pi-go configuration.
 type Config struct {
 	Roles           map[string]RoleConfig `json:"roles,omitempty"`
@@ -88,13 +109,16 @@ type Config struct {
 	// models absent from the embedded catalog (notably the opencode ones):
 	// auto-compaction measures a percentage of the window, so it stays off
 	// rather than guess at an unknown budget.
-	ContextWindow int64              `json:"contextWindow,omitempty"`
-	Compactor     *CompactorConfig   `json:"compactor,omitempty"`
-	AutoCompact   *AutoCompactConfig `json:"autoCompact,omitempty"`
-	Memory        *MemoryConfig      `json:"memory,omitempty"`
-	Palace        *PalaceConfig      `json:"palace,omitempty"`
-	A2A           *A2AConfig         `json:"a2a,omitempty"`
-	LLMS          *LLMSConfig        `json:"llms,omitempty"`
+	ContextWindow int64 `json:"contextWindow,omitempty"`
+	// RateLimits paces outbound requests, keyed by provider name ("gemini",
+	// "agentgateway", …) with "*" as the fallback for the rest.
+	RateLimits  map[string]RateLimitConfig `json:"rateLimits,omitempty"`
+	Compactor   *CompactorConfig           `json:"compactor,omitempty"`
+	AutoCompact *AutoCompactConfig         `json:"autoCompact,omitempty"`
+	Memory      *MemoryConfig              `json:"memory,omitempty"`
+	Palace      *PalaceConfig              `json:"palace,omitempty"`
+	A2A         *A2AConfig                 `json:"a2a,omitempty"`
+	LLMS        *LLMSConfig                `json:"llms,omitempty"`
 	// ReroutedLLMS names the MCP servers whose URL is an llms.txt index and
 	// which were therefore given a fetch_docs source during load.
 	ReroutedLLMS []string `json:"-"`

@@ -257,6 +257,11 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 		AdvisorModel:    advisorModel,
 		AdvisorMaxUses:  advisorMaxUses,
 		AdvisorCaching:  advisorCaching,
+		// Paced like the CLI's clients, and against the same shared budget:
+		// an editor driving pi-go over ACP spends from the same provider quota
+		// as a terminal session, so leaving this path unpaced would let the
+		// two of them exhaust a window neither could see the other filling.
+		RateLimit: cfg.ResolveRateLimits(info.Provider, info.Model),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("creating LLM provider: %w", err)
