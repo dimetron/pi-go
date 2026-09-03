@@ -165,24 +165,6 @@ func Providers() []Provider {
 			DeviceVerifyURL:   "https://auth.openai.com/codex/device",
 			DeviceRedirectURI: "https://auth.openai.com/deviceauth/callback",
 		},
-		{
-			// OpenCode Console (console.opencode.ai) device flow — the same
-			// RFC 8628 flow the opencode CLI runs for `opencode console
-			// login` / `/connect`. The access token returned by the device
-			// grant is the bearer credential pi-go sends to
-			// opencode.ai/zen/go/v1, so it is saved as OPENCODE_API_KEY.
-			// The console endpoints speak JSON, not form-encoded.
-			Name:           "opencode",
-			EnvVar:         "OPENCODE_API_KEY",
-			ClientID:       "opencode-cli",
-			UseDeviceFlow:  true,
-			DeviceJSONBody: true,
-			DeviceURL:      "https://console.opencode.ai/auth/device/code",
-			TokenURL:       "https://console.opencode.ai/auth/device/token",
-			TokenToKey: func(tok *TokenResponse) string {
-				return tok.AccessToken
-			},
-		},
 	}
 }
 
