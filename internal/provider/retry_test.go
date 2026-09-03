@@ -292,20 +292,52 @@ func TestStreamFailure(t *testing.T) {
 	}
 }
 
-// The production budget: three retries before the failure is surfaced, paced
-// 3s, 5s, 7s. Pinned here because the schedule is the user-visible contract —
-// "it retries three times, a few seconds apart" — and TestMain hides it from
-// every other test in the package.
+// The production budget: five retries before the failure is surfaced, paced
+// 3s, 5s, 7s, 15s, 30s. Pinned here because the schedule is the user-visible
+// contract — the TUI prints "Retrying in 5s (2/5)" — and TestMain hides it
+// from every other test in the package.
 func TestDefaultStreamRetrySchedule(t *testing.T) {
 	cfg := defaultStreamRetry()
-	if cfg.MaxRetries != 3 {
-		t.Errorf("MaxRetries = %d, want 3", cfg.MaxRetries)
+	if cfg.MaxRetries != 5 {
+		t.Errorf("MaxRetries = %d, want 5", cfg.MaxRetries)
 	}
-	want := []time.Duration{3 * time.Second, 5 * time.Second, 7 * time.Second}
+	want := []time.Duration{
+		3 * time.Second, 5 * time.Second, 7 * time.Second,
+		15 * time.Second, 30 * time.Second,
+	}
+	if len(cfg.Delays) != cfg.MaxRetries {
+		t.Errorf("Delays has %d entries for %d retries; the tail would silently repeat",
+			len(cfg.Delays), cfg.MaxRetries)
+	}
 	for i, d := range want {
 		if got := retry.Delay(cfg, i, errors.New("503")); got != d {
 			t.Errorf("retry %d waits %v, want %v", i+1, got, d)
 		}
+	}
+}
+
+// The reason the last two delays are long: the failure that motivated this is
+// a per-minute quota window, and a retry that lands inside the window that
+// just rejected it is a wasted attempt. The whole budget has to outlast the
+// minute, which three retries totaling 15s did not.
+func TestDefaultStreamRetryOutlastsAMinuteWindow(t *testing.T) {
+	cfg := defaultStreamRetry()
+	var total time.Duration
+	for i := range cfg.MaxRetries {
+		total += retry.Delay(cfg, i, errors.New("503"))
+	}
+	if total < time.Minute {
+		t.Errorf("the full retry budget waits %v, less than the 1m window that rejects it", total)
+	}
+}
+
+// A server-supplied window still wins over the schedule: the server knows when
+// its window reopens and pi-go does not.
+func TestDefaultStreamRetryHonorsServerDelay(t *testing.T) {
+	cfg := defaultStreamRetry()
+	err := errors.New(`429: quota exceeded. {"@type":"…/google.rpc.RetryInfo","retryDelay":"11s"}`)
+	if got := retry.Delay(cfg, 0, err); got != 11*time.Second {
+		t.Errorf("first retry waits %v, want the server's 11s rather than the scheduled 3s", got)
 	}
 }
 

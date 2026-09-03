@@ -228,7 +228,7 @@ func resolvePingTarget(cfg config.Config) (*pingTarget, error) {
 	opts := &provider.LLMOptions{
 		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 	}
-	applyTransportOptions(opts, cfg)
+	applyTransportOptions(opts, cfg, info)
 
 	trimmed := strings.TrimRight(baseURL, "/")
 	fallbackURLs := make([]string, 0, len(fallbacks))

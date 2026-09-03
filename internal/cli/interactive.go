@@ -1005,7 +1005,7 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	llmOpts := &provider.LLMOptions{
 		ExtraHeaders: mergeExtraHeaders(cfg.ExtraHeaders, flagHeaders),
 	}
-	applyTransportOptions(llmOpts, cfg)
+	applyTransportOptions(llmOpts, cfg, info)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("creating LLM: %w", err)

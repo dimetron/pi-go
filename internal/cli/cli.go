@@ -469,7 +469,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 		AdvisorMaxUses: advisorMaxUses,
 		AdvisorCaching: advisorCaching,
 	}
-	applyTransportOptions(llmOpts, cfg)
+	applyTransportOptions(llmOpts, cfg, info)
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, llmOpts)
 	if err != nil {
 		return rootRuntime{}, fmt.Errorf("creating LLM provider: %w", err)
@@ -1910,7 +1910,7 @@ func mergeExtraHeaders(cfgHeaders map[string]string, cliHeaders []string) map[st
 // applyTransportOptions layers the --insecure/--ca-cert/--trace-http flags over
 // the transport settings from config. The flags are additive: none of them can
 // turn a config-enabled setting back off, matching how --header behaves.
-func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config) {
+func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config, info provider.Info) {
 	opts.MaxOutputTokens = cfg.MaxOutputTokens
 	opts.InsecureSkipTLS = cfg.InsecureSkipTLS || flagInsecure
 	opts.CACertPath = cfg.CACertPath
@@ -1926,6 +1926,13 @@ func applyTransportOptions(opts *provider.LLMOptions, cfg config.Config) {
 	if opts.TraceHTTP {
 		httplog.SetEnabled(true)
 	}
+
+	// Pacing is resolved here, alongside the other transport settings, because
+	// it is installed the same way — as a RoundTripper by BuildTransport — and
+	// because every path that builds an LLM already funnels through this
+	// function. A provider added to the switch in NewLLM without a stop here
+	// would silently send unpaced.
+	opts.RateLimit = cfg.ResolveRateLimits(info.Provider, info.Model)
 }
 
 // convertHooks converts config.HookConfig to extension.HookConfig.

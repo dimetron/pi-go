@@ -207,16 +207,29 @@ func containsAny(msg string, patterns []string) bool {
 	return false
 }
 
+// hintPrefix matches the phrases providers use to introduce a retry window,
+// together with the punctuation that can sit between the phrase and the figure.
+//
+// The trailing `"?\s*:?\s*"?\s*` is what lets the same pattern read prose and
+// raw JSON. Gemini states the window twice — once as English ("Please retry in
+// 10.419145242s.") and once as a machine-readable RetryInfo detail — and the
+// detail reaches pi-go as JSON when a transport reads the response body
+// directly: `"retryDelay": "11s"`. Without tolerating the quotes and the
+// spacing around the colon, the JSON form silently fails to match and the
+// caller falls back to a fixed backoff that lands inside the same exhausted
+// window.
+const hintPrefix = `(?i)(?:try again in|retry[- ]after|retry in|retrydelay)"?\s*:?\s*"?\s*`
+
 // durationHintRe matches a Go-parseable duration after a retry hint, covering
 // the "9.422s" and "6m0.339s" forms OpenAI uses and the "59.440629838s" form
 // Gemini uses.
 var durationHintRe = regexp.MustCompile(
-	`(?i)(?:try again in|retry[- ]after:?|retry in|retrydelay:?)\s*((?:[0-9]+h)?(?:[0-9]+m)?[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h))`)
+	hintPrefix + `((?:[0-9]+h)?(?:[0-9]+m)?[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h))`)
 
 // numberHintRe matches a bare number followed by an optional spelled-out unit,
 // covering "retry after 30 seconds" and a raw Retry-After value.
 var numberHintRe = regexp.MustCompile(
-	`(?i)(?:try again in|retry[- ]after:?|retry in|retrydelay:?)\s*([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|seconds?|secs?|minutes?|mins?)?`)
+	hintPrefix + `([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|seconds?|secs?|minutes?|mins?)?`)
 
 // ServerDelay extracts the wait the provider asked for, if it named one.
 //
