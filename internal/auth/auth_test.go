@@ -489,7 +489,7 @@ func TestPollDeviceToken_Timeout(t *testing.T) {
 }
 
 func TestFindProvider(t *testing.T) {
-	for _, name := range []string{"codex", "Codex", "CODEX", "opencode", "OpenCode"} {
+	for _, name := range []string{"codex", "Codex", "CODEX"} {
 		p, ok := FindProvider(name)
 		if !ok {
 			t.Errorf("expected to find provider %q", name)
@@ -499,25 +499,7 @@ func TestFindProvider(t *testing.T) {
 		}
 	}
 
-	// opencode uses the JSON device flow against the console endpoints.
-	op, ok := FindProvider("opencode")
-	if !ok {
-		t.Fatal("expected opencode provider")
-	}
-	if !op.UseDeviceFlow || !op.DeviceJSONBody {
-		t.Errorf("opencode should use the JSON device flow, got UseDeviceFlow=%v DeviceJSONBody=%v", op.UseDeviceFlow, op.DeviceJSONBody)
-	}
-	if op.DeviceURL == "" || op.TokenURL == "" {
-		t.Errorf("opencode device endpoints not set: device=%q token=%q", op.DeviceURL, op.TokenURL)
-	}
-	if op.TokenToKey == nil {
-		t.Error("opencode TokenToKey must be set")
-	}
-	if got := op.TokenToKey(&TokenResponse{AccessToken: "jwt-token"}); got != "jwt-token" {
-		t.Errorf("opencode TokenToKey should pass access_token through, got %q", got)
-	}
-
-	for _, name := range []string{"anthropic", "openai", "gemini", "unknown"} {
+	for _, name := range []string{"anthropic", "openai", "gemini", "opencode", "unknown"} {
 		if _, ok := FindProvider(name); ok {
 			t.Errorf("should not find provider %q", name)
 		}
@@ -669,10 +651,9 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 }
 
 func TestProviders_TokenToKey(t *testing.T) {
-	// The codex, anthropic and opencode OAuth providers pass access_token
-	// through unchanged (the opencode console token endpoint only ever returns
-	// access_token, never an api_key field); other providers prefer api_key
-	// when present and fall back to access_token.
+	// The codex and anthropic OAuth providers pass access_token through
+	// unchanged; other providers prefer api_key when present and fall back
+	// to access_token.
 	for _, p := range Providers() {
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
@@ -680,7 +661,7 @@ func TestProviders_TokenToKey(t *testing.T) {
 				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-		if p.Name == "codex" || p.Name == "anthropic" || p.Name == "opencode" {
+		if p.Name == "codex" || p.Name == "anthropic" {
 			continue
 		}
 		t.Run(p.Name+"_apikey", func(t *testing.T) {

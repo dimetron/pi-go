@@ -24,11 +24,9 @@ func newLoginCmd() *cobra.Command {
 
 Supported providers:
   codex        ChatGPT (chatgpt.com) — device auth
-  opencode     OpenCode Console (console.opencode.ai) — device auth
 
 Examples:
   pi login codex                        # Authenticate with Codex
-  pi login opencode                     # Authenticate with OpenCode Console
   pi login                              # Interactive provider selection`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runLogin,
@@ -57,7 +55,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Find the provider.
 	prov, ok := auth.FindProvider(providerName)
 	if !ok {
-		return fmt.Errorf("unknown provider %q — supported: codex, opencode", providerName)
+		return fmt.Errorf("unknown provider %q — supported: codex", providerName)
 	}
 
 	fmt.Printf("Logging in to %s...\n\n", prov.Name)
