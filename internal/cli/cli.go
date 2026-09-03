@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,7 @@ var (
 	flagSystem       string
 	flagPprof        string
 	flagPprofPort    string
+	flagCPUProfile   string
 	flagTraceHTTP    bool
 	flagA2AAddr      string
 	flagA2AReadyAddr string
@@ -182,8 +184,11 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 		// `pi audit`, ...) have their own RunE and never reach runRoot, so
 		// profiling them was impossible. PersistentPreRun runs for the root and
 		// every subcommand alike.
-		PersistentPreRun: func(*cobra.Command, []string) { startPprofServer() },
-		RunE:             runRoot,
+		PersistentPreRun: func(*cobra.Command, []string) {
+			startPprofServer()
+			startCPUProfile()
+		},
+		RunE: runRoot,
 	}
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-5, gpt-5.2, gemini-3.5-pro, ollama/gemma4:e4b, minimax-m3:cloud)")
@@ -215,6 +220,12 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	// "unknown flag: --pprof" the moment a subcommand was used.
 	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
 	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
+	// --cpuprofile writes a runtime CPU profile to the given path for the whole
+	// process lifetime. This is the profile PGO consumes: `go build` reads a CPU
+	// pprof profile (default.pgo in the main package dir, or -pgo=<path>) to
+	// guide inlining and layout. Collect it from a representative workload —
+	// the eval-tools suite (`make record-pgo`) — not from a microbenchmark.
+	cmd.PersistentFlags().StringVar(&flagCPUProfile, "cpuprofile", "", "Write a CPU profile to this path for the process lifetime (PGO input)")
 	// Persistent for the same reason as --pprof: `pi ping --trace-http` and the
 	// other subcommands that reach a provider all need it.
 	cmd.PersistentFlags().BoolVar(&flagTraceHTTP, "trace-http", false,
@@ -497,6 +508,41 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 // with "address already in use".
 var pprofOnce sync.Once
 
+// cpuProfileOnce guards the CPU profile writer. Like pprofOnce it exists so a
+// command reached both through PersistentPreRun and directly in tests does not
+// start two writers on the same file.
+var cpuProfileOnce sync.Once
+
+// startCPUProfile begins writing a runtime CPU profile to flagCPUProfile when
+// set. The profile is the input PGO consumes, so it must cover a representative
+// workload (see `make record-pgo`). It is stopped by stopCPUProfile, which
+// runRoot defers; a command that never reaches runRoot (a subcommand with its
+// own RunE) leaves the profile unwritten rather than corrupting it.
+func startCPUProfile() {
+	if flagCPUProfile == "" {
+		return
+	}
+	cpuProfileOnce.Do(func() {
+		f, err := os.Create(flagCPUProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cpuprofile: create %s: %v\n", flagCPUProfile, err)
+			return
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "cpuprofile: start: %v\n", err)
+			f.Close()
+			return
+		}
+		fmt.Fprintf(os.Stderr, "cpuprofile: writing to %s\n", flagCPUProfile)
+	})
+}
+
+// stopCPUProfile flushes and closes the CPU profile started by startCPUProfile.
+// It is safe to call when no profile was started.
+func stopCPUProfile() {
+	pprof.StopCPUProfile()
+}
+
 // startPprofServer serves net/http/pprof on --pprof-port when --pprof is set to
 // any non-empty value. Profiles are then collected over HTTP
 // (http://localhost:<port>/debug/pprof), so no profile-specific setup is needed
@@ -528,6 +574,11 @@ func runRoot(cmd *cobra.Command, args []string) error {
 
 	// Normally started by the root's PersistentPreRun; harmless if already up.
 	startPprofServer()
+	startCPUProfile()
+	// Flush the CPU profile on the way out. runRoot is the only path that
+	// reaches the agent loop, so deferring here (rather than in main) keeps the
+	// profile covering exactly the work the process did.
+	defer stopCPUProfile()
 
 	runtime, err := buildRootRuntime(cmd.Context(), args)
 	if err != nil {
