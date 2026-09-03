@@ -27,6 +27,7 @@ WORKDIR /src
 # Cache module downloads first.
 COPY go.mod go.sum ./
 COPY third_party/acp-go-sdk ./third_party/acp-go-sdk
+COPY third_party/go-ordered-map ./third_party/go-ordered-map
 RUN go mod download
 
 # Build the pure-Go pi binary for the target architecture (TARGETARCH is set
