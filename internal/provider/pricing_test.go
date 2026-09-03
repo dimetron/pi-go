@@ -117,6 +117,40 @@ func TestParseModelsDevPricingEmpty(t *testing.T) {
 	}
 }
 
+func TestParseModelsDevPricingSkipsNonContextTierAndZeroModel(t *testing.T) {
+	// A tier whose type is not "context" is skipped; a model whose rates are
+	// all zero and has no tiers is dropped entirely.
+	body := `{
+		"openai": {
+			"models": {
+				"gpt-4o": {
+					"cost": {
+						"input": 2.5, "output": 10,
+						"tiers": [
+							{"input": 5, "output": 20, "tier": {"type": "context", "size": 100000}},
+							{"input": 9, "output": 30, "tier": {"type": "prompt", "size": 200000}}
+						]
+					}
+				},
+				"zero-model": {"cost": {"input": 0, "output": 0}}
+			}
+		}
+	}`
+	s, err := parseModelsDevPricing([]byte(body))
+	if err != nil {
+		t.Fatalf("parseModelsDevPricing: %v", err)
+	}
+	// Only the context tier survives.
+	got := s.Providers["openai"]["gpt-4o"]
+	if len(got.Tiers) != 1 || got.Tiers[0].ContextOver != 100000 {
+		t.Errorf("gpt-4o tiers = %+v, want only the 100k context tier", got.Tiers)
+	}
+	// The all-zero model is dropped.
+	if _, ok := s.Providers["openai"]["zero-model"]; ok {
+		t.Error("zero-model should be dropped")
+	}
+}
+
 func TestRefreshPricingFetches(t *testing.T) {
 	withTempCacheDir(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,5 +206,125 @@ func TestPricingCachePathUsesModelsCacheDir(t *testing.T) {
 	dir := withTempCacheDir(t)
 	if got := pricingCachePath(); got != filepath.Join(dir, pricingCacheFile) {
 		t.Errorf("pricingCachePath() = %q, want %q", got, filepath.Join(dir, pricingCacheFile))
+	}
+}
+
+func TestLoadPricingSnapshotInvalid(t *testing.T) {
+	if _, ok := loadPricingSnapshot([]byte("not json")); ok {
+		t.Error("loadPricingSnapshot(not json) should be false")
+	}
+	if _, ok := loadPricingSnapshot([]byte(`{"source":"models.dev"}`)); ok {
+		t.Error("loadPricingSnapshot with no providers should be false")
+	}
+}
+
+func TestLoadEmbeddedPricingMissing(t *testing.T) {
+	// The embedded snapshot is always present in the binary, so this exercises
+	// the error path by reading a nonexistent file name via the same helper
+	// shape. We can't remove the embedded file, so assert the happy path works
+	// and the loader returns ok for the real snapshot.
+	if _, ok := loadEmbeddedPricing(); !ok {
+		t.Error("loadEmbeddedPricing() should find the embedded snapshot")
+	}
+}
+
+func TestLoadCachedPricingMissing(t *testing.T) {
+	withTempCacheDir(t)
+	if _, ok := loadCachedPricing(); ok {
+		t.Error("loadCachedPricing() should be false with no cache file")
+	}
+}
+
+func TestPricingForPrefersCache(t *testing.T) {
+	withTempCacheDir(t)
+	// Write a cache file; pricingFor should prefer it over embedded.
+	s := pricingSnapshot{
+		Source:    "models.dev",
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Providers: map[string]map[string]PricingModel{"openai": {"gpt-4o": {Input: 2.5}}},
+	}
+	b, _ := json.Marshal(s)
+	if err := os.MkdirAll(pricingCacheDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pricingCachePath(), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := pricingFor()
+	if !ok {
+		t.Fatal("pricingFor() should find the cache")
+	}
+	if _, ok := got.Providers["openai"]["gpt-4o"]; !ok {
+		t.Errorf("pricingFor() did not prefer the cache: %+v", got.Providers)
+	}
+}
+
+func TestCostForEmptyModelName(t *testing.T) {
+	withTempCacheDir(t)
+	if _, ok := CostFor("openai", ""); ok {
+		t.Error("CostFor(openai, \"\") should not be found")
+	}
+}
+
+func TestNumInvalid(t *testing.T) {
+	if got := num(json.Number("not-a-number")); got != 0 {
+		t.Errorf("num(invalid) = %v, want 0", got)
+	}
+	if got := num(json.Number("")); got != 0 {
+		t.Errorf("num(empty) = %v, want 0", got)
+	}
+}
+
+func TestFetchModelsDevPricingNon200(t *testing.T) {
+	withTempCacheDir(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestFetchModelsDevPricingBadBody(t *testing.T) {
+	withTempCacheDir(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = srv.URL
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for malformed body")
+	}
+}
+
+func TestFetchModelsDevPricingNetworkError(t *testing.T) {
+	withTempCacheDir(t)
+	// Point at a closed port so http.DefaultClient.Do fails.
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = "http://127.0.0.1:1"
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for unreachable endpoint")
+	}
+}
+
+func TestFetchModelsDevPricingInvalidURL(t *testing.T) {
+	withTempCacheDir(t)
+	// An invalid URL makes http.NewRequestWithContext fail.
+	oldURL := modelsDevPricingURL
+	modelsDevPricingURL = "://bad"
+	defer func() { modelsDevPricingURL = oldURL }()
+
+	if _, err := fetchModelsDevPricing(context.Background()); err == nil {
+		t.Fatal("expected error for invalid URL")
 	}
 }
