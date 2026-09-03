@@ -129,6 +129,32 @@ func TestResolveWithAzurePrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestResolveWithAnthropicPrefix(t *testing.T) {
+	info, err := Resolve("anthropic/claude-fable-5-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", info.Provider)
+	}
+	if info.Model != "claude-fable-5-1" {
+		t.Errorf("model = %q, want %q", info.Model, "claude-fable-5-1")
+	}
+}
+
+func TestResolveWithAnthropicPrefixCaseInsensitive(t *testing.T) {
+	info, err := Resolve("ANTHROPIC/claude-fable-5-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", info.Provider)
+	}
+	if info.Model != "claude-fable-5-1" {
+		t.Errorf("model = %q, want %q", info.Model, "claude-fable-5-1")
+	}
+}
+
 func TestResolveMistralPrefixStripped(t *testing.T) {
 	tests := []struct {
 		model     string
