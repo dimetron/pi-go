@@ -1488,28 +1488,46 @@ func TestGeminiAPIKey(t *testing.T) {
 }
 
 func TestGeminiHTTPOptions(t *testing.T) {
-	t.Run("no overrides", func(t *testing.T) {
-		opts, overridden := geminiHTTPOptions("", nil)
-		if overridden {
-			t.Error("overridden = true, want false")
-		}
-		if opts.BaseURL != "" || opts.Headers != nil {
-			t.Errorf("opts = %+v, want zero value", opts)
+	// The retry policy is the reason these options are always set: the genai
+	// SDK does no retrying at all when RetryOptions is nil.
+	t.Run("always carries a retry policy", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			baseURL string
+			opts    *LLMOptions
+		}{
+			{"no overrides", "", nil},
+			{"empty extra headers", "", &LLMOptions{ExtraHeaders: map[string]string{}}},
+			{"base url", "https://example.test", nil},
+		} {
+			got := geminiHTTPOptions(tc.baseURL, tc.opts)
+			if got.RetryOptions == nil {
+				t.Fatalf("%s: RetryOptions = nil, want a retry policy", tc.name)
+			}
+			if got.RetryOptions.Attempts == nil || *got.RetryOptions.Attempts != geminiSDKRetryAttempts {
+				t.Errorf("%s: Attempts = %v, want %d", tc.name, got.RetryOptions.Attempts, geminiSDKRetryAttempts)
+			}
 		}
 	})
 
-	t.Run("empty extra headers is not an override", func(t *testing.T) {
-		_, overridden := geminiHTTPOptions("", &LLMOptions{ExtraHeaders: map[string]string{}})
-		if overridden {
-			t.Error("overridden = true, want false for an empty header map")
+	t.Run("no overrides leaves the endpoint and headers alone", func(t *testing.T) {
+		opts := geminiHTTPOptions("", nil)
+		if opts.BaseURL != "" {
+			t.Errorf("BaseURL = %q, want empty so the SDK keeps its default", opts.BaseURL)
+		}
+		if opts.Headers != nil {
+			t.Errorf("Headers = %v, want nil", opts.Headers)
+		}
+	})
+
+	t.Run("empty extra headers adds no header map", func(t *testing.T) {
+		if opts := geminiHTTPOptions("", &LLMOptions{ExtraHeaders: map[string]string{}}); opts.Headers != nil {
+			t.Errorf("Headers = %v, want nil for an empty header map", opts.Headers)
 		}
 	})
 
 	t.Run("base url only", func(t *testing.T) {
-		opts, overridden := geminiHTTPOptions("https://example.test", nil)
-		if !overridden {
-			t.Error("overridden = false, want true")
-		}
+		opts := geminiHTTPOptions("https://example.test", nil)
 		if opts.BaseURL != "https://example.test" {
 			t.Errorf("BaseURL = %q, want %q", opts.BaseURL, "https://example.test")
 		}
@@ -1519,12 +1537,9 @@ func TestGeminiHTTPOptions(t *testing.T) {
 	})
 
 	t.Run("headers only", func(t *testing.T) {
-		opts, overridden := geminiHTTPOptions("", &LLMOptions{
+		opts := geminiHTTPOptions("", &LLMOptions{
 			ExtraHeaders: map[string]string{"X-Token": "abc"},
 		})
-		if !overridden {
-			t.Error("overridden = false, want true")
-		}
 		if opts.BaseURL != "" {
 			t.Errorf("BaseURL = %q, want empty", opts.BaseURL)
 		}
@@ -1534,12 +1549,9 @@ func TestGeminiHTTPOptions(t *testing.T) {
 	})
 
 	t.Run("both", func(t *testing.T) {
-		opts, overridden := geminiHTTPOptions("https://example.test", &LLMOptions{
+		opts := geminiHTTPOptions("https://example.test", &LLMOptions{
 			ExtraHeaders: map[string]string{"X-Token": "abc"},
 		})
-		if !overridden {
-			t.Error("overridden = false, want true")
-		}
 		if opts.BaseURL != "https://example.test" || opts.Headers.Get("X-Token") != "abc" {
 			t.Errorf("opts = %+v, want both set", opts)
 		}
