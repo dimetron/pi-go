@@ -575,6 +575,11 @@ func stopCPUProfile() {
 // any non-empty value. Profiles are then collected over HTTP
 // (http://localhost:<port>/debug/pprof), so no profile-specific setup is needed
 // here — the value is only echoed back so the user can see what they asked for.
+//
+// Diagnostics go through slog, not fmt: this starts from PersistentPreRun and
+// the interactive TUI may already own the terminal by the time the listener
+// fails, and a raw stdout or stderr write would render as garbage over the
+// alternate screen (see CLAUDE.md).
 func startPprofServer() {
 	if flagPprof == "" {
 		return
@@ -582,10 +587,12 @@ func startPprofServer() {
 	pprofOnce.Do(func() {
 		addr := ":" + flagPprofPort
 		go func() {
-			fmt.Printf("pprof server listening on %s (profile: %s)\n", addr, flagPprof)
-			fmt.Println("collect with: go tool pprof http://localhost:" + flagPprofPort + "/debug/pprof/heap")
+			slog.Info("pprof server listening",
+				"addr", addr,
+				"profile", flagPprof,
+				"collect_with", "go tool pprof http://localhost:"+flagPprofPort+"/debug/pprof/heap")
 			if err := http.ListenAndServe(addr, nil); err != nil {
-				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
+				slog.Error("pprof server error", "error", err)
 			}
 		}()
 	})
