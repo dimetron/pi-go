@@ -26,7 +26,7 @@
       // lints with an older ruleset than CI does. The feature has no way to
       // skip this install: "latest" and "" mean latest, and anything else is
       // used verbatim as the tag "v${value}" (so "none" 404s on "vnone").
-      "golangciLintVersion": "2.13.1"
+      "golangciLintVersion": "2.13.2"
     },
     // Node, Python and Rust are deliberately absent. They exist only to run
     // real language servers for internal/lsp, and every test that needs one
@@ -41,7 +41,7 @@
     // Costs a privileged container and a cold image cache per rebuild; buys
     // bind mounts that use container paths, which is what the gemini client
     // assumes anyway.
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {
       "moby": false
     },
     "ghcr.io/devcontainers-extra/features/kind:1": {
@@ -53,7 +53,7 @@
       // kind is the cluster; minikube would just be a second, unused VM driver.
       "minikube": "none"
     },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1.1": {}
   },
   "containerEnv": {
     // Overrides the go feature's default of /go, so the module cache volume
