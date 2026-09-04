@@ -84,6 +84,55 @@ func TestLimiterBlocksOnRequestBudget(t *testing.T) {
 	}
 }
 
+// The regression this package was reworked for: a second full burst, sent a
+// minute after the first, must be held rather than admitted. The server's
+// rolling window still counts the first burst when the second lands, so a
+// token bucket with a full-window burst would over-spend and 429. The rolling
+// window delays the second burst until the first falls out.
+func TestLimiterHoldsSecondFullBurst(t *testing.T) {
+	t.Parallel()
+	lim := New(Limits{InputTokensPerMinute: 1000})
+	if err := lim.Wait(context.Background(), 1000); err != nil {
+		t.Fatalf("first burst Wait: %v", err)
+	}
+
+	// A second full burst immediately must wait for the first to fall out of
+	// the window, not be admitted.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := lim.Wait(ctx, 1000); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second full burst err = %v, want it held by the rolling window", err)
+	}
+}
+
+// A charge admitted at t=0 still counts against the window at t=59 and only
+// falls out at t=60. This is the property a token bucket does not model.
+func TestLimiterRollingWindowExpiry(t *testing.T) {
+	t.Parallel()
+	lim := New(Limits{InputTokensPerMinute: 1000})
+	if err := lim.Wait(context.Background(), 1000); err != nil {
+		t.Fatalf("first Wait: %v", err)
+	}
+
+	// Just before the window closes, the budget is still spent.
+	lim.mu.Lock()
+	lim.spend[0].at = time.Now().Add(-59 * time.Second)
+	lim.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := lim.Wait(ctx, 1000); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait at t=59 err = %v, want it still held", err)
+	}
+
+	// Once the charge falls out of the window, the budget is free again.
+	lim.mu.Lock()
+	lim.spend[0].at = time.Now().Add(-61 * time.Second)
+	lim.mu.Unlock()
+	if err := lim.Wait(context.Background(), 1000); err != nil {
+		t.Fatalf("Wait after window expiry: %v", err)
+	}
+}
+
 // A request larger than the whole per-minute budget must still be sent: the
 // server's 429 names the quota, whereas a local rate.WaitN error would say
 // nothing useful and would never clear.

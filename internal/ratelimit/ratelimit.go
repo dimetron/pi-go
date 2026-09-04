@@ -27,6 +27,15 @@
 //     holding its own model.LLM. A limiter owned by one client would not have
 //     seen the others' spend, so limiters are looked up from a process-wide
 //     registry keyed by endpoint (see Shared).
+//
+// The token budget is a *rolling window*, not a token bucket. The server's
+// quota is a rolling 60-second window: a burst at t=0 still counts against the
+// window at t=59 and only falls out at t=60. A token bucket with a full-window
+// burst lets a client dump a whole window's worth instantly and again a minute
+// later, which the server counts as two windows' worth in one — the bursty
+// failure mode that produced mid-stream 429s after the original fix. The
+// rolling window here delays a request until its input tokens fit in the last
+// window, so a second full burst is held rather than sent and rejected.
 package ratelimit
 
 import (
@@ -64,18 +73,33 @@ func (l Limits) Enabled() bool {
 // would let a misconfigured gateway freeze a turn indefinitely.
 const maxCooldown = 60 * time.Second
 
-// Limiter paces requests against a token-per-minute and/or
+// window is how long a token charge stays in the rolling window. It matches
+// the server's own per-minute quota window.
+const window = time.Minute
+
+// spendEvent records one admitted request's token charge and when it was
+// admitted, so the rolling window can drop it once it falls out.
+type spendEvent struct {
+	at     time.Time
+	tokens int
+}
+
+// Limiter paces requests against a rolling input-token window and/or a
 // request-per-minute budget, and absorbs server-ordered cooldowns.
 //
 // The zero value is not usable; a nil *Limiter is, and does nothing — that is
 // how "no limits configured" is represented at call sites.
 type Limiter struct {
-	// requests and tokens are nil when that budget is unlimited.
+	// requests is nil when the RPM budget is unlimited.
 	requests *rate.Limiter
-	tokens   *rate.Limiter
-	// tokenBurst mirrors tokens' burst so Wait can clamp to it without
-	// reaching back into the rate.Limiter.
+
+	// tokenLimit is the max input tokens admitted in any window; tokenBurst
+	// mirrors it so Wait can clamp an oversize request without reaching back
+	// into the ledger. Both are zero when the token budget is unlimited.
+	tokenLimit int
 	tokenBurst int
+	// spend holds the token charges still inside the window, oldest first.
+	spend []spendEvent
 
 	mu        sync.Mutex
 	coolUntil time.Time
@@ -83,11 +107,10 @@ type Limiter struct {
 
 // New builds a Limiter for the given budget, or nil when nothing is limited.
 //
-// Each bucket's burst is a full window's worth rather than 1. Smoothing to a
-// single unit would serialize an agent turn that legitimately fans out several
-// small requests at once, and it would make the token bucket reject any
-// request larger than one token. A full-window burst matches the shape of the
-// server's own limit: spend it all at once if you like, then wait.
+// The RPM budget is a token bucket with a full-window burst, so a turn that
+// legitimately fans out several small requests at once is not serialized. The
+// token budget is a rolling window instead — see the package comment for why a
+// bucket is the wrong shape for a per-minute quota.
 func New(l Limits) *Limiter {
 	if !l.Enabled() {
 		return nil
@@ -97,7 +120,7 @@ func New(l Limits) *Limiter {
 		lim.requests = rate.NewLimiter(rate.Limit(float64(l.RequestsPerMinute)/60), l.RequestsPerMinute)
 	}
 	if l.InputTokensPerMinute > 0 {
-		lim.tokens = rate.NewLimiter(rate.Limit(float64(l.InputTokensPerMinute)/60), l.InputTokensPerMinute)
+		lim.tokenLimit = l.InputTokensPerMinute
 		lim.tokenBurst = l.InputTokensPerMinute
 	}
 	return lim
@@ -120,22 +143,57 @@ func (l *Limiter) Wait(ctx context.Context, inputTokens int) error {
 			return waitErr(ctx, err)
 		}
 	}
-	if l.tokens != nil && inputTokens > 0 {
-		// Clamp to the burst. A request bigger than the whole per-minute
-		// budget can never be admitted, and rate.WaitN reports that as an
-		// error — which would turn an over-large prompt into a local failure
-		// with no useful text. Drain the bucket and let the server answer
-		// instead: its 429 names the quota and the model, which is the message
-		// the user actually needs.
-		n := inputTokens
-		if n > l.tokenBurst {
-			n = l.tokenBurst
-		}
-		if err := l.tokens.WaitN(ctx, n); err != nil {
-			return waitErr(ctx, err)
+	if l.tokenLimit > 0 && inputTokens > 0 {
+		if err := l.waitTokenWindow(ctx, inputTokens); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// waitTokenWindow holds a request until its token charge fits in the rolling
+// window, then records the charge.
+//
+// A request larger than the whole window can never be admitted, and blocking
+// on it would turn an over-large prompt into a local failure with no useful
+// text. Clamp its charge to a full window and let the server answer instead:
+// its 429 names the quota and the model, which is the message the user
+// actually needs. The window is then full, so later requests wait.
+func (l *Limiter) waitTokenWindow(ctx context.Context, inputTokens int) error {
+	charge := inputTokens
+	if charge > l.tokenLimit {
+		charge = l.tokenLimit
+	}
+	for {
+		l.mu.Lock()
+		now := time.Now()
+		// Drop charges that have fallen out of the window: they no longer
+		// count against the server's rolling window.
+		cutoff := now.Add(-window)
+		keep := 0
+		for keep < len(l.spend) && l.spend[keep].at.Before(cutoff) {
+			keep++
+		}
+		l.spend = l.spend[keep:]
+
+		sum := 0
+		for _, e := range l.spend {
+			sum += e.tokens
+		}
+		if sum+charge <= l.tokenLimit {
+			l.spend = append(l.spend, spendEvent{at: now, tokens: charge})
+			l.mu.Unlock()
+			return nil
+		}
+
+		// The window is full. Wait until the oldest charge falls out of it,
+		// then re-check — a concurrent caller may have spent in the meantime.
+		wait := l.spend[0].at.Add(window).Sub(now)
+		l.mu.Unlock()
+		if !sleepCtx(ctx, wait) {
+			return ctx.Err()
+		}
+	}
 }
 
 // waitErr translates a rate.Limiter refusal into the vocabulary the rest of
@@ -193,15 +251,24 @@ func (l *Limiter) waitCooldown(ctx context.Context) error {
 		if d <= 0 {
 			return nil
 		}
-		timer := time.NewTimer(d)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !sleepCtx(ctx, d) {
 			return ctx.Err()
-		case <-timer.C:
-			// Loop rather than return: a concurrent Backoff may have pushed
-			// coolUntil further out while this caller was asleep.
 		}
+	}
+}
+
+// sleepCtx waits for d, reporting false if ctx was canceled first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
