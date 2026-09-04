@@ -17,7 +17,10 @@ services:
     container_name: agentgateway
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      # Loopback only: publishing on 0.0.0.0 collides with Tailscale's
+      # 100.x.y.z interface, which makes the gateway unreachable from the
+      # tailnet and can confuse other local services.
+      - "127.0.0.1:4000:4000"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
