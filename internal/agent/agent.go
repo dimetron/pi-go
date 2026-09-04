@@ -391,6 +391,14 @@ func (a *Agent) SetPreTurnHook(h PreTurnHook) {
 	a.preTurn = h
 }
 
+// HasPreTurnHook reports whether a pre-turn hook is installed. It exists so a
+// caller can assert that compaction was actually wired: every entry point
+// installs the hook conditionally, and an entry point that quietly declined to
+// would show no symptom until a transcript outgrew its context window.
+func (a *Agent) HasPreTurnHook() bool {
+	return a.preTurn != nil
+}
+
 // runPreTurn invokes the hook if one is installed.
 func (a *Agent) runPreTurn(ctx context.Context, sessionID string) error {
 	if a.preTurn == nil {

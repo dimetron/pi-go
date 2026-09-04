@@ -137,10 +137,6 @@
 // credential option exists here, because each one would drag provider
 // resolution into this package's public surface.
 //
-// The CLI's two-stage auto-compaction pre-turn hook, which lives in
-// internal/cli and would have to be extracted first; embedders that need it
-// can install their own via ADK.
-//
 // A process-global HTTP trace sink, because a library has no business
 // claiming one.
 //
@@ -150,7 +146,24 @@
 // [WithAfterToolCallbacks] do the same work without the fork.
 //
 // The daily-token guardrail, which wraps the model rather than the agent and
-// so belongs with whoever built the model.
+// so belongs with whoever built the model. piagent does wrap the model in an
+// unlimited tracker, but only to measure: nothing here caps an embedder's
+// spend.
+//
+// # Auto-compaction
+//
+// The two-stage compaction the CLI runs — shed superseded tool results at the
+// lower threshold, summarize the transcript at the upper one — is installed
+// here too, as a pre-turn hook. An embedded agent re-sends its whole
+// transcript on every turn exactly as an interactive one does, so a long
+// session outgrows its context window just as fast.
+//
+// It reads its thresholds from the auto_compact block of ~/.pi-go/config.json
+// and is on by default. Two things switch it off: setting auto_compact.enabled
+// to false, and a context window that cannot be resolved. The window comes
+// from the embedded model catalog, because piagent is handed a finished model
+// and never learns its base URL; set context_window in config.json when the
+// catalog does not know the model.
 //
 // # Finding the provider behind a model
 //

@@ -16,6 +16,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/autocompact"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/guardrail"
@@ -325,11 +326,11 @@ func deferredInit(
 	// only ever rewritten between turns. It shares the caller's notice channel
 	// — a buffered, non-blocking send, so a compaction notice never blocks the
 	// turn if the TUI is momentarily busy.
-	if hook := buildAutoCompactHook(autoCompactDeps{
+	if hook := autocompact.BuildHook(autocompact.Deps{
 		SessionSvc:    sessionSvc,
 		Tracker:       tokenTracker,
 		Deduper:       cbs.deduper,
-		Cfg:           autoCompactConfigFrom(cfg),
+		Cfg:           autocompact.ConfigFrom(cfg),
 		Log:           sessionLog,
 		SummarizerLLM: llm,
 		Notify: func(msg string) {

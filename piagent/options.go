@@ -50,6 +50,7 @@ type options struct {
 	skillsEnabled   bool
 	subagentEnabled bool
 	onAgentEvent    AgentEventFunc
+	contextWindow   int64
 }
 
 // defaultOptions splits pi-go's conventions along one line: reading them is on
@@ -232,4 +233,25 @@ func WithSubagents(enabled bool) Option {
 // Without one those events are discarded.
 func WithAgentEvents(fn AgentEventFunc) Option {
 	return func(o *options) { o.onAgentEvent = fn }
+}
+
+// WithContextWindow states the model's context window in tokens, which is what
+// switches auto-compaction on.
+//
+// piagent cannot look this up. Resolving a window means consulting pi-go's
+// model catalog, and this package is deliberately kept off provider
+// construction — so the number is stated by whoever built the model. An
+// embedder using pimodels has it to hand:
+//
+//	m, _ := pimodels.New(ctx, "gemini-3.8-flash")
+//	ag, _ := piagent.New(ctx,
+//		piagent.WithModel(m),
+//		piagent.WithContextWindow(provider.ContextWindowSizeFor("gemini", m.Name())),
+//	)
+//
+// Without it, and without context_window in ~/.pi-go/config.json, the window
+// is unknown and compaction never fires — the transcript grows until the
+// provider rejects it. A non-positive size is ignored.
+func WithContextWindow(tokens int64) Option {
+	return func(o *options) { o.contextWindow = tokens }
 }
