@@ -24,7 +24,9 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/autocompact"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/ctxwindow"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/guardrail"
@@ -401,29 +403,6 @@ func applyRuntimeOllamaEndpoint(info *provider.Info, apiKey, baseURL string) (st
 	return baseURL, nil
 }
 
-// resolveRuntimeContextWindow picks the context window to budget against: the
-// catalog size, overridden by what a live Ollama daemon reports, overridden in
-// turn by an explicit config value.
-func resolveRuntimeContextWindow(ctx context.Context, cfg config.Config, info provider.Info, baseURL string) int64 {
-	ctxWindowSize := provider.ContextWindowSizeFor(info.Provider, info.Model)
-	if info.Ollama {
-		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			ctxWindowSize = n
-		}
-	}
-	if info.Provider == "openrouter" {
-		if n := provider.OpenRouterContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			ctxWindowSize = n
-		}
-	}
-	// An explicit config value wins: the embedded catalog does not cover every
-	// provider's models, and auto-compaction needs a real window to work from.
-	if cfg.ContextWindow > 0 {
-		ctxWindowSize = cfg.ContextWindow
-	}
-	return ctxWindowSize
-}
-
 func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	cfg, err := loadRootConfig()
 	if err != nil {
@@ -476,7 +455,7 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	tokenTracker.SetContextWindowSize(resolveRuntimeContextWindow(ctx, cfg, info, baseURL))
+	tokenTracker.SetContextWindowSize(ctxwindow.Resolve(ctx, cfg, info, baseURL))
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	cwd, err := os.Getwd()
@@ -858,11 +837,11 @@ func runNonInteractive(
 	// Two-stage auto-compaction: shed superseded tool results at the lower
 	// threshold, summarize at the upper one. Installed as a pre-turn hook so it
 	// only ever rewrites history between turns.
-	if hook := buildAutoCompactHook(autoCompactDeps{
+	if hook := autocompact.BuildHook(autocompact.Deps{
 		SessionSvc:    sessionSvc,
 		Tracker:       tokenTracker,
 		Deduper:       resultDeduper,
-		Cfg:           autoCompactConfigFrom(cfg),
+		Cfg:           autocompact.ConfigFrom(cfg),
 		Log:           sessionLog,
 		SummarizerLLM: llm,
 		Notify:        func(msg string) { fmt.Fprintf(os.Stderr, "pi-go: %s\n", msg) },
@@ -1308,31 +1287,6 @@ func compactorConfigFrom(cfg config.Config) tools.CompactorConfig {
 		compactorCfg.MaxLines = cfg.Compactor.MaxLines
 	}
 	return compactorCfg
-}
-
-// autoCompactConfigFrom resolves the two-stage auto-compaction settings,
-// falling back to the session package's defaults for anything unset.
-func autoCompactConfigFrom(cfg config.Config) pisession.AutoCompactConfig {
-	acCfg := pisession.DefaultAutoCompactConfig()
-	if cfg.AutoCompact == nil {
-		return acCfg
-	}
-	if cfg.AutoCompact.Enabled != nil {
-		acCfg.Enabled = *cfg.AutoCompact.Enabled
-	}
-	if cfg.AutoCompact.ShedPercent > 0 {
-		acCfg.ShedPercent = cfg.AutoCompact.ShedPercent
-	}
-	if cfg.AutoCompact.SummarizePercent > 0 {
-		acCfg.SummarizePercent = cfg.AutoCompact.SummarizePercent
-	}
-	if cfg.AutoCompact.KeepUserMessageTokens > 0 {
-		acCfg.KeepUserMessageTokens = cfg.AutoCompact.KeepUserMessageTokens
-	}
-	if cfg.AutoCompact.KeepRecentEvents > 0 {
-		acCfg.KeepRecentEvents = cfg.AutoCompact.KeepRecentEvents
-	}
-	return acCfg
 }
 
 // memoryObservationCallback records each successful tool call as a raw

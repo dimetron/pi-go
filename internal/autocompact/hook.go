@@ -1,11 +1,19 @@
-package cli
+// Package autocompact installs pi-go's two-stage context compaction as a
+// pre-turn hook: shed superseded tool results at the lower threshold,
+// summarize at the upper one.
+//
+// It lives outside internal/cli so that every agent entry point can install
+// the same hook — the interactive TUI, the one-shot CLI, the ACP server and
+// the piagent SDK. A long agent session re-sends its whole transcript on every
+// turn, so an entry point without compaction pays that growth in full.
+package autocompact
 
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/dimetron/pi-go/internal/agent"
-	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/logger"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -13,10 +21,24 @@ import (
 	llmmodel "google.golang.org/adk/v2/model"
 )
 
-// autoCompactDeps are the pieces a pre-turn compaction pass needs.
-type autoCompactDeps struct {
+// ContextMeter reports how much of the model's context window the live
+// transcript occupies. *guardrail.Tracker satisfies it, and so does [Meter];
+// the interface is what keeps this package off internal/guardrail, which
+// piagent may not reach even transitively.
+//
+// BodyTokens is the figure the thresholds are measured against: tokens after
+// the stable cached prefix, so a large but fully-cached system prompt never
+// pushes a session toward compaction on its own.
+type ContextMeter interface {
+	BodyTokens() int64
+	ContextWindowSize() int64
+	SetLastPromptTokens(int64)
+}
+
+// Deps are the pieces a pre-turn compaction pass needs.
+type Deps struct {
 	SessionSvc *pisession.FileService
-	Tracker    *guardrail.Tracker
+	Tracker    ContextMeter
 	Deduper    *tools.ResultDeduper
 	Cfg        pisession.AutoCompactConfig
 	Log        *logger.Logger
@@ -31,18 +53,25 @@ type autoCompactDeps struct {
 	Notify func(string)
 }
 
-// buildAutoCompactHook returns a pre-turn hook that runs the two-stage
-// compaction. It reads the body size — context after the stable cached prefix —
+// BuildHook returns a pre-turn hook that runs the two-stage compaction.
+// It returns nil when compaction cannot run — no session service, no token
+// tracker, or disabled by config — so a caller can install the result
+// unconditionally. It reads the body size — context after the stable cached prefix —
 // from the token tracker, so a large but fully cached system prompt and tool
 // block never trigger compaction on their own.
 //
 // The hook never aborts a turn on compaction failure: being unable to reclaim
 // context is a degraded state, not a reason to refuse the user's request. The
 // error is reported and the turn proceeds.
-func buildAutoCompactHook(deps autoCompactDeps) agent.PreTurnHook {
+func BuildHook(deps Deps) agent.PreTurnHook {
 	if deps.SessionSvc == nil || deps.Tracker == nil || !deps.Cfg.Enabled {
 		return nil
 	}
+
+	// An unknown window is reported once rather than every turn: the hook is
+	// inert for the whole session in that state, and repeating it each turn
+	// would bury the notice it is trying to deliver.
+	var warnUnknownWindow sync.Once
 
 	return func(ctx context.Context, sessionID string) error {
 		if sessionID == "" {
@@ -51,6 +80,15 @@ func buildAutoCompactHook(deps autoCompactDeps) agent.PreTurnHook {
 
 		body := deps.Tracker.BodyTokens()
 		window := deps.Tracker.ContextWindowSize()
+		if window <= 0 {
+			// Compaction has no denominator, so it can never fire. Saying so
+			// beats the alternative, which is a transcript that grows until
+			// the provider rejects it with nothing having warned anyone.
+			warnUnknownWindow.Do(func() {
+				deps.report("context window unknown for this model — auto-compaction is off; set context_window in ~/.pi-go/config.json")
+			})
+			return nil
+		}
 		if deps.Cfg.Decide(body, window) == pisession.CompactionNone {
 			return nil
 		}
@@ -98,7 +136,7 @@ func buildAutoCompactHook(deps autoCompactDeps) agent.PreTurnHook {
 	}
 }
 
-func (d autoCompactDeps) report(msg string) {
+func (d Deps) report(msg string) {
 	if d.Log != nil {
 		d.Log.Info("auto-compact: " + msg)
 	}

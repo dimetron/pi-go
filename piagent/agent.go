@@ -17,6 +17,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/autocompact"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
@@ -46,9 +47,13 @@ type Agent struct {
 	// onNewSession arms the subsystems that can only be told a session ID
 	// after the session exists — memory recording and the ACP event log.
 	onNewSession func(sessionID string)
-	beforeTurn   []BeforeTurnFunc
-	afterTurn    []AfterTurnFunc
-	closers      []func() error
+	// meter is what auto-compaction reads the live context size from. It is
+	// fed by an after-model callback rather than by a model wrapper, because
+	// wrapping the model is guardrail's job and guardrail is out of reach.
+	meter      *autocompact.Meter
+	beforeTurn []BeforeTurnFunc
+	afterTurn  []AfterTurnFunc
+	closers    []func() error
 }
 
 // ErrNoModel is returned by [New] when no model was supplied. piagent does not
@@ -87,12 +92,21 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 
 	llm := o.model
 	providerName := providerOf(llm)
+
+	// Measures, never enforces: nothing here caps an embedder's spend, and
+	// the CLI's guardrail is out of reach anyway (see the isolation test).
+	// The meter exists so auto-compaction can tell how much of the context
+	// window the transcript is using; it is fed by an after-model callback.
+	contextMeter := autocompact.NewMeter()
+	contextMeter.SetContextWindowSize(contextWindowFor(cfg, o))
+
 	a := &Agent{
 		workDir:    workDir,
 		modelName:  llm.Name(),
 		provider:   providerName,
 		beforeTurn: o.beforeTurn,
 		afterTurn:  o.afterTurn,
+		meter:      contextMeter,
 	}
 
 	rt, err := a.buildRuntime(ctx, o, &cfg, providerName)
@@ -124,7 +138,13 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	// memSessionID is only known once a session exists; the memory callback
 	// reads it through the pointer, so recording starts from that point.
 	var memSessionID string
+	// Held rather than created inline: a summarizing compaction rebuilds the
+	// transcript, which invalidates every pointer the deduper holds into the
+	// old one, so the hook has to be able to reset it.
+	resultDeduper := tools.NewResultDeduper()
 	before, after := buildCallbacks(callbackDeps{
+		deduper:   resultDeduper,
+		meter:     contextMeter,
 		cfg:       cfg,
 		sandbox:   rt.sandbox,
 		lspMgr:    rt.lspMgr,
@@ -152,6 +172,24 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		return nil, a.abort(fmt.Errorf("creating agent: %w", err))
 	}
 	a.inner = inner
+	// Auto-compaction, on the same terms as the CLI and the ACP server. An
+	// embedded agent is no less prone to outgrowing its window than an
+	// interactive one — it re-sends the whole transcript every turn just the
+	// same — and before this it was the one entry point with no defense.
+	if hook := autocompact.BuildHook(autocompact.Deps{
+		SessionSvc:    sessionSvc,
+		Tracker:       contextMeter,
+		Deduper:       resultDeduper,
+		Cfg:           autocompact.ConfigFrom(cfg),
+		Log:           sessionLog,
+		SummarizerLLM: llm,
+		// No terminal to notify: an embedder reads the outcome in the session
+		// log, and writing it anywhere else would be output it never asked
+		// for.
+		Notify: nil,
+	}); hook != nil {
+		inner.SetPreTurnHook(hook)
+	}
 	a.onNewSession = func(sessionID string) {
 		memSessionID = sessionID
 		rt.orch.SetACPLogPath(filepath.Join(sessionDir, sessionID, "acp.jsonl"))
@@ -378,6 +416,27 @@ type providerNamer interface{ Provider() string }
 // and both degrade quietly on a miss — the OTel gen_ai.provider.name span
 // attribute (which falls back to the raw string) and the Gemini grounding tool
 // (which simply does not register).
+// contextWindowFor reports the model's context window in tokens, which is the
+// denominator auto-compaction measures its thresholds against.
+//
+// It cannot consult the model catalog the way the CLI does: looking a model up
+// means importing internal/provider, and that is exactly the dependency
+// TestPiagentStaysIsolated exists to prevent. So the window is stated rather
+// than inferred — [WithContextWindow] first, then context_window in
+// ~/.pi-go/config.json.
+//
+// A zero result leaves compaction off rather than guessing, which is what an
+// unknown window means everywhere else in pi-go. An embedder using pimodels
+// can pass provider.ContextWindowSizeFor's answer straight into
+// [WithContextWindow]; that composition belongs in the caller, which is the
+// whole point of the split.
+func contextWindowFor(cfg config.Config, o options) int64 {
+	if o.contextWindow > 0 {
+		return o.contextWindow
+	}
+	return cfg.ContextWindow
+}
+
 func providerOf(m model.LLM) string {
 	if pn, ok := m.(providerNamer); ok {
 		if name := pn.Provider(); name != "" {
@@ -420,6 +479,8 @@ type callbackDeps struct {
 	worker    *memory.Worker
 	project   string
 	sessionID *string
+	deduper   *tools.ResultDeduper
+	meter     *autocompact.Meter
 	opts      options
 }
 
@@ -459,11 +520,15 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 	afterTool = append(afterTool,
 		lsp.BuildLSPAfterToolCallback(d.lspMgr),
 		tools.BuildCompactorCallback(compactorConfig(d.cfg), tools.NewCompactMetrics()),
-		tools.BuildDedupCallback(tools.NewResultDeduper()))
+		tools.BuildDedupCallback(d.deduper))
 
 	if d.worker != nil {
 		afterTool = append(afterTool, memoryObservationCallback(d.worker, d.cfg, d.project, d.sessionID))
 	}
+
+	// Ahead of the embedder's callbacks: the meter reports what the provider
+	// actually billed for, which is not the embedder's to alter.
+	afterModel = append(afterModel, autocompact.MeterCallback(d.meter))
 
 	// The embedder's callbacks run last, so they observe the compacted and
 	// deduplicated result rather than the raw one.

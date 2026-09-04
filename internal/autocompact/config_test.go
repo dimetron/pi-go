@@ -1,4 +1,4 @@
-package cli
+package autocompact
 
 import (
 	"testing"
@@ -84,9 +84,9 @@ func TestAutoCompactConfigFrom(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
-			got := autoCompactConfigFrom(tc.in)
+			got := ConfigFrom(tc.in)
 			if got != tc.want {
-				t.Fatalf("autoCompactConfigFrom() = %+v, want %+v", got, tc.want)
+				t.Fatalf("ConfigFrom() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
@@ -119,12 +119,12 @@ func newTempLogger(t *testing.T) *logger.Logger {
 // this test or any parent has called t.Parallel.
 func TestAutoCompactDepsReport(t *testing.T) {
 	t.Run("both sinks nil does not panic", func(t *testing.T) {
-		autoCompactDeps{}.report("no sinks")
+		Deps{}.report("no sinks")
 	})
 
 	t.Run("Notify receives the message verbatim", func(t *testing.T) {
 		var got []string
-		d := autoCompactDeps{Notify: func(m string) { got = append(got, m) }}
+		d := Deps{Notify: func(m string) { got = append(got, m) }}
 		d.report("shed 3 results")
 		if len(got) != 1 || got[0] != "shed 3 results" {
 			t.Fatalf("Notify got %q, want exactly [\"shed 3 results\"]", got)
@@ -133,13 +133,13 @@ func TestAutoCompactDepsReport(t *testing.T) {
 
 	// The Log sink writes to ~/.pi-go/log, so these point HOME at a temp dir.
 	t.Run("Log alone does not panic and does not need Notify", func(t *testing.T) {
-		d := autoCompactDeps{Log: newTempLogger(t)}
+		d := Deps{Log: newTempLogger(t)}
 		d.report("logged only")
 	})
 
 	t.Run("both sinks each receive the message", func(t *testing.T) {
 		var got []string
-		d := autoCompactDeps{
+		d := Deps{
 			Log:    newTempLogger(t),
 			Notify: func(m string) { got = append(got, m) },
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,13 +20,16 @@ import (
 
 	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 	piagent "github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/autocompact"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/ctxwindow"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/gitroot"
 	"github.com/dimetron/pi-go/internal/guardrail"
 	"github.com/dimetron/pi-go/internal/lsp"
 	"github.com/dimetron/pi-go/internal/otel"
 	"github.com/dimetron/pi-go/internal/provider"
+	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
 )
@@ -169,7 +173,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, err
 	}
 
-	llm, providerName, err := buildSessionLLM(ctx, rt, cfg)
+	llm, providerName, tokenTracker, err := buildSessionLLM(ctx, rt, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +211,8 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	}
 	span.SetAttributes(attribute.Bool("session.resumed", resumed))
 
+	installAutoCompact(ctx, rt, cfg, ag, llm, tokenTracker)
+
 	return &piSessionState{
 		agent:       ag,
 		sessionID:   sessionID,
@@ -214,6 +220,44 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		bashSup:     res.bashSup,
 		cleanup:     res.cleanup,
 	}, nil
+}
+
+// installAutoCompact wires the two-stage compaction hook onto an ACP session.
+//
+// An ACP session is the longest-lived shape pi-go runs in — an editor holds one
+// open across many turns, and every turn re-sends the whole transcript — so it
+// is the path that most needs the history rewritten out from under it. It is
+// also the path that went without: the hook used to live in internal/cli and
+// nothing outside that package could reach it.
+//
+// Compaction rewrites the persisted transcript, so it needs the file-backed
+// session service. Under an in-memory service there is no stored history to
+// rewrite and the hook is left off; BuildHook returns nil for that, and for a
+// tracker that never learned the model's context window.
+func installAutoCompact(
+	ctx context.Context,
+	rt RuntimeConfig,
+	cfg config.Config,
+	ag *piagent.Agent,
+	llm adkmodel.LLM,
+	tracker *guardrail.Tracker,
+) {
+	svc, _ := rt.SessionService.(*pisession.FileService)
+	hook := autocompact.BuildHook(autocompact.Deps{
+		SessionSvc:    svc,
+		Tracker:       tracker,
+		Cfg:           autocompact.ConfigFrom(cfg),
+		SummarizerLLM: llm,
+		// No session logger on this path, and stdout belongs to the ACP wire
+		// protocol, so the notice goes to slog like the rest of the server's
+		// diagnostics.
+		Notify: func(msg string) {
+			slog.InfoContext(ctx, "acp-server: auto-compact", "outcome", msg)
+		},
+	})
+	if hook != nil {
+		ag.SetPreTurnHook(hook)
+	}
 }
 
 // openPiSession settles the ADK session a turn runs in and reports whether it
@@ -260,26 +304,31 @@ func loadSessionConfig(rt RuntimeConfig, cwd string) (config.Config, error) {
 // buildSessionLLM resolves the default role to a provider and returns a
 // token-guarded LLM for it, along with the name of the provider it resolved to
 // — callbacks built alongside the agent need it to know what the wire format
-// can carry.
-func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (adkmodel.LLM, string, error) {
+// can carry — and the guardrail tracker guarding it.
+//
+// The tracker is returned rather than kept private because auto-compaction
+// reads the live context size from it. An ACP session that dropped it on the
+// floor could still meter tokens, but nothing could tell when the transcript
+// had outgrown the window.
+func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (adkmodel.LLM, string, *guardrail.Tracker, error) {
 	modelName, providerName, advisorModel, advisorMaxUses, advisorCaching, err := cfg.ResolveRole("default")
 	if err != nil {
-		return nil, "", fmt.Errorf("resolving model role: %w", err)
+		return nil, "", nil, fmt.Errorf("resolving model role: %w", err)
 	}
 
 	info, baseURL, err := resolveSessionProvider(cfg, rt.BaseURL, modelName, providerName)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
 	if err := checkProviderCredentials(info, apiKey, baseURL); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	baseURL, err = resolveOllamaBaseURL(info, apiKey, baseURL)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	llm, err := provider.NewLLM(ctx, info, apiKey, baseURL, cfg.ThinkingLevel, &provider.LLMOptions{
@@ -295,12 +344,12 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 		RateLimit: cfg.ResolveRateLimits(info.Provider, info.Model),
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("creating LLM provider: %w", err)
+		return nil, "", nil, fmt.Errorf("creating LLM provider: %w", err)
 	}
 
 	tokenTracker := guardrail.New(cfg.MaxDailyTokens)
-	tokenTracker.SetContextWindowSize(sessionContextWindow(ctx, info, baseURL))
-	return guardrail.WrapModel(llm, tokenTracker), info.Provider, nil
+	tokenTracker.SetContextWindowSize(ctxwindow.Resolve(ctx, cfg, info, baseURL))
+	return guardrail.WrapModel(llm, tokenTracker), info.Provider, tokenTracker, nil
 }
 
 // checkProviderCredentials rejects a provider that needs an API key and has
@@ -362,23 +411,6 @@ func resolveSessionProvider(cfg config.Config, flagBaseURL, modelName, providerN
 		return provider.Info{}, "", fmt.Errorf("model validation: %w", err)
 	}
 	return info, baseURL, nil
-}
-
-// sessionContextWindow returns the model's context window, preferring the size
-// a running Ollama reports or the OpenRouter listing publishes over the static
-// table.
-func sessionContextWindow(ctx context.Context, info provider.Info, baseURL string) int64 {
-	if info.Ollama {
-		if n := provider.OllamaContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			return n
-		}
-	}
-	if info.Provider == "openrouter" {
-		if n := provider.OpenRouterContextWindowSize(ctx, baseURL, info.Model); n > 0 {
-			return n
-		}
-	}
-	return provider.ContextWindowSizeFor(info.Provider, info.Model)
 }
 
 // sessionResources holds the tools and callbacks a session runs with, plus the
