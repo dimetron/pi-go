@@ -105,6 +105,30 @@ func TestLimiterHoldsSecondFullBurst(t *testing.T) {
 	}
 }
 
+// This is the case that distinguishes the rolling window from the old token
+// bucket. A token bucket refills continuously, so at t=59s it has ~983 tokens
+// back and would admit a 100-token request. The rolling window still counts
+// the full 1000-token burst at t=59, so it must reject the same request. The
+// old bucket would pass this test; the rolling window is what makes it fail.
+func TestLimiterRollingWindowRejectsPartialChargeBeforeExpiry(t *testing.T) {
+	t.Parallel()
+	lim := New(Limits{InputTokensPerMinute: 1000})
+	if err := lim.Wait(context.Background(), 1000); err != nil {
+		t.Fatalf("first Wait: %v", err)
+	}
+
+	// At t=59s the full burst is still in the window, so even a small charge
+	// must be held. A token bucket would have refilled and admitted it.
+	lim.mu.Lock()
+	lim.spend[0].at = time.Now().Add(-59 * time.Second)
+	lim.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := lim.Wait(ctx, 100); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait(100) at t=59 err = %v, want it held by the rolling window", err)
+	}
+}
+
 // A charge admitted at t=0 still counts against the window at t=59 and only
 // falls out at t=60. This is the property a token bucket does not model.
 func TestLimiterRollingWindowExpiry(t *testing.T) {
@@ -130,6 +154,62 @@ func TestLimiterRollingWindowExpiry(t *testing.T) {
 	lim.mu.Unlock()
 	if err := lim.Wait(context.Background(), 1000); err != nil {
 		t.Fatalf("Wait after window expiry: %v", err)
+	}
+}
+
+// A canceled context must not record a charge for a request that will never be
+// sent. The old rate.WaitN rejected a pre-canceled context; the rolling window
+// must too, or it would charge budget for a request that never goes out.
+func TestLimiterPreCanceledContextDoesNotCharge(t *testing.T) {
+	t.Parallel()
+	lim := New(Limits{InputTokensPerMinute: 1000})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := lim.Wait(ctx, 100); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait with canceled ctx err = %v, want context.Canceled", err)
+	}
+
+	lim.mu.Lock()
+	defer lim.mu.Unlock()
+	if len(lim.spend) != 0 {
+		t.Fatalf("canceled request recorded %d charges, want none", len(lim.spend))
+	}
+}
+
+// A large request queued behind a stream of small ones must not be starved.
+// Without FIFO ordering, a small request arriving after the large one could
+// consume the freed capacity and leapfrog it. Here the large request is queued
+// first and the small one second; neither may be admitted while the window is
+// full, and the small one must not slip ahead of the large one.
+func TestLimiterFIFOOrderingPreventsStarvation(t *testing.T) {
+	t.Parallel()
+	lim := New(Limits{InputTokensPerMinute: 1000})
+	if err := lim.Wait(context.Background(), 1000); err != nil {
+		t.Fatalf("fill Wait: %v", err)
+	}
+
+	// Queue a large request first, then a small one. Both must be held while
+	// the window is full.
+	largeDone := make(chan error, 1)
+	go func() {
+		largeDone <- lim.Wait(context.Background(), 1000)
+	}()
+	// Give the large request a moment to enqueue before the small one.
+	time.Sleep(20 * time.Millisecond)
+	smallDone := make(chan error, 1)
+	go func() {
+		smallDone <- lim.Wait(context.Background(), 100)
+	}()
+
+	// Neither may complete while the window is full.
+	select {
+	case err := <-largeDone:
+		t.Fatalf("large request admitted while window full: %v", err)
+	case err := <-smallDone:
+		t.Fatalf("small request admitted ahead of the queued large one: %v", err)
+	case <-time.After(50 * time.Millisecond):
+		// Both correctly held.
 	}
 }
 

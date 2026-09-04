@@ -84,6 +84,15 @@ type spendEvent struct {
 	tokens int
 }
 
+// waiter is one request queued for token capacity. Waiters are served in FIFO
+// order so a large request cannot be starved by a stream of small ones.
+type waiter struct {
+	charge int
+	// ready is closed when this waiter becomes the head and should re-check
+	// whether it can be admitted.
+	ready chan struct{}
+}
+
 // Limiter paces requests against a rolling input-token window and/or a
 // request-per-minute budget, and absorbs server-ordered cooldowns.
 //
@@ -100,6 +109,8 @@ type Limiter struct {
 	tokenBurst int
 	// spend holds the token charges still inside the window, oldest first.
 	spend []spendEvent
+	// waiters is the FIFO queue of requests waiting for token capacity.
+	waiters []*waiter
 
 	mu        sync.Mutex
 	coolUntil time.Time
@@ -159,39 +170,118 @@ func (l *Limiter) Wait(ctx context.Context, inputTokens int) error {
 // text. Clamp its charge to a full window and let the server answer instead:
 // its 429 names the quota and the model, which is the message the user
 // actually needs. The window is then full, so later requests wait.
+//
+// Waiters are served in FIFO order. Without ordering, a large request queued
+// behind a stream of small ones could be leapfrogged at every window expiry
+// and starve; the queue guarantees each waiter is admitted before any that
+// arrived after it.
 func (l *Limiter) waitTokenWindow(ctx context.Context, inputTokens int) error {
 	charge := inputTokens
 	if charge > l.tokenLimit {
 		charge = l.tokenLimit
 	}
-	for {
-		l.mu.Lock()
-		now := time.Now()
-		// Drop charges that have fallen out of the window: they no longer
-		// count against the server's rolling window.
-		cutoff := now.Add(-window)
-		keep := 0
-		for keep < len(l.spend) && l.spend[keep].at.Before(cutoff) {
-			keep++
-		}
-		l.spend = l.spend[keep:]
 
-		sum := 0
-		for _, e := range l.spend {
-			sum += e.tokens
+	// Fast path: no one is waiting and the charge fits, admit immediately.
+	// A canceled context must not record a charge for a request that will
+	// never be sent.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// Enqueue behind any existing waiters, or admit immediately when the queue
+	// is empty and the charge fits.
+	w := &waiter{charge: charge, ready: make(chan struct{})}
+	l.mu.Lock()
+	if len(l.waiters) == 0 && l.windowSumLocked() <= l.tokenLimit-charge {
+		l.spend = append(l.spend, spendEvent{at: time.Now(), tokens: charge})
+		l.mu.Unlock()
+		return nil
+	}
+	l.waiters = append(l.waiters, w)
+	head := len(l.waiters) == 1
+	l.mu.Unlock()
+
+	// Wait until this waiter is at the head of the queue, then try to admit.
+	// The head waiter proceeds immediately; later waiters wait to be woken by
+	// the waiter ahead of them being admitted or removed.
+	for {
+		if !head {
+			select {
+			case <-ctx.Done():
+				l.removeWaiter(w)
+				return ctx.Err()
+			case <-w.ready:
+				head = true
+			}
 		}
-		if sum+charge <= l.tokenLimit {
+
+		l.mu.Lock()
+		if l.waiters[0] != w {
+			// Not head yet; a predecessor is still ahead. Wait to be woken.
+			head = false
+			l.mu.Unlock()
+			continue
+		}
+		now := time.Now()
+		l.dropExpiredLocked(now)
+		if l.windowSumLocked() <= l.tokenLimit-charge {
+			// Admit and dequeue.
 			l.spend = append(l.spend, spendEvent{at: now, tokens: charge})
+			l.waiters = l.waiters[1:]
+			l.wakeNextLocked()
 			l.mu.Unlock()
 			return nil
 		}
-
-		// The window is full. Wait until the oldest charge falls out of it,
-		// then re-check — a concurrent caller may have spent in the meantime.
+		// Head but the window is full. Wait until the oldest charge falls out,
+		// then re-check.
 		wait := l.spend[0].at.Add(window).Sub(now)
 		l.mu.Unlock()
 		if !sleepCtx(ctx, wait) {
+			l.removeWaiter(w)
 			return ctx.Err()
+		}
+	}
+}
+
+// windowSumLocked returns the sum of token charges still inside the window.
+// Caller must hold l.mu.
+func (l *Limiter) windowSumLocked() int {
+	sum := 0
+	for _, e := range l.spend {
+		sum += e.tokens
+	}
+	return sum
+}
+
+// dropExpiredLocked removes charges that have fallen out of the window.
+// Caller must hold l.mu.
+func (l *Limiter) dropExpiredLocked(now time.Time) {
+	cutoff := now.Add(-window)
+	keep := 0
+	for keep < len(l.spend) && l.spend[keep].at.Before(cutoff) {
+		keep++
+	}
+	l.spend = l.spend[keep:]
+}
+
+// wakeNextLocked signals the next waiter in line, if any, that it may re-check.
+// Caller must hold l.mu.
+func (l *Limiter) wakeNextLocked() {
+	if len(l.waiters) > 0 {
+		close(l.waiters[0].ready)
+	}
+}
+
+// removeWaiter drops w from the queue, waking the next waiter if w was head.
+func (l *Limiter) removeWaiter(w *waiter) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, c := range l.waiters {
+		if c == w {
+			l.waiters = append(l.waiters[:i], l.waiters[i+1:]...)
+			if i == 0 && len(l.waiters) > 0 {
+				close(l.waiters[0].ready)
+			}
+			return
 		}
 	}
 }
