@@ -79,6 +79,8 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 		base = &ratelimit.Transport{
 			Base:    base,
 			Limiter: ratelimit.Shared(opts.RateLimitScope, opts.RateLimit),
+			Scope:   opts.RateLimitScope,
+			Limits:  opts.RateLimit,
 		}
 	}
 	return base, nil

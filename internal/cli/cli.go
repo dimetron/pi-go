@@ -37,6 +37,7 @@ import (
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/pirpc"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/ratelimit"
 	"github.com/dimetron/pi-go/internal/retry"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
@@ -70,6 +71,8 @@ var (
 	flagSystem       string
 	flagPprof        string
 	flagPprofPort    string
+	flagMetrics      bool
+	flagMetricsPort  string
 	flagCPUProfile   string
 	flagTraceHTTP    bool
 	flagA2AAddr      string
@@ -186,6 +189,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 		// every subcommand alike.
 		PersistentPreRun: func(*cobra.Command, []string) {
 			startPprofServer()
+			startMetricsServer()
 			startCPUProfile()
 		},
 		PersistentPostRun: func(*cobra.Command, []string) {
@@ -223,6 +227,16 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	// "unknown flag: --pprof" the moment a subcommand was used.
 	cmd.PersistentFlags().StringVar(&flagPprof, "pprof", "", "Enable pprof profiling (serves /debug/pprof; any non-empty value enables it)")
 	cmd.PersistentFlags().StringVar(&flagPprofPort, "pprof-port", "6060", "Port for the pprof HTTP server")
+	// A separate flag and server from --pprof on purpose: pprof is a profiling
+	// tool a user turns on for one debugging session, while rate-limit metrics
+	// are an ops signal someone may want scraped continuously. Tying it to
+	// --pprof would mean either enabling CPU/heap profiling overhead just to
+	// see quota headroom, or never exposing the quota view without it; a
+	// dedicated mux also keeps /debug/pprof off this port when only metrics
+	// were asked for. 9464 is OpenTelemetry's own default Prometheus exporter
+	// port, so a scraper config aimed at "the usual place" finds it.
+	cmd.PersistentFlags().BoolVar(&flagMetrics, "metrics", false, "Serve rate-limit usage metrics in Prometheus text format at /metrics (see --metrics-port)")
+	cmd.PersistentFlags().StringVar(&flagMetricsPort, "metrics-port", "9464", "Port for the rate-limit metrics HTTP server")
 	// --cpuprofile writes a runtime CPU profile to the given path for the whole
 	// process lifetime. This is the profile PGO consumes: `go build` reads a CPU
 	// pprof profile (default.pgo in the main package dir, or -pgo=<path>) to
@@ -572,6 +586,36 @@ func startPprofServer() {
 			fmt.Println("collect with: go tool pprof http://localhost:" + flagPprofPort + "/debug/pprof/heap")
 			if err := http.ListenAndServe(addr, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
+			}
+		}()
+	})
+}
+
+// metricsOnce guards the metrics listener the same way pprofOnce guards the
+// pprof one: PersistentPreRun fires once per command, including subcommands.
+var metricsOnce sync.Once
+
+// startMetricsServer serves internal/ratelimit's Prometheus-format /metrics
+// endpoint on --metrics-port when --metrics is set.
+//
+// It runs on its own ServeMux rather than sharing pprof's DefaultServeMux
+// (or listening on the same address): the two flags are independent, and a
+// user who asked only for --metrics should not also get /debug/pprof for
+// free, or vice versa. Diagnostics go through slog rather than fmt/stdout —
+// this can start while the interactive TUI already owns the terminal, and a
+// raw stdout write from here would corrupt its display (see CLAUDE.md).
+func startMetricsServer() {
+	if !flagMetrics {
+		return
+	}
+	metricsOnce.Do(func() {
+		addr := ":" + flagMetricsPort
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", ratelimit.MetricsHandler())
+		go func() {
+			slog.Info("rate-limit metrics server listening", "addr", addr, "path", "/metrics")
+			if err := http.ListenAndServe(addr, mux); err != nil {
+				slog.Error("rate-limit metrics server error", "error", err)
 			}
 		}()
 	})
