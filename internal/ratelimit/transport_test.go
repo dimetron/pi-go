@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -325,5 +326,140 @@ func TestEstimateCatchesTheRejectedMinute(t *testing.T) {
 	if est <= budget {
 		t.Fatalf("the rejected minute (%d bytes) estimates at %d tokens, inside the %d budget: "+
 			"the limiter would pace nothing and the 429 would recur", wireBytes, est, budget)
+	}
+}
+
+// A Transport with no Scope is the pre-metrics configuration and must not
+// record anything, so existing callers that never set the field see no
+// behavior change.
+func TestTransportEmptyScopeRecordsNoMetrics(t *testing.T) {
+	resetMetrics()
+	t.Cleanup(resetMetrics)
+	stub := &stubRoundTripper{resp: response(http.StatusOK, nil, "")}
+	tr := &Transport{Base: stub, Limiter: New(Limits{InputTokensPerMinute: 1_000_000})}
+
+	if _, err := tr.RoundTrip(newRequest(t, strings.Repeat("x", 270))); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if got := MetricsSnapshot(); len(got) != 0 {
+		t.Fatalf("MetricsSnapshot = %+v, want no scopes recorded", got)
+	}
+}
+
+// The point of wiring metrics into Transport: an admitted request shows up
+// under its provider+model scope, charged for the same tokens the Limiter
+// paced it against.
+func TestTransportRecordsAdmittedRequestMetrics(t *testing.T) {
+	resetMetrics()
+	t.Cleanup(resetMetrics)
+	stub := &stubRoundTripper{resp: response(http.StatusOK, nil, "")}
+	scope := ScopeFor("gemini", "gemini-3.8-flash", "https://generativelanguage.googleapis.com")
+	tr := &Transport{
+		Base:    stub,
+		Limiter: New(Limits{InputTokensPerMinute: 2_000_000}),
+		Scope:   scope,
+		Limits:  Limits{InputTokensPerMinute: 2_000_000},
+	}
+
+	// 270 bytes / 2.7 bytes-per-token = 100 tokens.
+	if _, err := tr.RoundTrip(newRequest(t, strings.Repeat("x", 270))); err != nil {
+		t.Fatalf("first RoundTrip: %v", err)
+	}
+	if _, err := tr.RoundTrip(newRequest(t, strings.Repeat("x", 270))); err != nil {
+		t.Fatalf("second RoundTrip: %v", err)
+	}
+
+	got := MetricsSnapshot()
+	if len(got) != 1 {
+		t.Fatalf("MetricsSnapshot returned %d scopes, want 1: %+v", len(got), got)
+	}
+	want := ScopeMetrics{
+		Provider: "gemini", Model: "gemini-3.8-flash",
+		RequestsPerMinute: 2, PeakRequestsPerMinute: 2,
+		InputTokensPerMinute: 200, PeakInputTokensPerMinute: 200, InputTokensLimit: 2_000_000,
+	}
+	if got[0] != want {
+		t.Fatalf("MetricsSnapshot[0] = %+v, want %+v", got[0], want)
+	}
+}
+
+// A request rejected by admission (context canceled while waiting) must not
+// be counted — the counters are meant to mirror what the provider actually
+// saw, and a request that never went out was never charged by anyone.
+func TestTransportDoesNotRecordUnadmittedRequests(t *testing.T) {
+	resetMetrics()
+	t.Cleanup(resetMetrics)
+	stub := &stubRoundTripper{resp: response(http.StatusOK, nil, "")}
+	scope := ScopeFor("gemini", "gemini-3.8-flash", "")
+	lim := New(Limits{InputTokensPerMinute: 100})
+	tr := &Transport{Base: stub, Limiter: lim, Scope: scope, Limits: Limits{InputTokensPerMinute: 100}}
+
+	body := strings.Repeat("x", 400) // ~148 tokens, exceeds the 100-token budget's burst
+	if _, err := tr.RoundTrip(newRequest(t, body)); err != nil {
+		t.Fatalf("first RoundTrip: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := tr.RoundTrip(newRequest(t, body).WithContext(ctx)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second RoundTrip err = %v, want it held and then time out", err)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("stub saw %d calls, want 1", stub.calls)
+	}
+
+	got := MetricsSnapshot()
+	if len(got) != 1 || got[0].RequestsPerMinute != 1 {
+		t.Fatalf("MetricsSnapshot = %+v, want exactly the one admitted request counted", got)
+	}
+}
+
+// Concurrent requests across several scopes must not race: the counters are
+// written from request goroutines and read by the metrics HTTP handler.
+// Run with -race.
+func TestTransportMetricsConcurrentSafe(t *testing.T) {
+	resetMetrics()
+	t.Cleanup(resetMetrics)
+
+	const goroutines = 20
+	const perGoroutine = 50
+	scopes := []string{
+		ScopeFor("gemini", "gemini-3.8-flash", ""),
+		ScopeFor("openai", "gpt-5.2", ""),
+	}
+
+	var wg sync.WaitGroup
+	for g := range goroutines {
+		scope := scopes[g%len(scopes)]
+		tr := &Transport{
+			Base:    &stubRoundTripper{resp: response(http.StatusOK, nil, "")},
+			Limiter: New(Limits{InputTokensPerMinute: 100_000_000}),
+			Scope:   scope,
+			Limits:  Limits{InputTokensPerMinute: 100_000_000},
+		}
+		wg.Go(func() {
+			for range perGoroutine {
+				if _, err := tr.RoundTrip(newRequest(t, "x")); err != nil {
+					t.Errorf("RoundTrip: %v", err)
+				}
+			}
+		})
+	}
+	// Read concurrently with the writers too, exercising the handler's read
+	// path against live writers.
+	wg.Go(func() {
+		for range 50 {
+			_ = MetricsSnapshot()
+		}
+	})
+	wg.Wait()
+
+	got := MetricsSnapshot()
+	total := 0
+	for _, s := range got {
+		total += s.RequestsPerMinute
+	}
+	if want := goroutines * perGoroutine; total != want {
+		t.Fatalf("total RequestsPerMinute across scopes = %d, want %d", total, want)
 	}
 }

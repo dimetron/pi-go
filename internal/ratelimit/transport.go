@@ -55,6 +55,16 @@ const hintBodyLimit = 8 << 10
 type Transport struct {
 	Base    http.RoundTripper
 	Limiter *Limiter
+
+	// Scope names the budget this transport paces against (see ScopeFor). A
+	// non-empty Scope also turns on metrics: each admitted request is counted
+	// against it for the /metrics endpoint (see MetricsHandler). Left empty,
+	// a caller that does not want metrics is unaffected.
+	Scope string
+	// Limits is the configured budget for Scope, recorded as-is so a scraper
+	// can read it back as the pi_ratelimit_*_limit gauges. Ignored when Scope
+	// is empty.
+	Limits Limits
 }
 
 // RoundTrip waits for budget, sends, and records any cooldown the server asked
@@ -64,8 +74,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	if err := t.Limiter.Wait(req.Context(), estimateRequestTokens(req)); err != nil {
+	tokens := estimateRequestTokens(req)
+	if err := t.Limiter.Wait(req.Context(), tokens); err != nil {
 		return nil, err
+	}
+	// Recorded here, once admission succeeds, so the count matches what the
+	// provider actually saw rather than what pi-go merely attempted.
+	if t.Scope != "" {
+		provider, model := splitScope(t.Scope)
+		recordAdmitted(t.Scope, provider, model, t.Limits, tokens)
 	}
 
 	resp, err := base.RoundTrip(req)

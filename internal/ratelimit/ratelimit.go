@@ -32,6 +32,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,6 +248,19 @@ func Shared(scope string, l Limits) *Limiter {
 // different accounts.
 func ScopeFor(provider, model, baseURL string) string {
 	return provider + "|" + model + "|" + baseURL
+}
+
+// splitScope recovers the provider and model labels from a scope string built
+// by ScopeFor, for use as metrics labels (see metrics.go). The base URL
+// segment is dropped: metrics are labeled by provider+model only, matching
+// how the dashboard being mirrored groups usage by model rather than by
+// endpoint.
+func splitScope(scope string) (provider, model string) {
+	parts := strings.SplitN(scope, "|", 3)
+	if len(parts) < 2 {
+		return scope, ""
+	}
+	return parts[0], parts[1]
 }
 
 // resetRegistry drops every shared limiter. Tests only: the registry is
