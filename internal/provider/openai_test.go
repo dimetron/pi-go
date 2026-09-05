@@ -1357,6 +1357,7 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"gpt-5.6-luna", true},
 		{"gpt-5.6-sol", true},
 		{"gpt-5.6-terra", true},
+		{"gpt-6-astra", true},
 		{"gpt-5.1-codex", true},
 		// Provider-prefixed forms (agentgateway virtual models forward the
 		// bare ID upstream, so the endpoint decision must match on it).
