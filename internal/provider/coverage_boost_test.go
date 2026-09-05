@@ -31,6 +31,7 @@ func TestContextWindowSize(t *testing.T) {
 		{"gemini-3.6-flash previous stable", "gemini-3.6-flash", 1_048_576},
 		{"gemini-3.5-flash stable", "gemini-3.5-flash", 1_048_576},
 		{"gemini-3.1-flash-lite stable beats -preview prefix", "gemini-3.1-flash-lite", 1_048_576},
+		{"gpt-6-astra frontier", "gpt-6-astra", 1_050_000},
 		{"gpt-5.5 frontier", "gpt-5.5", 272_000},
 		{"gpt-5.4-mini has longer prefix", "gpt-5.4-mini", 400_000},
 		{"mistral-large tag variant", "mistral-large-2512", 256_000},
