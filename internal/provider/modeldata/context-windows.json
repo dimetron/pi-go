@@ -30,6 +30,7 @@
     "claude-3-haiku": 200000
   },
   "openai": {
+    "gpt-6-astra": 1050000,
     "gpt-5.6-sol": 272000,
     "gpt-5.6-terra": 272000,
     "gpt-5.6-luna": 272000,
