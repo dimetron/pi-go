@@ -647,6 +647,11 @@ type LLMOptions struct {
 	// stop below that and reject the request rather than clamping it. A
 	// per-request genai MaxOutputTokens still wins over both.
 	MaxOutputTokens int64
+	// UseLegacyMaxTokens sends max_tokens instead of max_completion_tokens on
+	// the Chat Completions wire. Ollama only understands the legacy field; the
+	// newer max_completion_tokens is silently ignored, leaving the model
+	// unbounded. Set for agentgateway (which routes to Ollama).
+	UseLegacyMaxTokens bool
 	// RateLimit paces outbound requests so a turn stays inside the provider's
 	// per-minute quota rather than being rejected by it. A zero value sends at
 	// whatever rate the caller manages. Resolved from config by

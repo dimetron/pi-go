@@ -173,3 +173,56 @@ func TestChatCompletionsSendsMaxCompletionTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentGatewaySendsLegacyMaxTokens pins the fix for Ollama ignoring
+// max_completion_tokens: the agentgateway provider must send max_tokens
+// (the legacy field) instead, or Ollama runs unbounded and hits its own
+// 65536-token default — which is what truncated session 260906-1320.
+func TestAgentGatewaySendsLegacyMaxTokens(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "c1", "object": "chat.completion", "model": "m",
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	llm, err := NewAgentGateway(context.Background(), "ollama-deepseek", "", srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewAgentGateway() error: %v", err)
+	}
+	req := &model.LLMRequest{Contents: []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
+	}}
+	for _, err := range llm.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("decoding request: %v", err)
+	}
+	// max_tokens must be present (the legacy field Ollama understands).
+	got, ok := sent["max_tokens"].(float64)
+	if !ok {
+		t.Fatalf("request has no max_tokens (Ollama would run unbounded): %s", body)
+	}
+	if got != float64(defaultOaiMaxOutputTokens) {
+		t.Errorf("max_tokens = %v, want %v", got, defaultOaiMaxOutputTokens)
+	}
+	// max_completion_tokens must NOT be present — Ollama ignores it, and
+	// sending both is at best redundant and at worst ambiguous.
+	if _, ok := sent["max_completion_tokens"]; ok {
+		t.Errorf("request has max_completion_tokens, should only send max_tokens for agentgateway")
+	}
+}
