@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "fetched_at": "2026-09-03T00:00:00Z",
+  "fetched_at": "2026-09-05T00:00:00Z",
   "models": [
     {
       "id": "codestral-2508",
@@ -20,7 +20,8 @@
         "completion_chat",
         "completion_fim",
         "function_calling"
-      ]
+      ],
+      "release_date": "2024-05-29"
     },
     {
       "id": "glm-5-2",
@@ -52,16 +53,6 @@
       ]
     },
     {
-      "id": "magistral-medium-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
       "id": "magistral-small-latest",
       "owned_by": "mistralai",
       "context_window": 262144,
@@ -69,7 +60,8 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2025-03-17"
     },
     {
       "id": "ministral-14b-2512",
@@ -113,7 +105,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2024-10-01"
     },
     {
       "id": "ministral-8b-2512",
@@ -135,7 +128,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2024-10-01"
     },
     {
       "id": "mistral-code-fim-latest",
@@ -166,7 +160,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2024-11-01"
     },
     {
       "id": "mistral-large-latest",
@@ -177,67 +172,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-2604",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-3",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-3-5",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-3.5",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-medium-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
+      ],
+      "release_date": "2024-11-01"
     },
     {
       "id": "mistral-small-2603",
@@ -247,7 +183,8 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2026-03-16"
     },
     {
       "id": "mistral-small-latest",
@@ -257,30 +194,11 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2026-03-16"
     },
     {
       "id": "mistral-vibe-cli-fast",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-vibe-cli-latest",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "mistral-vibe-cli-with-tools",
       "owned_by": "mistralai",
       "context_window": 262144,
       "capabilities": [
@@ -305,7 +223,8 @@
       "capabilities": [
         "completion_chat",
         "function_calling"
-      ]
+      ],
+      "release_date": "2025-07-15"
     },
     {
       "id": "zai-glm-5-2",
@@ -314,7 +233,8 @@
       "capabilities": [
         "completion_chat",
         "function_calling"
-      ]
+      ],
+      "release_date": "2026-06-13"
     }
   ]
 }

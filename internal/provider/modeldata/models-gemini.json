@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-09-03T00:00:00Z",
+  "fetched_at": "2026-09-05T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -12,11 +12,13 @@
     },
     {
       "id": "deep-research-max-preview-04-2026",
-      "owned_by": "Deep Research Max Preview (Apr-21-2026)"
+      "owned_by": "Deep Research Max Preview (Apr-21-2026)",
+      "release_date": "2026-04-21"
     },
     {
       "id": "deep-research-preview-04-2026",
-      "owned_by": "Deep Research Preview (Apr-21-2026)"
+      "owned_by": "Deep Research Preview (Apr-21-2026)",
+      "release_date": "2026-04-21"
     },
     {
       "id": "deep-research-pro-preview-12-2025",
@@ -24,91 +26,98 @@
     },
     {
       "id": "gemini-2.5-computer-use-preview-10-2025",
-      "owned_by": "Gemini 2.5 Computer Use Preview 10-2025"
+      "owned_by": "Gemini 2.5 Computer Use Preview 10-2025",
+      "release_date": "2025-10-07"
     },
     {
       "id": "gemini-2.5-flash",
-      "owned_by": "Gemini 2.5 Flash"
+      "owned_by": "Gemini 2.5 Flash",
+      "release_date": "2025-06-17"
     },
     {
       "id": "gemini-2.5-flash-image",
-      "owned_by": "Nano Banana"
+      "owned_by": "Nano Banana",
+      "release_date": "2025-08-26"
     },
     {
       "id": "gemini-2.5-flash-lite",
-      "owned_by": "Gemini 2.5 Flash-Lite"
+      "owned_by": "Gemini 2.5 Flash-Lite",
+      "release_date": "2025-06-17"
     },
     {
       "id": "gemini-2.5-flash-native-audio-latest",
-      "owned_by": "Gemini 2.5 Flash Native Audio Latest"
+      "owned_by": "Gemini 2.5 Flash Native Audio Latest",
+      "release_date": "2025-06-17"
     },
     {
       "id": "gemini-2.5-flash-native-audio-preview-09-2025",
-      "owned_by": "Gemini 2.5 Flash Native Audio Preview 09-2025"
-    },
-    {
-      "id": "gemini-2.5-flash-preview-tts",
-      "owned_by": "Gemini 2.5 Flash Preview TTS"
+      "owned_by": "Gemini 2.5 Flash Native Audio Preview 09-2025",
+      "release_date": "2025-06-17"
     },
     {
       "id": "gemini-2.5-pro",
-      "owned_by": "Gemini 2.5 Pro"
-    },
-    {
-      "id": "gemini-2.5-pro-preview-tts",
-      "owned_by": "Gemini 2.5 Pro Preview TTS"
+      "owned_by": "Gemini 2.5 Pro",
+      "release_date": "2025-06-17"
     },
     {
       "id": "gemini-3-flash-preview",
-      "owned_by": "Gemini 3 Flash Preview"
+      "owned_by": "Gemini 3 Flash Preview",
+      "release_date": "2025-12-17"
     },
     {
       "id": "gemini-3-pro-image",
-      "owned_by": "Nano Banana Pro"
+      "owned_by": "Nano Banana Pro",
+      "release_date": "2026-05-28"
     },
     {
       "id": "gemini-3-pro-image-preview",
-      "owned_by": "Nano Banana Pro"
+      "owned_by": "Nano Banana Pro",
+      "release_date": "2025-11-20"
     },
     {
       "id": "gemini-3.1-flash-image",
-      "owned_by": "Nano Banana 2"
+      "owned_by": "Nano Banana 2",
+      "release_date": "2026-05-28"
     },
     {
       "id": "gemini-3.1-flash-image-preview",
-      "owned_by": "Nano Banana 2"
+      "owned_by": "Nano Banana 2",
+      "release_date": "2026-02-26"
     },
     {
       "id": "gemini-3.1-flash-lite",
-      "owned_by": "Gemini 3.1 Flash Lite"
+      "owned_by": "Gemini 3.1 Flash Lite",
+      "release_date": "2026-05-07"
     },
     {
       "id": "gemini-3.1-flash-lite-image",
-      "owned_by": "Nano Banana 2 Lite"
+      "owned_by": "Nano Banana 2 Lite",
+      "release_date": "2026-06-30"
     },
     {
       "id": "gemini-3.1-flash-lite-preview",
-      "owned_by": "Gemini 3.1 Flash Lite Preview"
-    },
-    {
-      "id": "gemini-3.1-flash-tts-preview",
-      "owned_by": "Gemini 3.1 Flash TTS Preview"
+      "owned_by": "Gemini 3.1 Flash Lite Preview",
+      "release_date": "2026-03-03"
     },
     {
       "id": "gemini-3.1-pro-preview",
-      "owned_by": "Gemini 3.1 Pro Preview"
+      "owned_by": "Gemini 3.1 Pro Preview",
+      "release_date": "2026-02-19"
     },
     {
       "id": "gemini-3.1-pro-preview-customtools",
-      "owned_by": "Gemini 3.1 Pro Preview Custom Tools"
+      "owned_by": "Gemini 3.1 Pro Preview Custom Tools",
+      "release_date": "2026-02-19"
     },
     {
       "id": "gemini-3.5-flash",
-      "owned_by": "Gemini 3.5 Flash"
+      "owned_by": "Gemini 3.5 Flash",
+      "release_date": "2026-05-19"
     },
     {
       "id": "gemini-3.5-flash-lite",
-      "owned_by": "Gemini 3.5 Flash Lite"
+      "owned_by": "Gemini 3.5 Flash Lite",
+      "release_date": "2026-07-21"
     },
     {
       "id": "gemini-3.5-transcribe",
@@ -120,47 +129,47 @@
     },
     {
       "id": "gemini-3.6-flash",
-      "owned_by": "Gemini 3.6 Flash"
+      "owned_by": "Gemini 3.6 Flash",
+      "release_date": "2026-07-21"
     },
     {
       "id": "gemini-3.7-flash",
-      "owned_by": "Gemini 3.7 Flash"
+      "owned_by": "Gemini 3.7 Flash",
+      "release_date": "2026-08-13"
     },
     {
       "id": "gemini-3.8-flash",
-      "owned_by": "Gemini 3.8 Flash"
+      "owned_by": "Gemini 3.8 Flash",
+      "release_date": "2026-09-02"
     },
     {
       "id": "gemini-embedding-001",
-      "owned_by": "Gemini Embedding 001"
+      "owned_by": "Gemini Embedding 001",
+      "release_date": "2025-05-20"
     },
     {
       "id": "gemini-embedding-2",
-      "owned_by": "Gemini Embedding 2"
+      "owned_by": "Gemini Embedding 2",
+      "release_date": "2026-04-22"
     },
     {
       "id": "gemini-embedding-2-preview",
-      "owned_by": "Gemini Embedding 2 Preview"
+      "owned_by": "Gemini Embedding 2 Preview",
+      "release_date": "2026-04-22"
     },
     {
       "id": "gemini-flash-latest",
-      "owned_by": "Gemini Flash Latest"
-    },
-    {
-      "id": "gemini-flash-latest-high-res-exp",
-      "owned_by": "Gemini Flash Latest"
+      "owned_by": "Gemini Flash Latest",
+      "release_date": "2026-08-13"
     },
     {
       "id": "gemini-flash-lite-latest",
-      "owned_by": "Gemini Flash-Lite Latest"
+      "owned_by": "Gemini Flash-Lite Latest",
+      "release_date": "2026-07-21"
     },
     {
       "id": "gemini-omni-1.1-flash",
       "owned_by": "Gemini Omni 1.1 Flash"
-    },
-    {
-      "id": "gemini-omni-flash-preview",
-      "owned_by": "Gemini Omni Flash Preview"
     },
     {
       "id": "gemini-pro-latest",
@@ -180,27 +189,21 @@
     },
     {
       "id": "lyria-3-clip-preview",
-      "owned_by": "Lyria 3 Clip Preview"
+      "owned_by": "Lyria 3 Clip Preview",
+      "release_date": "2026-03-25"
     },
     {
       "id": "lyria-3-pro-preview",
-      "owned_by": "Lyria 3 Pro Preview"
+      "owned_by": "Lyria 3 Pro Preview",
+      "release_date": "2026-03-25"
+    },
+    {
+      "id": "lyria-3.5",
+      "owned_by": "Lyria 3.5"
     },
     {
       "id": "nano-banana-pro-preview",
       "owned_by": "Nano Banana Pro"
-    },
-    {
-      "id": "veo-3.1-fast-generate-preview",
-      "owned_by": "Veo 3.1 fast"
-    },
-    {
-      "id": "veo-3.1-generate-preview",
-      "owned_by": "Veo 3.1"
-    },
-    {
-      "id": "veo-3.1-lite-generate-preview",
-      "owned_by": "Veo 3.1 lite"
     }
   ]
 }

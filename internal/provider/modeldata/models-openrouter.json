@@ -1,867 +1,1173 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-09-03T00:00:00Z",
+  "fetched_at": "2026-09-05T00:00:00Z",
   "models": [
     {
-      "id": "aion-labs/aion-2.0"
+      "id": "aion-labs/aion-2.0",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "aion-labs/aion-3.0"
+      "id": "aion-labs/aion-3.0",
+      "release_date": "2026-07-07"
     },
     {
-      "id": "aion-labs/aion-3.0-mini"
+      "id": "aion-labs/aion-3.0-mini",
+      "release_date": "2026-07-07"
     },
     {
-      "id": "aion-labs/aion-rp-llama-3.1-8b"
+      "id": "aion-labs/aion-rp-llama-3.1-8b",
+      "release_date": "2025-02-04"
     },
     {
-      "id": "amazon/nova-2-lite-v1"
+      "id": "amazon/nova-2-lite-v1",
+      "release_date": "2025-12-02"
     },
     {
-      "id": "amazon/nova-lite-v1"
+      "id": "amazon/nova-lite-v1",
+      "release_date": "2024-12-05"
     },
     {
-      "id": "amazon/nova-micro-v1"
+      "id": "amazon/nova-micro-v1",
+      "release_date": "2024-12-05"
     },
     {
-      "id": "amazon/nova-premier-v1"
+      "id": "amazon/nova-premier-v1",
+      "release_date": "2025-10-31"
     },
     {
-      "id": "amazon/nova-pro-v1"
+      "id": "amazon/nova-pro-v1",
+      "release_date": "2024-12-05"
     },
     {
-      "id": "anthracite-org/magnum-v4-72b"
+      "id": "anthracite-org/magnum-v4-72b",
+      "release_date": "2024-10-22"
     },
     {
-      "id": "anthropic/claude-3-haiku"
+      "id": "anthropic/claude-3-haiku",
+      "release_date": "2024-03-13"
     },
     {
-      "id": "anthropic/claude-fable-5"
+      "id": "anthropic/claude-fable-5",
+      "release_date": "2026-06-09"
     },
     {
-      "id": "anthropic/claude-fable-5.1"
+      "id": "anthropic/claude-fable-5.1",
+      "release_date": "2026-09-01"
     },
     {
-      "id": "anthropic/claude-fable-5.1:batch"
+      "id": "anthropic/claude-fable-5.1:batch",
+      "release_date": "2026-09-01"
     },
     {
-      "id": "anthropic/claude-fable-5:batch"
+      "id": "anthropic/claude-fable-5:batch",
+      "release_date": "2026-06-09"
     },
     {
-      "id": "anthropic/claude-haiku-4.5"
+      "id": "anthropic/claude-haiku-4.5",
+      "release_date": "2025-10-15"
     },
     {
-      "id": "anthropic/claude-haiku-4.5:batch"
+      "id": "anthropic/claude-haiku-4.5:batch",
+      "release_date": "2025-10-15"
     },
     {
-      "id": "anthropic/claude-opus-4"
+      "id": "anthropic/claude-opus-4",
+      "release_date": "2025-05-22"
     },
     {
-      "id": "anthropic/claude-opus-4.1"
+      "id": "anthropic/claude-opus-4.1",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "anthropic/claude-opus-4.1:batch"
+      "id": "anthropic/claude-opus-4.1:batch",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "anthropic/claude-opus-4.5"
+      "id": "anthropic/claude-opus-4.5",
+      "release_date": "2025-11-24"
     },
     {
-      "id": "anthropic/claude-opus-4.5:batch"
+      "id": "anthropic/claude-opus-4.5:batch",
+      "release_date": "2025-11-24"
     },
     {
-      "id": "anthropic/claude-opus-4.6"
+      "id": "anthropic/claude-opus-4.6",
+      "release_date": "2026-02-05"
     },
     {
-      "id": "anthropic/claude-opus-4.6:batch"
+      "id": "anthropic/claude-opus-4.6:batch",
+      "release_date": "2026-02-05"
     },
     {
-      "id": "anthropic/claude-opus-4.7"
+      "id": "anthropic/claude-opus-4.7",
+      "release_date": "2026-04-16"
     },
     {
-      "id": "anthropic/claude-opus-4.7:batch"
+      "id": "anthropic/claude-opus-4.7:batch",
+      "release_date": "2026-04-16"
     },
     {
-      "id": "anthropic/claude-opus-4.8"
+      "id": "anthropic/claude-opus-4.8",
+      "release_date": "2026-05-28"
     },
     {
-      "id": "anthropic/claude-opus-4.8:batch"
+      "id": "anthropic/claude-opus-4.8:batch",
+      "release_date": "2026-05-28"
     },
     {
-      "id": "anthropic/claude-opus-5"
+      "id": "anthropic/claude-opus-5",
+      "release_date": "2026-07-24"
     },
     {
-      "id": "anthropic/claude-opus-5:batch"
+      "id": "anthropic/claude-opus-5:batch",
+      "release_date": "2026-07-24"
     },
     {
-      "id": "anthropic/claude-sonnet-4"
+      "id": "anthropic/claude-sonnet-4",
+      "release_date": "2025-05-22"
     },
     {
-      "id": "anthropic/claude-sonnet-4.5"
+      "id": "anthropic/claude-sonnet-4.5",
+      "release_date": "2025-09-29"
     },
     {
-      "id": "anthropic/claude-sonnet-4.5:batch"
+      "id": "anthropic/claude-sonnet-4.5:batch",
+      "release_date": "2025-09-29"
     },
     {
-      "id": "anthropic/claude-sonnet-4.6"
+      "id": "anthropic/claude-sonnet-4.6",
+      "release_date": "2026-02-17"
     },
     {
-      "id": "anthropic/claude-sonnet-4.6:batch"
+      "id": "anthropic/claude-sonnet-4.6:batch",
+      "release_date": "2026-02-17"
     },
     {
-      "id": "anthropic/claude-sonnet-5"
+      "id": "anthropic/claude-sonnet-5",
+      "release_date": "2026-06-30"
     },
     {
-      "id": "anthropic/claude-sonnet-5:batch"
+      "id": "anthropic/claude-sonnet-5:batch",
+      "release_date": "2026-06-30"
     },
     {
-      "id": "arcee-ai/trinity-large-thinking"
+      "id": "arcee-ai/trinity-large-thinking",
+      "release_date": "2026-04-01"
     },
     {
-      "id": "baidu/ernie-4.5-vl-424b-a47b"
+      "id": "baidu/ernie-4.5-vl-424b-a47b",
+      "release_date": "2025-06-30"
     },
     {
-      "id": "bytedance-seed/seed-1.6"
+      "id": "bytedance-seed/seed-1.6",
+      "release_date": "2025-12-23"
     },
     {
-      "id": "bytedance-seed/seed-1.6-flash"
+      "id": "bytedance-seed/seed-1.6-flash",
+      "release_date": "2025-12-23"
     },
     {
-      "id": "bytedance-seed/seed-2-1-turbo"
+      "id": "bytedance-seed/seed-2-1-turbo",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "bytedance-seed/seed-2.0-code"
+      "id": "bytedance-seed/seed-2.0-code",
+      "release_date": "2026-02-14"
     },
     {
-      "id": "bytedance-seed/seed-2.0-lite"
+      "id": "bytedance-seed/seed-2.0-lite",
+      "release_date": "2026-02-14"
     },
     {
-      "id": "bytedance-seed/seed-2.0-mini"
+      "id": "bytedance-seed/seed-2.0-mini",
+      "release_date": "2026-02-14"
     },
     {
-      "id": "bytedance/ui-tars-1.5-7b"
+      "id": "bytedance/ui-tars-1.5-7b",
+      "release_date": "2025-07-22"
     },
     {
-      "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition"
+      "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition",
+      "release_date": "2025-07-09"
     },
     {
-      "id": "cohere/command-a"
+      "id": "cohere/command-a",
+      "release_date": "2025-03-13"
     },
     {
-      "id": "cohere/command-r-08-2024"
+      "id": "cohere/command-r-08-2024",
+      "release_date": "2024-08-30"
     },
     {
-      "id": "cohere/command-r-plus-08-2024"
+      "id": "cohere/command-r-plus-08-2024",
+      "release_date": "2024-08-30"
     },
     {
-      "id": "cohere/command-r7b-12-2024"
+      "id": "cohere/command-r7b-12-2024",
+      "release_date": "2024-12-02"
     },
     {
-      "id": "cohere/north-mini-code:free"
+      "id": "cohere/north-mini-code:free",
+      "release_date": "2026-06-17"
     },
     {
-      "id": "deepseek/deepseek-chat"
+      "id": "deepseek/deepseek-chat",
+      "release_date": "2025-12-01"
     },
     {
-      "id": "deepseek/deepseek-chat-v3-0324"
+      "id": "deepseek/deepseek-chat-v3-0324",
+      "release_date": "2025-03-24"
     },
     {
-      "id": "deepseek/deepseek-chat-v3.1"
+      "id": "deepseek/deepseek-chat-v3.1",
+      "release_date": "2025-08-21"
     },
     {
-      "id": "deepseek/deepseek-r1"
+      "id": "deepseek/deepseek-r1",
+      "release_date": "2025-01-20"
     },
     {
-      "id": "deepseek/deepseek-r1-0528"
+      "id": "deepseek/deepseek-r1-0528",
+      "release_date": "2025-05-28"
     },
     {
-      "id": "deepseek/deepseek-r1-distill-llama-70b"
+      "id": "deepseek/deepseek-r1-distill-llama-70b",
+      "release_date": "2025-01-23"
     },
     {
-      "id": "deepseek/deepseek-v3.1-terminus"
+      "id": "deepseek/deepseek-v3.1-terminus",
+      "release_date": "2025-09-22"
     },
     {
-      "id": "deepseek/deepseek-v3.2"
+      "id": "deepseek/deepseek-v3.2",
+      "release_date": "2025-12-01"
     },
     {
-      "id": "deepseek/deepseek-v3.2-exp"
+      "id": "deepseek/deepseek-v3.2-exp",
+      "release_date": "2025-09-29"
     },
     {
-      "id": "deepseek/deepseek-v4-flash"
+      "id": "deepseek/deepseek-v4-flash",
+      "release_date": "2026-04-24"
     },
     {
-      "id": "deepseek/deepseek-v4-flash-0731"
+      "id": "deepseek/deepseek-v4-flash-0731",
+      "release_date": "2026-07-31"
     },
     {
-      "id": "deepseek/deepseek-v4-flash-0731:batch"
+      "id": "deepseek/deepseek-v4-flash-0731:batch",
+      "release_date": "2026-07-31"
     },
     {
-      "id": "deepseek/deepseek-v4-flash-vision-exp"
+      "id": "deepseek/deepseek-v4-flash-vision-exp",
+      "release_date": "2026-08-21"
     },
     {
-      "id": "deepseek/deepseek-v4-pro"
+      "id": "deepseek/deepseek-v4-pro",
+      "release_date": "2026-04-24"
     },
     {
-      "id": "deepseek/deepseek-v4-pro-0813"
+      "id": "deepseek/deepseek-v4-pro-0813",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "deepseek/deepseek-v4-pro-0813:batch"
+      "id": "deepseek/deepseek-v4-pro-0813:batch",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "dots-studio/dots-3-note-preview:free"
+      "id": "dots-studio/dots-3-note-preview:free",
+      "release_date": "2026-08-14"
     },
     {
-      "id": "google/gemini-2.5-flash"
+      "id": "google/gemini-2.5-flash",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-2.5-flash-image"
+      "id": "google/gemini-2.5-flash-image",
+      "release_date": "2025-08-26"
     },
     {
-      "id": "google/gemini-2.5-flash-lite"
+      "id": "google/gemini-2.5-flash-lite",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-2.5-flash-lite:batch"
+      "id": "google/gemini-2.5-flash-lite:batch",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-2.5-flash:batch"
+      "id": "google/gemini-2.5-flash:batch",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-2.5-pro"
+      "id": "google/gemini-2.5-pro",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-2.5-pro-preview"
+      "id": "google/gemini-2.5-pro-preview",
+      "release_date": "2025-06-05"
     },
     {
-      "id": "google/gemini-2.5-pro-preview-05-06"
+      "id": "google/gemini-2.5-pro-preview-05-06",
+      "release_date": "2025-05-07"
     },
     {
-      "id": "google/gemini-2.5-pro:batch"
+      "id": "google/gemini-2.5-pro:batch",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "google/gemini-3-flash-preview"
+      "id": "google/gemini-3-flash-preview",
+      "release_date": "2025-12-17"
     },
     {
-      "id": "google/gemini-3-flash-preview:batch"
+      "id": "google/gemini-3-flash-preview:batch",
+      "release_date": "2025-12-17"
     },
     {
-      "id": "google/gemini-3-pro-image"
+      "id": "google/gemini-3-pro-image",
+      "release_date": "2026-05-28"
     },
     {
-      "id": "google/gemini-3-pro-image-preview"
+      "id": "google/gemini-3-pro-image-preview",
+      "release_date": "2025-11-20"
     },
     {
-      "id": "google/gemini-3.1-flash-image"
+      "id": "google/gemini-3.1-flash-image",
+      "release_date": "2026-05-28"
     },
     {
-      "id": "google/gemini-3.1-flash-image-preview"
+      "id": "google/gemini-3.1-flash-image-preview",
+      "release_date": "2026-02-26"
     },
     {
-      "id": "google/gemini-3.1-flash-lite"
+      "id": "google/gemini-3.1-flash-lite",
+      "release_date": "2026-05-07"
     },
     {
-      "id": "google/gemini-3.1-flash-lite-image"
+      "id": "google/gemini-3.1-flash-lite-image",
+      "release_date": "2026-06-30"
     },
     {
-      "id": "google/gemini-3.1-flash-lite-preview"
+      "id": "google/gemini-3.1-flash-lite-preview",
+      "release_date": "2026-03-03"
     },
     {
-      "id": "google/gemini-3.1-flash-lite:batch"
+      "id": "google/gemini-3.1-flash-lite:batch",
+      "release_date": "2026-05-07"
     },
     {
-      "id": "google/gemini-3.1-pro-preview"
+      "id": "google/gemini-3.1-pro-preview",
+      "release_date": "2026-02-19"
     },
     {
-      "id": "google/gemini-3.1-pro-preview-customtools"
+      "id": "google/gemini-3.1-pro-preview-customtools",
+      "release_date": "2026-02-19"
     },
     {
-      "id": "google/gemini-3.1-pro-preview:batch"
+      "id": "google/gemini-3.1-pro-preview:batch",
+      "release_date": "2026-02-19"
     },
     {
-      "id": "google/gemini-3.5-flash"
+      "id": "google/gemini-3.5-flash",
+      "release_date": "2026-05-19"
     },
     {
-      "id": "google/gemini-3.5-flash-lite"
+      "id": "google/gemini-3.5-flash-lite",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "google/gemini-3.5-flash-lite:batch"
+      "id": "google/gemini-3.5-flash-lite:batch",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "google/gemini-3.5-flash:batch"
+      "id": "google/gemini-3.5-flash:batch",
+      "release_date": "2026-05-19"
     },
     {
-      "id": "google/gemini-3.6-flash"
+      "id": "google/gemini-3.6-flash",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "google/gemini-3.6-flash:batch"
+      "id": "google/gemini-3.6-flash:batch",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "google/gemini-3.7-flash"
+      "id": "google/gemini-3.7-flash",
+      "release_date": "2026-08-13"
     },
     {
-      "id": "google/gemini-3.7-flash:batch"
+      "id": "google/gemini-3.7-flash:batch",
+      "release_date": "2026-08-13"
     },
     {
-      "id": "google/gemini-3.8-flash"
+      "id": "google/gemini-3.8-flash",
+      "release_date": "2026-09-02"
     },
     {
-      "id": "google/gemini-3.8-flash:batch"
+      "id": "google/gemini-3.8-flash:batch",
+      "release_date": "2026-09-02"
     },
     {
-      "id": "google/gemma-2-27b-it"
+      "id": "google/gemma-2-27b-it",
+      "release_date": "2024-07-13"
     },
     {
-      "id": "google/gemma-3-12b-it"
+      "id": "google/gemma-3-12b-it",
+      "release_date": "2025-03-13"
     },
     {
-      "id": "google/gemma-3-27b-it"
+      "id": "google/gemma-3-27b-it",
+      "release_date": "2025-03-12"
     },
     {
-      "id": "google/gemma-3-4b-it"
+      "id": "google/gemma-3-4b-it",
+      "release_date": "2025-03-13"
     },
     {
-      "id": "google/gemma-4-26b-a4b-it"
+      "id": "google/gemma-4-26b-a4b-it",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "google/gemma-4-26b-a4b-it:free"
+      "id": "google/gemma-4-26b-a4b-it:free",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "google/gemma-4-31b-it"
+      "id": "google/gemma-4-31b-it",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "google/gemma-4-31b-it:batch"
+      "id": "google/gemma-4-31b-it:batch",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "google/gemma-4-31b-it:free"
+      "id": "google/gemma-4-31b-it:free",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "google/lyria-3-clip-preview"
+      "id": "google/lyria-3-clip-preview",
+      "release_date": "2026-03-25"
     },
     {
-      "id": "google/lyria-3-pro-preview"
+      "id": "google/lyria-3-pro-preview",
+      "release_date": "2026-03-25"
     },
     {
-      "id": "gryphe/mythomax-l2-13b"
+      "id": "gryphe/mythomax-l2-13b",
+      "release_date": "2023-07-02"
     },
     {
-      "id": "ibm-granite/granite-4.0-h-micro"
+      "id": "ibm-granite/granite-4.0-h-micro",
+      "release_date": "2025-10-20"
     },
     {
-      "id": "ibm-granite/granite-4.1-8b"
+      "id": "ibm-granite/granite-4.2-8b",
+      "release_date": "2026-08-31"
     },
     {
-      "id": "ibm-granite/granite-4.2-8b"
+      "id": "inception/mercury-2",
+      "release_date": "2026-03-04"
     },
     {
-      "id": "inception/mercury-2"
+      "id": "inception/mercury-2.5-preview",
+      "release_date": "2026-08-31"
     },
     {
-      "id": "inception/mercury-2.5-preview"
+      "id": "inclusionai/ling-3.0-flash",
+      "release_date": "2026-07-23"
     },
     {
-      "id": "inclusionai/ling-3.0-flash"
+      "id": "inclusionai/ling-3.0-flash-fin",
+      "release_date": "2026-07-23"
     },
     {
-      "id": "inclusionai/ling-3.0-flash-fin:free"
+      "id": "inclusionai/ling-3.0-flash-fin:free",
+      "release_date": "2026-08-27"
     },
     {
-      "id": "kwaipilot/kat-coder-pro-v2"
+      "id": "inclusionai/ling-3.0-flash-sante:free",
+      "release_date": "2026-07-23"
     },
     {
-      "id": "kwaipilot/kat-coder-pro-v2.5"
+      "id": "kwaipilot/kat-coder-pro-v2",
+      "release_date": "2026-03-27"
     },
     {
-      "id": "liquid/lfm-2.5-2.6b:free"
+      "id": "kwaipilot/kat-coder-pro-v2.5",
+      "release_date": "2026-07-10"
     },
     {
-      "id": "mancer/weaver"
+      "id": "liquid/lfm-2.5-2.6b:free",
+      "release_date": "2026-08-11"
     },
     {
-      "id": "meituan/longcat-2.0"
+      "id": "mancer/weaver",
+      "release_date": "2023-08-02"
     },
     {
-      "id": "meta-llama/llama-3.1-70b-instruct"
+      "id": "meituan/longcat-2.0",
+      "release_date": "2026-07-20"
     },
     {
-      "id": "meta-llama/llama-3.1-8b-instruct"
+      "id": "meta-llama/llama-3.1-70b-instruct",
+      "release_date": "2024-07-23"
     },
     {
-      "id": "meta-llama/llama-3.2-1b-instruct"
+      "id": "meta-llama/llama-3.1-8b-instruct",
+      "release_date": "2024-07-23"
     },
     {
-      "id": "meta-llama/llama-3.2-3b-instruct"
+      "id": "meta-llama/llama-3.2-1b-instruct",
+      "release_date": "2024-09-25"
     },
     {
-      "id": "meta-llama/llama-3.3-70b-instruct"
+      "id": "meta-llama/llama-3.2-3b-instruct",
+      "release_date": "2024-09-25"
     },
     {
-      "id": "meta-llama/llama-4-maverick"
+      "id": "meta-llama/llama-3.3-70b-instruct",
+      "release_date": "2024-12-06"
     },
     {
-      "id": "meta-llama/llama-4-scout"
+      "id": "meta-llama/llama-4-maverick",
+      "release_date": "2025-04-05"
     },
     {
-      "id": "meta-llama/llama-guard-4-12b"
+      "id": "meta-llama/llama-4-scout",
+      "release_date": "2025-04-05"
     },
     {
-      "id": "meta/muse-glimmer-30b"
+      "id": "meta-llama/llama-guard-4-12b",
+      "release_date": "2025-04-30"
     },
     {
-      "id": "meta/muse-glimmer-30b:batch"
+      "id": "meta/muse-glimmer-30b",
+      "release_date": "2026-08-10"
     },
     {
-      "id": "meta/muse-spark-1.1"
+      "id": "meta/muse-glimmer-30b:batch",
+      "release_date": "2026-08-10"
     },
     {
-      "id": "meta/muse-spark-1.2"
+      "id": "meta/muse-spark-1.1",
+      "release_date": "2026-04-08"
     },
     {
-      "id": "meta/muse-spark-1.2-contributor"
+      "id": "meta/muse-spark-1.2",
+      "release_date": "2026-08-05"
     },
     {
-      "id": "meta/muse-spark-1.3"
+      "id": "meta/muse-spark-1.2-contributor",
+      "release_date": "2026-08-21"
     },
     {
-      "id": "meta/muse-spark-1.3-contributor"
+      "id": "meta/muse-spark-1.3",
+      "release_date": "2026-09-02"
     },
     {
-      "id": "microsoft/phi-4"
+      "id": "meta/muse-spark-1.3-contributor",
+      "release_date": "2026-09-02"
     },
     {
-      "id": "microsoft/wizardlm-2-8x22b"
+      "id": "microsoft/phi-4",
+      "release_date": "2025-01-10"
     },
     {
-      "id": "minimax/minimax-01"
+      "id": "microsoft/wizardlm-2-8x22b",
+      "release_date": "2024-04-16"
     },
     {
-      "id": "minimax/minimax-m1"
+      "id": "minimax/minimax-01",
+      "release_date": "2025-01-15"
     },
     {
-      "id": "minimax/minimax-m2"
+      "id": "minimax/minimax-m1",
+      "release_date": "2025-06-17"
     },
     {
-      "id": "minimax/minimax-m2-her"
+      "id": "minimax/minimax-m2",
+      "release_date": "2025-10-27"
     },
     {
-      "id": "minimax/minimax-m2.1"
+      "id": "minimax/minimax-m2-her",
+      "release_date": "2026-01-23"
     },
     {
-      "id": "minimax/minimax-m2.5"
+      "id": "minimax/minimax-m2.1",
+      "release_date": "2025-12-23"
     },
     {
-      "id": "minimax/minimax-m2.7"
+      "id": "minimax/minimax-m2.5",
+      "release_date": "2026-02-12"
     },
     {
-      "id": "minimax/minimax-m2.7:free"
+      "id": "minimax/minimax-m2.7",
+      "release_date": "2026-03-18"
     },
     {
-      "id": "minimax/minimax-m3"
+      "id": "minimax/minimax-m2.7:free",
+      "release_date": "2026-03-18"
     },
     {
-      "id": "minimax/minimax-m3:batch"
+      "id": "minimax/minimax-m3",
+      "release_date": "2026-06-01"
     },
     {
-      "id": "minimax/minimax-m3:free"
+      "id": "minimax/minimax-m3:batch",
+      "release_date": "2026-06-01"
     },
     {
-      "id": "mistralai/codestral-2508"
+      "id": "minimax/minimax-m3:free",
+      "release_date": "2026-06-01"
     },
     {
-      "id": "mistralai/devstral-2512"
+      "id": "mistralai/codestral-2508",
+      "release_date": "2025-08-01"
     },
     {
-      "id": "mistralai/ministral-14b-2512"
+      "id": "mistralai/devstral-2512",
+      "release_date": "2025-12-09"
     },
     {
-      "id": "mistralai/ministral-3b-2512"
+      "id": "mistralai/ministral-14b-2512",
+      "release_date": "2025-12-02"
     },
     {
-      "id": "mistralai/ministral-8b-2512"
+      "id": "mistralai/ministral-3b-2512",
+      "release_date": "2025-12-02"
     },
     {
-      "id": "mistralai/mistral-large"
+      "id": "mistralai/ministral-8b-2512",
+      "release_date": "2025-12-02"
     },
     {
-      "id": "mistralai/mistral-large-2407"
+      "id": "mistralai/mistral-large",
+      "release_date": "2024-02-26"
     },
     {
-      "id": "mistralai/mistral-large-2512"
+      "id": "mistralai/mistral-large-2407",
+      "release_date": "2024-11-19"
     },
     {
-      "id": "mistralai/mistral-medium-3"
+      "id": "mistralai/mistral-large-2512",
+      "release_date": "2024-11-01"
     },
     {
-      "id": "mistralai/mistral-medium-3-5"
+      "id": "mistralai/mistral-medium-3",
+      "release_date": "2025-05-07"
     },
     {
-      "id": "mistralai/mistral-medium-3-5:batch"
+      "id": "mistralai/mistral-medium-3-5",
+      "release_date": "2026-04-30"
     },
     {
-      "id": "mistralai/mistral-medium-3.1"
+      "id": "mistralai/mistral-medium-3-5:batch",
+      "release_date": "2026-04-30"
     },
     {
-      "id": "mistralai/mistral-nemo"
+      "id": "mistralai/mistral-medium-3.1",
+      "release_date": "2025-08-13"
     },
     {
-      "id": "mistralai/mistral-saba"
+      "id": "mistralai/mistral-nemo",
+      "release_date": "2024-07-01"
     },
     {
-      "id": "mistralai/mistral-small-24b-instruct-2501"
+      "id": "mistralai/mistral-saba",
+      "release_date": "2025-02-17"
     },
     {
-      "id": "mistralai/mistral-small-2603"
+      "id": "mistralai/mistral-small-24b-instruct-2501",
+      "release_date": "2025-01-30"
     },
     {
-      "id": "mistralai/mistral-small-3.1-24b-instruct"
+      "id": "mistralai/mistral-small-2603",
+      "release_date": "2026-03-16"
     },
     {
-      "id": "mistralai/mistral-small-3.2-24b-instruct"
+      "id": "mistralai/mistral-small-3.1-24b-instruct",
+      "release_date": "2025-03-17"
     },
     {
-      "id": "mistralai/mixtral-8x22b-instruct"
+      "id": "mistralai/mistral-small-3.2-24b-instruct",
+      "release_date": "2025-06-20"
     },
     {
-      "id": "mistralai/voxtral-small-24b-2507"
+      "id": "mistralai/mixtral-8x22b-instruct",
+      "release_date": "2024-04-17"
     },
     {
-      "id": "moonshotai/kimi-k2"
+      "id": "mistralai/voxtral-small-24b-2507",
+      "release_date": "2025-10-30"
     },
     {
-      "id": "moonshotai/kimi-k2-0905"
+      "id": "moonshotai/kimi-k2",
+      "release_date": "2025-07-11"
     },
     {
-      "id": "moonshotai/kimi-k2-thinking"
+      "id": "moonshotai/kimi-k2-0905",
+      "release_date": "2025-09-04"
     },
     {
-      "id": "moonshotai/kimi-k2.5"
+      "id": "moonshotai/kimi-k2-thinking",
+      "release_date": "2025-11-06"
     },
     {
-      "id": "moonshotai/kimi-k2.6"
+      "id": "moonshotai/kimi-k2.5",
+      "release_date": "2026-01"
     },
     {
-      "id": "moonshotai/kimi-k2.7-code"
+      "id": "moonshotai/kimi-k2.6",
+      "release_date": "2026-04-21"
     },
     {
-      "id": "moonshotai/kimi-k3"
+      "id": "moonshotai/kimi-k2.7-code",
+      "release_date": "2026-06-12"
     },
     {
-      "id": "moonshotai/kimi-k3:batch"
+      "id": "moonshotai/kimi-k3",
+      "release_date": "2026-07-16"
     },
     {
-      "id": "morph/morph-v3-fast"
+      "id": "moonshotai/kimi-k3:batch",
+      "release_date": "2026-07-16"
     },
     {
-      "id": "morph/morph-v3-large"
+      "id": "morph/morph-v3-fast",
+      "release_date": "2025-07-07"
     },
     {
-      "id": "nex-agi/nex-n2-mini"
+      "id": "morph/morph-v3-large",
+      "release_date": "2025-07-07"
     },
     {
-      "id": "nex-agi/nex-n2-pro"
+      "id": "nex-agi/nex-n2-mini",
+      "release_date": "2026-06-24"
     },
     {
-      "id": "nousresearch/hermes-3-llama-3.1-405b"
+      "id": "nex-agi/nex-n2-pro",
+      "release_date": "2026-06-08"
     },
     {
-      "id": "nousresearch/hermes-3-llama-3.1-70b"
+      "id": "nousresearch/hermes-3-llama-3.1-405b",
+      "release_date": "2024-08-16"
     },
     {
-      "id": "nousresearch/hermes-4-405b"
+      "id": "nousresearch/hermes-3-llama-3.1-70b",
+      "release_date": "2024-08-18"
     },
     {
-      "id": "nousresearch/hermes-4-70b"
+      "id": "nousresearch/hermes-4-405b",
+      "release_date": "2025-08-26"
     },
     {
-      "id": "nvidia/nemotron-3-nano-30b-a3b"
+      "id": "nousresearch/hermes-4-70b",
+      "release_date": "2025-08-26"
     },
     {
-      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "release_date": "2025-12-15"
     },
     {
-      "id": "nvidia/nemotron-3-super-120b-a12b"
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "release_date": "2026-04-28"
     },
     {
-      "id": "nvidia/nemotron-3-super-120b-a12b:free"
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "release_date": "2026-03-11"
     },
     {
-      "id": "nvidia/nemotron-3-ultra-550b-a55b"
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "release_date": "2026-03-11"
     },
     {
-      "id": "nvidia/nemotron-3-ultra-550b-a55b:free"
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "release_date": "2026-06-04"
     },
     {
-      "id": "nvidia/nemotron-3.5-content-safety:free"
+      "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "release_date": "2026-06-04"
     },
     {
-      "id": "nvidia/nemotron-3.5-lightning"
+      "id": "nvidia/nemotron-3.5-content-safety"
     },
     {
-      "id": "nvidia/nemotron-3.5-lightning:free"
+      "id": "nvidia/nemotron-3.5-content-safety:free",
+      "release_date": "2026-06-04"
     },
     {
-      "id": "openai/gpt-3.5-turbo"
+      "id": "nvidia/nemotron-3.5-lightning",
+      "release_date": "2026-08-11"
     },
     {
-      "id": "openai/gpt-3.5-turbo-0613"
+      "id": "nvidia/nemotron-3.5-lightning:free",
+      "release_date": "2026-08-11"
     },
     {
-      "id": "openai/gpt-3.5-turbo-16k"
+      "id": "openai/gpt-3.5-turbo",
+      "release_date": "2023-03-01"
     },
     {
-      "id": "openai/gpt-3.5-turbo-instruct"
+      "id": "openai/gpt-3.5-turbo-0613",
+      "release_date": "2024-01-25"
     },
     {
-      "id": "openai/gpt-3.5-turbo:batch"
+      "id": "openai/gpt-3.5-turbo-16k",
+      "release_date": "2023-08-28"
     },
     {
-      "id": "openai/gpt-4"
+      "id": "openai/gpt-3.5-turbo-instruct",
+      "release_date": "2023-09-28"
     },
     {
-      "id": "openai/gpt-4-turbo"
+      "id": "openai/gpt-3.5-turbo:batch",
+      "release_date": "2023-03-01"
     },
     {
-      "id": "openai/gpt-4-turbo-preview"
+      "id": "openai/gpt-4",
+      "release_date": "2023-11-06"
     },
     {
-      "id": "openai/gpt-4-turbo:batch"
+      "id": "openai/gpt-4-turbo",
+      "release_date": "2023-11-06"
     },
     {
-      "id": "openai/gpt-4.1"
+      "id": "openai/gpt-4-turbo-preview",
+      "release_date": "2024-01-25"
     },
     {
-      "id": "openai/gpt-4.1-mini"
+      "id": "openai/gpt-4-turbo:batch",
+      "release_date": "2023-11-06"
     },
     {
-      "id": "openai/gpt-4.1-mini:batch"
+      "id": "openai/gpt-4.1",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4.1-nano"
+      "id": "openai/gpt-4.1-mini",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4.1-nano:batch"
+      "id": "openai/gpt-4.1-mini:batch",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4.1:batch"
+      "id": "openai/gpt-4.1-nano",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4o"
+      "id": "openai/gpt-4.1-nano:batch",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4o-2024-05-13"
+      "id": "openai/gpt-4.1:batch",
+      "release_date": "2025-04-14"
     },
     {
-      "id": "openai/gpt-4o-2024-08-06"
+      "id": "openai/gpt-4o",
+      "release_date": "2024-05-13"
     },
     {
-      "id": "openai/gpt-4o-2024-11-20"
+      "id": "openai/gpt-4o-2024-05-13",
+      "release_date": "2024-05-13"
     },
     {
-      "id": "openai/gpt-4o-mini"
+      "id": "openai/gpt-4o-2024-08-06",
+      "release_date": "2024-08-06"
     },
     {
-      "id": "openai/gpt-4o-mini-2024-07-18"
+      "id": "openai/gpt-4o-2024-11-20",
+      "release_date": "2024-11-20"
     },
     {
-      "id": "openai/gpt-4o-mini:batch"
+      "id": "openai/gpt-4o-mini",
+      "release_date": "2024-07-18"
     },
     {
-      "id": "openai/gpt-4o:batch"
+      "id": "openai/gpt-4o-mini-2024-07-18",
+      "release_date": "2024-07-18"
     },
     {
-      "id": "openai/gpt-5"
+      "id": "openai/gpt-4o-mini:batch",
+      "release_date": "2024-07-18"
     },
     {
-      "id": "openai/gpt-5-image"
+      "id": "openai/gpt-4o:batch",
+      "release_date": "2024-05-13"
     },
     {
-      "id": "openai/gpt-5-image-mini"
+      "id": "openai/gpt-5",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-5-mini"
+      "id": "openai/gpt-5-image",
+      "release_date": "2025-10-14"
     },
     {
-      "id": "openai/gpt-5-mini:batch"
+      "id": "openai/gpt-5-image-mini",
+      "release_date": "2025-10-16"
     },
     {
-      "id": "openai/gpt-5-nano"
+      "id": "openai/gpt-5-mini",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-5-nano:batch"
+      "id": "openai/gpt-5-mini:batch",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-5-pro"
+      "id": "openai/gpt-5-nano",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-5-pro:batch"
+      "id": "openai/gpt-5-nano:batch",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-5.1"
+      "id": "openai/gpt-5-pro",
+      "release_date": "2025-10-06"
     },
     {
-      "id": "openai/gpt-5.1-codex"
+      "id": "openai/gpt-5-pro:batch",
+      "release_date": "2025-10-06"
     },
     {
-      "id": "openai/gpt-5.1-codex-max"
+      "id": "openai/gpt-5.1",
+      "release_date": "2025-11-13"
     },
     {
-      "id": "openai/gpt-5.1-codex-mini"
+      "id": "openai/gpt-5.1-codex",
+      "release_date": "2025-11-13"
     },
     {
-      "id": "openai/gpt-5.1:batch"
+      "id": "openai/gpt-5.1-codex-max",
+      "release_date": "2025-11-13"
     },
     {
-      "id": "openai/gpt-5.2"
+      "id": "openai/gpt-5.1-codex-mini",
+      "release_date": "2025-11-13"
     },
     {
-      "id": "openai/gpt-5.2-chat"
+      "id": "openai/gpt-5.1:batch",
+      "release_date": "2025-11-13"
     },
     {
-      "id": "openai/gpt-5.2-codex"
+      "id": "openai/gpt-5.2",
+      "release_date": "2025-12-11"
     },
     {
-      "id": "openai/gpt-5.2-pro"
+      "id": "openai/gpt-5.2-chat",
+      "release_date": "2025-12-10"
     },
     {
-      "id": "openai/gpt-5.2-pro:batch"
+      "id": "openai/gpt-5.2-codex",
+      "release_date": "2025-12-11"
     },
     {
-      "id": "openai/gpt-5.2:batch"
+      "id": "openai/gpt-5.2-pro",
+      "release_date": "2025-12-11"
     },
     {
-      "id": "openai/gpt-5.3-codex"
+      "id": "openai/gpt-5.2-pro:batch",
+      "release_date": "2025-12-11"
     },
     {
-      "id": "openai/gpt-5.4"
+      "id": "openai/gpt-5.2:batch",
+      "release_date": "2025-12-11"
     },
     {
-      "id": "openai/gpt-5.4-image-2"
+      "id": "openai/gpt-5.3-codex",
+      "release_date": "2026-02-05"
     },
     {
-      "id": "openai/gpt-5.4-mini"
+      "id": "openai/gpt-5.4",
+      "release_date": "2026-03-05"
     },
     {
-      "id": "openai/gpt-5.4-mini:batch"
+      "id": "openai/gpt-5.4-image-2",
+      "release_date": "2026-04-21"
     },
     {
-      "id": "openai/gpt-5.4-nano"
+      "id": "openai/gpt-5.4-mini",
+      "release_date": "2026-03-17"
     },
     {
-      "id": "openai/gpt-5.4-nano:batch"
+      "id": "openai/gpt-5.4-mini:batch",
+      "release_date": "2026-03-17"
     },
     {
-      "id": "openai/gpt-5.4-pro"
+      "id": "openai/gpt-5.4-nano",
+      "release_date": "2026-03-17"
     },
     {
-      "id": "openai/gpt-5.4-pro:batch"
+      "id": "openai/gpt-5.4-nano:batch",
+      "release_date": "2026-03-17"
     },
     {
-      "id": "openai/gpt-5.4:batch"
+      "id": "openai/gpt-5.4-pro",
+      "release_date": "2026-03-05"
     },
     {
-      "id": "openai/gpt-5.5"
+      "id": "openai/gpt-5.4-pro:batch",
+      "release_date": "2026-03-05"
     },
     {
-      "id": "openai/gpt-5.5-pro"
+      "id": "openai/gpt-5.4:batch",
+      "release_date": "2026-03-05"
     },
     {
-      "id": "openai/gpt-5.5-pro:batch"
+      "id": "openai/gpt-5.5",
+      "release_date": "2026-04-23"
     },
     {
-      "id": "openai/gpt-5.5:batch"
+      "id": "openai/gpt-5.5-pro",
+      "release_date": "2026-04-23"
     },
     {
-      "id": "openai/gpt-5.6-luna"
+      "id": "openai/gpt-5.5-pro:batch",
+      "release_date": "2026-04-23"
     },
     {
-      "id": "openai/gpt-5.6-luna-pro"
+      "id": "openai/gpt-5.5:batch",
+      "release_date": "2026-04-23"
     },
     {
-      "id": "openai/gpt-5.6-luna-pro:batch"
+      "id": "openai/gpt-5.6-luna",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-luna:batch"
+      "id": "openai/gpt-5.6-luna-pro",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-sol"
+      "id": "openai/gpt-5.6-luna-pro:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-sol-pro"
+      "id": "openai/gpt-5.6-luna:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-sol-pro:batch"
+      "id": "openai/gpt-5.6-sol",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-sol:batch"
+      "id": "openai/gpt-5.6-sol-pro",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-terra"
+      "id": "openai/gpt-5.6-sol-pro:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-terra-pro"
+      "id": "openai/gpt-5.6-sol:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-terra-pro:batch"
+      "id": "openai/gpt-5.6-terra",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5.6-terra:batch"
+      "id": "openai/gpt-5.6-terra-pro",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-5:batch"
+      "id": "openai/gpt-5.6-terra-pro:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-audio"
+      "id": "openai/gpt-5.6-terra:batch",
+      "release_date": "2026-07-09"
     },
     {
-      "id": "openai/gpt-audio-mini"
+      "id": "openai/gpt-5:batch",
+      "release_date": "2025-08-07"
     },
     {
-      "id": "openai/gpt-chat-latest"
+      "id": "openai/gpt-6-astra"
     },
     {
-      "id": "openai/gpt-oss-120b"
+      "id": "openai/gpt-6-astra-pro"
     },
     {
-      "id": "openai/gpt-oss-120b:batch"
+      "id": "openai/gpt-6-astra-pro:batch"
     },
     {
-      "id": "openai/gpt-oss-20b"
+      "id": "openai/gpt-6-astra:batch"
     },
     {
-      "id": "openai/gpt-oss-20b:batch"
+      "id": "openai/gpt-audio",
+      "release_date": "2026-01-19"
     },
     {
-      "id": "openai/gpt-oss-safeguard-20b"
+      "id": "openai/gpt-audio-mini",
+      "release_date": "2026-01-19"
     },
     {
-      "id": "openai/o1"
+      "id": "openai/gpt-chat-latest",
+      "release_date": "2026-05-05"
     },
     {
-      "id": "openai/o1-pro"
+      "id": "openai/gpt-oss-120b",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "openai/o3"
+      "id": "openai/gpt-oss-120b:batch",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "openai/o3-mini"
+      "id": "openai/gpt-oss-20b",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "openai/o3-mini-high"
+      "id": "openai/gpt-oss-20b:batch",
+      "release_date": "2025-08-05"
     },
     {
-      "id": "openai/o3-mini:batch"
+      "id": "openai/gpt-oss-safeguard-20b",
+      "release_date": "2025-10-29"
     },
     {
-      "id": "openai/o3-pro"
+      "id": "openai/o1",
+      "release_date": "2024-12-05"
     },
     {
-      "id": "openai/o3:batch"
+      "id": "openai/o1-pro",
+      "release_date": "2025-03-19"
     },
     {
-      "id": "openai/o4-mini"
+      "id": "openai/o3",
+      "release_date": "2025-04-16"
     },
     {
-      "id": "openai/o4-mini-high"
+      "id": "openai/o3-mini",
+      "release_date": "2024-12-20"
     },
     {
-      "id": "openai/o4-mini:batch"
+      "id": "openai/o3-mini-high",
+      "release_date": "2025-02-12"
+    },
+    {
+      "id": "openai/o3-mini:batch",
+      "release_date": "2024-12-20"
+    },
+    {
+      "id": "openai/o3-pro",
+      "release_date": "2025-06-10"
+    },
+    {
+      "id": "openai/o3:batch",
+      "release_date": "2025-04-16"
+    },
+    {
+      "id": "openai/o4-mini",
+      "release_date": "2025-04-16"
+    },
+    {
+      "id": "openai/o4-mini-high",
+      "release_date": "2025-04-16"
+    },
+    {
+      "id": "openai/o4-mini:batch",
+      "release_date": "2025-04-16"
     },
     {
       "id": "openrouter/auto"
@@ -873,7 +1179,8 @@
       "id": "openrouter/bodybuilder"
     },
     {
-      "id": "openrouter/free"
+      "id": "openrouter/free",
+      "release_date": "2026-02-01"
     },
     {
       "id": "openrouter/fusion"
@@ -882,397 +1189,532 @@
       "id": "openrouter/pareto-code"
     },
     {
-      "id": "perceptron/perceptron-mk1"
+      "id": "perceptron/perceptron-mk1",
+      "release_date": "2026-05-12"
     },
     {
-      "id": "perplexity/sonar"
+      "id": "perplexity/sonar",
+      "release_date": "2025-01-27"
     },
     {
-      "id": "perplexity/sonar-deep-research"
+      "id": "perplexity/sonar-deep-research",
+      "release_date": "2025-03-07"
     },
     {
-      "id": "perplexity/sonar-pro"
+      "id": "perplexity/sonar-pro",
+      "release_date": "2025-03-07"
     },
     {
-      "id": "perplexity/sonar-pro-search"
+      "id": "perplexity/sonar-pro-search",
+      "release_date": "2025-10-30"
     },
     {
-      "id": "perplexity/sonar-reasoning-pro"
+      "id": "perplexity/sonar-reasoning-pro",
+      "release_date": "2025-03-07"
     },
     {
-      "id": "poolside/laguna-s-2.1"
+      "id": "poolside/laguna-s-2.1",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "poolside/laguna-s-2.1:free"
+      "id": "poolside/laguna-s-2.1:free",
+      "release_date": "2026-07-21"
     },
     {
-      "id": "poolside/laguna-xs-2.1"
+      "id": "poolside/laguna-xs-2.1",
+      "release_date": "2026-07-02"
     },
     {
-      "id": "poolside/laguna-xs-2.1:free"
+      "id": "poolside/laguna-xs-2.1:free",
+      "release_date": "2026-07-02"
     },
     {
-      "id": "qwen/qwen-2.5-72b-instruct"
+      "id": "qwen/qwen-2.5-72b-instruct",
+      "release_date": "2024-09-19"
     },
     {
-      "id": "qwen/qwen-2.5-7b-instruct"
+      "id": "qwen/qwen-2.5-7b-instruct",
+      "release_date": "2024-10-16"
     },
     {
-      "id": "qwen/qwen-2.5-coder-32b-instruct"
+      "id": "qwen/qwen-2.5-coder-32b-instruct",
+      "release_date": "2024-11-11"
     },
     {
-      "id": "qwen/qwen-plus"
+      "id": "qwen/qwen-plus",
+      "release_date": "2024-01-25"
     },
     {
-      "id": "qwen/qwen-plus-2025-07-28"
+      "id": "qwen/qwen-plus-2025-07-28",
+      "release_date": "2025-09-08"
     },
     {
-      "id": "qwen/qwen2.5-vl-72b-instruct"
+      "id": "qwen/qwen2.5-vl-72b-instruct",
+      "release_date": "2025-02-01"
     },
     {
-      "id": "qwen/qwen3-14b"
+      "id": "qwen/qwen3-14b",
+      "release_date": "2025-04-28"
     },
     {
-      "id": "qwen/qwen3-235b-a22b"
+      "id": "qwen/qwen3-235b-a22b",
+      "release_date": "2025-04"
     },
     {
-      "id": "qwen/qwen3-235b-a22b-2507"
+      "id": "qwen/qwen3-235b-a22b-2507",
+      "release_date": "2025-07-21"
     },
     {
-      "id": "qwen/qwen3-235b-a22b-thinking-2507"
+      "id": "qwen/qwen3-235b-a22b-thinking-2507",
+      "release_date": "2025-07-25"
     },
     {
-      "id": "qwen/qwen3-30b-a3b"
+      "id": "qwen/qwen3-30b-a3b",
+      "release_date": "2025-04-28"
     },
     {
-      "id": "qwen/qwen3-30b-a3b-instruct-2507"
+      "id": "qwen/qwen3-30b-a3b-instruct-2507",
+      "release_date": "2025-07-29"
     },
     {
-      "id": "qwen/qwen3-30b-a3b-thinking-2507"
+      "id": "qwen/qwen3-30b-a3b-thinking-2507",
+      "release_date": "2025-08-28"
     },
     {
-      "id": "qwen/qwen3-32b"
+      "id": "qwen/qwen3-32b",
+      "release_date": "2025-04"
     },
     {
-      "id": "qwen/qwen3-8b"
+      "id": "qwen/qwen3-8b",
+      "release_date": "2025-04-28"
     },
     {
-      "id": "qwen/qwen3-coder"
+      "id": "qwen/qwen3-coder",
+      "release_date": "2025-07-23"
     },
     {
-      "id": "qwen/qwen3-coder-30b-a3b-instruct"
+      "id": "qwen/qwen3-coder-30b-a3b-instruct",
+      "release_date": "2025-04"
     },
     {
-      "id": "qwen/qwen3-coder-flash"
+      "id": "qwen/qwen3-coder-flash",
+      "release_date": "2025-07-28"
     },
     {
-      "id": "qwen/qwen3-coder-next"
+      "id": "qwen/qwen3-coder-next",
+      "release_date": "2026-02-03"
     },
     {
-      "id": "qwen/qwen3-coder-plus"
+      "id": "qwen/qwen3-coder-plus",
+      "release_date": "2025-07-23"
     },
     {
-      "id": "qwen/qwen3-max"
+      "id": "qwen/qwen3-max",
+      "release_date": "2025-09-23"
     },
     {
-      "id": "qwen/qwen3-max-thinking"
+      "id": "qwen/qwen3-max-thinking",
+      "release_date": "2026-02-09"
     },
     {
-      "id": "qwen/qwen3-next-80b-a3b-instruct"
+      "id": "qwen/qwen3-next-80b-a3b-instruct",
+      "release_date": "2025-09"
     },
     {
-      "id": "qwen/qwen3-next-80b-a3b-thinking"
+      "id": "qwen/qwen3-next-80b-a3b-thinking",
+      "release_date": "2025-09"
     },
     {
-      "id": "qwen/qwen3-vl-235b-a22b-instruct"
+      "id": "qwen/qwen3-vl-235b-a22b-instruct",
+      "release_date": "2025-09-23"
     },
     {
-      "id": "qwen/qwen3-vl-235b-a22b-thinking"
+      "id": "qwen/qwen3-vl-235b-a22b-thinking",
+      "release_date": "2025-09-23"
     },
     {
-      "id": "qwen/qwen3-vl-30b-a3b-instruct"
+      "id": "qwen/qwen3-vl-30b-a3b-instruct",
+      "release_date": "2025-10-06"
     },
     {
-      "id": "qwen/qwen3-vl-30b-a3b-thinking"
+      "id": "qwen/qwen3-vl-30b-a3b-thinking",
+      "release_date": "2025-10-06"
     },
     {
-      "id": "qwen/qwen3-vl-32b-instruct"
+      "id": "qwen/qwen3-vl-32b-instruct",
+      "release_date": "2025-10-23"
     },
     {
-      "id": "qwen/qwen3-vl-8b-instruct"
+      "id": "qwen/qwen3-vl-8b-instruct",
+      "release_date": "2025-10-14"
     },
     {
-      "id": "qwen/qwen3-vl-8b-thinking"
+      "id": "qwen/qwen3-vl-8b-thinking",
+      "release_date": "2025-10-14"
     },
     {
-      "id": "qwen/qwen3.5-122b-a10b"
+      "id": "qwen/qwen3.5-122b-a10b",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "qwen/qwen3.5-27b"
+      "id": "qwen/qwen3.5-27b",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "qwen/qwen3.5-35b-a3b"
+      "id": "qwen/qwen3.5-35b-a3b",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "qwen/qwen3.5-397b-a17b"
+      "id": "qwen/qwen3.5-397b-a17b",
+      "release_date": "2026-02-15"
     },
     {
-      "id": "qwen/qwen3.5-9b"
+      "id": "qwen/qwen3.5-9b",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "qwen/qwen3.5-9b:batch"
+      "id": "qwen/qwen3.5-9b:batch",
+      "release_date": "2026-02-23"
     },
     {
-      "id": "qwen/qwen3.5-flash-02-23"
+      "id": "qwen/qwen3.5-flash-02-23",
+      "release_date": "2026-02-25"
     },
     {
-      "id": "qwen/qwen3.5-plus-02-15"
+      "id": "qwen/qwen3.5-plus-02-15",
+      "release_date": "2026-02-16"
     },
     {
-      "id": "qwen/qwen3.5-plus-20260420"
+      "id": "qwen/qwen3.5-plus-20260420",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "qwen/qwen3.6-27b"
+      "id": "qwen/qwen3.6-27b",
+      "release_date": "2026-04-22"
     },
     {
-      "id": "qwen/qwen3.6-35b-a3b"
+      "id": "qwen/qwen3.6-35b-a3b",
+      "release_date": "2026-04-17"
     },
     {
-      "id": "qwen/qwen3.6-flash"
+      "id": "qwen/qwen3.6-flash",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "qwen/qwen3.6-max-preview"
+      "id": "qwen/qwen3.6-max-preview",
+      "release_date": "2026-04-20"
     },
     {
-      "id": "qwen/qwen3.6-plus"
+      "id": "qwen/qwen3.6-plus",
+      "release_date": "2026-04-02"
     },
     {
-      "id": "qwen/qwen3.7-flash"
+      "id": "qwen/qwen3.7-flash",
+      "release_date": "2026-07-15"
     },
     {
-      "id": "qwen/qwen3.7-max"
+      "id": "qwen/qwen3.7-max",
+      "release_date": "2026-05-21"
     },
     {
-      "id": "qwen/qwen3.7-plus"
+      "id": "qwen/qwen3.7-plus",
+      "release_date": "2026-06-02"
     },
     {
-      "id": "qwen/qwen3.8-2.4t-a95b"
+      "id": "qwen/qwen3.8-2.4t-a95b",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "qwen/qwen3.8-2.4t-a95b:batch"
+      "id": "qwen/qwen3.8-2.4t-a95b:batch",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "qwen/qwen3.8-27b"
+      "id": "qwen/qwen3.8-27b",
+      "release_date": "2026-08-14"
     },
     {
-      "id": "qwen/qwen3.8-flash"
+      "id": "qwen/qwen3.8-flash",
+      "release_date": "2026-08-26"
     },
     {
-      "id": "qwen/qwen3.8-max"
+      "id": "qwen/qwen3.8-max-0902",
+      "release_date": "2026-08-03"
     },
     {
-      "id": "rekaai/reka-edge"
+      "id": "rekaai/reka-edge",
+      "release_date": "2026-03-20"
     },
     {
-      "id": "rekaai/reka-flash-3"
+      "id": "rekaai/reka-flash-3",
+      "release_date": "2025-03-12"
     },
     {
-      "id": "relace/relace-apply-3"
+      "id": "relace/relace-apply-3",
+      "release_date": "2025-09-26"
     },
     {
-      "id": "relace/relace-search"
+      "id": "relace/relace-search",
+      "release_date": "2025-12-08"
     },
     {
-      "id": "sakana/fugu-ultra"
+      "id": "sakana/fugu-ultra",
+      "release_date": "2026-06-15"
     },
     {
-      "id": "sakana/sakana-namazu"
+      "id": "sakana/sakana-namazu",
+      "release_date": "2026-08-03"
     },
     {
-      "id": "sao10k/l3-lunaris-8b"
+      "id": "sao10k/l3-lunaris-8b",
+      "release_date": "2024-08-13"
     },
     {
-      "id": "sao10k/l3.1-euryale-70b"
+      "id": "sao10k/l3.1-euryale-70b",
+      "release_date": "2024-08-28"
     },
     {
-      "id": "sao10k/l3.3-euryale-70b"
+      "id": "sao10k/l3.3-euryale-70b",
+      "release_date": "2024-12-18"
     },
     {
-      "id": "stepfun/step-3.5-flash"
+      "id": "stepfun/step-3.5-flash",
+      "release_date": "2026-01-29"
     },
     {
-      "id": "stepfun/step-3.7-flash"
+      "id": "stepfun/step-3.7-flash",
+      "release_date": "2026-05-29"
     },
     {
-      "id": "tencent/hunyuan-a13b-instruct"
+      "id": "tencent/hunyuan-a13b-instruct",
+      "release_date": "2025-07-08"
     },
     {
-      "id": "tencent/hy-mt2-1.8b"
+      "id": "tencent/hy-mt2-1.8b",
+      "release_date": "2026-08-20"
     },
     {
-      "id": "tencent/hy-mt2-30b-a3b"
+      "id": "tencent/hy-mt2-30b-a3b",
+      "release_date": "2026-08-20"
     },
     {
-      "id": "tencent/hy-mt2-7b"
+      "id": "tencent/hy-mt2-7b",
+      "release_date": "2026-08-19"
     },
     {
-      "id": "tencent/hy3"
+      "id": "tencent/hy3",
+      "release_date": "2026-07-06"
     },
     {
-      "id": "tencent/hy3-preview"
+      "id": "tencent/hy3-preview",
+      "release_date": "2026-04-20"
     },
     {
-      "id": "tencent/hy4-preview"
+      "id": "tencent/hy4-preview",
+      "release_date": "2026-08-28"
     },
     {
-      "id": "thedrummer/cydonia-24b-v4.1"
+      "id": "thedrummer/cydonia-24b-v4.1",
+      "release_date": "2025-09-27"
     },
     {
-      "id": "thedrummer/skyfall-36b-v2"
+      "id": "thedrummer/skyfall-36b-v2",
+      "release_date": "2025-03-10"
     },
     {
-      "id": "thedrummer/unslopnemo-12b"
+      "id": "thedrummer/unslopnemo-12b",
+      "release_date": "2024-11-08"
     },
     {
-      "id": "thinkingmachines/inkling"
+      "id": "thinkingmachines/inkling",
+      "release_date": "2026-07-15"
     },
     {
-      "id": "thinkingmachines/inkling-small"
+      "id": "thinkingmachines/inkling-small",
+      "release_date": "2026-07-30"
     },
     {
-      "id": "thinkingmachines/inkling-small:batch"
+      "id": "thinkingmachines/inkling-small:batch",
+      "release_date": "2026-07-30"
     },
     {
-      "id": "thinkingmachines/inkling-small:free"
+      "id": "thinkingmachines/inkling-small:free",
+      "release_date": "2026-07-30"
     },
     {
-      "id": "thinkingmachines/inkling:batch"
+      "id": "thinkingmachines/inkling:batch",
+      "release_date": "2026-07-15"
     },
     {
-      "id": "thinkingmachines/inkling:free"
+      "id": "thinkingmachines/inkling:free",
+      "release_date": "2026-07-15"
     },
     {
-      "id": "undi95/remm-slerp-l2-13b"
+      "id": "undi95/remm-slerp-l2-13b",
+      "release_date": "2023-07-22"
     },
     {
-      "id": "upstage/solar-pro-3"
+      "id": "upstage/solar-pro-3",
+      "release_date": "2026-01-27"
     },
     {
-      "id": "upstage/solar-pro4"
+      "id": "upstage/solar-pro4",
+      "release_date": "2026-08-10"
     },
     {
-      "id": "writer/palmyra-x5"
+      "id": "writer/palmyra-x5",
+      "release_date": "2026-01-21"
     },
     {
-      "id": "x-ai/grok-4.20"
+      "id": "x-ai/grok-4.20",
+      "release_date": "2026-03-31"
     },
     {
-      "id": "x-ai/grok-4.20-multi-agent"
+      "id": "x-ai/grok-4.20-multi-agent",
+      "release_date": "2026-03-31"
     },
     {
-      "id": "x-ai/grok-4.3"
+      "id": "x-ai/grok-4.3",
+      "release_date": "2026-04-17"
     },
     {
-      "id": "x-ai/grok-4.5"
+      "id": "x-ai/grok-4.3:batch",
+      "release_date": "2026-04-17"
     },
     {
-      "id": "x-ai/grok-4.6"
+      "id": "x-ai/grok-4.5",
+      "release_date": "2026-07-08"
     },
     {
-      "id": "x-ai/grok-build-0.1"
+      "id": "x-ai/grok-4.6",
+      "release_date": "2026-08-12"
     },
     {
-      "id": "xiaomi/mimo-v2.5"
+      "id": "x-ai/grok-build-0.1",
+      "release_date": "2026-04-16"
     },
     {
-      "id": "xiaomi/mimo-v2.5-pro"
+      "id": "xiaomi/mimo-v2.5",
+      "release_date": "2026-04-22"
     },
     {
-      "id": "z-ai/glm-4.5"
+      "id": "xiaomi/mimo-v2.5-pro",
+      "release_date": "2026-04-22"
     },
     {
-      "id": "z-ai/glm-4.5-air"
+      "id": "z-ai/glm-4.5",
+      "release_date": "2025-07-28"
     },
     {
-      "id": "z-ai/glm-4.5v"
+      "id": "z-ai/glm-4.5-air",
+      "release_date": "2025-07-28"
     },
     {
-      "id": "z-ai/glm-4.6"
+      "id": "z-ai/glm-4.5v",
+      "release_date": "2025-08-11"
     },
     {
-      "id": "z-ai/glm-4.6v"
+      "id": "z-ai/glm-4.6",
+      "release_date": "2025-09-30"
     },
     {
-      "id": "z-ai/glm-4.7"
+      "id": "z-ai/glm-4.6v",
+      "release_date": "2025-12-08"
     },
     {
-      "id": "z-ai/glm-4.7-flash"
+      "id": "z-ai/glm-4.7",
+      "release_date": "2025-12-22"
     },
     {
-      "id": "z-ai/glm-5"
+      "id": "z-ai/glm-4.7-flash",
+      "release_date": "2026-01-19"
     },
     {
-      "id": "z-ai/glm-5-turbo"
+      "id": "z-ai/glm-5",
+      "release_date": "2026-02-12"
     },
     {
-      "id": "z-ai/glm-5.1"
+      "id": "z-ai/glm-5-turbo",
+      "release_date": "2026-03-16"
     },
     {
-      "id": "z-ai/glm-5.2"
+      "id": "z-ai/glm-5.1",
+      "release_date": "2026-04-07"
     },
     {
-      "id": "z-ai/glm-5.2:free"
+      "id": "z-ai/glm-5.2",
+      "release_date": "2026-06-13"
     },
     {
-      "id": "z-ai/glm-5.3"
+      "id": "z-ai/glm-5.2:free",
+      "release_date": "2026-06-13"
     },
     {
-      "id": "z-ai/glm-5.3-flash"
+      "id": "z-ai/glm-5.3",
+      "release_date": "2026-08-14"
     },
     {
-      "id": "z-ai/glm-5.3-flash:batch"
+      "id": "z-ai/glm-5.3-flash",
+      "release_date": "2026-08-26"
     },
     {
-      "id": "z-ai/glm-5v-turbo"
+      "id": "z-ai/glm-5.3-flash:batch",
+      "release_date": "2026-08-26"
     },
     {
-      "id": "~anthropic/claude-fable-latest"
+      "id": "z-ai/glm-5v-turbo",
+      "release_date": "2026-04-01"
     },
     {
-      "id": "~anthropic/claude-haiku-latest"
+      "id": "~anthropic/claude-fable-latest",
+      "release_date": "2026-06-09"
     },
     {
-      "id": "~anthropic/claude-opus-latest"
+      "id": "~anthropic/claude-haiku-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~anthropic/claude-sonnet-latest"
+      "id": "~anthropic/claude-opus-latest",
+      "release_date": "2026-04-21"
     },
     {
-      "id": "~deepseek/deepseek-v4-flash-latest"
+      "id": "~anthropic/claude-sonnet-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~google/gemini-flash-latest"
+      "id": "~deepseek/deepseek-v4-flash-latest",
+      "release_date": "2026-08-01"
     },
     {
-      "id": "~google/gemini-pro-latest"
+      "id": "~google/gemini-flash-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~moonshotai/kimi-latest"
+      "id": "~google/gemini-pro-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~openai/gpt-latest"
+      "id": "~moonshotai/kimi-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~openai/gpt-mini-latest"
+      "id": "~openai/gpt-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~x-ai/grok-latest"
+      "id": "~openai/gpt-mini-latest",
+      "release_date": "2026-04-27"
     },
     {
-      "id": "~z-ai/glm-flash-latest"
+      "id": "~x-ai/grok-latest",
+      "release_date": "2026-07-08"
     },
     {
-      "id": "~z-ai/glm-latest"
+      "id": "~z-ai/glm-flash-latest",
+      "release_date": "2026-08-27"
+    },
+    {
+      "id": "~z-ai/glm-latest",
+      "release_date": "2026-08-19"
     }
   ]
 }

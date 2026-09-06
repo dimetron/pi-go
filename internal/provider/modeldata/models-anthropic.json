@@ -1,50 +1,61 @@
 {
   "provider": "anthropic",
-  "fetched_at": "2026-09-03T00:00:00Z",
+  "fetched_at": "2026-09-05T00:00:00Z",
   "models": [
     {
       "id": "claude-fable-5",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-06-07"
     },
     {
       "id": "claude-fable-5-1",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-09-01"
     },
     {
       "id": "claude-haiku-4-5-20251001",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2025-10-15"
     },
     {
       "id": "claude-opus-4-5-20251101",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2025-11-24"
     },
     {
       "id": "claude-opus-4-6",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-02-04"
     },
     {
       "id": "claude-opus-4-7",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-04-14"
     },
     {
       "id": "claude-opus-4-8",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-05-28"
     },
     {
       "id": "claude-opus-5",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-07-24"
     },
     {
       "id": "claude-sonnet-4-5-20250929",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2025-09-29"
     },
     {
       "id": "claude-sonnet-4-6",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-02-17"
     },
     {
       "id": "claude-sonnet-5",
-      "owned_by": "model"
+      "owned_by": "model",
+      "release_date": "2026-06-29"
     }
   ]
 }
