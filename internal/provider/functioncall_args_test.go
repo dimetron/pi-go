@@ -226,3 +226,52 @@ func TestAgentGatewaySendsLegacyMaxTokens(t *testing.T) {
 		t.Errorf("request has max_completion_tokens, should only send max_tokens for agentgateway")
 	}
 }
+
+// TestAgentGatewayNonOllamaRouteSendsModernMaxTokens pins that legacy mode is
+// scoped to the gateway's Ollama routes, not forced provider-wide. A route that
+// resolves to a non-Ollama backend (here anthropic/) must send the modern
+// max_completion_tokens field, not the deprecated max_tokens.
+func TestAgentGatewayNonOllamaRouteSendsModernMaxTokens(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "c1", "object": "chat.completion", "model": "m",
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	llm, err := NewAgentGateway(context.Background(), "anthropic/claude-opus-5", "", srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewAgentGateway() error: %v", err)
+	}
+	req := &model.LLMRequest{Contents: []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
+	}}
+	for _, err := range llm.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent() error: %v", err)
+		}
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("decoding request: %v", err)
+	}
+	// max_completion_tokens must be present (the modern field non-Ollama
+	// backends understand).
+	if _, ok := sent["max_completion_tokens"]; !ok {
+		t.Fatalf("request has no max_completion_tokens: %s", body)
+	}
+	// max_tokens must NOT be present — it is deprecated on non-Ollama backends.
+	if _, ok := sent["max_tokens"]; ok {
+		t.Errorf("request has legacy max_tokens, should only send max_completion_tokens for non-Ollama agentgateway routes")
+	}
+}
