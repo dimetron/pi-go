@@ -37,6 +37,13 @@ type openaiModel struct {
 	// maxOutputTokens caps the reply, in tokens. See
 	// defaultOaiMaxOutputTokens for why omitting it is not an option.
 	maxOutputTokens int64
+	// useLegacyMaxTokens sends max_tokens instead of max_completion_tokens
+	// on the Chat Completions wire. Ollama only understands max_tokens — the
+	// newer max_completion_tokens field is silently ignored, so the model
+	// runs unbounded and hits its own 65536 default (see agentgateway). The
+	// OpenAI API itself accepts both but deprecated max_tokens in favor of
+	// max_completion_tokens, so this only matters for Ollama-class backends.
+	useLegacyMaxTokens bool
 	// mu protects responseState for Responses mode multi-turn.
 	mu            sync.Mutex
 	responseState *responsesState // nil when using Chat Completions
@@ -128,11 +135,12 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 		maxOutputTokens = llmOpts.MaxOutputTokens
 	}
 	return &openaiModel{
-		modelName:       modelName,
-		client:          client,
-		codexBackend:    useCodexBackend,
-		maxOutputTokens: maxOutputTokens,
-		responseState:   nil, // determined per-call based on model
+		modelName:          modelName,
+		client:             client,
+		codexBackend:       useCodexBackend,
+		maxOutputTokens:    maxOutputTokens,
+		useLegacyMaxTokens: llmOpts != nil && llmOpts.UseLegacyMaxTokens,
+		responseState:      nil, // determined per-call based on model
 	}, nil
 }
 

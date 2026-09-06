@@ -26,7 +26,11 @@ func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, m
 			Messages: messages,
 		}
 		if maxTokens := oaiMaxOutputTokens(req.Config, m.maxOutputTokens); maxTokens > 0 {
-			params.MaxCompletionTokens = openai.Int(maxTokens)
+			if m.useLegacyMaxTokens {
+				params.MaxTokens = openai.Int(maxTokens)
+			} else {
+				params.MaxCompletionTokens = openai.Int(maxTokens)
+			}
 		}
 		if systemInstruction != "" {
 			params.Messages = append([]openai.ChatCompletionMessageParamUnion{
