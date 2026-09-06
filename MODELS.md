@@ -3,54 +3,57 @@
 Models available through `pi model list`, organized by provider.
 The latest 5 top generative/chat models per provider are listed below.
 
-Last updated: 2026-08-13
+Last updated: 2026-09-05
 
 ## Anthropic
 
 | # | Model Name | Description |
 |---|------------|-------------|
-| 1 | `claude-sonnet-5` | — |
-| 2 | `claude-opus-4-8` | — |
-| 3 | `claude-opus-4-7` | — |
-| 4 | `claude-opus-4-6` | — |
-| 5 | `claude-opus-4-5-20251101` | — |
+| 1 | `claude-fable-5-1` | — |
+| 2 | `claude-opus-5` | — |
+| 3 | `claude-sonnet-5` | — |
+| 4 | `claude-fable-5` | — |
+| 5 | `claude-opus-4-8` | — |
 
-> 10 models total. See `pi model list anthropic` for the full list.
+> 11 models total. See `pi model list anthropic` for the full list.
 
 ## Gemini
 
 | # | Model Name | Description |
 |---|------------|-------------|
-| 1 | `gemini-3.7-flash` | Gemini 3.7 Flash |
-| 2 | `gemini-3.6-flash` | Gemini 3.6 Flash |
-| 3 | `gemini-3.5-flash` | Gemini 3.5 Flash |
+| 1 | `gemini-3.8-flash` | Gemini 3.8 Flash |
+| 2 | `gemini-3.7-flash` | Gemini 3.7 Flash |
+| 3 | `gemini-flash-latest` | Gemini Flash Latest |
 | 4 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite |
-| 5 | `gemini-3.5-pro` | Gemini 3.5 Pro |
+| 5 | `gemini-3.6-flash` | Gemini 3.6 Flash |
 
-> 51 models total. Excludes embedding, imagen, lyria, veo, robotics, tts, and audio models.
+> 43 models total. Excludes embedding, imagen, lyria, veo, robotics, tts, and audio models.
 > See `pi model list gemini` for the full list.
 
 ## Ollama
 
 | # | Model Name | Description |
 |---|------------|-------------|
-| 1 | `minimax-m3:cloud` | — |
-| 2 | `kimi-k2.7-code:cloud` | — |
-| 3 | `glm-5.2:cloud` | — |
-| 4 | `gemma4:12b-mlx` | — |
-| 5 | `gemma4:e4b-mlx` | — |
+| 1 | `deepseek-v4-flash:cloud` | — |
+| 2 | `gemma4:cloud` | — |
+| 3 | `minimax-m3:cloud` | — |
+| 4 | `kimi-k3:cloud` | — |
+| 5 | `gemma4:12b-mlx` | — |
 
-> 6 models total. Excludes `embeddinggemma:latest` (not a chat model).
+> 9 models total (chat). Excludes `embeddinggemma:latest` (not a chat model).
 > See `pi model list ollama` for the full list.
 
 ## OpenAI
 
-| Status | Note |
-|--------|------|
-| Unavailable | 403: missing `api.model.read` scope |
+| # | Model Name | Description |
+|---|------------|-------------|
+| 1 | `gpt-5.6-luna` | — |
+| 2 | `gpt-5.6-sol` | — |
+| 3 | `gpt-5.6-terra` | — |
+| 4 | `gpt-5.5` | — |
+| 5 | `gpt-5.5-2026-04-23` | — |
 
-> Requires correct organization role and project permissions.
-> See `pi model list openai` for details.
+> 13 models total. See `pi model list openai` for the full list.
 
 ## Updating This File
 
