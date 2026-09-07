@@ -531,3 +531,39 @@ func TestRunModelList_NoArgs_EnvBaseURL(t *testing.T) {
 		t.Errorf("expected openai header in output: %s", out)
 	}
 }
+
+// TestRunModelList_OllamaUnavailableIgnored pins that a failing ollama query is
+// skipped silently rather than surfacing as an error: ollama is a local daemon
+// that is often simply not running, so `model list` must still succeed for the
+// providers that are up.
+func TestRunModelList_OllamaUnavailableIgnored(t *testing.T) {
+	// A server that 500s for ollama's /api/tags but serves openai's /v1/models.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/models") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"id": "gpt-5.5"}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "ollama down")
+	}))
+	defer srv.Close()
+	isolateRunModelListEnv(t)
+	t.Setenv("OPENAI_BASE_URL", srv.URL)
+	t.Setenv("OPENAI_API_KEY", "testkey")
+	// Point ollama at the mock too so the no-args branch (which always queries
+	// ollama) hits the failing endpoint.
+	t.Setenv("OLLAMA_HOST", srv.URL)
+
+	out, err := runModelListCapture(t)
+	if err != nil {
+		t.Fatalf("Execute: %v (ollama failure must not fail the command)", err)
+	}
+	if !strings.Contains(out, "gpt-5.5") {
+		t.Errorf("output missing gpt-5.5: %s", out)
+	}
+	if strings.Contains(out, "ollama") {
+		t.Errorf("output should not mention the unavailable ollama provider: %s", out)
+	}
+}
