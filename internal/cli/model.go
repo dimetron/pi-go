@@ -112,6 +112,12 @@ func runModelList(cmd *cobra.Command, args []string) error {
 		cancel()
 
 		if err != nil {
+			// Ollama is a local daemon that is often simply not running.
+			// Treat it as absent rather than as a failure: skip it silently
+			// so `model list` still succeeds for the providers that are up.
+			if p == "ollama" {
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
 			exitCode = 1
 			continue
