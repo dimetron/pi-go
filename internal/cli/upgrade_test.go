@@ -111,16 +111,27 @@ func TestIsNewerVersion(t *testing.T) {
 		})
 	}
 }
-func TestRunUpgradePowerShellFetchError(t *testing.T) {
-	if err := runUpgradePowerShell("http://127.0.0.1:1/nope.ps1"); err == nil {
-		t.Fatal("expected fetch error")
-	}
-}
 
-func TestRunUpgradePowerShellHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	defer srv.Close()
-	if err := runUpgradePowerShell(srv.URL); err == nil {
-		t.Fatal("expected HTTP status error")
+// TestRunUpgradePowerShellCommand pins that the Windows upgrade runs PowerShell
+// with the install script URL piped into iex — the same one-liner as the
+// quickinstall command — rather than downloading the script to a temp file.
+func TestRunUpgradePowerShellCommand(t *testing.T) {
+	cmd := runUpgradePowerShellCommand("https://example.com/install.ps1")
+	if cmd == nil {
+		t.Fatal("expected a command")
+	}
+	if cmd.Path != "powershell.exe" {
+		t.Errorf("Path = %q, want powershell.exe", cmd.Path)
+	}
+	args := cmd.Args
+	if len(args) < 4 {
+		t.Fatalf("args = %v, want -NoProfile -Command <iwr ... | iex>", args)
+	}
+	if args[1] != "-NoProfile" || args[2] != "-Command" {
+		t.Errorf("args = %v, want -NoProfile -Command", args)
+	}
+	want := "iwr https://example.com/install.ps1 -UseBasicParsing | iex"
+	if args[3] != want {
+		t.Errorf("command = %q, want %q", args[3], want)
 	}
 }

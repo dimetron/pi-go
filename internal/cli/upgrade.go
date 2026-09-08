@@ -165,29 +165,19 @@ func runUpgradeShell(scriptURL string) error {
 }
 
 func runUpgradePowerShell(scriptURL string) error {
-	resp, err := http.Get(scriptURL)
-	if err != nil {
-		return fmt.Errorf("fetching install script: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("install script returned HTTP %d", resp.StatusCode)
-	}
+	cmd := runUpgradePowerShellCommand(scriptURL)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
 
-	tmp, err := os.CreateTemp("", "pi-upgrade-*.ps1")
-	if err != nil {
-		return fmt.Errorf("creating temp script: %w", err)
-	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-
-	if _, err := tmp.ReadFrom(resp.Body); err != nil {
-		return fmt.Errorf("reading script: %w", err)
-	}
-
-	execCmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", tmp.Name())
-	execCmd.Stdin = os.Stdin
-	execCmd.Stdout = os.Stdout
-	execCmd.Stderr = os.Stderr
-	return execCmd.Run()
+// runUpgradePowerShellCommand builds the PowerShell invocation that upgrades
+// pi-go on Windows. It runs the install script straight from the GitHub URL,
+// the same way the quickinstall one-liner does — iwr the script and pipe it
+// into iex — rather than downloading it to a temp file. Kept separate from
+// runUpgradePowerShell so the command shape is testable without executing it.
+func runUpgradePowerShellCommand(scriptURL string) *exec.Cmd {
+	return exec.Command("powershell.exe", "-NoProfile", "-Command",
+		fmt.Sprintf("iwr %s -UseBasicParsing | iex", scriptURL))
 }
