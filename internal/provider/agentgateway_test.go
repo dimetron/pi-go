@@ -103,7 +103,7 @@ func TestContextWindowSizeForAgentGatewayLayeredRoutes(t *testing.T) {
 // 0 window, which disables auto-compaction and lets the session grow unchecked
 // until the model hits its output cap.
 func TestContextWindowSizeForAgentGatewayVirtualModels(t *testing.T) {
-	for _, name := range []string{"ollama-deepseek", "ollama-deepseek-balanced", "pi-fast"} {
+	for _, name := range []string{"ollama-deepseek", "ollama-deepseek-balanced", "ollama-dsf4", "pi-fast"} {
 		if got := ContextWindowSizeFor("agentgateway", name); got != 1_000_000 {
 			t.Errorf("ContextWindowSizeFor(agentgateway, %q) = %d, want 1000000", name, got)
 		}
