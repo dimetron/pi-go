@@ -92,6 +92,7 @@ a specific model. Repoint them here rather than reconfiguring every caller.
 |---|---|
 | `ollama-deepseek-balanced` | DeepSeek weighted evenly across all three Ollama Cloud accounts |
 | `ollama-deepseek` | DeepSeek on account 1, failing over to 2 then 3 |
+| `ollama-dsf4` | Alias for `ollama-deepseek` — same DeepSeek failover, short name |
 | `ollama-gemma4`, `ollama-glm-flash`, `ollama-minimax` | Failover variants of those models across the three accounts, same pattern |
 | `pi-default` | Claude Opus, failing over to GPT then Gemini |
 | `pi-fast` | Ollama Cloud DeepSeek (account 1), failing over to `gpt-5.6-luna` |
