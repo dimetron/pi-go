@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 )
 
@@ -120,7 +121,11 @@ func TestRunUpgradePowerShellCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected a command")
 	}
-	if cmd.Path != "powershell.exe" {
+	// exec.Command resolves Path via LookPath: on Windows that yields a full
+	// path (e.g. C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe)
+	// while on other platforms the binary can't be resolved, leaving the raw
+	// name. Assert on the basename so the test passes on both.
+	if filepath.Base(cmd.Path) != "powershell.exe" {
 		t.Errorf("Path = %q, want powershell.exe", cmd.Path)
 	}
 	args := cmd.Args
