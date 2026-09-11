@@ -190,7 +190,7 @@ func TestProviderEnvVar(t *testing.T) {
 	}{
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"openai", "OPENAI_API_KEY"},
-		{"azure", "AZURE_OPENAI_API_KEY"},
+		{"azure", "AZUREOPENAI_API_KEY"},
 		{"gemini", "GEMINI_API_KEY"},
 		{"unknown", "UNKNOWN_API_KEY"},
 		{"ollama", "OLLAMA_API_KEY"},

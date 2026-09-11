@@ -127,7 +127,7 @@ routing you need:
   ollama/<model>           Ollama, local   none; http://localhost:11434
   <model>:cloud            Ollama Cloud    OLLAMA_API_KEY; https://api.ollama.com
                                            without a key: the local daemon
-  azure/<deployment>       Azure OpenAI    AZURE_OPENAI_API_KEY
+  azure/<deployment>       Azure OpenAI    AZUREOPENAI_API_KEY
   opencode/<model>         OpenCode        OPENCODE_API_KEY
 
 A name with no recognized prefix is rejected rather than guessed at — reach for

@@ -40,7 +40,7 @@ services:
       # localhost inside a container is the container, so reach the host's
       # Ollama explicitly. Linux needs the extra_hosts entry below.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
-      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZUREOPENAI_API_KEY: ${AZUREOPENAI_API_KEY:-}
       AZURE_OPENAI_RESOURCE_NAME: ${AZURE_OPENAI_RESOURCE_NAME:-}
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
       # The config default points at localhost, which is right for run.sh but

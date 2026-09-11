@@ -135,7 +135,7 @@ append:
 - name: azure
   provider: azure
   params:
-    apiKey: ${AZURE_OPENAI_API_KEY:-}
+    apiKey: ${AZUREOPENAI_API_KEY:-}
     azureResourceName: ${AZURE_OPENAI_RESOURCE_NAME:-}
     azureApiVersion: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
 
