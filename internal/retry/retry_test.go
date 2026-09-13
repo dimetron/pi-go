@@ -165,6 +165,10 @@ func TestServerDelay(t *testing.T) {
 		{"gemini retrydelay detail", "retryDelay:59s", 59 * time.Second, true},
 		{"no hint", "429 Too Many Requests", 0, false},
 		{"empty", "", 0, false},
+		// A negative figure parses but is rejected: the n<=0 branch.
+		{"negative figure", "try again in -5 seconds", 0, false},
+		// The number path's unit table: milliseconds.
+		{"spelled milliseconds", "Retry-After: 250 ms", 250 * time.Millisecond, true},
 	}
 
 	for _, tt := range tests {
@@ -300,5 +304,45 @@ func TestJSONRetryInfoMakesQuotaErrorTransient(t *testing.T) {
 	}
 	if !IsTransient(err) {
 		t.Error("a quota error naming a retry window was not classified transient")
+	}
+}
+
+// IsTerminal(nil) must be false — the retry loop calls it on every error,
+// including the absence of one.
+func TestIsTerminalNil(t *testing.T) {
+	if IsTerminal(nil) {
+		t.Error("IsTerminal(nil) = true, want false")
+	}
+}
+
+// A delay-carrying error is never terminal: the window reopens, so waiting
+// clears it regardless of what the prose says.
+func TestIsTerminalServerWindowBeatsTerminalProse(t *testing.T) {
+	err := providerErr("429 Too Many Requests: credit_balance_exhausted. Please retry in 9.422s.")
+	if IsTerminal(err) {
+		t.Error("an error naming a retry window should not be terminal")
+	}
+	if !IsTransient(err) {
+		t.Error("an error naming a retry window should be transient")
+	}
+}
+
+// A bare number with an unparseable value is not a delay hint: the fallback
+// branch of the number reader.
+func TestServerDelayRejectsNonNumericHint(t *testing.T) {
+	if _, ok := ServerDelay(providerErr("try again in later maybe")); ok {
+		t.Error("prose without a figure should not read as a delay")
+	}
+	if _, ok := ServerDelay(providerErr("try again in -5 seconds")); ok {
+		t.Error("a negative figure should not read as a delay")
+	}
+	// A figure too large for ParseFloat (+Inf, out of range): the regex
+	// accepts it, the float reader rejects it.
+	huge := "retryDelay:9"
+	for i := 0; i < 400; i++ {
+		huge += "0"
+	}
+	if _, ok := ServerDelay(providerErr(huge + "s")); ok {
+		t.Error("an overflowing figure should not read as a delay")
 	}
 }
