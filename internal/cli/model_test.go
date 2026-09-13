@@ -321,7 +321,7 @@ func TestRunModelList_NoArgs_AzureOnly(t *testing.T) {
 	}))
 	defer srv.Close()
 	isolateRunModelListEnv(t)
-	t.Setenv("AZURE_OPENAI_API_KEY", "testkey")
+	t.Setenv("AZUREOPENAI_API_KEY", "testkey")
 	t.Setenv("OLLAMA_HOST", srv.URL)
 
 	out, err := runModelListCapture(t)

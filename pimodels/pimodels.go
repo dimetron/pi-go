@@ -23,7 +23,7 @@
 // # API keys
 //
 // [New] reads the key from the provider's environment variable — OPENAI_API_KEY,
-// ANTHROPIC_API_KEY, GEMINI_API_KEY, AZURE_OPENAI_API_KEY, or <PROVIDER>_API_KEY
+// ANTHROPIC_API_KEY, GEMINI_API_KEY, AZUREOPENAI_API_KEY, or <PROVIDER>_API_KEY
 // for the rest. [WithAPIKey] overrides that. Providers that need no key, such as
 // a local Ollama, work with neither set.
 //

@@ -1131,7 +1131,7 @@ func TestNewAzureOpenAI_MissingEndpoint(t *testing.T) {
 	t.Cleanup(func() { osGetenv = orig })
 
 	osGetenv = func(key string) string {
-		if key == "AZURE_OPENAI_API_KEY" {
+		if key == "AZUREOPENAI_API_KEY" {
 			return "test-key"
 		}
 		return ""
@@ -1149,7 +1149,7 @@ func TestNewAzureOpenAI_Success(t *testing.T) {
 
 	osGetenv = func(key string) string {
 		switch key {
-		case "AZURE_OPENAI_API_KEY":
+		case "AZUREOPENAI_API_KEY":
 			return "test-azure-key"
 		case "AZURE_OPENAI_ENDPOINT":
 			return "https://my-resource.openai.azure.com"
@@ -1177,7 +1177,7 @@ func TestNewAzureOpenAI_WithOverrides(t *testing.T) {
 
 	// Override only API key; endpoint and api-version come from arguments.
 	osGetenv = func(key string) string {
-		if key == "AZURE_OPENAI_API_KEY" {
+		if key == "AZUREOPENAI_API_KEY" {
 			return "test-azure-key"
 		}
 		return ""
@@ -1198,7 +1198,7 @@ func TestNewAzureOpenAI_AcceptsLegacyAPIKeyEnvName(t *testing.T) {
 
 	osGetenv = func(key string) string {
 		switch key {
-		case "AZUREOPENAI_API_KEY":
+		case "AZURE_OPENAI_API_KEY":
 			return "legacy-azure-key"
 		case "AZURE_OPENAI_ENDPOINT":
 			return "https://my-resource.openai.azure.com"
@@ -1208,10 +1208,10 @@ func TestNewAzureOpenAI_AcceptsLegacyAPIKeyEnvName(t *testing.T) {
 
 	llm, err := NewAzureOpenAI(context.Background(), "my-deployment", "", "", "", nil)
 	if err != nil {
-		t.Fatalf("NewAzureOpenAI() with AZUREOPENAI_API_KEY error: %v", err)
+		t.Fatalf("NewAzureOpenAI() with AZURE_OPENAI_API_KEY error: %v", err)
 	}
 	if llm == nil {
-		t.Fatal("NewAzureOpenAI() with AZUREOPENAI_API_KEY returned nil")
+		t.Fatal("NewAzureOpenAI() with AZURE_OPENAI_API_KEY returned nil")
 	}
 }
 

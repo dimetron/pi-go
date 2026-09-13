@@ -51,7 +51,7 @@ provider handling to become a breaking change to the agent API.
 | openai | `OPENAI_API_KEY` |
 | anthropic | `ANTHROPIC_API_KEY` |
 | gemini | `GEMINI_API_KEY` |
-| azure | `AZURE_OPENAI_API_KEY` |
+| azure | `AZUREOPENAI_API_KEY` |
 | everything else | `<PROVIDER>_API_KEY` |
 
 `WithAPIKey` overrides it. A local Ollama needs neither.

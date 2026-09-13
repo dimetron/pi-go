@@ -221,8 +221,8 @@ func TestLoadFile_LegacyDefaultModel(t *testing.T) {
 func TestAPIKeys(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZUREOPENAI_API_KEY", "azure-test-key")
+	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZURE_API_KEY", "")
 	t.Setenv("OPENCODE_API_KEY", "opencode-test-key")
 	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")

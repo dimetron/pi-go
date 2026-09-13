@@ -11,7 +11,7 @@ func TestAPIKeyEnvVar(t *testing.T) {
 		// mapping exists rather than a bare strings.ToUpper.
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"openai", "OPENAI_API_KEY"},
-		{"azure", "AZURE_OPENAI_API_KEY"},
+		{"azure", "AZUREOPENAI_API_KEY"},
 		{"gemini", "GEMINI_API_KEY"},
 		// Everything else derives from the provider name.
 		{"xai", "XAI_API_KEY"},

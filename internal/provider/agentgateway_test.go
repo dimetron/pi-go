@@ -61,8 +61,8 @@ func TestResolveAgentGatewayCaseInsensitive(t *testing.T) {
 }
 
 func TestContextWindowSizeForAgentGateway(t *testing.T) {
-	if got := ContextWindowSizeFor("agentgateway", "deepseek-v4-flash:0731-cloud"); got != 1_000_000 {
-		t.Errorf("ContextWindowSizeFor(agentgateway, deepseek-v4-flash:0731-cloud) = %d, want 1000000", got)
+	if got := ContextWindowSizeFor("agentgateway", "deepseek-v4-flash:0731-cloud"); got != 1_048_576 {
+		t.Errorf("ContextWindowSizeFor(agentgateway, deepseek-v4-flash:0731-cloud) = %d, want 1048576", got)
 	}
 }
 
@@ -215,5 +215,37 @@ func TestNewAgentGatewayWrapsConstructionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "creating agentgateway client") {
 		t.Errorf("error = %q, want it to name agentgateway", err)
+	}
+}
+
+// TestContextWindowSizeForAgentGatewayCloudModels pins the context windows of
+// the Ollama cloud models agentgateway routes (from models.dev). Each window is
+// looked up by the form pi-go actually resolves to — the ollama1/ prefix is
+// stripped, leaving the :cloud-tagged model name.
+func TestContextWindowSizeForAgentGatewayCloudModels(t *testing.T) {
+	tests := map[string]int64{
+		"deepseek-v4-flash:0731-cloud": 1_048_576,
+		"deepseek-v4-pro:0813-cloud":   1_048_576,
+		"gemma4:cloud":                 262_144,
+		"glm-5.1:cloud":                202_752,
+		"glm-5.2:cloud":                976_000,
+		"glm-5.3:cloud":                1_048_576,
+		"glm-5.3-flash:cloud":          1_000_000,
+		"minimax-m3:cloud":             512_000,
+		"gpt-oss:120b-cloud":           131_072,
+		"kimi-k3:cloud":                1_048_576,
+	}
+	for model, want := range tests {
+		t.Run(model, func(t *testing.T) {
+			for _, prefixed := range []string{
+				model,
+				"ollama1/" + model,
+				"ollama/" + model,
+			} {
+				if got := ContextWindowSizeFor("agentgateway", prefixed); got != want {
+					t.Errorf("ContextWindowSizeFor(agentgateway, %q) = %d, want %d", prefixed, got, want)
+				}
+			}
+		})
 	}
 }

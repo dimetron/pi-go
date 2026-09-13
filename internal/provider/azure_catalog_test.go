@@ -200,8 +200,8 @@ func TestAzureProbePathsEscapesDeployment(t *testing.T) {
 // config.APIKeys already reads all three, so this is not a new capability —
 // it is the fallback chain living in one place instead of two that can drift.
 func TestAzureAPIKeyFallbackChain(t *testing.T) {
-	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZUREOPENAI_API_KEY", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	t.Setenv("AZURE_API_KEY", "third")
 	if got := AzureAPIKey(""); got != "third" {
 		t.Errorf("AzureAPIKey() = %q, want the AZURE_API_KEY fallback", got)

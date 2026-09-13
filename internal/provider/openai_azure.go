@@ -29,7 +29,7 @@ func AzureAPIKey(apiKey string) string {
 	if apiKey != "" {
 		return apiKey
 	}
-	for _, env := range []string{"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"} {
+	for _, env := range []string{"AZUREOPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_API_KEY"} {
 		if v := osGetenv(env); v != "" {
 			return v
 		}
@@ -98,7 +98,7 @@ func AzureProbePaths(deployment, apiVersion, endpoint string) []string {
 }
 
 // NewAzureOpenAI creates an Azure OpenAI model.LLM.
-// It uses AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, and OPENAI_API_VERSION (defaults to 2025-04-01-preview).
+// It uses AZUREOPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, and OPENAI_API_VERSION (defaults to 2025-04-01-preview).
 // The deploymentName is the Azure deployment name (not the model ID).
 func NewAzureOpenAI(_ context.Context, deploymentName, apiKey, endpoint, apiVersion string, llmOpts *LLMOptions) (model.LLM, error) {
 	apiKey = AzureAPIKey(apiKey)

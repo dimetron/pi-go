@@ -675,7 +675,7 @@ func APIKeys() map[string]string {
 	envVars := map[string][]string{
 		"anthropic":    {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
 		"openai":       {"OPENAI_API_KEY"},
-		"azure":        {"AZURE_OPENAI_API_KEY", "AZUREOPENAI_API_KEY", "AZURE_API_KEY"},
+		"azure":        {"AZUREOPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_API_KEY"},
 		"gemini":       {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		"mistral":      {"MISTRAL_API_KEY"},
 		"xai":          {"XAI_API_KEY"},

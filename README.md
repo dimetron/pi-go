@@ -256,7 +256,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | xAI (Grok) | `grok-*` | `XAI_API_KEY` | `XAI_BASE_URL` |
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` |
 | agentgateway | `agentgateway/<model>` | none (optional `AGENTGATEWAY_API_KEY`) | `AGENTGATEWAY_BASE_URL` (default `http://localhost:4000`) |
-| Azure OpenAI | `azure/<deployment>` | `AZURE_OPENAI_API_KEY` | — |
+| Azure OpenAI | `azure/<deployment>` | `AZUREOPENAI_API_KEY` | — |
 | OpenCode | `opencode/<model>` | `OPENCODE_API_KEY` | `OPENCODE_BASE_URL` |
 | Ollama (local) | `ollama/<model>` | none | `OLLAMA_HOST` (default `http://localhost:11434`) |
 | Ollama Cloud | `<model>:cloud` | `OLLAMA_API_KEY` | `https://api.ollama.com`, or the local daemon when no key is set |

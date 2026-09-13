@@ -561,7 +561,7 @@ func providerEnvVar(p string) string {
 	case "openai":
 		return "OPENAI_API_KEY"
 	case "azure":
-		return "AZURE_OPENAI_API_KEY"
+		return "AZUREOPENAI_API_KEY"
 	case "gemini":
 		return "GEMINI_API_KEY"
 	default:
