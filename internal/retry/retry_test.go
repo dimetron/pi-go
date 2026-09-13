@@ -65,6 +65,7 @@ func TestIsTransient(t *testing.T) {
 		{"ollama weekly quota", errors.New("429 Too Many Requests: you (dimetron) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade"), false},
 		{"ollama session quota", errors.New("429 Too Many Requests: you (dimetron) have reached your session usage limit, upgrade for higher limits: https://ollama.com/upgrade"), false},
 		{"openai quota", errors.New(`POST "https://api.openai.com/v1/chat/completions": 429 Too Many Requests {"message": "You exceeded your current quota, please check your plan and billing details."}`), false},
+		{"openai prepaid credits exhausted", errors.New(`credit_balance_exhausted: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/`), false}, //nolint:revive // quoting the provider's body verbatim
 
 		// Terminal: auth and malformed requests.
 		{"401", errors.New("401 Unauthorized"), false},
