@@ -86,15 +86,9 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 	case "agentgateway":
 		return listAgentGatewayModels(ctx, opts)
 	case "ollama":
-		names, err := OllamaListModels(ctx, opts.BaseURL)
-		if err != nil {
-			return nil, err
-		}
-		result := make([]ModelInfo, len(names))
-		for i, n := range names {
-			result[i] = ModelInfo{ID: n}
-		}
-		return result, nil
+		// OllamaListModels already fills context window and capabilities
+		// from the daemon's /api/tags response — nothing to enrich.
+		return OllamaListModels(ctx, opts.BaseURL)
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", providerName)
 	}

@@ -414,6 +414,42 @@ func TestModelPrice(t *testing.T) {
 	}
 }
 
+// TestModelPriceOllamaCloud pins the ollama-cloud pricing path: a cloud-tagged
+// model listed by the local daemon shows the api.ollama.com rate from the
+// embedded ollama.com/pricing snapshot, matched on the tag-stripped base name.
+func TestModelPriceOllamaCloud(t *testing.T) {
+	// Base entry, exact match.
+	if got := modelPrice("ollama", "glm-5.3:cloud"); got != "$1.40/$4.40 per 1M" {
+		t.Errorf("modelPrice(ollama, glm-5.3:cloud) = %q, want $1.40/$4.40 per 1M", got)
+	}
+	// Sized-cloud tag: the suffix is stripped before the lookup.
+	if got := modelPrice("ollama", "deepseek-v4-flash:0731-cloud"); got != "$0.22/$0.66 per 1M" {
+		t.Errorf("modelPrice(ollama, deepseek-v4-flash:0731-cloud) = %q, want $0.22/$0.66 per 1M", got)
+	}
+	if got := modelPrice("ollama", "gemma4:31b-cloud"); got != "$0.14/$0.40 per 1M" {
+		t.Errorf("modelPrice(ollama, gemma4:31b-cloud) = %q, want $0.14/$0.40 per 1M", got)
+	}
+	// A cloud-tagged model absent from the snapshot shows no price.
+	if got := modelPrice("ollama", "nonexistent-model:cloud"); got != "" {
+		t.Errorf("modelPrice(ollama, nonexistent-model:cloud) = %q, want empty", got)
+	}
+}
+
+func TestOllamaCloudPriceKey(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"glm-5.3:cloud", "glm-5.3"},
+		{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731"},
+		{"gemma4:31b-cloud", "gemma4:31b"},
+		{"mistral-large-3:675b-cloud", "mistral-large-3:675b"},
+		{"qwen3.5:397b", "qwen3.5:397b"}, // no cloud tag: untouched
+	}
+	for _, tt := range cases {
+		if got := ollamaCloudPriceKey(tt.in); got != tt.want {
+			t.Errorf("ollamaCloudPriceKey(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestPrintAzureDeployments(t *testing.T) {
 	var sb strings.Builder
 	printAzureDeployments(&sb)

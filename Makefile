@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing fetch-ollama-pricing
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -228,3 +228,11 @@ fetch-models:
 .PHONY: fetch-modelsdev-pricing
 fetch-modelsdev-pricing:
 	@bash scripts/fetch-modelsdev-pricing.sh
+
+# fetch-ollama-pricing: regenerate the embedded Ollama Cloud pricing snapshot
+# under internal/provider/modeldata/ollama-cloud-pricing.json by scraping
+# https://ollama.com/pricing. Ollama publishes no pricing API; the page is the
+# only source for the per-token rates.
+.PHONY: fetch-ollama-pricing
+fetch-ollama-pricing:
+	@bash scripts/fetch-ollama-pricing.sh

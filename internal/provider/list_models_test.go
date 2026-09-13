@@ -46,7 +46,7 @@ func TestListModelsOllamaWrapsNames(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]any{
-				{"name": "llama3:latest"},
+				{"name": "llama3:latest", "details": map[string]any{"context_length": 131072}},
 				{"name": "qwen:7b"},
 			},
 		})
@@ -62,6 +62,13 @@ func TestListModelsOllamaWrapsNames(t *testing.T) {
 	}
 	if models[0].ID != "llama3:latest" {
 		t.Errorf("models[0].ID = %q, want llama3:latest", models[0].ID)
+	}
+	if models[0].ContextWindow != 131072 {
+		t.Errorf("models[0].ContextWindow = %d, want 131072", models[0].ContextWindow)
+	}
+	// A model without details carries no window rather than a guess.
+	if models[1].ContextWindow != 0 {
+		t.Errorf("models[1].ContextWindow = %d, want 0", models[1].ContextWindow)
 	}
 }
 
