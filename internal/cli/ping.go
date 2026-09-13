@@ -1092,11 +1092,15 @@ func ollamaEnsureModel(ctx context.Context, baseURL, modelName string, w pingWri
 	if err != nil {
 		return fmt.Errorf("list models: %w", err)
 	}
-	w("*   Available models: %s\n", strings.Join(models, ", "))
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.ID
+	}
+	w("*   Available models: %s\n", strings.Join(names, ", "))
 
 	modelBase := strings.Split(modelName, ":")[0]
 	for _, m := range models {
-		if m == modelName || strings.HasPrefix(m, modelBase) {
+		if m.ID == modelName || strings.HasPrefix(m.ID, modelBase) {
 			w("*   Model %s: %sfound ✓%s\n", modelName, colorGreen, colorReset)
 			return nil
 		}

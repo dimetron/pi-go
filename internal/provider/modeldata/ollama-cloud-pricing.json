@@ -1,0 +1,123 @@
+{
+ "fetched_at": "2026-09-11T00:00:00Z",
+ "models": {
+  "deepseek-v4-flash": {
+   "cache_read": 0.007,
+   "input": 0.22,
+   "output": 0.66
+  },
+  "deepseek-v4-pro": {
+   "cache_read": 0.022,
+   "input": 0.66,
+   "output": 1.98
+  },
+  "deepseek-v4.1-flash": {
+   "cache_read": 0.003,
+   "input": 0.15,
+   "output": 0.6
+  },
+  "gemma4": {
+   "cache_read": 0.05,
+   "input": 0.14,
+   "output": 0.4
+  },
+  "glm-5.1": {
+   "cache_read": 0.2,
+   "input": 1.0,
+   "output": 3.2
+  },
+  "glm-5.2": {
+   "cache_read": 0.26,
+   "input": 1.4,
+   "output": 4.4
+  },
+  "glm-5.3": {
+   "cache_read": 0.26,
+   "input": 1.4,
+   "output": 4.4
+  },
+  "glm-5.3-flash": {
+   "cache_read": 0.03,
+   "input": 0.15,
+   "output": 0.5
+  },
+  "gpt-oss:120b": {
+   "cache_read": 0.014,
+   "input": 0.15,
+   "output": 0.6
+  },
+  "gpt-oss:20b": {
+   "cache_read": 0.035,
+   "input": 0.07,
+   "output": 0.3
+  },
+  "kimi-k2.6": {
+   "cache_read": 0.16,
+   "input": 0.95,
+   "output": 4.0
+  },
+  "kimi-k2.7-code": {
+   "cache_read": 0.19,
+   "input": 0.95,
+   "output": 4.0
+  },
+  "kimi-k3": {
+   "cache_read": 0.3,
+   "input": 3.0,
+   "output": 15.0
+  },
+  "minimax-m2.7": {
+   "cache_read": 0.06,
+   "input": 0.3,
+   "output": 1.2
+  },
+  "minimax-m3": {
+   "cache_read": 0.12,
+   "input": 0.6,
+   "output": 2.4
+  },
+  "mistral-large-3": {
+   "cache_read": null,
+   "input": 0.5,
+   "output": 1.5
+  },
+  "nemotron-3-nano": {
+   "cache_read": null,
+   "input": 0.06,
+   "output": 0.24
+  },
+  "nemotron-3-super": {
+   "cache_read": 0.015,
+   "input": 0.015,
+   "output": 0.6
+  },
+  "nemotron-3-ultra": {
+   "cache_read": 0.1,
+   "input": 0.1,
+   "output": 3.0
+  },
+  "qwen3.5:397b": {
+   "cache_read": null,
+   "input": 0.6,
+   "output": 3.6
+  }
+ },
+ "peak": {
+  "deepseek-v4-flash": {
+   "cache_read": 0.014,
+   "input": 0.44,
+   "output": 1.32
+  },
+  "deepseek-v4-pro": {
+   "cache_read": 0.044,
+   "input": 1.32,
+   "output": 3.96
+  },
+  "deepseek-v4.1-flash": {
+   "cache_read": 0.006,
+   "input": 0.3,
+   "output": 1.2
+  }
+ },
+ "source": "ollama.com/pricing"
+}

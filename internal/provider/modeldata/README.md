@@ -38,6 +38,16 @@ Usage:
   (`os.UserCacheDir()/pi-go/models/modelsdev-pricing.json`) on demand.
   Regenerate the embedded snapshot with `make fetch-modelsdev-pricing`.
 
+- `ollama-cloud-pricing.json` is a snapshot of the two tables on
+  https://ollama.com/pricing: standard rates and the 12:00-18:00 UTC
+  Monday-Friday peak rates, per million tokens. It prices models served by
+  Ollama Cloud (api.ollama.com); a local daemon runs the same weights for
+  free, so plain `ollama` lookups stay unpriced. Ollama publishes no pricing
+  API — models.dev's `ollama-cloud` entry carries IDs and release dates but no
+  cost fields, and `api.ollama.com/v1/models` returns IDs only — so this file
+  is scraped from the page by `make fetch-ollama-pricing`. Read through
+  `OllamaCloudCost` / `OllamaCloudPeakCost` in `ollama_pricing.go`.
+
 Update process:
 1. Refresh the two `llm-prices-*.json` files from upstream.
 2. Review new IDs and update `context-windows.json` where official context-window data is known.
@@ -48,4 +58,8 @@ Update process:
    a note rather than failing the target — check the output for `skip` lines.
 4. Run `make fetch-modelsdev-pricing` to regenerate `modelsdev-pricing.json`
    from models.dev. It needs no API key.
-5. Run `go test ./internal/provider`.
+5. Run `make fetch-ollama-pricing` to regenerate `ollama-cloud-pricing.json`
+   from ollama.com/pricing. It needs no API key. Run it when Ollama changes a
+   price or adds a cloud model; there is no runtime refresh because the page
+   has no API behind it.
+6. Run `go test ./internal/provider`.

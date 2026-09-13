@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	ollamaapi "github.com/ollama/ollama/api"
+	ollamamodel "github.com/ollama/ollama/types/model"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -780,8 +782,12 @@ func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatRe
 	}, nil)
 }
 
-// OllamaListModels lists available models from the Ollama server.
-func OllamaListModels(ctx context.Context, baseURL string) ([]string, error) {
+// OllamaListModels lists available models from the Ollama server. The daemon's
+// /api/tags response carries each model's context window
+// (details.context_length — num_ctx for local models, the published window for
+// cloud models) and capability flags, so both come back filled in rather than
+// from a second per-model /api/show round trip.
+func OllamaListModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
@@ -794,11 +800,40 @@ func OllamaListModels(ctx context.Context, baseURL string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
-	var names []string
+	models := make([]ModelInfo, 0, len(resp.Models))
 	for _, m := range resp.Models {
-		names = append(names, m.Name)
+		info := ModelInfo{
+			ID:            m.Name,
+			OwnedBy:       m.Details.ParameterSize,
+			ContextWindow: int64(m.Details.ContextLength),
+			Capabilities:  ollamaCapabilities(m.Capabilities),
+		}
+		if m.RemoteModel != "" {
+			info.OwnedBy = m.Details.ParameterSize + " · " + m.RemoteModel
+		}
+		models = append(models, info)
 	}
-	return names, nil
+	return models, nil
+}
+
+// ollamaCapabilities maps the daemon's capability flags to the strings the
+// model table shows. Unknown flags are dropped rather than guessed at.
+func ollamaCapabilities(caps []ollamamodel.Capability) []string {
+	names := map[ollamamodel.Capability]string{
+		ollamamodel.CapabilityCompletion: "completion",
+		ollamamodel.CapabilityTools:      "tools",
+		ollamamodel.CapabilityThinking:   "thinking",
+		ollamamodel.CapabilityVision:     "vision",
+		ollamamodel.CapabilityEmbedding:  "embedding",
+	}
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if name, ok := names[c]; ok {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // OllamaContextWindowSize queries the Ollama server for the context window size
