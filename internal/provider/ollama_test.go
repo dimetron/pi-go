@@ -641,27 +641,50 @@ func TestOllamaListModelsWithMockServer(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		// Minimal Ollama list response format.
-		_, _ = w.Write([]byte(`{"models":[{"name":"llama3:latest"},{"name":"qwen2.5:7b"}]}`))
+		// A local model with a context length, and a cloud model that also
+		// names its remote counterpart — the two shapes the daemon serves.
+		_, _ = w.Write([]byte(`{"models":[
+			{"name":"llama3:latest","details":{"parameter_size":"8.0B","context_length":131072},"capabilities":["completion","tools"]},
+			{"name":"glm-5.3:cloud","remote_model":"glm-5.3","details":{"parameter_size":"321B","context_length":1048576},"capabilities":["completion","thinking"]}
+		]}`))
 	}))
 	defer srv.Close()
 
-	names, err := OllamaListModels(context.Background(), srv.URL)
+	models, err := OllamaListModels(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("OllamaListModels() error: %v", err)
 	}
-	if len(names) != 2 {
-		t.Fatalf("expected 2 models, got %d: %v", len(names), names)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d: %v", len(models), models)
 	}
 	found := map[string]bool{}
-	for _, n := range names {
-		found[n] = true
+	for _, m := range models {
+		found[m.ID] = true
 	}
 	if !found["llama3:latest"] {
 		t.Error("expected llama3:latest in results")
 	}
-	if !found["qwen2.5:7b"] {
-		t.Error("expected qwen2.5:7b in results")
+	if !found["glm-5.3:cloud"] {
+		t.Error("expected glm-5.3:cloud in results")
+	}
+	// Context windows come from details.context_length in the same response.
+	if models[0].ID != "llama3:latest" {
+		t.Fatalf("models[0].ID = %q, want llama3:latest", models[0].ID)
+	}
+	if models[0].ContextWindow != 131072 {
+		t.Errorf("llama3:latest ContextWindow = %d, want 131072", models[0].ContextWindow)
+	}
+	if models[0].OwnedBy != "8.0B" {
+		t.Errorf("llama3:latest OwnedBy = %q, want 8.0B", models[0].OwnedBy)
+	}
+	if got := strings.Join(models[0].Capabilities, ","); got != "completion,tools" {
+		t.Errorf("llama3:latest Capabilities = %q, want completion,tools", got)
+	}
+	if models[1].ContextWindow != 1048576 {
+		t.Errorf("glm-5.3:cloud ContextWindow = %d, want 1048576", models[1].ContextWindow)
+	}
+	if models[1].OwnedBy != "321B · glm-5.3" {
+		t.Errorf("glm-5.3:cloud OwnedBy = %q, want %q", models[1].OwnedBy, "321B · glm-5.3")
 	}
 }
 

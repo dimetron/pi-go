@@ -31,7 +31,7 @@ Three conventions coexist. Match the one that fits who is doing the work.
 
 | Creator | Path | Branch | Notes |
 |---|---|---|---|
-| Human / Claude Code | `<repo>/.worktrees/<branch-with-dashes>` | `fix/…`, `feat/…` | Inside the repo, so it stays within the sandbox; `.worktrees/` is gitignored |
+| Human / Claude Code | `<repo>/.worktrees/<branch-with-dashes>` | `fix/…`, `feat/…` | Inside the repo; `.worktrees/` is gitignored |
 | pi-go agent (`/run`, subagents) | `<repo>/.pi-go/tasks/<pathID>` | `pi-agent-<shortID>`, or the sanitized requested name | Created by `internal/subagent/worktree.go`; `.pi-go/` is gitignored |
 | `arbor` tool | `~/.arbor/worktrees/pi-go/<name>` | matches dir name | External tool, listed here only so `git worktree list` output is not surprising |
 
@@ -82,14 +82,7 @@ user.signingkey  = ssh-ed25519 AAAAC3Nza...
 gpg.ssh.program  = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
 ```
 
-### The sandbox breaks signing — commit with it disabled
-
-`op-ssh-sign` needs to reach the 1Password agent, which is not reachable from
-inside the sandbox. A commit attempted there either fails or, worse, succeeds
-unsigned. **Run `git commit` with the sandbox disabled.**
-
-This is not hypothetical: commits `0714568`, `a8b243b` and `bcb6d26` carry no
-signature at all, and only some commits carry a `Signed-off-by`.
+### Verify signatures by inspecting the raw object
 
 **Do not use `%G?` to check.** `gpg.ssh.allowedSignersFile` is not configured, so
 signature *verification* cannot run: `git log --show-signature` errors with
@@ -312,14 +305,6 @@ make lint           # golangci-lint v2
 make vet
 make check-cve
 ```
-
-### Two environment traps
-
-- **Tests that bind a local listener fail under the sandbox.** Anything using
-  `httptest.NewServer` panics in `newLocalListener`. `internal/cli` is affected.
-  This is not a real failure — re-run outside the sandbox before believing it.
-- **Profiling endpoints are on localhost**, so `curl localhost:6060/...` is
-  blocked by the sandbox too. See the `go-pprof` skill.
 
 ## TUI output safety: never write to stdout/stderr
 

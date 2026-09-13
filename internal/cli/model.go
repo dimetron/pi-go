@@ -39,8 +39,14 @@ or base URL set) are queried in turn.
 
 The human table shows each model's per-million-token input/output price in
 USD, from the embedded models.dev snapshot (refresh on demand with the
-/model-price-refresh slash command). Local providers (ollama, agentgateway)
-and models absent from the snapshot show no price.
+/model-price-refresh slash command). Local providers (agentgateway, and
+locally-installed Ollama models) and models absent from the snapshots show no
+price; an Ollama model tagged for Ollama Cloud ("glm-5.3:cloud",
+"deepseek-v4-flash:0731-cloud") shows the api.ollama.com rate published on
+ollama.com/pricing.
+
+Ollama, mistral and agentgateway rows also show each model's context window
+and capabilities, reported by the provider itself.
 
 Providers: anthropic, openai, gemini, mistral, xai, ollama, openrouter, agentgateway
 
@@ -256,10 +262,10 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 		return models[i].ID < models[j].ID
 	})
 
-	// mistral and agentgateway carry a context window and capabilities; the
-	// other providers carry an owner (or nothing). Build a uniform table with a
-	// Notes column that holds whichever applies.
-	hasContext := (providerName == "mistral" || providerName == "agentgateway")
+	// mistral, agentgateway and ollama carry a context window and capabilities;
+	// the other providers carry an owner (or nothing). Build a uniform table
+	// with a Notes column that holds whichever applies.
+	hasContext := (providerName == "mistral" || providerName == "agentgateway" || providerName == "ollama")
 	var header, sep string
 	if hasContext {
 		header = "| Model | Release | Price | Context | Notes |"
@@ -298,12 +304,39 @@ func printProviderModels(providerName string, models []provider.ModelInfo) {
 // modelPrice returns a human-readable per-million-token price for a model, or
 // "" when the pricing snapshot has no entry for it. Prices come from the
 // embedded models.dev snapshot (refreshed daily at startup); local providers
-// (ollama, agentgateway) and unknown models have no price and show none.
+// (agentgateway, local ollama) and unknown models have no price and show none.
+// Ollama is the one local provider that also sells: a cloud-tagged model
+// (deepseek-v4-flash:0731-cloud) runs on api.ollama.com at the per-token rates
+// published on ollama.com/pricing, vendored in the ollama-cloud pricing
+// snapshot.
 func modelPrice(providerName, modelID string) string {
+	if providerName == "ollama" && provider.IsOllamaCloudModel(modelID) {
+		if pm, ok := provider.OllamaCloudCost(ollamaCloudPriceKey(modelID)); ok {
+			return formatModelPrice(pm)
+		}
+	}
 	pm, ok := provider.CostFor(providerName, modelID)
 	if !ok {
 		return ""
 	}
+	return formatModelPrice(pm)
+}
+
+// ollamaCloudPriceKey strips the cloud tag from an Ollama model name so it
+// matches the base IDs in the ollama-cloud pricing snapshot: both the ":cloud"
+// form and the "<size>-cloud" suffix the catalog mostly uses. The part before
+// the tag is kept — a dated cloud ID (deepseek-v4-flash:0731-cloud) still
+// carries its date so the prefix lookup resolves the right base entry.
+func ollamaCloudPriceKey(modelID string) string {
+	if i := strings.LastIndex(modelID, "-cloud"); i >= 0 {
+		return modelID[:i]
+	}
+	return strings.TrimSuffix(modelID, ":cloud")
+}
+
+// formatModelPrice renders a PricingModel as the "$in/$out per 1M" figure the
+// model table shows.
+func formatModelPrice(pm provider.PricingModel) string {
 	return fmt.Sprintf("$%s/$%s per 1M", priceAmount(pm.Input), priceAmount(pm.Output))
 }
 
