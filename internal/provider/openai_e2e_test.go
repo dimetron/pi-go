@@ -340,9 +340,13 @@ func TestE2EOpenAIResponsesSystemInstruction(t *testing.T) {
 			}
 		}
 	}
-	words := strings.Fields(strings.TrimSpace(text.String()))
+	// The synthesized phase label ("[phase: final_answer]", added by
+	// parseResponsesOutput for codex-style responses) is not the model's
+	// words — strip it before counting.
+	answer := strings.ReplaceAll(text.String(), "[phase: final_answer]", "")
+	words := strings.Fields(strings.TrimSpace(answer))
 	if len(words) != 5 {
-		t.Errorf("answer = %q (%d words), want exactly five words per the instruction", text.String(), len(words))
+		t.Errorf("answer = %q (%d words), want exactly five words per the instruction", answer, len(words))
 	}
 }
 
