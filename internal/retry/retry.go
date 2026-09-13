@@ -70,6 +70,9 @@ var terminalPatterns = []string{
 	"exceeded your current quota",
 	"check your plan and billing",
 	"quota exceeded",
+	// OpenAI's prepaid-balance code (credit_balance_exhausted), which its
+	// Responses streams also send as a terminal error event.
+	"credit_balance_exhausted",
 
 	// Authentication and authorization.
 	"unauthorized",

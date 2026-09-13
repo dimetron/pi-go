@@ -378,6 +378,28 @@ func oaiGenaiToolsToResponses(tools []*genai.Tool) []responses.ToolUnionParam {
 	return out
 }
 
+// errorEventDetail reads the nested error object of a raw "error" event, whose
+// code and message the SDK's flattened union fields do not carry. Returns nil
+// when the body carries no nested object.
+func errorEventDetail(raw string) *struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+} {
+	var probe struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil || probe.Error == nil {
+		return nil
+	}
+	return &struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: probe.Error.Code, Message: probe.Error.Message}
+}
+
 // responsesStreamState holds accumulated state from Responses streaming.
 type responsesStreamState struct {
 	text             string
@@ -485,9 +507,23 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 			}
 		}
 
-		// response.error — surface as LLM error.
+		// response.error — surface as LLM error. The live API nests
+		// code/message inside an "error" object (e.g. insufficient_quota), and
+		// the SDK's flattened Code/Message fields stay empty for it, so read
+		// the raw event JSON when they are.
 		if evtType == "error" {
-			_ = yield(&model.LLMResponse{ErrorCode: evt.Code, ErrorMessage: evt.Message}, nil)
+			code, msg := evt.Code, evt.Message
+			if code == "" || msg == "" {
+				if nested := errorEventDetail(evt.AsError().RawJSON()); nested != nil {
+					if code == "" {
+						code = nested.Code
+					}
+					if msg == "" {
+						msg = nested.Message
+					}
+				}
+			}
+			_ = yield(&model.LLMResponse{ErrorCode: code, ErrorMessage: msg}, nil)
 			return true, nil
 		}
 
