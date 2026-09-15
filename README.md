@@ -602,6 +602,26 @@ Add pi to Zed's `agent_servers` in your settings:
 Then invoke via Zed's agent panel (`⌘⇧A` / `Ctrl+Shift+A`) and select "pi". The agent runs in the current Zed project
 directory with full access to pi's tools and memory.
 
+### JetBrains IDEs
+
+JetBrains IDEs (IntelliJ IDEA, GoLand, PyCharm, WebStorm, …) discover ACP agents
+from `~/.jetbrains/acp.json`. Add pi under `agent_servers`:
+
+```json
+{
+  "agent_servers": {
+    "Pi-Go": {
+      "command": "pi",
+      "args": ["acp-server", "--model", "agentgateway/ollama/glm-5.3-flash:cloud"]
+    }
+  }
+}
+```
+
+Restart the IDE so it picks up the file, then open the AI Assistant / agent panel and select "Pi-Go". The agent runs in
+the current project directory. `pi acp-server` accepts `--model` plus `--url`, `--header key=value` (repeatable) and
+`--insecure`; with no `--model` it falls back to `glm-5.2:cloud`.
+
 ### Sessions survive the server
 
 Every ACP session's transcript is written to the same store the terminal uses
