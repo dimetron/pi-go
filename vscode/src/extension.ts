@@ -2,9 +2,9 @@ import * as vscode from "vscode";
 import {
   PiGoAcpClient,
   type SessionEntry,
+  chunkText,
   SESSION_SCHEME,
   SESSION_TYPE,
-  updateText,
 } from "./acp";
 import {
   chatParts,
@@ -103,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Keep the transcript in sync from raw ACP updates (covers session/load replay).
   context.subscriptions.push(
     client.onSessionUpdate((update) => {
-      const text = updateText(update);
+      const text = chunkText(update);
       if (!text) return;
       const isUser = update.update?.sessionUpdate === "user_message_chunk";
       store.append(update.sessionId, { role: isUser ? "user" : "agent", text });
@@ -141,7 +141,7 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push(
           client.onSessionUpdate((update) => {
             if (update.sessionId !== entry.sessionId) return;
-            const text = updateText(update);
+            const text = chunkText(update);
             if (text && update.update?.sessionUpdate === "agent_message_chunk") {
               out.append(text);
             }
@@ -149,7 +149,11 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         out.appendLine(`You: ${input}`);
         out.append("pi-go: ");
-        await client.prompt(entry.sessionId, input, () => {}, new vscode.CancellationTokenSource().token);
+        await client.prompt(
+          entry.sessionId,
+          [{ type: "text", text: input }],
+          new vscode.CancellationTokenSource().token,
+        );
         out.appendLine("");
       } catch (err) {
         void vscode.window.showErrorMessage(`pi-go failed: ${errString(err)}`);
@@ -281,16 +285,19 @@ function createRequestHandler(client: PiGoAcpClient, acpId: string): vscode.Chat
     stream.progress("Talking to pi-go…");
     let wrote = false;
     try {
-      await client.prompt(
-        acpId,
-        request.prompt,
-        (chunk) => {
-          if (!chunk) return;
-          wrote = true;
-          stream.markdown(chunk);
-        },
-        token,
-      );
+      const listener = client.onSessionUpdate((update) => {
+        if (update.sessionId !== acpId) return;
+        if (update.update?.sessionUpdate !== "agent_message_chunk") return;
+        const block = update.update.content;
+        if (!block || block.type !== "text" || !block.text) return;
+        wrote = true;
+        stream.markdown(block.text);
+      });
+      try {
+        await client.prompt(acpId, [{ type: "text", text: request.prompt }], token);
+      } finally {
+        listener.dispose();
+      }
       if (!wrote) stream.markdown("_(no response)_");
       return { metadata: { agent: "pi-go" } };
     } catch (err) {
