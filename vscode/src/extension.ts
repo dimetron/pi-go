@@ -6,6 +6,15 @@ import {
   SESSION_TYPE,
   updateText,
 } from "./acp";
+import {
+  chatParts,
+  type ChatNamespaceWithSessions,
+  type ChatSessionContentProviderDto,
+  type ChatSessionItemDto,
+  type ChatSessionItemProviderDto,
+  type ChatSessionDto,
+  type ChatTurnConstructors,
+} from "./types/chatApi";
 
 const log = vscode.window.createOutputChannel("pi-go", { log: true });
 
@@ -15,90 +24,6 @@ function errString(err: unknown): string {
     return String((err as { message: unknown }).message);
   }
   return String(err);
-}
-
-/**
- * Structural types for the `chatSessionsProvider` proposed API (VS Code 1.137).
- * Not in the public @types yet; verified against the running ext host.
- */
-interface ChatSessionItemDto {
-  resource: vscode.Uri;
-  label: string;
-  description?: string | vscode.MarkdownString;
-  status?: number; // ChatSessionStatus: 0 failed, 1 completed, 2 in-progress, 3 needs-input
-  archived?: boolean;
-  tooltip?: string | vscode.MarkdownString;
-  timing?: {
-    created?: number;
-    lastRequestStarted?: number;
-    lastRequestEnded?: number;
-  };
-}
-
-interface ChatSessionDto {
-  title?: string;
-  history: unknown[];
-  activeResponseCallback?: unknown;
-  requestHandler: vscode.ChatRequestHandler | undefined;
-  options?: Record<string, unknown>;
-}
-
-interface ChatSessionItemProviderDto {
-  readonly onDidChangeChatSessionItems: vscode.Event<void>;
-  provideChatSessionItems(token: vscode.CancellationToken): vscode.ProviderResult<ChatSessionItemDto[]>;
-  resolveChatSessionItem?(item: ChatSessionItemDto, token: vscode.CancellationToken): vscode.ProviderResult<ChatSessionItemDto>;
-}
-
-interface ChatSessionContentProviderDto {
-  provideChatSessionContent(
-    resource: vscode.Uri,
-    token: vscode.CancellationToken,
-    context: unknown,
-  ): vscode.ProviderResult<ChatSessionDto>;
-}
-
-interface ChatNamespaceWithSessions {
-  registerChatSessionItemProvider(
-    chatSessionType: string,
-    provider: ChatSessionItemProviderDto,
-  ): vscode.Disposable;
-  registerChatSessionContentProvider(
-    scheme: string,
-    provider: ChatSessionContentProviderDto,
-    defaultChatParticipant: vscode.ChatParticipant,
-    capabilities?: { supportsInterruptions?: boolean },
-  ): vscode.Disposable;
-}
-
-interface ChatTurnConstructors {
-  // (prompt, command, references, participant, toolReferences, editedFileEvents, id, modelId, modeInstructions)
-  ChatRequestTurn: new (
-    prompt: string,
-    command: string | undefined,
-    references: unknown[],
-    participant: string,
-    toolReferences?: unknown[],
-    ...rest: unknown[]
-  ) => unknown;
-  // (response, result, participant, command)
-  ChatResponseTurn: new (
-    response: unknown[],
-    result: object,
-    participant: string,
-    command?: string,
-  ) => unknown;
-  ChatResponseMarkdownPart: new (value: string | vscode.MarkdownString) => unknown;
-}
-
-/** Runtime constructor access for classes the public d.ts marks unconstructible. */
-function turnCtors(): ChatTurnConstructors | undefined {
-  const ns = vscode as unknown as Record<string, unknown>;
-  const ctor = <T>(name: string): T | undefined => ns[name] as T | undefined;
-  const req = ctor<ChatTurnConstructors["ChatRequestTurn"]>("ChatRequestTurn");
-  const res = ctor<ChatTurnConstructors["ChatResponseTurn"]>("ChatResponseTurn");
-  const part = ctor<ChatTurnConstructors["ChatResponseMarkdownPart"]>("ChatResponseMarkdownPart");
-  if (!req || !res || !part) return undefined;
-  return { ChatRequestTurn: req, ChatResponseTurn: res, ChatResponseMarkdownPart: part };
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +165,10 @@ function activateNative(
   refresh: vscode.EventEmitter<void>,
   chat: ChatNamespaceWithSessions,
 ): void {
-  const ctors = turnCtors();
-  if (!ctors) log.error("chat turn constructors not found; history will render empty");
+  const ctors = chatParts() as ChatTurnConstructors | undefined;
+  if (!ctors || !ctors.ChatRequestTurn || !ctors.ChatResponseTurn || !ctors.ChatResponseMarkdownPart) {
+    log.error("chat turn constructors not found; history will render empty");
+  }
 
   // -------------------------------------------------------------------------
   // Item provider — sessions listed in the Agent Sessions view.
