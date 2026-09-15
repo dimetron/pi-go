@@ -202,10 +202,10 @@ func (m *mockAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 
 	m.mu.Lock()
 	if s != nil {
+		s.transcript = append(s.transcript, mockChunk{role: "user", text: promptText})
 		if resourceEcho != "" {
 			s.transcript = append(s.transcript, mockChunk{role: "user", text: resourceEcho})
 		}
-		s.transcript = append(s.transcript, mockChunk{role: "user", text: promptText})
 		if m.emitThoughts {
 			s.transcript = append(s.transcript, mockChunk{role: "agent", thought: true, text: "thinking about: " + truncate(promptText, 60)})
 		}
