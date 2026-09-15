@@ -134,6 +134,8 @@ export interface ChatTurnConstructors {
   ) => unknown;
   ChatResponseWarningPart: new (value: string | vscode.MarkdownString) => unknown;
   ChatResponseInfoPart: new (value: string | vscode.MarkdownString) => unknown;
+  /** (id, label, values) — chatParticipantAdditions */
+  ChatCompletionItem: new (id: string, label: string, values: unknown[]) => unknown;
 }
 
 const WANTED: ReadonlyArray<keyof ChatTurnConstructors> = [
@@ -146,6 +148,7 @@ const WANTED: ReadonlyArray<keyof ChatTurnConstructors> = [
   "ChatResponseThinkingProgressPart",
   "ChatResponseWarningPart",
   "ChatResponseInfoPart",
+  "ChatCompletionItem",
 ];
 
 /** Constructors the ext host exports at runtime; missing entries mean the
