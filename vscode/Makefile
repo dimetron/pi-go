@@ -15,6 +15,15 @@ MODE ?= mock
 OUTDIR ?= $(HOME)/.vscode-ext
 VSIXFILE ?= $(OUTDIR)/pi-go-vscode.vsix
 
+# Unit tests with the `vscode` module mocked (--preload registers the stub
+# before any source import resolves). Coverage gate: 90% line coverage.
+.PHONY: test coverage
+test:
+	$(BUN) test --preload ./test/mock-vscode.ts
+
+coverage:
+	$(BUN) test --preload ./test/mock-vscode.ts --coverage
+
 .PHONY: build package install release smoke clean
 
 build:
