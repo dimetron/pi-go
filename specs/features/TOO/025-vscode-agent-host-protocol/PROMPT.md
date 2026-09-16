@@ -97,9 +97,12 @@ contracted consumers and the primary conformance gate.
 1. **Wire plumbing** — WS server (gorilla), JSON-RPC 2.0 framing (1 msg/frame), token
    handshake, `initialize`/`ping`/`subscribe`/`unsubscribe`/`reconnect` entry points,
    `StateManager` (reducers, global monotonic `serverSeq`, per-channel 1024 ring,
-   echo/rejection semantics), `action` broadcast. files:
+   echo/rejection semantics), `action` broadcast; **adds module dep**
+   `github.com/microsoft/agent-host-protocol/clients/go` v0.6.0 (`ahptypes` used by
+   all later slices). files:
    `internal/ahp/server/host.go`, `internal/ahp/server/connection.go`,
    `internal/ahp/server/common.go`, `internal/ahp/server/state.go`,
+   `go.mod`, `go.sum`,
    `internal/ahp/server/host_test.go`, `internal/ahp/server/connection_test.go`,
    `internal/ahp/server/state_test.go`, verify:
    `go test ./internal/ahp/server/...`, parallel-safe: no
@@ -158,7 +161,8 @@ contracted consumers and the primary conformance gate.
     subscribe→snapshot, createSession→prompt→ordered parts/tool-call→turnComplete,
     cancellation, reconnect replay + snapshot fallback, `fetchTurns`, `listSessions`+
     root notifications, authenticate flow, envelope ordering/origin/seq monotonicity.
-    files: `internal/ahp/server/conformance_test.go`, `go.mod`, `go.sum`, verify:
+    dependency already added in slice 1. files:
+    `internal/ahp/server/conformance_test.go`, verify:
     `go test -tags integration ./internal/ahp/server/...`, parallel-safe: no
 
 ## Execution Model

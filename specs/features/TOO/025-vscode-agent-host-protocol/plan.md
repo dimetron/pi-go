@@ -9,6 +9,13 @@ Conventions: stdlib `testing` only, hand-rolled mocks, table-driven where shape 
 `t.TempDir()` stores, `t.Chdir` when needed, `slog` for logs (never to stdout of the host).
 Wire types always imported from `ahptypes` (generated; CI-parity with the TS spec).
 
+**Step 1 also adds the module dependency** `github.com/microsoft/agent-host-protocol/
+clients/go` (v0.6.0) — `ahptypes` is needed by every later slice (Snapshot, ActionEnvelope,
+error codes), so it must land in Step 1, not Step 10. Its transitive dep
+`github.com/coder/websocket` coexists with `gorilla/websocket` (distinct module paths).
+Steps 1–8 use the Go client lib's types only; Step 10 additionally uses its client
+(`ahp.Connect`/`ahpws.Connect`) in tests.
+
 Slice index (details in the sections below; /run ticks the detailed `- [ ] Step N`
 checkboxes):
 1. Wire plumbing — WebSocket + JSON-RPC + state manager
@@ -26,6 +33,8 @@ checkboxes):
 
 - [ ] Step 1: Wire plumbing — WS server, JSON-RPC framing, state manager
   **Implement:**
+  - Add module dep `github.com/microsoft/agent-host-protocol/clients/go` v0.6.0
+    (`go.mod`/`go.sum`; `ahptypes` wire types used by all later slices).
   - `internal/ahp/server/host.go`: `Config` (Addr/Token/Model/BaseURL/Headers/Insecure/
     System/SessionService/LoadConfig/SandboxRootFunc/Logger), `NewHost`, `ListenAndServe`
     — HTTP server on `cfg.Addr`, `GET /ahp` upgrade route, one goroutine per connection
@@ -48,7 +57,8 @@ checkboxes):
     if gap > buffer; `origin{clientId, clientSeq}` on echoes; `rejectionReason` echo for
     invalid client actions (silent-ignore for unknown channels, per spec).
   - Files: `internal/ahp/server/{host.go, connection.go, common.go, state.go}`,
-    `internal/ahp/server/{host_test.go, connection_test.go, state_test.go}`.
+    `go.mod`, `go.sum`, `internal/ahp/server/{host_test.go, connection_test.go,
+    state_test.go}`.
   - **Verify:** `go build ./... && go test ./internal/ahp/server/...`
   - Depends on: nothing. Parallel-safe: **no**.
 
@@ -169,8 +179,8 @@ checkboxes):
 
 - [ ] Step 10: Conformance vs official Go client
   - `internal/ahp/server/conformance_test.go` (build tag `integration`): spin host in
-    process on ephemeral port; drive with `ahp.Connect` + `ahpws.Connect` (dep:
-    `github.com/microsoft/agent-host-protocol/clients/go` v0.6.0); scenarios:
+    process on ephemeral port; drive with `ahp.Connect` + `ahpws.Connect` (dep already
+    added in Step 1:
     (a) initialize negotiation + snapshots, (b) subscribe→snapshot of stored session,
     (c) createSession → `chat/turnStarted` dispatch → prompt → ordered
     responsePart/delta/toolCall actions → turnComplete, (d) toolCallConfirmed rejection
