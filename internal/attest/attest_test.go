@@ -8,13 +8,18 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	in_toto "github.com/in-toto/attestation/go/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
+	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestFileDigest_KnownVector(t *testing.T) {
@@ -338,5 +343,284 @@ func TestNewVerifierWithMaterial_BadRepo(t *testing.T) {
 		if _, err := NewVerifierWithMaterial(repo, material); err == nil {
 			t.Errorf("NewVerifierWithMaterial(%q) succeeded, want an error", repo)
 		}
+	}
+}
+
+// ---- coverage additions ----
+
+// TestFileDigest_Directory: a path that opens but cannot be read (a
+// directory) must surface as a hashing error, not a panic or a silent "".
+func TestFileDigest_Directory(t *testing.T) {
+	if _, err := FileDigest(t.TempDir()); err == nil || !strings.Contains(err.Error(), "hashing") {
+		t.Errorf("FileDigest(dir) error = %v, want a hashing error", err)
+	}
+}
+
+// roundTripFunc adapts a function to http.RoundTripper, so fetch behavior
+// can be driven without any network at all.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestFetch_DefaultBaseURL(t *testing.T) {
+	var gotHost string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotHost = r.URL.Host
+		return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody}, nil
+	})
+	f := &Fetcher{HTTPClient: &http.Client{Transport: rt}}
+
+	_, err := f.Fetch(context.Background(), DefaultRepo, "abc")
+	if !errors.Is(err, ErrNoAttestations) {
+		t.Fatalf("Fetch error = %v, want ErrNoAttestations", err)
+	}
+	if gotHost != "api.github.com" {
+		t.Errorf("request went to %q, want api.github.com", gotHost)
+	}
+}
+
+func TestFetch_TransportError(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused by test")
+	})
+	f := &Fetcher{HTTPClient: &http.Client{Transport: rt}}
+
+	_, err := f.Fetch(context.Background(), DefaultRepo, "abc")
+	if err == nil || errors.Is(err, ErrNoAttestations) || !strings.Contains(err.Error(), "fetching attestations") {
+		t.Errorf("Fetch error = %v, want a wrapped transport error", err)
+	}
+}
+
+// A repo whose name carries a control character must fail while the request
+// is being built, before anything is sent.
+func TestFetch_RequestBuildError(t *testing.T) {
+	f := &Fetcher{BaseURL: "https://unit.test"}
+	_, err := f.Fetch(context.Background(), "own\nname", "abc")
+	if err == nil || !strings.Contains(err.Error(), "creating attestation request") {
+		t.Errorf("Fetch error = %v, want a request-creation error", err)
+	}
+}
+
+func TestFetch_BadJSON(t *testing.T) {
+	srv := fetchServer(t, http.StatusOK, `not json`)
+	f := &Fetcher{BaseURL: srv.URL}
+
+	_, err := f.Fetch(context.Background(), DefaultRepo, "abc")
+	if err == nil || !strings.Contains(err.Error(), "decoding attestations") {
+		t.Errorf("Fetch error = %v, want a decode error", err)
+	}
+}
+
+// A 200 whose every bundle is unreadable is, as far as this package can
+// answer, an artifact with no attestations at all.
+func TestFetch_AllBundlesUnparseable(t *testing.T) {
+	srv := fetchServer(t, http.StatusOK, `{"attestations":[{"bundle":{"mediaType":"nonsense"}}]}`)
+	f := &Fetcher{BaseURL: srv.URL}
+
+	_, err := f.Fetch(context.Background(), DefaultRepo, "abc")
+	if !errors.Is(err, ErrNoAttestations) {
+		t.Fatalf("Fetch error = %v, want ErrNoAttestations", err)
+	}
+}
+
+func TestTUFCacheDir_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "") // Windows reads this, not HOME.
+
+	if _, err := TUFCacheDir(); err == nil {
+		t.Error("TUFCacheDir() succeeded without a home directory, want an error")
+	}
+}
+
+func structPredicate(t *testing.T, raw string) *structpb.Struct {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatal(err)
+	}
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// The newResult branches below run for every verified bundle, but a fixture
+// exercises only one shape at a time; building VerificationResults by hand
+// pins each branch without needing a signed bundle per case.
+func TestNewResult(t *testing.T) {
+	signedAt := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	const san = "https://github.com/dimetron/pi-go/.github/workflows/release.yml@refs/tags/v0.0.74"
+
+	t.Run("nil statement", func(t *testing.T) {
+		if _, err := newResult(&verify.VerificationResult{}); err == nil ||
+			!strings.Contains(err.Error(), "no in-toto statement") {
+			t.Errorf("newResult error = %v, want the no-statement error", err)
+		}
+	})
+
+	t.Run("provenance", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateSLSAProvenanceV1,
+				Predicate:     structPredicate(t, slsaV1Predicate),
+			},
+			Signature:          &verify.SignatureVerificationResult{Certificate: &certificate.Summary{SubjectAlternativeName: san}},
+			VerifiedTimestamps: []verify.TimestampVerificationResult{{Timestamp: signedAt}},
+		}
+		got, err := newResult(res)
+		if err != nil {
+			t.Fatalf("newResult: %v", err)
+		}
+		if got.PredicateType != PredicateSLSAProvenanceV1 {
+			t.Errorf("PredicateType = %q", got.PredicateType)
+		}
+		if got.SignerIdentity != san {
+			t.Errorf("SignerIdentity = %q, want %q", got.SignerIdentity, san)
+		}
+		if !got.SignedAt.Equal(signedAt) {
+			t.Errorf("SignedAt = %v, want %v", got.SignedAt, signedAt)
+		}
+		want := &Provenance{
+			Repository: "github.com/dimetron/pi-go",
+			Workflow:   ".github/workflows/release.yml",
+			Ref:        "refs/tags/v0.0.74",
+			Commit:     "4086645aa1f2c3d4e5f60718293a4b5c6d7e8f90",
+			RunURL:     "https://github.com/dimetron/pi-go/actions/runs/1234/attempts/1",
+			BuildType:  "https://actions.github.io/buildtypes/workflow/v1",
+		}
+		if !reflect.DeepEqual(got.Provenance, want) {
+			t.Errorf("Provenance =\n%+v\nwant\n%+v", got.Provenance, want)
+		}
+		if len(got.Predicate) == 0 {
+			t.Error("raw predicate was dropped")
+		}
+	})
+
+	// A verified bundle whose provenance predicate is missing the fields we
+	// read must still produce a result — just a thinner one.
+	t.Run("provenance without fields", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateSLSAProvenanceV1,
+				Predicate:     structPredicate(t, `{"buildDefinition":{}}`),
+			},
+		}
+		got, err := newResult(res)
+		if err != nil {
+			t.Fatalf("newResult: %v", err)
+		}
+		if got.Provenance == nil || *got.Provenance != (Provenance{}) || got.SBOM != nil || got.SignerIdentity != "" || !got.SignedAt.IsZero() {
+			t.Errorf("expected a bare result, got %+v", got)
+		}
+	})
+
+	t.Run("unparseable provenance", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateSLSAProvenanceV1,
+				Predicate:     structPredicate(t, `{"buildDefinition": "not an object"}`),
+			},
+		}
+		if _, err := newResult(res); err == nil || !strings.Contains(err.Error(), "parsing provenance predicate") {
+			t.Errorf("newResult error = %v, want a provenance-parse error", err)
+		}
+	})
+
+	t.Run("spdx", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateSPDXPrefix + "Ref",
+				Predicate:     structPredicate(t, spdxPredicate),
+			},
+		}
+		got, err := newResult(res)
+		if err != nil {
+			t.Fatalf("newResult: %v", err)
+		}
+		if got.SBOM == nil || got.SBOM.Format != "SPDX" || got.SBOM.Packages != 4 {
+			t.Errorf("SBOM = %+v, want an SPDX summary of 4 packages", got.SBOM)
+		}
+	})
+
+	t.Run("cyclonedx", func(t *testing.T) {
+		const doc = `{
+		  "specVersion": "1.5",
+		  "metadata": {"component": {"name": "pi"}},
+		  "components": [{"name": "a", "purl": "pkg:golang/example.com/a@v1"}]
+		}`
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateCycloneDX,
+				Predicate:     structPredicate(t, doc),
+			},
+		}
+		got, err := newResult(res)
+		if err != nil {
+			t.Fatalf("newResult: %v", err)
+		}
+		if got.SBOM == nil || got.SBOM.Name != "pi" || got.SBOM.Version != "1.5" {
+			t.Errorf("SBOM = %+v", got.SBOM)
+		}
+		if !reflect.DeepEqual(got.SBOM.Ecosystems, map[string]int{"golang": 1}) {
+			t.Errorf("ecosystems = %v", got.SBOM.Ecosystems)
+		}
+	})
+
+	t.Run("malformed SBOM predicate", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateCycloneDX,
+				Predicate:     structPredicate(t, `{"specVersion": 5}`),
+			},
+		}
+		if _, err := newResult(res); err == nil || !strings.Contains(err.Error(), "parsing CycloneDX predicate") {
+			t.Errorf("newResult error = %v, want a CycloneDX-parse error", err)
+		}
+	})
+
+	t.Run("unreadable predicate", func(t *testing.T) {
+		// A predicate string with invalid UTF-8 cannot be marshaled back to
+		// JSON; newResult must report it instead of returning garbage.
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{
+				PredicateType: PredicateSLSAProvenanceV1,
+				Predicate: &structpb.Struct{Fields: map[string]*structpb.Value{
+					"x": structpb.NewStringValue("\xff"),
+				}},
+			},
+		}
+		if _, err := newResult(res); err == nil || !strings.Contains(err.Error(), "reading predicate") {
+			t.Errorf("newResult error = %v, want a read-predicate error", err)
+		}
+	})
+
+	t.Run("unknown predicate type", func(t *testing.T) {
+		res := &verify.VerificationResult{
+			Statement: &in_toto.Statement{PredicateType: "https://example.com/other"},
+		}
+		got, err := newResult(res)
+		if err != nil {
+			t.Fatalf("newResult: %v", err)
+		}
+		if got.Provenance != nil || got.SBOM != nil {
+			t.Errorf("unknown predicate parsed as %+v", got)
+		}
+	})
+}
+
+// TestVerify_DigestMismatch: a well-formed digest that binds no subject in
+// the bundle must fail inside the Sigstore verifier, not earlier.
+func TestVerify_DigestMismatch(t *testing.T) {
+	material := loadPinnedTrustRoot(t)
+	b := loadFixtureBundle(t)
+
+	v, err := NewVerifierWithMaterial(DefaultRepo, material)
+	if err != nil {
+		t.Fatalf("NewVerifierWithMaterial: %v", err)
+	}
+
+	if _, err := v.Verify(b, strings.Repeat("ab", 32)); err == nil {
+		t.Fatal("Verify succeeded for a digest the bundle does not contain")
 	}
 }
