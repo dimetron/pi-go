@@ -1,0 +1,13 @@
+<!-- Walkthrough step: start a new session. Theme-aware via VS Code color
+     variables so it renders correctly in light and dark themes. -->
+<svg width="240" height="140" viewBox="0 0 240 140" xmlns="http://www.w3.org/2000/svg">
+  <rect x="16" y="20" width="208" height="100" rx="8" fill="var(--vscode-input-background)" stroke="var(--vscode-input-border)" stroke-width="2"/>
+  <rect x="32" y="34" width="130" height="22" rx="4" fill="none" stroke="var(--vscode-charts-green)" stroke-width="2"/>
+  <path d="M92 45 L92 38" fill="none" stroke="var(--vscode-charts-green)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M92 45 L92 52" fill="none" stroke="var(--vscode-charts-green)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="32" y="64" width="176" height="0" fill="none"/>
+  <rect x="32" y="66" width="130" height="22" rx="4" fill="none" stroke="var(--vscode-descriptionForeground)" stroke-width="2" opacity="0.6"/>
+  <rect x="32" y="98" width="130" height="22" rx="4" fill="none" stroke="var(--vscode-descriptionForeground)" stroke-width="2" opacity="0.3"/>
+  <circle cx="188" cy="44" r="16" fill="var(--vscode-button-background)"/>
+  <path d="M182 44 L194 44 M188 38 L188 50" stroke="var(--vscode-button-foreground)" stroke-width="3" stroke-linecap="round"/>
+</svg>

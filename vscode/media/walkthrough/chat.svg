@@ -1,0 +1,10 @@
+<!-- Walkthrough step: open the pi-go chat tab. Theme-aware via VS Code color
+     variables so it renders correctly in light and dark themes. -->
+<svg width="240" height="140" viewBox="0 0 240 140" xmlns="http://www.w3.org/2000/svg">
+  <rect x="16" y="20" width="208" height="100" rx="8" fill="var(--vscode-input-background)" stroke="var(--vscode-input-border)" stroke-width="2"/>
+  <path d="M96 52 C96 44 104 40 120 40 C136 40 144 44 144 52 C144 60 136 64 120 64 C116 64 112 64 108 63 L96 72 L98 61 C96 58 96 55 96 52 Z" fill="none" stroke="var(--vscode-charts-blue)" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M108 48 C112 48 116 48 132 48" fill="none" stroke="var(--vscode-charts-blue)" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M108 55 C114 55 120 55 128 55" fill="none" stroke="var(--vscode-charts-blue)" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="32" y="88" width="176" height="20" rx="4" fill="var(--vscode-editorWidget-background)" stroke="var(--vscode-focusBorder)" stroke-width="2"/>
+  <text x="42" y="102" font-family="var(--vscode-font-family, sans-serif)" font-size="12" fill="var(--vscode-descriptionForeground)">Ask pi-go…</text>
+</svg>

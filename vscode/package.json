@@ -11,6 +11,7 @@
   "categories": ["AI", "Chat"],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:pi-go.start",
     "onChatSession:pi-go",
     "onLanguageModelChatProvider:pi-go",
@@ -158,6 +159,55 @@
       {
         "vendor": "pi-go",
         "displayName": "pi-go"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "pi-go.getstarted",
+        "title": "Get Started with pi-go",
+        "description": "Use pi-go as a native ACP coding agent in VS Code.",
+        "steps": [
+          {
+            "id": "pi-go.getstarted.configure",
+            "title": "Point pi-go at your pi binary",
+            "description": "pi-go needs the path to the __`pi` executable__ it should run in ACP mode. Set `pi-go.command` if `pi` is not already on your PATH. Only change this if the default does not find your binary.\n[Open Settings](command:workbench.action.openSettings?%22pi-go.command%22)",
+            "media": {
+              "image": "media/walkthrough/configure.svg",
+              "altText": "The pi-go.command setting pointing at the pi binary"
+            },
+            "completionEvents": ["onSettingChanged:pi-go.command"]
+          },
+          {
+            "id": "pi-go.getstarted.chat",
+            "title": "Open the pi-go chat",
+            "description": "Chat with the pi-go agent in a dedicated editor tab. Use the `cmd+alt+u` keybinding to focus it from anywhere.\n[Open the pi-go Chat](command:pi-go.chat.focus)",
+            "media": {
+              "image": "media/walkthrough/chat.svg",
+              "altText": "The pi-go chat tab with its prompt input"
+            },
+            "completionEvents": ["onView:pi-go.chat", "onView:pi-go.chatSecondary"]
+          },
+          {
+            "id": "pi-go.getstarted.session",
+            "title": "Start a new session",
+            "description": "Each conversation is a session, saved to your pi-go history so you can pick it up again later from the Sessions view in the pi-go activity bar.\n[Start a New Session](command:pi-go.newSession)",
+            "media": {
+              "image": "media/walkthrough/session.svg",
+              "altText": "A new session being added to the session list"
+            },
+            "completionEvents": ["onCommand:pi-go.newSession"]
+          },
+          {
+            "id": "pi-go.getstarted.attach",
+            "title": "Attach a file to your prompt",
+            "description": "Give the agent context without pasting code: attach files from your workspace to the prompt before sending it.\n[Attach a File](command:pi-go.attachFile)",
+            "media": {
+              "image": "media/walkthrough/attach.svg",
+              "altText": "A file being attached to the chat prompt"
+            },
+            "completionEvents": ["onCommand:pi-go.attachFile"]
+          }
+        ]
       }
     ],
     "configuration": {

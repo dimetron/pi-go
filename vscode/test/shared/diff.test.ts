@@ -33,6 +33,13 @@ describe("lineDiff", () => {
     expect(types(out2)).toEqual(["c:a", "a:b", "c:c"]);
   });
 
+  it("reads a trailing newline as an extra empty line", () => {
+    expect(lineDiff("a", "a\n")).toEqual([
+      { type: "ctx", text: "a" },
+      { type: "add", text: "" },
+    ]);
+  });
+
   it("falls back to naive del/add for oversized inputs", () => {
     const big = Array.from({ length: 4001 }, (_, i) => `line${i}`).join("\n");
     const out = lineDiff(big, big);

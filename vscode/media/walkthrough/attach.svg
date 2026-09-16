@@ -1,0 +1,9 @@
+<!-- Walkthrough step: attach a file to the prompt. Theme-aware via VS Code
+     color variables so it renders correctly in light and dark themes. -->
+<svg width="240" height="140" viewBox="0 0 240 140" xmlns="http://www.w3.org/2000/svg">
+  <rect x="16" y="20" width="208" height="100" rx="8" fill="var(--vscode-input-background)" stroke="var(--vscode-input-border)" stroke-width="2"/>
+  <path d="M62 38 L106 38 L134 66 L134 102 L62 102 Z" fill="var(--vscode-editorWidget-background)" stroke="var(--vscode-charts-blue)" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M106 38 L106 66 L134 66" fill="none" stroke="var(--vscode-charts-blue)" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M76 78 L120 78 M76 88 L104 88" stroke="var(--vscode-descriptionForeground)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M156 56 C150 50 152 42 158 40 C163 38 168 41 168 46 C168 52 160 56 154 62 L144 72 C140 76 138 82 142 86 C146 90 152 88 156 84 L168 72" fill="none" stroke="var(--vscode-charts-orange)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
