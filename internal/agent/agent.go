@@ -814,7 +814,7 @@ var contextFileNames = []string{
 func LoadInstruction(baseInstruction string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), "")
+		return prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), os.Getenv("LANG"), "")
 	}
 	home, _ := os.UserHomeDir()
 	return loadInstructionFrom(baseInstruction, cwd, home)
@@ -861,23 +861,123 @@ func LoadInstructionPartsFor(baseInstruction, cwd string) InstructionParts {
 func LoadInstructionParts(baseInstruction string) InstructionParts {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), "")}
+		return InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), os.Getenv("LANG"), "")}
 	}
 	home, _ := os.UserHomeDir()
 	return loadInstructionPartsFrom(baseInstruction, cwd, home)
 }
 
 // prependEnvironmentContext adds the process context before the built-in prompt
-// so the agent has authoritative values for common shell variables.
-func prependEnvironmentContext(baseInstruction, home, user, pwd, cwd string) string {
+// so the agent has authoritative values for common shell variables. LANG is
+// mapped to a language name and stated as the agent's required response
+// language; it is omitted when LANG is unset or empty.
+func prependEnvironmentContext(baseInstruction, home, user, pwd, lang, cwd string) string {
 	if pwd == "" {
 		pwd = cwd
 	}
-	return fmt.Sprintf("# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=%q\n- USER=%q\n- PWD=%q\n\n%s", home, user, pwd, baseInstruction)
+	env := fmt.Sprintf("# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=%q\n- USER=%q\n- PWD=%q\n", home, user, pwd)
+	if lang != "" {
+		env += fmt.Sprintf("\nLanguage: %s is the required language for your responses.\n", languageName(lang))
+	}
+	return env + "\n" + baseInstruction
+}
+
+// languageName maps a POSIX locale (e.g. "en_US.UTF-8") to a human-readable
+// language name for the system prompt. It returns the raw value unchanged
+// when the primary subtag has no known name, so nothing is invented.
+func languageName(lang string) string {
+	primary := strings.SplitN(lang, ".", 2)[0]   // strip codeset: en_US.UTF-8 -> en_US
+	primary = strings.SplitN(primary, "@", 2)[0] // strip modifier: en_US@cyrillic -> en_US
+	region := strings.SplitN(primary, "_", 2)
+	code := strings.ToLower(region[0])
+	name, ok := localeLanguageNames[code]
+	if !ok {
+		return lang
+	}
+	if len(region) == 2 {
+		if country, ok := localeRegionNames[strings.ToUpper(region[1])]; ok {
+			return name + " (" + country + ")"
+		}
+	}
+	return name
+}
+
+// localeLanguageNames maps ISO 639-1 primary language subtags to names.
+var localeLanguageNames = map[string]string{
+	"ar": "Arabic",
+	"bn": "Bengali",
+	"cs": "Czech",
+	"da": "Danish",
+	"de": "German",
+	"el": "Greek",
+	"en": "English",
+	"es": "Spanish",
+	"fa": "Persian",
+	"fi": "Finnish",
+	"fr": "French",
+	"he": "Hebrew",
+	"hi": "Hindi",
+	"hu": "Hungarian",
+	"id": "Indonesian",
+	"it": "Italian",
+	"ja": "Japanese",
+	"ko": "Korean",
+	"nb": "Norwegian (Bokmål)",
+	"nl": "Dutch",
+	"nn": "Norwegian (Nynorsk)",
+	"no": "Norwegian",
+	"pl": "Polish",
+	"pt": "Portuguese",
+	"ro": "Romanian",
+	"ru": "Russian",
+	"sv": "Swedish",
+	"th": "Thai",
+	"tr": "Turkish",
+	"uk": "Ukrainian",
+	"vi": "Vietnamese",
+	"zh": "Chinese",
+}
+
+// localeRegionNames maps ISO 3166-1 region subtags to country names for the
+// common locales, so en_US reads "English (United States)".
+var localeRegionNames = map[string]string{
+	"AT": "Austria",
+	"BE": "Belgium",
+	"BR": "Brazil",
+	"CA": "Canada",
+	"CH": "Switzerland",
+	"CN": "China",
+	"DE": "Germany",
+	"DK": "Denmark",
+	"ES": "Spain",
+	"FI": "Finland",
+	"FR": "France",
+	"GB": "United Kingdom",
+	"GR": "Greece",
+	"HK": "Hong Kong",
+	"IL": "Israel",
+	"IN": "India",
+	"IT": "Italy",
+	"JP": "Japan",
+	"KR": "South Korea",
+	"MX": "Mexico",
+	"NL": "Netherlands",
+	"NO": "Norway",
+	"PL": "Poland",
+	"PT": "Portugal",
+	"RO": "Romania",
+	"RU": "Russia",
+	"SE": "Sweden",
+	"TH": "Thailand",
+	"TR": "Turkey",
+	"TW": "Taiwan",
+	"UA": "Ukraine",
+	"US": "United States",
+	"VN": "Vietnam",
 }
 
 func loadInstructionPartsFrom(baseInstruction, cwd, home string) InstructionParts {
-	parts := InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), cwd)}
+	parts := InstructionParts{Base: prependEnvironmentContext(baseInstruction, os.Getenv("HOME"), os.Getenv("USER"), os.Getenv("PWD"), os.Getenv("LANG"), cwd)}
 
 	if contents := discoverContextFiles(cwd, home); len(contents) > 0 {
 		parts.Rules = "\n\n# Project Rules\n\n" + strings.Join(contents, "\n\n")
