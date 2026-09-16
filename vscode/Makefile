@@ -8,13 +8,14 @@ CODE ?= $(shell for c in \
 	  "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" \
 	  code; do command -v "$$c" >/dev/null 2>&1 && { echo "$$c"; break; }; done)
 VERSION ?= $(shell sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' package.json | head -1)
+MODE ?= mock
 
 # Local build output lives outside the repo so branches and worktrees never see
 # stale artifacts, and VSIXes never risk being committed. Overridable.
 OUTDIR ?= $(HOME)/.vscode-ext
 VSIXFILE ?= $(OUTDIR)/pi-go-vscode.vsix
 
-.PHONY: build package install release clean
+.PHONY: build package install release smoke clean
 
 build:
 	$(BUN) run compile
@@ -25,6 +26,11 @@ package: build
 
 install: package
 	"$(CODE)" --install-extension "$(VSIXFILE)" --force
+
+# Launch the editor in an isolated profile and assert the extension activates
+# and the pi acp-server answers. Modes: mock (default), dev, installed.
+smoke: build
+	chmod +x scripts/smoke.sh && scripts/smoke.sh $(MODE)
 
 # Production-only VSIX named for the release, e.g. pi-go-vscode-0.3.0.vsix —
 # the artifact the CI release workflow attaches to GitHub releases. Unaffected
