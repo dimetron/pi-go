@@ -40,6 +40,7 @@ function errString(err: unknown): string {
 // ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext): void {
+  log.info(`activating pi-go extension (version ${context.extension.packageJSON.version as string})`);
   const client = new PiGoAcpClient();
   const store = new TranscriptStore();
   const refresh = new vscode.EventEmitter<void>();
@@ -102,6 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Sessions tree with the running-prompt badge (also drives pi-go.openSession
   // / pi-go.newSession).
   registerSessionsTree(context, client, store, refresh, active, panel);
+  log.info("chat panel and sessions tree registered");
 
   // Fallback: quick one-shot prompt through an output channel.
   let quickChat: vscode.OutputChannel | undefined;
@@ -137,6 +139,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  log.info("pi-go extension activated");
 }
 
 function activateNative(

@@ -70,6 +70,7 @@ export class PiGoAcpClient implements vscode.Disposable {
       throw new Error(`acp-server is not running (${command})`);
     }
 
+    log.info(`spawning acp-server: ${command} ${args.join(" ")} (cwd ${cwd})`);
     this.process = spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
     this.process.on("error", (err) => {
       this.lastSpawnFailed = Date.now();
@@ -96,6 +97,7 @@ export class PiGoAcpClient implements vscode.Disposable {
         for (const listener of this.listeners) listener(params);
       });
     this.connection = client.connect(stream);
+    log.debug("waiting for acp-server initialize response…");
     await this.initializeOnce();
     return this.connection;
   }
@@ -110,6 +112,7 @@ export class PiGoAcpClient implements vscode.Disposable {
       clientInfo: { name: "pi-go-vscode", version: "0.1.0" },
     });
     if (init.protocolVersion !== acp.PROTOCOL_VERSION) {
+      log.error(`unsupported ACP protocol version ${String(init.protocolVersion)}`);
       throw new Error(`unsupported ACP protocol version ${String(init.protocolVersion)}`);
     }
     this.caps = {
@@ -117,6 +120,10 @@ export class PiGoAcpClient implements vscode.Disposable {
       supportsList: init.agentCapabilities?.sessionCapabilities?.list !== undefined,
       embeddedContext: init.agentCapabilities?.promptCapabilities?.embeddedContext === true,
     };
+    log.info(
+      `acp-server initialized (protocol ${init.protocolVersion}, ` +
+        `supportsList=${this.caps.supportsList}, embeddedContext=${this.caps.embeddedContext})`,
+    );
     this.initialized = true;
   }
 
@@ -129,6 +136,7 @@ export class PiGoAcpClient implements vscode.Disposable {
       const dead = !this.process || this.process.exitCode !== null || this.process.killed;
       if (!dead) throw err;
       // The server died under us: respawn once and retry the request.
+      log.info("acp-server died mid-request, respawning");
       this.disposeConnection();
       await new Promise((r) => setTimeout(r, 250));
       const retry = await this.ensureConnected();
