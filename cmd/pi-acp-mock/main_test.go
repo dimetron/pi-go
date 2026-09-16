@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,5 +188,137 @@ func TestServe_ReturnsWhenPeerCloses(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after the peer closed the connection")
+	}
+}
+
+// recordingConn captures SessionUpdate notifications so tests can assert on
+// the emitted update stream without a real transport.
+type recordingConn struct {
+	mu       sync.Mutex
+	sessions []acp.SessionNotification
+}
+
+func (r *recordingConn) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessions = append(r.sessions, n)
+	return nil
+}
+
+func (r *recordingConn) count(kind string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sessions {
+		switch kind {
+		case "tool_call":
+			if s.Update.ToolCall != nil {
+				n++
+			}
+		case "tool_call_update":
+			if s.Update.ToolCallUpdate != nil {
+				n++
+			}
+		case "thought":
+			if s.Update.AgentThoughtChunk != nil {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func TestMockAgent_ToolLifecycle(t *testing.T) {
+	agent := &mockAgent{responseText: "done", emitTools: true, sessions: map[acp.SessionId]*mockSession{}}
+	rec := &recordingConn{}
+	agent.conn = rec
+
+	sess, err := agent.NewSession(context.Background(), acp.NewSessionRequest{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := agent.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sess.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("run tools")},
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := rec.count("tool_call"); got != 1 {
+		t.Errorf("tool_call notifications = %d, want 1", got)
+	}
+	if got := rec.count("tool_call_update"); got < 2 {
+		t.Errorf("tool_call_update notifications = %d, want >= 2 (in_progress + completed)", got)
+	}
+	last := rec.sessions[len(rec.sessions)-2] // completed tool update
+	if last.Update.ToolCallUpdate == nil || last.Update.ToolCallUpdate.Status == nil {
+		t.Fatalf("last tool update missing status")
+	}
+	if *last.Update.ToolCallUpdate.Status != acp.ToolCallStatusCompleted {
+		t.Errorf("tool status = %q, want completed", *last.Update.ToolCallUpdate.Status)
+	}
+	if agent.sessions == nil {
+		t.Fatalf("sessions map not initialized")
+	}
+}
+
+func TestMockAgent_LoadSessionReplays(t *testing.T) {
+	agent := &mockAgent{responseText: "answer", sessions: map[acp.SessionId]*mockSession{}}
+	rec := &recordingConn{}
+	agent.conn = rec
+
+	sess, err := agent.NewSession(context.Background(), acp.NewSessionRequest{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := agent.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sess.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("hello")},
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	before := len(rec.sessions)
+
+	// A second load replays the same transcript; both are complete replays.
+	if _, err := agent.LoadSession(context.Background(), acp.LoadSessionRequest{SessionId: sess.SessionId}); err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	replayed := len(rec.sessions) - before
+	if replayed != 2 { // one user chunk + one agent chunk
+		t.Errorf("replayed updates = %d, want 2", replayed)
+	}
+
+	if _, err := agent.ListSessions(context.Background(), acp.ListSessionsRequest{}); err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	list := func() acp.ListSessionsResponse {
+		resp, err := agent.ListSessions(context.Background(), acp.ListSessionsRequest{})
+		if err != nil {
+			t.Fatalf("ListSessions: %v", err)
+		}
+		return resp
+	}()
+	if len(list.Sessions) != 1 {
+		t.Errorf("listed sessions = %d, want 1", len(list.Sessions))
+	}
+	if list.Sessions[0].Title == nil || *list.Sessions[0].Title != "hello" {
+		t.Errorf("session title = %v, want \"hello\"", list.Sessions[0].Title)
+	}
+}
+
+func TestMockAgent_AvailableCommands(t *testing.T) {
+	agent := &mockAgent{responseText: "ok", emitCommands: true, sessions: map[acp.SessionId]*mockSession{}}
+	rec := &recordingConn{}
+	agent.conn = rec
+	if _, err := agent.NewSession(context.Background(), acp.NewSessionRequest{}); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	found := false
+	for _, s := range rec.sessions {
+		if s.Update.AvailableCommandsUpdate != nil && len(s.Update.AvailableCommandsUpdate.AvailableCommands) == 3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("available_commands_update not emitted on session/new")
 	}
 }

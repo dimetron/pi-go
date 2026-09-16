@@ -1,0 +1,11 @@
+# Ship only the built artifacts and static assets.
+src/**
+esbuild.js
+Makefile
+tsconfig.json
+tsconfig.web.json
+*.vsix
+.gitignore
+node_modules/**
+bun.lock
+package-lock.json
