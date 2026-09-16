@@ -16,6 +16,9 @@
 - **In:** `initialize`/`ping`/`reconnect`+replay, `subscribe`/`unsubscribe`; root `listSessions` + `root/session*` notifications; `createSession`/`disposeSession`, `SessionState` (lifecycle, chats catalog, defaultChat, inputNeeded roll-up, workingDirectories), `fetchTurns`; chat channel — `createChat`, turn lifecycle (`chat/turnStarted`, streaming content parts, `turnComplete`), tool-call state machine (`toolCallStart/Delta/Ready/Complete`, confirmation via inputNeeded + `chat/toolCallConfirmed`), `chat/cancel`; `authenticate` (or advertise no protected resources).
 - **Out (defer):** terminal channel, automation channels, changesets/review flow, client-contributed tools (`session/activeClientSet` tool routing), customizations/plugins, `completions`, multi-chat per session, multi-client optimistic dispatch/arbitration (single client drives a session in v1).
 
+### Q5: Session durability & the sessions list
+**A:** (a) Option 2 — **full persistence + re-attach**: AHP host stores/replays `SessionState`/`ChatState` (from pi-go's existing JSONL event log) so clients can re-subscribe to past sessions after host restart or reconnect-with-buffer-overflow, with `fetchTurns` history. (b) Yes — `listSessions` surfaces pre-existing pi-go sessions from the session store, so TUI-created sessions appear in VS Code's Agents window.
+
 ### Research notes (from AHP/VS Code docs, 2026-08-26 announcement)
 - VS Code moved agent sessions out of the extension host into a dedicated **Agent Host** process that owns sessions; clients (windows, browser, Agents window) attach/detach freely.
 - **AHP** (open spec, `microsoft/agent-host-protocol`): JSON-RPC 2.0, transport-agnostic (WebSocket/MessagePort/stdio), URI-addressed channels (`ahp-root://`, `ahp-session://`, `ahp-chat://`), immutable state + pure reducers, ordered `ActionEnvelope`s, write-ahead reconciliation, reconnect/replay via monotonic sequence numbers.
