@@ -40,6 +40,7 @@ function errString(err: unknown): string {
 // ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext): void {
+  log.info(`activating pi-go extension (version ${context.extension.packageJSON.version as string})`);
   const client = new PiGoAcpClient();
   const store = new TranscriptStore();
   const refresh = new vscode.EventEmitter<void>();
@@ -75,13 +76,32 @@ export function activate(context: vscode.ExtensionContext): void {
     typeof chat.registerChatSessionItemProvider === "function" &&
     typeof chat.registerChatSessionContentProvider === "function";
 
-  if (sessionsAvailable) {
-    activateNative(context, client, store, refresh, active, chat);
-  } else {
-    log.error(
-      "chat session APIs unavailable. Launch VS Code with " +
-        "--enable-proposed-api pi-go.pi-go-vscode to get native agent sessions.",
-    );
+  try {
+    if (sessionsAvailable) {
+      activateNative(context, client, store, refresh, active, chat);
+    } else {
+      log.error(
+        "chat session APIs unavailable. Launch VS Code with " +
+          "--enable-proposed-api pi-go.pi-go-vscode to get native agent sessions.",
+      );
+    }
+  } catch (err) {
+    // A gated proposed API throws mid-activation; every command below must
+    // still register or the UI dead-ends with "command not found". The
+    // dedicated chat view works without native sessions.
+    log.error(`native agent sessions setup failed: ${errString(err)}`);
+  }
+
+  // Public API in both modes: view-title refresh button.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pi-go.refreshSessions", () => refresh.fire()),
+  );
+
+  // Smoke hook for scripts/smoke.sh: prove activation and the ACP roundtrip
+  // by writing progress lines to PI_GO_SMOKE_FILE (node fs in the ext host;
+  // output channels flush lazily and are useless as a sync signal).
+  if (process.env.PI_GO_SMOKE === "1" && process.env.PI_GO_SMOKE_FILE) {
+    void selfCheck(client, process.env.PI_GO_SMOKE_FILE);
   }
 
   // Dedicated chat tab: one ChatPanelProvider instance serves both the
@@ -102,6 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Sessions tree with the running-prompt badge (also drives pi-go.openSession
   // / pi-go.newSession).
   registerSessionsTree(context, client, store, refresh, active, panel);
+  log.info("chat panel and sessions tree registered");
 
   // Fallback: quick one-shot prompt through an output channel.
   let quickChat: vscode.OutputChannel | undefined;
@@ -137,6 +158,45 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  log.info("pi-go extension activated");
+}
+
+/** Smoke self-check: start the acp-server, create a session, prompt it, write markers. */
+async function selfCheck(client: PiGoAcpClient, file: string): Promise<void> {
+  const { appendFileSync } = require("node:fs") as typeof import("node:fs");
+  const step = (msg: string) => {
+    try {
+      appendFileSync(file, `[smoke] ${msg}\n`);
+    } catch {
+      /* best effort */
+    }
+    log.info(`[smoke] ${msg}`);
+  };
+  try {
+    step("extension activated");
+    const entry = await client.newSession();
+    step(`acp-server up, session ${entry.sessionId}`);
+    const chunks: string[] = [];
+    const sub = client.onSessionUpdate((update) => {
+      if (update.sessionId !== entry.sessionId) return;
+      if (update.update?.sessionUpdate !== "agent_message_chunk") return;
+      const text = chunkText(update);
+      if (text) chunks.push(text);
+    });
+    try {
+      await client.prompt(entry.sessionId, [{ type: "text", text: "smoke" }], {
+        isCancellationRequested: false,
+        onCancellationRequested: () => ({ dispose: () => {} }),
+      } as unknown as vscode.CancellationToken);
+      step(`prompt roundtrip ok, ${chunks.length} chunk(s): ${chunks.join("").trim().slice(0, 80)}`);
+    } finally {
+      sub.dispose();
+    }
+    step("SMOKE-OK");
+  } catch (err) {
+    step(`SMOKE-FAIL ${errString(err)}`);
+  }
 }
 
 function activateNative(
@@ -202,7 +262,9 @@ function activateNative(
   // Slash-command autocomplete for the pi-go agent's advertised commands.
   // Whether the sessions editor consults this depends on the surface; the
   // requestHandler also intercepts /help, so this is a progressive
-  // enhancement only.
+  // enhancement only. participantVariableProvider sits behind the
+  // chatParticipantAdditions gate — setting it without --enable-proposed-api
+  // throws, so it is set through a guarded helper.
   let lastActive: string | undefined;
   const variable = participant as vscode.ChatParticipant & {
     participantVariableProvider?: {
@@ -215,22 +277,29 @@ function activateNative(
       triggerCharacters: string[];
     };
   };
-  variable.participantVariableProvider = {
-    provider: {
-      provideCompletionItems: (query, _token) => {
-        if (!lastActive) return [];
-        const Ctor = ctorOf<"ChatCompletionItem">(ctors, "ChatCompletionItem");
-        if (!Ctor) return [];
-        return client.availableCommands(lastActive).map((c) => {
-          const item = new Ctor(c.name, `/${c.name}`, []) as { insertText?: string; detail?: string };
-          item.insertText = `/${c.name}`;
-          item.detail = c.description ?? "";
-          return item;
-        });
+  if (!guardedProposed(() => {
+    variable.participantVariableProvider = {
+      provider: {
+        provideCompletionItems: (query, _token) => {
+          if (!lastActive) return [];
+          const Ctor = ctorOf<"ChatCompletionItem">(ctors, "ChatCompletionItem");
+          if (!Ctor) return [];
+          return client.availableCommands(lastActive).map((c) => {
+            const item = new Ctor(c.name, `/${c.name}`, []) as { insertText?: string; detail?: string };
+            item.insertText = `/${c.name}`;
+            item.detail = c.description ?? "";
+            return item;
+          });
+        },
       },
-    },
-    triggerCharacters: ["/"],
-  };
+      triggerCharacters: ["/"],
+    };
+  }, "participantVariableProvider")) {
+    log.error(
+      "slash-command autocomplete skipped (chatParticipantAdditions gated). " +
+        "Launch with --enable-proposed-api pi-go.pi-go-vscode to enable.",
+    );
+  }
 
   const contentProvider: ChatSessionContentProviderDto = {
     provideChatSessionContent: async (resource, _token) => {
@@ -298,10 +367,6 @@ function activateNative(
       },
       provideTokenCount: async () => 0,
     }),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("pi-go.refreshSessions", () => refresh.fire()),
   );
 }
 
@@ -463,6 +528,22 @@ function ctorOf<K extends keyof ChatTurnConstructors>(
  */
 function pushPart(stream: vscode.ChatResponseStream, part: unknown): void {
   stream.push(part as vscode.ChatResponsePart);
+}
+
+/**
+ * Run a proposed-API touchpoint under the ext-host gate. Without
+ * --enable-proposed-api the ext host throws on the property setter itself;
+ * catching here keeps activation alive. Returns false when the call was
+ * blocked so callers can log a degradation notice.
+ */
+function guardedProposed(fn: () => void, what: string): boolean {
+  try {
+    fn();
+    return true;
+  } catch (err) {
+    log.error(`proposed API rejected (${what}): ${errString(err)}`);
+    return false;
+  }
 }
 
 function workspaceCwd(): string {

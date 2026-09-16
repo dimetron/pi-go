@@ -94,9 +94,14 @@ cd vscode
 make install      # bun compile → vsce package → code --install-extension
 ```
 
+The local VSIX is written to `~/.vscode-ext/pi-go-vscode.vsix` (override with
+`OUTDIR=…`), so branches and worktrees never hold build artifacts. The `install`
+target detects the VS Code CLI: PATH `code` first, falling back to the binary
+inside the Insiders or stable app bundle (paths with spaces are quoted).
+
 or step by step: `bun install`, `bun run compile`, then
-`npx @vscode/vsce package --no-dependencies -o pi-go-vscode.vsix` and
-`code --install-extension pi-go-vscode.vsix --force`.
+`npx @vscode/vsce package --no-dependencies -o ~/.vscode-ext/pi-go-vscode.vsix`
+and `code --install-extension ~/.vscode-ext/pi-go-vscode.vsix --force`.
 
 ## Settings
 

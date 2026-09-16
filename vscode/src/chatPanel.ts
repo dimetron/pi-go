@@ -114,6 +114,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (!message || typeof message !== "object") return;
     switch (message.type) {
       case "ready":
+        log.debug("chat webview ready");
         this.sendState();
         break;
       case "prompt":

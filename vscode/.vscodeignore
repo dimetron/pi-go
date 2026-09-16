@@ -9,3 +9,10 @@ tsconfig.web.json
 node_modules/**
 bun.lock
 package-lock.json
+# Dev-only: the unit suite, its runner config and coverage output, and the
+# local smoke harness. None of it is loaded at runtime; VSIX size is install
+# size, so none of it ships.
+test/**
+vitest.config.mts
+coverage/**
+scripts/**

@@ -306,6 +306,23 @@ make vet
 make check-cve
 ```
 
+### VS Code extension (`vscode/`)
+
+The extension is built and installed from `vscode/` with its own Makefile:
+
+```bash
+cd vscode && make install   # bun compile → vsce package → install
+```
+
+Local build output goes to `$HOME/.vscode-ext/` (`pi-go-vscode.vsix`), never
+into the repo — worktree branches must not accumulate VSIX artifacts, and
+`.vscode-ext` output is kept out of `git status`. The `install` target
+auto-detects the VS Code CLI: `code` on PATH first, then the binary inside the
+Insiders app bundle (`/Applications/Visual Studio Code -
+Insiders.app/.../bin/code`, this machine's editor), then stable VS Code. CI
+(`release.yml`) uses `make release` only, which keeps the versioned VSIX at the
+repo root for the release upload glob — do not move that output.
+
 ## TUI output safety: never write to stdout/stderr
 
 The interactive TUI runs on the terminal's alternate screen. **Any write to
