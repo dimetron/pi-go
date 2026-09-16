@@ -11,6 +11,11 @@
 ### Q3: Which transports must the AHP host support for v1?
 **A:** Option 1 — WebSocket only (matches VS Code Agents window connecting to a standalone host, localhost + connection token, `--tunnel` for remote). stdio/Unix-socket transports deferred.
 
+### Q4: Which slice of the AHP surface is v1?
+**A:** Keep v1 minimal ("AHP is broad"). Accept proposed split:
+- **In:** `initialize`/`ping`/`reconnect`+replay, `subscribe`/`unsubscribe`; root `listSessions` + `root/session*` notifications; `createSession`/`disposeSession`, `SessionState` (lifecycle, chats catalog, defaultChat, inputNeeded roll-up, workingDirectories), `fetchTurns`; chat channel — `createChat`, turn lifecycle (`chat/turnStarted`, streaming content parts, `turnComplete`), tool-call state machine (`toolCallStart/Delta/Ready/Complete`, confirmation via inputNeeded + `chat/toolCallConfirmed`), `chat/cancel`; `authenticate` (or advertise no protected resources).
+- **Out (defer):** terminal channel, automation channels, changesets/review flow, client-contributed tools (`session/activeClientSet` tool routing), customizations/plugins, `completions`, multi-chat per session, multi-client optimistic dispatch/arbitration (single client drives a session in v1).
+
 ### Research notes (from AHP/VS Code docs, 2026-08-26 announcement)
 - VS Code moved agent sessions out of the extension host into a dedicated **Agent Host** process that owns sessions; clients (windows, browser, Agents window) attach/detach freely.
 - **AHP** (open spec, `microsoft/agent-host-protocol`): JSON-RPC 2.0, transport-agnostic (WebSocket/MessagePort/stdio), URI-addressed channels (`ahp-root://`, `ahp-session://`, `ahp-chat://`), immutable state + pure reducers, ordered `ActionEnvelope`s, write-ahead reconciliation, reconnect/replay via monotonic sequence numbers.
