@@ -206,3 +206,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" kagent-manifests.yaml --clobber
+
+  vscode:
+    name: VS Code extension
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      # Attach the packaged VSIX as a release asset.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Build the VSIX
+        working-directory: vscode
+        run: |
+          bun install --frozen-lockfile
+          make release
+
+      # --clobber so re-running a release replaces the asset rather than
+      # failing on one that is already attached.
+      - name: Attach it to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" vscode/pi-go-vscode-*.vsix --clobber

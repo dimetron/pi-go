@@ -1,0 +1,522 @@
+/* pi-go chat webview. Colors come only from --vscode-* variables so the view
+   follows the workbench theme (light, dark, high contrast). */
+
+/* The hidden attribute must win over class-level display rules. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-sideBar-background);
+  font-family: var(--vscode-font-family, var(--vscode-editor-font-family));
+  font-size: var(--vscode-font-size, 13px);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* -- header ------------------------------------------------------------- */
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+  flex: none;
+}
+
+.session-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-sideBar-foreground, inherit);
+  font-weight: 600;
+}
+
+.header-new {
+  flex: none;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: none;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.header-new:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+/* -- transcript ---------------------------------------------------------- */
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.empty-state button {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: none;
+  border-radius: 3px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.empty-state button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.loading {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+.turn {
+  margin: 10px 0;
+}
+
+.turn.user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.turn.user .bubble {
+  max-width: 85%;
+  background: var(--vscode-chat-requestBackground, var(--vscode-input-background));
+  border: 1px solid var(--vscode-chat-requestBorder, transparent);
+  border-radius: 8px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.turn.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.part.text {
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.part.text.streaming .stream-body,
+.part.thought.streaming .stream-body {
+  white-space: pre-wrap;
+}
+
+.part.thought {
+  border-left: 2px solid var(--vscode-charts-purple, var(--vscode-descriptionForeground));
+  padding-left: 8px;
+}
+
+.part.thought summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+  user-select: none;
+}
+
+.thought-body {
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notice,
+.banner {
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 8px 0;
+  word-break: break-word;
+}
+
+.notice {
+  background: var(--vscode-notifications-background);
+  color: var(--vscode-descriptionForeground);
+}
+
+.banner {
+  background: var(--vscode-inputValidation-errorBackground, var(--vscode-notifications-background));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-testing-iconFailed));
+  color: var(--vscode-testing-iconFailed, inherit);
+}
+
+/* -- markdown ------------------------------------------------------------ */
+
+.md pre,
+.tool-input,
+.tool-output {
+  background: var(--vscode-textCodeBlock-background);
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 4px;
+  padding: 8px;
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size, 12px);
+}
+
+.md code {
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+}
+
+.md a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.md img {
+  max-width: 100%;
+}
+
+.md table {
+  border-collapse: collapse;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--vscode-panel-border, transparent);
+  padding: 3px 8px;
+}
+
+.md blockquote {
+  border-left: 3px solid var(--vscode-panel-border, transparent);
+  margin: 4px 0;
+  padding-left: 10px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* -- tool cards ----------------------------------------------------------- */
+
+.tool-card {
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-editor-background);
+  font-size: 12px;
+}
+
+.tool-card summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-glyph {
+  flex: none;
+}
+
+.tool-name {
+  font-weight: 600;
+}
+
+.tool-title {
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pending .tool-glyph {
+  color: var(--vscode-charts-yellow, inherit);
+}
+
+.status-in-progress .tool-glyph {
+  color: var(--vscode-charts-blue, inherit);
+}
+
+.status-completed .tool-glyph {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.status-failed .tool-glyph {
+  color: var(--vscode-testing-iconFailed, var(--vscode-charts-red));
+}
+
+.tool-body {
+  padding: 0 8px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-input,
+.tool-output {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* -- diffs ----------------------------------------------------------------- */
+
+.tool-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diff-header {
+  display: flex;
+}
+
+.diff-path {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  font-family: var(--vscode-editor-font-family);
+  text-decoration: underline;
+}
+
+.diff-table {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size, 12px);
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.diff-line {
+  display: flex;
+  white-space: pre;
+}
+
+.diff-sign {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  user-select: none;
+}
+
+.diff-text {
+  flex: 1;
+}
+
+.diff-line.add {
+  background: var(--vscode-diffEditor-insertedTextBackground, rgba(0, 0, 0, 0));
+  color: var(--vscode-diffEditor-insertedTextForeground, inherit);
+}
+
+.diff-line.del {
+  background: var(--vscode-diffEditor-removedTextBackground, rgba(0, 0, 0, 0));
+  color: var(--vscode-diffEditor-removedTextForeground, inherit);
+}
+
+.diff-line.ctx .diff-text {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* -- composer --------------------------------------------------------------- */
+
+.composer-host {
+  flex: none;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+  background: var(--vscode-sideBar-background);
+}
+
+.composer {
+  position: relative;
+  padding: 8px 12px;
+}
+
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.composer-attach {
+  flex: none;
+  background: none;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-input-foreground);
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.composer-input {
+  flex: 1;
+  resize: none;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.4;
+}
+
+.composer-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  border-color: var(--vscode-focusBorder);
+}
+
+.composer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.composer-send,
+.composer-stop {
+  flex: none;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 6px 10px;
+}
+
+.composer-send {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.composer-send:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.composer-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.composer-stop {
+  background: var(--vscode-errorForeground, var(--vscode-button-secondaryBackground));
+  color: var(--vscode-button-secondaryForeground, inherit);
+}
+
+.composer-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-editorWidget-foreground, inherit);
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, transparent));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.popup-item {
+  display: flex;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.popup-item.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.popup-name {
+  font-weight: 600;
+}
+
+.popup-detail {
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- mermaid diagrams -------------------------------------------------------- */
+
+.md .mermaid {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+  overflow-x: auto;
+}
+
+.md .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* -- scrollbars -------------------------------------------------------------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+}
