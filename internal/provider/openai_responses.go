@@ -378,6 +378,28 @@ func oaiGenaiToolsToResponses(tools []*genai.Tool) []responses.ToolUnionParam {
 	return out
 }
 
+// errorEventDetail reads the nested error object of a raw "error" event, whose
+// code and message the SDK's flattened union fields do not carry. Returns nil
+// when the body carries no nested object.
+func errorEventDetail(raw string) *struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+} {
+	var probe struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil || probe.Error == nil {
+		return nil
+	}
+	return &struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: probe.Error.Code, Message: probe.Error.Message}
+}
+
 // responsesStreamState holds accumulated state from Responses streaming.
 type responsesStreamState struct {
 	text             string
@@ -388,6 +410,21 @@ type responsesStreamState struct {
 	completionTokens int64
 	cachedTokens     int64
 	responseID       string
+	// term is what the stream's terminal event said, as distinct from what the
+	// response it carried repeated: a "response.incomplete" declares a turn cut
+	// short even when its payload reports no status and no reason. Ported from
+	// adk-go v2.4.0 model/openaimodel (PR #1373).
+	term terminalEvent
+}
+
+// terminalEvent records the terminal event of a Responses stream — the only
+// kind that says why the turn ended — as distinct from the response object it
+// carried. seen is set by "response.completed" or "response.incomplete" whose
+// response actually decoded; incomplete distinguishes the two.
+type terminalEvent struct {
+	resp       *responses.Response
+	seen       bool
+	incomplete bool
 }
 
 type toolCallAcc struct {
@@ -432,16 +469,61 @@ func (m *openaiModel) runResponsesStreaming(ctx context.Context, params response
 		evt := stream.Current()
 		evtType := evt.Type
 
-		// response.completed — capture final response with usage and status.
-		if evtType == "response.completed" {
-			finalResp = &evt.Response
-			applyResponsesCompleted(state, finalResp)
-			continue
+		// First terminal object wins: a later one, or a stray
+		// "response.created", would relabel a truncated turn a clean stop.
+		// An event whose response never decoded is not one of those, hence
+		// carriesResponse. Ported from adk-go v2.4.0 (PR #1373).
+		if !state.term.seen {
+			switch evtType {
+			case "response.created":
+				created := evt.AsResponseCreated()
+				if carriesResponse(&created.Response) {
+					// Keep the created response for its metadata only; it
+					// never counts as having seen a terminal event.
+					state.term.resp = &created.Response
+					finalResp = &created.Response
+				}
+			case "response.completed":
+				completed := evt.AsResponseCompleted()
+				if carriesResponse(&completed.Response) {
+					state.term.resp, state.term.seen = &completed.Response, true
+					finalResp = &completed.Response
+					applyResponsesCompleted(state, &completed.Response)
+				}
+			case "response.incomplete":
+				incomplete := evt.AsResponseIncomplete()
+				if carriesResponse(&incomplete.Response) {
+					state.term.resp, state.term.seen, state.term.incomplete = &incomplete.Response, true, true
+					finalResp = &incomplete.Response
+					applyResponsesCompleted(state, &incomplete.Response)
+				}
+			case "response.failed":
+				failed := evt.AsResponseFailed()
+				// A failure stated as its own event, mirroring adk-go v2.4.0:
+				// the server failed the turn, so it ends in place of
+				// TurnComplete with the same error the blocking path reports.
+				_ = yield(nil, failedResponseError(&failed.Response))
+				return true, nil
+			}
 		}
 
-		// response.error — surface as LLM error.
+		// response.error — surface as LLM error. The live API nests
+		// code/message inside an "error" object (e.g. insufficient_quota), and
+		// the SDK's flattened Code/Message fields stay empty for it, so read
+		// the raw event JSON when they are.
 		if evtType == "error" {
-			_ = yield(&model.LLMResponse{ErrorCode: evt.Code, ErrorMessage: evt.Message}, nil)
+			code, msg := evt.Code, evt.Message
+			if code == "" || msg == "" {
+				if nested := errorEventDetail(evt.AsError().RawJSON()); nested != nil {
+					if code == "" {
+						code = nested.Code
+					}
+					if msg == "" {
+						msg = nested.Message
+					}
+				}
+			}
+			_ = yield(&model.LLMResponse{ErrorCode: code, ErrorMessage: msg}, nil)
 			return true, nil
 		}
 
@@ -503,7 +585,14 @@ func applyResponsesCompleted(state *responsesStreamState, resp *responses.Respon
 	if c := resp.Usage.InputTokensDetails.CachedTokens; c > 0 {
 		state.cachedTokens = c
 	}
-	state.finishReason = string(resp.Status)
+	if resp.IncompleteDetails.Reason != "" {
+		// The reason is the provider's own word for why the turn stopped —
+		// "max_output_tokens", "content_filter" — and carries more than the
+		// bare status. Ported from adk-go v2.4.0.
+		state.finishReason = resp.IncompleteDetails.Reason
+	} else {
+		state.finishReason = string(resp.Status)
+	}
 }
 
 // applyResponsesToolCallEvent folds the function-call events into the tool call
@@ -551,6 +640,22 @@ func (m *openaiModel) finishResponsesStream(state *responsesStreamState, finalRe
 		}
 	}
 
+	// The finish reason comes off the terminal event, the only thing that says
+	// why the turn ended. Without one, finishReason would read silence as a
+	// clean stop, so report Unspecified — the model never said. Ported from
+	// adk-go v2.4.0 (PR #1373).
+	finish := genai.FinishReasonUnspecified
+	var termResp *responses.Response
+	if state.term.seen {
+		termResp = state.term.resp
+		finish = oaiResponsesFinishReason(termResp, state.term.incomplete)
+	} else if finalResp != nil {
+		// A stream whose only terminal-ish object was a bare "response.created":
+		// read the payload, but do not trust it as the provider's verdict.
+		termResp = finalResp
+		finish = oaiResponsesFinishReason(termResp, false)
+	}
+
 	// Save response ID for multi-turn continuation.
 	if finalResp != nil && finalResp.ID != "" {
 		m.mu.Lock()
@@ -561,13 +666,17 @@ func (m *openaiModel) finishResponsesStream(state *responsesStreamState, finalRe
 		m.mu.Unlock()
 	}
 
-	_ = yield(&model.LLMResponse{
+	final := &model.LLMResponse{
 		Partial:       false,
 		TurnComplete:  true,
-		FinishReason:  oaiFinishReasonToGenai(state.finishReason),
+		FinishReason:  finish,
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
-	}, nil)
+	}
+	if termResp != nil {
+		attachResponsesFinishSignal(final, termResp, state.term.incomplete && state.term.seen)
+	}
+	_ = yield(final, nil)
 }
 
 // buildResponsesFinalParts assembles the final parts from streaming state.
@@ -615,7 +724,14 @@ func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params respo
 		return false, err
 	}
 
-	parts, finishReason := parseResponsesOutput(resp.Output)
+	// A failed response body on HTTP 200 is a failure, not a turn. Ported
+	// from adk-go v2.4.0 (PR #1359).
+	if reportsFailure(resp) {
+		_ = yield(nil, failedResponseError(resp))
+		return true, nil
+	}
+
+	parts, _ := parseResponsesOutput(resp.Output)
 	var usage *genai.GenerateContentResponseUsageMetadata
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 		usage = &genai.GenerateContentResponseUsageMetadata{
@@ -635,13 +751,19 @@ func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params respo
 		m.mu.Unlock()
 	}
 
-	_ = yield(&model.LLMResponse{
+	// No event announced this response, so its own payload is all there is
+	// to read the finish reason from. Ported from adk-go v2.4.0.
+	finish := oaiResponsesFinishReason(resp, false)
+
+	final := &model.LLMResponse{
 		Partial:       false,
 		TurnComplete:  true,
-		FinishReason:  oaiFinishReasonToGenai(finishReason),
+		FinishReason:  finish,
 		UsageMetadata: usage,
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: parts},
-	}, nil)
+	}
+	attachResponsesFinishSignal(final, resp, false)
+	_ = yield(final, nil)
 	return true, nil
 }
 
@@ -684,4 +806,213 @@ func parseResponsesOutput(items []responses.ResponseOutputItemUnion) ([]*genai.P
 	}
 
 	return parts, finishReason
+}
+
+// --- Finish reason and failure handling, ported from adk-go v2.4.0
+// model/openaimodel (PRs #1373, #1359, #1467). pi-go's Responses path shared
+// the same defect shape: the finish reason was read off fields openai-go does
+// not mark required, so a truncated or failed turn decoded to a clean stop.
+
+// maxServerTextRunes bounds any server-chosen string an error quotes.
+const maxServerTextRunes = 256
+
+// clipServerText trims a server-chosen string and caps its length, so that a
+// pathological one — a megabyte of message — cannot become the error a caller
+// logs. Truncation is marked, so a clipped value does not read as the whole of
+// what the server said.
+func clipServerText(s string) string {
+	s = strings.TrimSpace(s)
+	// Counted by ranging rather than by materializing []rune: an 8 MiB message
+	// would otherwise cost 32 MiB to yield at most a kilobyte. Ranging a string
+	// yields the byte index of each rune, so s[:i] never splits one.
+	n := 0
+	for i := range s {
+		if n == maxServerTextRunes {
+			return strings.TrimSpace(s[:i]) + "…"
+		}
+		n++
+	}
+	return s
+}
+
+// reportsFailure reports whether the server is describing a failure rather than
+// a turn, which on an HTTP 200 is the whole of what separates the two. Only
+// "failed" qualifies — "incomplete" is an ordinary truncation — except that a
+// body stating no status at all, which the API permits, is judged by its error
+// object instead.
+func reportsFailure(resp *responses.Response) bool {
+	if resp == nil {
+		return false
+	}
+	switch resp.Status {
+	case responses.ResponseStatusFailed:
+		return true
+	case "":
+		return clipServerText(resp.Error.Message) != "" || clipServerText(string(resp.Error.Code)) != ""
+	default:
+		return false
+	}
+}
+
+// failedResponseError renders a failure as an error quoting the server: the
+// message as the text, the response ID and error code as a labeled
+// parenthetical. The ID is there because the response is discarded with the
+// failure, so nothing else is left to quote back to the provider.
+func failedResponseError(resp *responses.Response) error {
+	if resp == nil {
+		return fmt.Errorf("openai response failed")
+	}
+	msg := clipServerText(resp.Error.Message)
+	var details []string
+	if id := clipServerText(resp.ID); id != "" {
+		details = append(details, fmt.Sprintf("id %q", id))
+	}
+	if code := clipServerText(string(resp.Error.Code)); code != "" {
+		details = append(details, fmt.Sprintf("code %q", code))
+	}
+	switch joined := strings.Join(details, ", "); {
+	case joined != "" && msg != "":
+		return fmt.Errorf("openai response failed (%s): %q", joined, msg)
+	case joined != "":
+		return fmt.Errorf("openai response failed (%s)", joined)
+	case msg != "":
+		return fmt.Errorf("openai response failed: %q", msg)
+	default:
+		// The server said "failed" and nothing more.
+		return fmt.Errorf("openai response failed")
+	}
+}
+
+// carriesResponse reports whether an event delivered the response object the
+// schema marks required. AsResponse* discards its unmarshal error and Response
+// is a value field, so an omitted or empty object hands back a zero value that
+// would otherwise outrank a well-formed event later in the turn. Any field
+// having decoded stands for the object's presence; testing "id" alone would
+// also reject a populated response that merely omits it. A bare "{}" leaves
+// every raw value empty and is still rejected.
+func carriesResponse(resp *responses.Response) bool {
+	j := &resp.JSON
+	return j.ID.Valid() || j.Status.Valid() || j.Output.Valid() ||
+		j.IncompleteDetails.Valid() || j.Error.Valid() || j.Model.Valid()
+}
+
+// oaiResponsesFinishReason reports why the model stopped generating.
+// incompleteEvent says the terminal streaming event was a "response.incomplete"
+// (see runResponsesStreaming); blocking, having no event to read, passes false.
+// Both paths otherwise decide from the same payload. Ported from adk-go v2.4.0.
+func oaiResponsesFinishReason(resp *responses.Response, incompleteEvent bool) genai.FinishReason {
+	if resp == nil {
+		return genai.FinishReasonUnspecified
+	}
+	switch resp.IncompleteDetails.Reason {
+	case "max_output_tokens", "max_tool_calls", "max_tokens":
+		return genai.FinishReasonMaxTokens
+	case "content_filter":
+		return genai.FinishReasonSafety
+	case "":
+		// No reason given, so the status and what the event was called are all
+		// that is left to go on.
+		if responsesTruncated(resp, incompleteEvent) {
+			return genai.FinishReasonOther
+		}
+		return genai.FinishReasonStop
+	default:
+		return genai.FinishReasonOther
+	}
+}
+
+// responsesTruncated reports whether a turn that named no incomplete reason
+// nonetheless ended before it was done; calling one a clean stop would have a
+// caller that retries on anything but STOP accept a partial answer as final.
+//
+// openai-go marks incomplete_details required but neither its reason nor the
+// status, so a provider may declare a turn truncated and leave either empty.
+// Every signal that survives that is read here.
+func responsesTruncated(resp *responses.Response, incompleteEvent bool) bool {
+	if incompleteEvent {
+		// The event stands in for "response.completed", so its name is the
+		// provider's verdict, and it outranks a payload that says otherwise.
+		return true
+	}
+	switch resp.Status {
+	case responses.ResponseStatusCompleted:
+		return false
+	case "":
+		// A finished turn carries incomplete_details as null.
+		return resp.JSON.IncompleteDetails.Valid()
+	default:
+		// failed, canceled, incomplete, in_progress and queued all describe an
+		// unfinished turn. Enumerating the finished states instead keeps a
+		// status added later from defaulting to a clean stop.
+		return true
+	}
+}
+
+// responsesFinishMessage is the provider's own account of why a turn ended,
+// which the finish reason flattens away: an unmapped incomplete reason and a
+// failure both arrive as OTHER.
+func responsesFinishMessage(resp *responses.Response, incompleteEvent bool) string {
+	if resp == nil {
+		return ""
+	}
+	if msg := resp.Error.Message; msg != "" {
+		return msg
+	}
+	if reason := resp.IncompleteDetails.Reason; reason != "" {
+		return reason
+	}
+	// The contradiction responsesTruncated resolves, resolved the same way: the
+	// event's name outranks a payload calling the turn completed. Every other
+	// status is still the provider's own wording for why.
+	if resp.Status != "" && (!incompleteEvent || resp.Status != responses.ResponseStatusCompleted) {
+		return string(resp.Status)
+	}
+	if responsesTruncated(resp, incompleteEvent) {
+		// No usable reason or status, yet the turn did not finish: the event's
+		// name, or a bare incomplete_details, is all the provider said.
+		return string(responses.ResponseStatusIncomplete)
+	}
+	return ""
+}
+
+// ResponsesFinishMessageKey is the model.LLMResponse.CustomMetadata key under
+// which a turn that ended badly but still carries an answer reports the
+// provider's own account of why — a content filter's "content_filter", an
+// incomplete reason this package does not map, or a server error message. Its
+// FinishReason says the turn was cut short; this says what the provider called
+// it. Same wording as adk-go v2.4.0's openaimodel.FinishMessageKey.
+const ResponsesFinishMessageKey = "openai_finish_message"
+
+// attachResponsesFinishSignal surfaces why a turn did not end cleanly, in the
+// place that suits what the turn produced. ErrorCode is not advisory — pi-go
+// aborts the turn on a non-empty one and discards the content — so a turn with
+// content reports the provider's wording as metadata beside a FinishReason that
+// already says it was cut short; only a turn with nothing to read uses the
+// error fields. Ported from adk-go v2.4.0 (PR #1373).
+func attachResponsesFinishSignal(resp *model.LLMResponse, openaiResp *responses.Response, incompleteEvent bool) {
+	if resp == nil || openaiResp == nil {
+		return
+	}
+	switch resp.FinishReason {
+	case genai.FinishReasonSafety, genai.FinishReasonOther:
+	default:
+		// MAX_TOKENS and STOP say all there is to say by themselves.
+		return
+	}
+	msg := responsesFinishMessage(openaiResp, incompleteEvent)
+	if resp.Content != nil && len(resp.Content.Parts) > 0 {
+		if msg != "" {
+			if resp.CustomMetadata == nil {
+				resp.CustomMetadata = map[string]any{}
+			}
+			resp.CustomMetadata[ResponsesFinishMessageKey] = msg
+		}
+		return
+	}
+	if resp.FinishReason == genai.FinishReasonSafety {
+		resp.ErrorCode = string(genai.BlockedReasonSafety)
+	} else {
+		resp.ErrorCode = string(genai.FinishReasonOther)
+	}
+	resp.ErrorMessage = msg
 }
