@@ -182,7 +182,9 @@
   "scripts": {
     "compile": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js",
     "package": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js --production",
-    "check-types": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+    "check-types": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0"
@@ -190,9 +192,11 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "1.137.0",
+    "@vitest/coverage-v8": "^5.0.1",
     "dompurify": "^3.2.4",
     "esbuild": "^0.25.0",
     "marked": "^15.0.7",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.1"
   }
 }

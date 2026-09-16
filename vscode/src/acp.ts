@@ -72,6 +72,12 @@ export class PiGoAcpClient implements vscode.Disposable {
 
     log.info(`spawning acp-server: ${command} ${args.join(" ")} (cwd ${cwd})`);
     this.process = spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    // Spawn failures (ENOENT, EACCES) are emitted asynchronously: without this
+    // race, ensureConnected would await an initialize response that never
+    // arrives and the caller would hang instead of surfacing the error.
+    const spawnFailure = new Promise<never>((_, reject) => {
+      this.process!.once("error", (err) => reject(err));
+    });
     this.process.on("error", (err) => {
       this.lastSpawnFailed = Date.now();
       this.spawnError.fire(err.message);
@@ -98,7 +104,14 @@ export class PiGoAcpClient implements vscode.Disposable {
       });
     this.connection = client.connect(stream);
     log.debug("waiting for acp-server initialize response…");
-    await this.initializeOnce();
+    try {
+      await Promise.race([this.initializeOnce(), spawnFailure]);
+    } catch (err) {
+      // The server never came up: drop the half-open connection so the next
+      // request starts a clean respawn instead of reusing dead state.
+      this.disposeConnection();
+      throw err;
+    }
     return this.connection;
   }
 
