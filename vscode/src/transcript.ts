@@ -15,6 +15,9 @@ export interface ToolCallState {
   status: "pending" | "in_progress" | "completed" | "failed";
   inputText?: string;
   outputText?: string;
+  /** First diff content block, for structured rendering (the webview line-diffs
+   *  it; the native path keeps rendering the fenced text in outputText). */
+  diff?: { path: string; oldText: string; newText: string };
 }
 
 export type TurnPart =
@@ -203,6 +206,7 @@ export function toolStateOf(
     status: u.status ?? "pending",
     inputText: formatInput(u.rawInput),
     outputText: formatContent(u.content),
+    diff: firstDiff(u.content),
   };
 }
 
@@ -243,6 +247,16 @@ export function formatContent(content: acp.ToolCallContent[] | null | undefined)
   }
   const text = out.join("\n").trim();
   return text || undefined;
+}
+
+/** The first diff content block, if the call carries one (structured form for
+ *  the webview's real line-diff rendering). */
+export function firstDiff(
+  content: acp.ToolCallContent[] | null | undefined,
+): { path: string; oldText: string; newText: string } | undefined {
+  const d = content?.find((c) => c.type === "diff");
+  if (!d || d.type !== "diff") return undefined;
+  return { path: d.path, oldText: d.oldText ?? "", newText: d.newText ?? "" };
 }
 
 function diffBody(oldText: string | null | undefined, newText: string | null | undefined): string {

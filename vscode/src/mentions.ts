@@ -16,7 +16,7 @@ const TEXT_EXTENSIONS = new Set([
   "tsx", "txt", "xml", "yaml", "yml", "zig",
 ]);
 
-/** Result of converting chat @-mentions into ACP content blocks. */
+/** Result of converting attachments into ACP content blocks. */
 export interface MentionsResult {
   blocks: acp.ContentBlock[];
   skipped: string[];
@@ -24,26 +24,19 @@ export interface MentionsResult {
 }
 
 /**
- * Convert ChatRequest references (from @file mentions in the session editor)
- * into ACP embedded resource blocks. Non-file references, oversized files and
- * unknown binary extensions are skipped and reported by name.
+ * Convert @-mention file paths into ACP embedded resource blocks. Oversized
+ * files and unknown binary extensions are skipped and reported by name.
  */
-export async function referencesToBlocks(
-  references: readonly vscode.ChatPromptReference[] | undefined,
+export async function pathsToBlocks(
+  paths: readonly string[],
   token: vscode.CancellationToken,
 ): Promise<MentionsResult> {
   const result: MentionsResult = { blocks: [], skipped: [], truncated: [] };
-  if (!references || references.length === 0) return result;
 
   let total = 0;
-  for (const ref of references) {
+  for (const raw of paths) {
     if (token.isCancellationRequested) break;
-    if (!(ref.value instanceof vscode.Uri)) continue;
-    const uri = ref.value;
-    if (uri.scheme !== "file") {
-      result.skipped.push(vscode.workspace.asRelativePath(uri, false));
-      continue;
-    }
+    const uri = vscode.Uri.file(raw);
     if (result.blocks.length >= MAX_FILES) {
       result.skipped.push(vscode.workspace.asRelativePath(uri, false));
       continue;
@@ -78,7 +71,21 @@ export async function referencesToBlocks(
   return result;
 }
 
-/** Warning banner text for the files referencesToBlocks left out. */
+/**
+ * Convert ChatRequest references (from @file mentions in the session editor)
+ * into ACP embedded resource blocks. Non-file references are skipped too.
+ */
+export async function referencesToBlocks(
+  references: readonly vscode.ChatPromptReference[] | undefined,
+  token: vscode.CancellationToken,
+): Promise<MentionsResult> {
+  const paths = (references ?? [])
+    .filter((ref) => ref.value instanceof vscode.Uri && (ref.value as vscode.Uri).scheme === "file")
+    .map((ref) => (ref.value as vscode.Uri).fsPath);
+  return pathsToBlocks(paths, token);
+}
+
+/** Warning banner text for the files pathsToBlocks left out. */
 export function skippedMentionsMarkdown(skipped: string[]): string | undefined {
   if (skipped.length === 0) return undefined;
   const names = skipped.map((n) => `\`${n}\``).join(", ");

@@ -24,6 +24,8 @@ import {
   toolPartFor,
 } from "./chatParts";
 import { referencesToBlocks, skippedMentionsMarkdown } from "./mentions";
+import { ChatPanelProvider } from "./chatPanel";
+import { registerSessionsTree } from "./sessionsTree";
 
 const log = vscode.window.createOutputChannel("pi-go", { log: true });
 
@@ -81,6 +83,25 @@ export function activate(context: vscode.ExtensionContext): void {
         "--enable-proposed-api pi-go.pi-go-vscode to get native agent sessions.",
     );
   }
+
+  // Dedicated chat tab: one ChatPanelProvider instance serves both the
+  // activity-bar container and the secondary-sidebar container (Claude's
+  // pattern). Works without the proposed-API flag.
+  const panel = new ChatPanelProvider(context, client, store, refresh, active);
+  context.subscriptions.push(
+    panel,
+    vscode.window.registerWebviewViewProvider("pi-go.chat", panel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+    vscode.window.registerWebviewViewProvider("pi-go.chatSecondary", panel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+    vscode.commands.registerCommand("pi-go.attachFile", () => panel.attachFiles()),
+  );
+
+  // Sessions tree with the running-prompt badge (also drives pi-go.openSession
+  // / pi-go.newSession).
+  registerSessionsTree(context, client, store, refresh, active, panel);
 
   // Fallback: quick one-shot prompt through an output channel.
   let quickChat: vscode.OutputChannel | undefined;

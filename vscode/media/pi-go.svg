@@ -1,0 +1,11 @@
+<!-- pi-go activity-bar mark: a speech bubble with the π glyph cut out as
+     negative space. Monochrome (fill: currentColor) because VS Code renders
+     view-container icons as CSS masks. -->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path
+    fill="currentColor"
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M12 2C6.48 2 2 5.58 2 9.98c0 2.55 1.46 4.82 3.74 6.3-.24 1.36-.85 2.5-1.9 3.36-.5.4-.26 1.21.37 1.28 2.14.24 4.05-.3 5.62-1.47.7.1 1.43.16 2.17.16 5.52 0 10-3.58 10-7.98S17.52 2 12 2zM7.2 7.6h9.6v2.6H7.2zM8.6 10.2h2.6v6.2H8.6zM13 10.2h2.6v6.2H13z"
+  />
+</svg>

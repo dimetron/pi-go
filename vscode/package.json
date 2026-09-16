@@ -13,7 +13,10 @@
   "activationEvents": [
     "onCommand:pi-go.start",
     "onChatSession:pi-go",
-    "onLanguageModelChatProvider:pi-go"
+    "onLanguageModelChatProvider:pi-go",
+    "onView:pi-go.sessions",
+    "onView:pi-go.chat",
+    "onView:pi-go.chatSecondary"
   ],
   "enabledApiProposals": [
     "chatSessionsProvider",
@@ -21,6 +24,49 @@
     "chatParticipantPrivate"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pi-go",
+          "title": "pi-go",
+          "icon": "media/pi-go.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "pi-go-secondary",
+          "title": "pi-go",
+          "icon": "media/pi-go.svg"
+        }
+      ]
+    },
+    "views": {
+      "pi-go": [
+        {
+          "type": "tree",
+          "id": "pi-go.sessions",
+          "name": "Sessions",
+          "icon": "$(history)",
+          "contextualTitle": "pi-go"
+        },
+        {
+          "type": "webview",
+          "id": "pi-go.chat",
+          "name": "Chat",
+          "icon": "$(comment-discussion)",
+          "contextualTitle": "pi-go"
+        }
+      ],
+      "pi-go-secondary": [
+        {
+          "type": "webview",
+          "id": "pi-go.chatSecondary",
+          "name": "Chat",
+          "icon": "$(comment-discussion)",
+          "contextualTitle": "pi-go"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "pi-go.start",
@@ -29,7 +75,64 @@
       },
       {
         "command": "pi-go.refreshSessions",
-        "title": "pi-go: Refresh Sessions"
+        "title": "pi-go: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pi-go.newSession",
+        "title": "pi-go: New Session",
+        "icon": "$(plus)",
+        "category": "pi-go"
+      },
+      {
+        "command": "pi-go.openSession",
+        "title": "pi-go: Open Session",
+        "icon": "$(comment-discussion)",
+        "category": "pi-go"
+      },
+      {
+        "command": "pi-go.attachFile",
+        "title": "pi-go: Attach File to Prompt",
+        "icon": "$(file-add)",
+        "category": "pi-go"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "pi-go.newSession",
+          "group": "navigation@1",
+          "when": "view == pi-go.sessions"
+        },
+        {
+          "command": "pi-go.refreshSessions",
+          "group": "navigation@2",
+          "when": "view == pi-go.sessions"
+        },
+        {
+          "command": "pi-go.attachFile",
+          "group": "navigation@1",
+          "when": "view == pi-go.chat || view == pi-go.chatSecondary"
+        },
+        {
+          "command": "pi-go.newSession",
+          "group": "navigation@2",
+          "when": "view == pi-go.chat || view == pi-go.chatSecondary"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pi-go.openSession",
+          "group": "inline@1",
+          "when": "view == pi-go.sessions && viewItem == piGoSession"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "pi-go.chat.focus",
+        "key": "ctrl+alt+u",
+        "mac": "cmd+alt+u"
       }
     ],
     "chatParticipants": [
@@ -77,9 +180,9 @@
     }
   },
   "scripts": {
-    "compile": "tsc --noEmit && node esbuild.js",
-    "package": "tsc --noEmit && node esbuild.js --production",
-    "check-types": "tsc --noEmit"
+    "compile": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js",
+    "package": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js --production",
+    "check-types": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0"
@@ -87,7 +190,9 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "1.137.0",
+    "dompurify": "^3.2.4",
     "esbuild": "^0.25.0",
+    "marked": "^15.0.7",
     "typescript": "^5.7.0"
   }
 }

@@ -46,6 +46,30 @@ pi-go dispatches slash commands only in its TUI today, so in VS Code sessions:
 Follow-up (pi-go side): dispatch slash commands in the ACP prompt handler; the
 advertisement already exists.
 
+## Dedicated chat tab
+
+In addition to the native agent sessions above, the extension contributes a
+**pi-go** view container (activity bar, and the same Chat view in the secondary
+sidebar) — the dedicated tab pattern Claude Code and Codex use:
+
+- **Chat** — a webview chat: streamed replies, collapsible thinking blocks,
+  live tool cards with real line diffs for file edits, fenced ```mermaid
+  fences rendered as diagrams (the library loads on demand from cdnjs;
+  offline, the source code block stays), a slash-command popup fed by
+  `available_commands_update`, `@` file attachments (same size caps as
+  the native path), a stop button (ACP `session/cancel`), and a badge with the
+  number of running prompts.
+- **Sessions** — a tree of persisted pi-go sessions (`session/list`), newest
+  first. A single click loads the session and replays its transcript into the
+  chat view; the running-prompt count shows as the view badge.
+
+Both containers are stable contribution points — the dedicated tab works
+without `--enable-proposed-api`. One `ChatPanelProvider` serves both chat view
+ids (`pi-go.chat`, `pi-go.chatSecondary`) with `retainContextWhenHidden`, so
+the composer draft and transcript survive hiding the panel.
+
+Keybinding: **cmd+alt+u** (ctrl+alt+u elsewhere) focuses the chat view.
+
 ## Launching with the proposed API
 
 `chatSessionsProvider` is a proposed API. On stable VS Code you must grant it:
@@ -96,6 +120,16 @@ or step by step: `bun install`, `bun run compile`, then
   fallback quick-prompt command.
 - `src/transcript.ts` — turn model (user prompt / agent parts: text, thought,
   tool call) and the ACP→store writers shared by live prompts and replays.
+- `src/chatPanel.ts` — host bridge for the dedicated chat tab: webview HTML
+  (CSP, nonce), host↔webview message routing, prompt runs with cancellation,
+  session replay, attachments, badges.
+- `src/sessionsTree.ts` — sessions tree provider for the activity-bar
+  container, with the running-prompt badge.
+- `src/webview/` — the webview bundle (vanilla TS, DOM only): controller,
+  composer (slash popup + attachment chips), markdown (marked + DOMPurify),
+  tool cards with LCS line diffs, entry point.
+- `src/shared/` — the host↔webview message protocol and the line-diff helper;
+  imported by both esbuild targets and never by "vscode".
 - `src/chatParts.ts` — ACP update → proposed-API chat part mappers (tool cards,
   thinking parts, notices) shared by the live stream and history.
 - `src/mentions.ts` — @file references → ACP embedded resource blocks.
