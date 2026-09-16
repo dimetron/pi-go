@@ -250,7 +250,14 @@ function activateNative(
   // without a Copilot sign-in. Generation never goes through it: prompts are
   // answered by the pi-go agent inside the session requestHandler.
   // -------------------------------------------------------------------------
-  const modelInfo: vscode.LanguageModelChatInformation = {
+  // targetChatSessionType scopes the model to pi-go agent sessions: without it
+  // the stub shows up in the regular Chat panel's model picker, where a picked
+  // prompt routes to provideLanguageModelChatResponse below and errors. The
+  // field is copied by the 1.137 ext host but is missing from the stable d.ts,
+  // so the literal is built loosely and cast. Deliberately no
+  // isUserSelectable: false — that flag also hides the model from typed
+  // sessions, where it must stay resolvable.
+  const modelInfo = {
     id: "agent",
     name: "pi-go agent",
     family: "pi-go",
@@ -258,7 +265,8 @@ function activateNative(
     maxInputTokens: 1_000_000,
     maxOutputTokens: 1_000_000,
     capabilities: { toolCalling: true },
-  };
+    targetChatSessionType: SESSION_TYPE,
+  } as vscode.LanguageModelChatInformation;
   context.subscriptions.push(
     vscode.lm.registerLanguageModelChatProvider("pi-go", {
       provideLanguageModelChatInformation: async () => [modelInfo],

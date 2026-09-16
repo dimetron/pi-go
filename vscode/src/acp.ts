@@ -76,8 +76,8 @@ export class PiGoAcpClient implements vscode.Disposable {
       this.spawnError.fire(err.message);
       log.error(`failed to spawn ${command}: ${err.message}`);
     });
-    this.process.on("exit", (code) => {
-      log.error(`acp-server exited (code ${code})`);
+    this.process.on("exit", (code, signal) => {
+      log.error(`acp-server exited (code ${code}, signal ${signal ?? "none"})`);
       this.connection = undefined;
       this.initialized = false;
     });
