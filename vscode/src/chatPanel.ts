@@ -301,7 +301,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update") {
-      this.postAll({ type: "toolUpdate", sessionId: update.sessionId, tool: toolStateOf(u) });
+      // Merge against the recorded state: updates carry only changed fields,
+      // so a status-only terminal update must not wipe the name/title/input
+      // the start event provided.
+      const tool = toolStateOf(u, this.store.toolCall(update.sessionId, u.toolCallId));
+      this.postAll({ type: "toolUpdate", sessionId: update.sessionId, tool });
       return;
     }
   }

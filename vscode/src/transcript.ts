@@ -2,6 +2,10 @@ import * as vscode from "vscode";
 import type * as acp from "@agentclientprotocol/sdk";
 import { SESSION_SCHEME } from "./acp";
 
+// Output cap for tool cards; raw output can be huge (pi-go sends raw result
+// payloads), so clamp what reaches the UI.
+export const MAX_TOOL_OUTPUT = 16 * 1024;
+
 // ---------------------------------------------------------------------------
 // Turn model — what a session transcript is made of, in arrival order.
 // ---------------------------------------------------------------------------
@@ -145,6 +149,17 @@ export class TranscriptStore {
     else list.push({ role: "agent", parts: [{ kind: "tool", tool: state }] });
   }
 
+  /** Current state of one tool call, wherever it was recorded. */
+  toolCall(acpId: string, toolCallId: string): ToolCallState | undefined {
+    for (const turn of this.turnList(acpId)) {
+      if (turn.role !== "agent") continue;
+      for (const p of turn.parts) {
+        if (p.kind === "tool" && p.tool.toolCallId === toolCallId) return p.tool;
+      }
+    }
+    return undefined;
+  }
+
   private turnList(acpId: string): Turn[] {
     let t = this.turns.get(acpId);
     if (!t) {
@@ -187,7 +202,8 @@ export function recordUpdate(store: TranscriptStore, update: acp.SessionNotifica
     }
     case "tool_call":
     case "tool_call_update": {
-      store.upsertToolCall(update.sessionId, toolStateOf(u));
+      const merged = toolStateOf(u, store.toolCall(update.sessionId, u.toolCallId));
+      store.upsertToolCall(update.sessionId, merged);
       return true;
     }
     default:
@@ -195,19 +211,57 @@ export function recordUpdate(store: TranscriptStore, update: acp.SessionNotifica
   }
 }
 
-/** Merge a tool_call / tool_call_update payload into a ToolCallState. */
+/**
+ * Merge a tool_call / tool_call_update payload into a ToolCallState.
+ *
+ * ACP tool-call updates carry only the fields that changed — an omitted (or
+ * null) field means "leave unchanged" — so when a state for the same
+ * toolCallId already exists it is the base and the update folds in on top.
+ * Building a fresh state from each update alone is what collapsed completed
+ * cards to a bare "✓ tool": the terminal update only carries a status, and
+ * the name, title and input recorded at the start were discarded.
+ */
 export function toolStateOf(
   u: Extract<acp.SessionUpdate, { sessionUpdate: "tool_call" | "tool_call_update" }>,
+  existing?: ToolCallState,
 ): ToolCallState {
-  return {
-    toolCallId: u.toolCallId,
-    toolName: u.name ?? deriveName(u.title),
-    title: u.title ?? "",
-    status: u.status ?? "pending",
-    inputText: formatInput(u.rawInput),
-    outputText: formatContent(u.content),
-    diff: firstDiff(u.content),
-  };
+  const state: ToolCallState = existing
+    ? { ...existing, toolCallId: u.toolCallId }
+    : {
+        toolCallId: u.toolCallId,
+        toolName: deriveName(u.title),
+        title: u.title ?? "",
+        status: u.status ?? "pending",
+        inputText: formatInput(u.rawInput),
+        outputText: formatContent(u.content),
+        diff: firstDiff(u.content),
+      };
+  if (u.name) state.toolName = u.name;
+  if (u.title) state.title = u.title;
+  if (u.status) state.status = u.status;
+  if (u.rawInput !== undefined && u.rawInput !== null) state.inputText = formatInput(u.rawInput);
+  const content = formatContent(u.content);
+  if (content !== undefined) {
+    state.outputText = content;
+    state.diff = firstDiff(u.content);
+  } else if (u.rawOutput !== undefined && u.rawOutput !== null) {
+    state.outputText = formatRawOutput(u.rawOutput);
+  }
+  return state;
+}
+
+/** Raw tool output as display text. pi-go sends results as rawOutput JSON:
+ *  string results pass through, anything else renders as pretty JSON, clamped
+ *  so a huge result cannot flood the card. */
+export function formatRawOutput(rawOutput: unknown): string | undefined {
+  if (rawOutput === undefined || rawOutput === null) return undefined;
+  try {
+    const text = typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput, null, 2);
+    if (text.length > MAX_TOOL_OUTPUT) return `${text.slice(0, MAX_TOOL_OUTPUT)}\n…(truncated)`;
+    return text;
+  } catch {
+    return String(rawOutput);
+  }
 }
 
 function deriveName(title: string | null | undefined): string {

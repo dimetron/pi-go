@@ -1,11 +1,7 @@
 import * as vscode from "vscode";
 import type { ChatTurnConstructors } from "./types/chatApi";
-import { type Turn, type ToolCallState } from "./transcript";
+import { MAX_TOOL_OUTPUT, type Turn, type ToolCallState } from "./transcript";
 import type * as acp from "@agentclientprotocol/sdk";
-
-// Output cap for the collapsible tool-card output section; raw output can be
-// huge (pi-go sends raw output payloads), so clamp what we hand to the UI.
-const MAX_TOOL_OUTPUT = 16 * 1024;
 
 /** Ctor bundle accepted by the mappers: full ChatTurnConstructors. */
 export type PartCtors = ChatTurnConstructors;
