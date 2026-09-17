@@ -168,3 +168,38 @@ func TestEcosystemsSorted_Empty(t *testing.T) {
 		t.Errorf("expected nil for an empty map, got %v", got)
 	}
 }
+
+func TestParseSBOM_SPDXInvalid(t *testing.T) {
+	if _, err := parseSBOM(PredicateSPDXPrefix, json.RawMessage(`{`)); err == nil {
+		t.Error("expected an error for malformed SPDX")
+	}
+	if _, err := parseSBOM(PredicateSPDXPrefix, json.RawMessage(`[]`)); err == nil {
+		t.Error("expected an error when the SPDX document is not an object")
+	}
+}
+
+// A package's first purl ref wins, and non-purl refs are skipped.
+func TestParseSBOM_SPDXSkipsNonPurlRefs(t *testing.T) {
+	const doc = `{
+	  "spdxVersion": "SPDX-2.3",
+	  "name": "pi-go",
+	  "packages": [
+	    {
+	      "name": "a",
+	      "externalRefs": [
+	        {"referenceType": "documentation", "referenceLocator": "https://example.com/a"},
+	        {"referenceType": "purl", "referenceLocator": "pkg:npm/left-pad@1"},
+	        {"referenceType": "purl", "referenceLocator": "pkg:golang/ignored@v1"}
+	      ]
+	    }
+	  ]
+	}`
+	got, err := parseSBOM(PredicateSPDXPrefix, json.RawMessage(doc))
+	if err != nil {
+		t.Fatalf("parseSBOM: %v", err)
+	}
+	want := map[string]int{"npm": 1}
+	if !reflect.DeepEqual(got.Ecosystems, want) {
+		t.Errorf("ecosystems = %v, want %v", got.Ecosystems, want)
+	}
+}
