@@ -14,6 +14,17 @@ config:
   - file: ${AGENTGATEWAY_PI_ALIASES:-./pi-aliases.json}
   - inline:
       providers: {}
+frontendPolicies:
+  http:
+    # Maximum request body the gateway will buffer. The built-in default is
+    # 2 MiB (DEFAULT_BUFFER_LIMIT in crates/http), which a long pi-go session
+    # blows past: the whole transcript, tool results included, is serialized
+    # into one request body. Over the limit the gateway answers
+    #   413 request_body_too_large
+    #   "LLM request body exceeded the buffer limit"
+    # before the request reaches a provider, so it looks like a model failure.
+    # 20 MiB matches examples/llm-basic in the agentgateway repo.
+    maxBufferSize: 20971520
 gateways:
   default:
     port: 4000
