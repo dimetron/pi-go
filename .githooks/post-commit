@@ -10,19 +10,37 @@
 # This runs after the signature would have been applied, so it is the first
 # point at which the outcome is actually knowable. It cannot fail the commit —
 # post-commit's exit code is ignored — so it prints the repair command instead.
+#
+# It verifies rather than looking for a gpgsig header. The header survives a
+# later rewrite of the commit object, so a header test passes on commits whose
+# signature is invalid — see CLAUDE.md, "Verify signatures with git verify-commit".
 set -euo pipefail
 
-if git cat-file commit HEAD | grep -q '^gpgsig'; then
+if [ -n "$(git config --get gpg.ssh.allowedSignersFile || true)" ] \
+   && git verify-commit HEAD >/dev/null 2>&1; then
   exit 0
 fi
 
 SHA="$(git rev-parse --short HEAD)"
+if [ -z "$(git config --get gpg.ssh.allowedSignersFile || true)" ]; then
+  REASON="gpg.ssh.allowedSignersFile is not configured, so the signature cannot
+  be verified. Set it up once (see CLAUDE.md):
+
+      echo \"$(git config user.email) \$(git config user.signingkey)\" \\
+        > ~/.config/git/allowed_signers
+      git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers"
+else
+  REASON="the signature is missing or INVALID — it fails git verify-commit. A
+  gpgsig header is present in a rewritten commit object, which is why a header
+  check is not used here. commit.gpgsign is set, so signing most likely failed
+  because op-ssh-sign could not reach the 1Password agent from a sandbox."
+fi
+
 cat >&2 <<EOF
 
-  ⚠  UNSIGNED COMMIT: $SHA
+  ⚠  $SHA DOES NOT HAVE A VALID SIGNATURE
 
-  commit.gpgsign is set, so signing was attempted and failed — most likely
-  because op-ssh-sign could not reach the 1Password agent from a sandbox.
+  $REASON
 
   Re-sign it before pushing:
 

@@ -82,27 +82,88 @@ user.signingkey  = ssh-ed25519 AAAAC3Nza...
 gpg.ssh.program  = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
 ```
 
-### Verify signatures by inspecting the raw object
+### Verify signatures with `git verify-commit`, never with the `gpgsig` header
 
-**Do not use `%G?` to check.** `gpg.ssh.allowedSignersFile` is not configured, so
-signature *verification* cannot run: `git log --show-signature` errors with
-`gpg.ssh.allowedSignersFile needs to be configured and exist`, and `%G?` reports
-`N` for correctly signed and unsigned commits alike. It is a verification gap,
-not a signing failure, but it makes the obvious check useless.
-
-Inspect the raw object instead — a signed commit has a `gpgsig` header:
+**A `gpgsig` header does not mean the signature is valid.** It only means signing
+was *attempted* at the time the commit was created. Rewriting the commit object
+afterwards keeps the header and silently invalidates the signature. That is not
+hypothetical: appending a trailer, dropping a duplicate one, or re-writing the
+message with `git hash-object -t commit -w` all produce a commit that passes a
+header check and fails verification.
 
 ```bash
+# WRONG — passes on invalid signatures
 git cat-file commit HEAD | grep -q '^gpgsig' && echo signed || echo UNSIGNED
-git log --format='%h %(trailers:key=Signed-off-by,valueonly,separator=;) %s' -5
+
+# RIGHT — actually verifies the signature
+git verify-commit HEAD && echo VALID || echo INVALID
 ```
 
-Configuring an allowed-signers file would restore `%G?`, and is worth doing:
+One-time setup, without which verification cannot run at all
+(`gpg.ssh.allowedSignersFile needs to be configured and exist`, and `%G?`
+reports `N` for signed and unsigned commits alike):
 
 ```bash
 echo "dimetron@me.com $(git config user.signingkey)" > ~/.config/git/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ```
+
+Then check a range — every commit a PR would publish:
+
+```bash
+git log --format='%h' origin/main..HEAD | while read c; do
+  printf '%s ' "$c"
+  git verify-commit "$c" >/dev/null 2>&1 && echo VALID || echo ">>> INVALID <<<"
+done
+git log --format='%h %(trailers:key=Signed-off-by,valueonly,separator=;) %s' -5
+```
+
+**To fix commits that carry an invalid signature**, re-sign them — do not
+hand-edit the object:
+
+```bash
+git rebase --exec 'git commit --amend --no-edit -S' origin/main
+```
+
+`-S` signs. Do **not** pass `-s` as well when the message already ends in a
+`Signed-off-by` line: you get a duplicate trailer, and "fixing" that by
+rewriting the message with `git hash-object` is what breaks the signature in the
+first place. Prefer letting the `commit-msg` hook add the trailer, or run
+`git commit -S` alone.
+
+GitHub's own verdict is the ground truth for what reviewers see, and it agrees
+with `git verify-commit`:
+
+```bash
+gh api repos/dimetron/pi-go/commits/<sha> \
+  --jq '.commit.verification | "\(.verified) \(.reason)"'
+```
+
+### Two kinds of commit that fail a local check and are not your problem
+
+111 merge commits on `main` fail `git verify-commit` locally. They are
+**GitHub-created merge commits**, signed by GitHub's own key — GitHub reports
+them `verified=true`, but your personal `allowed_signers` has no public key for
+that signature, so a local check cannot confirm it and fails closed. They are
+never in a push range (`rev-list <sha> --not --remotes=origin` is empty for
+them), so `pre-push` does not reject them. Do not "fix" them.
+
+The non-merge ones are real, and five exist in `main` as of 2026-09-17:
+
+```
+60cbdfa  feat(hack/agentgateway): track update-prices.sh
+6ce61d9  feat(hack/agentgateway): add update.sh to push repo changes ...
+4aa99b8  feat(ollama): cloud pricing and context windows in model metadata
+369cfbd  feat: add Nix flake and NixOS module
+de6481b  pimodels: add NewFromInfo
+```
+
+The first two were produced by hand-rewriting commit objects with
+`git hash-object -t commit -w` after signing, which keeps the `gpgsig` header
+and invalidates the signature. The rest predate this guidance. All five are
+already merged, so removing them means rewriting published history — it needs an
+admin force-push and invalidates every clone, so it is a deliberate decision, not
+a cleanup. Record them rather than quietly re-pushing.
 
 ### Never use `--no-verify`
 
@@ -111,9 +172,10 @@ hook, not "just this once", not with a note in the commit message. There is no
 case in this repo where it is the right answer.
 
 `--no-verify` skips *all* hooks, including the signing path — so a bypassed
-commit lands unsigned, and because `gpg.ssh.allowedSignersFile` is unset (see
-above) nothing will tell you. That is how `0714568`, `a8b243b` and `bcb6d26`
-ended up with no signature.
+commit lands unsigned. That is how `0714568`, `a8b243b` and `bcb6d26` ended up
+with no signature. Set up `gpg.ssh.allowedSignersFile` (above) so that
+`git verify-commit` catches it immediately rather than leaving it for a reviewer
+to notice.
 
 The hook that usually tempts this is `golangci-lint`, which runs against the
 **primary checkout** and so can fail on pre-existing issues in files a worktree

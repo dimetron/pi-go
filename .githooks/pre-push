@@ -8,12 +8,21 @@
 # other way still has to be caught before the objects leave the machine.
 #
 # The post-commit hook only warns — it cannot stop an unsigned commit, and
-# AGENTS.md records commits (0714568, a8b243b, bcb6d26) that reached the
-# remote that way. Signature *verification* via %G? is unusable here because
-# gpg.ssh.allowedSignersFile is unset (see AGENTS.md), so this inspects the
-# raw commit object for a gpgsig header instead: presence of the header means
-# signing was attempted and produced a signature; verification happens on the
-# server side.
+# CLAUDE.md records commits (0714568, a8b243b, bcb6d26) that reached the
+# remote that way.
+#
+# Signature checking uses `git verify-commit`, NOT a gpgsig header test. The
+# header only proves signing was attempted when the commit was created: rewrite
+# the object afterwards (append a trailer, re-word the message with
+# `git hash-object -t commit -w`, or drop a duplicate Signed-off-by) and the
+# header survives while the signature becomes invalid. A header test therefore
+# passes on commits GitHub marks `invalid`, which is how PR #345 published two
+# of them through this very hook.
+#
+# `git verify-commit` needs gpg.ssh.allowedSignersFile configured (CLAUDE.md,
+# "Verify signatures with git verify-commit"). When it is missing, verification
+# is impossible and this hook says so loudly rather than accepting the commit —
+# an enforcement gate that silently passes is worse than none.
 #
 # Skipped worktrees (prunable entries) are ignored. Merge commits created by
 # git itself are checked like any other commit.
@@ -25,6 +34,21 @@ zero=0000000000000000000000000000000000000000
 unsigned=()
 missing_sob=()
 size_scan=()
+
+# Without this file `git verify-commit` cannot verify anything, so every commit
+# would look unsigned and the hook would be useless whichever way it failed.
+if [ -z "$(git config --get gpg.ssh.allowedSignersFile || true)" ]; then
+  echo "pre-push: gpg.ssh.allowedSignersFile is not configured, so signatures" >&2
+  echo "          cannot be verified. Set it up once (see CLAUDE.md):" >&2
+  echo "            echo \"$(git config user.email) \$(git config user.signingkey)\" \\" >&2
+  echo "              > ~/.config/git/allowed_signers" >&2
+  echo "            git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers" >&2
+  exit 1
+fi
+
+verify_signature() {
+  git verify-commit "$1" >/dev/null 2>&1
+}
 
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Branch deletion or remote already has the ref with no new commits.
@@ -47,7 +71,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 
   for sha in $range; do
-    if ! git cat-file commit "$sha" | grep -q '^gpgsig'; then
+    if ! verify_signature "$sha"; then
       unsigned+=("$sha")
     fi
     trailers="$(git log --format='%(trailers:key=Signed-off-by,valueonly)' -1 "$sha")"
@@ -65,15 +89,18 @@ if [ "${#size_scan[@]}" -gt 0 ]; then
   "$(dirname "$0")/check-large-files" commits "${size_scan[@]}" || fail=1
 fi
 if [ "${#unsigned[@]}" -gt 0 ]; then
-  echo "pre-push: UNSIGNED commits cannot be pushed:" >&2
+  echo "pre-push: commits whose signature is missing or INVALID cannot be pushed:" >&2
   printf '  %s\n' "${unsigned[@]}" >&2
-  echo "  Re-sign each with:  git rebase --exec 'git commit --amend --no-edit -S' origin/main" >&2
+  echo "  A gpgsig header is not enough — these fail git verify-commit." >&2
+  echo "  Re-sign them:  git rebase --exec 'git commit --amend --no-edit -S' origin/main" >&2
+  echo "  Do NOT hand-edit the commit object; that is what invalidates it." >&2
   fail=1
 fi
 if [ "${#missing_sob[@]}" -gt 0 ]; then
   echo "pre-push: commits missing a matching Signed-off-by trailer:" >&2
   printf '  %s\n' "${missing_sob[@]}" >&2
-  echo "  Fix with:          git rebase --exec 'git commit --amend --no-edit -sS' origin/main" >&2
+  echo "  Fix with:      git rebase --exec 'git commit --amend --no-edit -S' origin/main" >&2
+  echo "  (-s adds a second trailer when the message already has one)" >&2
   fail=1
 fi
 exit $fail
