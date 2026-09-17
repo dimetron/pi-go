@@ -134,7 +134,7 @@ example. Address one directly when you care which account pays:
 ```bash
 curl -s http://localhost:4000/v1/chat/completions -H 'content-type: application/json' \
   -H "Authorization: Bearer $AGENTGATEWAY_API_KEY" \
-  -d '{"model":"ollama2/deepseek-v4-flash:0731-cloud",
+  -d '{"model":"ollama2/deepseek-v4.1-flash:cloud",
        "messages":[{"role":"user","content":"say ok"}]}'
 ```
 
