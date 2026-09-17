@@ -453,6 +453,22 @@ These each cost a debugging cycle when this config was built.
 - **Gemini 3.x needs its `thought_signature` echoed back** on replayed tool
   calls, or the second turn of any tool conversation is a 400. A client that
   drops unknown `tool_calls` fields cannot use Gemini 3; 2.5 is unaffected.
+- **A large request body 413s at the gateway, before any provider sees it.** The
+  frontend buffers request bodies up to `frontendPolicies.http.maxBufferSize`,
+  which defaults to **2 MiB**, and rejects anything larger:
+
+  ```
+  413 Request Entity Too Large
+  {"message":"LLM request body exceeded the buffer limit",
+   "code":"request_body_too_large"}
+  ```
+
+  pi-go serializes an entire session into one request body, so a long
+  conversation with a few large tool results crosses 2 MiB and every turn fails
+  this way — reading as a broken model when the model was never called. The
+  config raises the ceiling to 20 MiB. That is the *gateway's* cap, not the
+  model's context window: a body under the limit still fails upstream if it
+  exceeds what the model accepts.
 - **`localhost` inside a container is the container.** The compose file points
   `OLLAMA_BASE_URL` at `host.docker.internal` and adds the `host-gateway` entry
   that Linux needs.
