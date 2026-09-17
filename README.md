@@ -622,6 +622,12 @@ Restart the IDE so it picks up the file, then open the AI Assistant / agent pane
 the current project directory. `pi acp-server` accepts `--model` plus `--url`, `--header key=value` (repeatable) and
 `--insecure`; with no `--model` it falls back to `glm-5.2:cloud`.
 
+### VS Code
+
+The `vscode/` directory contains a VS Code extension that drives pi-go over
+ACP, surfacing it as a native agent in VS Code's Chat/Agent Sessions UI. See
+[vscode/README.md](vscode/README.md) for installation and usage.
+
 ### Sessions survive the server
 
 Every ACP session's transcript is written to the same store the terminal uses
