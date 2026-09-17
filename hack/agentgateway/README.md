@@ -18,6 +18,8 @@ edit when a model is retired or a provider needs failover.
 | `docker-compose.yaml` | Runs `config.yaml` plus Postgres for the request log. |
 | `run.sh` | Runs `config.yaml` from a local binary. |
 | `install.sh` | Copies the directory to `$HOME/agentgateway` and runs compose there — see below. |
+| `update.sh` | Pushes repo changes to `$HOME/agentgateway` and applies them — see below. |
+| `update-prices.sh` | Narrower version of `update.sh`: cost catalogs only. |
 | `backup-db.sh` / `restore-db.sh` | Dump / restore the request log to `backup/*.dump`. |
 | `migrate-sessions.py` | Replays pre-gateway pi-go session history into the request log. |
 | `ollama-cloud.yaml`, `ollama-cloud-k8s.yaml`, `docker-compose.ollama-cloud.yaml` | The upstream 3-instance Ollama Cloud example, kept as-is. `config.yaml` now absorbs it — same three keys, plus the `ollama-deepseek` virtual models. |
@@ -73,9 +75,7 @@ Installed. Work in /Users/you/agentgateway from now on:
 
 From then on you work directly in `$HOME/agentgateway` (that is where the
 writable `config.yaml` mount, the `postgres-data` volume and the `backup/` dumps
-live). Re-run `install.sh` after updating the repo copy to push a fresh
-config/scripts out; it skips `.env` and `backup/` so your keys and dumps are
-untouched. To install without starting compose, set `PI_AGW_SKIP_START=1`.
+live). To install without starting compose, set `PI_AGW_SKIP_START=1`.
 
 `AGENTGATEWAY_API_KEY` is the key *clients* send to the gateway, distinct from
 every provider key above, which the gateway holds and spends upstream. The
@@ -85,6 +85,47 @@ without it is rejected; see [Client authentication](#client-authentication).
 ```bash
 curl -s http://localhost:4000/v1/models -H "Authorization: Bearer $AGENTGATEWAY_API_KEY" | jq -r '.data[].id'
 ```
+
+### Apply repo changes
+
+`install.sh` is for the first install. To push an edit you just made in the repo
+to the running deployment, use `update.sh` — it is the one to reach for, and it
+does not re-run `compose pull` or touch `.env`:
+
+```bash
+hack/agentgateway/update.sh              # copy every managed file and apply
+hack/agentgateway/update.sh --dry-run    # show what would change, copy nothing
+hack/agentgateway/update.sh --skip-base  # leave base-costs.json alone
+hack/agentgateway/update.sh --restart    # restart instead of relying on the watcher
+```
+
+It refuses to run from `$HOME/agentgateway` (there is no repo to copy from
+there), and it **validates `config.yaml` before copying**. That check is the
+point of the script: a config the gateway cannot parse does *not* fail loudly —
+it logs an error and keeps serving the previous config, so a bad copy looks like
+a successful one. Catalogs get the same treatment (invalid JSON is refused),
+because a malformed catalog is only a startup warning and the cost data just
+quietly goes missing.
+
+Replaced files are saved to `backup/pre-update-<timestamp>/`. That matters
+because two of them are machine-managed and may hold content that exists nowhere
+else: `config.yaml` (UI saves rewrite it and strip comments — including any API
+keys you created there) and `base-costs.json` (the gateway overwrites it on
+every refresh, so the deployed copy is often *newer* than the repo's). Diff the
+backup before discarding it.
+
+`config.yaml` and both catalogs are watched, so copying them is enough — no
+restart. That was verified directly: setting `maxBufferSize` to a small value
+changed request handling within seconds and with no restart. `update.sh` does
+not parse the logs to confirm this, because `config.yaml` enables
+`llm.prompt`/`llm.completion` logging and past prompts appear in `docker logs` —
+a grep for "reload" matches old conversations as readily as real events, and a
+check that lies is worse than no check. Use `--restart` when you want certainty.
+
+Only `update-prices.sh` (catalogs only) and the two files the deployment owns —
+`.env` and `backup/` — are outside `update.sh`'s scope. `.env` is never copied:
+it holds the live provider keys, and the deployment is the only place they
+exist.
 
 ## Two naming schemes, on purpose
 
