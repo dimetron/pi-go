@@ -178,11 +178,11 @@ llm:
     routing:
       weighted:
         targets:
-        - model: ollama1/deepseek-v4-flash:0731-cloud
+        - model: ollama1/deepseek-v4.1-flash:cloud
           weight: 1
-        - model: ollama2/deepseek-v4-flash:0731-cloud
+        - model: ollama2/deepseek-v4.1-flash:cloud
           weight: 1
-        - model: ollama3/deepseek-v4-flash:0731-cloud
+        - model: ollama3/deepseek-v4.1-flash:cloud
           weight: 1
   - name: ollama-gemma4
     routing:
@@ -218,21 +218,21 @@ llm:
     routing:
       failover:
         targets:
-        - model: ollama1/deepseek-v4-flash:0731-cloud
+        - model: ollama1/deepseek-v4.1-flash:cloud
           priority: 0
-        - model: ollama2/deepseek-v4-flash:0731-cloud
+        - model: ollama2/deepseek-v4.1-flash:cloud
           priority: 1
-        - model: ollama3/deepseek-v4-flash:0731-cloud
+        - model: ollama3/deepseek-v4.1-flash:cloud
           priority: 2
   - name: ollama-dsf4
     routing:
       failover:
         targets:
-        - model: ollama1/deepseek-v4-flash:0731-cloud
+        - model: ollama1/deepseek-v4.1-flash:cloud
           priority: 0
-        - model: ollama2/deepseek-v4-flash:0731-cloud
+        - model: ollama2/deepseek-v4.1-flash:cloud
           priority: 1
-        - model: ollama3/deepseek-v4-flash:0731-cloud
+        - model: ollama3/deepseek-v4.1-flash:cloud
           priority: 2
   - name: pi-default
     routing:
@@ -248,7 +248,7 @@ llm:
     routing:
       failover:
         targets:
-        - model: ollama1/deepseek-v4-flash:0731-cloud
+        - model: ollama1/deepseek-v4.1-flash:cloud
           priority: 0
         - model: openai/gpt-5.6-luna
           priority: 1

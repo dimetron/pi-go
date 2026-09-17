@@ -262,6 +262,13 @@
             "cacheRead": "0.007"
           }
         },
+        "deepseek-v4.1-flash:cloud": {
+          "rates": {
+            "input": "0.15",
+            "output": "0.6",
+            "cacheRead": "0.003"
+          }
+        },
         "deepseek-v4-pro": {
           "rates": {
             "input": "0.66",
