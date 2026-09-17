@@ -1,0 +1,3 @@
+# Request-log dumps from backup-db.sh land in backup/. They contain real usage
+# and prompt data; keep them out of git and don't let install.sh copy them.
+/backup/

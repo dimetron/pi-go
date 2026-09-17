@@ -17,6 +17,8 @@ edit when a model is retired or a provider needs failover.
 | `.env.example` | Every key the config reads. Copy to `.env`. |
 | `docker-compose.yaml` | Runs `config.yaml` plus Postgres for the request log. |
 | `run.sh` | Runs `config.yaml` from a local binary. |
+| `install.sh` | Copies the directory to `$HOME/agentgateway` and runs compose there — see below. |
+| `backup-db.sh` / `restore-db.sh` | Dump / restore the request log to `backup/*.dump`. |
 | `migrate-sessions.py` | Replays pre-gateway pi-go session history into the request log. |
 | `ollama-cloud.yaml`, `ollama-cloud-k8s.yaml`, `docker-compose.ollama-cloud.yaml` | The upstream 3-instance Ollama Cloud example, kept as-is. `config.yaml` now absorbs it — same three keys, plus the `ollama-deepseek` virtual models. |
 
@@ -47,6 +49,33 @@ set -a; . ../../.pi-go/.env; set +a
 
 Either way: LLM endpoint on `http://localhost:4000`, UI on
 `http://localhost:4000/ui`.
+
+### Install to `$HOME/agentgateway` and run it there
+
+The repo copy is the source of truth, but it is not where you run it: this
+machine-managed config, the request-log volume and the `backup/` dumps belong in a
+stable location outside the repo. `install.sh` copies the whole directory to
+`$HOME/agentgateway` (override with `AGENTGATEWAY_HOME`), seeds `.env` from
+`.env.example` if keys are missing, and runs `docker compose up -d` there:
+
+```bash
+hack/agentgateway/install.sh
+```
+
+```text
+Installing agentgateway -> /Users/you/agentgateway
+created /Users/you/agentgateway/.env from .env.example — edit it to add your keys:
+  vi /Users/you/agentgateway/.env
+Installed. Work in /Users/you/agentgateway from now on:
+  cd /Users/you/agentgateway
+  docker compose up -d
+```
+
+From then on you work directly in `$HOME/agentgateway` (that is where the
+writable `config.yaml` mount, the `postgres-data` volume and the `backup/` dumps
+live). Re-run `install.sh` after updating the repo copy to push a fresh
+config/scripts out; it skips `.env` and `backup/` so your keys and dumps are
+untouched. To install without starting compose, set `PI_AGW_SKIP_START=1`.
 
 `AGENTGATEWAY_API_KEY` is the key *clients* send to the gateway, distinct from
 every provider key above, which the gateway holds and spends upstream. The
@@ -231,6 +260,23 @@ Postgres is not published to the host by default; uncomment the `ports` block in
 `docker-compose.yaml` to reach it with `psql` directly. The `postgres-data`
 volume persists across `docker compose down`, so request history survives
 restarts — use `down -v` to discard it.
+
+### Backing up and restoring the request log
+
+Two helpers dump / restore the Postgres database into `backup/` in this directory
+(`~/.agentgateway/backup/` after an install). `backup/` is gitignored and excluded
+by `install.sh`, so dumps move with a copy of the directory but never reach the
+repo.
+
+```bash
+./backup-db.sh                 # -> backup/agentgateway-20260913-101500.dump
+./restore-db.sh backup/agentgateway-20260913-101500.dump
+```
+
+`restore-db.sh` uses `pg_restore --clean`, overwriting the current request log
+with the dump — stop the gateway first so the two don't race on the database.
+Dumps are taken inside the container via `docker compose exec … pg_dump -Fc` so
+they do not need Postgres published to the host.
 
 ### Cost tracking
 
