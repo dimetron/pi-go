@@ -5,6 +5,7 @@ import {
   firstDiff,
   formatContent,
   formatInput,
+  formatRawOutput,
   recordUpdate,
   toolStateOf,
   type ToolCallState,
@@ -229,6 +230,64 @@ describe("recordUpdate", () => {
     expect(parts[0]).toEqual({ kind: "thought", text: "hmm" });
     expect(parts[1].tool).toMatchObject({ toolCallId: "t1", toolName: "bash", inputText: "{\n  \"cmd\": \"ls\"\n}" });
   });
+
+  it("tool_call_update merges into the recorded state instead of replacing it", () => {
+    const t = store();
+    // Start: name, title and input are all present.
+    recordUpdate(t, update("s1", {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      name: "bash",
+      title: "git status",
+      status: "in_progress",
+      rawInput: { command: "git status" },
+    } as never));
+    // Terminal update: status only — the fields it omits must survive.
+    recordUpdate(t, update("s1", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+      rawOutput: { exit_code: 0, stdout: "On main" },
+    } as never));
+    const parts = (t.snapshot("s1")[0] as { parts: { kind: string; tool?: ToolCallState }[] }).parts;
+    expect(parts[0].tool).toMatchObject({
+      toolCallId: "t1",
+      toolName: "bash",
+      title: "git status",
+      status: "completed",
+      inputText: "{\n  \"command\": \"git status\"\n}",
+    });
+    // rawOutput feeds the card body when the update carries no content blocks.
+    expect(parts[0].tool?.outputText).toContain("\"exit_code\": 0");
+  });
+
+  it("toolStateOf merges onto an existing state field by field", () => {
+    const base = toolStateOf({
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      name: "read",
+      title: "read a.go",
+      status: "in_progress",
+      rawInput: { file_path: "a.go" },
+    } as never);
+    const end = toolStateOf({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed" } as never, base);
+    expect(end).toMatchObject({
+      toolCallId: "t1",
+      toolName: "read",
+      title: "read a.go",
+      status: "failed",
+      inputText: "{\n  \"file_path\": \"a.go\"\n}",
+    });
+    // Fields the update carries override the base.
+    const renamed = toolStateOf({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      name: "edit",
+      title: "edit b.go",
+    } as never, base);
+    expect(renamed.toolName).toBe("edit");
+    expect(renamed.title).toBe("edit b.go");
+  });
 });
 
 describe("toolStateOf / formatting helpers", () => {
@@ -264,6 +323,14 @@ describe("toolStateOf / formatting helpers", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(formatInput(cyclic)).toBe(String(cyclic));
+  });
+
+  it("formatRawOutput passes strings through, pretty-prints objects, clamps, and skips empty", () => {
+    expect(formatRawOutput(undefined)).toBeUndefined();
+    expect(formatRawOutput(null)).toBeUndefined();
+    expect(formatRawOutput("plain")).toBe("plain");
+    expect(formatRawOutput({ ok: true })).toBe("{\n  \"ok\": true\n}");
+    expect(formatRawOutput("x".repeat(17 * 1024))).toMatch(/\(truncated\)$/);
   });
 
   it("formatContent joins text, diffs, and terminal blocks", () => {

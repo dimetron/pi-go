@@ -153,6 +153,11 @@ func TestOnToolStartAndEndSuccess(t *testing.T) {
 	if end.RawOutput == nil {
 		t.Fatal("end rawOutput is nil, want non-nil result")
 	}
+	// The terminal update re-sends the start's title so a client that renders
+	// updates standalone still has a header for the completed card.
+	if end.Title == nil || *end.Title != "read /tmp/x.txt" {
+		t.Fatalf("end title = %+v, want %q", end.Title, "read /tmp/x.txt")
+	}
 }
 
 func TestOnToolEndFailureSetsFailedStatusAndErrorOutput(t *testing.T) {

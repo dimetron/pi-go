@@ -16,6 +16,7 @@ import (
 type callState struct {
 	id      acp.ToolCallId
 	name    string
+	title   string
 	kind    acp.ToolKind
 	parent  acp.ToolCallId
 	content []acp.ToolCallContent
@@ -89,7 +90,7 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 
 	s.nextCallSeq++
 	id := acp.ToolCallId("call_" + strconv.Itoa(s.nextCallSeq))
-	state := &callState{id: id, name: name, kind: toolKind(name)}
+	state := &callState{id: id, name: name, title: buildTitle(name, args), kind: toolKind(name)}
 
 	switch {
 	case isSubagentTool(name):
@@ -134,7 +135,7 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	if loc := locationFromArgs(args); loc != "" {
 		opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: loc}}))
 	}
-	if err := updater.Update(ctx, acp.StartToolCall(id, buildTitle(name, args), opts...)); err != nil {
+	if err := updater.Update(ctx, acp.StartToolCall(id, state.title, opts...)); err != nil {
 		return string(id), fmt.Errorf("stream: tool-call start: %w", err)
 	}
 	return string(id), nil
@@ -192,6 +193,13 @@ func (s *Stream) OnToolEnd(ctx context.Context, callID string, args map[string]a
 		status = acp.ToolCallStatusFailed
 	}
 	opts := []acp.ToolCallUpdateOpt{acp.WithUpdateStatus(status)}
+	// Resend the title so the terminal update is self-describing. ACP clients
+	// are supposed to merge updates into the state the start built, but a
+	// client that renders each update standalone would otherwise show the
+	// completed card with no header at all.
+	if state.title != "" {
+		opts = append(opts, acp.WithUpdateTitle(state.title))
+	}
 	switch {
 	case runErr != nil:
 		opts = append(opts, acp.WithUpdateRawOutput(map[string]any{"error": runErr.Error()}))

@@ -455,6 +455,10 @@ async function runPrompt(
 ): Promise<void> {
   // Editor-side listener: renders live updates into the chat editor. The
   // transcript store is fed by the global session-update listener instead.
+  // Tool-call states accumulate here for the length of the prompt so updates
+  // merge onto the state their start event built, instead of each update
+  // rendering from scratch.
+  const toolStates = new Map<string, ToolCallState>();
   const editorListener = client.onSessionUpdate((update) => {
     if (update.sessionId !== acpId || token.isCancellationRequested) return;
     const u = update.update;
@@ -476,7 +480,8 @@ async function runPrompt(
       }
       case "tool_call":
       case "tool_call_update": {
-        const state = toolStateOf(u);
+        const state = toolStateOf(u, toolStates.get(u.toolCallId));
+        toolStates.set(u.toolCallId, state);
         const part = toolPartFor(state, ctors, { live: true });
         if (part) pushPart(stream, part);
         break;
