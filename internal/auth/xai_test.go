@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -147,18 +148,6 @@ func TestXAITokenStoreRoundTrip(t *testing.T) {
 		t.Fatalf("SaveXAITokens: %v", err)
 	}
 
-	path, err := XAITokenStorePath()
-	if err != nil {
-		t.Fatalf("XAITokenStorePath: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat token store: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("token store mode = %o, want 0600", perm)
-	}
-
 	got, err := LoadXAITokens()
 	if err != nil {
 		t.Fatalf("LoadXAITokens: %v", err)
@@ -179,6 +168,59 @@ func TestXAITokenStoreRoundTrip(t *testing.T) {
 	// Clearing twice must not error — logout is not idempotent-sensitive.
 	if err := ClearXAITokens(); err != nil {
 		t.Errorf("second ClearXAITokens: %v", err)
+	}
+}
+
+// TestXAITokenStorePermissions pins the file and directory modes. Split from
+// the round-trip test because POSIX permission bits are not meaningful on
+// Windows, where the same assertions would fail for reasons that have nothing
+// to do with the code under test.
+func TestXAITokenStorePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+
+	if err := SaveXAITokens(&XAITokenSet{
+		AccessToken:  "access-1",
+		RefreshToken: "refresh-1",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveXAITokens: %v", err)
+	}
+
+	path, err := XAITokenStorePath()
+	if err != nil {
+		t.Fatalf("XAITokenStorePath: %v", err)
+	}
+	// The refresh token is a durable credential, so the file must not be
+	// group- or world-readable.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat token store: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("token store mode = %o, want 0600", perm)
+	}
+
+	di, err := os.Stat(filepath.Join(home, ".pi-go"))
+	if err != nil {
+		t.Fatalf("stat token dir: %v", err)
+	}
+	if perm := di.Mode().Perm(); perm != 0700 {
+		t.Errorf("token dir mode = %o, want 0700", perm)
+	}
+
+	// The atomic write must not leave a temp file behind.
+	entries, err := os.ReadDir(filepath.Join(home, ".pi-go"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
 	}
 }
 
@@ -635,5 +677,376 @@ func TestDeviceFlowInvokesOnToken(t *testing.T) {
 	}
 	if set.RefreshToken != "device-flow-refresh" {
 		t.Errorf("stored refresh token = %q, want device-flow-refresh", set.RefreshToken)
+	}
+}
+
+// TestDecodeJWTPayloadRejectsMalformed pins that a non-JWT, a wrong segment
+// count, a non-base64 payload and a non-JSON payload are all rejected rather
+// than yielding partial claims. A false positive here would route an opaque
+// credential to the subscription proxy.
+func TestDecodeJWTPayloadRejectsMalformed(t *testing.T) {
+	padded := base64.URLEncoding.EncodeToString([]byte(`{"iss":"https://auth.x.ai"}`))
+	cases := []struct {
+		name  string
+		token string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"two segments", "a.b", false},
+		{"four segments", "a.b.c.d", false},
+		{"not base64", "a.!!!not-base64!!!.c", false},
+		{"base64 but not json", "a." + base64.RawURLEncoding.EncodeToString([]byte("nope")) + ".c", false},
+		{"padded base64 payload", "a." + padded + ".c", true},
+		{"valid", makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai"}), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, ok := decodeJWTPayload(tc.token)
+			if ok != tc.want {
+				t.Fatalf("decodeJWTPayload ok = %v, want %v", ok, tc.want)
+			}
+			if ok && claims == nil {
+				t.Error("ok=true but claims is nil")
+			}
+		})
+	}
+}
+
+// TestXAITokenExpiryRejectsBadClaims covers the shapes that must not be read as
+// a valid expiry — a wrong type, a non-positive value, or a missing claim. Any
+// of these read as "expired", which is the safe direction.
+func TestXAITokenExpiryRejectsBadClaims(t *testing.T) {
+	cases := []struct {
+		name string
+		tok  string
+	}{
+		{"exp as string", makeXAIToken(t, map[string]any{"exp": "soon"})},
+		{"exp zero", makeXAIToken(t, map[string]any{"exp": 0})},
+		{"exp negative", makeXAIToken(t, map[string]any{"exp": -1})},
+		{"no exp", makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai"})},
+		{"not a jwt", "opaque"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := XAITokenExpiry(tc.tok); !got.IsZero() {
+				t.Errorf("XAITokenExpiry = %v, want zero time", got)
+			}
+		})
+	}
+	// A valid principal claim must be ignored when it is not a string.
+	if got := XAIPrincipalID(makeXAIToken(t, map[string]any{"principal_id": 42, "sub": "s"})); got != "s" {
+		t.Errorf("XAIPrincipalID = %q, want the sub fallback", got)
+	}
+	if got := XAIPrincipalID("not-a-jwt"); got != "" {
+		t.Errorf("XAIPrincipalID(non-jwt) = %q, want empty", got)
+	}
+}
+
+// TestImportGrokCLITokensErrors covers the unreadable and unparseable cases.
+// Both must surface rather than silently looking like "not logged in", which
+// would send the user through a needless second login.
+func TestImportGrokCLITokensErrors(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "auth.json")
+
+	if err := os.WriteFile(path, []byte("not json at all"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := ImportGrokCLITokens(); err == nil {
+		t.Error("expected an error for an unparseable auth.json")
+	}
+
+	// A directory in place of the file is a read error, not a missing file.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := ImportGrokCLITokens(); err == nil {
+		t.Error("expected an error when auth.json is a directory")
+	}
+}
+
+// TestLoadXAITokensRejectsCorruptStore: a corrupt store must be reported, not
+// mistaken for "no credentials".
+func TestLoadXAITokensRejectsCorruptStore(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(home, ".pi-go", xaiTokenFileName)
+	if err := os.WriteFile(path, []byte("{broken"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadXAITokens(); err == nil {
+		t.Error("expected an error for a corrupt token store")
+	}
+}
+
+// TestRefreshXAITokenRejectsEmptyAccessToken: a 200 response with no access
+// token must not be persisted as a usable credential.
+func TestRefreshXAITokenRejectsEmptyAccessToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"refresh_token": "rotated"})
+	}))
+	defer server.Close()
+	restore := setXAIEndpoints(t, server.URL, server.URL, server.URL)
+	defer restore()
+
+	if _, err := RefreshXAIToken(context.Background(), "r"); err == nil {
+		t.Error("expected an error when the response carries no access token")
+	}
+}
+
+// TestRefreshXAITokenRejectsNonJSON: a non-JSON 200 must be an error, not an
+// empty credential that overwrites a working one.
+func TestRefreshXAITokenRejectsNonJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html>proxy error</html>"))
+	}))
+	defer server.Close()
+	restore := setXAIEndpoints(t, server.URL, server.URL, server.URL)
+	defer restore()
+
+	if _, err := RefreshXAIToken(context.Background(), "r"); err == nil {
+		t.Error("expected an error for a non-JSON token response")
+	}
+}
+
+// TestXaiTokenSetFromResponseFallsBackToJWTExpiry: when the token endpoint
+// omits expires_in, the expiry must come from the JWT's own exp claim rather
+// than defaulting to the zero time, which would mark every token stale and
+// refresh on every single request.
+func TestXaiTokenSetFromResponseFallsBackToJWTExpiry(t *testing.T) {
+	want := time.Now().Add(3 * time.Hour).Truncate(time.Second)
+	tok := makeXAIToken(t, map[string]any{
+		"iss": "https://auth.x.ai",
+		"exp": want.Unix(),
+	})
+
+	// With expires_in: derived from the response.
+	withExpiresIn := xaiTokenSetFromResponse(&TokenResponse{AccessToken: tok, ExpiresIn: 3600})
+	if remaining := time.Until(withExpiresIn.ExpiresAt); remaining < 55*time.Minute || remaining > 65*time.Minute {
+		t.Errorf("expires_in path gave %s, want ~1h", remaining)
+	}
+
+	// Without expires_in: derived from the JWT.
+	withoutExpiresIn := xaiTokenSetFromResponse(&TokenResponse{AccessToken: tok})
+	if !withoutExpiresIn.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt = %v, want the JWT exp %v", withoutExpiresIn.ExpiresAt, want)
+	}
+	if withoutExpiresIn.Expired(time.Now()) {
+		t.Error("a token expiring in 3h must not be reported stale")
+	}
+}
+
+// TestResolveXAICredentialEnvOnly covers the env-token paths that the store
+// tests do not reach: a fresh env token is used directly, and an env token
+// with no stored refresh token is handed back rather than reported missing.
+func TestResolveXAICredentialEnvOnly(t *testing.T) {
+	t.Run("fresh env token is used directly", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		fresh := makeXAIToken(t, map[string]any{
+			"iss":          "https://auth.x.ai",
+			"principal_id": "acct-env",
+			"exp":          time.Now().Add(4 * time.Hour).Unix(),
+		})
+		t.Setenv("XAI_API_KEY", fresh)
+
+		called := false
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		defer server.Close()
+		restore := setXAIEndpoints(t, server.URL, server.URL, server.URL)
+		defer restore()
+
+		key, sub, err := ResolveXAICredential(context.Background())
+		if err != nil {
+			t.Fatalf("ResolveXAICredential: %v", err)
+		}
+		if key != fresh || !sub {
+			t.Errorf("got (%q…, %v), want the fresh env token and true", key[:12], sub)
+		}
+		if called {
+			t.Error("a fresh env token must not trigger a refresh")
+		}
+	})
+
+	t.Run("expired env token with no refresh token is handed back", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		stale := makeXAIToken(t, map[string]any{
+			"iss": "https://auth.x.ai",
+			"exp": time.Now().Add(-time.Hour).Unix(),
+		})
+		t.Setenv("XAI_API_KEY", stale)
+
+		key, sub, err := ResolveXAICredential(context.Background())
+		if err != nil {
+			t.Fatalf("ResolveXAICredential: %v", err)
+		}
+		// Handing it back lets the upstream 401 surface instead of a
+		// confusing "no credential configured".
+		if key != stale {
+			t.Error("expected the expired env token to be returned")
+		}
+		if !sub {
+			t.Error("expected subscription=true so the proxy is used")
+		}
+	})
+}
+
+// TestResolveXAICredentialRefreshFailurePaths covers the two failure
+// fallbacks: when refresh fails and an expired env token is present, the env
+// token is returned so the upstream error surfaces (rather than a misleading
+// "no credential"); with no env token the refresh error is reported.
+func TestResolveXAICredentialRefreshFailurePaths(t *testing.T) {
+	brokenRefresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+	}))
+	defer brokenRefresh.Close()
+
+	seedStaleStore := func(t *testing.T) {
+		t.Helper()
+		testenv.SetHome(t, t.TempDir())
+		if err := SaveXAITokens(&XAITokenSet{
+			AccessToken:  makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai", "exp": time.Now().Add(-time.Hour).Unix()}),
+			RefreshToken: "dead-refresh",
+			ExpiresAt:    time.Now().Add(-time.Hour),
+		}); err != nil {
+			t.Fatalf("SaveXAITokens: %v", err)
+		}
+	}
+
+	t.Run("refresh failure falls back to an expired env token", func(t *testing.T) {
+		seedStaleStore(t)
+		staleEnv := makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai", "exp": time.Now().Add(-time.Hour).Unix()})
+		t.Setenv("XAI_API_KEY", staleEnv)
+		restore := setXAIEndpoints(t, brokenRefresh.URL, brokenRefresh.URL, brokenRefresh.URL)
+		defer restore()
+
+		key, sub, err := ResolveXAICredential(context.Background())
+		if err != nil {
+			t.Fatalf("a refresh failure with an env token present should not be fatal: %v", err)
+		}
+		if key != staleEnv {
+			t.Error("expected the expired env token to be returned")
+		}
+		if !sub {
+			t.Error("expected subscription=true")
+		}
+	})
+
+	t.Run("refresh failure with no env token is reported", func(t *testing.T) {
+		seedStaleStore(t)
+		t.Setenv("XAI_API_KEY", "")
+		restore := setXAIEndpoints(t, brokenRefresh.URL, brokenRefresh.URL, brokenRefresh.URL)
+		defer restore()
+
+		_, _, err := ResolveXAICredential(context.Background())
+		if err == nil {
+			t.Fatal("expected the refresh failure to be reported")
+		}
+		if !strings.Contains(err.Error(), "invalid_grant") {
+			t.Errorf("error = %v, want it to carry the server reason", err)
+		}
+	})
+}
+
+// TestResolveXAICredentialUnreadableStore: a corrupt store must not block a
+// usable env credential — the store error is logged, not fatal.
+func TestResolveXAICredentialUnreadableStore(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".pi-go"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".pi-go", xaiTokenFileName), []byte("{corrupt"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	fresh := makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai", "exp": time.Now().Add(4 * time.Hour).Unix()})
+	t.Setenv("XAI_API_KEY", fresh)
+
+	key, sub, err := ResolveXAICredential(context.Background())
+	if err != nil {
+		t.Fatalf("a corrupt store must not be fatal when an env token exists: %v", err)
+	}
+	if key != fresh || !sub {
+		t.Error("expected the env token to win")
+	}
+}
+
+// TestImportGrokCLITokensSkipsNonXAIShapedEntry pins the second skip: an entry
+// under the xAI key space whose token is not a subscription token (a developer
+// key, say) must not be adopted.
+func TestImportGrokCLITokensSkipsNonXAIShapedEntry(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := map[string]any{
+		"https://auth.x.ai::" + xaiClientID: map[string]any{"key": "xai-developer-key-not-a-jwt"},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), raw, 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	set, err := ImportGrokCLITokens()
+	if err != nil {
+		t.Fatalf("ImportGrokCLITokens: %v", err)
+	}
+	if set != nil {
+		t.Errorf("adopted a non-subscription token: %+v", set)
+	}
+}
+
+// TestImportGrokCLITokensIgnoresStoredExpiryWhenTokenHasNone pins that a
+// malformed expires_at does not zero out the expiry — the JWT's own exp claim
+// is the fallback.
+func TestImportGrokCLITokensIgnoresMalformedExpiry(t *testing.T) {
+	home := t.TempDir()
+	testenv.SetHome(t, home)
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	want := time.Now().Add(5 * time.Hour).Truncate(time.Second)
+	tok := makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai", "exp": want.Unix()})
+	body := map[string]any{
+		"https://auth.x.ai::" + xaiClientID: map[string]any{
+			"key":        tok,
+			"expires_at": "not-a-timestamp",
+		},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), raw, 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	set, err := ImportGrokCLITokens()
+	if err != nil {
+		t.Fatalf("ImportGrokCLITokens: %v", err)
+	}
+	if set == nil {
+		t.Fatal("expected to adopt the token")
+	}
+	if !set.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt = %v, want the JWT exp %v", set.ExpiresAt, want)
 	}
 }
