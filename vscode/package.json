@@ -8,16 +8,17 @@
   "engines": {
     "vscode": "^1.137.0"
   },
-  "categories": ["AI", "Chat"],
+  "categories": [
+    "AI",
+    "Chat"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:pi-go.start",
     "onChatSession:pi-go",
     "onLanguageModelChatProvider:pi-go",
     "onView:pi-go.sessions",
-    "onView:pi-go.chat",
-    "onView:pi-go.chatSecondary"
+    "onView:pi-go.chat"
   ],
   "enabledApiProposals": [
     "chatSessionsProvider",
@@ -49,20 +50,13 @@
           "name": "Sessions",
           "icon": "$(history)",
           "contextualTitle": "pi-go"
-        },
-        {
-          "type": "webview",
-          "id": "pi-go.chat",
-          "name": "Chat",
-          "icon": "$(comment-discussion)",
-          "contextualTitle": "pi-go"
         }
       ],
       "pi-go-secondary": [
         {
           "type": "webview",
-          "id": "pi-go.chatSecondary",
-          "name": "Chat",
+          "id": "pi-go.chat",
+          "name": "Pi-Go",
           "icon": "$(comment-discussion)",
           "contextualTitle": "pi-go"
         }
@@ -70,8 +64,13 @@
     },
     "commands": [
       {
-        "command": "pi-go.start",
-        "title": "pi-go: Ask (quick prompt)",
+        "command": "pi-go.openWalkthrough",
+        "title": "pi-go: Open Getting Started",
+        "icon": "$(mortar-board)"
+      },
+      {
+        "command": "pi-go.chat.focus",
+        "title": "pi-go: Focus Chat",
         "icon": "$(comment-discussion)"
       },
       {
@@ -109,16 +108,6 @@
           "command": "pi-go.refreshSessions",
           "group": "navigation@2",
           "when": "view == pi-go.sessions"
-        },
-        {
-          "command": "pi-go.attachFile",
-          "group": "navigation@1",
-          "when": "view == pi-go.chat || view == pi-go.chatSecondary"
-        },
-        {
-          "command": "pi-go.newSession",
-          "group": "navigation@2",
-          "when": "view == pi-go.chat || view == pi-go.chatSecondary"
         }
       ],
       "view/item/context": [
@@ -164,8 +153,8 @@
     "walkthroughs": [
       {
         "id": "pi-go.getstarted",
-        "title": "Get Started with pi-go",
-        "description": "Use pi-go as a native ACP coding agent in VS Code.",
+        "title": "Get Started with Pi-Go",
+        "description": "Set up Pi-Go, open your chat, and learn the core coding workflows.",
         "steps": [
           {
             "id": "pi-go.getstarted.configure",
@@ -175,17 +164,21 @@
               "image": "media/walkthrough/configure.svg",
               "altText": "The pi-go.command setting pointing at the pi binary"
             },
-            "completionEvents": ["onSettingChanged:pi-go.command"]
+            "completionEvents": [
+              "onSettingChanged:pi-go.command"
+            ]
           },
           {
             "id": "pi-go.getstarted.chat",
             "title": "Open the pi-go chat",
-            "description": "Chat with the pi-go agent in a dedicated editor tab. Use the `cmd+alt+u` keybinding to focus it from anywhere.\n[Open the pi-go Chat](command:pi-go.chat.focus)",
+            "description": "Chat with the pi-go agent in a dedicated sidebar tab. Use the `cmd+alt+u` keybinding to focus it from anywhere.\n[Open the pi-go Chat](command:pi-go.chat.focus)",
             "media": {
               "image": "media/walkthrough/chat.svg",
               "altText": "The pi-go chat tab with its prompt input"
             },
-            "completionEvents": ["onView:pi-go.chat", "onView:pi-go.chatSecondary"]
+            "completionEvents": [
+              "onView:pi-go.chat"
+            ]
           },
           {
             "id": "pi-go.getstarted.session",
@@ -195,7 +188,9 @@
               "image": "media/walkthrough/session.svg",
               "altText": "A new session being added to the session list"
             },
-            "completionEvents": ["onCommand:pi-go.newSession"]
+            "completionEvents": [
+              "onCommand:pi-go.newSession"
+            ]
           },
           {
             "id": "pi-go.getstarted.attach",
@@ -205,7 +200,9 @@
               "image": "media/walkthrough/attach.svg",
               "altText": "A file being attached to the chat prompt"
             },
-            "completionEvents": ["onCommand:pi-go.attachFile"]
+            "completionEvents": [
+              "onCommand:pi-go.attachFile"
+            ]
           }
         ]
       }
@@ -223,7 +220,9 @@
           "items": {
             "type": "string"
           },
-          "default": ["acp-server"],
+          "default": [
+            "acp-server"
+          ],
           "description": "Arguments passed to pi-go."
         }
       }

@@ -16,10 +16,18 @@ const STATUS_META: Record<ToolSnapshot["status"], { glyph: string; className: st
   failed: { glyph: "✕", className: "failed", label: "failed" },
 };
 
+/** Tool details are user-controlled; status updates must never open raw output. */
+export const TOOL_CARD_DEFAULT_OPEN = false;
+
+export function shouldAutoExpandTool(_status: ToolSnapshot["status"]): boolean {
+  return false;
+}
+
 /** Create (or refresh) the card for one tool call. */
 export function toolCard(tool: ToolSnapshot, onRevealFile: (path: string) => void): ToolCard {
   const root = document.createElement("details");
   root.className = "tool-card";
+  root.open = TOOL_CARD_DEFAULT_OPEN;
   const body = document.createElement("div");
   body.className = "tool-body";
 
@@ -30,7 +38,9 @@ export function toolCard(tool: ToolSnapshot, onRevealFile: (path: string) => voi
   name.className = "tool-name";
   const title = document.createElement("span");
   title.className = "tool-title";
-  summary.append(glyph, name, title);
+  const status = document.createElement("span");
+  status.className = "tool-status";
+  summary.append(glyph, name, title, status);
   root.append(summary, body);
 
   const card: ToolCard = {
@@ -43,6 +53,7 @@ export function toolCard(tool: ToolSnapshot, onRevealFile: (path: string) => voi
       glyph.title = meta.label;
       name.textContent = next.toolName;
       title.textContent = next.title && next.title !== next.toolName ? next.title : "";
+      status.textContent = meta.label;
 
       body.replaceChildren();
       if (next.inputText) {
@@ -59,8 +70,8 @@ export function toolCard(tool: ToolSnapshot, onRevealFile: (path: string) => voi
         output.textContent = next.outputText;
         body.append(output);
       }
-      // Auto-expand while running so progress is visible; collapse when done.
-      root.open = next.status === "in_progress" ? true : root.open && next.status !== "pending";
+      // Keep the disclosure state under the user's control. Status updates
+      // only refresh the compact summary line; raw input/output stays hidden.
     },
   };
   card.update(tool);

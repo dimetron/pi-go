@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import vscode, { spy as mkSpy, type ChannelSpy } from "vscode";
-import { activate } from "../src/extension";
+import { activate, proposedApiEnabled } from "../src/extension";
 import type { SessionEntry } from "../src/acp";
 
 // activate() wires the real chatPanel/sessionsTree/acp modules together; mock
@@ -141,6 +141,9 @@ const logChannel: ChannelSpy = vscode.channelByName("pi-go")!;
 
 beforeEach(() => {
   vscode.__reset();
+  if (!process.argv.includes("--enable-proposed-api")) {
+    process.argv.push("--enable-proposed-api", "pi-go.pi-go-vscode");
+  }
   vscode.outputChannels.push(logChannel);
   vscode.__workspaceFolders.push({ uri: vscode.Uri.file("/tmp/ws"), name: "ws", index: 0 });
   // Fresh window spies so tests that replace them never leak into each other.
@@ -155,6 +158,12 @@ beforeEach(() => {
 const chatSpies = () => vscode.chat as unknown as Record<string, { calls: unknown[][] }>;
 
 describe("activate", () => {
+  it("detects the proposed API launch switch", () => {
+    expect(proposedApiEnabled(["code", "--folder-uri", "/tmp/ws"])).toBe(false);
+    expect(proposedApiEnabled(["code", "--enable-proposed-api", "pi-go.pi-go-vscode"])).toBe(true);
+    expect(proposedApiEnabled(["code", "--enable-proposed-api=pi-go.pi-go-vscode"])).toBe(true);
+  });
+
   it("registers providers, commands, the panel, and the tree", () => {
     const ctx = context();
     activate(ctx);
@@ -172,9 +181,9 @@ describe("activate", () => {
     );
 
     const providerCalls = vscode.window.registerWebviewViewProvider as unknown as { calls: unknown[][] };
-    expect(providerCalls.calls.map((c) => c[0])).toEqual(["pi-go.chat", "pi-go.chatSecondary"]);
+    expect(providerCalls.calls.map((c) => c[0])).toEqual(["pi-go.chat"]);
     expect(vscode.__commands.has("pi-go.attachFile")).toBe(true);
-    expect(vscode.__commands.has("pi-go.start")).toBe(true);
+    expect(vscode.__commands.has("pi-go.start")).toBe(false);
     expect(vscode.__commands.has("pi-go.refreshSessions")).toBe(true);
     expect(chatPanelState.instances).toHaveLength(1);
     expect(sessionsTreeMock.registerSessionsTree).toHaveBeenCalledTimes(1);
@@ -523,36 +532,6 @@ describe("native sessions path", () => {
     await expect(provider.provideTokenCount()).resolves.toBe(0);
   });
 
-  it("pi-go.start runs a quick prompt through the output channel", async () => {
-    activateWithCtors();
-    (vscode.window as unknown as { showInputBox: unknown }).showInputBox = mkSpy(async () => "quick question");
-    // Stream an agent chunk from inside the prompt so the channel appends it.
-    let promptRuns = 0;
-    (client() as unknown as { prompt: unknown }).prompt = (async () => {
-      promptRuns++;
-      client().fireUpdate(
-        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello there" } },
-        "n1",
-      );
-    }) as never;
-    await vscode.__commands.get("pi-go.start")?.();
-    const quick = vscode.channelByName("pi-go chat")!;
-    expect(quick.lines.some((l) => l.includes("You: quick question"))).toBe(true);
-    expect(quick.lines.join("")).toContain("pi-go: hello there");
-
-    // A dismissed input box does nothing.
-    (vscode.window as unknown as { showInputBox: unknown }).showInputBox = mkSpy(async () => undefined);
-    await vscode.__commands.get("pi-go.start")?.();
-    expect(promptRuns).toBe(1);
-    expect(quick.lines.filter((l) => l.startsWith("You:"))).toHaveLength(1);
-
-    // Failures are surfaced.
-    client().newSessionError = new Error("spawn failed");
-    (vscode.window as unknown as { showInputBox: unknown }).showInputBox = mkSpy(async () => "another");
-    await vscode.__commands.get("pi-go.start")?.();
-    const err = vscode.window.showErrorMessage as unknown as { calls: unknown[][] };
-    expect(err.calls.some((c) => String(c[0]).includes("pi-go failed: spawn failed"))).toBe(true);
-  });
 });
 
 describe("wiring and live-update paths", () => {

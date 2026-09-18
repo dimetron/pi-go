@@ -26,6 +26,7 @@ import {
 import { referencesToBlocks, skippedMentionsMarkdown } from "./mentions";
 import { ChatPanelProvider } from "./chatPanel";
 import { registerSessionsTree } from "./sessionsTree";
+import { explainPiGoError, renderPiGoErrorMarkdown, type PiGoLaunchConfig } from "./errorInfo";
 
 const log = vscode.window.createOutputChannel("pi-go", { log: true });
 
@@ -72,18 +73,21 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const chat = vscode.chat as unknown as ChatNamespaceWithSessions;
+  const proposalEnabled = proposedApiEnabled();
   const sessionsAvailable =
+    proposalEnabled &&
     typeof chat.registerChatSessionItemProvider === "function" &&
     typeof chat.registerChatSessionContentProvider === "function";
 
   try {
-    if (sessionsAvailable) {
-      activateNative(context, client, store, refresh, active, chat);
-    } else {
-      log.error(
-        "chat session APIs unavailable. Launch VS Code with " +
-          "--enable-proposed-api pi-go.pi-go-vscode to get native agent sessions.",
+    if (sessionsAvailable) activateNative(context, client, store, refresh, active, chat);
+    else if (!proposalEnabled) {
+      log.info(
+        "native agent sessions disabled; launch VS Code with " +
+          "--enable-proposed-api pi-go.pi-go-vscode to enable them",
       );
+    } else {
+      log.error("chat session APIs unavailable; native agent sessions are disabled");
     }
   } catch (err) {
     // A gated proposed API throws mid-activation; every command below must
@@ -104,60 +108,27 @@ export function activate(context: vscode.ExtensionContext): void {
     void selfCheck(client, process.env.PI_GO_SMOKE_FILE);
   }
 
-  // Dedicated chat tab: one ChatPanelProvider instance serves both the
-  // activity-bar container and the secondary-sidebar container (Claude's
-  // pattern). Works without the proposed-API flag.
+  // One dedicated chat in the secondary sidebar; the activity bar holds history.
+  // Works without the proposed-API flag.
   const panel = new ChatPanelProvider(context, client, store, refresh, active);
   context.subscriptions.push(
     panel,
     vscode.window.registerWebviewViewProvider("pi-go.chat", panel, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.window.registerWebviewViewProvider("pi-go.chatSecondary", panel, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
     vscode.commands.registerCommand("pi-go.attachFile", () => panel.attachFiles()),
+    vscode.commands.registerCommand("pi-go.chat.focus", () =>
+      vscode.commands.executeCommand("workbench.action.openView", "pi-go.chat"),
+    ),
+    vscode.commands.registerCommand("pi-go.openWalkthrough", () =>
+      vscode.commands.executeCommand("workbench.action.openWalkthrough", "pi-go.getstarted"),
+    ),
   );
 
   // Sessions tree with the running-prompt badge (also drives pi-go.openSession
   // / pi-go.newSession).
   registerSessionsTree(context, client, store, refresh, active, panel);
   log.info("chat panel and sessions tree registered");
-
-  // Fallback: quick one-shot prompt through an output channel.
-  let quickChat: vscode.OutputChannel | undefined;
-  context.subscriptions.push(
-    vscode.commands.registerCommand("pi-go.start", async () => {
-      const input = await vscode.window.showInputBox({
-        prompt: "Ask pi-go",
-        placeHolder: "Explain this code…",
-      });
-      if (!input) return;
-      try {
-        const entry = await client.newSession();
-        quickChat ??= vscode.window.createOutputChannel("pi-go chat");
-        quickChat.show(true);
-        context.subscriptions.push(
-          client.onSessionUpdate((update) => {
-            if (update.sessionId !== entry.sessionId) return;
-            if (update.update?.sessionUpdate !== "agent_message_chunk") return;
-            const text = chunkText(update);
-            if (text) quickChat?.append(text);
-          }),
-        );
-        quickChat.appendLine(`You: ${input}`);
-        quickChat.append("pi-go: ");
-        await client.prompt(
-          entry.sessionId,
-          [{ type: "text", text: input }],
-          new vscode.CancellationTokenSource().token,
-        );
-        quickChat.appendLine("");
-      } catch (err) {
-        void vscode.window.showErrorMessage(`pi-go failed: ${errString(err)}`);
-      }
-    }),
-  );
 
   log.info("pi-go extension activated");
 }
@@ -401,7 +372,8 @@ function createRequestHandler(
         refresh.fire();
         return { metadata: { cleared: true, newSessionId: entry.sessionId } };
       } catch (err) {
-        stream.markdown(`**pi-go error:** ${errString(err)}`);
+        const info = explainPiGoError(err, launchConfig());
+        stream.markdown(`**pi-go error:** ${errString(err)}${renderPiGoErrorMarkdown(info)}`);
         return { errorDetails: { message: errString(err) } };
       }
     }
@@ -435,7 +407,8 @@ function createRequestHandler(
       }
       const msg = errString(err);
       log.error(`prompt failed: ${msg}`);
-      stream.markdown(`\n\n**pi-go error:** ${msg}`);
+      const info = explainPiGoError(err, launchConfig());
+      stream.markdown(`\n\n**pi-go error:** ${msg}${renderPiGoErrorMarkdown(info)}`);
       return { errorDetails: { message: msg } };
     } finally {
       refresh.fire();
@@ -553,6 +526,19 @@ function guardedProposed(fn: () => void, what: string): boolean {
 
 function workspaceCwd(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+}
+
+export function proposedApiEnabled(argv: readonly string[] = process.argv): boolean {
+  return argv.some((arg) => arg === "--enable-proposed-api" || arg.startsWith("--enable-proposed-api="));
+}
+
+function launchConfig(): PiGoLaunchConfig {
+  const config = vscode.workspace.getConfiguration("pi-go");
+  return {
+    command: config.get<string>("command", "pi"),
+    args: config.get<string[]>("args", ["acp-server"]),
+    cwd: workspaceCwd(),
+  };
 }
 
 export function deactivate(): void {

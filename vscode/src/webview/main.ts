@@ -17,6 +17,7 @@ interface PersistedState {
   draft?: string;
   attachments?: string[];
   sessionId?: string;
+  welcomeDismissed?: boolean;
 }
 let persisted: PersistedState | undefined;
 try {

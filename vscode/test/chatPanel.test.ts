@@ -21,6 +21,14 @@ const state = vi.hoisted(() => ({
   counter: 0,
 }));
 
+const pingState = vi.hoisted(() => ({
+  run: vi.fn(async () => ({
+    ok: true,
+    title: "Pi-Go ping succeeded",
+    detail: "Provider: agentgateway\nModel: ollama-deepseek",
+  })),
+}));
+
 vi.mock("../src/acp", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/acp")>();
   class FakeClient {
@@ -59,6 +67,11 @@ vi.mock("../src/acp", async (importOriginal) => {
     dispose(): void {}
   }
   return { ...actual, PiGoAcpClient: FakeClient };
+});
+
+vi.mock("../src/ping", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/ping")>();
+  return { ...actual, runPiPing: pingState.run };
 });
 
 type FakeView = {
@@ -191,6 +204,25 @@ describe("ChatPanelProvider sessions", () => {
     panel.startNewSession();
     // Fire-and-forget; the session shows up in the store when it settles.
     await vi.waitFor(() => expect(store.uriFor("new-1")).toBeDefined());
+  });
+});
+
+describe("ChatPanelProvider ping", () => {
+  it("runs pi ping and broadcasts the result without starting a session", async () => {
+    const { panel, client } = setup();
+    const view = fakeView();
+    panel.resolveWebviewView(view as never, {} as never, {} as never);
+
+    view.__post({ type: "ping" });
+    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("pingResult"));
+
+    expect(pingState.run).toHaveBeenCalledWith({ command: "pi", args: ["acp-server"], cwd: "/tmp/ws" });
+    expect(client.promptCalls).toHaveLength(0);
+    expect(view.__messages.at(-1)).toMatchObject({
+      type: "pingResult",
+      ok: true,
+      title: "Pi-Go ping succeeded",
+    });
   });
 });
 

@@ -8,6 +8,8 @@ import {
 } from "./acp";
 import { TranscriptStore, toolStateOf } from "./transcript";
 import { pathsToBlocks, skippedMentionsMarkdown } from "./mentions";
+import { explainPiGoError, type PiGoLaunchConfig } from "./errorInfo";
+import { runPiPing } from "./ping";
 import type {
   CommandInfo,
   HostToWebview,
@@ -34,8 +36,8 @@ function getNonce(): string {
 }
 
 /**
- * Host bridge for the dedicated chat view (activity bar + secondary sidebar).
- * One instance serves both view ids; live ACP updates stream straight to the
+ * Host bridge for the dedicated secondary-sidebar chat view.
+ * Live ACP updates stream straight to the
  * webview while the global listener keeps the TranscriptStore authoritative
  * for snapshots, replays, and the native sessions path.
  */
@@ -135,6 +137,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "requestFilePicker":
         void this.pickFiles();
         break;
+      case "openPiGoSettings":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "pi-go.command");
+        break;
+      case "openPiGoLogs":
+        log.show(true);
+        break;
+      case "ping":
+        void this.runPing();
+        break;
+      case "showHistory":
+        void vscode.commands.executeCommand("workbench.action.openView", "pi-go.sessions");
+        break;
       case "draft":
         break;
       default:
@@ -182,7 +196,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.refresh.fire();
       return entry;
     } catch (err) {
-      this.postAll({ type: "error", message: errString(err) });
+      const info = explainPiGoError(err, this.launchConfig());
+      this.postAll({ type: "error", message: info.title, detail: info.detail, steps: info.steps });
       return undefined;
     }
   }
@@ -256,7 +271,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (err) {
       const msg = errString(err);
       log.error(`prompt failed: ${msg}`);
-      this.postAll({ type: "turnEnd", sessionId, error: msg });
+      const info = explainPiGoError(err, this.launchConfig());
+      this.postAll({
+        type: "turnEnd",
+        sessionId,
+        error: msg,
+        errorDetail: info.detail,
+        errorSteps: info.steps,
+      });
     } finally {
       this.inFlight.dispose();
       this.inFlight = undefined;
@@ -345,6 +367,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           ? { value, tooltip: value === 1 ? "1 prompt running" : `${value} prompts running` }
           : undefined;
     }
+  }
+
+  private launchConfig(): PiGoLaunchConfig {
+    const config = vscode.workspace.getConfiguration("pi-go");
+    return {
+      command: config.get<string>("command", "pi"),
+      args: config.get<string[]>("args", ["acp-server"]),
+      cwd: workspaceCwd(),
+    };
+  }
+
+  private async runPing(): Promise<void> {
+    const config = this.launchConfig();
+    const result = await runPiPing({ command: config.command, args: config.args, cwd: config.cwd });
+    this.postAll({ type: "pingResult", ...result });
   }
 
   private html(webview: vscode.Webview): string {
