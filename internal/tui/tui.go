@@ -73,6 +73,14 @@ type model struct {
 	agentCancel    context.CancelFunc // cancels the active agent response without quitting the TUI
 	pendingPrompts []queuedPrompt     // prompts submitted while a response is active
 
+	// The prompt of the most recent turn, kept so a turn that failed can be
+	// re-sent without retyping it. lastPromptFailed marks it as worth offering:
+	// a successful turn clears the flag, so /retry never replays a prompt whose
+	// answer is already on screen.
+	lastPrompt       string
+	lastMentions     []string
+	lastPromptFailed bool
+
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
@@ -1253,6 +1261,14 @@ func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 
 // handleToggleKey handles the Ctrl-chord toggles and the search popup.
 func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	// Ctrl+Y: re-send the prompt of a turn that failed. Checked before the input
+	// fallthrough, and only when the prompt is empty, so a user editing a new
+	// prompt never has it replaced by the previous one.
+	if key.Code == 'y' && key.Mod == tea.ModCtrl && m.inputModel.Text == "" {
+		model, cmd := m.handleRetry()
+		return model, cmd, true
+	}
+
 	// Ctrl+O: toggle compact/expanded tool output.
 	if key.Code == 'o' && key.Mod == tea.ModCtrl {
 		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
