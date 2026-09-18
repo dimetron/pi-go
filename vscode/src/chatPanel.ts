@@ -380,7 +380,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async runPing(): Promise<void> {
     const config = this.launchConfig();
-    const result = await runPiPing({ command: config.command, cwd: config.cwd });
+    const result = await runPiPing({ command: config.command, args: config.args, cwd: config.cwd });
     this.postAll({ type: "pingResult", ...result });
   }
 

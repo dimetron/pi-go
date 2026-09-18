@@ -73,18 +73,21 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const chat = vscode.chat as unknown as ChatNamespaceWithSessions;
+  const proposalEnabled = proposedApiEnabled();
   const sessionsAvailable =
+    proposalEnabled &&
     typeof chat.registerChatSessionItemProvider === "function" &&
     typeof chat.registerChatSessionContentProvider === "function";
 
   try {
-    if (sessionsAvailable) {
-      activateNative(context, client, store, refresh, active, chat);
-    } else {
-      log.error(
-        "chat session APIs unavailable. Launch VS Code with " +
-          "--enable-proposed-api pi-go.pi-go-vscode to get native agent sessions.",
+    if (sessionsAvailable) activateNative(context, client, store, refresh, active, chat);
+    else if (!proposalEnabled) {
+      log.info(
+        "native agent sessions disabled; launch VS Code with " +
+          "--enable-proposed-api pi-go.pi-go-vscode to enable them",
       );
+    } else {
+      log.error("chat session APIs unavailable; native agent sessions are disabled");
     }
   } catch (err) {
     // A gated proposed API throws mid-activation; every command below must
@@ -523,6 +526,10 @@ function guardedProposed(fn: () => void, what: string): boolean {
 
 function workspaceCwd(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+}
+
+export function proposedApiEnabled(argv: readonly string[] = process.argv): boolean {
+  return argv.some((arg) => arg === "--enable-proposed-api" || arg.startsWith("--enable-proposed-api="));
 }
 
 function launchConfig(): PiGoLaunchConfig {

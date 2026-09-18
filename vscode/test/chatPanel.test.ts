@@ -216,7 +216,7 @@ describe("ChatPanelProvider ping", () => {
     view.__post({ type: "ping" });
     await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("pingResult"));
 
-    expect(pingState.run).toHaveBeenCalledWith({ command: "pi", cwd: "/tmp/ws" });
+    expect(pingState.run).toHaveBeenCalledWith({ command: "pi", args: ["acp-server"], cwd: "/tmp/ws" });
     expect(client.promptCalls).toHaveLength(0);
     expect(view.__messages.at(-1)).toMatchObject({
       type: "pingResult",

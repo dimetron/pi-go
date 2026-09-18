@@ -86,9 +86,9 @@ code --enable-proposed-api pi-go.pi-go-vscode [folder]
   --enable-proposed-api pi-go.pi-go-vscode ~/p6s/pi-dev/pi-go
 ```
 
-Without the flag the extension still activates (the `pi-go: Ask (quick prompt)`
-command works), but native agent sessions are disabled and a warning is logged
-in the **pi-go** output channel.
+Without the flag the extension still activates and the dedicated Pi-Go chat
+view remains available, but native agent sessions are disabled and a warning is
+logged in the **pi-go** output channel.
 
 ## Build & install
 

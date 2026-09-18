@@ -24,14 +24,32 @@ function codeOf(error: unknown): string | undefined {
   return String((error as { code: unknown }).code);
 }
 
+function safeLaunch(command: string, args: readonly string[]): string {
+  const safe: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (/^(?:--?(?:api[-_]?key|token|secret|password|authorization))$/i.test(arg)) {
+      safe.push(arg, "[redacted]");
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+    if (/^(?:api[-_]?key|token|secret|password|authorization|header)=/i.test(arg)) {
+      safe.push(`${arg.slice(0, arg.indexOf("="))}=[redacted]`);
+      continue;
+    }
+    safe.push(arg);
+  }
+  return `${command} ${safe.join(" ")}`.trim();
+}
+
 export function explainPiGoError(error: unknown, config: PiGoLaunchConfig): PiGoErrorInfo {
   const raw = messageOf(error);
   const lower = raw.toLowerCase();
   const code = codeOf(error);
-  const launch = `${config.command} ${config.args.join(" ")}`.trim();
+  const launch = safeLaunch(config.command, config.args);
   const detail = `${raw}\nLaunch: ${launch}\nWorkspace: ${config.cwd}`;
 
-  if (code === "ENOENT" || lower.includes("enoent") || lower.includes("not found")) {
+  if (code === "ENOENT" || lower.includes("enoent") || /spawn .*not found|executable not found/.test(lower)) {
     return {
       title: "Pi-Go could not start",
       detail,
@@ -53,6 +71,19 @@ export function explainPiGoError(error: unknown, config: PiGoLaunchConfig): PiGo
         `Check that pi-go.command points to an executable file.`,
         `Run chmod +x on the pi binary if it is not executable.`,
         `Reload VS Code after correcting the setting.`,
+      ],
+    };
+  }
+
+  if (lower.includes("internal error")) {
+    return {
+      title: "Pi-Go agent reported an internal error",
+      detail,
+      raw,
+      steps: [
+        `Run the Ping icon to check the currently configured provider and model.`,
+        `If you recently changed ~/.pi-go/config.json, start a new session; existing sessions keep their previous model.`,
+        `Open the Pi-Go output log for the ACP server error details.`,
       ],
     };
   }

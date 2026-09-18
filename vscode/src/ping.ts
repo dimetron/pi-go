@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 export interface PiGoPingConfig {
   command: string;
+  args?: string[];
   cwd: string;
 }
 
@@ -24,12 +25,14 @@ export function sanitizePiPingOutput(output: string): string {
     .replace(/(API\s*Key\s*:\s*).*/gi, "$1[redacted]")
     .replace(/(Authorization\s*:\s*).*/gi, "$1[redacted]")
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
+    .replace(/([?&](?:api[-_]?key|key|token|access_token|authorization|secret|password)=)[^&\s]+/gi, "$1[redacted]")
     .trim();
 }
 
 export function formatPiPingResult(result: PiGoPingProcessResult): PiGoPingResult {
   const output = compactPingOutput(sanitizePiPingOutput([result.stdout, result.stderr].filter(Boolean).join("\n")));
-  if (result.exitCode === 0) {
+  const unhealthy = /RESULT:\s*(?:connection issue|failure)|skipped\s*[—-]\s*endpoint not reachable|HTTP FAILED|authentication failed|server error|rate limited|model ping failed/i.test(output);
+  if (result.exitCode === 0 && !unhealthy) {
     return {
       ok: true,
       title: "Pi-Go ping succeeded",
@@ -58,7 +61,11 @@ export function runPiPing(config: PiGoPingConfig, timeoutMs = 15_000): Promise<P
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const child = spawn(config.command, ["ping"], { cwd: config.cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const pingArgs = [
+      "ping",
+      ...(config.args ?? []).filter((arg) => arg !== "acp-server" && arg !== "--acp-server"),
+    ];
+    const child = spawn(config.command, pingArgs, { cwd: config.cwd, stdio: ["ignore", "pipe", "pipe"] });
     const finish = (result: PiGoPingResult): void => {
       if (settled) return;
       settled = true;
