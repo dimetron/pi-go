@@ -1012,6 +1012,13 @@ func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd)
 	}
 	m.sel.dragging = false
 
+	// Take the release's own position, not the last motion's. Terminals coalesce
+	// motion events, so the final mouse position often arrives only with the
+	// release: copying the last motion made the selection stop a row short of
+	// where the user let go.
+	mouse := msg.Mouse()
+	m.sel.cursorX, m.sel.cursorY = m.clampToChat(mouse.X, mouse.Y)
+
 	if m.sel.empty() {
 		m.sel = selection{} // a plain click, not a drag: just clear
 		return m, nil

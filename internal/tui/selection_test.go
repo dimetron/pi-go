@@ -111,6 +111,38 @@ func TestDragBackwardsSelectsSameSpan(t *testing.T) {
 	}
 }
 
+// The release carries the drag's final position, and the terminal often reports
+// it there rather than in a last motion event. Ignoring it ended the selection a
+// row short of where the user let go, copying the wrong line.
+func TestReleaseUsesItsOwnCoordinate(t *testing.T) {
+	m := selectionModel(t)
+	m.View()
+	top := m.frameTop()
+
+	r1, c1 := findRow(t, m, "SELECT-ME-ONE")
+	r2, c2 := findRow(t, m, "SELECT-ME-TWO")
+	if r2 <= r1 {
+		t.Skip("messages not laid out as expected")
+	}
+
+	// Press and drag within the first message, then release on the second —
+	// with no motion event at the release row.
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: c1, Y: r1 + top, Button: tea.MouseLeft}))
+	m = next.(*model)
+	next, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: c1 + len("SELECT-ME-ONE") - 1, Y: r1 + top, Button: tea.MouseLeft}))
+	m = next.(*model)
+	next, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: c2 + len("SELECT-ME-TWO") - 1, Y: r2 + top, Button: tea.MouseLeft}))
+	m = next.(*model)
+
+	if m.sel.cursorY != r2 {
+		t.Errorf("released on frame row %d but the selection ends on row %d", r2, m.sel.cursorY)
+	}
+	got := selectedText(m.lastFrame, m.sel, m.chatWidth())
+	if !strings.Contains(got, "SELECT-ME-TWO") {
+		t.Errorf("released on the SELECT-ME-TWO row but copied %q", got)
+	}
+}
+
 // A plain click away from the highlight clears it. (A click *inside* the
 // highlight copies instead — see TestClickInsideSelectionCopiesAgain.)
 func TestClickOutsideClearsSelection(t *testing.T) {
