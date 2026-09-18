@@ -21,9 +21,14 @@ Usage:
   `mistral`, `xai`, `openrouter`. `TestEmbeddedCatalogPresentForEveryProvider`
   enforces this, because `make fetch-models` skips a provider whose API key is
   missing and would otherwise leave the gap silent. `openrouter` is the
-  load-bearing one: it has no hard-coded `KnownModels` entry, so without its
-  snapshot `CatalogFor` returns nothing and `ValidateModel` stops validating
-  OpenRouter models altogether.
+  load-bearing one: until recently it had no `KnownModels` entry at all, so
+  without its snapshot `CatalogFor` returned nothing and `ValidateModel`
+  stopped validating OpenRouter models altogether. It now carries a short
+  curated entry for models OpenRouter serves but omits from `GET /v1/models`
+  (stealth previews, and retired slugs that keep answering) — those are
+  invisible to `make fetch-models`, so they cannot live in the snapshot, which
+  is replaced wholesale on every regeneration. The snapshot remains the bulk
+  of the catalog.
 
   `ollama` is deliberately excluded. Its model list is whatever the local
   daemon has pulled, so a checked-in snapshot would describe one developer's

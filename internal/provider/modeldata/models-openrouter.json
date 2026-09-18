@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-09-05T00:00:00Z",
+  "fetched_at": "2026-09-18T00:00:00Z",
   "models": [
     {
       "id": "aion-labs/aion-2.0",
@@ -259,7 +259,15 @@
       "release_date": "2026-07-31"
     },
     {
+      "id": "deepseek/deepseek-v4-flash-0731:free",
+      "release_date": "2026-07-31"
+    },
+    {
       "id": "deepseek/deepseek-v4-flash-vision-exp",
+      "release_date": "2026-08-21"
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-vision-exp:batch",
       "release_date": "2026-08-21"
     },
     {
@@ -273,6 +281,9 @@
     {
       "id": "deepseek/deepseek-v4-pro-0813:batch",
       "release_date": "2026-08-12"
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash"
     },
     {
       "id": "dots-studio/dots-3-note-preview:free",
@@ -305,10 +316,6 @@
     {
       "id": "google/gemini-2.5-pro-preview",
       "release_date": "2025-06-05"
-    },
-    {
-      "id": "google/gemini-2.5-pro-preview-05-06",
-      "release_date": "2025-05-07"
     },
     {
       "id": "google/gemini-2.5-pro:batch",
@@ -435,10 +442,6 @@
       "release_date": "2026-04-02"
     },
     {
-      "id": "google/gemma-4-31b-it:batch",
-      "release_date": "2026-04-02"
-    },
-    {
       "id": "google/gemma-4-31b-it:free",
       "release_date": "2026-04-02"
     },
@@ -467,8 +470,8 @@
       "release_date": "2026-03-04"
     },
     {
-      "id": "inception/mercury-2.5-preview",
-      "release_date": "2026-08-31"
+      "id": "inception/mercury-2.5",
+      "release_date": "2026-03-04"
     },
     {
       "id": "inclusionai/ling-3.0-flash",
@@ -485,6 +488,20 @@
     {
       "id": "inclusionai/ling-3.0-flash-sante:free",
       "release_date": "2026-07-23"
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-vl",
+      "release_date": "2026-07-23"
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-vl:free",
+      "release_date": "2026-07-23"
+    },
+    {
+      "id": "inference-net/schematron-v2-small"
+    },
+    {
+      "id": "inference-net/schematron-v2-turbo"
     },
     {
       "id": "kwaipilot/kat-coder-pro-v2",
@@ -603,10 +620,6 @@
       "release_date": "2026-03-18"
     },
     {
-      "id": "minimax/minimax-m2.7:free",
-      "release_date": "2026-03-18"
-    },
-    {
       "id": "minimax/minimax-m3",
       "release_date": "2026-06-01"
     },
@@ -615,11 +628,11 @@
       "release_date": "2026-06-01"
     },
     {
-      "id": "minimax/minimax-m3:free",
-      "release_date": "2026-06-01"
+      "id": "mistralai/codestral-2508",
+      "release_date": "2025-08-01"
     },
     {
-      "id": "mistralai/codestral-2508",
+      "id": "mistralai/codestral-2508:batch",
       "release_date": "2025-08-01"
     },
     {
@@ -639,6 +652,10 @@
       "release_date": "2025-12-02"
     },
     {
+      "id": "mistralai/ministral-8b-2512:batch",
+      "release_date": "2025-12-02"
+    },
+    {
       "id": "mistralai/mistral-large",
       "release_date": "2024-02-26"
     },
@@ -647,7 +664,7 @@
       "release_date": "2024-11-19"
     },
     {
-      "id": "mistralai/mistral-large-2512",
+      "id": "mistralai/mistral-large-2512:batch",
       "release_date": "2024-11-01"
     },
     {
@@ -667,6 +684,10 @@
       "release_date": "2025-08-13"
     },
     {
+      "id": "mistralai/mistral-medium-3.1:batch",
+      "release_date": "2025-08-13"
+    },
+    {
       "id": "mistralai/mistral-nemo",
       "release_date": "2024-07-01"
     },
@@ -680,6 +701,10 @@
     },
     {
       "id": "mistralai/mistral-small-2603",
+      "release_date": "2026-03-16"
+    },
+    {
+      "id": "mistralai/mistral-small-2603:batch",
       "release_date": "2026-03-16"
     },
     {
@@ -739,12 +764,10 @@
       "release_date": "2025-07-07"
     },
     {
-      "id": "nex-agi/nex-n2-mini",
-      "release_date": "2026-06-24"
+      "id": "nex-agi/nex-n2.5-mini:free"
     },
     {
-      "id": "nex-agi/nex-n2-pro",
-      "release_date": "2026-06-08"
+      "id": "nex-agi/nex-n2.5-pro:free"
     },
     {
       "id": "nousresearch/hermes-3-llama-3.1-405b",
@@ -756,10 +779,6 @@
     },
     {
       "id": "nousresearch/hermes-4-405b",
-      "release_date": "2025-08-26"
-    },
-    {
-      "id": "nousresearch/hermes-4-70b",
       "release_date": "2025-08-26"
     },
     {
@@ -828,10 +847,6 @@
     {
       "id": "openai/gpt-4-turbo",
       "release_date": "2023-11-06"
-    },
-    {
-      "id": "openai/gpt-4-turbo-preview",
-      "release_date": "2024-01-25"
     },
     {
       "id": "openai/gpt-4-turbo:batch",
@@ -1115,10 +1130,6 @@
     },
     {
       "id": "openai/gpt-oss-20b",
-      "release_date": "2025-08-05"
-    },
-    {
-      "id": "openai/gpt-oss-20b:batch",
       "release_date": "2025-08-05"
     },
     {
@@ -1433,6 +1444,10 @@
       "release_date": "2026-08-14"
     },
     {
+      "id": "qwen/qwen3.8-27b:free",
+      "release_date": "2026-08-14"
+    },
+    {
       "id": "qwen/qwen3.8-flash",
       "release_date": "2026-08-26"
     },
@@ -1457,7 +1472,14 @@
       "release_date": "2025-12-08"
     },
     {
+      "id": "sakana/fugu-max"
+    },
+    {
       "id": "sakana/fugu-ultra",
+      "release_date": "2026-06-15"
+    },
+    {
+      "id": "sakana/fugu-ultra-v2",
       "release_date": "2026-06-15"
     },
     {
@@ -1533,10 +1555,6 @@
       "release_date": "2026-07-30"
     },
     {
-      "id": "thinkingmachines/inkling-small:batch",
-      "release_date": "2026-07-30"
-    },
-    {
       "id": "thinkingmachines/inkling-small:free",
       "release_date": "2026-07-30"
     },
@@ -1547,6 +1565,9 @@
     {
       "id": "thinkingmachines/inkling:free",
       "release_date": "2026-07-15"
+    },
+    {
+      "id": "unbiased/pareto"
     },
     {
       "id": "undi95/remm-slerp-l2-13b",
@@ -1645,6 +1666,10 @@
       "release_date": "2026-06-13"
     },
     {
+      "id": "z-ai/glm-5.2:batch",
+      "release_date": "2026-06-13"
+    },
+    {
       "id": "z-ai/glm-5.2:free",
       "release_date": "2026-06-13"
     },
@@ -1659,6 +1684,10 @@
     {
       "id": "z-ai/glm-5.3-flash:batch",
       "release_date": "2026-08-26"
+    },
+    {
+      "id": "z-ai/glm-5.3:batch",
+      "release_date": "2026-08-14"
     },
     {
       "id": "z-ai/glm-5v-turbo",
@@ -1681,6 +1710,12 @@
       "release_date": "2026-04-27"
     },
     {
+      "id": "~deepseek/deepseek-flash-latest"
+    },
+    {
+      "id": "~deepseek/deepseek-pro-latest"
+    },
+    {
       "id": "~deepseek/deepseek-v4-flash-latest",
       "release_date": "2026-08-01"
     },
@@ -1697,12 +1732,20 @@
       "release_date": "2026-04-27"
     },
     {
-      "id": "~openai/gpt-latest",
-      "release_date": "2026-04-27"
+      "id": "~openai/gpt-astra-latest"
+    },
+    {
+      "id": "~openai/gpt-luna-latest"
     },
     {
       "id": "~openai/gpt-mini-latest",
       "release_date": "2026-04-27"
+    },
+    {
+      "id": "~openai/gpt-sol-latest"
+    },
+    {
+      "id": "~openai/gpt-terra-latest"
     },
     {
       "id": "~x-ai/grok-latest",

@@ -105,6 +105,56 @@ func TestCatalogForCacheModelNotInEmbedded(t *testing.T) {
 	}
 }
 
+// TestCatalogForCacheDoesNotShadowOtherSources pins the union invariant: a
+// cache file that lists fewer models than the embedded snapshot must not
+// shrink CatalogFor to its own contents.
+//
+// The regression this guards is silent. openrouter's live catalog omits
+// stealth/* models and can come back short for an account whose
+// allowed-providers setting excludes a provider, so a refresh could install a
+// cache that is a strict subset of what the embedded snapshot already lists.
+// When the cache was returned on its own, every dropped ID stopped validating
+// — including the ones the snapshot and KnownModels exist to guarantee.
+func TestCatalogForCacheDoesNotShadowOtherSources(t *testing.T) {
+	cacheDir := withTempCacheDir(t)
+	// The embedded mistral snapshot is load-bearing here: it must be non-empty
+	// or the test would pass for the wrong reason.
+	embedded, ok := loadEmbeddedCatalogIDs("mistral")
+	if !ok || len(embedded) == 0 {
+		t.Fatal("no embedded mistral snapshot; test premise is broken")
+	}
+	known := KnownModels["mistral"]
+	if len(known) == 0 {
+		t.Fatal("no KnownModels for mistral; test premise is broken")
+	}
+
+	// A cache listing exactly one model that appears in neither other source,
+	// so every assertion below is about union membership rather than overlap.
+	cf := catalogFile{
+		Provider:  "mistral",
+		FetchedAt: "2026-08-27T00:00:00Z",
+		Models:    []ModelInfo{{ID: "zz-cache-only-2599"}},
+	}
+	b, _ := json.Marshal(cf)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "mistral.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := CatalogFor("mistral")
+	if !contains(ids, "zz-cache-only-2599") {
+		t.Errorf("CatalogFor(mistral) dropped the cached model: %v", ids)
+	}
+	if !contains(ids, embedded[0]) {
+		t.Errorf("CatalogFor(mistral) dropped embedded %q: a cache must not shadow the snapshot", embedded[0])
+	}
+	if !contains(ids, known[0]) {
+		t.Errorf("CatalogFor(mistral) dropped KnownModels %q: a cache must not shadow the hard-coded list", known[0])
+	}
+}
+
 func TestCatalogForInvalidCacheFallsBack(t *testing.T) {
 	cacheDir := withTempCacheDir(t)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
