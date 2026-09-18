@@ -35,24 +35,33 @@ func cachePath(provider string) string {
 	return filepath.Join(modelsCacheDir(), provider+".json")
 }
 
-// CatalogFor returns known model prefixes for a provider: XDG cache first (if
-// present), else the embedded modeldata/models-<provider>.json snapshot merged
-// with the hard-coded KnownModels list, else the hard-coded list alone.
+// CatalogFor returns known model prefixes for a provider: the XDG cache (if
+// present) merged with the embedded modeldata/models-<provider>.json snapshot
+// and the hard-coded KnownModels list, falling back to the snapshot alone and
+// then to the hard-coded list alone as each earlier source is missing.
 //
 // The merge is a union: the hard-coded list carries curated compatibility
 // entries (e.g. bare "codestral", "pixtral", "ministral") that the live
 // catalog does not, and the live catalog adds dated models the hard-coded
 // list predates. A union is a superset, so nothing that validated before
 // stops validating.
+//
+// The cache is a floor, not a replacement. It used to be returned on its own,
+// which made a stale or filtered cache the whole catalog: a refresh that came
+// back short (an account-level provider allowlist, a vendor hiding a preview
+// model, a transient partial response) silently dropped every model the
+// embedded snapshot and KnownModels still listed. That is a validation
+// regression on a machine whose cache was written by a narrower request, and
+// it is invisible because the cache file exists and parses.
 func CatalogFor(provider string) []string {
-	if ids, ok := loadCatalogIDs(cachePath(provider)); ok {
-		return ids
+	ids := KnownModels[provider]
+	if embedded, ok := loadEmbeddedCatalogIDs(provider); ok {
+		ids = append(ids, embedded...)
 	}
-	embedded, ok := loadEmbeddedCatalogIDs(provider)
-	if !ok {
-		return KnownModels[provider]
+	if cached, ok := loadCatalogIDs(cachePath(provider)); ok {
+		ids = append(ids, cached...)
 	}
-	return uniqueSorted(append(embedded, KnownModels[provider]...))
+	return uniqueSorted(ids)
 }
 
 // loadEmbeddedCatalogIDs reads the checked-in modeldata/models-<provider>.json

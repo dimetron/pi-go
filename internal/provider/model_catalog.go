@@ -120,6 +120,18 @@ func loadKnownModels() (map[string][]string, error) {
 			"grok-4.20-multi-agent-0309",
 			"grok-build-0.1",
 		},
+		// openrouter serves models it omits from GET /v1/models: a stealth
+		// preview is hidden for its whole run, and a retired model keeps
+		// answering under its old slug for a while (the "-latest" aliases and
+		// dated previews below all still serve requests). `make fetch-models`
+		// therefore cannot see them, so they have to be curated here — this
+		// list is the only source that survives a snapshot regeneration, since
+		// the check-in replaces modeldata/models-openrouter.json wholesale.
+		"openrouter": {
+			"~openai/gpt-latest",
+			"google/gemini-2.5-pro-preview-05-06",
+			"inception/mercury-2.5-preview",
+		},
 	}
 
 	for _, provider := range []string{"anthropic", "openai"} {
