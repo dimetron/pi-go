@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -24,10 +25,16 @@ func newLoginCmd() *cobra.Command {
 
 Supported providers:
   codex        ChatGPT (chatgpt.com) — device auth
+  xai          Grok via a SuperGrok / X Premium+ subscription — device code
+               (uses your subscription instead of per-token API billing)
 
 Examples:
   pi login codex                        # Authenticate with Codex
-  pi login                              # Interactive provider selection`,
+  pi login xai                          # Use your Grok subscription
+  pi login                              # Interactive provider selection
+
+An existing "grok" CLI login is adopted automatically when you log in to xai,
+so there is no need to authenticate twice.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runLogin,
 	}
@@ -55,7 +62,22 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Find the provider.
 	prov, ok := auth.FindProvider(providerName)
 	if !ok {
-		return fmt.Errorf("unknown provider %q — supported: codex", providerName)
+		names := make([]string, 0, len(auth.Providers()))
+		for _, p := range auth.Providers() {
+			names = append(names, p.Name)
+		}
+		return fmt.Errorf("unknown provider %q — supported: %s", providerName, strings.Join(names, ", "))
+	}
+
+	// A user who already ran `grok login` holds a usable subscription
+	// credential. Adopt it rather than making them authenticate twice; fall
+	// through to the interactive flow when there is nothing to adopt.
+	if prov.Name == "xai" {
+		if adopted, err := auth.ImportGrokCLITokens(); err != nil {
+			fmt.Printf("Note: could not read grok CLI credentials: %v\n", err)
+		} else if adopted != nil {
+			return saveAdoptedXAI(adopted)
+		}
 	}
 
 	fmt.Printf("Logging in to %s...\n\n", prov.Name)
@@ -97,6 +119,25 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Default model set to %s\n", flagLoginModel)
 	}
 
+	return nil
+}
+
+// saveAdoptedXAI persists a subscription credential adopted from the grok CLI
+// and reports the outcome. It mirrors saveResult's contract (env var plus
+// ~/.pi-go/.env) so the credential is picked up on the next run.
+func saveAdoptedXAI(set *auth.XAITokenSet) error {
+	if err := auth.SaveXAITokens(set); err != nil {
+		return fmt.Errorf("saving xAI credentials: %w", err)
+	}
+	if err := auth.SaveKey("XAI_API_KEY", set.AccessToken); err != nil {
+		return fmt.Errorf("saving xAI key: %w", err)
+	}
+	_ = os.Setenv("XAI_API_KEY", set.AccessToken)
+	fmt.Println("Imported your existing grok CLI session.")
+	if !set.ExpiresAt.IsZero() {
+		fmt.Printf("Access token valid until %s (refreshed automatically).\n", set.ExpiresAt.Format(time.RFC3339))
+	}
+	fmt.Println("Run a grok-* model to use your SuperGrok subscription.")
 	return nil
 }
 

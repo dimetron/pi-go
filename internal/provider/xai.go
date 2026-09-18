@@ -14,9 +14,114 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"google.golang.org/adk/v2/model"
+
+	"github.com/dimetron/pi-go/internal/auth"
 )
 
 const xaiDefaultBaseURL = "https://api.x.ai/v1"
+
+// xaiSubscriptionBaseURL is the Grok CLI chat proxy, the surface that honors
+// a SuperGrok / X Premium+ subscription bearer. The per-token developer API at
+// xaiDefaultBaseURL rejects that token with HTTP 402, so the two are not
+// interchangeable. See internal/auth/xai.go for the credential half.
+const xaiSubscriptionBaseURL = "https://cli-chat-proxy.grok.com/v1"
+
+// xaiSubscriptionHeaders are the Grok-CLI identity headers the chat proxy
+// requires on a subscription request. They mirror what the official `grok`
+// CLI sends; the client version is the minimum the proxy accepts.
+func xaiSubscriptionHeaders() []option.RequestOption {
+	return []option.RequestOption{
+		option.WithHeader("X-XAI-Token-Auth", "xai-grok-cli"),
+		option.WithHeader("x-grok-client-identifier", "grok-shell"),
+		option.WithHeader("x-grok-client-version", xaiClientVersion),
+	}
+}
+
+// xaiClientVersion is the Grok CLI version advertised in
+// xaiSubscriptionHeaders. The proxy rejects older clients outright.
+const xaiClientVersion = "0.2.93"
+
+// StoredSubscriptionCredential returns a credential held outside the
+// provider's environment variable, for providers that persist OAuth material
+// separately. Only xAI needs it today: its access token lives in
+// ~/.pi-go/xai_auth.json so the refresh token can be kept alongside it, while
+// the env var may hold either a developer key or an access token.
+//
+// Callers that gate on "is a key present" consult this before declaring a
+// provider unconfigured — without it a subscription-only setup is rejected
+// with "set XAI_API_KEY" even though a usable credential exists.
+//
+// The returned value is a token that may be expired; refresh happens later, in
+// resolveXAIEndpoint, so an expired-but-refreshable credential must still be
+// reported as present here.
+func StoredSubscriptionCredential(providerName string) string {
+	if providerName != "xai" {
+		return ""
+	}
+	set, err := auth.LoadXAITokens()
+	if err != nil || set == nil {
+		return ""
+	}
+	return set.AccessToken
+}
+
+// resolveXAIEndpoint decides which xAI surface a credential belongs to and
+// returns the key, base URL and whether the credential is a subscription
+// token.
+//
+// The two surfaces are not interchangeable. A per-token developer key
+// (xai-…) belongs to api.x.ai. A SuperGrok / X Premium+ OAuth access token
+// belongs to the Grok CLI chat proxy: api.x.ai bills it against prepaid
+// credits and answers HTTP 402 `personal-team-blocked:spending-limit`.
+//
+// An explicit baseURL is authoritative and suppresses the reroute entirely —
+// the caller is stating which surface the token belongs to (a gateway, a
+// self-hosted proxy, or a test server). The credential is still resolved, so
+// a subscription login works against a caller-named host, and the
+// subscription flag stays set so the Grok-CLI identity headers are sent.
+func resolveXAIEndpoint(ctx context.Context, apiKey, baseURL string) (key, resolvedBaseURL string, subscription bool, err error) {
+	explicitBaseURL := baseURL != ""
+
+	// A developer API key passed by the caller is used as-is; refresh must
+	// never second-guess an operator's configured credential.
+	//
+	// Subscription tokens are different: the CLI and the token loader both
+	// hand us the value from XAI_API_KEY, which may be an access token that
+	// expired up to six hours after it was written to ~/.pi-go/.env. That
+	// value must go through resolution so the stored refresh token can renew
+	// it — using it directly would 401 after the first six hours.
+	useExplicitKey := apiKey != "" && !auth.IsXAISubscriptionToken(apiKey)
+	if useExplicitKey {
+		subscription = false
+	} else {
+		resolved, isSub, resolveErr := auth.ResolveXAICredential(ctx)
+		if resolveErr != nil {
+			return "", "", false, resolveErr
+		}
+		if resolved != "" {
+			apiKey, subscription = resolved, isSub
+		} else if apiKey != "" {
+			// Resolution found nothing (no store, unreadable file); fall back
+			// to the caller's value rather than reporting no credential.
+			subscription = auth.IsXAISubscriptionToken(apiKey)
+		}
+	}
+
+	if apiKey == "" {
+		return "", "", false, fmt.Errorf(
+			"xAI API key is required (set XAI_API_KEY, or run `pi login xai` to use a SuperGrok subscription)")
+	}
+
+	switch {
+	case explicitBaseURL:
+		resolvedBaseURL = baseURL
+	case subscription:
+		resolvedBaseURL = xaiSubscriptionBaseURL
+	default:
+		resolvedBaseURL = xaiDefaultBaseURL
+	}
+	return apiKey, resolvedBaseURL, subscription, nil
+}
 
 // xaiConversationHeader is xAI's cache-affinity hint. xAI routes every request
 // carrying the same value to the same server, which is what makes a prompt
@@ -47,11 +152,20 @@ type xaiModel struct {
 // If baseURL is empty, the default xAI API endpoint is used.
 // thinkingLevel controls reasoning effort: "none", "low", "medium", "high", "max".
 func NewXAI(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string, llmOpts *LLMOptions) (model.LLM, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("xAI API key is required (set XAI_API_KEY)")
-	}
-	if baseURL == "" {
-		baseURL = xaiDefaultBaseURL
+	// A credential resolved here may be either a per-token developer API key
+	// or a subscription OAuth access token. They are not interchangeable:
+	// api.x.ai bills a subscription bearer against prepaid credits and answers
+	// HTTP 402 `personal-team-blocked:spending-limit`, while the Grok CLI chat
+	// proxy accepts it and draws on the subscription's weekly pool instead.
+	// Resolve once, here, so the choice of endpoint and headers stays
+	// consistent for the life of the model instance.
+	//
+	// An explicit baseURL always wins: it is the caller saying "I know which
+	// surface this token belongs to" (a gateway, a self-hosted proxy, or a
+	// deliberate test).
+	apiKey, baseURL, subscription, err := resolveXAIEndpoint(context.Background(), apiKey, baseURL)
+	if err != nil {
+		return nil, err
 	}
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -60,6 +174,13 @@ func NewXAI(_ context.Context, modelName, apiKey, baseURL, thinkingLevel string,
 		// turn of a conversation shares a prefix, and that is exactly the
 		// scope xAI's cache is keyed on.
 		option.WithHeader(xaiConversationHeader, uuid.NewString()),
+	}
+	if subscription {
+		// The CLI proxy gates on Grok-CLI identity headers: without them it
+		// answers as though the caller were an unentitled API client, which
+		// surfaces as a 403 that reads like a subscription problem. Sent
+		// before ExtraHeaders so an explicit --header can still override.
+		opts = append(opts, xaiSubscriptionHeaders()...)
 	}
 	if llmOpts != nil {
 		// Applied after the conversation header so an explicit --header can

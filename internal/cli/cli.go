@@ -268,6 +268,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newMemoryCmd())
 	cmd.AddCommand(newModelCmd())
 	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newLogoutCmd())
 	cmd.AddCommand(newACPServerCmd())
 	cmd.AddCommand(newA2AServerCmd())
 	cmd.AddCommand(newUpgradeCmd())
@@ -447,6 +448,13 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 
 	keys := config.APIKeys()
 	apiKey := keys[info.Provider]
+	// A provider may hold its credential outside its env var — xAI keeps the
+	// subscription access token in ~/.pi-go/xai_auth.json so the refresh token
+	// stays alongside it. Consult that before declaring the provider
+	// unconfigured.
+	if apiKey == "" {
+		apiKey = provider.StoredSubscriptionCredential(info.Provider)
+	}
 	if err := requireRuntimeAPIKey(info, apiKey, baseURL); err != nil {
 		return rootRuntime{}, err
 	}

@@ -84,6 +84,12 @@ type Provider struct {
 	ManualRedirectURI string // fixed redirect URI for manual-code flow
 	TokenJSONBody     bool   // POST token exchange as JSON (Anthropic) instead of form-encoded
 	APIKeyURL         string // optional: exchange OAuth access_token for an API key via this endpoint
+	// OnToken, when set, is invoked with the raw token response before it is
+	// reduced to an API key. Providers whose credential is more than an opaque
+	// string use it to persist the extra material — xAI keeps the refresh
+	// token and expiry so a 6-hour access token can be renewed without a new
+	// browser login. A non-nil error fails the login.
+	OnToken func(tok *TokenResponse) error
 }
 
 // TokenResponse holds the OAuth token response.
@@ -165,6 +171,7 @@ func Providers() []Provider {
 			DeviceVerifyURL:   "https://auth.openai.com/codex/device",
 			DeviceRedirectURI: "https://auth.openai.com/deviceauth/callback",
 		},
+		xaiProvider(),
 	}
 }
 
@@ -176,6 +183,16 @@ func FindProvider(name string) (Provider, bool) {
 		}
 	}
 	return Provider{}, false
+}
+
+// runOnToken invokes the provider's OnToken hook when it has one. Flows call
+// it before reducing the token to an API key, so providers whose credential
+// carries more than an opaque string can persist the rest.
+func runOnToken(prov Provider, tok *TokenResponse) error {
+	if prov.OnToken == nil {
+		return nil
+	}
+	return prov.OnToken(tok)
 }
 
 // --- PKCE Flow ---
@@ -243,6 +260,10 @@ func PKCEFlow(ctx context.Context, prov Provider, openBrowser func(string) error
 		logf("pkce: token exchange ok access_len=%d id_len=%d refresh_len=%d api_key_present=%v",
 			len(tok.AccessToken), len(tok.IDToken), len(tok.RefreshToken),
 			tok.APIKey != "" || tok.APIKeyCamel != "" || tok.OpenAIAPIKey != "")
+		if err := runOnToken(prov, tok); err != nil {
+			logf("pkce: OnToken failed: %v", err)
+			return &Result{Provider: prov.Name, Err: fmt.Errorf("persisting token: %w", err)}, nil
+		}
 		apiKey := prov.TokenToKey(tok)
 		logf("pkce: final api_key_present=%v", apiKey != "")
 		return &Result{
@@ -316,6 +337,12 @@ func CompleteManualCodeFlow(ctx context.Context, sess *ManualCodeSession, pasted
 	tok, err := exchangeCodeManual(ctx, sess.Provider, code, sess.RedirectURI, sess.Verifier, state)
 	if err != nil {
 		return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("token exchange: %w", err)}, nil
+	}
+	if err := runOnToken(sess.Provider, tok); err != nil {
+		// Wrap rather than return err directly: the package's contract is a
+		// nil Go error with the failure carried in Result.Err, and wrapping
+		// names the phase that failed.
+		return &Result{Provider: sess.Provider.Name, Err: fmt.Errorf("persisting token: %w", err)}, nil
 	}
 	apiKey := sess.Provider.TokenToKey(tok)
 	if sess.Provider.APIKeyURL != "" && tok.AccessToken != "" {
@@ -636,6 +663,9 @@ func pollDeviceTokenOnce(ctx context.Context, prov Provider, device *DeviceCodeR
 
 	tok, err := requestDeviceToken(ctx, prov, device.DeviceCode)
 	if err == nil {
+		if onErr := runOnToken(prov, tok); onErr != nil {
+			return &Result{Provider: prov.Name, Err: fmt.Errorf("persisting token: %w", onErr)}, false
+		}
 		return &Result{
 			Provider: prov.Name,
 			APIKey:   prov.TokenToKey(tok),

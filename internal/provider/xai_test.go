@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,19 +10,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3/shared"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/testenv"
 )
 
 func TestNewXAIRequiresAPIKey(t *testing.T) {
+	// An empty apiKey now means "resolve from the environment or the
+	// subscription token store", so the missing-credential case has to clear
+	// both. Coverage of the ambient-resolution paths lives in
+	// TestResolveXAIEndpoint.
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
 	if _, err := NewXAI(context.Background(), "grok-4.6", "", "", "high", nil); err == nil {
-		t.Fatal("expected error when API key is empty")
+		t.Fatal("expected error when no xAI credential is available")
 	}
 }
 
+// TestNewXAIDefaultBaseURL pins that a developer key with no explicit base URL
+// still resolves to the per-token developer API, not the subscription proxy.
 func TestNewXAIDefaultBaseURL(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
 	m, err := NewXAI(context.Background(), "grok-4.6", "test-key", "", "high", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -709,4 +724,298 @@ func TestListXAIModelsWithVersionedBaseURL(t *testing.T) {
 	if path != "/v1/models" {
 		t.Errorf("path = %q, want /v1/models", path)
 	}
+}
+
+// --- xAI subscription routing ---
+
+// xaiSubToken builds a JWT-shaped xAI subscription token carrying the claims
+// the provider uses to tell it apart from a developer API key.
+func xaiSubToken(t *testing.T, exp time.Time) string {
+	t.Helper()
+	enc := func(v any) string {
+		body, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(body)
+	}
+	return enc(map[string]string{"alg": "RS256"}) + "." + enc(map[string]any{
+		"iss":          "https://auth.x.ai",
+		"scope":        "openid offline_access grok-cli:access api:access",
+		"principal_id": "acct-1",
+		"exp":          exp.Unix(),
+	}) + ".sig"
+}
+
+// TestResolveXAIEndpoint is the routing contract. The two xAI surfaces are not
+// interchangeable: sending a subscription bearer to the per-token developer API
+// is what produces HTTP 402 personal-team-blocked:spending-limit.
+func TestResolveXAIEndpoint(t *testing.T) {
+	cases := []struct {
+		name         string
+		apiKey       string
+		baseURL      string
+		envKey       string
+		wantBase     string
+		wantSub      bool
+		wantContains string
+	}{
+		{
+			name:         "developer key goes to the developer API",
+			apiKey:       "xai-developer-key",
+			wantBase:     xaiDefaultBaseURL,
+			wantContains: "api.x.ai",
+		},
+		{
+			name:         "subscription token goes to the CLI proxy",
+			apiKey:       xaiSubToken(t, time.Now().Add(4*time.Hour)),
+			wantBase:     xaiSubscriptionBaseURL,
+			wantSub:      true,
+			wantContains: "cli-chat-proxy.grok.com",
+		},
+		{
+			name:         "ambient developer key from env",
+			envKey:       "xai-env-key",
+			wantBase:     xaiDefaultBaseURL,
+			wantContains: "api.x.ai",
+		},
+		{
+			name:         "ambient subscription token from env",
+			envKey:       xaiSubToken(t, time.Now().Add(4*time.Hour)),
+			wantBase:     xaiSubscriptionBaseURL,
+			wantSub:      true,
+			wantContains: "cli-chat-proxy.grok.com",
+		},
+		{
+			name:         "explicit base URL wins over subscription routing",
+			apiKey:       xaiSubToken(t, time.Now().Add(4*time.Hour)),
+			baseURL:      "https://my-gateway.internal/v1",
+			wantBase:     "https://my-gateway.internal/v1",
+			wantSub:      true,
+			wantContains: "my-gateway.internal",
+		},
+		{
+			name:         "explicit base URL wins over developer routing",
+			apiKey:       "xai-developer-key",
+			baseURL:      "https://my-gateway.internal/v1",
+			wantBase:     "https://my-gateway.internal/v1",
+			wantContains: "my-gateway.internal",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testenv.SetHome(t, t.TempDir())
+			t.Setenv("XAI_API_KEY", tc.envKey)
+
+			key, base, sub, err := resolveXAIEndpoint(context.Background(), tc.apiKey, tc.baseURL)
+			if err != nil {
+				t.Fatalf("resolveXAIEndpoint: %v", err)
+			}
+			if base != tc.wantBase {
+				t.Errorf("base URL = %q, want %q", base, tc.wantBase)
+			}
+			if !strings.Contains(base, tc.wantContains) {
+				t.Errorf("base URL = %q, want it to contain %q", base, tc.wantContains)
+			}
+			if sub != tc.wantSub {
+				t.Errorf("subscription = %v, want %v", sub, tc.wantSub)
+			}
+			if key == "" {
+				t.Error("key should not be empty")
+			}
+			// The credential must be passed through untouched.
+			wantKey := tc.apiKey
+			if wantKey == "" {
+				wantKey = tc.envKey
+			}
+			if key != wantKey {
+				t.Errorf("key = %q, want %q", key, wantKey)
+			}
+		})
+	}
+}
+
+// TestResolveXAIEndpointNoCredential pins the actionable error: it must name
+// both ways to configure xAI, since the subscription path is not discoverable
+// from a bare "API key required".
+func TestResolveXAIEndpointNoCredential(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
+
+	_, _, _, err := resolveXAIEndpoint(context.Background(), "", "")
+	if err == nil {
+		t.Fatal("expected an error when no xAI credential is configured")
+	}
+	if !strings.Contains(err.Error(), "XAI_API_KEY") {
+		t.Errorf("error = %v, want it to mention XAI_API_KEY", err)
+	}
+	if !strings.Contains(err.Error(), "pi login xai") {
+		t.Errorf("error = %v, want it to mention the subscription login", err)
+	}
+}
+
+// TestNewXAIRequiresCredentialAfterRouting ensures the constructor surfaces the
+// missing-credential error rather than constructing a keyless client.
+func TestNewXAIRequiresCredentialAfterRouting(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
+	if _, err := NewXAI(context.Background(), "grok-4.6", "", "", "high", nil); err == nil {
+		t.Fatal("expected an error when no xAI credential is available")
+	}
+}
+
+// TestNewXAISubscriptionSendsIdentityHeaders verifies the Grok-CLI headers the
+// proxy gates on actually reach the wire. Without them the proxy answers as
+// though the caller were an unentitled API client, which reads as a
+// subscription failure rather than a header problem.
+func TestNewXAISubscriptionSendsIdentityHeaders(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	var header http.Header
+	var body map[string]any
+	srv := xaiCaptureServer(t, &header, &body)
+	defer srv.Close()
+
+	t.Setenv("XAI_API_KEY", xaiSubToken(t, time.Now().Add(4*time.Hour)))
+	llm, err := NewXAI(context.Background(), "grok-4.6", "", srv.URL, "low", nil)
+	if err != nil {
+		t.Fatalf("NewXAI: %v", err)
+	}
+	xaiDrain(t, llm, "grok-4.6")
+
+	for _, want := range []struct{ key, value string }{
+		{"X-XAI-Token-Auth", "xai-grok-cli"},
+		{"x-grok-client-identifier", "grok-shell"},
+		{"x-grok-client-version", xaiClientVersion},
+	} {
+		if got := header.Get(want.key); got != want.value {
+			t.Errorf("header %s = %q, want %q", want.key, got, want.value)
+		}
+	}
+}
+
+// TestNewXAIDeveloperKeySendsNoSubscriptionHeaders: the developer API is not
+// gated on Grok-CLI identity, so those headers are noise on that path and the
+// bearer must be the developer key itself.
+func TestNewXAIDeveloperKeySendsNoSubscriptionHeaders(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	var header http.Header
+	var body map[string]any
+	srv := xaiCaptureServer(t, &header, &body)
+	defer srv.Close()
+
+	t.Setenv("XAI_API_KEY", "xai-developer-key")
+	llm, err := NewXAI(context.Background(), "grok-4.6", "", srv.URL, "low", nil)
+	if err != nil {
+		t.Fatalf("NewXAI: %v", err)
+	}
+	xaiDrain(t, llm, "grok-4.6")
+
+	if got := header.Get("x-xai-token-auth"); got != "" {
+		t.Errorf("x-xai-token-auth = %q, want absent for a developer key", got)
+	}
+	if got := header.Get("Authorization"); got != "Bearer xai-developer-key" {
+		t.Errorf("Authorization = %q, want the developer key as bearer", got)
+	}
+}
+
+// TestResolveXAIEndpointExpiredExplicitTokenStillRoutesSubscription covers the
+// shape the CLI actually produces: ~/.pi-go/.env holds an xAI credential that
+// was fresh when written and has since aged out. The expired token must still
+// be recognized as a subscription credential and routed to the CLI proxy —
+// misreading it as a developer key would send it to api.x.ai and earn a 402.
+//
+// Whether it gets refreshed is auth.ResolveXAICredential's decision, covered by
+// TestResolveXAICredential in the auth package. Here the store is empty, so
+// there is nothing to refresh with and the value is passed through unchanged.
+func TestResolveXAIEndpointExpiredExplicitTokenStillRoutesSubscription(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
+
+	expired := xaiSubToken(t, time.Now().Add(-time.Hour))
+	key, base, sub, err := resolveXAIEndpoint(context.Background(), expired, "")
+	if err != nil {
+		t.Fatalf("resolveXAIEndpoint: %v", err)
+	}
+	if !sub {
+		t.Error("an expired subscription token must still be recognized as one")
+	}
+	if base != xaiSubscriptionBaseURL {
+		t.Errorf("base URL = %q, want the CLI proxy", base)
+	}
+	if key != expired {
+		t.Error("with nothing to refresh with, the given token should be passed through")
+	}
+}
+
+// TestResolveXAIEndpointExplicitKeyNeverRefreshed: an operator's developer key
+// is authoritative. Resolution must not replace it with a stored subscription
+// credential, even when one is present.
+func TestResolveXAIEndpointExplicitKeyNeverRefreshed(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Setenv("XAI_API_KEY", "")
+	// A stored subscription credential exists and must be ignored.
+	if err := auth.SaveXAITokens(&auth.XAITokenSet{
+		AccessToken:  xaiSubToken(t, time.Now().Add(4*time.Hour)),
+		RefreshToken: "should-not-be-used",
+		ExpiresAt:    time.Now().Add(4 * time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveXAITokens: %v", err)
+	}
+
+	key, base, sub, err := resolveXAIEndpoint(context.Background(), "xai-operator-key", "")
+	if err != nil {
+		t.Fatalf("resolveXAIEndpoint: %v", err)
+	}
+	if key != "xai-operator-key" {
+		t.Errorf("key = %q, want the operator's developer key kept", key)
+	}
+	if sub {
+		t.Error("a developer key must not be reported as a subscription token")
+	}
+	if base != xaiDefaultBaseURL {
+		t.Errorf("base URL = %q, want the developer API", base)
+	}
+}
+
+// TestStoredSubscriptionCredential covers the helper that stops the CLI from
+// rejecting a subscription-only xAI setup with "no API key found". An expired
+// token must still count as present — refresh happens later.
+func TestStoredSubscriptionCredential(t *testing.T) {
+	t.Run("subscription store is reported for xai", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		tok := xaiSubToken(t, time.Now().Add(-time.Hour)) // expired on purpose
+		if err := auth.SaveXAITokens(&auth.XAITokenSet{
+			AccessToken:  tok,
+			RefreshToken: "refresh",
+			ExpiresAt:    time.Now().Add(-time.Hour),
+		}); err != nil {
+			t.Fatalf("SaveXAITokens: %v", err)
+		}
+		if got := StoredSubscriptionCredential("xai"); got != tok {
+			t.Error("an expired-but-refreshable token must still be reported as present")
+		}
+	})
+
+	t.Run("empty when no store exists", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		if got := StoredSubscriptionCredential("xai"); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("other providers are never answered from the xai store", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		if err := auth.SaveXAITokens(&auth.XAITokenSet{
+			AccessToken:  xaiSubToken(t, time.Now().Add(time.Hour)),
+			RefreshToken: "r",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("SaveXAITokens: %v", err)
+		}
+		for _, name := range []string{"openai", "anthropic", "gemini", "codex", ""} {
+			if got := StoredSubscriptionCredential(name); got != "" {
+				t.Errorf("StoredSubscriptionCredential(%q) = %q, want empty", name, got)
+			}
+		}
+	})
 }

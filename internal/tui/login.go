@@ -11,6 +11,7 @@ import (
 	"github.com/dimetron/pi-go/internal/auth"
 	"github.com/dimetron/pi-go/internal/browser"
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/provider"
 )
 
 // loginState tracks the /login interactive flow.
@@ -76,6 +77,11 @@ func (m *model) loginShowStatus() (tea.Model, tea.Cmd) {
 		status := "not set"
 		if _, ok := keys[p.Name]; ok {
 			status = "configured"
+		} else if provider.StoredSubscriptionCredential(p.Name) != "" {
+			// A credential can live outside the provider's env var: xAI keeps
+			// the subscription token (and its refresh token) in a separate
+			// store, so reporting "not set" here would be wrong.
+			status = "configured (subscription)"
 		}
 		fmt.Fprintf(&sb, "- **%s** — %s\n", p.Name, status)
 	}
