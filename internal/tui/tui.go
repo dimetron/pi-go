@@ -547,7 +547,8 @@ func Run(ctx context.Context, cfg Config) error {
 	// in effect until something resets it.
 	prepareTerminal()
 
-	p := tea.NewProgram(&m, tea.WithContext(ctx))
+	opts := append(terminalProgramOptions(os.Stdout, os.Environ()), tea.WithContext(ctx))
+	p := tea.NewProgram(&m, opts...)
 	_, err := p.Run()
 	drainTerminalResponses()
 	if m.initErr != nil {
