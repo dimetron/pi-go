@@ -3,6 +3,23 @@
 Guidance for coding agents working in this repo. Applies to Claude Code and to
 pi-go's own agent; where the two differ, both are described.
 
+## Before starting work
+
+Use an isolated git worktree for every task that edits tracked files. Before
+reading or changing code, enumerate the repository's instruction files and read
+the applicable ones:
+
+```bash
+git worktree add -b feat/<topic> .worktrees/feat-<topic> HEAD
+cd .worktrees/feat-<topic>
+rg --files -g 'AGENTS.md' -g 'CLAUDE.md' -g '!tmp/**' -g '!.git/**' ..
+```
+
+Read the root `AGENTS.md` or `CLAUDE.md` first, then any instruction file in
+each parent directory of the files you will touch. Instructions closer to a
+file add constraints to the repository guidance; do not skip them because a
+task appears small.
+
 ## Work in a git worktree, not the primary checkout
 
 **Do not make uncommitted edits in `/Users/dimetron/p6s/pi-dev/pi-go` and leave

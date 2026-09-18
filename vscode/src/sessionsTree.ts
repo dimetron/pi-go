@@ -122,10 +122,11 @@ export function registerSessionsTree(
   context.subscriptions.push(
     vscode.commands.registerCommand("pi-go.openSession", (node: SessionNode) => {
       if (!node?.entry?.sessionId) return;
+      void vscode.commands.executeCommand("pi-go.chat.focus");
       void chatPanel.openSession(node.entry);
-      void treeView.reveal(node, { select: true });
     }),
     vscode.commands.registerCommand("pi-go.newSession", () => {
+      void vscode.commands.executeCommand("pi-go.chat.focus");
       chatPanel.startNewSession();
     }),
   );

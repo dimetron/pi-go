@@ -17,6 +17,97 @@ body {
   font-size: var(--vscode-font-size, 13px);
 }
 
+button { font: inherit; }
+
+/* -- Pi-Go welcome ------------------------------------------------------ */
+
+.chat-header {
+  min-height: 36px;
+  padding: 5px 14px;
+  background: var(--vscode-sideBar-background);
+}
+
+.session-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.icon-button svg { width: 18px; height: 18px; }
+.icon-button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+
+.welcome-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 24px auto 24px;
+  color: var(--vscode-foreground);
+}
+
+.welcome-brand .gopher { width: 48px; height: 54px; }
+.welcome-brand h1 {
+  margin: 0;
+  color: #00add8;
+  font-family: Georgia, serif;
+  font-size: 30px;
+  letter-spacing: -0.04em;
+}
+
+.learn-card {
+  width: min(100% - 28px, 410px);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, #00add8 18%);
+  text-align: left;
+}
+
+.learn-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.learn-header .gopher { width: 38px; height: 42px; }
+.learn-header h2 { flex: 1; margin: 0; font-size: 16px; color: var(--vscode-foreground); }
+
+.learn-lessons { padding: 6px 8px 8px; }
+.learn-lesson {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 8px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.learn-lesson:hover { background: var(--vscode-list-hoverBackground); }
+.lesson-mark { width: 16px; height: 16px; border: 1.5px solid #00add8; border-radius: 4px; flex: none; }
+
+.empty-state { justify-content: flex-start; padding-top: 4px; gap: 0; color: var(--vscode-foreground); }
+
 body {
   display: flex;
   flex-direction: column;
@@ -135,10 +226,26 @@ body {
 }
 
 .part.thought summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
   color: var(--vscode-descriptionForeground);
   font-style: italic;
   user-select: none;
+}
+
+.thought-summary::before {
+  content: "✦";
+  color: #00add8;
+  font-style: normal;
+}
+
+.thought-status {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-style: normal;
+  opacity: .8;
 }
 
 .thought-body {
@@ -160,10 +267,122 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
+.ping-result {
+  margin: 10px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 6px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-notifications-background));
+  color: var(--vscode-foreground);
+}
+
+.ping-result.failed {
+  border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border, transparent));
+}
+
+.ping-title {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.ping-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+}
+
 .banner {
   background: var(--vscode-inputValidation-errorBackground, var(--vscode-notifications-background));
   border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-testing-iconFailed));
   color: var(--vscode-testing-iconFailed, inherit);
+}
+
+.error-card {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #f38ba8);
+  border-left: 4px solid var(--vscode-testing-iconFailed, #f38ba8);
+  border-radius: 7px;
+  background: var(--vscode-inputValidation-errorBackground, #3b202b);
+  color: var(--vscode-foreground);
+  word-break: break-word;
+}
+
+.error-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--vscode-testing-iconFailed, #f38ba8);
+  font-size: 14px;
+}
+
+.error-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.error-detail {
+  margin: 10px 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--vscode-foreground);
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, .18));
+  border: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, .16));
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+}
+
+.error-help-title {
+  margin-top: 10px;
+  font-weight: 600;
+}
+
+.error-steps {
+  margin: 6px 0 0 20px;
+  padding: 0;
+}
+
+.error-steps li {
+  margin: 4px 0;
+}
+
+.error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.error-action {
+  padding: 5px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+  font: inherit;
+}
+
+.error-action:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.error-action.secondary {
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  border-color: var(--vscode-panel-border);
 }
 
 /* -- markdown ------------------------------------------------------------ */
@@ -253,6 +472,14 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-status {
+  flex: none;
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  opacity: .8;
 }
 
 .status-pending .tool-glyph {
@@ -353,11 +580,16 @@ body {
   flex: none;
   border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
   background: var(--vscode-sideBar-background);
+  padding: 8px 10px 10px;
 }
 
 .composer {
   position: relative;
-  padding: 8px 12px;
+  padding: 0;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 12px;
+  background: var(--vscode-input-background);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .12);
 }
 
 .composer-chips {
@@ -389,35 +621,36 @@ body {
 .composer-row {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 4px;
+  padding: 9px 9px 8px;
 }
 
 .composer-attach {
   flex: none;
   background: none;
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 3px;
+  border: 0;
+  border-radius: 6px;
   color: var(--vscode-input-foreground);
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 5px 8px;
+  font-size: 18px;
 }
 
 .composer-input {
   flex: 1;
   resize: none;
   color: var(--vscode-input-foreground);
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, transparent);
+  background: transparent;
+  border: 0;
   border-radius: 3px;
-  padding: 6px 8px;
+  padding: 6px 4px;
   font-family: inherit;
   font-size: inherit;
   line-height: 1.4;
 }
 
 .composer-input:focus {
-  outline: 1px solid var(--vscode-focusBorder);
-  border-color: var(--vscode-focusBorder);
+  outline: none;
 }
 
 .composer-actions {
@@ -429,9 +662,10 @@ body {
 .composer-stop {
   flex: none;
   border: none;
-  border-radius: 3px;
+  border-radius: 7px;
   cursor: pointer;
-  padding: 6px 10px;
+  padding: 7px 11px;
+  min-width: 34px;
 }
 
 .composer-send {

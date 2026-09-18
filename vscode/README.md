@@ -46,11 +46,11 @@ pi-go dispatches slash commands only in its TUI today, so in VS Code sessions:
 Follow-up (pi-go side): dispatch slash commands in the ACP prompt handler; the
 advertisement already exists.
 
-## Dedicated chat tab
+## Dedicated Pi-Go chat
 
 In addition to the native agent sessions above, the extension contributes a
-**pi-go** view container (activity bar, and the same Chat view in the secondary
-sidebar) — the dedicated tab pattern Claude Code and Codex use:
+**pi-go** view container for session history and one **Pi-Go** chat in the
+secondary sidebar — the focused chat pattern Claude Code and Codex use:
 
 - **Chat** — a webview chat: streamed replies, collapsible thinking blocks,
   live tool cards with real line diffs for file edits, fenced ```mermaid
@@ -63,10 +63,13 @@ sidebar) — the dedicated tab pattern Claude Code and Codex use:
   first. A single click loads the session and replays its transcript into the
   chat view; the running-prompt count shows as the view badge.
 
-Both containers are stable contribution points — the dedicated tab works
-without `--enable-proposed-api`. One `ChatPanelProvider` serves both chat view
-ids (`pi-go.chat`, `pi-go.chatSecondary`) with `retainContextWhenHidden`, so
-the composer draft and transcript survive hiding the panel.
+The chat works without `--enable-proposed-api` and keeps its composer draft and
+transcript when the sidebar is hidden. The first prompt creates a session, so
+there is no separate start screen or duplicate chat surface.
+
+The **Get Started with Pi-Go** walkthrough is available from the Welcome page,
+the Command Palette as `pi-go: Open Getting Started`, or the extension's
+walkthrough entry. It covers configuration, chat, sessions, and attachments.
 
 Keybinding: **cmd+alt+u** (ctrl+alt+u elsewhere) focuses the chat view.
 

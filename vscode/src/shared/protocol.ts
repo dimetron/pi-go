@@ -50,7 +50,7 @@ export interface CommandInfo {
 
 export interface StateMessage {
   type: "state";
-  /** Undefined → render the empty "start a session" state. */
+  /** Undefined → show the welcome screen; the first prompt starts a session. */
   sessionId?: string;
   title?: string;
   turns: TurnSnapshot[];
@@ -94,6 +94,10 @@ export interface TurnEndMessage {
   sessionId: string;
   /** Error text when the turn failed; undefined on success/cancel. */
   error?: string;
+  /** Human-readable diagnosis for a failed turn. */
+  errorDetail?: string;
+  /** Recovery actions for a failed turn. */
+  errorSteps?: string[];
 }
 
 export interface CommandsUpdatedMessage {
@@ -111,6 +115,15 @@ export interface SessionLoadedMessage {
 export interface ErrorMessage {
   type: "error";
   message: string;
+  detail?: string;
+  steps?: string[];
+}
+
+export interface PingResultMessage {
+  type: "pingResult";
+  ok: boolean;
+  title: string;
+  detail: string;
 }
 
 /** Non-failure inline notice (e.g. skipped oversized attachments). */
@@ -135,6 +148,7 @@ export type HostToWebview =
   | CommandsUpdatedMessage
   | SessionLoadedMessage
   | ErrorMessage
+  | PingResultMessage
   | NoticeMessage
   | AttachmentsAddedMessage;
 
@@ -183,12 +197,28 @@ export interface RequestFilePickerMessage {
   type: "requestFilePicker";
 }
 
+export interface OpenPiGoSettingsMessage {
+  type: "openPiGoSettings";
+}
+
+export interface OpenPiGoLogsMessage {
+  type: "openPiGoLogs";
+}
+
+export interface PingMessage {
+  type: "ping";
+}
+
 export type WebviewToHost =
   | ReadyMessage
+  | { type: "showHistory" }
   | PromptMessage
   | NewSessionMessage
   | OpenSessionMessage
   | CancelMessage
   | DraftMessage
   | RevealFileMessage
-  | RequestFilePickerMessage;
+  | RequestFilePickerMessage
+  | OpenPiGoSettingsMessage
+  | OpenPiGoLogsMessage
+  | PingMessage;

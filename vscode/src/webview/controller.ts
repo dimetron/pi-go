@@ -13,11 +13,12 @@ import { renderMarkdown } from "./markdown";
 import { renderMermaidBlocks } from "./mermaid";
 import { toolCard, type ToolCard } from "./toolCard";
 import { Composer } from "./composer";
+import { gopher, iconButton } from "./icons";
 
 export interface ControllerHost {
   post(message: WebviewToHost): void;
-  setState(state: { draft?: string; attachments?: string[]; sessionId?: string }): void;
-  getState(): { draft?: string; attachments?: string[]; sessionId?: string } | undefined;
+  setState(state: { draft?: string; attachments?: string[]; sessionId?: string; welcomeDismissed?: boolean }): void;
+  getState(): { draft?: string; attachments?: string[]; sessionId?: string; welcomeDismissed?: boolean } | undefined;
 }
 
 export class ChatController {
@@ -42,24 +43,63 @@ export class ChatController {
     this.header.className = "chat-header";
     this.headerTitle = document.createElement("span");
     this.headerTitle.className = "session-title";
-    const newButton = document.createElement("button");
-    newButton.className = "header-new";
-    newButton.title = "New session";
-    newButton.textContent = "+ New";
-    newButton.addEventListener("click", () => this.host.post({ type: "newSession" }));
-    this.header.append(this.headerTitle, newButton);
+    const historyButton = iconButton("history", "Session history", () => this.host.post({ type: "showHistory" }));
+    const newButton = iconButton("newChat", "New session", () => this.host.post({ type: "newSession" }));
+    const pingButton = iconButton("ping", "Run pi ping", () => this.host.post({ type: "ping" }));
+    this.headerTitle.textContent = "Untitled";
+    this.header.append(this.headerTitle, historyButton, pingButton, newButton);
 
     this.transcript = document.createElement("div");
     this.transcript.className = "transcript";
+    this.transcript.hidden = true;
+    this.transcript.setAttribute("role", "log");
+    this.transcript.setAttribute("aria-label", "Conversation");
 
     this.emptyState = document.createElement("div");
     this.emptyState.className = "empty-state";
-    const start = document.createElement("button");
-    start.textContent = "Start a session";
-    start.addEventListener("click", () => this.host.post({ type: "newSession" }));
-    const hint = document.createElement("p");
-    hint.textContent = "Ask pi-go anything, or start a session and reopen saved ones from the Sessions tree.";
-    this.emptyState.append(hint, start);
+    const brand = document.createElement("div");
+    brand.className = "welcome-brand";
+    const wordmark = document.createElement("h1");
+    wordmark.textContent = "Pi-Go";
+    brand.append(gopher(), wordmark);
+
+    const learn = document.createElement("section");
+    learn.className = "learn-card";
+    learn.hidden = this.host.getState()?.welcomeDismissed === true;
+    const learnHeader = document.createElement("div");
+    learnHeader.className = "learn-header";
+    const learnTitle = document.createElement("h2");
+    learnTitle.textContent = "Learn Pi-Go";
+    const dismiss = iconButton("close", "Dismiss getting started", () => {
+      learn.hidden = true;
+      this.host.setState({ welcomeDismissed: true });
+    });
+    learnHeader.append(gopher(), learnTitle, dismiss);
+    const lessons = document.createElement("div");
+    lessons.className = "learn-lessons";
+    for (const [label, prompt] of [
+      ["Ask Pi-Go to write code", "Help me build a new feature in this project. "],
+      ["Explore your codebase", "Explain the architecture of this repository."],
+      ["Find and fix a bug", "Help me investigate a bug in this project. "],
+      ["Plan a change before editing", "Help me plan a change. Explore the code and propose an approach before editing. "],
+    ]) {
+      const lesson = document.createElement("button");
+      lesson.className = "learn-lesson";
+      const mark = document.createElement("span");
+      mark.className = "lesson-mark";
+      mark.setAttribute("aria-hidden", "true");
+      const text = document.createElement("span");
+      text.textContent = label;
+      lesson.append(mark, text);
+      lesson.addEventListener("click", () => {
+        this.composer.restore(prompt);
+        this.host.setState({ draft: prompt });
+        this.composer.focus();
+      });
+      lessons.append(lesson);
+    }
+    learn.append(learnHeader, lessons);
+    this.emptyState.append(brand, learn);
 
     const composerHost = document.createElement("div");
     composerHost.className = "composer-host";
@@ -119,6 +159,9 @@ export class ChatController {
         if (!this.isCurrent(message.sessionId)) return;
         this.openTextPart = undefined;
         this.openThoughtPart = undefined;
+        this.streaming = true;
+        this.composer.setStreaming(true);
+        if (this.headerTitle.textContent === "Untitled") this.headerTitle.textContent = message.prompt;
         this.appendUserTurn(message.prompt);
         break;
       }
@@ -146,7 +189,7 @@ export class ChatController {
         this.streaming = false;
         this.composer.setStreaming(false);
         this.finalizeStreamedParts();
-        if (message.error) this.banner(message.error);
+        if (message.error) this.banner(message.error, message.errorDetail, message.errorSteps);
         break;
       }
       case "commandsUpdated": {
@@ -155,7 +198,11 @@ export class ChatController {
         break;
       }
       case "error": {
-        this.banner(message.message);
+        this.banner(message.message, message.detail, message.steps);
+        break;
+      }
+      case "pingResult": {
+        this.appendPingResult(message.ok, message.title, message.detail);
         break;
       }
       case "notice": {
@@ -176,19 +223,24 @@ export class ChatController {
 
   private setSession(sessionId: string | undefined, title: string | undefined): void {
     this.currentSessionId = sessionId;
-    this.headerTitle.textContent = title ?? (sessionId ? sessionId : "");
-    this.header.hidden = !sessionId;
-    this.emptyState.hidden = !!sessionId;
+    this.headerTitle.textContent = title && title !== "New session" ? title : "Untitled";
+    this.headerTitle.title = this.headerTitle.textContent;
   }
 
   private isCurrent(sessionId: string): boolean {
     return sessionId === this.currentSessionId;
   }
 
+  private showTranscript(): void {
+    this.emptyState.hidden = true;
+    this.transcript.hidden = false;
+  }
+
   private showLoading(): void {
     const el = document.createElement("div");
     el.className = "loading";
     el.textContent = "Loading session…";
+    this.showTranscript();
     this.transcript.append(el);
   }
 
@@ -208,12 +260,15 @@ export class ChatController {
         else this.upsertTool(part.tool);
       }
     }
+    this.emptyState.hidden = turns.length > 0;
+    this.transcript.hidden = turns.length === 0;
     this.scrollToBottom(true);
   }
 
   // -- turn rendering ------------------------------------------------------
 
   private appendUserTurn(prompt: string): void {
+    this.showTranscript();
     const turn = document.createElement("div");
     turn.className = "turn user";
     const bubble = document.createElement("div");
@@ -230,6 +285,7 @@ export class ChatController {
     if (last instanceof HTMLElement && last.classList.contains("turn") && last.classList.contains("agent")) {
       return last;
     }
+    this.showTranscript();
     const turn = document.createElement("div");
     turn.className = "turn agent";
     this.transcript.append(turn);
@@ -265,9 +321,17 @@ export class ChatController {
     }
     const part = document.createElement("details");
     part.className = "part thought streaming";
-    part.open = true;
+    // Thinking can be very verbose. Keep the disclosure collapsed while the
+    // model streams; the complete thought remains available on demand.
+    part.open = false;
     const summary = document.createElement("summary");
-    summary.textContent = "Thinking";
+    summary.className = "thought-summary";
+    const label = document.createElement("span");
+    label.textContent = "Thinking";
+    const status = document.createElement("span");
+    status.className = "thought-status";
+    status.textContent = "in progress";
+    summary.append(label, status);
     const body = document.createElement("div");
     body.className = "thought-body stream-body";
     part.append(summary, body);
@@ -280,6 +344,8 @@ export class ChatController {
       const text = body?.textContent ?? "";
       part.classList.remove("streaming");
       if (part.classList.contains("thought")) {
+        const status = part.querySelector(".thought-status");
+        if (status) status.textContent = "complete";
         part.querySelector(".thought-body")?.replaceChildren();
         const rendered = markdownBlock(text);
         rendered.className = "thought-body md";
@@ -317,6 +383,7 @@ export class ChatController {
     const part = document.createElement("details");
     part.className = "part thought";
     const summary = document.createElement("summary");
+    summary.className = "thought-summary";
     summary.textContent = "Thinking";
     part.append(summary, node);
     this.agentTurn().append(part);
@@ -326,14 +393,81 @@ export class ChatController {
     const el = document.createElement("div");
     el.className = "notice";
     el.textContent = text;
+    this.showTranscript();
     this.transcript.append(el);
     this.scrollToBottom();
   }
 
-  private banner(message: string): void {
-    const el = document.createElement("div");
-    el.className = "banner";
-    el.textContent = message;
+  private appendPingResult(ok: boolean, title: string, detail: string): void {
+    const el = document.createElement("section");
+    el.className = `ping-result${ok ? "" : " failed"}`;
+    el.setAttribute("role", ok ? "status" : "alert");
+    const heading = document.createElement("strong");
+    heading.className = "ping-title";
+    heading.textContent = title;
+    const body = document.createElement("pre");
+    body.className = "ping-detail";
+    body.textContent = detail;
+    el.append(heading, body);
+    this.showTranscript();
+    this.transcript.append(el);
+    this.scrollToBottom();
+  }
+
+  private banner(message: string, detail?: string, steps?: readonly string[]): void {
+    const el = document.createElement("section");
+    el.className = "error-card";
+    el.setAttribute("role", "alert");
+
+    const title = document.createElement("div");
+    title.className = "error-title";
+    const mark = document.createElement("span");
+    mark.className = "error-mark";
+    mark.textContent = "!";
+    mark.setAttribute("aria-hidden", "true");
+    const heading = document.createElement("strong");
+    heading.textContent = message;
+    title.append(mark, heading);
+    el.append(title);
+
+    const body = detail ?? message;
+    if (body) {
+      const detailEl = document.createElement("pre");
+      detailEl.className = "error-detail";
+      detailEl.textContent = body;
+      el.append(detailEl);
+    }
+
+    if (steps?.length) {
+      const helpTitle = document.createElement("div");
+      helpTitle.className = "error-help-title";
+      helpTitle.textContent = "What to do";
+      const list = document.createElement("ul");
+      list.className = "error-steps";
+      for (const step of steps) {
+        const item = document.createElement("li");
+        item.textContent = step;
+        list.append(item);
+      }
+      el.append(helpTitle, list);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "error-actions";
+    const settings = document.createElement("button");
+    settings.className = "error-action";
+    settings.type = "button";
+    settings.textContent = "Open Pi-Go settings";
+    settings.addEventListener("click", () => this.host.post({ type: "openPiGoSettings" }));
+    const logs = document.createElement("button");
+    logs.className = "error-action secondary";
+    logs.type = "button";
+    logs.textContent = "Open output log";
+    logs.addEventListener("click", () => this.host.post({ type: "openPiGoLogs" }));
+    actions.append(settings, logs);
+    el.append(actions);
+
+    this.showTranscript();
     this.transcript.append(el);
     this.scrollToBottom();
   }
