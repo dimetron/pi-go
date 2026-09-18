@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -677,6 +678,66 @@ func TestDeviceFlowInvokesOnToken(t *testing.T) {
 	}
 	if set.RefreshToken != "device-flow-refresh" {
 		t.Errorf("stored refresh token = %q, want device-flow-refresh", set.RefreshToken)
+	}
+}
+
+// TestDeviceFlowOnTokenFailureIsReported covers the other half of the OnToken
+// contract: when the hook cannot persist the credential, the login must fail
+// rather than report success. A "successful" login whose refresh token was
+// never written stops working six hours later with no explanation.
+//
+// The hook here is a stub rather than a filesystem fault, because the point is
+// the call site's error handling, not persistXAITokens' internals — those are
+// covered by TestPersistXAITokens.
+func TestDeviceFlowOnTokenFailureIsReported(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/device/code") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code":      "dev-code",
+				"user_code":        "ABCD-1234",
+				"verification_uri": srv.URL + "/verify",
+				"expires_in":       900,
+				"interval":         1,
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  makeXAIToken(t, map[string]any{"iss": "https://auth.x.ai", "exp": time.Now().Add(time.Hour).Unix()}),
+			"refresh_token": "device-flow-refresh",
+			"expires_in":    21600,
+		})
+	}))
+	defer srv.Close()
+
+	restore := setXAIEndpoints(t, srv.URL, srv.URL, srv.URL+"/device/code")
+	defer restore()
+
+	prov := xaiProvider()
+	// The provider's real hook writes to disk; replace it with one that fails,
+	// which is the condition the call site has to handle.
+	prov.OnToken = func(*TokenResponse) error { return errors.New("disk full") }
+
+	dev, err := DeviceFlow(context.Background(), prov)
+	if err != nil {
+		t.Fatalf("DeviceFlow: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := PollDeviceToken(ctx, prov, dev)
+	if err != nil {
+		t.Fatalf("PollDeviceToken: %v", err)
+	}
+	if res.Err == nil {
+		t.Fatal("a failed OnToken must fail the login, not report success")
+	}
+	if !strings.Contains(res.Err.Error(), "persisting token") {
+		t.Errorf("Err = %v, want it to name the persistence phase", res.Err)
+	}
+	if !strings.Contains(res.Err.Error(), "disk full") {
+		t.Errorf("Err = %v, want it to carry the hook's reason", res.Err)
 	}
 }
 
