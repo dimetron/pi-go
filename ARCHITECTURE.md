@@ -72,7 +72,8 @@ pi-go/
     │   └── palace/           MemPalace — miner, embedder, KG, graph, tools
     │
     ├── 🔌 extensions
-    │   └── extension/       skills loader, MCP client, hooks, read_image
+    │   ├── extension/       skills loader, MCP client, hooks, read_image
+    │   └── plugin/          marketplace manifests, registry, install/update
     │
     ├── 📊 eval & audit
     │   ├── eval/             scenario runner, judge, coverage, metrics
@@ -444,15 +445,18 @@ graph TD
         hooks["Hooks<br/>Shell commands<br/>before/after tool calls"]
         skills["Skills<br/>*.SKILL.md files<br/>Reusable instructions"]
         mcp["MCP Servers<br/>External tool providers<br/>via subprocess"]
+        plugins["Plugins<br/>Skill bundles from<br/>a marketplace"]
     end
 
     config["config.json"] --> hooks
     skilldir["~/.pi-go/skills/<br/>.pi-go/skills/"] --> skills
     config --> mcp
+    registry["~/.pi-go/plugins/<br/>installed.json"] --> plugins
 
     hooks --> agent["Agent Callbacks"]
     skills --> agent
     mcp --> agent
+    plugins --> agent
 
     style Extensions fill:#1a1a2a,color:#fff
 ```
@@ -463,6 +467,56 @@ graph TD
 
 **MCP**: Launch external tool servers as subprocesses. Tools bridged into agent's toolset via ADK.
 
+**Plugins**: Skill bundles fetched from a plugin marketplace. A plugin is a git
+repository carrying skills under `skills/` or `.pi-go/skills/`, described by a
+`.claude-plugin/plugin.json` manifest and listed in a marketplace's
+`.claude-plugin/marketplace.json`. pi-go reads the same manifest format other
+coding agents use, so no translation layer is needed.
+
+### Plugin installation
+
+`internal/plugin` owns the whole lifecycle: resolving a source, cloning it into
+`~/.pi-go/plugins/<name>/`, and recording what was installed in
+`~/.pi-go/plugins/installed.json`.
+
+```mermaid
+flowchart LR
+    A["pi plugin<br/>marketplace add"] --> B["clone into<br/>marketplaces dir"]
+    B --> C["record in<br/>installed.json"]
+    C --> D["pi plugin install"]
+    D --> E{"source kind?"}
+    E -- "relative path" --> F["copy from the<br/>marketplace clone"]
+    E -- "url / git-subdir" --> G["clone the<br/>plugin repo"]
+    F --> H["record version<br/>and commit"]
+    G --> H
+    H --> I["install into<br/>plugins dir"]
+    I --> J["skills discovered by<br/>DefaultSkillDirsIn"]
+```
+
+Three source shapes are supported, matching what real marketplaces publish:
+
+| Shape | Example | Handling |
+|-------|---------|----------|
+| Relative path | `"./plugins/foo"` | Copied from the marketplace clone (the clone is a shared cache — never moved from) |
+| `url` | `{"source":"url","url":"…/x.git"}` | Cloned whole; the clone *is* the plugin |
+| `git-subdir` | `{"source":"git-subdir","url":"…/x.git","path":"plugins/foo"}` | Cloned, then the named subdirectory is installed |
+
+`ref` and `sha` are honoured when the catalog pins them. Installation records
+the resolved commit, so `pi plugin update` can report whether anything moved.
+
+**Precedence.** Plugin skill directories are inserted *first* in
+`DefaultSkillDirsIn`, before `~/.pi-go/skills` and any project directory. Skill
+loading lets a later directory override an earlier one, so a plugin can never
+silently replace a skill the user wrote or customized under the same name.
+
+**Untrusted input.** Plugin and marketplace names come from a third-party
+manifest and are used as directory names, so they are validated
+(`plugin.ValidName`) to reject path traversal, separators, absolute paths, and
+the reserved `marketplaces` directory name before anything is written.
+
+**Atomicity.** The registry is written to a temporary file and renamed, so an
+interrupted install cannot leave a half-written registry behind.
+
 ## Configuration
 
 ```
@@ -472,6 +526,8 @@ graph TD
 .pi-go/sops/                   # Custom SOPs
 ~/.pi-go/skills/*.SKILL.md     # Global skills
 .pi-go/skills/*.SKILL.md       # Project skills (override global)
+~/.pi-go/plugins/<name>/       # Installed plugins (lowest skill precedence)
+~/.pi-go/plugins/installed.json  # Plugin + marketplace registry
 ~/.pi-go/sessions/             # Session storage
 ~/.pi-go/memory/               # Memory SQLite database
 ~/.pi-go/log/                  # Session logs

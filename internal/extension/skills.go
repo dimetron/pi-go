@@ -3,6 +3,7 @@ package extension
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/audit"
 	"github.com/dimetron/pi-go/internal/notice"
+	"github.com/dimetron/pi-go/internal/plugin"
 )
 
 // Skill represents a loaded skill from a SKILL.md file.
@@ -194,7 +196,7 @@ func skillCandidates(dir string, entries []os.DirEntry) []skillCandidate {
 		{path: filepath.Join(dir, "SKILL.md"), defaultName: filepath.Base(dir)},
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isDirOrDirSymlink(dir, entry) {
 			continue
 		}
 		skillFile := filepath.Join(dir, entry.Name(), "SKILL.md")
@@ -204,6 +206,23 @@ func skillCandidates(dir string, entries []os.DirEntry) []skillCandidate {
 		candidates = append(candidates, skillCandidate{path: skillFile, defaultName: entry.Name()})
 	}
 	return candidates
+}
+
+// isDirOrDirSymlink reports whether an entry is a directory, or a symlink that
+// resolves to one. Plugin installs and cross-agent skill layouts expose skills
+// as symlinks (e.g. ~/.gemini/config/skills/<name> → a plugin's skills dir),
+// and a symlink's DirEntry reports IsDir() == false even when its target is a
+// directory — so the plain IsDir() check would silently skip every one of
+// them.
+func isDirOrDirSymlink(parent string, entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(parent, entry.Name()))
+	return err == nil && info.IsDir()
 }
 
 // auditRejects scans a skill file and reports whether it must not be loaded.
@@ -444,19 +463,42 @@ func DefaultSkillDirs() []string {
 }
 
 // DefaultSkillDirsIn returns skill directories relative to the given root.
-// User-level skill directory (~/.pi-go/skills) plus project-level directories
+// Installed plugins come first (lowest priority), then the user-level skill
+// directory (~/.pi-go/skills), then the project-level directories
 // (.pi-go/skills, .claude/skills, .cursor/skills) found by walking up from root.
+//
+// Order is precedence: a later directory overrides an earlier one, so a plugin
+// can never silently replace a skill the user wrote or customized under the
+// same name.
 func DefaultSkillDirsIn(root string) []string {
-	dirs := make([]string, 0, 4)
-	seen := make(map[string]struct{}, 4)
+	dirs := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		dirs = append(dirs, dir)
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+
+	// Installed plugins, before anything the user owns.
+	if homeDir != "" {
+		for _, dir := range InstalledPluginSkillDirs(homeDir) {
+			add(dir)
+		}
+	}
 
 	// User-level skill directory.
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		userDir := filepath.Join(homeDir, ".pi-go", "skills")
-		if _, ok := seen[userDir]; !ok {
-			seen[userDir] = struct{}{}
-			dirs = append(dirs, userDir)
-		}
+	if homeDir != "" {
+		add(filepath.Join(homeDir, ".pi-go", "skills"))
 	}
 
 	// Project-level skill directories, walking up from root.
@@ -465,16 +507,23 @@ func DefaultSkillDirsIn(root string) []string {
 		filepath.Join(".claude", "skills"),
 		filepath.Join(".cursor", "skills"),
 	} {
-		dir := findNearestDir(root, rel)
-		if dir != "" {
-			if _, ok := seen[dir]; !ok {
-				seen[dir] = struct{}{}
-				dirs = append(dirs, dir)
-			}
-		}
+		add(findNearestDir(root, rel))
 	}
 
 	return dirs
+}
+
+// InstalledPluginSkillDirs returns the skills directories of plugins installed
+// under the given pi-go home. A missing or unreadable registry yields no
+// directories: an installation problem must never stop pi-go from loading the
+// skills it already had.
+func InstalledPluginSkillDirs(piHome string) []string {
+	registry, err := plugin.LoadRegistry(piHome)
+	if err != nil {
+		notice.Notifyf("warning: could not read the plugin registry: %v", err)
+		return nil
+	}
+	return registry.SkillDirs(piHome)
 }
 
 // findNearestDir searches for rel starting at start and walking up the directory tree.
