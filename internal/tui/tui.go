@@ -1261,10 +1261,11 @@ func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 
 // handleToggleKey handles the Ctrl-chord toggles and the search popup.
 func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
-	// Ctrl+Y: re-send the prompt of a turn that failed. Checked before the input
+	// Ctrl+R: re-send the prompt of a turn that failed. Checked before the input
 	// fallthrough, and only when the prompt is empty, so a user editing a new
-	// prompt never has it replaced by the previous one.
-	if key.Code == 'y' && key.Mod == tea.ModCtrl && m.inputModel.Text == "" {
+	// prompt never has it replaced by the previous one. A search popup owns the
+	// key while it is open — retrying under it would run a turn behind the popup.
+	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.inputModel.Text == "" && m.searchPopup == nil {
 		model, cmd := m.handleRetry()
 		return model, cmd, true
 	}
@@ -1294,9 +1295,14 @@ func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
-	// Ctrl+R: open history search popup (reverse-i-search style). With no
+	// Ctrl+H: open history search popup (reverse-i-search style). With no
 	// history to search the key falls through to the input.
-	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.searchPopup == nil && len(m.inputModel.History) > 0 {
+	//
+	// Gated on an empty prompt because Ctrl+H is also the readline "delete
+	// backward" chord: with text in the buffer the input keeps it, so the
+	// editing key still works where it is actually needed.
+	if key.Code == 'h' && key.Mod == tea.ModCtrl && m.searchPopup == nil &&
+		len(m.inputModel.History) > 0 && m.inputModel.Text == "" {
 		m.newSearchPopup(searchModeHistory)
 		return m, nil, true
 	}

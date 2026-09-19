@@ -969,8 +969,8 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `Enter` | Submit |\n")
 	b.WriteString("| `Ctrl+C` / `Esc` | Cancel |\n")
 	b.WriteString("| `Up/Down` | Prompt history |\n")
-	b.WriteString("| `Ctrl+R` | History search |\n")
-	b.WriteString("| `Ctrl+Y` | Retry the last failed turn |\n")
+	b.WriteString("| `Ctrl+H` | History search |\n")
+	b.WriteString("| `Ctrl+R` | Retry the last failed turn |\n")
 	b.WriteString("| `PgUp/PgDn` | Scroll chat |\n")
 
 	return b.String()

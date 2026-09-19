@@ -25,18 +25,18 @@ func retryModel(t *testing.T, failed bool) *model {
 	return m
 }
 
-// Ctrl+Y re-sends a prompt whose turn failed.
-func TestCtrlYRetriesFailedPrompt(t *testing.T) {
+// Ctrl+R re-sends a prompt whose turn failed.
+func TestCtrlRRetriesFailedPrompt(t *testing.T) {
 	m := retryModel(t, true)
 
-	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 
 	if !m.running {
-		t.Fatal("Ctrl+Y did not start a turn")
+		t.Fatal("Ctrl+R did not start a turn")
 	}
 	if cmd == nil {
-		t.Error("Ctrl+Y returned no command to run the retried turn")
+		t.Error("Ctrl+R returned no command to run the retried turn")
 	}
 	// The prompt is back in the transcript as a user turn, not just in state.
 	found := false
@@ -52,14 +52,14 @@ func TestCtrlYRetriesFailedPrompt(t *testing.T) {
 
 // A successful turn is not retryable: replaying it would duplicate an answer
 // that is already on screen.
-func TestCtrlYIgnoresSuccessfulTurn(t *testing.T) {
+func TestCtrlRIgnoresSuccessfulTurn(t *testing.T) {
 	m := retryModel(t, false)
 
-	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 
 	if m.running {
-		t.Error("Ctrl+Y started a turn after a successful one")
+		t.Error("Ctrl+R started a turn after a successful one")
 	}
 	if !strings.Contains(m.flash, "Nothing to retry") {
 		t.Errorf("flash = %q, want it to say there is nothing to retry", m.flash)
@@ -67,41 +67,41 @@ func TestCtrlYIgnoresSuccessfulTurn(t *testing.T) {
 }
 
 // With no previous turn there is nothing to re-send.
-func TestCtrlYWithoutPromptIsQuiet(t *testing.T) {
+func TestCtrlRWithoutPromptIsQuiet(t *testing.T) {
 	m := retryModel(t, false)
 	m.lastPrompt = ""
 
-	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 
 	if m.running {
-		t.Error("Ctrl+Y started a turn with no prompt to retry")
+		t.Error("Ctrl+R started a turn with no prompt to retry")
 	}
 }
 
 // While a turn is running the key must not queue a second one.
-func TestCtrlYIgnoredWhileRunning(t *testing.T) {
+func TestCtrlRIgnoredWhileRunning(t *testing.T) {
 	m := retryModel(t, true)
 	m.running = true
 
-	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 
 	if len(m.pendingPrompts) != 0 {
-		t.Errorf("Ctrl+Y queued %d prompts while running", len(m.pendingPrompts))
+		t.Errorf("Ctrl+R queued %d prompts while running", len(m.pendingPrompts))
 	}
 }
 
 // A user typing a new prompt must not have it replaced by the retry.
-func TestCtrlYIgnoredWithDraftText(t *testing.T) {
+func TestCtrlRIgnoredWithDraftText(t *testing.T) {
 	m := retryModel(t, true)
 	m.inputModel.SetText("a new prompt I am writing")
 
-	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 
 	if m.running {
-		t.Error("Ctrl+Y fired while a draft was in the prompt")
+		t.Error("Ctrl+R fired while a draft was in the prompt")
 	}
 	if got := m.inputModel.Text; got != "a new prompt I am writing" {
 		t.Errorf("the draft was clobbered: %q", got)
@@ -144,7 +144,7 @@ func TestRetrySlashCommand(t *testing.T) {
 func TestRetryOfRetryStaysArmed(t *testing.T) {
 	m := retryModel(t, true)
 
-	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = next.(*model)
 	next, _ = m.Update(agentDoneMsg{err: errors.New("still refused")})
 	m = next.(*model)
@@ -163,5 +163,51 @@ func TestClearConversationDisarmsRetry(t *testing.T) {
 	if m.lastPrompt != "" || m.lastPromptFailed {
 		t.Errorf("clearConversation left retry state: prompt=%q failed=%v",
 			m.lastPrompt, m.lastPromptFailed)
+	}
+}
+
+// Ctrl+R is shared with history search: with a popup open the search owns the
+// key, so a retry must not run a turn behind the open popup.
+func TestCtrlRRetryDoesNotFireUnderPopup(t *testing.T) {
+	m := retryModel(t, true)
+	m.inputModel.History = []HistoryEntry{{Text: "older prompt"}}
+	m.newSearchPopup(searchModeHistory)
+	if m.searchPopup == nil {
+		t.Fatal("history popup did not open; the test cannot exercise the gate")
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	m = next.(*model)
+
+	if m.running {
+		t.Error("Ctrl+R retried while a search popup was open")
+	}
+}
+
+// Ctrl+H is also readline's delete-backward. With text in the prompt the input
+// must keep the key rather than losing it to history search.
+func TestCtrlHWithTextDoesNotOpenHistory(t *testing.T) {
+	m := retryModel(t, false)
+	m.inputModel.History = []HistoryEntry{{Text: "older prompt"}}
+	m.inputModel.SetText("editing this")
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'h', Mod: tea.ModCtrl}))
+	m = next.(*model)
+
+	if m.searchPopup != nil {
+		t.Error("Ctrl+H opened history search while text was being edited")
+	}
+}
+
+// On an empty prompt Ctrl+H is history search.
+func TestCtrlHOpensHistorySearch(t *testing.T) {
+	m := retryModel(t, false)
+	m.inputModel.History = []HistoryEntry{{Text: "older prompt"}}
+
+	next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'h', Mod: tea.ModCtrl}))
+	m = next.(*model)
+
+	if m.searchPopup == nil || m.searchPopup.mode != searchModeHistory {
+		t.Fatalf("Ctrl+H did not open history search (popup = %+v)", m.searchPopup)
 	}
 }

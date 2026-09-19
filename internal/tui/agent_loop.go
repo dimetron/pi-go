@@ -1950,7 +1950,7 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 		// actually ran is held, so a failure before the first submit stays quiet.
 		if m.lastPrompt != "" {
 			m.lastPromptFailed = true
-			m.chatModel.AppendMeta("Retry with Ctrl+Y or /retry")
+			m.chatModel.AppendMeta("Retry with Ctrl+R or /retry")
 		}
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "error", summary: "Error", detail: msg.err.Error(),
