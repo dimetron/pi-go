@@ -20,6 +20,9 @@
     "exa": {
       "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
     },
+    "you": {
+      "url": "https://api.you.com/mcp?profile=free"
+    },
     "parallel-search": {
       "url": "https://search.parallel.ai/mcp"
     },
