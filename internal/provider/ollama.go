@@ -172,14 +172,68 @@ func (m *ollamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 		if !stream {
 			chatReq.Stream = new(false)
-			ollamaRunNonStreaming(ctx, m.client, chatReq, yield)
+			ollamaRunNonStreamingRelaxThink(ctx, m.client, chatReq, yield)
 			return
 		}
 
-		retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
-			ollamaRunStreaming(ctx, m.client, chatReq, y)
-		})
+		ollamaRunStreamingRelaxThink(ctx, m.client, chatReq, yield)
 	}
+}
+
+// ollamaRunStreamingRelaxThink runs the streaming request, dropping the think
+// field and retrying once when the server rejects it.
+//
+// Ollama answers 400 "<model> does not support thinking" for any model whose
+// capabilities carry no "thinking" flag, and it rejects the request before
+// inference starts, so the failure is terminal rather than transient — an
+// identical retry gets the identical 400. pi-go's thinking level is a
+// session-wide setting rather than a per-model one, so selecting a
+// non-thinking model (qwen2.5-coder, an embedding model, any older tag) while
+// the level is "high" ended the turn before it began. The field is not what the
+// user asked for in that case, so dropping it is the fix, not a compromise.
+//
+// The name-based guard in ollamaThinkValue still covers models that say
+// "nothink" and saves them the round trip; this covers every other model the
+// daemon knows cannot think, including ones installed after this shipped, and
+// without a capability lookup per turn.
+//
+// The relax is applied only when nothing has been forwarded yet, so it can
+// never duplicate partial output.
+func ollamaRunStreamingRelaxThink(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {
+	var (
+		rejected error
+		emitted  bool
+	)
+	forward := func(resp *model.LLMResponse, err error) bool {
+		failure := streamFailure(resp, err)
+		if failure != nil && !emitted && ollamaThinkingUnsupported(failure) {
+			rejected = failure
+			return false
+		}
+		if failure == nil {
+			emitted = true
+		}
+		return yield(resp, err)
+	}
+
+	retryStream(ctx, streamRetryConfig(), forward, func(y func(*model.LLMResponse, error) bool) {
+		ollamaRunStreaming(ctx, client, chatReq, y)
+	})
+	if rejected == nil {
+		return
+	}
+
+	relaxed := *chatReq
+	relaxed.Think = &ollamaapi.ThinkValue{Value: false}
+	retryStream(ctx, streamRetryConfig(), yield, func(y func(*model.LLMResponse, error) bool) {
+		ollamaRunStreaming(ctx, client, &relaxed, y)
+	})
+}
+
+// ollamaThinkingUnsupported reports whether err is Ollama's rejection of the
+// think field for a model that cannot think.
+func ollamaThinkingUnsupported(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "does not support thinking")
 }
 
 // buildChatRequest assembles the /api/chat request for one turn.
@@ -721,6 +775,32 @@ func ollamaRunStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *
 	}
 
 	_ = yield(state.finalResponse(), nil)
+}
+
+// ollamaRunNonStreamingRelaxThink runs one non-streaming request, dropping the
+// think field and retrying once when the server rejects it. Same reasoning as
+// the streaming path — see ollamaRunStreamingRelaxThink — with the failure
+// arriving as a Go error rather than an ErrorCode response.
+func ollamaRunNonStreamingRelaxThink(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {
+	var (
+		emitted  bool
+		rejected bool
+	)
+	ollamaRunNonStreaming(ctx, client, chatReq, func(resp *model.LLMResponse, err error) bool {
+		if !emitted && ollamaThinkingUnsupported(err) {
+			rejected = true
+			return false
+		}
+		emitted = true
+		return yield(resp, err)
+	})
+	if !rejected {
+		return
+	}
+
+	relaxed := *chatReq
+	relaxed.Think = &ollamaapi.ThinkValue{Value: false}
+	ollamaRunNonStreaming(ctx, client, &relaxed, yield)
 }
 
 func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatReq *ollamaapi.ChatRequest, yield func(*model.LLMResponse, error) bool) {
