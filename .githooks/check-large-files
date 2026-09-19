@@ -11,7 +11,7 @@
 #      legitimate file anywhere near it (the largest non-media file tracked is
 #      ~70 KiB).
 #
-#   2. CLAUDE.md's recording rule: a GIF of a test run or a TUI session is
+#   2. AGENTS.md's recording rule: a GIF of a test run or a TUI session is
 #      attached to a PR as a *release asset*, never committed. See the
 #      `vhs-e2e-gif` skill's attach-gif-to-pr.sh. Recordings are
 #      write-once and quickly stale, and every revision of one is kept forever
@@ -22,7 +22,7 @@
 #   check-large-files staged                 # pre-commit: blobs in the index
 #   check-large-files commits <rev-list-args…>   # pre-push: blobs a push adds
 #
-# Escape hatch — NOT --no-verify, which CLAUDE.md forbids because it also
+# Escape hatch — NOT --no-verify, which AGENTS.md forbids because it also
 # skips the signing hooks:
 #
 #   PI_ALLOW_LARGE_FILES=1 git commit -sS -m "…"

@@ -1,11 +1,11 @@
-# CLAUDE.md — hack/agentgateway
+# AGENTS.md — hack/agentgateway
 
 Guidance for coding agents changing the agentgateway deployment in this
 directory. `README.md` is the reference for *what* is here (layout, naming
 schemes, catalogs, client wiring); this file is the rules for *how* to change
 it safely, and the failures worth recognizing on sight.
 
-The repo-root `CLAUDE.md` still applies — worktrees, signed commits, no
+The repo-root `AGENTS.md` still applies — worktrees, signed commits, no
 `--no-verify`.
 
 ## The pieces

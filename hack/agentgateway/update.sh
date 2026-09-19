@@ -104,7 +104,7 @@ fi
 MANAGED="
 .env.example
 .gitignore
-CLAUDE.md
+AGENTS.md
 README.md
 backup-db.sh
 restore-db.sh

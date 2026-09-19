@@ -490,7 +490,7 @@ These each cost a debugging cycle when this config was built.
   API key gets a 401 that reads as a bad key but is not one. The provider points
   at Google's OpenAI-compatible endpoint instead, and keeps
   `providerOverride: gcp.gemini` so the cost catalog still resolves — without it
-  requests succeed but log no cost at all. See `CLAUDE.md`.
+  requests succeed but log no cost at all. See `AGENTS.md`.
 - **Gemini 3.x needs its `thought_signature` echoed back** on replayed tool
   calls, or the second turn of any tool conversation is a 400. A client that
   drops unknown `tool_calls` fields cannot use Gemini 3; 2.5 is unaffected.

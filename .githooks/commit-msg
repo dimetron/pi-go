@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # commit-msg: guarantee every commit carries a Signed-off-by trailer.
 #
-# CLAUDE.md mandates `git commit -s -S`, but -s is easy to forget and nothing
+# AGENTS.md mandates `git commit -s -S`, but -s is easy to forget and nothing
 # caught it: 5 of the last 20 commits reached main without the trailer. This
 # adds it when missing rather than rejecting the commit, so the invariant holds
 # without turning a forgotten flag into a lost commit message.

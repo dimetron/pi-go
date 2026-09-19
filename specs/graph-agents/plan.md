@@ -253,5 +253,5 @@ plus the subagent templates, plus resume.
 - **Don't delete code you didn't create:** `internal/tui/run.go` orchestration is
   replaced incrementally — keep the gate/merge helpers until the graph path is proven,
   then remove the dead state machine.
-- **Worktree discipline:** per CLAUDE.md, do the work in a git worktree
+- **Worktree discipline:** per AGENTS.md, do the work in a git worktree
   (`.worktrees/graph-agents/`), commit with `-s -S`, and never `--no-verify`.

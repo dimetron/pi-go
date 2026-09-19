@@ -8,7 +8,7 @@
 # other way still has to be caught before the objects leave the machine.
 #
 # The post-commit hook only warns — it cannot stop an unsigned commit, and
-# CLAUDE.md records commits (0714568, a8b243b, bcb6d26) that reached the
+# AGENTS.md records commits (0714568, a8b243b, bcb6d26) that reached the
 # remote that way.
 #
 # Signature checking uses `git verify-commit`, NOT a gpgsig header test. The
@@ -19,7 +19,7 @@
 # passes on commits GitHub marks `invalid`, which is how PR #345 published two
 # of them through this very hook.
 #
-# `git verify-commit` needs gpg.ssh.allowedSignersFile configured (CLAUDE.md,
+# `git verify-commit` needs gpg.ssh.allowedSignersFile configured (AGENTS.md,
 # "Verify signatures with git verify-commit"). When it is missing, verification
 # is impossible and this hook says so loudly rather than accepting the commit —
 # an enforcement gate that silently passes is worse than none.
@@ -39,7 +39,7 @@ size_scan=()
 # would look unsigned and the hook would be useless whichever way it failed.
 if [ -z "$(git config --get gpg.ssh.allowedSignersFile || true)" ]; then
   echo "pre-push: gpg.ssh.allowedSignersFile is not configured, so signatures" >&2
-  echo "          cannot be verified. Set it up once (see CLAUDE.md):" >&2
+  echo "          cannot be verified. Set it up once (see AGENTS.md):" >&2
   echo "            echo \"$(git config user.email) \$(git config user.signingkey)\" \\" >&2
   echo "              > ~/.config/git/allowed_signers" >&2
   echo "            git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers" >&2

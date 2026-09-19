@@ -186,7 +186,7 @@ Verified against `go tool fix help` on 1.27.0:
   be fetched directly.
 - **`go tool trace -http=:6060` now binds localhost only**, matching `go tool pprof`.
   Pass `-http=0.0.0.0:6060` to listen on all interfaces. Relevant to the `go-pprof`
-  workflow in `CLAUDE.md`.
+  workflow in `AGENTS.md`.
 - **Response files (`@file`)** are accepted by `compile`, `link`, `asm`, `cgo`, `cover`
   and `pack`, in GCC's format.
 - **Linker**: `-macos` and `-macsdk` set OS/SDK versions in `LC_BUILD_VERSION`.
@@ -405,7 +405,7 @@ Also new: `database/sql.ConvertAssign(scanCtx driver.ScanContext, dest any, src 
   order unpredictable.
 - `httptest.NewTestServer(t, h)` binds no TCP port and self-cleans, so `defer srv.Close()`
   goes away and round-trips can run in synthetic time under `testing/synctest`. Worth
-  trying against the `internal/cli` sandbox trap in `CLAUDE.md`, where
+  trying against the `internal/cli` sandbox trap in `AGENTS.md`, where
   `httptest.NewServer` panics in `newLocalListener` — but that has not been demonstrated
   here, so verify before relying on it.
 - `maphash.Hasher[T]` is a contract for *future* containers; there is no stdlib hash set

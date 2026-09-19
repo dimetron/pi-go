@@ -3,7 +3,7 @@
 #
 # commit.gpgsign is true, so this should be unreachable — but op-ssh-sign needs
 # the 1Password agent, which is not reachable from inside the sandbox, and
-# CLAUDE.md records three commits (0714568, a8b243b, bcb6d26) that landed
+# AGENTS.md records three commits (0714568, a8b243b, bcb6d26) that landed
 # unsigned that way. A full-history scan found 281 unsigned commits; signing
 # only became consistent on 2026-07-29.
 #
@@ -13,7 +13,7 @@
 #
 # It verifies rather than looking for a gpgsig header. The header survives a
 # later rewrite of the commit object, so a header test passes on commits whose
-# signature is invalid — see CLAUDE.md, "Verify signatures with git verify-commit".
+# signature is invalid — see AGENTS.md, "Verify signatures with git verify-commit".
 set -euo pipefail
 
 if [ -n "$(git config --get gpg.ssh.allowedSignersFile || true)" ] \
@@ -24,7 +24,7 @@ fi
 SHA="$(git rev-parse --short HEAD)"
 if [ -z "$(git config --get gpg.ssh.allowedSignersFile || true)" ]; then
   REASON="gpg.ssh.allowedSignersFile is not configured, so the signature cannot
-  be verified. Set it up once (see CLAUDE.md):
+  be verified. Set it up once (see AGENTS.md):
 
       echo \"$(git config user.email) \$(git config user.signingkey)\" \\
         > ~/.config/git/allowed_signers

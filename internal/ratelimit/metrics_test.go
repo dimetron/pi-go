@@ -228,7 +228,7 @@ func TestWriteMetricsEscapesLabels(t *testing.T) {
 
 // httptest.NewRecorder is safe here (unlike httptest.NewServer): it fakes an
 // http.ResponseWriter without binding a local listener, so it does not hit
-// the sandbox trap documented in CLAUDE.md.
+// the sandbox trap documented in AGENTS.md.
 func TestMetricsHandlerServesExpositionFormat(t *testing.T) {
 	resetMetrics()
 	t.Cleanup(resetMetrics)
