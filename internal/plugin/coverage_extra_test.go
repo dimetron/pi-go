@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -172,13 +173,9 @@ func remoteOnlyFixture(t *testing.T) (marketplaceDir, pluginRepo string) {
 	gitInit(t, pluginRepo)
 
 	mp := t.TempDir()
-	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
-	  "name": "url-market",
-	  "plugins": [
-	    {"name":"url-plugin","version":"3.1.4",
-	     "source":{"source":"url","url":"file://`+pluginRepo+`"}}
-	  ]
-	}`)
+	writeCatalog(t, mp, "url-market", map[string]any{
+		"url-plugin": Source{Kind: SourceURL, URL: fileURL(pluginRepo)},
+	})
 	writeFile(t, filepath.Join(mp, "README.md"), "catalog\n")
 	gitInit(t, mp)
 	return mp, pluginRepo
@@ -237,13 +234,9 @@ func TestInstall_RemoteRefPin(t *testing.T) {
 	commitAll(t, pluginRepo, "later")
 
 	mp := t.TempDir()
-	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
-	  "name": "pin-market",
-	  "plugins": [
-	    {"name":"pinned","version":"1.0.0",
-	     "source":{"source":"url","url":"file://`+pluginRepo+`","ref":"v1"}}
-	  ]
-	}`)
+	writeCatalog(t, mp, "pin-market", map[string]any{
+		"pinned": Source{Kind: SourceURL, URL: fileURL(pluginRepo), Ref: "v1"},
+	})
 	writeFile(t, filepath.Join(mp, "README.md"), "x\n")
 	gitInit(t, mp)
 
@@ -274,13 +267,9 @@ func TestInstall_RemoteSubdirMissing(t *testing.T) {
 	gitInit(t, pluginRepo)
 
 	mp := t.TempDir()
-	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
-	  "name": "bad-subdir",
-	  "plugins": [
-	    {"name":"missing","version":"1.0.0",
-	     "source":{"source":"git-subdir","url":"file://`+pluginRepo+`","path":"plugins/not-here"}}
-	  ]
-	}`)
+	writeCatalog(t, mp, "bad-subdir", map[string]any{
+		"missing": Source{Kind: SourceGitSubdir, URL: fileURL(pluginRepo), Path: "plugins/not-here"},
+	})
 	writeFile(t, filepath.Join(mp, "README.md"), "x\n")
 	gitInit(t, mp)
 
@@ -302,10 +291,7 @@ func TestInstall_RemoteSubdirMissing(t *testing.T) {
 // naming both the path and the marketplace.
 func TestInstall_RelativePathMissing(t *testing.T) {
 	mp := t.TempDir()
-	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
-	  "name": "ghost-path",
-	  "plugins": [{"name":"ghost","version":"1.0.0","source":"./plugins/ghost"}]
-	}`)
+	writeCatalog(t, mp, "ghost-path", map[string]any{"ghost": "./plugins/ghost"})
 	writeFile(t, filepath.Join(mp, "README.md"), "x\n")
 	gitInit(t, mp)
 
@@ -600,7 +586,7 @@ func TestAddMarketplace_RemoteSourceClones(t *testing.T) {
 	home := t.TempDir()
 	m := &Manager{PiHome: home}
 
-	rec, err := m.AddMarketplace(context.Background(), "file://"+mpDir)
+	rec, err := m.AddMarketplace(context.Background(), fileURL(mpDir))
 	if err != nil {
 		t.Fatalf("AddMarketplace from a URL: %v", err)
 	}
@@ -636,7 +622,7 @@ func TestUpdateMarketplace_RemoteRefreshes(t *testing.T) {
 	m := &Manager{PiHome: home}
 	ctx := context.Background()
 
-	rec, err := m.AddMarketplace(ctx, "file://"+mpDir)
+	rec, err := m.AddMarketplace(ctx, fileURL(mpDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,10 +700,7 @@ func TestInstall_PluginWithoutSkills(t *testing.T) {
 	mp := t.TempDir()
 	pluginDir := filepath.Join(mp, "plugins", "agents-only")
 	writeFile(t, filepath.Join(pluginDir, ManifestDir, PluginName), `{"name":"agents-only","version":"1.0.0"}`)
-	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
-	  "name": "no-skills",
-	  "plugins": [{"name":"agents-only","version":"1.0.0","source":"./plugins/agents-only"}]
-	}`)
+	writeCatalog(t, mp, "no-skills", map[string]any{"agents-only": "./plugins/agents-only"})
 	gitInit(t, mp)
 
 	var notes []string
@@ -771,6 +754,11 @@ func TestSourceUnmarshal_InfersGitHubFromRepo(t *testing.T) {
 // permissions do not restrict access.
 func onlyIfWritable(t *testing.T) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// Windows has no POSIX permission bits; Chmod only toggles the
+		// read-only flag, so a "read-only" directory is still writable.
+		t.Skip("POSIX permissions are not enforced on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: directory permissions are not enforced")
 	}
@@ -843,7 +831,7 @@ func TestUpdateMarketplace_RemoteGone(t *testing.T) {
 	m := &Manager{PiHome: home}
 	ctx := context.Background()
 
-	rec, err := m.AddMarketplace(ctx, "file://"+mpDir)
+	rec, err := m.AddMarketplace(ctx, fileURL(mpDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +848,7 @@ func TestUpdateMarketplace_RemoteGone(t *testing.T) {
 // message, rather than being reported as a malformed marketplace.
 func TestAddMarketplace_UnfetchableSource(t *testing.T) {
 	m := &Manager{PiHome: t.TempDir()}
-	_, err := m.AddMarketplace(context.Background(), "file://"+filepath.Join(t.TempDir(), "absent"))
+	_, err := m.AddMarketplace(context.Background(), fileURL(filepath.Join(t.TempDir(), "absent")))
 	if err == nil {
 		t.Fatal("expected an error for a source that cannot be fetched")
 	}
