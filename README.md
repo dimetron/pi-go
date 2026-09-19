@@ -27,6 +27,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
 - **Memory Palace** — 4-layer contextual memory with SQLite storage, semantic embeddings (all-MiniLM-L6-v2), temporal knowledge graph, and project/conversation miners
 - **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and Model Context Protocol (MCP) servers
+- **Plugin marketplaces** — Install skill bundles from any Claude Code-compatible plugin marketplace, with version tracking and updates (`pi plugin`)
 - **Skills audit** — Security scanning for hidden Unicode characters, BiDi attacks, and supply-chain threats in skill files (`pi audit`)
 
 ## Architecture
@@ -39,6 +40,7 @@ internal/
 ├── config/         Global and project config (roles, hooks, MCP, themes)
 ├── audit/          Security scanner for skills (hidden Unicode, supply-chain threats)
 ├── extension/      Hooks, skills, MCP server integration
+├── plugin/         Plugin marketplaces — manifests, registry, install/update
 ├── lsp/            LSP JSON-RPC client, language registry, manager, hooks
 ├── palace/         Memory Palace — drawers, layers, KG, miners, embedder, search
 ├── provider/       LLM providers implementing genai model interface
@@ -349,6 +351,41 @@ pi --mode rpc                              # pi-compatible NDJSON over stdio (fo
 | `/audit`        | Scan skills for hidden Unicode threats                   |
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
+
+### Plugin marketplaces
+
+Install skill bundles from a **plugin marketplace**. pi-go reads the same
+`.claude-plugin/marketplace.json` manifest other coding agents use, so existing
+marketplaces work unchanged:
+
+```bash
+# Register the Superpowers marketplace
+pi plugin marketplace add obra/superpowers-marketplace
+
+# Install a plugin from it
+pi plugin install superpowers@superpowers-marketplace
+
+# See what is installed
+pi plugin list
+```
+
+| Command                                          | Description                                             |
+|--------------------------------------------------|---------------------------------------------------------|
+| `pi plugin marketplace add <source>`             | Register a marketplace (GitHub `owner/repo`, git URL, or local directory) |
+| `pi plugin marketplace list`                     | List registered marketplaces                            |
+| `pi plugin install <plugin[@marketplace]>`       | Install a plugin and make its skills available          |
+| `pi plugin list`                                 | List installed plugins, versions, and commits           |
+| `pi plugin update [plugin]`                      | Update one plugin, or all of them                       |
+| `pi plugin uninstall <plugin>`                   | Remove a plugin and its files                           |
+
+Installed plugins live in `~/.pi-go/plugins/`, and their skills are discovered
+automatically. **Plugin skills have lower precedence than your own**: a skill in
+`~/.pi-go/skills` or `.pi-go/skills` with the same name always wins, so
+installing a plugin can never silently replace a skill you wrote or customized.
+
+Sources may be a GitHub shorthand (`owner/repo`), a full git URL, or a local
+directory. Plugin names come from the marketplace manifest, which is untrusted
+input, so they are validated before being used as directory names.
 
 ### Memory Palace
 
