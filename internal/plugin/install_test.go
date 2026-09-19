@@ -6,11 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 // gitInit creates a git repository at dir with every file committed.
+//
+// Signing is explicitly disabled: these fixtures inherit the developer's global
+// git config, and a machine with commit.gpgsign=true (SSH signing via a
+// hardware-backed agent) fails the commit below with "failed to write commit
+// object" whenever that agent is unavailable. The tests are about plugin
+// installation, so they must not depend on the host's signing setup.
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
@@ -18,7 +25,7 @@ func gitInit(t *testing.T, dir string) {
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "Test"},
 		{"add", "-A"},
-		{"commit", "-q", "-m", "init"},
+		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -528,13 +535,17 @@ func TestCopyTree(t *testing.T) {
 		}
 	}
 
-	// Modes are preserved for regular files.
-	info, err := os.Stat(filepath.Join(dst, "skills", "a", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("mode = %o, want 600", perm)
+	// Modes are preserved for regular files. Windows has no POSIX permission
+	// bits — Chmod there only toggles the read-only flag, and files report 0666
+	// — so the assertion is meaningful on Unix only.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dst, "skills", "a", "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("mode = %o, want 600", perm)
+		}
 	}
 
 	// The link is reproduced as a link, not dereferenced into a file.
@@ -545,8 +556,11 @@ func TestCopyTree(t *testing.T) {
 	if li.Mode()&os.ModeSymlink == 0 {
 		t.Error("symlink was followed and copied as a regular file; it must be reproduced as a link")
 	}
-	if target, err := os.Readlink(filepath.Join(dst, "linked.md")); err != nil || target != "skills/a/SKILL.md" {
-		t.Errorf("link target = %q (err %v), want skills/a/SKILL.md", target, err)
+	// Windows Readlink returns the stored target with backslash separators, so
+	// the expectation is converted rather than compared in slash form.
+	wantTarget := filepath.FromSlash("skills/a/SKILL.md")
+	if target, err := os.Readlink(filepath.Join(dst, "linked.md")); err != nil || target != wantTarget {
+		t.Errorf("link target = %q (err %v), want %q", target, err, wantTarget)
 	}
 }
 
@@ -585,7 +599,11 @@ func TestSyncRepo_ResetsExistingRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "v1\n" {
-		t.Errorf("content = %q, want the remote version %q", got, "v1\n")
+	// Windows git rewrites LF to CRLF on checkout (core.autocrlf), so the
+	// comparison normalizes line endings rather than assuming LF survives.
+	// The assertion is that the local edit was discarded, not the encoding.
+	if content := strings.ReplaceAll(string(got), "\r\n", "\n"); content != "v1\n" {
+		t.Errorf("content = %q, want the remote version %q — the local edit was not discarded",
+			content, "v1\n")
 	}
 }
