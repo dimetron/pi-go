@@ -322,6 +322,12 @@ func buildSessionLLM(ctx context.Context, rt RuntimeConfig, cfg config.Config) (
 	}
 
 	apiKey := config.APIKeys()[info.Provider]
+	// A provider may keep its credential outside its env var — xAI stores the
+	// subscription access token alongside its refresh token. Consult that
+	// before rejecting the provider as unconfigured.
+	if apiKey == "" {
+		apiKey = provider.StoredSubscriptionCredential(info.Provider)
+	}
 	if err := checkProviderCredentials(info, apiKey, baseURL); err != nil {
 		return nil, "", nil, err
 	}

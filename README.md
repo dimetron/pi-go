@@ -253,7 +253,7 @@ Set the API key for your provider as an environment variable. The provider is in
 | OpenAI | `gpt-*` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` |
 | Google Gemini | `gemini-*` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_BASE_URL` |
 | Mistral | `mistral-*`, `magistral-*` | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` |
-| xAI (Grok) | `grok-*` | `XAI_API_KEY` | `XAI_BASE_URL` |
+| xAI (Grok) | `grok-*` | `XAI_API_KEY`, or `/login xai` for a SuperGrok subscription | `XAI_BASE_URL` |
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` |
 | agentgateway | `agentgateway/<model>` | none (optional `AGENTGATEWAY_API_KEY`) | `AGENTGATEWAY_BASE_URL` (default `http://localhost:4000`) |
 | Azure OpenAI | `azure/<deployment>` | `AZUREOPENAI_API_KEY` | — |
@@ -273,6 +273,17 @@ export OLLAMA_API_KEY="..."   # optional — only to reach Ollama Cloud directly
 ```
 
 A name with no recognized prefix is rejected rather than guessed at — reach for the `ollama/` prefix or the `:cloud` suffix to name an Ollama model explicitly.
+
+### Grok: API key or subscription
+
+xAI sells two things that both reach Grok, and pi-go uses whichever you have:
+
+- **A developer API key** (`XAI_API_KEY=xai-...` from [console.x.ai](https://console.x.ai)) — billed per token against prepaid credits, on `api.x.ai`.
+- **A SuperGrok or X Premium+ subscription** — billed against the subscription's weekly usage pool, on the Grok CLI chat proxy. Run `/login xai` (or `pi login xai`) and pick the device-code flow. If you already ran `grok login`, that session is adopted automatically.
+
+The two are not interchangeable: a subscription token sent to `api.x.ai` is rejected with HTTP 402 `personal-team-blocked:spending-limit`. pi-go tells them apart by shape and picks the matching endpoint and headers, so a `grok-*` model works either way with no extra flags. Subscription access tokens last six hours and are refreshed automatically from a stored refresh token; `pi logout xai` removes it.
+
+xAI gates subscription API access by account, and has been observed to reject some tiers even with an active subscription. If inference fails with HTTP 402/403, fall back to an API key.
 
 A `:cloud` tag names a model, not a destination. With `OLLAMA_API_KEY` set the
 request goes straight to `api.ollama.com`; without one it goes to the local

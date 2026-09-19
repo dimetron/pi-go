@@ -651,9 +651,12 @@ func TestRunTLSPreflight_NetworkError(t *testing.T) {
 }
 
 func TestProviders_TokenToKey(t *testing.T) {
-	// The codex and anthropic OAuth providers pass access_token through
+	// The codex, anthropic and xai OAuth providers pass access_token through
 	// unchanged; other providers prefer api_key when present and fall back
-	// to access_token.
+	// to access_token. xAI joins this set because a SuperGrok subscription
+	// bearer is sent to the Grok CLI proxy as-is — there is no key-exchange
+	// endpoint to convert it into a developer API key.
+	passthrough := map[string]bool{"codex": true, "anthropic": true, "xai": true}
 	for _, p := range Providers() {
 		t.Run(p.Name+"_accesstoken", func(t *testing.T) {
 			tok := &TokenResponse{AccessToken: "access-token"}
@@ -661,7 +664,7 @@ func TestProviders_TokenToKey(t *testing.T) {
 				t.Errorf("expected 'access-token', got %q", got)
 			}
 		})
-		if p.Name == "codex" || p.Name == "anthropic" {
+		if passthrough[p.Name] {
 			continue
 		}
 		t.Run(p.Name+"_apikey", func(t *testing.T) {
