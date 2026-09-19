@@ -27,7 +27,10 @@ becomes the new short-circuit. Compose the callbacks into one, as `design.md`
 
 ## How to work
 
-- One worktree for the whole task:
+- One worktree for the whole task — **but only if you are not already in one.**
+  Check `git rev-parse --git-dir` against `git rev-parse --git-common-dir` first:
+  they differ inside a linked worktree. If they differ, work in place and skip
+  the command below. Otherwise:
   `git worktree add -b fix/memory-subsystem .worktrees/fix-memory-subsystem HEAD`
 - One commit per slice, `-s -S`, sandbox disabled for the commit. Never
   `--no-verify`.
