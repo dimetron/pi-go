@@ -31,6 +31,7 @@ var Exclusions = []eval.Exclusion{
 	{Tool: "a2a", Reason: "needs a remote A2A agent server (external service); not registered without a2a config"},
 	{Tool: "palace-*", Reason: "needs a populated memory palace (embedding model + drawers); not registered in a fresh HOME"},
 	{Tool: "google_search", Reason: "Gemini provider built-in, not a pi tool; only present when the eval model is a Gemini model"},
+	{Tool: "web_search", Reason: "reaches the network: needs a running Ollama daemon or OLLAMA_API_KEY, and spends the account's monthly search quota"},
 }
 
 // Suite returns the scenarios in run order.

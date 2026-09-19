@@ -84,6 +84,15 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 	}
 	tools = append(tools, sessionStatsTool)
 
+	// Add web_search (no sandbox needed). It reaches the network rather than
+	// the filesystem, and reports its own failure as a model-visible result
+	// when no Ollama endpoint is configured, so it is safe in every mode.
+	webSearchTool, err := newWebSearchTool()
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, webSearchTool)
+
 	return tools, nil
 }
 

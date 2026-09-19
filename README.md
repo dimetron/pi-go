@@ -488,6 +488,44 @@ Both apply to local Ollama and Ollama Cloud — they share one request path. Rai
 these trades diversity for repetition control, and a value that helps one model can
 degrade another, so tune per model rather than setting them globally.
 
+### Web search
+
+The `web_search` tool lets the agent look up things that are not in the
+repository — a library's current release, a recent API change, an error message
+it has not seen before.
+
+It uses one of two Ollama endpoints, tried in order:
+
+1. **A local daemon** (`OLLAMA_HOST`, default `http://localhost:11434`), on
+   `/api/experimental/web_search`. No key is needed: the daemon searches using
+   the identity from `ollama signin`. This path spends no quota, so it is tried
+   first.
+2. **`https://ollama.com/api/web_search`**, when `OLLAMA_API_KEY` is set. This is
+   the fallback for environments with no daemon — CI runners, dev containers, VS
+   Code remotes. It draws on the account's monthly search quota.
+
+With neither available, the tool returns that as an ordinary result naming what
+to set, rather than failing the turn.
+
+The two endpoints are different *paths*, not the same path on two hosts, which is
+why pi-go calls them directly instead of through the Ollama Go SDK: the SDK's
+`WebSearchExperimental` posts to `/api/experimental/web_search`, which 404s on
+`api.ollama.com`.
+
+Each result keeps its URL and is capped at 4000 bytes of content, so a large page
+— a GitHub repository page comes back as the whole rendered README — spends a
+bounded part of the context window, and the model can still fetch the full page
+with `bash` when a snippet is not enough.
+
+```bash
+# Local daemon (no key needed)
+pi "what changed in the latest Ollama release?"
+
+# Headless / CI, using the cloud search API
+export OLLAMA_API_KEY="..."
+pi "what changed in the latest Ollama release?"
+```
+
 ### Custom OpenAI-compatible provider
 
 For OpenAI-compatible APIs with model names that Pi cannot infer from a prefix, explicitly set the role provider to
