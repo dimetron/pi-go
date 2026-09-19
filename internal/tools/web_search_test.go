@@ -279,6 +279,166 @@ func TestWebSearchLocalHostNormalization(t *testing.T) {
 	}
 }
 
+// The Run wrapper is the path the model actually takes, so invoke through it
+// rather than only through runWebSearch.
+func TestWebSearchViaRun(t *testing.T) {
+	var rec searchRequest
+	srv := newSearchTestServer(t, http.StatusOK, twoResults, &rec)
+	withSearchEnv(t, srv.URL, "", "")
+
+	tl, err := newWebSearchTool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runTool(t, tl, map[string]any{"query": "hello"})
+	if got := out["source"]; got != "local" {
+		t.Errorf("source = %v, want local", got)
+	}
+	results, ok := out["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("results = %#v, want 2 entries", out["results"])
+	}
+}
+
+// A non-2xx answer that is not JSON must still produce a usable message. The
+// real API wraps its errors in JSON, but a proxy or load balancer in the path
+// answers with HTML, and that must not reach the model as a bare decode error.
+func TestWebSearchNonJSONErrorStatus(t *testing.T) {
+	srv := newSearchTestServer(t, http.StatusBadGateway, "<html>502 Bad Gateway</html>", nil)
+	withSearchEnv(t, srv.URL, "", "")
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if !strings.Contains(out.Error, "502") {
+		t.Errorf("error = %q, want it to carry the status", out.Error)
+	}
+}
+
+// Same guard for a 2xx body that is not JSON: a truncated or malformed
+// response is a decode failure, and the message must say so.
+func TestWebSearchMalformedSuccessBody(t *testing.T) {
+	srv := newSearchTestServer(t, http.StatusOK, "not json at all", nil)
+	withSearchEnv(t, srv.URL, "", "")
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if !strings.Contains(out.Error, "decode") {
+		t.Errorf("error = %q, want a decode failure", out.Error)
+	}
+}
+
+// A 2xx body with no results is "no results", not an error from the API.
+func TestWebSearchEmptyBodyIsNoResults(t *testing.T) {
+	srv := newSearchTestServer(t, http.StatusOK, "{}", nil)
+	withSearchEnv(t, srv.URL, "", "")
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if out.Error != "no results returned" {
+		t.Errorf("error = %q, want no results returned", out.Error)
+	}
+}
+
+// A non-2xx status with a valid-JSON body that carries no error field still has
+// to be reported; otherwise a bare 500 would look like an empty result set.
+func TestWebSearchErrorStatusWithoutErrorMessage(t *testing.T) {
+	srv := newSearchTestServer(t, http.StatusInternalServerError, `{"results":[]}`, nil)
+	withSearchEnv(t, srv.URL, "", "")
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if !strings.Contains(out.Error, "500") {
+		t.Errorf("error = %q, want it to carry the status", out.Error)
+	}
+}
+
+// A request that cannot be built short-circuits before any network call.
+func TestWebSearchBadURLIsReported(t *testing.T) {
+	srv := newSearchTestServer(t, http.StatusOK, twoResults, nil)
+	withSearchEnv(t, srv.URL, "", "")
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("baseline failed: %s", out.Error)
+	}
+
+	// A control character in the URL makes http.NewRequestWithContext fail
+	// before the request is sent.
+	t.Setenv("OLLAMA_HOST", "http://exa\x7fmple.com")
+	out, err = runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if out.Error == "" {
+		t.Error("expected an error for an unbuildable URL")
+	}
+}
+
+// With a key present and the local endpoint unreachable, the transport failure
+// from both endpoints is what gets reported.
+func TestWebSearchBothEndpointsUnreachableWithKey(t *testing.T) {
+	dead := newSearchTestServer(t, http.StatusOK, twoResults, nil)
+	deadURL := dead.URL
+	dead.Close()
+
+	withSearchEnv(t, deadURL, deadURL, "sk-test-key")
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if !strings.Contains(out.Error, "web search failed") {
+		t.Errorf("error = %q, want the transport failure", out.Error)
+	}
+	// With a key set, the message must not claim the key is missing.
+	if strings.Contains(out.Error, "OLLAMA_API_KEY is not set") {
+		t.Errorf("error = %q wrongly blames a missing key", out.Error)
+	}
+}
+
+// A body that fails mid-read is the case the bounded read exists for: a
+// connection dropped partway must not surface as a partial decode.
+func TestWebSearchBodyReadError(t *testing.T) {
+	t.Setenv("OLLAMA_API_KEY", "")
+	t.Setenv("OLLAMA_HOST", "http://example.invalid")
+
+	prev := webSearchHTTPClient
+	webSearchHTTPClient = &http.Client{Transport: errReadTransport{}}
+	t.Cleanup(func() { webSearchHTTPClient = prev })
+
+	out, err := runWebSearch(context.Background(), WebSearchInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("runWebSearch: %v", err)
+	}
+	if !strings.Contains(out.Error, "read response") {
+		t.Errorf("error = %q, want a read failure", out.Error)
+	}
+}
+
+// errReadTransport returns a well-formed response whose body fails on Read,
+// standing in for a connection dropped mid-stream. The failing reader is the
+// package's existing errReader (llms_test.go).
+type errReadTransport struct{}
+
+func (errReadTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(errReader{}),
+	}, nil
+}
+
 func TestWebSearchToolDeclaration(t *testing.T) {
 	tool, err := newWebSearchTool()
 	if err != nil {
