@@ -425,6 +425,14 @@ func (m *Manager) Install(ctx context.Context, spec string) (*Installed, error) 
 	}
 
 	dst := PluginDir(m.PiHome, entry.Name)
+	// The containment check runs before anything is removed or created. A
+	// plugin whose source sits inside its own destination would otherwise have
+	// that source deleted by the RemoveAll below and only then be refused —
+	// losing the very files the user asked to install.
+	if !remote && insideDir(dst, srcDir) {
+		return nil, fmt.Errorf("plugin %s: refusing to install into %s, which contains its own source",
+			entry.Name, dst)
+	}
 	if err := os.RemoveAll(dst); err != nil {
 		return nil, err
 	}
@@ -443,10 +451,6 @@ func (m *Manager) Install(ctx context.Context, spec string) (*Installed, error) 
 			}
 		}
 	default:
-		if insideDir(dst, srcDir) {
-			return nil, fmt.Errorf("plugin %s: refusing to install into %s, which contains its own source",
-				entry.Name, dst)
-		}
 		if err := copyTree(srcDir, dst); err != nil {
 			return nil, fmt.Errorf("installing plugin %s: %w", entry.Name, err)
 		}

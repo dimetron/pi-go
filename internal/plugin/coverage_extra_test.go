@@ -1137,3 +1137,111 @@ func TestInsideDir_NonexistentPaths(t *testing.T) {
 		t.Error("a not-yet-created path under root must report as inside")
 	}
 }
+
+// A git failure that writes nothing to stderr still carries git's exit error
+// rather than reporting an empty reason.
+func TestGit_ErrorWithoutStderr(t *testing.T) {
+	// A directory that is not a repository: git writes to stderr, so this
+	// covers the common path. A bad flag covers the "no output" fallback.
+	dir := t.TempDir()
+	_, err := git(context.Background(), dir, "rev-parse", "--verify", "nosuchref")
+	if err == nil {
+		t.Fatal("expected an error from a failing git command")
+	}
+	if !strings.Contains(err.Error(), "git ") {
+		t.Errorf("error = %v, want it to name the failing command", err)
+	}
+
+	// A command git cannot even start, so no stderr is captured at all.
+	_, err = git(context.Background(), dir, "not-a-real-git-subcommand")
+	if err == nil {
+		t.Fatal("expected an error for an unknown git subcommand")
+	}
+}
+
+// A plugin whose source sits inside its own install destination must be refused
+// *before* anything is removed. The destination is cleared by RemoveAll before
+// the copy, so checking containment afterwards would delete the source and only
+// then fail — losing the files the user asked to install.
+func TestInstall_RefusesDestinationContainingSource(t *testing.T) {
+	home := t.TempDir()
+	// A local marketplace whose plugin lives inside the plugins directory, so
+	// the install destination (plugins/<name>) contains the source.
+	pluginSrc := filepath.Join(Root(home), "self")
+	writeSkillFixture(t, filepath.Join(pluginSrc, "skills"), "self-skill")
+	writeFile(t, filepath.Join(pluginSrc, ManifestDir, PluginName), `{"name":"self","version":"1.0.0"}`)
+
+	// Point a marketplace at the plugins directory itself.
+	mp := t.TempDir()
+	writeFile(t, filepath.Join(mp, ManifestDir, MarketplaceName), `{
+	  "name": "local-market",
+	  "plugins": [{"name":"self","version":"1.0.0","source":"./self"}]
+	}`)
+	writeFile(t, filepath.Join(mp, "README.md"), "x\n")
+	gitInit(t, mp)
+
+	m := &Manager{PiHome: home}
+	ctx := context.Background()
+	if _, err := m.AddMarketplace(ctx, mp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install from the in-plugins source by symlinking the marketplace's plugin
+	// path at it: the containment guard is about the resolved destination.
+	linked := filepath.Join(mp, "self")
+	if err := os.Symlink(pluginSrc, linked); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := m.Install(ctx, "self@local-market")
+	if err == nil {
+		t.Fatal("expected an install whose destination contains its source to be refused")
+	}
+	if !strings.Contains(err.Error(), "contains its own source") {
+		t.Errorf("error = %v, want it to explain the self-containment", err)
+	}
+	// The source survived: the guard ran before the destination was cleared.
+	if _, statErr := os.Stat(filepath.Join(pluginSrc, "skills", "self-skill", "SKILL.md")); statErr != nil {
+		t.Errorf("the guard deleted the plugin's own source files: %v", statErr)
+	}
+}
+
+// An installed plugin whose directory cannot be removed must be reported rather
+// than left half-removed and dropped from the registry.
+func TestUninstall_RemovalFails(t *testing.T) {
+	onlyIfWritable(t)
+	home := t.TempDir()
+	dir := PluginDir(home, "stuck")
+	writeSkillFixture(t, filepath.Join(dir, "skills"), "s")
+	// A non-empty subdirectory that cannot be written is still removable by
+	// the owner, so make the *parent* read-only to block the removal.
+	if err := os.Chmod(Root(home), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(Root(home), 0o755) })
+
+	r := NewRegistry()
+	r.Plugins["stuck"] = Installed{Name: "stuck"}
+	if err := r.Save(home); err != nil {
+		// Save needs the directory writable; restore, save, then re-block.
+		_ = os.Chmod(Root(home), 0o755)
+		if err := r.Save(home); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(Root(home), 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := &Manager{PiHome: home}
+	if err := m.Uninstall("stuck"); err == nil {
+		t.Fatal("expected an error removing a plugin from a read-only directory")
+	}
+	// The entry survives, so the user can retry once permissions are fixed.
+	after, err := LoadRegistry(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after.Plugins["stuck"]; !ok {
+		t.Error("a failed uninstall still dropped the registry entry")
+	}
+}
