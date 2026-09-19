@@ -147,22 +147,41 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// insideDir reports whether path is dir or lies within it. Both are resolved
-// with symlinks first, so a linked path cannot slip past the comparison.
+// insideDir reports whether path is dir or lies within it.
+//
+// Comparing cleaned paths is not enough: the install destination usually does
+// not exist yet, while the source does, so resolving only the side that exists
+// leaves the two rooted differently whenever a parent is a symlink — as /var is
+// on macOS. Both sides are therefore resolved through their nearest existing
+// ancestor, which puts them on the same footing whether or not they exist.
 func insideDir(path, dir string) bool {
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolvedPath = filepath.Clean(path)
-	}
-	resolvedDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		resolvedDir = filepath.Clean(dir)
-	}
-	rel, err := filepath.Rel(resolvedDir, resolvedPath)
+	rel, err := filepath.Rel(resolveExisting(dir), resolveExisting(path))
 	if err != nil {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveExisting returns p with symlinks resolved through its longest existing
+// prefix, keeping any trailing elements that do not exist yet. A path that
+// cannot be resolved at all is returned cleaned.
+func resolveExisting(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	dir, base := filepath.Split(filepath.Clean(p))
+	if base == "" || dir == "" {
+		return filepath.Clean(p)
+	}
+	if filepath.Clean(dir) == filepath.Clean(p) {
+		// Reached the root without resolving; nothing more to try.
+		return filepath.Clean(p)
+	}
+	resolvedDir := resolveExisting(dir)
+	if filepath.Base(resolvedDir) == base {
+		return resolvedDir
+	}
+	return filepath.Join(resolvedDir, base)
 }
 
 // isLocalDir reports whether a normalized source is a directory rather than a
@@ -540,24 +559,26 @@ func (m *Manager) Update(ctx context.Context, name string) (bool, error) {
 			return changed, fmt.Errorf("plugin %q is not installed", target)
 		}
 		before := inst.Sha
-		// Reinstall through the same path as install, then restore the
-		// record: the source of truth for what a plugin is remains its
-		// marketplace entry.
-		delete(registry.Plugins, target)
-		if err := registry.Save(m.PiHome); err != nil {
-			return changed, err
-		}
 		spec := target
 		if inst.Marketplace != "" {
 			spec = target + "@" + inst.Marketplace
 		}
+
+		// Install refuses to run while the plugin is already registered, so
+		// the entry comes out first and goes back if the install fails.
+		//
+		// Both steps re-load the registry rather than writing back the
+		// instance loaded above. Install persists through a registry of its
+		// own, so re-saving a stale instance here would silently drop the
+		// record of every plugin already updated in this loop — updating all
+		// plugins would leave only the last one registered.
+		if err := m.unregister(target); err != nil {
+			return changed, err
+		}
 		fresh, err := m.Install(ctx, spec)
 		if err != nil {
-			// Put the previous record back so a failed update does not
-			// leave the plugin unregistered.
-			registry.Plugins[target] = inst
-			if saveErr := registry.Save(m.PiHome); saveErr != nil {
-				m.logf("warning: could not restore registry entry for %s: %v", target, saveErr)
+			if restoreErr := m.restore(inst); restoreErr != nil {
+				m.logf("warning: could not restore registry entry for %s: %v", target, restoreErr)
 			}
 			return changed, fmt.Errorf("updating %s: %w", target, err)
 		}
@@ -566,6 +587,29 @@ func (m *Manager) Update(ctx context.Context, name string) (bool, error) {
 		}
 	}
 	return changed, nil
+}
+
+// unregister drops a plugin's registry entry. It re-loads the registry so the
+// write cannot clobber records that another operation — Install, most often —
+// added after the caller last read the file.
+func (m *Manager) unregister(name string) error {
+	registry, err := LoadRegistry(m.PiHome)
+	if err != nil {
+		return err
+	}
+	delete(registry.Plugins, name)
+	return registry.Save(m.PiHome)
+}
+
+// restore puts a plugin's record back after a failed operation, under the
+// current contents of the registry rather than a previously read copy.
+func (m *Manager) restore(inst Installed) error {
+	registry, err := LoadRegistry(m.PiHome)
+	if err != nil {
+		return err
+	}
+	registry.Plugins[inst.Name] = inst
+	return registry.Save(m.PiHome)
 }
 
 // UpdateMarketplace refreshes registered marketplaces so their catalogs pick up

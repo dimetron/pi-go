@@ -255,3 +255,129 @@ func TestPluginHome(t *testing.T) {
 		}
 	})
 }
+
+// A plugin with no version anywhere reports "unknown" rather than an empty
+// column, so the list stays aligned and readable.
+func TestPluginCmd_ListShowsUnknownVersion(t *testing.T) {
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, "plugins", "unversioned")
+	skillDir := filepath.Join(pluginDir, "skills", "s")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: s\n---\nB\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No version in the catalog entry and no plugin.json at all.
+	manifest := `{"name":"noversion","plugins":[{"name":"unversioned","source":"./plugins/unversioned"}]}`
+	if err := os.WriteFile(filepath.Join(root, ".claude-plugin", "marketplace.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "T"},
+		{"add", "-A"},
+		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	home := t.TempDir()
+	if _, err := runPluginCmd(t, home, "marketplace", "add", root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPluginCmd(t, home, "install", "unversioned@noversion"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runPluginCmd(t, home, "list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out, "unknown") {
+		t.Errorf("list output = %q, want it to show the version as unknown", out)
+	}
+}
+
+// `pi plugin update` reports whether anything actually moved, and refreshes the
+// catalog first so a new version is visible.
+func TestPluginCmd_UpdateOutput(t *testing.T) {
+	mpDir := pluginFixture(t)
+	home := t.TempDir()
+
+	if _, err := runPluginCmd(t, home, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPluginCmd(t, home, "install", "demo-plugin@demo-marketplace"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing moved in the source, so the first update is a no-op.
+	out, err := runPluginCmd(t, home, "update")
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Already up to date") {
+		t.Errorf("update output = %q, want the up-to-date message", out)
+	}
+
+	// Move the plugin's source commit on, then update again: the plugin's
+	// recorded commit differs, so the command reports a change.
+	if err := os.WriteFile(filepath.Join(mpDir, "plugins", "demo-plugin", "NEW.md"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add", "-A"},
+		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", "move on"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = mpDir
+		if o, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, o)
+		}
+	}
+
+	if _, err := runPluginCmd(t, home, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("re-adding the marketplace: %v", err)
+	}
+	out, err = runPluginCmd(t, home, "update", "demo-plugin")
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Updated.") {
+		t.Errorf("update output = %q, want it to report the update", out)
+	}
+}
+
+// A marketplace whose files have gone missing makes list report the failure
+// rather than printing a partial view.
+func TestPluginCmd_BrokenRegistry(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "plugins", "installed.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The registry path is a directory, which is not a readable registry.
+	if _, err := runPluginCmd(t, home, "list"); err == nil {
+		t.Error("expected an error when the registry cannot be read")
+	}
+	if _, err := runPluginCmd(t, home, "marketplace", "list"); err == nil {
+		t.Error("expected an error when the registry cannot be read")
+	}
+}
+
+// Registering a source that cannot be fetched reports the failure.
+func TestPluginCmd_MarketplaceAddUnfetchable(t *testing.T) {
+	home := t.TempDir()
+	_, err := runPluginCmd(t, home, "marketplace", "add", "file://"+filepath.Join(t.TempDir(), "absent"))
+	if err == nil {
+		t.Fatal("expected an error adding an unfetchable marketplace")
+	}
+}
