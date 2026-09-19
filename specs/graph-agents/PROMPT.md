@@ -110,7 +110,9 @@ declared graphs with retries, joins, routing, and cross-turn resume. Full design
   in-process agents — isolation (sandbox, worktrees, crash containment) is the point.
 - **Don't adopt `adk-utils-go`** — pi-go has its own memory/session/provider layers.
 - **Don't adopt kagent's Kubernetes CRD model** — pi-go is a local CLI/TUI agent.
-- **Worktree discipline** — work in a git worktree (`.worktrees/graph-agents/`), commit
-  with `-s -S`, never `--no-verify`.
+- **Worktree discipline** — work in a git worktree (`.worktrees/graph-agents/`),
+  but first confirm you are not already inside one (`git rev-parse --git-dir`
+  differs from `git rev-parse --git-common-dir` when you are); if so, work in
+  place. Commit with `-s -S`, never `--no-verify`.
 - **Don't delete code you didn't create** — replace `internal/tui/run.go` orchestration
   incrementally; keep gate/merge helpers until the graph path is proven.

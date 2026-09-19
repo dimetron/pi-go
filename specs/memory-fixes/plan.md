@@ -5,7 +5,7 @@
 >
 > Repo gate per slice: `make test`, `make vet`, `make lint`.
 > `internal/cli` tests bind local listeners — run them **outside the sandbox**
-> (`CLAUDE.md` § "Two environment traps").
+> (`AGENTS.md` § "Two environment traps").
 >
 > Slices 1–2 are the outage. Land and verify them before starting 3.
 

@@ -1,4 +1,4 @@
-# CLAUDE.md — pi-go
+# AGENTS.md — pi-go
 
 Guidance for coding agents working in this repo. Applies to Claude Code and to
 pi-go's own agent; where the two differ, both are described.
@@ -10,25 +10,45 @@ reading or changing code, enumerate the repository's instruction files and read
 the applicable ones:
 
 ```bash
-git worktree add -b feat/<topic> .worktrees/feat-<topic> HEAD
-cd .worktrees/feat-<topic>
 rg --files -g 'AGENTS.md' -g 'CLAUDE.md' -g '!tmp/**' -g '!.git/**' ..
 ```
 
-Read the root `AGENTS.md` or `CLAUDE.md` first, then any instruction file in
-each parent directory of the files you will touch. Instructions closer to a
-file add constraints to the repository guidance; do not skip them because a
-task appears small.
+Read the root `AGENTS.md` first, then any instruction file in each parent
+directory of the files you will touch. Instructions closer to a file add
+constraints to the repository guidance; do not skip them because a task appears
+small.
 
 ## Work in a git worktree, not the primary checkout
 
-**Do not make uncommitted edits in `/Users/dimetron/p6s/pi-dev/pi-go` and leave
-them there.** The primary checkout has its branch switched frequently, and
-`git checkout` discards uncommitted changes in tracked files without warning.
-Work has been lost to this. A worktree gives each task its own working
-directory and its own branch, so a switch in one cannot destroy another.
+**Do not make uncommitted edits in the primary checkout and leave them there.**
+The primary checkout has its branch switched frequently, and `git checkout`
+discards uncommitted changes in tracked files without warning. Work has been
+lost to this. A worktree gives each task its own working directory and its own
+branch, so a switch in one cannot destroy another.
 
-Create one before starting any task that edits tracked files:
+### Check first: are you already in a worktree?
+
+**Do not create a worktree when you are already inside one.** Nesting a
+worktree below another puts the new branch's base at the enclosing worktree's
+HEAD, and leaves two worktrees whose branches shadow each other on the same
+task. If you are already in one, work in the current directory.
+
+The check is a comparison, because `git rev-parse --git-dir` and
+`--git-common-dir` differ in exactly the case that matters:
+
+```bash
+# Already in a worktree? Then the two paths differ.
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  echo "already in a worktree: $(git rev-parse --show-toplevel) — work here"
+else
+  echo "primary checkout — create a worktree for this task"
+fi
+```
+
+In the primary checkout both report `.git`. Inside a linked worktree `--git-dir`
+is `<repo>/.git/worktrees/<name>` while `--git-common-dir` stays `<repo>/.git`.
+
+Create one only when that check says you are in the primary checkout:
 
 ```bash
 git worktree add -b fix/<topic> .worktrees/fix-<topic> HEAD

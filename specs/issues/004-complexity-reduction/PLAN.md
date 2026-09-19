@@ -478,7 +478,7 @@ regressions. **Effort: S–M.** **Public API change: no.**
 
 ## 3. Tooling & Conventions
 
-- Follow existing project rules in `AGENTS.md` / `CLAUDE.md`.
+- Follow existing project rules in `AGENTS.md`.
 - Build tags: stay consistent with existing files; do not introduce new build tags
   without maintainer sign-off.
 - Error wrapping: `fmt.Errorf("context: %w", err)` — no bare `errors.New` for

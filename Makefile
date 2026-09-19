@@ -41,7 +41,7 @@ install:
 
 # hooks: point core.hooksPath at the versioned .githooks/ directory.
 #
-# The hooks enforce CLAUDE.md's signing rules: commit-msg adds a missing
+# The hooks enforce AGENTS.md's signing rules: commit-msg adds a missing
 # Signed-off-by, post-commit warns on unsigned commits, and pre-push
 # HARD-FAILS any push containing unsigned or unsigned-off commits.
 #

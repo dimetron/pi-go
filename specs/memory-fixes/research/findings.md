@@ -218,5 +218,5 @@ ever worked on into one L1 essential story, ranked by importance alone.
 
 `go test ./internal/palace/...` panics under the sandbox in
 `TestOllamaEmbedSerializesAcrossGoroutines` — `httptest.NewServer` cannot bind.
-Outside the sandbox both packages pass (2.8 s). See `CLAUDE.md` § "Two
+Outside the sandbox both packages pass (2.8 s). See `AGENTS.md` § "Two
 environment traps"; do not read that panic as a real failure.

@@ -173,7 +173,7 @@ type runAgentDoneMsg struct {
 // purpose: a gate that never returns is not a gate that passed.
 //
 // pi-go has a documented case of this — tests that bind a local listener hang
-// under the sandbox (CLAUDE.md, "Two environment traps"). Session trajectories
+// under the sandbox (AGENTS.md, "Two environment traps"). Session trajectories
 // show coordinators backgrounding such a run, killing it, and reporting
 // success. Collapsing "hang" into either "pass" or "fail" is what let that
 // happen: reported as a pass it merges unverified work, reported as a fail it
@@ -1395,7 +1395,7 @@ func (m *model) handleRunGateResult(msg runGateResultMsg) (tea.Model, tea.Cmd) {
 
 // reportGateHang ends the run on a gate that never returned, naming the gate
 // and the worktree so the command can be re-run by hand. pi-go's own test
-// suite hangs under the sandbox (CLAUDE.md), so "re-run outside the sandbox"
+// suite hangs under the sandbox (AGENTS.md), so "re-run outside the sandbox"
 // is the usual resolution rather than a code fix.
 func (m *model) reportGateHang(results []GateResult) (tea.Model, tea.Cmd) {
 	m.run.phase = "failed"

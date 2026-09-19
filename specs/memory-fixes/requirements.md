@@ -128,7 +128,7 @@ observation bridge is wired — exactly as in the headless path.
   `palace.PalaceStore`, `palace.PalaceTools`, all `pi memory` subcommands.
 - Gate for every slice: `make test`, `make vet`, `make lint`.
 - `internal/cli` tests bind local listeners and must be run outside the sandbox
-  (`CLAUDE.md` § "Two environment traps").
+  (`AGENTS.md` § "Two environment traps").
 
 ## Out of scope
 

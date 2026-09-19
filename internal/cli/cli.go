@@ -558,7 +558,7 @@ func stopCPUProfile() {
 // Diagnostics go through slog, not fmt: this starts from PersistentPreRun and
 // the interactive TUI may already own the terminal by the time the listener
 // fails, and a raw stdout or stderr write would render as garbage over the
-// alternate screen (see CLAUDE.md).
+// alternate screen (see AGENTS.md).
 func startPprofServer() {
 	if flagPprof == "" {
 		return
@@ -589,7 +589,7 @@ var metricsOnce sync.Once
 // user who asked only for --metrics should not also get /debug/pprof for
 // free, or vice versa. Diagnostics go through slog rather than fmt/stdout —
 // this can start while the interactive TUI already owns the terminal, and a
-// raw stdout write from here would corrupt its display (see CLAUDE.md).
+// raw stdout write from here would corrupt its display (see AGENTS.md).
 func startMetricsServer() {
 	if !flagMetrics {
 		return
