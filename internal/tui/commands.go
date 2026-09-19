@@ -118,6 +118,9 @@ var slashCommandSpecs = []slashCommandSpec{
 		desc: "Watch a GitHub PR's checks and fix them until it is green",
 		run:  (*model).handlePRAutofixCommand,
 	},
+	// After /run and /pr-autofix: autocomplete returns the first prefix match, so
+	// "/r" must keep completing to /run.
+	{name: "/retry", desc: "Re-send the prompt of a turn that failed", run: slashCmdBare((*model).handleRetry)},
 	{name: "/skills", desc: "List skills (create, load)", run: (*model).handleSkillsCommand},
 	{name: "/skill-list", desc: "List all loaded skills", hidden: true, run: slashCmdBare((*model).handleSkillListCommand)},
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
@@ -297,6 +300,11 @@ func (m *model) clearConversation() {
 	m.loadingItems = nil
 	m.matrix.clear()
 	m.matrix.feed("pi-go", m.mainWidth())
+	// Drop the retry offer with the transcript: /retry after /clear would
+	// otherwise re-send a prompt whose turn is no longer on screen.
+	m.lastPrompt = ""
+	m.lastMentions = nil
+	m.lastPromptFailed = false
 	// Drop the session's events and zero the context gauge. Without this the
 	// transcript looks empty while the model still receives — and still pays
 	// for — every prior turn.
@@ -910,6 +918,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/context` | Show context usage |\n")
 	b.WriteString("| `/compact` | Compact session context |\n")
 	b.WriteString("| `/history [query]` | Command history |\n")
+	b.WriteString("| `/retry` | Re-send the prompt of a turn that failed |\n")
 	b.WriteString("| `/exit`, `/quit` | Exit |\n")
 
 	b.WriteString("\n**Git & Planning:**\n\n")
@@ -960,7 +969,8 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `Enter` | Submit |\n")
 	b.WriteString("| `Ctrl+C` / `Esc` | Cancel |\n")
 	b.WriteString("| `Up/Down` | Prompt history |\n")
-	b.WriteString("| `Ctrl+R` | History search |\n")
+	b.WriteString("| `Ctrl+H` | History search |\n")
+	b.WriteString("| `Ctrl+R` | Retry the last failed turn |\n")
 	b.WriteString("| `PgUp/PgDn` | Scroll chat |\n")
 
 	return b.String()

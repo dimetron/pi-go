@@ -1218,10 +1218,10 @@ func TestHistoryEntry_WithMentions(t *testing.T) {
 		{Text: "plain prompt"},
 	}
 
-	// Ctrl+R on empty input opens the history search popup.
+	// Ctrl+H on empty input opens the history search popup.
 	// History entries are reversed for display (newest first).
 	// So popup has: [0]="plain prompt" (newest), [1]="fix..." (older)
-	newM, _ := m.handleKey(makeKeyMod('r', tea.ModCtrl))
+	newM, _ := m.handleKey(makeKeyMod('h', tea.ModCtrl))
 	m = newM.(*model)
 	if m.searchPopup == nil {
 		t.Fatal("expected search popup to open")

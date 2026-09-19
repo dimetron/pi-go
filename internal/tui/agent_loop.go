@@ -903,6 +903,26 @@ type queuedPrompt struct {
 
 const maxPendingPrompts = 32
 
+// handleRetry re-sends the last prompt after a turn failed. It is the recovery
+// path for a provider failure that outlived its own retry budget — a refused
+// connection to a local gateway, say, which no amount of automatic retrying
+// will clear because nothing is listening yet.
+//
+// Refuses unless a previous turn actually failed, so it can never replay a
+// prompt whose answer is already on screen, and stays silent while a turn runs.
+// A turn the user canceled counts as not-failed, so Esc is never replayed.
+func (m *model) handleRetry() (tea.Model, tea.Cmd) {
+	switch {
+	case m.running:
+		return m, m.setFlash("Still running")
+	case m.lastPrompt == "" || !m.lastPromptFailed:
+		return m, m.setFlash("Nothing to retry")
+	}
+	// A queued prompt would otherwise run ahead of the retry.
+	m.pendingPrompts = nil
+	return m.enqueuePrompt(m.lastPrompt, m.lastMentions)
+}
+
 func (m *model) enqueuePrompt(text string, mentions []string) (tea.Model, tea.Cmd) {
 	if len(m.pendingPrompts) >= maxPendingPrompts {
 		m.flash = "Prompt queue full"
@@ -958,6 +978,13 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	}
 
 	m.matrix.feed("init", m.mainWidth())
+
+	// Remember what was asked, so a turn that dies under a provider failure can
+	// be re-sent without retyping it (see handleRetry). The flag is cleared here
+	// rather than on success so a retry of a retry stays offerable.
+	m.lastPrompt = text
+	m.lastMentions = append([]string(nil), mentions...)
+	m.lastPromptFailed = false
 
 	return m, tea.Batch(m.startAgentLoop(promptText), matrixTickCmd())
 }
@@ -1918,6 +1945,13 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 			m.face.SetMood(MoodSad)
 		}
 		m.chatModel.AppendError(fmt.Sprintf("Error: %v", msg.err))
+		// A failed turn is re-sendable: offer the prompt back rather than making
+		// the user retype what a connection error threw away. Only a prompt that
+		// actually ran is held, so a failure before the first submit stays quiet.
+		if m.lastPrompt != "" {
+			m.lastPromptFailed = true
+			m.chatModel.AppendMeta("Retry with Ctrl+R or /retry")
+		}
 		m.chatModel.TraceLog = append(m.chatModel.TraceLog, traceEntry{
 			time: time.Now(), kind: "error", summary: "Error", detail: msg.err.Error(),
 		})

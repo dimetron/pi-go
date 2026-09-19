@@ -73,6 +73,14 @@ type model struct {
 	agentCancel    context.CancelFunc // cancels the active agent response without quitting the TUI
 	pendingPrompts []queuedPrompt     // prompts submitted while a response is active
 
+	// The prompt of the most recent turn, kept so a turn that failed can be
+	// re-sent without retyping it. lastPromptFailed marks it as worth offering:
+	// a successful turn clears the flag, so /retry never replays a prompt whose
+	// answer is already on screen.
+	lastPrompt       string
+	lastMentions     []string
+	lastPromptFailed bool
+
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
@@ -1012,6 +1020,13 @@ func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd)
 	}
 	m.sel.dragging = false
 
+	// Take the release's own position, not the last motion's. Terminals coalesce
+	// motion events, so the final mouse position often arrives only with the
+	// release: copying the last motion made the selection stop a row short of
+	// where the user let go.
+	mouse := msg.Mouse()
+	m.sel.cursorX, m.sel.cursorY = m.clampToChat(mouse.X, mouse.Y)
+
 	if m.sel.empty() {
 		m.sel = selection{} // a plain click, not a drag: just clear
 		return m, nil
@@ -1246,6 +1261,15 @@ func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 
 // handleToggleKey handles the Ctrl-chord toggles and the search popup.
 func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
+	// Ctrl+R: re-send the prompt of a turn that failed. Checked before the input
+	// fallthrough, and only when the prompt is empty, so a user editing a new
+	// prompt never has it replaced by the previous one. A search popup owns the
+	// key while it is open — retrying under it would run a turn behind the popup.
+	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.inputModel.Text == "" && m.searchPopup == nil {
+		model, cmd := m.handleRetry()
+		return model, cmd, true
+	}
+
 	// Ctrl+O: toggle compact/expanded tool output.
 	if key.Code == 'o' && key.Mod == tea.ModCtrl {
 		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
@@ -1271,9 +1295,14 @@ func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
-	// Ctrl+R: open history search popup (reverse-i-search style). With no
+	// Ctrl+H: open history search popup (reverse-i-search style). With no
 	// history to search the key falls through to the input.
-	if key.Code == 'r' && key.Mod == tea.ModCtrl && m.searchPopup == nil && len(m.inputModel.History) > 0 {
+	//
+	// Gated on an empty prompt because Ctrl+H is also the readline "delete
+	// backward" chord: with text in the buffer the input keeps it, so the
+	// editing key still works where it is actually needed.
+	if key.Code == 'h' && key.Mod == tea.ModCtrl && m.searchPopup == nil &&
+		len(m.inputModel.History) > 0 && m.inputModel.Text == "" {
 		m.newSearchPopup(searchModeHistory)
 		return m, nil, true
 	}
