@@ -18,12 +18,20 @@ import (
 // hardware-backed agent) fails the commit below with "failed to write commit
 // object" whenever that agent is unavailable. The tests are about plugin
 // installation, so they must not depend on the host's signing setup.
+//
+// Automatic maintenance is disabled too. git detaches `gc --auto` after a
+// commit, and the detached process keeps writing pack files into .git/objects
+// while the test finishes — which makes t.TempDir's cleanup fail intermittently
+// with ".git/objects: directory not empty". The fixtures are throwaway
+// repositories, so there is nothing for gc to collect.
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "Test"},
+		{"config", "gc.auto", "0"},
+		{"config", "maintenance.auto", "false"},
 		{"add", "-A"},
 		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"},
 	} {

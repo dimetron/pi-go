@@ -381,3 +381,70 @@ func TestPluginCmd_MarketplaceAddUnfetchable(t *testing.T) {
 		t.Fatal("expected an error adding an unfetchable marketplace")
 	}
 }
+
+// With no home directory resolvable, every plugin subcommand reports the
+// failure up front rather than operating on a bogus path.
+//
+// os.UserHomeDir returns an error when $HOME is unset, which is the only way to
+// reach this path on a normal machine.
+func TestPluginCmd_WithoutHome(t *testing.T) {
+	t.Setenv("PI_GO_HOME", "")
+	t.Setenv("HOME", "")
+
+	if _, err := pluginHome(); err == nil {
+		t.Fatal("expected pluginHome to fail with no home directory")
+	}
+
+	cases := [][]string{
+		{"marketplace", "add", "obra/superpowers-marketplace"},
+		{"marketplace", "list"},
+		{"install", "x"},
+		{"list"},
+		{"uninstall", "x"},
+		{"update"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			cmd := newPluginCmd()
+			cmd.SetArgs(args)
+			var buf bytes.Buffer
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
+			cmd.SetContext(context.Background())
+			if err := cmd.Execute(); err == nil {
+				t.Errorf("expected an error with no home directory for %v", args)
+			}
+		})
+	}
+}
+
+// A marketplace whose remote has gone away makes `update` warn and carry on to
+// the plugin updates, rather than aborting the whole command.
+func TestPluginCmd_UpdateWarnsWhenCatalogRefreshFails(t *testing.T) {
+	mpDir := pluginFixture(t)
+	home := t.TempDir()
+
+	if _, err := runPluginCmd(t, home, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPluginCmd(t, home, "install", "demo-plugin@demo-marketplace"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-register the marketplace from a URL so the refresh has something to
+	// fetch, then remove that remote.
+	if _, err := runPluginCmd(t, home, "marketplace", "add", "file://"+filepath.ToSlash(mpDir)); err != nil {
+		t.Fatalf("re-registering from a URL: %v", err)
+	}
+	if err := os.RemoveAll(mpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runPluginCmd(t, home, "update")
+	if err != nil {
+		t.Fatalf("update should warn and continue, got: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning") {
+		t.Errorf("output = %q, want a warning about the failed catalog refresh", out)
+	}
+}

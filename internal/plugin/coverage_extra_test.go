@@ -10,14 +10,15 @@ import (
 	"testing"
 )
 
-// commitAll stages and commits everything in dir. Signing is disabled for the
-// same reason gitInit disables it: fixtures must not depend on the host's
-// signing setup, which would otherwise hang on a hardware-backed agent.
+// commitAll stages and commits everything in dir. Signing and automatic
+// maintenance are disabled for the same reasons gitInit disables them: fixtures
+// must not depend on the host's signing setup, and a detached `gc --auto` would
+// race with the cleanup of a t.TempDir.
 func commitAll(t *testing.T, dir, msg string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"add", "-A"},
-		{"-c", "commit.gpgsign=false", "commit", "-q", "-m", msg},
+		{"-c", "commit.gpgsign=false", "-c", "gc.auto=0", "commit", "-q", "-m", msg},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
