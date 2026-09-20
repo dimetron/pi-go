@@ -347,3 +347,68 @@ func TestSQLiteStore_ConcurrentCreateSessionPersistsAll(t *testing.T) {
 		t.Errorf("persisted %d of %d sessions — concurrent creates were lost", rows, n)
 	}
 }
+
+// Each OpenDB(":memory:") must be its own database.
+//
+// A fixed shared-cache name ("file::memory:?cache=shared") is process-global, so
+// every in-memory open in a process shares one store: two concurrent opens both
+// read version 0 and both insert version 1, one failing with "UNIQUE constraint
+// failed: schema_versions.version", and migrations racing each other into
+// "database table is locked". CI caught this; it is invisible when tests run
+// sequentially.
+func TestOpenDB_MemoryOpensAreIndependent(t *testing.T) {
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	dbs := make([]*sql.DB, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			db, err := OpenDB(":memory:")
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			dbs[i] = db
+		}(i)
+	}
+	wg.Wait()
+	defer func() {
+		for _, db := range dbs {
+			if db != nil {
+				db.Close()
+			}
+		}
+	}()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent OpenDB(:memory:) %d: %v", i, err)
+		}
+	}
+
+	// Each handle must see its own schema and its own rows.
+	for i, db := range dbs {
+		if db == nil {
+			continue
+		}
+		store := NewSQLiteStore(db)
+		if err := store.CreateSession(context.Background(), &Session{
+			SessionID: fmt.Sprintf("s-%d", i), Project: "/p",
+			StartedAt: time.Now(), Status: "active",
+		}); err != nil {
+			t.Errorf("db %d CreateSession: %v", i, err)
+			continue
+		}
+		var rows int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&rows); err != nil {
+			t.Errorf("db %d count: %v", i, err)
+			continue
+		}
+		if rows != 1 {
+			t.Errorf("db %d sees %d sessions, want exactly its own 1 — in-memory opens are sharing a database", i, rows)
+		}
+	}
+}

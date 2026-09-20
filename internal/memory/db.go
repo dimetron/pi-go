@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// memDBCounter names each in-memory database uniquely; see OpenDB.
+var memDBCounter uint64
 
 // migrations is the ordered list of schema migrations.
 // Each entry is a SQL statement to execute for that version.
@@ -136,10 +140,16 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=mmap_size(268435456)"
 	if dbPath == ":memory:" {
-		// A named in-memory database shared across the pool's connections. A
-		// bare ":memory:" gives each connection its own empty database, so the
-		// schema created by one connection would be invisible to the next.
-		dsn = "file::memory:?cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+		// A bare ":memory:" gives each pooled connection its own empty database,
+		// so the schema one connection creates is invisible to the next. The
+		// shared cache fixes that, but the name must be unique per call: a fixed
+		// name like "file::memory:?cache=shared" is process-global, so two
+		// OpenDB(":memory:") calls — concurrent tests, say — would share one
+		// database and race each other's migrations (UNIQUE violation on
+		// schema_versions, or a locked schema). A per-call name keeps the pool
+		// coherent while keeping separate opens separate.
+		dsn = fmt.Sprintf("file:memdb-%d?mode=memory&cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)",
+			atomic.AddUint64(&memDBCounter, 1))
 	}
 
 	db, err := sql.Open("sqlite", dsn)
