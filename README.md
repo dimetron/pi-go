@@ -326,8 +326,26 @@ pi --url "..."    # custom API endpoint URL
 # Non-interactive modes
 pi --mode print "explain this codebase"
 pi --mode json "list all TODO comments"
+pi --mode json --json-deltas full "..."      # one event per model chunk, not per sentence
 pi --mode socket --socket /tmp/pi-go.sock  # JSON-RPC 2.0 over a Unix socket
 pi --mode rpc                              # pi-compatible NDJSON over stdio (for pi-acp)
+```
+
+### JSON mode
+
+`--mode json` writes one JSON object per line to stdout. Streamed assistant text
+is grouped by sentence, so one `text_delta` carries a whole sentence rather than
+a single SSE chunk — a three-sentence reply is 5 lines instead of 76, and the
+`delta` fields still concatenate to exactly the reply. Concatenate `delta` to
+reconstruct the text; that is how every consumer uses it.
+
+```
+{"type":"message_start","agent":"pi","role":"model","session_id":"..."}
+{"type":"thinking_delta","agent":"pi","delta":"..."}
+{"type":"text_delta","agent":"pi","delta":"Go is a compiled language. "}
+{"type":"tool_call","agent":"pi","tool_name":"bash","tool_input":{...}}
+{"type":"tool_result","agent":"pi","tool_name":"bash","content":"{...}"}
+{"type":"message_end"}
 ```
 
 ### Slash commands

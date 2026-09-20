@@ -57,6 +57,11 @@ var (
 	flagURL     string
 	flagHeaders []string
 
+	// flagJSONDeltas selects how --mode json emits streamed assistant text:
+	// "group" (default) coalesces it into one event per sentence, "full" emits
+	// one event per model chunk.
+	flagJSONDeltas string
+
 	// flagSocketChanged records whether --socket was passed explicitly, so
 	// the deprecated `--mode rpc --socket` spelling can be distinguished
 	// from the default value. Set by runRoot.
@@ -202,6 +207,11 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 
 	cmd.Flags().StringVar(&flagModel, "model", "", "LLM model to use (e.g. claude-sonnet-5, gpt-5.2, gemini-3.5-pro, ollama/gemma4:e4b, minimax-m3:cloud)")
 	cmd.Flags().StringVar(&flagMode, "mode", "", "Output mode: interactive, print, json, socket, rpc")
+	// Grouping is the default because the ungrouped stream is one event per SSE
+	// chunk — a few characters each — which buries the tool calls and results a
+	// JSON-mode consumer is usually after.
+	cmd.Flags().StringVar(&flagJSONDeltas, "json-deltas", "group",
+		"JSON mode streamed-text granularity: group (one event per sentence) or full (one event per model chunk)")
 	cmd.Flags().StringVar(&flagSocket, "socket", "/tmp/pi-go.sock", "Unix socket path for socket mode")
 	// pi-acp unconditionally spawns `pi --mode rpc --no-themes`. pi-go has no
 	// themes to disable, but rejecting the flag kills the child on spawn and
@@ -1725,7 +1735,8 @@ type jsonEvent struct {
 }
 
 // runJSON runs the agent and emits JSONL events to stdout.
-// Events: message_start (once), text_delta (per text chunk), tool_call, tool_result, message_end (once).
+// Events: message_start (once), text_delta (one per sentence, or per text chunk
+// under --json-deltas full), tool_call, tool_result, message_end (once).
 func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
 	log.UserMessage(prompt)
 	// Auto-set the session title for JSON mode too. The first jsonEvent
@@ -1734,7 +1745,11 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	if title := derivePrintTitle(prompt); title != "" {
 		_ = ag.SetSessionTitle(sessionID, title)
 	}
-	enc := json.NewEncoder(os.Stdout)
+	raw, err := jsonRawDeltas()
+	if err != nil {
+		return err
+	}
+	em := newJSONEmitter(json.NewEncoder(os.Stdout), log, raw)
 	started := false
 	// SSE delivers the reply as deltas and then once more as an aggregate;
 	// without this every text_delta is emitted twice.
@@ -1746,7 +1761,8 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 	}) {
 		if err != nil {
 			if ctx.Err() != nil {
-				_ = enc.Encode(jsonEvent{Type: "message_end"})
+				em.flush()
+				em.emit(jsonEvent{Type: "message_end"})
 				return nil
 			}
 			log.Error(err.Error())
@@ -1759,7 +1775,8 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		// tell a failed run from an empty one. See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
 			log.Error(evErr.Error())
-			_ = enc.Encode(jsonEvent{Type: "error", Agent: ev.Author, Error: evErr.Error()})
+			em.flush()
+			em.emit(jsonEvent{Type: "error", Agent: ev.Author, Error: evErr.Error()})
 			return fmt.Errorf("agent run: %w", evErr)
 		}
 		if ev.Content == nil {
@@ -1768,7 +1785,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 
 		// Emit message_start on the first event from the assistant.
 		if !started {
-			_ = enc.Encode(jsonEvent{
+			em.emit(jsonEvent{
 				Type:      "message_start",
 				Agent:     ev.Author,
 				Role:      ev.Content.Role,
@@ -1778,65 +1795,16 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		}
 
 		dedup.BeginEvent(ev)
-		encodeEventParts(enc, ev, &dedup, log)
+		em.parts(ev, &dedup)
 	}
+	em.flush()
 	if !started {
 		const warn = "pi-go: warning: no assistant events received before message_end"
 		fmt.Fprintln(os.Stderr, warn)
 		log.Error(warn)
 	}
-	_ = enc.Encode(jsonEvent{Type: "message_end"})
+	em.emit(jsonEvent{Type: "message_end"})
 	return nil
-}
-
-// encodeEventParts emits one event's parts as JSONL: thinking_delta,
-// text_delta, tool_call and tool_result. The caller must have called
-// dedup.BeginEvent for ev.
-func encodeEventParts(enc *json.Encoder, ev *session.Event, dedup *agent.StreamDedup, log *logger.Logger) {
-	for _, part := range ev.Content.Parts {
-		if part.Text != "" && ev.Content.Role == "thinking" {
-			_ = enc.Encode(jsonEvent{
-				Type:  "thinking_delta",
-				Agent: ev.Author,
-				Delta: part.Text,
-			})
-			log.Thinking(ev.Author, part.Text)
-			continue
-		}
-		if part.Text != "" {
-			if dedup.SkipText(ev) {
-				continue
-			}
-			_ = enc.Encode(jsonEvent{
-				Type:  "text_delta",
-				Agent: ev.Author,
-				Delta: part.Text,
-			})
-			log.LLMText(ev.Author, part.Text)
-		}
-		if part.FunctionCall != nil {
-			_ = enc.Encode(jsonEvent{
-				Type:      "tool_call",
-				Agent:     ev.Author,
-				ToolName:  part.FunctionCall.Name,
-				ToolInput: part.FunctionCall.Args,
-			})
-			log.ToolCall(ev.Author, part.FunctionCall.Name, part.FunctionCall.Args)
-		}
-		if part.FunctionResponse != nil {
-			respJSON, err := json.Marshal(part.FunctionResponse.Response)
-			if err != nil {
-				respJSON = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
-			}
-			_ = enc.Encode(jsonEvent{
-				Type:     "tool_result",
-				Agent:    ev.Author,
-				ToolName: part.FunctionResponse.Name,
-				Content:  string(respJSON),
-			})
-			log.ToolResult(ev.Author, part.FunctionResponse.Name, string(respJSON))
-		}
-	}
 }
 
 // buildCommitMsgFunc creates the GenerateCommitMsg callback for /commit.

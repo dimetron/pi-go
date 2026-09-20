@@ -744,7 +744,9 @@ func TestEncodeEventParts(t *testing.T) {
 	var buf bytes.Buffer
 	var dedup agent.StreamDedup
 	dedup.BeginEvent(ev)
-	encodeEventParts(json.NewEncoder(&buf), ev, &dedup, nil)
+	em := newJSONEmitter(json.NewEncoder(&buf), nil, false)
+	em.parts(ev, &dedup)
+	em.flush()
 
 	var gotTypes []string
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -768,7 +770,9 @@ func TestEncodeEventPartsThinkingAndDedup(t *testing.T) {
 	var buf bytes.Buffer
 	var dedup agent.StreamDedup
 	dedup.BeginEvent(thinking)
-	encodeEventParts(json.NewEncoder(&buf), thinking, &dedup, nil)
+	em := newJSONEmitter(json.NewEncoder(&buf), nil, false)
+	em.parts(thinking, &dedup)
+	em.flush()
 	if !strings.Contains(buf.String(), `"thinking_delta"`) {
 		t.Errorf("output = %q, want a thinking_delta event", buf.String())
 	}
@@ -780,10 +784,12 @@ func TestEncodeEventPartsThinkingAndDedup(t *testing.T) {
 	buf.Reset()
 	enc := json.NewEncoder(&buf)
 	var d2 agent.StreamDedup
+	em2 := newJSONEmitter(enc, nil, false)
 	for _, ev := range []*session.Event{delta, aggregate} {
 		d2.BeginEvent(ev)
-		encodeEventParts(enc, ev, &d2, nil)
+		em2.parts(ev, &d2)
 	}
+	em2.flush()
 	if n := strings.Count(buf.String(), `"text_delta"`); n != 1 {
 		t.Errorf("text_delta count = %d, want 1 (aggregate re-send suppressed)", n)
 	}
