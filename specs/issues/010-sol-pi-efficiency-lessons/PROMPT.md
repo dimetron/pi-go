@@ -22,10 +22,24 @@ harness study, plus three prerequisite fixes that make them verifiable:
 **`research.md` §R2 is not optional reading and it changed after the plan was
 written.** The plan originally described ticket T2 as three line-level fixes.
 Empirical verification showed **seven of nine registered compaction pipelines are
-no-ops in production**: they read `result["output"]`, a key that no tool's output
-struct produces. If you implement from this prompt alone, or from a summary of
-the plan, you will implement the wrong thing. Read `research.md` §R2 in full,
-including the §R2.4 probe output.
+no-ops in production**, for three independent reasons: they read
+`result["output"]`, a key that no tool's output struct produces; three git tools
+route on names the registry never produces; and `ls` has no route at all. If you
+implement from this prompt alone, or from a summary of the plan, you will
+implement the wrong thing. Read `research.md` §R2 in full, including the §R2.4
+probe output.
+
+**Do not "fix" the fraction — fix the evidence.** §R2 records a second pass over
+the count. **"Seven of nine" is arithmetically correct** (9 registered
+bulk-output tools, 2 work, 7 dead), but the table and probe offered for it were
+wrong in two opposite ways that cancelled: the probe listed `grep` **and**
+`ripgrep` as separate dead routes when `grep.go:128-133` registers only one of
+them (`registry.go:62` builds it once), and it omitted `ls`, which is registered
+(`registry.go:66`) with no pipeline at all. `9 − 1 duplicate + 1 omission = 9`.
+
+The corrected **set** of seven: `ripgrep`, `find`, `tree`, `ls`,
+`git-file-diff`, `git-overview`, `git-hunk`. Any test that enumerates tool names
+by hand will re-derive both errors — source the list from the registry.
 
 Two further findings that change the implementation:
 
@@ -114,20 +128,22 @@ inventing one. On registration failure, fall back to plain truncated output.
   `AKIA…` key; assert the artifact on disk contains `***` and not the secret.
 - Fail open: unwritable artifact dir → plain truncated output, no error escapes.
 
-### T2 — Fix the seven dead compaction pipelines
+### T2 — Fix the seven dead compaction pipelines (of nine registered)
 
 **Read `research.md` §R2 in full first.**
 
 **T2.0 — Establish real result shapes.** ADK marshals each tool's typed output
 struct to JSON and unmarshals into `map[string]any`
-(`adk/v2@v2.4.0/tool/functiontool/function.go:231`). Verified keys:
+(`adk/v2@v2.4.0/tool/functiontool/function.go:229`; `:231` is inside the
+following `if err == nil` block). Verified keys:
 
 ```go
 bash          → stdout, stderr, exit_code
 read          → content, total_lines
-grep/ripgrep  → matches, total_matches
+ripgrep       → matches, total_matches          (registered name; "grep" only when rg is absent)
 find          → files, total_files
 tree          → tree, dirs, files
+ls            → entries, total_entries          (registered, no pipeline — see T2.3)
 git-file-diff → file, diff, lines_added, lines_removed
 git-overview  → branch, recent_commits, staged_files, ...
 git-hunk      → file, hunks, total_hunks
@@ -152,19 +168,41 @@ git-hunk      → file, hunks, total_hunks
 - `compactor.go:108-113` — hyphens: `git-file-diff`, `git-overview`, `git-hunk`
   (match `git_diff.go:36`, `git_overview.go:52`, `git_hunk.go:42`).
 - `compactor.go:102` — accept both `grep` and `ripgrep` (`grep.go:129-132`).
+  This is a second barrier on *one* route, not a second route: with `rg` present
+  the registered name is `ripgrep` and `case "grep"` never fires; without `rg`
+  the case fires and the pipeline then fails on the field. Both must be fixed
+  and both belong to the same pipeline.
+- **Add `case "ls"`.** `newLsTool` is registered (`registry.go:66`) and has no
+  case, so `ls` output is never a candidate for compaction. It needs the case
+  plus a `compactLs` over `entries`/`total_entries` (`ls.go:19-25`).
+
+**T2.2a — `git-file-diff` first.** It needs *only* the name fixed: its pipeline
+already reads `diff` (`compactor_git.go:11`) and `applyCompaction` already writes
+`diff` (`compactor.go:131`). Verified end to end — routed as `git_file_diff`, the
+callback compacted `len 182 → 63`. Land this one first: one string, one
+measurable win, and it proves the harness before the harder six.
 
 **T2.3 — `applyCompaction` must write what was read.**
 `compactor.go:119-156` probes `stdout` → `content` → `output` → `diff` →
 `result` → `data` in first-match order, so a correct pipeline can still write to
-the wrong key or none. Route the write by the same key the pipeline read —
-simplest correct shape is carrying the target key on `CompactResult`.
+the wrong key or none. Verified independently of T2.1/T2.2: given a hand-made
+non-nil `*CompactResult`, it declined to write for `grep`, `find`, `tree` and
+`git-overview`, logging `no known output field` each time. Route the write by the
+same key the pipeline read — simplest correct shape is carrying the target key on
+`CompactResult`.
 
 **T2.4 — The guard test.** The existing tests are *why this shipped*:
 `compactor_test.go` feeds synthetic maps with an `output` key
 (`:702,709,784,999,1019,1028,1061,1076`) — a shape no tool produces. Build test
-results by `json.Marshal`/`Unmarshal` of the **real output structs**; assert all
-nine names compact on a payload large enough to trigger; assert routing exists
-for every registered tool name, sourced from the registry.
+results by `json.Marshal`/`Unmarshal` of the **real output structs**; assert
+**every name from the registry** compacts on a payload large enough to trigger,
+and that routing exists for every registered name.
+
+Do **not** hand-write the name list in the test — enumerate the built tools. A
+hand-written list is exactly how `ls` stayed invisible and how `grep`/`ripgrep`
+got counted as two. Assert the count as well: **9 registered bulk-output tools,
+2 working (`bash`, `read`), 7 to fix**, with `ls` gaining a route it currently
+lacks. Asserting the count is what catches a silent re-registration.
 
 ### T3 — Make reduction rejectable
 

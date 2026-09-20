@@ -52,10 +52,18 @@ bug fixes and wiring that make item 1 (and everything later) verifiable.
 
 **Item 2 grew during authoring.** It began as "three line-level fixes" for
 grep/git tool-name mismatches. Empirical verification (R2.4 in `research.md`)
-showed **seven of nine registered compaction pipelines are no-ops in
-production** — they read a `result["output"]` key that no tool's output struct
-produces. This is a latent subsystem failure, not a typo, and it means the
-compactor's real contribution today is `bash` and `read` only.
+showed **seven registered compaction pipelines are no-ops in production** — they
+read a `result["output"]` key that no tool's output struct produces. This is a
+latent subsystem failure, not a typo, and it means the compactor's real
+contribution today is `bash` and `read` only.
+
+A second pass corrected the **evidence** for that figure. "Seven of nine" was
+right, but the table supporting it listed `grep` **and** `ripgrep` as two dead
+routes when `grep.go:128-133` registers only one of them (`registry.go:62` builds
+it once), and it omitted `ls`, which is registered with no pipeline at all. Two
+opposite errors cancelled: `9 − 1 duplicate + 1 omission = 9`. The corrected
+**set** of seven dead pipelines is `ripgrep`, `find`, `tree`, `ls`,
+`git-file-diff`, `git-overview`, `git-hunk`.
 
 ## Out of scope
 
@@ -97,3 +105,11 @@ authoring. The R2 finding was additionally **verified by executing the real
 its output are reproduced in `research.md` §R2.4. That probe was temporary and
 has been removed; no code change was left behind, and no build or test of the
 repository was run.
+
+The R2 **count** was re-verified in a second, independent pass that re-ran the
+probe with `ls` included and enumerated the registered names from a live
+`CoreTools` call. That pass found the `grep`/`ripgrep` double-count and the
+missing `ls` row, both now corrected in `research.md` §R2. Everything it asserts
+— the registered names, the `ls` verdict, the `applyCompaction` failure, and the
+`git-file-diff` asymmetry — was measured, not inferred. Only the `ls` byte count
+comes from the second run's own payload; §R2.4 says so explicitly.

@@ -226,11 +226,14 @@ external dependency.
 1. A >256 KiB tool result leaves a complete artifact on disk, and a
    `read(offset=…)` on the pointer's path returns content past the truncation
    point. Verified by an integration test, not by inspection.
-2. All nine compaction pipelines compact on a realistically-shaped payload, and
-   the test that proves it builds results from the **real output structs** rather
-   than synthetic maps — the synthetic maps are why seven of nine shipped dead.
-   Plus a routing assertion that fails if any registered tool name has no
-   matching pipeline.
+2. Every registrable compaction pipeline compacts on a realistically-shaped
+   payload (9 registered bulk-output tools: `bash`/`read` pass today, 6 others to
+   fix, and `ls` gains a route it currently lacks), and the test that proves it
+   builds results from the **real output structs** rather than synthetic maps —
+   the synthetic maps are why seven pipelines shipped dead. Plus a routing
+   assertion that fails if any name **from the registry** has no matching
+   pipeline, and a count assertion so a silent re-registration cannot shrink
+   coverage unnoticed.
 3. `compactor-metrics.json` exists in a session dir after a session that
    compacted — the current `Save()` has no caller, so this is a real assertion.
 4. No reduction in `token-cost/TOKENS.md`'s 201:1 measurement is *claimed* until

@@ -98,7 +98,7 @@ redaction and adds a shell round trip.
 
 ---
 
-## R2. Seven of nine compaction pipelines are dead — [CORRECTION, verified empirically]
+## R2. Seven of nine compaction pipelines are dead — [CORRECTION, verified empirically twice]
 
 **This section was rewritten after the first draft of this spec, which
 understated the defect as "grep reads the wrong field".** The scope is much
@@ -106,14 +106,50 @@ larger, and the original claim was wrong. Everything below was **verified by
 running the real callback against real production result shapes**, not by
 reading code — see R2.4 for the probe.
 
+**A second correction — to the evidence, not the conclusion.** The first rewrite
+said "seven of nine". **That fraction is arithmetically correct**: nine registered
+tools emit bulk output, two (`bash`, `read`) compact, seven do not. But the table
+and the probe that were offered as evidence for it are both wrong, in two ways
+that happen to cancel:
+
+1. **`grep` and `ripgrep` are one route, not two.** `newGrepTool`
+   (`internal/tools/grep.go:128-133`) picks a single name at construction:
+   `grepToolName = "ripgrep"` whenever `rg` is on PATH. `CoreTools` calls that
+   builder **once** (`registry.go:62`). Verified against a live `CoreTools`
+   call: `rgAvailable=true`, registered names are
+   `[read read_image write edit bash ripgrep find ls tree git-overview
+   git-file-diff git-hunk session-stats web_search]` — `grep` is registered
+   **0 times**, `ripgrep` once. So the probe's `grep` row **inflates** the count
+   by one: it is the same pipeline as `ripgrep`.
+2. **`ls` is registered and appeared nowhere.** `newLsTool` is registered
+   (`registry.go:66`) and `compactToolResult` has no `case "ls"`, so the
+   callback returns before any pipeline runs. It is a dead route that **deflates**
+   the count by one.
+
+The two errors are opposite and equal, which is why `7/9` survived despite the
+evidence being wrong: `9 probe lines − 1 duplicate + 1 omission = 9 real tools`.
+
+The corrected decomposition, both ways of counting:
+
+- **9 registered bulk-output tools: 2 work, 7 dead.** The dead seven are
+  `ripgrep`, `find`, `tree`, **`ls`**, `git-file-diff`, `git-overview`,
+  `git-hunk`. Note this is a *different set* from the table's, which counted
+  `grep` **and** `ripgrep` as two dead routes and omitted `ls`.
+- **8 `compactToolResult` cases: 2 live, 6 dead.** Of the eight cases, `case
+  "grep"` can never match a registered name; `ls` is the 7th dead pipeline and
+  has no case at all.
+
+A test that enumerates names by hand will re-derive the same two errors. Enumerate
+from the registry.
+
 ### R2.1 The compactor's field names do not match the real result maps
 
 ADK's `functiontool` marshals the tool's typed output struct to JSON and
 unmarshals it into `map[string]any`
-(`google.golang.org/adk/v2@v2.4.0/tool/functiontool/function.go:231`,
-`typeutil.ConvertToWithJSONSchema`). So the keys the compactor sees in
-`result` are the structs' **`json` tags**, not Go field names and not
-free-form strings.
+(`google.golang.org/adk/v2@v2.4.0/tool/functiontool/function.go:229`,
+`typeutil.ConvertToWithJSONSchema`; `:231` is inside the following `if err ==
+nil` block). So the keys the compactor sees in `result` are the structs'
+**`json` tags**, not Go field names and not free-form strings.
 
 Empirically confirmed key sets (probe in R2.4), compared to what each pipeline
 reads:
@@ -122,9 +158,10 @@ reads:
 |---|---|---|---|
 | `bash` | `stdout` `stderr` `exit_code` | `stdout` | ✅ |
 | `read` | `content` `total_lines` | `content` | ✅ |
-| `grep`/`ripgrep` | `matches` `total_matches` | `output` | ❌ |
+| `ripgrep` *(or `grep` when `rg` is absent — one route, not two)* | `matches` `total_matches` | `output` | ❌ |
 | `find` | `files` `total_files` | `output` | ❌ |
 | `tree` | `tree` `dirs` `files` | `output` | ❌ |
+| `ls` | `entries` `total_entries` | — no pipeline exists — | ❌ |
 | `git-file-diff` | `file` `diff` `lines_added` `lines_removed` | `diff` *(but never routed — see R2.2)* | ❌ |
 | `git-overview` | `branch` `recent_commits` `staged_files` … | `output` *(never routed)* | ❌ |
 | `git-hunk` | `file` `hunks` `total_hunks` | `diff` *(never routed)* | ❌ |
@@ -169,9 +206,25 @@ if rgAvailable {
 }
 ```
 
-but `compactor.go:102` handles only `case "grep"`. On any host with `rg` —
-effectively all hosts — grep is not even routed. `ResultDeduper` has both names
+but `compactor.go:102` handles only `case "grep"`. On any host with `rg` — 
+effectively all hosts — the registered name is `ripgrep`, so the `case "grep"`
+never fires and the route is unreachable. `ResultDeduper` has both names
 correct (`dedup.go:34-44`), which is why grep *dedupes* but never *compacts*.
+
+**Note that this is a second barrier on the single grep route, not a second
+route.** The name mismatch (R2.3) and the field mismatch (R2.1) are two
+independent reasons the same pipeline never produces output, on two different
+hosts:
+
+- host **with** `rg` (every real host): name is `ripgrep` → `case "grep"` never
+  fires → `compactGrep` is never called.
+- host **without** `rg`: name is `grep` → `compactGrep` *is* called, and then
+  reads `result["output"]` → returns `nil` anyway.
+
+Both must be fixed for the route to work. Because it is one route with two
+barriers, it is **one** of the seven dead pipelines — not two. An earlier draft
+listed `grep` and `ripgrep` separately, which is what made the probe look like it
+covered nine tools when it did not.
 
 ### R2.4 The probe and its output
 
@@ -191,19 +244,50 @@ got, err := cb(nil, &probeTool{name: c.tool}, map[string]any{}, res, nil)
 bash             COMPACTED      before= 11202 after=    92
 read             COMPACTED      before= 11202 after=    92
 ripgrep          DEAD (no-op)   before= 25091 after= 25091
-grep             DEAD (no-op)   before= 25091 after= 25091
+grep             DEAD (no-op)   before= 25091 after= 25091   <- same route as ripgrep
 find             DEAD (no-op)   before=  7201 after=  7201
 tree             DEAD (no-op)   before= 11202 after= 11202
+ls               DEAD (no-op)   before= 40833 after= 40833   <- missing from the first table
 git-file-diff    DEAD (no-op)   before= 11202 after= 11202
 git-overview     DEAD (no-op)   before=  7201 after=  7201
 git-hunk         DEAD (no-op)   before= 32401 after= 32401
 ```
 
+The `ls` row is from a **second run of the probe** with its own 400-entry payload,
+so its absolute byte count is not comparable with the rows above (which are the
+original run). The verdict — `DEAD (no-op)`, byte-for-byte unchanged — is what
+matters, and it is what the second run measured directly.
+
+**Read this block for the verdicts, not the row count.** These 10 rows are not 10
+tools: `grep` is the same pipeline as `ripgrep` (only one of the two is ever
+registered — §R2, correction 1), and `ls` was absent from the original run. The
+rows are evidence that each *named candidate* does not compact; the enumeration of
+real tools is in §R2's corrected decomposition, sourced from the registry.
+
 **Only `bash` and `read` compact. Seven of nine registered compaction pipelines
-are no-ops in production.** They compute nothing, and `applyCompaction` then
+are no-ops in production** (`ripgrep`, `find`, `tree`, `ls`, `git-file-diff`,
+`git-overview`, `git-hunk`). They compute nothing, and `applyCompaction` then
 either finds no matching field or writes to a key that does not exist — the
-latter being why `compactor.go:155` can log
+latter being why `compactor.go:154` can log
 `"compactor: no known output field in result for replacement"`.
+
+A **second independent probe**, run later against the same callback, confirmed
+the metrics surface agrees: `metrics.Summary()` after all ten rows reported
+`ByTool: map[bash:… read:…]` — no other tool ever recorded a compaction. It also
+confirmed `applyCompaction` is a **third, separate defect**, not a consequence of
+the first two: fed a hand-made non-nil `*CompactResult`, it declined to write for
+every one of `grep`, `find`, `tree` and `git-overview`, logging
+`no known output field` each time, because it probes only
+`stdout`→`content`→`output`→`diff`→`result`→`data` and none of those is the real
+field.
+
+One asymmetry is worth recording, because it changes sequencing:
+**`git-file-diff` needs only the name fixed.** Its pipeline already reads `diff`
+(`compactor_git.go:11`) and `applyCompaction` already writes `diff`
+(`compactor.go:131`). Probed directly: routing it as `git_file_diff` returned a
+non-nil result and `applyCompaction` wrote it end to end (`len 182 → 63`). The
+other six need name **and** field **and** `applyCompaction` changes. So
+`git-file-diff` is the natural first slice — one string, one measurable win.
 
 ### R2.5 Consequence for ticket 2
 
@@ -215,15 +299,24 @@ The original ticket said "three line-level fixes". The real scope is:
    breaks whenever `compactFind` does); `compactGitOverview` must read
    `branch`/`recent_commits`/`staged_files` etc. rather than `output`.
 2. **Name routing** — hyphens for the three git tools; accept both `grep` and
-   `ripgrep`.
-3. **`applyCompaction` must write the same keys the pipeline read** — it
+   `ripgrep` (one route, two barriers — R2.3). Note `git-file-diff` needs *only*
+   this (§R2.4 asymmetry).
+3. **A route for `ls`** — it is registered and has no pipeline at all. Either
+   add `case "ls"` plus a `compactLs` over `entries`/`total_entries`, or
+   deregister it from the routing table's expectations. Adding the route is the
+   consistent choice; leaving it out silently is what produced this gap, and it
+   is the 7th dead pipeline that the original table omitted.
+4. **`applyCompaction` must write the same keys the pipeline read** — it
    currently probes `stdout` → `content` → `output` → `diff` → `result` →
    `data` in order, so even a working pipeline can write to the wrong field or
-   to none.
-4. **The guard test must use real structs, not synthetic maps.** The existing
+   to none. This is a **third defect**, verified independently: a hand-made
+   non-nil `*CompactResult` is still not written for grep/find/tree/git-overview.
+5. **The guard test must use real structs, not synthetic maps.** The existing
    tests are the reason this shipped: they assert against a shape no tool emits.
    The new test must build results via `json.Marshal`/`Unmarshal` of the actual
-   output structs, and assert routing for every registered tool name.
+   output structs, and assert routing for **every name in the registry** — not a
+   hand-written list, which is how `ls` stayed invisible and how `grep` got
+   counted twice.
 
 This is larger than a bug fix — it is a latent subsystem failure. It also means
 the compactor's contribution to pi-go's measured token traffic is currently

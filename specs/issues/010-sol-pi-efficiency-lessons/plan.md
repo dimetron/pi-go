@@ -138,7 +138,13 @@ root to the **single** `<sessionId>/tool-output/` directory — never
 Independent of T1. **Scope was revised upward after empirical verification: seven
 of nine registered pipelines are no-ops in production (R2).** Read R2 in
 `research.md` before starting — the first draft of this spec understated this as
-"grep reads the wrong field".
+"grep reads the wrong field", and a second pass corrected the *evidence* (the
+probe listed `grep` and `ripgrep` separately and omitted `ls`; the fraction was
+right, the reasoning was not).
+
+**Sequence `git-file-diff` first.** It needs only the name fixed and works end to
+end today once routed (R2.4); landing it first proves the test harness on the
+cheapest case before the six that need name + field + `applyCompaction`.
 
 ### T2.0 — Establish the real result shapes first
 
@@ -209,12 +215,15 @@ shape no tool produces.
   compacted value.
 
 **Tests:**
-- Per-pipeline: all nine names produce a non-nil `*CompactResult` on
-  representative input (seven fail today).
+- Per-pipeline: every name **enumerated from the registry** produces a non-nil
+  `*CompactResult` on representative input (7 fail today, `bash`/`read` pass,
+  `ls` gains a pipeline).
 - Routing table test from T2.4.
 - `applyCompaction` writes the field the pipeline read.
 - Existing behaviour unchanged for `bash` and `read`, which do work today
-  (verified: `before=11202 after=92` each).
+  (verified: `before=24837 after=128` and `before=24830 after=121` on a
+  400-line payload at `MaxChars=64`; the spec's original `11202→92` figures are
+  from a smaller payload and are not a contradiction).
 
 ---
 
