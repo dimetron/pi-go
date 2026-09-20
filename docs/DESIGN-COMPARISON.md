@@ -91,7 +91,7 @@ Legend: ✅ present · 🟡 partial/divergent · ❌ absent · 🧩 "via extensi
 | Secret redaction in tool output | ❌ | ✅ `internal/tools/redact.go` | |
 | Sessions (JSONL, resume) | ✅ | ✅ | |
 | Session branching | ✅ fork + full **tree navigation UI** + branch summarization | 🟡 named branches (`/branch`), no tree UI, no branch summaries | |
-| Compaction (auto + manual) | ✅ LLM summary, token thresholds, file tracking | 🟡 manual `/compact`; ANSI-strip + tool-result aggregation compactor | Different strategies, §6 |
+| Compaction (auto + manual) | ✅ LLM summary, token thresholds, file tracking | 🟡 auto (percent-of-window) + manual `/compact`; ANSI-strip + tool-result aggregation compactor | Different strategies, §6 |
 | Message queue (steering / follow-up) | ✅ two queues, modes, dequeue | ❌ | |
 | Extensions (in-process code plugins) | ✅ TypeScript via jiti, 20+ hooks, custom tools/commands/UI | ❌ (shell hooks only) | Largest gap, §7 |
 | Lifecycle hooks | ✅ in-process events | 🟡 shell-command hooks on tool events (`internal/extension/hooks.go`) | |
@@ -223,8 +223,13 @@ tool-call custom rendering.
   ([internal/session/compaction.go](../internal/session/compaction.go),
   [internal/config/config.go](../internal/config/config.go)). Both are
   automatic; the budget model and the configurability differ — Go's thresholds
-  are neither absolute nor per-model, and its `ContextWindow` is a single
-  global value even though the embedded catalog is per-model.
+  are neither absolute nor per-model, and they are configured as a single
+  global `autoCompact` block even though the context window itself resolves
+  per-model from the embedded catalog (`provider.ContextWindowSizeFor`).
+  Auto-compaction also disables itself when the window is unknown — `Decide`
+  returns no action for `windowSize <= 0`, so a model with no catalog entry and
+  no `contextWindow` override never compacts. A per-model window override on
+  `/model` switch is a further reason to key these thresholds by model.
 
 **Missing in Go:** session DAG/tree navigation, branch summarization,
 labels, read/modified-file preservation in compaction entries, per-model
@@ -554,8 +559,11 @@ Three concrete consequences in pi-go today, all verified:
    (`internal/tui/plan.go:428`) and skill activation
    (`internal/tui/create_skill.go:79`) rebuild the instruction and persist
    nothing; `/clear` (`internal/tui/commands.go:290` `clearConversation`) clears
-   events and the token gauge but **does not reset the instruction**, so an injected
-   skill/plan prompt survives until `/model` happens to reconstruct it.
+   events and the token gauge but **does not reset the instruction**, and
+   neither does `/model` — `RebuildWithModel` preserves `cfg.Instruction`
+   (`internal/agent/agent.go:552-573`), explicitly only swapping the LLM. So an
+   injected skill/plan prompt survives until a restart or an explicit
+   `--system`/`RebuildWithInstruction` call.
 3. **Resume reconstructs the prompt from current disk state.** Instruction is
    rebuilt from the current `SystemInstruction` plus the AGENTS.md/skills on
    disk at resume time (`internal/cli/interactive.go:539`
@@ -566,9 +574,11 @@ Three concrete consequences in pi-go today, all verified:
 **Tools.** `internal/tools/registry.go` has no add/remove API; tools are
 supplied once via `agent.Config.Tools` (`internal/agent/agent.go:318-319`), and
 both `RebuildWithInstruction` and `RebuildWithModel` deliberately **preserve
-`Tools`** (`:531-566`). The only dynamic path is incidental: ADK re-queries an
-MCP `Toolset.Tools(ctx)` per `Flow`, so a reconnecting MCP server can surface
-new tools on the next turn (`internal/extension/mcp.go:168`). There is no
+`Tools`** (`:531-573`). Even the MCP toolset does not refresh: ADK re-queries
+`Toolset.Tools(ctx)`, but `resilientToolset.Tools` guards its body with
+`sync.Once` and returns the cached slice thereafter
+(`internal/extension/mcp.go:161-187`), so a reconnecting server cannot surface
+changed tools mid-session either. There is no
 `tool_search` / `additional_tools` / deferred-tool mechanism, and no prompt
 caching is involved either way.
 
@@ -584,7 +594,8 @@ only as help text.)
 A transcript entry type that snapshots `{instruction, toolNames}` plus a
 resume path that replays it would close (1)–(3) without touching `pi-ai`
 typing. That is a medium change and it is the highest-value one in this
-release. Note that pi-go has no prompt cache to preserve, so the
+release. pi-go has request-side prompt caching (§16.5) but no way to mutate the
+prompt or toolset *while keeping a cached prefix intact*, so the
 cache-preserving half of upstream's motivation does not apply — see 16.5.
 
 ### 16.5 Cheap wins, and why they are cheap
@@ -633,8 +644,10 @@ OpenAI, Gemini, Mistral, xAI, Ollama and Azure ignore `DisablePromptCaching`,
 and only Mistral (`prompt_cache_key`) and xAI (`x-grok-conv-id`) do anything
 cache-affinity-shaped. It spends real tokens to save cache-write cost, so it
 needs cost-aware gating to be safe. And pi-go has **no prompt-cache lifetime
-metadata**, which `cache_apply.go` also notes (cache-write tokens are not
-broken out because `genai` has no field for them). That metadata is upstream's
+metadata**, because cache-write tokens are not broken out at all —
+`internal/guardrail/guardrail.go:27-31` records that the `genai` usage metadata
+has no field for them, so they stay folded into the non-cached remainder. That
+metadata is upstream's
 input for deciding *when* to warm — so it is a prerequisite, not a detail.
 
 **Constrained sampling — the same feature with opposite intent.** Upstream
@@ -658,9 +671,12 @@ inverse of upstream's `constrainedSampling: false` escape hatch. Note also that
 pi-go has no jitter in its backoff — a separate, smaller robustness gap.
 
 **Resume ergonomics (`-r`/`-c`).** The tweet advertised faster `-r`/`-c`. pi-go
-has **no shorthand flags at all** — `--session` (`internal/cli/cli.go:211`) and
-`--continue` (`:213`) are long-form only, with zero `Shorthand` registrations
-anywhere in `internal/`. The underlying *performance* property is already met
+has **no shorthand for resume** — `--session` (`internal/cli/cli.go:211`) and
+`--continue` (`:213`) are registered long-form with no single-letter alias.
+(Shorthands are not unused repo-wide: `-v` on audit and `-o` on the model-list
+subcommand exist — `internal/cli/audit.go:45`, `internal/cli/model.go:69` — but
+the root command's resume paths have none, and upstream's `-r`/`-c` are the
+muscle-memory flags being compared here.) The underlying *performance* property is already met
 (header-only reads, see 16.3), so this is pure flag ergonomics: small, but a
 real daily-use difference for anyone typing `-c`. Cheap and worth doing on its
 own.
@@ -679,12 +695,15 @@ Kept short — each needs its own spec before anyone acts.
   gate.**
 - **Clipboard reporting success when the fallback was ignored.** Upstream
   #9618. pi-go's `writeSystemClipboard` is explicitly best-effort — every error
-  path returns silently (`internal/tui/selection.go:170-185`) and the doc
-  comment concedes "a failure here still leaves OSC 52". Notably there is no
-  OSC 52 *emitter* in `internal/tui` at all (only OSC 8 hyperlinks and an OSC 0
-  title), so on a host with no `pbcopy`/`clip`/`wl-copy`/`xclip` a copy may fail
-  with no signal to the user. Low severity, but the comment currently
-  overstates the fallback.
+  path returns silently (`internal/tui/selection.go:170-185`) — and
+  `copySelection` also returns `tea.SetClipboard(text)` (`:147`), which is
+  Bubble Tea's OSC 52 path (bubbletea `clipboard.go:30`). So the fallback does
+  exist and a terminal that supports OSC 52 can succeed even with no
+  `pbcopy`/`clip`/`wl-copy`/`xclip` present. The real gap is narrower: neither
+  path reports success or failure, and OSC 52 is silently ignored by terminals
+  that do not support it, so a copy can fail with no signal to the user —
+  exactly the case upstream #9618 added guidance for. Low severity; the
+  mechanism is present, only the confirmation is missing.
 - **Cloudflare 520 and Azure peak-load retry classification.** Upstream #9627,
   #9669. pi-go classifies on message substrings
   (`internal/retry/retry.go:65-147`); `"overloaded"` is matched (`:114`) but
