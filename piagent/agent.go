@@ -41,6 +41,18 @@ type Agent struct {
 	provider  string
 	tools     []adktool.Tool
 	memStore  memory.Store
+	// memSummarizer writes end-of-session summaries. Nil when no summary model
+	// was supplied, which makes the flush on Close a no-op.
+	memSummarizer *memory.LLMSummarizer
+	// sessions records, in order, the sessions this agent created. Close
+	// summarizes and completes them: a session that is never completed stays
+	// 'active' in the memory database forever, which is what the CLI has been
+	// doing — ~/.pi-go/memory/claude-mem.db held thousands of active sessions
+	// and zero completed ones.
+	sessions []string
+	// project is the memory store's project key, which is the working
+	// directory. Kept because Close still needs it after the sandbox is gone.
+	project string
 	// sessionLog is nil-safe: every method tolerates a nil receiver, so a
 	// failed log file costs logging and nothing else.
 	sessionLog *logger.Logger
@@ -107,6 +119,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		beforeTurn: o.beforeTurn,
 		afterTurn:  o.afterTurn,
 		meter:      contextMeter,
+		project:    workDir,
 	}
 
 	rt, err := a.buildRuntime(ctx, o, &cfg, providerName)
@@ -114,6 +127,12 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		return nil, err
 	}
 	a.tools = rt.tools
+	// A summarizer with no store to write to would summarize into nothing, so
+	// it is only held when memory is on. This also keeps the "memory off"
+	// promise: no store, no summary, no model call.
+	if a.memStore != nil && o.sessionSummary != nil {
+		a.memSummarizer = memory.NewLLMSummarizer(o.sessionSummary)
+	}
 
 	instruction := buildInstruction(o, workDir)
 	if rt.palaceContext != "" {
@@ -257,7 +276,7 @@ func (a *Agent) buildRuntime(ctx context.Context, o options, cfg *config.Config,
 		coreTools = append(coreTools, agentTools...)
 	}
 
-	memStore, memWorker, closeMemory := setupMemory(ctx, o, *cfg, orch)
+	memStore, memWorker, closeMemory := setupMemory(ctx, o, *cfg, orch, func() { a.summarizeSessions() })
 	a.push(func() error { closeMemory(); return nil })
 	a.memStore = memStore
 	if memStore != nil {
@@ -313,6 +332,13 @@ func (a *Agent) abort(err error) error {
 // Close releases every resource the agent acquired: the sandbox, backgrounded
 // processes, the subagent orchestrator, the LSP manager, the memory worker and
 // store, the palace, and the session log. It is safe to call more than once.
+//
+// When a session summarizer is configured, Close writes a summary for every
+// session this agent created and marks those sessions completed. Both happen
+// inside the memory closer, after the observation worker has drained and before
+// the store is closed — see setupMemory for why that order is required.
+// Summarization is best-effort: a failure is logged and does not prevent any
+// resource from being released.
 func (a *Agent) Close() error {
 	var errs []error
 	for i := len(a.closers) - 1; i >= 0; i-- {
@@ -322,6 +348,76 @@ func (a *Agent) Close() error {
 	}
 	a.closers = nil
 	return errors.Join(errs...)
+}
+
+// summarizeSessions writes a summary for each recorded session and completes it.
+//
+// Only the summary write is gated on a summarizer being configured. Sessions are
+// completed either way: leaving them 'active' is what makes a store accumulate
+// rows that no reader can distinguish from a session still in progress.
+//
+// The context is bounded separately from the caller's, because Close may be
+// reached from a canceled context — that is the common case for a Ctrl-C — and a
+// summary that inherits that cancellation would never be written.
+func (a *Agent) summarizeSessions() {
+	if a.memStore == nil || len(a.sessions) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), sessionSummaryTimeout)
+	defer cancel()
+
+	for _, sessionID := range a.sessions {
+		if a.memSummarizer != nil {
+			if err := a.SummarizeSession(ctx, sessionID); err != nil {
+				slog.Warn("piagent: session summary failed",
+					"session", sessionID, "error", err)
+			}
+		}
+		if err := a.memStore.CompleteSession(ctx, sessionID); err != nil {
+			slog.Warn("piagent: completing session failed",
+				"session", sessionID, "error", err)
+		}
+	}
+	a.sessions = nil
+}
+
+// SummarizeSession summarizes one session's recorded observations and stores the
+// result, so it can be read back with `pi memory recent`.
+//
+// It is exported for embedders that want to choose the moment rather than wait
+// for [Agent.Close] — a long-lived agent may want a summary per logical unit of
+// work, not per process. [Agent.Close] calls it for every session the agent
+// created.
+//
+// It returns an error when memory is off, when no summarizer was configured, or
+// when the session has no observations. A session with no observations is not an
+// error in the "something broke" sense, but there is no summary to write, so it
+// is reported rather than silently succeeding.
+func (a *Agent) SummarizeSession(ctx context.Context, sessionID string) error {
+	if a.memStore == nil {
+		return errors.New("piagent: session summary requires memory — create the agent with WithMemory(true)")
+	}
+	if a.memSummarizer == nil {
+		return errors.New("piagent: session summary requires a summary model — pass WithSessionSummary(m)")
+	}
+
+	observations, err := a.memStore.SessionObservations(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("piagent: reading session observations: %w", err)
+	}
+	if len(observations) == 0 {
+		return fmt.Errorf("piagent: session %q has no observations to summarize", sessionID)
+	}
+
+	sum, err := a.memSummarizer.SummarizeSession(ctx, sessionID, a.project, observations)
+	if err != nil {
+		return fmt.Errorf("piagent: summarizing session: %w", err)
+	}
+	if err := a.memStore.UpsertSummary(ctx, sum); err != nil {
+		return fmt.Errorf("piagent: storing session summary: %w", err)
+	}
+	return nil
 }
 
 // NewSession creates a session and returns its ID. Sessions persist under the
@@ -341,6 +437,7 @@ func (a *Agent) NewSession(ctx context.Context) (string, error) {
 			StartedAt: time.Now(),
 			Status:    "active",
 		})
+		a.sessions = append(a.sessions, sessionID)
 	}
 	a.sessionLog.SessionStart(sessionID, a.modelName, a.provider, "embedded", "", "embedded")
 	return sessionID, nil

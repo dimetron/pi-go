@@ -53,6 +53,7 @@ type options struct {
 	contextWindow   int64
 	summarizer      model.LLM
 	compactNotify   func(string)
+	sessionSummary  model.LLM
 }
 
 // defaultOptions splits pi-go's conventions along one line: reading them is on
@@ -283,4 +284,26 @@ func WithSummarizer(m model.LLM) Option {
 // not block on I/O.
 func WithCompactNotify(fn func(string)) Option {
 	return func(o *options) { o.compactNotify = fn }
+}
+
+// WithSessionSummary sets the model that writes the end-of-session summary for
+// the observation memory store, and turns the feature on.
+//
+// It is separate from [WithSummarizer], which writes the auto-compaction handoff
+// summary for the conversation. The two reach different stores and answer
+// different questions: compaction asks "what does the next model need to
+// continue?", session summary asks "what happened in this session, for someone
+// reading the memory database later?".
+//
+// Summaries are written on [Agent.Close], because that is the only point at
+// which a session is known to be over — an embedder may run turns for hours, and
+// a summary written mid-session would describe work that had not happened yet.
+// Close is also the wrong place to spend much time, so the write is one model
+// call with a short budget and a failure is logged rather than returned.
+//
+// Without this option no summary is written, which is also the behavior when
+// memory is off. [Agent.SummarizeSession] can be called directly instead when
+// the embedder would rather choose the moment.
+func WithSessionSummary(m model.LLM) Option {
+	return func(o *options) { o.sessionSummary = m }
 }

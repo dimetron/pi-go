@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/memory"
 	"github.com/dimetron/pi-go/internal/palace"
 	"github.com/dimetron/pi-go/internal/tools"
 )
@@ -218,7 +219,7 @@ func TestSetupMemoryDisabled(t *testing.T) {
 	o := defaultOptions()
 	o.memoryEnabled = false
 
-	store, worker, closeFn := setupMemory(t.Context(), o, config.Config{}, nil)
+	store, worker, closeFn := setupMemory(t.Context(), o, config.Config{}, nil, nil)
 	defer closeFn()
 	if store != nil || worker != nil {
 		t.Error("setupMemory returned a store or worker while disabled")
@@ -238,7 +239,7 @@ func TestSetupMemoryDegradesOnAnUnopenableDatabase(t *testing.T) {
 	o := defaultOptions()
 	cfg := config.Config{Memory: &config.MemoryConfig{DBPath: dbPath}}
 
-	store, worker, closeFn := setupMemory(t.Context(), o, cfg, nil)
+	store, worker, closeFn := setupMemory(t.Context(), o, cfg, nil, nil)
 	defer closeFn()
 	if store != nil || worker != nil {
 		t.Error("setupMemory returned a store for an unopenable database")
@@ -250,7 +251,7 @@ func TestSetupMemoryOpensAndCloses(t *testing.T) {
 	cfg := config.Config{Memory: &config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "mem.db")}}
 	o := defaultOptions()
 
-	store, worker, closeFn := setupMemory(t.Context(), o, cfg, nil)
+	store, worker, closeFn := setupMemory(t.Context(), o, cfg, nil, nil)
 	if store == nil || worker == nil {
 		closeFn()
 		t.Skip("memory store unavailable in this environment")
@@ -459,5 +460,76 @@ func TestTimeoutsAreBounded(t *testing.T) {
 		if d <= 0 {
 			t.Errorf("%s = %v, want a positive bound", name, d)
 		}
+	}
+}
+
+// The memory closer must drain the observation worker before it summarizes.
+//
+// A summary that reads the store while observations are still queued silently
+// under-reports the session, and the end of a session is exactly what a summary
+// is for. This pins the order by queueing observations into the worker and
+// asserting the summarize step — which runs between drain and store close — can
+// already see all of them.
+func TestSetupMemorySummarizesAfterDraining(t *testing.T) {
+	isolate(t)
+
+	cfg := config.Config{Memory: &config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "mem.db")}}
+	o := defaultOptions()
+	o.memoryEnabled = true
+
+	// record what the summarize step sees at the moment it runs.
+	var seen int
+	var closedDuringSummarize error
+
+	var store memory.Store
+	var worker *memory.Worker
+	var closeFn func()
+
+	// The summarize hook captures the store through the closure below, which is
+	// only assigned once setupMemory returns — hence the pointer indirection.
+	orch := buildSubagents(t.Context(), &cfg, t.TempDir())
+	defer orch.Shutdown()
+
+	store, worker, closeFn = setupMemory(t.Context(), o, cfg, orch, func() {
+		obs, err := store.SessionObservations(context.Background(), "sess-drain")
+		seen = len(obs)
+		closedDuringSummarize = err
+	})
+	if store == nil || worker == nil {
+		closeFn()
+		t.Skip("memory store unavailable in this environment")
+	}
+
+	if err := store.CreateSession(t.Context(), &memory.Session{
+		SessionID: "sess-drain",
+		Project:   "/project",
+		StartedAt: time.Now(),
+		Status:    "active",
+	}); err != nil {
+		closeFn()
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Queue through the worker rather than inserting directly: anything still
+	// in the channel is invisible to a summary that runs too early.
+	const queued = 3
+	for i := 0; i < queued; i++ {
+		worker.Enqueue(memory.RawObservation{
+			SessionID:  "sess-drain",
+			Project:    "/project",
+			ToolName:   "edit",
+			ToolInput:  map[string]any{"file_path": "/tmp/f.go"},
+			ToolOutput: map[string]any{"ok": true},
+			Timestamp:  time.Now(),
+		})
+	}
+
+	closeFn()
+
+	if closedDuringSummarize != nil {
+		t.Fatalf("the store was already closed when the summary ran: %v", closedDuringSummarize)
+	}
+	if seen != queued {
+		t.Errorf("the summarizer saw %d observation(s), want %d — the worker had not drained yet", seen, queued)
 	}
 }

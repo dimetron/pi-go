@@ -715,6 +715,14 @@ func (s *lazyMemoryStore) RecentObservations(ctx context.Context, project string
 	return store.RecentObservations(ctx, project, limit)
 }
 
+func (s *lazyMemoryStore) SessionObservations(ctx context.Context, sessionID string) ([]*memory.Observation, error) {
+	store, err := s.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.SessionObservations(ctx, sessionID)
+}
+
 func (s *lazyMemoryStore) UpsertSummary(ctx context.Context, sum *memory.SessionSummary) error {
 	store, err := s.wait(ctx)
 	if err != nil {

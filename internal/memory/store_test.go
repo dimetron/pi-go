@@ -285,6 +285,70 @@ func TestRecentObservations(t *testing.T) {
 	}
 }
 
+func TestSessionObservations(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-target", "/project-a")
+	insertTestSession(t, store, "sess-other", "/project-a")
+
+	base := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	// Same project, different sessions: only the named session's rows may come
+	// back. This is the property RecentObservations cannot express.
+	for i := 0; i < 3; i++ {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-target",
+			Project:     "/project-a",
+			Title:       fmt.Sprintf("target-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "Read",
+			CreatedAt:   base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	store.InsertObservation(ctx, &Observation{
+		SessionID:   "sess-other",
+		Project:     "/project-a",
+		Title:       "other-0",
+		Type:        TypeChange,
+		Text:        "text",
+		SourceFiles: []string{},
+		ToolName:    "Read",
+		CreatedAt:   base,
+	})
+
+	results, err := store.SessionObservations(ctx, "sess-target")
+	if err != nil {
+		t.Fatalf("SessionObservations: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d observations, want 3", len(results))
+	}
+	// Oldest first: the summary prompt reads the session in the order it happened.
+	if results[0].Title != "target-0" {
+		t.Errorf("first = %q, want target-0 (oldest first)", results[0].Title)
+	}
+	if results[2].Title != "target-2" {
+		t.Errorf("last = %q, want target-2", results[2].Title)
+	}
+	for _, o := range results {
+		if o.SessionID != "sess-target" {
+			t.Errorf("observation %q belongs to session %q, want sess-target", o.Title, o.SessionID)
+		}
+	}
+
+	// An unknown session is empty, not an error.
+	empty, err := store.SessionObservations(ctx, "sess-absent")
+	if err != nil {
+		t.Fatalf("SessionObservations(absent): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("got %d observations for an unknown session, want 0", len(empty))
+	}
+}
+
 func TestUpsertSummary(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

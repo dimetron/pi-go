@@ -57,6 +57,9 @@ func (s *memMockStore) InsertObservation(context.Context, *memory.Observation) e
 func (s *memMockStore) RecentObservations(context.Context, string, int) ([]*memory.Observation, error) {
 	return nil, nil
 }
+func (s *memMockStore) SessionObservations(context.Context, string) ([]*memory.Observation, error) {
+	return s.observations, nil
+}
 func (s *memMockStore) UpsertSummary(context.Context, *memory.SessionSummary) error { return nil }
 func (s *memMockStore) RecentSummaries(context.Context, string, int) ([]*memory.SessionSummary, error) {
 	return nil, nil
