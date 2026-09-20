@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
-	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
+	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -20,24 +26,6 @@ func (n *namedToolStub) Description() string { return "" }
 func (n *namedToolStub) IsLongRunning() bool { return false }
 
 var _ adktool.Tool = (*namedToolStub)(nil)
-
-// safeInvoke runs one after-tool callback, reporting false if it panicked or
-// errored. Several callbacks in the assembled chain require a live invocation
-// context — OTEL tracing reads trace state off it (internal/extension/hooks.go)
-// — and panic on a nil context. They are not part of the ordering under test, so
-// they are skipped rather than allowed to abort the test.
-func safeInvoke(cb llmagent.AfterToolCallback, tool adktool.Tool, args, result map[string]any) (out map[string]any, ok bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			out, ok = nil, false
-		}
-	}()
-	next, err := cb(nil, tool, args, result, nil)
-	if err != nil {
-		return nil, false
-	}
-	return next, true
-}
 
 // TestDeferredCallbacks_DedupSeesPreCompactionBytes is the integration guard for
 // the callback order. It drives the real assembled chain over two results that
@@ -74,18 +62,26 @@ func TestDeferredCallbacks_DedupSeesPreCompactionBytes(t *testing.T) {
 		return map[string]any{"file": "big.go", "diff": b.String(), "lines_added": 4300}
 	}
 
-	// Run the assembled chain as the agent loop does, skipping the callbacks that
-	// need a live context.
+	// Run the chain exactly as ADK does. Flow.invokeAfterToolCallbacks
+	// (adk v2.4.0 internal/llminternal/base_flow.go:1436) returns at the FIRST
+	// callback that yields a non-nil result. The chain is therefore handed to ADK
+	// as a single composed callback: if it were passed as a slice, every stage
+	// after the first non-nil one would be skipped — which is how dedup and the
+	// compactor were dead in production.
+	if len(base.afterTool) != 1 {
+		t.Fatalf("after-tool chain has %d entries, want 1 composed callback; "+
+			"ADK would stop at the first and skip the rest", len(base.afterTool))
+	}
+	// A real agent.Context is required: the OTEL tracing stage reads trace state
+	// off the context and panics on nil. The composition is what makes every
+	// stage reachable, so the context must be realistic.
+	ctx := &cliToolCtx{Context: context.Background()}
 	runChain := func(result map[string]any) map[string]any {
-		out := result
-		for _, cb := range base.afterTool {
-			next, ok := safeInvoke(cb, tool, args, out)
-			if !ok || next == nil {
-				continue
-			}
-			out = next
+		next, err := base.afterTool[0](ctx, tool, args, result, nil)
+		if err != nil || next == nil {
+			return result // ADK keeps the tool's own result
 		}
-		return out
+		return next
 	}
 
 	runChain(mkDiff("alpha"))
@@ -122,3 +118,61 @@ func truncateForErr(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// cliToolCtx is a minimal agent.Context. The composed chain includes the OTEL
+// tracing stage, which reads trace state off the context and panics on nil, so
+// tests that drive the real chain must supply one. Only the methods the chain
+// touches are given real behavior; the rest satisfy the interface.
+type cliToolCtx struct{ context.Context }
+
+func (c *cliToolCtx) FunctionCallID() string         { return "fc-test" }
+func (c *cliToolCtx) Actions() *session.EventActions { return nil }
+func (c *cliToolCtx) SearchMemory(context.Context, string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (c *cliToolCtx) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+func (c *cliToolCtx) RequestConfirmation(string, any) error                { return nil }
+func (c *cliToolCtx) AgentName() string                                    { return "pi" }
+func (c *cliToolCtx) ReadonlyState() session.ReadonlyState                 { return nil }
+func (c *cliToolCtx) State() session.State                                 { return nil }
+func (c *cliToolCtx) Artifacts() agent.Artifacts                           { return nil }
+func (c *cliToolCtx) InvocationID() string                                 { return "inv-test" }
+func (c *cliToolCtx) UserContent() *genai.Content                          { return nil }
+func (c *cliToolCtx) AppName() string                                      { return "pi-go" }
+func (c *cliToolCtx) Branch() string                                       { return "" }
+func (c *cliToolCtx) SessionID() string                                    { return "s1" }
+func (c *cliToolCtx) UserID() string                                       { return "local" }
+func (c *cliToolCtx) Agent() agent.Agent                                   { return nil }
+func (c *cliToolCtx) Memory() agent.Memory                                 { return nil }
+func (c *cliToolCtx) Session() session.Session                             { return nil }
+func (c *cliToolCtx) RunConfig() *agent.RunConfig                          { return nil }
+func (c *cliToolCtx) EndInvocation()                                       {}
+func (c *cliToolCtx) Ended() bool                                          { return false }
+func (c *cliToolCtx) WithContext(ctx context.Context) agent.InvocationContext {
+	return &cliToolCtx{Context: ctx}
+}
+func (c *cliToolCtx) IsolationScope() string { return "" }
+func (c *cliToolCtx) ResumedInput(string) (any, bool) {
+	return nil, false
+}
+func (c *cliToolCtx) WithICDelta(*agent.InvocationContextDelta) agent.InvocationContext {
+	return c
+}
+func (c *cliToolCtx) Path() string                            { return "" }
+func (c *cliToolCtx) RunID() string                           { return "" }
+func (c *cliToolCtx) SubScheduler() agent.DynamicSubScheduler { return nil }
+func (c *cliToolCtx) WithAgentContext(ctx context.Context) agent.Context {
+	return &cliToolCtx{Context: ctx}
+}
+func (c *cliToolCtx) WithAgentTimeout(time.Duration) (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *cliToolCtx) WithAgentCancel() (agent.Context, context.CancelFunc) {
+	return c, func() {}
+}
+func (c *cliToolCtx) OutputForAncestors() []string { return nil }
+func (c *cliToolCtx) WithDelta(*agent.CommonContextDelta) agent.Context {
+	return c
+}
+
+var _ agent.Context = (*cliToolCtx)(nil)

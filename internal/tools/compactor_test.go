@@ -1197,8 +1197,15 @@ func TestCompactGitFileDiff_RealStructCompacts(t *testing.T) {
 }
 
 func TestCompactGitOverview_CapsCommitsNotFileLists(t *testing.T) {
+	// The commit count here exceeds what the tool can produce: `git log
+	// --oneline -10` (git_overview.go:72) caps recent_commits at 10, while this
+	// pipeline's own cap is MaxLogEntries. The oversized input is deliberate —
+	// it drives the cap to fire so the dirty-file behavior can be checked — but
+	// it means this test exercises a shape production cannot emit, and the
+	// pipeline cannot fire at default config. TestCompact_NoOpBelowItsCap states
+	// that unreachability explicitly; do not read a saving from this test.
 	cfg := DefaultCompactorConfig()
-	commits := make([]string, 200)
+	commits := make([]string, cfg.MaxLogEntries+60)
 	for i := range commits {
 		commits[i] = fmt.Sprintf("commit %d", i)
 	}

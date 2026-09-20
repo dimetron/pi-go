@@ -597,9 +597,14 @@ func buildDeferredCallbacks(
 		afterCBs = append(afterCBs, memRecorder.afterTool)
 	}
 
+	// Fold the after-tool chain into the single callback ADK runs. ADK's
+	// Flow.invokeAfterToolCallbacks returns at the first callback that yields a
+	// non-nil result, and every callback above returns the result map, so
+	// passing the slice would run only the first and skip the rest — which is
+	// how dedup, the compactor and memory recording were all dead in production.
 	return deferredCallbacks{
 		beforeTool:     beforeCBs,
-		afterTool:      afterCBs,
+		afterTool:      extension.ComposeAfterToolChain(afterCBs),
 		beforeModel:    llmBefore,
 		afterModel:     llmAfter,
 		deduper:        resultDeduper,

@@ -487,6 +487,59 @@ that cannot recur.
   `TestCompactor_EveryToolCompacts` and `TestCompactorRouting_EveryRegisteredTool`
   are the guards; both fail if a route or field drifts.
 
+### Compose the after-tool chain — a slice runs only its first callback
+
+**ADK invokes only the first after-tool callback that returns a non-nil result.**
+`Flow.invokeAfterToolCallbacks` (`adk/v2 internal/llminternal/base_flow.go`) is:
+
+```go
+for _, callback := range f.AfterToolCallbacks {
+    result, err := callback(...)
+    if result != nil { return result, nil }   // stops here
+}
+```
+
+Every pi-go after-tool callback returns the result map, and the OTEL tracing
+callback is registered first and always returns it — so handing ADK a slice ran
+*tracing only*. Dedup, the compactor, the LSP after-hook and memory recording
+were all silently dead for months, and it is why the compactor's revival changed
+nothing at runtime until the chain was composed.
+
+Rules:
+
+- **Pass the chain through `extension.ComposeAfterToolChain`.** It folds the
+  callbacks into one, so each stage's effect survives. Do not hand ADK a slice of
+  mutating callbacks, and do not "reorder" the slice expecting a later stage to
+  run.
+- **A composed stage returns `(nil, nil)` to continue**, `(m, nil)` to replace
+  the result for later stages, or `(_, err)` to abort. Returning the result map
+  from a non-final stage is what short-circuits the chain.
+- **Test with the composed callback and a real `agent.Context`.** The tracing
+  stage reads trace state off the context and panics on nil, so a test that
+  passes nil cannot observe the real chain. Better still, assert end to end
+  through a real agent — `internal/agent/after_chain_compose_test.go` shows the
+  `toolCallingLLM` pattern.
+- **A guard that walks the slice itself proves nothing.** An earlier test in this
+  repo looped over the callbacks and fed each output into the next, which is the
+  opposite of ADK's semantics; it passed while production stopped at the first
+  entry. Model the real invocation or the test cannot fail.
+
+### The deduper reaches fewer tools than it lists
+
+`dedupTools` (`internal/tools/dedup.go`) names the tools whose repeats may be
+elided, but the deduper hashes exactly one string field per result —
+`primaryOutputField` picks from `stdout|content|output|diff|result|data`. Measured
+against each tool's real output struct, only `read`, `read_image` and
+`git-file-diff` can actually be elided. `ripgrep`/`grep` (`matches`), `find`
+(`files`) and `ls` (`entries`) carry arrays, and `tree` puts its listing under
+`tree`, which the probe does not look at. `git-hunk` and `git-overview` were
+removed from the list for the same reason.
+
+`TestDedup_ReachableFieldsAreHonest` pins which tools are reachable. Extending
+`primaryOutputField` to serialize array payloads would make the remaining five
+reachable, but that is a feature change: do it deliberately, and move each tool
+into the reachable table as it starts working rather than listing it in advance.
+
 ### rtk is a CLI proxy, not a library — do not delegate to it
 
 `rtk` (third-party, `rtk-ai/rtk`, installed at `/opt/homebrew/bin/rtk`) is an

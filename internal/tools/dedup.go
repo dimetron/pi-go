@@ -31,6 +31,13 @@ const dedupMinBytes = 512
 // dedupTools are the read-only tools whose output is safe to elide on an exact
 // repeat. Mutating tools (edit, write) and tools whose output is inherently
 // time-varying are excluded — an identical hash there is meaningful, not noise.
+//
+// A tool belongs here only if primaryOutputField can find a payload for it: the
+// hash covers one string field, so a result whose bulk lives in an array cannot
+// be compared. git-hunk carries `hunks` (an array) and git-overview has no
+// recognized key at all, so listing either would claim coverage that cannot
+// exist. TestDedup_ToolListMatchesReachableFields enforces the pairing — add a
+// tool here only together with a field primaryOutputField can read.
 var dedupTools = map[string]bool{
 	"read":          true,
 	"read_image":    true,
@@ -39,9 +46,7 @@ var dedupTools = map[string]bool{
 	"find":          true,
 	"ls":            true,
 	"tree":          true,
-	"git-overview":  true,
 	"git-file-diff": true,
-	"git-hunk":      true,
 }
 
 type dedupEntry struct {

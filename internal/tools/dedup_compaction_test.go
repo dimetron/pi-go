@@ -160,3 +160,76 @@ func truncForLog(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// TestDedup_ReachableFieldsAreHonest records which tools the deduper can
+// actually reach, and fails only when the list claims coverage that does not
+// exist for a tool whose payload IS readable.
+//
+// The deduper hashes exactly one string field per result, chosen by
+// primaryOutputField from stdout|content|output|diff|result|data. A tool whose
+// bulk lives in an array therefore cannot be compared, however it is listed.
+// Measured against each tool's real output struct, the state is:
+//
+//   - read, read_image, git-file-diff — reachable (string payload).
+//   - ripgrep/grep, find, ls, tree    — listed but NOT reachable: their payload
+//     is an array (`matches`, `files`, `entries`) or, for tree, a string under
+//     `tree`, which the probe does not look at.
+//   - git-hunk, git-overview          — removed from the list for the same
+//     reason, so the entry no longer overstates coverage.
+//
+// Extending primaryOutputField to serialize array payloads would make the
+// remaining five reachable; that is a feature change rather than a bug fix, so
+// this test pins the current truth instead of assuming the improvement.
+func TestDedup_ReachableFieldsAreHonest(t *testing.T) {
+	reachable := []struct {
+		tool   string
+		result map[string]any
+	}{
+		{"read", prodResult(t, ReadOutput{Content: strings.Repeat("line\n", 200)})},
+		{"read_image", map[string]any{"path": "/x.png", "data": strings.Repeat("a", 2000)}},
+		{"git-file-diff", prodResult(t, GitFileDiffOutput{File: "a.go", Diff: strings.Repeat("+line\n", 100)})},
+	}
+	for _, c := range reachable {
+		if !dedupTools[c.tool] {
+			t.Errorf("%s can dedup in production but is missing from dedupTools", c.tool)
+		}
+		if f, _ := primaryOutputField(c.result); f == "" {
+			t.Errorf("%s is listed as dedup-eligible but primaryOutputField finds no "+
+				"payload in its real output", c.tool)
+		}
+	}
+
+	// These cannot dedup, so they must not be claimed.
+	unreachable := []struct {
+		tool   string
+		result map[string]any
+	}{
+		{"git-hunk", prodResult(t, GitHunkOutput{File: "a.go", Hunks: []Hunk{{Header: "@@", Content: "x"}}})},
+		{"git-overview", prodResult(t, GitOverviewOutput{Branch: "main", RecentCommits: []string{"abc"}})},
+	}
+	for _, c := range unreachable {
+		if dedupTools[c.tool] {
+			t.Errorf("%s is listed in dedupTools but its payload is not a recognized "+
+				"string field, so the entry overstates coverage", c.tool)
+		}
+	}
+
+	// The array-payload tools are listed today. If a future change makes them
+	// reachable this assertion starts failing, which is the signal to move them
+	// into the `reachable` table above.
+	arrayPayload := []struct {
+		tool   string
+		result map[string]any
+	}{
+		{"ripgrep", prodResult(t, GrepOutput{Matches: []GrepMatch{{File: "a.go", Line: 1, Content: "x"}}})},
+		{"find", prodResult(t, FindOutput{Files: []string{"a.go"}})},
+		{"ls", prodResult(t, LsOutput{Entries: []LsEntry{{Name: "a.go"}}})},
+		{"tree", prodResult(t, TreeOutput{Tree: strings.Repeat("f.go\n", 200)})},
+	}
+	for _, c := range arrayPayload {
+		f, _ := primaryOutputField(c.result)
+		if f != "" {
+			t.Errorf("%s now yields field %q; move it to the reachable table", c.tool, f)
+		}
+	}
+}

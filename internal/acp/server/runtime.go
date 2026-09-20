@@ -499,10 +499,14 @@ func buildSessionResources(rt RuntimeConfig, cfg config.Config, turn PromptTurn,
 		extension.BuildReadImageCallback(sandbox, providerName),
 	}
 
+	// Fold the after-tool chain into the single callback ADK runs. ADK's
+	// Flow.invokeAfterToolCallbacks returns at the first callback that yields a
+	// non-nil result, and every callback above returns the result map, so passing
+	// the slice ran only the first entry and skipped the LSP after-hook.
 	return &sessionResources{
 		coreTools:      coreTools,
 		beforeCBs:      beforeCBs,
-		afterCBs:       afterCBs,
+		afterCBs:       extension.ComposeAfterToolChain(afterCBs),
 		beforeModelCBs: beforeModelCBs,
 		proxy:          proxy,
 		bashSup:        bashSup,
