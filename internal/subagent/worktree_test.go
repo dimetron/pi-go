@@ -765,3 +765,220 @@ func TestWorktree_FindStashByMessage(t *testing.T) {
 		t.Error("findStashByMessage returned true for empty message")
 	}
 }
+
+// commitFile writes name into the repo and commits it, returning the new sha.
+func commitFile(t *testing.T, repo, name, content string) string {
+	t.Helper()
+	full := filepath.Join(repo, name)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", name, err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", name, err)
+	}
+	for _, args := range [][]string{{"add", name}, {"commit", "-m", "add " + name}} {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// readFileAt reads a file out of a worktree.
+func readFileAt(t *testing.T, wt, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(wt, name))
+	if err != nil {
+		t.Fatalf("reading %s in %s: %v", name, wt, err)
+	}
+	return string(b)
+}
+
+// diffIn returns the unified diff a reviewer's git-file-diff/git-hunk tools
+// would see inside the worktree: plain `git diff`, no refs.
+func diffIn(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "diff").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git diff in %s: %v: %s", dir, err, out)
+	}
+	return string(out)
+}
+
+// TestWorktree_CreateAtShowsTheChangeAsAPendingDiff is the point of CreateAt.
+//
+// The property is that `git diff` — the only view the review tools have —
+// reports the change. A worktree merely branched at base checks base out with a
+// clean index and shows an empty diff, which is the failure this feature exists
+// to remove, so asserting file content instead of the diff is what let a broken
+// implementation pass. This test fails on that variant.
+func TestWorktree_CreateAtShowsTheChangeAsAPendingDiff(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	base := commitFile(t, repo, "f.txt", "old")
+	commitFile(t, repo, "f.txt", "new")
+	commitFile(t, repo, "added.txt", "brand new")
+
+	wt, err := mgr.CreateAt("agent-diff001", base)
+	if err != nil {
+		t.Fatalf("CreateAt: %v", err)
+	}
+
+	diff := diffIn(t, wt)
+	if diff == "" {
+		t.Fatal("git diff is empty: a reviewer of this worktree would read nothing")
+	}
+	for _, want := range []string{"f.txt", "added.txt", "-old", "+new", "+brand new"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("diff does not mention %q:\n%s", want, diff)
+		}
+	}
+}
+
+// TestWorktree_CreateAtHoldsThePostChangeContent pins the other half of the
+// contract: the agent reads the code as it is after the change, so prose and
+// file reads describe the new state while the diff shows what moved.
+func TestWorktree_CreateAtHoldsThePostChangeContent(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	base := commitFile(t, repo, "f.txt", "old")
+	commitFile(t, repo, "f.txt", "new")
+
+	wt, err := mgr.CreateAt("agent-content", base)
+	if err != nil {
+		t.Fatalf("CreateAt: %v", err)
+	}
+	if got := readFileAt(t, wt, "f.txt"); got != "new" {
+		t.Errorf("content = %q, want %q (post-change content)", got, "new")
+	}
+}
+
+// TestWorktree_CreateStillShowsNothing keeps the default honest: without a base
+// there is no committed change to show, so the tree must stay clean. This fails
+// if the staging step leaked into the no-base path.
+func TestWorktree_CreateStillShowsNothing(t *testing.T) {
+	repo := initTestRepo(t)
+
+	commitFile(t, repo, "f.txt", "old")
+	commitFile(t, repo, "f.txt", "new")
+
+	for _, tc := range []struct {
+		name string
+		make func(m *WorktreeManager, id string) (string, error)
+	}{
+		{"Create", func(m *WorktreeManager, id string) (string, error) { return m.Create(id) }},
+		{"CreateAt_empty_base", func(m *WorktreeManager, id string) (string, error) { return m.CreateAt(id, "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewWorktreeManager(repo)
+			wt, err := tc.make(m, "agent-"+tc.name)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if diff := diffIn(t, wt); diff != "" {
+				t.Errorf("expected a clean tree, got a diff:\n%s", diff)
+			}
+			// Content still tracks HEAD, which is the pre-existing behavior.
+			if got := readFileAt(t, wt, "f.txt"); got != "new" {
+				t.Errorf("content = %q, want %q", got, "new")
+			}
+		})
+	}
+}
+
+// TestWorktree_CreateAtRejectsUnknownRef checks the failure is caught before any
+// git state changes: no worktree, no branch, and nothing left for Cleanup.
+func TestWorktree_CreateAtRejectsUnknownRef(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	if _, err := mgr.CreateAt("agent-badref", "no-such-ref-anywhere"); err == nil {
+		t.Fatal("expected an error for an unknown base ref")
+	} else if !strings.Contains(err.Error(), "no-such-ref-anywhere") {
+		t.Errorf("error = %v, want it to name the bad ref", err)
+	}
+
+	if err := mgr.Cleanup("agent-badref"); err == nil {
+		t.Error("expected Cleanup to find no worktree for the rejected spawn")
+	}
+}
+
+// TestWorktree_CreateAtAcceptsRevisionSyntax covers a relative rev, which is how
+// a caller names a PR's base commit without knowing its sha.
+func TestWorktree_CreateAtAcceptsRevisionSyntax(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	commitFile(t, repo, "f.txt", "first")
+	commitFile(t, repo, "f.txt", "second")
+
+	wt, err := mgr.CreateAt("agent-rev001", "HEAD~1")
+	if err != nil {
+		t.Fatalf("CreateAt(HEAD~1): %v", err)
+	}
+	diff := diffIn(t, wt)
+	if !strings.Contains(diff, "+second") || !strings.Contains(diff, "-first") {
+		t.Errorf("HEAD~1 diff does not show the last commit:\n%s", diff)
+	}
+}
+
+// TestWorktree_CreateAtGivesABranchNotDetachedHEAD keeps the CommitAll →
+// MergeBack → Cleanup path working for base-branched worktrees: a detached HEAD
+// would leave MergeBack merging whatever the repo root currently has.
+func TestWorktree_CreateAtGivesABranchNotDetachedHEAD(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	base := commitFile(t, repo, "f.txt", "old")
+	commitFile(t, repo, "f.txt", "new")
+
+	wt, err := mgr.CreateAt("agent-branch1", base)
+	if err != nil {
+		t.Fatalf("CreateAt: %v", err)
+	}
+
+	out, err := exec.Command("git", "-C", wt, "symbolic-ref", "--quiet", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("worktree HEAD is not on a branch: %v", err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		t.Error("expected a branch name, got an empty symbolic-ref")
+	}
+}
+
+// TestWorktree_CreateAtIsIdempotentOnRerun: a second spawn against the same base
+// must not double-apply the staging step, which would turn the pending diff into
+// a committed-looking state or fail outright.
+func TestWorktree_CreateAtKeepsTheDiffAfterCleanupAll(t *testing.T) {
+	repo := initTestRepo(t)
+	mgr := NewWorktreeManager(repo)
+
+	base := commitFile(t, repo, "f.txt", "old")
+	commitFile(t, repo, "f.txt", "new")
+
+	if _, err := mgr.CreateAt("agent-twice001", base); err != nil {
+		t.Fatalf("CreateAt: %v", err)
+	}
+	if err := mgr.CleanupAll(); err != nil {
+		t.Fatalf("CleanupAll: %v", err)
+	}
+
+	// A fresh manager on the same repo must still produce the diff, which fails
+	// if the first run left global git state behind (a dirty index in the main
+	// worktree, a leftover branch).
+	mgr2 := NewWorktreeManager(repo)
+	wt, err := mgr2.CreateAt("agent-twice002", base)
+	if err != nil {
+		t.Fatalf("second CreateAt: %v", err)
+	}
+	if diff := diffIn(t, wt); diff == "" {
+		t.Error("second run produced an empty diff")
+	}
+}

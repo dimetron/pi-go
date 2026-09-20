@@ -249,6 +249,10 @@ func (m *WorktreeManager) stashBeforeWorktreeAdd(agentID string) (msg string, st
 // addWorktree runs `git worktree add`. If the branch already exists but is not
 // checked out anywhere, attach it without `-b`; otherwise create a fresh branch
 // from HEAD.
+//
+// A base ref does not belong here: it is applied to the new worktree's index
+// afterwards (see CreateAt). Branching here instead would check out the base's
+// content and leave nothing for `git diff` to report.
 func (m *WorktreeManager) addWorktree(wtPath, branch string, branchExists bool) error {
 	var out string
 	var err error
@@ -269,6 +273,38 @@ func (m *WorktreeManager) addWorktree(wtPath, branch string, branchExists bool) 
 // or Cleanup can restore them later (looked up by that unique message).
 // Returns the filesystem path to the worktree.
 func (m *WorktreeManager) Create(agentID string, requestedName ...string) (string, error) {
+	return m.create(agentID, "", requestedName...)
+}
+
+// CreateAt creates a worktree whose branch starts at base rather than at the
+// repository's current HEAD.
+//
+// A reader that needs to see a change that is already committed — a reviewer
+// handed a merged PR, an auditor checking one branch against another — cannot
+// use Create: that branches from HEAD, so the agent gets a clean tree and an
+// empty `git diff`, which is the one thing it was spawned to look at.
+//
+// base must name a commit (a branch, tag, sha, or `HEAD~2`). It is resolved
+// with `rev-parse --verify <base>^{commit}` before any git state changes, so an
+// unknown ref fails here rather than as a confusing `worktree add` error, and a
+// tag pointing at a blob is rejected rather than silently producing a worktree
+// at the wrong place. An empty base means HEAD, i.e. exactly Create.
+//
+// The worktree is created at HEAD and its index is then reset to base, so
+// base..HEAD appears as an uncommitted diff: `git diff` — the only view the
+// git-file-diff and git-hunk tools have — reports it. Branching at base instead
+// would check out base's content with a clean index and show nothing at all,
+// which is the failure this exists to remove. File reads give post-change
+// content, so the agent sees the new code and the change together.
+//
+// The worktree gets a real branch rather than a detached HEAD, so the ordinary
+// CommitAll → MergeBack → Cleanup path keeps working: an agent may commit
+// findings, and nothing that expects a branch tip has to special-case this.
+func (m *WorktreeManager) CreateAt(agentID, base string, requestedName ...string) (string, error) {
+	return m.create(agentID, base, requestedName...)
+}
+
+func (m *WorktreeManager) create(agentID, base string, requestedName ...string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -278,6 +314,19 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 
 	if _, exists := m.active[agentID]; exists {
 		return "", fmt.Errorf("worktree already exists for agent %s", agentID)
+	}
+
+	// Resolve the base before touching any git state: a typo should not leave a
+	// half-created worktree or a stashed working tree behind. The sha is kept
+	// because the staging step below runs inside the worktree, where the ref
+	// name may not mean the same thing.
+	baseSHA := ""
+	if base != "" {
+		out, err := m.git("rev-parse", "--verify", "--quiet", base+"^{commit}")
+		if err != nil {
+			return "", fmt.Errorf("resolving worktree base %q: %w", base, err)
+		}
+		baseSHA = strings.TrimSpace(out)
 	}
 
 	name := ""
@@ -332,6 +381,38 @@ func (m *WorktreeManager) Create(agentID string, requestedName ...string) (strin
 			return "", fmt.Errorf("%w; uncommitted changes could NOT be restored and remain stashed as %q — recover them with `git stash list` and `git stash apply`: %w", addErr, stashMsg, restoreErr)
 		}
 		return "", addErr
+	}
+
+	// Move the new worktree's index to the base while its working tree stays at
+	// HEAD, so base..HEAD appears as a pending diff. Plain `git diff` — all the
+	// git-file-diff and git-hunk tools run — reports a diff against the index,
+	// so this is what makes the change visible; without it a reviewer of a
+	// committed change reads an empty diff and reports nothing. Reading files
+	// still yields post-change content, so the agent can see the new code and
+	// the change together.
+	//
+	// The intent-to-add pass covers files the change *adds*: the reset leaves
+	// them untracked and `git diff` skips untracked files, so without it a
+	// review of a PR that adds a file would never mention that file. `-N`
+	// records the path without staging content, which is what makes it show up
+	// as a pending addition rather than a staged one.
+	if baseSHA != "" {
+		_, resetErr := m.gitIn(wtPath, "reset", "--mixed", "--quiet", baseSHA)
+		if resetErr == nil {
+			_, resetErr = m.gitIn(wtPath, "add", "--intent-to-add", ".")
+		}
+		if resetErr != nil {
+			// Undo the worktree so a failed spawn does not leave one registered
+			// or on disk, then restore the stash exactly as a failed `worktree
+			// add` would.
+			_, _ = m.git("worktree", "remove", "--force", wtPath)
+			if stashedSomething {
+				if restoreErr := m.popStashByMessage(stashMsg); restoreErr != nil {
+					return "", fmt.Errorf("staging base diff %q failed (%w); uncommitted changes could NOT be restored and remain stashed as %q — recover them with `git stash list` and `git stash apply`: %w", base, resetErr, stashMsg, restoreErr)
+				}
+			}
+			return "", fmt.Errorf("staging base diff %q into worktree: %w", base, resetErr)
+		}
 	}
 
 	// Stash survives on success — MergeBack or, failing that, Cleanup restores

@@ -13,12 +13,18 @@ type SpawnInput struct {
 	Prompt       string      `json:"prompt"`                  // Task prompt for the agent
 	Worktree     *bool       `json:"worktree,omitempty"`      // Override worktree setting
 	WorktreeName string      `json:"worktree_name,omitempty"` // Optional worktree/branch name prefix
-	WorkDir      string      `json:"work_dir,omitempty"`      // Override working directory (e.g. existing worktree path)
-	Background   bool        `json:"background,omitempty"`    // Run in background
-	SkipCleanup  bool        `json:"skip_cleanup,omitempty"`  // Don't auto-cleanup worktree on completion
-	Env          []string    `json:"env,omitempty"`           // Additional environment variables
-	MaxRetries   int         `json:"max_retries,omitempty"`   // Max retry attempts on crash (default 0, max 3)
-	Timeout      int         `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
+	// WorktreeBase is the commit the worktree's branch starts at (a branch, tag,
+	// sha, or `HEAD~2`). Empty means HEAD, which is the behavior every existing
+	// caller gets. It exists for readers that need to see a committed change: a
+	// worktree branched from HEAD shows an empty diff, so a review of an
+	// already-merged PR has nothing to read. Ignored when WorkDir is set.
+	WorktreeBase string   `json:"worktree_base,omitempty"`
+	WorkDir      string   `json:"work_dir,omitempty"`     // Override working directory (e.g. existing worktree path)
+	Background   bool     `json:"background,omitempty"`   // Run in background
+	SkipCleanup  bool     `json:"skip_cleanup,omitempty"` // Don't auto-cleanup worktree on completion
+	Env          []string `json:"env,omitempty"`          // Additional environment variables
+	MaxRetries   int      `json:"max_retries,omitempty"`  // Max retry attempts on crash (default 0, max 3)
+	Timeout      int      `json:"timeout,omitempty"`      // Absolute timeout override in milliseconds
 
 	// Attribution records where the spawned agent sits in a run tree. The
 	// orchestrator forwards it through the environment; the child writes it
@@ -34,10 +40,13 @@ type AgentInput struct {
 	Prompt       string `json:"prompt"`                  // Task prompt for the agent
 	Worktree     *bool  `json:"worktree,omitempty"`      // Override worktree setting
 	WorktreeName string `json:"worktree_name,omitempty"` // Optional worktree/branch name prefix
-	WorkDir      string `json:"work_dir,omitempty"`      // Override working directory (e.g. existing worktree path)
-	Background   bool   `json:"background,omitempty"`    // Run in background
-	SkipCleanup  bool   `json:"skip_cleanup,omitempty"`  // Deprecated: worktree cleanup is always deferred to the caller or shutdown
-	Timeout      int    `json:"timeout,omitempty"`       // Absolute timeout override in milliseconds
+	// WorktreeBase is the commit the worktree's branch starts at. Empty means
+	// HEAD; see SpawnInput.WorktreeBase.
+	WorktreeBase string `json:"worktree_base,omitempty"`
+	WorkDir      string `json:"work_dir,omitempty"`     // Override working directory (e.g. existing worktree path)
+	Background   bool   `json:"background,omitempty"`   // Run in background
+	SkipCleanup  bool   `json:"skip_cleanup,omitempty"` // Deprecated: worktree cleanup is always deferred to the caller or shutdown
+	Timeout      int    `json:"timeout,omitempty"`      // Absolute timeout override in milliseconds
 
 	// Attribution records where the spawned agent sits in a run tree.
 	Attribution *session.AgentContext `json:"attribution,omitempty"`

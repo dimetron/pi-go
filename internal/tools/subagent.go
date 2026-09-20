@@ -33,6 +33,12 @@ type SubagentInput struct {
 	Agent string `json:"agent,omitempty"`
 	// Single mode: task prompt for the agent.
 	Task string `json:"task,omitempty"`
+	// Single mode: commit the agent's worktree branches from — a branch, tag,
+	// sha, or revision like main~3. Supplying it creates a worktree for this
+	// spawn even when the agent's own definition sets none, which is what makes
+	// an already-committed change reviewable: the agent runs in a tree where the
+	// change is still a pending diff. Requires single mode.
+	Base string `json:"base,omitempty"`
 
 	// Parallel mode: list of tasks to run concurrently.
 	Tasks []TaskItem `json:"tasks,omitempty"`
@@ -125,6 +131,13 @@ Modes:
 
 Worktree agents:
 - Agents marked [worktree] edit an isolated git worktree; their edits are not applied to the current tree. Ask for an exact patch/file list to apply, or use a non-worktree editing agent.
+
+Reviewing a committed change (single mode, base):
+- A worktree is created at HEAD, so an agent sent to review an already-committed change sees a clean tree and an empty diff. Pass base to compare against that commit instead:
+  {agent: "code-reviewer", task: "...", base: "main"}
+- The worktree holds the current tip with its index at base, so the agent sees base..HEAD as a pending diff via git diff, and reads post-change file content.
+- This works for read-only agents too: base creates the worktree even when the agent's own definition sets none, which is what makes a read-only reviewer usable.
+- Reviewing a branch before merging: pass its merge base. For a pull request merged long ago, base alone compares against the current tip, so check that commit out first if you need exactly that diff.
 
 `)
 
@@ -221,8 +234,9 @@ func singleModeHandler(ctx agent.Context, orch *subagent.Orchestrator, input Sub
 
 	// Spawn the agent.
 	events, agentID, err := orch.SpawnWithInput(resolveContext(ctx), subagent.AgentInput{
-		Type:   input.Agent,
-		Prompt: input.Task,
+		Type:         input.Agent,
+		Prompt:       input.Task,
+		WorktreeBase: input.Base,
 	})
 	if err != nil {
 		return SubagentOutput{
