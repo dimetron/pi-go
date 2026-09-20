@@ -405,6 +405,50 @@ make vet
 make check-cve
 ```
 
+### Two failures macOS cannot catch, but Windows CI will
+
+CI runs `Test (Windows)` and `Build (windows, amd64)`. Both classes below pass on
+macOS and fail only there, so a green local run is not evidence they are fixed.
+
+- **An open directory handle breaks `t.TempDir()` cleanup.** Windows refuses to
+  remove a directory whose entries are still open: `TempDir RemoveAll cleanup:
+  unlinkat ...: The process cannot access the file because it is being used by
+  another process`. `tools.NewSandbox` holds an open root, so a test that builds
+  one must release it:
+
+  ```go
+  sb, err := NewSandbox(t.TempDir())
+  if err != nil {
+      t.Fatal(err)
+  }
+  t.Cleanup(func() { _ = sb.Close() })
+  ```
+
+  The failure surfaces during *cleanup*, so the test's own assertions pass and the
+  report points at `testing.go` rather than at your test. `internal/agent` wraps
+  this in `testSandbox`; use that helper, or close explicitly.
+
+- **`rg` is not installed on the Windows runner.** `newGrepTool` self-names by
+  capability — `"ripgrep"` when `rg` is present, `"grep"` when it is not
+  (`grep.go:128-133`) — so a test that requires `"ripgrep"` by name fails on any
+  host without `rg`. Assert *exactly one* of the two is registered and that both
+  spellings route, and cover both branches by toggling the `rgAvailable` package
+  variable (`TestCompactorRouting_WithRipgrep` / `_WithoutRipgrep` show the
+  pattern). Do not hard-code either name.
+
+When CI reports a Windows failure, read the job log directly rather than guessing:
+
+```bash
+gh run list --branch <branch> --limit 5 \
+  --json databaseId,conclusion,headSha --jq '.[].databaseId'
+gh api repos/dimetron/pi-go/actions/runs/<run>/jobs \
+  --jq '.jobs[] | select(.name|test("Windows")) | .id'
+gh api --allow-escape-sequences repos/dimetron/pi-go/actions/jobs/<job>/logs \
+  | tr -d '\r' | grep -E 'FAIL|panic'
+```
+
+`--allow-escape-sequences` is required; without it the log API refuses to print.
+
 ### VS Code extension (`vscode/`)
 
 The extension is built and installed from `vscode/` with its own Makefile:
@@ -448,6 +492,178 @@ Rules:
 When in doubt, grep for `Printf|Println|os.Stdout|os.Stderr|stdlog` in the
 package you are touching and confirm every hit is either outside the TUI path
 or routed through the session logger.
+
+## Tool-output compaction: one route per tool, and write what you read
+
+`internal/tools/compactor*.go` shrinks tool results before they reach the model.
+Seven of its nine pipelines were no-ops in production for a long time, and every
+cause was a silent mismatch rather than a crash. The invariants below exist so
+that cannot recur.
+
+- **Route on the registered name.** `compactorPipelines` is keyed by the name a
+  tool actually registers — hyphens for the git tools (`git-file-diff`), and
+  `ripgrep` for the search tool, which self-names via `grepToolName` and is
+  built once by `CoreTools`. The tool registers `grep` only on a host without
+  `rg`. A `switch` on underscore spellings is what made three git pipelines
+  unreachable.
+- **A pipeline may only write the field it read.** `CompactResult` carries
+  `CompactWrite{Key, Value}` pairs. Do not add a probe order that guesses a
+  target field: the previous `stdout → content → output → diff → result → data`
+  order wrote to the wrong key, and no tool emits `output` at all.
+- **Keep the value's type.** ADK round-trips every result through
+  `json.Marshal`/`json.Unmarshal` (`internal/typeutil/convert.go`), so a
+  `[]GrepMatch` arrives as `[]any` of `map[string]any` — never a typed slice.
+  Cap the array; do not re-render it to a string. The TUI result summaries read
+  the same keys (`internal/tui/tool_display.go`) as `[]any`.
+- **Preserve the true total.** A cap sets `truncated` and leaves
+  `total_matches`/`total_files`/`total_entries`/`total_hunks` as the pre-cap
+  count, so a partial list is never read as the whole answer. `truncated`
+  carries `omitempty`, so it is absent from a complete result — `applyCompaction`
+  writes named keys unconditionally for exactly this reason.
+- **Decline when there is nothing to gain.** Return `nil` when the result would
+  not shrink (the rtk `never_worse` guard). Do not cap lists that mislead when
+  truncated: `git-overview` caps `recent_commits` but leaves the
+  staged/unstaged/untracked lists whole, because hiding a dirty file is a
+  correctness problem, not a saving.
+- **Test against real structs.** Build test payloads by marshalling the tool's
+  actual output struct (`buildProdResult`), never a hand-written map. Synthetic
+  maps carrying an `output` key are what kept the dead pipelines green.
+  `TestCompactor_EveryToolCompacts` and `TestCompactorRouting_EveryRegisteredTool`
+  are the guards; both fail if a route or field drifts.
+
+### Compose the after-tool chain — a slice runs only its first callback
+
+**ADK invokes only the first after-tool callback that returns a non-nil result.**
+`Flow.invokeAfterToolCallbacks` (`adk/v2 internal/llminternal/base_flow.go`) is:
+
+```go
+for _, callback := range f.AfterToolCallbacks {
+    result, err := callback(...)
+    if result != nil { return result, nil }   // stops here
+}
+```
+
+Every pi-go after-tool callback returns the result map, and the OTEL tracing
+callback is registered first and always returns it — so handing ADK a slice ran
+*tracing only*. Dedup, the compactor, the LSP after-hook and memory recording
+were all silently dead for months, and it is why the compactor's revival changed
+nothing at runtime until the chain was composed.
+
+Rules:
+
+- **Pass the chain through `extension.ComposeAfterToolChain`.** It folds the
+  callbacks into one, so each stage's effect survives. Do not hand ADK a slice of
+  mutating callbacks, and do not "reorder" the slice expecting a later stage to
+  run.
+- **A composed stage returns `(nil, nil)` to continue**, `(m, nil)` to replace
+  the result for later stages, or `(_, err)` to abort. Returning the result map
+  from a non-final stage is what short-circuits the chain.
+- **Test with the composed callback and a real `agent.Context`.** The tracing
+  stage reads trace state off the context and panics on nil, so a test that
+  passes nil cannot observe the real chain. Better still, assert end to end
+  through a real agent — `internal/agent/after_chain_compose_test.go` shows the
+  `toolCallingLLM` pattern.
+- **A guard that walks the slice itself proves nothing.** An earlier test in this
+  repo looped over the callbacks and fed each output into the next, which is the
+  opposite of ADK's semantics; it passed while production stopped at the first
+  entry. Model the real invocation or the test cannot fail.
+
+### The deduper reaches fewer tools than it lists
+
+`dedupTools` (`internal/tools/dedup.go`) names the tools whose repeats may be
+elided, but the deduper hashes exactly one string field per result —
+`primaryOutputField` picks from `stdout|content|output|diff|result|data`. Measured
+against each tool's real output struct, only `read`, `read_image` and
+`git-file-diff` can actually be elided. `ripgrep`/`grep` (`matches`), `find`
+(`files`) and `ls` (`entries`) carry arrays, and `tree` puts its listing under
+`tree`, which the probe does not look at. `git-hunk` and `git-overview` were
+removed from the list for the same reason.
+
+`TestDedup_ReachableFieldsAreHonest` pins which tools are reachable. Extending
+`primaryOutputField` to serialize array payloads would make the remaining five
+reachable, but that is a feature change: do it deliberately, and move each tool
+into the reachable table as it starts working rather than listing it in advance.
+
+### rtk is a CLI proxy, not a library — do not delegate to it
+
+`rtk` (third-party, `rtk-ai/rtk`, installed at `/opt/homebrew/bin/rtk`) is an
+independent Rust CLI. It is a **reference for design**, not a dependency: pi-go's
+compactor is native Go. Measured against pi-go's real shapes, delegating to it
+does not work:
+
+- `rtk pipe -f grep` was **byte-identical** on a 400-match list — the same class
+  of no-op bug described above. `rtk grep` (command mode) does compact (93.8% on
+  the same payload), but that is a different interface: it *runs* the search
+  rather than filtering a result pi-go already has.
+- `rtk pipe -f go-test` on real `go test` failure output emitted
+  `Go test: No tests found` and **exit code 0**, losing both the failure and its
+  signal.
+- Shelling out per tool result adds a process spawn on the hot path, and rtk's
+  filter set is not pi-go's tool set.
+
+Use rtk's *decisions* (caps that preserve totals, the never-worse guard,
+head-capping logs while keeping status lists whole); do not wire it in.
+
+## Never trust a big win without a proof check
+
+**A large improvement number is a claim about the code, and claims need evidence
+of the same size as the number.** A 90% saving, a 10× speedup, "this fixes the
+slow path" — each is exactly as likely to mean *the thing never ran* as it is to
+mean the work succeeded. Treat a big win as a hypothesis to falsify, not a result
+to report.
+
+This is not hypothetical. The compaction work above reported savings per tool,
+and three separate defects hid behind those numbers:
+
+- **The shape was impossible.** A pipeline was credited with a 49–76% saving on
+  payloads of 200 commits. The tool runs `git log --oneline -10`
+  (`git_overview.go:72`), so that input can never occur and the pipeline never
+  fires. The number was real and meaningless.
+- **The input was synthetic.** Pipelines looked healthy against hand-written maps
+  carrying an `output` key no tool emits. The tests passed; production did
+  nothing.
+- **The saving was measured per-tool, not end-to-end.** Nothing checked that the
+  bytes actually left the prompt.
+
+The rules that follow from that:
+
+- **Bound the input by what the producer can emit.** Before measuring, find the
+  cap the tool itself enforces (a constant like `maxGrepMatches`, a `-10` in the
+  command, `truncateOutput`'s byte ceiling) and measure at or below it. A
+  payload larger than the tool can produce measures a program that does not
+  exist. State the bound next to the number.
+- **Build fixtures from the real types.** Marshal the actual output struct and
+  unmarshal into `map[string]any`, the way ADK does. Never a hand-written map: a
+  fixture you invented encodes the contract you assumed, which is the thing under
+  test.
+- **Prove the saving end-to-end, not at the seam.** A per-function number shows a
+  function works; it does not show the result reached the model. `AvgResultBytes`
+  per tool in the eval harness (`internal/eval/metrics.go`) is the end-to-end
+  version of this — it is currently *reported* in every eval but asserted only in
+  one unit test, and never gated against a baseline. That gap is why seven dead
+  pipelines looked healthy.
+- **Check information, not just size.** Ask what the consumer needs from the
+  output — a file name, a count, a total, whether the list is complete — and
+  assert each survives. A cap that drops the one field a decision depends on is a
+  regression that a byte count calls a win. `compactor_preservation_test.go`
+  exists for this.
+- **Verify the guard can fail.** Reintroduce the bug and confirm the test goes
+  red, then restore. A test that has never failed proves nothing; several of the
+  guards here were only trusted after being seen to break.
+- **Prefer the cheap falsification first.** Before a full eval run, ask what
+  result would show the win is fake, and run the smallest thing that would show
+  it. Measuring at the producer's real bound is usually a few seconds of work and
+  kills most false wins outright.
+- **Say which numbers you did not verify.** If a figure came from an earlier
+  session, a different shape, or reasoning rather than a run, label it. An
+  honest gap is cheap; a confident wrong number is expensive.
+
+When a win is large enough to be worth reporting, it is large enough to be worth
+an eval. `make eval-tools` runs one headless scenario per tool family and rolls
+the results into a coverage matrix (`internal/eval/scenarios/README.md`);
+`make eval-run` and `make eval-judge` drive `/run` end-to-end against the pinned
+`eval/base` baseline (`internal/eval/eval.md`). Report the before/after the
+harness produced, not the before/after you expected.
 
 ## Profiling
 

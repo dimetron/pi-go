@@ -5,7 +5,7 @@ import (
 )
 
 // compactRead applies the read tool compaction pipeline.
-func compactRead(result map[string]any, cfg CompactorConfig) *CompactResult {
+func compactRead(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
 	content, _ := result["content"].(string)
 	if content == "" {
 		return nil
@@ -50,7 +50,7 @@ func compactRead(result map[string]any, cfg CompactorConfig) *CompactResult {
 	}
 
 	return &CompactResult{
-		Output:     content,
+		Writes:     []CompactWrite{{Key: "content", Value: content}},
 		Techniques: techniques,
 		OrigSize:   origSize,
 		CompSize:   compSize,

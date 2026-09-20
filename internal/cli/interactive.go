@@ -581,9 +581,12 @@ func buildDeferredCallbacks(
 	if lspMgr != nil {
 		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 	}
-	// Dedup runs after the compactor so both calls are compared in their final,
-	// post-compaction form.
-	afterCBs = append(afterCBs, compactorCB, tools.BuildDedupCallback(resultDeduper))
+	// Dedup runs BEFORE the compactor: its hash must cover the bytes the tool
+	// produced, not the truncated form. Compaction is lossy, so hashing after it
+	// makes two different results collide and the second is wrongly reported as
+	// "content is unchanged". See the note in cli.go where the same chain is
+	// wired for non-interactive runs.
+	afterCBs = append(afterCBs, tools.BuildDedupCallback(resultDeduper), compactorCB)
 
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(providerName)
@@ -595,9 +598,14 @@ func buildDeferredCallbacks(
 		afterCBs = append(afterCBs, memRecorder.afterTool)
 	}
 
+	// Fold the after-tool chain into the single callback ADK runs. ADK's
+	// Flow.invokeAfterToolCallbacks returns at the first callback that yields a
+	// non-nil result, and every callback above returns the result map, so
+	// passing the slice would run only the first and skip the rest — which is
+	// how dedup, the compactor and memory recording were all dead in production.
 	return deferredCallbacks{
 		beforeTool:     beforeCBs,
-		afterTool:      afterCBs,
+		afterTool:      extension.ComposeAfterToolChain(afterCBs),
 		beforeModel:    llmBefore,
 		afterModel:     llmAfter,
 		deduper:        resultDeduper,

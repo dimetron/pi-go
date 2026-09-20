@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -698,24 +699,34 @@ func TestCompactToolResult_AllTools(t *testing.T) {
 		t.Fatal("read compaction should return result for large source code")
 	}
 
-	// Grep with many matches
-	grepResult := map[string]any{"output": generateLargeSearchOutput()}
-	cr = compactToolResult("grep", nil, grepResult, cfg)
+	// Grep with many matches — built from the real GrepOutput struct, not a
+	// synthetic "output" map (the shape that hid the defect).
+	cr = compactToolResult("ripgrep", nil, buildProdResult(t, largeGrepOutput(400)), cfg)
 	if cr == nil {
-		t.Fatal("grep compaction should return result for large search output")
+		t.Fatal("ripgrep compaction should return a result for large real output")
 	}
 
 	// Find with many files
-	findResult := map[string]any{"output": generateLargeFindOutput()}
-	cr = compactToolResult("find", nil, findResult, cfg)
+	cr = compactToolResult("find", nil, buildProdResult(t, largeFindOutput(400)), cfg)
 	if cr == nil {
-		t.Fatal("find compaction should return result for large find output")
+		t.Fatal("find compaction should return a result for large real output")
 	}
 
-	// Tree (same as find)
-	cr = compactToolResult("tree", nil, findResult, cfg)
+	// Tree carries its listing in "tree", not "files".
+	treeResult := buildProdResult(t, TreeOutput{Tree: generateLargeFindOutput(), Dirs: 3, Files: 9})
+	cr = compactToolResult("tree", nil, treeResult, cfg)
 	if cr == nil {
-		t.Fatal("tree compaction should return result for large output")
+		t.Fatal("tree compaction should return a result for large real output")
+	}
+
+	// ls was registered with no pipeline at all before this change.
+	entries := make([]LsEntry, 400)
+	for i := range entries {
+		entries[i] = LsEntry{Name: fmt.Sprintf("e%d.go", i), Size: int64(i)}
+	}
+	cr = compactToolResult("ls", nil, buildProdResult(t, LsOutput{Entries: entries, TotalEntries: 400}), cfg)
+	if cr == nil {
+		t.Fatal("ls compaction should return a result — it had no route before")
 	}
 }
 
@@ -762,50 +773,88 @@ func TestRunStage_NotApplied(t *testing.T) {
 // applyCompaction
 // ---------------------------------------------------------------------------
 
-func TestApplyCompaction_BashOutput(t *testing.T) {
-	result := map[string]any{"stdout": "original", "stderr": ""}
-	cr := &CompactResult{Output: "compacted"}
-	applyCompaction(result, cr)
-	if result["stdout"] != "compacted" {
-		t.Errorf("stdout = %v, want 'compacted'", result["stdout"])
+func TestApplyCompaction_WritesOnlyItsOwnKey(t *testing.T) {
+	// Each pipeline names the field it read. applyCompaction must write exactly
+	// that key and nothing else — the old fixed probe order (stdout → content →
+	// output → diff) meant a correct pipeline could write to the wrong field.
+	for _, tc := range []struct {
+		name string
+		key  string
+		val  any
+	}{
+		{"bash", "stdout", "compacted"},
+		{"read", "content", "compacted"},
+		{"git-file-diff", "diff", "compacted"},
+		{"grep", "matches", []any{map[string]any{"file": "a.go"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := map[string]any{tc.key: "original"}
+			wrote := applyCompaction(result, &CompactResult{
+				Writes: []CompactWrite{{Key: tc.key, Value: tc.val}},
+			})
+			if !wrote {
+				t.Fatal("applyCompaction reported no write")
+			}
+			got, _ := json.Marshal(result[tc.key])
+			want, _ := json.Marshal(tc.val)
+			if string(got) != string(want) {
+				t.Errorf("%s = %s, want %s", tc.key, got, want)
+			}
+		})
 	}
 }
 
-func TestApplyCompaction_ReadOutput(t *testing.T) {
-	result := map[string]any{"content": "original"}
-	cr := &CompactResult{Output: "compacted"}
-	applyCompaction(result, cr)
-	if result["content"] != "compacted" {
-		t.Errorf("content = %v, want 'compacted'", result["content"])
+func TestApplyCompaction_DoesNotGuessAField(t *testing.T) {
+	// A write naming a key must not touch any other field. The old
+	// implementation probed result/data as a fallback and wrote there, which is
+	// how a correct pipeline could still land its output in the wrong place.
+	result := map[string]any{"data": "original", "result": "original"}
+	applyCompaction(result, &CompactResult{
+		Writes: []CompactWrite{{Key: "matches", Value: "compacted"}},
+	})
+	if result["data"] != "original" || result["result"] != "original" {
+		t.Errorf("fallback fields were modified: %v", result)
+	}
+	if result["matches"] != "compacted" {
+		t.Errorf("matches = %v, want the named key written", result["matches"])
 	}
 }
 
-func TestApplyCompaction_GrepOutput(t *testing.T) {
-	result := map[string]any{"output": "original"}
-	cr := &CompactResult{Output: "compacted"}
-	applyCompaction(result, cr)
-	if result["output"] != "compacted" {
-		t.Errorf("output = %v, want 'compacted'", result["output"])
+func TestApplyCompaction_WritesOmittedKeys(t *testing.T) {
+	// `truncated` carries omitempty, so a complete result has no such key.
+	// The compactor must still be able to set it, or a capped list would read
+	// as complete.
+	result := map[string]any{"matches": []any{1, 2, 3}}
+	applyCompaction(result, &CompactResult{
+		Writes: []CompactWrite{{Key: "truncated", Value: true}},
+	})
+	if result["truncated"] != true {
+		t.Errorf("truncated = %v, want true (omitempty key must be writable)", result["truncated"])
 	}
 }
 
-func TestApplyCompaction_DiffOutput(t *testing.T) {
-	result := map[string]any{"diff": "original"}
-	cr := &CompactResult{Output: "compacted"}
-	applyCompaction(result, cr)
-	if result["diff"] != "compacted" {
-		t.Errorf("diff = %v, want 'compacted'", result["diff"])
+func TestApplyCompaction_ReportsFalseWhenNothingWritten(t *testing.T) {
+	if applyCompaction(map[string]any{"a": 1}, nil) {
+		t.Error("nil CompactResult should report no write")
+	}
+	if applyCompaction(nil, &CompactResult{Writes: []CompactWrite{{Key: "a", Value: 2}}}) {
+		t.Error("nil result map should report no write")
+	}
+	if applyCompaction(map[string]any{"a": 1}, &CompactResult{}) {
+		t.Error("empty Writes should report no write")
 	}
 }
 
-func TestApplyCompaction_FallbackFields(t *testing.T) {
-	for _, field := range []string{"result", "data"} {
-		result := map[string]any{field: "original"}
-		cr := &CompactResult{Output: "compacted"}
-		applyCompaction(result, cr)
-		if result[field] != "compacted" {
-			t.Errorf("%s = %v, want 'compacted'", field, result[field])
-		}
+func TestApplyCompaction_PreservesFieldType(t *testing.T) {
+	// ADK round-trips results through JSON, so a slice arrives as []any. Replacing
+	// it with a string would change the shape the TUI summaries and the model see.
+	orig := []any{map[string]any{"file": "a.go", "line": float64(1)}}
+	result := map[string]any{"matches": orig}
+	applyCompaction(result, &CompactResult{
+		Writes: []CompactWrite{{Key: "matches", Value: orig[:1]}},
+	})
+	if _, ok := result["matches"].([]any); !ok {
+		t.Errorf("matches changed type: %T", result["matches"])
 	}
 }
 
@@ -941,7 +990,7 @@ func TestCompactBash_AnsiStripping(t *testing.T) {
 
 func TestCompactRead_Empty(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	cr := compactRead(map[string]any{"content": ""}, cfg)
+	cr := compactRead(map[string]any{"content": ""}, nil, cfg)
 	if cr != nil {
 		t.Error("empty content should return nil")
 	}
@@ -951,7 +1000,7 @@ func TestCompactRead_LargeSourceCode(t *testing.T) {
 	cfg := DefaultCompactorConfig()
 	cfg.SourceCodeFiltering = "minimal"
 	result := map[string]any{"content": generateLargeSourceCode()}
-	cr := compactRead(result, cfg)
+	cr := compactRead(result, nil, cfg)
 	if cr == nil {
 		t.Fatal("should compact large source code")
 	}
@@ -967,7 +1016,7 @@ func TestCompactRead_WithAnsi(t *testing.T) {
 		lines = append(lines, "\x1b[32mfunc foo() {}\x1b[0m")
 	}
 	result := map[string]any{"content": strings.Join(lines, "\n")}
-	cr := compactRead(result, cfg)
+	cr := compactRead(result, nil, cfg)
 	if cr == nil {
 		t.Fatal("should compact large content with ANSI")
 	}
@@ -976,7 +1025,7 @@ func TestCompactRead_WithAnsi(t *testing.T) {
 func TestCompactRead_SmallContent(t *testing.T) {
 	cfg := DefaultCompactorConfig()
 	result := map[string]any{"content": "small file content"}
-	cr := compactRead(result, cfg)
+	cr := compactRead(result, nil, cfg)
 	if cr != nil {
 		t.Error("small content should not be compacted")
 	}
@@ -988,122 +1037,367 @@ func TestCompactRead_SmallContent(t *testing.T) {
 
 func TestCompactGrep_Empty(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	cr := compactGrep(map[string]any{"output": ""}, cfg)
+	cr := compactGrep(map[string]any{"output": ""}, nil, cfg)
 	if cr != nil {
 		t.Error("empty output should return nil")
 	}
 }
 
-func TestCompactGrep_LargeOutput(t *testing.T) {
+// buildProdResult mirrors ADK's functiontool.Run: a typed output struct is
+// json.Marshal'd and json.Unmarshal'd into map[string]any (adk v2.4.0
+// internal/typeutil/convert.go, ConvertToWithJSONSchema). Tests must build
+// results this way: the old tests fed synthetic maps with an "output" key that
+// no tool emits, which is exactly why seven pipelines shipped green and dead.
+func buildProdResult(t *testing.T, v any) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return m
+}
+
+func largeGrepOutput(n int) GrepOutput {
+	matches := make([]GrepMatch, n)
+	for i := range matches {
+		matches[i] = GrepMatch{File: fmt.Sprintf("f%d.go", i), Line: i + 1, Content: strings.Repeat("b", 40)}
+	}
+	return GrepOutput{Matches: matches, TotalMatches: n}
+}
+
+func largeFindOutput(n int) FindOutput {
+	files := make([]string, n)
+	for i := range files {
+		files[i] = fmt.Sprintf("dir/file%d.go", i)
+	}
+	return FindOutput{Files: files, TotalFiles: n}
+}
+
+func TestCompactGrep_RealStructCompacts(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	result := map[string]any{"output": generateLargeSearchOutput()}
-	cr := compactGrep(result, cfg)
+	result := buildProdResult(t, largeGrepOutput(400))
+	cr := compactGrep(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large grep output")
+		t.Fatal("should compact large grep output built from GrepOutput")
 	}
 	if cr.CompSize >= cr.OrigSize {
-		t.Error("compacted should be smaller")
+		t.Errorf("compacted %d not smaller than %d", cr.CompSize, cr.OrigSize)
+	}
+	if len(cr.Writes) == 0 || cr.Writes[0].Key != "matches" {
+		t.Fatalf("writes = %+v, want a write to matches", cr.Writes)
 	}
 }
 
-func TestCompactFind_Empty(t *testing.T) {
+func TestCompactGrep_PreservesTotalAndMarksTruncated(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	cr := compactFind(map[string]any{"output": ""}, cfg)
-	if cr != nil {
-		t.Error("empty output should return nil")
-	}
-}
-
-func TestCompactFind_LargeOutput(t *testing.T) {
-	cfg := DefaultCompactorConfig()
-	result := map[string]any{"output": generateLargeFindOutput()}
-	cr := compactFind(result, cfg)
+	result := buildProdResult(t, largeGrepOutput(400))
+	cr := compactGrep(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large find output")
+		t.Fatal("expected compaction")
+	}
+	applyCompaction(result, cr)
+
+	// total_matches must stay the true, pre-cap count — an rtk invariant
+	// (search.rs, test_grep_overflow_uses_uncapped_total).
+	if got := result["total_matches"]; got != float64(400) {
+		t.Errorf("total_matches = %v, want 400 (the uncapped total)", got)
+	}
+	if got := result["truncated"]; got != true {
+		t.Errorf("truncated = %v, want true so a partial list is not read as complete", got)
+	}
+	matches, _ := result["matches"].([]any)
+	if len(matches) != cfg.MaxSearchTotal {
+		t.Errorf("matches kept %d, want %d", len(matches), cfg.MaxSearchTotal)
 	}
 }
 
-func TestCompactTree_LargeOutput(t *testing.T) {
+func TestCompactGrep_NoOpWhenUnderLimit(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	result := map[string]any{"output": generateLargeFindOutput()}
-	cr := compactTree(result, cfg)
+	result := buildProdResult(t, largeGrepOutput(5))
+	if cr := compactGrep(result, nil, cfg); cr != nil {
+		t.Error("a short match list must not be compacted")
+	}
+}
+
+func TestCompactGrep_EmptyMatches(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	result := buildProdResult(t, GrepOutput{Matches: []GrepMatch{}, TotalMatches: 0})
+	if cr := compactGrep(result, nil, cfg); cr != nil {
+		t.Error("no matches should return nil")
+	}
+}
+
+func TestCompactFind_RealStructCompacts(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	result := buildProdResult(t, largeFindOutput(400))
+	cr := compactFind(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large tree output")
+		t.Fatal("should compact large find output built from FindOutput")
+	}
+	applyCompaction(result, cr)
+	if got := result["total_files"]; got != float64(400) {
+		t.Errorf("total_files = %v, want 400", got)
+	}
+	files, _ := result["files"].([]any)
+	if len(files) != cfg.MaxSearchTotal {
+		t.Errorf("files kept %d, want %d", len(files), cfg.MaxSearchTotal)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline-level tests: git tool compaction
-// ---------------------------------------------------------------------------
-
-func TestCompactGitFileDiff_Empty(t *testing.T) {
+func TestCompactLs_RealStructCompacts(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	cr := compactGitFileDiff(map[string]any{"diff": ""}, cfg)
-	if cr != nil {
-		t.Error("empty diff should return nil")
+	entries := make([]LsEntry, 400)
+	for i := range entries {
+		entries[i] = LsEntry{Name: fmt.Sprintf("e%d.go", i), Size: int64(i)}
 	}
-}
-
-func TestCompactGitFileDiff_Large(t *testing.T) {
-	cfg := DefaultCompactorConfig()
-	result := map[string]any{"diff": generateLargeDiff()}
-	cr := compactGitFileDiff(result, cfg)
+	result := buildProdResult(t, LsOutput{Entries: entries, TotalEntries: 400})
+	cr := compactLs(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large diff")
+		t.Fatal("ls must compact — it had no pipeline at all before this change")
 	}
-	if cr.CompSize >= cr.OrigSize {
-		t.Error("compacted should be smaller")
-	}
-}
-
-func TestCompactGitOverview_Empty(t *testing.T) {
-	cfg := DefaultCompactorConfig()
-	cr := compactGitOverview(map[string]any{"output": ""}, cfg)
-	if cr != nil {
-		t.Error("empty output should return nil")
+	applyCompaction(result, cr)
+	if got := result["total_entries"]; got != float64(400) {
+		t.Errorf("total_entries = %v, want 400", got)
 	}
 }
 
-func TestCompactGitOverview_Large(t *testing.T) {
+func TestCompactTree_ReadsTreeFieldNotFiles(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-
-	var lines []string
-	lines = append(lines, "On branch main")
-	for i := 0; i < 50; i++ {
-		lines = append(lines, fmt.Sprintf("M  file%d.go", i))
-	}
-
-	result := map[string]any{"output": strings.Join(lines, "\n")}
-	cr := compactGitOverview(result, cfg)
+	cfg.MaxChars = 200
+	cfg.MaxLines = 10
+	result := buildProdResult(t, TreeOutput{Tree: strings.Repeat("line\n", 400), Dirs: 3, Files: 9})
+	cr := compactTree(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large git overview")
+		t.Fatal("tree must compact from its own tree field")
+	}
+	if cr.Writes[0].Key != "tree" {
+		t.Errorf("wrote %q, want tree", cr.Writes[0].Key)
+	}
+	// A find-shaped result (files field) must NOT be treated as tree output.
+	if got := compactTree(buildProdResult(t, largeFindOutput(400)), nil, cfg); got != nil {
+		t.Error("compactTree must not compact a files-only result")
 	}
 }
 
-func TestCompactGitHunk_Empty(t *testing.T) {
+func TestCompactGitFileDiff_RealStructCompacts(t *testing.T) {
 	cfg := DefaultCompactorConfig()
-	cr := compactGitHunk(map[string]any{"diff": "", "output": ""}, cfg)
-	if cr != nil {
-		t.Error("empty hunk should return nil")
-	}
-}
-
-func TestCompactGitHunk_DiffField(t *testing.T) {
-	cfg := DefaultCompactorConfig()
-	result := map[string]any{"diff": generateLargeDiff()}
-	cr := compactGitHunk(result, cfg)
+	diff := strings.Repeat("+added line\n", 3000)
+	result := buildProdResult(t, GitFileDiffOutput{File: "x.go", Diff: diff, LinesAdded: 3000})
+	cr := compactGitFileDiff(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact large hunk diff")
+		t.Fatal("git-file-diff must compact: its pipeline already read diff")
+	}
+	if cr.Writes[0].Key != "diff" {
+		t.Errorf("wrote %q, want diff", cr.Writes[0].Key)
 	}
 }
 
-func TestCompactGitHunk_OutputField(t *testing.T) {
+func TestCompactGitOverview_CapsCommitsNotFileLists(t *testing.T) {
+	// The commit count here exceeds what the tool can produce: `git log
+	// --oneline -10` (git_overview.go:72) caps recent_commits at 10, while this
+	// pipeline's own cap is MaxLogEntries. The oversized input is deliberate —
+	// it drives the cap to fire so the dirty-file behavior can be checked — but
+	// it means this test exercises a shape production cannot emit, and the
+	// pipeline cannot fire at default config. TestCompact_NoOpBelowItsCap states
+	// that unreachability explicitly; do not read a saving from this test.
 	cfg := DefaultCompactorConfig()
-	// When diff is empty, uses output field
-	result := map[string]any{"diff": "", "output": generateLargeDiff()}
-	cr := compactGitHunk(result, cfg)
+	commits := make([]string, cfg.MaxLogEntries+60)
+	for i := range commits {
+		commits[i] = fmt.Sprintf("commit %d", i)
+	}
+	staged := make([]string, 30)
+	for i := range staged {
+		staged[i] = fmt.Sprintf("staged%d.go", i)
+	}
+	result := buildProdResult(t, GitOverviewOutput{
+		Branch: "main", RecentCommits: commits, StagedFiles: staged,
+	})
+	cr := compactGitOverview(result, nil, cfg)
 	if cr == nil {
-		t.Fatal("should compact hunk via output field")
+		t.Fatal("git-overview must cap its commit log")
+	}
+	applyCompaction(result, cr)
+
+	got, _ := result["recent_commits"].([]any)
+	if len(got) != cfg.MaxLogEntries {
+		t.Errorf("recent_commits kept %d, want %d", len(got), cfg.MaxLogEntries)
+	}
+	// The dirty-file list is deliberately NOT capped: truncating it would hide
+	// which files are dirty (rtk git_cmd.rs format_status_inner does the same).
+	kept, _ := result["staged_files"].([]any)
+	if len(kept) != len(staged) {
+		t.Errorf("staged_files truncated to %d; dirty-file lists must stay complete", len(kept))
+	}
+	if result["branch"] != "main" {
+		t.Errorf("branch = %v, want main (never cap the branch)", result["branch"])
+	}
+}
+
+func TestCompactGitHunk_ReadsHunksNotDiff(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	hunks := make([]Hunk, 300)
+	for i := range hunks {
+		hunks[i] = Hunk{Header: "@@ -1,2 +1,2 @@", Content: strings.Repeat("c", 60), Added: 1, Removed: 1}
+	}
+	result := buildProdResult(t, GitHunkOutput{File: "x.go", Hunks: hunks, TotalHunks: 300})
+	cr := compactGitHunk(result, nil, cfg)
+	if cr == nil {
+		t.Fatal("git-hunk must compact its hunks")
+	}
+	if cr.Writes[0].Key != "hunks" {
+		t.Errorf("wrote %q, want hunks (git-hunk has no diff field)", cr.Writes[0].Key)
+	}
+	applyCompaction(result, cr)
+	if got := result["total_hunks"]; got != float64(300) {
+		t.Errorf("total_hunks = %v, want 300 (preserved)", got)
+	}
+}
+
+// TestCompactorRouting_EveryRegisteredTool is the guard this bug needed: every
+// registered tool that emits bulk output must have a pipeline, and the routing
+// keys must be the names the registry actually produces. Sourcing the list from
+// CoreTools is the point — a hand-written list is how `ls` stayed invisible and
+// how `grep`/`ripgrep` were counted twice.
+func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
+	sb, err := NewSandbox(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Close before the test ends: the sandbox holds an open directory handle, and
+	// on Windows an open handle makes TempDir's RemoveAll fail with "The process
+	// cannot access the file because it is being used by another process",
+	// failing the test during cleanup.
+	t.Cleanup(func() { _ = sb.Close() })
+	built, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Tools whose output the compactor is responsible for. The search tool is
+	// listed separately: it registers exactly one of "grep"/"ripgrep" depending
+	// on whether rg is installed (grep.go:128-133), so requiring a specific one
+	// here would fail on a host without rg.
+	wantPipelines := map[string]bool{
+		"bash": true, "read": true, "find": true,
+		"tree": true, "ls": true, "git-file-diff": true,
+		"git-overview": true, "git-hunk": true,
+	}
+
+	registered := map[string]bool{}
+	for _, x := range built {
+		registered[x.Name()] = true
+		if _, isSearch := compactorPipelines[x.Name()]; !isSearch {
+			if wantPipelines[x.Name()] {
+				t.Errorf("registered tool %q has no compaction pipeline", x.Name())
+			}
+		}
+	}
+
+	for name := range wantPipelines {
+		if !registered[name] {
+			t.Errorf("expected %q among registered tools; registry changed shape", name)
+		}
+	}
+
+	// Exactly one search spelling is registered, and both must route.
+	searchRegistered := 0
+	for _, name := range []string{"grep", "ripgrep"} {
+		if registered[name] {
+			searchRegistered++
+		}
+		if _, ok := compactorPipelines[name]; !ok {
+			t.Errorf("route missing for %q", name)
+		}
+	}
+	if searchRegistered != 1 {
+		t.Errorf("expected exactly one of grep/ripgrep registered, got %d "+
+			"(rgAvailable=%v)", searchRegistered, rgAvailable)
+	}
+
+	// Underscore spellings must NOT be the routing keys — they are what made the
+	// git pipelines unreachable.
+	for _, wrong := range []string{"git_file_diff", "git_overview", "git_hunk"} {
+		if _, ok := compactorPipelines[wrong]; ok {
+			t.Errorf("routing key %q is not a registered tool name", wrong)
+		}
+	}
+}
+
+// TestCompactorRouting_WithoutRipgrep covers the host without rg, where
+// newGrepTool registers "grep" instead of "ripgrep" (grep.go:128-133). Windows CI
+// has no rg, so a test that hard-requires "ripgrep" passes locally on macOS and
+// fails there. Both spellings must route, and exactly one must be registered.
+func TestCompactorRouting_WithoutRipgrep(t *testing.T) {
+	// rgAvailable is a package global read by other tests in this package. None
+	// of them call t.Parallel, and top-level tests run sequentially, so mutating
+	// it here is bounded to this test. Restoring via t.Cleanup keeps that true if
+	// it is ever called from a subtest.
+	orig := rgAvailable
+	rgAvailable = false
+	t.Cleanup(func() { rgAvailable = orig })
+
+	sb, err := NewSandbox(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	built, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var searchName string
+	for _, x := range built {
+		switch x.Name() {
+		case "grep", "ripgrep":
+			searchName = x.Name()
+		}
+	}
+	if searchName != "grep" {
+		t.Fatalf("with rgAvailable=false the search tool registered as %q, want \"grep\"",
+			searchName)
+	}
+	if _, ok := compactorPipelines[searchName]; !ok {
+		t.Errorf("registered search tool %q has no compaction pipeline", searchName)
+	}
+}
+
+// TestCompactorRouting_WithRipgrep is the mirror: when rg exists the tool
+// registers as "ripgrep", and that name must route too.
+func TestCompactorRouting_WithRipgrep(t *testing.T) {
+	orig := rgAvailable
+	rgAvailable = true
+	t.Cleanup(func() { rgAvailable = orig })
+
+	sb, err := NewSandbox(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	built, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var searchName string
+	for _, x := range built {
+		switch x.Name() {
+		case "grep", "ripgrep":
+			searchName = x.Name()
+		}
+	}
+	if searchName != "ripgrep" {
+		t.Fatalf("with rgAvailable=true the search tool registered as %q, want \"ripgrep\"",
+			searchName)
+	}
+	if _, ok := compactorPipelines[searchName]; !ok {
+		t.Errorf("registered search tool %q has no compaction pipeline", searchName)
 	}
 }
 
@@ -1328,7 +1622,7 @@ func BenchmarkCompactRead_FullPipeline(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		compactRead(result, cfg)
+		compactRead(result, nil, cfg)
 	}
 }
 
@@ -1339,7 +1633,7 @@ func BenchmarkCompactGitFileDiff_FullPipeline(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		compactGitFileDiff(result, cfg)
+		compactGitFileDiff(result, nil, cfg)
 	}
 }
 
@@ -1432,5 +1726,22 @@ func TestBuildCompactorCallback_KnownToolCompacts(t *testing.T) {
 	summary := metrics.Summary()
 	if summary.TotalOrig == 0 {
 		t.Errorf("expected compactor metrics to record compaction, got empty summary")
+	}
+}
+
+// TestCompact_NeverWorseGuard pins the rtk invariant that a filter must not
+// emit more bytes than the original (tmp/rtk/src/core/guard.rs). A cap that
+// saves nothing must return nil rather than rewrite the result.
+func TestCompact_NeverWorseGuard(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	// A tiny payload: capping one match cannot beat the cost of adding
+	// "truncated", so the pipeline must decline.
+	small := buildProdResult(t, GrepOutput{
+		Matches:      []GrepMatch{{File: "a.go", Line: 1, Content: "x"}},
+		TotalMatches: 1,
+	})
+	cfg.MaxSearchTotal = 0 // force a cut of the single element
+	if cr := compactGrep(small, nil, cfg); cr != nil && cr.CompSize >= cr.OrigSize {
+		t.Errorf("guard failed: compSize %d >= origSize %d", cr.CompSize, cr.OrigSize)
 	}
 }

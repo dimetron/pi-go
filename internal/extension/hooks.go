@@ -181,7 +181,74 @@ func BuildAfterToolCallbacks(hooks []HookConfig) []llmagent.AfterToolCallback {
 	return cbs
 }
 
-// spanRegistry hands a span from a before-callback to its matching
+// ComposeAfterTool folds a chain of after-tool callbacks into the single
+// callback handed to ADK.
+//
+// ADK's own chain (llminternal.Flow.invokeAfterToolCallbacks, adk v2.4.0
+// internal/llminternal/base_flow.go:1436) returns at the FIRST callback that
+// yields a non-nil result:
+//
+//	for _, callback := range f.AfterToolCallbacks {
+//	    result, err := callback(...)
+//	    if result != nil { return result, nil }
+//	}
+//
+// pi-go registers several after-tool callbacks that each return the result map —
+// hooks, OTEL tracing, LSP, dedup, the compactor, memory recording — so handing
+// ADK the slice runs only the first of them and silently skips the rest. OTEL
+// tracing is registered first and always returns non-nil, so every stage after
+// it, including dedup and the compactor, was dead in production.
+//
+// The composed semantics are:
+//
+//   - (nil, nil): result unchanged, chain continues.
+//   - (m, nil): m becomes the result later callbacks see, and the one returned.
+//   - (_, err): the chain aborts and err propagates.
+//
+// If every callback returns nil the composed callback returns (nil, nil), which
+// tells ADK to keep the tool's own result — the same as an empty chain.
+//
+// Call sites must pass the composed callback as the only entry in the slice.
+func ComposeAfterTool(cbs []llmagent.AfterToolCallback) llmagent.AfterToolCallback {
+	kept := make([]llmagent.AfterToolCallback, 0, len(cbs))
+	for _, cb := range cbs {
+		if cb != nil {
+			kept = append(kept, cb)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return func(ctx agent.Context, t tool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+		current := result
+		replaced := false
+		for _, cb := range kept {
+			out, err := cb(ctx, t, args, current, toolErr)
+			if err != nil {
+				return nil, err
+			}
+			if out == nil {
+				continue
+			}
+			current = out
+			replaced = true
+		}
+		if !replaced {
+			return nil, nil
+		}
+		return current, nil
+	}
+}
+
+// ComposeAfterToolChain wraps ComposeAfterTool for the shape ADK expects: a
+// one-element slice, or nil when there is nothing to run.
+func ComposeAfterToolChain(cbs []llmagent.AfterToolCallback) []llmagent.AfterToolCallback {
+	if cb := ComposeAfterTool(cbs); cb != nil {
+		return []llmagent.AfterToolCallback{cb}
+	}
+	return nil
+}
+
 // after-callback.
 //
 // ADK's callback signatures return no context, so the context returned by

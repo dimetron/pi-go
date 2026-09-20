@@ -955,22 +955,30 @@ func TestBuildDeferredCallbacks(t *testing.T) {
 	if len(base.beforeModel) == 0 {
 		t.Error("no before-model callbacks; the read-image callback is always added")
 	}
-	// The compactor and dedup callbacks are unconditional.
-	if len(base.afterTool) < 2 {
-		t.Errorf("after-tool callbacks = %d, want at least the compactor and deduper", len(base.afterTool))
+	// The chain is composed into exactly ONE callback. ADK's
+	// Flow.invokeAfterToolCallbacks returns at the first callback that yields a
+	// non-nil result, so handing it a slice would run only the first entry and
+	// silently skip dedup, the compactor and memory recording. The count is the
+	// invariant, not an incidental shape: more than one entry reintroduces that
+	// bug, and zero means the chain was dropped entirely.
+	if len(base.afterTool) != 1 {
+		t.Errorf("after-tool callbacks = %d, want 1 composed callback; ADK would stop "+
+			"at the first and skip the rest", len(base.afterTool))
 	}
 
+	// Adding LSP or a memory recorder must still yield a single composed
+	// callback, since they are folded into the same chain.
 	withLSP := buildDeferredCallbacks(config.Config{}, "anthropic", sandbox, mgr, nil)
-	if len(withLSP.afterTool) != len(base.afterTool)+1 {
-		t.Errorf("after-tool callbacks with an LSP manager = %d, want %d",
-			len(withLSP.afterTool), len(base.afterTool)+1)
+	if len(withLSP.afterTool) != 1 {
+		t.Errorf("after-tool callbacks with an LSP manager = %d, want 1 composed callback",
+			len(withLSP.afterTool))
 	}
 
 	rec := newDeferredMemoryRecorder(config.Config{}, t.TempDir())
 	withMem := buildDeferredCallbacks(config.Config{}, "anthropic", sandbox, nil, rec)
-	if len(withMem.afterTool) != len(base.afterTool)+1 {
-		t.Errorf("after-tool callbacks with a memory recorder = %d, want %d",
-			len(withMem.afterTool), len(base.afterTool)+1)
+	if len(withMem.afterTool) != 1 {
+		t.Errorf("after-tool callbacks with a memory recorder = %d, want 1 composed callback",
+			len(withMem.afterTool))
 	}
 }
 

@@ -31,6 +31,13 @@ const dedupMinBytes = 512
 // dedupTools are the read-only tools whose output is safe to elide on an exact
 // repeat. Mutating tools (edit, write) and tools whose output is inherently
 // time-varying are excluded — an identical hash there is meaningful, not noise.
+//
+// A tool belongs here only if primaryOutputField can find a payload for it: the
+// hash covers one string field, so a result whose bulk lives in an array cannot
+// be compared. git-hunk carries `hunks` (an array) and git-overview has no
+// recognized key at all, so listing either would claim coverage that cannot
+// exist. TestDedup_ToolListMatchesReachableFields enforces the pairing — add a
+// tool here only together with a field primaryOutputField can read.
 var dedupTools = map[string]bool{
 	"read":          true,
 	"read_image":    true,
@@ -39,9 +46,7 @@ var dedupTools = map[string]bool{
 	"find":          true,
 	"ls":            true,
 	"tree":          true,
-	"git-overview":  true,
 	"git-file-diff": true,
-	"git-hunk":      true,
 }
 
 type dedupEntry struct {
@@ -101,9 +106,15 @@ func (d *ResultDeduper) Reset() {
 }
 
 // BuildDedupCallback returns an AfterToolCallback that elides byte-identical
-// repeat results. It must run AFTER the compactor so that both calls are
-// compared in their final, post-compaction form — otherwise two results that
-// compact to the same bytes would still be sent twice.
+// repeat results.
+//
+// It must run BEFORE the compactor. The deduper's contract (see the package
+// comment) is that a changed result always produces full content; that holds
+// only while the hash covers the bytes the tool produced. Compaction is lossy —
+// two different diffs can truncate to the same capped head — so hashing after it
+// makes distinct results collide and the later one is replaced with "content is
+// unchanged", which tells the model a file it changed did not change.
+// TestDedup_ChangedDiffIsNotElided pins this.
 func BuildDedupCallback(d *ResultDeduper) llmagent.AfterToolCallback {
 	return func(_ agent.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		if d == nil || err != nil || result == nil {

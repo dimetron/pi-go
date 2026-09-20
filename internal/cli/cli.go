@@ -808,13 +808,17 @@ func runNonInteractive(
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
-	// Dedup runs after the compactor so both calls are compared in their final,
-	// post-compaction form.
+	// Dedup runs BEFORE the compactor, so its equality test compares the bytes
+	// the tool actually produced. Compaction is lossy: two different results can
+	// truncate to the same head, and if dedup hashed that truncated form it would
+	// report a changed file as "content is unchanged". The deduper's contract is
+	// that the model is never served stale bytes, which only holds when the hash
+	// covers the pre-compaction content.
 	resultDeduper := tools.NewResultDeduper()
 	afterCBs = append(afterCBs,
 		lsp.BuildLSPAfterToolCallback(lspMgr),
-		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()),
-		tools.BuildDedupCallback(resultDeduper))
+		tools.BuildDedupCallback(resultDeduper),
+		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()))
 
 	// memSessionID is only known once the session is created below; the
 	// callback reads it at call time, so recording starts from that point.
@@ -822,6 +826,14 @@ func runNonInteractive(
 	if memWorker != nil {
 		afterCBs = append(afterCBs, memoryObservationCallback(memWorker, cfg, cwd, &memSessionID))
 	}
+
+	// Fold the whole after-tool chain into the single callback ADK runs.
+	// ADK's Flow.invokeAfterToolCallbacks returns at the first callback that
+	// yields a non-nil result, and every callback above returns the result map —
+	// so handing ADK the slice ran only the first entry and silently skipped
+	// dedup, the compactor and memory recording. Composing preserves each
+	// stage's effect while presenting ADK one callback to invoke.
+	afterCBs = extension.ComposeAfterToolChain(afterCBs)
 
 	// LSP tool declarations are billed on every request, and with no server
 	// installed every call they enable fails — so the model pays tokens for
