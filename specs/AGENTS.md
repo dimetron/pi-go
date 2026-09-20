@@ -127,6 +127,7 @@ specs/
 | 007-write-tool-data-loss/ | readme | `write`/`edit` truncate before writing and never fsync — data loss on quit |
 | 008-adk-utils-go-review/  | research | adk-utils-go feature comparison & scored recommendations                  |
 | 009-tui-review-followups/ | readme | Deferred follow-ups from the TUI review and the PR #134 review           |
+| 010-sol-pi-efficiency-lessons/ | research+design+plan | Archive-before-reduce and unblocked fixes from the SoL-Pi harness study |
 
 ### memory-fixes/
 
