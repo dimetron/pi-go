@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1686,4 +1687,266 @@ func TestBearerTransport(t *testing.T) {
 			t.Errorf("expected no Authorization header, got %q", gotAuth)
 		}
 	})
+}
+
+// --- think relax on "does not support thinking" -----------------------------
+//
+// A non-thinking model (qwen2.5-coder, an embedding model, any older tag) meets
+// a session-wide thinking level of "high" on every turn. Ollama rejects the
+// request outright, so without the relax the turn ends before inference starts.
+// These tests pin the retry, the field it drops, and the cases that must NOT
+// trigger it.
+
+// thinkRejectServer answers the first request with Ollama's think rejection and
+// any later request successfully, recording each request body. requests counts
+// the calls so a test can assert the retry happened exactly once.
+type thinkRejectServer struct {
+	requests []map[string]any
+}
+
+// newThinkRejectServer builds a mock daemon whose first /api/chat call fails
+// with Ollama's "does not support thinking" and whose subsequent calls succeed.
+func newThinkRejectServer(t *testing.T) (*httptest.Server, *thinkRejectServer) {
+	t.Helper()
+	rec := &thinkRejectServer{}
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		rec.requests = append(rec.requests, body)
+
+		if len(rec.requests) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintln(w, `{"error":"\"qwen2.5-coder:7b\" does not support thinking"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeNDJSON(w, []any{
+			ollamaChatLine("qwen2.5-coder:7b", "assistant", "hello there", "", "stop", true, 3, 2, nil),
+		})
+	})
+	return srv, rec
+}
+
+func TestOllamaRelaxThink_Streaming(t *testing.T) {
+	srv, rec := newThinkRejectServer(t)
+	llm := newOllamaModelFromServer(t, srv, "qwen2.5-coder:7b", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Explain the project"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(rec.requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (original + one relax retry)", len(rec.requests))
+	}
+	if rec.requests[0]["think"] == nil {
+		t.Error("first request: expected the think field to be sent")
+	}
+	if got := rec.requests[1]["think"]; got != false {
+		t.Errorf("retry think = %v, want false", got)
+	}
+
+	// The retry's answer must reach the caller intact.
+	var text string
+	for _, r := range resps {
+		if r.Content == nil {
+			continue
+		}
+		for _, p := range r.Content.Parts {
+			text += p.Text
+		}
+	}
+	if !strings.Contains(text, "hello there") {
+		t.Errorf("aggregated text = %q, want it to contain 'hello there'", text)
+	}
+}
+
+func TestOllamaRelaxThink_NonStreaming(t *testing.T) {
+	srv, rec := newThinkRejectServer(t)
+	llm := newOllamaModelFromServer(t, srv, "qwen2.5-coder:7b", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Explain the project"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, false)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(rec.requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (original + one relax retry)", len(rec.requests))
+	}
+	if got := rec.requests[1]["think"]; got != false {
+		t.Errorf("retry think = %v, want false", got)
+	}
+	if len(resps) != 1 {
+		t.Fatalf("responses = %d, want 1", len(resps))
+	}
+}
+
+// The rejection must not be replayed as a user-visible error once the retry
+// works, and no duplicate response may be emitted.
+func TestOllamaRelaxThink_NoErrorWhenRetrySucceeds(t *testing.T) {
+	srv, _ := newThinkRejectServer(t)
+	llm := newOllamaModelFromServer(t, srv, "qwen2.5-coder:7b", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, errs := collectResponses(t, llm, req, true)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	for _, r := range resps {
+		if r.ErrorCode != "" {
+			t.Errorf("rejection leaked to the caller: %s: %s", r.ErrorCode, r.ErrorMessage)
+		}
+	}
+}
+
+// A 400 that is not the thinking rejection must pass through untouched — the
+// relax is not a general 400 handler.
+func TestOllamaRelaxThink_OtherBadRequestPassesThrough(t *testing.T) {
+	var calls int
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintln(w, `{"error":"invalid options"}`)
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	_, errs := collectResponses(t, llm, req, false)
+	if len(errs) == 0 {
+		t.Error("expected the error to be reported")
+	}
+	if calls != 1 {
+		t.Errorf("requests = %d, want 1: a non-thinking 400 must not be retried", calls)
+	}
+}
+
+// A streaming failure arrives as an ErrorCode response rather than a Go error,
+// so this pins the same pass-through on that shape.
+func TestOllamaRelaxThink_OtherBadRequestPassesThroughStreaming(t *testing.T) {
+	var calls int
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintln(w, `{"error":"invalid options"}`)
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, _ := collectResponses(t, llm, req, true)
+	var sawErr bool
+	for _, r := range resps {
+		if strings.Contains(r.ErrorMessage, "invalid options") {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Error("expected the unrelated 400 to reach the caller")
+	}
+	if calls != 1 {
+		t.Errorf("requests = %d, want 1: a non-thinking 400 must not be retried", calls)
+	}
+}
+
+// The relax retries once, not indefinitely: if the retry also fails with the
+// same rejection, that failure is reported.
+func TestOllamaRelaxThink_SecondRejectionIsReported(t *testing.T) {
+	var calls int
+	srv := newMockOllamaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintln(w, `{"error":"\"test\" does not support thinking"}`)
+	})
+
+	llm := newOllamaModelFromServer(t, srv, "test", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, _ := collectResponses(t, llm, req, true)
+	if calls != 2 {
+		t.Errorf("requests = %d, want exactly 2 (one original, one retry)", calls)
+	}
+	var sawErr bool
+	for _, r := range resps {
+		if strings.Contains(r.ErrorMessage, "does not support thinking") {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Error("expected the second rejection to be reported to the caller")
+	}
+}
+
+// Nothing is emitted before the retry, so a successful relax must not
+// double-emit the answer. The streaming path legitimately repeats the text once
+// on the final aggregate, so this counts non-partial responses only.
+func TestOllamaRelaxThink_NoDuplicateOutput(t *testing.T) {
+	srv, _ := newThinkRejectServer(t)
+	llm := newOllamaModelFromServer(t, srv, "qwen2.5-coder:7b", "high")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+	}
+
+	resps, _ := collectResponses(t, llm, req, true)
+	n := 0
+	for _, r := range resps {
+		if r.Partial || r.Content == nil {
+			continue
+		}
+		for _, p := range r.Content.Parts {
+			if strings.Contains(p.Text, "hello there") {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("answer emitted %d times on final responses, want 1", n)
+	}
+}
+
+func TestOllamaThinkingUnsupported(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"the rejection", errors.New(`400 Bad Request: "qwen2.5-coder:7b" does not support thinking`), true},
+		{"different case", errors.New("DOES NOT SUPPORT THINKING"), true},
+		{"unrelated 400", errors.New("400 Bad Request: invalid options"), false},
+		{"chat rejection", errors.New(`"x" does not support chat`), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ollamaThinkingUnsupported(tt.err); got != tt.want {
+				t.Errorf("ollamaThinkingUnsupported(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
 }
