@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -42,5 +43,40 @@ func TestSubagentDescription_WarnsWhenParallelIsPointless(t *testing.T) {
 	}
 	if strings.Contains(desc, "queue rather than overlap") {
 		t.Error("description gives the batching advice that only applies above 1")
+	}
+}
+
+// TestSubagentInput_BaseRoundTrips guards the JSON tag, which is the only
+// interface the model has to this field: the tool call arrives as JSON, so a
+// misspelled tag would make base silently unusable while the Go code still
+// compiled. It also pins that base keeps the call in single mode.
+func TestSubagentInput_BaseRoundTrips(t *testing.T) {
+	raw := `{"agent":"code-reviewer","task":"review","base":"origin/main~1"}`
+	var in SubagentInput
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if in.Base != "origin/main~1" {
+		t.Errorf("Base = %q, want %q", in.Base, "origin/main~1")
+	}
+	if got := detectMode(in); got != "single" {
+		t.Errorf("detectMode = %q, want single", got)
+	}
+}
+
+// TestSubagentDescription_MentionsBase: the description is the only place the
+// model learns that committed work needs base. If the section is dropped, the
+// model goes back to reviewing an empty diff and nothing else would report it.
+func TestSubagentDescription_MentionsBase(t *testing.T) {
+	// A real orchestrator, not nil: buildSubagentDescription walks the agent
+	// registry, so a nil one panics before any assertion runs.
+	orch := subagent.NewOrchestrator(&config.Config{}, "", nil)
+	t.Cleanup(orch.Shutdown)
+
+	desc := buildSubagentDescription(orch)
+	for _, want := range []string{"base", "empty diff"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description does not mention %q; a reviewer of committed work would read nothing", want)
+		}
 	}
 }
