@@ -580,9 +580,12 @@ func buildDeferredCallbacks(
 	if lspMgr != nil {
 		afterCBs = append(afterCBs, lsp.BuildLSPAfterToolCallback(lspMgr))
 	}
-	// Dedup runs after the compactor so both calls are compared in their final,
-	// post-compaction form.
-	afterCBs = append(afterCBs, compactorCB, tools.BuildDedupCallback(resultDeduper))
+	// Dedup runs BEFORE the compactor: its hash must cover the bytes the tool
+	// produced, not the truncated form. Compaction is lossy, so hashing after it
+	// makes two different results collide and the second is wrongly reported as
+	// "content is unchanged". See the note in cli.go where the same chain is
+	// wired for non-interactive runs.
+	afterCBs = append(afterCBs, tools.BuildDedupCallback(resultDeduper), compactorCB)
 
 	// LLM tracing: before/after model callbacks emit spans per LLM invocation.
 	llmBefore, llmAfter := extension.BuildLLMTracingCallbacks(providerName)

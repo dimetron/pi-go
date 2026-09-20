@@ -101,9 +101,15 @@ func (d *ResultDeduper) Reset() {
 }
 
 // BuildDedupCallback returns an AfterToolCallback that elides byte-identical
-// repeat results. It must run AFTER the compactor so that both calls are
-// compared in their final, post-compaction form — otherwise two results that
-// compact to the same bytes would still be sent twice.
+// repeat results.
+//
+// It must run BEFORE the compactor. The deduper's contract (see the package
+// comment) is that a changed result always produces full content; that holds
+// only while the hash covers the bytes the tool produced. Compaction is lossy —
+// two different diffs can truncate to the same capped head — so hashing after it
+// makes distinct results collide and the later one is replaced with "content is
+// unchanged", which tells the model a file it changed did not change.
+// TestDedup_ChangedDiffIsNotElided pins this.
 func BuildDedupCallback(d *ResultDeduper) llmagent.AfterToolCallback {
 	return func(_ agent.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		if d == nil || err != nil || result == nil {

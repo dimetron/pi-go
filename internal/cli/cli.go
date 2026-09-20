@@ -798,13 +798,17 @@ func runNonInteractive(
 
 	lspMgr := lsp.NewManager(nil)
 	defer lspMgr.Shutdown()
-	// Dedup runs after the compactor so both calls are compared in their final,
-	// post-compaction form.
+	// Dedup runs BEFORE the compactor, so its equality test compares the bytes
+	// the tool actually produced. Compaction is lossy: two different results can
+	// truncate to the same head, and if dedup hashed that truncated form it would
+	// report a changed file as "content is unchanged". The deduper's contract is
+	// that the model is never served stale bytes, which only holds when the hash
+	// covers the pre-compaction content.
 	resultDeduper := tools.NewResultDeduper()
 	afterCBs = append(afterCBs,
 		lsp.BuildLSPAfterToolCallback(lspMgr),
-		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()),
-		tools.BuildDedupCallback(resultDeduper))
+		tools.BuildDedupCallback(resultDeduper),
+		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()))
 
 	// memSessionID is only known once the session is created below; the
 	// callback reads it at call time, so recording starts from that point.
