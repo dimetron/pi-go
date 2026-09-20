@@ -228,9 +228,10 @@ or by a mutable Kubernetes object name.
 - `Harness/pi-go` exists in namespace `kagent`.
 - `AgentTemplate/pi-go` exists in namespace `kagent`.
 - Harness admission selector matches the template label.
-- Harness status is `Ready=True`.
 - AgentTemplate status contains `Accepted=True`, `ResolvedRefs=True`,
-  `Compatible=True`, and `Ready=True`.
+  `Compatible=True`, and `Ready=True`. (The Harness reports no status of its
+  own — the controller writes these conditions onto the admitting
+  AgentTemplate, so the Harness `READY` column stays blank by design.)
 - `kagent-default` WorkerPool is ready.
 - A created AgentInstance reaches `READY`.
 
