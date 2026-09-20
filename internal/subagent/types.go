@@ -79,6 +79,7 @@ func (a AgentInput) ToSpawnInput() (SpawnInput, error) {
 		Prompt:       a.Prompt,
 		Worktree:     a.Worktree,
 		WorktreeName: a.WorktreeName,
+		WorktreeBase: a.WorktreeBase,
 		WorkDir:      a.WorkDir,
 		Background:   a.Background,
 		SkipCleanup:  a.SkipCleanup,
