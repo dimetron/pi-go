@@ -126,32 +126,44 @@ func HasHeading(content, want string) bool {
 	return false
 }
 
-// Section returns the lines under the first heading containing name, up to the
+// Section returns the lines under the first heading matching name, up to the
 // next heading at the same or shallower depth. The heading line is excluded.
+//
+// An exact heading wins over a mere containing one, because containment alone
+// picks the wrong section in a real PROMPT.md: `Section(md, "Gates")` matched
+// the sub-heading `### Dependencies and gates` — which lists acceptance
+// criteria, not gates — and returned it, so `## Gates` further down was never
+// read and the plan failed with "no gates to check". Containment stays as the
+// fallback so headings that carry a qualifier still resolve, and it remains the
+// rule for HasHeading.
 func Section(content, name string) string {
 	lines := strings.Split(content, "\n")
-	want := strings.ToLower(name)
+	want := strings.ToLower(strings.TrimSpace(name))
 
-	start, depth := -1, 0
-	for i, line := range lines {
-		m := headingRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		if start == -1 {
-			if strings.Contains(strings.ToLower(m[2]), want) {
-				start, depth = i+1, len(m[1])
+	// Pass 1: exact heading. Pass 2: the first heading that contains name.
+	for _, exact := range []bool{true, false} {
+		start, depth := -1, 0
+		for i, line := range lines {
+			m := headingRe.FindStringSubmatch(line)
+			if m == nil {
+				continue
 			}
-			continue
+			head := strings.ToLower(strings.TrimSpace(m[2]))
+			if start == -1 {
+				if head == want || (!exact && strings.Contains(head, want)) {
+					start, depth = i+1, len(m[1])
+				}
+				continue
+			}
+			if len(m[1]) <= depth {
+				return strings.Join(lines[start:i], "\n")
+			}
 		}
-		if len(m[1]) <= depth {
-			return strings.Join(lines[start:i], "\n")
+		if start != -1 {
+			return strings.Join(lines[start:], "\n")
 		}
 	}
-	if start == -1 {
-		return ""
-	}
-	return strings.Join(lines[start:], "\n")
+	return ""
 }
 
 // --- gates ---
@@ -200,7 +212,11 @@ var (
 	verifyRe       = regexp.MustCompile("(?i)verify\\s*:\\s*`([^`]+)`")
 	filesRe        = regexp.MustCompile("(?i)files\\s*:\\s*((?:\\s*`[^`]+`\\s*,?)+)")
 	backtickRe     = regexp.MustCompile("`([^`]+)`")
-	parallelRe     = regexp.MustCompile(`(?i)parallel[- ]safe\s*:\s*(yes|no|true|false)`)
+	// parallelRe accepts the underscore spelling too: Contract.Describe renders
+	// the rule as `parallel_safe`, so a planner that follows the instruction it
+	// was given writes `parallel_safe: no`, and a hyphen-only pattern reads that
+	// as "not stated" and blocks the plan.
+	parallelRe = regexp.MustCompile(`(?i)parallel[-_ ]safe\s*:\s*(yes|no|true|false)`)
 )
 
 // ParsePlanSlices extracts slices from plan.md. Checkbox lines are

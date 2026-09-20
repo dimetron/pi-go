@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dimetron/pi-go/internal/sop/specdoc"
 )
@@ -434,18 +436,59 @@ func ruleReferencesExist(t Target, _ Args) Findings {
 	}
 	var out Findings
 	for _, ref := range specdoc.References(t.Content) {
-		if !isRepoPath(ref) {
+		if !isRepoPath(ref) || referenceResolves(t, ref) {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(t.RepoRoot, filepath.FromSlash(ref))); err != nil {
-			out = append(out, Finding{
-				Severity: SeverityError,
-				Message:  "Reference points at a path that does not exist: " + ref,
-				Fix:      "write the referenced artifact, or correct the path",
-			})
-		}
+		out = append(out, Finding{
+			Severity: SeverityError,
+			Message:  "Reference points at a path that does not exist: " + ref,
+			Fix:      "write the referenced artifact, or correct the path",
+		})
 	}
 	return out
+}
+
+// referenceResolves reports whether a Reference entry names something a worker
+// can actually reach, which is the property this rule is about. Three shapes
+// count, and checking only the first is what blocked a sound plan:
+//
+//   - a path in the checkout;
+//   - a path beside the spec, because a Reference section names sibling
+//     artifacts relative to the spec directory as often as repo-root paths
+//     (`research/x.md`, `plan-A.md`);
+//   - a git ref, because the section documents provenance as well as artifacts.
+func referenceResolves(t Target, ref string) bool {
+	rel := filepath.FromSlash(ref)
+	if _, err := os.Stat(filepath.Join(t.RepoRoot, rel)); err == nil {
+		return true
+	}
+	if t.Spec != nil && t.Spec.Dir != "" {
+		if _, err := os.Stat(filepath.Join(t.Spec.Dir, rel)); err == nil {
+			return true
+		}
+	}
+	return isGitRef(t.RepoRoot, ref)
+}
+
+// gitRefTimeout bounds the git probe so a stalled repository cannot freeze the
+// caller, which for /plan is the TUI's Update goroutine.
+const gitRefTimeout = 5 * time.Second
+
+// isGitRef reports whether ref names a branch, tag or commit in the checkout. A
+// Reference section records provenance — "Baseline branch:
+// `feature/mcp-sdk-migration`" — and a slash in a branch name is
+// indistinguishable from a path by the rules above, so without this the branch
+// is reported as a missing file and a plan with no real defect cannot merge.
+func isGitRef(repoRoot, ref string) bool {
+	if strings.HasPrefix(ref, "-") {
+		return false // would read as a git option rather than a ref
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitRefTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--verify", "--quiet", ref)
+	// Stdout and Stderr stay nil, so git writes to the null device: the TUI
+	// owns the terminal and any stray write corrupts the alternate screen.
+	return cmd.Run() == nil
 }
 
 // isRepoPath reports whether a Reference entry names a path inside this
