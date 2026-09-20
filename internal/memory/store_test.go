@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -285,6 +286,70 @@ func TestRecentObservations(t *testing.T) {
 	}
 }
 
+func TestSessionObservations(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-target", "/project-a")
+	insertTestSession(t, store, "sess-other", "/project-a")
+
+	base := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	// Same project, different sessions: only the named session's rows may come
+	// back. This is the property RecentObservations cannot express.
+	for i := 0; i < 3; i++ {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-target",
+			Project:     "/project-a",
+			Title:       fmt.Sprintf("target-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "Read",
+			CreatedAt:   base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	store.InsertObservation(ctx, &Observation{
+		SessionID:   "sess-other",
+		Project:     "/project-a",
+		Title:       "other-0",
+		Type:        TypeChange,
+		Text:        "text",
+		SourceFiles: []string{},
+		ToolName:    "Read",
+		CreatedAt:   base,
+	})
+
+	results, err := store.SessionObservations(ctx, "sess-target")
+	if err != nil {
+		t.Fatalf("SessionObservations: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d observations, want 3", len(results))
+	}
+	// Oldest first: the summary prompt reads the session in the order it happened.
+	if results[0].Title != "target-0" {
+		t.Errorf("first = %q, want target-0 (oldest first)", results[0].Title)
+	}
+	if results[2].Title != "target-2" {
+		t.Errorf("last = %q, want target-2", results[2].Title)
+	}
+	for _, o := range results {
+		if o.SessionID != "sess-target" {
+			t.Errorf("observation %q belongs to session %q, want sess-target", o.Title, o.SessionID)
+		}
+	}
+
+	// An unknown session is empty, not an error.
+	empty, err := store.SessionObservations(ctx, "sess-absent")
+	if err != nil {
+		t.Fatalf("SessionObservations(absent): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("got %d observations for an unknown session, want 0", len(empty))
+	}
+}
+
 func TestUpsertSummary(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -530,5 +595,137 @@ func TestFTS5SyncTriggers(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("FTS5 match count = %d, want 1", count)
+	}
+}
+
+// Observations sharing a second must come back in a total, deterministic order.
+//
+// created_at_epoch holds whole seconds, so a burst of tool calls ties on the sort
+// key, and SQLite leaves equal keys unordered. ORDER BY created_at_epoch alone is
+// therefore incidental, not guaranteed; the id tie-breaker is what makes the
+// order total and the summary reproducible.
+//
+// The table is deliberately put into a state where that matters: insert, delete a
+// middle run, re-insert. The re-inserted rows keep their earlier timestamps but
+// take higher ids, so the two candidate orders diverge. What comes back is id
+// order, which is the contract.
+//
+// Honest limitation: this cannot distinguish the tie-breaker from SQLite's
+// incidental rowid order, because an index scan over session_id happens to visit
+// rows in that order anyway. It pins the observable contract — total, repeatable,
+// id-ascending — rather than proving the guarantee is enforced. The tie-breaker
+// is defended by that reasoning, not by this test.
+func TestSessionObservations_SameSecondIsOrderedByID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-tie", "/project")
+	base := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	// A burst inside one second, which is what a run of tool calls produces.
+	for i := 0; i < 10; i++ {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-tie",
+			Project:     "/project",
+			Title:       fmt.Sprintf("o-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "edit",
+			CreatedAt:   base.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+
+	// Fragmented rowids: rows whose id order disagrees with their timestamp
+	// order. Without this the two orders coincide and the tie-breaker is
+	// invisible.
+	insertOne := func(i int) {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-tie",
+			Project:     "/project",
+			Title:       fmt.Sprintf("o-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "edit",
+			CreatedAt:   base.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	for i := 4; i < 7; i++ {
+		if _, err := store.db.Exec("DELETE FROM observations WHERE title = ?", fmt.Sprintf("o-%d", i)); err != nil {
+			t.Fatalf("DELETE: %v", err)
+		}
+	}
+	for i := 4; i < 7; i++ {
+		insertOne(i)
+	}
+
+	got, err := store.SessionObservations(ctx, "sess-tie")
+	if err != nil {
+		t.Fatalf("SessionObservations: %v", err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("got %d observations, want 10", len(got))
+	}
+
+	// The order is total: ids ascend, so no pair is left to SQLite's discretion.
+	// The re-inserted rows have earlier timestamps but higher ids, so this is the
+	// property that would break first if the tie-breaker were dropped.
+	for i := 1; i < len(got); i++ {
+		if got[i].ID <= got[i-1].ID {
+			t.Errorf("id %d at position %d is not greater than %d — the order is not total", got[i].ID, i, got[i-1].ID)
+		}
+	}
+
+	// Every observation comes back exactly once, and the same set each run.
+	if len(got) != 10 {
+		t.Fatalf("got %d observations, want 10", len(got))
+	}
+	seen := map[string]bool{}
+	for _, o := range got {
+		if seen[o.Title] {
+			t.Errorf("observation %q returned twice", o.Title)
+		}
+		seen[o.Title] = true
+	}
+
+	// Stability: repeating the query must not reshuffle.
+	for attempt := 0; attempt < 5; attempt++ {
+		again, err := store.SessionObservations(ctx, "sess-tie")
+		if err != nil {
+			t.Fatalf("SessionObservations (repeat %d): %v", attempt, err)
+		}
+		for i := range again {
+			if again[i].Title != got[i].Title {
+				t.Fatalf("order changed between runs at position %d: %q then %q",
+					i, got[i].Title, again[i].Title)
+			}
+		}
+	}
+}
+
+// A closed handle must surface an error, not an empty result.
+//
+// SessionObservations is what summarization reads. If a closed store returned
+// (nil, nil) instead of an error, a summary would be generated from an empty
+// observation list, or the caller would read "no observations" as "nothing
+// happened" rather than "could not read".
+func TestSessionObservations_ClosedStoreErrors(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	insertTestSession(t, store, "sess-closed", "/project")
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := store.SessionObservations(ctx, "sess-closed")
+	if err == nil {
+		t.Fatal("expected an error from a closed store, got nil")
+	}
+	// The driver's wording varies, so assert on the wrapping rather than on a
+	// sentinel: what matters is that it is an error and it names the operation.
+	if !strings.Contains(err.Error(), "session observations") {
+		t.Errorf("error does not name the operation: %v", err)
 	}
 }

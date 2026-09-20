@@ -32,6 +32,25 @@ const palaceStatusTimeout = 2 * time.Second
 // memoryShutdownTimeout bounds the memory worker's drain on Close.
 const memoryShutdownTimeout = 5 * time.Second
 
+// sessionSummaryTimeout bounds the end-of-session summarization flush.
+//
+// It is deliberately larger than memoryShutdownTimeout: that budget was sized
+// when the only work on Close was draining an already-running worker, and a
+// summary is a model round trip that has not started yet. It is nonetheless a
+// hard bound rather than an unbounded wait — Close is on the exit path, and a
+// provider that never answers must not hold the process open. A summary that
+// misses this budget is logged and abandoned.
+const sessionSummaryTimeout = 20 * time.Second
+
+// sessionCompleteTimeout bounds marking one session completed after its summary
+// has been attempted.
+//
+// Completion is a single local UPDATE, so it does not need the summary's budget.
+// It gets its own short context precisely so that a summary overrunning its
+// deadline cannot leave the session 'active': that is the state this whole
+// change exists to eliminate, and it must not be reachable from a slow provider.
+const sessionCompleteTimeout = 5 * time.Second
+
 // resolveWorkDir returns the absolute working directory for this agent.
 func resolveWorkDir(dir string) (string, error) {
 	if dir == "" {
@@ -187,8 +206,16 @@ func memoryTokenBudget(cfg config.Config) int {
 // setupMemory opens the observation store and starts its worker. Memory is
 // best-effort: any failure downgrades to "no memory" with a warning, and the
 // returned closer is always safe to call.
-func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subagent.Orchestrator) (memory.Store, *memory.Worker, func()) {
+//
+// summarize, when non-nil, is called after the worker has drained and before the
+// store is closed. That is the only point at which every observation this run
+// recorded is readable and the handle to write a summary into is still open. A
+// nil summarize is the same as passing a no-op.
+func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subagent.Orchestrator, summarize func()) (memory.Store, *memory.Worker, func()) {
 	noop := func() {}
+	if summarize == nil {
+		summarize = noop
+	}
 	if !o.memoryEnabled {
 		return nil, nil, noop
 	}
@@ -201,11 +228,39 @@ func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subage
 	worker := memory.NewWorker(store, memory.NewSubagentCompressor(orch), maxPendingObservations(cfg))
 	worker.Start(ctx)
 	return store, worker, func() {
+		// Drain first, summarize in between, close the store last.
+		//
+		// The order is load-bearing. Shutdown is what empties the worker's
+		// queue into the store, so a summary read before it would silently miss
+		// whatever the session's last tool calls had queued — and a summary that
+		// misses the end of a session is wrong in the way that is hardest to
+		// notice. The store then has to outlive the summary, because that is
+		// where the summary is written.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), memoryShutdownTimeout)
-		defer cancel()
-		_ = worker.Shutdown(shutdownCtx)
+		drainErr := worker.Shutdown(shutdownCtx)
+		cancel()
+
+		summarizeAfterDrain(drainErr, summarize)
+
 		_ = store.Close()
 	}
+}
+
+// summarizeAfterDrain runs the session-summary step, but only when the memory
+// worker drained cleanly.
+//
+// Extracted from the closer above so the decision is testable without staging a
+// real five-second drain timeout. A timeout means the worker goroutine may still
+// be compressing and storing, so a summary taken now would describe a prefix of
+// the session; that is reported and skipped rather than written, because a
+// summary that silently omits the end of a session reads as complete.
+func summarizeAfterDrain(drainErr error, summarize func()) {
+	if drainErr != nil {
+		slog.Warn("piagent: memory drain timed out; skipping session summary",
+			"error", drainErr, "budget", memoryShutdownTimeout)
+		return
+	}
+	summarize()
 }
 
 // memoryContext renders the recalled-memory block for the system prompt, or ""

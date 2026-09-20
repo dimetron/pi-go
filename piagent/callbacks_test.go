@@ -1,9 +1,11 @@
 package piagent
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -121,46 +123,153 @@ func TestComposeAfterToolEmptyChain(t *testing.T) {
 	}
 }
 
+// sessionCtx is an adkagent.Context whose session ID a test controls.
+//
+// Embedding the interface gets the rest of the method set for free; only
+// SessionID is ever read by the callback under test, so leaving the embedded
+// interface nil is safe here.
+type sessionCtx struct {
+	adkagent.Context
+	id string
+}
+
+func (c sessionCtx) SessionID() string { return c.id }
+
+// newCollectingWorker returns a started worker that records into got, plus a
+// stop function that drains it. The compressor is a passthrough so a test can
+// assert on attribution without spawning a real compression subagent.
+func newCollectingWorker(t *testing.T, got *[]memory.RawObservation) (*memory.Worker, func()) {
+	t.Helper()
+	w := memory.NewWorker(recordingStoreFor{into: got}, passthroughCompressor{}, 64)
+	w.Start(t.Context())
+	return w, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := w.Shutdown(ctx); err != nil {
+			t.Fatalf("worker shutdown: %v", err)
+		}
+	}
+}
+
+// passthroughCompressor turns a raw observation into a stored one without an
+// LLM call, preserving the fields attribution is asserted on.
+type passthroughCompressor struct{}
+
+func (passthroughCompressor) CompressObservation(_ context.Context, raw memory.RawObservation) (*memory.Observation, error) {
+	return &memory.Observation{
+		SessionID: raw.SessionID,
+		Project:   raw.Project,
+		Title:     raw.ToolName,
+		Type:      memory.TypeChange,
+		ToolName:  raw.ToolName,
+		CreatedAt: raw.Timestamp,
+	}, nil
+}
+
+// recordingStoreFor is a memory.Store that collects inserted observations. The
+// callback under test only needs InsertObservation; the rest of the interface is
+// unreachable through it, so embedding keeps the stub honest about that.
+type recordingStoreFor struct {
+	memory.Store
+	into *[]memory.RawObservation
+}
+
+func (s recordingStoreFor) InsertObservation(_ context.Context, obs *memory.Observation) error {
+	*s.into = append(*s.into, memory.RawObservation{
+		SessionID: obs.SessionID,
+		Project:   obs.Project,
+		ToolName:  obs.ToolName,
+	})
+	return nil
+}
+
 func TestMemoryObservationCallback(t *testing.T) {
-	worker := memory.NewWorker(nil, nil, 8)
 	cfg := config.Config{Memory: &config.MemoryConfig{ExcludedTools: []string{"bash"}}}
 
-	sessionID := ""
-	cb := memoryObservationCallback(worker, cfg, "/project", &sessionID)
+	t.Run("skips failed and excluded calls, attributes by context session", func(t *testing.T) {
+		var got []memory.RawObservation
+		worker, stop := newCollectingWorker(t, &got)
+		cb := memoryObservationCallback(worker, cfg, "/project")
 
-	tests := []struct {
-		name    string
-		session string
-		tool    string
-		toolErr error
-	}{
-		{"no session yet", "", "read", nil},
-		{"failed tool call", "s1", "read", errors.New("nope")},
-		{"excluded tool", "s1", "bash", nil},
-		{"recorded", "s1", "read", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sessionID = tt.session
-			got, err := cb(nil, namedTool{name: tt.tool}, map[string]any{"a": 1}, map[string]any{"b": 2}, tt.toolErr)
-			if err != nil {
-				t.Fatalf("callback: %v", err)
+		ctx := sessionCtx{id: "s1"}
+		for _, tc := range []struct {
+			name    string
+			ctx     adkagent.Context
+			tool    string
+			toolErr error
+		}{
+			{"no session", sessionCtx{id: ""}, "read", nil},
+			{"failed tool call", ctx, "read", errors.New("nope")},
+			{"excluded tool", ctx, "bash", nil},
+			{"recorded", ctx, "read", nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				out, err := cb(tc.ctx, namedTool{name: tc.tool}, map[string]any{"a": 1}, map[string]any{"b": 2}, tc.toolErr)
+				if err != nil {
+					t.Fatalf("callback: %v", err)
+				}
+				// The callback only observes; it must never rewrite the result.
+				if out != nil {
+					t.Errorf("result = %v, want nil", out)
+				}
+			})
+		}
+
+		stop()
+		if len(got) != 1 {
+			t.Fatalf("recorded %d observations, want 1 (only the successful non-excluded call)", len(got))
+		}
+		if got[0].SessionID != "s1" {
+			t.Errorf("SessionID = %q, want s1 — attribution must come from the call context", got[0].SessionID)
+		}
+		if got[0].ToolName != "read" {
+			t.Errorf("ToolName = %q, want read", got[0].ToolName)
+		}
+	})
+
+	// The regression this guards: the session ID used to be read from a single
+	// shared variable captured at build time, so interleaved sessions could have
+	// one session's tool calls recorded under another's ID.
+	t.Run("interleaved sessions keep their own attribution", func(t *testing.T) {
+		var got []memory.RawObservation
+		worker, stop := newCollectingWorker(t, &got)
+		cb := memoryObservationCallback(worker, config.Config{}, "/project")
+
+		a := sessionCtx{id: "session-a"}
+		b := sessionCtx{id: "session-b"}
+
+		for i := 0; i < 3; i++ {
+			if _, err := cb(a, namedTool{name: "read"}, nil, nil, nil); err != nil {
+				t.Fatal(err)
 			}
-			// The callback only observes; it must never rewrite the result.
-			if got != nil {
-				t.Errorf("result = %v, want nil", got)
+			if _, err := cb(b, namedTool{name: "edit"}, nil, nil, nil); err != nil {
+				t.Fatal(err)
 			}
-		})
-	}
+		}
+		stop()
+
+		if len(got) != 6 {
+			t.Fatalf("recorded %d observations, want 6", len(got))
+		}
+		for i, o := range got {
+			want := "session-a"
+			if i%2 == 1 {
+				want = "session-b"
+			}
+			if o.SessionID != want {
+				t.Errorf("observation %d SessionID = %q, want %q — sessions bled into each other",
+					i, o.SessionID, want)
+			}
+		}
+	})
 }
 
 func TestBuildCallbacksComposesAfterToolIntoOne(t *testing.T) {
 	isolate(t)
 	before, after := buildCallbacks(callbackDeps{
-		cfg:       config.Config{},
-		provider:  "anthropic",
-		sessionID: new(string),
-		opts:      defaultOptions(),
+		cfg:      config.Config{},
+		provider: "anthropic",
+		opts:     defaultOptions(),
 	})
 
 	if len(after.tool) != 1 {
@@ -183,9 +292,8 @@ func TestBuildCallbacksIncludesEmbedderCallbacks(t *testing.T) {
 	o.afterModel = []llmagent.AfterModelCallback{nil}
 
 	before, after := buildCallbacks(callbackDeps{
-		cfg:       config.Config{},
-		sessionID: new(string),
-		opts:      o,
+		cfg:  config.Config{},
+		opts: o,
 	})
 	if len(before.tool) == 0 {
 		t.Error("before-tool callbacks are empty; the embedder's was dropped")

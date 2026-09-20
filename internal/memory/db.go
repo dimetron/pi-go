@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// memDBCounter names each in-memory database uniquely; see OpenDB.
+var memDBCounter uint64
 
 // migrations is the ordered list of schema migrations.
 // Each entry is a SQL statement to execute for that version.
@@ -114,6 +118,15 @@ var migrations = []string{
 
 // OpenDB opens (or creates) a SQLite database at the given path with WAL mode
 // and runs pending migrations. Pass ":memory:" for in-memory databases.
+//
+// The pragmas are set through DSN parameters rather than by executing them on the
+// pool once. database/sql opens connections lazily and without a limit, so
+// `db.Exec("PRAGMA busy_timeout=5000")` configures only whichever single
+// connection happened to serve it; every later connection starts with
+// busy_timeout=0. Under concurrent writers that means SQLITE_BUSY is returned
+// immediately instead of being waited out, and the write is lost — measured at
+// 5 of 12 concurrent CreateSession calls persisted. The driver applies `_pragma`
+// parameters on each new connection, so every one of them is configured.
 func OpenDB(dbPath string) (*sql.DB, error) {
 	if dbPath != ":memory:" {
 		dir := filepath.Dir(dbPath)
@@ -122,23 +135,26 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("memory: open db: %w", err)
+	// Pragmas ride on the DSN so every pooled connection gets them. WAL and mmap
+	// are omitted for the in-memory database, where neither means anything.
+	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=mmap_size(268435456)"
+	if dbPath == ":memory:" {
+		// A bare ":memory:" gives each pooled connection its own empty database,
+		// so the schema one connection creates is invisible to the next. The
+		// shared cache fixes that, but the name must be unique per call: a fixed
+		// name like "file::memory:?cache=shared" is process-global, so two
+		// OpenDB(":memory:") calls — concurrent tests, say — would share one
+		// database and race each other's migrations (UNIQUE violation on
+		// schema_versions, or a locked schema). A per-call name keeps the pool
+		// coherent while keeping separate opens separate.
+		dsn = fmt.Sprintf("file:memdb-%d?mode=memory&cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)",
+			atomic.AddUint64(&memDBCounter, 1))
 	}
 
-	// Enable WAL mode and foreign keys.
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA mmap_size=268435456", // 256MB
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("memory: %s: %w", p, err)
-		}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("memory: open db: %w", err)
 	}
 
 	if err := migrate(db); err != nil {

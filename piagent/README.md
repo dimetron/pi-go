@@ -115,6 +115,7 @@ ag, err := piagent.New(ctx,
 | `WithAgentEvents(fn)` | Receive subagent and background-bash progress |
 | `WithSummarizer(m)` | Model that writes compaction summaries (default: the session model) |
 | `WithCompactNotify(fn)` | Be told when auto-compaction runs, or fails |
+| `WithSessionSummary(m)` | Write an end-of-session summary into the memory store |
 
 ## Auto-compaction is observable and retargetable
 
@@ -271,6 +272,35 @@ piagent.New(ctx, piagent.WithModel(m), piagent.WithMemory(true))
 Skills and subagent discovery stay **on**. Those *read* `.pi-go/`, which is the
 whole reason to embed this agent rather than write your own. Reading a
 convention and writing to someone's store are different things.
+
+## Session summaries
+
+With memory on, the agent records observations as it works. Nothing summarizes
+them unless you ask, because summarizing means a model call and that is your
+budget to spend:
+
+```go
+piagent.New(ctx,
+	piagent.WithModel(m),
+	piagent.WithMemory(true),
+	piagent.WithSessionSummary(m), // may be a cheaper model
+)
+```
+
+`Close` then writes one summary per session the agent created, and marks those
+sessions completed. Call `ag.SummarizeSession(ctx, sessionID)` yourself if you
+would rather choose the moment — a long-lived agent may want a summary per unit
+of work rather than per process.
+
+`WithSessionSummary` is deliberately distinct from `WithSummarizer`, which
+configures the *compaction* summary. They answer different questions and reach
+different stores: compaction asks "what does the next model need to continue?",
+a session summary asks "what happened here, for someone reading the memory
+database later?".
+
+Sessions are marked completed even when no summary model is configured. Leaving
+them `active` is what let the shared store accumulate thousands of rows that no
+reader could tell apart from a session still in progress.
 
 ## Finding the provider behind a model
 

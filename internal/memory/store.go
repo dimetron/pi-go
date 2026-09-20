@@ -15,6 +15,7 @@ type Store interface {
 	InsertObservation(ctx context.Context, obs *Observation) error
 	GetObservations(ctx context.Context, ids []int64) ([]*Observation, error)
 	RecentObservations(ctx context.Context, project string, limit int) ([]*Observation, error)
+	SessionObservations(ctx context.Context, sessionID string) ([]*Observation, error)
 	UpsertSummary(ctx context.Context, sum *SessionSummary) error
 	RecentSummaries(ctx context.Context, project string, limit int) ([]*SessionSummary, error)
 	Search(ctx context.Context, q SearchQuery) (*SearchResult, error)
@@ -142,6 +143,39 @@ func (s *SQLiteStore) RecentObservations(ctx context.Context, project string, li
 	)
 	if err != nil {
 		return nil, fmt.Errorf("memory: recent observations: %w", err)
+	}
+	defer rows.Close()
+
+	return scanObservations(rows)
+}
+
+// SessionObservations returns every observation recorded for one session, in
+// the order they were recorded.
+//
+// Unlike [Store.RecentObservations] this is not project-scoped and is not
+// capped: it is what session summarization reads, and a summary that silently
+// dropped the oldest observations would describe a session that never happened.
+//
+// The sort is on (created_at_epoch, id), not created_at_epoch alone. That column
+// holds whole seconds, and a burst of tool calls routinely lands several
+// observations in the same second; with an equal sort key SQLite's order is
+// undefined, so the same session could come back in different orders on
+// different runs — reordering the summarization prompt and making the summary
+// itself non-reproducible. id is monotonic within a session, which makes the
+// order total.
+//
+// The consequence worth knowing: within one second, order follows insertion
+// (id), not the sub-second timestamps, which are not persisted. Two observations
+// recorded in the same second therefore come back in insertion order regardless
+// of their CreatedAt values.
+func (s *SQLiteStore) SessionObservations(ctx context.Context, sessionID string) ([]*Observation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, session_id, project, title, type, text, source_files, tool_name, prompt_number, discovery_tokens, created_at
+		 FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC, id ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("memory: session observations: %w", err)
 	}
 	defer rows.Close()
 

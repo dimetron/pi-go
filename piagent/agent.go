@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -41,6 +42,22 @@ type Agent struct {
 	provider  string
 	tools     []adktool.Tool
 	memStore  memory.Store
+	// memSummarizer writes end-of-session summaries. Nil when no summary model
+	// was supplied, which makes the flush on Close a no-op.
+	memSummarizer *memory.LLMSummarizer
+	// memSessionsMu guards memSessions. [Agent] is documented as safe for
+	// concurrent use across sessions, and two goroutines calling NewSession at
+	// once append to this slice; Close also reads and clears it.
+	memSessionsMu sync.Mutex
+	// memSessions records, in order, the sessions this agent created. Close
+	// summarizes and completes them: a session that is never completed stays
+	// 'active' in the memory database forever, which is what the CLI has been
+	// doing — ~/.pi-go/memory/claude-mem.db held thousands of active sessions
+	// and zero completed ones.
+	memSessions []string
+	// project is the memory store's project key, which is the working
+	// directory. Kept because Close still needs it after the sandbox is gone.
+	project string
 	// sessionLog is nil-safe: every method tolerates a nil receiver, so a
 	// failed log file costs logging and nothing else.
 	sessionLog *logger.Logger
@@ -107,6 +124,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		beforeTurn: o.beforeTurn,
 		afterTurn:  o.afterTurn,
 		meter:      contextMeter,
+		project:    workDir,
 	}
 
 	rt, err := a.buildRuntime(ctx, o, &cfg, providerName)
@@ -114,6 +132,12 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		return nil, err
 	}
 	a.tools = rt.tools
+	// A summarizer with no store to write to would summarize into nothing, so
+	// it is only held when memory is on. This also keeps the "memory off"
+	// promise: no store, no summary, no model call.
+	if a.memStore != nil && o.sessionSummary != nil {
+		a.memSummarizer = memory.NewLLMSummarizer(o.sessionSummary)
+	}
 
 	instruction := buildInstruction(o, workDir)
 	if rt.palaceContext != "" {
@@ -135,24 +159,20 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	}
 	a.push(sessionLog.Close)
 
-	// memSessionID is only known once a session exists; the memory callback
-	// reads it through the pointer, so recording starts from that point.
-	var memSessionID string
 	// Held rather than created inline: a summarizing compaction rebuilds the
 	// transcript, which invalidates every pointer the deduper holds into the
 	// old one, so the hook has to be able to reset it.
 	resultDeduper := tools.NewResultDeduper()
 	before, after := buildCallbacks(callbackDeps{
-		deduper:   resultDeduper,
-		meter:     contextMeter,
-		cfg:       cfg,
-		sandbox:   rt.sandbox,
-		lspMgr:    rt.lspMgr,
-		provider:  providerName,
-		worker:    rt.memWorker,
-		project:   workDir,
-		sessionID: &memSessionID,
-		opts:      o,
+		deduper:  resultDeduper,
+		meter:    contextMeter,
+		cfg:      cfg,
+		sandbox:  rt.sandbox,
+		lspMgr:   rt.lspMgr,
+		provider: providerName,
+		worker:   rt.memWorker,
+		project:  workDir,
+		opts:     o,
 	})
 
 	inner, err := agent.New(agent.Config{
@@ -194,7 +214,6 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		inner.SetPreTurnHook(hook)
 	}
 	a.onNewSession = func(sessionID string) {
-		memSessionID = sessionID
 		rt.orch.SetACPLogPath(filepath.Join(sessionDir, sessionID, "acp.jsonl"))
 	}
 	a.sessionLog = sessionLog
@@ -257,7 +276,7 @@ func (a *Agent) buildRuntime(ctx context.Context, o options, cfg *config.Config,
 		coreTools = append(coreTools, agentTools...)
 	}
 
-	memStore, memWorker, closeMemory := setupMemory(ctx, o, *cfg, orch)
+	memStore, memWorker, closeMemory := setupMemory(ctx, o, *cfg, orch, func() { a.summarizeSessions() })
 	a.push(func() error { closeMemory(); return nil })
 	a.memStore = memStore
 	if memStore != nil {
@@ -313,6 +332,13 @@ func (a *Agent) abort(err error) error {
 // Close releases every resource the agent acquired: the sandbox, backgrounded
 // processes, the subagent orchestrator, the LSP manager, the memory worker and
 // store, the palace, and the session log. It is safe to call more than once.
+//
+// When a session summarizer is configured, Close writes a summary for every
+// session this agent created and marks those sessions completed. Both happen
+// inside the memory closer, after the observation worker has drained and before
+// the store is closed — see setupMemory for why that order is required.
+// Summarization is best-effort: a failure is logged and does not prevent any
+// resource from being released.
 func (a *Agent) Close() error {
 	var errs []error
 	for i := len(a.closers) - 1; i >= 0; i-- {
@@ -322,6 +348,90 @@ func (a *Agent) Close() error {
 	}
 	a.closers = nil
 	return errors.Join(errs...)
+}
+
+// summarizeSessions writes a summary for each recorded session and completes it.
+//
+// Only the summary write is gated on a summarizer being configured. Sessions are
+// completed either way: leaving them 'active' is what makes a store accumulate
+// rows that no reader can distinguish from a session still in progress.
+//
+// Each summary gets its own deadline rather than sharing one across the loop.
+// With a shared budget, a slow first session starves every later one — and worse,
+// the completion call would then receive an already-expired context, leaving
+// those sessions 'active' precisely because the summary overran. Completion is
+// bookkeeping on a local database, so it gets a fresh, short context that cannot
+// be consumed by a summary deadline.
+func (a *Agent) summarizeSessions() {
+	// Snapshot and clear under the lock: a concurrent NewSession must not append
+	// to a slice Close is walking, and clearing up front means a second Close
+	// cannot re-summarize the same sessions.
+	a.memSessionsMu.Lock()
+	sessions := a.memSessions
+	a.memSessions = nil
+	a.memSessionsMu.Unlock()
+
+	if a.memStore == nil || len(sessions) == 0 {
+		return
+	}
+
+	for _, sessionID := range sessions {
+		if a.memSummarizer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), sessionSummaryTimeout)
+			err := a.SummarizeSession(ctx, sessionID)
+			cancel()
+			if err != nil {
+				slog.Warn("piagent: session summary failed",
+					"session", sessionID, "error", err)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), sessionCompleteTimeout)
+		err := a.memStore.CompleteSession(ctx, sessionID)
+		cancel()
+		if err != nil {
+			slog.Warn("piagent: completing session failed",
+				"session", sessionID, "error", err)
+		}
+	}
+}
+
+// SummarizeSession summarizes one session's recorded observations and stores the
+// result, so it can be read back with `pi memory recent`.
+//
+// It is exported for embedders that want to choose the moment rather than wait
+// for [Agent.Close] — a long-lived agent may want a summary per logical unit of
+// work, not per process. [Agent.Close] calls it for every session the agent
+// created.
+//
+// It returns an error when memory is off, when no summarizer was configured, or
+// when the session has no observations. A session with no observations is not an
+// error in the "something broke" sense, but there is no summary to write, so it
+// is reported rather than silently succeeding.
+func (a *Agent) SummarizeSession(ctx context.Context, sessionID string) error {
+	if a.memStore == nil {
+		return errors.New("piagent: session summary requires memory — create the agent with WithMemory(true)")
+	}
+	if a.memSummarizer == nil {
+		return errors.New("piagent: session summary requires a summary model — pass WithSessionSummary(m)")
+	}
+
+	observations, err := a.memStore.SessionObservations(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("piagent: reading session observations: %w", err)
+	}
+	if len(observations) == 0 {
+		return fmt.Errorf("piagent: session %q has no observations to summarize", sessionID)
+	}
+
+	sum, err := a.memSummarizer.SummarizeSession(ctx, sessionID, a.project, observations)
+	if err != nil {
+		return fmt.Errorf("piagent: summarizing session: %w", err)
+	}
+	if err := a.memStore.UpsertSummary(ctx, sum); err != nil {
+		return fmt.Errorf("piagent: storing session summary: %w", err)
+	}
+	return nil
 }
 
 // NewSession creates a session and returns its ID. Sessions persist under the
@@ -341,6 +451,9 @@ func (a *Agent) NewSession(ctx context.Context) (string, error) {
 			StartedAt: time.Now(),
 			Status:    "active",
 		})
+		a.memSessionsMu.Lock()
+		a.memSessions = append(a.memSessions, sessionID)
+		a.memSessionsMu.Unlock()
 	}
 	a.sessionLog.SessionStart(sessionID, a.modelName, a.provider, "embedded", "", "embedded")
 	return sessionID, nil
@@ -492,16 +605,15 @@ func providerFromModelName(modelName string) string {
 
 // callbackDeps carries what the callback chains need to be built.
 type callbackDeps struct {
-	cfg       config.Config
-	sandbox   *tools.Sandbox
-	lspMgr    *lsp.Manager
-	provider  string
-	worker    *memory.Worker
-	project   string
-	sessionID *string
-	deduper   *tools.ResultDeduper
-	meter     *autocompact.Meter
-	opts      options
+	cfg      config.Config
+	sandbox  *tools.Sandbox
+	lspMgr   *lsp.Manager
+	provider string
+	worker   *memory.Worker
+	project  string
+	deduper  *tools.ResultDeduper
+	meter    *autocompact.Meter
+	opts     options
 }
 
 // callbackSet groups the tool and model callbacks for one phase.
@@ -543,7 +655,7 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 		tools.BuildDedupCallback(d.deduper))
 
 	if d.worker != nil {
-		afterTool = append(afterTool, memoryObservationCallback(d.worker, d.cfg, d.project, d.sessionID))
+		afterTool = append(afterTool, memoryObservationCallback(d.worker, d.cfg, d.project))
 	}
 
 	// Ahead of the embedder's callbacks: the meter reports what the provider
