@@ -215,6 +215,10 @@ func (m *model) startPlanWorktree(taskName string) (string, error) {
 	m.planTaskName = taskName
 	m.planBackupBranch = "specs/" + taskName
 	m.planWorktree = wm
+	// A new plan starts a fresh repair budget. The counter is scoped to the
+	// planning session, and carrying it across sessions would silently deny a
+	// re-planned spec its automatic fixes.
+	m.planFixCycle = 0
 	return wtPath, nil
 }
 

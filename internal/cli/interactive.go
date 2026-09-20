@@ -136,6 +136,7 @@ func runInteractive(
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
+		PlanAutoFix:    planAutoFixEnabled(cfg),
 		LLM:            llm,
 		AppVersion:     versionString(),
 		ModelName:      llm.Name(),
@@ -1105,4 +1106,15 @@ func switchedModelName(info provider.Info) string {
 		return "agentgateway/" + info.Model
 	}
 	return info.Model
+}
+
+// planAutoFixEnabled resolves the tri-state planAutoFix config value. The
+// default is on: a plan that fails the PDD contract should repair itself rather
+// than wait for a human to notice. An explicit false in config.json turns it
+// off.
+func planAutoFixEnabled(cfg config.Config) bool {
+	if cfg.PlanAutoFix == nil {
+		return true
+	}
+	return *cfg.PlanAutoFix
 }

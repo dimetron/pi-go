@@ -66,6 +66,14 @@ type model struct {
 	planTaskName        string
 	planWorktree        *subagent.WorktreeManager
 
+	// planFixCycle counts automatic validation-repair attempts for the current
+	// plan. validatePlanArtifacts fails the same way an unmet Done Criterion
+	// does, so it gets the same treatment: feed the findings back to the planner
+	// automatically rather than waiting for a human to notice and type "continue".
+	// Bounded so a plan that cannot satisfy the contract stops and reports
+	// instead of looping forever.
+	planFixCycle int
+
 	// Agent state.
 	running        bool
 	mode           string             // "chat" or "plan" — shown in status bar

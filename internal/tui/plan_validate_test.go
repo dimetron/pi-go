@@ -234,3 +234,75 @@ func TestValidatePlanArtifactsAcceptsConformingSpec(t *testing.T) {
 		t.Errorf("manifest = %+v, want a valid pdd-plan record", manifest)
 	}
 }
+
+// TestQueuePlanRepairQueuesBoundedAttempts verifies the automatic fix loop:
+// a failing validation queues exactly one repair prompt per call, carrying the
+// findings, and stops at the bound rather than looping forever.
+func TestQueuePlanRepairQueuesBoundedAttempts(t *testing.T) {
+	work := t.TempDir()
+	const taskName = "features/x"
+	writeTestSpec(t, work, taskName, map[string]string{
+		"PROMPT.md": "# Feature\n\n## Objective\nDo it.\n",
+	})
+
+	m := &model{cfg: Config{WorkDir: work, PlanAutoFix: true}, planTaskName: taskName}
+
+	// Each validation failure queues one repair attempt.
+	for i := 1; i <= 2; i++ {
+		if m.validatePlanArtifacts() {
+			t.Fatal("stub spec was accepted")
+		}
+		if got := len(m.pendingPrompts); got != i {
+			t.Fatalf("after %d failures queued=%d, want %d", i, got, i)
+		}
+		if m.planFixCycle != i {
+			t.Fatalf("planFixCycle=%d after %d failures, want %d", m.planFixCycle, i, i)
+		}
+	}
+
+	// The queued prompt must be actionable: it names the spec and the findings.
+	queued := m.pendingPrompts[0].text
+	for _, want := range []string{taskName, "attempt 1 of", "outline.md"} {
+		if !strings.Contains(queued, want) {
+			t.Errorf("repair prompt omits %q:\n%s", want, queued)
+		}
+	}
+
+	// Exhausting the budget stops the loop and says so, rather than queueing.
+	m.planFixCycle = planMaxFixCycles()
+	before := len(m.pendingPrompts)
+	if got := m.queuePlanRepair(nil); got.queued {
+		t.Error("queuePlanRepair reported success past the cycle limit")
+	}
+	if got := len(m.pendingPrompts); got != before {
+		t.Errorf("queued=%d past the limit, want %d", got, before)
+	}
+}
+
+// TestQueuePlanRepairRespectsOptOut covers the config switch.
+func TestQueuePlanRepairRespectsOptOut(t *testing.T) {
+	m := &model{cfg: Config{PlanAutoFix: false}, planTaskName: "features/x"}
+	if got := m.queuePlanRepair(nil); got.queued {
+		t.Error("queued a repair with PlanAutoFix disabled")
+	}
+	if m.planFixCycle != 0 {
+		t.Errorf("planFixCycle=%d with auto-fix disabled, want 0", m.planFixCycle)
+	}
+}
+
+// TestPlanMaxFixCyclesEnvOverride pins the override used to raise the bound in
+// a long session without a rebuild.
+func TestPlanMaxFixCyclesEnvOverride(t *testing.T) {
+	if got := planMaxFixCycles(); got != defaultMaxPlanFixCycles {
+		t.Errorf("default = %d, want %d", got, defaultMaxPlanFixCycles)
+	}
+	t.Setenv("PI_PLAN_MAX_FIX_CYCLES", "3")
+	if got := planMaxFixCycles(); got != 3 {
+		t.Errorf("override = %d, want 3", got)
+	}
+	// A malformed value falls back rather than disabling the bound.
+	t.Setenv("PI_PLAN_MAX_FIX_CYCLES", "nonsense")
+	if got := planMaxFixCycles(); got != defaultMaxPlanFixCycles {
+		t.Errorf("malformed override = %d, want %d", got, defaultMaxPlanFixCycles)
+	}
+}

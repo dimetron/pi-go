@@ -106,7 +106,15 @@ type Config struct {
 	//
 	// The resulting log contains the entire conversation, system prompt and
 	// tool output in cleartext. Credentials are masked; nothing else is.
-	TraceHTTP      bool           `json:"traceHTTP,omitempty"`
+	TraceHTTP bool `json:"traceHTTP,omitempty"`
+	// PlanAutoFix runs the automatic plan-repair loop. When a /plan session ends
+	// with a spec that fails the PDD contract, the blocking findings are fed
+	// back to the planner as its next prompt rather than waiting for a human to
+	// notice and continue. Bounded by PI_PLAN_MAX_FIX_CYCLES (default 10).
+	//
+	// A pointer so "unset" is distinguishable from an explicit false: the
+	// default is on, and a plain bool would make it impossible to turn off.
+	PlanAutoFix    *bool          `json:"planAutoFix,omitempty"`
 	Tools          map[string]any `json:"tools,omitempty"`
 	MCP            *MCPConfig     `json:"mcp,omitempty"`
 	Hooks          []HookConfig   `json:"hooks,omitempty"`
@@ -242,8 +250,11 @@ func Defaults() Config {
 		DefaultProvider: "openai",
 		ThinkingLevel:   "high",
 		Theme:           "default",
+		PlanAutoFix:     boolPtr(true),
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 // Known model prefixes for auto-detecting provider.
 var modelPrefixes = map[string]string{

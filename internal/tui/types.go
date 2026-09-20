@@ -54,6 +54,11 @@ type Config struct {
 	CompactMetrics CompactStatsProvider
 	// ThemeName is the configured theme name from config. Empty or "default" uses tokyo-night.
 	ThemeName string
+	// PlanAutoFix enables the automatic plan-repair loop: when a /plan session
+	// ends with a spec that fails the PDD contract, the blocking findings are
+	// fed back to the planner as its next prompt instead of waiting for a human
+	// turn. Bounded by maxPlanFixCycles.
+	PlanAutoFix bool
 	// LifecycleHooks are shell-command hooks fired on agent lifecycle events
 	// (turn_complete, user_input_required). Each carries the event name and a
 	// small data payload as JSON on stdin. Nil disables lifecycle hooks.
