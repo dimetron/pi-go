@@ -1267,6 +1267,11 @@ func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close before the test ends: the sandbox holds an open directory handle, and
+	// on Windows an open handle makes TempDir's RemoveAll fail with "The process
+	// cannot access the file because it is being used by another process",
+	// failing the test during cleanup.
+	t.Cleanup(func() { _ = sb.Close() })
 	built, err := CoreTools(sb)
 	if err != nil {
 		t.Fatal(err)
@@ -1319,6 +1324,80 @@ func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
 		if _, ok := compactorPipelines[wrong]; ok {
 			t.Errorf("routing key %q is not a registered tool name", wrong)
 		}
+	}
+}
+
+// TestCompactorRouting_WithoutRipgrep covers the host without rg, where
+// newGrepTool registers "grep" instead of "ripgrep" (grep.go:128-133). Windows CI
+// has no rg, so a test that hard-requires "ripgrep" passes locally on macOS and
+// fails there. Both spellings must route, and exactly one must be registered.
+func TestCompactorRouting_WithoutRipgrep(t *testing.T) {
+	// rgAvailable is a package global read by other tests in this package. None
+	// of them call t.Parallel, and top-level tests run sequentially, so mutating
+	// it here is bounded to this test. Restoring via t.Cleanup keeps that true if
+	// it is ever called from a subtest.
+	orig := rgAvailable
+	rgAvailable = false
+	t.Cleanup(func() { rgAvailable = orig })
+
+	sb, err := NewSandbox(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	built, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var searchName string
+	for _, x := range built {
+		switch x.Name() {
+		case "grep", "ripgrep":
+			searchName = x.Name()
+		}
+	}
+	if searchName != "grep" {
+		t.Fatalf("with rgAvailable=false the search tool registered as %q, want \"grep\"",
+			searchName)
+	}
+	if _, ok := compactorPipelines[searchName]; !ok {
+		t.Errorf("registered search tool %q has no compaction pipeline", searchName)
+	}
+}
+
+// TestCompactorRouting_WithRipgrep is the mirror: when rg exists the tool
+// registers as "ripgrep", and that name must route too.
+func TestCompactorRouting_WithRipgrep(t *testing.T) {
+	orig := rgAvailable
+	rgAvailable = true
+	t.Cleanup(func() { rgAvailable = orig })
+
+	sb, err := NewSandbox(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	built, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var searchName string
+	for _, x := range built {
+		switch x.Name() {
+		case "grep", "ripgrep":
+			searchName = x.Name()
+		}
+	}
+	if searchName != "ripgrep" {
+		t.Fatalf("with rgAvailable=true the search tool registered as %q, want \"ripgrep\"",
+			searchName)
+	}
+	if _, ok := compactorPipelines[searchName]; !ok {
+		t.Errorf("registered search tool %q has no compaction pipeline", searchName)
 	}
 }
 
