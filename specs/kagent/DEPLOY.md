@@ -168,19 +168,28 @@ Verify the Harness and template:
 kubectl get harness pi-go -n kagent
 kubectl get agenttemplate pi-go -n kagent
 
-kubectl get harness pi-go -n kagent -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\\n"}{end}'
-kubectl get agenttemplate pi-go -n kagent -o jsonpath='{range .status.harnesses[0].conditions[*]}{.type}={.status} {.reason}: {.message}{"\\n"}{end}'
+kubectl get agenttemplate pi-go -n kagent -o jsonpath='{range .status.harnesses[0].conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
 ```
 
 Expected conditions:
 
 ```text
-Harness:       Ready=True
 AgentTemplate: Accepted=True
                ResolvedRefs=True
                Compatible=True
                Ready=True
 ```
+
+The conditions live on the AgentTemplate, not the Harness. The Harness has a
+`status.conditions` field and a `READY` printer column, but the kagent
+controller never writes them — the only time it touches `HarnessStatus` is to
+clear it on create (`go/core/internal/grpcserver/harness.go`), and every
+Harness reconciler writes `AgentTemplate` status instead
+(`go/core/internal/controller/status.go`). So `kubectl get harness` always shows
+a blank `READY`, for the stock `kagent` Harness as much as for `pi-go`, and a
+`Harness: Ready=True` check would fail on a perfectly healthy deployment. A
+Harness that is admitted but broken still shows up as `Ready=False` on its
+AgentTemplate.
 
 If preparation fails, inspect the controller:
 
