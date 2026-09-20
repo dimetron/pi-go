@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -700,5 +701,31 @@ func TestSessionObservations_SameSecondIsOrderedByID(t *testing.T) {
 					i, got[i].Title, again[i].Title)
 			}
 		}
+	}
+}
+
+// A closed handle must surface an error, not an empty result.
+//
+// SessionObservations is what summarization reads. If a closed store returned
+// (nil, nil) instead of an error, a summary would be generated from an empty
+// observation list, or the caller would read "no observations" as "nothing
+// happened" rather than "could not read".
+func TestSessionObservations_ClosedStoreErrors(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	insertTestSession(t, store, "sess-closed", "/project")
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := store.SessionObservations(ctx, "sess-closed")
+	if err == nil {
+		t.Fatal("expected an error from a closed store, got nil")
+	}
+	// The driver's wording varies, so assert on the wrapping rather than on a
+	// sentinel: what matters is that it is an error and it names the operation.
+	if !strings.Contains(err.Error(), "session observations") {
+		t.Errorf("error does not name the operation: %v", err)
 	}
 }

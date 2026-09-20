@@ -17,6 +17,9 @@ import (
 type fakeSummarizerLLM struct {
 	reply string
 	err   error
+	// emptyFrames, when set, emits nil and content-less responses before the
+	// reply, which is what a streaming provider does for metadata-only frames.
+	emptyFrames bool
 
 	mu     sync.Mutex
 	calls  int
@@ -44,6 +47,19 @@ func (f *fakeSummarizerLLM) GenerateContent(_ context.Context, req *llmmodel.LLM
 		if err != nil {
 			yield(nil, err)
 			return
+		}
+		if f.emptyFrames {
+			// A nil response and one with no content: both must be skipped
+			// without panicking and without contributing text.
+			if !yield(nil, nil) {
+				return
+			}
+			if !yield(&llmmodel.LLMResponse{}, nil) {
+				return
+			}
+			if !yield(&llmmodel.LLMResponse{Content: &genai.Content{}}, nil) {
+				return
+			}
 		}
 		yield(&llmmodel.LLMResponse{
 			Content: genai.NewContentFromText(reply, genai.RoleModel),
@@ -168,5 +184,23 @@ func TestLLMSummarizer_NilModel(t *testing.T) {
 	empty := NewLLMSummarizer(nil)
 	if _, err := empty.SummarizeSession(context.Background(), "s", "/p", testObservations()); err == nil {
 		t.Error("nil model: expected an error")
+	}
+}
+
+// A provider that streams metadata-only frames must not break summarization.
+//
+// The loop skips a nil response and one with no content; without that guard a
+// real streaming provider would panic the summarizer on its first frame, which
+// happens on the exit path where a panic is least affordable.
+func TestLLMSummarizer_SkipsEmptyFrames(t *testing.T) {
+	llm := &fakeSummarizerLLM{reply: validSummaryJSON, emptyFrames: true}
+	s := NewLLMSummarizer(llm)
+
+	sum, err := s.SummarizeSession(context.Background(), "sess-1", "/project", testObservations())
+	if err != nil {
+		t.Fatalf("SummarizeSession: %v", err)
+	}
+	if sum.Request != "wire session summaries" {
+		t.Errorf("Request = %q, want the reply parsed despite the empty frames", sum.Request)
 	}
 }

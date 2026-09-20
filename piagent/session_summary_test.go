@@ -2,6 +2,7 @@ package piagent
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"os"
 	"path/filepath"
@@ -552,4 +553,168 @@ func TestCompletionSurvivesASummaryOverrun(t *testing.T) {
 			t.Errorf("session %s status = %q, want completed even though its summary failed", id, status)
 		}
 	}
+}
+
+// Closing an agent that never created a session must be a no-op, not a panic.
+//
+// summarizeSessions returns early when there is nothing to summarize. An
+// embedder that constructs an agent and closes it without running a turn is the
+// cheapest way to reach Close on the memory path, so the snapshot-and-clear has
+// to be safe on an empty list.
+func TestSummarizeSessionsNoSessions(t *testing.T) {
+	isolate(t)
+
+	summarizer := &sessionSummarizerLLM{reply: sessionSummaryReply}
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(summarizer),
+	)
+
+	ag.summarizeSessions()
+
+	ag.memSessionsMu.Lock()
+	left := len(ag.memSessions)
+	ag.memSessionsMu.Unlock()
+	if left != 0 {
+		t.Errorf("memSessions = %d, want 0", left)
+	}
+	if n := summarizer.callCount(); n != 0 {
+		t.Errorf("summarizer called %d time(s) with no sessions, want 0", n)
+	}
+
+	if err := ag.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// summarizeSessions must not re-summarize the same sessions when run twice.
+//
+// The snapshot-and-clear guarantees this: a repeat run finds an empty list. The
+// reason is deliberately NOT "Close is called twice" — Close nils its closer
+// list, so a second Close never reaches the memory closer at all. The clear
+// matters for a direct repeat invocation.
+func TestSummarizeSessionsDoesNotRepeatWork(t *testing.T) {
+	home := isolate(t)
+
+	summarizer := &sessionSummarizerLLM{reply: sessionSummaryReply}
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(summarizer),
+	)
+
+	ctx := t.Context()
+	sessionID, err := ag.NewSession(ctx)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	store := openMemoryStore(t, home)
+	if err := store.InsertObservation(ctx, &memory.Observation{
+		SessionID: sessionID, Project: ag.WorkingDir(), Title: "work",
+		Type: memory.TypeChange, Text: "t", ToolName: "edit", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("InsertObservation: %v", err)
+	}
+
+	ag.summarizeSessions()
+	first := summarizer.callCount()
+	if first == 0 {
+		t.Fatal("the first summarizeSessions call did not consult the summarizer")
+	}
+
+	ag.summarizeSessions()
+	if second := summarizer.callCount(); second != first {
+		t.Errorf("summarizer called %d time(s) after a repeat run, want still %d — sessions are re-summarized",
+			second, first)
+	}
+}
+
+// A store that fails must produce an error from SummarizeSession, not a silent
+// success: the caller has to be able to tell that no summary was written.
+func TestSummarizeSessionStoreErrors(t *testing.T) {
+	isolate(t)
+
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(&sessionSummarizerLLM{reply: sessionSummaryReply}),
+	)
+	sessionID, err := ag.NewSession(t.Context())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	ag.memStore = failingStore{Store: ag.memStore}
+
+	if err := ag.SummarizeSession(t.Context(), sessionID); err == nil {
+		t.Error("expected an error when SessionObservations fails")
+	} else if !strings.Contains(err.Error(), "reading session observations") {
+		t.Errorf("error does not name the failing step: %v", err)
+	}
+}
+
+// A failed summary write must surface rather than be swallowed.
+func TestSummarizeSessionUpsertFailure(t *testing.T) {
+	isolate(t)
+
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(&sessionSummarizerLLM{reply: sessionSummaryReply}),
+	)
+	ctx := t.Context()
+	sessionID, err := ag.NewSession(ctx)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	real := ag.memStore
+	if err := real.InsertObservation(ctx, &memory.Observation{
+		SessionID: sessionID, Project: ag.WorkingDir(), Title: "work",
+		Type: memory.TypeChange, Text: "t", ToolName: "edit", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("InsertObservation: %v", err)
+	}
+
+	ag.memStore = upsertFailStore{Store: real}
+	if err := ag.SummarizeSession(ctx, sessionID); err == nil {
+		t.Error("expected an error when UpsertSummary fails")
+	} else if !strings.Contains(err.Error(), "storing session summary") {
+		t.Errorf("error does not name the failing step: %v", err)
+	}
+}
+
+// A failing store during Close must be logged and skipped, never returned:
+// Close is on the exit path, and a summary problem cannot keep resources
+// unreleased.
+func TestSummarizeSessionsSurvivesStoreFailure(t *testing.T) {
+	isolate(t)
+
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(&sessionSummarizerLLM{reply: sessionSummaryReply}),
+	)
+	if _, err := ag.NewSession(t.Context()); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	ag.memStore = failingStore{Store: ag.memStore}
+	if err := ag.Close(); err != nil {
+		t.Fatalf("Close returned an error from a failing store: %v", err)
+	}
+}
+
+// failingStore fails reads and completions, to drive the degraded branches.
+type failingStore struct{ memory.Store }
+
+func (failingStore) SessionObservations(context.Context, string) ([]*memory.Observation, error) {
+	return nil, errors.New("store read failed")
+}
+
+func (failingStore) CompleteSession(context.Context, string) error {
+	return errors.New("store complete failed")
+}
+
+// upsertFailStore reads successfully but cannot persist a summary.
+type upsertFailStore struct{ memory.Store }
+
+func (upsertFailStore) UpsertSummary(context.Context, *memory.SessionSummary) error {
+	return errors.New("store write failed")
 }

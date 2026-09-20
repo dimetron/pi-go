@@ -240,20 +240,27 @@ func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subage
 		drainErr := worker.Shutdown(shutdownCtx)
 		cancel()
 
-		if drainErr != nil {
-			// The worker goroutine may still be compressing and storing, so a
-			// summary taken now would describe a prefix of the session. Report
-			// the loss rather than writing something that reads as complete.
-			// Not fatal: an observation that misses the queue is worth less
-			// than the process failing to exit.
-			slog.Warn("piagent: memory drain timed out; skipping session summary",
-				"error", drainErr, "budget", memoryShutdownTimeout)
-		} else {
-			summarize()
-		}
+		summarizeAfterDrain(drainErr, summarize)
 
 		_ = store.Close()
 	}
+}
+
+// summarizeAfterDrain runs the session-summary step, but only when the memory
+// worker drained cleanly.
+//
+// Extracted from the closer above so the decision is testable without staging a
+// real five-second drain timeout. A timeout means the worker goroutine may still
+// be compressing and storing, so a summary taken now would describe a prefix of
+// the session; that is reported and skipped rather than written, because a
+// summary that silently omits the end of a session reads as complete.
+func summarizeAfterDrain(drainErr error, summarize func()) {
+	if drainErr != nil {
+		slog.Warn("piagent: memory drain timed out; skipping session summary",
+			"error", drainErr, "budget", memoryShutdownTimeout)
+		return
+	}
+	summarize()
 }
 
 // memoryContext renders the recalled-memory block for the system prompt, or ""

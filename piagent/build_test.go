@@ -533,3 +533,27 @@ func TestSetupMemorySummarizesAfterDraining(t *testing.T) {
 		t.Errorf("the summarizer saw %d observation(s), want %d — the worker had not drained yet", seen, queued)
 	}
 }
+
+// A timed-out drain must skip the summary, not summarize a session prefix.
+//
+// This is the P1 from the Codex review: Worker.Shutdown returning a timeout while
+// the worker goroutine can still be storing means a summary read now would miss
+// the end of the session. Extracted into summarizeAfterDrain so the decision is
+// reachable without waiting out a real five-second drain.
+func TestSummarizeAfterDrain(t *testing.T) {
+	t.Run("clean drain runs the summary", func(t *testing.T) {
+		ran := false
+		summarizeAfterDrain(nil, func() { ran = true })
+		if !ran {
+			t.Error("summarize did not run after a clean drain")
+		}
+	})
+
+	t.Run("timed-out drain skips the summary", func(t *testing.T) {
+		ran := false
+		summarizeAfterDrain(context.DeadlineExceeded, func() { ran = true })
+		if ran {
+			t.Error("summarize ran despite a timed-out drain — a partial summary would be written as if complete")
+		}
+	})
+}
