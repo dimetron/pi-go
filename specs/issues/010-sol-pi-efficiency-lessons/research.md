@@ -98,14 +98,51 @@ redaction and adds a shell round trip.
 
 ---
 
-## R2. The compactor has two dead dispatch classes — [CORRECTION]
+## R2. Seven of nine compaction pipelines are dead — [CORRECTION, verified empirically]
 
-An earlier verbal summary of mine said fixing the `ripgrep` name mismatch was
-sufficient for grep. **It is not.** There are two independent defects.
+**This section was rewritten after the first draft of this spec, which
+understated the defect as "grep reads the wrong field".** The scope is much
+larger, and the original claim was wrong. Everything below was **verified by
+running the real callback against real production result shapes**, not by
+reading code — see R2.4 for the probe.
 
-### R2.1 Three git stages are unreachable (underscore vs hyphen)
+### R2.1 The compactor's field names do not match the real result maps
 
-`internal/tools/compactor.go:108-113` routes:
+ADK's `functiontool` marshals the tool's typed output struct to JSON and
+unmarshals it into `map[string]any`
+(`google.golang.org/adk/v2@v2.4.0/tool/functiontool/function.go:231`,
+`typeutil.ConvertToWithJSONSchema`). So the keys the compactor sees in
+`result` are the structs' **`json` tags**, not Go field names and not
+free-form strings.
+
+Empirically confirmed key sets (probe in R2.4), compared to what each pipeline
+reads:
+
+| Tool | Real keys in `result` | Pipeline reads | Match? |
+|---|---|---|---|
+| `bash` | `stdout` `stderr` `exit_code` | `stdout` | ✅ |
+| `read` | `content` `total_lines` | `content` | ✅ |
+| `grep`/`ripgrep` | `matches` `total_matches` | `output` | ❌ |
+| `find` | `files` `total_files` | `output` | ❌ |
+| `tree` | `tree` `dirs` `files` | `output` | ❌ |
+| `git-file-diff` | `file` `diff` `lines_added` `lines_removed` | `diff` *(but never routed — see R2.2)* | ❌ |
+| `git-overview` | `branch` `recent_commits` `staged_files` … | `output` *(never routed)* | ❌ |
+| `git-hunk` | `file` `hunks` `total_hunks` | `diff` *(never routed)* | ❌ |
+
+`compactGrep` (`compactor_search.go:9-13`), `compactFind` (`:43-44`) and
+`compactGitOverview` (`compactor_git.go:45`) all read `result["output"]`, which
+**exists in no tool's output struct**. They therefore return `nil`
+unconditionally.
+
+The cause is visible in the test suite: `compactor_test.go` feeds these
+pipelines synthetic maps with an `output` key
+(`compactor_test.go:702,709,784,999,1019,1028,1061,1076`) — a shape no tool ever
+produces. The tests pass against an invented contract, so the pipelines were
+green while dead in production.
+
+### R2.2 Two git pipelines are unreachable by name
+
+`internal/tools/compactor.go:108-113` routes on underscores:
 
 ```go
 case "git_file_diff": return compactGitFileDiff(result, cfg)
@@ -113,17 +150,17 @@ case "git_overview":  return compactGitOverview(result, cfg)
 case "git_hunk":      return compactGitHunk(result, cfg)
 ```
 
-Tools register hyphens:
+The tools register hyphens:
 
-- `internal/tools/git_overview.go:52` — `newTool("git-overview", …)`
 - `internal/tools/git_diff.go:36` — `newTool("git-file-diff", …)`
+- `internal/tools/git_overview.go:52` — `newTool("git-overview", …)`
 - `internal/tools/git_hunk.go:42` — `newTool("git-hunk", …)`
 
 No case ever matches. Already recorded in `specs/issues/token-cost/04-bugs.md` §4a.
 
-### R2.2 Grep fails twice over — name *and* field
+### R2.3 Grep additionally fails on the name
 
-**Name:** `internal/tools/grep.go:129-133`:
+`internal/tools/grep.go:129-132`:
 
 ```go
 grepToolName := "grep"
@@ -132,32 +169,66 @@ if rgAvailable {
 }
 ```
 
-but `internal/tools/compactor.go:102` handles only `case "grep"`. On any host
-with `rg` — effectively all of them — grep output is never compacted.
+but `compactor.go:102` handles only `case "grep"`. On any host with `rg` —
+effectively all hosts — grep is not even routed. `ResultDeduper` has both names
+correct (`dedup.go:34-44`), which is why grep *dedupes* but never *compacts*.
 
-**Field:** even with the name fixed, `compactGrep` reads a field that does not
-exist. `internal/tools/compactor_search.go:9-13`:
+### R2.4 The probe and its output
+
+Temporary probe (removed after running) — real structs → JSON → `map[string]any`,
+then fed through the real `BuildCompactorCallback`:
 
 ```go
-func compactGrep(result map[string]any, cfg CompactorConfig) *CompactResult {
-	output, _ := result["output"].(string)
-	if output == "" {
-		return nil
-	}
+cfg := DefaultCompactorConfig()
+cfg.Enabled = true
+cfg.MaxChars = 64
+cfg.MaxLines = 4
+// 400-line / 400-match payloads, real production structs
+got, err := cb(nil, &probeTool{name: c.tool}, map[string]any{}, res, nil)
 ```
 
-`GrepOutput` (`internal/tools/grep.go:112-119`) has fields `matches`,
-`total_matches`, `truncated` — **no `output`**. So `compactGrep` returns `nil`
-unconditionally, and `applyCompaction`'s `output` branch never fires for grep
-either (`compactor.go:130-134`).
+```
+bash             COMPACTED      before= 11202 after=    92
+read             COMPACTED      before= 11202 after=    92
+ripgrep          DEAD (no-op)   before= 25091 after= 25091
+grep             DEAD (no-op)   before= 25091 after= 25091
+find             DEAD (no-op)   before=  7201 after=  7201
+tree             DEAD (no-op)   before= 11202 after= 11202
+git-file-diff    DEAD (no-op)   before= 11202 after= 11202
+git-overview     DEAD (no-op)   before=  7201 after=  7201
+git-hunk         DEAD (no-op)   before= 32401 after= 32401
+```
 
-`ResultDeduper` has both names correct (`internal/tools/dedup.go:34-44`
-includes `"ripgrep"` and `"grep"`), which is why the gap went unnoticed — grep
-*dedupes* but never *compacts*.
+**Only `bash` and `read` compact. Seven of nine registered compaction pipelines
+are no-ops in production.** They compute nothing, and `applyCompaction` then
+either finds no matching field or writes to a key that does not exist — the
+latter being why `compactor.go:155` can log
+`"compactor: no known output field in result for replacement"`.
 
-**Consequence for ticket 2:** the fix is (a) accept both names, (b) teach
-`compactGrep` to read `matches`, and (c) add a test that asserts the compactor
-routes on the same names the tools register with, so the class cannot recur.
+### R2.5 Consequence for ticket 2
+
+The original ticket said "three line-level fixes". The real scope is:
+
+1. **Field alignment** — `compactGrep` must read `matches` (a `[]GrepMatch`) and
+   re-render to a string; `compactFind` must read `files` (`[]string`);
+   `compactTree` reads `tree` (currently it delegates to `compactFind`, so it
+   breaks whenever `compactFind` does); `compactGitOverview` must read
+   `branch`/`recent_commits`/`staged_files` etc. rather than `output`.
+2. **Name routing** — hyphens for the three git tools; accept both `grep` and
+   `ripgrep`.
+3. **`applyCompaction` must write the same keys the pipeline read** — it
+   currently probes `stdout` → `content` → `output` → `diff` → `result` →
+   `data` in order, so even a working pipeline can write to the wrong field or
+   to none.
+4. **The guard test must use real structs, not synthetic maps.** The existing
+   tests are the reason this shipped: they assert against a shape no tool emits.
+   The new test must build results via `json.Marshal`/`Unmarshal` of the actual
+   output structs, and assert routing for every registered tool name.
+
+This is larger than a bug fix — it is a latent subsystem failure. It also means
+the compactor's contribution to pi-go's measured token traffic is currently
+**only** `bash` and `read`, and any expectation based on the other seven is
+unfounded.
 
 ---
 

@@ -41,14 +41,21 @@ belong to other efforts — see "Out of scope".
 
 | # | Item | Blocked by | Risk | Ticket |
 |---|---|---|---|---|
-| 1 | Archive-before-reduce + readback pointer | nothing | medium | `plan.md` §1–3 |
-| 2 | Fix compactor dispatch (3 dead stages + `ripgrep`) | nothing | low | `plan.md` §4 |
-| 3 | Make reduction rejectable, not mutating | nothing | low | `plan.md` §5 |
-| 4 | Wire the dead measurement surfaces | nothing | low | `plan.md` §6 |
-| 5 | Cache reporting on the Ollama path | upstream | medium | `plan.md` §7 |
+| 1 | Archive-before-reduce + readback pointer | nothing | medium | `plan.md` §T1 |
+| 2 | **7 of 9 compactor pipelines are dead** | nothing | low | `plan.md` §T2 |
+| 3 | Make reduction rejectable, not mutating | nothing | low | `plan.md` §T3 |
+| 4 | Wire the dead measurement surfaces | nothing | low | `plan.md` §T4 |
+| 5 | Cache reporting on the Ollama path | upstream | medium | `plan.md` §T5 |
 
 Item 1 is the only genuinely *architectural* change; items 2–4 are prerequisite
 bug fixes and wiring that make item 1 (and everything later) verifiable.
+
+**Item 2 grew during authoring.** It began as "three line-level fixes" for
+grep/git tool-name mismatches. Empirical verification (R2.4 in `research.md`)
+showed **seven of nine registered compaction pipelines are no-ops in
+production** — they read a `result["output"]` key that no tool's output struct
+produces. This is a latent subsystem failure, not a typo, and it means the
+compactor's real contribution today is `bash` and `read` only.
 
 ## Out of scope
 
@@ -85,6 +92,8 @@ than duplication:
 ## Verification status of this spec
 
 All `file:line` anchors in `research.md` were read directly from the tree during
-authoring. **No code was changed and no build or test was run** — this is a
-review document. Where a claim is inferred rather than read, it is marked
-`(inferred)`.
+authoring. The R2 finding was additionally **verified by executing the real
+`BuildCompactorCallback` against real production result shapes** — the probe and
+its output are reproduced in `research.md` §R2.4. That probe was temporary and
+has been removed; no code change was left behind, and no build or test of the
+repository was run.

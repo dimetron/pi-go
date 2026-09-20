@@ -135,52 +135,86 @@ root to the **single** `<sessionId>/tool-output/` directory — never
 
 ## T2 — Compactor dispatch fixes
 
-Independent of T1. Three defects (R2), all verified.
+Independent of T1. **Scope was revised upward after empirical verification: seven
+of nine registered pipelines are no-ops in production (R2).** Read R2 in
+`research.md` before starting — the first draft of this spec understated this as
+"grep reads the wrong field".
 
-### T2.1 — Hyphenate the git tool names
+### T2.0 — Establish the real result shapes first
 
-`internal/tools/compactor.go:108-113` — change `git_file_diff` → `git-file-diff`,
-`git_overview` → `git-overview`, `git_hunk` → `git-hunk`, matching
-`git_diff.go:36`, `git_overview.go:52`, `git_hunk.go:42`.
+Do this before any fix, and keep it as the basis of T2.4.
 
-### T2.2 — Accept both grep names
+ADK marshals each tool's typed output struct to JSON and unmarshals into
+`map[string]any` (`adk/v2@v2.4.0/tool/functiontool/function.go:231`). So the keys
+are the structs' `json` tags. Verified key sets:
 
-`internal/tools/compactor.go:102` — `case "grep":` must also match `"ripgrep"`,
-which is what `newGrepTool` registers when `rg` is on PATH
-(`internal/tools/grep.go:129-133`).
+```go
+bash          → stdout, stderr, exit_code
+read          → content, total_lines
+grep/ripgrep  → matches, total_matches
+find          → files, total_files
+tree          → tree, dirs, files
+git-file-diff → file, diff, lines_added, lines_removed
+git-overview  → branch, recent_commits, staged_files, ...
+git-hunk      → file, hunks, total_hunks
+```
 
-### T2.3 — Read the field that exists
+### T2.1 — Align each pipeline to its real field
 
-`internal/tools/compactor_search.go:9-13` currently reads
-`result["output"].(string)`, but `GrepOutput` (`grep.go:112-119`) has
-`matches`/`total_matches`/`truncated` and **no `output`** — so `compactGrep`
-returns `nil` unconditionally even after T2.2.
+- `compactor_search.go:9-13` `compactGrep` — read `matches` (`[]GrepMatch`,
+  `grep.go:122-126`), compact, re-render to a string; preserve `total_matches`
+  and `truncated`. Today it reads `result["output"]`, which no tool emits.
+- `compactor_search.go:43-44` `compactFind` — read `files` (`[]string`,
+  `find.go:25-32`) rather than `output`. Note `compactTree`
+  (`compactor_search.go:74-76`) delegates to `compactFind`, so `tree` breaks
+  with it — `tree` actually carries `tree` (a string), `dirs`, `files`.
+- `compactor_git.go:45` `compactGitOverview` — read `branch` / `recent_commits` /
+  `staged_files` / `unstaged_files` / `untracked_files`
+  (`git_overview.go:32-42`) rather than `output`.
+- `compactor_git.go:11,79` `compactGitFileDiff` / `compactGitHunk` — read `diff`,
+  which is correct for `git-file-diff`; `git-hunk` has **no `diff` field** at
+  all (`git_hunk.go:32-39` has `file`/`hunks`/`total_hunks`), so `compactGitHunk`
+  must be rewritten against `hunks`.
 
-- Read `matches` as `[]GrepMatch` (`grep.go:122-126`), compact, and re-render to
-  a string. Preserve `total_matches` and `truncated` semantics.
-- Check whether the same field/name mismatch affects `compactFind` and
-  `compactTree` before declaring this done. `dedup.go:34-44` lists `find` and
-  `tree` with correct names, but the compactor's field assumptions for those were
-  not verified in `research.md`.
+### T2.2 — Fix name routing
 
-### T2.4 — The regression guard (this is the point)
+- `compactor.go:108-113` — hyphens: `git-file-diff`, `git-overview`, `git-hunk`,
+  matching `git_diff.go:36`, `git_overview.go:52`, `git_hunk.go:42`.
+- `compactor.go:102` — accept both `grep` and `ripgrep`
+  (`grep.go:129-132` registers `ripgrep` when `rg` is present).
 
-Add a table test asserting the compactor has a routing case for **every tool name
-the registry registers**. This is the class of bug that produced three dead
-stages and went unnoticed because `dedup.go` had the names right.
+### T2.3 — Make `applyCompaction` write what was read
 
-- Source the names from the registry rather than hardcoding a list, so a future
-  rename fails the test.
-- If the registry cannot be enumerated cheaply in a unit test, a table listing
-  registered names with a comment pinning the registry file:line is an
-  acceptable fallback — but note the weakness.
+`compactor.go:119-156` probes `stdout` → `content` → `output` → `diff` →
+`result` → `data` in first-match order. Even a correct pipeline can therefore
+write to the wrong key, or none (it logs
+`"compactor: no known output field in result for replacement"` and the
+compaction is silently discarded).
+
+- Route the write by the same key the pipeline read, rather than re-probing.
+  Simplest correct shape: carry the target key on `CompactResult`.
+
+### T2.4 — The guard test (this is the point)
+
+The existing tests are *why this shipped*: `compactor_test.go` feeds pipelines
+synthetic maps with an `output` key (`:702,709,784,999,1019,1028,1061,1076`) — a
+shape no tool produces.
+
+- New table test builds results by `json.Marshal`/`json.Unmarshal` of the **real
+  output structs**, then asserts each pipeline compacts on a payload large enough
+  to trigger it.
+- Assert routing exists for **every registered tool name**, sourced from the
+  registry so a future rename fails the test.
+- Assert round trip: after the callback, the field the pipeline read holds the
+  compacted value.
 
 **Tests:**
-- Per-pipeline: each of the seven names produces a non-nil `*CompactResult` on
-  representative input.
-- `compactGrep` on a real `GrepOutput`-shaped result compacts (fails today).
+- Per-pipeline: all nine names produce a non-nil `*CompactResult` on
+  representative input (seven fail today).
 - Routing table test from T2.4.
-- Assert existing behaviour is unchanged for `bash`, `read`, `tree`, `find`.
+- `applyCompaction` writes the field the pipeline read.
+- Existing behaviour unchanged for `bash` and `read`, which do work today
+  (verified: `before=11202 after=92` each).
 
 ---
 
