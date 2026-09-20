@@ -29,6 +29,14 @@
 //
 // Nothing here reads pi-go's config file. [FromConfig] does, explicitly, for
 // embedders that want the same model a `pi` session would pick.
+//
+// # Tracing
+//
+// [WithTraceSink] records the HTTP traffic of one client and delivers it to a
+// callback, without touching process-global state. pi-go's own --trace-http
+// machinery is not usable from an embedder: it needs httplog.SetEnabled and a
+// globally installed sink, and the global sink is a single slot a library has no
+// business claiming.
 package pimodels
 
 import (
@@ -39,6 +47,7 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/provider"
 )
 
@@ -263,6 +272,47 @@ func FromConfig(ctx context.Context, role string, opts ...Option) (Model, error)
 		merged = append([]Option{WithThinkingLevel(cfg.ThinkingLevel)}, merged...)
 	}
 	return New(ctx, modelName, merged...)
+}
+
+// TraceEntry is one captured half of an HTTP exchange between a provider client
+// and its endpoint: an outgoing request, or the response to it. Requests and
+// responses arrive as separate entries, correlated by Exchange.
+//
+// It is an alias rather than a copy so the field set cannot drift from the
+// transport that produces it; it is the same type pi-go's own --trace-http
+// writes. Credentials in Headers are already masked, and Body is capped (see
+// [TraceMaxBody]).
+type TraceEntry = httplog.Entry
+
+// WithTraceSink records every request and response this client makes, handing
+// each to fn. It is the way to trace an embedder's traffic without touching
+// process-global state.
+//
+// The sink belongs to the client, not to the process: two clients built with
+// different sinks trace independently, and installing one here does not
+// displace pi-go's own --trace-http sink or anything else in the host process.
+// That is the reason this option exists instead of a SetSink-style call — the
+// global sink is a single slot that SetSink replaces.
+//
+// Capture is on whenever a sink is set; there is no separate flag, because a
+// trace with nowhere to go is not a useful state. Note that pi-go's own
+// TraceHTTP setting is the opposite arrangement — it only takes effect once
+// httplog.SetEnabled(true) has been called — so the two are not interchangeable.
+//
+// Entries arrive synchronously on the request goroutine, so a slow fn delays
+// the request: queue the entry and return rather than writing it inline.
+//
+// fn receives prompts, completions and tool output in cleartext. Credentials
+// are masked; nothing else is.
+func WithTraceSink(fn func(TraceEntry)) Option {
+	return func(o *options) { o.llm.TraceSink = fn }
+}
+
+// TraceMaxBody returns the byte cap applied to a traced request or response
+// body before it reaches a [WithTraceSink] function. A truncated entry reports
+// it in BodyTruncated.
+func TraceMaxBody() int {
+	return httplog.MaxBody()
 }
 
 // Resolve reports how a model name would be routed, without building a client
