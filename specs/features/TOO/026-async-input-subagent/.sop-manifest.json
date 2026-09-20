@@ -1,0 +1,67 @@
+{
+  "sopVersion": 2,
+  "spec": "features/TOO/026-async-input-subagent",
+  "contract": "pdd-plan",
+  "validatedAt": "2026-09-20T09:26:35.20331Z",
+  "artifacts": [
+    {
+      "name": "rough-idea.md",
+      "present": true,
+      "lines": 3
+    },
+    {
+      "name": "requirements.md",
+      "present": true,
+      "lines": 771
+    },
+    {
+      "name": "design.md",
+      "present": true,
+      "lines": 810
+    },
+    {
+      "name": "outline.md",
+      "present": true,
+      "lines": 111
+    },
+    {
+      "name": "plan.md",
+      "present": true,
+      "lines": 872,
+      "slices": 17
+    },
+    {
+      "name": "PROMPT.md",
+      "present": true,
+      "lines": 187,
+      "slices": 17
+    }
+  ],
+  "rules": [
+    "non_empty",
+    "non_empty",
+    "min_qa(min: 3)",
+    "non_empty",
+    "max_lines(max: 2000)",
+    "has_headings([\"Acceptance Criteria\", \"Testing Strategy\"])",
+    "acceptance_criteria_are_given_when_then",
+    "research_at_least(min: 2)",
+    "non_empty",
+    "max_lines(max: 120)",
+    "lists_slices(min: 2)",
+    "non_empty",
+    "max_lines(max: 2000)",
+    "slices_are_checkboxes",
+    "slice_count(min: 1, max: 25)",
+    "outline_slices_match_plan_slices",
+    "non_empty",
+    "has_headings([\"Objective\", \"Acceptance Criteria\", \"Implementation Slices\", \"Done Criteria\", \"Gates\"])",
+    "every_slice_has([\"files\", \"verify\", \"parallel_safe\"])",
+    "slice_budget(max_files: 10)",
+    "gates_are_executable",
+    "done_criteria(min: 3, no_placeholders: true)",
+    "references_exist",
+    "plan_slices_match_prompt_slices"
+  ],
+  "valid": true
+}
