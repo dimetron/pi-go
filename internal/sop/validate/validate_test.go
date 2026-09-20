@@ -2,6 +2,7 @@ package validate
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -272,6 +273,68 @@ func TestRuleReferencesExist(t *testing.T) {
 	}
 	if len(got) != 1 || !strings.Contains(got[0].Message, "design.md") {
 		t.Errorf("findings = %v", got)
+	}
+}
+
+// A Reference section records provenance as well as artifacts. A baseline
+// branch named `feature/mcp-sdk-migration` has a slash and looks exactly like a
+// path, so checking only the filesystem reported it missing and blocked a plan
+// with no real defect.
+func TestRuleReferencesExistAcceptsGitRef(t *testing.T) {
+	repo := initGitRepo(t)
+	runGit(t, repo, "branch", "feature/mcp-sdk-migration")
+	content := "## Reference\n- Baseline branch: `feature/mcp-sdk-migration`\n"
+	if got := Apply("references_exist", Target{Artifact: "PROMPT.md", Content: content, RepoRoot: repo}); !got.OK() {
+		t.Errorf("a git ref was reported missing: %v", got)
+	}
+}
+
+func TestRuleReferencesExistRejectsMissingBranch(t *testing.T) {
+	repo := initGitRepo(t)
+	content := "## Reference\n- Baseline branch: `feature/does-not-exist`\n"
+	if got := Apply("references_exist", Target{Artifact: "PROMPT.md", Content: content, RepoRoot: repo}); got.OK() {
+		t.Error("a ref to a nonexistent branch passed")
+	}
+}
+
+// Sibling artifacts are named relative to the spec directory as often as from
+// the repo root: the Reference section of a spec reads `research/x.md`.
+func TestRuleReferencesExistResolvesSpecRelativePaths(t *testing.T) {
+	repo := t.TempDir()
+	specDir := filepath.Join(repo, "specs", "features", "x")
+	if err := os.MkdirAll(filepath.Join(specDir, "research"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(specDir, "research", "notes.md"), []byte("n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := &specdoc.Spec{Name: "features/x", Dir: specDir, Files: map[string]string{}}
+	content := "## Reference\n- Research: `research/notes.md`\n"
+	if got := Apply("references_exist", Target{Artifact: "PROMPT.md", Content: content, Spec: spec, RepoRoot: repo}); !got.OK() {
+		t.Errorf("a spec-relative path was reported missing: %v", got)
+	}
+}
+
+// initGitRepo creates a repository with one commit, so `git rev-parse --verify`
+// has a ref to resolve and the rules have a repo root to read.
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "test")
+	runGit(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	return repo
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 }
 

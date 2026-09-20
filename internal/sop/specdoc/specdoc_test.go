@@ -3,6 +3,7 @@ package specdoc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,37 @@ func TestParsePromptSlices(t *testing.T) {
 	}
 }
 
+func TestParsePromptSlicesAcceptsUnderscoredParallelSafe(t *testing.T) {
+	// Contract.Describe tells the planner the key is `parallel_safe`, so a
+	// planner that follows its instruction writes an underscore. Reading only
+	// the hyphenated spelling reported every slice as "not stated" and blocked a
+	// plan that was correct — 8 of the 10 findings in a real /plan run.
+	md := "# Thing\n\n## Implementation Slices\n\n" +
+		"1. **Add the type** — define it, files: `a.go`, verify: `go build ./...`,\n" +
+		"   parallel_safe: no\n" +
+		"2. **Wire it up** — call it, files: `b.go`, verify: `go build ./...`,\n" +
+		"   parallel_safe: yes\n"
+	got := ParsePromptSlices(md)
+	if len(got) != 2 {
+		t.Fatalf("got %d slices, want 2: %+v", len(got), got)
+	}
+	if !got[0].HasParallel || got[0].ParallelSafe {
+		t.Errorf("slice 1 = stated %v, safe %v; want stated=true safe=false", got[0].HasParallel, got[0].ParallelSafe)
+	}
+	if !got[1].HasParallel || !got[1].ParallelSafe {
+		t.Errorf("slice 2 = stated %v, safe %v; want stated=true safe=true", got[1].HasParallel, got[1].ParallelSafe)
+	}
+}
+
+func TestParsePromptSlicesAcceptsSpacedParallelSafe(t *testing.T) {
+	md := "# Thing\n\n## Implementation Slices\n\n" +
+		"1. **A** — do it, files: `a.go`, verify: `go build ./...`, parallel safe: no\n"
+	got := ParsePromptSlices(md)
+	if len(got) != 1 || !got[0].HasParallel {
+		t.Fatalf("spaced spelling not read: %+v", got)
+	}
+}
+
 func TestDoneCriteria(t *testing.T) {
 	got := DoneCriteria(samplePrompt)
 	if len(got) != 2 {
@@ -139,6 +171,34 @@ func TestSectionStopsAtSameDepth(t *testing.T) {
 	got := Section(md, "A")
 	if want := "alpha\n### A1\nnested"; got != want {
 		t.Errorf("Section(A) = %q, want %q", got, want)
+	}
+}
+
+// A sub-heading that merely contains the name must not shadow the exact
+// section. In a real PROMPT.md, `Section(md, "Gates")` matched
+// "### Dependencies and gates" — acceptance criteria for the gates, not the
+// gates — so `## Gates` was never read and the plan failed "no gates to check".
+func TestSectionPrefersExactHeadingOverContaining(t *testing.T) {
+	md := "# T\n\n" +
+		"### Dependencies and gates\n" +
+		"- Given a clean checkout, when the build runs, then it exits 0.\n\n" +
+		"## Gates\n" +
+		"- **build**: `go build ./...`\n"
+	got := Section(md, "Gates")
+	// TrimSpace: a section that ends the document keeps its trailing newline.
+	if want := "- **build**: `go build ./...`"; strings.TrimSpace(got) != want {
+		t.Errorf("Section(Gates) = %q, want %q", got, want)
+	}
+	if len(ParseGates(md)) != 1 {
+		t.Errorf("ParseGates read %d gates from the exact section, want 1", len(ParseGates(md)))
+	}
+}
+
+// Containment stays the fallback: real specs write "## Gates (must pass)".
+func TestSectionFallsBackToContainingHeading(t *testing.T) {
+	md := "## Gates (must pass)\n- **build**: `go build ./...`\n## Next\nx\n"
+	if got := Section(md, "Gates"); got != "- **build**: `go build ./...`" {
+		t.Errorf("Section(Gates) = %q, want the qualified section", got)
 	}
 }
 
