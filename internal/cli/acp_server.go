@@ -74,6 +74,7 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 		Headers:  flagHeaders,
 		Insecure: flagInsecure,
 		System:   flagSystem,
+		Version:  versionString(),
 	}
 	if sessionSvc != nil {
 		rt.SessionService = sessionSvc

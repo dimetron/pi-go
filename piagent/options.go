@@ -54,6 +54,7 @@ type options struct {
 	summarizer      model.LLM
 	compactNotify   func(string)
 	sessionSummary  model.LLM
+	version         string
 }
 
 // defaultOptions splits pi-go's conventions along one line: reading them is on
@@ -306,4 +307,15 @@ func WithCompactNotify(fn func(string)) Option {
 // the embedder would rather choose the moment.
 func WithSessionSummary(m model.LLM) Option {
 	return func(o *options) { o.sessionSummary = m }
+}
+
+// WithVersion records the version string an embedder wants stamped into the
+// sessions it creates via [Agent.CreateSession], so a transcript can be tied
+// back to the build that produced it. The CLI passes its -ldflags-stamped
+// version; an embedder passes its own, or nothing.
+//
+// Without this option the session's "version" field is omitted, which is
+// correct for a library that has no version of its own to claim.
+func WithVersion(v string) Option {
+	return func(o *options) { o.version = v }
 }

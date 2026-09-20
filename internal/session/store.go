@@ -51,6 +51,14 @@ type Meta struct {
 	UserID  string `json:"userID"`
 	WorkDir string `json:"workDir,omitempty"`
 
+	// Version is the pi-go build that produced the session, as reported by
+	// `pi version` (version plus short commit, e.g. "1.4.2+a1b2c3d"). Without
+	// it a session directory cannot say which build wrote it, so a symptom
+	// observed in a transcript cannot be tied to a release or bisected to a
+	// commit — the same reason Model and Provider are recorded alongside the
+	// transcript rather than left to inference.
+	Version string `json:"version,omitempty"`
+
 	// Model is the model name as configured. Provider is recorded alongside it
 	// because the same name means different things to different backends —
 	// "qwen2.5:latest" via ollama and via a hosted gateway are not the same
@@ -618,6 +626,32 @@ func (s *FileService) SetSessionModel(sessionID, modelName string) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.meta.Model = modelName
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// SetSessionVersion records the pi-go build that produced the session and
+// persists it to meta.json. An empty version clears the field rather than
+// writing a blank string, the same way SetSessionProvider treats its optional
+// values: a session written by a build with no version stamped has nothing to
+// say, and "version": "" would read as a claim that it does.
+func (s *FileService) SetSessionVersion(sessionID, version string) error {
+	version = strings.TrimSpace(version)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		// Lazy-load from disk, like SetSessionModel: a resumed session is not
+		// in the cache until the runner first reads it.
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Version = version
 	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
 }
 

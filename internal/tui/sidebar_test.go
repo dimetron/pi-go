@@ -690,3 +690,38 @@ func TestRenderSidebar_NoPlanSection(t *testing.T) {
 		t.Error("did not expect a plan checklist row when no PlanPhases are present")
 	}
 }
+
+// The running build must be visible without a second terminal, and it must be
+// the first row: every other section describes behavior that only makes sense
+// next to the binary that produced it.
+func TestRenderSidebar_VersionTopmost(t *testing.T) {
+	result := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:        SidebarWidth,
+		Height:       40,
+		AppVersion:   "1.4.2+a1b2c3d",
+		ProviderName: "agentgateway",
+		ModelName:    "ollama-deepseek",
+		GitBranch:    "main",
+	}))
+
+	ver := strings.Index(result, "pi-go 1.4.2+a1b2c3d")
+	if ver < 0 {
+		t.Fatalf("version line missing; got:\n%s", result)
+	}
+	model := strings.Index(result, "Model")
+	if model < 0 {
+		t.Fatalf("Model section missing; got:\n%s", result)
+	}
+	if ver > model {
+		t.Errorf("version line at %d is not above Model at %d", ver, model)
+	}
+}
+
+// No version configured means no line at all — an empty "pi-go " row would
+// occupy a scarce sidebar row to say nothing.
+func TestRenderSidebar_VersionHiddenWhenUnset(t *testing.T) {
+	result := ansi.Strip(RenderSidebar(SidebarRenderInput{Width: SidebarWidth, Height: 20}))
+	if strings.Contains(result, "pi-go") {
+		t.Errorf("version line rendered with no AppVersion:\n%s", result)
+	}
+}

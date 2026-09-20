@@ -347,6 +347,13 @@ type Config struct {
 	// not started in.
 	WorkingDir string
 
+	// Version is the pi-go build string recorded in the session's metadata
+	// (e.g. "1.4.2+a1b2c3d"), so a transcript can be tied to the build that
+	// produced it. Empty means the field is left out of meta.json. It is a
+	// caller-supplied string rather than a lookup because the CLI stamps the
+	// version through -ldflags and an embedder may carry a different one.
+	Version string
+
 	// Logger, if non-nil, receives non-fatal diagnostics such as unresolved
 	// instruction placeholders. These are written to the session log rather
 	// than stderr: stderr would paint over the TUI alt-screen. Its methods
@@ -601,6 +608,12 @@ type agentContextRecorder interface {
 	UpdateAgentContext(sessionID string, ctx *pisession.AgentContext) error
 }
 
+// versionRecorder is implemented by session services that can record the
+// pi-go build that produced a session.
+type versionRecorder interface {
+	SetSessionVersion(sessionID, version string) error
+}
+
 // CreateSession creates a new session and returns its ID together with the
 // default title that was applied (git repo name, or CWD basename) — or "" if
 // no title was set. The title is metadata only; the TUI seeds its terminal
@@ -666,6 +679,11 @@ func (a *Agent) recordNewSessionMeta(sid string) string {
 			modelName = a.config.Model.Name()
 		}
 		_ = mn.SetSessionModel(sid, modelName) // meta defaults to "unknown"
+	}
+	// Record the build, so a transcript that misbehaves can be attributed to
+	// the binary that produced it rather than to whatever is installed today.
+	if vr, ok := a.sessionService.(versionRecorder); ok && a.config.Version != "" {
+		_ = vr.SetSessionVersion(sid, a.config.Version)
 	}
 	// The service records the process cwd at creation; an explicitly
 	// configured working directory is the one the session actually runs in.
