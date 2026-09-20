@@ -86,7 +86,7 @@ func compactBash(result, args map[string]any, cfg CompactorConfig) *CompactResul
 	}
 
 	return &CompactResult{
-		Output:     stdout,
+		Writes:     []CompactWrite{{Key: "stdout", Value: stdout}},
 		Techniques: techniques,
 		OrigSize:   origSize,
 		CompSize:   compSize,

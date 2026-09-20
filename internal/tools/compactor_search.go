@@ -1,78 +1,150 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
 
-// compactGrep applies search grouping to grep tool output.
-func compactGrep(result map[string]any, cfg CompactorConfig) *CompactResult {
-	output, _ := result["output"].(string)
-	if output == "" {
+// The search-family pipelines read the fields their tools actually emit.
+//
+// ADK converts a tool's typed output struct to map[string]any by marshaling it
+// to JSON and unmarshaling into a map (adk v2.4.0
+// internal/typeutil/convert.go). A []GrepMatch therefore arrives as []any of
+// map[string]any, and a []string as []any of string — never as the Go slice
+// type. These pipelines cap the array and keep its type, because the same keys
+// are re-read by the TUI result summaries (internal/tui/tool_display.go:897-984)
+// and handed to the model. Re-rendering an array to a string would change the
+// shape both of those depend on.
+//
+// Each pipeline reports nil when it would not shrink the result. That is the
+// never-worse guard rtk applies to every filter (tmp/rtk/src/core/guard.rs):
+// a "compaction" that costs more than the original must not be applied.
+
+// capArray truncates an []any to at most max items, reporting whether it cut.
+func capArray(v any, max int) ([]any, bool) {
+	arr, ok := v.([]any)
+	if !ok || max <= 0 || len(arr) <= max {
+		return arr, false
+	}
+	return arr[:max], true
+}
+
+// jsonLen is the encoded byte size of a result map — the bytes the model is
+// billed for, since ADK json.Marshals the response before it reaches the prompt
+// (adk internal/llminternal/contents_processor.go, stringify).
+func jsonLen(m map[string]any) int {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+// measureCompaction reports the encoded size before and after applying writes,
+// without mutating result. Measuring the actual writes keeps the reported saving
+// honest even when a write adds a field (truncated) as well as removing one.
+func measureCompaction(result map[string]any, writes []CompactWrite) (origSize, compSize int) {
+	origSize = jsonLen(result)
+
+	view := make(map[string]any, len(result))
+	for k, v := range result {
+		view[k] = v
+	}
+	for _, w := range writes {
+		view[w.Key] = w.Value
+	}
+	return origSize, jsonLen(view)
+}
+
+// capResult builds a CompactResult for a pure array cap, or nil when nothing
+// would be removed.
+//
+// totalField and truncField are the tool's own count/flag keys, preserved so the
+// caller can still tell a partial list from a complete one — the rtk invariant
+// that the reported total is counted before the cap, never after
+// (tmp/rtk/src/cmds/system/search.rs, test_grep_overflow_uses_uncapped_total).
+//
+// truncField is written unconditionally, not only when already present: these
+// structs declare `truncated` with omitempty, so a complete result carries no
+// such key. Writing it is what stops a capped list from reading as the whole
+// answer — the one case where dropping items without a marker would be a
+// correctness bug rather than a saving.
+func capResult(result map[string]any, key, totalField, truncField, technique string, max int) *CompactResult {
+	arr, ok := result[key].([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	capped, cut := capArray(arr, max)
+	if !cut {
 		return nil
 	}
 
-	origSize := len(output)
-	var techniques []string
-
-	if cfg.GroupSearchOutput {
-		output = runStage(output, &techniques, "search-group", func(s string) (string, bool) {
-			return groupSearchOutput(s, cfg)
-		})
+	writes := []CompactWrite{
+		{Key: key, Value: capped},
+		{Key: truncField, Value: true},
 	}
 
-	output = runStage(output, &techniques, "hard-truncate", func(s string) (string, bool) {
-		return hardTruncate(s, cfg.MaxChars)
-	})
-	techniques = dedup(techniques)
-
-	compSize := len(output)
+	origSize, compSize := measureCompaction(result, writes)
 	if compSize >= origSize {
-		return nil
+		return nil // never-worse guard
 	}
-
 	return &CompactResult{
-		Output:     output,
-		Techniques: techniques,
+		Writes:     writes,
+		Techniques: []string{technique},
 		OrigSize:   origSize,
 		CompSize:   compSize,
 	}
 }
 
-// compactFind applies hard truncation to find tool output.
-func compactFind(result map[string]any, cfg CompactorConfig) *CompactResult {
-	output, _ := result["output"].(string)
-	if output == "" {
+// compactGrep caps the matches array of a grep/ripgrep result.
+func compactGrep(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	return capResult(result, "matches", "total_matches", "truncated", "search-cap", cfg.MaxSearchTotal)
+}
+
+// compactFind caps the files array of a find result.
+func compactFind(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	return capResult(result, "files", "total_files", "truncated", "find-cap", cfg.MaxSearchTotal)
+}
+
+// compactLs caps the entries array of an ls result.
+func compactLs(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	return capResult(result, "entries", "total_entries", "truncated", "ls-cap", cfg.MaxSearchTotal)
+}
+
+// compactTree caps the tree listing.
+//
+// tree emits one pre-rendered string, so this is a text cap rather than an array
+// cap. It reads "tree" — not "files" — so it no longer shares compactFind's
+// failure mode, which is what made the old compactTree dead whenever compactFind
+// was.
+func compactTree(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	tree, ok := result["tree"].(string)
+	if !ok || tree == "" {
 		return nil
 	}
 
-	origSize := len(output)
+	origSize := len(tree)
 	var techniques []string
 
-	output = runStage(output, &techniques, "hard-truncate", func(s string) (string, bool) {
+	tree = runStage(tree, &techniques, "hard-truncate", func(s string) (string, bool) {
 		return hardTruncate(s, cfg.MaxChars)
 	})
-	output = runStage(output, &techniques, "hard-truncate-lines", func(s string) (string, bool) {
+	tree = runStage(tree, &techniques, "hard-truncate-lines", func(s string) (string, bool) {
 		return hardTruncateLines(s, cfg.MaxLines)
 	})
 	techniques = dedup(techniques)
 
-	compSize := len(output)
-	if compSize >= origSize {
-		return nil
+	if len(tree) >= origSize {
+		return nil // never-worse guard
 	}
 
 	return &CompactResult{
-		Output:     output,
+		Writes:     []CompactWrite{{Key: "tree", Value: tree}},
 		Techniques: techniques,
 		OrigSize:   origSize,
-		CompSize:   compSize,
+		CompSize:   len(tree),
 	}
-}
-
-// compactTree applies hard truncation to tree tool output.
-func compactTree(result map[string]any, cfg CompactorConfig) *CompactResult {
-	return compactFind(result, cfg) // same strategy
 }
 
 // groupSearchOutput groups search results by file with match counts.

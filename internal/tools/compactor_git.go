@@ -6,122 +6,117 @@ import (
 	"strings"
 )
 
-// compactGitFileDiff applies compaction to the git_file_diff tool result.
-func compactGitFileDiff(result map[string]any, cfg CompactorConfig) *CompactResult {
-	diff, _ := result["diff"].(string)
-	if diff == "" {
+// The git pipelines read the fields their tools actually emit:
+//
+//	git-file-diff → file, diff, lines_added, lines_removed  (git_diff.go:20-32)
+//	git-overview  → branch, recent_commits, staged_files,    (git_overview.go:32-48)
+//	                unstaged_files, untracked_files, ...
+//	git-hunk      → file, hunks, total_hunks                 (git_hunk.go:32-38)
+//
+// The old versions read "diff" for git-hunk (a field it does not have) and
+// "output" for git-overview (a field no tool has), and routed on underscore
+// names the registry never produces — so all three were no-ops.
+
+// compactGitFileDiff compacts the diff text of a git-file-diff result.
+//
+// This pipeline already read the right field ("diff") and applyCompaction
+// already wrote it; only the name was wrong. It is therefore the smallest fix
+// in the set, and the one to land first.
+func compactGitFileDiff(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	return gitTextResult(result, "diff", cfg,
+		func(s string, c CompactorConfig) (string, bool) { return compactGitDiffText(s, c) },
+		func(s string, c CompactorConfig) (string, bool) { return hardTruncate(s, c.MaxChars) },
+	)
+}
+
+// compactGitOverview compacts the fields of a git-overview result.
+//
+// It caps recent_commits but deliberately does NOT cap the staged/unstaged/
+// untracked file lists. rtk made the same call for the same reason
+// (tmp/rtk/src/cmds/git/git_cmd.rs, format_status_inner): truncating the status
+// list hides which files are dirty, and "hiding it misleads the user about the
+// true repo state". The counts in ahead/behind and the file lists stay exact;
+// only the commit log is head-capped, matching rtk's DEFAULT_LOG_LIMIT.
+func compactGitOverview(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	commits, ok := result["recent_commits"].([]any)
+	if !ok || len(commits) == 0 {
 		return nil
 	}
 
-	origSize := len(diff)
-	var techniques []string
-
-	if cfg.CompactGitOutput {
-		diff = runStage(diff, &techniques, "git-compact", func(s string) (string, bool) {
-			return compactGitDiffText(s, cfg)
-		})
+	capped, cut := capArray(commits, cfg.MaxLogEntries)
+	if !cut {
+		return nil
 	}
 
-	diff = runStage(diff, &techniques, "hard-truncate", func(s string) (string, bool) {
-		return hardTruncate(s, cfg.MaxChars)
-	})
-	techniques = dedup(techniques)
-
-	compSize := len(diff)
+	writes := []CompactWrite{{Key: "recent_commits", Value: capped}}
+	origSize, compSize := measureCompaction(result, writes)
 	if compSize >= origSize {
-		return nil
+		return nil // never-worse guard
 	}
-
 	return &CompactResult{
-		Output:     diff,
-		Techniques: techniques,
+		Writes:     writes,
+		Techniques: []string{"git-log-cap"},
 		OrigSize:   origSize,
 		CompSize:   compSize,
 	}
 }
 
-// compactGitOverview applies compaction to git_overview tool result.
-func compactGitOverview(result map[string]any, cfg CompactorConfig) *CompactResult {
-	output, _ := result["output"].(string)
-	if output == "" {
+// compactGitHunk compacts the parsed hunks of a git-hunk result.
+//
+// It reads "hunks" — the field the tool emits — rather than "diff", which
+// git-hunk does not have. total_hunks is preserved so the trimmed list is not
+// mistaken for the complete change set.
+func compactGitHunk(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	hunks, ok := result["hunks"].([]any)
+	if !ok || len(hunks) == 0 {
 		return nil
 	}
 
-	origSize := len(output)
-	var techniques []string
-
-	if cfg.CompactGitOutput {
-		output = runStage(output, &techniques, "git-compact", func(s string) (string, bool) {
-			return compactGitStatusText(s, cfg)
-		})
+	capped, cut := capArray(hunks, cfg.MaxDiffLines)
+	if !cut {
+		return nil
 	}
 
-	output = runStage(output, &techniques, "hard-truncate", func(s string) (string, bool) {
-		return hardTruncate(s, cfg.MaxChars)
-	})
-	techniques = dedup(techniques)
-
-	compSize := len(output)
+	writes := []CompactWrite{{Key: "hunks", Value: capped}}
+	origSize, compSize := measureCompaction(result, writes)
 	if compSize >= origSize {
-		return nil
+		return nil // never-worse guard
 	}
-
 	return &CompactResult{
-		Output:     output,
-		Techniques: techniques,
+		Writes:     writes,
+		Techniques: []string{"git-hunk-cap"},
 		OrigSize:   origSize,
 		CompSize:   compSize,
 	}
 }
 
-// compactGitHunk applies compaction to git_hunk tool result.
-func compactGitHunk(result map[string]any, cfg CompactorConfig) *CompactResult {
-	diff, _ := result["diff"].(string)
-	if diff == "" {
-		output, _ := result["output"].(string)
-		if output == "" {
-			return nil
-		}
-		// Try output field instead
-		origSize := len(output)
-		var techniques []string
-		if cfg.CompactGitOutput {
-			output = runStage(output, &techniques, "git-compact", func(s string) (string, bool) {
-				return compactGitDiffText(s, cfg)
-			})
-		}
-		techniques = dedup(techniques)
-		compSize := len(output)
-		if compSize >= origSize {
-			return nil
-		}
-		return &CompactResult{Output: output, Techniques: techniques, OrigSize: origSize, CompSize: compSize}
-	}
-
-	origSize := len(diff)
-	var techniques []string
-
-	if cfg.CompactGitOutput {
-		diff = runStage(diff, &techniques, "git-compact", func(s string) (string, bool) {
-			return compactGitDiffText(s, cfg)
-		})
-	}
-
-	diff = runStage(diff, &techniques, "hard-truncate", func(s string) (string, bool) {
-		return hardTruncate(s, cfg.MaxChars)
-	})
-	techniques = dedup(techniques)
-
-	compSize := len(diff)
-	if compSize >= origSize {
+// gitTextResult runs text stages over one string field and returns a
+// CompactResult whose single write targets that field.
+func gitTextResult(result map[string]any, key string, cfg CompactorConfig,
+	stages ...func(string, CompactorConfig) (string, bool)) *CompactResult {
+	text, ok := result[key].(string)
+	if !ok || text == "" {
 		return nil
 	}
 
+	origSize := len(text)
+	var techniques []string
+	for _, stage := range stages {
+		st := stage
+		text = runStage(text, &techniques, "git-compact", func(s string) (string, bool) {
+			return st(s, cfg)
+		})
+	}
+	techniques = dedup(techniques)
+
+	if len(text) >= origSize {
+		return nil // never-worse guard
+	}
 	return &CompactResult{
-		Output:     diff,
+		Writes:     []CompactWrite{{Key: key, Value: text}},
 		Techniques: techniques,
 		OrigSize:   origSize,
-		CompSize:   compSize,
+		CompSize:   len(text),
 	}
 }
 
