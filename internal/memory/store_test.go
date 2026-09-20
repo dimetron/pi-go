@@ -596,3 +596,69 @@ func TestFTS5SyncTriggers(t *testing.T) {
 		t.Errorf("FTS5 match count = %d, want 1", count)
 	}
 }
+
+// Observations sharing a second must come back in a stable, insertion order.
+//
+// created_at_epoch holds whole seconds, so a burst of tool calls ties on the
+// sort key. Ties are not "usually fine": SQLite's order for equal keys is
+// undefined, so without a tie-breaker the same session can come back in
+// different orders on different runs — which reorders the summarization prompt
+// and makes the summary itself non-reproducible.
+func TestSessionObservations_SameSecondIsStableAndOrdered(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	insertTestSession(t, store, "sess-tie", "/project")
+	base := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	// A burst inside one second, which is what a run of tool calls produces.
+	for i := 0; i < 10; i++ {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-tie",
+			Project:     "/project",
+			Title:       fmt.Sprintf("o-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "edit",
+			CreatedAt:   base.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+
+	got, err := store.SessionObservations(ctx, "sess-tie")
+	if err != nil {
+		t.Fatalf("SessionObservations: %v", err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("got %d observations, want 10", len(got))
+	}
+
+	// Insertion order is preserved, because id is monotonic with insertion.
+	for i, o := range got {
+		if want := fmt.Sprintf("o-%d", i); o.Title != want {
+			t.Errorf("position %d = %q, want %q", i, o.Title, want)
+		}
+	}
+
+	// And the order is total: ids ascend, so no pair is left to SQLite's
+	// discretion.
+	for i := 1; i < len(got); i++ {
+		if got[i].ID <= got[i-1].ID {
+			t.Errorf("id %d at position %d is not greater than %d", got[i].ID, i, got[i-1].ID)
+		}
+	}
+
+	// Stability: repeating the query must not reshuffle.
+	for attempt := 0; attempt < 5; attempt++ {
+		again, err := store.SessionObservations(ctx, "sess-tie")
+		if err != nil {
+			t.Fatalf("SessionObservations (repeat %d): %v", attempt, err)
+		}
+		for i := range again {
+			if again[i].Title != got[i].Title {
+				t.Fatalf("order changed between runs at position %d: %q then %q",
+					i, got[i].Title, again[i].Title)
+			}
+		}
+	}
+}

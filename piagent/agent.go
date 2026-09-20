@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -44,12 +45,16 @@ type Agent struct {
 	// memSummarizer writes end-of-session summaries. Nil when no summary model
 	// was supplied, which makes the flush on Close a no-op.
 	memSummarizer *memory.LLMSummarizer
-	// sessions records, in order, the sessions this agent created. Close
+	// memSessionsMu guards memSessions. [Agent] is documented as safe for
+	// concurrent use across sessions, and two goroutines calling NewSession at
+	// once append to this slice; Close also reads and clears it.
+	memSessionsMu sync.Mutex
+	// memSessions records, in order, the sessions this agent created. Close
 	// summarizes and completes them: a session that is never completed stays
 	// 'active' in the memory database forever, which is what the CLI has been
 	// doing — ~/.pi-go/memory/claude-mem.db held thousands of active sessions
 	// and zero completed ones.
-	sessions []string
+	memSessions []string
 	// project is the memory store's project key, which is the working
 	// directory. Kept because Close still needs it after the sandbox is gone.
 	project string
@@ -154,24 +159,20 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	}
 	a.push(sessionLog.Close)
 
-	// memSessionID is only known once a session exists; the memory callback
-	// reads it through the pointer, so recording starts from that point.
-	var memSessionID string
 	// Held rather than created inline: a summarizing compaction rebuilds the
 	// transcript, which invalidates every pointer the deduper holds into the
 	// old one, so the hook has to be able to reset it.
 	resultDeduper := tools.NewResultDeduper()
 	before, after := buildCallbacks(callbackDeps{
-		deduper:   resultDeduper,
-		meter:     contextMeter,
-		cfg:       cfg,
-		sandbox:   rt.sandbox,
-		lspMgr:    rt.lspMgr,
-		provider:  providerName,
-		worker:    rt.memWorker,
-		project:   workDir,
-		sessionID: &memSessionID,
-		opts:      o,
+		deduper:  resultDeduper,
+		meter:    contextMeter,
+		cfg:      cfg,
+		sandbox:  rt.sandbox,
+		lspMgr:   rt.lspMgr,
+		provider: providerName,
+		worker:   rt.memWorker,
+		project:  workDir,
+		opts:     o,
 	})
 
 	inner, err := agent.New(agent.Config{
@@ -213,7 +214,6 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		inner.SetPreTurnHook(hook)
 	}
 	a.onNewSession = func(sessionID string) {
-		memSessionID = sessionID
 		rt.orch.SetACPLogPath(filepath.Join(sessionDir, sessionID, "acp.jsonl"))
 	}
 	a.sessionLog = sessionLog
@@ -356,30 +356,44 @@ func (a *Agent) Close() error {
 // completed either way: leaving them 'active' is what makes a store accumulate
 // rows that no reader can distinguish from a session still in progress.
 //
-// The context is bounded separately from the caller's, because Close may be
-// reached from a canceled context — that is the common case for a Ctrl-C — and a
-// summary that inherits that cancellation would never be written.
+// Each summary gets its own deadline rather than sharing one across the loop.
+// With a shared budget, a slow first session starves every later one — and worse,
+// the completion call would then receive an already-expired context, leaving
+// those sessions 'active' precisely because the summary overran. Completion is
+// bookkeeping on a local database, so it gets a fresh, short context that cannot
+// be consumed by a summary deadline.
 func (a *Agent) summarizeSessions() {
-	if a.memStore == nil || len(a.sessions) == 0 {
+	// Snapshot and clear under the lock: a concurrent NewSession must not append
+	// to a slice Close is walking, and clearing up front means a second Close
+	// cannot re-summarize the same sessions.
+	a.memSessionsMu.Lock()
+	sessions := a.memSessions
+	a.memSessions = nil
+	a.memSessionsMu.Unlock()
+
+	if a.memStore == nil || len(sessions) == 0 {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), sessionSummaryTimeout)
-	defer cancel()
-
-	for _, sessionID := range a.sessions {
+	for _, sessionID := range sessions {
 		if a.memSummarizer != nil {
-			if err := a.SummarizeSession(ctx, sessionID); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), sessionSummaryTimeout)
+			err := a.SummarizeSession(ctx, sessionID)
+			cancel()
+			if err != nil {
 				slog.Warn("piagent: session summary failed",
 					"session", sessionID, "error", err)
 			}
 		}
-		if err := a.memStore.CompleteSession(ctx, sessionID); err != nil {
+
+		ctx, cancel := context.WithTimeout(context.Background(), sessionCompleteTimeout)
+		err := a.memStore.CompleteSession(ctx, sessionID)
+		cancel()
+		if err != nil {
 			slog.Warn("piagent: completing session failed",
 				"session", sessionID, "error", err)
 		}
 	}
-	a.sessions = nil
 }
 
 // SummarizeSession summarizes one session's recorded observations and stores the
@@ -437,7 +451,9 @@ func (a *Agent) NewSession(ctx context.Context) (string, error) {
 			StartedAt: time.Now(),
 			Status:    "active",
 		})
-		a.sessions = append(a.sessions, sessionID)
+		a.memSessionsMu.Lock()
+		a.memSessions = append(a.memSessions, sessionID)
+		a.memSessionsMu.Unlock()
 	}
 	a.sessionLog.SessionStart(sessionID, a.modelName, a.provider, "embedded", "", "embedded")
 	return sessionID, nil
@@ -589,16 +605,15 @@ func providerFromModelName(modelName string) string {
 
 // callbackDeps carries what the callback chains need to be built.
 type callbackDeps struct {
-	cfg       config.Config
-	sandbox   *tools.Sandbox
-	lspMgr    *lsp.Manager
-	provider  string
-	worker    *memory.Worker
-	project   string
-	sessionID *string
-	deduper   *tools.ResultDeduper
-	meter     *autocompact.Meter
-	opts      options
+	cfg      config.Config
+	sandbox  *tools.Sandbox
+	lspMgr   *lsp.Manager
+	provider string
+	worker   *memory.Worker
+	project  string
+	deduper  *tools.ResultDeduper
+	meter    *autocompact.Meter
+	opts     options
 }
 
 // callbackSet groups the tool and model callbacks for one phase.
@@ -640,7 +655,7 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 		tools.BuildDedupCallback(d.deduper))
 
 	if d.worker != nil {
-		afterTool = append(afterTool, memoryObservationCallback(d.worker, d.cfg, d.project, d.sessionID))
+		afterTool = append(afterTool, memoryObservationCallback(d.worker, d.cfg, d.project))
 	}
 
 	// Ahead of the embedder's callbacks: the meter reports what the provider

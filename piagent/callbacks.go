@@ -58,9 +58,15 @@ func composeAfterTool(cbs []llmagent.AfterToolCallback) llmagent.AfterToolCallba
 }
 
 // memoryObservationCallback records each successful tool call as a raw
-// observation. sessionID is read through a pointer because the callbacks are
-// wired before any session exists; until one does, the callback is inert.
-func memoryObservationCallback(worker *memory.Worker, cfg config.Config, project string, sessionID *string) llmagent.AfterToolCallback {
+// observation.
+//
+// The session ID comes from the ADK context rather than from a captured
+// variable. It used to be read through a pointer to a single shared string, which
+// was wrong in two ways: it raced under the concurrent use the Agent documents
+// (two NewSession calls writing it, the callback reading it), and it could
+// attribute one session's tool calls to another — recording A's work under B's
+// ID. ctx.SessionID() is supplied per invocation, so there is nothing to share.
+func memoryObservationCallback(worker *memory.Worker, cfg config.Config, project string) llmagent.AfterToolCallback {
 	var excluded map[string]bool
 	if cfg.Memory != nil && len(cfg.Memory.ExcludedTools) > 0 {
 		excluded = make(map[string]bool, len(cfg.Memory.ExcludedTools))
@@ -68,16 +74,20 @@ func memoryObservationCallback(worker *memory.Worker, cfg config.Config, project
 			excluded[name] = true
 		}
 	}
-	return func(_ adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
+	return func(ctx adkagent.Context, t adktool.Tool, args, result map[string]any, toolErr error) (map[string]any, error) {
 		// A failed tool call is not worth remembering, and swallowing toolErr
 		// here is correct: it is the tool's error to report, and this callback
 		// only observes.
 		//nolint:nilerr // toolErr belongs to the tool, not to this observer
-		if toolErr != nil || *sessionID == "" || excluded[t.Name()] {
+		if toolErr != nil || excluded[t.Name()] {
+			return nil, nil
+		}
+		sessionID := ctx.SessionID()
+		if sessionID == "" {
 			return nil, nil
 		}
 		worker.Enqueue(memory.RawObservation{
-			SessionID:  *sessionID,
+			SessionID:  sessionID,
 			Project:    project,
 			ToolName:   t.Name(),
 			ToolInput:  args,

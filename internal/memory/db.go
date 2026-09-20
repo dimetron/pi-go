@@ -114,6 +114,15 @@ var migrations = []string{
 
 // OpenDB opens (or creates) a SQLite database at the given path with WAL mode
 // and runs pending migrations. Pass ":memory:" for in-memory databases.
+//
+// The pragmas are set through DSN parameters rather than by executing them on the
+// pool once. database/sql opens connections lazily and without a limit, so
+// `db.Exec("PRAGMA busy_timeout=5000")` configures only whichever single
+// connection happened to serve it; every later connection starts with
+// busy_timeout=0. Under concurrent writers that means SQLITE_BUSY is returned
+// immediately instead of being waited out, and the write is lost — measured at
+// 5 of 12 concurrent CreateSession calls persisted. The driver applies `_pragma`
+// parameters on each new connection, so every one of them is configured.
 func OpenDB(dbPath string) (*sql.DB, error) {
 	if dbPath != ":memory:" {
 		dir := filepath.Dir(dbPath)
@@ -122,23 +131,20 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("memory: open db: %w", err)
+	// Pragmas ride on the DSN so every pooled connection gets them. WAL and mmap
+	// are omitted for the in-memory database, where neither means anything.
+	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=mmap_size(268435456)"
+	if dbPath == ":memory:" {
+		// A named in-memory database shared across the pool's connections. A
+		// bare ":memory:" gives each connection its own empty database, so the
+		// schema created by one connection would be invisible to the next.
+		dsn = "file::memory:?cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 	}
 
-	// Enable WAL mode and foreign keys.
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA mmap_size=268435456", // 256MB
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("memory: %s: %w", p, err)
-		}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("memory: open db: %w", err)
 	}
 
 	if err := migrate(db); err != nil {

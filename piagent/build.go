@@ -42,6 +42,15 @@ const memoryShutdownTimeout = 5 * time.Second
 // misses this budget is logged and abandoned.
 const sessionSummaryTimeout = 20 * time.Second
 
+// sessionCompleteTimeout bounds marking one session completed after its summary
+// has been attempted.
+//
+// Completion is a single local UPDATE, so it does not need the summary's budget.
+// It gets its own short context precisely so that a summary overrunning its
+// deadline cannot leave the session 'active': that is the state this whole
+// change exists to eliminate, and it must not be reachable from a slow provider.
+const sessionCompleteTimeout = 5 * time.Second
+
 // resolveWorkDir returns the absolute working directory for this agent.
 func resolveWorkDir(dir string) (string, error) {
 	if dir == "" {
@@ -228,10 +237,20 @@ func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subage
 		// notice. The store then has to outlive the summary, because that is
 		// where the summary is written.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), memoryShutdownTimeout)
-		_ = worker.Shutdown(shutdownCtx)
+		drainErr := worker.Shutdown(shutdownCtx)
 		cancel()
 
-		summarize()
+		if drainErr != nil {
+			// The worker goroutine may still be compressing and storing, so a
+			// summary taken now would describe a prefix of the session. Report
+			// the loss rather than writing something that reads as complete.
+			// Not fatal: an observation that misses the queue is worth less
+			// than the process failing to exit.
+			slog.Warn("piagent: memory drain timed out; skipping session summary",
+				"error", drainErr, "budget", memoryShutdownTimeout)
+		} else {
+			summarize()
+		}
 
 		_ = store.Close()
 	}

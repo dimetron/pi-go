@@ -437,3 +437,119 @@ func TestSessionSummaryIsSeparateFromCompactionSummarizer(t *testing.T) {
 		t.Errorf("the compaction summarizer was called %d time(s) for a session summary", n)
 	}
 }
+
+// Agent documents that it is safe for concurrent use across sessions. NewSession
+// appends to the session list and Close reads and clears it, so without a lock
+// that claim is false: -race flags the append, and concurrent callers can lose
+// session IDs, which would silently skip their summaries and completions.
+func TestConcurrentNewSessionIsRaceFree(t *testing.T) {
+	home := isolate(t)
+
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(&sessionSummarizerLLM{reply: sessionSummaryReply}),
+	)
+
+	const n = 8
+	var wg sync.WaitGroup
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, err := ag.NewSession(context.Background())
+			if err != nil {
+				t.Errorf("NewSession: %v", err)
+				return
+			}
+			ids[i] = id
+		}()
+	}
+	wg.Wait()
+
+	// Every session must be recorded, or its summary and completion are skipped.
+	ag.memSessionsMu.Lock()
+	recorded := len(ag.memSessions)
+	ag.memSessionsMu.Unlock()
+	if recorded != n {
+		t.Errorf("recorded %d sessions, want %d — concurrent appends lost entries", recorded, n)
+	}
+
+	// Each session must be distinct; a lost append can also mean a duplicated id.
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" {
+			t.Error("a concurrent NewSession returned an empty ID")
+			continue
+		}
+		if seen[id] {
+			t.Errorf("session %q was issued twice", id)
+		}
+		seen[id] = true
+	}
+
+	if err := ag.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// And every one of them must have been completed by the flush.
+	store := openMemoryStore(t, home)
+	for id := range seen {
+		if status := sessionStatus(t, home, id); status != "completed" {
+			t.Errorf("session %s status = %q, want completed", id, status)
+		}
+	}
+	_ = store
+}
+
+// A slow summary must not leave a later session 'active'.
+//
+// With one shared deadline across the loop, a first session that consumed the
+// budget left every later session with an already-canceled context — so
+// CompleteSession failed and the sessions stayed 'active', which is precisely the
+// state this change exists to remove. Completion now gets a fresh context.
+func TestCompletionSurvivesASummaryOverrun(t *testing.T) {
+	home := isolate(t)
+
+	// A summarizer that fails instantly stands in for one that overran its
+	// deadline: either way the session must still be completed.
+	failing := &sessionSummarizerLLM{err: os.ErrDeadlineExceeded}
+	ag := newTestAgent(t, &fakeLLM{name: "conversation", reply: "done"},
+		WithMemory(true),
+		WithSessionSummary(failing),
+	)
+
+	ctx := t.Context()
+	var ids []string
+	for i := 0; i < 3; i++ {
+		id, err := ag.NewSession(ctx)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Give each session something to summarize, so the summarizer is consulted.
+	store := openMemoryStore(t, home)
+	for _, id := range ids {
+		if err := store.InsertObservation(ctx, &memory.Observation{
+			SessionID: id, Project: ag.WorkingDir(), Title: "work",
+			Type: memory.TypeChange, Text: "t", ToolName: "edit", CreatedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("InsertObservation: %v", err)
+		}
+	}
+
+	if err := ag.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if n := failing.callCount(); n != len(ids) {
+		t.Errorf("summarizer consulted %d time(s), want %d — one deadline must not starve later sessions", n, len(ids))
+	}
+	for _, id := range ids {
+		if status := sessionStatus(t, home, id); status != "completed" {
+			t.Errorf("session %s status = %q, want completed even though its summary failed", id, status)
+		}
+	}
+}

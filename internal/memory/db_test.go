@@ -1,10 +1,14 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestOpenDB_Memory(t *testing.T) {
@@ -248,5 +252,98 @@ func TestOpenDB_FileBased(t *testing.T) {
 	}
 	if version != len(migrations) {
 		t.Errorf("version = %d after reopen, want %d", version, len(migrations))
+	}
+}
+
+// Pragmas must hold on every connection the pool opens, not just the first.
+//
+// Executing them once on the pool configures whichever single connection served
+// the statement; database/sql then hands out fresh, unconfigured connections
+// under load. With busy_timeout=0 on those, a concurrent writer gets
+// SQLITE_BUSY immediately instead of waiting, and the write is lost — measured
+// at 5 of 12 concurrent CreateSession calls surviving.
+//
+// Connections are checked one at a time: the pool is deliberately bounded, so
+// holding several open at once would block here rather than prove anything.
+func TestOpenDB_PragmasApplyToEveryConnection(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "mem.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	seen := map[string]int{}
+	for i := 0; i < 6; i++ {
+		c, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn %d: %v", i, err)
+		}
+		var busy, fk int
+		var journal string
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); err != nil {
+			c.Close()
+			t.Fatalf("conn %d busy_timeout: %v", i, err)
+		}
+		if err := c.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+			c.Close()
+			t.Fatalf("conn %d foreign_keys: %v", i, err)
+		}
+		c.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journal)
+		c.Close()
+
+		if busy <= 0 {
+			t.Errorf("conn %d busy_timeout = %d, want > 0 — a concurrent write will fail instead of waiting", i, busy)
+		}
+		if fk != 1 {
+			t.Errorf("conn %d foreign_keys = %d, want 1", i, fk)
+		}
+		seen[journal]++
+	}
+	if len(seen) != 1 {
+		t.Errorf("journal_mode differs across connections: %v", seen)
+	}
+}
+
+// Concurrent creates must all persist. This is the user-visible consequence of
+// the pragma bug above: the row is silently dropped.
+func TestSQLiteStore_ConcurrentCreateSessionPersistsAll(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "mem.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	store := NewSQLiteStore(db)
+	ctx := context.Background()
+
+	const n = 12
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = store.CreateSession(ctx, &Session{
+				SessionID: fmt.Sprintf("s-%02d", i),
+				Project:   "/project",
+				StartedAt: time.Now(),
+				Status:    "active",
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("CreateSession %d: %v", i, err)
+		}
+	}
+
+	var rows int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != n {
+		t.Errorf("persisted %d of %d sessions — concurrent creates were lost", rows, n)
 	}
 }
