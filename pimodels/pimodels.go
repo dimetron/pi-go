@@ -185,6 +185,47 @@ func WithPromptCachingDisabled() Option {
 	return func(o *options) { o.llm.DisablePromptCaching = true }
 }
 
+// WithMaxOutputTokens caps a reply, in tokens, on the OpenAI-compatible paths
+// (openai, azure, openrouter, opencode, xai and agentgateway).
+//
+// Set it for a backend whose models stop below the default and reject the
+// request rather than clamping it. A per-request MaxOutputTokens still wins
+// over this.
+//
+// The native Ollama client is not on those paths and does not read this: it
+// caps output with PI_OLLAMA_NUM_PREDICT, which is a variable rather than a
+// per-client option. Reaching Ollama through a gateway is the way to set a cap
+// in code.
+func WithMaxOutputTokens(n int64) Option {
+	return func(o *options) { o.llm.MaxOutputTokens = n }
+}
+
+// WithLegacyMaxTokens sends max_tokens instead of max_completion_tokens on the
+// Chat Completions wire, for an OpenAI-compatible endpoint that cannot read the
+// modern field.
+//
+// Set it when pointing [WithBaseURL] at an OpenAI-compatible proxy in front of
+// Ollama, or at any server that ignores max_completion_tokens: that field being
+// ignored is silent, so the model runs unbounded rather than returning an error.
+//
+// Scoped to the OpenAI-compatible paths, like [WithMaxOutputTokens]. The native
+// ollama/ client already speaks Ollama's own API and never had the problem; the
+// agentgateway provider sets this for its own known Ollama routes without help.
+func WithLegacyMaxTokens() Option {
+	return func(o *options) { o.llm.UseLegacyMaxTokens = true }
+}
+
+// WithSystemCAsDisabled narrows trust to the bundle given to [WithCACert]
+// alone, so an endpoint is reachable only through that CA and never through a
+// public root.
+//
+// Only useful together with [WithCACert], and only when the endpoint must not
+// be reachable any other way — the opposite of what a TLS-intercepting proxy
+// wants, which is additive trust.
+func WithSystemCAsDisabled() Option {
+	return func(o *options) { o.llm.DisableSystemCAs = true }
+}
+
 // WithAdvisor enables an advisor model for providers that support it, bounded
 // by maxUses per request (0 = unbounded).
 func WithAdvisor(advisorModel string, maxUses int, caching bool) Option {

@@ -113,6 +113,40 @@ ag, err := piagent.New(ctx,
 | `WithMemory(bool)` / `WithPalace(bool)` | Opt in to the shared `~/.pi-go` stores (off by default) |
 | `WithSkills(bool)` / `WithSubagents(bool)` | Toggle discovery (on by default) |
 | `WithAgentEvents(fn)` | Receive subagent and background-bash progress |
+| `WithSummarizer(m)` | Model that writes compaction summaries (default: the session model) |
+| `WithCompactNotify(fn)` | Be told when auto-compaction runs, or fails |
+
+## Auto-compaction is observable and retargetable
+
+Compaction discards conversation history, so two things about it are worth
+controlling.
+
+**Which model summarizes.** Summarizing a transcript is a different job from
+holding the conversation, and a small fast model often does it better and for
+less:
+
+```go
+cheap, _ := pimodels.New(ctx, "gemini-3.8-flash")
+ag, _ := piagent.New(ctx,
+    piagent.WithModel(m),
+    piagent.WithSummarizer(cheap),
+)
+```
+
+**Whether you are told.** Without a notifier the outcome is silent, and "silent"
+is not the same as "discoverable" — the session log is the stated fallback, so
+`Agent.LogPath()` exists to make it reachable:
+
+```go
+ag, _ := piagent.New(ctx, piagent.WithModel(m),
+    piagent.WithCompactNotify(func(msg string) {
+        log.Printf("compaction: %s", msg)
+    }),
+)
+fmt.Println("session log:", ag.LogPath()) // "" when no log could be created
+```
+
+The notifier runs on the goroutine driving the turn, so keep it quick.
 
 ## Callbacks
 
