@@ -473,17 +473,21 @@ func TestResolveWorktreeUsage(t *testing.T) {
 		agentDefault  bool
 		inputOverride *bool
 		workDir       string
+		worktreeBase  string
 		want          bool
 	}{
-		{"default true, no override", true, nil, "", true},
-		{"default false, no override", false, nil, "", false},
-		{"override true", false, boolPtr(true), "", true},
-		{"override false", true, boolPtr(false), "", false},
-		{"workDir provided, ignores all", true, boolPtr(true), "/tmp/wt", false},
+		{"default true, no override", true, nil, "", "", true},
+		{"default false, no override", false, nil, "", "", false},
+		{"override true", false, boolPtr(true), "", "", true},
+		{"override false", true, boolPtr(false), "", "", false},
+		{"workDir provided, ignores all", true, boolPtr(true), "/tmp/wt", "", false},
+		{"base forces a worktree on an agent that sets none", false, nil, "", "main", true},
+		{"base is ignored when workDir is set", false, nil, "/tmp/wt", "main", false},
+		{"explicit override false beats a base", false, boolPtr(false), "", "main", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveWorktreeUsage(tt.agentDefault, tt.inputOverride, tt.workDir)
+			got := resolveWorktreeUsage(tt.agentDefault, tt.inputOverride, tt.workDir, tt.worktreeBase)
 			if got != tt.want {
 				t.Errorf("resolveWorktreeUsage = %v, want %v", got, tt.want)
 			}

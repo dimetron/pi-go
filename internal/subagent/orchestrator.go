@@ -448,7 +448,7 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 	agentID := fmt.Sprintf("%s-%d", agent.Name, uniqueNano())
 
 	// Determine if worktree is needed.
-	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir)
+	useWorktree := resolveWorktreeUsage(agent.Worktree, input.Worktree, input.WorkDir, input.WorktreeBase)
 
 	workDir, err := o.resolveWorkDir(agentID, input, useWorktree)
 	if err != nil {
@@ -514,13 +514,15 @@ func (o *Orchestrator) Spawn(ctx context.Context, input SpawnInput) (<-chan Even
 }
 
 // resolveWorkDir picks the directory the subagent runs in, creating its
-// worktree when one is called for.
+// worktree when one is called for. A base ref branches the worktree from that
+// commit instead of HEAD, which is what lets a read-only agent see an
+// already-committed change.
 func (o *Orchestrator) resolveWorkDir(agentID string, input SpawnInput, useWorktree bool) (string, error) {
 	if input.WorkDir != "" {
 		return input.WorkDir, nil
 	}
 	if useWorktree && o.worktree != nil {
-		wtPath, err := o.worktree.Create(agentID, input.WorktreeName)
+		wtPath, err := o.worktree.CreateAt(agentID, input.WorktreeBase, input.WorktreeName)
 		if err != nil {
 			return "", fmt.Errorf("creating worktree: %w", err)
 		}
@@ -781,12 +783,21 @@ func (o *Orchestrator) Get(agentID string) (AgentStatus, bool) {
 }
 
 // resolveWorktreeUsage determines whether a worktree should be created for a spawn.
-func resolveWorktreeUsage(agentDefault bool, inputOverride *bool, workDir string) bool {
+//
+// A non-empty worktreeBase forces one: the base only means something inside a
+// worktree, so honoring it on the repo root would silently answer a different
+// question than the caller asked. This is what makes a base ref work for a
+// read-only agent, whose own definition sets no worktree — the caller asks for
+// the diff, and the worktree is the only way to see it.
+func resolveWorktreeUsage(agentDefault bool, inputOverride *bool, workDir, worktreeBase string) bool {
 	if workDir != "" {
 		return false // explicit work dir — no worktree
 	}
 	if inputOverride != nil {
 		return *inputOverride
+	}
+	if worktreeBase != "" {
+		return true
 	}
 	return agentDefault
 }

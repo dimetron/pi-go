@@ -1187,6 +1187,49 @@ func TestResolveWorkDir(t *testing.T) {
 		}
 	})
 
+	t.Run("base ref makes the committed change a visible diff", func(t *testing.T) {
+		repo := initTestRepo(t)
+		mgr := NewWorktreeManager(repo)
+		o := &Orchestrator{repoRoot: repo, worktree: mgr}
+		t.Cleanup(func() { _ = mgr.CleanupAll() })
+
+		// Two commits, then ask for the older one.
+		for _, step := range []struct{ content string }{{"old"}, {"new"}} {
+			if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte(step.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range [][]string{{"add", "f.txt"}, {"commit", "-m", step.content}} {
+				cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v: %s", args, err, out)
+				}
+			}
+		}
+
+		got, err := o.resolveWorkDir("wd-base012345", SpawnInput{WorktreeBase: "HEAD~1"}, true)
+		if err != nil {
+			t.Fatalf("resolveWorkDir: %v", err)
+		}
+
+		// `git diff` is the only view the review tools have, so this is the
+		// assertion tied to the actual goal. It fails if the base is dropped
+		// anywhere between SpawnInput and the worktree, and it also fails on a
+		// worktree merely branched at base, which would show nothing here.
+		out, err := exec.Command("git", "-C", got, "diff").CombinedOutput()
+		if err != nil {
+			t.Fatalf("git diff in worktree: %v: %s", err, out)
+		}
+		diff := string(out)
+		if diff == "" {
+			t.Fatal("git diff is empty: a reviewer of this change would read nothing")
+		}
+		for _, want := range []string{"-old", "+new"} {
+			if !strings.Contains(diff, want) {
+				t.Errorf("diff does not contain %q:\n%s", want, diff)
+			}
+		}
+	})
+
 	t.Run("worktree failure is wrapped", func(t *testing.T) {
 		// A manager rooted outside a git repo cannot create a worktree.
 		o := &Orchestrator{repoRoot: "/repo", worktree: NewWorktreeManager(t.TempDir())}
