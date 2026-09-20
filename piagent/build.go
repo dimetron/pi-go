@@ -225,7 +225,12 @@ func setupMemory(ctx context.Context, o options, cfg config.Config, orch *subage
 		return nil, nil, noop
 	}
 	store := memory.NewSQLiteStore(db)
-	worker := memory.NewWorker(store, memory.NewSubagentCompressor(orch), maxPendingObservations(cfg))
+	compressorName, known := cfg.ResolveCompressor()
+	if !known {
+		slog.Warn("piagent: unknown memory compressor in config, using default",
+			"configured", cfg.Memory.Compressor, "using", compressorName)
+	}
+	worker := memory.NewWorker(store, memory.NewCompressor(compressorName, orch), maxPendingObservations(cfg))
 	worker.Start(ctx)
 	return store, worker, func() {
 		// Drain first, summarize in between, close the store last.

@@ -77,3 +77,52 @@ func (s *LLMSummarizer) SummarizeSession(ctx context.Context, sessionID, project
 	}
 	return sum, nil
 }
+
+// SessionSummarizer summarizes one session's observations and stores the result.
+//
+// It is the whole end-of-session step — read the session's observations, ask
+// the model once, write the summary — so the CLI and the piagent façade reach
+// the store through one path and cannot disagree about what a summary is.
+//
+// A session with no observations is reported as an error rather than silently
+// writing nothing: callers distinguish "nothing to summarize" from "summarized"
+// by their own bookkeeping, but a silent success would hide a store that never
+// recorded anything.
+type SessionSummarizer struct {
+	store Store
+	llm   llmmodel.LLM
+}
+
+// NewSessionSummarizer returns a summarizer that reads observations from store
+// and writes the summary back to it. A nil model, or a nil store, yields a
+// summarizer that reports an error rather than panicking.
+func NewSessionSummarizer(store Store, llm llmmodel.LLM) *SessionSummarizer {
+	return &SessionSummarizer{store: store, llm: llm}
+}
+
+// SummarizeSession summarizes sessionID and stores the summary.
+func (s *SessionSummarizer) SummarizeSession(ctx context.Context, sessionID, project string) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("memory: no store configured for session summary")
+	}
+	if s.llm == nil {
+		return fmt.Errorf("memory: no summarizer model configured")
+	}
+
+	observations, err := s.store.SessionObservations(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("memory: reading session observations: %w", err)
+	}
+	if len(observations) == 0 {
+		return fmt.Errorf("memory: session %q has no observations to summarize", sessionID)
+	}
+
+	sum, err := NewLLMSummarizer(s.llm).SummarizeSession(ctx, sessionID, project, observations)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpsertSummary(ctx, sum); err != nil {
+		return fmt.Errorf("memory: storing session summary: %w", err)
+	}
+	return nil
+}

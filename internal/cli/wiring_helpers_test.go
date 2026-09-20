@@ -135,7 +135,7 @@ func TestSetupMemoryDisabledIsSafe(t *testing.T) {
 	flagMemoryOff = true
 	t.Cleanup(func() { flagMemoryOff = orig })
 
-	store, worker, closeFn := setupMemory(t.Context(), config.Config{}, nil)
+	store, worker, closeFn := setupMemory(t.Context(), config.Config{}, nil, nil, nil, "")
 	if store != nil || worker != nil {
 		t.Errorf("expected no store/worker when memory is off, got %v/%v", store, worker)
 	}

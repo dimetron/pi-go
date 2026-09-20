@@ -37,23 +37,61 @@ var ErrNoDefaultRole = errors.New("no default model role configured")
 
 // MemoryConfig holds settings for the persistent memory system.
 type MemoryConfig struct {
-	Enabled          *bool    `json:"enabled,omitempty"`
-	DBPath           string   `json:"db_path,omitempty"`
-	TokenBudget      int      `json:"token_budget,omitempty"`
-	CompressionRole  string   `json:"compression_model_role,omitempty"`
+	Enabled         *bool  `json:"enabled,omitempty"`
+	DBPath          string `json:"db_path,omitempty"`
+	TokenBudget     int    `json:"token_budget,omitempty"`
+	CompressionRole string `json:"compression_model_role,omitempty"`
+	// Compressor selects how a recorded tool call becomes an observation.
+	//
+	// "none" (the default) records the raw event with no model call.
+	// "subagent" spawns the bundled memory-compressor as a child process per
+	// tool call. Per-tool inference is off by default because it costs a
+	// process spawn and an uncached provider round trip for every tool call in
+	// a session; the session summary supplies the narrative instead.
+	Compressor       string   `json:"compressor,omitempty"`
 	MaxPending       int      `json:"max_pending_observations,omitempty"`
 	LookbackHours    int      `json:"context_lookback_hours,omitempty"`
 	ExcludedTools    []string `json:"excluded_tools,omitempty"`
 	ExcludedProjects []string `json:"excluded_projects,omitempty"`
 }
 
+// Compressor values accepted in MemoryConfig.Compressor.
+const (
+	// CompressorNone records observations without any model call.
+	CompressorNone = "none"
+	// CompressorSubagent compresses each observation with the bundled
+	// memory-compressor subagent, one child process per tool call.
+	CompressorSubagent = "subagent"
+)
+
 // MemoryDefaults returns a MemoryConfig with default values.
 func MemoryDefaults() MemoryConfig {
 	return MemoryConfig{
 		TokenBudget:     8000,
 		CompressionRole: "smol",
+		Compressor:      CompressorNone,
 		MaxPending:      100,
 		LookbackHours:   72,
+	}
+}
+
+// ResolveCompressor returns the configured compressor name, falling back to the
+// default when config carries none. An unrecognized value also falls back
+// rather than erroring: memory is best-effort, and refusing to record anything
+// because of a mistyped knob would be a worse outcome than recording the
+// model-free default.
+//
+// Callers that need to tell an unknown value apart from an absent one log it
+// themselves; this returns only the resolved name.
+func (c Config) ResolveCompressor() (name string, ok bool) {
+	if c.Memory == nil || c.Memory.Compressor == "" {
+		return MemoryDefaults().Compressor, true
+	}
+	switch c.Memory.Compressor {
+	case CompressorNone, CompressorSubagent:
+		return c.Memory.Compressor, true
+	default:
+		return MemoryDefaults().Compressor, false
 	}
 }
 

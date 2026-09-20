@@ -32,6 +32,23 @@ func NewSubagentCompressor(orch *subagent.Orchestrator) *SubagentCompressor {
 	return &SubagentCompressor{runner: orch}
 }
 
+// NewCompressor returns the Compressor for a resolved compressor name.
+//
+// The name is resolved by config.Config.ResolveCompressor; this keeps the
+// mapping in one place so the CLI and the piagent wiring cannot select
+// different compressors for the same configuration.
+//
+// A nil orchestrator forces the model-free compressor even when the subagent
+// compressor was asked for: spawning subagents needs an orchestrator, and
+// falling back to recording beats failing to record. That is also what makes
+// the disabled-orchestrator paths in tests behave.
+func NewCompressor(name string, orch *subagent.Orchestrator) Compressor {
+	if name == "subagent" && orch != nil {
+		return NewSubagentCompressor(orch)
+	}
+	return NewNoopCompressor()
+}
+
 // compressedResponse is the JSON structure expected from the compression subagent.
 type compressedResponse struct {
 	Title       string   `json:"title"`
