@@ -597,14 +597,24 @@ func TestFTS5SyncTriggers(t *testing.T) {
 	}
 }
 
-// Observations sharing a second must come back in a stable, insertion order.
+// Observations sharing a second must come back in a total, deterministic order.
 //
-// created_at_epoch holds whole seconds, so a burst of tool calls ties on the
-// sort key. Ties are not "usually fine": SQLite's order for equal keys is
-// undefined, so without a tie-breaker the same session can come back in
-// different orders on different runs — which reorders the summarization prompt
-// and makes the summary itself non-reproducible.
-func TestSessionObservations_SameSecondIsStableAndOrdered(t *testing.T) {
+// created_at_epoch holds whole seconds, so a burst of tool calls ties on the sort
+// key, and SQLite leaves equal keys unordered. ORDER BY created_at_epoch alone is
+// therefore incidental, not guaranteed; the id tie-breaker is what makes the
+// order total and the summary reproducible.
+//
+// The table is deliberately put into a state where that matters: insert, delete a
+// middle run, re-insert. The re-inserted rows keep their earlier timestamps but
+// take higher ids, so the two candidate orders diverge. What comes back is id
+// order, which is the contract.
+//
+// Honest limitation: this cannot distinguish the tie-breaker from SQLite's
+// incidental rowid order, because an index scan over session_id happens to visit
+// rows in that order anyway. It pins the observable contract — total, repeatable,
+// id-ascending — rather than proving the guarantee is enforced. The tie-breaker
+// is defended by that reasoning, not by this test.
+func TestSessionObservations_SameSecondIsOrderedByID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -625,6 +635,30 @@ func TestSessionObservations_SameSecondIsStableAndOrdered(t *testing.T) {
 		})
 	}
 
+	// Fragmented rowids: rows whose id order disagrees with their timestamp
+	// order. Without this the two orders coincide and the tie-breaker is
+	// invisible.
+	insertOne := func(i int) {
+		store.InsertObservation(ctx, &Observation{
+			SessionID:   "sess-tie",
+			Project:     "/project",
+			Title:       fmt.Sprintf("o-%d", i),
+			Type:        TypeChange,
+			Text:        "text",
+			SourceFiles: []string{},
+			ToolName:    "edit",
+			CreatedAt:   base.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	for i := 4; i < 7; i++ {
+		if _, err := store.db.Exec("DELETE FROM observations WHERE title = ?", fmt.Sprintf("o-%d", i)); err != nil {
+			t.Fatalf("DELETE: %v", err)
+		}
+	}
+	for i := 4; i < 7; i++ {
+		insertOne(i)
+	}
+
 	got, err := store.SessionObservations(ctx, "sess-tie")
 	if err != nil {
 		t.Fatalf("SessionObservations: %v", err)
@@ -633,19 +667,25 @@ func TestSessionObservations_SameSecondIsStableAndOrdered(t *testing.T) {
 		t.Fatalf("got %d observations, want 10", len(got))
 	}
 
-	// Insertion order is preserved, because id is monotonic with insertion.
-	for i, o := range got {
-		if want := fmt.Sprintf("o-%d", i); o.Title != want {
-			t.Errorf("position %d = %q, want %q", i, o.Title, want)
+	// The order is total: ids ascend, so no pair is left to SQLite's discretion.
+	// The re-inserted rows have earlier timestamps but higher ids, so this is the
+	// property that would break first if the tie-breaker were dropped.
+	for i := 1; i < len(got); i++ {
+		if got[i].ID <= got[i-1].ID {
+			t.Errorf("id %d at position %d is not greater than %d — the order is not total", got[i].ID, i, got[i-1].ID)
 		}
 	}
 
-	// And the order is total: ids ascend, so no pair is left to SQLite's
-	// discretion.
-	for i := 1; i < len(got); i++ {
-		if got[i].ID <= got[i-1].ID {
-			t.Errorf("id %d at position %d is not greater than %d", got[i].ID, i, got[i-1].ID)
+	// Every observation comes back exactly once, and the same set each run.
+	if len(got) != 10 {
+		t.Fatalf("got %d observations, want 10", len(got))
+	}
+	seen := map[string]bool{}
+	for _, o := range got {
+		if seen[o.Title] {
+			t.Errorf("observation %q returned twice", o.Title)
 		}
+		seen[o.Title] = true
 	}
 
 	// Stability: repeating the query must not reshuffle.
