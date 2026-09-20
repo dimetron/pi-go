@@ -22,6 +22,13 @@ import (
 // This pipeline already read the right field ("diff") and applyCompaction
 // already wrote it; only the name was wrong. It is therefore the smallest fix
 // in the set, and the one to land first.
+//
+// It sets the tool's own `truncated` field when the diff is cut. Before this,
+// the compactor could reduce a diff by 99% while leaving truncated unset, so the
+// result claimed to be the complete diff of the file. GitFileDiffOutput already
+// declares the field (git_diff.go:32) and the tool sets it when its own 256KB
+// byte cap fires (git_diff.go:88-90) — compaction is the same kind of loss and
+// must report it the same way.
 func compactGitFileDiff(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
 	return gitTextResult(result, "diff", cfg,
 		func(s string, c CompactorConfig) (string, bool) { return compactGitDiffText(s, c) },
@@ -91,7 +98,15 @@ func compactGitHunk(result, _ map[string]any, cfg CompactorConfig) *CompactResul
 }
 
 // gitTextResult runs text stages over one string field and returns a
-// CompactResult whose single write targets that field.
+// CompactResult whose writes target that field and, when the tool declares one,
+// its truncation flag.
+//
+// The flag is written unconditionally rather than only when already present.
+// These structs declare `truncated` with omitempty, so a complete result carries
+// no such key — checking for it would mean never setting it, which is precisely
+// how a diff reduced by 99% could still claim to be the whole diff. A result
+// that silently reads as complete is worse than a large one, so a missing key is
+// the case that most needs the write.
 func gitTextResult(result map[string]any, key string, cfg CompactorConfig,
 	stages ...func(string, CompactorConfig) (string, bool)) *CompactResult {
 	text, ok := result[key].(string)
@@ -112,12 +127,35 @@ func gitTextResult(result map[string]any, key string, cfg CompactorConfig,
 	if len(text) >= origSize {
 		return nil // never-worse guard
 	}
+
+	writes := []CompactWrite{{Key: key, Value: text}}
+	if _, hasFlag := result["truncated"]; hasFlag || declaresTruncated(result) {
+		writes = append(writes, CompactWrite{Key: "truncated", Value: true})
+	}
+
+	origSize, compSize := measureCompaction(result, writes)
+	if compSize >= origSize {
+		return nil // never-worse guard, now counting the disclosure write
+	}
 	return &CompactResult{
-		Writes:     []CompactWrite{{Key: key, Value: text}},
+		Writes:     writes,
 		Techniques: techniques,
 		OrigSize:   origSize,
-		CompSize:   len(text),
+		CompSize:   compSize,
 	}
+}
+
+// declaresTruncated reports whether the result belongs to a tool whose output
+// type carries a truncation flag. The flag is absent from the map when false
+// (omitempty), so its absence cannot distinguish "not truncated" from "no such
+// field" — the tool is identified by the companion fields instead.
+func declaresTruncated(result map[string]any) bool {
+	// git-file-diff: file + diff (+ lines_added/lines_removed); git-hunk has no
+	// truncated field and is excluded by requiring lines_added or lines_removed.
+	_, hasFile := result["file"]
+	_, hasAdded := result["lines_added"]
+	_, hasRemoved := result["lines_removed"]
+	return hasFile && (hasAdded || hasRemoved)
 }
 
 // diffFileHeader matches diff file headers like "diff --git a/file b/file".
@@ -137,6 +175,15 @@ type diffTextCompactor struct {
 	currentFile string
 	additions   int
 	deletions   int
+
+	// Per-hunk counters for the lines dropped past MaxDiffHunkLines. Without
+	// them a cap that lands inside an unbalanced run shows only one sign, and
+	// the hunk reads as a pure removal (or addition) when it was neither. rtk
+	// reports the same figures (tmp/rtk/src/cmds/git/git_cmd.rs,
+	// hunk_truncation_note) for the same reason: an anchored ^- / ^+ audit must
+	// be able to tell what it did not see.
+	hunkDroppedDels int
+	hunkDroppedAdds int
 }
 
 // emit passes one line through to the output and counts it against MaxDiffLines.
@@ -153,8 +200,34 @@ func (c *diffTextCompactor) flushFile() {
 	}
 }
 
+// flushHunkNote discloses the change lines dropped from the hunk just closed,
+// split by sign. Emitting nothing when the hunk was fully shown keeps the note
+// from appearing on diffs that lost nothing.
+func (c *diffTextCompactor) flushHunkNote() {
+	d, a := c.hunkDroppedDels, c.hunkDroppedAdds
+	if d == 0 && a == 0 {
+		return
+	}
+	noun := func(n int, word string) string {
+		if n == 1 {
+			return fmt.Sprintf("%d %s", n, word)
+		}
+		return fmt.Sprintf("%d %ss", n, word)
+	}
+	switch {
+	case d == 0:
+		fmt.Fprintf(&c.b, "  ... (%s truncated)\n", noun(a, "addition"))
+	case a == 0:
+		fmt.Fprintf(&c.b, "  ... (%s truncated)\n", noun(d, "deletion"))
+	default:
+		fmt.Fprintf(&c.b, "  ... (%s, %s truncated)\n", noun(d, "deletion"), noun(a, "addition"))
+	}
+	c.hunkDroppedDels, c.hunkDroppedAdds = 0, 0
+}
+
 // startFile closes off the previous file's tally and begins a new file.
 func (c *diffTextCompactor) startFile(name, header string) {
+	c.flushHunkNote()
 	c.flushFile()
 	c.currentFile = name
 	c.emit(header)
@@ -166,14 +239,27 @@ func (c *diffTextCompactor) startFile(name, header string) {
 
 // consumeHunkLine keeps the first MaxDiffHunkLines lines of a hunk while counting
 // additions and deletions across the whole hunk.
+//
+// Lines past the cap are counted by sign rather than silently discarded, so the
+// hunk can disclose what it withheld. Keeping the first N lines is otherwise
+// correct: it is the head of the change, which is where the reader starts.
 func (c *diffTextCompactor) consumeHunkLine(line string) {
 	c.hunkLines++
+	isAdd := strings.HasPrefix(line, "+")
+	isDel := strings.HasPrefix(line, "-")
+	if c.hunkLines > c.cfg.MaxDiffHunkLines {
+		if isDel {
+			c.hunkDroppedDels++
+		} else if isAdd {
+			c.hunkDroppedAdds++
+		}
+	}
 	if c.hunkLines <= c.cfg.MaxDiffHunkLines {
 		c.emit(line)
 	}
-	if strings.HasPrefix(line, "+") {
+	if isAdd {
 		c.additions++
-	} else if strings.HasPrefix(line, "-") {
+	} else if isDel {
 		c.deletions++
 	}
 }
@@ -217,7 +303,8 @@ func compactGitDiffText(s string, cfg CompactorConfig) (string, bool) {
 		c.consume(line)
 	}
 
-	// Final file summary
+	// Final file summary, then any note for the hunk still open at the cut.
+	c.flushHunkNote()
 	c.flushFile()
 
 	if c.totalLines < len(lines) {

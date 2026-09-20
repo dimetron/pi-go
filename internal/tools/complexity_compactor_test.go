@@ -353,14 +353,15 @@ func TestCompactGitDiffText_Golden(t *testing.T) {
 		{
 			name: "multi file diff with hunk and line caps",
 			cfg: cxCfg(func(c *CompactorConfig) {
-				c.MaxDiffLines = 14
+				c.MaxDiffLines = 11
 				c.MaxDiffHunkLines = 3
 			}),
 			in: multiFileDiff,
 			want: "diff --git a/a.go b/a.go\nindex 111..222 100644\n--- a/a.go\n+++ b/a.go\n" +
-				"@@ -1,4 +1,6 @@\n ctx\n+add one\n+add two\n  (+3 -1)\n" +
-				"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -10,2 +10,3 @@\n" +
-				"+bee one\n-bee two\n  (+1 -1)\n\n... (6 lines omitted from diff)\n",
+				"@@ -1,4 +1,6 @@\n ctx\n+add one\n+add two\n" +
+				"  ... (1 deletion, 1 addition truncated)\n  (+3 -1)\n" +
+				"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n" +
+				"\n... (9 lines omitted from diff)\n",
 			applied: true,
 		},
 		{
@@ -982,9 +983,12 @@ func TestDiffTextCompactor_ConsumeRouting(t *testing.T) {
 	}
 
 	c.consume("+one") // kept, counted as an addition
-	c.consume("-two") // over MaxDiffHunkLines: counted but not emitted
+	c.consume("-two") // over MaxDiffHunkLines: counted, withheld, and disclosed
 	if c.additions != 1 || c.deletions != 1 {
 		t.Errorf("additions/deletions = %d/%d, want 1/1", c.additions, c.deletions)
+	}
+	if c.hunkDroppedDels != 1 {
+		t.Errorf("hunkDroppedDels = %d, want 1 (the withheld deletion must be recorded)", c.hunkDroppedDels)
 	}
 
 	c.consume("diff --git a/y.go b/y.go")
@@ -995,7 +999,9 @@ func TestDiffTextCompactor_ConsumeRouting(t *testing.T) {
 		t.Errorf("file header should reset hunk state, got inHunk=%v +%d -%d", c.inHunk, c.additions, c.deletions)
 	}
 
-	want := "--- a/x.go\n@@ -1 +1 @@\n+one\ndiff --git a/y.go b/y.go\n"
+	// Closing the hunk must disclose the withheld deletion. Without the note the
+	// hunk reads as though "+one" were the whole change.
+	want := "--- a/x.go\n@@ -1 +1 @@\n+one\n  ... (1 deletion truncated)\ndiff --git a/y.go b/y.go\n"
 	if got := c.b.String(); got != want {
 		t.Errorf("output = %q, want %q", got, want)
 	}
