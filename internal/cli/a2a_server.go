@@ -88,6 +88,7 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		Headers:  flagHeaders,
 		Insecure: flagInsecure,
 		System:   system,
+		Version:  versionString(),
 	}
 	if sessionSvc := openServerSessionStore(ctx, logger); sessionSvc != nil {
 		rt.SessionService = sessionSvc

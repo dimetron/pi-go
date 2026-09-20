@@ -255,6 +255,7 @@ func RenderSidebar(in SidebarRenderInput) string {
 func sidebarHeadLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
 	var out []string
 	for _, section := range [][]string{
+		sidebarVersionLines(in, innerW, st),
 		sidebarMoodLines(in, st),
 		sidebarModelLines(in, innerW, st),
 		sidebarArtifactLines(in, innerW, st),
@@ -331,6 +332,21 @@ func sidebarMoodLines(in SidebarRenderInput, st sidebarStyles) []string {
 // sidebarContextLines / sidebarOTELLines were removed: the bottom context rule
 // is the canonical context gauge (calibrated to the dumb-zone framework) and the
 // OTEL indicator adds nothing the user cannot already see via the run status.
+
+// sidebarVersionLines shows the running pi-go build as the first row of the
+// panel, so the binary in use is visible without running `pi version` in
+// another shell. It is rendered topmost because it qualifies every other
+// section: behavior that looks wrong in this session is only diagnosable if
+// you know which build produced it.
+func sidebarVersionLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if in.AppVersion == "" {
+		return nil
+	}
+	return []string{
+		st.dim.Render("  " + truncateLabel("pi-go "+in.AppVersion, innerW)),
+		"",
+	}
+}
 
 // sidebarModelLines shows the active provider and model name.
 func sidebarModelLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {

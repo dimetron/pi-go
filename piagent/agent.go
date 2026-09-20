@@ -182,6 +182,7 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 		Instruction:          instruction,
 		SessionService:       sessionSvc,
 		WorkingDir:           workDir,
+		Version:              o.version,
 		BeforeToolCallbacks:  before.tool,
 		AfterToolCallbacks:   after.tool,
 		BeforeModelCallbacks: before.model,

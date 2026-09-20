@@ -2379,3 +2379,56 @@ func TestClearEventsUnknownSession(t *testing.T) {
 		t.Error("ClearEvents() on an unknown session: got nil error, want failure")
 	}
 }
+
+// TestSetSessionVersion covers the three states the field can be in: written,
+// cleared, and omitted. The omitempty tag is load-bearing — a session written
+// by a build with no version stamped must not carry "version": "" — so the
+// absent case is asserted separately from the cleared one.
+func TestSetSessionVersion(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+	metaPath := filepath.Join(svc.baseDir, sid, "meta.json")
+
+	// Absent by default: a fresh session has no version until one is set.
+	raw := readMetaRaw(t, metaPath)
+	if _, ok := raw["version"]; ok {
+		t.Errorf("fresh session carries version = %v; want the key absent", raw["version"])
+	}
+
+	if err := svc.SetSessionVersion(sid, "1.4.2+a1b2c3d"); err != nil {
+		t.Fatalf("SetSessionVersion: %v", err)
+	}
+	if got := readMetaRaw(t, metaPath)["version"]; got != "1.4.2+a1b2c3d" {
+		t.Errorf("version = %v, want %q", got, "1.4.2+a1b2c3d")
+	}
+
+	// Whitespace clears the field rather than persisting a blank string.
+	if err := svc.SetSessionVersion(sid, "  "); err != nil {
+		t.Fatalf("SetSessionVersion(blank): %v", err)
+	}
+	if got, ok := readMetaRaw(t, metaPath)["version"]; ok {
+		t.Errorf("blank version persisted as %q; want the key absent", got)
+	}
+}
+
+func TestSetSessionVersionUnknownSession(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.SetSessionVersion("ghost", "1.0.0"); err == nil {
+		t.Error("expected error for unknown session")
+	}
+}
+
+// readMetaRaw decodes meta.json into a raw map so a test can distinguish an
+// absent key from an empty one, which a typed struct cannot do.
+func readMetaRaw(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	return raw
+}

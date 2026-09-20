@@ -44,6 +44,7 @@ type RuntimeConfig struct {
 	Headers         []string
 	Insecure        bool
 	System          string
+	Version         string
 	LoadConfig      func() (config.Config, error)
 	SandboxRootFunc func(turn PromptTurn) string
 	// SessionService, when set, persists each ACP session's transcript under
@@ -195,6 +196,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		Instruction:          instruction,
 		SessionService:       rt.SessionService,
 		WorkingDir:           cwd,
+		Version:              rt.Version,
 		BeforeToolCallbacks:  res.beforeCBs,
 		AfterToolCallbacks:   res.afterCBs,
 		BeforeModelCallbacks: res.beforeModelCBs,

@@ -303,6 +303,7 @@ func deferredInit(
 		Toolsets:             mcpToolsets,
 		Instruction:          instruction,
 		SessionService:       sessionSvc,
+		Version:              versionString(),
 		BeforeToolCallbacks:  cbs.beforeTool,
 		AfterToolCallbacks:   cbs.afterTool,
 		BeforeModelCallbacks: cbs.beforeModel,

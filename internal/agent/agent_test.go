@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tools"
 )
@@ -1648,5 +1650,72 @@ func TestInjectWithFailOpen_PerPlaceholder(t *testing.T) {
 				t.Errorf("injectWithFailOpen(%q) = %q, want %q", tc.template, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCreateSession_RecordsVersion proves the configured build version reaches
+// meta.json on disk, not merely the recording interface: the point of the field
+// is that a transcript left behind by a dead process can be attributed to a
+// build, so a test that stops at the in-memory service would not exercise the
+// thing being fixed.
+func TestCreateSession_RecordsVersion(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := pisession.NewFileService(dir)
+	if err != nil {
+		t.Fatalf("NewFileService: %v", err)
+	}
+	a, err := New(Config{
+		Model:          &mockLLM{name: "t", response: "ok"},
+		SessionService: svc,
+		Version:        "1.4.2+a1b2c3d",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sid, _, err := a.CreateSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	var meta pisession.Meta
+	data, err := os.ReadFile(filepath.Join(dir, sid, "meta.json"))
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	if meta.Version != "1.4.2+a1b2c3d" {
+		t.Errorf("meta.json version = %q, want %q", meta.Version, "1.4.2+a1b2c3d")
+	}
+}
+
+// TestCreateSession_OmitsEmptyVersion pins the other half: an agent built with
+// no Version must leave the key out rather than write an empty string, which
+// would claim a build it cannot name.
+func TestCreateSession_OmitsEmptyVersion(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := pisession.NewFileService(dir)
+	if err != nil {
+		t.Fatalf("NewFileService: %v", err)
+	}
+	a, err := New(Config{Model: &mockLLM{name: "t", response: "ok"}, SessionService: svc})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sid, _, err := a.CreateSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, sid, "meta.json"))
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	if _, ok := raw["version"]; ok {
+		t.Errorf("unconfigured agent wrote version = %v; want the key absent", raw["version"])
 	}
 }

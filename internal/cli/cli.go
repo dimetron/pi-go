@@ -890,6 +890,7 @@ func runNonInteractive(
 		Toolsets:             allToolsets,
 		Instruction:          instruction,
 		SessionService:       sessionSvc,
+		Version:              versionString(),
 		BeforeToolCallbacks:  beforeCBs,
 		AfterToolCallbacks:   afterCBs,
 		BeforeModelCallbacks: llmBefore,
