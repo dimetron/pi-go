@@ -72,8 +72,52 @@ letting the first request fail with a provider-specific auth error.
 | `WithInsecureTLS` | Disable verification — prefer `WithCACert` |
 | `WithPromptCachingDisabled` | Turn off Anthropic cache breakpoints |
 | `WithAdvisor` | Advisor model, where supported |
+| `WithTraceSink` | Capture every HTTP request and response this client makes |
 
 Options apply in order, so a later one wins.
+
+## Tracing the traffic
+
+`WithTraceSink` hands you each request and response this client sends:
+
+```go
+m, err := pimodels.New(ctx, "claude-sonnet-5",
+    pimodels.WithTraceSink(func(e pimodels.TraceEntry) {
+        audit.Log(e.Exchange, e.Method, e.URL, e.Status, e.Body)
+    }))
+```
+
+`TraceEntry` is an alias for the type pi-go's own `--trace-http` writes, so
+request and response arrive as **separate** entries tied together by
+`Exchange` — a streaming body is not complete when its headers are, so one
+combined record could not be emitted until the stream drained.
+
+The sink belongs to the client, not the process:
+
+- Two clients with different sinks trace independently.
+- Installing one does not displace pi-go's `--trace-http` sink, or anything else
+  in the host process that is tracing.
+
+That last point is why this is an option rather than a `SetSink`-style call:
+the global sink is a **single slot** that `SetSink` replaces, so a public
+library claiming it would clobber its host.
+
+**Capture is on as soon as a sink is set** — there is no separate flag, because a
+trace with nowhere to go is not a useful state. Note this is the *opposite*
+arrangement from pi-go's own `TraceHTTP` setting, which captures nothing until
+`httplog.SetEnabled(true)` **and** a global sink are both in place. Do not
+assume the two behave alike.
+
+Two things to know before wiring one up:
+
+- **Entries arrive synchronously** on the request goroutine, so a slow sink
+  delays the request. Queue and return rather than writing inline.
+- **Bodies are cleartext.** Credentials are masked (`Bearer s***(32 bytes)`),
+  but prompts, completions and tool output are not. That is the point of a
+  trace and also the reason it is opt-in.
+
+`TraceMaxBody()` reports the byte cap applied before an entry reaches the sink;
+a body cut at the cap sets `BodyTruncated`.
 
 ## Without a model name
 
