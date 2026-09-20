@@ -199,12 +199,18 @@ jobs:
             --output kagent-manifests.yaml
           cat kagent-manifests.yaml
 
-      # --clobber so re-running a release replaces the asset rather than
-      # failing on one that is already attached.
       - name: Attach it to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The release is still a draft at this point (see the `draft: true` in
+          # .goreleaser.yaml), which is the only state an asset can be attached
+          # in on an immutable repository. On a re-run the published release is
+          # already sealed, so skip rather than fail the workflow with the 422.
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "release ${GITHUB_REF_NAME} is already published; skipping"
+            exit 0
+          fi
           gh release upload "${GITHUB_REF_NAME}" kagent-manifests.yaml --clobber
 
   vscode:
@@ -227,10 +233,52 @@ jobs:
           bun install --frozen-lockfile
           make release
 
-      # --clobber so re-running a release replaces the asset rather than
-      # failing on one that is already attached.
       - name: Attach it to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Draft-only, for the same reason as the kagent manifest: immutable
+          # releases accept no asset once published, so a re-run against an
+          # already-published release skips instead of failing.
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "release ${GITHUB_REF_NAME} is already published; skipping"
+            exit 0
+          fi
           gh release upload "${GITHUB_REF_NAME}" vscode/pi-go-vscode-*.vsix --clobber
+
+  # Immutable releases are sealed when published, so this is the last step: the
+  # release stays a draft while the kagent manifest and the VSIX attach, and is
+  # published here with every asset already in place.
+  #
+  # Deliberately not `if: always()`. If an attaching job failed, publishing
+  # anyway would produce a permanently incomplete release — immutability means
+  # the missing asset can never be added afterwards. Leaving it a draft is the
+  # recoverable outcome: the draft still holds the tag, and re-running the
+  # workflow finds it (the release-exists check reads drafts), re-attaches the
+  # assets with --clobber, and publishes. A human can also publish it by hand.
+  #
+  # The guards keep this a no-op when the release was never created (a re-run
+  # where GoReleaser skipped) or is already published.
+  publish:
+    name: Publish release
+    needs: [release, kagent-manifest, vscode]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "no release for ${GITHUB_REF_NAME}; nothing to publish"
+            exit 0
+          fi
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "release ${GITHUB_REF_NAME} is already published"
+            exit 0
+          fi
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
+          gh release view "${GITHUB_REF_NAME}" \
+            --json isDraft,isImmutable,assets \
+            --jq '"published: draft=\(.isDraft) immutable=\(.isImmutable) assets=\([.assets[].name] | length)"'

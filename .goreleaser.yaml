@@ -70,7 +70,17 @@ release:
   github:
     owner: dimetron
     name: pi-go
-  draft: false
+  # This repository has immutable releases enabled, so a release is sealed the
+  # moment it is published: no asset can be added afterwards, and the `vscode`
+  # and `kagent-manifest` jobs both need to attach one (`HTTP 422: Cannot upload
+  # assets to an immutable release`). GoReleaser leaves the release as a draft
+  # and publishes it at the end of its own run, which is why its own assets are
+  # fine and every later job fails.
+  #
+  # `draft: true` keeps it a draft once GoReleaser finishes, the two dependent
+  # jobs attach their assets, and a final `publish` job flips it public. That is
+  # GitHub's documented order for an immutable repository.
+  draft: true
   prerelease: auto
   name_template: "v{{.Version}}"
   # Aggregate source SBOM built by the release workflow before GoReleaser runs.
