@@ -91,7 +91,7 @@ Legend: ✅ present · 🟡 partial/divergent · ❌ absent · 🧩 "via extensi
 | Secret redaction in tool output | ❌ | ✅ `internal/tools/redact.go` | |
 | Sessions (JSONL, resume) | ✅ | ✅ | |
 | Session branching | ✅ fork + full **tree navigation UI** + branch summarization | 🟡 named branches (`/branch`), no tree UI, no branch summaries | |
-| Compaction (auto + manual) | ✅ LLM summary, token thresholds, file tracking | 🟡 manual `/compact`; ANSI-strip + tool-result aggregation compactor | Different strategies, §6 |
+| Compaction (auto + manual) | ✅ LLM summary, token thresholds, file tracking | 🟡 auto (percent-of-window) + manual `/compact`; ANSI-strip + tool-result aggregation compactor | Different strategies, §6 |
 | Message queue (steering / follow-up) | ✅ two queues, modes, dequeue | ❌ | |
 | Extensions (in-process code plugins) | ✅ TypeScript via jiti, 20+ hooks, custom tools/commands/UI | ❌ (shell hooks only) | Largest gap, §7 |
 | Lifecycle hooks | ✅ in-process events | 🟡 shell-command hooks on tool events (`internal/extension/hooks.go`) | |
@@ -185,8 +185,8 @@ tool-call custom rendering.
 
 ## 6. Sessions, Branching, Compaction
 
-**Same:** append-only JSONL event logs, resume (`--continue` /
-`--resume`), session pickers in the TUI, manual `/compact`.
+**Same:** append-only JSONL event logs, resume (`--continue` / `--session`
+— Go has no `--resume` flag), session pickers in the TUI, manual `/compact`.
 
 **Different:**
 
@@ -215,12 +215,25 @@ tool-call custom rendering.
   ([internal/session/store.go](../internal/session/store.go)). Go's approach
   reduces tokens *as they are produced*; TS reduces *retrospectively with an
   LLM summary*. These are complementary, not equivalent.
-- **Auto-compaction:** TS on by default with thresholds; Go's LLM-style
-  summarization is not automatically threshold-triggered in the same way.
+- **Auto-compaction:** TS triggers on an absolute budget
+  (`contextWindow − reserveTokens`); Go triggers on **percentages of the
+  window** — `ShedPercent` (default 60) sheds superseded tool results,
+  `SummarizePercent` (default 90) runs a summarizing LLM rebuild, enabled by
+  default (`Enabled: true`) and configured by a global `autoCompact` block
+  ([internal/session/compaction.go](../internal/session/compaction.go),
+  [internal/config/config.go](../internal/config/config.go)). Both are
+  automatic; the budget model and the configurability differ — Go's thresholds
+  are neither absolute nor per-model, and they are configured as a single
+  global `autoCompact` block even though the context window itself resolves
+  per-model from the embedded catalog (`provider.ContextWindowSizeFor`).
+  Auto-compaction also disables itself when the window is unknown — `Decide`
+  returns no action for `windowSize <= 0`, so a model with no catalog entry and
+  no `contextWindow` override never compacts. A per-model window override on
+  `/model` switch is a further reason to key these thresholds by model.
 
 **Missing in Go:** session DAG/tree navigation, branch summarization,
-labels, automatic token-threshold LLM compaction, `session_info`/naming
-entries, HTML export of sessions.
+labels, read/modified-file preservation in compaction entries, per-model
+compaction budgets, `session_info`/naming entries, HTML export of sessions.
 **Missing in TS:** streaming tool-output compaction, plan context persisted
 in session metadata (`meta.json.planContext` for PDD resume).
 
@@ -389,10 +402,11 @@ runtime.
    walk parent dirs, support a global file. (Small change in
    `agent.LoadInstruction`; today the common `AGENTS.md`-at-repo-root
    convention is silently ignored.)
-2. **Automatic token-threshold compaction with LLM summary** — Go has the
-   summarizer hook in `session.Compact` but lacks TS's auto-trigger
-   (`contextWindow − reserve`, keep-recent-tokens) and read/modified-file
-   preservation.
+2. **Compaction parity details** — Go's auto-compaction trigger exists and is
+   on by default (percent-of-window thresholds in
+   `internal/session/compaction.go`), but it lacks TS's absolute
+   `contextWindow − reserve` budget, per-model overrides, and
+   read/modified-file preservation in compaction entries. See §16.5.
 3. **Message queueing / steering** — TS's follow-up & steering queues are
    core interactive ergonomics with no Go equivalent.
 4. **Prompt templates** — cheap to implement (markdown + `$1`/`$@`
@@ -454,3 +468,263 @@ The implementations are best understood not as a port and its original, but
 as two answers to "what belongs in the core of a coding agent?" pi-go's
 highest-leverage next steps are the P0 items above — they close everyday
 ergonomic gaps without compromising its batteries-included identity.
+
+---
+
+## 16. Gap Analysis — TS pi 0.86.0 (2026-09-19)
+
+Upstream `pi` publishes a per-release changelog and a news page
+([`pi.dev/news/releases/0.86.0`](https://pi.dev/news/releases/0.86.0)). The
+package lives at `earendil-works/pi` (`packages/coding-agent/CHANGELOG.md`);
+the repo moved from `badlogic/pi-mono`, so older issue links point there.
+0.86.0 carries **66 changelog items** (5 new features, 3 breaking changes,
+10 added, 7 changed, 40 fixed, 1 removed).
+
+Two things make this release different from earlier ones worth diffing. First,
+its own headline is *transcript-aware prompt and tool changes* — pi grew a
+mechanism for mutating the system prompt and toolset **mid-conversation while
+keeping the prompt cache intact**. That is a design axis pi-go has not
+addressed at all (not a missing feature, a missing model). Second, the release
+is dominated by inherited `pi-ai` provider fixes, so several items are already
+present by accident or by earlier independent work.
+
+The verdict in one line: **0.86.0's five headline features are all absent from
+pi-go; roughly ten of its provider-level fixes are already done here; and its
+two most directly useful features (cache warming, per-model compaction
+budgets) are cheap precisely because pi-go already tracks cache reads and
+already has a percent-based auto-compaction trigger.**
+
+### 16.1 Headline features — all absent
+
+| 0.86.0 feature | pi-go status | Nearest existing thing |
+|---|---|---|
+| Prompt cache warming (cost-aware, during long tool runs and while idle) | ❌ absent | None. No keep-alive, no pre-warm, no cache-refresh timer, no provider call of any kind during a tool run |
+| `/bug` reporting (redacted diagnostics, optional transcript, ZIP export, `pi.bug-report` entry, crash log) | ❌ absent | Session logger + `internal/audit`; no user-facing reporting path, no `/bug` in the slash-command table |
+| Transcript-aware mid-conversation prompt **and tool** updates surviving resume/branch nav | ❌ absent | `Agent.RebuildWithInstruction` (`internal/agent/agent.go:531`) — see 16.4 for why this is not equivalent |
+| Offline Radius model catalog (cached + live overlaid) | ❌ absent (no Radius provider) | Embedded-catalog floor + XDG runtime cache (`internal/provider/catalog.go`) covers the *offline-selectable* property for the six embedded providers |
+| Per-model compaction budgets (`compaction.modelOverrides`) | ❌ absent | Global block only (`internal/config/config.go:123`); two distinct systems, percent-based auto-compaction and absolute-token manual `/compact` |
+
+### 16.2 Breaking changes — none apply directly
+
+pi-go does not implement the `pi-ai` provider-extension surface, so the
+`Context` → `TranscriptContext` change and the `ToolResultMessage` /
+`JsonValue` typing changes have no Go counterpart. `user_bash` fails-closed
+semantics apply to TS extension hooks; pi-go's shell hooks are config-driven
+and have no `user_bash` equivalent.
+
+The one **indirect** consequence worth tracking: upstream's own
+mid-conversation prompt fix is a bug fix for the mechanism pi-go lacks
+entirely, and it is the strongest signal in this release about where upstream
+considers the hard part to be.
+
+### 16.3 Already handled in pi-go (do not port)
+
+These read as gaps against the changelog but are already correct here. Listed
+so a future reader does not "fix" them twice.
+
+| 0.86.0 fix | pi-go evidence |
+|---|---|
+| Mistral `prompt_mode` → `reasoning_effort` for `mistral-medium-*` | Already correct: `internal/provider/mistral.go:165` documents the same finding ("magistral takes reasoning_effort, NOT prompt_mode"), with a verified prefix rule at `:145` |
+| Mistral-hosted GLM-5.2 `reasoning_effort` | Same mechanism (`mistral.go:133`) |
+| Agent-level retry backoff capped so long runs stay responsive | Already capped: `retry.DefaultConfig().MaxDelay = 60s` (`internal/retry/retry.go:52`), and agent retry reuses `retry.Delay` (`internal/agent/retry.go:77`). Upstream's fix *adds* the cap pi-go already had |
+| Quadratic CPU draining buffered `EventStream` events | Not applicable — Go channel/iterator semantics in ADK differ from the TS drain path |
+| Anthropic-compatible relays breaking signed thinking replay | pi-go's thinking-replay handling is separate; no equivalent defect identified |
+| Extension tools without parameter schemas rejected at registration | N/A by construction: pi-go tools declare schemas from Go struct types (`newTool[TArgs,TResults]`, `internal/tools/registry.go:228`) |
+| Fullscreen custom footers reserving a blank row | Different TUI (Bubble Tea), no equivalent layout path |
+| Skill slash-command autocomplete ranking the `skill:` prefix | pi-go uses explicit `/skill-load` / `/skill-list` commands with no prefix ranking |
+| Session ID lookup scanning full transcripts | Already avoided: `SessionModel`/`SessionBackend` are deliberately package functions that read `meta.json` only, specifically to dodge the full `events.jsonl` parse (`internal/session/store.go:1026-1041`) |
+| `--resume` / `--continue` slowness | pi-go's `--continue` reads `meta.json` per session dir and compares `updatedAt` (`internal/session/store.go:835`) — header-only, never parses events |
+
+### 16.4 The structural gap: mid-conversation prompt and tool mutation
+
+This is the release's real subject, and pi-go's divergence is architectural
+rather than a missing flag.
+
+**Prompt.** pi-go's instruction is a fixed string captured by the
+`InstructionProvider` closure at agent-create time
+(`internal/agent/agent.go:466-486`). The only mutation path is
+`Agent.RebuildWithInstruction` (`:531`), which rebuilds the runner. Upstream
+0.86.0 instead records prompt and tool changes **into the transcript** so they
+survive resume and branch navigation while preserving cached prefixes
+(`#9548`), with a `before_agent_start` hook and `getCurrentSystemPrompt()` /
+`getCurrentTools()` accessors.
+
+Three concrete consequences in pi-go today, all verified:
+
+1. **Instruction changes are retroactive, not scoped.** `RebuildWithInstruction`
+   applies the new instruction to the *whole* conversation on the next turn —
+   there is no "from here on" semantics. Upstream's model is specifically
+   designed to avoid this.
+2. **Prompt state is not versioned, so it leaks.** `/plan`
+   (`internal/tui/plan.go:428`) and skill activation
+   (`internal/tui/create_skill.go:79`) rebuild the instruction and persist
+   nothing; `/clear` (`internal/tui/commands.go:290` `clearConversation`) clears
+   events and the token gauge but **does not reset the instruction**, and
+   neither does `/model` — `RebuildWithModel` preserves `cfg.Instruction`
+   (`internal/agent/agent.go:552-573`), explicitly only swapping the LLM. So an
+   injected skill/plan prompt survives until a restart or an explicit
+   `--system`/`RebuildWithInstruction` call.
+3. **Resume reconstructs the prompt from current disk state.** Instruction is
+   rebuilt from the current `SystemInstruction` plus the AGENTS.md/skills on
+   disk at resume time (`internal/cli/interactive.go:539`
+   `buildDeferredInstructionParts`), not from what the
+   session actually ran with. A session recorded under one prompt resumes under
+   another, silently.
+
+**Tools.** `internal/tools/registry.go` has no add/remove API; tools are
+supplied once via `agent.Config.Tools` (`internal/agent/agent.go:318-319`), and
+both `RebuildWithInstruction` and `RebuildWithModel` deliberately **preserve
+`Tools`** (`:531-573`). Even the MCP toolset does not refresh: ADK re-queries
+`Toolset.Tools(ctx)`, but `resilientToolset.Tools` guards its body with
+`sync.Once` and returns the cached slice thereafter
+(`internal/extension/mcp.go:161-187`), so a reconnecting server cannot surface
+changed tools mid-session either. There is no
+`tool_search` / `additional_tools` / deferred-tool mechanism, and no prompt
+caching is involved either way.
+
+**No persistence either way.** Session `meta.json` carries no instruction or
+tool fields (`internal/session/store.go:48`; no instruction or tool fields), `CreateBranch` copies only
+events (`internal/session/branch.go:28`), and no event author records a
+prompt/tool change. (One related dead end: `/plan` *writes*
+`PlanContext` to `meta.json` and `GetPlanContext` has no non-test caller, so
+the persisted plan context is currently write-only, and `/plan resume` exists
+only as help text.)
+
+**Assessment.** Porting the *outcome* does not require porting the mechanism.
+A transcript entry type that snapshots `{instruction, toolNames}` plus a
+resume path that replays it would close (1)–(3) without touching `pi-ai`
+typing. That is a medium change and it is the highest-value one in this
+release. pi-go has request-side prompt caching (§16.5) but no way to mutate the
+prompt or toolset *while keeping a cached prefix intact*, so the
+cache-preserving half of upstream's motivation does not apply — see 16.5.
+
+### 16.5 Cheap wins, and why they are cheap
+
+**Per-model compaction budgets — smallest change with real payoff.** pi-go has
+two *independent* compaction systems: percent-based auto-compaction
+(`internal/session/compaction.go:81`, `ShedPercent: 60` / `SummarizePercent: 90`)
+and an absolute-token manual `/compact` (`internal/session/store.go:1128`,
+`MaxTokens: 100000` / `KeepRecent: 10`). Settings are a single global block
+(`internal/config/config.go:123`); `ContextWindow` is likewise a single `int64`
+(`:118`) even though the embedded catalog *is* per-model
+(`provider.ContextWindowSizeFor`). Upstream added `compaction.modelOverrides`
+with `reserveTokens` / `keepRecentTokens` (#8133).
+
+Why cheap: `autocompact.ConfigFrom` (`internal/autocompact/config.go:12`) is
+already the single choke point and is called identically from CLI, TUI, ACP
+and piagent — it just never receives a model name. Adding a
+`map[string]AutoCompactConfig` keyed by model and resolving in that one
+function is a contained change. Two caveats: the budget model differs
+(percentages of the window vs `window − reserve`), so a faithful port means
+introducing absolute budgets alongside the percentages rather than replacing
+them; and upstream's own release carried a follow-up fix for mid-run threshold
+compaction skipping oversized trailing tool results (#9740), which suggests
+this area is easy to get subtly wrong.
+
+**Cache warming — cheap in mechanism, questionable in value.** pi-go already
+tracks cache reads end-to-end: providers populate
+`CachedContentTokenCount` (`internal/provider/anthropic.go:557,712,842`;
+`openai_completions.go:368`; `openai_responses.go:639`), the guardrail tracker
+exposes `CacheHitRateToday` / `CachePrefixTokens` / `BodyTokens`
+(`internal/guardrail/guardrail.go:215,354,363`), and the TUI renders cache
+state in the per-turn usage line and in `/context`. Anthropic request-side
+caching is already implemented in full — `internal/provider/anthropic_caching.go`
+stamps exactly three ephemeral breakpoints (last tool, last system block, last
+cacheable block), opt-out via `LLMOptions.DisablePromptCaching`.
+
+What is missing is any *active* component: nothing refreshes or pings a cache,
+and nothing happens during a long tool run except TUI heartbeats
+(`internal/tools/bash_supervisor.go:290`) — no provider traffic at all. So
+warming could be built on existing accounting.
+
+But three things argue against rushing it. Warming is inherently
+**Anthropic-only** here, because Anthropic is the only provider that sets
+`cache_control` — `internal/provider/cache_apply.go` states outright that
+OpenAI, Gemini, Mistral, xAI, Ollama and Azure ignore `DisablePromptCaching`,
+and only Mistral (`prompt_cache_key`) and xAI (`x-grok-conv-id`) do anything
+cache-affinity-shaped. It spends real tokens to save cache-write cost, so it
+needs cost-aware gating to be safe. And pi-go has **no prompt-cache lifetime
+metadata**, because cache-write tokens are not broken out at all —
+`internal/guardrail/guardrail.go:27-31` records that the `genai` usage metadata
+has no field for them, so they stay folded into the non-cached remainder. That
+metadata is upstream's
+input for deciding *when* to warm — so it is a prerequisite, not a detail.
+
+**Constrained sampling — the same feature with opposite intent.** Upstream
+0.86.0 turned strict-prefer JSON-schema sampling **on by default** for
+`read`/`bash`/`powershell`/`edit`/`write`, no longer behind `PI_EXPERIMENTAL`.
+pi-go does the reverse deliberately: schemas are relaxed and models are
+*coerced*, not constrained — `relaxSchema` opens `AdditionalProperties` and can
+strip `Required` (`internal/tools/registry.go:126-152`), `lenientSchema` strips
+required fields for the runtime schema, and the registry coerces
+string→int/bool/array (`:354-505`) and aliases wrong param names
+(`internal/tools/read.go:87-102`). OpenAI Responses explicitly pins
+`Strict: false` (`internal/provider/openai_responses.go:373`, asserted in test
+at `openai_test.go:1676`).
+
+This is a genuine philosophy fork, not an oversight, and it is worth *naming*
+rather than porting: upstream trusts the sampler to make malformed args
+impossible; pi-go trusts the handler to make them harmless. Adopting upstream's
+default would fight the existing coercion layer. If pi-go ever wants it, the
+consistent form is opt-in per tool that *keeps* the coercion fallback — the
+inverse of upstream's `constrainedSampling: false` escape hatch. Note also that
+pi-go has no jitter in its backoff — a separate, smaller robustness gap.
+
+**Resume ergonomics (`-r`/`-c`).** The tweet advertised faster `-r`/`-c`. pi-go
+has **no shorthand for resume** — `--session` (`internal/cli/cli.go:211`) and
+`--continue` (`:213`) are registered long-form with no single-letter alias.
+(Shorthands are not unused repo-wide: `-v` on audit and `-o` on the model-list
+subcommand exist — `internal/cli/audit.go:45`, `internal/cli/model.go:69` — but
+the root command's resume paths have none, and upstream's `-r`/`-c` are the
+muscle-memory flags being compared here.) The underlying *performance* property is already met
+(header-only reads, see 16.3), so this is pure flag ergonomics: small, but a
+real daily-use difference for anyone typing `-c`. Cheap and worth doing on its
+own.
+
+### 16.6 Fixes worth attention (pi-go has the defect; upstream fixed it)
+
+Kept short — each needs its own spec before anyone acts.
+
+- **Local shell commands terminated by a signal.** Upstream #9577: a
+  signal-terminated command was reported as *successful* with partial output.
+  pi-go's `finish()` special-cases SIGPIPE for good reason (exit 141 → 0,
+  `internal/tools/bash_supervisor.go:341`), but derives status from
+  `p.exitCode` generally (`:340`), so the same class of misreporting looks
+  reachable. `exitStatus()` (`:190`) guards the reap-ordering race, not the
+  signal interpretation. **Investigate before trusting bash exit status in a
+  gate.**
+- **Clipboard reporting success when the fallback was ignored.** Upstream
+  #9618. pi-go's `writeSystemClipboard` is explicitly best-effort — every error
+  path returns silently (`internal/tui/selection.go:170-185`) — and
+  `copySelection` also returns `tea.SetClipboard(text)` (`:147`), which is
+  Bubble Tea's OSC 52 path (bubbletea `clipboard.go:30`). So the fallback does
+  exist and a terminal that supports OSC 52 can succeed even with no
+  `pbcopy`/`clip`/`wl-copy`/`xclip` present. The real gap is narrower: neither
+  path reports success or failure, and OSC 52 is silently ignored by terminals
+  that do not support it, so a copy can fail with no signal to the user —
+  exactly the case upstream #9618 added guidance for. Low severity; the
+  mechanism is present, only the confirmation is missing.
+- **Cloudflare 520 and Azure peak-load retry classification.** Upstream #9627,
+  #9669. pi-go classifies on message substrings
+  (`internal/retry/retry.go:65-147`); `"overloaded"` is matched (`:114`) but
+  neither `520` nor an Azure peak-load phrase appears. Transient errors would
+  be treated as terminal. Worth a look.
+- **Bedrock one-hour cache writes priced at the five-minute rate.** Upstream
+  #9457. **Not applicable** — pi-go has no Bedrock provider — but pi-go's
+  pricing model has a single `CacheWrite` rate
+  (`internal/provider/pricing.go:44-45`) with no cache-duration dimension, so
+  the same conflation is latent if Bedrock or another tiered-cache provider is
+  ever added.
+
+### 16.7 Recommended order
+
+1. **Per-model compaction budgets** — one choke point, real payoff, and it
+   fixes a genuine inconsistency (per-model context windows already exist).
+2. **`-r` / `-c` shorthands** — trivial, daily ergonomics, no design debate.
+3. **Transcript-recorded prompt/tool state** — the release's actual thesis;
+   medium cost, closes three verified correctness leaks (16.4).
+4. **Signal-terminated bash status** — correctness, investigate first.
+5. **Cache warming** — build the cache-lifetime metadata first; revisit
+   warming only if measurement shows it pays on Anthropic.
+6. **Constrained sampling** — do not port the default; decide the philosophy
+   explicitly if at all.

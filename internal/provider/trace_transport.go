@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -22,10 +23,31 @@ import (
 // Capture is re-checked per round trip rather than only at construction, so
 // enabling the trace does not depend on having been decided before the LLM
 // client was built.
-type traceTransport struct{ base http.RoundTripper }
+//
+// sink, when non-nil, is the per-client destination and makes capture
+// independent of httplog.Enabled(). Entries still go to httplog.Emit as well:
+// with capture disabled that is a no-op, and with it enabled it keeps the OTel
+// span events and the global JSONL sink working exactly as before.
+type traceTransport struct {
+	base http.RoundTripper
+	sink func(httplog.Entry)
+}
+
+// emit delivers an entry to the per-client sink, if any, and to httplog.
+//
+// Both, not either: a client with a sink may still have the global capture on
+// (--trace-http in the same process), and in that case the entry belongs in the
+// OTel span events too. httplog.Emit is a no-op when capture is disabled, so
+// the sink-only case costs one atomic load.
+func (t *traceTransport) emit(ctx context.Context, e httplog.Entry) {
+	if t.sink != nil {
+		t.sink(e)
+	}
+	httplog.Emit(ctx, e)
+}
 
 func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !httplog.Enabled() {
+	if t.sink == nil && !httplog.Enabled() {
 		return t.base.RoundTrip(req)
 	}
 
@@ -34,7 +56,7 @@ func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	method, url := req.Method, req.URL.String()
 
 	body, truncated := readRequestBody(req)
-	httplog.Emit(ctx, httplog.Entry{
+	t.emit(ctx, httplog.Entry{
 		Exchange:      exchange,
 		Direction:     httplog.DirectionRequest,
 		Method:        method,
@@ -53,7 +75,7 @@ func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			msg = err.Error()
 		}
-		httplog.Emit(ctx, httplog.Entry{
+		t.emit(ctx, httplog.Entry{
 			Exchange:  exchange,
 			Direction: httplog.DirectionResponse,
 			Method:    method,
@@ -67,7 +89,7 @@ func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Headers are emitted now, body when the stream ends. Waiting for the body
 	// would withhold the status code of a streaming completion for the whole
 	// duration of the turn, which is exactly when it is most wanted.
-	httplog.Emit(ctx, httplog.Entry{
+	t.emit(ctx, httplog.Entry{
 		Exchange:  exchange,
 		Direction: httplog.DirectionResponse,
 		Method:    method,
@@ -84,7 +106,7 @@ func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if b == "" {
 				return
 			}
-			httplog.Emit(ctx, httplog.Entry{
+			t.emit(ctx, httplog.Entry{
 				Exchange:      exchange,
 				Direction:     httplog.DirectionResponse,
 				Method:        method,

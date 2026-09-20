@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dimetron/pi-go/internal/auth"
+	"github.com/dimetron/pi-go/internal/httplog"
 	"github.com/dimetron/pi-go/internal/ratelimit"
 
 	"google.golang.org/adk/v2/model"
@@ -29,17 +30,17 @@ import (
 // HTTPS_PROXY — which is exactly the environment where a custom CA or a TLS
 // skip is needed in the first place.
 func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
-	// TraceHTTP is checked before the nil guard: a nil opts still has to be
-	// traceable, because several callers pass one and they issue real requests.
-	traceHTTP := opts != nil && opts.TraceHTTP
+	// A nil opts carries neither a trace flag nor a sink, so it is handed to
+	// maybeTrace anyway rather than special-cased: one decision point for
+	// whether the wrapper goes on.
 	if opts == nil {
-		return maybeTrace(nil, traceHTTP), nil
+		return maybeTrace(nil, nil), nil
 	}
 	hasHeaders := len(opts.ExtraHeaders) > 0
 	needsTLS := opts.InsecureSkipTLS || opts.CACertPath != ""
 	needsPacing := opts.RateLimit.Enabled()
 	if !needsTLS && !hasHeaders && !needsPacing && opts.ConnectTimeout <= 0 {
-		return maybeTrace(nil, traceHTTP), nil
+		return maybeTrace(nil, opts), nil
 	}
 
 	base := http.DefaultTransport
@@ -66,7 +67,7 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 	// the trace first and log a request missing every ExtraHeader the server
 	// went on to receive — the headers a proxy or gateway problem is usually
 	// about.
-	base = maybeTrace(base, traceHTTP)
+	base = maybeTrace(base, opts)
 	if hasHeaders {
 		base = &headerTransport{base: base, headers: opts.ExtraHeaders}
 	}
@@ -88,18 +89,28 @@ func BuildTransport(opts *LLMOptions) (http.RoundTripper, error) {
 
 // maybeTrace wraps base in the HTTP trace transport when tracing is on.
 //
+// "On" means either the process-global capture (--trace-http, via httplog) or a
+// per-client opts.TraceSink. The sink is deliberately checked here rather than
+// only inside the transport: an embedder setting only a sink has never called
+// httplog.SetEnabled, so without this the wrapper would not be installed at all.
+//
 // A nil base means "no customization was needed"; that becomes
 // http.DefaultTransport rather than staying nil, because a nil RoundTripper
 // tells the caller to leave the SDK's own client alone and the trace would
 // never run.
-func maybeTrace(base http.RoundTripper, trace bool) http.RoundTripper {
-	if !trace {
+func maybeTrace(base http.RoundTripper, opts *LLMOptions) http.RoundTripper {
+	var sink func(httplog.Entry)
+	trace := false
+	if opts != nil {
+		trace, sink = opts.TraceHTTP, opts.TraceSink
+	}
+	if !trace && sink == nil {
 		return base
 	}
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return &traceTransport{base: base}
+	return &traceTransport{base: base, sink: sink}
 }
 
 // buildTLSConfig turns the TLS fields of opts into a *tls.Config.
@@ -638,7 +649,26 @@ type LLMOptions struct {
 	// --trace-http. Credentials are masked (see httplog.Redact), but prompts
 	// and completions are not: the log holds the entire conversation in
 	// cleartext, which is the point and also the reason it is off by default.
+	//
+	// On its own this captures nothing. The transport only emits when
+	// httplog.Enabled() is true, and entries with no sink installed are
+	// dropped, so a caller setting this without httplog.SetEnabled(true) and
+	// httplog.SetSink gets silence. TraceSink below is the alternative for a
+	// caller that wants neither global.
 	TraceHTTP bool
+	// TraceSink, when non-nil, receives every captured entry for this client
+	// and turns capture on, independently of TraceHTTP, of the process-global
+	// sink, and of httplog.Enabled().
+	//
+	// It exists so a library embedding these providers can trace its own
+	// requests without claiming the process-global httplog sink, which is a
+	// single slot that SetSink replaces — installing it from a public package
+	// would clobber whatever else in the host process is tracing.
+	//
+	// Entries are already redacted and body-capped. Delivery is synchronous on
+	// the request goroutine, so a slow sink delays the request: hand off to a
+	// queue rather than doing I/O inline.
+	TraceSink func(httplog.Entry)
 	// EnableXAITools opts into xAI server-side tools (web search, X search,
 	// and code interpreter) for xAI Responses API requests.
 	EnableXAITools bool
