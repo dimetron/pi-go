@@ -31,8 +31,18 @@ import (
 // must report it the same way.
 func compactGitFileDiff(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
 	return gitTextResult(result, "diff", cfg,
-		func(s string, c CompactorConfig) (string, bool) { return compactGitDiffText(s, c) },
-		func(s string, c CompactorConfig) (string, bool) { return hardTruncate(s, c.MaxChars) },
+		gitTextStage{"git-compact", func(s string, c CompactorConfig) (string, bool) {
+			// The semantic diff rewrite is opt-out via CompactGitOutput, as it was
+			// before this fix. Hard truncation below stays unconditional: it is the
+			// byte-ceiling safety net, not a git-specific transformation.
+			if !c.CompactGitOutput {
+				return s, false
+			}
+			return compactGitDiffText(s, c)
+		}},
+		gitTextStage{"hard-truncate", func(s string, c CompactorConfig) (string, bool) {
+			return hardTruncate(s, c.MaxChars)
+		}},
 	)
 }
 
@@ -45,6 +55,9 @@ func compactGitFileDiff(result, _ map[string]any, cfg CompactorConfig) *CompactR
 // true repo state". The counts in ahead/behind and the file lists stay exact;
 // only the commit log is head-capped, matching rtk's DEFAULT_LOG_LIMIT.
 func compactGitOverview(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	if !cfg.CompactGitOutput {
+		return nil // opt-out, as the previous git pipelines were
+	}
 	commits, ok := result["recent_commits"].([]any)
 	if !ok || len(commits) == 0 {
 		return nil
@@ -73,28 +86,93 @@ func compactGitOverview(result, _ map[string]any, cfg CompactorConfig) *CompactR
 // It reads "hunks" — the field the tool emits — rather than "diff", which
 // git-hunk does not have. total_hunks is preserved so the trimmed list is not
 // mistaken for the complete change set.
+//
+// Two caps are needed, because a hunk is not bounded by its count: capping only
+// the number of hunks leaves a single hunk with a large Content untouched, and
+// one hunk of a whole-file diff can be hundreds of KB. So each hunk's Content is
+// trimmed as well, and the hunk's own Added/Removed counts are left exact.
 func compactGitHunk(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	if !cfg.CompactGitOutput {
+		return nil // opt-out, as the previous git pipelines were
+	}
 	hunks, ok := result["hunks"].([]any)
 	if !ok || len(hunks) == 0 {
 		return nil
 	}
 
-	capped, cut := capArray(hunks, cfg.MaxDiffLines)
-	if !cut {
+	writes := make([]CompactWrite, 0, 1)
+	techniques := make([]string, 0, 1)
+
+	// Cap the number of hunk records.
+	if capped, cut := capArray(hunks, cfg.MaxDiffLines); cut {
+		writes = append(writes, CompactWrite{Key: "hunks", Value: capped})
+		techniques = append(techniques, "git-hunk-cap")
+		hunks = capped
+	}
+
+	// Cap each remaining hunk's Content independently.
+	trimmed := make([]any, len(hunks))
+	copy(trimmed, hunks)
+	contentTrimmed := false
+	for i, h := range trimmed {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := hm["content"].(string)
+		if !ok || len(content) <= cfg.MaxChars {
+			continue
+		}
+		// Copy the map so the original element is not mutated in place.
+		cp := make(map[string]any, len(hm))
+		for k, v := range hm {
+			cp[k] = v
+		}
+		cp["content"] = hardTruncateContent(content, cfg.MaxChars)
+		trimmed[i] = cp
+		contentTrimmed = true
+	}
+	if contentTrimmed {
+		writes = append(writes, CompactWrite{Key: "hunks", Value: trimmed})
+		techniques = append(techniques, "git-hunk-content-cap")
+	}
+
+	if len(writes) == 0 {
 		return nil
 	}
 
-	writes := []CompactWrite{{Key: "hunks", Value: capped}}
 	origSize, compSize := measureCompaction(result, writes)
 	if compSize >= origSize {
 		return nil // never-worse guard
 	}
 	return &CompactResult{
 		Writes:     writes,
-		Techniques: []string{"git-hunk-cap"},
+		Techniques: dedup(techniques),
 		OrigSize:   origSize,
 		CompSize:   compSize,
 	}
+}
+
+// hardTruncateContent cuts a hunk body to maxChars on a line boundary, marking
+// the cut so trimmed content is never read as the whole hunk.
+func hardTruncateContent(s string, maxChars int) string {
+	if maxChars <= 0 || len(s) <= maxChars {
+		return s
+	}
+	cut := s[:maxChars]
+	// Prefer a line boundary so the tail is not a half-written line.
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i]
+	}
+	dropped := strings.Count(s[len(cut):], "\n")
+	return cut + fmt.Sprintf("\n  ... (%d lines truncated)\n", dropped)
+}
+
+// gitTextStage pairs a compaction step with the technique name it reports, so
+// the recorded technique describes what actually ran.
+type gitTextStage struct {
+	name string
+	fn   func(string, CompactorConfig) (string, bool)
 }
 
 // gitTextResult runs text stages over one string field and returns a
@@ -103,12 +181,12 @@ func compactGitHunk(result, _ map[string]any, cfg CompactorConfig) *CompactResul
 //
 // The flag is written unconditionally rather than only when already present.
 // These structs declare `truncated` with omitempty, so a complete result carries
-// no such key — checking for it would mean never setting it, which is precisely
-// how a diff reduced by 99% could still claim to be the whole diff. A result
-// that silently reads as complete is worse than a large one, so a missing key is
-// the case that most needs the write.
+// no such key — checking for it would mean never setting it, which is how a diff
+// reduced by 99% could still claim to be the whole diff. A result that silently
+// reads as complete is worse than a large one, so a missing key is the case that
+// most needs the write.
 func gitTextResult(result map[string]any, key string, cfg CompactorConfig,
-	stages ...func(string, CompactorConfig) (string, bool)) *CompactResult {
+	stages ...gitTextStage) *CompactResult {
 	text, ok := result[key].(string)
 	if !ok || text == "" {
 		return nil
@@ -118,8 +196,8 @@ func gitTextResult(result map[string]any, key string, cfg CompactorConfig,
 	var techniques []string
 	for _, stage := range stages {
 		st := stage
-		text = runStage(text, &techniques, "git-compact", func(s string) (string, bool) {
-			return st(s, cfg)
+		text = runStage(text, &techniques, st.name, func(s string) (string, bool) {
+			return st.fn(s, cfg)
 		})
 	}
 	techniques = dedup(techniques)
@@ -273,6 +351,11 @@ func (c *diffTextCompactor) consume(line string) {
 	}
 
 	if diffHunkHeader.MatchString(line) {
+		// Close the previous hunk before opening this one. Its withheld counts
+		// must be disclosed next to the hunk they belong to; without this flush
+		// they carry into the next hunk and the note is emitted at the wrong
+		// place, attributing one hunk's loss to another.
+		c.flushHunkNote()
 		c.inHunk = true
 		c.hunkLines = 0
 		c.emit(line)

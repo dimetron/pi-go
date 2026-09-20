@@ -98,17 +98,31 @@ func capResult(result map[string]any, key, totalField, truncField, technique str
 }
 
 // compactGrep caps the matches array of a grep/ripgrep result.
+//
+// The cap is gated on GroupSearchOutput, the setting that governed search-result
+// size before this fix. Dropping that gate would make a documented opt-out
+// silently ineffective: with the setting off, a search result must not be
+// restructured or trimmed by the compactor.
 func compactGrep(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	if !cfg.GroupSearchOutput {
+		return nil
+	}
 	return capResult(result, "matches", "total_matches", "truncated", "search-cap", cfg.MaxSearchTotal)
 }
 
-// compactFind caps the files array of a find result.
+// compactFind caps the files array of a find result, gated like compactGrep.
 func compactFind(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	if !cfg.GroupSearchOutput {
+		return nil
+	}
 	return capResult(result, "files", "total_files", "truncated", "find-cap", cfg.MaxSearchTotal)
 }
 
-// compactLs caps the entries array of an ls result.
+// compactLs caps the entries array of an ls result, gated like compactGrep.
 func compactLs(result, _ map[string]any, cfg CompactorConfig) *CompactResult {
+	if !cfg.GroupSearchOutput {
+		return nil
+	}
 	return capResult(result, "entries", "total_entries", "truncated", "ls-cap", cfg.MaxSearchTotal)
 }
 

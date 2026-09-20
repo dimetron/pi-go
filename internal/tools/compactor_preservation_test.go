@@ -248,3 +248,171 @@ func TestCompact_CapKeepsHeadNotSpread(t *testing.T) {
 		t.Logf("file coverage improved to %d (was 10)", len(seen))
 	}
 }
+
+// TestCompact_HunkNoteStaysWithItsHunk guards the attribution of a per-hunk
+// disclosure. The note for a truncated hunk must sit next to that hunk, not be
+// carried into a later one: otherwise a reader attributes one hunk's withheld
+// lines to another, which is worse than no note at all.
+func TestCompact_HunkNoteStaysWithItsHunk(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	cfg.MaxDiffLines = 10 // force truncation
+	cfg.MaxDiffHunkLines = 3
+
+	var b strings.Builder
+	b.WriteString("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n")
+	b.WriteString("@@ -1,10 +1,10 @@\n") // hunk 1: 10 changes, capped to 3
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&b, "-h1 del %d\n+h1 add %d\n", i, i)
+	}
+	b.WriteString("@@ -50,2 +50,2 @@\n") // hunk 2: fully shown
+	b.WriteString("-h2 del 0\n+h2 add 0\n")
+
+	out, applied := compactGitDiffText(b.String(), cfg)
+	if !applied {
+		t.Fatal("expected compaction")
+	}
+
+	iNote := strings.Index(out, "truncated)")
+	iHunk2 := strings.Index(out, "@@ -50,2")
+	if iNote < 0 {
+		t.Fatal("no disclosure note emitted")
+	}
+	if iHunk2 < 0 {
+		t.Fatal("second hunk header missing")
+	}
+	if iNote > iHunk2 {
+		t.Errorf("the truncated hunk's note (offset %d) appears after the next hunk "+
+			"header (offset %d), so one hunk's withheld lines are attributed to "+
+			"another:\n%s", iNote, iHunk2, out)
+	}
+}
+
+// TestCompact_RespectsConfigOptOuts pins the documented opt-out switches. Each
+// was honored by the pipelines before the dispatch fix; dropping a gate would
+// make a documented setting silently ineffective, which is a worse defect than
+// the dead pipelines it replaced.
+func TestCompact_RespectsConfigOptOuts(t *testing.T) {
+	t.Run("group_search_output=false disables search compaction", func(t *testing.T) {
+		cfg := DefaultCompactorConfig()
+		cfg.GroupSearchOutput = false
+
+		ms := make([]GrepMatch, 400)
+		for i := range ms {
+			ms[i] = GrepMatch{File: fmt.Sprintf("f%d.go", i), Line: i, Content: "x"}
+		}
+		if cr := compactGrep(prodResult(t, GrepOutput{Matches: ms, TotalMatches: 400}), nil, cfg); cr != nil {
+			t.Error("grep compacted with GroupSearchOutput off")
+		}
+
+		fs := make([]string, 500)
+		for i := range fs {
+			fs[i] = fmt.Sprintf("f%d.go", i)
+		}
+		if cr := compactFind(prodResult(t, FindOutput{Files: fs, TotalFiles: 500}), nil, cfg); cr != nil {
+			t.Error("find compacted with GroupSearchOutput off")
+		}
+
+		es := make([]LsEntry, 1000)
+		for i := range es {
+			es[i] = LsEntry{Name: fmt.Sprintf("f%d.go", i)}
+		}
+		if cr := compactLs(prodResult(t, LsOutput{Entries: es, TotalEntries: 1000}), nil, cfg); cr != nil {
+			t.Error("ls compacted with GroupSearchOutput off")
+		}
+	})
+
+	t.Run("compact_git_output=false disables only the semantic git rewrite", func(t *testing.T) {
+		cfg := DefaultCompactorConfig()
+		cfg.CompactGitOutput = false
+
+		// The flag governs the git-specific transformations. Hard truncation at
+		// MaxChars sits outside it — it is the byte-ceiling safety net and ran
+		// unconditionally before this fix too, so it must keep running.
+		var db strings.Builder
+		for i := 0; i < 1500; i++ {
+			fmt.Fprintf(&db, "-old %d\n+new %d\n", i, i)
+		}
+		cr := compactGitFileDiff(prodResult(t, GitFileDiffOutput{
+			File: "f.go", Diff: db.String(), LinesAdded: 1500,
+		}), nil, cfg)
+		if cr != nil {
+			out, _ := cr.Writes[0].Value.(string)
+			if strings.Contains(out, "omitted from diff") {
+				t.Error("semantic diff rewrite ran despite CompactGitOutput=false")
+			}
+			for _, tech := range cr.Techniques {
+				if tech == "git-compact" {
+					t.Error("git-compact technique applied despite CompactGitOutput=false")
+				}
+			}
+		}
+
+		// hunks and commits have no byte-ceiling fallback, so the gate is total.
+		hs := make([]Hunk, 240)
+		for i := range hs {
+			hs[i] = Hunk{Header: "@@ -1 +1 @@", Content: "x", Added: 1, Removed: 1}
+		}
+		if cr := compactGitHunk(prodResult(t, GitHunkOutput{
+			File: "f.go", Hunks: hs, TotalHunks: 240,
+		}), nil, cfg); cr != nil {
+			t.Error("git-hunk compacted with CompactGitOutput off")
+		}
+
+		commits := make([]string, 100)
+		for i := range commits {
+			commits[i] = fmt.Sprintf("abc%04d subject", i)
+		}
+		if cr := compactGitOverview(prodResult(t, GitOverviewOutput{
+			Branch: "main", RecentCommits: commits,
+		}), nil, cfg); cr != nil {
+			t.Error("git-overview compacted with CompactGitOutput off")
+		}
+	})
+}
+
+// TestCompact_LargeHunkContentIsCapped covers the case a hunk-count cap misses.
+// A hunk is not bounded by how many hunks there are: git-hunk can return a
+// single hunk carrying hundreds of KB of Content, and capping only len(hunks)
+// leaves that untouched. Each hunk's Content is capped independently, on a line
+// boundary, with the withheld line count disclosed.
+func TestCompact_LargeHunkContentIsCapped(t *testing.T) {
+	cfg := DefaultCompactorConfig()
+	var content strings.Builder
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&content, "+added line %d with plenty of content here\n", i)
+	}
+	hs := []Hunk{{Header: "@@ -1,1 +1,5001 @@", Content: content.String(), Added: 5000}}
+	r := prodResult(t, GitHunkOutput{File: "big.go", Hunks: hs, TotalHunks: 1})
+
+	before := jsonLen(r)
+	cr := compactGitHunk(r, nil, cfg)
+	if cr == nil {
+		t.Fatalf("a single %d-byte hunk was left untouched (len(hunks)=1 is under the "+
+			"hunk-count cap of %d)", content.Len(), cfg.MaxDiffLines)
+	}
+	applyCompaction(r, cr)
+	after := jsonLen(r)
+	if after >= before {
+		t.Errorf("content cap did not shrink the result: %d -> %d", before, after)
+	}
+	t.Logf("single hunk %d bytes -> result %d -> %d", content.Len(), before, after)
+
+	// The trimmed content must say it was trimmed.
+	got, _ := r["hunks"].([]any)
+	if len(got) != 1 {
+		t.Fatalf("hunks = %d, want 1", len(got))
+	}
+	hm, _ := got[0].(map[string]any)
+	s, _ := hm["content"].(string)
+	if !strings.Contains(s, "truncated)") {
+		t.Errorf("trimmed hunk content does not disclose the cut")
+	}
+	// The hunk's own counts stay exact — only the rendered lines were trimmed.
+	if hm["added"] != float64(5000) {
+		t.Errorf("added = %v, want 5000 (counts are never rewritten)", hm["added"])
+	}
+	// total_hunks is preserved.
+	if r["total_hunks"] != float64(1) {
+		t.Errorf("total_hunks = %v, want 1", r["total_hunks"])
+	}
+}

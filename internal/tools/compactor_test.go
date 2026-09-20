@@ -1265,9 +1265,12 @@ func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Tools whose output the compactor is responsible for.
+	// Tools whose output the compactor is responsible for. The search tool is
+	// listed separately: it registers exactly one of "grep"/"ripgrep" depending
+	// on whether rg is installed (grep.go:128-133), so requiring a specific one
+	// here would fail on a host without rg.
 	wantPipelines := map[string]bool{
-		"bash": true, "read": true, "ripgrep": true, "find": true,
+		"bash": true, "read": true, "find": true,
 		"tree": true, "ls": true, "git-file-diff": true,
 		"git-overview": true, "git-hunk": true,
 	}
@@ -1275,11 +1278,10 @@ func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
 	registered := map[string]bool{}
 	for _, x := range built {
 		registered[x.Name()] = true
-		if !wantPipelines[x.Name()] {
-			continue
-		}
-		if _, ok := compactorPipelines[x.Name()]; !ok {
-			t.Errorf("registered tool %q has no compaction pipeline", x.Name())
+		if _, isSearch := compactorPipelines[x.Name()]; !isSearch {
+			if wantPipelines[x.Name()] {
+				t.Errorf("registered tool %q has no compaction pipeline", x.Name())
+			}
 		}
 	}
 
@@ -1289,12 +1291,19 @@ func TestCompactorRouting_EveryRegisteredTool(t *testing.T) {
 		}
 	}
 
-	// The two grep spellings must both route: with rg the tool registers as
-	// "ripgrep", without it as "grep".
+	// Exactly one search spelling is registered, and both must route.
+	searchRegistered := 0
 	for _, name := range []string{"grep", "ripgrep"} {
+		if registered[name] {
+			searchRegistered++
+		}
 		if _, ok := compactorPipelines[name]; !ok {
 			t.Errorf("route missing for %q", name)
 		}
+	}
+	if searchRegistered != 1 {
+		t.Errorf("expected exactly one of grep/ripgrep registered, got %d "+
+			"(rgAvailable=%v)", searchRegistered, rgAvailable)
 	}
 
 	// Underscore spellings must NOT be the routing keys — they are what made the
