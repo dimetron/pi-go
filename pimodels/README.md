@@ -74,30 +74,52 @@ letting the first request fail with a provider-specific auth error.
 | `WithAdvisor` | Advisor model, where supported |
 | `WithMaxOutputTokens` | Cap a reply, in tokens |
 | `WithLegacyMaxTokens` | Send `max_tokens` — required for Ollama |
-| `WithXAITools` | xAI server-side tools |
 | `WithSystemCAsDisabled` | Trust only the `WithCACert` bundle |
 
 Options apply in order, so a later one wins.
 
-## Token limits and Ollama
+## Token limits on Ollama-backed endpoints
 
-Two options exist for backends that do not accept the modern wire format.
+Both token options below apply to the **OpenAI-compatible** paths — openai,
+azure, openrouter, opencode, xai and agentgateway — and are read by the Chat
+Completions request builder.
+
+Point an explicit endpoint at a gateway or proxy in front of Ollama, which is
+where these matter:
 
 ```go
-m, err := pimodels.New(ctx, "ollama/gemma4:e4b",
+m, err := pimodels.New(ctx, "llama3",
+    pimodels.WithBaseURL("http://127.0.0.1:4000/v1"),
     pimodels.WithLegacyMaxTokens(),      // send max_tokens, not max_completion_tokens
     pimodels.WithMaxOutputTokens(4096),  // cap the reply
 )
 ```
 
-`WithLegacyMaxTokens` is not a preference. **Ollama understands only
-`max_tokens`**; the newer `max_completion_tokens` is ignored by it *without an
-error*, which leaves generation unbounded rather than rejected. Any client
-pointed at Ollama — directly, or through a gateway that does not rewrite the
-payload — needs it.
+`WithLegacyMaxTokens` is not a preference. An endpoint that understands only
+`max_tokens` **ignores `max_completion_tokens` without an error**, so the model
+runs unbounded instead of being rejected. The agentgateway provider sets this
+itself for its known Ollama routes; set it when naming the endpoint yourself.
 
 `WithMaxOutputTokens` is for a backend whose models stop below the default and
 **reject** the request rather than clamping it.
+
+### The native `ollama/` client is different
+
+An `ollama/<name>` model name selects pi-go's native Ollama client, which speaks
+Ollama's own API rather than the OpenAI wire. Neither option above affects it —
+there is no `max_tokens` field to choose and nothing to cap in the request body.
+Its output cap is the `PI_OLLAMA_NUM_PREDICT` environment variable, which
+defaults to 16384 tokens; a value `<= 0` removes the cap.
+
+To set a cap for Ollama from code rather than the environment, reach it through a
+gateway instead:
+
+```go
+m, err := pimodels.New(ctx, "llama3",
+    pimodels.WithBaseURL("http://127.0.0.1:4000/v1"),
+    pimodels.WithMaxOutputTokens(4096),
+)
+```
 
 ## Trusting only one CA
 

@@ -176,30 +176,34 @@ func WithPromptCachingDisabled() Option {
 	return func(o *options) { o.llm.DisablePromptCaching = true }
 }
 
-// WithMaxOutputTokens caps a reply, in tokens, on the OpenAI-compatible paths.
+// WithMaxOutputTokens caps a reply, in tokens, on the OpenAI-compatible paths
+// (openai, azure, openrouter, opencode, xai and agentgateway).
 //
 // Set it for a backend whose models stop below the default and reject the
 // request rather than clamping it. A per-request MaxOutputTokens still wins
 // over this.
+//
+// The native Ollama client is not on those paths and does not read this: it
+// caps output with PI_OLLAMA_NUM_PREDICT, which is a variable rather than a
+// per-client option. Reaching Ollama through a gateway is the way to set a cap
+// in code.
 func WithMaxOutputTokens(n int64) Option {
 	return func(o *options) { o.llm.MaxOutputTokens = n }
 }
 
 // WithLegacyMaxTokens sends max_tokens instead of max_completion_tokens on the
-// Chat Completions wire.
+// Chat Completions wire, for an OpenAI-compatible endpoint that cannot read the
+// modern field.
 //
-// Ollama understands only the legacy field. The newer max_completion_tokens is
-// silently ignored by it, which leaves the model unbounded rather than
-// returning an error — so a request to Ollama through a gateway that rewrites
-// nothing still needs this. Harmless for providers that accept both.
+// Set it when pointing [WithBaseURL] at an OpenAI-compatible proxy in front of
+// Ollama, or at any server that ignores max_completion_tokens: that field being
+// ignored is silent, so the model runs unbounded rather than returning an error.
+//
+// Scoped to the OpenAI-compatible paths, like [WithMaxOutputTokens]. The native
+// ollama/ client already speaks Ollama's own API and never had the problem; the
+// agentgateway provider sets this for its own known Ollama routes without help.
 func WithLegacyMaxTokens() Option {
 	return func(o *options) { o.llm.UseLegacyMaxTokens = true }
-}
-
-// WithXAITools opts into xAI's server-side tools (web search, X search, code
-// interpreter) for xAI Responses API requests. Ignored by other providers.
-func WithXAITools() Option {
-	return func(o *options) { o.llm.EnableXAITools = true }
 }
 
 // WithSystemCAsDisabled narrows trust to the bundle given to [WithCACert]
