@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,13 @@ type initResources struct {
 	sessionLog *logger.Logger
 	sessionID  string // captured for resume hint on exit
 	bashSup    *tools.BashSupervisor
+
+	// memSummarizer, with memSessionID and memProject, describes the
+	// end-of-session summary written during cleanup. All three are empty when
+	// memory is off, which is what makes the closer's summary step a no-op.
+	memSummarizer *memory.SessionSummarizer
+	memSessionID  string
+	memProject    string
 }
 
 func (r *initResources) cleanup() {
@@ -58,9 +66,24 @@ func (r *initResources) cleanup() {
 		_ = r.sessionLog.Close()
 	}
 	if r.memWorker != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = r.memWorker.Shutdown(ctx)
+		ctx, cancel := context.WithTimeout(context.Background(), memoryDrainTimeout)
+		drainErr := r.memWorker.Shutdown(ctx)
+		cancel()
+
+		// Summarize between the drain and the close, for the reason the piagent
+		// closer documents: the drain is what moves the session's queued tool
+		// calls into the store, so a summary read before it would describe a
+		// prefix of the session and read as complete. The store then has to
+		// outlive the summary, because that is where the summary is written.
+		if r.memSummarizer != nil {
+			summarizeSessionAfterDrain(summarizeParams{
+				store:      r.memStore,
+				summarizer: r.memSummarizer,
+				sessionID:  r.memSessionID,
+				project:    r.memProject,
+				log:        slog.Default(),
+			}, drainErr, true)
+		}
 	}
 	if r.memStore != nil {
 		_ = r.memStore.Close()
@@ -388,7 +411,7 @@ func deferredInit(
 	}
 
 	if memStore != nil {
-		initMemoryAfterUI(ctx, cfg, cwd, sessionID, orch, memStore, memRecorder, res)
+		initMemoryAfterUI(ctx, cfg, cwd, sessionID, orch, llm, memStore, memRecorder, res)
 	}
 }
 
@@ -831,6 +854,7 @@ func initMemoryAfterUI(
 	cwd string,
 	sessionID string,
 	orch *subagent.Orchestrator,
+	llm adkmodel.LLM,
 	store *lazyMemoryStore,
 	recorder *deferredMemoryRecorder,
 	res *initResources,
@@ -856,8 +880,22 @@ func initMemoryAfterUI(
 		Status:    "active",
 	})
 
-	worker := memory.NewWorker(memStore, memory.NewSubagentCompressor(orch), memCfg.MaxPending)
+	compressorName, known := cfg.ResolveCompressor()
+	if !known {
+		slog.Warn("memory: unknown compressor in config, using default",
+			"configured", cfg.Memory.Compressor, "using", compressorName)
+	}
+
+	worker := memory.NewWorker(memStore, memory.NewCompressor(compressorName, orch), memCfg.MaxPending)
 	worker.Start(ctx)
+
+	// The summary is written by initResources.cleanup after the worker has
+	// drained, so it is held here rather than run now: at this point no tool
+	// call has been made, and a summary written here would describe an empty
+	// session.
+	res.memSessionID = sessionID
+	res.memProject = cwd
+	res.memSummarizer = memory.NewSessionSummarizer(memStore, llm)
 
 	res.memStore = memStore
 	res.memWorker = worker

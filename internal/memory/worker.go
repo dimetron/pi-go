@@ -121,18 +121,11 @@ func (w *Worker) processOne(ctx context.Context, raw RawObservation) {
 }
 
 // fallbackObservation creates a minimal observation when compression fails.
+//
+// Delegates to FallbackObservation so a failed compression and a compressor
+// that does not call a model produce the same record.
 func (w *Worker) fallbackObservation(raw RawObservation) *Observation {
-	text := truncateFallbackText(raw)
-	return &Observation{
-		SessionID:   raw.SessionID,
-		Project:     raw.Project,
-		Title:       raw.ToolName + " (uncompressed)",
-		Type:        TypeChange,
-		Text:        text,
-		SourceFiles: extractSourceFiles(raw.ToolInput),
-		ToolName:    raw.ToolName,
-		CreatedAt:   raw.Timestamp,
-	}
+	return FallbackObservation(raw)
 }
 
 // truncateFallbackText produces a truncated JSON summary of the raw observation.

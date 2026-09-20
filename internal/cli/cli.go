@@ -785,7 +785,12 @@ func runNonInteractive(
 	coreTools := runtime.coreTools
 	orch := runtime.orch
 
-	memStore, memWorker, closeMemory := setupMemory(parentCtx, cfg, orch)
+	// memSessionID is only known once the session is created below; both the
+	// observation recorder and the end-of-session summary read it at call time,
+	// so recording starts from that point rather than from wiring.
+	var memSessionID string
+
+	memStore, memWorker, closeMemory := setupMemory(parentCtx, cfg, orch, llm, &memSessionID, cwd)
 	defer closeMemory()
 
 	coreTools = appendNonInteractiveMemoryTools(coreTools, memStore)
@@ -820,9 +825,8 @@ func runNonInteractive(
 		tools.BuildDedupCallback(resultDeduper),
 		tools.BuildCompactorCallback(compactorConfigFrom(cfg), tools.NewCompactMetrics()))
 
-	// memSessionID is only known once the session is created below; the
-	// callback reads it at call time, so recording starts from that point.
-	var memSessionID string
+	// The recorder reads memSessionID at call time, so recording starts from
+	// the point the session is created below.
 	if memWorker != nil {
 		afterCBs = append(afterCBs, memoryObservationCallback(memWorker, cfg, cwd, &memSessionID))
 	}
@@ -1223,7 +1227,21 @@ func palaceIsEnabled(cfg config.Config) bool {
 // setupMemory opens the observation store and starts its background worker.
 // Memory is best-effort: every failure downgrades to "no memory" with a
 // warning, and the returned closer is always safe to defer.
-func setupMemory(ctx context.Context, cfg config.Config, orch *subagent.Orchestrator) (memory.Store, *memory.Worker, func()) {
+//
+// On close it drains the worker, then writes one session summary for sessionID
+// and closes the store. The order is load-bearing: draining is what moves the
+// session's queued tool calls into the store, so a summary read before it would
+// describe a prefix of the session — which reads as complete and is the hardest
+// kind of wrong to notice. The store must therefore outlive the summary.
+//
+// llm writes the summary. A nil model, or an empty sessionID, skips the summary
+// and only drains: an embedder or a subagent may have no session to summarize,
+// and a summary is worth less than a clean shutdown. project is the key the
+// summary is filed under, matching the one observations were recorded with.
+//
+// sessionID is read through a pointer because the session is created after this
+// call — the closer runs at exit, by which point it is set.
+func setupMemory(ctx context.Context, cfg config.Config, orch *subagent.Orchestrator, llm adkmodel.LLM, sessionID *string, project string) (memory.Store, *memory.Worker, func()) {
 	noop := func() {}
 	if !memoryEnabled(cfg) {
 		return nil, nil, noop
@@ -1243,16 +1261,80 @@ func setupMemory(ctx context.Context, cfg config.Config, orch *subagent.Orchestr
 		return nil, nil, noop
 	}
 
+	compressorName, known := cfg.ResolveCompressor()
+	if !known {
+		slog.Warn("memory: unknown compressor in config, using default",
+			"configured", cfg.Memory.Compressor, "using", compressorName)
+	}
+
 	store := memory.NewSQLiteStore(memDB)
-	worker := memory.NewWorker(store, memory.NewSubagentCompressor(orch), memCfg.MaxPending)
+	worker := memory.NewWorker(store, memory.NewCompressor(compressorName, orch), memCfg.MaxPending)
 	worker.Start(ctx)
 
+	summarizer := memory.NewSessionSummarizer(store, llm)
+
 	return store, worker, func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = worker.Shutdown(shutdownCtx)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), memoryDrainTimeout)
+		drainErr := worker.Shutdown(shutdownCtx)
+		cancel()
+
+		summarizeSessionAfterDrain(summarizeParams{
+			store:      store,
+			summarizer: summarizer,
+			sessionID:  derefString(sessionID),
+			project:    project,
+			log:        slog.Default(),
+		}, drainErr, llm != nil)
+
 		_ = store.Close()
 	}
+}
+
+// summarizeParams bundles the inputs to summarizeSessionAfterDrain.
+type summarizeParams struct {
+	store      memory.Store
+	summarizer *memory.SessionSummarizer
+	sessionID  string
+	project    string
+	log        *slog.Logger
+}
+
+// derefString reads a string through a pointer, treating nil as empty. The
+// session ID is unknown when the memory subsystem is wired and known by the
+// time its closer runs, so the closer reads it through a pointer.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// summarizeSessionAfterDrain writes the end-of-session summary, but only when
+// the worker drained cleanly.
+//
+// A drain timeout means the worker may still be storing, so a summary taken now
+// would describe a prefix of the session and read as complete. That is reported
+// and skipped.
+func summarizeSessionAfterDrain(p summarizeParams, drainErr error, modelAvailable bool) {
+	if drainErr != nil {
+		p.log.Warn("memory: drain timed out; skipping session summary",
+			"error", drainErr, "budget", memoryDrainTimeout)
+		return
+	}
+	if !modelAvailable || p.sessionID == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), sessionSummaryTimeout)
+	defer cancel()
+	if err := p.summarizer.SummarizeSession(ctx, p.sessionID, p.project); err != nil {
+		// Best-effort: a session with no observations, or a provider that did
+		// not answer inside the budget, must not fail the shutdown that follows.
+		p.log.Warn("memory: session summary failed",
+			"session", p.sessionID, "error", err)
+		return
+	}
+	p.log.Info("memory: session summary written", "session", p.sessionID)
 }
 
 // resolveLSPMode turns the --lsp flag into a mode, warning once on a value it
@@ -1945,6 +2027,28 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 // stalled repo (blocked hook, lock contention, unreachable network mount)
 // can never hang the init pipeline indefinitely.
 const gitCmdTimeout = 5 * time.Second
+
+// memoryDrainTimeout bounds the memory worker's drain at session end.
+//
+// It is larger than the 5s this used to be because draining is now the only
+// step that can be slow: with the default model-free compressor each queued
+// observation is a local insert, but a host configured for subagent compression
+// pays a child process per observation, and a budget shorter than one of those
+// abandons the tail of the session.
+//
+// A timeout here is not fatal but it does suppress the summary, so it is also
+// the point at which the session stops being described rather than just
+// recorded.
+const memoryDrainTimeout = 60 * time.Second
+
+// sessionSummaryTimeout bounds the end-of-session summary: one model call.
+//
+// It gets its own budget rather than sharing the drain's, because a summary is
+// work that has not started when the drain finishes. It is a hard bound and not
+// an open wait — this runs on the exit path, so a provider that never answers
+// must not hold the process open. A summary that overruns is logged and
+// abandoned; the observations it would have described are already stored.
+const sessionSummaryTimeout = 20 * time.Second
 
 // detectGitRoot returns the git repository root for the given directory,
 // or empty string if not inside a git repo.

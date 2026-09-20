@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/testenv"
@@ -477,6 +478,11 @@ func TestMemoryDefaults(t *testing.T) {
 	}
 	if m.CompressionRole != "smol" {
 		t.Errorf("expected compression role smol, got %s", m.CompressionRole)
+	}
+	// Per-tool inference must be off by default: it spawns a child process per
+	// tool call, which is what the session summary replaced.
+	if m.Compressor != CompressorNone {
+		t.Errorf("expected default compressor %q, got %q", CompressorNone, m.Compressor)
 	}
 	if m.MaxPending != 100 {
 		t.Errorf("expected max pending 100, got %d", m.MaxPending)
@@ -1417,5 +1423,78 @@ func TestSave_DoesNotPersistMCPJSONServers(t *testing.T) {
 	}
 	if len(saved.MCP.Servers) != 1 || saved.MCP.Servers[0].Name != "declared" {
 		t.Errorf("expected only declared server to survive, got %+v", saved.MCP.Servers)
+	}
+}
+
+func TestResolveCompressor(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      Config
+		wantName string
+		wantOK   bool
+	}{
+		{
+			name:     "no memory config defaults to none",
+			cfg:      Config{},
+			wantName: CompressorNone,
+			wantOK:   true,
+		},
+		{
+			name:     "empty field defaults to none",
+			cfg:      Config{Memory: &MemoryConfig{}},
+			wantName: CompressorNone,
+			wantOK:   true,
+		},
+		{
+			name:     "explicit none",
+			cfg:      Config{Memory: &MemoryConfig{Compressor: CompressorNone}},
+			wantName: CompressorNone,
+			wantOK:   true,
+		},
+		{
+			name:     "explicit subagent is honored",
+			cfg:      Config{Memory: &MemoryConfig{Compressor: CompressorSubagent}},
+			wantName: CompressorSubagent,
+			wantOK:   true,
+		},
+		{
+			// A typo must not stop recording; the caller logs that it was unknown.
+			name:     "unknown value falls back to none and reports not-ok",
+			cfg:      Config{Memory: &MemoryConfig{Compressor: "typo"}},
+			wantName: CompressorNone,
+			wantOK:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotOK := tt.cfg.ResolveCompressor()
+			if gotName != tt.wantName {
+				t.Errorf("ResolveCompressor() name = %q, want %q", gotName, tt.wantName)
+			}
+			if gotOK != tt.wantOK {
+				t.Errorf("ResolveCompressor() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+		})
+	}
+}
+
+// The compressor knob must round-trip through JSON, or a user cannot set it.
+func TestMemoryCompressorJSONRoundTrip(t *testing.T) {
+	in := Config{Memory: &MemoryConfig{Compressor: CompressorSubagent}}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"compressor":"subagent"`) {
+		t.Errorf("compressor not serialized under its documented key: %s", data)
+	}
+
+	var out Config
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.Memory == nil || out.Memory.Compressor != CompressorSubagent {
+		t.Errorf("compressor did not round-trip: %+v", out.Memory)
 	}
 }
