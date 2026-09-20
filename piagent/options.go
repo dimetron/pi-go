@@ -51,6 +51,8 @@ type options struct {
 	subagentEnabled bool
 	onAgentEvent    AgentEventFunc
 	contextWindow   int64
+	summarizer      model.LLM
+	compactNotify   func(string)
 }
 
 // defaultOptions splits pi-go's conventions along one line: reading them is on
@@ -254,4 +256,31 @@ func WithAgentEvents(fn AgentEventFunc) Option {
 // provider rejects it. A non-positive size is ignored.
 func WithContextWindow(tokens int64) Option {
 	return func(o *options) { o.contextWindow = tokens }
+}
+
+// WithSummarizer sets the model that writes the handoff summary when
+// auto-compaction triggers. Without it, the session's own model does the work.
+//
+// A summarizer is a different job from the conversation: it reads a transcript
+// and emits prose, so a cheaper or faster model often does it better and for
+// less. This is the headless equivalent of replacing the compaction strategy.
+//
+// The model is used as-is — nothing is wrapped or metered here, and it is not
+// used for anything but summarization.
+func WithSummarizer(m model.LLM) Option {
+	return func(o *options) { o.summarizer = m }
+}
+
+// WithCompactNotify receives a line of text whenever auto-compaction runs — or
+// fails to.
+//
+// Compaction discards conversation history, which is not something an embedder
+// should have to infer from a shrinking transcript. Without this the outcome is
+// silent: piagent passes no notifier, on the grounds that an embedder can read
+// the session log, and the session log is not reachable from outside the module.
+//
+// The callback runs on the goroutine driving the turn, so keep it quick and do
+// not block on I/O.
+func WithCompactNotify(fn func(string)) Option {
+	return func(o *options) { o.compactNotify = fn }
 }

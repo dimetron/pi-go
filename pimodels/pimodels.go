@@ -176,6 +176,43 @@ func WithPromptCachingDisabled() Option {
 	return func(o *options) { o.llm.DisablePromptCaching = true }
 }
 
+// WithMaxOutputTokens caps a reply, in tokens, on the OpenAI-compatible paths.
+//
+// Set it for a backend whose models stop below the default and reject the
+// request rather than clamping it. A per-request MaxOutputTokens still wins
+// over this.
+func WithMaxOutputTokens(n int64) Option {
+	return func(o *options) { o.llm.MaxOutputTokens = n }
+}
+
+// WithLegacyMaxTokens sends max_tokens instead of max_completion_tokens on the
+// Chat Completions wire.
+//
+// Ollama understands only the legacy field. The newer max_completion_tokens is
+// silently ignored by it, which leaves the model unbounded rather than
+// returning an error — so a request to Ollama through a gateway that rewrites
+// nothing still needs this. Harmless for providers that accept both.
+func WithLegacyMaxTokens() Option {
+	return func(o *options) { o.llm.UseLegacyMaxTokens = true }
+}
+
+// WithXAITools opts into xAI's server-side tools (web search, X search, code
+// interpreter) for xAI Responses API requests. Ignored by other providers.
+func WithXAITools() Option {
+	return func(o *options) { o.llm.EnableXAITools = true }
+}
+
+// WithSystemCAsDisabled narrows trust to the bundle given to [WithCACert]
+// alone, so an endpoint is reachable only through that CA and never through a
+// public root.
+//
+// Only useful together with [WithCACert], and only when the endpoint must not
+// be reachable any other way — the opposite of what a TLS-intercepting proxy
+// wants, which is additive trust.
+func WithSystemCAsDisabled() Option {
+	return func(o *options) { o.llm.DisableSystemCAs = true }
+}
+
 // WithAdvisor enables an advisor model for providers that support it, bounded
 // by maxUses per request (0 = unbounded).
 func WithAdvisor(advisorModel string, maxUses int, caching bool) Option {

@@ -72,8 +72,48 @@ letting the first request fail with a provider-specific auth error.
 | `WithInsecureTLS` | Disable verification — prefer `WithCACert` |
 | `WithPromptCachingDisabled` | Turn off Anthropic cache breakpoints |
 | `WithAdvisor` | Advisor model, where supported |
+| `WithMaxOutputTokens` | Cap a reply, in tokens |
+| `WithLegacyMaxTokens` | Send `max_tokens` — required for Ollama |
+| `WithXAITools` | xAI server-side tools |
+| `WithSystemCAsDisabled` | Trust only the `WithCACert` bundle |
 
 Options apply in order, so a later one wins.
+
+## Token limits and Ollama
+
+Two options exist for backends that do not accept the modern wire format.
+
+```go
+m, err := pimodels.New(ctx, "ollama/gemma4:e4b",
+    pimodels.WithLegacyMaxTokens(),      // send max_tokens, not max_completion_tokens
+    pimodels.WithMaxOutputTokens(4096),  // cap the reply
+)
+```
+
+`WithLegacyMaxTokens` is not a preference. **Ollama understands only
+`max_tokens`**; the newer `max_completion_tokens` is ignored by it *without an
+error*, which leaves generation unbounded rather than rejected. Any client
+pointed at Ollama — directly, or through a gateway that does not rewrite the
+payload — needs it.
+
+`WithMaxOutputTokens` is for a backend whose models stop below the default and
+**reject** the request rather than clamping it.
+
+## Trusting only one CA
+
+`WithCACert` is additive by default: the bundle is trusted *alongside* the
+system roots, which is what a TLS-intercepting proxy wants. When an endpoint
+must instead be reachable through that CA **and nothing else**:
+
+```go
+m, err := pimodels.New(ctx, "claude-sonnet-5",
+    pimodels.WithCACert("/etc/ssl/corp.pem"),
+    pimodels.WithSystemCAsDisabled(),
+)
+```
+
+This is the opposite of the proxy case. Use it only when a public root being
+able to reach the endpoint would itself be the problem.
 
 ## Without a model name
 

@@ -176,17 +176,20 @@ func New(ctx context.Context, opts ...Option) (*Agent, error) {
 	// embedded agent is no less prone to outgrowing its window than an
 	// interactive one — it re-sends the whole transcript every turn just the
 	// same — and before this it was the one entry point with no defense.
+	// The summarizer defaults to the session model. An embedder can hand over a
+	// cheaper one: summarizing a transcript is a different job from the
+	// conversation itself, and often a better one for a small model.
 	if hook := autocompact.BuildHook(autocompact.Deps{
 		SessionSvc:    sessionSvc,
 		Tracker:       contextMeter,
 		Deduper:       resultDeduper,
 		Cfg:           autocompact.ConfigFrom(cfg),
 		Log:           sessionLog,
-		SummarizerLLM: llm,
-		// No terminal to notify: an embedder reads the outcome in the session
-		// log, and writing it anywhere else would be output it never asked
-		// for.
-		Notify: nil,
+		SummarizerLLM: resolveSummarizer(o, llm),
+		// An embedder reads the outcome through its notifier when it supplies
+		// one, and otherwise in the session log — never on stdout, which would
+		// be output it never asked for.
+		Notify: o.compactNotify,
 	}); hook != nil {
 		inner.SetPreTurnHook(hook)
 	}
@@ -405,6 +408,23 @@ func (a *Agent) Model() string { return a.modelName }
 // WorkingDir returns the absolute directory the agent operates in.
 func (a *Agent) WorkingDir() string { return a.workDir }
 
+// LogPath returns the file the agent writes its session log to — the same
+// JSONL stream a `pi` session produces, with tool calls, model output and any
+// auto-compaction outcome in it.
+//
+// It returns "" when no log could be created, which is not fatal: the agent
+// runs without one. Callers should treat "" as "no log" rather than as an
+// error.
+//
+// The path is fixed at construction and the file is created then, so this is
+// safe to call from the moment [New] returns.
+func (a *Agent) LogPath() string {
+	if a.sessionLog == nil {
+		return ""
+	}
+	return a.sessionLog.Path()
+}
+
 // providerNamer is satisfied by a model that knows which provider it talks to.
 // The models package implements it; it is declared here structurally, and
 // deliberately not imported, so piagent depends on the shape rather than on
@@ -543,4 +563,17 @@ func buildCallbacks(d callbackDeps) (callbackSet, afterCallbackSet) {
 	}
 	return callbackSet{tool: beforeTool, model: beforeModel},
 		afterCallbackSet{tool: composed, model: afterModel}
+}
+
+// resolveSummarizer picks the model that writes compaction summaries: the one
+// the embedder named, or the session model when it named none.
+//
+// Extracted from the [New] body so the choice is testable on its own. Staging
+// a real compaction to observe which model ran would mean building a transcript
+// past the window, which is far more machinery than the decision warrants.
+func resolveSummarizer(o options, session model.LLM) model.LLM {
+	if o.summarizer != nil {
+		return o.summarizer
+	}
+	return session
 }
