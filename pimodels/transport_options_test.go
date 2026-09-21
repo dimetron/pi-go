@@ -154,3 +154,27 @@ func TestCustomBaseURLSelectsTheOpenAICompatibleClient(t *testing.T) {
 			info.Provider)
 	}
 }
+
+// TestWithWebSearch guards the pass-through to provider.LLMOptions, the same
+// way the transport options above are guarded. pimodels may not import
+// internal/agent or internal/tools (isolation_test.go), so the option sets a
+// provider flag and the provider decides what reaches the wire — a renamed or
+// dropped field would otherwise leave an embedder asking for search and
+// silently getting none.
+func TestWithWebSearch(t *testing.T) {
+	o := apply(t, WithWebSearch())
+	if !o.llm.EnableOpenAIWebSearch {
+		t.Error("WithWebSearch did not set EnableOpenAIWebSearch; an embedder " +
+			"asking for built-in search would get an ordinary turn with no error")
+	}
+}
+
+// Default must stay off: OpenAI rejects the web_search tool on models that do
+// not support it, so an embedder that never asked for search must not get it.
+func TestWebSearchOffWithoutOption(t *testing.T) {
+	o := apply(t)
+	if o.llm.EnableOpenAIWebSearch {
+		t.Error("EnableOpenAIWebSearch is on without WithWebSearch; models that " +
+			"reject the tool would fail ordinary turns")
+	}
+}

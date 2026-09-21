@@ -44,6 +44,11 @@ type openaiModel struct {
 	// OpenAI API itself accepts both but deprecated max_tokens in favor of
 	// max_completion_tokens, so this only matters for Ollama-class backends.
 	useLegacyMaxTokens bool
+	// enableWebSearch attaches OpenAI's built-in web_search tool to every
+	// Responses request. Resolved once at construction from the caller's
+	// opt-in, PI_OPENAI_WEB_SEARCH, and PI_NO_OPENAI_WEB_SEARCH; see
+	// openaiWebSearchEnabled for why it is opt-in rather than default-on.
+	enableWebSearch bool
 	// mu protects responseState for Responses mode multi-turn.
 	mu            sync.Mutex
 	responseState *responsesState // nil when using Chat Completions
@@ -140,6 +145,7 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 		codexBackend:       useCodexBackend,
 		maxOutputTokens:    maxOutputTokens,
 		useLegacyMaxTokens: llmOpts != nil && llmOpts.UseLegacyMaxTokens,
+		enableWebSearch:    openaiWebSearchEnabled(llmOpts != nil && llmOpts.EnableOpenAIWebSearch),
 		responseState:      nil, // determined per-call based on model
 	}, nil
 }
