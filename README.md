@@ -549,6 +549,24 @@ The `web_search` tool lets the agent look up things that are not in the
 repository — a library's current release, a recent API change, an error message
 it has not seen before.
 
+**Off by default.** It needs a backend that is frequently absent, so a session
+without one would advertise a tool the model calls and then fails on:
+
+```
+web_search  error: Post "https://ollama.com:443/api/web_search": net/http: TLS handshake timeout
+```
+
+Turn it on with the flag, or with the environment variable:
+
+```bash
+pi --web-search-enabled "what changed in the latest Ollama release?"   # flag
+PI_WEB_SEARCH=1 pi "what changed in the latest Ollama release?"        # env
+```
+
+Prefer `PI_WEB_SEARCH` when subagents matter: a subagent runs as a child `pi`
+process whose command line carries only model, url, headers and `--lsp`, so a
+flag does not reach it, while the `PI_` prefix is forwarded to every child.
+
 It uses one of two Ollama endpoints, tried in order:
 
 1. **A local daemon** (`OLLAMA_HOST`, default `http://localhost:11434`), on
@@ -574,11 +592,11 @@ with `bash` when a snippet is not enough.
 
 ```bash
 # Local daemon (no key needed)
-pi "what changed in the latest Ollama release?"
+pi --web-search-enabled "what changed in the latest Ollama release?"
 
 # Headless / CI, using the cloud search API
 export OLLAMA_API_KEY="..."
-pi "what changed in the latest Ollama release?"
+PI_WEB_SEARCH=1 pi "what changed in the latest Ollama release?"
 ```
 
 ### Custom OpenAI-compatible provider

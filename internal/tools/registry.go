@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,10 @@ type CoreOption func(*coreConfig)
 type coreConfig struct {
 	bashSupervisor *BashSupervisor
 	readLedger     *ReadLedger
+	// webSearch opts into the web_search tool. Off by default because the tool
+	// needs a search backend that is often absent, so advertising it hands the
+	// model something that fails mid-turn. See WithWebSearch.
+	webSearch bool
 }
 
 // WithBashSupervisor makes the bash tool use a caller-owned supervisor, so the
@@ -37,6 +42,49 @@ func WithBashSupervisor(sup *BashSupervisor) CoreOption {
 // for tools built by this call.
 func WithReadLedger(l *ReadLedger) CoreOption {
 	return func(c *coreConfig) { c.readLedger = l }
+}
+
+// WithWebSearch registers the web_search tool.
+//
+// It is opt-in because the tool depends on a service that is frequently absent:
+// it calls a local Ollama daemon at OLLAMA_HOST, or ollama.com when
+// OLLAMA_API_KEY is set. Registered unconditionally — as it was — a machine
+// running neither still advertises web_search, the model calls it, and the turn
+// surfaces a transport error that reads as a pi-go bug rather than a missing
+// service. One observed case:
+//
+//	web_search  error: Post "https://ollama.com:443/api/web_search": net/http: TLS handshake timeout
+//
+// Gating it means the model is never offered a tool that cannot succeed.
+//
+// PI_WEB_SEARCH=1 has the same effect without a code path change; see
+// webSearchEnvEnabled.
+func WithWebSearch() CoreOption {
+	return func(c *coreConfig) { c.webSearch = true }
+}
+
+// webSearchEnvVar enables web_search process-wide.
+//
+// It exists alongside the CLI flag because a flag cannot reach everywhere the
+// tool is built. A subagent runs as a child `pi` process whose command line is
+// assembled by subagent.spawnArgs — model, url, headers, --lsp and the prompt,
+// nothing more — so a tool gated only on a flag would vanish in every subagent
+// while the parent kept it. subagent.FilterEnv forwards the whole PI_ prefix, so
+// an environment variable survives the hop and a flag does not.
+//
+// Reading it here rather than in each caller is deliberate: internal/acp/server
+// builds the same tool set and cannot import internal/cli, so a gate that lived
+// in the CLI would have to be duplicated there and would drift.
+const webSearchEnvVar = "PI_WEB_SEARCH"
+
+// webSearchEnvEnabled reports whether PI_WEB_SEARCH holds a recognized truthy
+// token (case-insensitive, trimmed). Empty, unset and anything else are false.
+func webSearchEnvEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(webSearchEnvVar))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // CoreTools returns the core coding agent tools as ADK FunctionTools.
@@ -84,14 +132,17 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 	}
 	tools = append(tools, sessionStatsTool)
 
-	// Add web_search (no sandbox needed). It reaches the network rather than
-	// the filesystem, and reports its own failure as a model-visible result
-	// when no Ollama endpoint is configured, so it is safe in every mode.
-	webSearchTool, err := newWebSearchTool()
-	if err != nil {
-		return nil, err
+	// Add web_search only when the caller opted in. It reaches the network
+	// rather than the filesystem, and where no Ollama daemon or OLLAMA_API_KEY
+	// exists the call fails with a transport error — so advertising it by
+	// default hands the model a tool that cannot succeed. See WithWebSearch.
+	if cfg.webSearch || webSearchEnvEnabled() {
+		webSearchTool, err := newWebSearchTool()
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, webSearchTool)
 	}
-	tools = append(tools, webSearchTool)
 
 	return tools, nil
 }
