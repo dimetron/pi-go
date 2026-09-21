@@ -65,7 +65,8 @@ letting the first request fail with a provider-specific auth error.
 |---|---|
 | `WithAPIKey` | Explicit credential |
 | `WithBaseURL` | Gateway, proxy, or self-hosted endpoint |
-| `WithThinkingLevel` | Reasoning effort where supported |
+| `WithThinkingLevel` | Reasoning effort, validated — see below |
+| `WithThinkingLevelString` | The same, from a string |
 | `WithHeaders` | Extra headers for gateway routing or tenancy |
 | `WithConnectTimeout` | Bounds connect only — not the request, which streams |
 | `WithCACert` | Trust a PEM bundle alongside system roots |
@@ -79,6 +80,59 @@ letting the first request fail with a provider-specific auth error.
 | `WithTraceSink` | Capture every HTTP request and response this client makes |
 
 Options apply in order, so a later one wins.
+
+## Reasoning effort
+
+`WithThinkingLevel` takes a `ThinkingLevel`, and there are five:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `ThinkingNone` | `"none"` | Don't reason, where the model can be told |
+| `ThinkingLow` | `"low"` | Cheapest level that still reasons |
+| `ThinkingMedium` | `"medium"` | Balanced |
+| `ThinkingHigh` | `"high"` | pi-go's own config default |
+| `ThinkingMax` | `"max"` | Most reasoning the provider offers |
+
+`ThinkingUnset` — the empty string, and the zero value — leaves the provider's
+own default in force.
+
+```go
+m, err := pimodels.New(ctx, "claude-opus-4-7", pimodels.WithThinkingLevel(pimodels.ThinkingHigh))
+```
+
+A level that arrives as text — a flag, a config file, an environment variable —
+should go through `WithThinkingLevelString` or `ParseThinkingLevel`, so it gets
+the same check:
+
+```go
+level, err := pimodels.ParseThinkingLevel(os.Getenv("PI_THINKING"))
+if err != nil {
+    return err                          // names the accepted set
+}
+m, err := pimodels.New(ctx, name, pimodels.WithThinkingLevel(level))
+```
+
+An unrecognized level is an error from `New`, not a silent pass-through. That
+is deliberate: every provider omits a level it does not recognize rather than
+rejecting it, so an unchecked typo looks like a setting that was applied and
+had no effect. `"xhigh"` and `"off"` are rejected for the same reason — some
+providers honor those spellings and others drop them, so accepting either would
+mean one provider quietly ignoring what you asked for. `ThinkingMax` and
+`ThinkingNone` are the spellings that work everywhere.
+
+### Which providers act on it
+
+Choosing a level is a request, not a guarantee. Two things can weaken it:
+
+- **Some providers ignore the level entirely.** OpenAI, Azure, Gemini and
+  agentgateway never receive it, because their constructors do not take one.
+  The option is still accepted and validated, so the same code works across
+  providers; the model just runs at its own default.
+- **Some collapse the range.** Anthropic maps low, medium and high onto a single
+  adaptive-thinking config, and Mistral documents only two values (`high` and
+  `none`), so it maps every active level to `high`.
+
+Ollama, xAI and OpenRouter preserve the full range.
 
 ## Token limits on Ollama-backed endpoints
 
