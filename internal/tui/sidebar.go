@@ -37,24 +37,35 @@ type SidebarRenderInput struct {
 	Mode         string
 	ProviderName string
 	ModelName    string
-	GitBranch    string
-	DiffAdded    int
-	DiffRemoved  int
-	Running      bool
-	TokenTracker TokenTracker
-	AppVersion   string
-	HostName     string
-	FolderName   string
-	Messages     []message
-	ActiveTool   string
-	LoadingItems map[string]bool
-	RunChecklist []ChecklistStep // steps from plan.md during /run
-	RunPhase     string          // current /run phase (empty if not running)
-	RunSpec      string          // spec name during /run
-	RunCycle     int             // current retry cycle
-	RunMaxCycle  int             // max retries
-	PlanPhases   []PlanPhase     // PDD phase checklist shown in plan mode; nil/empty = hidden
-	Graph        *SOPGraph       // compiled SOP drawn under the stage list; nil = hidden
+	// ThinkingLevel is the configured reasoning effort ("none", "low", "medium",
+	// "high", "max"), shown under the model name. Empty hides the row, which is
+	// what an unset level means — the provider's own default applies.
+	//
+	// It is the configured value, not a capability report. Several providers
+	// (OpenAI, Azure, Gemini, agentgateway) never receive it, so a level can be
+	// displayed on a model that ignores it. Reporting that here would mean
+	// duplicating internal/provider.NewLLM's provider switch into the sidebar,
+	// which is a worse trade than a row that occasionally describes an unheeded
+	// request.
+	ThinkingLevel string
+	GitBranch     string
+	DiffAdded     int
+	DiffRemoved   int
+	Running       bool
+	TokenTracker  TokenTracker
+	AppVersion    string
+	HostName      string
+	FolderName    string
+	Messages      []message
+	ActiveTool    string
+	LoadingItems  map[string]bool
+	RunChecklist  []ChecklistStep // steps from plan.md during /run
+	RunPhase      string          // current /run phase (empty if not running)
+	RunSpec       string          // spec name during /run
+	RunCycle      int             // current retry cycle
+	RunMaxCycle   int             // max retries
+	PlanPhases    []PlanPhase     // PDD phase checklist shown in plan mode; nil/empty = hidden
+	Graph         *SOPGraph       // compiled SOP drawn under the stage list; nil = hidden
 	// mergePlanGraph draws the plan section as the graph alone rather than as a
 	// checklist plus a graph saying the same thing twice. Set by RenderSidebar
 	// once it knows the graph will fit.
@@ -348,7 +359,7 @@ func sidebarVersionLines(in SidebarRenderInput, innerW int, st sidebarStyles) []
 	}
 }
 
-// sidebarModelLines shows the active provider and model name.
+// sidebarModelLines shows the active provider, model name and reasoning level.
 func sidebarModelLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
 	lines := []string{st.heading.Render("  Model")}
 	if in.ProviderName != "" {
@@ -357,6 +368,10 @@ func sidebarModelLines(in SidebarRenderInput, innerW int, st sidebarStyles) []st
 	if in.ModelName != "" {
 		lines = append(lines, st.yellow.
 			Render("  "+truncateLabel(in.ModelName, innerW)))
+	}
+	if level := in.ThinkingLevel; level != "" {
+		lines = append(lines, st.subtext.
+			Render("  "+truncateLabel("◆ "+level, innerW)))
 	}
 	return append(lines, "")
 }

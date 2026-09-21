@@ -504,3 +504,104 @@ func TestSidebarPlanLines_Hidden(t *testing.T) {
 		t.Errorf("expected 0 lines when no PlanPhases, got %d: %q", len(got), plain(got))
 	}
 }
+
+// TestSidebarModelLinesThinkingLevel pins the reasoning level row under the
+// model name.
+//
+// The row is the only place the configured level is visible: it is threaded
+// into provider.NewLLM at startup and never surfaced again, so a level set in
+// ~/.pi-go/config.json was previously unverifiable from inside a session — the
+// sidebar claimed to show it (Config.ThinkingLevel's comment) and did not.
+func TestSidebarModelLinesThinkingLevel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("shown under the model name", func(t *testing.T) {
+		t.Parallel()
+		out := plain(sidebarModelLines(SidebarRenderInput{
+			ProviderName:  "anthropic",
+			ModelName:     "claude-opus-4-7",
+			ThinkingLevel: "high",
+		}, 27, testSidebarStyles()))
+
+		if !strings.Contains(out, "◆ high") {
+			t.Errorf("thinking level missing from the Model section:\n%s", out)
+		}
+		// Order matters: the level belongs to the model above it, so it must
+		// come after the model name rather than above it.
+		model := strings.Index(out, "claude-opus-4-7")
+		level := strings.Index(out, "◆ high")
+		if model < 0 || level < 0 || level < model {
+			t.Errorf("thinking level should follow the model name:\n%s", out)
+		}
+	})
+
+	t.Run("hidden when unset", func(t *testing.T) {
+		t.Parallel()
+		// Empty is the zero value and means "provider default", so there is
+		// nothing to show — an empty row would read as a level called "".
+		out := plain(sidebarModelLines(SidebarRenderInput{
+			ProviderName: "anthropic",
+			ModelName:    "claude-opus-4-7",
+		}, 27, testSidebarStyles()))
+
+		if strings.Contains(out, "◆") {
+			t.Errorf("unset level should render no row:\n%s", out)
+		}
+	})
+
+	t.Run("every level renders", func(t *testing.T) {
+		t.Parallel()
+		for _, level := range []string{"none", "low", "medium", "high", "max"} {
+			out := plain(sidebarModelLines(SidebarRenderInput{
+				ModelName:     "m",
+				ThinkingLevel: level,
+			}, 27, testSidebarStyles()))
+			if !strings.Contains(out, "◆ "+level) {
+				t.Errorf("level %q did not render:\n%s", level, out)
+			}
+		}
+	})
+
+	t.Run("long level is truncated, not wrapped", func(t *testing.T) {
+		t.Parallel()
+		// The level is capped at innerW like the model name above it, so a long
+		// value ends in an ellipsis rather than running the column wide. The
+		// frame's MaxWidth(w) would clamp an overflow anyway, but it would do so
+		// by cutting the row mid-character with no ellipsis — the reader would
+		// see a truncated word and not know it was truncated. Truncating here
+		// keeps the row bounded and honest at the same time.
+		out := plain(sidebarModelLines(SidebarRenderInput{
+			ModelName:     "m",
+			ThinkingLevel: strings.Repeat("x", 60),
+		}, 12, testSidebarStyles()))
+		if !strings.Contains(out, "…") {
+			t.Errorf("a long level should be ellipsized, got:\n%s", out)
+		}
+		// The cap applies to the level text, so the row is at most 2 cells of
+		// leading indent plus innerW — the same budget the model name uses.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "x") && runewidth.StringWidth(line) > 2+12 {
+				t.Errorf("level row %q exceeds the model name budget", line)
+			}
+		}
+	})
+}
+
+// TestRenderSidebarThinkingLevelVisible is the end-to-end version: the row has
+// to survive sidebarFrame's padding and clamping, not just the section
+// renderer. A section that renders correctly and is then clipped by the frame
+// would still be invisible to the user.
+func TestRenderSidebarThinkingLevelVisible(t *testing.T) {
+	t.Parallel()
+	out := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:         SidebarWidth,
+		Height:        40,
+		ProviderName:  "anthropic",
+		ModelName:     "claude-opus-4-7",
+		ThinkingLevel: "medium",
+		GitBranch:     "main",
+	}))
+	if !strings.Contains(out, "◆ medium") {
+		t.Errorf("thinking level did not survive the sidebar frame:\n%s", out)
+	}
+}

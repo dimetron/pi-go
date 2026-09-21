@@ -16,13 +16,21 @@ import (
 
 // Config holds configuration for the TUI.
 type Config struct {
-	Agent          *agent.Agent
-	LLM            llmmodel.LLM // The active LLM, used by /ping.
-	SessionID      string
-	AppVersion     string
-	ModelName      string
-	ProviderName   string
-	ThinkingLevel  string // "none", "low", "medium", "high", "max" — drives sidebar indicator
+	Agent        *agent.Agent
+	LLM          llmmodel.LLM // The active LLM, used by /ping.
+	SessionID    string
+	AppVersion   string
+	ModelName    string
+	ProviderName string
+	// ThinkingLevel is the configured reasoning effort: "none", "low",
+	// "medium", "high" or "max", or empty for the provider's own default.
+	//
+	// It is read at startup by the CLI, which threads it into
+	// provider.NewLLM, and shown by the sidebar under the model name. The two
+	// are deliberately separate: this field reports what was configured, while
+	// a provider that ignores the level still accepts it, so the row describes
+	// the request rather than a guarantee.
+	ThinkingLevel  string
 	ActiveRole     string
 	Roles          map[string]config.RoleConfig
 	SessionService *pisession.FileService
