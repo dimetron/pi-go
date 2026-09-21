@@ -430,23 +430,53 @@ func TestNewAcceptsEveryValidThinkingLevel(t *testing.T) {
 	}
 }
 
-// TestWithThinkingLevelStringValidates pins that the string entry point
-// validates at the same point the typed one does — a caller with a level from a
-// flag or a config file must not get a weaker check than one writing a constant.
-func TestWithThinkingLevelStringValidates(t *testing.T) {
+// TestWithThinkingLevelAcceptsStringVariables pins the compatibility property
+// that a ThinkingLevel-typed parameter alone would have broken.
+//
+// Before this change WithThinkingLevel took a string, so `WithThinkingLevel(level)`
+// with level a string variable compiled. Typing the parameter as ThinkingLevel
+// rejects exactly that call while still accepting an untyped literal — which
+// makes the break invisible in every test that writes the level inline, and
+// visible only to callers reading it from a flag or a config file. The ~string
+// type parameter keeps both working.
+//
+// The typed variables below are the point of the test: if the parameter ever
+// narrows back to ThinkingLevel, this file stops compiling.
+func TestWithThinkingLevelAcceptsStringVariables(t *testing.T) {
 	ctx := context.Background()
-	if _, err := New(ctx, "ollama/gemma4:e4b",
-		WithBaseURL("http://127.0.0.1:11434"),
-		WithThinkingLevelString("nonsense"),
-	); err == nil {
-		t.Error("WithThinkingLevelString(\"nonsense\") was accepted; the string path must validate")
+
+	fromConfig := "medium" // the common case: a plain string
+	var fromFlag string    // the zero value, meaning "provider default"
+	type myLevel string    // a caller's own named string type
+	var fromElsewhere myLevel = "high"
+
+	for name, opt := range map[string]Option{
+		"string variable":   WithThinkingLevel(fromConfig),
+		"empty string":      WithThinkingLevel(fromFlag),
+		"named string type": WithThinkingLevel(fromElsewhere),
+		"ThinkingLevel":     WithThinkingLevel(ThinkingHigh),
+		"untyped literal":   WithThinkingLevel("low"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, err := New(ctx, "ollama/gemma4:e4b",
+				WithBaseURL("http://127.0.0.1:11434"), opt)
+			if err != nil {
+				t.Fatalf("New with %s: %v", name, err)
+			}
+			if m == nil {
+				t.Fatalf("New with %s returned a nil model", name)
+			}
+		})
 	}
 
+	// Validation still applies to the string path — compatibility must not
+	// come at the cost of the check this change exists to add.
+	badLevel := "nonsense"
 	if _, err := New(ctx, "ollama/gemma4:e4b",
 		WithBaseURL("http://127.0.0.1:11434"),
-		WithThinkingLevelString("medium"),
-	); err != nil {
-		t.Errorf("WithThinkingLevelString(\"medium\") was rejected: %v", err)
+		WithThinkingLevel(badLevel),
+	); err == nil {
+		t.Error("a bad level in a string variable was accepted; the string path must validate too")
 	}
 }
 

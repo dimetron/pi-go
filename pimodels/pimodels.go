@@ -123,15 +123,22 @@ type Info struct {
 // The vocabulary is pi-go's: the same five levels the TUI's sidebar indicator
 // and `thinkingLevel` in ~/.pi-go/config.json use. A provider maps them onto
 // its own wire vocabulary, and providers differ in how much of the range they
-// preserve — Anthropic collapses low/medium/high onto one adaptive config, and
-// Mistral documents only two values. Choosing a level is therefore a request,
-// not a guarantee.
+// preserve. Choosing a level is therefore a request, not a guarantee, and the
+// README carries the per-provider table.
 //
-// Which providers act on it at all is decided by internal/provider.NewLLM,
-// which does not pass it to the OpenAI, Azure, Gemini or agentgateway
-// constructors. On those, any level here is accepted and ignored, because it is
-// the model that cannot express the setting rather than the option that is
-// wrong.
+// Two limits are worth knowing here, because both make a level look applied
+// when it is not:
+//
+//   - Some providers ignore it entirely. internal/provider.NewLLM does not pass
+//     a level to the OpenAI, Azure, Gemini or agentgateway constructors, so on
+//     those the model runs at its own default whatever is set here.
+//   - ThinkingNone is not a universal off switch. xAI maps it to its lowest tier
+//     (Grok's reasoning models have no off position) and OpenRouter omits the
+//     override, because effort "none" is rejected by some providers behind it.
+//
+// Accepting these levels anyway is deliberate: the alternative is code that
+// stops working when the provider changes, and a level a model cannot express is
+// the model's limitation rather than the option's wrongness.
 type ThinkingLevel string
 
 const (
@@ -245,23 +252,18 @@ func WithBaseURL(url string) Option {
 
 // WithThinkingLevel sets the reasoning effort for models that support it.
 //
-// An unrecognized level is reported by [New] rather than sent, so a typo fails
-// at construction instead of silently leaving the model on its own default. A
-// caller with a level in a string — from a flag, a config file, an environment
-// variable — should use [WithThinkingLevelString] or [ParseThinkingLevel], or
-// accept that a bad value surfaces as an error naming the field.
-func WithThinkingLevel(level ThinkingLevel) Option {
-	return func(o *options) { o.thinkingLevel = level }
-}
-
-// WithThinkingLevelString sets the reasoning effort from a string, validating it
-// at the same point [WithThinkingLevel] does.
+// It takes any string-backed type, so a [ThinkingLevel] constant, a plain
+// string from a flag or config file, and a caller's own named string type all
+// work without a conversion. That matters for more than convenience: typing the
+// parameter as ThinkingLevel alone would have rejected `WithThinkingLevel(level)`
+// where level is a string variable, turning a validating change into a
+// source-breaking one for every caller that reads the level from somewhere else.
+// The empty string is valid and means "leave the provider's default in force".
 //
-// It exists because a level usually arrives as text — a config file, a flag, an
-// env var — and converting it by hand means the caller has to either duplicate
-// the accepted set or convert unchecked and lose the validation. The empty
-// string is valid and means "leave the provider's default in force".
-func WithThinkingLevelString(level string) Option {
+// An unrecognized level is reported by [New] rather than sent, so a typo fails
+// at construction instead of silently leaving the model on its own default. Use
+// [ParseThinkingLevel] to find out early, and to normalize the spelling.
+func WithThinkingLevel[T ~string](level T) Option {
 	return func(o *options) { o.thinkingLevel = ThinkingLevel(level) }
 }
 
@@ -445,7 +447,7 @@ func FromConfig(ctx context.Context, role string, opts ...Option) (Model, error)
 	// still override them.
 	merged := append([]Option{WithAdvisor(advisorModel, advisorMaxUses, advisorCaching)}, opts...)
 	if cfg.ThinkingLevel != "" {
-		merged = append([]Option{WithThinkingLevelString(cfg.ThinkingLevel)}, merged...)
+		merged = append([]Option{WithThinkingLevel(cfg.ThinkingLevel)}, merged...)
 	}
 	return New(ctx, modelName, merged...)
 }

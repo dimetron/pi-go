@@ -305,11 +305,17 @@ func ollamaThinkValue(modelName, thinkingLevel string) *ollamaapi.ThinkValue {
 // gemma-4 then think anyway, spending latency and tokens the user asked to
 // avoid. Unrecognized levels (including "") still return nil so the model
 // default applies.
+//
+// "max" is a level Ollama accepts — api.ThinkValue.IsValid lists exactly
+// "high", "medium", "low" and "max" — so it is forwarded like the middle
+// tiers. Without this arm it fell to the default and returned nil, which
+// silently left the model on its own default: the request looked accepted and
+// the setting never applied.
 func ollamaThinkingConfig(level string) *ollamaapi.ThinkValue {
 	switch level {
 	case "none":
 		return &ollamaapi.ThinkValue{Value: false}
-	case "low", "medium", "high":
+	case "low", "medium", "high", "max":
 		return &ollamaapi.ThinkValue{Value: level}
 	default:
 		return nil

@@ -478,9 +478,17 @@ func antGenaiToolsToAnthropic(tools []*genai.Tool) []anthropic.ToolUnionParam {
 
 // antThinkingConfig maps a thinking level string to Anthropic thinking config.
 // Uses adaptive type as "enabled" is not supported by all models.
+//
+// Every active level lands on the same adaptive config, because the adaptive
+// form has no effort field to grade with — the SDK's
+// ThinkingConfigAdaptiveParam carries only a display setting, and graded effort
+// lives on a different field (output_config.effort) this path does not set.
+// "max" is listed rather than left to the default arm: the default returns nil,
+// which sends no thinking config at all and so leaves thinking off, meaning the
+// highest level would have disabled the very thing it asked for.
 func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
 	switch level {
-	case "low", "medium", "high":
+	case "low", "medium", "high", "max":
 		return &anthropic.ThinkingConfigParamUnion{
 			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
 				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
@@ -494,7 +502,7 @@ func antThinkingConfig(level string) *anthropic.ThinkingConfigParamUnion {
 // antThinkingConfigBeta maps a thinking level string to Anthropic beta thinking config.
 func antThinkingConfigBeta(level string) *anthropic.BetaThinkingConfigParamUnion {
 	switch level {
-	case "low", "medium", "high":
+	case "low", "medium", "high", "max":
 		return &anthropic.BetaThinkingConfigParamUnion{
 			OfAdaptive: &anthropic.BetaThinkingConfigAdaptiveParam{
 				Display: anthropic.BetaThinkingConfigAdaptiveDisplaySummarized,
