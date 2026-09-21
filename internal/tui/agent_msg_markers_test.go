@@ -40,6 +40,42 @@ func TestWaitForSystemNotice_ClosedChannelYieldsNil(t *testing.T) {
 	}
 }
 
+// TestSystemNoticeMsg_LandsInChatTranscript closes the loop on the notice path:
+// waitForSystemNotice delivers the message, and updateAgentStream must render it
+// into the chat transcript. Together with the LSP hook's guard, this is what
+// makes a warning like "language server not installed" visible *in the layout*
+// rather than as a raw write over the alternate screen.
+func TestSystemNoticeMsg_LandsInChatTranscript(t *testing.T) {
+	noticeCh := make(chan string, 1)
+	m := &model{
+		chatModel: ChatModel{Messages: []message{{role: "user", content: "hi"}}},
+		cfg:       Config{SystemNoticeCh: noticeCh},
+	}
+	noticeCh <- "pi-go: lsp hook: typescript-language-server not found in PATH"
+
+	// Deliver exactly as the TUI does: waitForSystemNotice -> updateAgentStream.
+	msg := waitForSystemNotice(noticeCh)()
+	if msg == nil {
+		t.Fatal("waitForSystemNotice returned nil for a queued notice")
+	}
+	_, _, handled := m.updateAgentStream(msg)
+	if !handled {
+		t.Fatal("updateAgentStream did not handle systemNoticeMsg")
+	}
+
+	if len(m.chatModel.Messages) != 2 {
+		t.Fatalf("chat transcript has %d messages, want 2 (user + notice)",
+			len(m.chatModel.Messages))
+	}
+	last := m.chatModel.Messages[len(m.chatModel.Messages)-1]
+	if last.role != "assistant" {
+		t.Errorf("notice role = %q, want assistant", last.role)
+	}
+	if !strings.Contains(last.content, "typescript-language-server not found in PATH") {
+		t.Errorf("notice did not reach the transcript: %q", last.content)
+	}
+}
+
 func TestWaitForSystemNotice_IsATeaCmd(t *testing.T) {
 	ch := make(chan string, 1)
 	ch <- "x"

@@ -3,7 +3,6 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,8 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/tool"
+
+	"github.com/dimetron/pi-go/internal/notice"
 )
 
 const (
@@ -23,12 +24,28 @@ const (
 	DiagnosticsDelay = 2 * time.Second
 )
 
+// warnf routes a non-fatal LSP warning without ever touching the terminal.
+//
+// This must never use the standard library log package. log's default sink is
+// os.Stderr, and the Bubble Tea renderer owns the alternate screen: a write
+// there lands inside the painted frame and stays until the next full repaint.
+// It is not a rare path either — with no language server installed for a file
+// type, every single write/edit to that file type takes it.
+//
+// notice.Notifyf delivers to whatever sink the front end installed: the TUI
+// turns it into a chat message, and the non-interactive CLI's default sink
+// writes it to os.Stderr, where nothing else owns the terminal. Same route the
+// MCP, skills and read_image warnings already take.
+func warnf(format string, args ...any) {
+	notice.Notifyf(format, args...)
+}
+
 // BuildLSPAfterToolCallback creates an AfterToolCallback that:
 // - Formats files after write tool calls via the LSP server
 // - Collects diagnostics after write/edit tool calls and appends them to the result
 //
 // If no LSP server is available for a file type, the callback is a no-op.
-// All errors are logged but never fail the tool call.
+// All errors are reported as notices and never fail the tool call.
 func BuildLSPAfterToolCallback(mgr *Manager) llmagent.AfterToolCallback {
 	return func(ctx agent.Context, t tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		name := t.Name()
@@ -50,7 +67,7 @@ func BuildLSPAfterToolCallback(mgr *Manager) llmagent.AfterToolCallback {
 		// Get LSP server for this file type.
 		srv, srvErr := mgr.ServerFor(filePath)
 		if srvErr != nil {
-			log.Printf("lsp hook: server for %s: %v", filePath, srvErr)
+			warnf("lsp hook: server for %s: %v", filePath, srvErr)
 			return result, nil
 		}
 		if srv == nil {
@@ -61,12 +78,12 @@ func BuildLSPAfterToolCallback(mgr *Manager) llmagent.AfterToolCallback {
 		// Read current file content and notify the server.
 		content, readErr := os.ReadFile(filePath)
 		if readErr != nil {
-			log.Printf("lsp hook: reading %s: %v", filePath, readErr)
+			warnf("lsp hook: reading %s: %v", filePath, readErr)
 			return result, nil
 		}
 
 		if notifyErr := srv.NotifyChange(filePath, string(content)); notifyErr != nil {
-			log.Printf("lsp hook: notify change %s: %v", filePath, notifyErr)
+			warnf("lsp hook: notify change %s: %v", filePath, notifyErr)
 			return result, nil
 		}
 
@@ -100,7 +117,7 @@ func formatFileWithFormatter(fmtr formatter, filePath string, result map[string]
 
 	edits, err := fmtr.Format(fmtCtx, filePath)
 	if err != nil {
-		log.Printf("lsp hook: format %s: %v", filePath, err)
+		warnf("lsp hook: format %s: %v", filePath, err)
 		return result
 	}
 	if len(edits) == 0 {
@@ -110,19 +127,19 @@ func formatFileWithFormatter(fmtr formatter, filePath string, result map[string]
 	// Apply text edits to the file.
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Printf("lsp hook: read for format %s: %v", filePath, err)
+		warnf("lsp hook: read for format %s: %v", filePath, err)
 		return result
 	}
 
 	formatted := ApplyTextEdits(string(content), edits)
 	if err := os.WriteFile(filePath, []byte(formatted), 0o644); err != nil {
-		log.Printf("lsp hook: write formatted %s: %v", filePath, err)
+		warnf("lsp hook: write formatted %s: %v", filePath, err)
 		return result
 	}
 
 	// Notify server of the formatted content.
 	if err := fmtr.NotifyChange(filePath, formatted); err != nil {
-		log.Printf("lsp hook: notify formatted %s: %v", filePath, err)
+		warnf("lsp hook: notify formatted %s: %v", filePath, err)
 	}
 
 	result["lsp_formatted"] = true
