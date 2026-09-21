@@ -24,6 +24,31 @@ import (
 // instead of silently arriving with fresh facts.
 const GroundingToolName = "google_search"
 
+// OpenAIWebSearchToolName is the display name for OpenAI's built-in web_search.
+//
+// It is a separate constant from GroundingToolName because the two searches are
+// not the same search: they hit different indexes and return different sources.
+// Sharing one name would tell a reader that OpenAI's index is Google's, which is
+// exactly the kind of provenance the synthetic name exists to report. Like
+// Gemini's, it is not a registered tool — nothing in pi's loop executes it.
+const OpenAIWebSearchToolName = "openai_web_search"
+
+// GroundingToolNameFor returns the display name for a server-side search run by
+// the given provider. Gemini grounds with Google Search and OpenAI with its own
+// web_search; anything else returning GroundingMetadata is treated as the
+// Gemini shape, which is where the convention started.
+//
+// Azure is included with OpenAI because it serves the same model and the same
+// Responses API.
+func GroundingToolNameFor(providerName string) string {
+	switch providerName {
+	case "openai", "azure":
+		return OpenAIWebSearchToolName
+	default:
+		return GroundingToolName
+	}
+}
+
 // GroundingQueryKey identifies a search by its query set. GroundingMetadata is
 // repeated on every streamed chunk of the response it grounds, so callers key
 // on this to report each search exactly once per turn.

@@ -504,3 +504,64 @@ func TestE2EOpenAIResponsesFailedStreamIsNotATurn(t *testing.T) {
 		}
 	}
 }
+
+// TestE2EOpenAIWebSearch drives OpenAI's built-in web_search against the live
+// API. This is the only check that can confirm the request shape is accepted:
+// the endpoint rejects an unknown tool or an unsupported include value with a
+// 400, which a fake server would happily accept. It also proves the sources
+// round-trip — GroundingMetadata is what carries them to the display layer.
+//
+// The model must support the tool: gpt-4.1-nano and minimal-reasoning gpt-5
+// reject it, which is why the option is opt-in.
+func TestE2EOpenAIWebSearch(t *testing.T) {
+	e2eOpenAICreditsAvailable(t)
+
+	llm, err := NewOpenAI(context.Background(), e2eOpenAIModel, testGetOpenAIAPIKey(t), "",
+		&LLMOptions{EnableOpenAIWebSearch: true})
+	if err != nil {
+		t.Fatalf("NewOpenAI(%s): %v", e2eOpenAIModel, err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{
+			Text: "Use web search: name one positive news story from today. One sentence.",
+		}}}},
+	}
+	var resps []*model.LLMResponse
+	for resp, err := range llm.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent: %v", err)
+		}
+		resps = append(resps, resp)
+	}
+	final := e2eTerminalOf(t, resps)
+
+	if final.Content == nil {
+		t.Fatal("final response has no content")
+	}
+	var text string
+	for _, p := range final.Content.Parts {
+		text += p.Text
+	}
+	if strings.TrimSpace(text) == "" {
+		t.Error("empty reply; the request shape may have been rejected")
+	}
+	t.Logf("reply: %s", text)
+
+	// The model decides whether to search, so a missing GroundingMetadata is
+	// not by itself a failure — but when it searched, the query and sources
+	// must be there, since that is the whole point of the feature.
+	if gm := final.GroundingMetadata; gm != nil {
+		t.Logf("grounding: queries=%v sources=%d", gm.WebSearchQueries, len(gm.GroundingChunks))
+		if len(gm.WebSearchQueries) == 0 {
+			t.Error("GroundingMetadata present with no query; the search would render unlabeled")
+		}
+		for _, c := range gm.GroundingChunks {
+			if c.Web == nil || c.Web.URI == "" {
+				t.Errorf("source chunk without a URI: %+v", c)
+			}
+		}
+	} else {
+		t.Log("model answered without searching; GroundingMetadata absent as expected")
+	}
+}

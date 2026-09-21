@@ -88,7 +88,7 @@ func TestDispatchModeSocketServesTheConfiguredPath(t *testing.T) {
 	go func() {
 		defer close(done)
 		_ = captureStderr(t, func() {
-			err = dispatchMode(ctx, "socket", "", nil, "sid", nil, "test-model", config.Config{}, nil)
+			err = dispatchMode(ctx, "socket", "", nil, "sid", nil, "test-model", config.Config{}, nil, "")
 		})
 	}()
 
@@ -127,7 +127,7 @@ func TestDispatchModeRPCWithExplicitSocketFallsBackToSocketMode(t *testing.T) {
 	go func() {
 		defer close(done)
 		stderr = captureStderr(t, func() {
-			err = dispatchMode(ctx, "rpc", "", nil, "sid", nil, "test-model", config.Config{}, nil)
+			err = dispatchMode(ctx, "rpc", "", nil, "sid", nil, "test-model", config.Config{}, nil, "")
 		})
 	}()
 
@@ -174,7 +174,7 @@ func TestDispatchModeRPCServesTheStdioProtocol(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = dispatchMode(context.Background(), "rpc", "", nil, "sess-1", nil, "test-model", config.Config{}, nil)
+		err = dispatchMode(context.Background(), "rpc", "", nil, "sess-1", nil, "test-model", config.Config{}, nil, "")
 	})
 	if err != nil {
 		t.Fatalf("dispatchMode(rpc) = %v, want nil when stdin closes", err)
@@ -216,7 +216,7 @@ func TestDispatchModeRPCSetModelRejectsUnknownModels(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = dispatchMode(context.Background(), "rpc", "", ag, sessionID, nil, "test-model", config.Config{}, tracker)
+		err = dispatchMode(context.Background(), "rpc", "", ag, sessionID, nil, "test-model", config.Config{}, tracker, "")
 	})
 	if err != nil {
 		t.Fatalf("dispatchMode(rpc) = %v, want nil when stdin closes", err)
@@ -260,7 +260,7 @@ func TestDispatchModeRPCSetModelHonorsTheNamedProvider(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = dispatchMode(context.Background(), "rpc", "", ag, sessionID, nil, "test-model", cfg, tracker)
+		err = dispatchMode(context.Background(), "rpc", "", ag, sessionID, nil, "test-model", cfg, tracker, "")
 	})
 	if err != nil {
 		t.Fatalf("dispatchMode(rpc) = %v, want nil when stdin closes", err)

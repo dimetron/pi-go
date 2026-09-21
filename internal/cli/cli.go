@@ -934,7 +934,7 @@ func runNonInteractive(
 	armMemoryObservationSession(ctx, memStore, sessionID, cwd, &memSessionID)
 
 	sessionLog.SessionStart(sessionID, llm.Name(), info.Provider, provider.BackendName(info, config.APIKeys()[info.Provider], info.BaseURL), info.BaseURL, mode)
-	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker)
+	return dispatchMode(ctx, mode, prompt, ag, sessionID, sessionLog, llm.Name(), cfg, tokenTracker, info.Provider)
 }
 
 // appendNonInteractiveMemoryTools adds the memory tools when a store is
@@ -1160,7 +1160,7 @@ func resolveSessionID(ctx context.Context, ag *agent.Agent, sessionSvc *pisessio
 //     integration. This was spelled "rpc" before the rename.
 //   - "rpc": the stdio NDJSON protocol that `pi-acp` drives, wire-compatible
 //     with upstream pi's `--mode rpc`.
-func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, sessionID string, sessionLog *logger.Logger, modelName string, cfg config.Config, tokenTracker *guardrail.Tracker) error {
+func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, sessionID string, sessionLog *logger.Logger, modelName string, cfg config.Config, tokenTracker *guardrail.Tracker, providerName string) error {
 	// Pre-rename spelling: `--mode rpc --socket <path>` meant the Unix socket
 	// server. Honor it with a warning rather than silently starting the
 	// stdio server and leaving the caller's socket client hanging.
@@ -1208,7 +1208,7 @@ func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, ses
 	if mode == "json" {
 		return runJSON(ctx, ag, sessionID, prompt, sessionLog)
 	}
-	return runPrint(ctx, ag, sessionID, prompt, sessionLog)
+	return runPrint(ctx, ag, sessionID, prompt, sessionLog, providerName)
 }
 
 // memoryEnabled reports whether the observation memory subsystem is on.
@@ -1707,7 +1707,7 @@ func formatPrintSkillLoad(count int, err error) string {
 
 // runPrint runs the agent and prints text responses to stdout.
 // Tool calls are shown as status lines on stderr.
-func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
+func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger, providerName string) error {
 	ctx, span := otel.Tracer("pi-go").Start(ctx, "agent.prompt")
 	defer span.End()
 	span.SetAttributes(otel.AttributeInt("prompt.length", len(prompt)))
@@ -1746,7 +1746,7 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 		if ev == nil {
 			continue
 		}
-		printGroundingEvent(ev, groundedSeen, log)
+		printGroundingEvent(ev, providerName, groundedSeen, log)
 		// Without this, a provider failure exits 0 having printed nothing.
 		// See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
@@ -1763,12 +1763,17 @@ func runPrint(ctx context.Context, ag *agent.Agent, sessionID, prompt string, lo
 	return nil
 }
 
-// printGroundingEvent reports a server-side Gemini search as a tool call.
+// printGroundingEvent reports a server-side search as a tool call.
 //
-// Gemini grounding runs server-side and emits no FunctionCall, so it would
-// otherwise be invisible. GroundingMetadata repeats on every chunk of the
-// response it grounds, so groundedSeen keeps each search to one report.
-func printGroundingEvent(ev *session.Event, groundedSeen map[string]bool, log *logger.Logger) {
+// Gemini grounding and OpenAI's built-in web_search both run server-side and
+// emit no FunctionCall, so they would otherwise be invisible. GroundingMetadata
+// repeats on every chunk of the response it grounds, so groundedSeen keeps each
+// search to one report.
+//
+// providerName decides the label: the two searches hit different indexes, so
+// reporting an OpenAI search as google_search would misstate where the facts
+// came from. Empty falls back to the Gemini name, which is the older shape.
+func printGroundingEvent(ev *session.Event, providerName string, groundedSeen map[string]bool, log *logger.Logger) {
 	gm := ev.GroundingMetadata
 	if gm == nil || len(gm.WebSearchQueries) == 0 {
 		return
@@ -1778,14 +1783,15 @@ func printGroundingEvent(ev *session.Event, groundedSeen map[string]bool, log *l
 		return
 	}
 	groundedSeen[key] = true
+	toolName := agent.GroundingToolNameFor(providerName)
 	args := map[string]any{"query": agent.GroundingQuery(gm)}
-	fmt.Fprint(os.Stderr, formatPrintToolCall(agent.GroundingToolName, args))
-	log.ToolCall("grounding", agent.GroundingToolName, args)
+	fmt.Fprint(os.Stderr, formatPrintToolCall(toolName, args))
+	log.ToolCall("grounding", toolName, args)
 	for _, src := range strings.Split(agent.GroundingSummary(gm), "\n") {
 		fmt.Fprintf(os.Stderr, "%s   %s%s\n", printToolDimColor, src, printToolReset)
 	}
-	fmt.Fprint(os.Stderr, formatPrintToolDone(agent.GroundingToolName))
-	log.ToolResult("grounding", agent.GroundingToolName, agent.GroundingSources(gm))
+	fmt.Fprint(os.Stderr, formatPrintToolDone(toolName))
+	log.ToolResult("grounding", toolName, agent.GroundingSources(gm))
 }
 
 // printEventParts writes one event's parts: reply text to stdout, thinking and
