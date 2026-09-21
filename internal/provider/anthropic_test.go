@@ -290,6 +290,10 @@ func TestAntThinkingConfig(t *testing.T) {
 		{"low", false},
 		{"medium", false},
 		{"high", false},
+		// "max" must not fall to the default arm. The default returns nil,
+		// which sends no thinking config at all — so the highest level would
+		// turn thinking off rather than maximize it.
+		{"max", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.level, func(t *testing.T) {

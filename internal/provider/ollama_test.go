@@ -32,6 +32,11 @@ func TestOllamaThinkingConfig(t *testing.T) {
 		{"low", false, "low"},
 		{"medium", false, "medium"},
 		{"high", false, "high"},
+		// "max" is one of the four levels Ollama's own ThinkValue.IsValid
+		// accepts, so it must reach the wire rather than fall to the default
+		// arm and be dropped — a dropped level leaves the model on its own
+		// default and reads as a setting that was applied.
+		{"max", false, "max"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.level, func(t *testing.T) {
