@@ -1163,13 +1163,14 @@ func (m *model) streamTurn(
 			continue
 		}
 		turnUsage = addUsage(turnUsage, ev.UsageMetadata)
-		// Gemini search grounding runs server-side: it never produces a
-		// FunctionCall part, so without this the search is invisible — the
-		// model just answers with fresh facts and no sign it searched. The only
-		// evidence is GroundingMetadata riding on the response, so surface it as
-		// a synthetic tool call/result pair. Checked before the Content
+		// Gemini grounding and OpenAI's built-in web_search both run
+		// server-side: neither produces a FunctionCall part, so without this
+		// the search is invisible — the model just answers with fresh facts and
+		// no sign it searched. The only evidence is GroundingMetadata riding on
+		// the response, so surface it as a synthetic tool call/result pair,
+		// labeled for the provider that searched. Checked before the Content
 		// nil-guard, since the metadata hangs off the event, not the content.
-		m.emitGroundingEvents(ch, ev.GroundingMetadata, groundedSeen, log)
+		m.emitGroundingEvents(ch, ev.GroundingMetadata, m.cfg.ProviderName, groundedSeen, log)
 
 		// A provider failure is a content-less event, so it has to be caught
 		// before the guard below drops it. See agent.EventError.

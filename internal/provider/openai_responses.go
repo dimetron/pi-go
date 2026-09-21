@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -111,6 +112,20 @@ func (m *openaiModel) buildResponsesParams(req *model.LLMRequest, modelName stri
 
 	if req.Config != nil && len(req.Config.Tools) > 0 {
 		params.Tools = oaiGenaiToolsToResponses(req.Config.Tools)
+	}
+
+	// OpenAI's built-in web_search runs server-side: the model searches, reads
+	// and cites without a FunctionCall reaching pi's loop. Appended after the
+	// function declarations so both travel in one request.
+	//
+	// Not sent to the ChatGPT codex backend: that endpoint exposes a fixed
+	// tool set, and the include list that makes sources readable is an OpenAI
+	// platform feature. The xAI equivalent had to be removed outright when the
+	// endpoint rejected it (commit 233134f), so this stays behind the same
+	// boundary rather than being discovered live.
+	if m.enableWebSearch && !m.codexBackend {
+		params.Tools = append(params.Tools, openaiWebSearchTool())
+		params.Include = append(params.Include, openaiWebSearchInclude()...)
 	}
 
 	if reasoning, ok := oaiResponsesReasoning(req.Config); ok {
@@ -674,6 +689,10 @@ func (m *openaiModel) finishResponsesStream(state *responsesStreamState, finalRe
 		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: finalParts},
 	}
 	if termResp != nil {
+		// A server-side search reaches the client only through the terminal
+		// response's output list — it emits no delta to latch onto while the
+		// stream runs, so it is collected here.
+		final.GroundingMetadata = openaiWebSearchGrounding(termResp.Output)
 		attachResponsesFinishSignal(final, termResp, state.term.incomplete && state.term.seen)
 	}
 	_ = yield(final, nil)
@@ -756,11 +775,12 @@ func (m *openaiModel) runResponsesNonStreaming(ctx context.Context, params respo
 	finish := oaiResponsesFinishReason(resp, false)
 
 	final := &model.LLMResponse{
-		Partial:       false,
-		TurnComplete:  true,
-		FinishReason:  finish,
-		UsageMetadata: usage,
-		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: parts},
+		Partial:           false,
+		TurnComplete:      true,
+		FinishReason:      finish,
+		UsageMetadata:     usage,
+		GroundingMetadata: openaiWebSearchGrounding(resp.Output),
+		Content:           &genai.Content{Role: string(genai.RoleModel), Parts: parts},
 	}
 	attachResponsesFinishSignal(final, resp, false)
 	_ = yield(final, nil)
@@ -796,6 +816,15 @@ func parseResponsesOutput(items []responses.ResponseOutputItemUnion) ([]*genai.P
 			p.FunctionCall.ID = variant.CallID
 			parts = append(parts, p)
 
+		case responses.ResponseFunctionWebSearch:
+			// A server-side search. The model ran it and cites what it read,
+			// so there is no FunctionCall for pi's loop to execute. Its
+			// evidence is collected into the response's GroundingMetadata
+			// below rather than emitted as a synthetic call: an unmatched
+			// FunctionCall part would be executed by ADK's flow, which finds
+			// no such tool and injects a "tool not found" result into the
+			// conversation.
+
 		case responses.ResponseReasoningItem:
 			// Raw reasoning tokens.
 			for _, c := range variant.Content {
@@ -806,6 +835,91 @@ func parseResponsesOutput(items []responses.ResponseOutputItemUnion) ([]*genai.P
 	}
 
 	return parts, finishReason
+}
+
+// sourceHostLabel reduces a source URL to the host a reader recognizes, so a
+// chat line stays short: "nasa.gov", not the full URL with its tracking query.
+// Falls back to the whole URL when it does not parse, because an unparseable
+// source is still worth showing.
+func sourceHostLabel(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	return u.Host
+}
+
+// openaiWebSearchGrounding collects the server-side web searches in a response
+// into the GroundingMetadata shape pi's surfaces already render, so an OpenAI
+// search shows its query and sources exactly as a Gemini one does.
+//
+// This is the channel rather than a synthetic FunctionCall part because ADK
+// executes every FunctionCall it finds in a model response: a name with no
+// registered tool comes back as newToolNotFoundError, which lands a
+// "tool 'openai_web_search' not found" result in the conversation and feeds it
+// to the model on the next turn. GroundingMetadata is opaque to ADK's flow —
+// the aggregator only carries it forward (stream_aggregator.go) — so it reaches
+// the display layer without being executed.
+//
+// Returns nil when the response names no search, so callers can leave the field
+// unset rather than attach an empty metadata object.
+func openaiWebSearchGrounding(items []responses.ResponseOutputItemUnion) *genai.GroundingMetadata {
+	var queries []string
+	var chunks []*genai.GroundingChunk
+
+	for _, item := range items {
+		search, ok := item.AsAny().(responses.ResponseFunctionWebSearch)
+		if !ok {
+			continue
+		}
+		action, ok := search.Action.AsAny().(responses.ResponseFunctionWebSearchActionSearch)
+		if !ok {
+			// open_page / find — the model followed a link instead of
+			// searching. Nothing to report as a query.
+			continue
+		}
+		// Queries only; the struct's single-query `Query` field is deprecated,
+		// and reading it would need a staticcheck suppression to buy nothing.
+		// Measured against the live API, a web_search_call carries both — and
+		// `query` is not a fallback for an empty list but a duplicate of
+		// queries[0]:
+		//
+		//	"queries": ["positive news today", "site:reuters.com ..."],
+		//	"query":   "positive news today"
+		//
+		// So the list is always the complete answer, and appending the singular
+		// field would double-report the first query.
+		queries = append(queries, action.Queries...)
+
+		// One chunk per URL, following the same convention Gemini's grounding
+		// uses: Title is the short label the chat shows, URI the full address
+		// the trace log keeps. Unlike Gemini — which returns an opaque
+		// ~200-char vertexaisearch redirect and so must put the domain in
+		// Title — OpenAI returns the real page URL, so the host is the label
+		// and the URL itself survives in the log.
+		//
+		// Without this the chat prints raw URLs (query strings and all), which
+		// soft-wrap across the panel: one live search returned 39 sources.
+		for _, src := range action.Sources {
+			if src.URL == "" {
+				continue
+			}
+			chunks = append(chunks, &genai.GroundingChunk{
+				Web: &genai.GroundingChunkWeb{
+					Title: sourceHostLabel(src.URL),
+					URI:   src.URL,
+				},
+			})
+		}
+	}
+
+	if len(queries) == 0 && len(chunks) == 0 {
+		return nil
+	}
+	return &genai.GroundingMetadata{
+		WebSearchQueries: queries,
+		GroundingChunks:  chunks,
+	}
 }
 
 // --- Finish reason and failure handling, ported from adk-go v2.4.0

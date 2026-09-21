@@ -78,7 +78,7 @@ func TestDispatchModeNoPrompt(t *testing.T) {
 
 			var err error
 			out := captureStderr(t, func() {
-				err = dispatchMode(context.Background(), mode, "", nil, "sid", nil, "test-model", config.Config{}, nil)
+				err = dispatchMode(context.Background(), mode, "", nil, "sid", nil, "test-model", config.Config{}, nil, "")
 			})
 
 			if err != nil {

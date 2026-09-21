@@ -672,6 +672,12 @@ type LLMOptions struct {
 	// EnableXAITools opts into xAI server-side tools (web search, X search,
 	// and code interpreter) for xAI Responses API requests.
 	EnableXAITools bool
+	// EnableOpenAIWebSearch opts into OpenAI's built-in web_search tool on the
+	// Responses API. Off by default: OpenAI rejects the tool on models that do
+	// not support it, so turning it on unconditionally would fail ordinary
+	// turns on those models. PI_OPENAI_WEB_SEARCH turns it on process-wide;
+	// PI_NO_OPENAI_WEB_SEARCH is the kill switch and beats both.
+	EnableOpenAIWebSearch bool
 	// MaxOutputTokens caps a reply on the OpenAI-compatible paths, in tokens.
 	// Zero uses defaultOaiMaxOutputTokens; set it for a backend whose models
 	// stop below that and reject the request rather than clamping it. A

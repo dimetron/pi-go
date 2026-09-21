@@ -71,6 +71,7 @@ letting the first request fail with a provider-specific auth error.
 | `WithCACert` | Trust a PEM bundle alongside system roots |
 | `WithInsecureTLS` | Disable verification — prefer `WithCACert` |
 | `WithPromptCachingDisabled` | Turn off Anthropic cache breakpoints |
+| `WithWebSearch` | Provider's built-in web search, where supported |
 | `WithAdvisor` | Advisor model, where supported |
 | `WithMaxOutputTokens` | Cap a reply, in tokens |
 | `WithLegacyMaxTokens` | Send `max_tokens` — required for Ollama |

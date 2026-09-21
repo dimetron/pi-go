@@ -702,7 +702,7 @@ func TestPrintGroundingEvent(t *testing.T) {
 
 	t.Run("no grounding metadata prints nothing", func(t *testing.T) {
 		got := captureStderr(t, func() {
-			printGroundingEvent(newEvent(nil), map[string]bool{}, nil)
+			printGroundingEvent(newEvent(nil), "gemini", map[string]bool{}, nil)
 		})
 		if got != "" {
 			t.Errorf("stderr = %q, want nothing", got)
@@ -711,7 +711,7 @@ func TestPrintGroundingEvent(t *testing.T) {
 
 	t.Run("empty query list prints nothing", func(t *testing.T) {
 		got := captureStderr(t, func() {
-			printGroundingEvent(newEvent([]string{}), map[string]bool{}, nil)
+			printGroundingEvent(newEvent([]string{}), "gemini", map[string]bool{}, nil)
 		})
 		if got != "" {
 			t.Errorf("stderr = %q, want nothing", got)
@@ -722,12 +722,12 @@ func TestPrintGroundingEvent(t *testing.T) {
 		seen := map[string]bool{}
 		ev := newEvent([]string{"go generics"})
 
-		first := captureStderr(t, func() { printGroundingEvent(ev, seen, nil) })
+		first := captureStderr(t, func() { printGroundingEvent(ev, "gemini", seen, nil) })
 		if !strings.Contains(first, agent.GroundingToolName) {
 			t.Errorf("stderr = %q, want it to name %q", first, agent.GroundingToolName)
 		}
 
-		second := captureStderr(t, func() { printGroundingEvent(ev, seen, nil) })
+		second := captureStderr(t, func() { printGroundingEvent(ev, "gemini", seen, nil) })
 		if second != "" {
 			t.Errorf("repeat stderr = %q, want the second report suppressed", second)
 		}

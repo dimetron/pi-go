@@ -396,7 +396,7 @@ func TestRunPrintTextOutput(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runPrint(context.Background(), ag, sessionID, "Say hello", nil)
+		err := runPrint(context.Background(), ag, sessionID, "Say hello", nil, "")
 		if err != nil {
 			t.Fatalf("runPrint error: %v", err)
 		}
@@ -444,7 +444,7 @@ func TestRunPrintToolStatusToStderr(t *testing.T) {
 	sessionID, _, _ := ag.CreateSession(ctx)
 
 	stderr := captureStderr(t, func() {
-		_ = runPrint(ctx, ag, sessionID, "Read the file", nil)
+		_ = runPrint(ctx, ag, sessionID, "Read the file", nil, "")
 	})
 
 	if !strings.Contains(stderr, "⚙ tool: read") {
@@ -1227,7 +1227,7 @@ func TestRunPrintAgentError(t *testing.T) {
 	llm := &cliErrorLLM{name: "test-print-error", err: sentinel}
 	ag, sessionID := newTestAgent(t, llm)
 
-	err := runPrint(context.Background(), ag, sessionID, "hello", nil)
+	err := runPrint(context.Background(), ag, sessionID, "hello", nil, "")
 	if err == nil {
 		t.Fatal("expected runPrint to return an error when LLM errors and ctx is not canceled")
 	}

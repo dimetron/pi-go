@@ -297,7 +297,7 @@ func TestCliRunPrintNilLogger(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runPrint(context.Background(), ag, sessionID, "hi", nil)
+		err := runPrint(context.Background(), ag, sessionID, "hi", nil, "")
 		if err != nil {
 			t.Fatalf("runPrint error: %v", err)
 		}
@@ -344,7 +344,7 @@ func TestCliRunPrintWithLogger(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runPrint(context.Background(), ag, sessionID, "hello", lg)
+		err := runPrint(context.Background(), ag, sessionID, "hello", lg, "")
 		if err != nil {
 			t.Fatalf("runPrint error: %v", err)
 		}
@@ -402,7 +402,7 @@ func TestCliRunPrintCancelledContext(t *testing.T) {
 	// With a canceled context, runPrint may return nil (context.Canceled
 	// is suppressed) or an error. Either is acceptable — we just verify no panic.
 	_ = captureStdout(t, func() {
-		_ = runPrint(ctx, ag, sessionID, "hello", nil)
+		_ = runPrint(ctx, ag, sessionID, "hello", nil, "")
 	})
 }
 

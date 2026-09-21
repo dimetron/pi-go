@@ -226,6 +226,22 @@ func WithSystemCAsDisabled() Option {
 	return func(o *options) { o.llm.DisableSystemCAs = true }
 }
 
+// WithWebSearch enables the provider's built-in web search: OpenAI's
+// web_search tool on the Responses API, or xAI's server-side tools (which are
+// on by default for xAI).
+//
+// Opt-in because OpenAI rejects the tool on models that do not support it —
+// gpt-4.1-nano, and gpt-5 at minimal reasoning — so sending it unconditionally
+// would fail ordinary turns on those models.
+//
+// The search runs server-side and cites what it read. Because it never produces
+// a tool call pi-go's loop executes, the agent's own toolset is unaffected: this
+// does not register a tool, and an embedder that also composes a client-side
+// search tool will have two search tools in the request.
+func WithWebSearch() Option {
+	return func(o *options) { o.llm.EnableOpenAIWebSearch = true }
+}
+
 // WithAdvisor enables an advisor model for providers that support it, bounded
 // by maxUses per request (0 = unbounded).
 func WithAdvisor(advisorModel string, maxUses int, caching bool) Option {
