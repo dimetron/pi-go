@@ -74,6 +74,7 @@ var (
 	flagSlow         bool
 	flagPlan         bool
 	flagMemoryOff    bool
+	flagWebSearch    bool
 	flagLSP          string
 	flagSystem       string
 	flagPprof        string
@@ -233,6 +234,8 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.Flags().BoolVar(&flagInsecure, "insecure", false, "Skip TLS certificate verification for LLM API calls")
 	cmd.Flags().StringVar(&flagCACert, "ca-cert", "", "PEM bundle to trust for LLM API calls, in addition to the system roots")
 	cmd.Flags().BoolVar(&flagMemoryOff, "memory-off", false, "Disable the persistent memory system for this session")
+	cmd.Flags().BoolVar(&flagWebSearch, "web-search-enabled", false,
+		"Register the web_search tool (needs a running Ollama daemon, or OLLAMA_API_KEY). Off by default; PI_WEB_SEARCH=1 does the same, and propagates to subagents")
 	cmd.Flags().StringVar(&flagLSP, "lsp", "min", "Language-server tools: off, min (symbols+diagnostics), or full (all seven)")
 	// Persistent, not local: `pi memory mine . --pprof true` and every other
 	// subcommand must accept these too. As local flags they were rejected with
@@ -697,7 +700,7 @@ func initNonInteractiveRuntime(ctx context.Context, cfg *config.Config, cwd, san
 	}
 
 	bashSup := tools.NewBashSupervisor()
-	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
+	coreTools, err := tools.CoreTools(sandbox, coreToolOptions(bashSup)...)
 	if err != nil {
 		_ = sandbox.Close()
 		return nil, fmt.Errorf("creating core tools: %w", err)
@@ -1222,6 +1225,22 @@ func memoryEnabled(cfg config.Config) bool {
 // default-on semantics as memoryEnabled.
 func palaceIsEnabled(cfg config.Config) bool {
 	return !flagMemoryOff && (cfg.Palace == nil || cfg.Palace.Enabled == nil || *cfg.Palace.Enabled)
+}
+
+// coreToolOptions builds the CoreTools options every entry point shares, so a
+// new opt-in gate is wired once rather than at each construction site
+// (interactive, print/JSON, ACP and the eval inventory).
+//
+// Only the flag is read here. PI_WEB_SEARCH is read inside tools.CoreTools
+// instead, because internal/acp/server builds the same tool set and cannot
+// import this package — a gate that lived only here would leave ACP without the
+// tool its session asked for.
+func coreToolOptions(sup *tools.BashSupervisor) []tools.CoreOption {
+	opts := []tools.CoreOption{tools.WithBashSupervisor(sup)}
+	if flagWebSearch {
+		opts = append(opts, tools.WithWebSearch())
+	}
+	return opts
 }
 
 // setupMemory opens the observation store and starts its background worker.
