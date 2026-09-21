@@ -42,6 +42,7 @@ package pimodels
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/adk/v2/model"
@@ -117,12 +118,114 @@ type Info struct {
 	Custom bool
 }
 
+// ThinkingLevel is the reasoning effort to ask a model for.
+//
+// The vocabulary is pi-go's: the same five levels the TUI's sidebar indicator
+// and `thinkingLevel` in ~/.pi-go/config.json use. A provider maps them onto
+// its own wire vocabulary, and providers differ in how much of the range they
+// preserve — Anthropic collapses low/medium/high onto one adaptive config, and
+// Mistral documents only two values. Choosing a level is therefore a request,
+// not a guarantee.
+//
+// Which providers act on it at all is decided by internal/provider.NewLLM,
+// which does not pass it to the OpenAI, Azure, Gemini or agentgateway
+// constructors. On those, any level here is accepted and ignored, because it is
+// the model that cannot express the setting rather than the option that is
+// wrong.
+type ThinkingLevel string
+
+const (
+	// ThinkingNone asks the model not to reason, where it can be told. Providers
+	// with no off switch land on their lowest tier instead; see the mapping
+	// notes in internal/provider/xai.go.
+	ThinkingNone ThinkingLevel = "none"
+	// ThinkingLow is the cheapest level that still requests reasoning.
+	ThinkingLow ThinkingLevel = "low"
+	// ThinkingMedium balances effort against latency.
+	ThinkingMedium ThinkingLevel = "medium"
+	// ThinkingHigh is what pi-go's own config defaults to (config.Defaults).
+	ThinkingHigh ThinkingLevel = "high"
+	// ThinkingMax requests the most reasoning the provider offers. Providers
+	// without a top tier above high treat it as high.
+	ThinkingMax ThinkingLevel = "max"
+)
+
+// validThinkingLevels are the levels the providers can express. "max" and
+// "xhigh" are separate spellings for the same top tier in some providers and
+// only "max" is honored by all of them — OpenRouter drops "xhigh" silently —
+// so "max" is the one spelling accepted here.
+var validThinkingLevels = []ThinkingLevel{
+	ThinkingNone, ThinkingLow, ThinkingMedium, ThinkingHigh, ThinkingMax,
+}
+
+// ParseThinkingLevel converts a level string to a ThinkingLevel, so a caller
+// reading one from a file or a flag gets the same validation the option applies
+// rather than an error on the first request.
+//
+// The empty string is accepted and returns "", meaning "leave the provider's
+// default in force" — the same meaning it has in WithThinkingLevel.
+func ParseThinkingLevel(s string) (ThinkingLevel, error) {
+	if strings.TrimSpace(s) == "" {
+		return ThinkingUnset, nil
+	}
+	level := ThinkingLevel(strings.ToLower(strings.TrimSpace(s)))
+	if err := level.Validate(); err != nil {
+		return "", err
+	}
+	return level, nil
+}
+
+// ThinkingUnset leaves the provider's own default in force. It is the zero
+// ThinkingLevel and the value WithThinkingLevel has when it is not called.
+const ThinkingUnset ThinkingLevel = ""
+
+// Validate reports whether the level is one a provider can act on.
+//
+// It rejects an unrecognized level rather than passing it through, because
+// every provider treats an unknown string by silently omitting the parameter —
+// a typo is accepted, the model keeps its own default, and nothing in the
+// response says why the setting did not take effect.
+//
+// Case and surrounding whitespace are normalized rather than rejected, and the
+// same normalization [ParseThinkingLevel] applies: a level read from a config
+// file routinely arrives as " High ", and the two functions disagreeing about
+// it would mean validating early proved nothing about passing it later.
+func (l ThinkingLevel) Validate() error {
+	trimmed := strings.TrimSpace(string(l))
+	if trimmed == "" {
+		return nil
+	}
+	for _, valid := range validThinkingLevels {
+		if strings.EqualFold(trimmed, string(valid)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown thinking level %q: want one of none, low, medium, high, max, or the empty string", string(l))
+}
+
+// String returns the level as it goes on the wire.
+func (l ThinkingLevel) String() string { return string(l) }
+
+// canonical returns the level in the lowercase spelling the providers match on.
+//
+// This matters because the providers are not uniform in how they compare: the
+// Ollama and xAI mappings switch on the string with exact `case` labels, so
+// "HIGH" reaches their default arm and is dropped, while OpenRouter and Mistral
+// lowercase it themselves first. Validating a level and then forwarding the
+// caller's original spelling would therefore accept "HIGH" and still let those
+// two providers ignore it — the silent no-op this type exists to prevent. Every
+// level that reaches a provider goes through here, so all of them see the
+// spelling they match on.
+func (l ThinkingLevel) canonical() ThinkingLevel {
+	return ThinkingLevel(strings.ToLower(strings.TrimSpace(string(l))))
+}
+
 // options carries everything New needs beyond the model name. Callers set it
 // through Option values; the zero value is a working default.
 type options struct {
 	apiKey        string
 	baseURL       string
-	thinkingLevel string
+	thinkingLevel ThinkingLevel
 	llm           provider.LLMOptions
 }
 
@@ -140,10 +243,26 @@ func WithBaseURL(url string) Option {
 	return func(o *options) { o.baseURL = url }
 }
 
-// WithThinkingLevel sets the reasoning effort for models that support it
-// ("none", "low", "medium", "high"). Ignored by models that do not.
-func WithThinkingLevel(level string) Option {
+// WithThinkingLevel sets the reasoning effort for models that support it.
+//
+// An unrecognized level is reported by [New] rather than sent, so a typo fails
+// at construction instead of silently leaving the model on its own default. A
+// caller with a level in a string — from a flag, a config file, an environment
+// variable — should use [WithThinkingLevelString] or [ParseThinkingLevel], or
+// accept that a bad value surfaces as an error naming the field.
+func WithThinkingLevel(level ThinkingLevel) Option {
 	return func(o *options) { o.thinkingLevel = level }
+}
+
+// WithThinkingLevelString sets the reasoning effort from a string, validating it
+// at the same point [WithThinkingLevel] does.
+//
+// It exists because a level usually arrives as text — a config file, a flag, an
+// env var — and converting it by hand means the caller has to either duplicate
+// the accepted set or convert unchecked and lose the validation. The empty
+// string is valid and means "leave the provider's default in force".
+func WithThinkingLevelString(level string) Option {
+	return func(o *options) { o.thinkingLevel = ThinkingLevel(level) }
 }
 
 // WithHeaders adds headers to every request, for gateways that need routing or
@@ -326,7 +445,7 @@ func FromConfig(ctx context.Context, role string, opts ...Option) (Model, error)
 	// still override them.
 	merged := append([]Option{WithAdvisor(advisorModel, advisorMaxUses, advisorCaching)}, opts...)
 	if cfg.ThinkingLevel != "" {
-		merged = append([]Option{WithThinkingLevel(cfg.ThinkingLevel)}, merged...)
+		merged = append([]Option{WithThinkingLevelString(cfg.ThinkingLevel)}, merged...)
 	}
 	return New(ctx, modelName, merged...)
 }
@@ -412,6 +531,18 @@ func APIKeyEnvVar(providerName string) string {
 }
 
 func newFromProviderInfo(ctx context.Context, info provider.Info, o options) (Model, error) {
+	// Validate before building anything: a credential probe or a network call
+	// that happens first turns a typo in a thinking level into a confusing
+	// second error, and on a provider that needs no key it would build a client
+	// only to reject the option that was passed with it.
+	//
+	// This is the one funnel New, NewFromInfo and FromConfig all reach, so
+	// validating here covers every entry point and cannot be forgotten by a
+	// future one.
+	if err := o.thinkingLevel.Validate(); err != nil {
+		return nil, fmt.Errorf("pimodels: %s %q: %w", info.Provider, info.Model, err)
+	}
+
 	apiKey := o.apiKey
 	if apiKey == "" {
 		apiKey = provider.APIKeyFromEnv(info.Provider)
@@ -423,7 +554,7 @@ func newFromProviderInfo(ctx context.Context, info provider.Info, o options) (Mo
 	}
 
 	llmOpts := o.llm
-	m, err := provider.NewLLM(ctx, info, apiKey, baseURL, o.thinkingLevel, &llmOpts)
+	m, err := provider.NewLLM(ctx, info, apiKey, baseURL, o.thinkingLevel.canonical().String(), &llmOpts)
 	if err != nil {
 		return nil, fmt.Errorf("pimodels: building %s model %q: %w", info.Provider, info.Model, err)
 	}

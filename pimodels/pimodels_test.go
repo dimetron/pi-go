@@ -2,12 +2,17 @@ package pimodels
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 func TestNewRejectsEmptyModelName(t *testing.T) {
@@ -293,4 +298,239 @@ func TestProviderModelForwardsEmbeddedMethods(t *testing.T) {
 		t.Fatalf("Name() = %q, want the wrapped model's name — wrapping must be transparent", got)
 	}
 	var _ Model = m // must still satisfy the interface an agent consumes
+}
+
+// TestThinkingLevelValidate pins the accepted vocabulary, including the two
+// spellings deliberately left out. "xhigh" and "off" are provider aliases that
+// some providers honor and others drop silently — OpenRouter discards "xhigh"
+// while xAI discards nothing, so neither can be accepted without one provider
+// quietly ignoring it. "max" and "none" are the spellings every provider
+// understands.
+func TestThinkingLevelValidate(t *testing.T) {
+	valid := []ThinkingLevel{
+		ThinkingUnset, ThinkingNone, ThinkingLow, ThinkingMedium, ThinkingHigh, ThinkingMax,
+	}
+	for _, level := range valid {
+		t.Run("valid "+string(level), func(t *testing.T) {
+			if err := level.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil for %q", err, level)
+			}
+		})
+	}
+
+	// Case and surrounding space are normalized rather than rejected: a level
+	// read from a config file often carries one.
+	for _, spelling := range []string{"HIGH", " High ", "Medium"} {
+		t.Run("normalized "+spelling, func(t *testing.T) {
+			if err := ThinkingLevel(spelling).Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil for %q", err, spelling)
+			}
+		})
+	}
+
+	invalid := []string{"turbo", "xhigh", "off", "hihg", "nonee", "highh"}
+	for _, spelling := range invalid {
+		t.Run("invalid "+spelling, func(t *testing.T) {
+			err := ThinkingLevel(spelling).Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil for %q; an unaccepted level must not pass silently", spelling)
+			}
+			// The message has to name the accepted set, or the caller has to
+			// go read the source to find out what would have worked.
+			for _, want := range []string{"low", "medium", "high", "max"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error for %q does not mention %q: %v", spelling, want, err)
+				}
+			}
+		})
+	}
+}
+
+// TestParseThinkingLevel pins the string form against the typed one: parsing
+// must accept exactly what Validate accepts and reject the rest, so a caller
+// validating early and a caller passing the string directly cannot disagree
+// about what is allowed.
+func TestParseThinkingLevel(t *testing.T) {
+	for _, in := range []string{"", "none", "low", "medium", "high", "max", "HIGH", " High "} {
+		got, err := ParseThinkingLevel(in)
+		if err != nil {
+			t.Errorf("ParseThinkingLevel(%q) = %v, want no error", in, err)
+			continue
+		}
+		if err := got.Validate(); err != nil {
+			t.Errorf("ParseThinkingLevel(%q) returned %q, which does not validate: %v", in, got, err)
+		}
+	}
+
+	// Empty means "provider default", not a level called "".
+	got, err := ParseThinkingLevel("")
+	if err != nil || got != ThinkingUnset {
+		t.Errorf("ParseThinkingLevel(\"\") = (%q, %v), want (\"\", nil)", got, err)
+	}
+
+	for _, in := range []string{"turbo", "xhigh", "off"} {
+		if _, err := ParseThinkingLevel(in); err == nil {
+			t.Errorf("ParseThinkingLevel(%q) = nil error, want rejection", in)
+		}
+	}
+}
+
+// TestNewRejectsBadThinkingLevel is the guard that matters: a typo must fail at
+// construction. Every provider omits an unrecognized level from the request
+// instead of erroring, so without this the level is accepted, the model keeps
+// its own default, and nothing in the response says the setting did not apply.
+//
+// It asserts on the error text, which is what makes it able to fail: if
+// validation were moved after the client build, an Ollama target would build
+// fine and return no error at all.
+func TestNewRejectsBadThinkingLevel(t *testing.T) {
+	ctx := context.Background()
+	// A local Ollama endpoint resolves and builds with no credential and no
+	// network, so any error here is the level and not the environment.
+	m, err := New(ctx, "ollama/gemma4:e4b",
+		WithBaseURL("http://127.0.0.1:11434"),
+		WithThinkingLevel("turbo"))
+	if err == nil {
+		t.Fatal("New accepted thinking level \"turbo\"; an unrecognized level must fail rather than be omitted")
+	}
+	if m != nil {
+		t.Error("New returned a model alongside the error; a rejected option must not produce a usable client")
+	}
+	for _, want := range []string{"pimodels:", "ollama", "turbo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q — it must name the package, the target and the bad value", err, want)
+		}
+	}
+}
+
+// TestNewAcceptsEveryValidThinkingLevel pins that validation does not reject
+// what it should accept. An over-eager check is the failure mode that would
+// make this option worse than the unchecked string it replaced.
+func TestNewAcceptsEveryValidThinkingLevel(t *testing.T) {
+	ctx := context.Background()
+	for _, level := range validThinkingLevels {
+		t.Run(string(level), func(t *testing.T) {
+			m, err := New(ctx, "ollama/gemma4:e4b",
+				WithBaseURL("http://127.0.0.1:11434"),
+				WithThinkingLevel(level))
+			if err != nil {
+				t.Fatalf("New rejected the valid level %q: %v", level, err)
+			}
+			if m == nil {
+				t.Fatalf("New returned a nil model for the valid level %q", level)
+			}
+		})
+	}
+
+	// The unset level is the zero value, which is also what an untyped ""
+	// converts to, so a caller that never sets a level keeps working.
+	m, err := New(ctx, "ollama/gemma4:e4b", WithBaseURL("http://127.0.0.1:11434"))
+	if err != nil || m == nil {
+		t.Fatalf("New with no thinking level = (%v, %v), want a working model", m, err)
+	}
+}
+
+// TestWithThinkingLevelStringValidates pins that the string entry point
+// validates at the same point the typed one does — a caller with a level from a
+// flag or a config file must not get a weaker check than one writing a constant.
+func TestWithThinkingLevelStringValidates(t *testing.T) {
+	ctx := context.Background()
+	if _, err := New(ctx, "ollama/gemma4:e4b",
+		WithBaseURL("http://127.0.0.1:11434"),
+		WithThinkingLevelString("nonsense"),
+	); err == nil {
+		t.Error("WithThinkingLevelString(\"nonsense\") was accepted; the string path must validate")
+	}
+
+	if _, err := New(ctx, "ollama/gemma4:e4b",
+		WithBaseURL("http://127.0.0.1:11434"),
+		WithThinkingLevelString("medium"),
+	); err != nil {
+		t.Errorf("WithThinkingLevelString(\"medium\") was rejected: %v", err)
+	}
+}
+
+// TestThinkingLevelReachesTheWireCanonicalized is the regression for a silent
+// no-op this type would otherwise have introduced, and it asserts on the
+// request body rather than on an internal helper for that reason.
+//
+// Ollama and xAI match the level with exact `case` labels (ollama.go's
+// ollamaThinkingConfig, xai.go's xaiReasoningEffort), while OpenRouter and
+// Mistral lowercase the input themselves. A level that validates as "HIGH" and
+// is then forwarded as "HIGH" passes New and is dropped by those two providers:
+// accepted, applied nowhere, and invisible in the response. Only an assertion
+// on what the provider is sent can tell a canonicalized level from a validated
+// one, because both pass every check inside this package.
+func TestThinkingLevelReachesTheWireCanonicalized(t *testing.T) {
+	tests := []struct {
+		given ThinkingLevel
+		want  string
+		// wantFalse is set for "none", which Ollama encodes as think=false
+		// rather than as a level string.
+		wantFalse bool
+	}{
+		{given: ThinkingHigh, want: "high"},
+		{given: "HIGH", want: "high"},
+		{given: " High ", want: "high"},
+		{given: ThinkingMedium, want: "medium"},
+		{given: "MediuM", want: "medium"},
+		{given: ThinkingNone, wantFalse: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.given), func(t *testing.T) {
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured = body
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				_, _ = w.Write([]byte(`{"model":"gemma4:e4b","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"ok"},"done":true,"done_reason":"stop"}` + "\n"))
+			}))
+			defer srv.Close()
+
+			m, err := New(context.Background(), "ollama/gemma4:e4b",
+				WithBaseURL(srv.URL),
+				WithThinkingLevel(tt.given))
+			if err != nil {
+				t.Fatalf("New(%q): %v", tt.given, err)
+			}
+
+			req := &model.LLMRequest{
+				Contents: []*genai.Content{
+					{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
+				},
+			}
+			// Drain the iterator so the request is actually sent; ignoring the
+			// response is fine, this test is about the request.
+			for resp, err := range m.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("GenerateContent: %v", err)
+				}
+				_ = resp
+			}
+
+			if len(captured) == 0 {
+				t.Fatal("no request reached the server")
+			}
+			var body map[string]any
+			if err := json.Unmarshal(captured, &body); err != nil {
+				t.Fatalf("parsing request body: %v", err)
+			}
+
+			if tt.wantFalse {
+				// "none" is Ollama's explicit false, not an omitted field: a
+				// missing field leaves the model's own default in force.
+				if got, ok := body["think"].(bool); !ok || got {
+					t.Fatalf("think = %v, want false for \"none\" — an omitted field would let the model think anyway", body["think"])
+				}
+				return
+			}
+
+			got, _ := body["think"].(string)
+			if got != tt.want {
+				t.Fatalf("think = %q on the wire, want %q; Ollama's case arm matches %q exactly and drops anything else",
+					got, tt.want, tt.want)
+			}
+		})
+	}
 }
