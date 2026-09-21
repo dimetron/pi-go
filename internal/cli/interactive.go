@@ -436,7 +436,7 @@ func deferredInitCoreTools(sandboxRoot, worktreeDir string, res *initResources) 
 	bashSup := tools.NewBashSupervisor()
 	res.bashSup = bashSup
 
-	coreTools, err := tools.CoreTools(sandbox, tools.WithBashSupervisor(bashSup))
+	coreTools, err := tools.CoreTools(sandbox, coreToolOptions(bashSup)...)
 	if err != nil {
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}

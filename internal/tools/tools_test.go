@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -780,15 +781,17 @@ func TestCoreTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 14 {
-		t.Errorf("expected 14 core tools, got %d", len(tools))
+	// 13, not 14: web_search is opt-in and this call does not opt in. See
+	// TestCoreToolsWebSearchOptIn for the other half of the contract.
+	if len(tools) != 13 {
+		t.Errorf("expected 13 core tools, got %d", len(tools))
 	}
 
 	expected := map[string]bool{
 		"read": true, "read_image": true, "write": true, "edit": true, "bash": true,
 		"find": true, "ls": true, "tree": true,
 		"git-overview": true, "git-file-diff": true, "git-hunk": true,
-		"session-stats": true, "web_search": true,
+		"session-stats": true,
 	}
 	if rgAvailable {
 		expected["ripgrep"] = true
@@ -803,6 +806,75 @@ func TestCoreTools(t *testing.T) {
 	}
 	for name := range expected {
 		t.Errorf("missing tool: %s", name)
+	}
+
+	// web_search must be absent, not just omitted from the count: a session
+	// with no search backend was advertising a tool that fails mid-turn with a
+	// transport error, which reads as a pi-go bug.
+	for _, tool := range tools {
+		if tool.Name() == "web_search" {
+			t.Error("web_search registered without an opt-in; it needs a running " +
+				"Ollama daemon or OLLAMA_API_KEY, and fails with a network error otherwise")
+		}
+	}
+}
+
+// WithWebSearch registers the tool; without it the model is never offered a
+// search it cannot run.
+func TestCoreToolsWebSearchOptIn(t *testing.T) {
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+	tools, err := CoreTools(sb, WithWebSearch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	if !slices.Contains(names, "web_search") {
+		t.Errorf("WithWebSearch did not register web_search; tools = %v", names)
+	}
+}
+
+// PI_WEB_SEARCH is the switch a subagent can inherit. A flag cannot reach one:
+// spawnArgs passes only model, url, headers, --lsp and the prompt, while
+// FilterEnv forwards the whole PI_ prefix.
+func TestCoreToolsWebSearchEnvVar(t *testing.T) {
+	t.Setenv(webSearchEnvVar, "1")
+	dir := t.TempDir()
+	sb := testSandbox(t, dir)
+	tools, err := CoreTools(sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	if !slices.Contains(names, "web_search") {
+		t.Errorf("%s=1 did not register web_search; tools = %v", webSearchEnvVar, names)
+	}
+}
+
+// A non-truthy value must leave the tool off, so PI_WEB_SEARCH=0 is an
+// unambiguous way to keep it disabled.
+func TestCoreToolsWebSearchEnvVarFalsy(t *testing.T) {
+	for _, val := range []string{"0", "false", "no", "off", "", "garbage"} {
+		t.Run(val, func(t *testing.T) {
+			t.Setenv(webSearchEnvVar, val)
+			dir := t.TempDir()
+			sb := testSandbox(t, dir)
+			tools, err := CoreTools(sb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range tools {
+				if tool.Name() == "web_search" {
+					t.Errorf("%s=%q registered web_search, want it left off", webSearchEnvVar, val)
+				}
+			}
+		})
 	}
 }
 

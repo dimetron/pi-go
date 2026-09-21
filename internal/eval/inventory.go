@@ -60,7 +60,11 @@ func Inventory(dir string) ([]ToolInfo, error) {
 	defer func() { _ = sb.Close() }()
 
 	sup := tools.NewBashSupervisor()
-	core, err := tools.CoreTools(sb, tools.WithBashSupervisor(sup))
+	// WithWebSearch is passed explicitly: the inventory lists every tool that
+	// can exist, and web_search is opt-in in a real session. Omitting it here
+	// would make the tool invisible to the coverage check, so the suite would
+	// stop noticing that it has neither a scenario nor an exclusion.
+	core, err := tools.CoreTools(sb, tools.WithBashSupervisor(sup), tools.WithWebSearch())
 	if err != nil {
 		return nil, fmt.Errorf("inventory core tools: %w", err)
 	}
