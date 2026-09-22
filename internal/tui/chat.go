@@ -102,6 +102,11 @@ type message struct {
 	isWarning bool // if true, render with warning style
 	isError   bool // if true, render with error style (takes precedence)
 	isMeta    bool // if true, render as a dim one-line note (no bullet)
+	// isNotice marks a system notice. It renders exactly like a plain reply —
+	// a notice is not a warning, so it gets neither the ⚠ bullet nor the
+	// warning color — but it is a *closed* block, so streamed text that
+	// arrives after it starts a new message instead of overwriting it.
+	isNotice bool
 	// preRendered marks content that is already terminal output — it carries
 	// its own ANSI and must bypass glamour, which treats escape bytes as text
 	// and prints them. Used by /theme's palette preview.
@@ -219,7 +224,7 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 		h = fnvByte(h, 1)
 	}
 
-	var flags byte
+	var flags uint16
 	if m.isWarning {
 		flags |= 1 << 0
 	}
@@ -244,7 +249,10 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if m.isMeta {
 		flags |= 1 << 7
 	}
-	return fnvByte(h, flags)
+	if m.isNotice {
+		flags |= 1 << 8
+	}
+	return fnvInt(h, int(flags))
 }
 
 // toolPending reports whether a tool card is still waiting on a result, and so
@@ -302,13 +310,13 @@ func (c *ChatModel) Clear() {
 }
 
 // closed reports whether a message is a finished block that must never absorb
-// more streamed text. Errors, warnings, meta notes and pre-rendered output all
-// carry role "assistant" so they sit in the reply column, but each is complete
-// the moment it is appended. Streaming into one overwrites the notice with the
-// reply and drags the notice's styling over every line that follows — a
+// more streamed text. Errors, warnings, meta notes, notices and pre-rendered
+// output all carry role "assistant" so they sit in the reply column, but each is
+// complete the moment it is appended. Streaming into one overwrites the notice
+// with the reply and drags the notice's styling over every line that follows — a
 // mid-turn warning used to swallow the rest of the answer and paint it orange.
 func (m *message) closed() bool {
-	return m.isError || m.isWarning || m.isMeta || m.preRendered
+	return m.isError || m.isWarning || m.isMeta || m.preRendered || m.isNotice
 }
 
 // AppendError adds an error message styled with red text. Errors that end a
@@ -340,6 +348,28 @@ func (c *ChatModel) AppendWarning(text string) {
 func (c *ChatModel) closeStreamingBlock() {
 	c.Streaming = ""
 	c.Scroll = 0
+}
+
+// AppendNotice adds a system notice to the transcript — a skipped MCP server, a
+// blocked skill, an LSP hook warning — styled as an ordinary reply.
+//
+// It exists rather than reusing AppendWarning because a notice is not a warning:
+// "compaction ran" and "update available" carry no ⚠, and dressing them in the
+// warning color would make every benign startup message read as a problem.
+//
+// What it does share with the other appenders is closing the block. A notice
+// carries role "assistant" so it sits in the reply column, which means an
+// unflagged one is indistinguishable from a reply still being streamed: the next
+// text delta appends into it and overwrites the notice before it is ever
+// painted. The repaint the notice triggers is not the problem — painting a
+// message that the next delta erases is.
+func (c *ChatModel) AppendNotice(text string) {
+	c.Messages = append(c.Messages, message{
+		role:     "assistant",
+		content:  text,
+		isNotice: true,
+	})
+	c.closeStreamingBlock()
 }
 
 // AppendMeta adds a dim, single-line metadata note to the transcript (e.g. the

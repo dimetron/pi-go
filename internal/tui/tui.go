@@ -865,10 +865,12 @@ func (m *model) updateAgentStream(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleAgentUsage(msg)
 		return model, cmd, true
 	case systemNoticeMsg:
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: msg.text,
-		})
+		// AppendNotice, not a bare append: a notice carries role "assistant",
+		// so an unflagged one is absorbed by the next streamed text delta — it
+		// is overwritten before the repaint it just triggered can paint it.
+		// This is the path every LSP hook warning takes, so on an .rs write it
+		// was the notice that vanished, never the repaint that failed.
+		m.chatModel.AppendNotice(msg.text)
 		return m, waitForSystemNotice(m.cfg.SystemNoticeCh), true
 	case agentDoneMsg:
 		model, cmd := m.handleAgentDone(msg)
