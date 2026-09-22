@@ -159,3 +159,50 @@ func TestCancel_StartsQueuedPrompt(t *testing.T) {
 		t.Error("queued prompt did not start after Esc")
 	}
 }
+
+// A prompt submitted through the real entry point mid-turn steers. The other
+// tests in this file call steerPrompt directly, which leaves Update's own
+// routing — the thing that decides a mid-turn Enter is a steer at all —
+// uncovered, so a regression there would pass every test above.
+func TestSteer_MidTurnSubmitRoutesThroughHandleInputSubmit(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentCancel = cancel
+
+	_, _, handled := m.handleInputSubmit(InputSubmitMsg{Text: "actually, do X instead"})
+	if !handled {
+		t.Fatal("handleInputSubmit did not claim the prompt")
+	}
+	if ctx.Err() == nil {
+		t.Error("a mid-turn submit did not cancel the running turn")
+	}
+	if got := len(m.pendingPrompts); got != 1 {
+		t.Fatalf("pending = %d, want 1", got)
+	}
+	if got := m.pendingPrompts[0].text; got != "actually, do X instead" {
+		t.Fatalf("queued prompt = %q, want the submitted text", got)
+	}
+}
+
+// A slash command mid-turn is still ignored rather than steered: it is not a
+// message for the model, and canceling the turn for one would be a surprise.
+func TestSteer_SlashCommandMidTurnIsIgnored(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentCancel = cancel
+
+	_, _, handled := m.handleInputSubmit(InputSubmitMsg{Text: "/help"})
+	if !handled {
+		t.Fatal("handleInputSubmit did not claim the command")
+	}
+	if ctx.Err() != nil {
+		t.Error("a slash command mid-turn canceled the turn")
+	}
+	if got := len(m.pendingPrompts); got != 0 {
+		t.Fatalf("pending = %d, want 0 (a command is not a prompt)", got)
+	}
+}
