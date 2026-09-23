@@ -61,6 +61,20 @@ func TestHoverResultUnmarshal(t *testing.T) {
 			wantKind: "",
 			wantSubs: nil,
 		},
+		{
+			// Not a shape the spec defines, but a server can still send it;
+			// it must not abort the request.
+			name:     "unsupported number",
+			raw:      `{"contents":5}`,
+			wantKind: "",
+			wantSubs: nil,
+		},
+		{
+			name:     "array containing an unsupported shape",
+			raw:      `{"contents":["kept",7,"also kept"]}`,
+			wantKind: "plaintext",
+			wantSubs: []string{"kept", "also kept"},
+		},
 	}
 
 	for _, tt := range tests {
