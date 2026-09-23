@@ -658,6 +658,25 @@ func TestAutoDetectProviderOllamaPrefix(t *testing.T) {
 	}
 }
 
+// TestAutoDetectProviderOpenAIPrefix covers the "openai/" prefix branch. A
+// defaultProvider of something else must not win: the prefix is explicit.
+func TestAutoDetectProviderOpenAIPrefix(t *testing.T) {
+	cfg := Config{
+		DefaultProvider: "anthropic",
+		Roles: map[string]RoleConfig{
+			"default": {Model: "openai/gpt-6-luna"},
+		},
+	}
+
+	_, prov, _, _, _, err := cfg.ResolveRole("default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prov != "openai" {
+		t.Errorf("expected openai provider for openai/ prefix model, got %q", prov)
+	}
+}
+
 // --- MCP config tests ---
 
 func TestLoadMCPServers_GlobalOnly(t *testing.T) {

@@ -129,6 +129,50 @@ func TestResolveWithAzurePrefixCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestResolveWithOpenAIPrefix(t *testing.T) {
+	tests := []struct {
+		model     string
+		wantModel string
+	}{
+		{"openai/gpt-6-luna", "gpt-6-luna"},
+		{"openai/gpt-6-sol", "gpt-6-sol"},
+		{"openai/gpt-6-astra", "gpt-6-astra"},
+		// Case-insensitive like the other prefixes Resolve special-cases.
+		{"OPENAI/gpt-6-luna", "gpt-6-luna"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			info, err := Resolve(tt.model)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Provider != "openai" {
+				t.Errorf("provider = %q, want openai", info.Provider)
+			}
+			if info.Model != tt.wantModel {
+				t.Errorf("model = %q, want %q", info.Model, tt.wantModel)
+			}
+			if info.Ollama || info.Custom {
+				t.Errorf("info = %+v, expected Ollama and Custom to be false", info)
+			}
+		})
+	}
+}
+
+// TestResolveOpenAIPrefixKeepsNestedRouting pins that openai/ is stripped from
+// the front of a layered route without disturbing the prefix behind it. Resolve
+// returns the remainder as-is; unwrapping the inner vendor is
+// StripKnownProviderPrefixes's job, not Resolve's.
+func TestResolveOpenAIPrefixKeepsNestedRouting(t *testing.T) {
+	info, err := Resolve("agentgateway/openai/gpt-6-luna")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Provider != "agentgateway" || info.Model != "openai/gpt-6-luna" {
+		t.Fatalf("info = %+v, want agentgateway/openai/gpt-6-luna", info)
+	}
+}
+
 func TestResolveWithAnthropicPrefix(t *testing.T) {
 	info, err := Resolve("anthropic/claude-fable-5-1")
 	if err != nil {

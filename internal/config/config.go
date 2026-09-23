@@ -342,6 +342,10 @@ func autoDetectProvider(modelName string) string {
 		return "azure"
 	}
 	lower := strings.ToLower(modelName)
+	// openai/ prefix → native OpenAI provider.
+	if strings.HasPrefix(lower, "openai/") {
+		return "openai"
+	}
 	// ollama/ prefix → native Ollama provider.
 	if strings.HasPrefix(lower, "ollama/") {
 		return "ollama"
