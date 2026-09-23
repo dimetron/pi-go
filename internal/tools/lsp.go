@@ -486,6 +486,11 @@ func fileURI(path string) string {
 	}
 	// lsp.URIPath supplies the leading slash a Windows drive path needs so
 	// url.URL emits "file:///C:/x" rather than reading "C:" as the authority.
+	// Symlink-resolve so the URI matches the one a language server publishes
+	// back; see the note on lsp.fileURI.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 	u := &url.URL{Scheme: "file", Path: lsp.URIPath(abs)}
 	return u.String()
 }

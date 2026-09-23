@@ -14,10 +14,10 @@ func TestManager_NewWithDefaults(t *testing.T) {
 	defer mgr.Shutdown()
 
 	langs := mgr.Languages()
-	if len(langs) != 4 {
-		t.Errorf("expected 4 default languages, got %d", len(langs))
+	if len(langs) != 5 {
+		t.Errorf("expected 5 default languages, got %d", len(langs))
 	}
-	for _, name := range []string{"go", "typescript", "python", "rust"} {
+	for _, name := range []string{"go", "typescript", "python", "rust", "java"} {
 		if _, ok := langs[name]; !ok {
 			t.Errorf("missing default language %q", name)
 		}

@@ -22,7 +22,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 - **Session persistence** — JSONL append-only event logs with branching, compaction, and resume
 - **Model roles** — Named configurations (default, smol, slow, plan, commit) selectable via CLI flags
 - **Subagents** — Process-based multi-agent system with types: explore, plan, designer, reviewer, task, quick_task
-- **LSP** — JSON-RPC client for Go, TypeScript/JS, Python, and Rust, with auto-format and diagnostics hooks
+- **LSP** — JSON-RPC client for Go, TypeScript/JS, Python, Rust, and Java, with auto-format and diagnostics hooks
 - **AI Git tools** — Repository overview, file diffs, hunk parsing, and LLM-generated conventional commits (`/commit`)
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
 - **Memory Palace** — 4-layer contextual memory with SQLite storage, semantic embeddings (all-MiniLM-L6-v2), temporal knowledge graph, and project/conversation miners

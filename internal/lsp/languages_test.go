@@ -22,6 +22,7 @@ func TestDetectLanguage(t *testing.T) {
 		{"script.py", "python"},
 		{"types.pyi", "python"},
 		{"lib.rs", "rust"},
+		{"Main.java", "java"},
 		{"readme.txt", ""},
 		{"Makefile", ""},
 		{"", ""},
@@ -38,7 +39,7 @@ func TestDetectLanguage(t *testing.T) {
 func TestDefaultLanguages_AllHaveRequired(t *testing.T) {
 	langs := DefaultLanguages()
 
-	expectedLangs := []string{"go", "typescript", "python", "rust"}
+	expectedLangs := []string{"go", "typescript", "python", "rust", "java"}
 	for _, name := range expectedLangs {
 		cfg, ok := langs[name]
 		if !ok {
@@ -207,6 +208,7 @@ func TestDetectLanguage_CaseInsensitiveExtension(t *testing.T) {
 		{"/path/APP.TS", "typescript"},
 		{"/path/SCRIPT.PY", "python"},
 		{"/path/LIB.RS", "rust"},
+		{"/path/Main.JAVA", "java"},
 	}
 	for _, tt := range tests {
 		got := DetectLanguage(tt.path, langs)
