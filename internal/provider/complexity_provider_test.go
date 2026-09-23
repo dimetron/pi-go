@@ -1651,20 +1651,28 @@ func TestApplyResponsesToolCallEvent(t *testing.T) {
 		}
 	})
 
-	t.Run("done overwrites accumulated arguments", func(t *testing.T) {
-		state := &responsesStreamState{toolCalls: map[int64]toolCallAcc{0: {arguments: "partial"}}}
+	t.Run("done overwrites accumulated arguments and preserves the item name", func(t *testing.T) {
+		// The done event carries no name: the API omits it and openai-go removed
+		// the field to match (openai-go #889). A name recorded by
+		// output_item.added has to survive it, or the call reaches the model
+		// with full arguments and no function to run.
+		state := &responsesStreamState{toolCalls: map[int64]toolCallAcc{0: {name: "lookup", arguments: "partial"}}}
 
-		applyResponsesToolCallEvent(state, responses.ResponseStreamEventUnion{
-			Type: "response.function_call_arguments.done", OutputIndex: 0,
-			Name: "fn", Arguments: `{"full":true}`,
-		})
+		evt := decodeAntEvent[responses.ResponseStreamEventUnion](t, `{
+			"type": "response.function_call_arguments.done",
+			"output_index": 0,
+			"item_id": "fc_1",
+			"arguments": "{\"full\":true}"
+		}`)
+
+		applyResponsesToolCallEvent(state, evt)
 
 		acc := state.toolCalls[0]
 		if acc.arguments != `{"full":true}` {
 			t.Errorf("arguments = %q, want %q", acc.arguments, `{"full":true}`)
 		}
-		if acc.name != "fn" {
-			t.Errorf("name = %q, want %q", acc.name, "fn")
+		if acc.name != "lookup" {
+			t.Errorf("name = %q, want %q (the done event must not clear it)", acc.name, "lookup")
 		}
 	})
 

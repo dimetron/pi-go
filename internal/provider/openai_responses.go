@@ -625,8 +625,14 @@ func applyResponsesToolCallEvent(state *responsesStreamState, evt responses.Resp
 	// response.function_call_arguments.done — final full arguments string.
 	// Use it as a safety net: if deltas were missed, overwrite with the
 	// authoritative complete arguments payload.
+	//
+	// This event carries no name — the API omits it, and openai-go v3.61
+	// removed the field to match (openai-go #889, "correct function argument
+	// completion event fields"). The name is accumulated from the
+	// response.output_item.* events, which are the only ones that carry it, so
+	// pass none here rather than clobbering what they recorded.
 	case "response.function_call_arguments.done":
-		updateResponsesToolCall(state, evt.OutputIndex, "", evt.Name, evt.Arguments, false)
+		updateResponsesToolCall(state, evt.OutputIndex, "", "", evt.Arguments, false)
 
 	// response.output_item.added — function call item header.
 	case "response.output_item.added":

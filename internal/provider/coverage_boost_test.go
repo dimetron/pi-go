@@ -503,12 +503,15 @@ func TestOpenAIResponses_Streaming(t *testing.T) {
 			"delta":           `"ls"}`,
 		})
 		// Args done — final authoritative string (covers the "done" branch).
+		// Deliberately without a "name": the API does not send one on this
+		// event (openai-go #889 removed the field to match), so a fixture that
+		// includes it would let a regression that depends on it pass. The name
+		// has to come from the function_call item above.
 		writeEvent(map[string]any{
 			"type":            "response.function_call_arguments.done",
 			"sequence_number": 7,
 			"item_id":         "fc_1",
 			"output_index":    1,
-			"name":            "bash",
 			"arguments":       `{"cmd":"ls"}`,
 		})
 		// Output-item done (safety-net branch).
