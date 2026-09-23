@@ -187,22 +187,31 @@ func (h *HoverResult) UnmarshalJSON(data []byte) error {
 
 // parseHoverContents normalizes a hover contents value into MarkupContent.
 // Unrecognized shapes yield an empty value rather than an error: a missing
-// hover is not a failure worth aborting the request over.
+// hover is not worth aborting the request over.
 func parseHoverContents(raw json.RawMessage) MarkupContent {
 	if len(raw) == 0 || string(raw) == "null" {
 		return MarkupContent{}
 	}
 
-	// Array: concatenate each element.
-	if raw[0] == '[' {
-		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
-			return MarkupContent{}
-		}
-		parts := make([]string, 0, len(items))
+	// The enclosing UnmarshalJSON decoded the whole document before calling
+	// this, so raw is always valid JSON and the decode cannot fail.
+	var value any
+	_ = json.Unmarshal(raw, &value)
+	return normalizeHoverContents(value)
+}
+
+// normalizeHoverContents flattens a decoded hover-contents value, which the
+// spec allows to be a string, an object, or an array of either.
+func normalizeHoverContents(value any) MarkupContent {
+	switch v := value.(type) {
+	case string:
+		return MarkupContent{Kind: "plaintext", Value: v}
+
+	case []any:
+		parts := make([]string, 0, len(v))
 		kind := ""
-		for _, item := range items {
-			mc := parseHoverContents(item)
+		for _, item := range v {
+			mc := normalizeHoverContents(item)
 			if mc.Value != "" {
 				parts = append(parts, mc.Value)
 			}
@@ -211,32 +220,21 @@ func parseHoverContents(raw json.RawMessage) MarkupContent {
 			}
 		}
 		return MarkupContent{Kind: kind, Value: strings.Join(parts, "\n\n")}
-	}
 
-	// Plain string.
-	if raw[0] == '"' {
-		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return MarkupContent{}
+	case map[string]any:
+		// MarkupContent carries {kind, value}; MarkedString carries
+		// {language, value}. Both put the text in "value".
+		text, _ := v["value"].(string)
+		kind, _ := v["kind"].(string)
+		if kind == "" {
+			if _, marked := v["language"]; marked {
+				kind = "plaintext"
+			}
 		}
-		return MarkupContent{Kind: "plaintext", Value: s}
+		return MarkupContent{Kind: kind, Value: text}
 	}
 
-	// Object: either MarkupContent ({kind, value}) or MarkedString
-	// ({language, value}). Both carry the text in "value".
-	var obj struct {
-		Kind     string `json:"kind"`
-		Language string `json:"language"`
-		Value    string `json:"value"`
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return MarkupContent{}
-	}
-	kind := obj.Kind
-	if kind == "" && obj.Language != "" {
-		kind = "plaintext"
-	}
-	return MarkupContent{Kind: kind, Value: obj.Value}
+	return MarkupContent{}
 }
 
 // --- Initialize request/response types ---
