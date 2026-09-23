@@ -155,11 +155,7 @@ func collectDiagnostics(mgr *Manager, srv *Server, filePath string, result map[s
 
 // collectDiagnosticsImmediate appends cached diagnostics to the result without waiting.
 func collectDiagnosticsImmediate(mgr *Manager, _ *Server, filePath string, result map[string]any) map[string]any {
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		absPath = filePath
-	}
-	uri := pathToURI(absPath)
+	uri := fileURI(filePath)
 
 	diags := mgr.CachedDiagnostics(uri)
 	if len(diags) == 0 {

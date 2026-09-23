@@ -354,7 +354,8 @@ The LSP system provides language intelligence through two mechanisms:
 - `lsp-symbols` — List all symbols in a file
 
 The `Manager` starts language servers on demand based on file extension, caches connections, and shuts them down on
-exit. Supported languages: Go (gopls), TypeScript (typescript-language-server), Python (ruff), Rust (rust-analyzer).
+exit. Supported languages: Go (gopls), TypeScript (typescript-language-server), Python (ruff), Rust (rust-analyzer),
+Java (jdtls).
 
 ## Provider System
 

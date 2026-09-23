@@ -9,6 +9,23 @@ import (
 	"github.com/dimetron/pi-go/internal/lsp"
 )
 
+// allLanguages returns every language name in the default registry, for tests
+// that mean "no language server is available".
+//
+// Hardcoding the list is what these tests used to do, and it breaks silently
+// whenever a language is added: the new entry stays enabled, so if its server
+// binary happens to be installed the test finds a real server and fails in a
+// way that looks unrelated to the change. Deriving the list keeps the intent
+// ("disable everything") true as the registry grows.
+func allLanguages() []string {
+	langs := lsp.DefaultLanguages()
+	names := make([]string, 0, len(langs))
+	for name := range langs {
+		names = append(names, name)
+	}
+	return names
+}
+
 // TestLSPTools_Count covers the full set, which LSPTools no longer returns by
 // default: the default is now the two-tool minimal set (see
 // TestLSPToolsDefaultsToMinimal), and the seven are reached via LSPFull.
@@ -51,7 +68,7 @@ func TestLSPTools_Count(t *testing.T) {
 func TestLSPDiagnostics_NoServer(t *testing.T) {
 	// Manager with all languages disabled — no server for any file.
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -70,7 +87,7 @@ func TestLSPDiagnostics_NoServer(t *testing.T) {
 
 func TestLSPDefinition_NoServer(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -86,7 +103,7 @@ func TestLSPDefinition_NoServer(t *testing.T) {
 
 func TestLSPReferences_NoServer(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -102,7 +119,7 @@ func TestLSPReferences_NoServer(t *testing.T) {
 
 func TestLSPHover_NoServer(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -118,7 +135,7 @@ func TestLSPHover_NoServer(t *testing.T) {
 
 func TestLSPSymbols_NoServer(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -363,7 +380,7 @@ func TestExtractHoverContent_WithResult(t *testing.T) {
 
 func TestGetServerOrSkipForLanguage_NotAvailable(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -479,7 +496,7 @@ func TestFormatDiagnosticsForDisplay_ZeroSeverity(t *testing.T) {
 
 func TestLSPCodeAction_NoServer(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
@@ -540,7 +557,7 @@ func TestGetServerOrSkipForLanguage_NoExtensionsConfigured(t *testing.T) {
 
 func TestLSPWorkspaceSymbol_NoServerAvailable(t *testing.T) {
 	mgr := lsp.NewManager(&lsp.ManagerConfig{
-		Disabled: []string{"go", "typescript", "python", "rust"},
+		Disabled: allLanguages(),
 	})
 	defer mgr.Shutdown()
 
