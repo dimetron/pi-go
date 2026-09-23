@@ -32,6 +32,14 @@ func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, m
 				params.MaxCompletionTokens = openai.Int(maxTokens)
 			}
 		}
+		// Reasoning effort rides the chat wire as `reasoning_effort`, which is
+		// the same setting the Responses path sends as `reasoning.effort`. Both
+		// paths need it: the model decides which one a turn uses (see
+		// endpointMode), and gpt-5.1/5.4/5.5 — reasoning models that do not
+		// require Responses — use this one for their first turn.
+		if effort, ok := m.chatReasoningEffort(); ok {
+			params.ReasoningEffort = effort
+		}
 		if systemInstruction != "" {
 			params.Messages = append([]openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemInstruction),

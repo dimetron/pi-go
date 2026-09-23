@@ -49,6 +49,12 @@ type openaiModel struct {
 	// opt-in, PI_OPENAI_WEB_SEARCH, and PI_NO_OPENAI_WEB_SEARCH; see
 	// openaiWebSearchEnabled for why it is opt-in rather than default-on.
 	enableWebSearch bool
+	// thinkingLevel is the caller's requested reasoning effort ("none", "low",
+	// "medium", "high", "max", or empty for the model's own default). It is
+	// resolved to a wire effort per request by oaiReasoningEffortFor, which
+	// clamps it to the tiers the model accepts — the accepted set is not
+	// uniform across the gpt-5/gpt-6/o-series.
+	thinkingLevel string
 	// mu protects responseState for Responses mode multi-turn.
 	mu            sync.Mutex
 	responseState *responsesState // nil when using Chat Completions
@@ -146,8 +152,33 @@ func NewOpenAI(_ context.Context, modelName, apiKey, baseURL string, llmOpts *LL
 		maxOutputTokens:    maxOutputTokens,
 		useLegacyMaxTokens: llmOpts != nil && llmOpts.UseLegacyMaxTokens,
 		enableWebSearch:    openaiWebSearchEnabled(llmOpts != nil && llmOpts.EnableOpenAIWebSearch),
+		thinkingLevel:      openaiThinkingLevel(modelName, llmOpts),
 		responseState:      nil, // determined per-call based on model
 	}, nil
+}
+
+// openaiThinkingLevel reads the requested reasoning effort off the options,
+// defaulting to the level a coding agent wants when the caller named none.
+//
+// The default is medium rather than the model's own — OpenAI's Codex guidance
+// makes medium the recommended all-round interactive coding effort, with
+// higher effort reserved for multi-file work and hard debugging. Leaving it
+// unset instead would let each model's own default (often none on gpt-5.1+)
+// silently govern a coding agent, which is the gap this closes. Models with a
+// better answer than medium get one; see oaiThinkingLevelForModel.
+func openaiThinkingLevel(modelName string, llmOpts *LLMOptions) string {
+	// An explicit level from the caller always wins, including when it lowers
+	// a model that would otherwise get a higher one.
+	if llmOpts != nil && strings.TrimSpace(llmOpts.ThinkingLevel) != "" {
+		return llmOpts.ThinkingLevel
+	}
+	// No level named: the per-model answer decides, falling back to the coding
+	// default. Passing the default in would mask the per-model rule, because
+	// it only speaks when the level is empty.
+	if level := oaiThinkingLevelForModel(modelName, ""); level != "" {
+		return level
+	}
+	return defaultOpenAIThinkingLevel
 }
 
 func (m *openaiModel) Name() string { return m.modelName }
