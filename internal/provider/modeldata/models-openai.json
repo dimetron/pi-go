@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "fetched_at": "2026-09-05T00:00:00Z",
+  "fetched_at": "2026-09-22T00:00:00Z",
   "models": [
     {
       "id": "chatgpt-image-latest",
@@ -50,6 +50,21 @@
       "id": "gpt-5.6-terra",
       "owned_by": "system",
       "release_date": "2026-07-09"
+    },
+    {
+      "id": "gpt-6-astra",
+      "owned_by": "system",
+      "release_date": "2026-09-04"
+    },
+    {
+      "id": "gpt-6-luna",
+      "owned_by": "system",
+      "release_date": "2026-09-22"
+    },
+    {
+      "id": "gpt-6-sol",
+      "owned_by": "system",
+      "release_date": "2026-09-22"
     },
     {
       "id": "gpt-audio-1.5",

@@ -334,6 +334,10 @@ func TestValidateModel(t *testing.T) {
 		{Info{Provider: "anthropic", Model: "claude-haiku-4-5"}, false},
 		{Info{Provider: "openai", Model: "gpt-5.5"}, false},
 		{Info{Provider: "openai", Model: "gpt-5.4"}, false},
+		// GPT-6 family, from the 2026-09-22 Sol and Luna launch.
+		{Info{Provider: "openai", Model: "gpt-6-sol"}, false},
+		{Info{Provider: "openai", Model: "gpt-6-luna"}, false},
+		{Info{Provider: "openai", Model: "gpt-6-astra"}, false},
 		{Info{Provider: "gemini", Model: "gemini-2.5-pro"}, false},
 		{Info{Provider: "gemini", Model: "gemini-2.5-flash"}, false},
 		{Info{Provider: "gemini", Model: "gemini-3.5-flash"}, false},

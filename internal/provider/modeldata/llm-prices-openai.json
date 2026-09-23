@@ -546,6 +546,45 @@
           "input_cached": 0.1
         }
       ]
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "price_history": [
+        {
+          "input": 2.0,
+          "output": 10.0,
+          "from_date": "2026-09-22",
+          "to_date": null,
+          "input_cached": 0.2
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "price_history": [
+        {
+          "input": 0.10,
+          "output": 0.50,
+          "from_date": "2026-09-22",
+          "to_date": null,
+          "input_cached": 0.01
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "price_history": [
+        {
+          "input": 10.0,
+          "output": 50.0,
+          "from_date": "2026-09-04",
+          "to_date": null,
+          "input_cached": 1.0
+        }
+      ]
     }
   ]
 }

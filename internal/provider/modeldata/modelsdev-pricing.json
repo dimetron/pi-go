@@ -3,6 +3,57 @@
  "fetched_at": "2026-09-03T00:00:00Z",
  "providers": {
   "openai": {
+   "gpt-6-sol": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.2,
+    "cache_write": 2.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 4,
+      "output": 15,
+      "cache_read": 0.4,
+      "cache_write": 5
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
+   "gpt-6-astra": {
+    "input": 10,
+    "output": 50,
+    "cache_read": 1,
+    "cache_write": 12.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 20,
+      "output": 75,
+      "cache_read": 2,
+      "cache_write": 25
+     }
+    ],
+    "release_date": "2026-09-04",
+    "text_output": true
+   },
+   "gpt-6-luna": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cache_read": 0.02,
+      "cache_write": 0.25
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
    "gpt-4o": {
     "input": 2.5,
     "output": 10,
@@ -1097,6 +1148,57 @@
    }
   },
   "azure": {
+   "gpt-6-sol": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.2,
+    "cache_write": 2.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 4,
+      "output": 15,
+      "cache_read": 0.4,
+      "cache_write": 5
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
+   "gpt-6-astra": {
+    "input": 10,
+    "output": 50,
+    "cache_read": 1,
+    "cache_write": 12.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 20,
+      "output": 75,
+      "cache_read": 2,
+      "cache_write": 25
+     }
+    ],
+    "release_date": "2026-09-04",
+    "text_output": true
+   },
+   "gpt-6-luna": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cache_read": 0.02,
+      "cache_write": 0.25
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
    "phi-4-reasoning-plus": {
     "input": 0.125,
     "output": 0.5,
@@ -1754,6 +1856,108 @@
    }
   },
   "openrouter": {
+   "openai/gpt-6-sol": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.2,
+    "cache_write": 2.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 4,
+      "output": 15,
+      "cache_read": 0.4,
+      "cache_write": 5
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
+   "openai/gpt-6-astra-pro": {
+    "input": 10,
+    "output": 50,
+    "cache_read": 1,
+    "cache_write": 12.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 20,
+      "output": 75,
+      "cache_read": 2,
+      "cache_write": 25
+     }
+    ],
+    "release_date": "2026-09-04",
+    "text_output": true
+   },
+   "openai/gpt-6-luna-pro": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cache_read": 0.02,
+      "cache_write": 0.25
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
+   "openai/gpt-6-sol-pro": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.2,
+    "cache_write": 2.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 4,
+      "output": 15,
+      "cache_read": 0.4,
+      "cache_write": 5
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
+   "openai/gpt-6-astra": {
+    "input": 10,
+    "output": 50,
+    "cache_read": 1,
+    "cache_write": 12.5,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 20,
+      "output": 75,
+      "cache_read": 2,
+      "cache_write": 25
+     }
+    ],
+    "release_date": "2026-09-04",
+    "text_output": true
+   },
+   "openai/gpt-6-luna": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cache_read": 0.02,
+      "cache_write": 0.25
+     }
+    ],
+    "release_date": "2026-09-22",
+    "text_output": true
+   },
    "tencent/hy-mt2-30b-a3b": {
     "input": 0.074,
     "output": 0.295,

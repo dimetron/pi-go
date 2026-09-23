@@ -25,6 +25,39 @@ func TestCostForExactMatch(t *testing.T) {
 	}
 }
 
+// TestCostForGPT6Family pins the GPT-6 Sol and Luna rates, which the embedded
+// models.dev snapshot must carry for cost estimation to price a session at all.
+// Both are Responses-only models, so a missing entry here is invisible until a
+// user wonders why their spend reads as zero.
+func TestCostForGPT6Family(t *testing.T) {
+	withTempCacheDir(t)
+	tests := []struct {
+		model  string
+		input  float64
+		output float64
+	}{
+		// The 2026-09-22 launch cut Sol and Luna to half their 5.6 pricing.
+		{"gpt-6-sol", 2, 10},
+		{"gpt-6-luna", 0.1, 0.5},
+		{"gpt-6-astra", 10, 50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			m, ok := CostFor("openai", tt.model)
+			if !ok {
+				t.Fatalf("CostFor(openai, %s) not found", tt.model)
+			}
+			if m.Input != tt.input || m.Output != tt.output {
+				t.Errorf("%s rates = %+v, want input %v output %v",
+					tt.model, m, tt.input, tt.output)
+			}
+			if len(m.Tiers) != 1 || m.Tiers[0].ContextOver != 272000 {
+				t.Errorf("%s tiers = %+v, want one 272k tier", tt.model, m.Tiers)
+			}
+		})
+	}
+}
+
 func TestCostForPrefixMatch(t *testing.T) {
 	withTempCacheDir(t)
 	// A dated model ID resolves against its base entry.
