@@ -71,6 +71,8 @@ func TestEmbeddedContextWindows(t *testing.T) {
 		want   int64
 	}{
 		{"gpt-6-astra", 1_050_000},
+		{"gpt-6-sol", 1_050_000},
+		{"gpt-6-luna", 1_050_000},
 		{"gpt-5.6-sol", 272_000},
 		{"gpt-5.2", 1_050_000},
 		{"claude-mythos-5", 1_000_000},
