@@ -692,6 +692,18 @@ type LLMOptions struct {
 	// stop below that and reject the request rather than clamping it. A
 	// per-request genai MaxOutputTokens still wins over both.
 	MaxOutputTokens int64
+	// ThinkingLevel is the caller's requested reasoning effort for the
+	// OpenAI-compatible paths ("none", "low", "medium", "high", "max", or
+	// empty). It rides on LLMOptions rather than a constructor parameter so
+	// the routes that forward opts — agentgateway and opencode — carry it
+	// without each growing a parameter NewLLM would have to thread. Resolved
+	// and clamped per model by oaiReasoningEffortFor: the accepted tiers are
+	// not uniform across the gpt-5/gpt-6/o-series, and a non-reasoning model
+	// (gpt-4.1, gpt-4o) rejects the field outright rather than ignoring it.
+	//
+	// NewLLM fills this in from its thinkingLevel argument, so the CLI, the
+	// config file and pimodels all set it through the one path.
+	ThinkingLevel string
 	// UseLegacyMaxTokens sends max_tokens instead of max_completion_tokens on
 	// the Chat Completions wire. Ollama only understands the legacy field; the
 	// newer max_completion_tokens is silently ignored, leaving the model
@@ -721,6 +733,12 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 	if opts.RateLimitScope == "" {
 		opts.RateLimitScope = ratelimit.ScopeFor(info.Provider, info.Model, baseURL)
 	}
+	// Carry the thinking level on opts for the OpenAI-compatible constructors.
+	// They take no positional level — unlike Anthropic, Mistral, OpenRouter and
+	// xAI — because the routes that forward opts to them (agentgateway,
+	// opencode) would each need a parameter threaded through just to pass it on.
+	// Setting it here keeps the CLI, the config file and pimodels on one path.
+	fillThinkingLevel(opts, thinkingLevel)
 	switch info.Provider {
 	case "ollama":
 		return NewOllama(ctx, OllamaRouting{
@@ -754,6 +772,18 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewAgentGateway(ctx, info.Model, apiKey, baseURL, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
+	}
+}
+
+// fillThinkingLevel copies the level NewLLM was given onto the options the
+// OpenAI-compatible constructors read, without overwriting an explicit option.
+//
+// Split out so the wiring is testable on its own: the bug this fixes was that
+// the level never reached those constructors at all, which a test asserting on
+// the resulting request can only catch if the copy step is reachable.
+func fillThinkingLevel(opts *LLMOptions, thinkingLevel string) {
+	if opts.ThinkingLevel == "" {
+		opts.ThinkingLevel = thinkingLevel
 	}
 }
 

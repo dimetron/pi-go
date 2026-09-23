@@ -92,6 +92,28 @@ func (m *openaiModel) buildResponsesParams(req *model.LLMRequest, modelName stri
 		params.Instructions = param.NewOpt(instructions)
 	}
 
+	// The output cap travels on the Responses wire too. Leaving it off is not
+	// the neutral choice it looks like: the server substitutes its own default,
+	// and agentgateway in front of Anthropic settles on 4096, which cuts a long
+	// coding turn off mid-sentence — and a cut landing inside a tool call's
+	// arguments leaves the JSON unclosed (see defaultOaiMaxOutputTokens). The
+	// Chat Completions path has always sent it; this one dropped it.
+	//
+	// Not sent to the ChatGPT codex backend. That endpoint exposes a restricted
+	// Responses surface that rejects client-side output controls, and the gate
+	// keeps a rejected field from breaking every turn rather than degrading one
+	// feature. This is the same boundary the web_search include below sits
+	// behind, reached the same way — by caution rather than by a live 400, since
+	// verifying it needs a codex OAuth token this repo's tests do not carry.
+	// The evidence is external (an open report against another client that
+	// strips temperature and max_output_tokens for this backend), which is why
+	// the field is gated rather than sent-and-seen-to-fail.
+	if !m.codexBackend {
+		if maxOutputTokens := oaiMaxOutputTokens(req.Config, m.maxOutputTokens); maxOutputTokens > 0 {
+			params.MaxOutputTokens = param.NewOpt(maxOutputTokens)
+		}
+	}
+
 	// The ChatGPT codex backend is stateless — it rejects requests that
 	// expect server-side persistence and requires clients to opt in to
 	// encrypted reasoning echo so multi-turn context can round-trip on
@@ -128,30 +150,30 @@ func (m *openaiModel) buildResponsesParams(req *model.LLMRequest, modelName stri
 		params.Include = append(params.Include, openaiWebSearchInclude()...)
 	}
 
-	if reasoning, ok := oaiResponsesReasoning(req.Config); ok {
+	if reasoning, ok := m.responsesReasoning(req.Config); ok {
 		params.Reasoning = reasoning
 	}
 
 	return params, sentPreviousResponseID, nil
 }
 
-// oaiResponsesReasoning maps a configured thinking budget onto a Responses
-// reasoning effort. Low tokens (100-500) → low effort; medium (2000-4000) →
-// medium; high (8000+) → high. The second result is false when no budget is
-// configured, or when the budget is not positive.
-func oaiResponsesReasoning(config *genai.GenerateContentConfig) (shared.ReasoningParam, bool) {
-	if config == nil || config.ThinkingConfig == nil || config.ThinkingConfig.ThinkingBudget == nil {
+// responsesReasoning picks the reasoning effort for one turn: an explicit
+// per-request thinking budget wins, else the model-level thinking level, else
+// nothing (the model's own default).
+//
+// The budget form is the pre-existing per-request channel and keeps its
+// mapping (see oaiResponsesReasoning); the level form is what
+// `thinkingLevel` in ~/.pi-go/config.json and WithThinkingLevel reach, and it
+// is clamped per model (see oaiReasoningEffortFor).
+func (m *openaiModel) responsesReasoning(config *genai.GenerateContentConfig) (shared.ReasoningParam, bool) {
+	if reasoning, ok := oaiResponsesReasoning(config); ok {
+		return reasoning, true
+	}
+	effort, ok := oaiReasoningEffortFor(m.modelName, m.thinkingLevel)
+	if !ok {
 		return shared.ReasoningParam{}, false
 	}
-	switch bt := *config.ThinkingConfig.ThinkingBudget; {
-	case bt >= 8000:
-		return shared.ReasoningParam{Effort: shared.ReasoningEffortHigh}, true
-	case bt >= 2000:
-		return shared.ReasoningParam{Effort: shared.ReasoningEffortMedium}, true
-	case bt > 0:
-		return shared.ReasoningParam{Effort: shared.ReasoningEffortLow}, true
-	}
-	return shared.ReasoningParam{}, false
+	return shared.ReasoningParam{Effort: effort}, true
 }
 
 // sendResponses performs one Responses request, recovering from a
