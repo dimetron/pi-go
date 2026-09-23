@@ -111,6 +111,11 @@ landing unsigned when config is missing or overridden. The `pre-push` hook
 hard-fails any push containing an unsigned commit or one missing a matching
 `Signed-off-by` trailer, so an unsigned commit cannot reach the remote.
 
+A signed commit is only half the guarantee: **the merge method can replace it
+with an unsigned one after review.** "Rebase and merge" rewrites the commit
+server-side and drops the signature; see "Never merge with 'Rebase and merge'"
+under *Creating a pull request*.
+
 Signing here is SSH-format, not GPG, through 1Password:
 
 ```
@@ -369,6 +374,48 @@ gh pr create --fill --web        # --web opens the PR page in the browser
   browser so the user can review it immediately. `gh pr create --web` does this
   automatically; if you create the PR without `--web`, open the returned URL
   yourself.
+
+### Never merge with "Rebase and merge"
+
+**Use "Create a merge commit" or "Squash and merge". Never "Rebase and merge".**
+Rebase-and-merge is the one merge method that silently produces unsigned
+commits on `main`, and it is how 7 consecutive commits landed unsigned on
+2026-09-23 (`1134feb`, `63661c5`, `efd5073`, `8f2272f`, `0aa87ae`, `ae30efd`,
+`ccce1de`) even though every PR branch head *was* signed.
+
+GitHub's own documentation is explicit:
+
+> When using the Rebase and Merge option on a pull request, the commits in the
+> head branch are added to the base branch **without commit signature
+> verification**. When you use this option, GitHub creates a modified commit,
+> using the data and content of the original commit. This means that GitHub
+> didn't truly create this commit, and can't therefore sign it as a generic
+> system user. GitHub doesn't have access to the committer's private signing
+> keys, so it can't sign the commit on the user's behalf.
+
+The mechanism, measured against this repository's history:
+
+| Merge method | Who authors the landed commit | Signature on `main` |
+|---|---|---|
+| Create a merge commit | GitHub (`GitHub <noreply@github.com>`) | ✅ signed by GitHub's key |
+| Squash and merge | GitHub | ✅ signed by GitHub's key |
+| **Rebase and merge** | **you — with a new SHA** | ❌ **unsigned, always** |
+
+Rebase-and-merge always rewrites the committer and creates a new SHA, so it
+discards the signature the branch commit carried. `required_signatures` does not
+catch it: the rule is checked on the pushed commits, and the rewrite happens
+server-side afterwards.
+
+`allowed_merge_methods` in the `main-admin` ruleset is now `["merge",
+"squash"]`, so GitHub refuses a rebase-merge on `main`. The instruction remains
+because the rule can be changed and because a rebase onto an updated base after
+a force-push recreates the same exposure. If history must stay linear, rebase
+**locally** and push the result — do not let GitHub rewrite it.
+
+**Verify after merging.** `git verify-commit` on the landing commit, or check
+the `Verified` badge, is the only proof. A signed PR branch is not evidence
+about what landed: for all 7 commits above the branch head was signed (`%G?` =
+`G`) and the landed commit was not.
 
 ### Never link an agent session in a PR
 
