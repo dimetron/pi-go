@@ -259,6 +259,15 @@ jobs:
   #
   # The guards keep this a no-op when the release was never created (a re-run
   # where GoReleaser skipped) or is already published.
+  #
+  # Every `gh` call passes --repo. This job used to omit the checkout the other
+  # jobs have, which left `gh` with no repository to infer: it failed with
+  # "failed to run git: not a git repository" on every invocation. The guard
+  # below reads a non-zero exit as "no release exists", so it printed
+  # "nothing to publish" and exited 0 while the draft was still sitting there —
+  # v0.1.9 and v0.2.0 shipped as CI-green and never published. --repo makes the
+  # commands independent of the working directory, so removing the checkout
+  # again cannot reintroduce a silent pass.
   publish:
     name: Publish release
     needs: [release, kagent-manifest, vscode]
@@ -266,19 +275,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Publish the draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "no release for ${GITHUB_REF_NAME}; nothing to publish"
             exit 0
           fi
-          if [ "$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)" != "true" ]; then
+          if [ "$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" != "true" ]; then
             echo "release ${GITHUB_REF_NAME} is already published"
             exit 0
           fi
-          gh release edit "${GITHUB_REF_NAME}" --draft=false
-          gh release view "${GITHUB_REF_NAME}" \
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --json isDraft,isImmutable,assets \
             --jq '"published: draft=\(.isDraft) immutable=\(.isImmutable) assets=\([.assets[].name] | length)"'
