@@ -2060,6 +2060,25 @@
             }
           ]
         },
+        "gpt-6-luna": {
+          "rates": {
+            "input": "0.1",
+            "output": "0.5",
+            "cacheRead": "0.01",
+            "cacheWrite": "0.125"
+          },
+          "tiers": [
+            {
+              "contextOver": 272000,
+              "rates": {
+                "input": "0.2",
+                "output": "0.75",
+                "cacheRead": "0.02",
+                "cacheWrite": "0.25"
+              }
+            }
+          ]
+        },
         "grok-4.5": {
           "rates": {
             "input": "2",
@@ -4329,6 +4348,25 @@
             }
           ]
         },
+        "gpt-6-luna": {
+          "rates": {
+            "input": "0.1",
+            "output": "0.5",
+            "cacheRead": "0.01",
+            "cacheWrite": "0.125"
+          },
+          "tiers": [
+            {
+              "contextOver": 272000,
+              "rates": {
+                "input": "0.2",
+                "output": "0.75",
+                "cacheRead": "0.02",
+                "cacheWrite": "0.25"
+              }
+            }
+          ]
+        },
         "gpt-image-2": {
           "rates": {
             "input": "5",
@@ -6134,6 +6172,25 @@
                 "output": "75",
                 "cacheRead": "2",
                 "cacheWrite": "25"
+              }
+            }
+          ]
+        },
+        "openai/gpt-6-luna": {
+          "rates": {
+            "input": "0.1",
+            "output": "0.5",
+            "cacheRead": "0.01",
+            "cacheWrite": "0.125"
+          },
+          "tiers": [
+            {
+              "contextOver": 272000,
+              "rates": {
+                "input": "0.2",
+                "output": "0.75",
+                "cacheRead": "0.02",
+                "cacheWrite": "0.25"
               }
             }
           ]
