@@ -721,7 +721,7 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 			ForceLocal: info.LocalOllama,
 		}, thinkingLevel, opts)
 	case "gemini":
-		return NewGemini(ctx, info.Model, baseURL, opts)
+		return NewGemini(ctx, info.Model, apiKey, baseURL, opts)
 	case "openai":
 		return NewOpenAI(ctx, info.Model, apiKey, baseURL, opts)
 	case "azure":

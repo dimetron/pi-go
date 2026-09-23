@@ -870,7 +870,7 @@ func runNonInteractive(
 	// coreTools here strips every real tool and every MCP toolset, leaving the
 	// model with nothing to call. The built-in search and function declarations
 	// coexist fine.
-	if gTool, ok := agent.GeminiGroundingTool(info.Provider); ok {
+	if gTool, ok := agent.GeminiGroundingTool(info.Provider, info.Model); ok {
 		coreTools = append(coreTools, gTool)
 	}
 

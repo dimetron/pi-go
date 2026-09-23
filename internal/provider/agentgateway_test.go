@@ -249,3 +249,94 @@ func TestContextWindowSizeForAgentGatewayCloudModels(t *testing.T) {
 		})
 	}
 }
+
+// TestGatewayRoutesToGemini pins the route-to-protocol decision that picks the
+// native Gemini client.
+//
+// The failure this guards is not a crash, it is a quiet wrong answer: an
+// OpenAI-shaped request through a native Gemini route has its
+// {"type":"google_search"} tool dropped in conversion, and the model then
+// answers from its own priors with full confidence. Nothing in the response
+// says the tool went missing, so the only defense is routing correctly here.
+func TestGatewayRoutesToGemini(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{name: "layered gemini route", model: "gemini/gemini-2.5-flash", want: true},
+		{name: "bare gemini id", model: "gemini-2.5-flash", want: true},
+		{name: "case and space tolerated", model: "  GEMINI-2.5-Flash ", want: true},
+		{name: "ollama route is not gemini", model: "ollama/qwen3.5:4b-mlx", want: false},
+		{name: "openai route is not gemini", model: "gpt-5.6-luna", want: false},
+		{name: "a gemini-looking name inside another route is not gemini", model: "openai/gemini-x", want: false},
+		{name: "empty", model: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GatewayRoutesToGemini(tt.model); got != tt.want {
+				t.Errorf("GatewayRoutesToGemini(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNewAgentGatewayGeminiRoute pins that a gateway Gemini model gets the
+// native client, not the OpenAI one, and that the gateway credential survives
+// on the request.
+//
+// The Authorization assertion is the load-bearing one. The gateway's API-key
+// policy reads Authorization: Bearer, and the genai SDK never sets that header
+// — so without the injection every call to a gateway with a policy 401s. That
+// failure names the gateway, not this code, which is what makes it worth
+// pinning rather than discovering in production.
+func TestNewAgentGatewayGeminiRoute(t *testing.T) {
+	t.Run("native client is chosen and carries the gateway key", func(t *testing.T) {
+		opts := &LLMOptions{}
+		llm, err := NewAgentGateway(context.Background(), "gemini/gemini-2.5-flash", "gw-key", "", opts)
+		if err != nil {
+			t.Fatalf("NewAgentGateway error: %v", err)
+		}
+		if _, ok := llm.(*openaiModel); ok {
+			t.Error("got *openaiModel, want the native Gemini client for a gemini route")
+		}
+		if llm.Name() != "gemini/gemini-2.5-flash" {
+			t.Errorf("Name() = %q, want the name passed through unchanged", llm.Name())
+		}
+		if got := opts.ExtraHeaders["Authorization"]; got != "Bearer gw-key" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer gw-key")
+		}
+	})
+
+	t.Run("a nil ExtraHeaders map is initialized rather than panicking", func(t *testing.T) {
+		opts := &LLMOptions{}
+		if _, err := NewAgentGateway(context.Background(), "gemini-2.5-flash", "gw-key", "", opts); err != nil {
+			t.Fatalf("NewAgentGateway error: %v", err)
+		}
+		if opts.ExtraHeaders == nil {
+			t.Fatal("ExtraHeaders is nil; writing to it would panic on the next call")
+		}
+	})
+
+	t.Run("no key means no Authorization header", func(t *testing.T) {
+		t.Setenv("AGENTGATEWAY_API_KEY", "")
+		opts := &LLMOptions{}
+		if _, err := NewAgentGateway(context.Background(), "gemini-2.5-flash", "", "", opts); err != nil {
+			t.Fatalf("NewAgentGateway error: %v", err)
+		}
+		if _, ok := opts.ExtraHeaders["Authorization"]; ok {
+			t.Error("Authorization set without a key; an empty bearer is worse than none")
+		}
+	})
+
+	t.Run("an ollama route still takes the OpenAI client", func(t *testing.T) {
+		llm, err := NewAgentGateway(context.Background(), "ollama/qwen3.5:4b-mlx", "", "", nil)
+		if err != nil {
+			t.Fatalf("NewAgentGateway error: %v", err)
+		}
+		if _, ok := llm.(*openaiModel); !ok {
+			t.Errorf("expected *openaiModel for an ollama route, got %T", llm)
+		}
+	})
+}
