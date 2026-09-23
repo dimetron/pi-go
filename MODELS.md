@@ -5,14 +5,14 @@ each provider currently serves is listed below. Prices are USD per 1M tokens
 (input/output), from the embedded models.dev snapshot; a `—` means the
 snapshot has no entry for that model.
 
-Last updated: 2026-09-18
+Last updated: 2026-09-22
 
 ## Providers
 
 | Provider | Models | Credentials |
 |---|---|---|
 | [Anthropic](#anthropic) | 11 | `ANTHROPIC_API_KEY` |
-| [OpenAI](#openai) | 124 | `OPENAI_API_KEY` |
+| [OpenAI](#openai) | 126 | `OPENAI_API_KEY` |
 | [Google Gemini](#google-gemini) | 43 | `GEMINI_API_KEY` |
 | [Mistral](#mistral) | 34 | `MISTRAL_API_KEY` |
 | [xAI](#xai) | 7 | `XAI_API_KEY` |
@@ -47,12 +47,15 @@ API key: `ANTHROPIC_API_KEY`.
 | claude-haiku-4-5-20251001 | 2025-10-15 | $1.00/$5.00 |
 | claude-sonnet-4-5-20250929 | 2025-09-29 | $3.00/$15.00 |
 
-## OpenAI — 124 models
+## OpenAI — 126 models
 
 API key: `OPENAI_API_KEY`.
 
 | Model | Release | Price (in/out per 1M) |
 |---|---|---|
+| gpt-6-sol | 2026-09-22 | $2.00/$10.00 |
+| gpt-6-luna | 2026-09-22 | $0.10/$0.50 |
+| gpt-6-astra | 2026-09-04 | $10.00/$50.00 |
 | gpt-5.6-luna | 2026-07-09 | $0.20/$1.20 |
 | gpt-5.6-sol | 2026-07-09 | $4.00/$20.00 |
 | gpt-5.6-terra | 2026-07-09 | $2.00/$12.00 |
@@ -152,7 +155,6 @@ API key: `OPENAI_API_KEY`.
 | chat-latest | — | — |
 | chatgpt-image-latest | — | — |
 | davinci-002 | — | — |
-| gpt-6-astra | — | — |
 | gpt-audio | — | — |
 | gpt-audio-1.5 | — | — |
 | gpt-audio-2025-08-28 | — | — |
@@ -736,10 +738,10 @@ API key: `OPENROUTER_API_KEY`.
 | nex-agi/nex-n2.5-mini:free | — | — |
 | nex-agi/nex-n2.5-pro:free | — | — |
 | nvidia/nemotron-3.5-content-safety | — | — |
-| openai/gpt-6-astra | — | — |
-| openai/gpt-6-astra-pro | — | — |
-| openai/gpt-6-astra-pro:batch | — | — |
-| openai/gpt-6-astra:batch | — | — |
+| openai/gpt-6-astra | 2026-09-04 | $10.00/$50.00 |
+| openai/gpt-6-astra-pro | 2026-09-04 | $10.00/$50.00 |
+| openai/gpt-6-astra-pro:batch | 2026-09-04 | $10.00/$50.00 |
+| openai/gpt-6-astra:batch | 2026-09-04 | $10.00/$50.00 |
 | openrouter/auto | — | — |
 | openrouter/auto-beta | — | — |
 | openrouter/bodybuilder | — | — |
@@ -819,6 +821,9 @@ falls back to the OpenAI entry it is named after, or override it with
 | `gpt-5.4` | 900K |
 | `gpt-5.4-mini` | 272K |
 | `gpt-5.5` | 900K |
+| `gpt-6-astra` | 1.05M |
+| `gpt-6-luna` | 1.05M |
+| `gpt-6-sol` | 1.05M |
 | `gpt-5.6-luna` | 1.05M |
 | `gpt-5.6-sol` | 1.05M |
 | `gpt-5.6-terra` | 1.05M |
