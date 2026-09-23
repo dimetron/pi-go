@@ -222,13 +222,71 @@ func groundingDisabled() bool {
 	return false
 }
 
+// GatewayRouteSpeaksGemini reports whether an agentgateway model name resolves
+// to a route whose upstream speaks Gemini's native generateContent protocol.
+//
+// The gateway fronts every provider behind one endpoint, so the provider name
+// alone cannot say whether Gemini's server-side search is available — the ROUTE
+// decides. The convention mirrored here is the one the gateway's own config.yaml
+// follows: gemini/* and gemini-* are Gemini routes.
+//
+// This is deliberately a second implementation of
+// internal/provider.GatewayRoutesToGemini rather than a call into it, and the
+// reason is a hard constraint rather than a preference: piagent imports this
+// package, and TestPiagentStaysIsolated forbids internal/provider anywhere in
+// piagent's transitive graph, so importing it here would break the embedder.
+// The two lists are pinned together by
+// TestGatewayRouteSpeaksGeminiAgreesWithProvider, which fails the moment either
+// one changes alone — that test is what makes the duplication safe.
+func GatewayRouteSpeaksGemini(modelName string) bool {
+	lower := strings.ToLower(strings.TrimSpace(modelName))
+	for _, prefix := range []string{"gemini/", "gemini-"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// GroundsViaGemini reports whether a resolved provider/model pair is served by
+// Gemini, and so may carry Gemini's server-side search.
+//
+// Two shapes reach Gemini and they are not the same provider:
+//
+//   - "gemini" — the AI Studio API directly, where the provider name is the
+//     whole answer.
+//   - "agentgateway" — the local gateway, but only for a route whose upstream
+//     speaks native Gemini. The gateway also fronts OpenAI, Anthropic and
+//     Ollama, and a grounding tool registered for one of those is dropped in
+//     conversion rather than rejected: {"type":"google_search"} simply
+//     disappears and the model then answers from its own priors. So the model
+//     name has to agree, and this is the same question
+//     internal/provider asks before choosing the native client.
+//
+// The model name is therefore required for the gateway case and optional for
+// the direct one, so a caller that knows only the provider still works.
+func GroundsViaGemini(providerName, modelName string) bool {
+	switch providerName {
+	case "gemini":
+		return true
+	case "agentgateway":
+		return GatewayRouteSpeaksGemini(modelName)
+	default:
+		return false
+	}
+}
+
 // GeminiGroundingTool returns the geminitool.GoogleSearch tool if and only if
-// the active provider is "gemini" and grounding has not been disabled by the
-// PI_NO_GROUNDING env var. It returns (nil, false) otherwise. Callers append
-// the returned tool to the agent's Tools slice only when the second return
-// value is true.
-func GeminiGroundingTool(providerName string) (tool.Tool, bool) {
-	if providerName != "gemini" {
+// the active provider is served by Gemini (see GroundsViaGemini) and grounding
+// has not been disabled by the PI_NO_GROUNDING env var. It returns (nil, false)
+// otherwise. Callers append the returned tool to the agent's Tools slice only
+// when the second return value is true.
+//
+// modelName may be empty; a caller that has already established the provider is
+// "gemini" does not need it. It is required for the agentgateway case, where
+// the provider name alone does not say which upstream the route reaches.
+func GeminiGroundingTool(providerName, modelName string) (tool.Tool, bool) {
+	if !GroundsViaGemini(providerName, modelName) {
 		return nil, false
 	}
 	if groundingDisabled() {

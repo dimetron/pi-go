@@ -13,16 +13,32 @@ import (
 )
 
 // NewGemini creates a Gemini model.LLM using ADK Go's native Gemini support.
-// It reads the API key from GEMINI_API_KEY or GOOGLE_API_KEY env vars.
-// If neither is set, it falls back to Application Default Credentials.
+//
+// apiKey is the caller's key and wins when set; an empty value falls back to
+// GEMINI_API_KEY or GOOGLE_API_KEY, and then to Application Default
+// Credentials. Taking the key as a parameter — rather than reading the
+// environment unconditionally — is what every sibling provider already does
+// (NewOpenAI, NewAnthropic, NewXAI, NewOllama), and it is the only way a
+// caller can point the SDK at a proxy that substitutes its own key. Without
+// it, a caller-supplied key was silently ignored and the environment was
+// consulted instead, so a request meant for one credential went out with
+// another.
+//
+// A key is still REQUIRED to build a client: the SDK refuses with "api key is
+// required for Google AI backend" when none is available. The gateway path
+// therefore passes a placeholder, because there the gateway injects the real
+// key itself (see newAgentGatewayGemini).
+//
 // If baseURL is non-empty, it overrides the default API endpoint.
-func NewGemini(ctx context.Context, modelName, baseURL string, opts *LLMOptions) (model.LLM, error) {
+func NewGemini(ctx context.Context, modelName, apiKey, baseURL string, opts *LLMOptions) (model.LLM, error) {
 	cfg := &genai.ClientConfig{
 		Backend: genai.BackendGeminiAPI,
 	}
 
-	// Check for API key in env vars
-	if apiKey := geminiAPIKey(); apiKey != "" {
+	if apiKey == "" {
+		apiKey = geminiAPIKey()
+	}
+	if apiKey != "" {
 		cfg.APIKey = apiKey
 	}
 

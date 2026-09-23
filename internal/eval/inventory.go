@@ -116,7 +116,7 @@ func Inventory(dir string) ([]ToolInfo, error) {
 	// the PI_NO_GROUNDING kill switch, which must not hide it from the
 	// inventory.
 	if gt, ok := withEnvUnset("PI_NO_GROUNDING", func() (adktool.Tool, bool) {
-		return agent.GeminiGroundingTool("gemini")
+		return agent.GeminiGroundingTool("gemini", "")
 	}); ok {
 		add("provider", "gemini", []adktool.Tool{gt})
 	}

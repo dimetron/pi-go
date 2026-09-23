@@ -19,7 +19,7 @@ import (
 // came up with no bash/read/write/grep, the model hallucinated tool names, and
 // every call returned "tool not found. Available tools: " with an empty list.
 func TestGroundingToolEnablesServerSideToolInvocations(t *testing.T) {
-	tool, ok := GeminiGroundingTool("gemini")
+	tool, ok := GeminiGroundingTool("gemini", "")
 	if !ok {
 		t.Fatal("grounding tool not returned for the gemini provider")
 	}
