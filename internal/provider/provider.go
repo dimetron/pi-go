@@ -509,6 +509,15 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "azure", Model: modelName[len("azure/"):]}, nil
 	}
 
+	// Detect openai/ prefix → native OpenAI provider.
+	// The prefix is stripped; the remainder is the bare model ID. This is the
+	// vendor prefix of the OpenAI catalog entries ("openai/gpt-6-luna"), and it
+	// is listed in KnownProviderPrefixes, so Resolve has to honor it rather
+	// than fail on a name the rest of the codebase already accepts.
+	if strings.HasPrefix(strings.ToLower(modelName), "openai/") {
+		return Info{Provider: "openai", Model: modelName[len("openai/"):]}, nil
+	}
+
 	// Detect opencode/ prefix → OpenCode Go provider.
 	// The prefix is stripped; the remainder is the bare model ID.
 	if strings.HasPrefix(strings.ToLower(modelName), "opencode/") {
@@ -565,7 +574,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: claude, gpt, gemini, mistral, grok, openrouter, agentgateway; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: openai, claude, gpt, gemini, mistral, grok, openrouter, agentgateway; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
