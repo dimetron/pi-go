@@ -46,6 +46,17 @@ func DefaultLanguages() map[string]*LanguageConfig {
 			RootMarkers:    []string{"Cargo.toml"},
 			LanguageID:     "rust",
 		},
+		"java": {
+			Command:        "jdtls",
+			FileExtensions: []string{".java"},
+			RootMarkers: []string{
+				"pom.xml",
+				"build.gradle", "build.gradle.kts",
+				"settings.gradle", "settings.gradle.kts",
+				".project",
+			},
+			LanguageID: "java",
+		},
 	}
 }
 

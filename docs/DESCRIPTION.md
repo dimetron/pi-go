@@ -272,7 +272,7 @@ Agent Types:
 ```
 LSP Manager
 ├── Protocol layer (JSON-RPC over stdio)
-├── Client (gopls, tsserver, ruff, rust-analyzer)
+├── Client (gopls, tsserver, ruff, rust-analyzer, jdtls)
 ├── Manager (lifecycle, caching)
 └── Hooks (AfterToolCallback integration)
 
@@ -291,6 +291,7 @@ Explicit Tools:
 - **TypeScript/JS:** typescript-language-server
 - **Python:** ruff (LSP mode)
 - **Rust:** rust-analyzer
+- **Java:** jdtls (Eclipse JDT Language Server)
 
 ---
 

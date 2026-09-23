@@ -461,10 +461,21 @@ func (m *Manager) startServer(_ string, lcfg *LanguageConfig, root string) (*Ser
 // --- Helpers ---
 
 // fileURI converts a file path to a file:// URI.
+//
+// The path is symlink-resolved before conversion. Servers (jdtls in
+// particular) canonicalize the URIs they publish back, so a cache key built
+// from an unresolved path never matches the notification. On macOS this bites
+// on every temp path, where /var is a symlink to /private/var: the URI would
+// be cached under "file:///private/var/..." while callers looked it up as
+// "file:///var/...". EvalSymlinks is best-effort — a path that cannot be
+// resolved falls back to its absolute form.
 func fileURI(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	return pathToURI(abs)
 }
@@ -512,6 +523,7 @@ func installHint(lang string) string {
 		"typescript": "npm install -g typescript-language-server typescript",
 		"python":     "uvx ruff server -s",
 		"rust":       "rustup component add rust-analyzer",
+		"java":       "brew install jdtls",
 	}
 	if h, ok := hints[lang]; ok {
 		return h
