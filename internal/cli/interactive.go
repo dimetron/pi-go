@@ -155,7 +155,7 @@ func runInteractive(
 	go func() {
 		defer close(initDone)
 		defer close(initCh)
-		deferredInit(initCtx, cfg, llm, info.Provider, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, noticeCh, &res)
+		deferredInit(initCtx, cfg, llm, info.Provider, info.Model, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, noticeCh, &res)
 	}()
 
 	tuiErr := tui.Run(ctx, tui.Config{
@@ -198,6 +198,7 @@ func deferredInit(
 	cfg config.Config,
 	llm adkmodel.LLM,
 	providerName string,
+	modelName string,
 	baseURL string,
 	tokenTracker *guardrail.Tracker,
 	cwd, sandboxRoot, worktreeDir string,
@@ -302,7 +303,7 @@ func deferredInit(
 	// The built-in search coexists with function declarations: geminitool's
 	// ProcessRequest appends to req.Config.Tools rather than overwriting it, and
 	// a single Gemini turn will happily call `read` and `google_search` both.
-	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
+	if gTool, ok := agent.GeminiGroundingTool(providerName, modelName); ok {
 		coreTools = append(coreTools, gTool)
 	}
 

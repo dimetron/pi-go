@@ -304,7 +304,7 @@ func (a *Agent) buildRuntime(ctx context.Context, o options, cfg *config.Config,
 	// on a Gemini model; see providerOf for how that is decided.
 	// APPEND, never replace: replacing the slice here would strip every real
 	// tool and leave the model with nothing to call.
-	if gTool, ok := agent.GeminiGroundingTool(providerName); ok {
+	if gTool, ok := agent.GeminiGroundingTool(providerName, a.modelName); ok {
 		coreTools = append(coreTools, gTool)
 	}
 	coreTools = append(coreTools, o.tools...)
