@@ -1,5 +1,71 @@
-/* pi-go chat webview. Colors come only from --vscode-* variables so the view
-   follows the workbench theme (light, dark, high contrast). */
+/* pi-go chat webview. Surfaces and text come from --vscode-* variables so the
+   view follows the workbench theme (light, dark, high contrast). The --pg-*
+   brand tokens below layer the Pi-Go design system on top: neon cyan /
+   magenta / purple accents, sharp 2px/4px radii, gradient dividers and the
+   signature easing. Glows only appear in dark themes; high-contrast themes
+   fall back to the theme's own focus and foreground colors. The full
+   cyberpunk look ships as the "Pi-Go Neon" color theme (themes/).
+
+   The tokens live on body, not :root: derived tokens like --pg-accent
+   resolve var() where they are declared, so they must sit on the same
+   element as the body.vscode-* overrides or they keep the dark values. */
+
+body {
+  --pg-cyan: #00f0ff;
+  --pg-magenta: #ff00aa;
+  --pg-purple: #b347ff;
+  --pg-green: #00ff88;
+  --pg-yellow: #ffe600;
+  --pg-accent: var(--pg-cyan);
+  --pg-accent-2: var(--pg-magenta);
+  --pg-on-accent: #0a0a12;
+  --pg-grad: linear-gradient(135deg, var(--pg-accent), var(--pg-accent-2));
+  --pg-grad-button: linear-gradient(135deg, var(--pg-accent), var(--pg-purple));
+  --pg-border: color-mix(in srgb, var(--pg-accent) 16%, transparent);
+  --pg-border-strong: color-mix(in srgb, var(--pg-accent) 38%, transparent);
+  --pg-tint: color-mix(in srgb, var(--pg-accent) 7%, transparent);
+  --pg-glow: 0 0 14px rgba(0, 240, 255, .22), 0 0 40px rgba(0, 240, 255, .07);
+  --pg-divider: linear-gradient(90deg, transparent, var(--pg-accent), var(--pg-accent-2), transparent);
+  --pg-mono: "JetBrains Mono", var(--vscode-editor-font-family), ui-monospace, monospace;
+  --pg-r-xs: 2px;
+  --pg-r-sm: 4px;
+  --pg-r-md: 8px;
+  --pg-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --pg-dur: .2s;
+}
+
+/* Light themes: the neon hues fail contrast on white, so use deeper inks. */
+body.vscode-light {
+  --pg-cyan: #00758f;
+  --pg-magenta: #c2007f;
+  --pg-purple: #7b2fd0;
+  --pg-green: #00875a;
+  --pg-yellow: #9a7b00;
+  --pg-on-accent: #ffffff;
+  --pg-glow: none;
+}
+
+/* High contrast: no gradients or glows, only the theme's own colors. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --pg-accent: var(--vscode-focusBorder);
+  --pg-accent-2: var(--vscode-focusBorder);
+  --pg-on-accent: var(--vscode-button-foreground);
+  --pg-grad: var(--vscode-focusBorder);
+  --pg-grad-button: var(--vscode-button-background);
+  --pg-border: var(--vscode-contrastBorder);
+  --pg-border-strong: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  --pg-tint: transparent;
+  --pg-glow: none;
+  --pg-divider: var(--vscode-contrastBorder);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
 
 /* The hidden attribute must win over class-level display rules. */
 [hidden] {
@@ -43,68 +109,137 @@ button { font: inherit; }
   color: var(--vscode-descriptionForeground);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--pg-r-xs);
   cursor: pointer;
+  transition: color var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease);
 }
 
 .icon-button svg { width: 18px; height: 18px; }
-.icon-button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.icon-button:hover { color: var(--pg-accent); background: var(--pg-tint); }
+.icon-button:active { transform: scale(.97); }
+.icon-button:focus-visible { outline: 1px solid var(--pg-accent); outline-offset: 1px; }
 
 .welcome-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 24px auto 24px;
+  gap: 14px;
+  width: min(100% - 28px, 410px);
+  margin: 28px auto 20px;
   color: var(--vscode-foreground);
 }
 
-.welcome-brand .gopher { width: 48px; height: 54px; }
-.welcome-brand h1 {
+.mascot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid var(--pg-border-strong);
+  border-radius: var(--pg-r-md);
+  background: #0a0a12;
+  box-shadow: var(--pg-glow);
+  color: var(--pg-cyan);
+  font: 700 28px var(--pg-mono);
+}
+
+.mascot img { width: 100%; height: 100%; object-fit: cover; }
+
+.wordmark {
   margin: 0;
-  color: #00add8;
-  font-family: Georgia, serif;
-  font-size: 30px;
-  letter-spacing: -0.04em;
+  font-family: var(--pg-mono);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  line-height: 1.15;
+  text-transform: uppercase;
+  background: var(--pg-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+body.vscode-high-contrast .wordmark,
+body.vscode-high-contrast-light .wordmark {
+  background: none;
+  color: var(--vscode-foreground);
+}
+
+.tagline {
+  margin: 2px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
 }
 
 .learn-card {
   width: min(100% - 28px, 410px);
   margin: 0 auto;
   overflow: hidden;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 82%, #00add8 18%);
+  border: 1px solid var(--pg-border);
+  border-radius: var(--pg-r-sm);
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--pg-accent) 6%);
   text-align: left;
 }
 
 .learn-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 58px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--vscode-panel-border);
+  min-height: 40px;
+  padding: 0 6px 0 14px;
 }
 
-.learn-header .gopher { width: 38px; height: 42px; }
-.learn-header h2 { flex: 1; margin: 0; font-size: 16px; color: var(--vscode-foreground); }
+/* Gradient hairline instead of a solid rule — a Pi-Go signature. */
+.learn-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--pg-divider);
+  opacity: .45;
+}
 
-.learn-lessons { padding: 6px 8px 8px; }
+.learn-header h2 {
+  flex: 1;
+  margin: 0;
+  color: var(--pg-accent);
+  font-family: var(--pg-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.learn-lessons { padding: 6px; }
 .learn-lesson {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 10px 8px;
+  padding: 9px 8px;
   color: var(--vscode-foreground);
   background: transparent;
-  border: 0;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--pg-r-xs);
   text-align: left;
   cursor: pointer;
+  transition: border-color var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease), transform var(--pg-dur) var(--pg-ease);
 }
-.learn-lesson:hover { background: var(--vscode-list-hoverBackground); }
-.lesson-mark { width: 16px; height: 16px; border: 1.5px solid #00add8; border-radius: 4px; flex: none; }
+.learn-lesson:hover { background: var(--pg-tint); border-color: var(--pg-border); transform: translateX(2px); }
+.learn-lesson:active { transform: scale(.98); }
+.learn-lesson:focus-visible { outline: none; border-color: var(--pg-accent); }
+.lesson-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--pg-accent);
+  border-radius: var(--pg-r-xs);
+  transition: background var(--pg-dur) var(--pg-ease), box-shadow var(--pg-dur) var(--pg-ease);
+}
+.learn-lesson:hover .lesson-mark { background: var(--pg-accent); box-shadow: var(--pg-glow); }
 
 .empty-state { justify-content: flex-start; padding-top: 4px; gap: 0; color: var(--vscode-foreground); }
 
@@ -117,12 +252,23 @@ body {
 /* -- header ------------------------------------------------------------- */
 
 .chat-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
   flex: none;
+}
+
+.chat-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--pg-divider);
+  opacity: .35;
 }
 
 .session-title {
@@ -166,19 +312,6 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
-.empty-state button {
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
-  border: none;
-  border-radius: 3px;
-  padding: 6px 14px;
-  cursor: pointer;
-}
-
-.empty-state button:hover {
-  background: var(--vscode-button-hoverBackground);
-}
-
 .loading {
   color: var(--vscode-descriptionForeground);
   font-style: italic;
@@ -197,9 +330,10 @@ body {
 .turn.user .bubble {
   max-width: 85%;
   background: var(--vscode-chat-requestBackground, var(--vscode-input-background));
-  border: 1px solid var(--vscode-chat-requestBorder, transparent);
-  border-radius: 8px;
-  padding: 6px 10px;
+  border: 1px solid var(--vscode-chat-requestBorder, var(--pg-border));
+  border-left: 2px solid var(--pg-accent);
+  border-radius: var(--pg-r-sm);
+  padding: 7px 11px;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -210,8 +344,14 @@ body {
   gap: 6px;
 }
 
+/* A burst of consecutive tool calls (a string of reads, say) shouldn't take
+   as much vertical room as prose — tighten the gap between them only. */
+.tool-card + .tool-card {
+  margin-top: -4px;
+}
+
 .part.text {
-  line-height: 1.5;
+  line-height: 1.55;
   word-break: break-word;
 }
 
@@ -220,25 +360,57 @@ body {
   white-space: pre-wrap;
 }
 
+/* Blinking caret at the tail of live text — the signal that more is coming. */
+.part.text.streaming .stream-body::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  background: var(--pg-accent);
+  vertical-align: text-bottom;
+  animation: pg-caret-blink 1s steps(1, jump-none) infinite;
+}
+
+@keyframes pg-caret-blink {
+  50% { opacity: 0; }
+}
+
 .part.thought {
-  border-left: 2px solid var(--vscode-charts-purple, var(--vscode-descriptionForeground));
+  border-left: 2px solid var(--pg-purple);
   padding-left: 8px;
 }
 
 .part.thought summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   cursor: pointer;
   color: var(--vscode-descriptionForeground);
-  font-style: italic;
   user-select: none;
 }
 
-.thought-summary::before {
-  content: "✦";
-  color: #00add8;
-  font-style: normal;
+.thought-summary::-webkit-details-marker {
+  display: none;
+}
+
+.thought-label {
+  font-style: italic;
+}
+
+/* Animated dot while the model is actively thinking; removed on finalize. */
+.thought-pulse {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pg-purple);
+  animation: pg-thought-pulse 1.3s var(--pg-ease) infinite;
+}
+
+@keyframes pg-thought-pulse {
+  0%, 100% { opacity: .35; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.15); }
 }
 
 .thought-status {
@@ -256,13 +428,14 @@ body {
 
 .notice,
 .banner {
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: 7px 11px;
+  border-radius: var(--pg-r-sm);
   margin: 8px 0;
   word-break: break-word;
 }
 
 .notice {
+  border-left: 2px solid var(--pg-accent);
   background: var(--vscode-notifications-background);
   color: var(--vscode-descriptionForeground);
 }
@@ -270,14 +443,16 @@ body {
 .ping-result {
   margin: 10px 0;
   padding: 9px 11px;
-  border: 1px solid var(--vscode-panel-border, transparent);
-  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border, var(--pg-border));
+  border-left: 2px solid var(--pg-green);
+  border-radius: var(--pg-r-sm);
   background: var(--vscode-textCodeBlock-background, var(--vscode-notifications-background));
   color: var(--vscode-foreground);
 }
 
 .ping-result.failed {
-  border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border, transparent));
+  border-left-color: var(--pg-accent-2);
+  border-color: var(--vscode-inputValidation-errorBorder, var(--pg-border));
 }
 
 .ping-title {
@@ -296,17 +471,18 @@ body {
 
 .banner {
   background: var(--vscode-inputValidation-errorBackground, var(--vscode-notifications-background));
-  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-testing-iconFailed));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--pg-accent-2));
+  border-left: 2px solid var(--pg-accent-2);
   color: var(--vscode-testing-iconFailed, inherit);
 }
 
 .error-card {
   margin: 12px 0;
   padding: 12px 14px;
-  border: 1px solid var(--vscode-inputValidation-errorBorder, #f38ba8);
-  border-left: 4px solid var(--vscode-testing-iconFailed, #f38ba8);
-  border-radius: 7px;
-  background: var(--vscode-inputValidation-errorBackground, #3b202b);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--pg-border));
+  border-left: 2px solid var(--pg-accent-2);
+  border-radius: var(--pg-r-sm);
+  background: var(--vscode-inputValidation-errorBackground, color-mix(in srgb, var(--pg-accent-2) 8%, var(--vscode-editor-background)));
   color: var(--vscode-foreground);
   word-break: break-word;
 }
@@ -315,7 +491,7 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: var(--vscode-testing-iconFailed, #f38ba8);
+  color: var(--pg-accent-2);
   font-size: 14px;
 }
 
@@ -387,12 +563,49 @@ body {
 
 /* -- markdown ------------------------------------------------------------ */
 
+.md {
+  line-height: 1.55;
+}
+
+.md p {
+  margin: 6px 0;
+}
+
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 14px 0 6px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.md h1 { font-size: 1.32em; }
+.md h2 { font-size: 1.18em; }
+.md h3 { font-size: 1.07em; }
+.md h4, .md h5, .md h6 { font-size: 1em; }
+
+.md ul,
+.md ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+.md li {
+  margin: 2px 0;
+}
+
+.md hr {
+  height: 1px;
+  margin: 12px 0;
+  border: none;
+  background: var(--pg-divider);
+  opacity: .35;
+}
+
 .md pre,
 .tool-input,
 .tool-output {
   background: var(--vscode-textCodeBlock-background);
   border: 1px solid var(--vscode-panel-border, transparent);
-  border-radius: 4px;
+  border-radius: var(--pg-r-sm);
   padding: 8px;
   overflow-x: auto;
   font-family: var(--vscode-editor-font-family);
@@ -400,19 +613,32 @@ body {
 }
 
 .md code {
-  background: var(--vscode-textCodeBlock-background);
-  font-family: var(--vscode-editor-font-family);
-  padding: 1px 4px;
-  border-radius: 3px;
+  background: var(--pg-tint);
+  color: var(--pg-accent);
+  border: 1px solid var(--pg-border);
+  font-family: var(--pg-mono);
+  font-size: .92em;
+  padding: 1px 5px;
+  border-radius: var(--pg-r-xs);
 }
 
 .md pre code {
   padding: 0;
+  border: none;
   background: none;
+  color: inherit;
+  font-family: var(--vscode-editor-font-family);
+  font-size: inherit;
 }
 
 .md a {
-  color: var(--vscode-textLink-foreground);
+  color: var(--pg-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md a:hover {
+  color: var(--pg-accent-2);
 }
 
 .md img {
@@ -421,28 +647,117 @@ body {
 
 .md table {
   border-collapse: collapse;
+  margin: 8px 0;
+  font-size: .95em;
 }
 
 .md th,
 .md td {
-  border: 1px solid var(--vscode-panel-border, transparent);
-  padding: 3px 8px;
+  border: 1px solid var(--pg-border);
+  padding: 4px 10px;
+}
+
+.md th {
+  background: var(--pg-tint);
+  color: var(--pg-accent);
+  font-family: var(--pg-mono);
+  font-size: .82em;
+  font-weight: 700;
+  letter-spacing: .4px;
+  text-transform: uppercase;
 }
 
 .md blockquote {
-  border-left: 3px solid var(--vscode-panel-border, transparent);
-  margin: 4px 0;
-  padding-left: 10px;
+  border-left: 2px solid var(--pg-accent-2);
+  margin: 8px 0;
+  padding: 3px 12px;
+  background: var(--pg-tint);
   color: var(--vscode-descriptionForeground);
+}
+
+/* -- code blocks (fenced markdown) ---------------------------------------- */
+
+.code-block {
+  margin: 6px 0;
+  border: 1px solid var(--vscode-panel-border, var(--pg-border));
+  border-radius: var(--pg-r-sm);
+  overflow: hidden;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 4px 3px 9px;
+  background: var(--pg-tint);
+  border-bottom: 1px solid var(--pg-border);
+}
+
+.code-block-lang {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--pg-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+}
+
+.code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+/* -- copy buttons ---------------------------------------------------------- */
+
+.copy-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--pg-r-xs);
+  cursor: pointer;
+  transition: color var(--pg-dur) var(--pg-ease), border-color var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease);
+}
+
+.copy-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.copy-button:hover {
+  color: var(--pg-accent);
+  border-color: var(--pg-border);
+  background: var(--pg-tint);
+}
+
+.copy-button.copied {
+  color: var(--pg-green);
+}
+
+.copy-button.copy-failed {
+  color: var(--pg-accent-2);
 }
 
 /* -- tool cards ----------------------------------------------------------- */
 
 .tool-card {
-  border: 1px solid var(--vscode-panel-border, transparent);
-  border-radius: 4px;
+  border: 1px solid var(--pg-border);
+  border-left: 2px solid transparent;
+  border-radius: var(--pg-r-sm);
   background: var(--vscode-editor-background);
   font-size: 12px;
+  transition: border-color var(--pg-dur) var(--pg-ease);
+}
+
+.tool-card:hover {
+  border-color: var(--pg-border-strong);
 }
 
 .tool-card summary {
@@ -461,10 +776,59 @@ body {
 
 .tool-glyph {
   flex: none;
+  display: inline-flex;
+}
+
+.tool-glyph svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Per-tool emoji chip (🔍 search, 📖 read, ✏️ edit, ⚡ shell…): a sharp
+   tinted tile that lights up with the card's status. */
+.tool-emoji {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--pg-border);
+  border-radius: var(--pg-r-xs);
+  background: var(--pg-tint);
+  font-size: 12px;
+  line-height: 1;
+  transition: transform var(--pg-dur) var(--pg-ease), box-shadow var(--pg-dur) var(--pg-ease), border-color var(--pg-dur) var(--pg-ease);
+}
+
+.tool-card summary:hover .tool-emoji {
+  transform: translateY(-1px) scale(1.08);
+  border-color: var(--pg-border-strong);
+  box-shadow: var(--pg-glow);
+}
+
+.status-in-progress .tool-emoji {
+  border-color: var(--pg-accent);
+  animation: pg-emoji-bob 1.2s var(--pg-ease) infinite;
+}
+
+.status-completed .tool-emoji {
+  border-color: color-mix(in srgb, var(--pg-green) 35%, transparent);
+}
+
+.status-failed .tool-emoji {
+  border-color: var(--pg-accent-2);
+  background: color-mix(in srgb, var(--pg-accent-2) 12%, transparent);
+}
+
+@keyframes pg-emoji-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
 }
 
 .tool-name {
+  font-family: var(--pg-mono);
   font-weight: 600;
+  letter-spacing: .1px;
 }
 
 .tool-title {
@@ -482,36 +846,100 @@ body {
   opacity: .8;
 }
 
+/* Status → color, per the Pi-Go system: yellow queued, cyan running,
+   green done, magenta failed. The left edge repeats the same signal. */
+.status-pending {
+  border-left-color: var(--pg-yellow);
+}
+
 .status-pending .tool-glyph {
-  color: var(--vscode-charts-yellow, inherit);
+  color: var(--pg-yellow);
+}
+
+.status-in-progress {
+  border-left-color: var(--pg-accent);
+  animation: pg-tool-pulse 1.7s var(--pg-ease) infinite;
 }
 
 .status-in-progress .tool-glyph {
-  color: var(--vscode-charts-blue, inherit);
+  color: var(--pg-accent);
+}
+
+.status-in-progress .tool-glyph svg {
+  animation: pg-spin .9s linear infinite;
+}
+
+@keyframes pg-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pg-tool-pulse {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: var(--pg-glow); }
 }
 
 .status-completed .tool-glyph {
-  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+  color: var(--pg-green);
+}
+
+.status-failed {
+  border-left-color: var(--pg-accent-2);
 }
 
 .status-failed .tool-glyph {
-  color: var(--vscode-testing-iconFailed, var(--vscode-charts-red));
+  color: var(--pg-accent-2);
 }
 
 .tool-body {
   padding: 0 8px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+}
+
+.tool-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tool-block-label {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--pg-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .8px;
+  text-transform: uppercase;
 }
 
 .tool-input,
 .tool-output {
   margin: 0;
-  max-height: 200px;
-  overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tool-block-more {
+  align-self: flex-start;
+  padding: 2px 9px;
+  background: none;
+  border: 1px solid var(--pg-border);
+  border-radius: var(--pg-r-xs);
+  color: var(--pg-accent);
+  cursor: pointer;
+  font-family: var(--pg-mono);
+  font-size: 11px;
+}
+
+.tool-block-more:hover {
+  background: var(--pg-tint);
+  border-color: var(--pg-border-strong);
 }
 
 /* -- diffs ----------------------------------------------------------------- */
@@ -524,9 +952,15 @@ body {
 
 .diff-header {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .diff-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: none;
   border: none;
   padding: 0;
@@ -540,7 +974,7 @@ body {
   font-family: var(--vscode-editor-font-family);
   font-size: var(--vscode-editor-font-size, 12px);
   border: 1px solid var(--vscode-panel-border, transparent);
-  border-radius: 4px;
+  border-radius: var(--pg-r-sm);
   overflow-x: auto;
 }
 
@@ -586,10 +1020,15 @@ body {
 .composer {
   position: relative;
   padding: 0;
-  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-  border-radius: 12px;
+  border: 1px solid var(--pg-border-strong);
+  border-radius: var(--pg-r-sm);
   background: var(--vscode-input-background);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, .12);
+  transition: border-color var(--pg-dur) var(--pg-ease), box-shadow var(--pg-dur) var(--pg-ease);
+}
+
+.composer:focus-within {
+  border-color: var(--pg-accent);
+  box-shadow: var(--pg-glow);
 }
 
 .composer-chips {
@@ -603,10 +1042,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  border-radius: 10px;
+  background: var(--pg-tint);
+  color: var(--pg-accent);
+  border: 1px solid var(--pg-border);
+  border-radius: var(--pg-r-xs);
   padding: 1px 6px;
+  font-family: var(--pg-mono);
   font-size: 11px;
 }
 
@@ -629,11 +1070,17 @@ body {
   flex: none;
   background: none;
   border: 0;
-  border-radius: 6px;
-  color: var(--vscode-input-foreground);
+  border-radius: var(--pg-r-xs);
+  color: var(--vscode-descriptionForeground);
   cursor: pointer;
   padding: 5px 8px;
   font-size: 18px;
+  transition: color var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease);
+}
+
+.composer-attach:hover {
+  color: var(--pg-accent);
+  background: var(--pg-tint);
 }
 
 .composer-input {
@@ -662,29 +1109,42 @@ body {
 .composer-stop {
   flex: none;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--pg-r-xs);
   cursor: pointer;
   padding: 7px 11px;
   min-width: 34px;
+  transition: transform var(--pg-dur) var(--pg-ease), box-shadow var(--pg-dur) var(--pg-ease), filter var(--pg-dur) var(--pg-ease);
 }
 
 .composer-send {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+  background: var(--pg-grad-button);
+  color: var(--pg-on-accent);
 }
 
-.composer-send:hover {
-  background: var(--vscode-button-hoverBackground);
+.composer-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--pg-glow);
+  filter: brightness(1.08);
+}
+
+.composer-send:active:not(:disabled),
+.composer-stop:active {
+  transform: scale(.97);
 }
 
 .composer-send:disabled {
   opacity: 0.5;
-  cursor: default;
+  cursor: not-allowed;
 }
 
 .composer-stop {
-  background: var(--vscode-errorForeground, var(--vscode-button-secondaryBackground));
-  color: var(--vscode-button-secondaryForeground, inherit);
+  background: transparent;
+  color: var(--pg-accent-2);
+  box-shadow: inset 0 0 0 1px var(--pg-accent-2);
+}
+
+.composer-stop:hover {
+  background: color-mix(in srgb, var(--pg-accent-2) 12%, transparent);
 }
 
 .composer-popup {
@@ -696,9 +1156,9 @@ body {
   overflow-y: auto;
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   color: var(--vscode-editorWidget-foreground, inherit);
-  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, transparent));
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--pg-border-strong);
+  border-radius: var(--pg-r-sm);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   z-index: 10;
 }
 
@@ -706,15 +1166,18 @@ body {
   display: flex;
   gap: 8px;
   padding: 4px 10px;
+  border-left: 2px solid transparent;
   cursor: pointer;
 }
 
 .popup-item.selected {
-  background: var(--vscode-list-activeSelectionBackground);
-  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--pg-tint);
+  border-left-color: var(--pg-accent);
 }
 
 .popup-name {
+  color: var(--pg-accent);
+  font-family: var(--pg-mono);
   font-weight: 600;
 }
 
@@ -748,7 +1211,11 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--vscode-scrollbarSlider-background);
-  border-radius: 5px;
+  border-radius: var(--pg-r-xs);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--pg-accent-2) 45%, transparent);
 }
 
 ::-webkit-scrollbar-thumb:hover {

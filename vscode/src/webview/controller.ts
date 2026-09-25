@@ -11,9 +11,10 @@ import type {
 } from "../shared/protocol";
 import { renderMarkdown } from "./markdown";
 import { renderMermaidBlocks } from "./mermaid";
-import { toolCard, type ToolCard } from "./toolCard";
+import { toolCard, type ToolCard, formatDuration } from "./toolCard";
 import { Composer } from "./composer";
-import { gopher, iconButton } from "./icons";
+import { iconButton, mascot } from "./icons";
+import { copyButton } from "./clipboard";
 
 export interface ControllerHost {
   post(message: WebviewToHost): void;
@@ -60,8 +61,14 @@ export class ChatController {
     const brand = document.createElement("div");
     brand.className = "welcome-brand";
     const wordmark = document.createElement("h1");
-    wordmark.textContent = "Pi-Go";
-    brand.append(gopher(), wordmark);
+    wordmark.className = "wordmark";
+    wordmark.textContent = "pi-go";
+    const tagline = document.createElement("p");
+    tagline.className = "tagline";
+    tagline.textContent = "Your AI coding agent, in the editor";
+    const titles = document.createElement("div");
+    titles.append(wordmark, tagline);
+    brand.append(mascot(root.dataset.mascot), titles);
 
     const learn = document.createElement("section");
     learn.className = "learn-card";
@@ -69,12 +76,12 @@ export class ChatController {
     const learnHeader = document.createElement("div");
     learnHeader.className = "learn-header";
     const learnTitle = document.createElement("h2");
-    learnTitle.textContent = "Learn Pi-Go";
+    learnTitle.textContent = "Get started";
     const dismiss = iconButton("close", "Dismiss getting started", () => {
       learn.hidden = true;
       this.host.setState({ welcomeDismissed: true });
     });
-    learnHeader.append(gopher(), learnTitle, dismiss);
+    learnHeader.append(learnTitle, dismiss);
     const lessons = document.createElement("div");
     lessons.className = "learn-lessons";
     for (const [label, prompt] of [
@@ -324,14 +331,18 @@ export class ChatController {
     // Thinking can be very verbose. Keep the disclosure collapsed while the
     // model streams; the complete thought remains available on demand.
     part.open = false;
+    part.dataset.startedAt = String(Date.now());
     const summary = document.createElement("summary");
     summary.className = "thought-summary";
+    const pulse = document.createElement("span");
+    pulse.className = "thought-pulse";
+    pulse.setAttribute("aria-hidden", "true");
     const label = document.createElement("span");
+    label.className = "thought-label";
     label.textContent = "Thinking";
     const status = document.createElement("span");
     status.className = "thought-status";
-    status.textContent = "in progress";
-    summary.append(label, status);
+    summary.append(pulse, label, status);
     const body = document.createElement("div");
     body.className = "thought-body stream-body";
     part.append(summary, body);
@@ -344,8 +355,11 @@ export class ChatController {
       const text = body?.textContent ?? "";
       part.classList.remove("streaming");
       if (part.classList.contains("thought")) {
+        part.querySelector(".thought-pulse")?.remove();
+        const label = part.querySelector(".thought-label");
+        if (label) label.textContent = "Thought";
         const status = part.querySelector(".thought-status");
-        if (status) status.textContent = "complete";
+        if (status) status.textContent = thoughtDurationLabel((part as HTMLElement).dataset.startedAt);
         part.querySelector(".thought-body")?.replaceChildren();
         const rendered = markdownBlock(text);
         rendered.className = "thought-body md";
@@ -384,7 +398,12 @@ export class ChatController {
     part.className = "part thought";
     const summary = document.createElement("summary");
     summary.className = "thought-summary";
-    summary.textContent = "Thinking";
+    const label = document.createElement("span");
+    label.className = "thought-label";
+    // Replayed from history: it already ran, and no timing survives a
+    // reload, so state it as a fact rather than a live "Thinking…".
+    label.textContent = "Thought";
+    summary.append(label);
     part.append(summary, node);
     this.agentTurn().append(part);
   }
@@ -492,8 +511,43 @@ function markdownBlock(text: string): HTMLElement {
   const el = document.createElement("div");
   el.className = "md";
   el.innerHTML = renderMarkdown(text);
+  decorateCodeBlocks(el);
   // Fire-and-forget: diagrams render when mermaid finishes loading; on
   // failure the source code blocks stay in place.
   void renderMermaidBlocks(el).catch(() => undefined);
   return el;
+}
+
+/** "Thought" alone once elapsed time is negligible; "for Ns" past 1s, so a
+ *  near-instant thought doesn't get a distracting "for 200ms". */
+function thoughtDurationLabel(startedAt: string | undefined): string {
+  const started = Number(startedAt);
+  if (!Number.isFinite(started)) return "";
+  const elapsed = Date.now() - started;
+  return elapsed >= 1000 ? `for ${formatDuration(elapsed)}` : "";
+}
+
+/** Wrap fenced code blocks with a header bar (language label + copy button).
+ *  Mermaid fences are left untouched — renderMermaidBlocks replaces them
+ *  with a diagram right after this runs. */
+function decorateCodeBlocks(root: HTMLElement): void {
+  for (const code of Array.from(root.querySelectorAll("pre > code[class*='language-']"))) {
+    if (code.classList.contains("language-mermaid")) continue;
+    const pre = code.parentElement;
+    if (!(pre instanceof HTMLElement)) continue;
+    const lang = code.className.match(/language-(\S+)/)?.[1] ?? "text";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+    pre.replaceWith(wrapper);
+
+    const header = document.createElement("div");
+    header.className = "code-block-header";
+    const label = document.createElement("span");
+    label.className = "code-block-lang";
+    label.textContent = lang;
+    header.append(label, copyButton("Copy code", () => code.textContent ?? ""));
+
+    wrapper.append(header, pre);
+  }
 }

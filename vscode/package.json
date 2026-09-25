@@ -10,7 +10,8 @@
   },
   "categories": [
     "AI",
-    "Chat"
+    "Chat",
+    "Themes"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -26,6 +27,18 @@
     "chatParticipantPrivate"
   ],
   "contributes": {
+    "themes": [
+      {
+        "label": "Pi-Go Neon",
+        "uiTheme": "vs-dark",
+        "path": "./themes/pi-go-neon-color-theme.json"
+      },
+      {
+        "label": "Pi-Go Daylight",
+        "uiTheme": "vs",
+        "path": "./themes/pi-go-daylight-color-theme.json"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -232,6 +245,7 @@
     "compile": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js",
     "package": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit && node esbuild.js --production",
     "check-types": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "themes": "node scripts/themes.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
@@ -239,6 +253,7 @@
     "@agentclientprotocol/sdk": "^1.4.0"
   },
   "devDependencies": {
+    "@catppuccin/vscode": "^3.18.1",
     "@types/node": "^22.0.0",
     "@types/vscode": "1.137.0",
     "@vitest/coverage-v8": "^5.0.1",
