@@ -22,6 +22,17 @@ type SetupProvider struct {
 	EnvVar   string // environment variable / .env key
 	NeedsKey bool   // false for a local daemon that authenticates nothing
 	KeyURL   string // where the user gets a key, empty when NeedsKey is false
+	// OptionalKey shows the key step without requiring an answer. It is for a
+	// provider that runs without a credential by default but can be put
+	// behind one — agentgateway with an apiKey policy — where skipping the
+	// step would leave no way to configure the protected case, and requiring
+	// it would block the common open one. Ignored when NeedsKey is set.
+	OptionalKey bool
+}
+
+// asksForKey reports whether the wizard shows this provider a key step.
+func (p SetupProvider) asksForKey() bool {
+	return p.NeedsKey || p.OptionalKey
 }
 
 // SetupConfig is everything the wizard needs before it can draw a frame.
@@ -275,6 +286,11 @@ func (w *SetupWizard) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return w, tea.Quit
 		}
 		w.step--
+		// Back from the model step lands on the provider list when the key
+		// step was never shown, rather than on a key box the provider skipped.
+		if w.step == setupStepKey && !w.provider().asksForKey() {
+			w.step = setupStepProvider
+		}
 		w.focusStep()
 		return w, nil
 	}
@@ -307,7 +323,7 @@ func (w *SetupWizard) handleProviderKey(key tea.Key) (tea.Model, tea.Cmd) {
 func (w *SetupWizard) advanceFromProvider() {
 	w.candIdx = 0
 	w.errMsg = ""
-	if w.provider().NeedsKey {
+	if w.provider().asksForKey() {
 		w.step = setupStepKey
 	} else {
 		// Nothing to authenticate: going straight on is the whole reason
@@ -323,7 +339,7 @@ func (w *SetupWizard) advanceFromProvider() {
 // would block a user whose key is simply new.
 func (w *SetupWizard) handleKeyStep(msg tea.KeyPressMsg, key tea.Key) (tea.Model, tea.Cmd) {
 	if key.Code == tea.KeyEnter {
-		if strings.TrimSpace(w.keyInput.Value()) == "" {
+		if strings.TrimSpace(w.keyInput.Value()) == "" && w.provider().NeedsKey {
 			w.errMsg = "a key is required for " + w.provider().Label
 			return w, nil
 		}
@@ -421,7 +437,11 @@ func (w *SetupWizard) View() tea.View {
 				style = sel
 			}
 			line := marker + sp.Label
-			if !sp.NeedsKey {
+			switch {
+			case sp.NeedsKey:
+			case sp.OptionalKey:
+				line += dim.Render("  (key optional)")
+			default:
 				line += dim.Render("  (no key needed)")
 			}
 			b.WriteString(style.Render(line))
@@ -438,8 +458,14 @@ func (w *SetupWizard) View() tea.View {
 		b.WriteString("\n\n")
 		b.WriteString(w.keyInput.View())
 		b.WriteString("\n\n")
-		b.WriteString(muted.Render("Get a key at: " + sp.KeyURL))
-		b.WriteString("\n\n")
+		if !sp.NeedsKey {
+			b.WriteString(muted.Render("optional — leave blank if it needs no key, or to keep the one already set"))
+			b.WriteString("\n\n")
+		}
+		if sp.KeyURL != "" {
+			b.WriteString(muted.Render("Get a key at: " + sp.KeyURL))
+			b.WriteString("\n\n")
+		}
 		b.WriteString(dim.Render("enter continue · esc back · ctrl+c quit"))
 
 	case setupStepModel:
@@ -496,7 +522,7 @@ func (w *SetupWizard) View() tea.View {
 // not appear.
 func (w *SetupWizard) stepIndicator() string {
 	total, current := 3, int(w.step)+1
-	if !w.provider().NeedsKey {
+	if !w.provider().asksForKey() {
 		total, current = 2, int(w.step)
 		if w.step == setupStepModel {
 			current = 2

@@ -324,3 +324,47 @@ func TestSetupHasTTYRejectsDevNull(t *testing.T) {
 		t.Error("setupHasTTY accepted /dev/null as a terminal; `pi setup < /dev/null` would hang")
 	}
 }
+
+// TestSaveSetupResultOptionalGatewayKey proves agentgateway's optional key is
+// saved when given and leaves .env untouched when blank, so re-running setup
+// on an open gateway does not erase a key set earlier.
+func TestSaveSetupResultOptionalGatewayKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	envPath := filepath.Join(home, ".pi-go", ".env")
+
+	entry, ok := lookupSetupProvider("agentgateway")
+	if !ok {
+		t.Fatal("agentgateway missing from the setup provider table")
+	}
+	if entry.needsKey || !entry.optionalKey {
+		t.Fatalf("agentgateway should ask for an optional key, got %+v", entry)
+	}
+
+	if err := saveSetupResult(entry, tui.SetupResult{Provider: "agentgateway", Model: "m"}); err != nil {
+		t.Fatalf("saveSetupResult (blank key): %v", err)
+	}
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Errorf("a blank optional key wrote a .env file (stat err = %v)", err)
+	}
+
+	if err := saveSetupResult(entry, tui.SetupResult{Provider: "agentgateway", APIKey: "gw-secret", Model: "m"}); err != nil {
+		t.Fatalf("saveSetupResult (with key): %v", err)
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("reading .env: %v", err)
+	}
+	if !strings.Contains(string(data), "AGENTGATEWAY_API_KEY") || !strings.Contains(string(data), "gw-secret") {
+		t.Errorf(".env does not hold the gateway key:\n%s", data)
+	}
+
+	if err := saveSetupResult(entry, tui.SetupResult{Provider: "agentgateway", Model: "m"}); err != nil {
+		t.Fatalf("saveSetupResult (blank re-run): %v", err)
+	}
+	after, _ := os.ReadFile(envPath)
+	if !strings.Contains(string(after), "gw-secret") {
+		t.Errorf("a blank re-run erased the existing gateway key:\n%s", after)
+	}
+}

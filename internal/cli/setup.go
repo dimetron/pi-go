@@ -30,6 +30,9 @@ type setupProviderEntry struct {
 	envVar   string
 	needsKey bool
 	keyURL   string
+	// optionalKey asks for a key but accepts a blank answer; see
+	// tui.SetupProvider.OptionalKey.
+	optionalKey bool
 }
 
 var setupProviders = []setupProviderEntry{
@@ -65,6 +68,10 @@ var setupProviders = []setupProviderEntry{
 		label:    "agentgateway (local gateway)",
 		envVar:   "AGENTGATEWAY_API_KEY",
 		needsKey: false,
+		// A gateway runs open by default, but one with an apiKey policy
+		// rejects every request without AGENTGATEWAY_API_KEY, so the key is
+		// asked for rather than skipped.
+		optionalKey: true,
 	},
 	{
 		name:     "mistral",
@@ -113,7 +120,8 @@ interactive wizard.
 The wizard asks three questions:
 
   1. which provider to use
-  2. the API key for that provider (skipped for a local daemon)
+  2. the API key for that provider (skipped for a local daemon; optional
+     for agentgateway, which only needs one behind an apiKey policy)
   3. which model should be the default
 
 On confirm it writes the key to ~/.pi-go/.env and the provider and model to
@@ -184,7 +192,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "\nConfigured %s\n", entry.label)
-	if entry.needsKey {
+	if entry.writesKey(result.APIKey) {
 		fmt.Fprintf(out, "  key    ~/.pi-go/.env (%s)\n", maskKey(result.APIKey))
 	}
 	fmt.Fprintf(out, "  model  %s\n", result.Model)
@@ -200,7 +208,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 // key with an unset role — recoverable by re-running — rather than a role
 // pointing at a credential that was never stored.
 func saveSetupResult(entry setupProviderEntry, result tui.SetupResult) error {
-	if entry.needsKey {
+	if entry.writesKey(result.APIKey) {
 		if err := auth.SaveKey(entry.envVar, result.APIKey); err != nil {
 			return fmt.Errorf("saving API key: %w", err)
 		}
@@ -212,17 +220,25 @@ func saveSetupResult(entry setupProviderEntry, result tui.SetupResult) error {
 	return nil
 }
 
+// writesKey reports whether saving this result stores a key. A blank optional
+// key writes nothing, so it leaves any key already in .env in place rather than
+// erasing it.
+func (e setupProviderEntry) writesKey(key string) bool {
+	return e.needsKey || (e.optionalKey && strings.TrimSpace(key) != "")
+}
+
 // setupWizardProviders projects the CLI's provider table into the wizard's
 // view of it.
 func setupWizardProviders() []tui.SetupProvider {
 	out := make([]tui.SetupProvider, 0, len(setupProviders))
 	for _, p := range setupProviders {
 		out = append(out, tui.SetupProvider{
-			Name:     p.name,
-			Label:    p.label,
-			EnvVar:   p.envVar,
-			NeedsKey: p.needsKey,
-			KeyURL:   p.keyURL,
+			Name:        p.name,
+			Label:       p.label,
+			EnvVar:      p.envVar,
+			NeedsKey:    p.needsKey,
+			KeyURL:      p.keyURL,
+			OptionalKey: p.optionalKey,
 		})
 	}
 	return out
