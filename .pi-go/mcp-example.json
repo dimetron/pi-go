@@ -14,13 +14,27 @@
         "chrome-devtools-mcp@latest"
       ]
     },
+    "firefox-devtools": {
+      "command": "bunx",
+      "args": [
+        "-y",
+        "@mozilla/firefox-devtools-mcp@latest"
+      ]
+    },
+    "playwright": {
+      "command": "bunx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest"
+      ]
+    },
     "tavily": {
       "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
     },
     "exa": {
       "url": "https://mcp.exa.ai/mcp?exaApiKey=${EXA_API_KEY}"
     },
-    "you": {
+    "you-search": {
       "url": "https://api.you.com/mcp?profile=free"
     },
     "parallel-search": {
