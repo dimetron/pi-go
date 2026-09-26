@@ -168,7 +168,7 @@ describe("ChatPanelProvider.resolveWebviewView", () => {
     expect(view.webview.html).toMatch(/script nonce="[^"]+"/);
 
     view.__post({ type: "ready" });
-    expect(typesOf(view.__messages)).toEqual(["state"]);
+    expect(typesOf(view.__messages)).toEqual(["state", "tabs"]);
     const stateMsg = view.__messages[0] as Record<string, unknown>;
     expect(stateMsg.sessionId).toBeUndefined();
     expect(stateMsg.turns).toEqual([]);
@@ -176,10 +176,19 @@ describe("ChatPanelProvider.resolveWebviewView", () => {
     // A second view id is tracked separately; broadcasts skip disposed views.
     const second = fakeView("pi-go.chatSecondary");
     panel.resolveWebviewView(second as never, {} as never, {} as never);
+    const disposedCount = view.__messages.length;
     view.__dispose();
     await panel.startNewSession();
-    expect(typesOf(second.__messages)).toContain("sessionLoaded");
-    expect(typesOf(view.__messages)).not.toContain("sessionLoaded");
+    const secondTabs = await vi.waitFor(() => {
+      const m = second.__messages.findLast(
+        (x) => (x as { type: string }).type === "tabs",
+      ) as { tabs: { sessionId: string }[] } | undefined;
+      expect(m?.tabs.map((t) => t.sessionId)).toEqual(["new-1"]);
+      return m!;
+    });
+    expect(secondTabs).toBeDefined();
+    // The disposed view received nothing after disposal.
+    expect(view.__messages.length).toBe(disposedCount);
   });
 });
 
@@ -191,12 +200,35 @@ describe("ChatPanelProvider sessions", () => {
     const view = fakeView();
     panel.resolveWebviewView(view as never, {} as never, {} as never);
 
-    await panel.openSession({ sessionId: "s1", cwd: "/tmp/ws" });
+    // A second open of a different session creates a second tab.
+    await panel.openSession({ sessionId: "s2", cwd: "/tmp/ws" });
     expect(client.loadCalls).toHaveLength(2);
     expect(typesOf(view.__messages)).toEqual(
-      expect.arrayContaining(["sessionLoaded", "replayStarted", "state"]),
+      expect.arrayContaining(["sessionLoaded", "replayStarted", "state", "tabs"]),
     );
+    const tabsMsg = view.__messages.findLast(
+      (m) => (m as { type: string }).type === "tabs",
+    ) as { tabs: { sessionId: string }[]; activeSessionId?: string };
+    expect(tabsMsg.tabs.map((t) => t.sessionId)).toEqual(["s1", "s2"]);
+    expect(tabsMsg.activeSessionId).toBe("s2");
     expect(store.uriFor("s1")).toBeDefined();
+    expect(store.uriFor("s2")).toBeDefined();
+  });
+
+  it("re-opening an open tab activates it instead of re-replaying", async () => {
+    const { panel, client } = setup();
+    await panel.openSession({ sessionId: "s1", cwd: "/tmp/ws" });
+    const view = fakeView();
+    panel.resolveWebviewView(view as never, {} as never, {} as never);
+    expect(client.loadCalls).toHaveLength(1);
+
+    await panel.openSession({ sessionId: "s1", cwd: "/tmp/ws" });
+    expect(client.loadCalls).toHaveLength(1); // no second replay
+    const tabsMsg = view.__messages.findLast(
+      (m) => (m as { type: string }).type === "tabs",
+    ) as { tabs: { sessionId: string }[]; activeSessionId?: string };
+    expect(tabsMsg.tabs).toHaveLength(1);
+    expect(tabsMsg.activeSessionId).toBe("s1");
   });
 
   it("startNewSession registers and broadcasts the new session", async () => {
@@ -204,6 +236,24 @@ describe("ChatPanelProvider sessions", () => {
     panel.startNewSession();
     // Fire-and-forget; the session shows up in the store when it settles.
     await vi.waitFor(() => expect(store.uriFor("new-1")).toBeDefined());
+  });
+
+  it("startNewSession twice opens a second tab and activates it", async () => {
+    const { panel } = setup();
+    const view = fakeView();
+    panel.resolveWebviewView(view as never, {} as never, {} as never);
+    await panel.startNewSession();
+    await panel.startNewSession();
+    const tabsMsg = await vi.waitFor(() => {
+      const m = view.__messages.findLast(
+        (x) => (x as { type: string }).type === "tabs",
+      ) as { tabs: { sessionId: string }[]; activeSessionId?: string } | undefined;
+      expect(m).toBeDefined();
+      expect(m!.tabs.map((t) => t.sessionId)).toEqual(["new-1", "new-2"]);
+      expect(m!.activeSessionId).toBe("new-2");
+      return m!;
+    });
+    expect(tabsMsg).toBeDefined();
   });
 });
 
@@ -234,7 +284,7 @@ describe("ChatPanelProvider prompts", () => {
     view.__post({ type: "prompt", text: "hello", attachments: [] });
     await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("turnEnd"));
     expect(typesOf(view.__messages)).toEqual(
-      expect.arrayContaining(["sessionLoaded", "state", "userTurn", "turnEnd"]),
+      expect.arrayContaining(["state", "tabs", "userTurn", "turnEnd"]),
     );
     expect(client.promptCalls).toHaveLength(1);
     expect(client.promptCalls[0][0]).toBe("new-1");
@@ -246,25 +296,83 @@ describe("ChatPanelProvider prompts", () => {
     expect(client.promptCalls[1][0]).toBe("new-1");
   });
 
-  it("guards against concurrent prompts", async () => {
-    const { panel, client } = setup();
+  it("guards against a concurrent prompt in the same session, but runs prompts in parallel sessions", async () => {
+    const { panel, client, active } = setup();
     const view = fakeView();
     panel.resolveWebviewView(view as never, {} as never, {} as never);
-    // A prompt that never settles keeps inFlight set.
-    const gate = { resolve: () => {} };
-    const pending = new Promise<void>((resolve) => {
-      gate.resolve = resolve;
-    });
-    client.prompt = (() => pending) as never;
-    view.__post({ type: "prompt", text: "first", attachments: [] });
+    // Two sessions, each with a prompt that hangs until released.
+    await panel.startNewSession(); // new-1
+    await panel.startNewSession(); // new-2
+
+    const gates: Array<(value?: unknown) => void> = [];
+    client.prompt = (async (sessionId: string) => {
+      client.promptCalls.push([sessionId]);
+      await new Promise((r) => gates.push(r as (value?: unknown) => void));
+    }) as never;
+
+    // Prompt the second tab while the first is visible.
+    view.__post({ type: "activateTab", sessionId: "new-2" });
+    view.__post({ type: "prompt", text: "in tab two", attachments: [] });
     await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("userTurn"));
-    // While the first prompt is in flight, a second one is refused with a notice.
-    view.__post({ type: "prompt", text: "second", attachments: [] });
+    expect(active.has("new-2")).toBe(true);
+
+    // Switch back to the first tab; its prompt is a different session and
+    // must run in parallel — no "already running" notice.
+    view.__post({ type: "activateTab", sessionId: "new-1" });
+    view.__post({ type: "prompt", text: "in tab one", attachments: [] });
+    await vi.waitFor(() => expect(client.promptCalls).toHaveLength(2));
+    expect(active.has("new-1")).toBe(true);
+    expect(active.has("new-2")).toBe(true);
+
+    // A second prompt against the same session while it is in flight is refused.
+    view.__post({ type: "prompt", text: "again", attachments: [] });
     const notices = () =>
       view.__messages.filter((m) => (m as { type: string }).type === "notice") as { text: string }[];
     await vi.waitFor(() => expect(notices().some((n) => n.text.includes("already running"))).toBe(true));
-    gate.resolve();
-    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("turnEnd"));
+
+    // Release both; both turns end.
+    for (const g of gates.splice(0)) g();
+    await vi.waitFor(() => {
+      const ends = typesOf(view.__messages).filter((t) => t === "turnEnd");
+      expect(ends).toHaveLength(2);
+    });
+    expect(active.size).toBe(0);
+  });
+
+  it("closing a tab cancels its in-flight prompt and activates a neighbour", async () => {
+    const { panel, client } = setup();
+    const view = fakeView();
+    panel.resolveWebviewView(view as never, {} as never, {} as never);
+    await panel.startNewSession(); // new-1
+    await panel.startNewSession(); // new-2
+
+    const gates: Array<(value?: unknown) => void> = [];
+    client.prompt = (async (sessionId: string) => {
+      client.promptCalls.push([sessionId]);
+      await new Promise((r) => gates.push(r as (value?: unknown) => void));
+    }) as never;
+
+    view.__post({ type: "prompt", text: "in tab two", attachments: [] });
+    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("userTurn"));
+
+    // Close the streaming tab: its turn is cancelled, the other takes over.
+    view.__post({ type: "closeTab", sessionId: "new-2" });
+    for (const g of gates.splice(0)) g();
+    await vi.waitFor(() => {
+      const tabsMsg = view.__messages.findLast(
+        (m) => (m as { type: string }).type === "tabs",
+      ) as { tabs: { sessionId: string }[]; activeSessionId?: string };
+      expect(tabsMsg.tabs.map((t) => t.sessionId)).toEqual(["new-1"]);
+      expect(tabsMsg.activeSessionId).toBe("new-1");
+    });
+    const end = await vi.waitFor(() => {
+      const e = view.__messages.findLast(
+        (m) => (m as { type: string }).type === "turnEnd",
+      ) as { sessionId?: string } | undefined;
+      expect(e?.sessionId).toBe("new-2"); // the closed tab's turn still ends
+      return e!;
+    });
+    expect(end).toBeDefined();
   });
 
   it("handles /help locally without contacting the agent", async () => {
@@ -324,7 +432,7 @@ describe("ChatPanelProvider prompts", () => {
     const view = fakeView();
     panel.resolveWebviewView(view as never, {} as never, {} as never);
     view.__post({ type: "prompt", text: "hello", attachments: [] });
-    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("sessionLoaded"));
+    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("turnEnd"));
     client.promptError = new Error("spawn failed");
     view.__post({ type: "prompt", text: "second", attachments: [] });
     await vi.waitFor(() => {
@@ -391,12 +499,16 @@ describe("ChatPanelProvider messages and live updates", () => {
     expect(added.paths).toEqual(["/tmp/ws/one.ts", "/tmp/ws/two.ts"]);
 
     view.__post({ type: "newSession" });
-    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("sessionLoaded"));
+    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("state"));
 
     view.__post({ type: "openSession", sessionId: "persisted" });
     await vi.waitFor(() => {
       expect(client.loadCalls).toHaveLength(1);
-      expect(typesOf(view.__messages).filter((t) => t === "sessionLoaded")).toHaveLength(2);
+      expect(typesOf(view.__messages).filter((t) => t === "sessionLoaded")).toHaveLength(1);
+      const tabsMsg = view.__messages.findLast(
+        (m) => (m as { type: string }).type === "tabs",
+      ) as { tabs: { sessionId: string }[] };
+      expect(tabsMsg.tabs.map((t) => t.sessionId)).toEqual(["new-1", "persisted"]);
     });
 
     // No-ops and the guard against junk messages.
@@ -427,7 +539,7 @@ describe("ChatPanelProvider messages and live updates", () => {
     panel.resolveWebviewView(view as never, {} as never, {} as never);
     // The current session id is only set once the implicit newSession lands.
     view.__post({ type: "prompt", text: "hi", attachments: [] });
-    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("sessionLoaded"));
+    await vi.waitFor(() => expect(typesOf(view.__messages)).toContain("userTurn"));
 
     const fire = (update: unknown, sessionId = "new-1") => {
       for (const l of client.listeners) l({ sessionId, update });
@@ -446,22 +558,28 @@ describe("ChatPanelProvider messages and live updates", () => {
     expect(tool.tool.toolName).toBe("bash");
   });
 
-  it("suppresses live chunks for other sessions and during replays", () => {
+  it("suppresses live chunks for other sessions and during replays", async () => {
     const { panel, client } = setup();
     const view = fakeView();
     panel.resolveWebviewView(view as never, {} as never, {} as never);
     const fire = (update: unknown, sessionId = "other") => {
       for (const l of client.listeners) l({ sessionId, update });
     };
+    // Not an open tab: no chunk reaches the webview.
     fire({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } });
     expect(typesOf(view.__messages)).not.toContain("agentChunk");
-    // Non-text chunks and non-message updates are dropped too.
+
+    // Open a tab so routing reaches the per-update type checks.
+    await panel.startNewSession(); // new-1, no prompt: no reply chunks pollute
+    // Non-text chunks are dropped too.
     fire({ sessionUpdate: "agent_message_chunk", content: { type: "image" } }, "new-1");
     expect(typesOf(view.__messages)).not.toContain("agentChunk");
-    // And updates for the current session are suppressed during replays.
-    (panel as unknown as { replaying: boolean }).replaying = true;
+    // And updates for a replaying session are suppressed: the snapshot lands
+    // after session/load resolves.
+    (panel as unknown as { replaying: Set<string> }).replaying.add("new-1");
     fire({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "y" } }, "new-1");
     expect(typesOf(view.__messages)).not.toContain("agentChunk");
+    (panel as unknown as { replaying: Set<string> }).replaying.delete("new-1");
   });
 
   it("attachFiles opens the picker and dispose cancels the in-flight turn", async () => {

@@ -52,7 +52,14 @@ In addition to the native agent sessions above, the extension contributes a
 **pi-go** view container for session history and one **Pi-Go** chat in the
 secondary sidebar — the focused chat pattern Claude Code and Codex use:
 
-- **Chat** — a webview chat: streamed replies, collapsible thinking blocks,
+- **Chat** — a webview chat with parallel session tabs: the `+` in the
+  Sessions view (or the header) starts a new tab instead of replacing the
+  current conversation, each tab streams independently (per-session prompts
+  run in parallel over one ACP connection), a pulsing dot marks streaming
+  tabs, and `×` closes a tab (cancelling its in-flight prompt; the persisted
+  transcript stays on disk). Tabs keep their own scroll position and
+  composer draft. The active tab also has the existing features: streamed
+  replies, collapsible thinking blocks,
   live tool cards with real line diffs for file edits, fenced ```mermaid
   fences rendered as diagrams (the library loads on demand from cdnjs;
   offline, the source code block stays), a slash-command popup fed by
@@ -60,8 +67,9 @@ secondary sidebar — the focused chat pattern Claude Code and Codex use:
   the native path), a stop button (ACP `session/cancel`), and a badge with the
   number of running prompts.
 - **Sessions** — a tree of persisted pi-go sessions (`session/list`), newest
-  first. A single click loads the session and replays its transcript into the
-  chat view; the running-prompt count shows as the view badge.
+  first. A single click opens the session as a tab and replays its transcript
+  into it (an already-open tab is just activated); the running-prompt count
+  shows as the view badge.
 
 The chat works without `--enable-proposed-api` and keeps its composer draft and
 transcript when the sidebar is hidden. The first prompt creates a session, so
