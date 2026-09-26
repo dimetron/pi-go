@@ -8,6 +8,7 @@
         "@agentclientprotocol/sdk": "^1.4.0",
       },
       "devDependencies": {
+        "@catppuccin/vscode": "^3.18.1",
         "@types/node": "^22.0.0",
         "@types/vscode": "1.137.0",
         "@vitest/coverage-v8": "^5.0.1",
@@ -31,6 +32,10 @@
     "@babel/types": ["@babel/types@7.29.8", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.7", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg=="],
 
     "@bcoe/v8-coverage": ["@bcoe/v8-coverage@1.0.2", "", {}, "sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA=="],
+
+    "@catppuccin/palette": ["@catppuccin/palette@1.8.0", "", {}, "sha512-qXhwKiLzQomUygUJYB36YAFgs+dET5bIocfkiaFIatQF5Pwc7L112TlF9P8J5Oqs3x3XTjYSucG0ncHXSCuk7Q=="],
+
+    "@catppuccin/vscode": ["@catppuccin/vscode@3.18.1", "", { "dependencies": { "@catppuccin/palette": "^1.7.1" } }, "sha512-aVG6vUN0RXPd8wX9X9RSiyGkwsBeGulifmwwFkYQgdEiyR2ERmv0Z/y0KADlUJMU/cDLrRxmRRbXPC5Ni+ctvQ=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.25.12", "", { "os": "aix", "cpu": "ppc64" }, "sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA=="],
 

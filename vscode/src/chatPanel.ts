@@ -147,7 +147,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         void this.runPing();
         break;
       case "showHistory":
-        void vscode.commands.executeCommand("workbench.action.openView", "pi-go.sessions");
+        // VS Code's auto-generated focus command for the view; not
+        // workbench.action.openView, which only opens the "Open View…" picker.
+        void vscode.commands.executeCommand("pi-go.sessions.focus");
         break;
       case "draft":
         break;
@@ -388,6 +390,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     const extUri = this.context.extensionUri;
     const styles = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "media", "chat.css"));
     const script = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "dist", "webview.js"));
+    const mascot = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "media", "pi-go-mascot.png"));
     const nonce = getNonce();
     const csp = [
       "default-src 'none'",
@@ -406,7 +409,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 <link rel="stylesheet" href="${styles}">
 <title>pi-go</title>
 </head>
-<body>
+<body data-mascot="${mascot}">
 <script nonce="${nonce}" src="${script}"></script>
 </body>
 </html>`;

@@ -73,6 +73,38 @@ walkthrough entry. It covers configuration, chat, sessions, and attachments.
 
 Keybinding: **cmd+alt+u** (ctrl+alt+u elsewhere) focuses the chat view.
 
+The chat follows whatever color theme is active and layers the
+[Pi-Go Design System](https://claude.ai/design/p/7009407c-e035-4157-bc52-4d4544f87be9)
+on top: neon cyan / magenta accents, sharp 2px/4px corners, gradient
+dividers, and one emoji badge per tool call (🔍 search, 📖 read, ✏️ edit,
+⚡ shell…). Light themes get deeper inks; high-contrast themes get the theme's
+own colors only.
+
+## Color themes
+
+Two workbench themes in the Pi-Go palette — pick one with
+**Preferences: Color Theme**:
+
+| Theme | Type | Look |
+|---|---|---|
+| **Pi-Go Neon** | dark | `#0a0a12` deep space, cyan `#00f0ff` accent, magenta selection, neon syntax |
+| **Pi-Go Daylight** | light | `#f7f8fc` page, the same hues as deeper inks that clear WCAG AA |
+
+Both are compiled with [Catppuccin for VS Code](https://github.com/catppuccin/vscode)
+(MIT, © 2021 Catppuccin): its generator derives ~565 workbench colors, the
+TextMate rules and the semantic-token rules from a 26-color palette, and
+`scripts/themes.mjs` feeds it the Pi-Go palettes plus a few brand signatures
+(cyan cursor and tab borders, magenta selection, Pi-Go terminal colors). The
+generated JSON in `themes/` is committed; after changing a palette run:
+
+```bash
+bun run themes
+```
+
+`test/themes.test.ts` fails when the committed JSON drifts from the generator,
+and checks contrast: editor text ≥ 7:1, keywords / functions / strings /
+numbers ≥ 4.5:1, comments ≥ 3:1.
+
 ## Launching with the proposed API
 
 `chatSessionsProvider` is a proposed API. On stable VS Code you must grant it:
