@@ -18,6 +18,12 @@ import type {
   WebviewToHost,
 } from "./shared/protocol";
 
+/** One open chat tab: the session it points at, which may be rebound by /clear. */
+interface TabSession {
+  sessionId: string;
+  title?: string;
+}
+
 const log = vscode.window.createOutputChannel("pi-go", { log: true });
 
 function errString(err: unknown): string {
@@ -43,10 +49,13 @@ function getNonce(): string {
  */
 export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly views = new Map<string, vscode.WebviewView>();
+  /** Open tabs, in strip order. */
+  private readonly tabs: TabSession[] = [];
   private currentSessionId?: string;
-  private inFlight?: vscode.CancellationTokenSource;
-  /** True while session/load replay flows through the update listener. */
-  private replaying = false;
+  /** In-flight prompt per session: parallel tabs stream concurrently. */
+  private readonly inFlight = new Map<string, vscode.CancellationTokenSource>();
+  /** Session ids whose session/load replay is streaming in right now. */
+  private readonly replaying = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -85,27 +94,124 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   dispose(): void {
-    this.inFlight?.dispose();
+    for (const cts of this.inFlight.values()) cts.dispose();
+    this.inFlight.clear();
   }
 
-  /** Open a persisted session in the chat view (from the sessions tree). */
-  async openSession(entry: SessionEntry): Promise<void> {
-    if (this.inFlight) return;
-    const acpId = entry.sessionId;
-    this.currentSessionId = acpId;
-    this.postAll({ type: "sessionLoaded", sessionId: acpId, title: entry.title ?? undefined });
+  /** The active tab, if one is open. */
+  get activeSessionId(): string | undefined {
+    return this.currentSessionId;
+  }
 
+  /** Open a persisted session in the chat view (from the sessions tree). An
+   *  already-open tab is just activated; otherwise the session becomes a new
+   *  tab and its transcript is replayed into it. */
+  async openSession(entry: SessionEntry): Promise<void> {
+    if (this.tabs.some((t) => t.sessionId === entry.sessionId)) {
+      this.activate(entry.sessionId);
+      return;
+    }
+    this.addTab(entry.sessionId, entry.title ?? undefined);
+    await this.replaySession(entry);
+  }
+
+  /** Command entry point for the sessions tree's "+" button. */
+  startNewSession(): void {
+    void this.startSession();
+  }
+
+  /** Command entry point for the paperclip/@ button on the view title. */
+  attachFiles(): void {
+    void this.pickFiles();
+  }
+
+  private async startSession(): Promise<SessionEntry | undefined> {
+    try {
+      const entry = await this.client.newSession();
+      this.store.register(entry.sessionId);
+      this.addTab(entry.sessionId);
+      this.activate(entry.sessionId);
+      this.refresh.fire();
+      return entry;
+    } catch (err) {
+      const info = explainPiGoError(err, this.launchConfig());
+      this.postAll({ type: "error", message: info.title, detail: info.detail, steps: info.steps });
+      return undefined;
+    }
+  }
+
+  // -- tabs ---------------------------------------------------------------
+
+  /** Append a tab, activate it, and notify the webview. */
+  private addTab(sessionId: string, title?: string): void {
+    this.tabs.push({ sessionId, title });
+    this.currentSessionId = sessionId;
+    this.postTabs();
+  }
+
+  /** Make an existing tab visible; sends state and tabs. */
+  private activate(sessionId: string): void {
+    this.currentSessionId = sessionId;
+    this.sendState();
+    this.postTabs();
+  }
+
+  /** Switch the visible tab (webview strip click). */
+  private async activateTab(sessionId: string): Promise<void> {
+    if (!this.tabs.some((t) => t.sessionId === sessionId)) return;
+    this.activate(sessionId);
+  }
+
+  /** Close a tab: cancels its in-flight prompt and drops the chat view of it.
+   *  The persisted transcript is untouched. */
+  private closeTab(sessionId: string): void {
+    const idx = this.tabs.findIndex((t) => t.sessionId === sessionId);
+    if (idx < 0) return;
+    this.tabs.splice(idx, 1);
+    if (this.inFlight.has(sessionId)) this.cancel(sessionId);
+    if (this.currentSessionId === sessionId) {
+      this.currentSessionId = this.tabs[idx - 1]?.sessionId ?? this.tabs[0]?.sessionId;
+      // A still-open tab takes over the strip; with none left the welcome screen returns.
+      this.sendState();
+    }
+    this.postTabs();
+    this.refresh.fire();
+  }
+
+  /** Tab label: an explicit title, else the first user prompt once one exists
+   *  (the webview shows "Untitled" for a session with no turns yet). */
+  private tabTitle(sessionId: string): string | undefined {
+    const asked = this.store.snapshot(sessionId).some((t) => t.role === "user");
+    return asked ? this.store.title(sessionId) : undefined;
+  }
+
+  private postTabs(): void {
+    this.postAll({
+      type: "tabs",
+      tabs: this.tabs.map((t) => ({
+        sessionId: t.sessionId,
+        title: t.title ?? this.tabTitle(t.sessionId),
+        streaming: this.active.has(t.sessionId),
+      })),
+      activeSessionId: this.currentSessionId,
+    });
+  }
+
+  /** Replay a persisted transcript into the store and the webview. */
+  private async replaySession(entry: SessionEntry): Promise<void> {
+    const acpId = entry.sessionId;
+    this.postAll({ type: "sessionLoaded", sessionId: acpId, title: entry.title ?? undefined });
     // Replay appends from a clean slate, so repeated opens do not stack turns.
     this.store.register(acpId);
     this.store.reset(acpId);
     this.postAll({ type: "replayStarted", sessionId: acpId });
-    this.replaying = true;
+    this.replaying.add(acpId);
     try {
       await this.client.load(entry);
     } catch (err) {
       log.error(`session/load for ${acpId}: ${errString(err)}`);
     }
-    this.replaying = false;
+    this.replaying.delete(acpId);
     this.sendState();
     this.refresh.fire();
   }
@@ -125,11 +231,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "newSession":
         void this.startSession();
         break;
+      case "activateTab":
+        void this.activateTab(message.sessionId);
+        break;
+      case "closeTab":
+        this.closeTab(message.sessionId);
+        break;
       case "openSession":
         void this.openSession({ sessionId: message.sessionId, cwd: workspaceCwd() });
         break;
       case "cancel":
-        this.inFlight?.cancel();
+        if (message.sessionId) this.cancel(message.sessionId);
+        else if (this.currentSessionId) this.cancel(this.currentSessionId);
         break;
       case "revealFile":
         void this.revealFile(message.path);
@@ -178,48 +291,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   // -- prompts ---------------------------------------------------------------
 
-  /** Command entry point for the sessions tree's "+" button. */
-  startNewSession(): void {
-    void this.startSession();
-  }
-
-  /** Command entry point for the paperclip/@ button on the view title. */
-  attachFiles(): void {
-    void this.pickFiles();
-  }
-
-  private async startSession(): Promise<SessionEntry | undefined> {
-    try {
-      const entry = await this.client.newSession();
-      this.store.register(entry.sessionId);
-      this.currentSessionId = entry.sessionId;
-      this.postAll({ type: "sessionLoaded", sessionId: entry.sessionId });
-      this.sendState();
-      this.refresh.fire();
-      return entry;
-    } catch (err) {
-      const info = explainPiGoError(err, this.launchConfig());
-      this.postAll({ type: "error", message: info.title, detail: info.detail, steps: info.steps });
-      return undefined;
-    }
-  }
-
   private async runPrompt(text: string, attachments: string[]): Promise<void> {
-    if (this.inFlight) {
-      this.postAll({ type: "notice", text: "A prompt is already running — stop it first." });
-      return;
-    }
     let sessionId = this.currentSessionId;
     if (!sessionId) {
       const entry = await this.startSession();
       sessionId = entry?.sessionId;
       if (!sessionId) return;
     }
+    if (this.inFlight.has(sessionId)) {
+      this.postAll({
+        type: "notice",
+        text: "A prompt is already running in this session — stop it first.",
+        sessionId,
+      });
+      return;
+    }
 
     const cts = new vscode.CancellationTokenSource();
-    this.inFlight = cts;
+    this.inFlight.set(sessionId, cts);
     this.active.add(sessionId);
     this.updateBadges();
+    this.postTabs();
 
     try {
       if (text === "/help") {
@@ -233,13 +325,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         const uri = this.store.uriFor(sessionId);
         if (uri) this.store.rebind(uri, entry.sessionId);
         else this.store.register(entry.sessionId);
+        // The tab survives with a fresh session under it.
+        const tab = this.tabs.find((t) => t.sessionId === sessionId);
+        if (tab) tab.sessionId = entry.sessionId;
         this.currentSessionId = entry.sessionId;
         this.postAll({ type: "sessionLoaded", sessionId: entry.sessionId });
         this.postAll({
           type: "notice",
           text: "Started a fresh session. The previous transcript is still on disk — reopen it from the Sessions tree.",
+          sessionId: entry.sessionId,
         });
         this.sendState();
+        this.postTabs();
         this.refresh.fire();
         return;
       }
@@ -247,12 +344,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.postAll({
           type: "notice",
           text: "Slash commands are forwarded to pi-go as plain text in VS Code.",
+          sessionId,
         });
       }
 
       const mentions = await pathsToBlocks(attachments, cts.token);
       const skipNotice = skippedMentionsMarkdown(mentions.skipped);
-      if (skipNotice) this.postAll({ type: "notice", text: skipNotice });
+      if (skipNotice) this.postAll({ type: "notice", text: skipNotice, sessionId });
 
       const blocks: Array<{ type: "text"; text: string } | (typeof mentions.blocks)[number]> = [
         { type: "text", text },
@@ -265,7 +363,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.postAll({ type: "userTurn", sessionId, prompt: text });
       await this.client.prompt(sessionId, blocks, cts.token);
       if (cts.token.isCancellationRequested) {
-        this.postAll({ type: "notice", text: "(cancelled)" });
+        this.postAll({ type: "notice", text: "(cancelled)", sessionId });
       } else if (!this.store.snapshot(sessionId).some((t) => t.role === "agent")) {
         this.postAll({ type: "agentChunk", sessionId, text: "_(no response)_" });
       }
@@ -282,10 +380,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         errorSteps: info.steps,
       });
     } finally {
-      this.inFlight.dispose();
-      this.inFlight = undefined;
+      cts.dispose();
+      this.inFlight.delete(sessionId);
       this.active.delete(sessionId);
       this.updateBadges();
+      this.postTabs();
       this.refresh.fire();
     }
   }
@@ -311,8 +410,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.postAll({ type: "commandsUpdated", sessionId: update.sessionId, commands });
       return;
     }
-    // Replays are delivered as a snapshot afterwards; live chunks only.
-    if (this.replaying || update.sessionId !== this.currentSessionId) return;
+    // Replays are delivered as a snapshot afterwards; live chunks only. A
+    // background tab still streams — its transcript must keep updating while
+    // another tab is visible, so route by open-tab membership, not visibility.
+    if (this.replaying.has(update.sessionId)) return;
+    if (!this.tabs.some((t) => t.sessionId === update.sessionId)) return;
 
     if (u?.sessionUpdate === "agent_message_chunk") {
       const text = chunkText(update);
@@ -345,15 +447,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.postAll({
       type: "state",
       sessionId,
-      title: sessionId ? this.store.title(sessionId) : undefined,
+      title: sessionId ? this.tabTitle(sessionId) : undefined,
       turns: turns as unknown as TurnSnapshot[],
       commands,
       streaming: this.active.has(sessionId ?? ""),
       caps: { embeddedContext: this.client.capabilities?.embeddedContext === true },
     });
+    this.postTabs();
   }
 
   // -- plumbing -----------------------------------------------------------------
+
+  /** Cancel one session's in-flight prompt (stop button / tab close). */
+  private cancel(sessionId: string): void {
+    this.inFlight.get(sessionId)?.cancel();
+  }
 
   private postAll(message: HostToWebview): void {
     for (const view of this.views.values()) {

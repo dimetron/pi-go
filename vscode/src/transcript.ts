@@ -111,7 +111,12 @@ export class TranscriptStore {
       return;
     }
     if (last?.role === "agent" && !newMessage) {
-      last.parts.push({ kind: "text", text });
+      // Chunks split mid-word and mid-markdown: extend the trailing text part
+      // so a re-render draws one block, not one paragraph per chunk. A tool or
+      // thought in between still starts a new part.
+      const tail = last.parts[last.parts.length - 1];
+      if (tail?.kind === "text") tail.text += text;
+      else last.parts.push({ kind: "text", text });
     } else {
       list.push({ role: "agent", parts: [{ kind: "text", text }] });
     }

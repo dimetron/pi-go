@@ -294,6 +294,143 @@ body {
   background: var(--vscode-button-hoverBackground);
 }
 
+/* -- session tabs ---------------------------------------------------------- */
+
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: none;
+  padding: 0 8px 5px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab-strip[hidden] {
+  display: none;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+  min-width: 0;
+  padding: 3px 6px 3px 8px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--pg-r-sm) var(--pg-r-sm) 0 0;
+  cursor: pointer;
+  transition: color var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease),
+    border-color var(--pg-dur) var(--pg-ease);
+}
+
+.tab:hover {
+  color: var(--vscode-foreground);
+  background: var(--pg-tint);
+}
+
+.tab.active {
+  color: var(--vscode-foreground);
+  background: var(--vscode-input-background);
+  border-color: var(--pg-border-strong);
+  border-bottom-color: transparent;
+  font-weight: 600;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pg-green);
+  box-shadow: var(--pg-glow);
+  animation: pg-tab-pulse 1.2s var(--pg-ease) infinite;
+}
+
+.tab-dot[hidden] {
+  display: none;
+}
+
+.tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--pg-r-xs);
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--pg-dur) var(--pg-ease), background var(--pg-dur) var(--pg-ease);
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  color: var(--vscode-foreground);
+  background: var(--pg-tint);
+}
+
+.tab-new {
+  flex: none;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 1px dashed var(--pg-border);
+  border-radius: var(--pg-r-xs);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--pg-dur) var(--pg-ease), border-color var(--pg-dur) var(--pg-ease);
+}
+
+.tab-new:hover {
+  color: var(--vscode-foreground);
+  border-color: var(--pg-border-strong);
+}
+
+@keyframes pg-tab-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+/* Stacks every tab transcript; the active one is visible, the rest hidden. */
+.view-stack {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.view-stack .transcript {
+  flex: 1;
+  min-width: 0;
+}
+
+.view-stack > .notice,
+.view-stack > .ping-result,
+.view-stack > .error-card {
+  margin: 8px 12px;
+}
+
 /* -- transcript ---------------------------------------------------------- */
 
 .transcript {
