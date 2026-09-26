@@ -257,7 +257,8 @@ export class ChatController {
         tab.streaming = false;
         if (tab.sessionId === this.activeId) this.composer.setStreaming(false);
         this.finalizeStreamedParts(tab);
-        if (message.error) this.banner(message.error, message.errorDetail, message.errorSteps);
+        // The failed turn may be a background tab's: its card belongs there.
+        if (message.error) this.banner(message.error, message.errorDetail, message.errorSteps, tab);
         break;
       }
       case "commandsUpdated": {
@@ -464,9 +465,17 @@ export class ChatController {
     }
   }
 
-  private appendUserTurn(tab: TabState, prompt: string): void {
+  /** A tab gained content. Only the active tab may become visible: showTab
+   *  owns visibility, and unhiding a background transcript renders it beside
+   *  the active one in the view stack. */
+  private revealIfActive(tab: TabState): void {
+    if (tab.sessionId !== this.activeId) return;
     tab.transcript.hidden = false;
     this.emptyState.hidden = true;
+  }
+
+  private appendUserTurn(tab: TabState, prompt: string): void {
+    this.revealIfActive(tab);
     const turn = document.createElement("div");
     turn.className = "turn user";
     const bubble = document.createElement("div");
@@ -483,8 +492,7 @@ export class ChatController {
     if (last instanceof HTMLElement && last.classList.contains("turn") && last.classList.contains("agent")) {
       return last;
     }
-    tab.transcript.hidden = false;
-    this.emptyState.hidden = true;
+    this.revealIfActive(tab);
     const turn = document.createElement("div");
     turn.className = "turn agent";
     tab.transcript.append(turn);
@@ -604,8 +612,7 @@ export class ChatController {
     const el = document.createElement("div");
     el.className = "notice";
     el.textContent = text;
-    tab.transcript.hidden = false;
-    if (tab.sessionId === this.activeId) this.emptyState.hidden = true;
+    this.revealIfActive(tab);
     tab.transcript.append(el);
     this.scrollToBottom(tab);
   }
@@ -633,7 +640,7 @@ export class ChatController {
     this.appendStandaloneOrActive(el);
   }
 
-  private banner(message: string, detail?: string, steps?: readonly string[]): void {
+  private banner(message: string, detail?: string, steps?: readonly string[], tab?: TabState): void {
     const el = document.createElement("section");
     el.className = "error-card";
     el.setAttribute("role", "alert");
@@ -686,16 +693,15 @@ export class ChatController {
     actions.append(settings, logs);
     el.append(actions);
 
-    this.appendStandaloneOrActive(el);
+    this.appendStandaloneOrActive(el, tab);
   }
 
-  /** Errors and ping results land in the active tab's transcript, or in the
-   *  view stack when no session is open at all. */
-  private appendStandaloneOrActive(el: HTMLElement): void {
-    const tab = this.activeId ? this.tabs.get(this.activeId) : undefined;
+  /** Errors and ping results land in the given tab (the session they belong
+   *  to), else the active tab, else the view stack when no session is open. */
+  private appendStandaloneOrActive(el: HTMLElement, target?: TabState): void {
+    const tab = target ?? (this.activeId ? this.tabs.get(this.activeId) : undefined);
     if (tab) {
-      tab.transcript.hidden = false;
-      this.emptyState.hidden = true;
+      this.revealIfActive(tab);
       tab.transcript.append(el);
       this.scrollToBottom(tab);
     } else {

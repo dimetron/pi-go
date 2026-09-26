@@ -78,13 +78,19 @@ describe("TranscriptStore writers", () => {
 
   it("appendMessageChunk merges consecutive chunks of the same turn", () => {
     const t = store();
-    // Without a message id, chunks append to the same agent turn as separate
-    // text parts (merge-on-turn, not merge-into-one-string).
-    t.appendMessageChunk("s1", "agent", "hel", undefined);
-    t.appendMessageChunk("s1", "agent", "lo", undefined);
+    // Without a message id, chunks merge into the trailing text part: a chunk
+    // boundary is not a paragraph boundary (it splits words and **bold**).
+    t.appendMessageChunk("s1", "agent", "**hel", undefined);
+    t.appendMessageChunk("s1", "agent", "lo**", undefined);
     let turns = t.snapshot("s1");
     expect(turns).toHaveLength(1);
-    expect((turns[0] as { parts: { text: string }[] }).parts.map((p) => p.text)).toEqual(["hel", "lo"]);
+    expect((turns[0] as { parts: { text: string }[] }).parts.map((p) => p.text)).toEqual(["**hello**"]);
+
+    // A tool call between chunks keeps them as separate parts around it.
+    t.upsertToolCall("s1", { toolCallId: "t1" } as Parameters<typeof t.upsertToolCall>[1]);
+    t.appendMessageChunk("s1", "agent", "after", undefined);
+    turns = t.snapshot("s1");
+    expect((turns[0] as { parts: { kind: string }[] }).parts.map((p) => p.kind)).toEqual(["text", "tool", "text"]);
 
     // a first message id starts a new agent turn (no previous id on record)
     t.appendMessageChunk("s1", "agent", "!", "m1");
@@ -94,7 +100,7 @@ describe("TranscriptStore writers", () => {
     t.appendMessageChunk("s1", "agent", "?", "m1");
     turns = t.snapshot("s1");
     expect(turns).toHaveLength(2);
-    expect((turns[1] as { parts: { text: string }[] }).parts.map((p) => p.text)).toEqual(["!", "?"]);
+    expect((turns[1] as { parts: { text: string }[] }).parts.map((p) => p.text)).toEqual(["!?"]);
 
     // a new message id starts another agent turn
     t.appendMessageChunk("s1", "agent", "next", "m2");
