@@ -59,6 +59,22 @@ export interface StateMessage {
   caps: { embeddedContext: boolean };
 }
 
+/** One open chat tab — a live view over a single session. */
+export interface TabInfo {
+  sessionId: string;
+  /** Display title; undefined → "Untitled". */
+  title?: string;
+  streaming: boolean;
+}
+
+/** The open-tab set changed; the strip must match this list exactly. */
+export interface TabsMessage {
+  type: "tabs";
+  tabs: TabInfo[];
+  /** The tab to show; undefined when no tabs are open. */
+  activeSessionId?: string;
+}
+
 export interface ReplayStartedMessage {
   type: "replayStarted";
   sessionId: string;
@@ -126,10 +142,13 @@ export interface PingResultMessage {
   detail: string;
 }
 
-/** Non-failure inline notice (e.g. skipped oversized attachments). */
+/** Non-failure inline notice (e.g. skipped oversized attachments). When
+ *  sessionId is set the notice belongs to that tab only; without one it is a
+ *  global banner (ping results, spawn errors). */
 export interface NoticeMessage {
   type: "notice";
   text: string;
+  sessionId?: string;
 }
 
 export interface AttachmentsAddedMessage {
@@ -139,6 +158,7 @@ export interface AttachmentsAddedMessage {
 
 export type HostToWebview =
   | StateMessage
+  | TabsMessage
   | ReplayStartedMessage
   | UserTurnMessage
   | AgentChunkMessage
@@ -170,6 +190,18 @@ export interface PromptMessage {
 
 export interface NewSessionMessage {
   type: "newSession";
+}
+
+/** Switch the visible tab; the host replies with a state message. */
+export interface ActivateTabMessage {
+  type: "activateTab";
+  sessionId: string;
+}
+
+/** Close a tab: cancels its in-flight prompt and drops the chat view of it. */
+export interface CloseTabMessage {
+  type: "closeTab";
+  sessionId: string;
 }
 
 export interface OpenSessionMessage {
@@ -214,6 +246,8 @@ export type WebviewToHost =
   | { type: "showHistory" }
   | PromptMessage
   | NewSessionMessage
+  | ActivateTabMessage
+  | CloseTabMessage
   | OpenSessionMessage
   | CancelMessage
   | DraftMessage

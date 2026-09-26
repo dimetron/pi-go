@@ -105,6 +105,11 @@ export class Composer {
     this.autosize();
   }
 
+  /** Current draft text (used to save a per-tab draft on tab switch). */
+  value(): string {
+    return this.textarea.value;
+  }
+
   focus(): void {
     this.textarea.focus();
   }
