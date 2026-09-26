@@ -8,6 +8,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/provider"
+	"github.com/dimetron/pi-go/internal/testenv"
 	"github.com/dimetron/pi-go/internal/tui"
 )
 
@@ -43,7 +44,7 @@ func TestSetupCmdIsRegistered(t *testing.T) {
 // persists it.
 func TestSaveSetupResultWritesKeyAndRole(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Chdir(t.TempDir())
 
 	entry, ok := lookupSetupProvider("anthropic")
@@ -88,7 +89,7 @@ func TestSaveSetupResultWritesKeyAndRole(t *testing.T) {
 // wizard collected. Checking the file bytes alone would pass even if the role
 // were written in a shape ResolveRole cannot read.
 func TestSaveSetupResultRoundTripsThroughResolveRole(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Chdir(t.TempDir())
 
 	entry, _ := lookupSetupProvider("xai")
@@ -122,7 +123,7 @@ func TestSaveSetupResultRoundTripsThroughResolveRole(t *testing.T) {
 // empty entry in .env.
 func TestSaveSetupResultSkipsKeyForLocalProvider(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Chdir(t.TempDir())
 
 	entry, ok := lookupSetupProvider("ollama")
@@ -273,7 +274,7 @@ func TestCurrentProviderReflectsConfig(t *testing.T) {
 // TestRunSetupRefusesWithoutTerminal proves the command fails with a usable
 // message instead of hanging when there is no TTY to draw on.
 func TestRunSetupRefusesWithoutTerminal(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Chdir(t.TempDir())
 
 	cmd := newSetupCmd()
@@ -330,7 +331,7 @@ func TestSetupHasTTYRejectsDevNull(t *testing.T) {
 // on an open gateway does not erase a key set earlier.
 func TestSaveSetupResultOptionalGatewayKey(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Chdir(t.TempDir())
 	envPath := filepath.Join(home, ".pi-go", ".env")
 

@@ -379,9 +379,6 @@ func (w *SetupWizard) handleModelKey(msg tea.KeyPressMsg, key tea.Key) (tea.Mode
 	if list := w.filtered(); len(list) > 0 && w.candIdx >= len(list) {
 		w.candIdx = len(list) - 1
 	}
-	if w.candIdx < 0 {
-		w.candIdx = 0
-	}
 	return w, cmd
 }
 

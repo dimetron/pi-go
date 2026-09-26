@@ -143,12 +143,25 @@ Examples:
 	return cmd
 }
 
+// setupTerminal and runSetupWizard are the two calls that need a real
+// terminal. They are variables so a test can drive runSetup end to end — the
+// config load, the wizard's result and what gets saved and printed — without
+// one.
+var (
+	setupTerminal  = setupHasTTY
+	runSetupWizard = func(cmd *cobra.Command, w *tui.SetupWizard) error {
+		opts := append(tui.SetupProgramOptions(), tea.WithContext(cmd.Context()))
+		_, err := tea.NewProgram(w, opts...).Run()
+		return err
+	}
+)
+
 func runSetup(cmd *cobra.Command, _ []string) error {
 	// Load .env first so an already-configured key shows up as the current
 	// state rather than reading as unset.
 	loadDotEnv()
 
-	if !setupHasTTY() {
+	if !setupTerminal() {
 		return fmt.Errorf("pi setup needs a terminal; on a headless host set the key directly, e.g. ANTHROPIC_API_KEY=... in ~/.pi-go/.env")
 	}
 
@@ -169,9 +182,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	w := tui.NewSetupWizard(wizardCfg, tui.PaletteForName(cfg.Theme))
 
-	opts := append(tui.SetupProgramOptions(), tea.WithContext(cmd.Context()))
-	p := tea.NewProgram(w, opts...)
-	if _, err := p.Run(); err != nil {
+	if err := runSetupWizard(cmd, w); err != nil {
 		return fmt.Errorf("running setup wizard: %w", err)
 	}
 
