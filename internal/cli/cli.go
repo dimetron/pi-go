@@ -281,6 +281,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newMemoryCmd())
 	cmd.AddCommand(newModelCmd())
 	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newSetupCmd())
 	cmd.AddCommand(newACPServerCmd())
 	cmd.AddCommand(newA2AServerCmd())
 	cmd.AddCommand(newUpgradeCmd())

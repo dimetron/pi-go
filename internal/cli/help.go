@@ -87,12 +87,16 @@ func writeRoleSummary(w io.Writer) {
 // identity. Calling that MISSING would report a failure that does not happen.
 //
 // agentgateway is a local OpenAI-compatible gateway and needs no credential
-// either; AGENTGATEWAY_API_KEY is only for a gateway that requires one.
+// either; AGENTGATEWAY_API_KEY is only for a gateway that requires one, and is
+// reported as set when present so a key saved by `pi setup` is visible.
 func credentialStatus(prov, model string, keys map[string]string) string {
 	if prov == "ollama" && !provider.IsOllamaCloudModel(model) {
 		return "none (local daemon)"
 	}
 	if prov == "agentgateway" {
+		if _, ok := keys[prov]; ok {
+			return providerEnvVar(prov) + " (set)"
+		}
 		return "none (local gateway)"
 	}
 

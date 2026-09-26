@@ -3,7 +3,9 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"os"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -178,6 +180,25 @@ func paletteOrDark(p Palette) Palette {
 		return p
 	}
 	return darkPalette
+}
+
+// PaletteForName resolves the palette for a configured theme name, falling back
+// to the dark default for an unknown or empty name. It exists for entry points
+// that run outside a chat session — `pi setup` — which have no ThemeManager and
+// should still draw in the user's colors rather than always in the default.
+func PaletteForName(name string) Palette {
+	tm := NewThemeManager()
+	if name != "" {
+		_ = tm.SetTheme(name)
+	}
+	return paletteFor(tm.Current())
+}
+
+// SetupProgramOptions returns the terminal options a standalone program should
+// use for the wizard: the same environment and color-profile negotiation the
+// main TUI performs, so color detection is consistent between the two.
+func SetupProgramOptions() []tea.ProgramOption {
+	return terminalProgramOptions(os.Stdout, os.Environ())
 }
 
 // paletteKey fingerprints a palette so the chat render cache can invalidate

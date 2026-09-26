@@ -157,3 +157,15 @@ func TestRootExampleCoversEveryProvider(t *testing.T) {
 		}
 	}
 }
+
+// TestCredentialStatusAgentGatewayKey proves a gateway key saved by `pi setup`
+// shows as set, while an open gateway still reads as needing none.
+func TestCredentialStatusAgentGatewayKey(t *testing.T) {
+	if got := credentialStatus("agentgateway", "m", map[string]string{}); got != "none (local gateway)" {
+		t.Errorf("no key: got %q, want none (local gateway)", got)
+	}
+	got := credentialStatus("agentgateway", "m", map[string]string{"agentgateway": "gw-secret"})
+	if got != "AGENTGATEWAY_API_KEY (set)" {
+		t.Errorf("with key: got %q, want AGENTGATEWAY_API_KEY (set)", got)
+	}
+}

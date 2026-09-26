@@ -276,6 +276,20 @@ export OLLAMA_API_KEY="..."   # optional — only to reach Ollama Cloud directly
 
 A name with no recognized prefix is rejected rather than guessed at — reach for the `ollama/` prefix or the `:cloud` suffix to name an Ollama model explicitly.
 
+To configure a provider interactively instead of exporting the variable yourself:
+
+```bash
+pi setup
+```
+
+The wizard asks which provider to use, for its API key, and which model should
+be the default. It writes the key to `~/.pi-go/.env` and the provider and model
+to the `default` role in `~/.pi-go/config.json` — the same places a hand-exported
+variable and a hand-edited config land. Providers that need no credential
+(Ollama, agentgateway) skip the key step; providers pi-go has no offline catalog
+for (Ollama, agentgateway, Azure, OpenCode) have their model typed in, since only
+you know what your daemon or deployment serves.
+
 A `:cloud` tag names a model, not a destination. With `OLLAMA_API_KEY` set the
 request goes straight to `api.ollama.com`; without one it goes to the local
 daemon, which has served cloud models on your `ollama signin` identity since
