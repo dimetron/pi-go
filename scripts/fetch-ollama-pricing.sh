@@ -6,11 +6,17 @@
 # Ollama does not publish per-token rates through an API: models.dev carries
 # the ollama-cloud catalog with IDs and release dates but no cost fields, and
 # api.ollama.com/v1/models returns IDs only. The per-million-token USD rates
-# live in the two tables on the pricing page, so this script scrapes them.
+# live in the single "Model pricing" table on the pricing page, so this script
+# scrapes it.
 #
-# The snapshot has two sections:
-#   - "models": the standard rates (the table headlined "Model pricing").
-#   - "peak": rates that apply 12:00-18:00 UTC Monday to Friday.
+# The page marks the discount, not the surcharge: the plain rows are the rates
+# that apply 12:00-18:00 UTC on weekdays, and a row suffixed "(Off-Peak)" is
+# the discounted rate for outside that window and all weekend — "Off-peak
+# pricing apply outside 12:00 and 18:00 UTC on weekdays and all day on
+# weekends." The snapshot keeps the same two sections as before:
+#   - "models": the off-peak rates. A model the page gives no separate
+#     off-peak row bills at one rate all day, so it uses its plain rate.
+#   - "peak": the 12:00-18:00 UTC weekday rates (the plain rows).
 #
 # The API is OpenAI-compatible at https://api.ollama.com, so pi-go stores the
 # prices under provider name "ollama-cloud" and serves them from CostFor when
@@ -35,9 +41,10 @@ if ! command -v python3 > /dev/null 2>&1; then
   exit 1
 fi
 
-# Parse the HTML tables into the snapshot shape, and pin fetched_at to the
-# fetch date at midnight UTC so a re-fetch with unchanged data produces no
-# diff. The first table is the normal rates, the second the peak rates.
+# Parse the single "Model pricing" table into the snapshot shape, and pin
+# fetched_at to the fetch date at midnight UTC so a re-fetch with unchanged
+# data produces no diff. The page labels the discounted row, so the plain rows
+# become "peak" and the "(Off-Peak)" rows become "models".
 python3 - "$WORK/pricing.html" "$WORK/snapshot.json" <<'PY'
 import html, json, re, sys, datetime
 
@@ -52,34 +59,58 @@ def rate(cell):
         raise ValueError(f"unexpected rate cell {cell!r}")
     return float(cell[1:])
 
+def cell_text(cell):
+    return html.unescape(re.sub(r"<[^>]+>", "", cell)).strip()
+
 def parse_table(tbl):
-    rows = re.findall(r"<tr>(.*?)</tr>", tbl, re.S)
     out = {}
-    for r in rows:
+    for r in re.findall(r"<tr>(.*?)</tr>", tbl, re.S):
         cells = re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)
         if len(cells) != 4:
             continue
-        name = html.unescape(re.sub(r"<[^>]+>", "", cells[0])).strip()
+        name = cell_text(cells[0])
         if not name:
             continue
         out[name] = {
-            "input": rate(html.unescape(re.sub(r"<[^>]+>", "", cells[1])).strip()),
-            "cache_read": rate(html.unescape(re.sub(r"<[^>]+>", "", cells[2])).strip()),
-            "output": rate(html.unescape(re.sub(r"<[^>]+>", "", cells[3])).strip()),
+            "input": rate(cell_text(cells[1])),
+            "cache_read": rate(cell_text(cells[2])),
+            "output": rate(cell_text(cells[3])),
         }
     return out
 
 tables = re.findall(r"<table.*?</table>", raw, re.S)
-if len(tables) < 2:
-    sys.exit("FAILED: expected the pricing page to carry a normal and a peak table")
+if not tables:
+    sys.exit("FAILED: no table found on the pricing page — layout changed")
 
-models = parse_table(tables[0])
-peak = parse_table(tables[1])
-if not models:
+rows = parse_table(tables[0])
+if not rows:
     sys.exit("FAILED: no priced models found on the pricing page")
-# The peak table only lists a subset; an empty one means the page changed.
-if not peak:
-    sys.exit("FAILED: peak pricing table parsed to nothing — page layout changed")
+
+# The page marks the discount, not the surcharge: plain rows are the weekday
+# peak (12:00-18:00 UTC) rates, "(Off-Peak)" rows the discounted ones.
+off_peak_re = re.compile(r"\s*\(Off-Peak\)\s*$", re.I)
+plain = {}
+off_peak = {}
+for name, rates in rows.items():
+    if off_peak_re.search(name):
+        off_peak[off_peak_re.sub("", name)] = rates
+    else:
+        plain[name] = rates
+
+if not plain:
+    sys.exit("FAILED: no plain-priced rows on the pricing page — layout changed")
+
+# An off-peak row only discounts a model that also has a plain row; one without
+# means the labels were restructured and the mapping below is no longer sound.
+orphans = sorted(set(off_peak) - set(plain))
+if orphans:
+    sys.exit("FAILED: off-peak rows with no plain rate: " + ", ".join(orphans))
+
+# A model has a distinct peak rate exactly when the page discounts it. "models"
+# is the off-peak rate where there is one, otherwise the plain rate, so a model
+# billed the same rate all day still prices correctly.
+models = {name: off_peak.get(name, rates) for name, rates in plain.items()}
+peak = {name: plain[name] for name in off_peak}
 
 out = {
     "source": "ollama.com/pricing",

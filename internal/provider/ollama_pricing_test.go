@@ -17,12 +17,12 @@ func TestOllamaCloudCost(t *testing.T) {
 		t.Errorf("OllamaCloudCost(glm-5.3) CacheRead = %v, want 0.26", pm.CacheRead)
 	}
 	// Prefix match: API IDs with a size or date tag resolve to the base entry.
-	pm, ok = OllamaCloudCost("deepseek-v4-flash:0731")
+	pm, ok = OllamaCloudCost("deepseek-v4-pro:0813")
 	if !ok {
-		t.Fatal("OllamaCloudCost(deepseek-v4-flash:0731) not found")
+		t.Fatal("OllamaCloudCost(deepseek-v4-pro:0813) not found")
 	}
-	if pm.Input != 0.22 || pm.Output != 0.66 {
-		t.Errorf("OllamaCloudCost(deepseek-v4-flash:0731) = %v/%v, want 0.22/0.66", pm.Input, pm.Output)
+	if pm.Input != 0.66 || pm.Output != 1.98 {
+		t.Errorf("OllamaCloudCost(deepseek-v4-pro:0813) = %v/%v, want 0.66/1.98", pm.Input, pm.Output)
 	}
 	pm, ok = OllamaCloudCost("gemma4:31b")
 	if !ok {
@@ -41,20 +41,29 @@ func TestOllamaCloudCost(t *testing.T) {
 }
 
 func TestOllamaCloudPeakCost(t *testing.T) {
-	// Peak rates apply to the models the peak table lists.
-	pm, ok := OllamaCloudPeakCost("deepseek-v4-flash")
+	// Peak rates apply to the models the page discounts with an "(Off-Peak)"
+	// row: the plain row is the 12:00-18:00 UTC weekday rate.
+	pm, ok := OllamaCloudPeakCost("deepseek-v4-pro")
 	if !ok {
-		t.Fatal("OllamaCloudPeakCost(deepseek-v4-flash) not found")
+		t.Fatal("OllamaCloudPeakCost(deepseek-v4-pro) not found")
 	}
-	if pm.Input != 0.44 || pm.Output != 1.32 {
-		t.Errorf("OllamaCloudPeakCost(deepseek-v4-flash) = %v/%v, want 0.44/1.32", pm.Input, pm.Output)
+	if pm.Input != 1.32 || pm.Output != 3.96 {
+		t.Errorf("OllamaCloudPeakCost(deepseek-v4-pro) = %v/%v, want 1.32/3.96", pm.Input, pm.Output)
 	}
-	// Models outside the peak table are not found there but price normally.
+	// A model the page bills the same rate all day is not in the peak table,
+	// but it still prices normally.
 	if _, ok := OllamaCloudPeakCost("glm-5.3"); ok {
-		t.Error("OllamaCloudPeakCost(glm-5.3) should not be found: it is not in the peak table")
+		t.Error("OllamaCloudPeakCost(glm-5.3) should not be found: it has no separate peak rate")
 	}
 	if _, ok := OllamaCloudCost("glm-5.3"); !ok {
 		t.Error("OllamaCloudCost(glm-5.3) should still be found")
+	}
+	// The discounted rate must be the one stored for normal pricing: if the
+	// scraper's row labels invert, this is the assertion that catches it.
+	peak, _ := OllamaCloudPeakCost("deepseek-v4-pro")
+	off, _ := OllamaCloudCost("deepseek-v4-pro")
+	if !(off.Input < peak.Input) {
+		t.Errorf("off-peak input %v should be cheaper than peak %v", off.Input, peak.Input)
 	}
 }
 

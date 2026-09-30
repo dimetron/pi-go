@@ -43,15 +43,19 @@ Usage:
   (`os.UserCacheDir()/pi-go/models/modelsdev-pricing.json`) on demand.
   Regenerate the embedded snapshot with `make fetch-modelsdev-pricing`.
 
-- `ollama-cloud-pricing.json` is a snapshot of the two tables on
-  https://ollama.com/pricing: standard rates and the 12:00-18:00 UTC
-  Monday-Friday peak rates, per million tokens. It prices models served by
-  Ollama Cloud (api.ollama.com); a local daemon runs the same weights for
-  free, so plain `ollama` lookups stay unpriced. Ollama publishes no pricing
-  API — models.dev's `ollama-cloud` entry carries IDs and release dates but no
-  cost fields, and `api.ollama.com/v1/models` returns IDs only — so this file
-  is scraped from the page by `make fetch-ollama-pricing`. Read through
-  `OllamaCloudCost` / `OllamaCloudPeakCost` in `ollama_pricing.go`.
+- `ollama-cloud-pricing.json` is a snapshot of the "Model pricing" table on
+  https://ollama.com/pricing, per million tokens. The page marks the discount
+  rather than the surcharge: its plain rows are the rates for 12:00-18:00 UTC on
+  weekdays and a row suffixed `(Off-Peak)` is the discounted rate for outside
+  that window and all weekend. The snapshot's two sections follow that split —
+  `models` is the off-peak rate (a model billed the same rate all day uses its
+  plain row), and `peak` is the weekday rate for the models the page discounts.
+  It prices models served by Ollama Cloud (api.ollama.com); a local daemon runs
+  the same weights for free, so plain `ollama` lookups stay unpriced. Ollama
+  publishes no pricing API — models.dev's `ollama-cloud` entry carries IDs and
+  release dates but no cost fields, and `api.ollama.com/v1/models` returns IDs
+  only — so this file is scraped from the page by `make fetch-ollama-pricing`.
+  Read through `OllamaCloudCost` / `OllamaCloudPeakCost` in `ollama_pricing.go`.
 
 Update process:
 1. Refresh the two `llm-prices-*.json` files from upstream.

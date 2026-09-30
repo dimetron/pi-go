@@ -1,6 +1,6 @@
 {
   "provider": "anthropic",
-  "fetched_at": "2026-09-05T00:00:00Z",
+  "fetched_at": "2026-09-30T00:00:00Z",
   "models": [
     {
       "id": "claude-fable-5",
@@ -43,6 +43,11 @@
       "release_date": "2026-07-24"
     },
     {
+      "id": "claude-opus-5-5",
+      "owned_by": "model",
+      "release_date": "2026-09-22"
+    },
+    {
       "id": "claude-sonnet-4-5-20250929",
       "owned_by": "model",
       "release_date": "2025-09-29"
@@ -56,6 +61,11 @@
       "id": "claude-sonnet-5",
       "owned_by": "model",
       "release_date": "2026-06-29"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "owned_by": "model",
+      "release_date": "2026-09-28"
     }
   ]
 }
