@@ -83,27 +83,29 @@ Keybinding: **cmd+alt+u** (ctrl+alt+u elsewhere) focuses the chat view.
 
 The chat follows whatever color theme is active and layers the
 [Pi-Go Design System](https://claude.ai/design/p/7009407c-e035-4157-bc52-4d4544f87be9)
-on top: neon cyan / magenta accents, sharp 2px/4px corners, gradient
+on top: Catppuccin Sky / Pink accents, sharp 2px/4px corners, gradient
 dividers, and one emoji badge per tool call (🔍 search, 📖 read, ✏️ edit,
 ⚡ shell…). Light themes get deeper inks; high-contrast themes get the theme's
 own colors only.
 
 ## Color themes
 
-Two workbench themes in the Pi-Go palette — pick one with
-**Preferences: Color Theme**:
+Two workbench themes in the [Catppuccin palette](https://catppuccin.com/palette/)
+— pick one with **Preferences: Color Theme**:
 
 | Theme | Type | Look |
 |---|---|---|
-| **Pi-Go Neon** | dark | `#0a0a12` deep space, cyan `#00f0ff` accent, magenta selection, neon syntax |
-| **Pi-Go Daylight** | light | `#f7f8fc` page, the same hues as deeper inks that clear WCAG AA |
+| **Pi-Go Neon** | dark | Catppuccin Mocha exactly: `#1e1e2e` base, Sky `#89dceb` accent, Pink badges |
+| **Pi-Go Daylight** | light | Catppuccin Latte, with accent inks deepened just enough to clear WCAG AA on `#eff1f5` |
 
 Both are compiled with [Catppuccin for VS Code](https://github.com/catppuccin/vscode)
 (MIT, © 2021 Catppuccin): its generator derives ~565 workbench colors, the
-TextMate rules and the semantic-token rules from a 26-color palette, and
-`scripts/themes.mjs` feeds it the Pi-Go palettes plus a few brand signatures
-(cyan cursor and tab borders, magenta selection, Pi-Go terminal colors). The
-generated JSON in `themes/` is committed; after changing a palette run:
+TextMate rules and the semantic-token rules from a 26-color palette.
+`scripts/themes.mjs` reads the palette from `@catppuccin/palette`, darkens any
+accent that fails AA as text (none in Mocha; most of Latte's), and adds a few
+Pi-Go touches in Catppuccin hues (Sky/Blue cursor, Pink badges). The names
+stay "Neon"/"Daylight" because VS Code remembers the selected theme by name.
+The generated JSON in `themes/` is committed; after changing a palette run:
 
 ```bash
 bun run themes

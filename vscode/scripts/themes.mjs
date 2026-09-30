@@ -2,198 +2,134 @@
 //
 // Catppuccin (https://github.com/catppuccin/vscode, MIT) derives ~560
 // workbench colors, ~180 TextMate rules and its semantic-token rules from a
-// 26-color palette. We keep that machinery and swap in the Pi-Go Design
-// System palette (https://claude.ai/design/p/7009407c-e035-4157-bc52-4d4544f87be9):
-// deep-space navy surfaces, cyan as the accent, magenta / purple / green /
-// yellow / orange neon hues. A handful of workbench colors are then pinned
-// to the brand's signatures (cyan cursor, magenta selection, gradient-era
-// borders) that the palette mapping alone cannot express.
+// 26-color palette. Both Pi-Go themes use Catppuccin's own palettes as-is
+// (https://catppuccin.com/palette/, read from @catppuccin/palette rather than
+// copied): Mocha for the dark theme, Latte for the light one. Catppuccin's
+// derived UI, syntax and terminal colors are kept; Pi-Go only picks the accent
+// and adds a few brand touches in Catppuccin hues — Sky/Blue where the old
+// neon theme used cyan, Pink where it used magenta.
+//
+// The theme labels stay "Pi-Go Neon" / "Pi-Go Daylight": VS Code stores the
+// selected theme by label, so renaming would silently reset it for users.
 //
 // Regenerate with `bun run themes` (or `node scripts/themes.mjs`). The
 // generated JSON is committed; test/themes.test.ts fails when it drifts.
 
+import { flavors } from "@catppuccin/palette";
 import { compile } from "@catppuccin/vscode";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** A Catppuccin flavor as { role: "#rrggbb" }. */
+function flavorHexes(flavor) {
+  return Object.fromEntries(Object.entries(flavors[flavor].colors).map(([role, c]) => [role, c.hex]));
+}
+
+/** The colors Catppuccin draws text with (syntax, links, diagnostics). */
+export const ACCENT_ROLES = [
+  "rosewater", "flamingo", "pink", "mauve", "red", "maroon", "peach",
+  "yellow", "green", "teal", "sky", "sapphire", "blue", "lavender",
+];
+
+/** WCAG AA for normal text; test/themes.test.ts holds syntax to it. */
+export const AA = 4.5;
+
+function luminance(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+export function contrast(a, b) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Darken hex in 1% steps (same hue, same channel ratios) until it reaches
+ *  AA on bg. A color that already passes comes back unchanged. */
+function inkForAA(hex, bg) {
+  const rgb = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  for (let k = 100; k > 0; k--) {
+    const out = `#${rgb.map((v) => Math.round((v * k) / 100).toString(16).padStart(2, "0")).join("")}`;
+    if (contrast(out, bg) >= AA) return out;
+  }
+  return hex;
+}
+
 /**
- * Pi-Go palettes in Catppuccin's role names. Syntax roles as Catppuccin uses
- * them: mauve = keywords, blue = functions + UI accent, green = strings,
- * yellow = types, peach = numbers/constants, maroon = parameters,
- * lavender = properties, sky = operators + find highlights, overlay2 =
- * comments, red = errors, pink = the brand's magenta.
+ * The palette each theme renders with: Catppuccin's, except that an accent
+ * color that would fail AA as text on the flavor's base is deepened just
+ * enough to pass. Mocha's pastels all pass on its dark base, so the dark
+ * theme is Mocha exactly. Latte trades contrast for softness (green strings
+ * are 2.96:1), so its failing inks are deepened; surfaces and text are
+ * untouched.
  */
+function readablePalette(flavor) {
+  const hexes = flavorHexes(flavor);
+  const out = { ...hexes };
+  for (const role of ACCENT_ROLES) out[role] = inkForAA(hexes[role], hexes.base);
+  return out;
+}
+
 export const PALETTES = {
-  // Dark — the design system as specified (#0a0a12 page, #00f0ff primary).
-  neon: {
-    rosewater: "#ffc4e8",
-    flamingo: "#ff8ad8",
-    pink: "#ff00aa",
-    mauve: "#b347ff",
-    red: "#ff2e6e",
-    maroon: "#ff7a9c",
-    peach: "#ff6a00",
-    yellow: "#ffe600",
-    green: "#00ff88",
-    teal: "#2dffd2",
-    sky: "#5cd7ff",
-    sapphire: "#36a3ff",
-    blue: "#00f0ff",
-    lavender: "#a8b4ff",
-    text: "#e0e0f0",
-    subtext1: "#c4c4dc",
-    subtext0: "#a4a4c4",
-    overlay2: "#8888aa",
-    overlay1: "#6e6e92",
-    overlay0: "#555577",
-    surface2: "#3a3a58",
-    surface1: "#262640",
-    surface0: "#17172b",
-    base: "#0a0a12",
-    mantle: "#07070d",
-    crust: "#040408",
-  },
-  // Light — same hues pushed to deeper inks so they clear WCAG AA on a
-  // near-white page; the chat webview uses the same inks (media/chat.css).
-  daylight: {
-    rosewater: "#b3476f",
-    flamingo: "#c0507a",
-    pink: "#c2007f",
-    mauve: "#7b2fd0",
-    red: "#d1004f",
-    maroon: "#b8385f",
-    peach: "#c24e00",
-    yellow: "#8f7200",
-    green: "#00805a",
-    teal: "#00806f",
-    sky: "#0072b0",
-    sapphire: "#005fbd",
-    blue: "#00758f",
-    lavender: "#4f5bd5",
-    text: "#1b1e3a",
-    subtext1: "#383c5e",
-    subtext0: "#4c5174",
-    overlay2: "#5f6488",
-    overlay1: "#7b80a2",
-    overlay0: "#969bba",
-    surface2: "#b6bbd5",
-    surface1: "#cdd1e5",
-    surface0: "#dfe2f0",
-    base: "#f7f8fc",
-    mantle: "#eef0f7",
-    crust: "#e4e7f2",
-  },
+  neon: readablePalette("mocha"),
+  daylight: readablePalette("latte"),
 };
 
-/** Brand signatures layered over Catppuccin's derived UI colors. */
-const SIGNATURES = {
-  neon: {
-    "editorCursor.foreground": "#00f0ff",
-    "terminalCursor.foreground": "#00f0ff",
-    "selection.background": "#ff00aa55",
-    "editor.selectionBackground": "#ff00aa40",
-    "editor.inactiveSelectionBackground": "#ff00aa20",
-    "terminal.selectionBackground": "#ff00aa40",
-    "focusBorder": "#00f0ff80",
-    "tab.activeBorderTop": "#00f0ff",
-    "tab.activeBorder": "#00000000",
-    "panelTitle.activeBorder": "#00f0ff",
-    "activityBar.activeBorder": "#00f0ff",
-    "button.background": "#00f0ff",
-    "button.hoverBackground": "#7ff8ff",
-    "button.foreground": "#0a0a12",
-    "badge.background": "#ff00aa",
-    "badge.foreground": "#0a0a12",
-    "activityBarBadge.background": "#ff00aa",
-    "activityBarBadge.foreground": "#0a0a12",
-    "statusBarItem.remoteBackground": "#00f0ff",
-    "statusBarItem.remoteForeground": "#0a0a12",
-    "progressBar.background": "#00f0ff",
-    "editorLineNumber.activeForeground": "#00f0ff",
-    "list.highlightForeground": "#00f0ff",
-    "textLink.foreground": "#00f0ff",
-    "textLink.activeForeground": "#ff00aa",
-    "errorForeground": "#ff2e6e",
-    "chat.requestBorder": "#00f0ff26",
-    "chat.requestBackground": "#00f0ff0d",
-  },
-  daylight: {
-    "editorCursor.foreground": "#00758f",
-    "terminalCursor.foreground": "#00758f",
-    "selection.background": "#c2007f33",
-    "editor.selectionBackground": "#c2007f26",
-    "editor.inactiveSelectionBackground": "#c2007f14",
-    "terminal.selectionBackground": "#c2007f26",
-    "tab.activeBorderTop": "#00758f",
-    "tab.activeBorder": "#00000000",
-    "panelTitle.activeBorder": "#00758f",
-    "activityBar.activeBorder": "#00758f",
-    "button.foreground": "#ffffff",
-    "badge.background": "#c2007f",
-    "badge.foreground": "#ffffff",
-    "activityBarBadge.background": "#c2007f",
-    "activityBarBadge.foreground": "#ffffff",
-    "editorLineNumber.activeForeground": "#00758f",
-    "textLink.activeForeground": "#c2007f",
-    "chat.requestBorder": "#00758f33",
-    "chat.requestBackground": "#00758f0d",
-  },
-};
-
-/** Bright ANSI variants; the normal ones come straight from the palette. */
-const ANSI_BRIGHT = {
-  neon: { red: "#ff5577", green: "#5cffb0", yellow: "#fff27a", blue: "#7fa2ff", magenta: "#ff5cc8", cyan: "#7ff8ff", white: "#ffffff" },
-  daylight: { red: "#e8336e", green: "#00a070", yellow: "#a88600", blue: "#2d7fe0", magenta: "#d63399", cyan: "#0099bb", white: "#383c5e" },
-};
+/** Only the colors that differ from the published flavor, for colorOverrides. */
+function overrides(id, flavor) {
+  const published = flavorHexes(flavor);
+  return Object.fromEntries(Object.entries(PALETTES[id]).filter(([role, hex]) => published[role] !== hex));
+}
 
 /**
- * Terminal colors. Catppuccin reads these from its own ANSI table, which
- * colorOverrides does not reach, so they are derived from the Pi-Go palette
- * here or the terminal keeps Catppuccin's pastels.
+ * Brand touches over Catppuccin's derived colors, all in the flavor's own
+ * hues. Kept deliberately small: everything else is Catppuccin's choice.
  */
-function ansiColors(id) {
+function signatures(id) {
   const p = PALETTES[id];
-  const bright = ANSI_BRIGHT[id];
-  const dark = id !== "daylight";
+  const accent = id === "neon" ? p.sky : p.blue;
+  const onPink = id === "neon" ? p.crust : p.base;
+  // Catppuccin letters Latte buttons in Crust, 3.9:1 on Blue; take the first
+  // light ink that reaches AA instead.
+  const onAccent = [p.crust, p.base, "#ffffff"].find((ink) => contrast(ink, accent) >= AA) ?? "#ffffff";
   return {
-    "terminal.ansiBlack": dark ? p.surface1 : p.subtext1,
-    "terminal.ansiRed": p.red,
-    "terminal.ansiGreen": p.green,
-    "terminal.ansiYellow": p.yellow,
-    "terminal.ansiBlue": p.sapphire,
-    "terminal.ansiMagenta": p.pink,
-    "terminal.ansiCyan": p.blue,
-    "terminal.ansiWhite": dark ? p.subtext1 : p.surface2,
-    "terminal.ansiBrightBlack": dark ? p.surface2 : p.subtext0,
-    "terminal.ansiBrightRed": bright.red,
-    "terminal.ansiBrightGreen": bright.green,
-    "terminal.ansiBrightYellow": bright.yellow,
-    "terminal.ansiBrightBlue": bright.blue,
-    "terminal.ansiBrightMagenta": bright.magenta,
-    "terminal.ansiBrightCyan": bright.cyan,
-    "terminal.ansiBrightWhite": bright.white,
+    "button.foreground": onAccent,
+    "editorCursor.foreground": accent,
+    "terminalCursor.foreground": accent,
+    "badge.background": p.pink,
+    "badge.foreground": onPink,
+    "activityBarBadge.background": p.pink,
+    "activityBarBadge.foreground": onPink,
+    "textLink.activeForeground": p.pink,
+    "chat.requestBorder": `${accent}33`,
+    "chat.requestBackground": `${accent}0d`,
   };
 }
 
-/** The themes this extension contributes, in package.json order. */
+/** The themes this extension contributes, in package.json order. Latte's Sky
+ *  is too light to carry button text (2.6:1 on base), so the light theme
+ *  accents with Blue, which Catppuccin designs for that role. */
 export const THEMES = [
-  { id: "neon", label: "Pi-Go Neon", flavor: "mocha", file: "pi-go-neon-color-theme.json" },
-  { id: "daylight", label: "Pi-Go Daylight", flavor: "latte", file: "pi-go-daylight-color-theme.json" },
+  { id: "neon", label: "Pi-Go Neon", flavor: "mocha", accent: "sky", file: "pi-go-neon-color-theme.json" },
+  { id: "daylight", label: "Pi-Go Daylight", flavor: "latte", accent: "blue", file: "pi-go-daylight-color-theme.json" },
 ];
 
 /** Compile one Pi-Go theme to the JSON VS Code loads. */
-export function buildTheme({ id, label, flavor }) {
+export function buildTheme({ id, label, flavor, accent }) {
   const theme = compile(flavor, {
-    accent: "blue",
+    accent,
     italicComments: true,
     italicKeywords: false,
     boldKeywords: true,
     workbenchMode: "default",
     bracketMode: "rainbow",
     extraBordersEnabled: true,
-    colorOverrides: { [flavor]: PALETTES[id] },
-    customUIColors: { [flavor]: { ...ansiColors(id), ...SIGNATURES[id] } },
+    colorOverrides: { [flavor]: overrides(id, flavor) },
+    customUIColors: { [flavor]: signatures(id) },
   });
   return {
     $schema: "vscode://schemas/color-theme",

@@ -1,32 +1,40 @@
 /* pi-go chat webview. Surfaces and text come from --vscode-* variables so the
    view follows the workbench theme (light, dark, high contrast). The --pg-*
-   brand tokens below layer the Pi-Go design system on top: neon cyan /
-   magenta / purple accents, sharp 2px/4px radii, gradient dividers and the
-   signature easing. Glows only appear in dark themes; high-contrast themes
-   fall back to the theme's own focus and foreground colors. The full
-   cyberpunk look ships as the "Pi-Go Neon" color theme (themes/).
+   brand tokens below layer the Pi-Go accents on top, in Catppuccin hues
+   (https://catppuccin.com/palette/) to match the bundled themes: Mocha on
+   dark, Latte (AA-deepened, see scripts/themes.mjs) on light. The token
+   names keep their roles — "cyan" is Sky, "magenta" is Pink, "purple" is
+   Mauve. Glows only appear in dark themes; high-contrast themes fall back to
+   the theme's own focus and foreground colors.
 
    The tokens live on body, not :root: derived tokens like --pg-accent
    resolve var() where they are declared, so they must sit on the same
    element as the body.vscode-* overrides or they keep the dark values. */
 
 body {
-  --pg-cyan: #00f0ff;
-  --pg-magenta: #ff00aa;
-  --pg-purple: #b347ff;
-  --pg-green: #00ff88;
-  --pg-yellow: #ffe600;
+  /* Catppuccin Mocha: sky, pink, mauve, green, yellow, crust. */
+  --pg-cyan: #89dceb;
+  --pg-magenta: #f5c2e7;
+  --pg-purple: #cba6f7;
+  --pg-green: #a6e3a1;
+  --pg-yellow: #f9e2af;
+  --pg-crust: #11111b;
   --pg-accent: var(--pg-cyan);
   --pg-accent-2: var(--pg-magenta);
-  --pg-on-accent: #0a0a12;
+  --pg-on-accent: var(--pg-crust);
   --pg-grad: linear-gradient(135deg, var(--pg-accent), var(--pg-accent-2));
   --pg-grad-button: linear-gradient(135deg, var(--pg-accent), var(--pg-purple));
   --pg-border: color-mix(in srgb, var(--pg-accent) 16%, transparent);
   --pg-border-strong: color-mix(in srgb, var(--pg-accent) 38%, transparent);
   --pg-tint: color-mix(in srgb, var(--pg-accent) 7%, transparent);
-  --pg-glow: 0 0 14px rgba(0, 240, 255, .22), 0 0 40px rgba(0, 240, 255, .07);
+  --pg-glow: 0 0 12px rgba(137, 220, 235, .16), 0 0 32px rgba(137, 220, 235, .05);
   --pg-divider: linear-gradient(90deg, transparent, var(--pg-accent), var(--pg-accent-2), transparent);
   --pg-mono: "JetBrains Mono", var(--vscode-editor-font-family), ui-monospace, monospace;
+  /* Secondary text tiers, mixed from the foreground rather than taken from
+     descriptionForeground: the pi-go Neon theme sets that to #e0e0f0, nearly
+     the body colour, which left tool rows and thoughts as loud as the answer. */
+  --pg-muted: color-mix(in srgb, var(--vscode-foreground) 60%, transparent);
+  --pg-faint: color-mix(in srgb, var(--vscode-foreground) 42%, transparent);
   --pg-r-xs: 2px;
   --pg-r-sm: 4px;
   --pg-r-md: 8px;
@@ -34,13 +42,15 @@ body {
   --pg-dur: .2s;
 }
 
-/* Light themes: the neon hues fail contrast on white, so use deeper inks. */
+/* Light themes: Catppuccin Latte inks, deepened to AA where Latte is soft —
+   the same values the Pi-Go Daylight theme uses (scripts/themes.mjs). */
 body.vscode-light {
-  --pg-cyan: #00758f;
-  --pg-magenta: #c2007f;
-  --pg-purple: #7b2fd0;
-  --pg-green: #00875a;
-  --pg-yellow: #9a7b00;
+  --pg-cyan: #0375a3;
+  --pg-magenta: #a1518c;
+  --pg-purple: #8839ef;
+  --pg-green: #327d22;
+  --pg-yellow: #986114;
+  --pg-crust: #dce0e8;
   --pg-on-accent: #ffffff;
   --pg-glow: none;
 }
@@ -137,7 +147,7 @@ button { font: inherit; }
   overflow: hidden;
   border: 1px solid var(--pg-border-strong);
   border-radius: var(--pg-r-md);
-  background: #0a0a12;
+  background: var(--pg-crust);
   box-shadow: var(--pg-glow);
   color: var(--pg-cyan);
   font: 700 28px var(--pg-mono);
@@ -487,9 +497,16 @@ body {
   margin-top: -4px;
 }
 
+/* The answer is the one thing at full strength; tools and thoughts recede. */
 .part.text {
+  color: var(--vscode-foreground);
   line-height: 1.55;
   word-break: break-word;
+}
+
+.part.text .md strong {
+  color: var(--vscode-foreground);
+  font-weight: 700;
 }
 
 .part.text.streaming .stream-body,
@@ -514,8 +531,9 @@ body {
 }
 
 .part.thought {
-  border-left: 2px solid var(--pg-purple);
+  border-left: 2px solid color-mix(in srgb, var(--pg-purple) 45%, transparent);
   padding-left: 8px;
+  font-size: 12px;
 }
 
 .part.thought summary {
@@ -523,8 +541,17 @@ body {
   align-items: center;
   gap: 7px;
   cursor: pointer;
-  color: var(--vscode-descriptionForeground);
+  color: var(--pg-faint);
   user-select: none;
+}
+
+.part.thought summary:hover {
+  color: var(--pg-muted);
+}
+
+/* A thought still running is the live signal; keep it a step brighter. */
+.part.thought.streaming summary {
+  color: var(--pg-muted);
 }
 
 .thought-summary::-webkit-details-marker {
@@ -551,14 +578,13 @@ body {
 }
 
 .thought-status {
-  color: var(--vscode-descriptionForeground);
+  color: var(--pg-faint);
   font-size: 11px;
   font-style: normal;
-  opacity: .8;
 }
 
 .thought-body {
-  color: var(--vscode-descriptionForeground);
+  color: var(--pg-muted);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -897,6 +923,9 @@ body {
   border-color: var(--pg-border-strong);
 }
 
+/* Tool rows are machinery: monospace (they are commands and paths), muted,
+   and a touch smaller than prose so the answer reads first. Hover brings a
+   row up to full strength when you go looking for it. */
 .tool-card summary {
   display: flex;
   align-items: center;
@@ -905,6 +934,15 @@ body {
   cursor: pointer;
   user-select: none;
   list-style: none;
+  color: var(--pg-muted);
+  font-family: var(--pg-mono);
+  font-size: 11.5px;
+  transition: color var(--pg-dur) var(--pg-ease);
+}
+
+.tool-card summary:hover,
+.tool-card[open] summary {
+  color: var(--vscode-foreground);
 }
 
 .tool-card summary::-webkit-details-marker {
@@ -963,13 +1001,17 @@ body {
 }
 
 .tool-name {
-  font-family: var(--pg-mono);
+  flex: none;
   font-weight: 600;
   letter-spacing: .1px;
 }
 
+.tool-name[hidden] {
+  display: none;
+}
+
 .tool-title {
-  color: var(--vscode-descriptionForeground);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -978,9 +1020,17 @@ body {
 .tool-status {
   flex: none;
   margin-left: auto;
-  color: var(--vscode-descriptionForeground);
+  padding-left: 8px;
+  color: var(--pg-faint);
+  font-family: var(--vscode-font-family);
   font-size: 11px;
-  opacity: .8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A failure is the one tool row that should grab attention. */
+.status-failed summary,
+.status-failed .tool-status {
+  color: var(--pg-accent-2);
 }
 
 /* Status → color, per the Pi-Go system: yellow queued, cyan running,

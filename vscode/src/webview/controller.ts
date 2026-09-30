@@ -232,22 +232,30 @@ export class ChatController {
       case "agentChunk": {
         const tab = this.tabs.get(message.sessionId);
         if (!tab) return;
-        tab.openThoughtPart = undefined;
+        // Whitespace between two thoughts must not open an empty text block:
+        // it would close the thought and stack a second "Thinking" row.
+        if (!tab.openTextPart && !message.text.trim()) return;
+        this.closeThought(tab);
         this.appendStream(tab, message.text, "text");
         break;
       }
       case "thoughtChunk": {
         const tab = this.tabs.get(message.sessionId);
         if (!tab) return;
-        tab.openTextPart = undefined;
+        if (!tab.openThoughtPart && !message.text.trim()) return;
+        this.closeText(tab);
         this.appendStream(tab, message.text, "thought");
         break;
       }
       case "toolUpdate": {
         const tab = this.tabs.get(message.sessionId);
         if (!tab) return;
-        tab.openTextPart = undefined;
-        tab.openThoughtPart = undefined;
+        // Only a new call ends the prose before it; a status update for an
+        // earlier card must not split text that is still streaming.
+        if (!tab.cards.has(message.tool.toolCallId)) {
+          this.closeText(tab);
+          this.closeThought(tab);
+        }
         this.upsertTool(tab, message.tool);
         break;
       }
@@ -550,28 +558,24 @@ export class ChatController {
   }
 
   private finalizeStreamedParts(tab: TabState): void {
-    for (const part of tab.transcript.querySelectorAll(".part.streaming")) {
-      const body = part.querySelector(".stream-body");
-      const text = body?.textContent ?? "";
-      part.classList.remove("streaming");
-      if (part.classList.contains("thought")) {
-        part.querySelector(".thought-pulse")?.remove();
-        const label = part.querySelector(".thought-label");
-        if (label) label.textContent = "Thought";
-        const status = part.querySelector(".thought-status");
-        if (status) status.textContent = thoughtDurationLabel((part as HTMLElement).dataset.startedAt);
-        part.querySelector(".thought-body")?.replaceChildren();
-        const rendered = markdownBlock(text);
-        rendered.className = "thought-body md";
-        body?.replaceWith(rendered);
-        (part as HTMLDetailsElement).open = false;
-      } else {
-        part.replaceChildren(markdownBlock(text));
-      }
-    }
+    for (const part of tab.transcript.querySelectorAll(".part.streaming")) finalizePart(part);
     tab.openTextPart = undefined;
     tab.openThoughtPart = undefined;
     this.scrollToBottom(tab);
+  }
+
+  /** The open text part is done once anything else starts: render its
+   *  markdown now (code spans, bold) and drop its caret, instead of leaving
+   *  every paragraph of a long turn raw and blinking until turnEnd. */
+  private closeText(tab: TabState): void {
+    if (tab.openTextPart) finalizePart(tab.openTextPart);
+    tab.openTextPart = undefined;
+  }
+
+  /** Same for a thought: "Thinking" + pulse becomes "Thought · Ns". */
+  private closeThought(tab: TabState): void {
+    if (tab.openThoughtPart) finalizePart(tab.openThoughtPart);
+    tab.openThoughtPart = undefined;
   }
 
   private upsertTool(tab: TabState, tool: ToolSnapshot): void {
@@ -745,6 +749,27 @@ function thoughtDurationLabel(startedAt: string | undefined): string {
   if (!Number.isFinite(started)) return "";
   const elapsed = Date.now() - started;
   return elapsed >= 1000 ? `for ${formatDuration(elapsed)}` : "";
+}
+
+/** Settle one streaming part: raw text → rendered markdown, caret/pulse off. */
+function finalizePart(part: Element): void {
+  if (!part.classList.contains("streaming")) return;
+  const body = part.querySelector(".stream-body");
+  const text = body?.textContent ?? "";
+  part.classList.remove("streaming");
+  if (part.classList.contains("thought")) {
+    part.querySelector(".thought-pulse")?.remove();
+    const label = part.querySelector(".thought-label");
+    if (label) label.textContent = "Thought";
+    const status = part.querySelector(".thought-status");
+    if (status) status.textContent = thoughtDurationLabel((part as HTMLElement).dataset.startedAt);
+    const rendered = markdownBlock(text);
+    rendered.className = "thought-body md";
+    body?.replaceWith(rendered);
+    (part as HTMLDetailsElement).open = false;
+  } else {
+    part.replaceChildren(markdownBlock(text));
+  }
 }
 
 /** Wrap fenced code blocks with a header bar (language label + copy button).

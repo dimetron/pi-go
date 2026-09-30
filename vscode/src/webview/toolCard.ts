@@ -48,6 +48,18 @@ export function toolEmoji(toolName: string): string {
   return "🔧";
 }
 
+/** Split a tool call into the two summary labels without repeating itself.
+ *  Shell calls arrive as name "cd" + title "cd /repo && …": printing both read
+ *  "cd cd /repo". When the title already starts with the name, the title is
+ *  the whole story and the name label is dropped. */
+export function toolLabels(toolName: string, title: string | undefined): { name: string; detail: string } {
+  const name = toolName.trim();
+  const detail = (title ?? "").trim();
+  if (!detail || detail === name) return { name, detail: "" };
+  if (name && (detail.startsWith(`${name} `) || detail.startsWith(`${name}(`))) return { name: "", detail };
+  return { name, detail };
+}
+
 /** Tool details are user-controlled; status updates must never open raw output. */
 export const TOOL_CARD_DEFAULT_OPEN = false;
 
@@ -200,10 +212,11 @@ export function toolCard(tool: ToolSnapshot, onRevealFile: (path: string) => voi
       glyph.replaceChildren(icon(meta.icon));
       glyph.title = meta.label;
       badge.textContent = toolEmoji(next.toolName);
-      name.textContent = next.toolName;
-      const titleText = next.title && next.title !== next.toolName ? next.title : "";
-      title.textContent = titleText;
-      title.title = titleText;
+      const labels = toolLabels(next.toolName, next.title);
+      name.textContent = labels.name;
+      name.hidden = labels.name === "";
+      title.textContent = labels.detail;
+      title.title = labels.detail;
       status.textContent = toolStatusText(next.status, meta.label, elapsedMs);
       if (next.status === "in_progress") startTicker();
       else stopTicker();
