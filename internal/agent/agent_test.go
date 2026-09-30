@@ -472,43 +472,32 @@ func TestLoadInstructionInjectsRuntimeEnvironment(t *testing.T) {
 	t.Setenv("LANG", "en_US.UTF-8")
 
 	got := loadInstructionFrom("Base instruction.", "/tmp/fallback-cwd", "/tmp/test-home")
-	want := "# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=\"/tmp/test-home\"\n- USER=\"test-user\"\n- PWD=\"/tmp/test-project\"\n\nLanguage: English (United States) is the required language for your responses.\n\nBase instruction."
+	want := "# Runtime Environment\n\nThe following values are from the current process environment. Treat them as authoritative; do not guess or substitute values for them.\n\n- HOME=\"/tmp/test-home\"\n- USER=\"test-user\"\n- PWD=\"/tmp/test-project\"\n\nBase instruction."
 	if !strings.HasPrefix(got, want) {
 		t.Fatalf("runtime environment should be the first prompt section, got %q", got)
 	}
 }
 
-func TestLoadInstructionOmitsLanguageWhenLANGUnset(t *testing.T) {
-	testenv.SetHome(t, "/tmp/test-home")
-	t.Setenv("USER", "test-user")
-	t.Setenv("PWD", "/tmp/test-project")
-	t.Setenv("LANG", "")
+// LANG must never pin the response language: a user with an en_US locale who
+// writes in Hebrew would be answered in English. The prompt carries no
+// language instruction, whatever the locale says.
+func TestLoadInstructionDoesNotConstrainLanguage(t *testing.T) {
+	for _, lang := range []string{"en_US.UTF-8", "he_IL.UTF-8", ""} {
+		t.Run(lang, func(t *testing.T) {
+			testenv.SetHome(t, "/tmp/test-home")
+			t.Setenv("USER", "test-user")
+			t.Setenv("PWD", "/tmp/test-project")
+			t.Setenv("LANG", lang)
 
-	got := loadInstructionFrom("Base instruction.", "/tmp/fallback-cwd", "/tmp/test-home")
-	if strings.Contains(got, "required language") {
-		t.Errorf("no LANG should mean no required-language line, got %q", got)
-	}
-}
-
-func TestLanguageName(t *testing.T) {
-	tests := []struct {
-		lang string
-		want string
-	}{
-		{"en_US.UTF-8", "English (United States)"},
-		{"en_GB.utf8", "English (United Kingdom)"},
-		{"de_DE.UTF-8", "German (Germany)"},
-		{"pt_BR.UTF-8", "Portuguese (Brazil)"},
-		{"ja_JP.UTF-8", "Japanese (Japan)"},
-		{"C", "C"},                     // unknown primary subtag: pass through untouched
-		{"", ""},                       // empty
-		{"xx_XX.UTF-8", "xx_XX.UTF-8"}, // unknown codes pass through
-		{"en", "English"},              // no region
-	}
-	for _, tt := range tests {
-		if got := languageName(tt.lang); got != tt.want {
-			t.Errorf("languageName(%q) = %q, want %q", tt.lang, got, tt.want)
-		}
+			// A temp cwd keeps discovered context files out of the assertion
+			// below, which inspects the whole prompt.
+			got := loadInstructionFrom("Base instruction.", t.TempDir(), "/tmp/test-home")
+			for _, banned := range []string{"Language:", "required language", "Hebrew", "English"} {
+				if strings.Contains(got, banned) {
+					t.Errorf("LANG=%q must not add a language constraint, found %q in %q", lang, banned, got)
+				}
+			}
+		})
 	}
 }
 
