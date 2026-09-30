@@ -13,8 +13,8 @@ import (
 // scripts/fetch-ollama-pricing.sh regenerates.
 //
 // The snapshot keys models by the base name the pricing page uses
-// (deepseek-v4-flash), which is also the prefix of every API ID that serves it
-// (deepseek-v4-flash, deepseek-v4-flash:0731), so lookupPricing's exact-then-
+// (deepseek-v4-pro), which is also the prefix of every API ID that serves it
+// (deepseek-v4-pro, deepseek-v4-pro:0813), so lookupPricing's exact-then-
 // longest-prefix matching resolves dated and sized variants against it.
 //
 // Prices are for Ollama Cloud (api.ollama.com). A local daemon runs the same

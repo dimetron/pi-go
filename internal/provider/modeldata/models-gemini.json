@@ -1,10 +1,18 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-09-05T00:00:00Z",
+  "fetched_at": "2026-09-30T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
       "owned_by": "Antigravity Agent Preview"
+    },
+    {
+      "id": "antigravity-preview-09-2026",
+      "owned_by": "Antigravity Agent Preview"
+    },
+    {
+      "id": "antigravity-preview-latest",
+      "owned_by": "Antigravity Agent Preview Latest"
     },
     {
       "id": "aqa",
@@ -42,16 +50,6 @@
     {
       "id": "gemini-2.5-flash-lite",
       "owned_by": "Gemini 2.5 Flash-Lite",
-      "release_date": "2025-06-17"
-    },
-    {
-      "id": "gemini-2.5-flash-native-audio-latest",
-      "owned_by": "Gemini 2.5 Flash Native Audio Latest",
-      "release_date": "2025-06-17"
-    },
-    {
-      "id": "gemini-2.5-flash-native-audio-preview-09-2025",
-      "owned_by": "Gemini 2.5 Flash Native Audio Preview 09-2025",
       "release_date": "2025-06-17"
     },
     {
@@ -124,10 +122,6 @@
       "owned_by": "Gemini 3.5 Transcribe"
     },
     {
-      "id": "gemini-3.5-transcribe-live",
-      "owned_by": "Gemini 3.5 Transcribe Live"
-    },
-    {
       "id": "gemini-3.6-flash",
       "owned_by": "Gemini 3.6 Flash",
       "release_date": "2026-07-21"
@@ -140,6 +134,16 @@
     {
       "id": "gemini-3.8-flash",
       "owned_by": "Gemini 3.8 Flash",
+      "release_date": "2026-09-02"
+    },
+    {
+      "id": "gemini-3.8-flash-lite-tts",
+      "owned_by": "Gemini 3.8 Flash Lite TTS",
+      "release_date": "2026-09-02"
+    },
+    {
+      "id": "gemini-3.8-flash-tts",
+      "owned_by": "Gemini 3.8 Flash TTS",
       "release_date": "2026-09-02"
     },
     {
