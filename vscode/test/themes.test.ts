@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { flavors } from "@catppuccin/palette";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain .mjs build script without type declarations.
-import { THEMES, THEMES_DIR, buildTheme, serialize } from "../scripts/themes.mjs";
+import { AA, ACCENT_ROLES, PALETTES, THEMES, THEMES_DIR, buildTheme, serialize } from "../scripts/themes.mjs";
 
 interface ThemeSpec {
   id: string;
@@ -66,15 +67,44 @@ describe("Pi-Go color themes", () => {
     }
     expect(contrast(scopeColor(theme, "comment"), bg)).toBeGreaterThanOrEqual(3);
     expect(contrast(c["button.foreground"], c["button.background"])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(c["sideBar.foreground"] ?? c["foreground"], c["sideBar.background"])).toBeGreaterThanOrEqual(7);
+    // Sidebar labels are UI text: AA. Catppuccin Latte's Text on Mantle is
+    // 6.57:1 by design, and surfaces/text are kept as Catppuccin ships them.
+    expect(contrast(c["sideBar.foreground"] ?? c["foreground"], c["sideBar.background"])).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(specs)("$label uses the Pi-Go palette, not Catppuccin's", (spec) => {
+  it.each(specs)("$label renders Catppuccin's own palette", (spec) => {
+    // Compared against @catppuccin/palette, not hex copied into this test:
+    // the point is that the theme tracks catppuccin.com/palette.
+    const p = flavors[spec.flavor as "mocha" | "latte"].colors;
+    const ours = PALETTES[spec.id] as Record<string, string>;
     const c = (buildTheme(spec) as Theme).colors;
-    const brand = spec.id === "neon" ? { cyan: "#00f0ff", magenta: "#ff00aa", bg: "#0a0a12" } : { cyan: "#00758f", magenta: "#c2007f", bg: "#f7f8fc" };
-    expect(c["editor.background"]).toBe(brand.bg);
-    expect(c["editorCursor.foreground"]).toBe(brand.cyan);
-    expect(c["terminal.ansiCyan"]).toBe(brand.cyan);
-    expect(c["terminal.ansiMagenta"]).toBe(brand.magenta);
+    const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+    // Surfaces and text are Catppuccin's exactly.
+    expect(c["editor.background"]).toBe(p.base.hex);
+    expect(c["editor.foreground"]).toBe(p.text.hex);
+    expect(c["sideBar.background"]).toBe(p.mantle.hex);
+
+    // A deviation is only allowed for an accent that fails AA on base, and
+    // only as a darkening of the same hue that now passes.
+    for (const [role, hex] of Object.entries(ours)) {
+      const published = p[role as keyof typeof p].hex;
+      if (hex === published) continue;
+      expect(ACCENT_ROLES, role).toContain(role);
+      expect(contrast(published, p.base.hex), role).toBeLessThan(AA);
+      expect(contrast(hex, p.base.hex), role).toBeGreaterThanOrEqual(AA);
+      const [a, b] = [rgb(published), rgb(hex)];
+      for (let i = 0; i < 3; i++) expect(b[i], role).toBeLessThanOrEqual(a[i]);
+    }
+    // Mocha's pastels all pass on its dark base: the dark theme is Mocha exactly.
+    if (spec.id === "neon") expect(ours).toEqual(Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.hex])));
+
+    expect(c["editorCursor.foreground"]).toBe(spec.id === "neon" ? ours.sky : ours.blue);
+    expect(c["badge.background"]).toBe(ours.pink);
+    // Terminal colors are Catppuccin's own ANSI table (the old neon theme
+    // overrode it; colorOverrides does not reach it).
+    expect(c["terminal.ansiRed"]).toBe(p.red.hex);
+    expect(c["terminal.ansiGreen"]).toBe(p.green.hex);
+    expect(Object.values(c)).not.toContain("#00f0ff");
   });
 });
