@@ -15,6 +15,27 @@ permissions:
 # (see Makefile history), so builds now use the default experiment set.
 
 jobs:
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+      # The release workflow runs exactly this before packaging, so a lockfile
+      # that has drifted from package.json fails there — at tag time, on a
+      # release that is already cut. Dependabot opens npm PRs here (it bumps
+      # package.json and package-lock.json), and nothing regenerates bun.lock,
+      # so the drift is invisible until a release. Run it on every PR instead:
+      # it takes seconds and turns a failed release into a failed check.
+      - name: Verify bun.lock is in sync with package.json
+        working-directory: vscode
+        run: bun install --frozen-lockfile
+      - name: Test
+        working-directory: vscode
+        run: bun run test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
