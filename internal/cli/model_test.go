@@ -417,14 +417,19 @@ func TestModelPrice(t *testing.T) {
 // TestModelPriceOllamaCloud pins the ollama-cloud pricing path: a cloud-tagged
 // model listed by the local daemon shows the api.ollama.com rate from the
 // embedded ollama.com/pricing snapshot, matched on the tag-stripped base name.
+//
+// The examples are real Ollama Cloud models, so a pricing refresh that retires
+// one takes its price with it and makes this test fail for a reason that has
+// nothing to do with the lookup logic. TestOllamaCloudPriceExamplesStillPriced
+// names that cause directly, so the two failures are not confused.
 func TestModelPriceOllamaCloud(t *testing.T) {
 	// Base entry, exact match.
 	if got := modelPrice("ollama", "glm-5.3:cloud"); got != "$1.40/$4.40 per 1M" {
 		t.Errorf("modelPrice(ollama, glm-5.3:cloud) = %q, want $1.40/$4.40 per 1M", got)
 	}
-	// Sized-cloud tag: the suffix is stripped before the lookup.
-	if got := modelPrice("ollama", "deepseek-v4-flash:0731-cloud"); got != "$0.22/$0.66 per 1M" {
-		t.Errorf("modelPrice(ollama, deepseek-v4-flash:0731-cloud) = %q, want $0.22/$0.66 per 1M", got)
+	// Sized/dated-cloud tag: the suffix is stripped before the lookup.
+	if got := modelPrice("ollama", "deepseek-v4-pro:0813-cloud"); got != "$0.66/$1.98 per 1M" {
+		t.Errorf("modelPrice(ollama, deepseek-v4-pro:0813-cloud) = %q, want $0.66/$1.98 per 1M", got)
 	}
 	if got := modelPrice("ollama", "gemma4:31b-cloud"); got != "$0.14/$0.40 per 1M" {
 		t.Errorf("modelPrice(ollama, gemma4:31b-cloud) = %q, want $0.14/$0.40 per 1M", got)
@@ -435,10 +440,26 @@ func TestModelPriceOllamaCloud(t *testing.T) {
 	}
 }
 
+// TestOllamaCloudPriceExamplesStillPriced guards what actually broke CI on main:
+// the examples TestModelPriceOllamaCloud pins are real catalog entries, and a
+// `make fetch-ollama-pricing` refresh that drops a retired model removes its
+// price silently. Without this check the failure reads as a lookup bug, which
+// sends whoever is on call looking in the wrong place. This one says which
+// model went away and what to do.
+func TestOllamaCloudPriceExamplesStillPriced(t *testing.T) {
+	for _, base := range []string{"glm-5.3", "deepseek-v4-pro", "gemma4"} {
+		if _, ok := provider.OllamaCloudCost(base); !ok {
+			t.Errorf("pricing example %q is no longer in the embedded snapshot: "+
+				"Ollama retired it or the refresh dropped it. Pick a model the page "+
+				"still lists and update TestModelPriceOllamaCloud to match.", base)
+		}
+	}
+}
+
 func TestOllamaCloudPriceKey(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"glm-5.3:cloud", "glm-5.3"},
-		{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731"},
+		{"deepseek-v4-pro:0813-cloud", "deepseek-v4-pro:0813"},
 		{"gemma4:31b-cloud", "gemma4:31b"},
 		{"mistral-large-3:675b-cloud", "mistral-large-3:675b"},
 		{"qwen3.5:397b", "qwen3.5:397b"}, // no cloud tag: untouched
