@@ -40,6 +40,9 @@
     "parallel-search": {
       "url": "https://search.parallel.ai/mcp"
     },
+    "fxmacrodata": {
+      "url": "https://mcp.fxmacrodata.com"
+    },
     "docs-acp": {
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
