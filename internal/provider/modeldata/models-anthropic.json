@@ -1,6 +1,6 @@
 {
   "provider": "anthropic",
-  "fetched_at": "2026-09-30T00:00:00Z",
+  "fetched_at": "2026-10-08T00:00:00Z",
   "models": [
     {
       "id": "claude-fable-5",
@@ -16,6 +16,10 @@
       "id": "claude-haiku-4-5-20251001",
       "owned_by": "model",
       "release_date": "2025-10-15"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "owned_by": "model"
     },
     {
       "id": "claude-opus-4-5-20251101",

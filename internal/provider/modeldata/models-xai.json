@@ -1,6 +1,6 @@
 {
   "provider": "xai",
-  "fetched_at": "2026-09-30T00:00:00Z",
+  "fetched_at": "2026-10-08T00:00:00Z",
   "models": [
     {
       "id": "grok-4.20-0309-non-reasoning",
