@@ -20,7 +20,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13
+          # Keep in step with ci.yml, and keep >= the toolchain go.mod selects:
+          # v2.13 decodes export data version 4 only (see the note in ci.yml).
+          version: v2.14
 
   test:
     name: Test
