@@ -37,6 +37,9 @@
     "you-search": {
       "url": "https://api.you.com/mcp?profile=free"
     },
+    "cohesivity": {
+      "url": "https://cohesivity.ai/mcp"
+    },
     "parallel-search": {
       "url": "https://search.parallel.ai/mcp"
     },
