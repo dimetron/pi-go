@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-09-30T00:00:00Z",
+  "fetched_at": "2026-10-08T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -170,6 +170,10 @@
       "id": "gemini-flash-lite-latest",
       "owned_by": "Gemini Flash-Lite Latest",
       "release_date": "2026-07-21"
+    },
+    {
+      "id": "gemini-nano-banana-2.1",
+      "owned_by": "Nano Banana 2.1"
     },
     {
       "id": "gemini-omni-1.1-flash",

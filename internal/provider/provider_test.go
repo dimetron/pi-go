@@ -396,7 +396,7 @@ func TestValidateModel(t *testing.T) {
 		{Info{Provider: "custom", Model: "some-model"}, false},
 		// Invalid models.
 		{Info{Provider: "anthropic", Model: "bogus-model"}, true},
-		{Info{Provider: "openai", Model: "davinci-002"}, true},
+		{Info{Provider: "openai", Model: "gpt-9000-nonexistent"}, true},
 		{Info{Provider: "gemini", Model: "palm-2"}, true},
 		{Info{Provider: "mistral", Model: "llama-3"}, true},
 	}
