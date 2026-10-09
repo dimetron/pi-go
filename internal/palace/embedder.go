@@ -68,7 +68,7 @@ func NewEmbedder(modelPath string) (Embedder, error) {
 		// guarantees we get the variant this backend actually wants.
 		OnnxFilename: OnnxModelFile(),
 	}
-	pipeline, err := hugot.NewPipeline(session, config)
+	pipeline, err := session.NewPipeline(config)
 	if err != nil {
 		_ = session.Destroy()
 		return nil, fmt.Errorf("create embedding pipeline: %w", err)
