@@ -19,7 +19,7 @@ func TestComplete_CommandCompletion(t *testing.T) {
 		{"plan matches", "/pl", 1, "/plan"}, // /plan and /plan resume
 		{"run matches", "/ru", 1, "/run"},
 		{"help matches", "/he", 1, "/help"},
-		{"commit matches", "/co", 4, "/commit"}, // /commit, /compact, /context, /copy
+		{"commit matches", "/co", 5, "/commit"}, // /commit, /compact, /context, /copy, /cost
 		{"all commands", "/", 0, ""},            // "/" alone doesn't return completions (handled by showCommandList)
 		{"no match", "/xyz", 0, ""},
 		{"exact match single", "/plan", 1, "/plan"},    // single alternative: keep exact match
@@ -74,49 +74,31 @@ func TestComplete_SkillCompletion(t *testing.T) {
 
 func TestComplete_CycleSelection(t *testing.T) {
 	result := Complete("/c", nil, "")
-	if len(result.Candidates) < 2 {
-		t.Fatalf("need at least 2 candidates, got %d", len(result.Candidates))
+	n := len(result.Candidates)
+	if n < 2 {
+		t.Fatalf("need at least 2 candidates, got %d", n)
 	}
 
-	// Initial state
 	if result.Selected != 0 {
 		t.Errorf("expected selected 0, got %d", result.Selected)
 	}
 
-	// Cycle forward
-	result.CycleSelection(1)
-	if result.Selected != 1 {
-		t.Errorf("expected selected 1, got %d", result.Selected)
+	// Walk every candidate, then one more step wraps. The /c set grows when
+	// a command is added, so the bound is the candidate count.
+	for i := 1; i < n; i++ {
+		result.CycleSelection(1)
+		if result.Selected != i {
+			t.Fatalf("selected = %d, want %d", result.Selected, i)
+		}
 	}
-
-	// Cycle forward again (should be at 2)
-	result.CycleSelection(1)
-	if result.Selected != 2 {
-		t.Errorf("expected selected 2, got %d", result.Selected)
-	}
-
-	// Cycle forward again (should be at 3)
-	result.CycleSelection(1)
-	if result.Selected != 3 {
-		t.Errorf("expected selected 3, got %d", result.Selected)
-	}
-
-	// Cycle forward through the remaining candidates.
-	result.CycleSelection(1)
-	if result.Selected != 4 {
-		t.Errorf("expected selected 4, got %d", result.Selected)
-	}
-
-	// Cycle forward again (wrap around to 0)
 	result.CycleSelection(1)
 	if result.Selected != 0 {
 		t.Errorf("expected selected 0 after wrap, got %d", result.Selected)
 	}
 
-	// Cycle backward
 	result.CycleSelection(-1)
-	if result.Selected != len(result.Candidates)-1 {
-		t.Errorf("expected selected %d after backward cycle, got %d", len(result.Candidates)-1, result.Selected)
+	if result.Selected != n-1 {
+		t.Errorf("expected selected %d after backward cycle, got %d", n-1, result.Selected)
 	}
 }
 

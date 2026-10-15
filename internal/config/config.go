@@ -116,6 +116,15 @@ type RateLimitConfig struct {
 // entry of its own.
 const rateLimitWildcard = "*"
 
+// ModelPrice is one model's per-million-token USD rates for /cost.
+// A zero cache_read bills cached tokens at the input rate. An all-zero
+// entry, present in ModelPrices, prices the model at $0.
+type ModelPrice struct {
+	Input     float64 `json:"input,omitempty"`
+	Output    float64 `json:"output,omitempty"`
+	CacheRead float64 `json:"cache_read,omitempty"`
+}
+
 // Config holds all pi-go configuration.
 type Config struct {
 	Roles           map[string]RoleConfig `json:"roles,omitempty"`
@@ -164,13 +173,21 @@ type Config struct {
 	ContextWindow int64 `json:"contextWindow,omitempty"`
 	// RateLimits paces outbound requests, keyed by provider name ("gemini",
 	// "agentgateway", …) with "*" as the fallback for the rest.
-	RateLimits  map[string]RateLimitConfig `json:"rateLimits,omitempty"`
-	Compactor   *CompactorConfig           `json:"compactor,omitempty"`
-	AutoCompact *AutoCompactConfig         `json:"autoCompact,omitempty"`
-	Memory      *MemoryConfig              `json:"memory,omitempty"`
-	Palace      *PalaceConfig              `json:"palace,omitempty"`
-	A2A         *A2AConfig                 `json:"a2a,omitempty"`
-	LLMS        *LLMSConfig                `json:"llms,omitempty"`
+	RateLimits map[string]RateLimitConfig `json:"rateLimits,omitempty"`
+	// ModelPrices overrides the models.dev per-million-token USD rates that
+	// /cost uses. Keys are "provider/model" (for example "openai/gpt-5.6-sol").
+	// An entry replaces the catalog rate for that model, including an
+	// all-zero entry, which prices it at $0. The catalog and this map both
+	// go stale; /cost says so. Refresh the catalog with /model-price-refresh.
+	// Cache-write rates are not settable here: the recorded token stats do
+	// not separate writes from fresh input.
+	ModelPrices map[string]ModelPrice `json:"modelPrices,omitempty"`
+	Compactor   *CompactorConfig      `json:"compactor,omitempty"`
+	AutoCompact *AutoCompactConfig    `json:"autoCompact,omitempty"`
+	Memory      *MemoryConfig         `json:"memory,omitempty"`
+	Palace      *PalaceConfig         `json:"palace,omitempty"`
+	A2A         *A2AConfig            `json:"a2a,omitempty"`
+	LLMS        *LLMSConfig           `json:"llms,omitempty"`
 	// ReroutedLLMS names the MCP servers whose URL is an llms.txt index and
 	// which were therefore given a fetch_docs source during load.
 	ReroutedLLMS []string `json:"-"`

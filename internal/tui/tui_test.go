@@ -853,9 +853,9 @@ func TestMatchingSlashCommands_All(t *testing.T) {
 
 func TestMatchingSlashCommands_Partial(t *testing.T) {
 	matches := matchingSlashCommands("/c")
-	// Should match: /clear, /context, /compact, /commit, /copy
-	if len(matches) != 5 {
-		t.Errorf("expected 5 matches for '/c', got %d: %v", len(matches), matches)
+	// Should match: /clear, /context, /compact, /commit, /copy, /cost
+	if len(matches) != 6 {
+		t.Errorf("expected 6 matches for '/c', got %d: %v", len(matches), matches)
 	}
 	for _, m := range matches {
 		if !strings.HasPrefix(m, "/c") {

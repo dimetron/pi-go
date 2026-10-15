@@ -83,7 +83,7 @@ func (c *cplxTracker) CachePrefixTokens() int64    { return c.prefix }
 // what both did, so pin the full set explicitly.
 func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 	want := []string{
-		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
+		"/help", "/clear", "/copy", "/model", "/session", "/context", "/cost", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
 		"/pr-autofix",
 		"/retry",
@@ -113,7 +113,7 @@ func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 // its order is behavior and not merely presentation.
 func TestCplxSlashCommands_DerivedOrder(t *testing.T) {
 	want := []string{
-		"/help", "/clear", "/copy", "/model", "/session", "/context", "/branch",
+		"/help", "/clear", "/copy", "/model", "/session", "/context", "/cost", "/branch",
 		"/compact", "/subagents", "/history", "/login", "/commit", "/plan", "/run",
 		// After /plan, so "/p" still completes to /plan and "/pr" is
 		// unambiguous: autocomplete returns the first prefix match.

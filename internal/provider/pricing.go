@@ -123,9 +123,21 @@ func pricingFor() (pricingSnapshot, bool) {
 // CostFor returns the per-million-token USD rates for a model served by a
 // provider, using prefix matching so a dated model ID (gpt-5.6-sol) resolves
 // against its base entry (gpt-5.6). ok is false when the provider or model is
-// unknown.
+// unknown. /cost prices a session from these rates. The snapshot can be
+// stale; PricingFetchedAt says when it was taken.
 func CostFor(providerName, modelName string) (PricingModel, bool) {
 	return lookupPricing(providerName, modelName)
+}
+
+// PricingFetchedAt returns the timestamp on the pricing snapshot /cost is
+// using, or "" when no snapshot is available. The runtime cache wins over
+// the embedded file, same as CostFor.
+func PricingFetchedAt() string {
+	s, ok := pricingFor()
+	if !ok {
+		return ""
+	}
+	return s.FetchedAt
 }
 
 // ModelReleaseDate returns the models.dev release date for a model, or "" when

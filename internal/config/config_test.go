@@ -1517,3 +1517,24 @@ func TestMemoryCompressorJSONRoundTrip(t *testing.T) {
 		t.Errorf("compressor did not round-trip: %+v", out.Memory)
 	}
 }
+
+func TestModelPricesJSONRoundTrip(t *testing.T) {
+	in := Config{ModelPrices: map[string]ModelPrice{
+		"openai/gpt-5.6-sol": {Input: 4, Output: 20, CacheRead: 0.4},
+	}}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"modelPrices"`) || !strings.Contains(string(data), `"cache_read":0.4`) {
+		t.Errorf("modelPrices not serialized under its documented keys: %s", data)
+	}
+	var out Config
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.ModelPrices["openai/gpt-5.6-sol"]
+	if got.Input != 4 || got.Output != 20 || got.CacheRead != 0.4 {
+		t.Errorf("modelPrices did not round-trip: %+v", out.ModelPrices)
+	}
+}
