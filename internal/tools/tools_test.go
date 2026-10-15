@@ -781,17 +781,17 @@ func TestCoreTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 13, not 14: web_search is opt-in and this call does not opt in. See
-	// TestCoreToolsWebSearchOptIn for the other half of the contract.
-	if len(tools) != 13 {
-		t.Errorf("expected 13 core tools, got %d", len(tools))
+	// 14, not 15: web_search is opt-in and this call does not opt in. web_fetch
+	// is always registered. See TestCoreToolsWebSearchOptIn for the search half.
+	if len(tools) != 14 {
+		t.Errorf("expected 14 core tools, got %d", len(tools))
 	}
 
 	expected := map[string]bool{
 		"read": true, "read_image": true, "write": true, "edit": true, "bash": true,
 		"find": true, "ls": true, "tree": true,
 		"git-overview": true, "git-file-diff": true, "git-hunk": true,
-		"session-stats": true,
+		"session-stats": true, "web_fetch": true,
 	}
 	if rgAvailable {
 		expected["ripgrep"] = true

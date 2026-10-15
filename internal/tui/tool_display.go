@@ -747,6 +747,7 @@ var toolSummaryArgKey = map[string]string{
 	"grep":            "pattern",
 	"ripgrep":         "pattern",
 	"find":            "pattern",
+	"web_fetch":       "url",
 	groundingToolName: "query",
 }
 

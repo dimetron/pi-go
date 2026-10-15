@@ -26,7 +26,7 @@ func TestInventory_CoreAndOptionalGroups(t *testing.T) {
 	}
 	// The core set the CLI always registers in print mode.
 	for _, name := range []string{"read", "read_image", "write", "edit", "bash", "find", "ls", "tree",
-		"git-overview", "git-file-diff", "git-hunk", "session-stats", "bash_wait", "bash_kill", "subagent"} {
+		"git-overview", "git-file-diff", "git-hunk", "session-stats", "web_fetch", "bash_wait", "bash_kill", "subagent"} {
 		ti, ok := byName[name]
 		if !ok {
 			t.Errorf("core tool %q missing from inventory", name)
