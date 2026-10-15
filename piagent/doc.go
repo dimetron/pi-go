@@ -49,8 +49,9 @@
 //     set, summarized into the system prompt.
 //   - Subagents discovered from .pi-go/agents plus the bundled set, wired to an
 //     orchestrator and exposed as tools.
-//   - Project context files (AGENT.md, AGENTS.md, CLAUDE.md, .pi-go/AGENTS.md)
-//     discovered from the working directory up to the filesystem root.
+//   - Project context files as plain text, most general first: ~/.pi-go/AGENTS.md,
+//     then one of AGENT.md, AGENTS.md, CLAUDE.md, or .pi-go/AGENTS.md per
+//     directory from the filesystem root down to the working directory.
 //   - MCP servers and A2A agents as ADK toolsets.
 //   - Sessions persisted under ~/.pi-go/sessions, so a session started by an
 //     embedder is visible to `pi --resume` and vice versa.

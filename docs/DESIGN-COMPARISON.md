@@ -106,7 +106,7 @@ Legend: ✅ present · 🟡 partial/divergent · ❌ absent · 🧩 "via extensi
 | Custom models registry | ✅ `models.json` | 🟡 hardcoded `KnownModels` + `--url`/`--header` overrides | |
 | Thinking levels | ✅ 6 levels, per-model budgets, cycling UI | 🟡 none/low/medium/high, config-level | |
 | Roles / model aliases | ❌ | ✅ `roles` (default/smol/slow/plan/commit) | Go-unique concept |
-| Context files | ✅ AGENTS.md/CLAUDE.md, cwd→root walk + global | 🟡 only `./AGENT.md` or `.pi-go/AGENTS.md` | §9 |
+| Context files | ✅ AGENTS.md/CLAUDE.md, cwd→root walk + global | ✅ `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.pi-go/AGENTS.md`, cwd→root walk + `~/.pi-go/AGENTS.md` | §9 |
 | MCP | ❌ 🧩 | ✅ stdio + streamable HTTP, resilient wrapper | |
 | Sub-agents | ❌ 🧩 | ✅ typed agents, pool, git worktrees, parallel `/run` with gates + merge | |
 | A2A agent network | ❌ | ✅ `internal/tools/a2a.go` (config-driven) | |
@@ -311,15 +311,18 @@ counterpart; TS would model this as a prompt template or extension.
   filesystem root**, plus global `~/.pi/agent/AGENTS.md`, merges all into a
   "# Project Context" section (`src/core/resource-loader.ts`,
   `src/core/system-prompt.ts`).
-- **Go:** loads only `./AGENT.md` or `./.pi-go/AGENTS.md` (first hit wins,
-  size-capped) and appends as "# Project Rules"; also appends a skill index
-  and (optionally) Memory Palace wake-up context
+- **Go:** same shape, different names. One file per directory from cwd up to
+  the filesystem root, plus global `~/.pi-go/AGENTS.md` prepended when the
+  walk did not already include that path. In each directory the first file
+  at most 128 KiB wins: `AGENT.md`, `AGENTS.md`, `CLAUDE.md`,
+  `.pi-go/AGENTS.md`. Contents are plain text under "# Project Rules"
   ([internal/agent/agent.go](../internal/agent/agent.go) `LoadInstruction`).
+  A skill index and (optionally) Memory Palace wake-up context are appended
+  separately. Rechecked against that function on 2026-10-15; the discovery
+  gap below is closed. See [AGENTS-HOWTO.md](AGENTS-HOWTO.md).
 
-**Gap (Go):** no parent-directory walk, no `CLAUDE.md`/`AGENTS.md` at repo
-root recognized directly (note: root `AGENTS.md` — the common convention — is
-**not** read; only `AGENT.md` singular or `.pi-go/AGENTS.md`), no global
-context file, no multi-file merge. This is a cheap, high-value fix.
+**Gap (Go):** none for discovery. `pi --system` replaces the assembled prompt
+and skips these files.
 **Gap (TS):** no memory-derived context injection.
 
 ---
@@ -398,10 +401,9 @@ runtime.
 ## 13. Gap Analysis — Missing from pi-go (prioritized)
 
 ### P0 — high user value, moderate cost
-1. **Context-file discovery parity** — read root `AGENTS.md`/`CLAUDE.md`,
-   walk parent dirs, support a global file. (Small change in
-   `agent.LoadInstruction`; today the common `AGENTS.md`-at-repo-root
-   convention is silently ignored.)
+1. **Context-file discovery parity** — closed. `LoadInstruction` already
+   walks parent directories, reads `AGENTS.md` / `CLAUDE.md` / `AGENT.md` /
+   `.pi-go/AGENTS.md`, and prepends `~/.pi-go/AGENTS.md`. See §9.
 2. **Compaction parity details** — Go's auto-compaction trigger exists and is
    on by default (percent-of-window thresholds in
    `internal/session/compaction.go`), but it lacks TS's absolute

@@ -523,7 +523,9 @@ interrupted install cannot leave a half-written registry behind.
 ```
 ~/.pi-go/config.json          # Global config
 .pi-go/config.json             # Project config (overrides global)
-.pi-go/AGENTS.md               # Project-specific agent instructions
+~/.pi-go/AGENTS.md             # Global agent instructions (plain text)
+AGENTS.md / CLAUDE.md / AGENT.md  # Per-directory instructions, filesystem root → cwd
+.pi-go/AGENTS.md               # Per-directory fallback when the three names above are absent
 .pi-go/sops/                   # Custom SOPs
 ~/.pi-go/skills/*.SKILL.md     # Global skills
 .pi-go/skills/*.SKILL.md       # Project skills (override global)
