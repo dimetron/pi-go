@@ -77,7 +77,7 @@ func main() {
 | Tools | read, write, edit, bash (+ supervisor and control tools), grep, find, ls, tree, git tools, session-stats |
 | Skills | `.pi-go/skills/`, the user directory and the bundled set, summarized into the prompt |
 | Subagents | `.pi-go/agents` plus the bundled set, exposed as tools |
-| Project rules | `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.pi-go/AGENTS.md`, discovered upward from the working directory |
+| Project rules | `~/.pi-go/AGENTS.md` first, then one of `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.pi-go/AGENTS.md` per directory from the filesystem root down to the working directory |
 | Toolsets | MCP servers and A2A agents from configuration |
 | Memory | **Off by default** — see below. `WithMemory(true)` opts in |
 | Palace | **Off by default.** Once on, tools register only when it holds drawers |

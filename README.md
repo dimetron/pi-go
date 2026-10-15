@@ -497,6 +497,17 @@ Skills are automatically scanned on load — skills with critical findings (Unic
 
 ## Configuration
 
+### Project instructions
+
+A session loads instruction files as plain text into the system prompt, under `# Project Rules`, before the model runs. Details and the 128 KiB cap are in [docs/AGENTS-HOWTO.md](docs/AGENTS-HOWTO.md).
+
+Order, general to specific:
+
+1. `~/.pi-go/AGENTS.md`, unless the directory walk below already selected that path.
+2. One file per directory from the filesystem root down to the working directory. In each directory the first usable file wins: `AGENT.md`, then `AGENTS.md`, then `CLAUDE.md`, then `.pi-go/AGENTS.md`.
+
+`pi --system` replaces the prompt and does not load these files.
+
 Pi reads configuration from `~/.pi-go/config.json` (global) and `.pi-go/config.json` (project-local):
 
 - **Model roles** — Map role names to specific model strings
