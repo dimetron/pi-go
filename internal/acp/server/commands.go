@@ -17,13 +17,14 @@ func DiscoverAvailableCommands(cwd string) []acp.AvailableCommand {
 	cwd = normalizeDiscoveryCWD(cwd)
 
 	skills, _ := extension.LoadSkills(extension.DefaultSkillDirsIn(cwd)...)
+	commands, _ := extension.LoadCommands(extension.DefaultCommandDirsIn(cwd)...)
 
 	var subagents []subagent.AgentConfig
 	if discovery, err := subagent.DiscoverAgents(cwd, subagent.ScopeBoth); err == nil && discovery != nil {
 		subagents = discovery.All
 	}
 
-	return adapter.BuildAvailableCommands(skills, subagents)
+	return adapter.BuildAvailableCommands(skills, subagents, commands)
 }
 
 func normalizeDiscoveryCWD(cwd string) string {

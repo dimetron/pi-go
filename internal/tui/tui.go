@@ -457,7 +457,7 @@ func (m *model) allSearchCandidates() []CompletionCandidate {
 	if len(skills) == 0 {
 		skills = m.cfg.Skills
 	}
-	return allSlashCommandCandidates(skills)
+	return allSlashCommandCandidates(skills, m.customCommands())
 }
 
 // filterSearch filters items by search query (case-insensitive substring on Text).
@@ -542,6 +542,8 @@ func newModel(ctx context.Context, cancel context.CancelFunc, cfg Config) model 
 		palette:      palette,
 		face:         NewFaceRenderer(),
 	}
+	m.inputModel.Commands = cfg.Commands
+	m.inputModel.CommandDirs = cfg.CommandDirs
 	m.syncPalette()
 	// The renderer above was built from this palette, so record its key rather
 	// than letting the first RefreshTheme rebuild it for nothing.
@@ -2412,6 +2414,8 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		extension.SetHookLogger(func(msg string) { r.Logger.Error("hook: " + msg) })
 		m.cfg.Skills = r.Skills
 		m.cfg.SkillDirs = r.SkillDirs
+		m.cfg.Commands = r.Commands
+		m.cfg.CommandDirs = r.CommandDirs
 		m.cfg.GenerateCommitMsg = r.GenerateCommitMsg
 		m.cfg.AgentEventCh = r.AgentEventCh
 		// Remembered before the assignment: a front end that handed the same
@@ -2429,9 +2433,11 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.cfg.MCPToolsets = r.MCPToolsets
 		m.cfg.MCPServers = r.MCPServers
 
-		// Update input model with loaded skills.
+		// Update input model with loaded skills and custom commands.
 		m.inputModel.Skills = r.Skills
 		m.inputModel.SkillDirs = r.SkillDirs
+		m.inputModel.Commands = r.Commands
+		m.inputModel.CommandDirs = r.CommandDirs
 
 		// Rebuild the transcript last: it reads the session service and token
 		// tracker that were just installed above.
@@ -2659,16 +2665,17 @@ func (m *model) slashCommandCandidates(prefix string) []CompletionCandidate {
 	if len(skills) == 0 {
 		skills = m.cfg.Skills
 	}
+	commands := m.customCommands()
 
 	if prefix == "/" {
-		return allSlashCommandCandidates(skills)
+		return allSlashCommandCandidates(skills, commands)
 	}
 
 	workDir := m.inputModel.WorkDir
 	if workDir == "" {
 		workDir = m.cfg.WorkDir
 	}
-	result := Complete(prefix, skills, workDir)
+	result := Complete(prefix, skills, workDir, commands)
 	if result == nil || len(result.Candidates) == 0 {
 		return nil
 	}
@@ -2682,9 +2689,9 @@ func (m *model) slashCommandCandidates(prefix string) []CompletionCandidate {
 	return candidates
 }
 
-func allSlashCommandCandidates(skills []extension.Skill) []CompletionCandidate {
+func allSlashCommandCandidates(skills []extension.Skill, commands []extension.Command) []CompletionCandidate {
 	seen := make(map[string]bool)
-	candidates := make([]CompletionCandidate, 0, len(slashCommands)+len(skills))
+	candidates := make([]CompletionCandidate, 0, len(slashCommands)+len(skills)+len(commands))
 	for _, cmd := range slashCommands {
 		if seen[cmd] {
 			continue
@@ -2693,6 +2700,18 @@ func allSlashCommandCandidates(skills []extension.Skill) []CompletionCandidate {
 		candidates = append(candidates, CompletionCandidate{
 			Text:        cmd,
 			Description: slashCommandDesc(cmd),
+			Type:        CompletionTypeCommand,
+		})
+	}
+	for _, cmd := range visibleCustomCommands(commands) {
+		text := "/" + cmd.Name
+		if seen[text] {
+			continue
+		}
+		seen[text] = true
+		candidates = append(candidates, CompletionCandidate{
+			Text:        text,
+			Description: cmd.Summary(),
 			Type:        CompletionTypeCommand,
 		})
 	}

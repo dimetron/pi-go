@@ -20,17 +20,44 @@ var metaCommands = []acp.AvailableCommand{
 
 // BuildAvailableCommands assembles the slash-command list advertised in
 // InitializeResponse.AvailableCommands. The result is the concatenation of
-// meta commands, one entry per discovered skill, and one per discovered
-// sub-agent — in that order. Input order within each group is preserved
-// because discovery is already deterministic (project > user > bundled).
+// meta commands, custom commands, one entry per discovered skill, and one
+// per discovered sub-agent — in that order. A custom command whose name
+// matches a meta command is omitted, and a skill whose name matches a custom
+// command is omitted: the same precedence the TUI uses when it runs them.
+// Input order within each group is preserved because discovery is already
+// deterministic (project > user > plugin).
 //
 // Wiring into Initialize is Zed-09's responsibility; this function is
 // pure so it can be unit-tested without spinning up an ACP server.
-func BuildAvailableCommands(skills []extension.Skill, subagents []subagent.AgentConfig) []acp.AvailableCommand {
-	out := make([]acp.AvailableCommand, 0, len(metaCommands)+len(skills)+len(subagents))
+func BuildAvailableCommands(skills []extension.Skill, subagents []subagent.AgentConfig, commands []extension.Command) []acp.AvailableCommand {
+	out := make([]acp.AvailableCommand, 0, len(metaCommands)+len(commands)+len(skills)+len(subagents))
+	meta := make(map[string]struct{}, len(metaCommands))
+	for _, m := range metaCommands {
+		meta[m.Name] = struct{}{}
+	}
 	out = append(out, metaCommands...)
+	taken := make(map[string]struct{}, len(commands))
+	for _, cmd := range commands {
+		if cmd.Name == "" {
+			continue
+		}
+		if _, isMeta := meta[cmd.Name]; isMeta {
+			continue
+		}
+		if _, seen := taken[cmd.Name]; seen {
+			continue
+		}
+		taken[cmd.Name] = struct{}{}
+		out = append(out, acp.AvailableCommand{
+			Name:        cmd.Name,
+			Description: cmd.Summary(),
+		})
+	}
 	for _, sk := range skills {
 		if sk.Name == "" {
+			continue
+		}
+		if _, overridden := taken[sk.Name]; overridden {
 			continue
 		}
 		out = append(out, acp.AvailableCommand{

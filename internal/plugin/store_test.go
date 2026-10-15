@@ -145,6 +145,40 @@ func TestSkillDirs(t *testing.T) {
 	}
 }
 
+func TestCommandRoots(t *testing.T) {
+	home := t.TempDir()
+	r := NewRegistry()
+
+	alpha := PluginDir(home, "alpha")
+	if err := os.MkdirAll(filepath.Join(alpha, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(alpha, ".pi-go", "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zeta := PluginDir(home, "zeta")
+	if err := os.MkdirAll(filepath.Join(zeta, ".claude", "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.Plugins["zeta"] = Installed{Name: "zeta"}
+	r.Plugins["alpha"] = Installed{Name: "alpha"}
+	r.Plugins["removed"] = Installed{Name: "removed"}
+
+	roots := r.CommandRoots(home)
+	if len(roots) != 3 {
+		t.Fatalf("CommandRoots = %+v, want 3 (removed plugin skipped)", roots)
+	}
+	if roots[0].Name != "alpha" || !strings.HasSuffix(roots[0].Dir, filepath.Join("alpha", "commands")) {
+		t.Errorf("roots[0] = %+v, want alpha commands/", roots[0])
+	}
+	if roots[1].Name != "alpha" || !strings.Contains(roots[1].Dir, filepath.Join(".pi-go", "commands")) {
+		t.Errorf("roots[1] = %+v, want alpha .pi-go/commands", roots[1])
+	}
+	if roots[2].Name != "zeta" || !strings.Contains(roots[2].Dir, filepath.Join(".claude", "commands")) {
+		t.Errorf("roots[2] = %+v, want zeta .claude/commands", roots[2])
+	}
+}
+
 // Names arrive from a third-party manifest and become directory names, so a
 // traversal attempt must be rejected.
 func TestValidName(t *testing.T) {

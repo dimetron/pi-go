@@ -467,7 +467,7 @@ func (a *Agent) availableCommandsForCWD(cwd string) []acp.AvailableCommand {
 	if resolver != nil {
 		return resolver(cwd)
 	}
-	return adapter.BuildAvailableCommands(skills, subagents)
+	return adapter.BuildAvailableCommands(skills, subagents, nil)
 }
 
 type connectionUpdater struct {

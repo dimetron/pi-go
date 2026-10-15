@@ -48,8 +48,8 @@ func newPluginManager(cmd *cobra.Command) (*plugin.Manager, context.Context, con
 	return m, ctx, cancel, nil
 }
 
-// newPluginCmd wires up `pi plugin`, which installs skills published through a
-// Claude Code-compatible plugin marketplace.
+// newPluginCmd wires up `pi plugin`, which installs skills and commands published
+// through a Claude Code-compatible plugin marketplace.
 func newPluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugin",
@@ -64,7 +64,8 @@ agents use, so existing marketplaces work unchanged:
     pi plugin install superpowers@superpowers-marketplace
 
 Installed plugins live in ~/.pi-go/plugins, and their skills are discovered
-automatically. Plugin skills have lower precedence than your own: a skill in
+automatically. Command files in a plugin are available as /plugin-name:command.
+Plugin skills have lower precedence than your own: a skill in
 ~/.pi-go/skills or .pi-go/skills with the same name always wins.`,
 	}
 

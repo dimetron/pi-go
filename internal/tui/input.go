@@ -62,9 +62,11 @@ type InputModel struct {
 	History   []HistoryEntry
 
 	// Dependencies (set by root model).
-	Skills    []extension.Skill
-	SkillDirs []string
-	WorkDir   string
+	Skills      []extension.Skill
+	SkillDirs   []string
+	Commands    []extension.Command
+	CommandDirs []extension.CommandDir
+	WorkDir     string
 
 	// Palette is the resolved theme palette, set each frame by the model before
 	// rendering. Zero means the dark default.
@@ -204,7 +206,19 @@ func (im *InputModel) ReloadSkills() {
 	}
 }
 
-// AllCommandNames returns a sorted list of all command names: built-in + skills.
+// ReloadCommands re-scans command directories from disk and updates the cached list.
+func (im *InputModel) ReloadCommands() {
+	if len(im.CommandDirs) == 0 {
+		return
+	}
+	if fresh, err := extension.LoadCommands(im.CommandDirs...); err == nil {
+		im.Commands = fresh
+	}
+}
+
+// AllCommandNames returns a sorted list of all command names: built-in,
+// custom commands, then skills. A built-in or custom command hides a later
+// entry of the same name.
 func (im *InputModel) AllCommandNames() []string {
 	seen := make(map[string]bool)
 	var cmds []string
@@ -213,6 +227,14 @@ func (im *InputModel) AllCommandNames() []string {
 			seen[cmd] = true
 			cmds = append(cmds, cmd)
 		}
+	}
+	for _, cmd := range im.Commands {
+		name := "/" + cmd.Name
+		if isBuiltinSlashCommand(cmd.Name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		cmds = append(cmds, name)
 	}
 	for _, skill := range im.Skills {
 		name := "/" + skill.Name

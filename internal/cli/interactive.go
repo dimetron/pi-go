@@ -396,6 +396,8 @@ func deferredInit(
 			Logger:            sessionLog,
 			Skills:            ps.skills,
 			SkillDirs:         ps.skillDirs,
+			Commands:          ps.commands,
+			CommandDirs:       ps.commandDirs,
 			GenerateCommitMsg: commitMsgFn,
 			AgentEventCh:      agentEventCh,
 			SystemNoticeCh:    noticeCh,
@@ -470,6 +472,10 @@ type deferredParallelState struct {
 	// Skills
 	skills    []extension.Skill
 	skillDirs []string
+
+	// Custom slash commands
+	commands    []extension.Command
+	commandDirs []extension.CommandDir
 }
 
 // runDeferredInitPhase2 discovers git state, LSP servers, MCP toolsets and
@@ -535,9 +541,16 @@ func runDeferredInitPhase2(ctx context.Context, cfg config.Config, cwd string, s
 		send("skills", false)
 		dirs := extension.DefaultSkillDirs()
 		sk, _ := extension.LoadSkills(dirs...)
+		cmdDirs := extension.DefaultCommandDirs()
+		cmds, cmdErr := extension.LoadCommands(cmdDirs...)
+		if cmdErr != nil {
+			notice.Notifyf("warning: custom commands not loaded: %v", cmdErr)
+		}
 		ps.mu.Lock()
 		ps.skills = sk
 		ps.skillDirs = dirs
+		ps.commands = cmds
+		ps.commandDirs = cmdDirs
 		ps.mu.Unlock()
 		send("skills", true)
 	}()

@@ -192,6 +192,45 @@ func (r *Registry) SkillDirs(piHome string) []string {
 	return dirs
 }
 
+// CommandRoot is one directory of slash-command files shipped by an installed
+// plugin. Name is the plugin name and becomes the command namespace
+// (/name:command). Dir is the directory that holds the markdown files.
+type CommandRoot struct {
+	Name string
+	Dir  string
+}
+
+// CommandRoots returns every commands directory of every installed plugin,
+// ordered by plugin name. Within one plugin the order is commands/, then
+// .claude/commands, then .pi-go/commands, matching the precedence used for
+// user and project command directories. Directories that do not exist are
+// skipped.
+func (r *Registry) CommandRoots(piHome string) []CommandRoot {
+	names := make([]string, 0, len(r.Plugins))
+	for name := range r.Plugins {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var roots []CommandRoot
+	for _, name := range names {
+		pluginDir := PluginDir(piHome, name)
+		for _, rel := range []string{
+			"commands",
+			filepath.Join(".claude", "commands"),
+			filepath.Join(".pi-go", "commands"),
+		} {
+			dir := filepath.Join(pluginDir, rel)
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			roots = append(roots, CommandRoot{Name: name, Dir: dir})
+		}
+	}
+	return roots
+}
+
 // ResolveSkillsDir returns the directory holding a plugin's skills. An explicit
 // SkillsDir on the record wins; otherwise the pi-go convention (.pi-go/skills)
 // is preferred and the Claude Code convention (skills/) is the fallback. The
