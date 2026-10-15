@@ -101,6 +101,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/model", desc: "Show or switch model", run: (*model).handleModelCommand},
 	{name: "/session", desc: "Show session info", run: slashCmdVoid((*model).showSessionMessage)},
 	{name: "/context", desc: "Show context usage", run: slashCmdVoid((*model).showContextMessage)},
+	{name: "/cost", desc: "Show estimated session cost", run: slashCmdVoid((*model).showCostMessage)},
 	{name: "/branch", desc: "Manage branches", run: slashCmdArgs((*model).handleBranchCommand)},
 	{name: "/compact", desc: "Compact context", run: slashCmdVoid((*model).handleCompactCommand)},
 	{name: "/subagents", desc: "Show subagents", run: slashCmdVoid((*model).handleAgentsCommand)},
@@ -578,6 +579,10 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 	m.cfg.LLM = newLLM
 	m.cfg.ModelName = newName
 	m.cfg.ProviderName = newProvider
+	// Later responses are priced as this model. Base URL is left alone.
+	if m.cfg.SessionService != nil && m.cfg.SessionID != "" {
+		_ = m.cfg.SessionService.SetSessionIdentity(m.cfg.SessionID, newName, newProvider)
+	}
 	if roleName != "" {
 		m.cfg.ActiveRole = roleName
 	} else {
@@ -916,6 +921,7 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/model [name]` | Show or switch current model |\n")
 	b.WriteString("| `/session` | Show session info |\n")
 	b.WriteString("| `/context` | Show context usage |\n")
+	b.WriteString("| `/cost` | Estimated USD cost for this session |\n")
 	b.WriteString("| `/compact` | Compact session context |\n")
 	b.WriteString("| `/history [query]` | Command history |\n")
 	b.WriteString("| `/retry` | Re-send the prompt of a turn that failed |\n")

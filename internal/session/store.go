@@ -484,6 +484,11 @@ func (s *FileService) AppendEvent(_ context.Context, curSession session.Session,
 		}
 	}
 
+	// Record token spend after the event is durable. A failure here must not
+	// fail the turn: the ledger is a report, and the next /cost backfills
+	// from the events that did persist.
+	s.noteAppendedSpend(sessionDir, sess, event)
+
 	return nil
 }
 
@@ -652,6 +657,38 @@ func (s *FileService) SetSessionVersion(sessionID, version string) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.meta.Version = version
+	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
+}
+
+// SetSessionIdentity records the model and provider currently answering,
+// without touching base URL. /model uses it so token spend after a switch is
+// priced as the model that ran, and a configured endpoint stays put.
+// An empty model name is stored as UnknownModel. An empty provider leaves
+// the recorded provider as it was.
+func (s *FileService) SetSessionIdentity(sessionID, modelName, providerName string) error {
+	modelName = strings.TrimSpace(modelName)
+	providerName = strings.TrimSpace(providerName)
+	if modelName == "" {
+		modelName = UnknownModel
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		loaded, err := s.loadSessionUnchecked(sessionID)
+		if err != nil {
+			return err
+		}
+		sess = loaded
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Model = modelName
+	if providerName != "" {
+		sess.meta.Provider = providerName
+	}
 	return writeMeta(filepath.Join(s.baseDir, sessionID), &sess.meta)
 }
 
@@ -1188,6 +1225,10 @@ func (s *FileService) Compact(sessionID, appName, userID string, summarizer Summ
 	if err != nil {
 		return fmt.Errorf("loading session for compaction: %w", err)
 	}
+	// Snapshot spend before events are dropped. A session under the token
+	// threshold returns below without rewriting, and the snapshot is still
+	// right: nothing was discarded.
+	s.ensureSpend(filepath.Join(s.baseDir, sessionID), sess)
 
 	totalTokens := estimateEventTokens(sess.events)
 	if totalTokens <= cfg.MaxTokens {
@@ -1260,6 +1301,8 @@ func (s *FileService) ClearEvents(sessionID, appName, userID string) error {
 	if err != nil {
 		return fmt.Errorf("loading session for clear: %w", err)
 	}
+	// /clear drops the conversation, not the tokens it spent.
+	s.ensureSpend(filepath.Join(s.baseDir, sessionID), sess)
 
 	sess.events = nil
 

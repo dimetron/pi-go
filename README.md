@@ -382,7 +382,22 @@ reconstruct the text; that is how every consumer uses it.
 | `/memory`       | Memory Palace commands (see below)                       |
 | `/audit`        | Scan skills for hidden Unicode threats                   |
 | `/clear`        | Clear conversation                                       |
+| `/cost`         | Estimated USD cost for this session                      |
 | `/exit`         | Exit the agent                                           |
+
+`/cost` prices the session's recorded input, output, and cache-read tokens.
+Rates are USD per million tokens from the bundled models.dev snapshot, which
+goes stale; `/model-price-refresh` pulls a new one. Override a model in
+`~/.pi-go/config.json` when the snapshot is wrong:
+
+```json
+{ "modelPrices": { "openai/gpt-5.6-sol": { "input": 4, "output": 20, "cache_read": 0.4 } } }
+```
+
+The figure is an estimate. Cache writes are not broken out from fresh input,
+so a newly filled prompt cache costs a little less here than on the invoice.
+Compaction does not erase the total: the token ledger is kept when events are
+dropped. Subagent sessions are separate.
 
 ### Plugin marketplaces
 

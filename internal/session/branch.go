@@ -99,6 +99,11 @@ func (s *FileService) SwitchBranch(sessionID, appName, userID, branchName string
 		return nil // Already on this branch.
 	}
 
+	// The active branch's events are about to be replaced. Capture their
+	// spend first so a switch does not drop tokens that were never appended
+	// under the ledger (a session resumed from before it existed).
+	s.ensureSpend(sessionDir, sess)
+
 	// Save current branch's events before switching.
 	if err := s.saveBranchEvents(sessionDir, bs.Active, sess); err != nil {
 		return err

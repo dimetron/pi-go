@@ -76,6 +76,8 @@ func (s *FileService) AutoCompact(
 	if err != nil {
 		return AutoCompactOutcome{}, fmt.Errorf("loading session for auto-compaction: %w", err)
 	}
+	// Snapshot spend before shed or summarize rewrites events.jsonl.
+	s.ensureSpend(filepath.Join(s.baseDir, sessionID), sess)
 
 	outcome := AutoCompactOutcome{
 		Action:       action,
