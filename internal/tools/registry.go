@@ -116,7 +116,7 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 		newGitHunkTool,
 	}
 
-	tools := make([]tool.Tool, 0, len(builders)+1)
+	tools := make([]tool.Tool, 0, len(builders)+2)
 	for _, b := range builders {
 		t, err := b(sandbox)
 		if err != nil {
@@ -143,6 +143,15 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 		}
 		tools = append(tools, webSearchTool)
 	}
+
+	// web_fetch is always registered. It is a plain HTTP GET with a timeout,
+	// a body cap, and the same private-host refusal as fetch_docs, so it does
+	// not depend on a search backend the way web_search does.
+	webFetchTool, err := newWebFetchTool()
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, webFetchTool)
 
 	return tools, nil
 }

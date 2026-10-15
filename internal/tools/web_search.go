@@ -100,8 +100,8 @@ Use this when you need facts that are not in the repository and that you cannot
 read from a file: a library's current release, a recent API change, an error
 message you have not seen before, or anything else that changed after your
 training data. Results are titles, URLs and content snippets, each with the URL
-kept intact so you can fetch a page in full with a shell command if a snippet is
-not enough.
+kept intact so you can read the page with web_fetch when a snippet is not
+enough.
 
 Requires a running Ollama daemon, or OLLAMA_API_KEY for the ollama.com search
 API. Prefer grep and read when the answer is already in the repository — a

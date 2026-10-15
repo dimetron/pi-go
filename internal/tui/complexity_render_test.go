@@ -352,6 +352,8 @@ func TestToolCallSummaryRender(t *testing.T) {
 		{"grep pattern", "grep", map[string]any{"pattern": "foo"}, "foo"},
 		{"ripgrep pattern", "ripgrep", map[string]any{"pattern": "bar"}, "bar"},
 		{"find pattern", "find", map[string]any{"pattern": "*.go"}, "*.go"},
+		{"web_fetch url", "web_fetch", map[string]any{"url": "https://example.com/docs"}, "https://example.com/docs"},
+		{"web_fetch missing", "web_fetch", map[string]any{}, ""},
 		{"grounding query", groundingToolName, map[string]any{"query": "who is x"}, "who is x"},
 		{"grounding missing", groundingToolName, map[string]any{}, ""},
 

@@ -49,7 +49,8 @@ const (
 const SystemInstruction = `You are pi-go, a coding agent that helps users with software engineering tasks.
 
 You have access to tools for reading, writing, and editing files, running shell commands,
-and searching codebases. Use these tools to assist the user effectively.
+searching codebases, and fetching web pages. Use these tools to assist the user effectively.
+To read a URL, use web_fetch.
 
 # Codebase exploration
 

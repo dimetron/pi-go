@@ -114,7 +114,7 @@ inventoried".
 
 Excluded (see `Exclusions` in `scenarios.go`): `a2a` (remote A2A server),
 `palace-*` (populated memory palace + embedding model), `google_search`
-(Gemini provider built-in).
+(Gemini provider built-in), `web_fetch` (arbitrary public URL).
 
 `fetch_docs` cannot be pointed at a local `httptest` server: the tool enforces
 `https://` and rejects private hosts, so the scenario uses a real public

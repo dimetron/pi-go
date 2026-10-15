@@ -18,6 +18,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 
 - **Multi-provider LLM** — Claude (Anthropic), GPT/O-series (OpenAI), Gemini (Google), Mistral, Grok (xAI), Azure OpenAI, OpenRouter, OpenCode, and Ollama (local or cloud) for models
 - **Sandboxed tools** — read, write, edit, shell, grep, find, tree, and git operations. All tools are restricted to the project directory via `os.Root`.
+- **Web fetch** — `web_fetch` reads a public URL, converts HTML to markdown, and enforces a response size cap and a timeout.
 - **Interactive TUI** — Bubble Tea v2 with Markdown rendering (Glamour), slash commands, and theming
 - **Session persistence** — JSONL append-only event logs with branching, compaction, and resume
 - **Model roles** — Named configurations (default, smol, slow, plan, commit) selectable via CLI flags
@@ -557,6 +558,19 @@ Both apply to local Ollama and Ollama Cloud — they share one request path. Rai
 these trades diversity for repetition control, and a value that helps one model can
 degrade another, so tune per model rather than setting them globally.
 
+### Web fetch
+
+The `web_fetch` tool fetches a public `http` or `https` URL and returns it as
+text the model can read. HTML is converted to markdown. Plain text and JSON are
+returned unchanged. Other content types — images, archives, PDF — are refused
+so a binary payload is not dumped into the context.
+
+The response body is capped at 100 KiB (`truncated` is set when the server sent
+more) and the request times out after 30 seconds. Redirects are limited, and
+loopback, private, and link-local addresses are refused.
+
+`web_search` still returns snippets. `web_fetch` reads one URL.
+
 ### Web search
 
 The `web_search` tool lets the agent look up things that are not in the
@@ -601,8 +615,8 @@ why pi-go calls them directly instead of through the Ollama Go SDK: the SDK's
 
 Each result keeps its URL and is capped at 4000 bytes of content, so a large page
 — a GitHub repository page comes back as the whole rendered README — spends a
-bounded part of the context window, and the model can still fetch the full page
-with `bash` when a snippet is not enough.
+bounded part of the context window. Read the page with `web_fetch` when a
+snippet is not enough.
 
 ```bash
 # Local daemon (no key needed)
