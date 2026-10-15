@@ -982,7 +982,7 @@ func TestSlashCommandCandidates_AllCommandsAlphabetical(t *testing.T) {
 	candidates := allSlashCommandCandidates([]extension.Skill{
 		{Name: "zeta", Description: "Zeta skill"},
 		{Name: "alpha", Description: "Alpha skill"},
-	})
+	}, nil)
 
 	for i := 1; i < len(candidates); i++ {
 		prev := strings.ToLower(candidates[i-1].Text)

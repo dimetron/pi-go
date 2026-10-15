@@ -42,9 +42,16 @@ func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return spec.run(m, parts[1:])
 	}
 
+	// Custom commands expand a markdown template into the next user turn.
+	// Built-ins above win on a name clash; a custom command wins over a skill
+	// of the same name because the user wrote it as a slash command.
+	commandName := strings.TrimPrefix(cmd, "/")
+	if custom, ok := extension.FindCommand(m.customCommands(), commandName); ok {
+		return m.handleCustomCommand(custom, parts[1:])
+	}
+
 	// Check if it's a dynamic skill command.
-	skillName := strings.TrimPrefix(cmd, "/")
-	if skill, ok := extension.FindSkill(m.cfg.Skills, skillName); ok {
+	if skill, ok := extension.FindSkill(m.cfg.Skills, commandName); ok {
 		return m.handleSkillCommand(skill, parts[1:])
 	}
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -142,6 +149,26 @@ var slashCommandByName = func() map[string]slashCommandSpec {
 	}
 	return byName
 }()
+
+// builtinSlashCommands is a second index of the built-in names, filled from
+// init rather than from slashCommandByName's initializer. formatHelp is
+// reachable from that initializer (the /help handler), so a direct reference
+// back to slashCommandByName is an initialization cycle.
+var builtinSlashCommands map[string]struct{}
+
+func init() {
+	builtinSlashCommands = make(map[string]struct{}, len(slashCommandByName))
+	for name := range slashCommandByName {
+		builtinSlashCommands[name] = struct{}{}
+	}
+}
+
+// isBuiltinSlashCommand reports whether /name is a built-in slash command.
+// name is the command without the leading slash.
+func isBuiltinSlashCommand(name string) bool {
+	_, ok := builtinSlashCommands["/"+name]
+	return ok
+}
 
 // showHelpMessage appends the help text as an assistant message.
 func (m *model) showHelpMessage() {
@@ -887,9 +914,20 @@ func (m *model) showCommandList() {
 		}
 		b.WriteString("\n")
 	}
-	if len(m.cfg.Skills) > 0 {
+	customs := visibleCustomCommands(m.customCommands())
+	if len(customs) > 0 {
+		b.WriteString("\n**Custom commands:**\n")
+		for _, cmd := range customs {
+			fmt.Fprintf(&b, "  `%s`", cmd.Invocation())
+			if cmd.Description != "" {
+				b.WriteString(" — " + cmd.Description)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if skills := skillsNotOverridden(m.cfg.Skills, customs); len(skills) > 0 {
 		b.WriteString("\n**Skills:**\n")
-		for _, skill := range m.cfg.Skills {
+		for _, skill := range skills {
 			fmt.Fprintf(&b, "  `/%s`", skill.Name)
 			if skill.Description != "" {
 				b.WriteString(" — " + skill.Description)
@@ -948,13 +986,23 @@ func (m *model) formatHelp() string {
 	b.WriteString("|---------|-------------|\n")
 	b.WriteString("| `/skills` | List available skills |\n")
 	b.WriteString("| `/skills create <n>` | Create a new skill |\n")
-	b.WriteString("| `/skills load` | Reload skills from disk |\n")
+	b.WriteString("| `/skills load` | Reload skills and custom commands |\n")
 
-	if len(m.cfg.Skills) > 0 {
+	customs := visibleCustomCommands(m.customCommands())
+	if len(customs) > 0 {
+		b.WriteString("\n**Custom commands:**\n\n")
+		b.WriteString("| Command | Description |\n")
+		b.WriteString("|---------|-------------|\n")
+		for _, c := range customs {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", c.Invocation(), clipHelp(c.Description, 80))
+		}
+	}
+
+	if skills := skillsNotOverridden(m.cfg.Skills, customs); len(skills) > 0 {
 		b.WriteString("\n**Available skills:**\n\n")
 		b.WriteString("| Skill | Description |\n")
 		b.WriteString("|-------|-------------|\n")
-		for _, s := range m.cfg.Skills {
+		for _, s := range skills {
 			desc := s.Description
 			if len(desc) > 80 {
 				desc = desc[:77] + "..."
@@ -1213,4 +1261,67 @@ func maskServerURL(url string) string {
 		}
 	}
 	return masked
+}
+
+// customCommands returns the command templates for this session. The input
+// model is the copy completion reloads; the config copy is what startup and
+// unit tests set.
+func (m *model) customCommands() []extension.Command {
+	if len(m.inputModel.Commands) > 0 {
+		return m.inputModel.Commands
+	}
+	return m.cfg.Commands
+}
+
+// visibleCustomCommands drops commands whose names belong to a built-in.
+// The built-in still runs; listing the file next to it would imply otherwise.
+func visibleCustomCommands(commands []extension.Command) []extension.Command {
+	if len(commands) == 0 {
+		return nil
+	}
+	out := make([]extension.Command, 0, len(commands))
+	for _, cmd := range commands {
+		if cmd.Name == "" {
+			continue
+		}
+		if isBuiltinSlashCommand(cmd.Name) {
+			continue
+		}
+		out = append(out, cmd)
+	}
+	return out
+}
+
+// skillsNotOverridden drops skills a visible custom command has taken over.
+// /name runs the command, so help should not also advertise the skill.
+func skillsNotOverridden(skills []extension.Skill, commands []extension.Command) []extension.Skill {
+	if len(commands) == 0 {
+		return skills
+	}
+	taken := make(map[string]struct{}, len(commands))
+	for _, cmd := range commands {
+		taken[cmd.Name] = struct{}{}
+	}
+	out := make([]extension.Skill, 0, len(skills))
+	for _, skill := range skills {
+		if _, ok := taken[skill.Name]; ok {
+			continue
+		}
+		out = append(out, skill)
+	}
+	return out
+}
+
+// clipHelp makes a frontmatter string safe to drop into a markdown table cell.
+func clipHelp(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ReplaceAll(s, "|", "/")
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	if n <= 3 {
+		return string(runes[:n])
+	}
+	return string(runes[:n-3]) + "..."
 }

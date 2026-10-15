@@ -45,6 +45,10 @@ type Config struct {
 	Skills []extension.Skill
 	// SkillDirs are the directories to re-scan for skills on each completion.
 	SkillDirs []string
+	// Commands are user-defined slash commands loaded from markdown files.
+	Commands []extension.Command
+	// CommandDirs are the directories to re-scan for custom commands.
+	CommandDirs []extension.CommandDir
 	// AgentEventCh receives subagent events from the agent tool for live display.
 	AgentEventCh <-chan AgentSubEvent
 	// SystemNoticeCh receives short system messages that must be shown in the
@@ -119,6 +123,8 @@ type InitResult struct {
 	Logger            *logger.Logger
 	Skills            []extension.Skill
 	SkillDirs         []string
+	Commands          []extension.Command
+	CommandDirs       []extension.CommandDir
 	GenerateCommitMsg func(context.Context, string) (string, error)
 	AgentEventCh      <-chan AgentSubEvent
 	SystemNoticeCh    <-chan string

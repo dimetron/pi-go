@@ -136,7 +136,7 @@ func (t *ToolDisplayModel) RenderToolMessage(msg message) string {
 	if t.CompactTools {
 		return t.renderCompactTool(msg, dim, p)
 	}
-	if msg.tool == "skill" {
+	if msg.tool == "skill" || msg.tool == "command" {
 		return t.renderSkillTool(msg, dim, p)
 	}
 	if msg.tool == "agent" || msg.tool == "subagent" || msg.tool == "a2a" {

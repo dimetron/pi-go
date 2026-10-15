@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildAvailableCommands_MetaOnlyWhenEmpty(t *testing.T) {
-	cmds := BuildAvailableCommands(nil, nil)
+	cmds := BuildAvailableCommands(nil, nil, nil)
 
 	want := []struct{ name, description string }{
 		{"clear", "Reset the conversation"},
@@ -33,7 +33,7 @@ func TestBuildAvailableCommands_AppendsSkillsInOrder(t *testing.T) {
 		{Name: "code-review", Description: "Review a pull request"},
 		{Name: "explore", Description: "Search the codebase"},
 	}
-	cmds := BuildAvailableCommands(skills, nil)
+	cmds := BuildAvailableCommands(skills, nil, nil)
 
 	if got, want := len(cmds), len(metaCommands)+len(skills); got != want {
 		t.Fatalf("len(cmds) = %d, want %d", got, want)
@@ -54,7 +54,7 @@ func TestBuildAvailableCommands_AppendsSubagentsInOrder(t *testing.T) {
 		{Name: "explore", Description: "Fast codebase exploration"},
 		{Name: "plan", Description: "Draft an implementation plan"},
 	}
-	cmds := BuildAvailableCommands(nil, agents)
+	cmds := BuildAvailableCommands(nil, agents, nil)
 
 	if got, want := len(cmds), len(metaCommands)+len(agents); got != want {
 		t.Fatalf("len(cmds) = %d, want %d", got, want)
@@ -74,7 +74,7 @@ func TestBuildAvailableCommands_CombinedOrderIsMetaThenSkillsThenSubagents(t *te
 	skills := []extension.Skill{{Name: "code-review", Description: "skill-desc"}}
 	agents := []subagent.AgentConfig{{Name: "planner", Description: "agent-desc"}}
 
-	cmds := BuildAvailableCommands(skills, agents)
+	cmds := BuildAvailableCommands(skills, agents, nil)
 
 	if got, want := len(cmds), len(metaCommands)+len(skills)+len(agents); got != want {
 		t.Fatalf("len(cmds) = %d, want %d", got, want)
@@ -106,7 +106,7 @@ func TestBuildAvailableCommands_SkipsUnnamedEntries(t *testing.T) {
 		{Name: "worker", Description: "loaded agent"},
 	}
 
-	cmds := BuildAvailableCommands(skills, agents)
+	cmds := BuildAvailableCommands(skills, agents, nil)
 
 	if got, want := len(cmds), len(metaCommands)+2; got != want {
 		t.Fatalf("len(cmds) = %d, want %d (%+v)", got, want, cmds)
@@ -122,14 +122,41 @@ func TestBuildAvailableCommands_SkipsUnnamedEntries(t *testing.T) {
 	}
 }
 
+func TestBuildAvailableCommands_CustomCommandsPrecedeSkillsAndSkipMeta(t *testing.T) {
+	skills := []extension.Skill{{Name: "review", Description: "skill"}}
+	commands := []extension.Command{
+		{Name: "help", Description: "should be hidden by the meta command"},
+		{Name: "review", Description: "custom", ArgumentHint: "[path]"},
+		{Name: "ship", Description: "Ship it"},
+	}
+
+	cmds := BuildAvailableCommands(skills, nil, commands)
+
+	names := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		names = append(names, c.Name)
+	}
+	// meta (3) + review + ship. help is dropped, and the skill named review
+	// loses to the custom command.
+	if len(names) != len(metaCommands)+2 {
+		t.Fatalf("names = %v, want meta + review + ship", names)
+	}
+	if names[len(metaCommands)] != "review" || names[len(metaCommands)+1] != "ship" {
+		t.Fatalf("custom commands = %v", names[len(metaCommands):])
+	}
+	if cmds[len(metaCommands)].Description != "custom ([path])" {
+		t.Errorf("description = %q, want summary with argument hint", cmds[len(metaCommands)].Description)
+	}
+}
+
 func TestBuildAvailableCommands_ReturnedSliceIsIndependent(t *testing.T) {
 	// BuildAvailableCommands must not mutate or share backing storage with
 	// the package-level metaCommands slice — callers (Initialize) may
 	// append their own entries in future layers.
-	first := BuildAvailableCommands(nil, nil)
+	first := BuildAvailableCommands(nil, nil, nil)
 	first[0].Name = "mutated"
 
-	second := BuildAvailableCommands(nil, nil)
+	second := BuildAvailableCommands(nil, nil, nil)
 	if second[0].Name == "mutated" {
 		t.Fatalf("metaCommands leaked into caller: %+v", second)
 	}

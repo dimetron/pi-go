@@ -273,28 +273,37 @@ func (m *model) handleSkillListCommand() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleSkillLoadCommand reloads skills from disk and reports what was found.
+// handleSkillLoadCommand reloads skills and custom commands from disk.
 func (m *model) handleSkillLoadCommand() (tea.Model, tea.Cmd) {
 	m.inputModel.Clear()
 
 	m.inputModel.ReloadSkills()
+	m.inputModel.ReloadCommands()
 	m.cfg.Skills = m.inputModel.Skills
+	m.cfg.Commands = m.inputModel.Commands
 
+	var parts []string
 	if len(m.cfg.Skills) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: "Reloaded: no skills found. Place `*.SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.",
-		})
-		return m, nil
+		parts = append(parts, "Reloaded: no skills found. Place `SKILL.md` files in `~/.pi-go/skills/` or `.pi-go/skills/`.")
+	} else {
+		var names []string
+		for _, s := range m.cfg.Skills {
+			names = append(names, "/"+s.Name)
+		}
+		parts = append(parts, fmt.Sprintf("Reloaded %d skill(s): %s", len(m.cfg.Skills), strings.Join(names, ", ")))
 	}
-
-	var names []string
-	for _, s := range m.cfg.Skills {
-		names = append(names, "/"+s.Name)
+	if cmds := visibleCustomCommands(m.customCommands()); len(cmds) == 0 {
+		parts = append(parts, "No custom commands found. Place markdown files in `.pi-go/commands/` or `~/.pi-go/commands/`.")
+	} else {
+		var names []string
+		for _, c := range cmds {
+			names = append(names, "/"+c.Name)
+		}
+		parts = append(parts, fmt.Sprintf("Reloaded %d custom command(s): %s", len(cmds), strings.Join(names, ", ")))
 	}
 	m.chatModel.Messages = append(m.chatModel.Messages, message{
 		role:    "assistant",
-		content: fmt.Sprintf("Reloaded %d skill(s): %s", len(m.cfg.Skills), strings.Join(names, ", ")),
+		content: strings.Join(parts, "\n"),
 	})
 	return m, nil
 }

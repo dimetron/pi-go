@@ -37,7 +37,7 @@ type CompleteResult struct {
 
 // Complete returns completion candidates for the given input.
 // It analyzes the input and returns all matching options for commands, skills, and specs.
-func Complete(input string, skills []extension.Skill, workDir string) *CompleteResult {
+func Complete(input string, skills []extension.Skill, workDir string, commands ...[]extension.Command) *CompleteResult {
 	if input == "" {
 		return &CompleteResult{}
 	}
@@ -54,8 +54,11 @@ func Complete(input string, skills []extension.Skill, workDir string) *CompleteR
 
 	switch completionType {
 	case CompletionTypeCommand:
-		// For command completion, include both built-in commands and skills
+		// For command completion, include built-ins, custom commands, and skills.
+		// Dedup keeps the first text, so a built-in hides a custom command and
+		// a custom command hides a skill of the same name.
 		candidates = append(candidates, matchingCommands(input)...)
+		candidates = append(candidates, matchingCustomCommands(input, optionalCommands(commands))...)
 		candidates = append(candidates, matchingSkills(input, skills)...)
 	case CompletionTypeSkill:
 		candidates = matchingSkills(input, skills)
@@ -171,6 +174,39 @@ func matchingCommands(prefix string) []CompletionCandidate {
 		}
 	}
 
+	return candidates
+}
+
+// optionalCommands unwraps the variadic command list Complete accepts so
+// existing callers that only pass skills keep compiling.
+func optionalCommands(commands [][]extension.Command) []extension.Command {
+	if len(commands) == 0 {
+		return nil
+	}
+	return commands[0]
+}
+
+// matchingCustomCommands returns custom command candidates matching the prefix.
+// Commands that share a name with a built-in are omitted; the built-in wins.
+func matchingCustomCommands(prefix string, commands []extension.Command) []CompletionCandidate {
+	if strings.HasSuffix(prefix, " ") || len(commands) == 0 {
+		return nil
+	}
+	prefixLower := strings.ToLower(prefix)
+	var candidates []CompletionCandidate
+	for _, cmd := range commands {
+		text := "/" + cmd.Name
+		if isBuiltinSlashCommand(cmd.Name) {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(text), prefixLower) {
+			candidates = append(candidates, CompletionCandidate{
+				Text:        text,
+				Description: cmd.Summary(),
+				Type:        CompletionTypeCommand,
+			})
+		}
+	}
 	return candidates
 }
 

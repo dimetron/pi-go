@@ -26,7 +26,7 @@ sandboxed tools, integrates LSP, and ships with a process-based subagent system.
 - **AI Git tools** — Repository overview, file diffs, hunk parsing, and LLM-generated conventional commits (`/commit`)
 - **RPC server** — Unix socket JSON-RPC 2.0 for IDE/editor integration
 - **Memory Palace** — 4-layer contextual memory with SQLite storage, semantic embeddings (all-MiniLM-L6-v2), temporal knowledge graph, and project/conversation miners
-- **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), and Model Context Protocol (MCP) servers
+- **Extensions** — Hooks (shell callbacks), skills (`.SKILL.md` instructions), custom slash commands (markdown prompt templates), and Model Context Protocol (MCP) servers
 - **Plugin marketplaces** — Install skill bundles from any Claude Code-compatible plugin marketplace, with version tracking and updates (`pi plugin`)
 - **Skills audit** — Security scanning for hidden Unicode characters, BiDi attacks, and supply-chain threats in skill files (`pi audit`)
 
@@ -39,7 +39,7 @@ internal/
 ├── cli/            Cobra CLI flags, output modes (interactive, print, json, rpc)
 ├── config/         Global and project config (roles, hooks, MCP, themes)
 ├── audit/          Security scanner for skills (hidden Unicode, supply-chain threats)
-├── extension/      Hooks, skills, MCP server integration
+├── extension/      Hooks, skills, custom slash commands, MCP server integration
 ├── plugin/         Plugin marketplaces — manifests, registry, install/update
 ├── lsp/            LSP JSON-RPC client, language registry, manager, hooks
 ├── palace/         Memory Palace — drawers, layers, KG, miners, embedder, search
@@ -378,11 +378,65 @@ reconstruct the text; that is how every consumer uses it.
 | `/run`          | Execute a spec with task agent                           |
 | `/skill-create` | Create a new skill                                       |
 | `/skill-list`   | List available skills                                    |
-| `/skill-load`   | Reload skills from disk                                  |
+| `/skill-load`   | Reload skills and custom commands from disk              |
 | `/memory`       | Memory Palace commands (see below)                       |
 | `/audit`        | Scan skills for hidden Unicode threats                   |
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
+
+### Custom slash commands
+
+A markdown file in a commands directory becomes a slash command. `/name args`
+expands the file into the next user turn. `.prompt` files are read the same way.
+
+Directories are searched lowest precedence first. A later directory overrides
+an earlier one when both define the same command name:
+
+| Order | Directory | What it is |
+|-------|-----------|------------|
+| 1 | `~/.pi-go/plugins/<plugin>/commands/` (also `.claude/commands` and `.pi-go/commands` inside the plugin) | Installed plugin. Invoked as `/plugin:name` |
+| 2 | `~/.claude/commands/` | User, Claude Code layout |
+| 3 | `~/.pi-go/commands/` | User |
+| 4 | `<project>/.claude/commands/` | Project, nearest ancestor, Claude Code layout |
+| 5 | `<project>/.pi-go/commands/` | Project, nearest ancestor |
+
+`review.md` defines `/review`. A nested file `git/commit.md` defines
+`/git:commit` (Claude Code's colon form). Nesting stops two directories down,
+so `git/hooks/pre-commit.md` is `/git:hooks:pre-commit` and anything deeper is
+ignored. `README.md` is documentation and is not a command. When `name.md` and
+`name.prompt` both exist in one directory, the markdown file wins.
+
+```markdown
+---
+description: Review a file
+argument-hint: [path]
+---
+
+Review $1 for bugs and missing tests.
+
+Context: $ARGUMENTS
+```
+
+`$ARGUMENTS` (or `${ARGUMENTS}`) is every argument joined by spaces. `$1`,
+`$2`, … are the individual arguments. Arguments are split on whitespace, the
+same way every other slash command splits them; quotes are not shell quotes.
+If the template names no placeholder, the arguments are appended. `pi plugin`
+installs are read from `~/.pi-go` unless `PI_GO_HOME` points somewhere else.
+`/skills load` reloads these files along with skills.
+
+**Conflicts.** A built-in command (`/help`, `/plan`, `/run`, and the rest of
+the table above) always runs. A custom file with that name is loaded and then
+ignored. A custom command wins over a skill of the same name. At the same
+scope, `.pi-go/commands` wins over `.claude/commands`, and a project command
+wins over a user command. Plugin commands stay namespaced, so a plugin cannot
+replace `/review` you wrote yourself.
+
+Frontmatter keys other than `description` and `argument-hint` are ignored.
+That includes Claude Code's `allowed-tools` and `model`. Claude Code's
+shell-injection placeholder (an exclamation mark in front of a backticked
+command) is passed through as text; pi-go does not execute it while expanding
+the template. Command files are scanned with the same hidden-character audit
+as skills, and a critical finding blocks that file.
 
 ### Plugin marketplaces
 
@@ -411,7 +465,9 @@ pi plugin list
 | `pi plugin uninstall <plugin>`                   | Remove a plugin and its files                           |
 
 Installed plugins live in `~/.pi-go/plugins/`, and their skills are discovered
-automatically. **Plugin skills have lower precedence than your own**: a skill in
+automatically. Command files in a plugin are discovered too, under
+`/plugin-name:command` (see [Custom slash commands](#custom-slash-commands)).
+**Plugin skills have lower precedence than your own**: a skill in
 `~/.pi-go/skills` or `.pi-go/skills` with the same name always wins, so
 installing a plugin can never silently replace a skill you wrote or customized.
 
