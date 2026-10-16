@@ -8,7 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/alecthomas/chroma/v2 v2.27.0
-	github.com/anthropics/anthropic-sdk-go v1.80.0
+	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4
@@ -23,12 +23,12 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/in-toto/attestation v1.2.0
 	github.com/kagent-dev/mockllm v0.1.0
-	github.com/knights-analytics/hugot v0.8.2
+	github.com/knights-analytics/hugot v0.8.3
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/termenv v0.16.0
-	github.com/ollama/ollama v0.40.4
+	github.com/ollama/ollama v0.40.5
 	github.com/openai/openai-go/v3 v3.78.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
@@ -46,7 +46,7 @@ require (
 	golang.org/x/text v0.43.0
 	golang.org/x/time v0.16.0
 	google.golang.org/adk/v2 v2.6.0
-	google.golang.org/genai v1.74.0
+	google.golang.org/genai v1.75.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -80,6 +80,7 @@ require (
 	github.com/digitorus/timestamp v0.0.0-20260914073129-b4b58b92aa51 // indirect
 	github.com/dlclark/regexp2/v2 v2.8.4 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
+	github.com/eliben/go-sentencepiece v0.7.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v1.0.1 // indirect
@@ -106,10 +107,10 @@ require (
 	github.com/gomlx/compute v0.1.14 // indirect
 	github.com/gomlx/compute-onnx v0.1.13 // indirect
 	github.com/gomlx/exceptions v0.0.3 // indirect
-	github.com/gomlx/go-huggingface v0.4.13 // indirect
-	github.com/gomlx/go-xla v0.4.13 // indirect
-	github.com/gomlx/gomlx v0.28.16 // indirect
-	github.com/gomlx/onnx-gomlx v0.5.13 // indirect
+	github.com/gomlx/go-huggingface v0.4.15 // indirect
+	github.com/gomlx/go-xla v0.4.14 // indirect
+	github.com/gomlx/gomlx v0.28.17 // indirect
+	github.com/gomlx/onnx-gomlx v0.5.14 // indirect
 	github.com/google/certificate-transparency-go v1.3.3 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
@@ -122,11 +123,11 @@ require (
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
-	github.com/knights-analytics/ortgenai v0.3.3 // indirect
+	github.com/knights-analytics/ortgenai v0.3.4 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
-	github.com/microsoft/onnxruntime/go v0.0.0-20261008215507-e379df24dbe4 // indirect
+	github.com/microsoft/onnxruntime/go v0.0.0-20261014085412-9c87bdf2e667 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
@@ -167,9 +168,9 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/exp v0.0.0-20261007192929-f45ad48fbe92 // indirect
-	golang.org/x/image v0.46.0 // indirect
-	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/exp v0.0.0-20261013213113-2ab7f3cbc5fb // indirect
+	golang.org/x/image v0.47.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	google.golang.org/api v0.301.0 // indirect
