@@ -53,8 +53,12 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	defer span.End()
 
 	conn := acp.NewAgentSideConnection(cfg.Agent, cfg.Out, cfg.In)
-	// SetLogger cannot be called safely after NewAgentSideConnection because
-	// the SDK starts receive goroutines immediately; defer to default logger.
+	// Route the SDK's transport-level diagnostics ("failed to parse incoming
+	// message", "connection closed") to the same sink as the Agent's own
+	// logger. Otherwise the SDK falls back to slog.Default() and writes them
+	// to stderr, leaving no trace in the log. Safe after construction: the
+	// vendored SDK stores the logger atomically for exactly this.
+	conn.SetLogger(logger)
 
 	span.SetAttributes(
 		attribute.String("service.version", "dev"),
