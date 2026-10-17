@@ -29,9 +29,25 @@ type capturingClient struct {
 	messages atomic.Pointer[[]string]
 
 	mu                    sync.Mutex
+	events                []string
 	availableCommandsByID map[string][]acp.AvailableCommand
 	availableCommandsSeen atomic.Int32
 	failCommandsCount     atomic.Int32
+}
+
+// recordEvent appends to an ordered log of interleaved client-side and
+// test-side observations. Ordering is the whole point: the test needs to know
+// whether a notification was delivered before or after a call returned.
+func (c *capturingClient) recordEvent(event string) {
+	c.mu.Lock()
+	c.events = append(c.events, event)
+	c.mu.Unlock()
+}
+
+func (c *capturingClient) eventLog() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.events...)
 }
 
 func (c *capturingClient) append(text string) {
@@ -56,6 +72,7 @@ func (c *capturingClient) SessionUpdate(_ context.Context, n acp.SessionNotifica
 		}
 	}
 	if n.Update.AvailableCommandsUpdate != nil {
+		c.recordEvent("available_commands_update")
 		c.availableCommandsSeen.Add(1)
 		for {
 			cur := c.failCommandsCount.Load()

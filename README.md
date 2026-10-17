@@ -768,6 +768,28 @@ session id. The server implements the protocol's session lifecycle on top of it:
 So an editor can restart pi — or the machine — and pick a thread up where it
 left off, and `pi --session <id>` reopens the same conversation from the terminal.
 
+### Conformance
+
+`pi acp-server` speaks ACP **v1**. To check it against the protocol independently,
+run the upstream [ACP Test Compatibility Kit](https://github.com/agentclientprotocol/acp-tck)
+against the built binary:
+
+```bash
+# from a checkout of github.com/agentclientprotocol/acp-tck
+uv run acp-tck --protocol-version 1 \
+  --agent-cwd /tmp/acp-tck-wd --timeout 90 --test-timeout 300 \
+  -- /path/to/pi acp-server --model <provider/model>
+```
+
+Pass `--model` with a model the machine is authenticated for: the server's default
+fallback is not universally available, and an unauthenticated model surfaces as prompt
+failures (`401 Unauthorized`) that look like protocol defects but are not. As of the
+last run, the kit reports `VERDICT: CONFORMANT` — all mandatory requirements pass. The
+skips are capability-tier checks for features pi does not advertise (`image`/`audio`
+prompts, `session/delete`, `session/close`, `additionalDirectories`, `auth.logout`, and
+`session/new` returning no `modes`/`configOptions`), which the kit correctly reports as
+"not advertised" rather than a failure.
+
 ## kagent
 
 Run pi-go as a custom agent inside [kagent](https://kagent.dev) on Agent Substrate via the A2A
