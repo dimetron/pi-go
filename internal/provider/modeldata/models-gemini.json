@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-10-08T00:00:00Z",
+  "fetched_at": "2026-10-17T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -145,6 +145,10 @@
       "id": "gemini-3.8-flash-tts",
       "owned_by": "Gemini 3.8 Flash TTS",
       "release_date": "2026-09-02"
+    },
+    {
+      "id": "gemini-4-argon",
+      "owned_by": "Gemini 4 Argon"
     },
     {
       "id": "gemini-embedding-001",
