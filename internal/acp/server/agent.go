@@ -340,6 +340,9 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 	if _, err := a.bindSession(ctx, string(params.SessionId), params.Cwd); err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
+	// Sent synchronously so the advertisement is on the wire before the
+	// response, matching session/load's ordering contract.
+	a.sendAvailableCommands(string(params.SessionId))
 	return acp.ResumeSessionResponse{}, nil
 }
 

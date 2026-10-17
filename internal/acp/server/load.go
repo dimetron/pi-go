@@ -24,6 +24,10 @@ func (a *Agent) LoadSession(ctx context.Context, params acp.LoadSessionRequest) 
 	if err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
+	// Advertise slash commands before the transcript replay, so every
+	// session/update this call emits is on the wire before the response —
+	// the ordering the protocol requires and that a racing goroutine broke.
+	a.sendAvailableCommands(sid)
 	if !persisted {
 		return acp.LoadSessionResponse{}, nil
 	}

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/genai"
 
 	piagent "github.com/dimetron/pi-go/internal/agent"
+	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
@@ -174,6 +175,75 @@ func TestAgentLoadSessionReplaysBeforeResponding(t *testing.T) {
 	if _, err := clientConn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: "sess_replayed", Cwd: "/tmp/rpc"}); err != nil {
 		t.Errorf("ResumeSession() over the wire error = %v", err)
 	}
+}
+
+// TestAgentLoadSessionSendsCommandsBeforeResponding pins the ordering half of
+// the protocol's session/load contract that TestAgentLoadSessionReplaysBeforeResponding
+// does not cover: every session/update belonging to the call -- the replay *and*
+// the slash-command advertisement -- must be delivered before the response.
+// A goroutine racing the response used to leak available_commands_update after
+// it, which the ACP TCK reports as ACP-LOAD-002.
+func TestAgentLoadSessionSendsCommandsBeforeResponding(t *testing.T) {
+	clientRW, agentRW := pipePair()
+	defer clientRW.Close()
+
+	store := &fakeStore{transcripts: map[string][]string{"sess_ordered": {"first reply"}}}
+	a := &Agent{
+		Sessions: store,
+		Skills:   []extension.Skill{{Name: "review", Description: "Review code"}},
+	}
+	defer wireAgent(t, a, agentRW)()
+
+	client := &capturingClient{}
+	clientConn := acp.NewClientSideConnection(client, clientRW, clientRW)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := clientConn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersion(acp.ProtocolVersionNumber),
+	}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	const sid = "sess_ordered"
+	if _, err := clientConn.LoadSession(ctx, acp.LoadSessionRequest{
+		SessionId: acp.SessionId(sid), Cwd: "/tmp/ordered", McpServers: []acp.McpServer{},
+	}); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	// LoadSession returns only once the SDK has drained the notifications the
+	// response's watermark covered. Any notification that lands after this
+	// point arrived after the response and is a protocol violation. Give a
+	// racing goroutine a quiet window to show itself, which is what the TCK
+	// does -- checking at one instant alone would only catch the race when it
+	// happened to lose.
+	client.recordEvent("load_returned")
+	time.Sleep(250 * time.Millisecond)
+
+	events := client.eventLog()
+	var sawCommands bool
+	for i, event := range events {
+		if event != "available_commands_update" {
+			continue
+		}
+		sawCommands = true
+		if i > indexOf(events, "load_returned") {
+			t.Fatalf("available_commands_update arrived after the session/load response: %v", events)
+		}
+	}
+	if !sawCommands {
+		t.Fatalf("no available_commands_update observed; events = %v", events)
+	}
+}
+
+func indexOf(haystack []string, needle string) int {
+	for i, s := range haystack {
+		if s == needle {
+			return i
+		}
+	}
+	return len(haystack)
 }
 
 func TestAgentLoadSessionSurfacesReplayFailure(t *testing.T) {
