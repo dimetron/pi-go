@@ -1,6 +1,6 @@
 {
  "source": "models.dev",
- "fetched_at": "2026-09-30T00:00:00Z",
+ "fetched_at": "2026-10-17T00:00:00Z",
  "providers": {
   "openai": {
    "gpt-5.4": {
@@ -575,6 +575,23 @@
     "release_date": "2025-10-15",
     "text_output": true
    },
+   "claude-haiku-5-5": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 100000,
+      "input": 0.5,
+      "output": 2.5,
+      "cache_read": 0.05,
+      "cache_write": 0.625
+     }
+    ],
+    "release_date": "2026-10-07",
+    "text_output": true
+   },
    "claude-sonnet-4-6": {
     "input": 3,
     "output": 15,
@@ -586,7 +603,7 @@
    "claude-sonnet-5-5": {
     "input": 2,
     "output": 10,
-    "cache_read": 0.2,
+    "cache_read": 0.1,
     "cache_write": 2.5,
     "release_date": "2026-09-28",
     "text_output": true
@@ -869,6 +886,13 @@
     "release_date": "2026-03-26",
     "text_output": true
    },
+   "gemini-4-argon": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.1,
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
    "gemini-3.1-flash-lite": {
     "input": 0.25,
     "output": 1.5,
@@ -896,12 +920,14 @@
     "input": 2,
     "output": 6,
     "release_date": "2024-11-18",
+    "deprecated": true,
     "text_output": true
    },
    "mistral-nemo": {
     "input": 0.15,
     "output": 0.15,
     "release_date": "2024-07-01",
+    "deprecated": true,
     "text_output": true
    },
    "voxtral-mini-tts-latest": {
@@ -911,6 +937,7 @@
     "input": 0.4,
     "output": 2,
     "release_date": "2025-08-12",
+    "deprecated": true,
     "text_output": true
    },
    "mistral-large-latest": {
@@ -927,11 +954,19 @@
     "release_date": "2026-03-16",
     "text_output": true
    },
+   "ministral-8b-2512": {
+    "input": 0.15,
+    "output": 0.15,
+    "cache_read": 0.015,
+    "release_date": "2025-12-02",
+    "text_output": true
+   },
    "zai-glm-5-2": {
     "input": 1.4,
     "output": 4.4,
     "cache_read": 0.14,
     "release_date": "2026-06-13",
+    "deprecated": true,
     "text_output": true
    },
    "ministral-8b-latest": {
@@ -947,10 +982,18 @@
     "deprecated": true,
     "text_output": true
    },
+   "mistral-large-4": {
+    "input": 0.68,
+    "output": 2.09,
+    "cache_read": 0.07,
+    "release_date": "2026-10-06",
+    "text_output": true
+   },
    "open-mixtral-8x22b": {
     "input": 2,
     "output": 6,
     "release_date": "2024-04-17",
+    "deprecated": true,
     "text_output": true
    },
    "devstral-2512": {
@@ -964,18 +1007,42 @@
     "input": 0.4,
     "output": 2,
     "release_date": "2025-05-07",
+    "deprecated": true,
     "text_output": true
    },
    "magistral-medium-latest": {
     "input": 2,
     "output": 5,
     "release_date": "2025-03-17",
+    "deprecated": true,
+    "text_output": true
+   },
+   "voxtral-small-2507": {
+    "input": 0.1,
+    "output": 0.4,
+    "release_date": "2025-07-15",
+    "text_output": true
+   },
+   "glm-5-2": {
+    "input": 1.4,
+    "output": 4.4,
+    "cache_read": 0.14,
+    "release_date": "2026-06-13",
+    "deprecated": true,
+    "text_output": true
+   },
+   "labs-leanstral-1-5-1": {
+    "input": 0,
+    "output": 0,
+    "release_date": "2026-06-30",
+    "deprecated": true,
     "text_output": true
    },
    "pixtral-12b": {
     "input": 0.15,
     "output": 0.15,
     "release_date": "2024-09-01",
+    "deprecated": true,
     "text_output": true
    },
    "mistral-embed": {
@@ -1026,6 +1093,13 @@
     "deprecated": true,
     "text_output": true
    },
+   "ministral-14b-2512": {
+    "input": 0.2,
+    "output": 0.2,
+    "cache_read": 0.02,
+    "release_date": "2025-12-02",
+    "text_output": true
+   },
    "devstral-small-2507": {
     "input": 0.1,
     "output": 0.3,
@@ -1037,6 +1111,7 @@
     "input": 2,
     "output": 6,
     "release_date": "2024-11-01",
+    "deprecated": true,
     "text_output": true
    },
    "voxtral-small-latest": {
@@ -1049,12 +1124,14 @@
     "input": 0.7,
     "output": 0.7,
     "release_date": "2023-12-11",
+    "deprecated": true,
     "text_output": true
    },
    "mistral-small-2506": {
     "input": 0.1,
     "output": 0.3,
     "release_date": "2025-06-20",
+    "deprecated": true,
     "text_output": true
    },
    "zai-glm-5-3": {
@@ -1062,6 +1139,13 @@
     "output": 4.4,
     "cache_read": 0.14,
     "release_date": "2026-08-14",
+    "text_output": true
+   },
+   "ministral-3b-2512": {
+    "input": 0.1,
+    "output": 0.1,
+    "cache_read": 0.01,
+    "release_date": "2025-12-02",
     "text_output": true
    },
    "mistral-medium-2604": {
@@ -1075,6 +1159,14 @@
     "input": 0.25,
     "output": 0.25,
     "release_date": "2023-09-27",
+    "deprecated": true,
+    "text_output": true
+   },
+   "codestral-2508": {
+    "input": 0.3,
+    "output": 0.9,
+    "cache_read": 0.03,
+    "release_date": "2025-07-30",
     "text_output": true
    },
    "ministral-3b-latest": {
@@ -1106,6 +1198,9 @@
     ],
     "release_date": "2026-09-21",
     "text_output": true
+   },
+   "grok-imagine-video-1.5-lite": {
+    "release_date": "2026-10-01"
    },
    "grok-imagine-image": {
     "release_date": "2026-01-28"
@@ -1800,6 +1895,23 @@
     "deprecated": true,
     "text_output": true
    },
+   "claude-haiku-5-5": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 100000,
+      "input": 0.5,
+      "output": 2.5,
+      "cache_read": 0.05,
+      "cache_write": 0.625
+     }
+    ],
+    "release_date": "2026-10-07",
+    "text_output": true
+   },
    "gpt-6-luna": {
     "input": 0.1,
     "output": 0.5,
@@ -1931,6 +2043,13 @@
     "release_date": "2025-08-07",
     "text_output": true
    },
+   "grok-4.6": {
+    "input": 2,
+    "output": 6,
+    "cache_read": 0.5,
+    "release_date": "2026-08-12",
+    "text_output": true
+   },
    "gpt-5.6-sol": {
     "input": 4,
     "output": 20,
@@ -1995,19 +2114,6 @@
     "input": 0.85,
     "output": 0.85,
     "release_date": "2024-08-28",
-    "text_output": true
-   },
-   "kwaipilot/kat-coder-pro-v2.5": {
-    "input": 0.74,
-    "output": 2.96,
-    "cache_read": 0.15,
-    "release_date": "2026-07-10",
-    "text_output": true
-   },
-   "stealth/space-bunny-alpha": {
-    "input": 0,
-    "output": 0,
-    "release_date": "2026-09-23",
     "text_output": true
    },
    "bytedance-seed/seed-1.6-flash": {
@@ -2082,9 +2188,9 @@
     "text_output": true
    },
    "~moonshotai/kimi-latest": {
-    "input": 0.19,
-    "output": 11,
-    "cache_read": 0.18,
+    "input": 0.27,
+    "output": 14,
+    "cache_read": 0.27,
     "release_date": "2026-04-27",
     "text_output": true
    },
@@ -2171,6 +2277,23 @@
     "release_date": "2026-04-16",
     "text_output": true
    },
+   "anthropic/claude-haiku-5.5": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 100000,
+      "input": 0.5,
+      "output": 2.5,
+      "cache_read": 0.05,
+      "cache_write": 0.625
+     }
+    ],
+    "release_date": "2026-10-07",
+    "text_output": true
+   },
    "anthropic/claude-opus-4.8": {
     "input": 5,
     "output": 25,
@@ -2198,7 +2321,7 @@
    "anthropic/claude-sonnet-5.5": {
     "input": 2,
     "output": 10,
-    "cache_read": 0.2,
+    "cache_read": 0.1,
     "cache_write": 2.5,
     "release_date": "2026-09-28",
     "text_output": true
@@ -2234,23 +2357,6 @@
     "cache_read": 1,
     "cache_write": 12.5,
     "release_date": "2026-06-09",
-    "text_output": true
-   },
-   "anthropic/claude-sonnet-4": {
-    "input": 3,
-    "output": 15,
-    "cache_read": 0.3,
-    "cache_write": 3.75,
-    "tiers": [
-     {
-      "context_over": 200000,
-      "input": 6,
-      "output": 22.5,
-      "cache_read": 0.6,
-      "cache_write": 7.5
-     }
-    ],
-    "release_date": "2025-05-22",
     "text_output": true
    },
    "anthropic/claude-sonnet-5": {
@@ -2345,16 +2451,16 @@
     "text_output": true
    },
    "deepseek/deepseek-v4-flash-0731": {
-    "input": 0.01,
+    "input": 0.0162,
     "output": 1.28,
-    "cache_read": 0.01,
+    "cache_read": 0.0162,
     "release_date": "2026-07-31",
     "text_output": true
    },
    "deepseek/deepseek-v4.1-flash": {
-    "input": 0.0198,
-    "output": 0.396,
-    "cache_read": 0.00291,
+    "input": 0.15,
+    "output": 0.6,
+    "cache_read": 0.003,
     "release_date": "2026-09-10",
     "text_output": true
    },
@@ -2366,15 +2472,14 @@
     "text_output": true
    },
    "deepseek/deepseek-v3.1-terminus": {
-    "input": 0.3,
+    "input": 0.27,
     "output": 1,
-    "cache_read": 0.135,
     "release_date": "2025-09-22",
     "text_output": true
    },
    "deepseek/deepseek-chat": {
-    "input": 0.2574,
-    "output": 1.0287,
+    "input": 0.32,
+    "output": 0.89,
     "release_date": "2025-12-01",
     "text_output": true
    },
@@ -2405,9 +2510,9 @@
     "text_output": true
    },
    "deepseek/deepseek-v4-pro": {
-    "input": 0.783,
-    "output": 1.566,
-    "cache_read": 0.06525,
+    "input": 0.2088,
+    "output": 0.4176,
+    "cache_read": 0.0174,
     "release_date": "2026-04-24",
     "text_output": true
    },
@@ -2425,18 +2530,32 @@
     "release_date": "2025-12-01",
     "text_output": true
    },
+   "deepseek/deepseek-v4.1-flash-1017": {
+    "input": 0.15,
+    "output": 0.6,
+    "cache_read": 0.003,
+    "release_date": "2026-10-17",
+    "text_output": true
+   },
    "deepseek/deepseek-v4-flash": {
-    "input": 0.07854,
-    "output": 0.15708,
-    "cache_read": 0.015708,
+    "input": 0.091,
+    "output": 0.182,
+    "cache_read": 0.0182,
     "release_date": "2026-04-24",
     "text_output": true
    },
-   "unbiased/pareto": {
+   "unbiased/pareto-26.9": {
     "input": 2.5,
     "output": 7.5,
     "cache_read": 0.25,
-    "release_date": "2026-09-17",
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
+   "unbiased/pareto-26.10": {
+    "input": 0.8,
+    "output": 3.2,
+    "cache_read": 0.03,
+    "release_date": "2026-10-15",
     "text_output": true
    },
    "tencent/hy3-preview": {
@@ -2505,6 +2624,7 @@
    "meta-llama/llama-4-maverick": {
     "input": 0.1875,
     "output": 0.6525,
+    "cache_read": 0.05,
     "release_date": "2025-04-05",
     "text_output": true
    },
@@ -2549,9 +2669,9 @@
    },
    "~google/gemini-pro-latest": {
     "input": 2,
-    "output": 12,
-    "cache_read": 0.2,
-    "cache_write": 0.375,
+    "output": 10,
+    "cache_read": 0.1,
+    "cache_write": 0.1875,
     "tiers": [
      {
       "context_over": 200000,
@@ -2561,6 +2681,13 @@
      }
     ],
     "release_date": "2026-04-27",
+    "text_output": true
+   },
+   "~unbiased/pareto-latest": {
+    "input": 0.8,
+    "output": 3.2,
+    "cache_read": 0.03,
+    "release_date": "2026-10-13",
     "text_output": true
    },
    "perceptron/perceptron-mk1": {
@@ -2611,16 +2738,16 @@
     "text_output": true
    },
    "z-ai/glm-4.6": {
-    "input": 0.43,
-    "output": 1.75,
-    "cache_read": 0.08,
+    "input": 0.5,
+    "output": 2,
+    "cache_read": 0.1,
     "release_date": "2025-09-30",
     "text_output": true
    },
    "z-ai/glm-5": {
-    "input": 0.6,
-    "output": 1.92,
-    "cache_read": 0.12,
+    "input": 1,
+    "output": 3.2,
+    "cache_read": 0.2,
     "release_date": "2026-02-12",
     "text_output": true
    },
@@ -2645,23 +2772,23 @@
     "text_output": true
    },
    "z-ai/glm-4.7": {
-    "input": 0.6,
-    "output": 2.2,
-    "cache_read": 0.11,
+    "input": 0.54,
+    "output": 1.98,
+    "cache_read": 0.099,
     "release_date": "2025-12-22",
     "text_output": true
    },
    "z-ai/glm-5.2": {
-    "input": 0.624,
-    "output": 3.99,
-    "cache_read": 0.26,
+    "input": 0.62,
+    "output": 2.42,
+    "cache_read": 0.14,
     "release_date": "2026-06-13",
     "text_output": true
    },
    "z-ai/glm-5.1": {
-    "input": 0.9646,
-    "output": 3.0316,
-    "cache_read": 0.17914,
+    "input": 0.966,
+    "output": 3.036,
+    "cache_read": 0.1794,
     "release_date": "2026-04-07",
     "text_output": true
    },
@@ -2680,10 +2807,17 @@
     "text_output": true
    },
    "z-ai/glm-5.3": {
-    "input": 1.4,
-    "output": 4.4,
-    "cache_read": 0.26,
+    "input": 0.079,
+    "output": 4.8,
+    "cache_read": 0.078,
     "release_date": "2026-08-14",
+    "text_output": true
+   },
+   "reflection/beam-1.0-501b-a23b": {
+    "input": 1,
+    "output": 3,
+    "cache_read": 0.1,
+    "release_date": "2026-10-16",
     "text_output": true
    },
    "inference-net/schematron-v2-small": {
@@ -2777,10 +2911,17 @@
     "text_output": true
    },
    "meta/muse-glimmer-30b": {
-    "input": 0.35,
-    "output": 1.5,
+    "input": 0.3,
+    "output": 1.2,
     "cache_read": 0.04,
     "release_date": "2026-08-10",
+    "text_output": true
+   },
+   "meta/muse-wonder": {
+    "input": 4,
+    "output": 20,
+    "cache_read": 0.2,
+    "release_date": "2026-10-12",
     "text_output": true
    },
    "meta/muse-spark-1.1": {
@@ -2811,6 +2952,13 @@
     "release_date": "2026-09-02",
     "text_output": true
    },
+   "meta/muse-spark-open": {
+    "input": 1.25,
+    "output": 4.25,
+    "cache_read": 0.15,
+    "release_date": "2026-10-15",
+    "text_output": true
+   },
    "nousresearch/hermes-3-llama-3.1-70b": {
     "input": 0.7,
     "output": 0.7,
@@ -2829,17 +2977,29 @@
     "release_date": "2025-08-26",
     "text_output": true
    },
+   "scaledown/summarize": {
+    "input": 0.04,
+    "output": 0,
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
+   "scaledown/extract": {
+    "input": 0.04,
+    "output": 0,
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
    "~z-ai/glm-flash-latest": {
-    "input": 0.02,
-    "output": 0.2475,
-    "cache_read": 0.01,
+    "input": 0.06,
+    "output": 1.6,
+    "cache_read": 0.04,
     "release_date": "2026-08-27",
     "text_output": true
    },
    "~z-ai/glm-latest": {
-    "input": 0.13,
-    "output": 4,
-    "cache_read": 0.13,
+    "input": 0.0632,
+    "output": 4.4,
+    "cache_read": 0.0588,
     "release_date": "2026-08-19",
     "text_output": true
    },
@@ -2951,12 +3111,6 @@
     "release_date": "2025-09-27",
     "text_output": true
    },
-   "baidu/ernie-4.5-vl-424b-a47b": {
-    "input": 0.42,
-    "output": 1.25,
-    "release_date": "2025-06-30",
-    "text_output": true
-   },
    "x-ai/grok-4.20-multi-agent": {
     "input": 1.25,
     "output": 2.5,
@@ -3062,6 +3216,13 @@
     "release_date": "2026-08-12",
     "text_output": true
    },
+   "elorian/glimpse": {
+    "input": 0.6,
+    "output": 3,
+    "cache_read": 0.06,
+    "release_date": "2026-10-17",
+    "text_output": true
+   },
    "~anthropic/claude-opus-latest": {
     "input": 4,
     "output": 20,
@@ -3071,17 +3232,26 @@
     "text_output": true
    },
    "~anthropic/claude-haiku-latest": {
-    "input": 1,
-    "output": 5,
-    "cache_read": 0.1,
-    "cache_write": 1.25,
+    "input": 0.1,
+    "output": 0.5,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+    "tiers": [
+     {
+      "context_over": 100000,
+      "input": 0.5,
+      "output": 2.5,
+      "cache_read": 0.05,
+      "cache_write": 0.625
+     }
+    ],
     "release_date": "2026-04-27",
     "text_output": true
    },
    "~anthropic/claude-sonnet-latest": {
     "input": 2,
     "output": 10,
-    "cache_read": 0.2,
+    "cache_read": 0.1,
     "cache_write": 2.5,
     "release_date": "2026-04-27",
     "text_output": true
@@ -3116,23 +3286,23 @@
     "text_output": true
    },
    "~deepseek/deepseek-flash-latest": {
-    "input": 0.0198,
-    "output": 0.396,
-    "cache_read": 0.00291,
+    "input": 0.08,
+    "output": 0.5,
+    "cache_read": 0.008,
     "release_date": "2026-09-14",
     "text_output": true
    },
    "~deepseek/deepseek-pro-latest": {
-    "input": 0.123,
-    "output": 3.5,
-    "cache_read": 0.123,
+    "input": 0.12,
+    "output": 8,
+    "cache_read": 0.12,
     "release_date": "2026-09-14",
     "text_output": true
    },
    "~deepseek/deepseek-v4-flash-latest": {
-    "input": 0.0099,
-    "output": 0.13068,
-    "cache_read": 0.001386,
+    "input": 0.0162,
+    "output": 1.28,
+    "cache_read": 0.0162,
     "release_date": "2026-08-01",
     "text_output": true
    },
@@ -3164,10 +3334,16 @@
     "release_date": "2026-08-11",
     "text_output": true
    },
+   "liquid/lfm-2.5-24b-a2b": {
+    "input": 0.05,
+    "output": 0.7,
+    "cache_read": 0.025,
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
    "google/gemma-4-31b-it": {
-    "input": 0.09,
-    "output": 0.34,
-    "cache_read": 0.05,
+    "input": 0.2,
+    "output": 0.4,
     "release_date": "2026-04-02",
     "text_output": true
    },
@@ -3225,9 +3401,9 @@
     "text_output": true
    },
    "google/gemma-4-26b-a4b-it": {
-    "input": 0.0765,
-    "output": 0.255,
-    "cache_read": 0.0425,
+    "input": 0.0675,
+    "output": 0.225,
+    "cache_read": 0.0375,
     "release_date": "2026-04-02",
     "text_output": true
    },
@@ -3360,9 +3536,9 @@
     "text_output": true
    },
    "google/gemini-3.8-flash": {
-    "input": 0.75,
-    "output": 3.75,
-    "cache_read": 0.075,
+    "input": 0.825,
+    "output": 4.125,
+    "cache_read": 0.0825,
     "cache_write": 0.041667,
     "release_date": "2026-09-02",
     "text_output": true
@@ -3405,6 +3581,20 @@
     "release_date": "2026-03-03",
     "text_output": true
    },
+   "google/gemini-nano-banana-2.1": {
+    "input": 1.5,
+    "output": 7.5,
+    "release_date": "2026-10-06",
+    "text_output": true
+   },
+   "google/gemini-4-argon": {
+    "input": 2,
+    "output": 10,
+    "cache_read": 0.1,
+    "cache_write": 0.1875,
+    "release_date": "2026-10-13",
+    "text_output": true
+   },
    "google/gemini-3.1-flash-lite": {
     "input": 0.25,
     "output": 1.5,
@@ -3417,6 +3607,18 @@
     "input": 0.6,
     "output": 6,
     "release_date": "2026-01-21",
+    "text_output": true
+   },
+   "moondream/moondream3-preview": {
+    "input": 0.3,
+    "output": 2.5,
+    "release_date": "2026-10-15",
+    "text_output": true
+   },
+   "moondream/moondream3.1-9b-a2b": {
+    "input": 0.3,
+    "output": 2.5,
+    "release_date": "2026-10-15",
     "text_output": true
    },
    "ibm-granite/granite-4.0-h-micro": {
@@ -3440,7 +3642,7 @@
     "text_output": true
    },
    "mistralai/mistral-nemo": {
-    "input": 0.019,
+    "input": 0.029,
     "output": 0.03,
     "release_date": "2024-07-01",
     "text_output": true
@@ -3540,6 +3742,13 @@
     "release_date": "2025-12-02",
     "text_output": true
    },
+   "mistralai/mistral-large-4-0": {
+    "input": 0.68,
+    "output": 2.09,
+    "cache_read": 0.07,
+    "release_date": "2026-10-06",
+    "text_output": true
+   },
    "mistralai/mistral-small-3.1-24b-instruct": {
     "input": 0.351,
     "output": 0.555,
@@ -3564,7 +3773,7 @@
     "input": 0.3,
     "output": 0.9,
     "cache_read": 0.03,
-    "release_date": "2025-08-01",
+    "release_date": "2025-07-30",
     "text_output": true
    },
    "sakana/fugu-max": {
@@ -3611,12 +3820,6 @@
     "release_date": "2026-08-03",
     "text_output": true
    },
-   "inclusionai/ling-3.0-flash-sante:free": {
-    "input": 0,
-    "output": 0,
-    "release_date": "2026-09-04",
-    "text_output": true
-   },
    "inclusionai/ling-3.0-flash": {
     "input": 0.021,
     "output": 0.063,
@@ -3624,24 +3827,24 @@
     "release_date": "2026-07-23",
     "text_output": true
    },
-   "inclusionai/ling-3.0-flash-vl": {
-    "input": 0.021,
-    "output": 0.0616,
-    "cache_read": 0.0042,
-    "release_date": "2026-09-10",
+   "inclusionai/ling-3.1-flash": {
+    "input": 0.075,
+    "output": 0.225,
+    "cache_read": 0.015,
+    "release_date": "2026-10-02",
     "text_output": true
    },
-   "inclusionai/ling-3.0-flash-fin": {
+   "inclusionai/ling-3.0-flash-vl": {
     "input": 0.06,
     "output": 0.18,
     "cache_read": 0.012,
-    "release_date": "2026-08-27",
+    "release_date": "2026-09-10",
     "text_output": true
    },
    "moonshotai/kimi-k3": {
-    "input": 3,
-    "output": 15,
-    "cache_read": 0.3,
+    "input": 0.304,
+    "output": 11.936,
+    "cache_read": 0.21,
     "release_date": "2026-07-16",
     "text_output": true
    },
@@ -3660,16 +3863,16 @@
     "text_output": true
    },
    "moonshotai/kimi-k2.5": {
-    "input": 0.45,
-    "output": 2.25,
-    "cache_read": 0.07,
+    "input": 0.5,
+    "output": 2.5,
+    "cache_read": 0.15,
     "release_date": "2026-01",
     "text_output": true
    },
    "moonshotai/kimi-k2-0905": {
     "input": 0.6,
     "output": 2.5,
-    "release_date": "2025-09-04",
+    "release_date": "2025-09-05",
     "text_output": true
    },
    "moonshotai/kimi-k2": {
@@ -3697,10 +3900,15 @@
     "release_date": "2026-03-20",
     "text_output": true
    },
+   "nvidia/nemotron-3.5-super-vl:free": {
+    "input": 0,
+    "output": 0,
+    "release_date": "2026-10-15",
+    "text_output": true
+   },
    "nvidia/nemotron-3-nano-30b-a3b": {
-    "input": 0.05,
-    "output": 0.2,
-    "cache_read": 0.03,
+    "input": 0.06,
+    "output": 0.24,
     "release_date": "2025-12-15",
     "text_output": true
    },
@@ -3711,9 +3919,9 @@
     "text_output": true
    },
    "nvidia/nemotron-3.5-lightning": {
-    "input": 0.06,
-    "output": 0.16,
-    "cache_read": 0.03,
+    "input": 0.07,
+    "output": 0.2,
+    "cache_read": 0.04,
     "release_date": "2026-08-11",
     "text_output": true
    },
@@ -3727,6 +3935,13 @@
     "input": 0.08,
     "output": 0.45,
     "release_date": "2026-03-11",
+    "text_output": true
+   },
+   "nvidia/nemotron-3.5-super-vl": {
+    "input": 0.15,
+    "output": 0.5,
+    "cache_read": 0.02,
+    "release_date": "2026-10-15",
     "text_output": true
    },
    "nvidia/nemotron-3-ultra-550b-a55b:free": {
@@ -3809,8 +4024,8 @@
    },
    "minimax/minimax-m2.5": {
     "input": 0.27,
-    "output": 1.08,
-    "cache_read": 0.027,
+    "output": 0.95,
+    "cache_read": 0.03,
     "release_date": "2026-02-12",
     "text_output": true
    },
@@ -3828,14 +4043,14 @@
     "text_output": true
    },
    "minimax/minimax-m2.7": {
-    "input": 0.21,
-    "output": 0.84,
-    "cache_read": 0.042,
+    "input": 0.3,
+    "output": 1.2,
+    "cache_read": 0.06,
     "release_date": "2026-03-18",
     "text_output": true
    },
    "minimax/minimax-m1": {
-    "input": 0.4,
+    "input": 0.55,
     "output": 2.2,
     "release_date": "2025-06-17",
     "text_output": true
@@ -3855,8 +4070,8 @@
     "text_output": true
    },
    "minimax/minimax-m2": {
-    "input": 0.3,
-    "output": 1.2,
+    "input": 0.255,
+    "output": 1.02,
     "release_date": "2025-10-27",
     "text_output": true
    },
@@ -3864,6 +4079,13 @@
     "input": 0.4,
     "output": 0.75,
     "release_date": "2023-08-02",
+    "text_output": true
+   },
+   "stepfun/step-5-preview": {
+    "input": 1,
+    "output": 2.7,
+    "cache_read": 0.1,
+    "release_date": "2026-09-16",
     "text_output": true
    },
    "stepfun/step-3.5-flash": {
@@ -3984,9 +4206,8 @@
     "text_output": true
    },
    "qwen/qwen3-235b-a22b-2507": {
-    "input": 0.0875,
-    "output": 0.35,
-    "cache_read": 0.0175,
+    "input": 0.09,
+    "output": 0.55,
     "release_date": "2025-07-21",
     "text_output": true
    },
@@ -4006,16 +4227,10 @@
     "text_output": true
    },
    "qwen/qwen3.8-27b": {
-    "input": 0.42,
-    "output": 3,
-    "cache_read": 0.085,
+    "input": 0.24,
+    "output": 2.2,
+    "cache_read": 0.05,
     "release_date": "2026-08-14",
-    "text_output": true
-   },
-   "qwen/qwen3-vl-235b-a22b-thinking": {
-    "input": 0.4,
-    "output": 4,
-    "release_date": "2025-09-23",
     "text_output": true
    },
    "qwen/qwen3.8-2.4t-a95b": {
@@ -4026,8 +4241,8 @@
     "text_output": true
    },
    "qwen/qwen3.5-27b": {
-    "input": 0.195,
-    "output": 1.56,
+    "input": 0.26,
+    "output": 2.6,
     "release_date": "2026-02-23",
     "text_output": true
    },
@@ -4098,30 +4313,6 @@
     "release_date": "2026-07-15",
     "text_output": true
    },
-   "qwen/qwen3-max": {
-    "input": 0.78,
-    "output": 3.9,
-    "cache_read": 0.156,
-    "cache_write": 0.975,
-    "tiers": [
-     {
-      "context_over": 32000,
-      "input": 1.56,
-      "output": 7.8,
-      "cache_read": 0.312,
-      "cache_write": 1.95
-     },
-     {
-      "context_over": 128000,
-      "input": 1.95,
-      "output": 9.75,
-      "cache_read": 0.39,
-      "cache_write": 2.4375
-     }
-    ],
-    "release_date": "2025-09-23",
-    "text_output": true
-   },
    "qwen/qwen3-coder-30b-a3b-instruct": {
     "input": 0.07,
     "output": 0.28,
@@ -4138,38 +4329,19 @@
    "qwen/qwen3-vl-30b-a3b-instruct": {
     "input": 0.15,
     "output": 0.6,
-    "release_date": "2025-10-06",
+    "release_date": "2025-10-04",
     "text_output": true
    },
    "qwen/qwen3-235b-a22b-thinking-2507": {
-    "input": 0.23,
-    "output": 2.3,
+    "input": 0.45,
+    "output": 3.5,
     "release_date": "2025-07-25",
-    "text_output": true
-   },
-   "qwen/qwen3-235b-a22b": {
-    "input": 0.455,
-    "output": 1.82,
-    "release_date": "2025-04",
     "text_output": true
    },
    "qwen/qwen3.5-122b-a10b": {
     "input": 0.26,
     "output": 2.08,
     "release_date": "2026-02-23",
-    "text_output": true
-   },
-   "qwen/qwen-plus-2025-07-28": {
-    "input": 0.26,
-    "output": 0.78,
-    "tiers": [
-     {
-      "context_over": 256000,
-      "input": 0.78,
-      "output": 2.34
-     }
-    ],
-    "release_date": "2025-09-08",
     "text_output": true
    },
    "qwen/qwen3.6-35b-a3b": {
@@ -4180,15 +4352,14 @@
     "text_output": true
    },
    "qwen/qwen3-next-80b-a3b-instruct": {
-    "input": 0.1,
+    "input": 0.09,
     "output": 1.1,
-    "cache_read": 0.07,
     "release_date": "2025-09",
     "text_output": true
    },
    "qwen/qwen3-vl-30b-a3b-thinking": {
-    "input": 0.2,
-    "output": 2.4,
+    "input": 0.29,
+    "output": 1,
     "release_date": "2025-10-06",
     "text_output": true
    },
@@ -4243,48 +4414,6 @@
     "release_date": "2026-02-25",
     "text_output": true
    },
-   "qwen/qwen3-max-thinking": {
-    "input": 0.78,
-    "output": 3.9,
-    "tiers": [
-     {
-      "context_over": 32000,
-      "input": 1.56,
-      "output": 7.8
-     },
-     {
-      "context_over": 128000,
-      "input": 1.95,
-      "output": 9.75
-     }
-    ],
-    "release_date": "2026-02-09",
-    "text_output": true
-   },
-   "qwen/qwen3-coder-plus": {
-    "input": 0.65,
-    "output": 3.25,
-    "cache_read": 0.13,
-    "cache_write": 0.8125,
-    "tiers": [
-     {
-      "context_over": 32000,
-      "input": 1.17,
-      "output": 5.85,
-      "cache_read": 0.234,
-      "cache_write": 1.4625
-     },
-     {
-      "context_over": 128000,
-      "input": 1.95,
-      "output": 9.75,
-      "cache_read": 0.39,
-      "cache_write": 2.4375
-     }
-    ],
-    "release_date": "2025-07-23",
-    "text_output": true
-   },
    "qwen/qwen3.5-9b": {
     "input": 0.1,
     "output": 0.15,
@@ -4317,29 +4446,14 @@
     "input": 0.15,
     "output": 0.47,
     "cache_read": 0.016,
-    "cache_write": 0.2,
     "release_date": "2026-08-26",
     "text_output": true
    },
    "qwen/qwen3.5-35b-a3b": {
-    "input": 0.1625,
-    "output": 1.3,
+    "input": 0.15,
+    "output": 1,
+    "cache_read": 0.05,
     "release_date": "2026-02-23",
-    "text_output": true
-   },
-   "qwen/qwen3.6-max-preview": {
-    "input": 1.027,
-    "output": 6.162,
-    "cache_write": 1.28375,
-    "tiers": [
-     {
-      "context_over": 128000,
-      "input": 1.58,
-      "output": 9.48,
-      "cache_write": 1.975
-     }
-    ],
-    "release_date": "2026-04-20",
     "text_output": true
    },
    "qwen/qwen3-30b-a3b": {
@@ -4349,33 +4463,22 @@
     "text_output": true
    },
    "qwen/qwen3.5-397b-a17b": {
-    "input": 0.55,
-    "output": 3.5,
-    "cache_read": 0.225,
+    "input": 0.5,
+    "output": 3.6,
+    "cache_read": 0.3,
     "release_date": "2026-02-15",
     "text_output": true
    },
-   "qwen/qwen3-8b": {
-    "input": 0.117,
-    "output": 0.455,
-    "release_date": "2025-04-28",
-    "text_output": true
-   },
-   "qwen/qwen3-vl-32b-instruct": {
-    "input": 0.104,
-    "output": 0.416,
-    "release_date": "2025-10-23",
-    "text_output": true
-   },
    "qwen/qwen3-vl-8b-instruct": {
-    "input": 0.117,
-    "output": 0.455,
+    "input": 0.25,
+    "output": 0.75,
+    "cache_read": 0.12,
     "release_date": "2025-10-14",
     "text_output": true
    },
    "qwen/qwen3-30b-a3b-instruct-2507": {
-    "input": 0.04815,
-    "output": 0.19305,
+    "input": 0.1,
+    "output": 0.3,
     "release_date": "2025-07-29",
     "text_output": true
    },
@@ -4411,15 +4514,10 @@
     "release_date": "2024-09-19",
     "text_output": true
    },
-   "qwen/qwen3-30b-a3b-thinking-2507": {
-    "input": 0.2,
-    "output": 2.4,
-    "release_date": "2025-08-28",
-    "text_output": true
-   },
    "qwen/qwen3.6-27b": {
-    "input": 0.32,
-    "output": 3.2,
+    "input": 0.25,
+    "output": 2,
+    "cache_read": 0.025,
     "release_date": "2026-04-22",
     "text_output": true
    },
@@ -4444,12 +4542,6 @@
     "release_date": "2025-04-28",
     "text_output": true
    },
-   "qwen/qwen3-vl-8b-thinking": {
-    "input": 0.18,
-    "output": 2.1,
-    "release_date": "2025-10-14",
-    "text_output": true
-   },
    "qwen/qwen3.7-plus": {
     "input": 0.32,
     "output": 1.28,
@@ -4467,18 +4559,17 @@
     "release_date": "2026-06-02",
     "text_output": true
    },
-   "qwen/qwen3.8-27b:free": {
-    "input": 0,
-    "output": 0,
-    "release_date": "2026-08-14",
-    "text_output": true
-   },
    "qwen/qwen3.8-max-0902": {
     "input": 2,
     "output": 6,
     "cache_read": 0.25,
-    "cache_write": 2.5,
     "release_date": "2026-09-02",
+    "text_output": true
+   },
+   "xingchen-agi/xing4.0-29b-a4b:free": {
+    "input": 0,
+    "output": 0,
+    "release_date": "2026-10-16",
     "text_output": true
    },
    "morph/morph-v3-large": {
@@ -5036,8 +5127,9 @@
     "text_output": true
    },
    "openai/gpt-oss-120b": {
-    "input": 0.037,
-    "output": 0.17,
+    "input": 0.15,
+    "output": 0.6,
+    "cache_read": 0.075,
     "release_date": "2025-08-05",
     "text_output": true
    },
@@ -5063,17 +5155,17 @@
     "text_output": true
    },
    "openai/gpt-5.6-sol": {
-    "input": 2,
-    "output": 10,
-    "cache_read": 0.2,
-    "cache_write": 2.5,
+    "input": 4,
+    "output": 20,
+    "cache_read": 0.4,
+    "cache_write": 5,
     "tiers": [
      {
       "context_over": 272000,
-      "input": 4,
-      "output": 15,
-      "cache_read": 0.4,
-      "cache_write": 5
+      "input": 8,
+      "output": 30,
+      "cache_read": 0.8,
+      "cache_write": 10
      }
     ],
     "release_date": "2026-07-09",
