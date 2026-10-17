@@ -87,9 +87,10 @@ func runACPServer(cmd *cobra.Command, _ []string) error {
 		Sessions:                  serverSessionStore(sessionSvc),
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
-		Agent: agent,
-		In:    os.Stdin,
-		Out:   os.Stdout,
+		Agent:  agent,
+		In:     os.Stdin,
+		Out:    os.Stdout,
+		Logger: logger,
 	}); err != nil {
 		if f != nil {
 			_, _ = io.WriteString(f, fmt.Sprintf("%v\n", err))
