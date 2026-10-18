@@ -150,12 +150,41 @@ func TestNewPromptHandler_ModelResolveError(t *testing.T) {
 	}
 }
 
+// clearAPIKeys unsets every provider credential config.APIKeys reads, so a test
+// asserting "no API key" cannot pass or fail based on the caller's environment.
+// t.Setenv restores the previous values on cleanup, so subtests and later tests
+// are unaffected.
+func clearAPIKeys(t *testing.T) {
+	t.Helper()
+	for _, envVar := range []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+		"OPENAI_API_KEY",
+		"AZUREOPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_API_KEY",
+		"GEMINI_API_KEY", "GOOGLE_API_KEY",
+		"MISTRAL_API_KEY",
+		"XAI_API_KEY",
+		"OPENROUTER_API_KEY",
+		"OLLAMA_API_KEY", "OLLAMA_API_KEY_1", "OLLAMA_API_KEY_2", "OLLAMA_API_KEY_3",
+		"OPENCODE_API_KEY",
+		"AGENTGATEWAY_API_KEY",
+	} {
+		t.Setenv(envVar, "")
+	}
+}
+
 // TestNewPromptHandler_NoAPIKey tests missing API key returns appropriate error.
 func TestNewPromptHandler_NoAPIKey(t *testing.T) {
-	// Use a valid anthropic model that requires an API key (not gemini, ollama, or azure).
+	// Hermetic: checkProviderCredentials reads the process environment through
+	// config.APIKeys, so a developer shell or CI runner with a key exported
+	// would otherwise let this test reach the network and fail for the wrong
+	// reason. Every provider in config.APIKeys is cleared, not just anthropic.
+	clearAPIKeys(t)
+
+	// A valid anthropic model that requires an API key (not gemini, ollama or
+	// azure, which authenticate some other way).
 	cfg := config.Config{
 		Roles: map[string]config.RoleConfig{
-			"default": {Model: "claude-3-5-haiku-latest"}, // Valid Anthropic model
+			"default": {Model: "claude-sonnet-4-6"},
 		},
 	}
 
