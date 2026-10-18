@@ -16,7 +16,9 @@ between the two protocols.
 - pi-go ACP command: `pi acp-server`
 - ACP transport: stdin/stdout
 - kagent Harness API: `kagent.dev/v1alpha3`
-- kagent Harness runtime adapter currently available: `spec.kagent`
+- kagent Harness runtime adapter for pi-go: `spec.byo` (the image serves the
+  A2A contract itself; `spec.kagent` selects the managed ADK compiler, whose
+  private runtime task-store contract this image does not implement)
 - Substrate workload images must be immutable digest-pinned OCI references.
 - `AgentInstance` is created through the kagent gRPC API; it is not a Kubernetes
   resource.
@@ -138,11 +140,14 @@ metadata:
   name: pi-go
   namespace: kagent
 spec:
-  # Use the currently registered Harness compiler while the dedicated custom
-  # runtime compiler is not yet implemented.
-  kagent: {}
+  # byo: the image is a pi-go process serving kagent's A2A contract itself.
+  # `kagent: {}` would select the managed ADK compiler instead, whose private
+  # runtime task-store contract this image does not implement.
+  byo: {}
   workload:
     image: localhost:5001/dimetron/pi-go-kagent@sha256:<adapter-image-digest>
+    # Required by the BYO CEL rule on HarnessSpec.
+    command: ["pi", "a2a"]
   substrate:
     workerPoolRef:
       name: kagent-default

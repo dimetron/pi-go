@@ -19,11 +19,17 @@ metadata:
   name: ${PI_GO_NAME}
   namespace: ${PI_GO_NAMESPACE}
 spec:
-  # The registered kagent compiler, while the dedicated custom runtime compiler
-  # is not yet implemented (see custom-harness.md).
-  kagent: {}
+  # byo, not kagent: the image is a pi-go process serving kagent's A2A
+  # contract (JSON-RPC + gRPC on $PORT, card, /readyz:8081), not an ADK agent
+  # driven by kagent's own compiler. `kagent: {}` selects the managed ADK
+  # compiler, which expects the ADK runtime's private task-store contract that
+  # this image does not implement.
+  #
+  # The CEL rule on HarnessSpec requires workload.command for a BYO harness.
+  byo: {}
   workload:
     image: ${PI_GO_IMAGE}
+    command: ["pi", "a2a"]
   substrate:
     workerPoolRef:
       name: ${PI_GO_WORKER_POOL}

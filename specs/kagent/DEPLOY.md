@@ -36,6 +36,32 @@ That command speaks ACP over stdin/stdout. The Dockerfile in this directory
 builds the real adapter: `pi a2a`, which serves JSON-RPC A2A + gRPC A2A on
 `$PORT` (80) plus the agent card and `/readyz` readiness probe on :8081.
 
+The Harness must therefore select `spec.byo`, not `spec.kagent`. `spec.kagent`
+selects kagent's managed ADK compiler, which drives an ADK agent and expects the
+runtime to implement ADK's private task-store gRPC service
+(`kagent.runtime.v1.TaskStoreService`) and to receive `KAGENT_API_URL` by
+injection. pi-go implements the A2A surface, not that private contract, so a
+managed harness admits the template and then fails on the first turn. `spec.byo`
+is the adapter contract — with one requirement the CEL rules enforce: BYO
+harnesses must set `spec.workload.command`.
+
+### Task persistence
+
+Where task state is written differs by controller version, and pi-go cannot
+detect which one it is talking to:
+
+- **Current kagent** writes it itself. The gateway consumes the runtime's A2A
+  event stream and persists every task and event into its own PostgreSQL
+  (`agent_instance_task`, `agent_instance_task_event`). The runtime only has to
+  emit a well-formed task and stream its updates correctly — no RPC.
+- **Older controllers** expected the runtime to persist through a private
+  `TaskStoreService`. That is what `internal/kagent/taskstore.go` implements, and
+  it is enabled only when `KAGENT_TASK_STORE_ADDRESS` is set. There is no
+  implicit fallback: pointing it at a controller that does not serve that service
+  turns a working turn into a failed RPC.
+
+So leave `KAGENT_TASK_STORE_ADDRESS` unset against a current controller.
+
 ## Option A: local registry (recommended)
 
 The local kagent Kind setup uses a registry reachable as `localhost:5001` from

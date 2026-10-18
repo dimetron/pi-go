@@ -148,3 +148,36 @@ func TestRunA2AServerUsesPortEnvWhenAddrUnset(t *testing.T) {
 		t.Fatal("want an error from the canceled context")
 	}
 }
+
+// TestKagentTaskStoreAddressIsExplicitOnly pins the one knob that governs task
+// persistence. It used to fall back to `control_plane_url` inside
+// KAGENT_CONFIG_JSON, a key nothing has ever written — the ADK config blob
+// carries model and instruction settings, not a URL. That fallback made
+// persistence look automatic while silently never happening.
+func TestKagentTaskStoreAddressIsExplicitOnly(t *testing.T) {
+	t.Run("explicit address is used", func(t *testing.T) {
+		t.Setenv("KAGENT_TASK_STORE_ADDRESS", "kagent-controller.kagent:8083")
+		if got := kagentTaskStoreAddress(); got != "kagent-controller.kagent:8083" {
+			t.Errorf("address = %q, want the explicit one", got)
+		}
+	})
+
+	// The regression: a config blob carrying control_plane_url must NOT be
+	// taken as a controller address, because the gateway does not serve the
+	// task-store service and the RPC would fail the turn.
+	t.Run("control_plane_url is not a fallback", func(t *testing.T) {
+		t.Setenv("KAGENT_TASK_STORE_ADDRESS", "")
+		t.Setenv("KAGENT_CONFIG_JSON", `{"control_plane_url":"http://controller.invalid:8083"}`)
+		if got := kagentTaskStoreAddress(); got != "" {
+			t.Errorf("address = %q, want empty: control_plane_url is not a task-store address", got)
+		}
+	})
+
+	t.Run("unset keeps tasks in memory", func(t *testing.T) {
+		t.Setenv("KAGENT_TASK_STORE_ADDRESS", "")
+		t.Setenv("KAGENT_CONFIG_JSON", "")
+		if got := kagentTaskStoreAddress(); got != "" {
+			t.Errorf("address = %q, want empty", got)
+		}
+	})
+}
