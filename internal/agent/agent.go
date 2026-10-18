@@ -792,6 +792,9 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userMessage string) i
 	if err := a.runPreTurn(ctx, sessionID); err != nil {
 		return failedRun(err)
 	}
+	if err := a.repairDanglingCalls(ctx, sessionID); err != nil {
+		return failedRun(err)
+	}
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)
 	return a.runner.Run(ctx, DefaultUserID, sessionID, msg, adkagent.RunConfig{})
 }
@@ -799,6 +802,9 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userMessage string) i
 // RunStreaming sends a user message with SSE streaming enabled.
 func (a *Agent) RunStreaming(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error] {
 	if err := a.runPreTurn(ctx, sessionID); err != nil {
+		return failedRun(err)
+	}
+	if err := a.repairDanglingCalls(ctx, sessionID); err != nil {
 		return failedRun(err)
 	}
 	msg := genai.NewContentFromText(userMessage, genai.RoleUser)

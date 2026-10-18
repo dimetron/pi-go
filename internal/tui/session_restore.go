@@ -47,7 +47,24 @@ func restoreTranscript(events []*session.Event) []message {
 			}
 		}
 	}
+	closeUnansweredCards(msgs)
 	return msgs
+}
+
+// interruptedCardText is what a restored call shows when its session recorded
+// no result — a turn cut off before the call returned, in a session written
+// before the agent began recording those.
+const interruptedCardText = "interrupted before it returned a result"
+
+// closeUnansweredCards gives every restored tool card that never received a
+// result a final state. An empty card renders as a blinking in-progress bullet,
+// and nothing is left running to ever fill it.
+func closeUnansweredCards(msgs []message) {
+	for i := range msgs {
+		if msgs[i].role == "tool" && msgs[i].content == "" {
+			msgs[i].content = interruptedCardText
+		}
+	}
 }
 
 // appendText adds one text part, merging into a trailing assistant message so a
