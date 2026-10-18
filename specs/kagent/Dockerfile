@@ -44,7 +44,8 @@ FROM debian:bookworm-slim
 # baked into the image at build time:
 #   git            — clone repos, git diff/log/status tools
 #   ripgrep        — `rg`, used by the grep tool
-#   gh             — GitHub CLI (installed via arkade, below)
+#   gh             — GitHub CLI (pinned release, below)
+#   gcx            — Grafana gcx: Grafana Cloud/LGTM CLI (pinned release, below)
 #   curl, wget     — fetch tarballs and API payloads
 #   jq             — JSON manipulation
 #   python3 + pip  — scripting/parsing helper
@@ -94,18 +95,56 @@ RUN if [ "${TARGETARCH}" = "arm64" ]; then ARKADE_ASSET=arkade-arm64; fi \
 RUN arkade system install go --version go1.27.0 --path /usr/local/ --progress=false \
     && /usr/local/go/bin/go version
 
-# GitHub CLI, baked in rather than left to `arkade get` at runtime: the
+# GitHub CLI and gcx, baked in rather than left to `arkade get` at runtime: the
 # Substrate sandbox blocks egress the same way it blocks apt, so a tool the
-# agent is expected to have has to be in the image. `arkade get` resolves the
-# right asset for TARGETARCH itself; --path puts it on the default PATH so it
-# works for any user, not just pi's ~/.arkade/bin.
+# agent is expected to have has to be in the image.
 #
-# The version is the git tag, which for cli/cli is v-prefixed — arkade passes
-# it through verbatim, so a bare "2.65.0" is a 404 rather than a resolution
-# failure. --path must already exist; /usr/local/bin does.
-ARG GH_VERSION=v2.65.0
-RUN arkade get gh --version "${GH_VERSION}" --path /usr/local/bin --progress=false \
-    && gh --version
+# Both come straight from their GitHub releases, pinned to a version and
+# checked against the SHA-256 that release publishes, rather than through
+# `arkade get`. Two reasons:
+#   - `arkade get gh` resolves against arkade's embedded catalogue, so a pin
+#     that falls behind the catalogue still installs — just not the version
+#     named in GH_VERSION, leaving the pin and the binary silently disagreeing;
+#   - gcx is not in arkade's catalogue at all.
+# The archive names carry the architecture (…_linux_amd64.tar.gz /
+# …_linux_arm64.tar.gz), and so do the checksums, so a wrong pairing fails the
+# build here instead of shipping a binary the worker cannot execute. TARGETARCH
+# is set by buildx; plain `docker build` defaults to arm64, matching the local
+# Kind cluster. Bump the four ARGs together from the release's checksums file:
+#   https://github.com/cli/cli/releases/download/v<gh>/gh_<gh>_checksums.txt
+#   https://github.com/grafana/gcx/releases/download/v<gcx>/gcx_<gcx>_checksums.txt
+#
+# gh's tarball is rooted at gh_<version>_linux_<arch>/ with the binary in bin/;
+# gcx's has the binary at the top level. No `#` comments inside this RUN: lines
+# joined by a trailing backslash are one shell line, so a `#` would comment out
+# everything after it.
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
+ARG GCX_VERSION=1.6.0
+ARG GCX_SHA256_AMD64=335e051cda6edfb4ad5757540208961dbdfab6d89d4af11a4087de6ffa0ec111
+ARG GCX_SHA256_ARM64=116fd1a9f25d5f5e29802b705d9964578a01614f94499b85461b6abca1cb4a04
+ARG TARGETARCH=arm64
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+        amd64) GH_SHA256="${GH_SHA256_AMD64}"; GCX_SHA256="${GCX_SHA256_AMD64}" ;; \
+        arm64) GH_SHA256="${GH_SHA256_ARM64}"; GCX_SHA256="${GCX_SHA256_ARM64}" ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    tmp="$(mktemp -d)"; trap 'rm -rf "${tmp}"' EXIT; \
+    curl -fsSL -o "${tmp}/gh.tar.gz" \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    echo "${GH_SHA256}  ${tmp}/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf "${tmp}/gh.tar.gz" -C "${tmp}" --strip-components=2 \
+        "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh"; \
+    install -m 0755 "${tmp}/gh" /usr/local/bin/gh; \
+    curl -fsSL -o "${tmp}/gcx.tar.gz" \
+        "https://github.com/grafana/gcx/releases/download/v${GCX_VERSION}/gcx_${GCX_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    echo "${GCX_SHA256}  ${tmp}/gcx.tar.gz" | sha256sum -c -; \
+    tar -xzf "${tmp}/gcx.tar.gz" -C "${tmp}" gcx; \
+    install -m 0755 "${tmp}/gcx" /usr/local/bin/gcx; \
+    gh --version; \
+    gcx --version
 
 ENV PATH="${PATH}:/usr/local/go/bin:/home/pi/.arkade/bin:/data/.arkade/bin"
 

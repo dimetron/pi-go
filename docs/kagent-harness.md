@@ -16,6 +16,7 @@ Docs in this section:
 | `specs/kagent/manifests.yaml.tmpl` | `Harness` + `AgentTemplate` template |
 | `specs/kagent/render-manifests.sh` | Renders that template against a digest-pinned image |
 | `scripts/install-kagent.sh` | One-liner installer: applies a release's manifest to a cluster |
+| `docs/kagent-mcp.md` | Wiring MCP servers into the harness, with the remote GitHub MCP server as the worked example |
 
 ## What the adapter image contains
 
@@ -38,8 +39,10 @@ gVisor sandbox), so the image bakes in the tools a coding agent needs:
 | `curl`, `wget` | fetch tarballs and API payloads |
 | `jq` | JSON manipulation |
 | `python3` + `pip` | scripting/parsing helper |
+| `gh` | GitHub CLI — PRs, issues, releases, `gh api` (pinned release + SHA-256) |
+| `gcx` | Grafana `gcx` — Grafana Cloud/LGTM CLI (pinned release + SHA-256) |
 | `go` | build/run Go projects (installed via `arkade system install go`) |
-| `arkade` | on-demand CLI installs (`arkade get kubectl helm gh rg ...`) |
+| `arkade` | on-demand CLI installs (`arkade get kubectl helm rg ...`) |
 | `build-essential`, `unzip`, `xz-utils`, `zip`, `tar` | build + archive support |
 | `vim-tiny` | minimal editor for the bash tool |
 
