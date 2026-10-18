@@ -23,6 +23,10 @@ namespace="kagent"
 worker_pool="kagent-default"
 snapshot_location="gs://ate-snapshots/pi-go/"
 model_config="default-model-config"
+# The kagent controller Service name. KAGENT_API_URL points at it so a BYO
+# harness can reach the control-plane API, which the BYO compiler does not
+# inject.
+controller_name="kagent-controller"
 # Defaults suit the local Kind Substrate; a release renders with --no-env so
 # the published manifest carries no cluster-specific endpoint.
 model="ollama/deepseek-v4-flash:0731-cloud"
@@ -40,6 +44,7 @@ while [ $# -gt 0 ]; do
     --worker-pool)       worker_pool="${2:?--worker-pool needs a value}"; shift 2 ;;
     --snapshot-location) snapshot_location="${2:?--snapshot-location needs a value}"; shift 2 ;;
     --model-config)      model_config="${2:?--model-config needs a value}"; shift 2 ;;
+    --controller)        controller_name="${2:?--controller needs a value}"; shift 2 ;;
     --model)             model="${2:?--model needs a value}"; shift 2 ;;
     --base-url)          base_url="${2:?--base-url needs a value}"; shift 2 ;;
     --no-env)            want_env=0; shift ;;
@@ -58,6 +63,12 @@ esac
 
 # The Harness env block, or nothing. Built here rather than in the template so
 # --no-env leaves no empty `env:` key behind, which the API would reject.
+#
+# KAGENT_API_URL is set explicitly because the BYO compiler does not inject it:
+# only the managed (`spec.kagent`) compiler appends the controller URL and
+# namespace to the environment (upstream translator/kagent/compiler.go). Without
+# it the harness's kagent_* tools are inert, since they register only when a
+# controller URL is known.
 env_block=""
 if [ "$want_env" -eq 1 ]; then
   env_block="  env:
@@ -65,6 +76,10 @@ if [ "$want_env" -eq 1 ]; then
       value: ${model}
     - name: PI_BASE_URL
       value: ${base_url}
+    - name: KAGENT_API_URL
+      value: http://${controller_name}.${namespace}:8083
+    - name: KAGENT_NAMESPACE
+      value: ${namespace}
 "
 fi
 

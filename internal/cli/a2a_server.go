@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -135,29 +134,23 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// kagentConfigURL reads control_plane_url from the KAGENT_CONFIG_JSON blob the
-// kagent compiler injects into the runtime container. Returns "" when the
-// variable is absent or does not carry a URL, which means this process is not
-// running behind a kagent gateway.
-func kagentConfigURL() string {
-	raw := strings.TrimSpace(os.Getenv("KAGENT_CONFIG_JSON"))
-	if raw == "" {
-		return ""
-	}
-	var cfg struct {
-		ControlPlaneURL string `json:"control_plane_url"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.ControlPlaneURL)
-}
-
-// kagentTaskStoreAddress returns the controller gRPC address used for task
+// kagentTaskStoreAddress returns the controller gRPC address for task
 // persistence, or "" to keep tasks in memory.
+//
+// KAGENT_TASK_STORE_ADDRESS is the only source, deliberately. It used to fall
+// back to `control_plane_url` inside KAGENT_CONFIG_JSON, which could never
+// resolve: that blob is the ADK agent config (model, instruction, session DB —
+// see go/adk/pkg/config/config_materialize.go upstream) and has never carried
+// a URL. The fallback read as "task persistence is automatic" when in fact
+// nothing set the one variable that works.
+//
+// Persistence is opt-in because the service it targets is not universal:
+// kagent's current gateway writes task state into its own Postgres from the
+// runtime's A2A event stream (a2agateway/gateway.go storeEvent →
+// StoreAgentInstanceTaskEvent) and does not serve kagent.runtime.v1
+// TaskStoreService at all. Pointing this at such a controller turns a working
+// turn into a failed RPC, so the address must be given explicitly, by a
+// deployment that knows its controller serves it.
 func kagentTaskStoreAddress() string {
-	if v := strings.TrimSpace(os.Getenv("KAGENT_TASK_STORE_ADDRESS")); v != "" {
-		return v
-	}
-	return kagentConfigURL()
+	return strings.TrimSpace(os.Getenv("KAGENT_TASK_STORE_ADDRESS"))
 }
