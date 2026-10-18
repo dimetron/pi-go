@@ -38,8 +38,10 @@ gVisor sandbox), so the image bakes in the tools a coding agent needs:
 | `curl`, `wget` | fetch tarballs and API payloads |
 | `jq` | JSON manipulation |
 | `python3` + `pip` | scripting/parsing helper |
+| `gh` | GitHub CLI — PRs, issues, releases, `gh api` (pinned release + SHA-256) |
+| `gcx` | Grafana `gcx` — Grafana Cloud/LGTM CLI (pinned release + SHA-256) |
 | `go` | build/run Go projects (installed via `arkade system install go`) |
-| `arkade` | on-demand CLI installs (`arkade get kubectl helm gh rg ...`) |
+| `arkade` | on-demand CLI installs (`arkade get kubectl helm rg ...`) |
 | `build-essential`, `unzip`, `xz-utils`, `zip`, `tar` | build + archive support |
 | `vim-tiny` | minimal editor for the bash tool |
 
