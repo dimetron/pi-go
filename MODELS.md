@@ -292,8 +292,8 @@ Local daemon, plus Ollama Cloud (`*:cloud` tags). No API key for local models.
 | Model | Price (in/out per 1M) | Context | Capabilities |
 |---|---|---|---|
 | all-minilm:latest | — | 512 | embedding |
-| deepseek-v4-flash:0731-cloud | $0.22/$0.66 | 1.05M | completion, thinking, tools |
-| deepseek-v4-flash:cloud | $0.22/$0.66 | 1.05M | completion, thinking, tools |
+| deepseek-v4-flash:0731-cloud | — | 1.05M | completion, thinking, tools |
+| deepseek-v4-flash:cloud | — | 1.05M | completion, thinking, tools |
 | deepseek-v4.1-flash:cloud | $0.15/$0.60 | 1.05M | completion, thinking, tools, vision |
 | embeddinggemma:latest | — | 2K | embedding |
 | gemma4:12b-mlx | — | — | completion, thinking, tools, vision |
