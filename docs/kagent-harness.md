@@ -16,6 +16,7 @@ Docs in this section:
 | `specs/kagent/manifests.yaml.tmpl` | `Harness` + `AgentTemplate` template |
 | `specs/kagent/render-manifests.sh` | Renders that template against a digest-pinned image |
 | `scripts/install-kagent.sh` | One-liner installer: applies a release's manifest to a cluster |
+| `docs/kagent-mcp.md` | Wiring MCP servers into the harness, with the remote GitHub MCP server as the worked example |
 
 ## What the adapter image contains
 
