@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package kagent.runtime.v1;
+
+import "a2a.proto";
+
+option go_package = "github.com/dimetron/pi-go/internal/kagent/runtimev1;runtimev1";
+
+// TaskStoreService is the private persistence API for agent runtimes. Every call
+// requires workload authority for the requested session. Public user and share
+// credentials do not grant access to this service.
+service TaskStoreService {
+  // CreateTask persists a new SDK task. Retrying the same task and payload
+  // returns its original version; a different creation with that ID conflicts.
+  rpc CreateTask(TaskStoreServiceCreateTaskRequest) returns (TaskStoreServiceCreateTaskResponse);
+  rpc GetTask(TaskStoreServiceGetTaskRequest) returns (TaskStoreServiceGetTaskResponse);
+  rpc UpdateTask(TaskStoreServiceUpdateTaskRequest) returns (TaskStoreServiceUpdateTaskResponse);
+  rpc ListTasks(TaskStoreServiceListTasksRequest) returns (TaskStoreServiceListTasksResponse);
+  // SettleTask acknowledges that native execution and SDK cleanup have stopped
+  // at this saved version and publishes its task state and history atomically.
+  // Runtime pause/suspend and checkpoint snapshot readiness are independent.
+  rpc SettleTask(TaskStoreServiceSettleTaskRequest) returns (TaskStoreServiceSettleTaskResponse);
+}
+
+message StoredTask {
+  lf.a2a.v1.Task task = 1;
+  // Opaque task storage version, scoped to its session. Reload after restoring
+  // a fork, which receives new public context and task IDs.
+  int64 version = 2;
+}
+
+message TaskStoreServiceCreateTaskRequest {
+  string session_id = 1;
+  lf.a2a.v1.Task task = 2;
+  // Gateway attempt fence, consumed by the first active save before native work.
+  optional string dispatch_id = 3;
+}
+
+message TaskStoreServiceCreateTaskResponse {
+  int64 version = 1;
+}
+
+message TaskStoreServiceGetTaskRequest {
+  string session_id = 1;
+  string task_id = 2;
+}
+
+message TaskStoreServiceGetTaskResponse {
+  StoredTask stored = 1;
+}
+
+message TaskStoreServiceUpdateTaskRequest {
+  string session_id = 1;
+  lf.a2a.v1.Task task = 2;
+  int64 expected_version = 3;
+  // Go's SDK supplies the triggering event. Snapshot-only SDKs omit it; the
+  // task then describes the complete update. History is archived separately.
+  lf.a2a.v1.StreamResponse event = 4;
+  optional string dispatch_id = 5;
+}
+
+message TaskStoreServiceUpdateTaskResponse {
+  // Retrying the same expected version and payload returns the original
+  // committed version, including after subsequent updates have committed.
+  int64 version = 1;
+}
+
+message TaskStoreServiceListTasksRequest {
+  string session_id = 1;
+  lf.a2a.v1.ListTasksRequest request = 2;
+}
+
+message TaskStoreServiceListTasksResponse {
+  lf.a2a.v1.ListTasksResponse result = 1;
+}
+
+message TaskStoreServiceSettleTaskRequest {
+  string session_id = 1;
+  string task_id = 2;
+  int64 version = 3;
+}
+
+message TaskStoreServiceSettleTaskResponse {}

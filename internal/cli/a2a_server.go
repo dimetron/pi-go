@@ -1,17 +1,20 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	a2aserver "github.com/dimetron/pi-go/internal/a2a/server"
 	acpserver "github.com/dimetron/pi-go/internal/acp/server"
+	"github.com/dimetron/pi-go/internal/kagent"
 )
 
 func newA2AServerCmd() *cobra.Command {
@@ -103,10 +106,25 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Behind the kagent gateway the task state must live where the gateway
+	// reads it, or a correct turn still fails with "task not found". The
+	// controller address comes from the deployment; when it is absent this runs
+	// as a standalone A2A server with an in-memory store.
+	var tasks a2aserver.TaskStore
+	if tasksURL := kagentTaskStoreAddress(); tasksURL != "" {
+		store, err := kagent.New(kagent.Config{Address: tasksURL})
+		if err != nil {
+			return fmt.Errorf("a2a server: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		tasks = store
+	}
+
 	if err := a2aserver.Serve(ctx, a2aserver.ServeConfig{
 		Addr:      addr,
 		ReadyAddr: flagA2AReadyAddr,
 		Handler:   handler,
+		TaskStore: tasks,
 		Logger:    logger,
 	}); err != nil {
 		if f != nil {
@@ -115,4 +133,31 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("a2a server: %w", err)
 	}
 	return nil
+}
+
+// kagentConfigURL reads control_plane_url from the KAGENT_CONFIG_JSON blob the
+// kagent compiler injects into the runtime container. Returns "" when the
+// variable is absent or does not carry a URL, which means this process is not
+// running behind a kagent gateway.
+func kagentConfigURL() string {
+	raw := strings.TrimSpace(os.Getenv("KAGENT_CONFIG_JSON"))
+	if raw == "" {
+		return ""
+	}
+	var cfg struct {
+		ControlPlaneURL string `json:"control_plane_url"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.ControlPlaneURL)
+}
+
+// kagentTaskStoreAddress returns the controller gRPC address used for task
+// persistence, or "" to keep tasks in memory.
+func kagentTaskStoreAddress() string {
+	if v := strings.TrimSpace(os.Getenv("KAGENT_TASK_STORE_ADDRESS")); v != "" {
+		return v
+	}
+	return kagentConfigURL()
 }
