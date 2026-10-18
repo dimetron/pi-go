@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dimetron/pi-go/internal/plugin"
 )
 
 func TestDefaultSkillDirs(t *testing.T) {
@@ -177,5 +179,57 @@ func writeSkillFile(t *testing.T, dir, name, body string) {
 	content := "---\nname: " + name + "\ndescription: test\n---\n" + body + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// PI_GO_HOME relocates the directory `pi skills add` installs into. Loading
+// must read the same place, or an install would report success into a
+// directory no session ever scans.
+func TestDefaultSkillDirsHonorsPiGoHome(t *testing.T) {
+	piHome := t.TempDir()
+	t.Setenv("PI_GO_HOME", piHome)
+
+	want := filepath.Join(piHome, "skills")
+	found := false
+	for _, d := range DefaultSkillDirsIn(t.TempDir()) {
+		if d == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("PI_GO_HOME skills dir %q not included in %v", want, DefaultSkillDirsIn(t.TempDir()))
+	}
+}
+
+// A plugin installed under a relocated PI_GO_HOME must be visible too. The
+// registry lives under the same home as the skills directory, so resolving one
+// from PI_GO_HOME and the other from ~/.pi-go would load user skills while
+// silently skipping every plugin alongside them.
+func TestDefaultSkillDirsHonorsPiGoHomeForPlugins(t *testing.T) {
+	piHome := t.TempDir()
+	t.Setenv("PI_GO_HOME", piHome)
+
+	pluginSkills := filepath.Join(plugin.Root(piHome), "demo", "skills")
+	writeSkillFile(t, filepath.Join(pluginSkills, "demo-skill"), "demo-skill", "from a plugin")
+
+	reg := plugin.NewRegistry()
+	reg.Plugins["demo"] = plugin.Installed{
+		Name:        "demo",
+		SkillsDir:   filepath.Join("skills"),
+		InstalledAt: "2026-01-01T00:00:00Z",
+	}
+	if err := reg.Save(piHome); err != nil {
+		t.Fatalf("saving registry: %v", err)
+	}
+
+	dirs := DefaultSkillDirsIn(t.TempDir())
+	found := false
+	for _, d := range dirs {
+		if d == pluginSkills {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("plugin skills dir %q from PI_GO_HOME not included in %v", pluginSkills, dirs)
 	}
 }

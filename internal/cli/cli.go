@@ -288,6 +288,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newSessionStatsCmd())
 	cmd.AddCommand(newVerifyCmd())
 	cmd.AddCommand(newPluginCmd())
+	cmd.AddCommand(newSkillsCmd())
 
 	return cmd
 }
