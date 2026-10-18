@@ -31,6 +31,7 @@ import (
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 
 	acpserver "github.com/dimetron/pi-go/internal/acp/server"
+	"github.com/dimetron/pi-go/internal/kagent"
 )
 
 // heartbeatInterval is how long the executor lets a turn's stream stay silent
@@ -43,6 +44,10 @@ import (
 // received — a slow hop shifts the deadline the wrong way.
 const heartbeatInterval = 10 * time.Second
 
+// settleTimeout bounds the settlement call made after a turn finishes. It
+// matches the window kagent itself allows for the same acknowledgement.
+const settleTimeout = 30 * time.Second
+
 // ServeConfig configures a server.Serve run.
 type ServeConfig struct {
 	// Addr is the HTTP/gRPC listen address. Default ":8085".
@@ -53,8 +58,22 @@ type ServeConfig struct {
 	Handler acpserver.PromptHandler
 	// CWD is the working directory for sessions. Empty means current dir.
 	CWD string
+	// TaskStore persists tasks where the kagent A2A gateway can read them.
+	// When nil, tasks live in memory for the life of the process, which is
+	// correct for a standalone A2A server but not behind the kagent gateway.
+	TaskStore TaskStore
 	// Logger receives diagnostic output. Optional.
 	Logger *slog.Logger
+}
+
+// TaskStore persists A2A tasks and, for kagent, publishes a completed turn's
+// boundary so the gateway can read the final result.
+type TaskStore interface {
+	a2ataskstore.Store
+	// Settle acknowledges that native execution stopped at version, which
+	// publishes the task state and history atomically. A store that has no
+	// staged boundary may treat it as a no-op.
+	Settle(ctx context.Context, taskID a2a.TaskID, version a2ataskstore.TaskVersion) error
 }
 
 // Serve runs pi as an A2A agent over HTTP/gRPC and returns when ctx is
@@ -82,23 +101,37 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	}
 
 	card := buildCard(ln.Addr().String())
-	executor := &piExecutor{handler: cfg.Handler, cwd: cfg.CWD, logger: logger}
+	executor := &piExecutor{handler: cfg.Handler, cwd: cfg.CWD, logger: logger, tasks: cfg.TaskStore}
 
-	// In-memory task store so GetTask/SubscribeToTask and continuation
-	// messages keep working for stateless runtime turn processing. The seed
-	// interceptor mirrors kagent's Go ADK: the kagent gateway assigns the
-	// TaskID and forwards the message, so the runtime must seed the task in
-	// its local store before the handler runs, or the executor rejects the
-	// message with "task not found".
-	tasks := a2ataskstore.NewInMemory(&a2ataskstore.InMemoryStoreConfig{
-		Authenticator: a2asrv.NewTaskStoreAuthenticator(),
-	})
+	// The kagent A2A gateway does not read task state from this process: it
+	// reads kagent's own PostgreSQL store and publishes the result from there.
+	// A purely in-memory store therefore streams a correct answer and then
+	// fails the call with "NotFound: task not found", because the gateway
+	// cannot find the task it is supposed to publish. When a kagent task store
+	// is configured the SDK persists through it instead, so the answer lands
+	// where the gateway looks; without one this stays a standalone A2A server
+	// whose tasks live only for the life of the process.
+	var tasks a2ataskstore.Store
+	if cfg.TaskStore != nil {
+		tasks = cfg.TaskStore
+	} else {
+		tasks = a2ataskstore.NewInMemory(&a2ataskstore.InMemoryStoreConfig{
+			Authenticator: a2asrv.NewTaskStoreAuthenticator(),
+		})
+	}
+	interceptors := []a2asrv.CallInterceptor{&seedTaskInterceptor{store: tasks}}
+	if cfg.TaskStore != nil {
+		// Carry the gateway's dispatch fence to the store so a save proves the
+		// reserved input was accepted, which is what makes a failed send
+		// retryable rather than ambiguous.
+		interceptors = append(interceptors, kagent.DispatchInterceptor{})
+	}
 	handler := a2asrv.NewHandler(executor,
 		a2asrv.WithCapabilityChecks(&a2a.AgentCapabilities{Streaming: true, ExtendedAgentCard: true}),
 		a2asrv.WithExtendedAgentCard(card),
 		a2asrv.WithTaskStore(tasks),
 		a2asrv.WithLogger(logger),
-		a2asrv.WithCallInterceptors(&seedTaskInterceptor{store: tasks}),
+		a2asrv.WithCallInterceptors(interceptors...),
 	)
 
 	// gRPC A2A server (kagent gateway dials the runtime over gRPC).
@@ -185,6 +218,9 @@ type piExecutor struct {
 	handler acpserver.PromptHandler
 	cwd     string
 	logger  *slog.Logger
+	// tasks publishes a finished turn's boundary. Nil means the store keeps no
+	// staged boundary, so there is nothing to settle.
+	tasks TaskStore
 	// heartbeat overrides heartbeatInterval. Zero means the default; only
 	// tests set it, so they need not wait out a real interval.
 	heartbeat time.Duration
@@ -323,6 +359,27 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 				return
 			}
 		}
+	}
+}
+
+// Cleanup publishes a finished turn's boundary.
+//
+// kagent stages the final waiting or terminal save and only publishes it once
+// the runtime acknowledges that exact version. Without this acknowledgement the
+// caller can observe a correct stream and still fail the call, because the
+// gateway never gets a readable result to return. Cleanup runs after execution
+// completes, which is exactly the point the boundary is complete.
+func (e *piExecutor) Cleanup(ctx context.Context, execCtx *a2asrv.ExecutorContext, _ a2a.SendMessageResult, execErr error) {
+	if e.tasks == nil || execCtx == nil || execCtx.TaskID == "" {
+		return
+	}
+	// Settlement is the last thing that happens in a turn and the caller may
+	// already be gone, so it must not inherit a canceled context.
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+	defer cancel()
+	if err := e.tasks.Settle(settleCtx, execCtx.TaskID, 0); err != nil {
+		e.logger.Log(settleCtx, slog.LevelError, "a2a-server: settle task boundary",
+			"task", execCtx.TaskID, "exec_err", execErr, "err", err)
 	}
 }
 
