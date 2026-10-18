@@ -1353,6 +1353,9 @@ func (m *model) handleHistoryKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	}
 	switch key.Code {
 	case tea.KeyUp:
+		if !m.inputModel.AtFirstRow() {
+			return nil, nil, false // move within a multi-line prompt
+		}
 		if len(m.inputModel.History) == 0 {
 			m.chatModel.ScrollUp(3, m.height)
 			return m, nil, true
@@ -1360,6 +1363,9 @@ func (m *model) handleHistoryKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 		m.newSearchPopup(searchModeHistory)
 		return m, nil, true
 	case tea.KeyDown:
+		if !m.inputModel.AtLastRow() {
+			return nil, nil, false
+		}
 		m.chatModel.ScrollDown(3)
 		return m, nil, true
 	}
@@ -2062,6 +2068,9 @@ func (m *model) messageViewportHeight() int {
 		m.statusModel.Width = m.width
 	}
 	statusBar := m.statusModel.Render(m.statusRenderInput())
+	// The prompt grows with its text, so size it to the terminal before
+	// counting its rows; View does the same on every frame.
+	m.inputModel.SetWidth(max(0, m.width-3))
 	inputArea := m.inputModel.View(m.loading)
 	statusLines := strings.Count(statusBar, "\n") + 1
 	inputLines := strings.Count(inputArea, "\n") + 1
