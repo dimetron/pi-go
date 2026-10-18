@@ -148,12 +148,17 @@ func TestEdgeIsSelfReference(t *testing.T) {
 
 // testSubgraphTree builds a two-level tree:
 //
-//	outer          contains: A, B
-//	  inner        contains: C
+//	outer          contains: A, B, C
+//	  inner        contains: C, D
+//
+// C is deliberately a member of both, so a lookup for it can distinguish
+// "found by recursion" from "innermost wins". With C only in inner, an
+// outermost-first search returns the same answer and the innermost-precedence
+// assertion cannot fail.
 func testSubgraphTree() *Graph {
 	g := NewGraph()
-	inner := &Subgraph{ID: "inner", Label: "Inner", NodeIDs: []string{"C"}}
-	outer := &Subgraph{ID: "outer", Label: "Outer", NodeIDs: []string{"A", "B"}, Children: []*Subgraph{inner}}
+	inner := &Subgraph{ID: "inner", Label: "Inner", NodeIDs: []string{"C", "D"}}
+	outer := &Subgraph{ID: "outer", Label: "Outer", NodeIDs: []string{"A", "B", "C"}, Children: []*Subgraph{inner}}
 	inner.Parent = outer
 	g.Subgraphs = []*Subgraph{outer}
 	return g
@@ -186,9 +191,13 @@ func TestFindSubgraphForNode(t *testing.T) {
 			t.Errorf("FindSubgraphForNode(%q) = %+v, want outer", id, sg)
 		}
 	}
-	// C is in both the outer tree and the inner subgraph; the innermost wins.
-	if sg := g.FindSubgraphForNode("C"); sg == nil || sg.ID != "inner" {
-		t.Errorf("expected innermost subgraph inner for C, got %+v", sg)
+	// C is a member of both levels, so this is the assertion that separates
+	// innermost-first from outermost-first: the latter returns outer. D proves
+	// plain recursion into the child.
+	for id, want := range map[string]string{"C": "inner", "D": "inner"} {
+		if sg := g.FindSubgraphForNode(id); sg == nil || sg.ID != want {
+			t.Errorf("FindSubgraphForNode(%q) = %+v, want %s", id, sg, want)
+		}
 	}
 	if sg := g.FindSubgraphForNode("nowhere"); sg != nil {
 		t.Errorf("expected nil for an unknown node, got %+v", sg)

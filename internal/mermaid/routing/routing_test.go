@@ -204,15 +204,24 @@ func TestResolvePlacementSubgraphUsesCenter(t *testing.T) {
 
 	for _, ids := range [][2]string{{"B", "A"}, {"A", "B"}} {
 		l := layout.NewGridLayout()
+		// Equidistant from the center, but at DIFFERENT grid cells, so the
+		// returned cell identifies which candidate won. Giving both the same
+		// cell makes the assertion pass whichever one the scan picks.
+		build := map[string]*layout.NodePlacement{
+			"A": placement("A", 2, 2, 0, 0, 10, 10),
+			"B": placement("B", 4, 4, 0, 0, 10, 10),
+		}
+		// Insert in the given order: map iteration is randomized regardless,
+		// so this covers both orderings of the same set of keys.
 		for _, id := range ids {
-			// Both centerd on the subgraph center, so both are distance 0.
-			l.Placements[id] = placement(id, 2, 2, 0, 0, 10, 10)
+			l.Placements[id] = build[id]
 		}
 		got := resolvePlacement("S", true, l, sgBounds)
 		if got == nil {
 			t.Fatal("expected a synthesized placement")
 		}
-		// sorted ids means A is scanned first and keeps the tie.
+		// sorted ids means A is scanned first and keeps the tie, so the result
+		// must be A's cell regardless of insertion order.
 		if got.Grid.Col != 2 || got.Grid.Row != 2 {
 			t.Errorf("expected tie to resolve to A's cell (2,2), got %+v", got.Grid)
 		}

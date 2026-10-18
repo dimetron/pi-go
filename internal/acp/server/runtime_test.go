@@ -150,13 +150,22 @@ func TestNewPromptHandler_ModelResolveError(t *testing.T) {
 	}
 }
 
-// clearAPIKeys unsets every provider credential config.APIKeys reads, so a test
-// asserting "no API key" cannot pass or fail based on the caller's environment.
+// clearProviderEnv unsets every provider credential and base URL that
+// config.APIKeys and config.BaseURLs read, so a test asserting "no API key"
+// cannot pass or fail based on the caller's environment.
+//
+// Base URLs matter as much as keys: checkProviderCredentials accepts a provider
+// with no key at all when a base URL is set (`apiKey == "" && baseURL == ""` is
+// the condition), so an exported ANTHROPIC_BASE_URL sends the test down the
+// same network path a real key would. Clearing only keys made the test look
+// hermetic while leaving that second door open.
+//
 // t.Setenv restores the previous values on cleanup, so subtests and later tests
 // are unaffected.
-func clearAPIKeys(t *testing.T) {
+func clearProviderEnv(t *testing.T) {
 	t.Helper()
-	for _, envVar := range []string{
+	envVars := []string{
+		// Credentials, from config.APIKeys.
 		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 		"OPENAI_API_KEY",
 		"AZUREOPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_API_KEY",
@@ -167,7 +176,20 @@ func clearAPIKeys(t *testing.T) {
 		"OLLAMA_API_KEY", "OLLAMA_API_KEY_1", "OLLAMA_API_KEY_2", "OLLAMA_API_KEY_3",
 		"OPENCODE_API_KEY",
 		"AGENTGATEWAY_API_KEY",
-	} {
+
+		// Base URLs, from config.BaseURLs. Any one of these satisfies
+		// checkProviderCredentials without a key.
+		"ANTHROPIC_BASE_URL",
+		"OPENAI_BASE_URL",
+		"GEMINI_BASE_URL",
+		"MISTRAL_BASE_URL",
+		"XAI_BASE_URL",
+		"OPENROUTER_BASE_URL",
+		"OLLAMA_HOST",
+		"OPENCODE_BASE_URL",
+		"AGENTGATEWAY_BASE_URL",
+	}
+	for _, envVar := range envVars {
 		t.Setenv(envVar, "")
 	}
 }
@@ -175,10 +197,10 @@ func clearAPIKeys(t *testing.T) {
 // TestNewPromptHandler_NoAPIKey tests missing API key returns appropriate error.
 func TestNewPromptHandler_NoAPIKey(t *testing.T) {
 	// Hermetic: checkProviderCredentials reads the process environment through
-	// config.APIKeys, so a developer shell or CI runner with a key exported
-	// would otherwise let this test reach the network and fail for the wrong
-	// reason. Every provider in config.APIKeys is cleared, not just anthropic.
-	clearAPIKeys(t)
+	// config.APIKeys and config.BaseURLs, so a developer shell or CI runner with
+	// either exported would otherwise let this test reach the network and fail
+	// for the wrong reason.
+	clearProviderEnv(t)
 
 	// A valid anthropic model that requires an API key (not gemini, ollama or
 	// azure, which authenticate some other way).

@@ -292,31 +292,40 @@ func TestDrawStateMarkers(t *testing.T) {
 }
 
 func TestShapeForEveryNodeShapeHasADrawer(t *testing.T) {
-	// Guards the shape enum against growing a member nothing can draw.
-	drawers := map[graph.NodeShape]func(*Canvas, int, int, int, int, string, CharSet, string){
-		graph.ShapeRectangle:        DrawRectangle,
-		graph.ShapeRounded:          DrawRounded,
-		graph.ShapeStadium:          DrawStadium,
-		graph.ShapeSubroutine:       DrawSubroutine,
-		graph.ShapeDiamond:          DrawDiamond,
-		graph.ShapeHexagon:          DrawHexagon,
-		graph.ShapeCircle:           DrawCircle,
-		graph.ShapeDoubleCircle:     DrawDoubleCircle,
-		graph.ShapeAsymmetric:       DrawAsymmetric,
-		graph.ShapeCylinder:         DrawCylinder,
-		graph.ShapeParallelogram:    DrawParallelogram,
-		graph.ShapeParallelogramAlt: DrawParallelogramAlt,
-		graph.ShapeTrapezoid:        DrawTrapezoid,
-		graph.ShapeTrapezoidAlt:     DrawTrapezoidAlt,
-		graph.ShapeStartState:       DrawStartState,
-		graph.ShapeEndState:         DrawEndState,
-		graph.ShapeForkJoin:         DrawForkJoin,
-	}
-
-	// The enum is contiguous from 0; every value must be covered.
+	// Guards the shape enum against growing a member nothing can draw, using
+	// the production ShapeRenderers map that drawNodes dispatches through. A
+	// copy of that map built inside the test would stay green if a shape were
+	// dropped from production while rendering silently stopped covering it.
+	//
+	// The enum is contiguous from 0; every value must have a renderer.
 	for s := graph.ShapeRectangle; s <= graph.ShapeForkJoin; s++ {
-		if _, ok := drawers[s]; !ok {
-			t.Errorf("NodeShape %d has no drawer registered in this test", s)
+		if _, ok := ShapeRenderers[s]; !ok {
+			t.Errorf("NodeShape %d has no entry in ShapeRenderers", s)
+		}
+	}
+	// No entry should point at a shape outside the enum, and none should be nil.
+	for s, fn := range ShapeRenderers {
+		if s < graph.ShapeRectangle || s > graph.ShapeForkJoin {
+			t.Errorf("ShapeRenderers has an out-of-range key %d", s)
+		}
+		if fn == nil {
+			t.Errorf("ShapeRenderers[%d] is nil", s)
+		}
+	}
+}
+
+// TestShapeRenderersProduceOutput asserts that every registered renderer
+// actually draws when dispatched through the production map, so a shape wired
+// to a no-op would be caught.
+func TestShapeRenderersProduceOutput(t *testing.T) {
+	for s, fn := range ShapeRenderers {
+		if s == graph.ShapeRectangle {
+			continue
+		}
+		c := NewCanvas(24, 9)
+		fn(c, 0, 0, 24, 9, "x", UNICODE, "")
+		if strings.TrimSpace(c.ToString()) == "" {
+			t.Errorf("ShapeRenderers[%d] rendered blank output", s)
 		}
 	}
 }
