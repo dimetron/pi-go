@@ -9,7 +9,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -50,9 +50,21 @@ type InputSubmitMsg struct {
 	Mentions []string // file paths referenced via @path
 }
 
-// InputModel wraps Bubble Tea's standard textinput component with history
-// and slash-command support. All completion/mention state has been removed;
-// the textinput library handles cursor movement and editing directly.
+// maxInputRows caps how tall the prompt grows before it scrolls internally.
+const maxInputRows = 8
+
+// inputPromptWidth is the width of the "> " prompt, which continuation rows
+// replace with blanks so wrapped and multi-line text stays aligned.
+const inputPromptWidth = 2
+
+// InputModel wraps Bubble Tea's textarea component with history and
+// slash-command support. All completion/mention state has been removed; the
+// textarea library handles cursor movement and editing directly.
+//
+// Enter submits. Shift+Enter, Alt+Enter and Ctrl+J insert a newline, and a
+// multi-line paste keeps its line breaks. Text and CursorPos stay flat (a rune
+// offset into the whole value, newlines included) so callers need not know the
+// input is multi-line.
 //
 // History is recorded here but not navigated here: the root model binds Up to
 // the history window (see handleKey), so the input never sees arrow keys.
@@ -70,7 +82,7 @@ type InputModel struct {
 	// rendering. Zero means the dark default.
 	Palette Palette
 
-	input textinput.Model
+	input textarea.Model
 
 	// stylePaletteKey fingerprints the palette `input`'s prompt and cursor
 	// styles were built from, so RefreshTheme can rebuild them on a theme
@@ -108,6 +120,12 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
+	if isNewlineKey(key) {
+		im.input.InsertString("\n")
+		im.syncFromInput()
+		return nil
+	}
+
 	switch key.Code {
 	case tea.KeyEnter:
 		text := strings.TrimSpace(im.input.Value())
@@ -140,20 +158,22 @@ func (im *InputModel) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 // SetWidth sets the visible width of the editable input text, excluding the prompt.
 func (im *InputModel) SetWidth(width int) {
 	im.ensureInput()
-	if width < 0 {
-		width = 0
-	}
-	pos := im.CursorPos
-	im.input.SetWidth(width)
-	// The textinput viewport only recalculates when the cursor moves outside
-	// the current bounds. After a width change (especially from the initial
-	// width=0 to a real value), the old viewport covers the full text and the
-	// cursor stays within it, so the viewport never narrows. CursorEnd forces
-	// a right-edge recalculation with the new width; SetCursor restores the
-	// actual position.
-	im.input.CursorEnd()
-	im.input.SetCursor(pos)
+	im.input.SetWidth(max(width, 0) + inputPromptWidth)
 	im.syncFromInput()
+}
+
+// AtFirstRow reports whether the cursor is on the first visual row, so Up has
+// nowhere to go inside the text and may be used for history instead.
+func (im *InputModel) AtFirstRow() bool {
+	im.ensureInput()
+	return im.input.Line() == 0 && im.input.LineInfo().RowOffset == 0
+}
+
+// AtLastRow reports whether the cursor is on the last visual row.
+func (im *InputModel) AtLastRow() bool {
+	im.ensureInput()
+	info := im.input.LineInfo()
+	return im.input.Line() == im.input.LineCount()-1 && info.RowOffset >= info.Height-1
 }
 
 // View renders the input area.
@@ -174,10 +194,7 @@ func (im *InputModel) View(running bool) string {
 // InsertText inserts pasted or programmatic text at cursor position.
 func (im *InputModel) InsertText(text string) {
 	im.ensureInput()
-	pos := im.CursorPos
-	beforeByte := charOffsetToByteOffset(im.Text, im.CursorPos)
-	im.setValue(im.Text[:beforeByte] + text + im.Text[beforeByte:])
-	im.input.SetCursor(pos + utf8.RuneCountInString(text))
+	im.input.InsertString(text)
 	im.syncFromInput()
 }
 
@@ -191,7 +208,7 @@ func (im *InputModel) Clear() {
 func (im *InputModel) SetText(text string) {
 	im.ensureInput()
 	im.setValue(text)
-	im.input.CursorEnd()
+	im.input.MoveToEnd()
 	im.syncFromInput()
 }
 
@@ -241,6 +258,10 @@ func (im *InputModel) applyPaletteStyles() {
 	styles := im.input.Styles()
 	styles.Focused.Prompt = promptStyle
 	styles.Blurred.Prompt = promptStyle
+	// The default styles tint the cursor row and dim the text; the prompt is
+	// one flat color, so neither is wanted.
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	styles.Blurred.CursorLine = lipgloss.NewStyle()
 	styles.Cursor.Color = p.Primary
 	styles.Cursor.Shape = tea.CursorBar
 	im.input.SetStyles(styles)
@@ -263,17 +284,31 @@ func (im *InputModel) RefreshTheme() bool {
 
 func (im *InputModel) ensureInput() {
 	if im.input.KeyMap.CharacterForward.Keys() == nil {
-		im.input = textinput.New()
+		im.input = textarea.New()
 		im.applyPaletteStyles()
 		im.input.Prompt = "> "
+		im.input.SetPromptFunc(inputPromptWidth, func(info textarea.PromptInfo) string {
+			if info.LineNumber == 0 {
+				return "> "
+			}
+			return "  "
+		})
+		im.input.ShowLineNumbers = false
+		im.input.EndOfBufferCharacter = ' '
+		im.input.CharLimit = 0
+		im.input.DynamicHeight = true
+		im.input.MinHeight = 1
+		im.input.MaxHeight = maxInputRows
 		im.input.SetVirtualCursor(false)
-		im.input.SetWidth(0)
+		im.input.SetWidth(inputPromptWidth + 1)
 		_ = im.input.Focus()
 	}
 	if im.input.Value() != im.Text {
 		im.input.SetValue(im.Text)
+		im.moveCursorTo(im.CursorPos)
+	} else if im.flatCursor() != im.CursorPos {
+		im.moveCursorTo(im.CursorPos)
 	}
-	im.input.SetCursor(im.CursorPos)
 	im.syncFromInput()
 }
 
@@ -284,7 +319,39 @@ func (im *InputModel) setValue(text string) {
 
 func (im *InputModel) syncFromInput() {
 	im.Text = im.input.Value()
-	im.CursorPos = im.input.Position()
+	im.CursorPos = im.flatCursor()
+}
+
+// flatCursor is the cursor as a rune offset into Value, counting each newline
+// as one rune.
+func (im *InputModel) flatCursor() int {
+	row, col := im.input.Line(), im.input.Column()
+	pos := col
+	for i, line := range strings.Split(im.input.Value(), "\n") {
+		if i >= row {
+			break
+		}
+		pos += utf8.RuneCountInString(line) + 1
+	}
+	return pos
+}
+
+// moveCursorTo places the cursor at a flat rune offset, clamped to the text.
+// The textarea cannot be addressed by offset, so walk from the nearer end.
+func (im *InputModel) moveCursorTo(pos int) {
+	total := utf8.RuneCountInString(im.input.Value())
+	pos = max(0, min(pos, total))
+	if pos <= total/2 {
+		im.input.MoveToBegin()
+		for range pos {
+			im.input, _ = im.input.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		}
+		return
+	}
+	im.input.MoveToEnd()
+	for range total - pos {
+		im.input, _ = im.input.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	}
 }
 
 func isLineStartKey(key tea.Key) bool {
@@ -297,6 +364,16 @@ func isLineEndKey(key tea.Key) bool {
 	return key.Code == tea.KeyEnd ||
 		(key.Code == 'e' && key.Mod == tea.ModCtrl) ||
 		key.Code == 0x05
+}
+
+// isNewlineKey reports whether the key inserts a line break instead of
+// submitting. Shift+Enter needs a terminal that reports it; Alt+Enter and
+// Ctrl+J work everywhere.
+func isNewlineKey(key tea.Key) bool {
+	if key.Code == tea.KeyEnter {
+		return key.Mod&(tea.ModShift|tea.ModAlt) != 0
+	}
+	return key.Code == 'j' && key.Mod == tea.ModCtrl
 }
 
 // slashCommands is the list of available slash commands for autocomplete.
