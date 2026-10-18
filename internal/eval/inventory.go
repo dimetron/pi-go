@@ -105,6 +105,12 @@ func Inventory(dir string) ([]ToolInfo, error) {
 
 	add("llms", "llms-config", tools.LLMSTools(tools.NewLLMSToolset(&config.LLMSConfig{})))
 	add("a2a", "a2a-config", tools.A2ATools(tools.NewClientCache(&config.A2AConfig{})))
+	// The kagent control-plane tools are named explicitly: their constructor
+	// reads KAGENT_API_URL and returns nothing when it is unset, so building
+	// them from the environment would leave them invisible to the coverage
+	// gate on any machine that is not itself a harness.
+	add("kagent", "kagent-controller",
+		tools.KagentTools(tools.NewKagentToolsetFor("http://kagent-controller.invalid", "", "")))
 
 	palaceTools, err := palace.PalaceTools(&palace.Palace{})
 	if err != nil {

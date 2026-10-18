@@ -324,7 +324,7 @@ func TestBuildToolsetsFromCfgIncludesLLMSSources(t *testing.T) {
 			{Name: "adk", URL: "https://adk.dev/llms.txt"},
 		}},
 	}
-	ts := buildToolsetsFromCfg(cfg)
+	ts := buildToolsetsFromCfg(cfg, false)
 	if len(ts) != 1 {
 		t.Fatalf("got %d toolsets, want 1", len(ts))
 	}
@@ -339,13 +339,66 @@ func TestBuildToolsetsFromCfgIncludesInferredSources(t *testing.T) {
 	cfg := config.Config{
 		InferredLLMS: []config.LLMSSource{{Name: "adk-docs-mcp", URL: "https://adk.dev/llms.txt"}},
 	}
-	if ts := buildToolsetsFromCfg(cfg); len(ts) != 1 {
+	if ts := buildToolsetsFromCfg(cfg, false); len(ts) != 1 {
 		t.Fatalf("got %d toolsets, want the inferred source served", len(ts))
 	}
 }
 
 func TestBuildToolsetsFromCfgEmpty(t *testing.T) {
-	if ts := buildToolsetsFromCfg(config.Config{}); ts != nil {
+	if ts := buildToolsetsFromCfg(config.Config{}, false); ts != nil {
 		t.Errorf("got %v, want nil for an empty config", ts)
+	}
+}
+
+// The A2A harness server runs inside a kagent cluster, so its sessions must
+// be able to discover and call sibling agents. Without the toolset a harness
+// could only reach agents someone had written into config.json — which is
+// exactly the deployment friction the kagent API exists to remove.
+func TestBuildToolsetsFromCfgKagentTools(t *testing.T) {
+	t.Setenv("KAGENT_API_URL", "http://kagent-controller.kagent:8083")
+	t.Setenv("KAGENT_NAMESPACE", "")
+
+	ts := buildToolsetsFromCfg(config.Config{}, true)
+	if len(ts) != 1 {
+		t.Fatalf("got %d toolsets, want the kagent toolset", len(ts))
+	}
+	if ts[0].Name() != "kagent" {
+		t.Fatalf("toolset = %q, want kagent", ts[0].Name())
+	}
+	names := map[string]bool{}
+	built, err := ts[0].Tools(nil)
+	if err != nil {
+		t.Fatalf("Tools() = %v", err)
+	}
+	for _, x := range built {
+		names[x.Name()] = true
+	}
+	for _, want := range []string{"kagent_list_agents", "kagent_create_agent", "kagent_call_agent"} {
+		if !names[want] {
+			t.Errorf("tool %q not offered by the harness toolset; got %v", want, names)
+		}
+	}
+}
+
+// An editor's ACP backend is not a kagent harness and has no controller to
+// talk to, so it must not be handed control-plane tools just because the
+// environment happens to carry the variables.
+func TestBuildToolsetsFromCfgKagentToolsOffForACP(t *testing.T) {
+	t.Setenv("KAGENT_API_URL", "http://kagent-controller.kagent:8083")
+
+	for _, ts := range buildToolsetsFromCfg(config.Config{}, false) {
+		if ts.Name() == "kagent" {
+			t.Error("an ACP session was given the kagent control-plane toolset")
+		}
+	}
+}
+
+// A harness deployed outside kagent has no controller URL; the toolset is
+// omitted rather than offered and broken.
+func TestBuildToolsetsFromCfgKagentToolsWithoutController(t *testing.T) {
+	t.Setenv("KAGENT_API_URL", "")
+
+	if ts := buildToolsetsFromCfg(config.Config{}, true); len(ts) != 0 {
+		t.Errorf("got %v, want no toolset without a controller URL", ts)
 	}
 }

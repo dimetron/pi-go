@@ -47,6 +47,11 @@ type RuntimeConfig struct {
 	Version         string
 	LoadConfig      func() (config.Config, error)
 	SandboxRootFunc func(turn PromptTurn) string
+	// KagentTools adds the kagent control-plane tools (list/create/call agent
+	// instances) to every session this handler builds. It is on for the A2A
+	// harness server, which runs inside a kagent cluster, and off for an
+	// editor's ACP backend, which does not.
+	KagentTools bool
 	// SessionService, when set, persists each ACP session's transcript under
 	// its ACP session id (see StoreSessionID), so a session survives the
 	// process that started it: the next process to see the same id — after
@@ -192,7 +197,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 	ag, err := piagent.New(piagent.Config{
 		Model:                llm,
 		Tools:                res.coreTools,
-		Toolsets:             buildToolsetsFromCfg(cfg),
+		Toolsets:             buildToolsetsFromCfg(cfg, rt.KagentTools),
 		Instruction:          instruction,
 		SessionService:       rt.SessionService,
 		WorkingDir:           cwd,
@@ -609,17 +614,31 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 }
 
 // buildToolsetsFromCfg assembles the toolsets an ACP session exposes: the
-// configured MCP servers, plus the llms.txt documentation sources that back
-// fetch_docs.
+// configured MCP servers, the llms.txt documentation sources that back
+// fetch_docs, and — when the session is a kagent harness — the kagent control
+// plane tools.
 //
 // The documentation sources belong here for the same reason they do in the
 // interactive, one-shot and piagent paths. Without them an ACP session would
 // dial an llms.txt entry as MCP, fail on the 405, and never offer the tool
 // that can actually read it. A nil return means nothing is configured.
-func buildToolsetsFromCfg(cfg config.Config) []adktool.Toolset {
+//
+// kagent is opt-in rather than env-detected because the two servers that share
+// this builder are different callers: `pi a2a` runs as a kagent harness and
+// wants the control plane, while `pi acp-server` is an editor's backend and
+// has no controller to talk to. Gating on KAGENT_API_URL alone would hand an
+// editor session tools that only work inside a cluster.
+func buildToolsetsFromCfg(cfg config.Config, kagent bool) []adktool.Toolset {
 	toolsets := buildMCPToolsetsFromCfg(cfg)
 	if llms := cfg.LLMSSources(); llms != nil {
 		toolsets = append(toolsets, tools.NewLLMSCachedToolset(llms))
+	}
+	if kagent {
+		// NewKagentToolset returns nil when no controller URL is known, so a
+		// harness running outside kagent simply gains nothing.
+		if ts := tools.NewKagentToolset(); ts != nil {
+			toolsets = append(toolsets, ts)
+		}
 	}
 	return toolsets
 }
