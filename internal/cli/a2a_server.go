@@ -92,6 +92,10 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		Insecure: flagInsecure,
 		System:   system,
 		Version:  versionString(),
+		// This server is the kagent harness, so the session gets the kagent
+		// control-plane tools. They are inert unless KAGENT_API_URL is set,
+		// which the kagent compiler injects.
+		KagentTools: true,
 	}
 	if sessionSvc := openServerSessionStore(ctx, logger); sessionSvc != nil {
 		rt.SessionService = sessionSvc

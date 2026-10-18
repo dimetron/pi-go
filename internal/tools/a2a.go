@@ -187,6 +187,18 @@ func (c *ClientCache) SendMessage(ctx context.Context, agentName string, prompt 
 
 // sendStreamingMessage sends a streaming message and accumulates all text parts.
 func (c *ClientCache) sendStreamingMessage(ctx context.Context, client *a2aclient.Client, msg *a2a.Message) (string, error) {
+	return collectStreamText(ctx, client, msg)
+}
+
+// collectStreamText sends one message over a client's streaming transport and
+// returns the accumulated reply text.
+//
+// It is package-level rather than a method on ClientCache because the kagent
+// toolset reaches an AgentInstance by id instead of through a configured agent
+// name, and both paths must reassemble a stream the same way — the kagent
+// gateway emits a SUBMITTED task and closing artifact snapshots that a naive
+// append would either truncate or duplicate.
+func collectStreamText(ctx context.Context, client *a2aclient.Client, msg *a2a.Message) (string, error) {
 	collector := newStreamTextCollector()
 	req := &a2a.SendMessageRequest{Message: msg}
 

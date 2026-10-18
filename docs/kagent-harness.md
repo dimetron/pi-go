@@ -106,6 +106,36 @@ durable directory, so one actor cannot read another's transcripts.
 The ACP server (`pi acp-server`) persists sessions the same way and exposes
 them through `session/load`, `session/resume` and `session/list`.
 
+## Calling other agents from inside a harness
+
+A harness built by `pi a2a` also gets three tools that talk to the kagent
+control plane, so it can discover and call sibling agents without each one
+being written into `config.json`:
+
+| Tool | What it does |
+|---|---|
+| `kagent_list_agents` | Lists agent instances in the namespace, with the `instance_id` needed to call one. Optional `agent_template` / `harness` filters. |
+| `kagent_create_agent` | Creates an instance from a `(harness, agent_template)` pair and returns its `instance_id`. |
+| `kagent_call_agent` | Sends a prompt to an agent over A2A and returns its reply. Accepts an `instance_id` directly, or a template name (an existing READY instance is reused, one is created if none is running). |
+
+They are wired only into the A2A harness server (`buildToolsetsFromCfg(cfg,
+true)` in `internal/acp/server/runtime.go`), not into an editor's `pi
+acp-server` backend, which has no controller to talk to. Nothing is registered
+unless a controller URL is known, so a `pi a2a` process outside kagent simply
+gains no tools.
+
+The endpoint comes from the environment the kagent compiler injects:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `KAGENT_API_URL` | Controller base URL, e.g. `http://kagent-controller.kagent:8083` | none — no URL means no tools |
+| `KAGENT_NAMESPACE` | Namespace the instance calls are scoped to | `kagent` |
+| `PI_KAGENT_USER` | Identity sent as `x-user-id` | `admin@kagent.dev` |
+
+Note that a **managed** (`spec.kagent`) harness gets `KAGENT_API_URL` injected
+by the compiler, but a BYO harness does not — add it to `spec.env` explicitly
+if you switch the harness to `spec.byo`.
+
 ## Model configuration
 
 Set `PI_MODEL` and `PI_BASE_URL` in the Harness `spec.env` to point at the
