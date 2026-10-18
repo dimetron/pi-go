@@ -484,21 +484,28 @@ func DefaultSkillDirsIn(root string) []string {
 		dirs = append(dirs, dir)
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = ""
+	// PI_GO_HOME relocates the pi-go home for `pi skills add` and `pi plugin`.
+	// Both the skills directory and the plugin registry live under it, so it has
+	// to be resolved once and used for both: honoring it for one and not the
+	// other would load user skills from the relocated home while silently
+	// skipping every plugin installed there.
+	piHomeDir := os.Getenv("PI_GO_HOME")
+	if piHomeDir == "" {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			piHomeDir = filepath.Join(homeDir, ".pi-go")
+		}
 	}
 
 	// Installed plugins, before anything the user owns.
-	if homeDir != "" {
-		for _, dir := range InstalledPluginSkillDirs(homeDir) {
+	if piHomeDir != "" {
+		for _, dir := range InstalledPluginSkillDirs(piHomeDir) {
 			add(dir)
 		}
 	}
 
 	// User-level skill directory.
-	if homeDir != "" {
-		add(filepath.Join(homeDir, ".pi-go", "skills"))
+	if piHomeDir != "" {
+		add(filepath.Join(piHomeDir, "skills"))
 	}
 
 	// Project-level skill directories, walking up from root.

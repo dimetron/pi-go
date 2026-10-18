@@ -384,6 +384,42 @@ reconstruct the text; that is how every consumer uses it.
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
 
+### Installing a single skill
+
+When you want one specific skill rather than a whole plugin bundle, install it
+straight from its repository:
+
+```bash
+# Install one skill from a repository
+pi skills add humanlayer/skills --skill show-me
+
+# Install every skill the repository offers
+pi skills add humanlayer/skills
+
+# See and remove what is installed
+pi skills list
+pi skills remove show-me
+```
+
+| Command                            | Description                                                    |
+|------------------------------------|----------------------------------------------------------------|
+| `pi skills add <source>`           | Install skills from a repository or local directory            |
+| `pi skills add <source> --skill x` | Install only skill `x` (repeatable, or comma-separated)        |
+| `pi skills add <source> --force`   | Replace a skill that is already installed                      |
+| `pi skills list`                   | List installed skills with their descriptions                  |
+| `pi skills remove <skill>...`      | Remove installed skills                                        |
+
+`<source>` accepts the same forms as a plugin source: a GitHub shorthand
+(`owner/repo`), a git URL, or a local directory. Skills are found under
+`skills/<name>/SKILL.md` and `.pi-go/skills/<name>/SKILL.md`, so the same
+repositories work for both mechanisms.
+
+Installed skills live in `~/.pi-go/skills/<name>/` and are loaded in every
+session, outranking a bundled or plugin skill with the same name. Bundled files
+(`references/`, `scripts/`, …) are copied along with `SKILL.md`. An existing
+skill is never overwritten without `--force`, so an install cannot silently
+replace a skill you edited by hand.
+
 ### Plugin marketplaces
 
 Install skill bundles from a **plugin marketplace**. pi-go reads the same
