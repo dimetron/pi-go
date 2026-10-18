@@ -71,11 +71,18 @@ def parse_table(tbl):
         name = cell_text(cells[0])
         if not name:
             continue
-        out[name] = {
+        rates = {
             "input": rate(cell_text(cells[1])),
             "cache_read": rate(cell_text(cells[2])),
             "output": rate(cell_text(cells[3])),
         }
+        # The page has begun listing input-only models (clef), rendering "-" for
+        # the rates it does not publish. Cost estimation needs both input and
+        # output: storing 0 for an unpublished output rate would report those
+        # tokens as free, so a row missing either is skipped instead.
+        if rates["input"] is None or rates["output"] is None:
+            continue
+        out[name] = rates
     return out
 
 tables = re.findall(r"<table.*?</table>", raw, re.S)

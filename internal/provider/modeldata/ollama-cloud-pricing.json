@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-09-30T00:00:00Z",
+ "fetched_at": "2026-10-18T00:00:00Z",
  "models": {
   "deepseek-v4-pro": {
    "cache_read": 0.022,
@@ -70,6 +70,16 @@
    "cache_read": null,
    "input": 0.5,
    "output": 1.5
+  },
+  "mistral-large-4": {
+   "cache_read": 0.07,
+   "input": 0.68,
+   "output": 2.09
+  },
+  "muse-spark-open": {
+   "cache_read": 0.15,
+   "input": 1.25,
+   "output": 4.25
   },
   "nemotron-3-nano": {
    "cache_read": null,
