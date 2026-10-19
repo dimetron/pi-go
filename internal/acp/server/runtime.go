@@ -189,10 +189,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, err
 	}
 
-	instruction := rt.System
-	if instruction == "" {
-		instruction = piagent.LoadInstruction(piagent.SystemInstruction)
-	}
+	instruction := resolveInstruction(rt, os.Getenv)
 
 	ag, err := piagent.New(piagent.Config{
 		Model:                llm,
@@ -630,6 +627,14 @@ func convertHooks(cfgHooks []config.HookConfig) []extension.HookConfig {
 // editor session tools that only work inside a cluster.
 func buildToolsetsFromCfg(cfg config.Config, kagent bool) []adktool.Toolset {
 	toolsets := buildMCPToolsetsFromCfg(cfg)
+	if kagent {
+		// The servers an AgentTemplate declares are compiled by the controller
+		// into KAGENT_CONFIG_JSON, never into the Harness spec, so a harness
+		// that only reads config files sees none of them. Appending here is
+		// what makes "tools: [mcp: ...]" in a template actually reach the
+		// model.
+		toolsets = append(toolsets, kagentMCPToolsetsFromEnv(os.Getenv)...)
+	}
 	if llms := cfg.LLMSSources(); llms != nil {
 		toolsets = append(toolsets, tools.NewLLMSCachedToolset(llms))
 	}

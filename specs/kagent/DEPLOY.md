@@ -60,7 +60,47 @@ detect which one it is talking to:
   implicit fallback: pointing it at a controller that does not serve that service
   turns a working turn into a failed RPC.
 
-So leave `KAGENT_TASK_STORE_ADDRESS` unset against a current controller.
+**Measured on v1alpha3 (v1.0.0-alpha14-9-g7a0a4fd0), the opposite is true:**
+this controller *does* serve `kagent.runtime.v1.TaskStoreService`, and a pi-go
+harness that leaves `KAGENT_TASK_STORE_ADDRESS` unset keeps its tasks in memory.
+Every turn then streams a correct answer and fails immediately afterwards with
+`task not found`, because the gateway looks for the task in its own database and
+finds nothing. Setting it is what makes the turn succeed:
+
+```yaml
+env:
+  - name: KAGENT_TASK_STORE_ADDRESS
+    value: http://kagent-controller.<namespace>:8083   # gRPC, not HTTP
+```
+
+Verified by A/B on one cluster: `kagent: {}` failed, `byo: {}` alone still
+failed, and `byo: {}` plus this variable produced a `TASK_STATE_COMPLETED` row
+in `kagent.session_task` and a clean reply. Treat the variable as **required**
+for this controller generation and re-test before removing it after a kagent
+upgrade.
+
+### MCP tools and credentials
+
+An AgentTemplate's `spec.tools` entries are **not** delivered through the Harness
+or through config files. The controller compiles them into the `KAGENT_CONFIG_JSON`
+environment variable of the workload, under `agent.http_tools`:
+
+```json
+{"agent":{"http_tools":[{"params":{"url":"https://api.githubcopilot.com/mcp/x/pull_requests/readonly",
+  "headers":{"Authorization":"KAGENT_ENV[KAGENT_CREDENTIAL_...]"}}}]}}
+```
+
+pi-go reads that variable at session build time and mounts each entry as an MCP
+server (`internal/acp/server/kagent_mcp.go`). Two consequences worth knowing:
+
+- **The credential is a placeholder, not a secret.** `KAGENT_ENV[...]` is
+  substituted by the Substrate egress gateway on the wire, so the real token
+  never enters the sandbox. pi-go passes the header through verbatim; rewriting
+  or dropping it breaks authentication.
+- **The egress destination must still be granted.** A credential placeholder
+  authorises nothing on its own: an `EgressPolicy` must list the origin (see the
+  `EgressPolicy` in the rendered manifest), and an Agent must reference it via
+  `spec.egressPolicyRefs`. Without that reference the policy is inert.
 
 ## Option A: local registry (recommended)
 
