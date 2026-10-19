@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,7 +180,11 @@ func emitSpanEvent(ctx context.Context, e Entry) {
 		attrs = append(attrs, attribute.String("http.request.method", e.Method))
 	}
 	if e.URL != "" {
-		attrs = append(attrs, attribute.String("url.full", e.URL))
+		// URL rather than e.URL: a credential carried in the query string —
+		// `https://mcp.exa.ai/mcp?exaApiKey=...` is the documented shape for
+		// several MCP servers — would otherwise land in the span, the session
+		// log, and every bug report pasted from it.
+		attrs = append(attrs, attribute.String("url.full", RedactURL(e.URL)))
 	}
 	if e.Status != 0 {
 		attrs = append(attrs, attribute.Int("http.response.status_code", e.Status))
@@ -337,4 +342,67 @@ func (b *bodyCapture) finish() {
 		}
 		b.done(body, b.truncated)
 	})
+}
+
+// credentialQueryParams are query parameters that carry a credential. Several
+// MCP servers take the key in the URL rather than a header — Tavily's
+// `?tavilyApiKey=` and Exa's `?exaApiKey=` are the two that motivated this —
+// so a URL is not safe to log on the assumption that secrets only travel in
+// headers.
+var credentialQueryParams = map[string]bool{
+	"tavilyapikey":  true,
+	"exaapikey":     true,
+	"api_key":       true,
+	"apikey":        true,
+	"access_token":  true,
+	"auth":          true,
+	"key":           true,
+	"password":      true,
+	"secret":        true,
+	"token":         true,
+	"client_secret": true,
+}
+
+// RedactURL returns rawURL with any credential-bearing query parameter masked,
+// and with userinfo dropped from the authority so `https://user:pass@host`
+// cannot leak either.
+//
+// The URL identity is preserved — scheme, host, path and the names of every
+// parameter survive — so a log line still says which server was called. Only
+// the values are replaced. A URL that cannot be parsed is returned with its
+// query stripped entirely: an unparseable URL has no safe partial form, and
+// dropping diagnostic detail is cheaper than leaking a key.
+func RedactURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		if i := strings.IndexAny(rawURL, "?#"); i >= 0 {
+			return rawURL[:i]
+		}
+		return rawURL
+	}
+	if u.User != nil {
+		// Keep the username: it identifies the account and is not the secret.
+		if name := u.User.Username(); name != "" {
+			u.User = url.User(name)
+		} else {
+			u.User = nil
+		}
+	}
+	if u.RawQuery != "" {
+		q := u.Query()
+		for k := range q {
+			if credentialQueryParams[strings.ToLower(k)] {
+				q.Set(k, "***")
+			}
+		}
+		u.RawQuery = q.Encode()
+	}
+	if u.Fragment != "" {
+		u.Fragment = ""
+		u.RawFragment = ""
+	}
+	return u.String()
 }
