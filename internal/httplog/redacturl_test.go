@@ -81,3 +81,35 @@ func TestRedactURL_MalformedDropsQuery(t *testing.T) {
 		t.Fatalf("secret survived on the malformed path: %q", got)
 	}
 }
+
+// A fragment can carry a token too — OAuth implicit flows put the access_token
+// there — so it is dropped rather than logged.
+func TestRedactURL_DropsFragment(t *testing.T) {
+	got := RedactURL("https://example.com/cb#access_token=abcdef123456")
+	if strings.Contains(got, "abcdef123456") {
+		t.Fatalf("fragment token survived: %q", got)
+	}
+	if !strings.Contains(got, "example.com/cb") {
+		t.Errorf("path should survive: %q", got)
+	}
+}
+
+// Userinfo with no username still carries a password; it must not be logged.
+func TestRedactURL_PasswordOnlyUserinfo(t *testing.T) {
+	got := RedactURL("https://:hunter2@example.com/mcp")
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("password-only userinfo survived: %q", got)
+	}
+	if !strings.Contains(got, "example.com/mcp") {
+		t.Errorf("host and path should survive: %q", got)
+	}
+}
+
+// An unparseable URL with no query has nothing to strip; it is returned as-is
+// rather than being blanked, which would lose the only diagnostic available.
+func TestRedactURL_MalformedWithoutQuery(t *testing.T) {
+	const bad = "ht!tp://%%%bad"
+	if got := RedactURL(bad); got != bad {
+		t.Errorf("malformed URL without query = %q, want it unchanged", got)
+	}
+}
